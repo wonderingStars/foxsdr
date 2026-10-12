@@ -2805,6 +2805,11 @@ int AppWindow::run(int frames) {
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    // The language list's system-font scan (gui/fonts.hpp) may still be reading
+    // a font file on its own thread: it is told to stop after the file in hand
+    // and joined here, before the context goes, so no joinable thread is left
+    // for the process to terminate on.
+    cascade::gui::fonts::shutdown();
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();

@@ -4,6 +4,8 @@
 
 Verified on Windows with 65 decoder checks, nine host test suites, a known text recording through the actual application, and live message output from a USRP B200 at 153.350 MHz. The specific transmission originally reported as missing was not available for comparison; receive windows without traffic produced no message rows. RF gain was observed rather than optimized by this change.
 
+**Opening Language & country no longer freezes the window while it looks for Chinese, Japanese and Korean fonts.** To list each language by its own name (日本語, 한국어) the window has to know which of those languages this computer can draw, and to find out it read Microsoft YaHei, JhengHei, Yu Gothic and Malgun Gothic from the Windows font folder (14 to 21 MB each) inside one frame, one byte at a time, and then read the ones it used a second time to put them in the text atlas. On a laptop with a slow disk that was a frozen window of many seconds, and the freeze monitor caught it twice in the field: 0.99.70 (signature CE8EBCD986C97CEB, stopped reading a font file) and 0.99.71 (signature D28A155E1A128889, a 13.6 second frame in the frame-start step, 32 plugins fitted and the audio starving). A font file is now read in one call (YaHei, 19.7 MB: 85 to 89 ms before, 11 ms after, on the development desktop with the file already in the system cache), each file is read once, and the search for the first usable font of each of the four scripts runs on a thread of its own, started when the section opens. With every font read made to take 400 ms the call that opens the list returned in 0.1 ms, where the same call took 2.9 s before. The trade is one or two frames of boxes: until the search finishes (39 ms in a run of the real application on this desktop, longer on a slow disk) the native names are drawn as boxes, the rows can already be picked, and a language the computer turns out not to be able to draw is refused afterwards with the same message as before. Two things remain. The thread that draws the window still works out which script each language needs (6 to 8 ms for the 34 listed here). And a user whose Windows language, or the language of the country chosen in this section, is Chinese, Japanese or Korean while the interface is in another language waits for the search once, on the section's first frame, for about the length of four of those file reads, because the two lines that ask whether that language can be drawn ask the exact question (668 ms and 674 ms measured with every read made to take 150 ms; the freeze threshold is 5 s, so it is reached only if a disk takes about a second for each 20 MB file); the previous code read the same four files on the window thread in the next frame, byte by byte and twice over, and those two lines are not yet moved. The search keeps the file it found for each script only until the list's names are in the text atlas: the files it merely looked at (JhengHei and Yu Gothic, 35 MB, because YaHei already draws their names) are then let go, so the memory held after opening the list is what it always was, and choosing Japanese or Traditional Chinese afterwards reads its file once more, in one call.
+
 The host source is committed for development. No FoxSDR 0.99.74 application
 release, installer, website deployment or Microsoft Store submission accompanies
 the POCSAG plugin-store publication.
@@ -48,3 +50,25 @@ without stream-error or overflow entries. Different receive windows do not
 establish a cause for the difference in message counts. RF gain was observed,
 not optimized by this change. These verification runs used isolated profiles;
 the saved user profile was not replaced.
+
+The language list's font search is covered by `test_font_scan`, which makes every
+font read slow on purpose and checks that each system font file is opened once
+(and that choosing Japanese afterwards opens its file a second time, and no other
+file, with nothing held in memory beyond the atlas in between),
+that asking for the names returns at once while the files are being read, that
+the three-way answer (Yes, No, Checking) agrees with the exact one when the search
+is done, that the one-call file read returns the bytes a byte-by-byte read does,
+that the search finds the faces the on-demand walk finds, and that a search still
+running when the program exits is joined rather than terminated. Against the
+previous code it failed 9 checks, among them the 2.9 s return and the two reads of
+`msyh.ttc` and `malgun.ttf`; with the change it passes, and removing each of the
+behaviours it is named after (waiting in `applyPending`, the kept bytes, the
+release of the kept files the names did not use, the non-blocking answer, the
+exit-time join, the full-length read, the search's first candidate) makes it fail
+again. The 350-test suite passed on Windows before the release of the unused kept
+files was added; after it, the eight font, i18n and CJK tests were run again and
+pass. A run of the
+real application with the section open and a Japanese country chosen started the
+search, adopted its answer 39 ms later, merged the names' faces on the next frame
+and shut down cleanly. Not verified: a slow disk (only a simulated one), and the
+Linux build, which only CI compiles.

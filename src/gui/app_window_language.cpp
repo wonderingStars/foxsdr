@@ -50,13 +50,18 @@ using cascade::core::upperLegend;
 std::string foldKey(std::string_view s) { return cascade::core::foldForSearch(s); }
 
 // What a language is called in the Language combo: its own name, and a
-// plain statement when nobody has checked the translation.
-std::string languageLabel(const cascade::i18n::Language& l) {
+// plain statement when nobody has checked the translation. `state` is what
+// fonts::canDrawNow said about it, so a row is labelled without waiting: the
+// reason is asked for only once the answer is known to be No, and a language
+// still being Checked is listed under its own name like a drawable one.
+std::string languageLabel(const cascade::i18n::Language& l, cascade::gui::fonts::Drawable state) {
     // A language this machine cannot draw is named in ENGLISH, with the
     // reason: its own name is written in the very characters that are
     // missing, and "□□□" tells nobody which language they could not have.
-    if (const char* why = cascade::gui::fonts::unavailableReason(l.code); why[0] != '\0') {
-        return l.englishName + " - " + tr(why);
+    if (state == cascade::gui::fonts::Drawable::No) {
+        if (const char* why = cascade::gui::fonts::unavailableReason(l.code); why[0] != '\0') {
+            return l.englishName + " - " + tr(why);
+        }
     }
     std::string s = l.name;
     if (l.machine) {
@@ -156,9 +161,17 @@ void AppWindow::drawLanguageSection() {
         return;
     }
     // The list below names every language in its own script. Whatever the
-    // chain in force cannot draw of those names is loaded before the next
-    // frame - here, while the section is open, rather than when the combo
-    // opens, so the list is never drawn in boxes for its first frame.
+    // chain in force cannot draw of those names needs a system CJK face, and
+    // finding out which this machine has means reading font files of 14 to
+    // 21 MB each. That is done by a worker thread (gui/fonts.hpp) which this
+    // starts, here, while the section is open rather than when the combo
+    // opens; the faces are merged into the atlas on the first frame after it
+    // has finished. Until then the list's first frames may show boxes for the
+    // native names (日本語, 한국어) - the trade taken against the freeze this
+    // replaced, when the same files were read here, on the GUI thread, one
+    // byte at a time and twice over: a multi-second frame on a slow disk
+    // (field hangs CE8EBCD986C97CEB, 0.99.70, stopped in fonts::readFile, and
+    // D28A155E1A128889, 0.99.71, a 13.6 s frame in the frame-start step).
     cascade::gui::fonts::requestLanguageNames();
 
     // --- LANGUAGE -------------------------------------------------------------
@@ -193,7 +206,8 @@ void AppWindow::drawLanguageSection() {
         preview = autoLabel;
     } else {
         const cascade::i18n::Language* l = cascade::i18n::findLanguage(chosenCode);
-        preview = l != nullptr ? languageLabel(*l) : std::string("English");
+        preview = l != nullptr ? languageLabel(*l, cascade::gui::fonts::canDrawNow(l->code))
+                               : std::string("English");
     }
     // Rows: "auto", then languages() - English first, then each catalogue.
     // The pick is recorded here and applied after EndCombo (list_pick.hpp).
@@ -208,11 +222,18 @@ void AppWindow::drawLanguageSection() {
             langs, [&](const cascade::i18n::Language& l, std::size_t i) {
                 const bool selected = !autoSelected && l.code == chosenCode;
                 // Listed, so nobody wonders where their language went, but not
-                // selectable: choosing it would only ever show English.
-                const bool drawable = cascade::gui::fonts::canDraw(l.code);
+                // selectable: choosing it would only ever show English. One
+                // that is still being Checked is selectable: a pick goes
+                // through i18n::setLanguage -> fonts::canDraw, which waits for
+                // the nearly-finished scan, and the "not applied" handling in
+                // applyPendingLanguage covers a language the machine turns
+                // out not to draw. Never a wait here: this is every row of
+                // every frame the list is open.
+                const cascade::gui::fonts::Drawable state = cascade::gui::fonts::canDrawNow(l.code);
+                const bool drawable = state != cascade::gui::fonts::Drawable::No;
                 ImGui::PushID(static_cast<int>(i));
                 const bool hit =
-                    ImGui::Selectable(languageLabel(l).c_str(), selected,
+                    ImGui::Selectable(languageLabel(l, state).c_str(), selected,
                                       drawable ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled);
                 ImGui::PopID();
                 if (selected) { ImGui::SetItemDefaultFocus(); }

@@ -204,6 +204,10 @@ void testCjkLazyAndOrdered() {
     // The language list on screen: the names' faces are merged BEHIND the
     // English chain, and the English primary still comes first.
     fonts::requestLanguageNames();
+    // Since 0.99.74 the system-font scan runs on a worker thread and the names'
+    // faces are merged by the first applyPending() AFTER it has finished, not by
+    // the very next one (gui/fonts.hpp; tests/test_font_scan.cpp pins that).
+    fonts::waitForSystemFontScan();
     CHECK(fonts::applyPending());
     frame();
     std::printf("    en + names: %s\n", labels().c_str());

@@ -3,13 +3,18 @@
 #include "gui/fonts.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/i18n.hpp"
@@ -56,27 +61,82 @@ bool gSystemSerif = false;
 // PINNED FILES STAY IN MEMORY FOR THE LIFE OF THE PROCESS. The atlas is given
 // their bytes with FontDataOwnedByAtlas = false, and Chain hands pointers into
 // them to its callers, so a pinned file is never freed. A file is pinned only
-// when a face in it is actually put in a chain; merely ASKING whether a
-// language can be drawn reads the file, answers, and lets the bytes go.
+// when a face in it is actually put in a chain.
+//
+// KEPT FILES (0.99.74) ARE THE ONES ASKING FOUND USABLE, UNTIL THE NAMES ARE
+// IN THE ATLAS. Asking whether a language can be drawn reads the candidate
+// files in order until one has the characters. A candidate that does not is let
+// go at once. The one that does is KEPT, because the question is nearly always
+// asked in order to put that face in a chain, and reading a 14 to 21 MB file a
+// second time to hand the atlas the bytes the scan has just looked at was half
+// of the cost that froze the language list (field hangs CE8EBCD986C97CEB and
+// D28A155E1A128889). pin() takes a kept file's bytes instead of reading it.
+//
+// Once applyPending() has merged the names' faces it lets go every kept file the
+// names did not pin (gKept.clear()): the list shows Traditional Chinese and
+// Japanese names with YaHei, so JhengHei and Yu Gothic were only looked at, and
+// holding their 35 MB for the life of the process would be a footprint the old
+// code never had. The price is one more read: a language chosen afterwards whose
+// file was let go (Japanese, here) reads it again when its face is put in a chain,
+// once, in one bulk read, on the GUI thread.
+//
+// THE READ ITSELF is one read() into a buffer sized from the file, not an
+// istreambuf_iterator walk - which is a virtual call per BYTE plus the vector's
+// regrowth, and was the stack of the 0.99.70 hang. readFileUncached() touches
+// no cache and no global of the GUI thread, so the scan's worker thread can use
+// it.
 using Bytes = std::shared_ptr<const std::vector<unsigned char>>;
 std::map<std::string, Bytes> gPinned;
+std::map<std::string, Bytes> gKept;
 
+// Test seams (fonts.hpp): a delay inside every read, and a count of opens per
+// path. Both are touched by the scan worker as well as the GUI thread.
+std::atomic<unsigned> gReadDelayMs{0};
+std::mutex gReadCountsMutex;
+std::map<std::string, int> gReadCounts;
+
+Bytes readFileUncached(const std::string& path) {
+    if (path.empty()) { return nullptr; }
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) { return nullptr; }
+    if (const unsigned ms = gReadDelayMs.load(); ms != 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    }
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { return nullptr; }
+    {
+        const std::lock_guard<std::mutex> lock(gReadCountsMutex);
+        ++gReadCounts[path];
+    }
+    f.seekg(0, std::ios::end);
+    const std::streamoff size = f.tellg();
+    if (size <= 0) { return nullptr; }  // empty, or the size could not be read
+    f.seekg(0, std::ios::beg);
+    auto bytes = std::make_shared<std::vector<unsigned char>>(static_cast<std::size_t>(size));
+    f.read(reinterpret_cast<char*>(bytes->data()), size);
+    if (f.gcount() != size) { return nullptr; }  // a short read is not a font
+    return bytes;
+}
+
+// The GUI thread's reader: what is pinned, then what the scan kept, then the disk.
 Bytes readFile(const std::string& path) {
     if (path.empty()) { return nullptr; }
     if (const auto it = gPinned.find(path); it != gPinned.end()) { return it->second; }
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(path, ec)) { return nullptr; }
-    std::ifstream f(path, std::ios::binary);
-    if (!f) { return nullptr; }
-    auto bytes = std::make_shared<std::vector<unsigned char>>(
-        (std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if (bytes->empty()) { return nullptr; }
-    return bytes;
+    if (const auto it = gKept.find(path); it != gKept.end()) { return it->second; }
+    return readFileUncached(path);
+}
+
+// Remember a file asking found usable (unless it is already pinned).
+void keep(const std::string& path, const Bytes& bytes) {
+    if (bytes != nullptr && gPinned.count(path) == 0) { gKept.emplace(path, bytes); }
 }
 
 Bytes pin(const std::string& path) {
     Bytes b = readFile(path);
-    if (b != nullptr) { gPinned.emplace(path, b); }
+    if (b != nullptr) {
+        gPinned.emplace(path, b);
+        gKept.erase(path);
+    }
     return b;
 }
 
@@ -122,8 +182,172 @@ struct CjkScan {
 };
 std::map<int, CjkScan> gScans;
 
+// --- the system-font scan, off the GUI thread (0.99.74) -------------------------
+//
+// The first usable candidate of EACH standard, found by one worker thread so the
+// language list never reads a 20 MB font inside a frame (fonts.hpp has the
+// story and the trade). The worker walks exactly the candidates usableCjk()
+// would, in the same order, with the same probe; it differs in three ways only:
+// it keeps no more than the first usable face of a standard, it never reads a
+// file twice (a path two standards share is read once), and it runs somewhere
+// else.
+//
+// WHAT THE WORKER MAY TOUCH. Its own arguments and the file system: no ImGui,
+// no i18n, and none of this file's GUI-thread globals (gScans, gPinned, gKept).
+// The GUI thread prepares everything it needs before starting it - the
+// candidates, their resolved paths (the environment is read here, not there),
+// the probe characters, and the bytes already in memory - and adopts the answer
+// in publishScan(). The only shared state is the small block below, behind one
+// mutex.
+enum class ScanState { NotStarted, Running, Done };
+
+struct ScanJob {                   // one standard
+    int face = 0;                  // a scripts::CjkFace
+    CjkScan scan;                  // started, with its candidates; the worker fills next and found
+    std::vector<std::string> paths;  // each candidate's resolved path
+    std::vector<unsigned int> probe;
+};
+struct ScanOutcome {
+    std::map<int, CjkScan> scans;           // the standards the worker finished, each decided for k = 0
+    std::map<std::string, Bytes> bytes;     // the bytes of each usable first candidate
+};
+
+std::mutex gScanMutex;
+std::condition_variable gScanCv;
+ScanState gScanState = ScanState::NotStarted;  // guarded by gScanMutex
+ScanOutcome gScanOutcome;                      // guarded by gScanMutex; written once, by the worker
+std::atomic<bool> gScanCancel{false};          // shutdown(): finish the file in hand and stop
+std::thread gScanThread;                       // GUI thread only (start, join)
+bool gScanPublished = false;                   // GUI thread only
+
+bool scanRunning() {
+    const std::lock_guard<std::mutex> lock(gScanMutex);
+    return gScanState == ScanState::Running;
+}
+bool scanDone() {
+    const std::lock_guard<std::mutex> lock(gScanMutex);
+    return gScanState == ScanState::Done;
+}
+
+// Safe to call from a thread other than the GUI's: see "what the worker may touch".
+ScanOutcome scanStandards(std::vector<ScanJob>& jobs, std::map<std::string, Bytes>& have) {
+    ScanOutcome out;
+    for (ScanJob& job : jobs) {
+        CjkScan& s = job.scan;
+        while (s.found.empty() && s.next < s.candidates.size()) {
+            if (gScanCancel.load()) { return out; }
+            const std::size_t i = s.next++;
+            const std::string& path = job.paths[i];
+            Bytes b;
+            if (const auto it = have.find(path); it != have.end()) {
+                b = it->second;
+            } else {
+                b = readFileUncached(path);
+                if (b != nullptr) { have.emplace(path, b); }
+            }
+            if (b == nullptr) { continue; }
+            const int index = fontprobe::pickFace(b->data(), b->size(), s.candidates[i].nameHint, job.probe);
+            if (index < 0) { continue; }
+            const std::string file = std::filesystem::path(path).filename().string();
+            s.found.push_back(CjkPick{path, file + "#" + std::to_string(index), index});
+            out.bytes.emplace(path, b);
+        }
+        out.scans.emplace(job.face, std::move(s));  // decided for k = 0: a pick, or every candidate tried
+    }
+    return out;
+}
+
+void scanWorker(std::vector<ScanJob> jobs, std::map<std::string, Bytes> have) {
+    ScanOutcome out;
+    try {
+        out = scanStandards(jobs, have);
+    } catch (...) {
+        // Out of memory, say: the standards finished before it stand, and the
+        // rest are answered on demand, as they were before the scan existed.
+        out = ScanOutcome();
+    }
+    // The worker's own references go before it announces it is done.
+    jobs.clear();
+    have.clear();
+    {
+        const std::lock_guard<std::mutex> lock(gScanMutex);
+        gScanOutcome = std::move(out);
+        gScanState = ScanState::Done;
+    }
+    gScanCv.notify_all();
+}
+
+// Starts the scan, once. GUI thread only. A standard the GUI thread has already
+// decided on demand is left out - its files have been read.
+void startSystemFontScan() {
+    {
+        const std::lock_guard<std::mutex> lock(gScanMutex);
+        if (gScanState != ScanState::NotStarted) { return; }
+        gScanState = ScanState::Running;
+    }
+    std::vector<ScanJob> jobs;
+    for (const scripts::CjkFace face : scripts::kCjkFaces) {
+        if (const auto it = gScans.find(static_cast<int>(face)); it != gScans.end() && it->second.started) {
+            continue;
+        }
+        ScanJob job;
+        job.face = static_cast<int>(face);
+        job.scan.started = true;
+        job.scan.candidates = scripts::systemCandidates(face, kWindows);
+        for (const scripts::SystemFace& c : job.scan.candidates) {
+            job.paths.push_back(kWindows ? systemFontPath(c.path.c_str()) : c.path);
+        }
+        job.probe = scripts::probeCodePoints(face);
+        jobs.push_back(std::move(job));
+    }
+    // What is already in memory is not read again.
+    std::map<std::string, Bytes> have = gPinned;
+    have.insert(gKept.begin(), gKept.end());
+    gScanCancel.store(false);
+    try {
+        gScanThread = std::thread(scanWorker, std::move(jobs), std::move(have));
+    } catch (...) {
+        // No thread to be had: every standard is answered on demand, as it was.
+        {
+            const std::lock_guard<std::mutex> lock(gScanMutex);
+            gScanOutcome = ScanOutcome();
+            gScanState = ScanState::Done;
+        }
+        gScanCv.notify_all();
+    }
+}
+
+// Adopts a finished scan's answers into gScans and gKept, and joins the worker
+// (it has set Done and is leaving). GUI thread only; cheap when there is nothing to do.
+void publishScan() {
+    if (gScanPublished) { return; }
+    ScanOutcome out;
+    {
+        const std::lock_guard<std::mutex> lock(gScanMutex);
+        if (gScanState != ScanState::Done) { return; }
+        out = std::move(gScanOutcome);
+        gScanOutcome = ScanOutcome();
+    }
+    gScanPublished = true;
+    if (gScanThread.joinable()) { gScanThread.join(); }
+    for (auto& [face, scan] : out.scans) {
+        CjkScan& mine = gScans[face];
+        if (mine.started) { continue; }  // decided on demand while the worker ran: that stands
+        mine = std::move(scan);
+        for (const CjkPick& p : mine.found) {
+            if (const auto b = out.bytes.find(p.path); b != out.bytes.end()) { keep(p.path, b->second); }
+        }
+    }
+}
+
+// The first usable face of `face` (k = 0), or the k-th when asked: the EXACT
+// answer. Waits for a scan that is deciding this standard rather than reading
+// its files again beside it; with no scan started it walks the candidates itself,
+// on the calling thread, as it always did.
 const CjkPick* usableCjk(scripts::CjkFace face, std::size_t k) {
+    publishScan();
     CjkScan& s = gScans[static_cast<int>(face)];
+    if (!s.started && scanRunning()) { waitForSystemFontScan(); }  // which publishes
     if (!s.started) {
         s.started = true;
         s.candidates = scripts::systemCandidates(face, kWindows);
@@ -136,11 +360,20 @@ const CjkPick* usableCjk(scripts::CjkFace face, std::size_t k) {
         const int index = fontprobe::pickFace(b->data(), b->size(), c.nameHint,
                                               scripts::probeCodePoints(face));
         if (index < 0) { continue; }
+        keep(path, b);  // usable: pin() will want these bytes, not another read
         const std::string file = std::filesystem::path(path).filename().string();
         s.found.push_back(CjkPick{path, file + "#" + std::to_string(index), index});
     }
     return k < s.found.size() ? &s.found[k] : nullptr;
 }
+
+// A static backstop: whatever path the process leaves by, a worker still
+// reading is joined, never destroyed joinable (which is std::terminate). Defined
+// after the thread and the mutex it uses, so it is destroyed before them.
+// Application teardown calls shutdown() itself, earlier, before ImGui goes.
+struct ScanJoiner {
+    ~ScanJoiner() { shutdown(); }
+} gScanJoiner;
 
 ChainFace pinCjk(const CjkPick& p) {
     const Bytes b = pin(p.path);
@@ -490,6 +723,9 @@ scripts::CjkFace faceOf(const std::string& code) {
 
 }  // namespace
 
+// The EXACT answer, which waits for a running scan: fonts.hpp states the one
+// residual that follows (the language section's "Automatic (...)" and country
+// keys, once, on its first frame, for about four bulk file reads).
 bool canDraw(const std::string& languageCode) {
     const scripts::CjkFace face = faceOf(languageCode);
     return face == scripts::CjkFace::None || usableCjk(face, 0) != nullptr;
@@ -498,6 +734,69 @@ bool canDraw(const std::string& languageCode) {
 const char* unavailableReason(const std::string& languageCode) {
     if (canDraw(languageCode)) { return ""; }
     return scripts::missingFontReason(faceOf(languageCode), kWindows);
+}
+
+// The same answer as canDraw() wherever it is known, and never a wait: while the
+// system-font scan has not decided this standard it starts the scan (once) and
+// says Checking. The language list asks this for every row of every frame.
+Drawable canDrawNow(const std::string& languageCode) {
+    const scripts::CjkFace face = faceOf(languageCode);
+    if (face == scripts::CjkFace::None) { return Drawable::Yes; }
+    publishScan();
+    if (const auto it = gScans.find(static_cast<int>(face)); it != gScans.end() && it->second.started) {
+        return it->second.found.empty() ? Drawable::No : Drawable::Yes;
+    }
+    // A finished scan that still has no answer for this standard (it could not
+    // get a thread): the on-demand walk, which is what canDraw() is.
+    if (scanDone()) { return usableCjk(face, 0) != nullptr ? Drawable::Yes : Drawable::No; }
+    startSystemFontScan();
+    return Drawable::Checking;
+}
+
+void waitForSystemFontScan() {
+    {
+        std::unique_lock<std::mutex> lock(gScanMutex);
+        gScanCv.wait(lock, [] { return gScanState != ScanState::Running; });
+    }
+    publishScan();
+}
+
+void shutdown() {
+    gScanCancel.store(true);
+    if (gScanThread.joinable()) { gScanThread.join(); }
+}
+
+void setReadDelayForTests(unsigned ms) { gReadDelayMs.store(ms); }
+
+std::map<std::string, int> fileReadCountsForTests() {
+    const std::lock_guard<std::mutex> lock(gReadCountsMutex);
+    return gReadCounts;
+}
+
+std::vector<unsigned char> readFileForTests(const std::string& path) {
+    const Bytes b = readFile(path);
+    return b != nullptr ? *b : std::vector<unsigned char>();
+}
+
+std::size_t keptBytesForTests() { return gKept.size(); }
+
+void resetScanForTests() {
+    shutdown();  // a worker still reading finishes its file and goes
+    gScanCancel.store(false);
+    {
+        const std::lock_guard<std::mutex> lock(gScanMutex);
+        gScanState = ScanState::NotStarted;
+        gScanOutcome = ScanOutcome();
+    }
+    gScanPublished = false;
+    gScans.clear();
+    gKept.clear();
+    for (auto it = gPinned.begin(); it != gPinned.end();) {
+        const unsigned char* d = it->second->data();
+        it = (d == gGeorgia.data || d == gGeorgiaBold.data) ? std::next(it) : gPinned.erase(it);
+    }
+    const std::lock_guard<std::mutex> lock(gReadCountsMutex);
+    gReadCounts.clear();
 }
 
 void applyLanguage(const std::string& languageCode) {
@@ -514,15 +813,19 @@ void setPreferredPair(const std::string& pair) {
     }
 }
 
+// The names' faces need to know which system faces exist, and that is the
+// background scan's to find out (see the scan above). So this starts it and
+// notes the request; it does NOT mark the atlas dirty: applyPending() adds the
+// names the first time it runs after the scan is done.
 void requestLanguageNames() {
-    if (!gWantNames) {
-        gWantNames = true;
-        gDirty = true;
-    }
+    gWantNames = true;
+    startSystemFontScan();
 }
 
 bool applyPending() {
-    if (!gDirty || gUi == nullptr) { return false; }
+    publishScan();
+    const bool namesReady = gWantNames && !gNamesDone && scanDone();
+    if ((!gDirty && !namesReady) || gUi == nullptr) { return false; }
     gDirty = false;
     const Chain c = planChain(gWantLanguage);
     bool changed = false;
@@ -545,9 +848,19 @@ bool applyPending() {
         extendChain(gReading, rd, readingReference(), "Reading", gChainReading);
         changed = true;
     }
-    if (gWantNames && !gNamesDone && gUi != nullptr) {
+    if (gWantNames && !gNamesDone && gUi != nullptr && scanDone()) {
         gNamesDone = true;
         changed = addNamesFaces() || changed;
+        // THE FOOTPRINT AFTER OPENING THE LIST IS WHAT IT ALWAYS WAS. The scan
+        // kept the bytes of the first usable face of every standard; the names
+        // pass has just pinned the ones it needed, and pin() takes a file out of
+        // gKept. What is left is files only LOOKED AT (JhengHei and Yu Gothic on a
+        // desktop where YaHei already draws their names: 35 MB), and nothing
+        // needs them now, so they go. A language chosen later whose file was let
+        // go - Japanese, say - reads it once more, in one bulk read, on the GUI
+        // thread, when it is put in a chain: that is the price of not holding 35 MB
+        // for everyone for a choice most never make.
+        gKept.clear();
     }
     return changed;
 }
