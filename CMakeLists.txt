@@ -388,6 +388,9 @@ if(WIN32)
     # makes (core/store_update.cpp, 0.99.53): RoGetActivationFactory and the
     # HSTRING functions C++/WinRT calls. Inbox on Windows 10+, like the above.
     target_link_libraries(cascade_lib PUBLIC runtimeobject)
+    # The common file dialog, for the BROWSE key a PATH settings field draws
+    # (core/file_pick.cpp, 0.99.74): GetOpenFileNameW. Inbox, like the above.
+    target_link_libraries(cascade_lib PUBLIC comdlg32)
 endif()
 
 if(NOT WIN32)

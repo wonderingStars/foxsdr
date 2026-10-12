@@ -330,6 +330,7 @@ const CapabilityName kCapabilityNames[] = {
     {"CASCADE_CAP_AUDIO_PROCESSOR", CASCADE_CAP_AUDIO_PROCESSOR},
     {"CASCADE_CAP_SETTINGS_UI", CASCADE_CAP_SETTINGS_UI},
     {"CASCADE_CAP_RECEIVER_LOCATOR", CASCADE_CAP_RECEIVER_LOCATOR},
+    {"CASCADE_CAP_TX_AUDIO", CASCADE_CAP_TX_AUDIO},
 };
 
 // Reads the shop-window fields of one catalogue entry into `e`. Never fails.
@@ -1411,6 +1412,217 @@ PluginRepo::RegionalMergeResult PluginRepo::mergeRegional(
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// Plugin sites (see the PLUGIN SITES block in the header)
+// ---------------------------------------------------------------------------
+
+std::string PluginRepo::catalogueKey(const std::string& source, const std::string& id) {
+    if (source.empty()) { return id; }
+    return id + "@" + siteLabel(source);
+}
+
+std::string PluginRepo::urlHost(const std::string& url) {
+    if (!isHttpsUrl(url)) { return {}; }
+    const std::size_t start = 8;  // past "https://"
+    std::size_t end = url.find_first_of("/?#", start);
+    if (end == std::string::npos) { end = url.size(); }
+    const std::string authority = url.substr(start, end - start);
+    if (authority.empty()) { return {}; }
+    // Userinfo ("good.example@evil.example"), a backslash (a browser reads it as a
+    // slash), a space, a control character or a byte >= 0x80 anywhere in the
+    // authority: not a host this code will lock anything to. Refused outright
+    // rather than parsed, because a parser that guesses which half is the host is
+    // exactly how a host lock gets walked around.
+    for (char c : authority) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (c == '@' || c == '\\' || u <= 0x20 || u >= 0x7F) { return {}; }
+    }
+    std::string host;
+    std::string port;
+    if (authority.front() == '[') {
+        const std::size_t close = authority.find(']');
+        if (close == std::string::npos) { return {}; }
+        host = authority.substr(0, close + 1);
+        for (std::size_t i = 1; i < close; ++i) {
+            if (!isHexDigit(authority[i]) && authority[i] != ':' && authority[i] != '.') { return {}; }
+        }
+        if (close + 1 < authority.size()) {
+            if (authority[close + 1] != ':') { return {}; }
+            port = authority.substr(close + 2);
+        }
+    } else {
+        const std::size_t colon = authority.find(':');
+        host = colon == std::string::npos ? authority : authority.substr(0, colon);
+        if (colon != std::string::npos) { port = authority.substr(colon + 1); }
+        if (host.empty()) { return {}; }
+        for (char c : host) {
+            const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
+            if (!ok) { return {}; }
+        }
+    }
+    if (authority.find(':') != std::string::npos && authority.front() != '[' && port.empty()) {
+        return {};  // "host:" - an empty port is a malformed authority
+    }
+    if (!port.empty()) {
+        if (port.size() > 5 || !allDigits(port)) { return {}; }
+        if (port == "443") { port.clear(); }  // the default: "host" and "host:443" are one host
+    }
+    host = toLowerAscii(host);
+    return port.empty() ? host : host + ":" + port;
+}
+
+std::string PluginRepo::siteLabel(const std::string& siteUrl) {
+    const std::string host = urlHost(siteUrl);
+    if (!host.empty()) { return host; }
+    if (siteUrl.find("://") != std::string::npos) { return siteUrl; }  // not a usable address: shown as it is
+    // A local file: its name, which is what tells two files apart in a list.
+    const std::size_t cut = siteUrl.find_last_of("/\\");
+    if (cut == std::string::npos || cut + 1 >= siteUrl.size()) { return siteUrl; }
+    return siteUrl.substr(cut + 1);
+}
+
+std::string PluginRepo::siteDisplay(const std::string& siteUrl, std::size_t maxChars) {
+    std::string s = siteUrl;
+    if (urlHost(siteUrl).empty() == false) {
+        s = siteUrl.substr(8);  // past "https://"
+    }
+    if (s.size() <= maxChars) { return s; }
+    if (maxChars < 8) { return s.substr(0, maxChars); }
+    const std::size_t keep = maxChars - 3;
+    std::size_t left = keep / 2 + keep % 2;
+    std::size_t rightStart = s.size() - keep / 2;
+    // Never cut inside a multi-byte character: a continuation byte is 10xxxxxx.
+    while (left > 0 && (static_cast<unsigned char>(s[left]) & 0xC0) == 0x80) { --left; }
+    while (rightStart < s.size() && (static_cast<unsigned char>(s[rightStart]) & 0xC0) == 0x80) {
+        ++rightStart;
+    }
+    return s.substr(0, left) + "..." + s.substr(rightStart);
+}
+
+bool PluginRepo::normaliseSiteUrl(const std::string& raw, std::string& out, std::string& error) {
+    out.clear();
+    error.clear();
+    std::size_t b = 0;
+    std::size_t e = raw.size();
+    while (b < e && (raw[b] == ' ' || raw[b] == '\t')) { ++b; }
+    while (e > b && (raw[e - 1] == ' ' || raw[e - 1] == '\t' || raw[e - 1] == '\r' ||
+                     raw[e - 1] == '\n')) {
+        --e;
+    }
+    const std::string s = raw.substr(b, e - b);
+    if (s.empty()) {
+        error = "the site address is empty";
+        return false;
+    }
+    if (s.size() > 2048) {
+        error = "the site address is longer than 2048 characters";
+        return false;
+    }
+    for (char c : s) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7F) {
+            error = "the site address contains a control character";
+            return false;
+        }
+    }
+    if (s.find("://") != std::string::npos) {
+        if (!isHttpsUrl(s)) {
+            error = "a site address must start with https:// (or be the path of a local index.json)";
+            return false;
+        }
+        if (urlHost(s).empty()) {
+            error = "the site address has no usable host name";
+            return false;
+        }
+    }
+    out = s;
+    return true;
+}
+
+bool PluginRepo::siteFilesAllowed(const std::string& url, const std::string& siteUrl) {
+    // A local index has no host to lock to: its file is the user's own.
+    if (siteUrl.find("://") == std::string::npos) { return true; }
+    const std::string want = urlHost(siteUrl);
+    if (want.empty()) { return false; }
+    return urlHost(url) == want;
+}
+
+std::string PluginRepo::siteCacheFileName(const std::string& siteUrl) {
+    if (siteUrl.empty()) { return {}; }  // no address, no kept copy
+    std::string hex;
+    std::string err;
+    if (!sha256Hex(siteUrl.data(), siteUrl.size(), hex, err) || hex.size() < 16) { return {}; }
+    return "catalogue-" + hex.substr(0, 16) + ".json";
+}
+
+std::string PluginRepo::siteCacheTimeFileName(const std::string& siteUrl) {
+    const std::string json = siteCacheFileName(siteUrl);
+    return json.empty() ? std::string() : json + ".time";
+}
+
+bool PluginRepo::isSiteCacheFile(const std::string& fileName) {
+    // "catalogue-" + 16 lower-case hex + ".json" | ".json.time" | either + ".part".
+    std::string rest = fileName;
+    const std::string head = "catalogue-";
+    if (rest.size() <= head.size() || rest.compare(0, head.size(), head) != 0) { return false; }
+    rest = rest.substr(head.size());
+    if (rest.size() < 16) { return false; }
+    for (std::size_t i = 0; i < 16; ++i) {
+        const char c = rest[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { return false; }
+    }
+    rest = rest.substr(16);
+    return rest == ".json" || rest == ".json.time" || rest == ".json.part" ||
+           rest == ".json.time.part";
+}
+
+PluginRepo::SiteMergeResult PluginRepo::mergeSite(
+    const std::vector<PluginCatalogEntry>& listed,
+    const std::vector<PluginCatalogEntry>& siteEntries, const std::string& siteUrl) {
+    SiteMergeResult result;
+    result.merged = listed;
+    // AN EMPTY ADDRESS ADMITS NOTHING: an entry with an empty `source` is the
+    // official one, and this function must never be how one is made.
+    if (siteUrl.empty()) {
+        result.hiddenOffHost = static_cast<int>(siteEntries.size());
+        return result;
+    }
+    for (const PluginCatalogEntry& e : siteEntries) {
+        // The host lock first (rule 10): it is the graver finding, and an entry that
+        // fails both is counted once, as the one the user should hear about.
+        bool offHost = false;
+        for (const PluginPlatform& p : e.platforms) {
+            if (!siteFilesAllowed(p.url, siteUrl)) { offHost = true; break; }
+        }
+        if (!offHost) {
+            for (const CatalogScreenshot& s : e.screenshots) {
+                if (!siteFilesAllowed(s.url, siteUrl)) { offHost = true; break; }
+            }
+        }
+        if (offHost) {
+            ++result.hiddenOffHost;
+            continue;
+        }
+        // Official wins (rule 9): against everything already listed, which by now
+        // includes this site's own earlier entries.
+        bool taken = false;
+        for (const PluginCatalogEntry& l : result.merged) {
+            if (l.id == e.id) { taken = true; break; }
+        }
+        if (taken) {
+            ++result.hiddenSameId;
+            continue;
+        }
+        PluginCatalogEntry copy = e;
+        copy.source = siteUrl;
+        copy.regional = false;
+        result.merged.push_back(std::move(copy));
+        ++result.added;
+    }
+    return result;
+}
+
 const char* PluginRepo::hostOs() {
 #if defined(_WIN32)
     return "windows";
@@ -1804,6 +2016,9 @@ bool PluginRepo::parseManifest(const std::string& text, std::vector<InstalledPlu
                 continue;
             }
             (void)wantString(pj, "name", false, r.name, where, ignoredError);
+            // The site it was installed from (0.99.74); absent is the official
+            // catalogue, which is what every record written before sites was.
+            (void)wantString(pj, "source", false, r.source, where, ignoredError);
             // A manifest is a file on disk that a user, an installer or a bad
             // shutdown can have written. Its file name is put through exactly
             // the same guard as one that came off the wire, BEFORE any code
@@ -1836,7 +2051,7 @@ bool PluginRepo::parseManifest(const std::string& text, std::vector<InstalledPlu
 
             bool duplicate = false;
             for (const InstalledPlugin& existing : plugins) {
-                if (existing.id == r.id) {
+                if (existing.id == r.id && existing.source == r.source) {
                     duplicate = true;
                     break;
                 }
@@ -1874,6 +2089,7 @@ bool PluginRepo::parseManifest(const std::string& text, std::vector<InstalledPlu
                              ignoredError);
             (void)wantString(pj, "catalogueVersion", false, p.catalogueVersion, where,
                              ignoredError);
+            (void)wantString(pj, "source", false, p.source, where, ignoredError);
             const auto abiIt = pj.find("abiVersion");
             if (abiIt != pj.end() && abiIt->is_number_unsigned()) {
                 const std::uint64_t v = abiIt->get<std::uint64_t>();
@@ -1882,7 +2098,7 @@ bool PluginRepo::parseManifest(const std::string& text, std::vector<InstalledPlu
             p.known = true;
             bool duplicate = false;
             for (const CachedPolicy& existing : policies) {
-                if (existing.id == p.id) {
+                if (existing.id == p.id && existing.source == p.source) {
                     duplicate = true;
                     break;
                 }
@@ -1905,6 +2121,10 @@ std::string PluginRepo::serialiseManifest(const std::vector<InstalledPlugin>& pl
     for (const InstalledPlugin& r : plugins) {
         json e;
         e["id"] = r.id;
+        // Written only for a site's plugin, so an official record's bytes are
+        // exactly what they were before sites existed (and an older build, which
+        // ignores the key, reads a site's record as it would any other).
+        if (!r.source.empty()) { e["source"] = r.source; }
         e["name"] = r.name;
         e["version"] = r.version;
         e["file"] = r.file;
@@ -1921,6 +2141,7 @@ std::string PluginRepo::serialiseManifest(const std::vector<InstalledPlugin>& pl
         }
         json e;
         e["id"] = p.id;
+        if (!p.source.empty()) { e["source"] = p.source; }
         e["minSupportedVersion"] = p.minSupportedVersion;
         e["catalogueVersion"] = p.catalogueVersion;
         e["abiVersion"] = p.abiVersion;
@@ -2101,13 +2322,19 @@ std::string PluginRepo::changedSinceInstallNote(const std::vector<InstalledPlugi
 
 CachedPolicy PluginRepo::policyFor(const std::vector<CachedPolicy>& policies,
                                    const std::string& id) {
+    return policyFor(policies, std::string(), id);
+}
+
+CachedPolicy PluginRepo::policyFor(const std::vector<CachedPolicy>& policies,
+                                   const std::string& source, const std::string& id) {
     for (const CachedPolicy& p : policies) {
-        if (p.id == id) {
+        if (p.id == id && p.source == source) {
             return p;
         }
     }
     CachedPolicy none;
     none.id = id;
+    none.source = source;
     none.known = false;  // explicit: this is THE fail-open state
     return none;
 }
@@ -2120,13 +2347,15 @@ void PluginRepo::mergePolicies(std::vector<CachedPolicy>& cached,
         }
         CachedPolicy fresh;
         fresh.id = e.id;
+        fresh.source = e.source;
         fresh.known = true;
         fresh.minSupportedVersion = e.minSupportedVersion;
         fresh.catalogueVersion = e.version;
         fresh.abiVersion = e.abiVersion;
         bool replaced = false;
         for (CachedPolicy& p : cached) {
-            if (p.id == e.id) {
+            // (source, id): a site's entry replaces only that site's own policy.
+            if (p.id == e.id && p.source == e.source) {
                 p = fresh;
                 replaced = true;
                 break;
@@ -2148,7 +2377,7 @@ namespace {
 bool sameCachedPolicies(const std::vector<CachedPolicy>& a, const std::vector<CachedPolicy>& b) {
     if (a.size() != b.size()) { return false; }
     for (std::size_t i = 0; i < a.size(); ++i) {
-        if (a[i].id != b[i].id || a[i].known != b[i].known ||
+        if (a[i].id != b[i].id || a[i].source != b[i].source || a[i].known != b[i].known ||
             a[i].minSupportedVersion != b[i].minSupportedVersion ||
             a[i].catalogueVersion != b[i].catalogueVersion ||
             a[i].abiVersion != b[i].abiVersion) {
@@ -2280,7 +2509,7 @@ std::vector<BlockedPlugin> PluginRepo::blockedPlugins(
     const std::vector<InstalledPlugin>& installed, const std::vector<CachedPolicy>& policies) {
     std::vector<BlockedPlugin> out;
     for (const InstalledPlugin& p : installed) {
-        const CachedPolicy policy = policyFor(policies, p.id);
+        const CachedPolicy policy = policyFor(policies, p.source, p.id);
         const PluginBlockReason r = pluginBlockReason(p, policy);
         if (r == PluginBlockReason::None) {
             continue;
@@ -2299,7 +2528,7 @@ std::size_t PluginRepo::blockedCount(const std::vector<InstalledPlugin>& install
                                      const std::vector<CachedPolicy>& policies) {
     std::size_t n = 0;
     for (const InstalledPlugin& p : installed) {
-        if (pluginBlockReason(p, policyFor(policies, p.id)) != PluginBlockReason::None) {
+        if (pluginBlockReason(p, policyFor(policies, p.source, p.id)) != PluginBlockReason::None) {
             ++n;
         }
     }
@@ -2317,9 +2546,11 @@ std::vector<PluginUpdate> PluginRepo::planUpdates(const std::vector<PluginCatalo
         if (e.id.empty()) {
             continue;
         }
+        // BY (source, id) (0.99.74): an installed plugin updates only from the
+        // source it came from.
         const InstalledPlugin* have = nullptr;
         for (const InstalledPlugin& p : installed) {
-            if (p.id == e.id) {
+            if (p.id == e.id && p.source == e.source) {
                 have = &p;
                 break;
             }
@@ -2366,6 +2597,7 @@ std::vector<PluginUpdate> PluginRepo::planUpdates(const std::vector<PluginCatalo
             continue;  // same version, same ABI: already up to date
         }
         u.id = e.id;
+        u.source = e.source;
         u.fromVersion = have->version;
         u.toVersion = e.version;
         u.entry = &e;
@@ -2404,10 +2636,10 @@ InstallState PluginRepo::installStateFor(const PluginCatalogEntry& e,
 
     // THE SCAN FIRST: what the module itself declares is what is running.
     for (const ScannedModule& m : scanned) {
-        if (m.id == e.id) { consider(m.version); }
+        if (m.id == e.id && m.source == e.source) { consider(m.version); }
     }
     for (const InstalledPlugin& r : installed) {
-        if (r.id != e.id) { continue; }
+        if (r.id != e.id || r.source != e.source) { continue; }
         // A record whose file the user deleted is not an installed plugin, and
         // updating it would put back what they removed (planUpdates says the same).
         if (r.missingFromDisk) { continue; }
@@ -2415,7 +2647,7 @@ InstallState PluginRepo::installStateFor(const PluginCatalogEntry& e,
         // The scan wins where both know the module - the file is the join.
         bool scanKnowsIt = false;
         for (const ScannedModule& m : scanned) {
-            if (m.id == e.id && iequalsAscii(m.file, r.file)) {
+            if (m.id == e.id && m.source == e.source && iequalsAscii(m.file, r.file)) {
                 scanKnowsIt = true;
                 break;
             }
@@ -2618,6 +2850,53 @@ bool PluginRepo::fetchRegionalIndex(const std::string& url, std::vector<PluginCa
     return parseIndex(body, out, error);
 }
 
+bool PluginRepo::fetchSiteIndex(const std::string& url, std::vector<PluginCatalogEntry>& out,
+                                std::string& rawText, std::vector<std::string>& report,
+                                std::string& error) {
+    out.clear();
+    rawText.clear();
+    report.clear();
+    error.clear();
+
+    // RULE 1, before any socket exists - and for a site the refusal is SHOWN, so it
+    // says what the user can do about it.
+    if (!isHttpsUrl(url)) {
+        error = "refusing a non-https site address: \"" + url + "\"";
+        return false;
+    }
+    std::string body;
+    body.reserve(8 * 1024);
+    // THE CAP IS ENFORCED AS THE BYTES ARRIVE, in the sink: a transport that does
+    // not count (a test's) and the real one end in the same place, and a site that
+    // streams for ever fills at most kMaxSiteIndexBytes of memory.
+    bool overCap = false;
+    const auto sink = [&body, &overCap](const void* p, std::size_t n) {
+        if (body.size() + n > kMaxSiteIndexBytes) {
+            overCap = true;
+            return false;
+        }
+        body.append(static_cast<const char*>(p), n);
+        return true;
+    };
+    // cancel_ is shared and NOT reset, exactly as fetchRegionalIndex() leaves it: a
+    // cancel() aimed at the official fetch this follows must still stop this one.
+    // The same short leash as the regional list: 4 s to connect, 8 s to receive.
+    if (!httpsGet(url, kMaxSiteIndexBytes, sink, nullptr, &cancel_, error,
+                  HttpTimeouts{/*connectMs=*/4000, /*sendMs=*/4000, /*receiveMs=*/8000})) {
+        if (overCap) {
+            error = "the site's index is larger than " +
+                    std::to_string(kMaxSiteIndexBytes / 1024ull) + " KiB and was refused";
+        }
+        return false;
+    }
+    if (!parseIndex(body, out, error, &report)) {
+        report.clear();
+        return false;
+    }
+    rawText = std::move(body);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // The catalogue cache (0.99.72)
 // ---------------------------------------------------------------------------
@@ -2663,19 +2942,30 @@ bool writeWholeFileAtomically(const fs::path& target, const std::string& text,
 
 }  // namespace
 
-bool PluginRepo::saveCatalogueCache(const std::string& pluginsDir, const std::string& rawIndexText,
-                                    std::int64_t readTimeUnix, std::string& error) {
+namespace {
+
+// The one body of both kept copies: the official catalogue's (catalogue.json) and a
+// plugin site's (catalogue-<hex>.json). The names and the cap are the only things that
+// differ, so the rules - text that parsed, text first, each file whole through ".part"
+// and one rename - are written once.
+bool saveKeptCopy(const std::string& pluginsDir, const std::string& jsonName,
+                  const std::string& timeName, std::uint64_t cap, const std::string& rawIndexText,
+                  std::int64_t readTimeUnix, std::string& error) {
     error.clear();
     if (pluginsDir.empty()) {
         error = "no plugins directory to keep the catalogue in";
+        return false;
+    }
+    if (jsonName.empty() || timeName.empty()) {
+        error = "there is no file name to keep the catalogue under";
         return false;
     }
     if (rawIndexText.empty()) {
         error = "there is no catalogue text to keep";
         return false;
     }
-    if (rawIndexText.size() > kMaxIndexBytes) {
-        error = "the catalogue is larger than the " + std::to_string(kMaxIndexBytes) +
+    if (rawIndexText.size() > cap) {
+        error = "the catalogue is larger than the " + std::to_string(cap) +
                 "-byte limit, so it is not kept";
         return false;
     }
@@ -2685,7 +2975,7 @@ bool PluginRepo::saveCatalogueCache(const std::string& pluginsDir, const std::st
     {
         std::vector<PluginCatalogEntry> scratch;
         std::string parseError;
-        if (!parseIndex(rawIndexText, scratch, parseError)) {
+        if (!PluginRepo::parseIndex(rawIndexText, scratch, parseError)) {
             error = "the catalogue is not kept because it is not one: " + parseError;
             return false;
         }
@@ -2696,21 +2986,25 @@ bool PluginRepo::saveCatalogueCache(const std::string& pluginsDir, const std::st
         error = "cannot create the plugins directory \"" + pluginsDir + "\"";
         return false;
     }
-    if (!writeWholeFileAtomically(fs::path(pluginsDir) / catalogueCacheFileName(), rawIndexText,
-                                  error)) {
+    if (!writeWholeFileAtomically(fs::path(pluginsDir) / jsonName, rawIndexText, error)) {
         return false;
     }
-    return writeWholeFileAtomically(fs::path(pluginsDir) / catalogueCacheTimeFileName(),
+    return writeWholeFileAtomically(fs::path(pluginsDir) / timeName,
                                     std::to_string(readTimeUnix) + "\n", error);
 }
 
-bool PluginRepo::loadCachedIndex(const std::string& pluginsDir,
-                                 std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
-                                 std::string& error) {
+bool loadKeptCopy(const std::string& pluginsDir, const std::string& jsonName,
+                  const std::string& timeName, std::uint64_t cap,
+                  std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
+                  std::string& error) {
     entries.clear();
     readTime = 0;
     error.clear();
-    const fs::path file = fs::path(pluginsDir) / catalogueCacheFileName();
+    if (jsonName.empty() || timeName.empty()) {
+        error = "no catalogue has been kept yet";
+        return false;
+    }
+    const fs::path file = fs::path(pluginsDir) / jsonName;
     std::error_code ec;
     if (!fs::exists(file, ec)) {
         error = "no catalogue has been kept yet";
@@ -2721,13 +3015,12 @@ bool PluginRepo::loadCachedIndex(const std::string& pluginsDir,
         error = "the kept catalogue cannot be read";
         return false;
     }
-    if (text.size() > kMaxIndexBytes) {
-        error = "the kept catalogue is larger than the " + std::to_string(kMaxIndexBytes) +
-                "-byte limit";
+    if (text.size() > cap) {
+        error = "the kept catalogue is larger than the " + std::to_string(cap) + "-byte limit";
         return false;
     }
     std::string parseError;
-    if (!parseIndex(text, entries, parseError)) {
+    if (!PluginRepo::parseIndex(text, entries, parseError)) {
         entries.clear();
         error = "the kept catalogue is not usable and was ignored: " + parseError;
         return false;
@@ -2735,8 +3028,7 @@ bool PluginRepo::loadCachedIndex(const std::string& pluginsDir,
     // The time is a second file; its absence or damage costs the date, not the
     // list. 0 reads as "not recorded".
     std::string timeText;
-    if (readTextFile(fs::path(pluginsDir) / catalogueCacheTimeFileName(), timeText) ==
-        ReadResult::Ok) {
+    if (readTextFile(fs::path(pluginsDir) / timeName, timeText) == ReadResult::Ok) {
         while (!timeText.empty() && (timeText.back() == '\n' || timeText.back() == '\r' ||
                                      timeText.back() == ' ')) {
             timeText.pop_back();
@@ -2746,6 +3038,49 @@ bool PluginRepo::loadCachedIndex(const std::string& pluginsDir,
         }
     }
     return true;
+}
+
+}  // namespace
+
+bool PluginRepo::saveCatalogueCache(const std::string& pluginsDir, const std::string& rawIndexText,
+                                    std::int64_t readTimeUnix, std::string& error) {
+    return saveKeptCopy(pluginsDir, catalogueCacheFileName(), catalogueCacheTimeFileName(),
+                        kMaxIndexBytes, rawIndexText, readTimeUnix, error);
+}
+
+bool PluginRepo::loadCachedIndex(const std::string& pluginsDir,
+                                 std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
+                                 std::string& error) {
+    return loadKeptCopy(pluginsDir, catalogueCacheFileName(), catalogueCacheTimeFileName(),
+                        kMaxIndexBytes, entries, readTime, error);
+}
+
+bool PluginRepo::saveSiteCache(const std::string& pluginsDir, const std::string& siteUrl,
+                               const std::string& rawIndexText, std::int64_t readTimeUnix,
+                               std::string& error) {
+    return saveKeptCopy(pluginsDir, siteCacheFileName(siteUrl), siteCacheTimeFileName(siteUrl),
+                        kMaxSiteIndexBytes, rawIndexText, readTimeUnix, error);
+}
+
+bool PluginRepo::loadSiteCache(const std::string& pluginsDir, const std::string& siteUrl,
+                               std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
+                               std::string& error) {
+    return loadKeptCopy(pluginsDir, siteCacheFileName(siteUrl), siteCacheTimeFileName(siteUrl),
+                        kMaxSiteIndexBytes, entries, readTime, error);
+}
+
+bool PluginRepo::removeSiteCache(const std::string& pluginsDir, const std::string& siteUrl) {
+    const std::string json = siteCacheFileName(siteUrl);
+    const std::string time = siteCacheTimeFileName(siteUrl);
+    if (json.empty() || time.empty() || pluginsDir.empty()) { return false; }
+    bool allGone = true;
+    for (const std::string& name : {json, json + ".part", time, time + ".part"}) {
+        std::error_code ec;
+        const fs::path p = fs::path(pluginsDir) / name;
+        fs::remove(p, ec);
+        if (fs::exists(p, ec)) { allGone = false; }
+    }
+    return allGone;
 }
 
 // ---------------------------------------------------------------------------
@@ -2913,12 +3248,55 @@ bool PluginRepo::install(const PluginCatalogEntry& e, const std::string& plugins
     // THE ANONYMOUS COUNT OF A FAILED INSTALL (0.99.64, core/health_events.hpp):
     // one of network, hash, write, other - never the entry, the file or the
     // message. Every way in (the store's install, an update) comes through here.
-    // A cancelled transfer is not a failed install.
+    // A cancelled transfer is not a failed install. A SITE'S plugin is not counted
+    // (0.99.74): the counter is the official catalogue's, and a failure on someone
+    // else's server says nothing about it.
     health::InstallClass failClass = health::InstallClass::Other;
     const bool ok = installImpl(e, pluginsDir, installedPath, error, failClass);
-    if (!ok && error != "cancelled") { health::notePluginInstallFailed(failClass); }
+    if (!ok && error != "cancelled" && e.source.empty()) {
+        health::notePluginInstallFailed(failClass);
+    }
     return ok;
 }
+
+namespace {
+
+// RULE 11, for a site's entry: the reason `safeName` may not be written into
+// `pluginsDir` for it, or EMPTY when it may. A file the manifest records for a
+// DIFFERENT plugin is that plugin's; a file with no record at all is a
+// side-loaded module (or a record that was lost) - neither is something a site's
+// install may replace. The site's OWN earlier install of this very plugin is the
+// one thing it may overwrite: that is an update. Fails closed: a manifest that
+// cannot be read is not evidence the folder is empty, so an existing file stays
+// protected.
+std::string siteFileCollision(const std::string& pluginsDir, const PluginCatalogEntry& e,
+                              const std::string& safeName) {
+    std::vector<InstalledPlugin> plugins;
+    std::vector<CachedPolicy> policies;
+    std::vector<std::string> notes;
+    std::string perr;
+    std::string text;
+    std::error_code ec;
+    const fs::path mpath(PluginRepo::manifestPath(pluginsDir));
+    if (fs::exists(mpath, ec) && readTextFile(mpath, text) == ReadResult::Ok &&
+        PluginRepo::parseManifest(text, plugins, policies, notes, perr)) {
+        for (const InstalledPlugin& r : plugins) {
+            if (!iequalsAscii(r.file, safeName)) { continue; }
+            if (r.id == e.id && r.source == e.source) { return {}; }
+            return "\"" + e.name + "\" would write the file \"" + safeName +
+                   "\", which belongs to another plugin (\"" + r.id +
+                   "\"); a plugin from a site may not replace it";
+        }
+    }
+    if (fs::exists(fs::path(pluginsDir) / safeName, ec)) {
+        return "\"" + e.name + "\" would write the file \"" + safeName +
+               "\", which is already in the plugins folder and is not recorded as this plugin; "
+               "a plugin from a site may not replace it";
+    }
+    return {};
+}
+
+}  // namespace
 
 bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& pluginsDir,
                              std::string& installedPath, std::string& error,
@@ -2970,6 +3348,22 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
         error = "\"" + e.name + "\" is a regional catalogue entry and may only download from " +
                 regionalDownloadPrefix();
         return false;
+    }
+    // PLUGIN SITES, second enforcement of the host lock (rule 10) and the file rule
+    // (rule 11). Still before any socket and before the folder is touched: this
+    // function does not trust its caller to have gone through mergeSite(), the only
+    // place `source` is meant to be set.
+    if (!e.source.empty()) {
+        if (!siteFilesAllowed(p->url, e.source)) {
+            error = "\"" + e.name + "\" comes from " + siteLabel(e.source) +
+                    " and may only download from that site's own host";
+            return false;
+        }
+        const std::string collision = siteFileCollision(pluginsDir, e, safeName);
+        if (!collision.empty()) {
+            error = collision;
+            return false;
+        }
     }
 
     std::error_code ec;
@@ -3087,6 +3481,7 @@ bool PluginRepo::recordInstall(const std::string& pluginsDir, const PluginCatalo
 
     InstalledPlugin r;
     r.id = e.id;
+    r.source = e.source;
     r.name = e.name;
     r.version = e.version;
     r.file = safeName;
@@ -3098,7 +3493,7 @@ bool PluginRepo::recordInstall(const std::string& pluginsDir, const PluginCatalo
 
     bool replaced = false;
     for (InstalledPlugin& existing : inv.plugins) {
-        if (existing.id == r.id) {
+        if (existing.id == r.id && existing.source == r.source) {
             existing = r;
             replaced = true;
             break;

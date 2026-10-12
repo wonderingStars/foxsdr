@@ -240,7 +240,8 @@ extern "C" {
 #define CASCADE_CAP_AUDIO_PROCESSOR 0x00000800u /* host API level 1 - see below */
 #define CASCADE_CAP_SETTINGS_UI 0x00001000u /* host-drawn settings fields - see below */
 #define CASCADE_CAP_RECEIVER_LOCATOR 0x00002000u /* may read receiverLocator - see below */
-#define CASCADE_CAP_ALL_KNOWN 0x00003FFFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_TX_AUDIO 0x00004000u /* host API level 2: transmit audio under an operator-armed grant - see below */
+#define CASCADE_CAP_ALL_KNOWN 0x00007FFFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -299,6 +300,16 @@ extern "C" {
  * nothing from it - there is no client for the check to gate, the same way a
  * CASCADE_CAP_PRESET-only or CASCADE_CAP_SETTINGS_UI-only plugin is refused as
  * providing nothing usable.
+ *
+ * CASCADE_CAP_TX_AUDIO (0x4000, FoxSDR 0.99.74, HOST API LEVEL 2) is the first
+ * capability that lets a plugin cause RADIO FREQUENCY to leave the machine, and
+ * it is built to be the hardest one to use by accident: a separate per-plugin
+ * grant (off by default), an arming window the OPERATOR opens on the TRANSMIT
+ * page and that closes itself, and a host that - not the plugin - chooses the
+ * frequency, the power and the mode. See CascadeTxAudioApi below for the whole
+ * contract, and CASCADE_STATE_TX_GRANTED / _TX_ARMED / _TRANSMITTING for what
+ * the plugin is told. A plugin declaring it with no decoder capability for it to
+ * ride on is refused at load, with that reason.
  */
 
 /*
@@ -1128,6 +1139,113 @@ typedef struct CascadeAudioOutApi {
 } CascadeAudioOutApi;
 
 /* ==========================================================================
+ * CASCADE_CAP_TX_AUDIO - the plugin hands the host AUDIO TO TRANSMIT.
+ *
+ * (Host API level 2, FoxSDR 0.99.74.)
+ *
+ * Every other output capability produces something to look at or listen to.
+ * This one produces something that leaves the machine as RADIO FREQUENCY, and
+ * the whole design is the opposite of convenient on purpose: a data-mode
+ * plugin (a packet TNC, a Winlink-compatible link) needs to key a radio and
+ * send audio, and nothing else a plugin can do puts a signal on the air. So it
+ * is never the plugin that decides to transmit. The plugin says it WANTS to
+ * (active()); the HOST decides, against a list of conditions that the operator
+ * - a person at this machine - controls and that all have to hold at once.
+ *
+ * Rides on the first decoder instance like CASCADE_CAP_AUDIO_OUT (no
+ * create/destroy). The `handle` passed to pull() and active() is the handle the
+ * host got from the plugin's own decoder create(), in the fixed order
+ * CASCADE_CAP_DECODER, CASCADE_CAP_IQ_DECODER, CASCADE_CAP_IMAGE_DECODER, so the
+ * modem that decodes and the modem that transmits are one object with one
+ * lifetime. A plugin declaring TX_AUDIO with none of the three decoder
+ * capabilities has no instance to pull from and is refused at load, with that
+ * reason (a plugin that also declares AUDIO_OUT shares the one handle).
+ *
+ * pull(): called on the real-time audio thread, never concurrently with
+ * process/pull/active of the same handle; returns frames written (<= frames),
+ * 0 = nothing to send now (the host sends silence and keeps the key only while
+ * active() says so), <0 = stopped for good.
+ * active(): non-zero while the plugin wants the transmitter keyed.
+ *
+ * The HOST keys only when ALL of: the plugin holds the TRANSMIT grant (per
+ * plugin, off by default, offered on the plugin's plate after it first asks,
+ * like SETTINGS), the operator's arming window on the TRANSMIT page is open
+ * (ARM n minutes, auto-disarm, never restored from config), the TRANSMIT page
+ * is live and tick() fresh, active() non-zero. The host unkeys on: active()
+ * zero, pull() < 0, the arming window closing, the page closing, a device
+ * fault, the grant being withdrawn, or 60 s of continuous key (the latch cap);
+ * the plugin learns the state through get_state flags. The plugin never chooses
+ * frequency, power or mode; the host modulates pull()'s audio with the page's
+ * mode (NFM with pre-emphasis OFF for data) and power. No host before this one
+ * offers the table (older hosts ignore the bit).
+ *
+ * WHAT "ASKS" MEANS, because the grant is offered only to a plugin that has
+ * asked: active() has returned non-zero at least once. The host polls active()
+ * of every TX_AUDIO instance once per audio block, granted or not, exactly as
+ * it does for AUDIO_OUT - so a plugin that has never wanted the transmitter has
+ * no key on its plate, and a control that grants nothing anyone reads is never
+ * drawn. Polling costs the plugin nothing and puts nothing on the air.
+ *
+ * WHEN pull() IS CALLED. Only while the host has KEYED the transmitter for this
+ * plugin, never before: a plugin that has not been keyed is never asked for
+ * audio, so it cannot send anything ahead of the key. Each call asks for
+ * the shortfall of a 100 ms lead (at most 4800 frames at once) and the host
+ * reads the audio out of a 1 s ring on its own transmit thread, so the audio is
+ * on the air up to about 100 ms after pull() returned it. If the plugin has no
+ * audio at a given instant, 0 is the right answer: the host sends silence and
+ * the key stays down only while active() says so.
+ *
+ * ENDING A TRANSMISSION. When active() reads zero the host stops asking for
+ * audio and lets what pull() already returned play out - at most the 100 ms
+ * above - and then opens the key, so a plugin that drops active() right after
+ * its last sample still gets that sample on the air. EVERY OTHER REASON TO
+ * UNKEY IS IMMEDIATE and discards what was queued: the arming window closing,
+ * the page closing, a fault, the grant being withdrawn, the 60 s cap, pull()
+ * returning a negative number. The transmitter ramps its carrier down over a
+ * few milliseconds on every one of them; none of them waits for the plugin.
+ *
+ * THE 60 SECOND CAP is the latch's own (core/transmitter.hpp): one continuous
+ * key is never longer than a minute, whatever the plugin wants. When it fires
+ * the arming window closes with it, so a plugin that holds active() high for ever
+ * cannot simply key again; the operator has to arm it again. A modem whose
+ * frames are seconds long never comes near it.
+ *
+ * ONE PLUGIN AT A TIME. Exactly one plugin may hold the transmitter: the first
+ * in load order that is granted and has active() non-zero. A second one gets no
+ * pull() and is told through its plate, and is never silently interleaved.
+ *
+ * WHAT THE HOST DOES WITH THE AUDIO. Mono, 48000 Hz, float, nominally in
+ * [-1, +1]. The host replaces a NaN or an infinity with silence and clamps to
+ * +/-1 before the modulator sees it. The mode (the TRANSMIT page's, or NFM with
+ * pre-emphasis off when the operator has ticked DATA (flat), which is the
+ * default for a plugin) and the transmit power are the OPERATOR'S; the
+ * frequency is the page's frequency. A plugin that wants a different one can
+ * tell the user in its own words, and cannot make it so. This host takes 48000
+ * Hz and one channel only: any other rate or channel count is refused at load,
+ * and so is a non-zero `flags` (reserved).
+ *
+ * WHAT THE PLUGIN IS TOLD, through get_state's flags: CASCADE_STATE_TX_GRANTED
+ * while it holds the grant, CASCADE_STATE_TX_ARMED while the operator's arming
+ * window is open, CASCADE_STATE_TRANSMITTING while the transmitter is keyed
+ * for it. The last two are set only for a client that declared this capability.
+ * They are read from a snapshot the host publishes once a frame, so a plugin
+ * sees a change within about one frame (~16 ms) and not instantly.
+ *
+ * REAL-TIME RULES, the same as every other table: no blocking lock, no
+ * allocation, no file or network I/O, no logging, no throw, inside pull() or
+ * active(). EVERY function pointer here must be non-NULL.
+ * ==========================================================================
+ */
+typedef struct CascadeTxAudioApi {
+    uint32_t structSize;   /* sizeof(CascadeTxAudioApi) as the PLUGIN compiled it */
+    uint32_t sampleRateHz; /* the rate pull() delivers; this host takes 48000 only */
+    uint32_t channels;     /* 1 */
+    uint32_t flags;        /* 0 */
+    int32_t (*pull)(void *handle, float *mono, size_t frames);
+    int32_t (*active)(void *handle);
+} CascadeTxAudioApi;
+
+/* ==========================================================================
  * CASCADE_CAP_AUDIO_PROCESSOR - the plugin TRANSFORMS the receiver's audio.
  *
  * (Host API level 1, FoxSDR 0.99.31.)
@@ -1319,7 +1437,7 @@ typedef struct CascadeAudioProcessorApi {
  * into an unloaded image.
  *
  * ---------------------------------------------------------------------------
- * PERMISSION - two grants, both per plugin, both off by default
+ * PERMISSION - three grants, all per plugin, all off by default
  * ---------------------------------------------------------------------------
  *
  *   TUNE (the grant request_tune has always needed; the user's "GRANT
@@ -1327,11 +1445,17 @@ typedef struct CascadeAudioProcessorApi {
  *   SETTINGS (new, a separate "GRANT RADIO SETTINGS" key): set_mode,
  *   set_bandwidth, set_squelch, set_sample_rate, set_gain, set_device_agc,
  *   set_running, set_volume, set_muted.
+ *   TRANSMIT (host API level 2, a separate "GRANT TRANSMIT" key): the right to
+ *   hand the host audio to transmit through CASCADE_CAP_TX_AUDIO. It is not a
+ *   function of this table and it is not enough on its own - the operator's
+ *   arming window on the TRANSMIT page has to be open too, and the host decides
+ *   the frequency, the power and the mode.
  *
  * They are separate so that a grant a user gave a satellite tracker to follow
  * Doppler keeps meaning exactly that and nothing more. A refused call answers
  * CASCADE_API_DENIED, and the host offers the SETTINGS key only to a plugin
- * that has asked at least once. A STOPPED plugin is refused everything.
+ * that has asked at least once (and the TRANSMIT key only to one whose active()
+ * has been non-zero at least once). A STOPPED plugin is refused everything.
  * Reads, the settings store, log lines, markers and commands need no grant:
  * none of them can change what the receiver does.
  *
@@ -1339,8 +1463,15 @@ typedef struct CascadeAudioProcessorApi {
  * access, no device enumeration or opening, no drawing surface. A plugin that
  * needs a file or a socket uses its own; routing them through the host would
  * only launder them.
+ *
+ * LEVEL 2 (FoxSDR 0.99.74) added CASCADE_CAP_TX_AUDIO and the three TX state
+ * flags, and nothing to this table: CascadeHostApi is byte-for-byte what level
+ * 1 had, so a level-1 plugin on this host and a level-2 plugin on a level-1
+ * host (which ignores the bit) both keep working. `apiLevel` is how a plugin
+ * learns the host will honour the new capability's semantics; the bit in
+ * `knownCapabilities` is the same answer for the one capability.
  */
-#define CASCADE_HOST_API_LEVEL 1u
+#define CASCADE_HOST_API_LEVEL 2u
 
 /* True when the host table `host` covers member `m` - i.e. the host that
  * filled it was built with that member. Use it before touching ANY member
@@ -1396,6 +1527,9 @@ typedef struct CascadeAudioProcessorApi {
 #define CASCADE_STATE_LOCATOR_KNOWN 0x00000800u  /* receiverLocator is valid for
                                                    * THIS client - see
                                                    * CASCADE_CAP_RECEIVER_LOCATOR */
+#define CASCADE_STATE_TX_GRANTED 0x00001000u     /* THIS plugin may send transmit audio */
+#define CASCADE_STATE_TX_ARMED 0x00002000u       /* the operator's arming window is open */
+#define CASCADE_STATE_TRANSMITTING 0x00004000u   /* the transmitter is keyed now */
 
 #define CASCADE_DEVICE_NAME_CHARS 64
 #define CASCADE_LOCATOR_CHARS 8 /* 6-char Maidenhead grid + NUL + 1 spare */
@@ -1725,8 +1859,13 @@ typedef struct CascadeHostApi {
  * or "" (unset/"0"), so a "Report to X" toggle costs nothing beyond one more
  * entry in the same table - there is no separate boolean store.
  *
- * VALIDATION IS THE PLUGIN'S JOB. The host enforces only `maxLength` (TEXT)
- * and that NUMBER/BOOL kinds parse as such; a callsign's shape, a locator's
+ * A PATH KIND (0.99.74) IS A TEXT FIELD FOR A FILE'S LOCATION: the host draws a
+ * BROWSE FILES key beside the box that opens its file dialog (offering programs
+ * first when the placeholder ends in ".exe"), and what is stored is the path as
+ * UTF-8 text, at most maxLength bytes, which the host never opens or checks.
+ *
+ * VALIDATION IS THE PLUGIN'S JOB. The host enforces only `maxLength` (TEXT,
+ * PATH) and that NUMBER/BOOL kinds parse as such; a callsign's shape, a locator's
  * four-or-six-character grid pattern, an antenna description's freeform text
  * - all of that is the plugin's to reject when it reads the value back, the
  * same way it would reject a malformed value from its own settings_set.
@@ -1751,6 +1890,7 @@ typedef struct CascadeHostApi {
 #define CASCADE_SETTING_TEXT 0u   /* a text box, up to maxLength UTF-8 bytes */
 #define CASCADE_SETTING_NUMBER 1u /* a numeric field; stored as decimal text */
 #define CASCADE_SETTING_BOOL 2u   /* a checkbox/toggle; stored as "1" or "" */
+#define CASCADE_SETTING_PATH 3u   /* a file path: a text box plus a BROWSE key that opens the host's file dialog (hosts from 0.99.74; older hosts skip the field) */
 
 typedef struct CascadeSettingSpec {
     /* sizeof(CascadeSettingSpec) as the PLUGIN compiled it. Checked; an
@@ -1771,7 +1911,7 @@ typedef struct CascadeSettingSpec {
     /* CASCADE_SETTING_*. */
     uint32_t kind;
 
-    /* TEXT only: the field's limit in UTF-8 bytes, 1..CASCADE_SETTING_VALUE_
+    /* TEXT and PATH: the field's limit in UTF-8 bytes, 1..CASCADE_SETTING_VALUE_
      * BYTES-1. Ignored for NUMBER and BOOL (0 is fine there). */
     uint32_t maxLength;
 

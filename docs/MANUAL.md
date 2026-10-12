@@ -30,7 +30,7 @@ are still moving. What is in the current build:
   lettered in the unit that stage is really measured in — decibels on every
   radio but the Airspy R2/Mini, whose gains are the hardware's own
   register steps and are shown as bare step numbers rather than invented
-  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead). Developed against an Ettus B200
+  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead); the AUTO key under the GAIN dial on the top bar is the same switch. Switching it off puts your manual gains back on the radio — some radios, a B200 among them, fall to the bottom of every stage when they leave automatic gain — and the sliders and the GAIN dial then show what the radio really holds. Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
   mean it runs with no radio at all.
   A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR
@@ -97,7 +97,7 @@ are still moving. What is in the current build:
   device path is ever written to the diagnostic log. `FOXSDR_GPS_PORT=<port>`
   (with `FOXSDR_GPS_BAUD`, default 9600) does the same read at start-up, in
   every run mode, for a bench with a receiver on it.
-- **A bench oscilloscope**, under VIEW. The demodulated audio drawn as a
+- **A bench oscilloscope**, under TOOLS. The demodulated audio drawn as a
   phosphor trace on a ten-by-eight graticule, with a 1-2-5 time base from 1 to
   50 ms a division, an attenuator that ranges itself (or steps by hand), and a
   rising-edge trigger with hold-off, which is what makes a tone or a vowel
@@ -117,14 +117,51 @@ are still moving. What is in the current build:
   half steps the digit up, the lower half down, holding either repeats, and
   the lever stays pointing the way it was last flicked. The SAMPLE RATE and
   FRAME TIME meters at the deck's right are on the bar at the window size the
-  application first opens with, not only once it is widened. Right-click
-  either meter to pick its own face - Classic, Analogue needle, LED ladder or
-  Peak meter - without changing what it reads.
+  application first opens with, not only once it is widened (the whole deck
+  is drawn about 8% smaller there, to keep them beside the three dials
+  below). Right-click either meter to pick its own face - Classic, Analogue
+  needle, LED ladder or Peak meter - without changing what it reads.
+- **Three dials on the deck: GAIN, SQUELCH and VOLUME**, left to right, in the
+  order the signal goes through the system, all one size, each answering a
+  drag round the dial or the wheel over it, with its setting printed under it.
+  **GAIN** sets the radio's first gain stage (the one the Source section lists
+  first, and the scope's gain knob drives) over that stage's own range, and
+  says N/A with no radio open and AUTO while automatic gain is on, when it is
+  dead; hover it for the stage's name. The **AUTO key** under it is the Source
+  section's Auto gain box - lit while the radio is gaining itself, and dark,
+  with a tooltip saying why, on a radio that has no automatic gain. **SQUELCH**
+  sets the level the receiver's channel must reach to be heard, the same
+  threshold as the Radio section's slider, from -120 to 0 dB. Its **AUTO key**
+  turns on AUTOMATIC squelch: the receiver measures the quietest the channel has
+  been over the last ten seconds - the noise floor - and keeps the threshold
+  8 dB above it, so weak carriers open it and the noise does not; the dial
+  follows. While the squelch is open the signal is being passed, which is not
+  the noise, so what the receiver reads then is not counted once it has a floor:
+  a carrier, however long, does not teach it. Noise that rises and stays risen
+  becomes the floor within ten seconds, if it stays under the threshold; if it
+  rises past the threshold the squelch opens and holds, and a squelch that has
+  stayed open for thirty seconds without a break is taken to be a floor that
+  rose, and is learnt. A signal that holds the channel for that long from the
+  moment you tune to it - a continuous broadcast - is the floor too, and
+  AUTOMATIC will close on it. A hand on the dial, the Radio section's slider, the
+  squelch keys or the web control is a threshold of your own and switches
+  AUTOMATIC off again, and a new frequency, bandwidth or mode starts the
+  measurement afresh.
+  **While the Airband monitor is listening, the SQUELCH dial and its AUTO key are
+  the monitor's:** the dial reads and sets the Airband section's own squelch
+  (-110 to 0 dB, the same one as that section's slider) and leaves the
+  receiver's threshold where it was, its tooltip says so, and a new threshold
+  takes effect when you let go of the dial. AUTO then applies the monitor's
+  "Above the noise" rule - 8 dB over the median channel level - and re-applies it
+  every quarter second while the key is lit. The Airband section's own slider and
+  its Above the noise key switch AUTO off, like the dial. AUTO is one setting for
+  both squelches, saved as one; when the monitor stops, the dial and AUTO are the
+  receiver's again.
 - **Band plans for the whole world.** Labelled service allocations drawn behind
   the spectrum, colour-coded by service on a colour-blind-safe palette, with a
   "what am I tuned to" readout that names the *narrowest* match — 145.800 MHz
-  reads "ISS Downlink", not "2 m Amateur". Pick your region from Display →
-  Region: a baseline for each ITU region plus country refinements that layer on
+  reads "ISS Downlink", not "2 m Amateur". Pick your region from SYSTEM →
+  Display → Region: a baseline for each ITU region plus country refinements that layer on
   top of it. The default is a worldwide plan holding only the allocations that
   are identical everywhere, because the ITU regions genuinely disagree — 40 m,
   mediumwave and the FM broadcast edges all differ — so there is no single plan
@@ -133,6 +170,10 @@ are still moving. What is in the current build:
   coloured by altitude band, with optional map imagery from a basemap plugin;
   wherever its tiles are drawn - the map pages, the patch Map part and the
   radar scope - the plugin's attribution is lettered beneath them.
+  An aircraft that reports **no altitude** is drawn **grey**, with a hollow
+  marker, rather than in an altitude colour - so it is never mistaken for one
+  on final approach, which is the lowest band - and the altitude key on the map
+  gains a "no altitude" row for it when there is one to explain.
   A target's **trail is coloured along its length** by the same bands, so a
   climb-out and a cruise read differently at a glance — from the altitudes the
   host watched the aircraft report as it flew the line, not from anything
@@ -148,7 +189,11 @@ are still moving. What is in the current build:
   those eight — callsign, id, altitude (ft), speed (kt), course (deg), distance
   (km), bearing (deg) or age (s) — ascending or descending, so "what is nearest
   me" is one menu pick away. Clicking a row takes the map to that target;
-  double-clicking follows it.
+  double-clicking follows it. Tick **On screen only**, beside the target count,
+  and the list shows only the aircraft inside the map as you are looking at it:
+  zoom in on an airfield or an air show and the list follows, instead of naming
+  everything the receiver has heard. The count then reads "3 of 41 targets",
+  and the setting is remembered.
   Give it your antenna's position once and it also builds a **coverage map**:
   the furthest anything has been heard in each direction, drawn over the map,
   which is the cheapest antenna diagnostic there is. Decoder plugins produce
@@ -218,11 +263,13 @@ edge, where on a single monitor it could land off the screen entirely.
 **The Plugin store** has one bar along the top and two tabs. The bar holds a search field
 (it looks through names, one-line summaries, descriptions and the category's name), the
 tabs **BROWSE** and **UPDATES (n)**, and at the right when the catalogue was last read
-("Catalogue read 14:07") with **CHECK AGAIN**. **BROWSE** is the catalogue in sections -
+("Catalogue read 14:07") with **CHECK AGAIN** and, beside it, **SITES** (see **Plugin sites**,
+below). **BROWSE** is the catalogue in sections -
 AIRCRAFT, MARINE, SATELLITES AND WEATHER, METERS AND PAGING, VOICE AND DATA, MAPS AND TOOLS,
 and OTHER for anything the catalogue has not filed - each a grid of cards: a small drawing of
 what the plugin is for, its name, a line about it, a badge when it has never decoded a real
-signal (**EXPERIMENTAL**) or has no build for your system (**WINDOWS ONLY**, **LINUX ONLY**),
+signal (**EXPERIMENTAL**), has no build for your system (**WINDOWS ONLY**, **LINUX ONLY**) or
+comes from a site you added rather than from the FoxSDR catalogue (**THIRD PARTY**),
 and one key at the right: **GET**, **FITTING...** while its download runs, **INSTALLED** or
 **UPDATE** with the two versions beside it. A key that cannot act is drawn greyed and says why
 when you rest the pointer on it - the plugin was built for another plugin ABI, there is no build
@@ -261,7 +308,8 @@ why, and reports what happened when it finishes ("24 installed, 0 failed", or th
 failed with the reason each gave); a plugin that fails does not stop the rest. Plugins whose
 maker attached a legal notice are counted and named and are added only if you tick the
 acknowledgement beside the key - "get everything" is not a way to consent to something you were
-never shown.
+never shown. It fits the FoxSDR catalogue only: plugins from sites you added (below) are left out
+of it, and of **UPDATE ALL**, and the key says so.
 
 **The catalogue** is contacted when you open the store window (the first time in a session) or
 press **CHECK NOW** / **CHECK AGAIN**: nothing is fetched at startup, and no plugin ever updates
@@ -274,6 +322,52 @@ sha256 the catalogue published before it is kept (under `store-cache` in the plu
 by that digest, and removed again when the catalogue stops naming it); a request carries the
 picture's address and nothing else, and a plugin that comes from the regional list shows none.
 Nothing is fetched for the grid.
+
+**Plugin sites.** Someone else may publish plugins of their own in the same `index.json` format
+(for a hobbyist's decoder, say); [docs/THIRD-PARTY-SITES.md](THIRD-PARTY-SITES.md) is written for
+them. To list one beside the FoxSDR catalogue, press **SITES** in the store's top bar: a panel opens
+under the bar with the sites you have added (each with a **REMOVE** key), an *index.json URL* field
+and **ADD**. Paste the address of the site's `index.json` (https, or the path of a file on this
+computer) and tick the box under the field - "Plugins from this site are not reviewed by FoxSDR.
+They run with the same access as this application. Only add a site you trust." - or **ADD** stays
+greyed; the tick is cleared each time, so each site is a decision of its own. Up to eight sites can
+be added. Nothing is fetched when you add a site except through the same read **CHECK NOW** makes:
+a site is read after the FoxSDR catalogue, each in turn and each with only a few seconds to answer,
+and a site that is down, or is not a catalogue, says so in amber under the top bar - "<host>: could
+not be read: <the reason>" - and never empties the rest of the list (its last good read, kept
+beside the install records, stays listed until it answers).
+
+What you will see of a site's plugins: the **THIRD PARTY** badge on every card, "from <host>" in
+the line under the name on its page, a one-line note of where it came from, and - whether or not its
+maker wrote a legal notice - the **BEFORE YOU FIT IT** box, which begins "This plugin comes from
+<host>, not from the FoxSDR catalogue. FoxSDR has not reviewed it." and then gives the maker's own
+notice, if any, word for word. The tick under that box is your consent, and the key stays greyed
+until you give it; **GET** on a card opens the page rather than fitting it. Under the top bar each
+site has a status line - "<host>: 7 plugins" - and says what it hid and why: "N hidden: same id as
+a plugin already listed" (a site can never replace or shadow a plugin the FoxSDR catalogue lists:
+the catalogue's wins), "N hidden: files not on the site's own host" (a site's plugin files and
+pictures must be served from the same host as its `index.json`, and a plugin that names another
+host is not listed at all).
+
+A module installed from a site also never takes a *declared name* from an official plugin: the host
+loads one module per name the plugin's own binary declares, normally the highest version, but when the
+FoxSDR catalogue's plugin holds the name the site's module is not loaded whatever its version, and its
+row in the Fitted modules window (and the log) says "Not loaded: it declares the same name as the
+official plugin ...". Nothing is deleted; **REMOVE** takes the file away.
+
+Everything a site's plugin goes through is what any plugin goes through - https only, the byte
+cap, the exact ABI match, the sha256 the site published, no redirect to another host - and a site's
+plugin is known by *which site* it came from as well as by its id, so a site can neither update an
+official plugin nor be updated by one, and a site cannot overwrite another plugin's file in the
+modules folder. What FoxSDR does *not* do is review it: the plugin is native code that runs inside
+FoxSDR with everything FoxSDR can do, and nothing in this product checks who wrote it. Add only
+sites you trust. **GET EVERYTHING** and **UPDATE ALL** leave a site's plugins out (fit each from
+its page, update each with its own **UPDATE** key), and the web page can list them but not fit
+them. **REMOVE** forgets a site and deletes its kept copy; the plugins you installed from it stay
+installed, the Fitted modules window says they are from a site you removed, and they get no more
+updates. The addresses are in the configuration file (`pluginSites`). The rail's *catalogue
+index.json URL* field is a different thing: it replaces the FoxSDR catalogue's own address, and
+sites are added beside it.
 
 **Fitted modules** is the operating panel. Along its top bar: a search field, six filter chips
 with their lamps and counts - **FED**, **IDLE**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED**,
@@ -431,6 +525,13 @@ forces numeric decoding. **Use function codes** takes precedence when enabled:
 function 3 decodes as text and functions 0-2 decode as numeric messages. Baud
 rate and discriminator polarity are detected automatically.
 
+**Plugin settings.** A plugin that has a settings form of its own (a callsign to report
+under, a tolerance) shows it on its row in the **Decoders** section of the rail, under its
+keys, in a **Plugin settings** line that is folded (0.99.74): click the line to open the
+form and click it again to fold it away, so scrolling down through the decoders does not
+mean scrolling past every plugin's fields. The line is folded each time FoxSDR starts; the
+values you type in the form are saved as before, whether it is open or not.
+
 **Mute audio while running.** A decoder that consumes raw I/Q is handed the
 whole receiver band and tunes inside it, so the channel your speakers are fed
 is not the signal being decoded: on ADS-B at 1090 MHz it is hiss, at whatever
@@ -484,6 +585,39 @@ module which is no longer fitted — a permission nobody can see is one nobody
 can take back. The grant is per plugin and is remembered
 between sessions.
 
+**Plugins that transmit** (0.99.74, host API level 2). A plugin that sends data
+over the air - a packet radio or Winlink-compatible link, say - can ask FoxSDR
+to key the Pluto transmitter and send its audio. Until now only a hand could
+key it; a plugin can now too, but only when you have said so twice, in two
+different places, and the second time is a window that closes by itself:
+
+1. **Grant it.** Once the plugin has asked to transmit at least once, a
+   **GRANT TRANSMIT** key appears on its page in Fitted modules (and
+   **REVOKE TRANSMIT** once it is granted). It is off for every plugin until you
+   press it, is remembered between sessions, and can be revoked at any time.
+2. **Arm the page.** On the **TRANSMIT** page, under the PTT and LATCH,
+   **ARM FOR PLUGINS** has **5 MIN**, **15 MIN**, **60 MIN** and **OFF**. While
+   the window is open the page counts it down and names the plugin it lets in;
+   it closes by itself when the time runs out, and also when you press OFF,
+   close or roll up the page, close the transmit radio, take the grant back, the
+   radio faults, or the program stalls for more than a second. It is never
+   remembered: start FoxSDR again and no plugin can transmit until you arm it
+   again. It will not arm with no transmit radio open or no plugin granted, and
+   says which.
+
+Even then FoxSDR is in charge, not the plugin: the frequency, the power and the
+mode are the ones on the TRANSMIT page (or, with the **DATA (flat)** tick on, the
+default, narrow FM with the pre-emphasis off, which is what a data modem wants),
+a hand on the PTT, the LATCH or the web remote's key always wins, one plugin at a
+time holds the transmitter, and no plugin can hold the key for more than a
+minute: at the minute it is cut and the window closes with it. The log writes a
+line each time (`tx: plugin <name> keyed`, `unkeyed (<why>)`, `armed`,
+`disarmed`). A plugin only gets asked whether it wants to transmit while it is
+running, so a transmitting plugin should have its window open or **Keep running**
+ticked. Like everything on the TRANSMIT page this puts a signal on the air, and
+whether you may is your responsibility and your country's licensing
+authority's. See [Transmitting](TRANSMITTING.md) for the full list of rules.
+
 **The host API for plugins** (0.99.31, host API level 1). A plugin that declares
 the host-client capability can now read the whole receiver - frequency, VFO
 offset, mode, bandwidth, squelch, gains, the radio's sample rates, volume,
@@ -498,7 +632,11 @@ application itself on its next frame, through the same code a click or a
 browser request goes through, and a stopped or ungranted module's requests are
 refused outright. A plugin can also put **marks** on the spectrum and waterfall,
 keep **its own settings** (saved in the config file under the plugin's name, so
-they survive an update), show **messages** in the Decoder output window (a
+they survive an update; the application can draw them as boxes for you to fill
+in, and a setting that names a file - the program a plugin drives, say - has a
+**BROWSE FILES** key beside its box that opens the system's file dialog, on
+Linux through zenity or kdialog where one is installed), show **messages** in
+the Decoder output window (a
 warning or an error also appears on its page), and offer **keys of its own** on
 its page. And a new capability lets a plugin **process the audio you hear** in
 place - a filter, a limiter - after the receiver's own processing and before
@@ -514,7 +652,10 @@ the catalogue before it is allowed to become a file, size-capped, refused on a
 cross-host redirect, and written under a sanitised bare filename inside the
 plugins directory; a plugin's pictures are held to the same https and sha256
 rule and a 4 MiB cap, and are decoded by a PNG reader that refuses anything that
-is not a PNG or claims a size no screen needs.
+is not a PNG or claims a size no screen needs. A plugin from a site you added
+(**Plugin sites**, above) goes through all of it, and in addition its files and pictures must
+come from the same host as the site's own `index.json`, it is known by its site as well as
+its id, it carries a notice you must tick, and it may not overwrite another plugin's file.
 
 **Where that directory is** depends on whether the application can write to its
 own: a portable copy keeps plugins in `plugins/` beside the executable, while an
@@ -549,7 +690,7 @@ alone and keep loading.
 
 ## Frequency lists
 
-**VIEW > Bookmarks** holds any number of named frequencies - tens of thousands
+**TOOLS > Bookmarks** holds any number of named frequencies - tens of thousands
 is fine - with a group, a mode, a bandwidth and a favourite star each. Click a
 row to tune it. The box at the start of each row ticks it: the Scanner's
 **Ticked frequencies** scans just the ticked rows (each with its own mode and
@@ -582,7 +723,7 @@ bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
 
 ## Airband
 
-**VIEW > Airband** listens to an airport's air traffic control:
+**TOOLS > Airband** listens to an airport's air traffic control:
 
 - **Type the airport's code** - the ICAO code (KORD, EGLL), the three letters
   on a luggage tag (ORD, LHR) or, in the US, the FAA's own id - and press
@@ -804,7 +945,7 @@ bookmark name, a password — and none fires while a dialog is open.
 | Start / stop the receiver | <kbd>Ctrl</kbd>+<kbd>F2</kbd> | |
 | Mute the sound | <kbd>M</kbd> | |
 | Volume up / down | <kbd>+</kbd> / <kbd>-</kbd> | 5% a press |
-| Squelch up / down | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | 2 dB a press |
+| Squelch up / down | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | 2 dB a press; switches AUTOMATIC squelch off |
 | Mode: NFM | <kbd>Ctrl</kbd>+<kbd>F</kbd> | |
 | Mode: WFM | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | |
 | Mode: AM | <kbd>Ctrl</kbd>+<kbd>A</kbd> | |
@@ -822,7 +963,7 @@ bookmark name, a password — and none fires while a dialog is open.
 | Transmit | <kbd>Space</kbd> | HELD, and only while the TRANSMIT page has focus |
 | Save a screenshot | <kbd>Ctrl</kbd>+<kbd>W</kbd> | |
 | Maximise / restore the window | <kbd>F11</kbd> | |
-| Bank: SIGNAL PATH / DECODE / VIEW / EXTEND / SYSTEM | <kbd>F1</kbd>…<kbd>F5</kbd> | |
+| Bank: SIGNAL PATH / DECODE / TOOLS / EXTEND / SYSTEM | <kbd>F1</kbd>…<kbd>F5</kbd> | |
 | Settings and key bindings | <kbd>F7</kbd> | |
 
 The transmit key is the one entry that behaves differently from every other:
@@ -903,21 +1044,37 @@ before you use the application:
 
 The controls live on the **FUNCTION SELECT** rail down the left, and the rail
 is a bank selector, the way a bench instrument's is: five brass pushbuttons
-under its title - **SIGNAL**, **DECODE**, **VIEW**, **EXTEND**, **SYSTEM** -
+under its title - **SIGNAL**, **DECODE**, **TOOLS**, **EXTEND**, **SYSTEM** -
 one of them pressed in with a phosphor strip lit beneath it, and the column
 below showing that bank's sections and nothing else. SIGNAL is the receiver
 itself (source, radio, audio filters, sinks, the recorder); DECODE is the
 plugin store, the fitted modules, the decoders, target details and the
-satellites map; VIEW is the display range, the demod scope, the radar scope,
-bookmarks, the scanner and airband; EXTEND is browser access and CAT control; SYSTEM is updates,
-diagnostics and usage reporting. **F1 to F5** press the same five keys from
+satellites map; TOOLS (called VIEW before 0.99.74) is the demod scope, the
+radar scope, bookmarks, the scanner and airband; EXTEND is browser access and
+CAT control; SYSTEM is the **Display** settings (interface size, theme, the
+spectrum's range, the band plan), language, updates, diagnostics and usage
+reporting. **F1 to F5** press the same five keys from
 the keyboard. Each section still opens and closes with its own key and
 keeps that state as you move between banks; a section unfolds rather than
 appearing, a bank comes up like a lamp rather than switching in one frame, and
-the rail opens on whichever bank you left it on — the only part of this the
-configuration file records, so a section comes back at its usual state on
-the next launch. Every chip on a row still reports what that section is
-doing without opening it.
+the rail opens on whichever bank you left it on. **Display** is the first
+section of SYSTEM and starts folded; the configuration file records whether
+you left it open or folded, so it comes back that way, and every other
+section comes back at its usual state on the next launch. Every chip on a row
+still reports what that section is doing without opening it.
+
+**Both side panels fold away.** The `<<` key at the right end of the
+FUNCTION SELECT title folds the rail to a thin strip, and since 0.99.74 the
+`>>` key at the left end of the STATUS column's title does the same for the
+column on the right, for a user who would rather have the whole width for the
+spectrum than the cards beside it. The patch page or the spectrum takes the
+width that frees, and the one key on each strip brings its panel back. The two
+are separate, and both are remembered (`railCollapsed` and `statusCollapsed` in
+the configuration file). The STATUS column belongs to the receiver view, and a
+window too narrow for the full column drops it, but its folded strip needs so
+little room that it stays. The REQUEST A FEATURE and REPORT A BUG / DISLIKE
+keys are part of that column: they are not shown while it is folded, and come
+back when it is opened.
 
 **Sinks**, in SIGNAL, is where the sound goes: the output device, the reason
 when there is no sound ("Muted by ..."), and, since 0.99.73, the **Audio
@@ -959,7 +1116,7 @@ that came out (`dsp: thread priority mmcss`). Neither change is a promise about
 any one computer: a machine that is too slow still is, and the buffer is what
 gives it room.
 
-The **Demod scope**, under VIEW, is the other instrument on the bench, and it
+The **Demod scope**, under TOOLS, is the other instrument on the bench, and it
 is deliberately not drawn like the radar one. That is a plan-position
 indicator: a round tube, a rotating sweep, a long-persist phosphor. This is a
 rectangular service oscilloscope — ruled ten divisions by eight, minor ticks
@@ -988,7 +1145,7 @@ did not happen. Nothing on the tube is drawn when the receiver is stopped: the
 graticule stays and the glass says so, because a flat line at zero volts is a
 measurement, and there was not one.
 
-The **Radar scope**, under VIEW, is drawn from the receiver's own position —
+The **Radar scope**, under TOOLS, is drawn from the receiver's own position —
 every mark on it is a range and a bearing from the antenna — and until that
 position is set there is nothing to draw. Rather than leave two zeroed cells
 on an empty panel, the Radar section and the scope's empty state both offer
@@ -1181,14 +1338,28 @@ each says what starts it:
   country code for your connection, stores nothing, logs nothing, and is not
   asked for when you have pointed the store at a different catalogue. See
   [PRIVACY.md](../PRIVACY.md).
+- **A plugin site's catalogue**, only if you added one (**Plugin sites**, above).
+  A site is an address *you* chose, and it is read at the same two moments as the
+  catalogue — when you open the store (the first time in a session) and whenever
+  you press **CHECK NOW** — after it, one site after another, each with a few
+  seconds to answer. The site receives your IP address and the path of its
+  `index.json`, as any web server does, and nothing else from FoxSDR: no
+  identifier and no cookie (the request names its client as
+  `cascade-plugin-repo/1.0`, the same for every copy). Nothing is fetched at
+  startup and nothing
+  from a site is installed unless you press **GET** or **UPDATE** on one of its
+  plugins.
 - **A plugin download**, when you press **GET** or **UPDATE** for
   one — always https, sha256-verified against the catalogue, size-capped and
-  refused on a cross-host redirect.
+  refused on a cross-host redirect. For a plugin from a site you added, the file
+  comes from that site's own host and is verified against the sha256 that site
+  published.
 - **A plugin's pictures**, when you open its page in the Plugin store: each is
   fetched once from the address the catalogue gives, over https, checked against
   the catalogue's sha256 and a 4 MiB cap, and kept under `store-cache` in the
   plugins folder. The request carries that address and nothing else; a plugin
-  from the regional list shows none. See [PRIVACY.md](../PRIVACY.md).
+  from the regional list shows none, and a plugin from a site you added shows
+  only pictures served by that site's own host. See [PRIVACY.md](../PRIVACY.md).
 - **A crash or freeze report**, and only with Diagnostics on: the report's text
   goes out the *next* time you open the application, never from inside the
   fault. See [When it crashes or freezes](#when-it-crashes-or-freezes).

@@ -538,7 +538,7 @@ int main() {
         CHECK(users == expected);
 
         // Inside app_window.cpp, every mention is within watchdogShellHooks(),
-        // once for each side of the bracket, and both shell call sites go
+        // once for each side of the bracket, and every native-wait call site goes
         // through runShellOpen() with those hooks.
         const std::string win = liveCode(readFile(src / "gui" / "app_window.cpp"));
         const std::string fn = "AppWindow::watchdogShellHooks()";
@@ -553,7 +553,10 @@ int main() {
         CHECK(countOf(win, "pauseUser") == 1u);
         CHECK(countOf(win, "resumeUser") == 1u);
         CHECK(countOf(win, "WatchdogUserPause") == 0u);
-        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 2u);
+        // THREE call sites, each a native wait a person paces: shellOpen (the shell),
+        // launchInstaller (the elevation prompt) and, since 0.99.74, pickFile (the
+        // BROWSE key's modal file dialog). A fourth is a new reason to read this list.
+        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 3u);
         // The application-paced sites are still plain pauses: the audio and
         // microphone opens and the display grace.
         CHECK(countOf(win, "watchdog_.pause()") >= 3u);

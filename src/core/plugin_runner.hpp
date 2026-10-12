@@ -55,6 +55,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
 #include "core/plugin_host.hpp"
+#include "core/tx_audio.hpp"
 #include "dsp/resampler.hpp"
 
 namespace cascade::core {
@@ -312,6 +313,56 @@ public:
     std::uint64_t audioGaps() const;
     std::uint64_t audioGapFrames() const;
 
+    // ----- The plugin TRANSMIT path (CASCADE_CAP_TX_AUDIO, host API level 2) -----
+    //
+    // The runner's half of a plugin transmitting: it asks each TX_AUDIO instance
+    // whether it wants the transmitter, decides which ONE plugin holds it, and - only
+    // while the host has keyed the transmitter FOR that plugin - pulls its audio into
+    // the ring the Transmitter reads. It never keys anything: the key is the GUI
+    // thread's, from core/tx_audio.hpp's pluginMayKey(), and this class is told the
+    // result (setTxKeyed) and tells the GUI what the plugin wants (the link).
+    //
+    //   setTxLink      the ring and the facts shared with the Transmitter. Once.
+    //   setTxGranted   the module file names holding the TRANSMIT grant. An instance
+    //                  whose module is not in it is polled (so it can be said to have
+    //                  ASKED) and is never pulled from, whatever else is true.
+    //   setTxKeyed     the host has keyed the transmitter for the holder: pull() may be
+    //                  called. Takes the runner's lock, so when it returns false nothing
+    //                  is still being pulled and nothing more will be - which is what
+    //                  lets the caller empty the ring afterwards.
+    //   pollTxAudio    DSP thread, real-time, once per audio block, under the same
+    //                  lock and on the same thread as process()/pull() of AUDIO_OUT,
+    //                  which is what the ABI promises a plugin: never concurrent.
+    //
+    // THE HOLDER is the first plugin in load order that is granted and has active()
+    // non-zero, and it is STICKY while the transmitter is keyed: a second plugin that
+    // starts wanting the key mid-transmission does not take it over - it waits, is
+    // told so (txState), and is considered again when the key is next open.
+    void setTxLink(std::shared_ptr<TxAudioLink> link);
+    void setTxGranted(std::vector<std::string> keys);
+    void setTxKeyed(bool keyed);
+    void pollTxAudio();
+
+    // What the plate and the log are told about one plugin (by module file name).
+    struct TxPluginState {
+        bool declared = false;   // it has a TX_AUDIO instance at all
+        bool asked = false;      // its active() has been non-zero at least once
+        bool holder = false;     // it holds the transmitter now
+        bool waiting = false;    // granted and wanting the key, but another plugin holds it
+        bool stopped = false;    // its pull() returned a negative number: stopped for good
+        std::string name;        // its descriptor name
+    };
+    TxPluginState txState(const std::string& pluginKey) const;
+    // Module file names whose active() has been non-zero at least once, this session -
+    // what the TRANSMIT key on a plate is offered to. Survives a rebuild.
+    std::vector<std::string> txAskers() const;
+    // The holder's descriptor name and module file name; empty when nobody holds it.
+    std::string txHolderName() const;
+    std::string txHolderKey() const;
+    // The first granted TX_AUDIO plugin in load order, holder or not: the plugin the
+    // TRANSMIT page names beside the arming window. Empty when none is granted.
+    std::string txFirstGrantedName() const;
+
     // GUI thread. Writes the diagnostics the audio path recorded: one line per
     // takeover transition, and a once-a-minute gap digest when there is
     // anything to say.
@@ -466,6 +517,25 @@ private:
         std::size_t fifoHead = 0;
     };
 
+    // ONE PLUGIN'S TRANSMIT CLAIM, riding on a decoder instance exactly as an
+    // AudioInstance does and for the same reason: it holds no handle of its own, so
+    // destroyInstances()/removePluginLocked() drop these BEFORE the instance whose
+    // handle they borrow.
+    struct TxInstance {
+        const CascadeTxAudioApi* api = nullptr;
+        void* handle = nullptr;  // borrowed from a decoder instance
+        std::string name;
+        std::string key;
+        bool active = false;   // the last active() reading
+        bool asked = false;    // active() has been non-zero at least once
+        bool stopped = false;  // pull() returned negative: never pulled or asked again
+    };
+    static constexpr std::size_t kNoTx = static_cast<std::size_t>(-1);
+    // Lock held; the real-time body of pollTxAudio.
+    void pollTxAudioLocked();
+    // Folds each instance's `asked` into txAsked_ (so a rebuild does not forget it).
+    void foldTxAskedLocked();
+
     // Recorded by the real-time path, written out by pollAudioDiagnostics on
     // the GUI thread. FIXED STORAGE and a fixed-size array, because the thread
     // that fills one of these is not allowed to allocate - a std::string here
@@ -583,6 +653,12 @@ private:
     // decide whether it has anything to feed without walking the vector.
     std::size_t audioImageCount_ = 0;
     std::size_t iqImageCount_ = 0;
+    std::vector<TxInstance> txInstances_;
+    std::size_t txHolder_ = kNoTx;  // index into txInstances_
+    std::vector<std::string> txGranted_;  // module file names holding the TRANSMIT grant
+    std::vector<std::string> txAsked_;    // module file names that have asked, kept across rebuilds
+    std::shared_ptr<TxAudioLink> txLink_;
+    std::vector<float> txPullBuf_;  // reserved at build; pull() writes into it
     std::vector<AudioInstance> audioInstances_;
     // Index into audioInstances_ of the plugin holding the speakers, or
     // kNoAudio. FIRST WINS: the search runs in rebuild order and stops at the

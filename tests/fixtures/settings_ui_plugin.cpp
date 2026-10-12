@@ -15,6 +15,11 @@
 // Its form, in order - each entry is there to prove one rule:
 //   callsign  TEXT, maxLength 12, placeholder, default ""      - the ordinary case
 //   power     NUMBER, default "5"                               - a default that shows
+//   tool_path PATH (0.99.74), maxLength 260, placeholder       - a text box plus the
+//             "C:\tools\tool.exe", default ""                    host's BROWSE key; placed
+//                                                                before `report` so the
+//                                                                checkbox stays the last
+//                                                                item the form draws
 //   report    BOOL, default ""                                  - a checkbox, off
 //   future    kind 99                                           - a later host's kind:
 //                                                                 SKIPPED, not refused
@@ -31,7 +36,10 @@
 //   "SETTINGS seq=<n> callsign=<v> power=<v> report=<v>\n"
 // read with settings_get (a NOT_FOUND key reads as its spec default, as the
 // header tells a plugin to), so the test - and a person watching the Decoder
-// output window - sees exactly what the plugin sees.
+// output window - sees exactly what the plugin sees. Once tool_path holds a
+// value the line gains " tool=<v>" before the newline (and not before, so the
+// line every earlier test pinned is unchanged): the end-to-end proof that a
+// path chosen with the BROWSE key is what the plugin reads back.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdio>
@@ -56,6 +64,8 @@ const CascadeSettingSpec kSpecs[] = {
      CASCADE_SETTING_TEXT, 12u, "e.g. G4ABC", ""},
     {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "power", "Power (W)",
      CASCADE_SETTING_NUMBER, 0u, "watts", "5"},
+    {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "tool_path", "Tool path",
+     CASCADE_SETTING_PATH, 260u, "C:\\tools\\tool.exe", ""},
     {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "report", "Report spots",
      CASCADE_SETTING_BOOL, 0u, "", ""},
     {static_cast<uint32_t>(sizeof(CascadeSettingSpec)), "future", "From a later host", 99u, 0u,
@@ -103,13 +113,17 @@ int32_t pollText(void* handle, char* buf, size_t cap) {
             char call[64];
             char power[64];
             char report[64];
+            char tool[300];
             readSetting("callsign", "", call, sizeof(call));
             readSetting("power", "5", power, sizeof(power));
             readSetting("report", "", report, sizeof(report));
+            readSetting("tool_path", "", tool, sizeof(tool));
+            char toolPart[320] = "";
+            if (tool[0] != '\0') { std::snprintf(toolPart, sizeof(toolPart), " tool=%s", tool); }
             const int n = std::snprintf(s->line, sizeof(s->line),
-                                        "SETTINGS seq=%llu callsign=%s power=%s report=%s\n",
+                                        "SETTINGS seq=%llu callsign=%s power=%s report=%s%s\n",
                                         static_cast<unsigned long long>(seq), call, power,
-                                        report);
+                                        report, toolPart);
             s->len = n > 0 ? static_cast<size_t>(n) : 0u;
             if (s->len >= sizeof(s->line)) { s->len = sizeof(s->line) - 1u; }
             s->read = 0;

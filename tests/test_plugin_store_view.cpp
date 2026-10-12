@@ -924,6 +924,217 @@ bool useLanguage(const std::string& code) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// PLUGIN SITES (0.99.74): the words, and the one decision the bulk keys make about them
+// ---------------------------------------------------------------------------
+StoreModule siteRow(const char* id = "hdradio@hobbyist.example", const char* name = "HD Radio") {
+    StoreModule sm = row(id, name, "broadcast");
+    sm.thirdParty = true;
+    sm.siteHost = "hobbyist.example";
+    sm.plate.legalNotice = cascade::gui::storeComposeNotice(sm.siteHost, std::string());
+    return sm;
+}
+
+void testPluginSites() {
+    // THE BADGE: its words.
+    CHECK(std::string(cascade::gui::storeThirdPartyBadge()) == "THIRD PARTY");
+
+    // THE HEADER LINE gains "from <host>" last, for a site's plugin and for no other.
+    {
+        StoreModule sm = siteRow();
+        sm.plate.maker = "A hobbyist";
+        sm.plate.version = "0.1.0";
+        CHECK(storeHeaderMeta(sm, "windows/x64") ==
+              "A hobbyist  \xc2\xb7  version 0.1.0  \xc2\xb7  windows/x64  \xc2\xb7  from hobbyist.example");
+        // With no build for this host the line still ends in where it comes from.
+        sm.haveBuildHere = false;
+        CHECK(storeHeaderMeta(sm, "windows/x64") ==
+              "A hobbyist  \xc2\xb7  version 0.1.0  \xc2\xb7  no build for this system  \xc2\xb7  from hobbyist.example");
+        StoreModule official = row();
+        official.plate.maker = "A hobbyist";
+        official.plate.version = "0.1.0";
+        CHECK(!has(storeHeaderMeta(official, "windows/x64"), "from "));
+        // A host never known is "?", not an empty "from".
+        sm.siteHost.clear();
+        CHECK(has(storeHeaderMeta(sm, ""), "from ?"));
+    }
+
+    // THE NOTICE: synthesised, always, and the maker's own words follow verbatim after a blank line.
+    {
+        const std::string syn = cascade::gui::storeThirdPartyNotice("hobbyist.example");
+        CHECK(syn == "This plugin comes from hobbyist.example, not from the FoxSDR catalogue. FoxSDR has not "
+                     "reviewed it.");
+        CHECK(cascade::gui::storeComposeNotice("hobbyist.example", "") == syn);
+        const std::string both =
+            cascade::gui::storeComposeNotice("hobbyist.example", "Licensed GPL-3: read the source offer.");
+        CHECK(both == syn + "\n\nLicensed GPL-3: read the source offer.");
+        // A site whose host is not known still says it is not the catalogue's.
+        CHECK(has(cascade::gui::storeThirdPartyNotice(""), "comes from ?"));
+    }
+
+    // THE NOTICE IS WHAT GATES IT: a site's plugin is GET-able from a card only by opening its page, and on
+    // the page the key is greyed until the tick - the gate every legal notice always had.
+    {
+        StoreModule sm = siteRow();
+        sm.blockedReason = "the legal notice must be acknowledged first";
+        sm.blockedReasonIfAcknowledged.clear();
+        const StoreKey card = storeKeyFor(sm, StoreKeyIn{});
+        CHECK(card.kind == StoreKeyKind::Get && card.enabled && card.opensPage);
+        StoreKeyIn page;
+        page.onPage = true;
+        CHECK(!storeKeyFor(sm, page).enabled);
+        page.noticeTicked = true;
+        CHECK(storeKeyFor(sm, page).enabled);
+    }
+
+    // THE CONSENT SENTENCE, verbatim from the design.
+    CHECK(std::string(cascade::gui::storeSiteConsentText()) ==
+          "Plugins from this site are not reviewed by FoxSDR. They run with the same access as this "
+          "application. Only add a site you trust.");
+
+    // THE STATUS LINES, per site.
+    {
+        using cascade::gui::StoreLineTone;
+        using cascade::gui::StoreSite;
+        StoreSite s;
+        s.url = "https://hobbyist.example/hdradio/index.json";
+        s.label = "hobbyist.example";
+        s.state = StoreSite::State::Read;
+        s.plugins = 7;
+        auto lines = cascade::gui::storeSiteLines(s);
+        CHECK(lines.size() == 1u);
+        if (lines.size() == 1u) {
+            CHECK(lines[0].text == "hobbyist.example: 7 plugins");
+            CHECK(lines[0].tone == StoreLineTone::Muted);
+            CHECK(lines[0].census == "hobbyist.example:read:7");
+        }
+        s.plugins = 1;
+        lines = cascade::gui::storeSiteLines(s);
+        if (!lines.empty()) { CHECK(lines[0].text == "hobbyist.example: 1 plugin"); }
+        // Hidden: official wins an id, and files that are not on the site's own host - amber, counted.
+        s.plugins = 5;
+        s.hiddenSameId = 2;
+        s.hiddenOffHost = 1;
+        lines = cascade::gui::storeSiteLines(s);
+        CHECK(lines.size() == 3u);
+        if (lines.size() == 3u) {
+            CHECK(lines[0].text == "hobbyist.example: 5 plugins");
+            CHECK(lines[1].text == "hobbyist.example: 2 hidden: same id as a plugin already listed");
+            CHECK(lines[1].tone == StoreLineTone::Amber);
+            CHECK(lines[1].census == "hobbyist.example:hidden-sameid:2");
+            CHECK(lines[2].text == "hobbyist.example: 1 hidden: files not on the site's own host");
+            CHECK(lines[2].tone == StoreLineTone::Amber);
+            CHECK(lines[2].census == "hobbyist.example:hidden-offhost:1");
+        }
+        // Failed: amber, with the reason verbatim.
+        s.state = StoreSite::State::Failed;
+        s.error = "the server returned HTTP 404";
+        s.hiddenSameId = 0;
+        s.hiddenOffHost = 0;
+        lines = cascade::gui::storeSiteLines(s);
+        CHECK(lines.size() == 1u);
+        if (lines.size() == 1u) {
+            CHECK(lines[0].text == "hobbyist.example: could not be read: the server returned HTTP 404");
+            CHECK(lines[0].tone == StoreLineTone::Amber);
+            CHECK(lines[0].census == "hobbyist.example:failed");
+        }
+        // Never read, and a kept copy that has not been refreshed: said as what they are.
+        s.state = StoreSite::State::NotRead;
+        lines = cascade::gui::storeSiteLines(s);
+        if (!lines.empty()) { CHECK(lines[0].text == "hobbyist.example: not read yet"); }
+        s.state = StoreSite::State::Kept;
+        s.plugins = 3;
+        lines = cascade::gui::storeSiteLines(s);
+        if (!lines.empty()) {
+            CHECK(lines[0].text == "hobbyist.example: 3 plugins (kept copy from an earlier session)");
+            CHECK(lines[0].census == "hobbyist.example:kept:3");
+        }
+        // Every state's line is different from every other's.
+        std::vector<std::string> all;
+        for (const StoreSite::State st : {StoreSite::State::NotRead, StoreSite::State::Kept,
+                                           StoreSite::State::Read, StoreSite::State::Failed}) {
+            s.state = st;
+            all.push_back(cascade::gui::storeSiteLines(s)[0].text);
+        }
+        CHECK(allDistinct(all));
+    }
+
+    // ADD'S CHECKS: the one validator, then what only the list knows.
+    {
+        using cascade::gui::StoreSite;
+        std::vector<StoreSite> sites;
+        StoreSite a;
+        a.url = "https://a.example/i.json";
+        sites.push_back(a);
+        const std::string official = "https://mirror.example/index.json";
+        std::string out = "stale";
+        // Accepted, and trimmed.
+        CHECK(cascade::gui::storeCheckSiteAdd("  https://b.example/i.json  ", sites, 8, official, out).empty());
+        CHECK(out == "https://b.example/i.json");
+        CHECK(cascade::gui::storeCheckSiteAdd("C:\\sites\\mine.json", sites, 8, official, out).empty());
+        CHECK(out == "C:\\sites\\mine.json");
+        // Refused, each with its own sentence, and nothing is handed back.
+        for (const char* bad : {"", "http://b.example/i.json", "ftp://b.example/i", "https://u@b.example/i.json",
+                                "https://"}) {
+            out = "stale";
+            const std::string why = cascade::gui::storeCheckSiteAdd(bad, sites, 8, official, out);
+            CHECK(!why.empty());
+            CHECK(out.empty());
+            CHECK(has(why, "not a site address"));
+        }
+        for (const std::string& dup :
+             {std::string("https://a.example/i.json"), std::string("  https://a.example/i.json"), official,
+              cascade::core::PluginRepo::defaultIndexUrl()}) {
+            out = "stale";
+            const std::string why = cascade::gui::storeCheckSiteAdd(dup, sites, 8, official, out);
+            CHECK(has(why, "already in the list"));
+            CHECK(out.empty());
+        }
+        // Full: the eighth is the last.
+        for (int i = 1; i < 8; ++i) {
+            StoreSite s;
+            s.url = "https://s" + std::to_string(i) + ".example/i.json";
+            sites.push_back(s);
+        }
+        CHECK(sites.size() == 8u);
+        out = "stale";
+        const std::string full = cascade::gui::storeCheckSiteAdd("https://ninth.example/i.json", sites, 8, official, out);
+        CHECK(has(full, "list is full"));
+        CHECK(out.empty());
+        sites.pop_back();
+        CHECK(cascade::gui::storeCheckSiteAdd("https://ninth.example/i.json", sites, 8, official, out).empty());
+    }
+
+    // GET EVERYTHING AND UPDATE ALL LEAVE A SITE'S PLUGINS OUT: neither fetched, nor updated, nor listed as
+    // passed over - and a notice of theirs does not count towards the tick.
+    {
+        StoreModule off = row("official-one", "Official One");
+        StoreModule site = siteRow("hdradio@hobbyist.example", "HD Radio");
+        StoreModule siteUpd = siteRow("other@hobbyist.example", "Other");
+        siteUpd.install = StoreInstallKind::UpdateAvailable;
+        siteUpd.installedVersion = "0.1.0";
+        siteUpd.updateToVersion = "0.2.0";
+        siteUpd.plate.fitted = true;
+        StoreModule offUpd = updateRow("official-upd");
+        const AddAllPlan p = planAddAll(readCatalogue({off, site, siteUpd, offUpd}), false);
+        CHECK(p.install.size() == 1u);
+        CHECK(p.install.size() == 1u && p.install[0] == 0);
+        CHECK(p.update.size() == 1u);
+        CHECK(p.update.size() == 1u && p.update[0] == 3);
+        CHECK(p.skipped.empty());
+        CHECK(p.heldByNotice == 0);
+        // Even acknowledged: the tick is not theirs to give.
+        const AddAllPlan acked = planAddAll(readCatalogue({off, site, siteUpd, offUpd}), true);
+        CHECK(acked.install.size() == 1u && acked.update.size() == 1u);
+        // A catalogue of nothing but a site's plugins gives the bulk keys nothing to do.
+        const AddAllPlan only = planAddAll(readCatalogue({site, siteUpd}), true);
+        CHECK(only.install.empty() && only.update.empty() && only.skipped.empty());
+        CHECK(!only.blockedReason.empty());
+        // ...and the words that say so.
+        CHECK(has(cascade::gui::storeSitesLeftOutNote(), "not included"));
+    }
+}
+
 // EVERY KEY MUST FIT ITS CARD AT 1234 PX, IN EVERY LANGUAGE. A card is (1188 - 2 x 14) / 3 = 386 px
 // wide at that window, its text column 296 px after the glyph and the padding, and the lower row
 // holds the one key - whose width follows its word - with, for an UPDATE, "1.10.0 to 1.10.1" in
@@ -932,7 +1143,10 @@ void testEveryLanguageNewWords() {
     std::printf("  every language: the card keys, the tabs and the top bar fit at 1234 and 900 px\n");
     constexpr float kTextColumn = 296.0f;
     constexpr float kTopBar = 900.0f;
-    constexpr float kSearch = 200.0f;
+    // The search field at the bar's minimum width: 170 px since the SITES key joined CHECK AGAIN in the bar
+    // (0.99.74; it was 200). With 200 the Dutch and Polish bars needed 919 and 907 of the 900 px; the field
+    // gives up the 30 px so the catalogue line keeps the same 60 px it always had.
+    constexpr float kSearch = 170.0f;
     int cardMiss = 0;
     int barMiss = 0;
     int factMiss = 0;
@@ -976,7 +1190,10 @@ void testEveryLanguageNewWords() {
         const float browse = std::max(cascade::gui::chassisKeyWidth(cascade::i18n::tr("BROWSE")), 100.0f) + 16.0f;
         const float updates = std::max(cascade::gui::chassisKeyWidth("UPDATES (99)"), 120.0f) + 16.0f;
         const float check = cascade::gui::chassisKeyWidth(cascade::i18n::tr("CHECK AGAIN"));
-        const float used = 2.0f * 16.0f + kSearch + 24.0f + browse + 8.0f + updates + 18.0f + check + 60.0f;
+        // ...and SITES beside it (0.99.74), with the gap the bar leaves between the two.
+        const float sites = cascade::gui::chassisKeyWidth(cascade::i18n::tr("SITES")) + 10.0f;
+        const float used =
+            2.0f * 16.0f + kSearch + 24.0f + browse + 8.0f + updates + 18.0f + check + sites + 60.0f;
         if (used > kTopBar) {
             std::printf("      %s: top bar needs %.0f px of %.0f\n", l.code.c_str(), static_cast<double>(used),
                         static_cast<double>(kTopBar));
@@ -1010,6 +1227,7 @@ int main() {
     testColumns();
     testProseSize();
     testAddAllPlan();
+    testPluginSites();
     testCatalogueConsentForgotten();
     testCleanupWords();
 

@@ -27,8 +27,10 @@
 // fakes wherever the application would construct a driver).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +64,11 @@ struct Record {
     std::string kind;
     std::string args;
     std::vector<bool> agcCalls;  // every setAutoGain(on), in order
+    // Only for a radio with stages (Registry::stages): every setGainDb(name, db) it was asked
+    // for, in order, and what each stage HOLDS now - the radio's own truth, which the window's
+    // mirror (deviceGainsDb_) is only a copy of.
+    std::vector<std::pair<std::string, double>> gainCalls;
+    std::map<std::string, double> gainNow;
 };
 
 struct Registry {
@@ -71,8 +78,27 @@ struct Registry {
     // A radio that has auto gain but refuses to switch it ON (it accepts OFF, which
     // is what the open's manual-gain probe asks).
     std::atomic<bool> refuseAgcOn{false};
+    // GAIN STAGES (0.99.74, the readback after automatic gain goes off). Off, a radio lists no
+    // stages at all, which is what every earlier test here relies on. On, it has an LNA (0..40)
+    // and a PGA (0..76) that move in 1 dB steps and hold what they are given.
+    std::atomic<bool> stages{false};
+    // The live finding on the B200 (SoapyUHD): switching automatic gain OFF leaves the radio at
+    // the BOTTOM of every stage, whatever it held before the switch went on.
+    std::atomic<bool> dropOnAgcOff{false};
+    // While automatic gain is ON the radio reports its own choice (kAgcOwnDb on every stage),
+    // not the manual value it will return to.
+    std::atomic<bool> agcReportsOwn{false};
+    // The PGA refuses to be moved (a step the driver turns down).
+    std::atomic<bool> refusePga{false};
+    // A driver whose autoGain() getter is not kept in step with the switch (it says "off" whatever
+    // it was asked): the box has always shown what the radio ACCEPTED, not what the getter says.
+    std::atomic<bool> autoGainGetterStale{false};
 };
 Registry g_reg;
+
+const double kLnaMax = 40.0;
+const double kPgaMax = 76.0;
+const double kAgcOwnDb = 17.0;
 
 // The HackRF fake has NO auto gain (autoGainSupported() false), like the real one
 // does not; every other kind has it.
@@ -114,15 +140,42 @@ public:
         {
             std::lock_guard<std::mutex> lk(g_reg.m);
             rec_->args = args;
+            if (g_reg.stages.load()) {
+                rec_->gainNow["LNA"] = lna_;
+                rec_->gainNow["PGA"] = pga_;
+            }
         }
         open_ = true;
         return true;
     }
     void closeDevice() override { open_ = false; }
     bool isOpen() const override { return open_; }
-    std::vector<cascade::source::GainInfo> gains() const override { return {}; }
-    bool setGainDb(const std::string&, double) override { return false; }
-    double gainDb(const std::string&) const override { return 0.0; }
+    std::vector<cascade::source::GainInfo> gains() const override {
+        if (!g_reg.stages.load()) { return {}; }
+        return {{"LNA", 0.0, kLnaMax, 1.0}, {"PGA", 0.0, kPgaMax, 1.0}};
+    }
+    bool setGainDb(const std::string& name, double db) override {
+        if (!g_reg.stages.load()) { return false; }
+        std::lock_guard<std::mutex> lk(g_reg.m);
+        rec_->gainCalls.emplace_back(name, db);
+        if (name == "LNA") {
+            lna_ = std::round(std::min(std::max(db, 0.0), kLnaMax));
+            rec_->gainNow[name] = lna_;
+            return true;
+        }
+        if (name == "PGA" && !g_reg.refusePga.load()) {
+            pga_ = std::round(std::min(std::max(db, 0.0), kPgaMax));
+            rec_->gainNow[name] = pga_;
+            return true;
+        }
+        err_ = "the radio turned down the gain step for " + name;
+        return false;
+    }
+    double gainDb(const std::string& name) const override {
+        if (!g_reg.stages.load()) { return 0.0; }
+        if (agc_ && g_reg.agcReportsOwn.load()) { return kAgcOwnDb; }
+        return name == "LNA" ? lna_ : (name == "PGA" ? pga_ : 0.0);
+    }
     bool autoGainSupported() const override { return kindHasAutoGain(kind_); }
     bool setAutoGain(bool on) override {
         {
@@ -134,10 +187,19 @@ public:
             err_ = "the radio refused automatic gain";
             return false;
         }
+        const bool was = agc_;
         agc_ = on;
+        if (was && !on && g_reg.stages.load() && g_reg.dropOnAgcOff.load()) {
+            // The B200's behaviour: out of automatic gain it is at the bottom of every stage.
+            std::lock_guard<std::mutex> lk(g_reg.m);
+            lna_ = 0.0;
+            pga_ = 0.0;
+            rec_->gainNow["LNA"] = lna_;
+            rec_->gainNow["PGA"] = pga_;
+        }
         return true;
     }
-    bool autoGain() const override { return agc_; }
+    bool autoGain() const override { return agc_ && !g_reg.autoGainGetterStale.load(); }
     std::vector<std::string> antennas() const override { return {}; }
     bool setAntenna(const std::string&) override { return false; }
     std::string antenna() const override { return {}; }
@@ -158,6 +220,8 @@ private:
     double centre_ = 100.0e6;
     bool open_ = false;
     bool agc_ = false;
+    double lna_ = 10.0;  // what the radio holds on each stage (used only with Registry::stages)
+    double pga_ = 12.0;
     std::string err_;
 };
 
@@ -206,6 +270,17 @@ int refusedLines() {
     return n;
 }
 
+// The line written when automatic gain goes OFF and the manual gains are put back on the radio.
+const char* const kRestoredLine = "source: manual gain restored after auto gain off";
+
+int restoredLines() {
+    int n = 0;
+    for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) {
+        if (line.find(kRestoredLine) != std::string::npos) { ++n; }
+    }
+    return n;
+}
+
 void resetRegistry() {
     {
         std::lock_guard<std::mutex> lk(g_reg.m);
@@ -215,6 +290,11 @@ void resetRegistry() {
                         {"hackrf", "HackRF One", kHack}};
     }
     g_reg.refuseAgcOn = false;
+    g_reg.stages = false;
+    g_reg.dropOnAgcOff = false;
+    g_reg.agcReportsOwn = false;
+    g_reg.refusePga = false;
+    g_reg.autoGainGetterStale = false;
     cc::DiagLog::instance().resetForTest();
 }
 
@@ -295,6 +375,18 @@ struct AppWindowTestAccess {
     }
     // The box's own path.
     static bool toggle(AppWindow& a, bool want) { return a.changeAutoGain(want); }
+
+    // The gain mirrors (what the Source section's sliders and the top bar's GAIN dial show), and
+    // the user's hand on a slider: the radio is asked and the mirror takes the READBACK, as the
+    // slider's own code does.
+    static std::vector<std::string> gainNames(const AppWindow& a) { return a.deviceGainNames_; }
+    static std::vector<float> gainMirror(const AppWindow& a) { return a.deviceGainsDb_; }
+    static bool setManual(AppWindow& a, std::size_t i, double db) {
+        if (a.device_ == nullptr || i >= a.deviceGainNames_.size()) { return false; }
+        if (!a.device_->setGainDb(a.deviceGainNames_[i], db)) { return false; }
+        a.deviceGainsDb_[i] = static_cast<float>(a.device_->gainDb(a.deviceGainNames_[i]));
+        return true;
+    }
     static void clearError(AppWindow& a) { a.sourceError_.clear(); }
     static std::string error(const AppWindow& a) { return a.sourceError_; }
 };
@@ -537,6 +629,213 @@ void testRecoveryReopen() {
     }
 }
 
+// --- THE GAINS AFTER AUTOMATIC GAIN GOES OFF (0.99.74) ---------------------------------------------
+//
+// Found live on the B200 by the verifier of the top bar's GAIN dial: switching automatic gain OFF
+// left the radio about 35 dB below the 76 dB the window's mirror (and so the dial) still showed,
+// because the radio drops to the bottom of every stage when it leaves automatic gain and the window
+// never put its manual gains back nor read them again. Only an Airspy was read back (the callers
+// refresh its mirrors). The fake radio here does what the B200 does: out of automatic gain it holds
+// the BOTTOM of every stage.
+
+// The radio holds (lna, pga) AND the window's mirror says the same - the dial and the sliders
+// are showing what the radio really has.
+bool holds(const cascade::gui::AppWindow& app, std::size_t r, double lna, double pga) {
+    const Record rec = made(r);
+    const std::vector<float> m = Access::gainMirror(app);
+    const auto at = [&rec](const char* n) {
+        const auto it = rec.gainNow.find(n);
+        return it == rec.gainNow.end() ? -1.0 : it->second;
+    };
+    const bool ok = at("LNA") == lna && at("PGA") == pga && m.size() == 2u &&
+                    m[0] == static_cast<float>(lna) && m[1] == static_cast<float>(pga);
+    if (!ok) {
+        std::printf("    wanted LNA %.0f PGA %.0f; the radio holds LNA %.0f PGA %.0f, the mirror says "
+                    "%.0f %.0f\n",
+                    lna, pga, at("LNA"), at("PGA"), m.size() > 0 ? static_cast<double>(m[0]) : -1.0,
+                    m.size() > 1 ? static_cast<double>(m[1]) : -1.0);
+    }
+    return ok;
+}
+
+// A radio with the two stages, opened the B200's way (a Soapy device: a mid-dial 30 dB goes into
+// every stage at open) or as a native RTL-SDR (left as its driver chose).
+std::size_t openStaged(cascade::gui::AppWindow& app, bool soapy) {
+    const std::size_t idx = madeCount();
+    CHECK(soapy ? Access::selectSoapy(app, kSoapyArgs) : Access::selectNative(app, kRtlA));
+    CHECK(madeCount() == idx + 1);
+    const std::vector<std::string> names = Access::gainNames(app);
+    CHECK(names.size() == 2u);
+    CHECK(Access::agcSupported(app));
+    return idx;
+}
+
+void testGainsComeBackAfterAgcOff(bool soapy) {
+    std::printf("  AUTO off on a radio that drops to the bottom of every stage (%s): the manual "
+                "gains go back on the radio and the mirror reads them\n",
+                soapy ? "Soapy, the B200's way" : "native");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.dropOnAgcOff = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, soapy);
+    CHECK(!Access::agc(app));
+    // The hand on the sliders.
+    CHECK(Access::setManual(app, 0, 33.0));
+    CHECK(Access::setManual(app, 1, 21.0));
+    CHECK(holds(app, r, 33.0, 21.0));
+
+    // AUTO OFF while it is already off is no change of mode: nothing is set again, nothing logged.
+    {
+        const std::size_t calls = made(r).gainCalls.size();
+        CHECK(Access::toggle(app, false));
+        CHECK(made(r).gainCalls.size() == calls);
+        CHECK(restoredLines() == 0);
+    }
+
+    // AUTO ON: this radio leaves its gains alone, and the mirror is read back (the same numbers).
+    CHECK(Access::toggle(app, true));
+    CHECK(Access::agc(app));
+    CHECK(holds(app, r, 33.0, 21.0));
+    CHECK(restoredLines() == 0);
+
+    // AUTO OFF: the radio falls to its bottoms; the window puts the manual values back, one call
+    // per stage, and the mirror is what the radio then holds.
+    const std::size_t before = made(r).gainCalls.size();
+    CHECK(Access::toggle(app, false));
+    CHECK(!Access::agc(app));
+    CHECK(holds(app, r, 33.0, 21.0));
+    const Record after = made(r);
+    CHECK(after.gainCalls.size() == before + 2u);
+    if (after.gainCalls.size() == before + 2u) {
+        CHECK(after.gainCalls[before].first == "LNA" && after.gainCalls[before].second == 33.0);
+        CHECK(after.gainCalls[before + 1].first == "PGA" && after.gainCalls[before + 1].second == 21.0);
+    }
+    CHECK(restoredLines() == 1);
+
+    // And again: the second round trip comes back the same, with one more line.
+    CHECK(Access::toggle(app, true));
+    CHECK(Access::toggle(app, false));
+    CHECK(holds(app, r, 33.0, 21.0));
+    CHECK(restoredLines() == 2);
+}
+
+void testGainsComeBackAfterRememberedAgcOff() {
+    std::printf("  AUTO off on a radio opened already on auto gain (remembered): the gains it was "
+                "opened with come back\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.dropOnAgcOff = true;
+    cascade::gui::AppWindow app;
+    Access::remember(app, kKeyA, true);
+    const std::size_t r = openStaged(app, false);
+    CHECK(Access::agc(app));
+    // Nothing was switched by the user, so there is no manual value but the one the open read.
+    CHECK(holds(app, r, 10.0, 12.0));
+    CHECK(Access::toggle(app, false));
+    CHECK(!Access::agc(app));
+    CHECK(holds(app, r, 10.0, 12.0));
+    CHECK(restoredLines() == 1);
+}
+
+void testAgcOnShowsWhatTheRadioReports() {
+    std::printf("  AUTO on reads the radio back (the dial shows what it reports); AUTO off still "
+                "returns the MANUAL values, not what auto gain chose\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.dropOnAgcOff = true;
+    g_reg.agcReportsOwn = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, true);
+    CHECK(Access::setManual(app, 0, 33.0));
+    CHECK(Access::setManual(app, 1, 21.0));
+    CHECK(Access::toggle(app, true));
+    {
+        // The radio's own stages did not move; it REPORTS its automatic choice, and the mirror
+        // (the dial) shows that.
+        const std::vector<float> m = Access::gainMirror(app);
+        CHECK(m.size() == 2u && m[0] == static_cast<float>(kAgcOwnDb) &&
+              m[1] == static_cast<float>(kAgcOwnDb));
+        const Record rec = made(r);
+        CHECK(rec.gainNow.at("LNA") == 33.0 && rec.gainNow.at("PGA") == 21.0);
+    }
+    // ON again while it is on is no change of mode: the numbers kept are still the user's, not the
+    // 17 dB the dial now shows.
+    CHECK(Access::toggle(app, true));
+    // Out of automatic gain it is the user's own numbers that come back.
+    CHECK(Access::toggle(app, false));
+    CHECK(holds(app, r, 33.0, 21.0));
+}
+
+void testBoxKeepsWhatTheRadioAccepted() {
+    std::printf("  the box shows what the radio ACCEPTED, even from a driver whose autoGain() getter "
+                "is not kept in step\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.autoGainGetterStale = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, true);
+    (void)r;
+    CHECK(Access::toggle(app, true));
+    CHECK(Access::agc(app));
+    CHECK(Access::toggle(app, false));
+    CHECK(!Access::agc(app));
+}
+
+void testGainStepRefusedIsDroppedSilently() {
+    std::printf("  a stage the radio turns down is dropped without a word; the others come back and "
+                "the mirror matches the radio\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.dropOnAgcOff = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, true);
+    CHECK(Access::setManual(app, 0, 33.0));
+    CHECK(Access::setManual(app, 1, 21.0));
+    CHECK(Access::toggle(app, true));
+    g_reg.refusePga = true;
+    Access::clearError(app);
+    CHECK(Access::toggle(app, false));
+    CHECK(!Access::agc(app));
+    // LNA is back; the PGA stays at the bottom it fell to, and the mirror says so.
+    CHECK(holds(app, r, 33.0, 0.0));
+    // Silently: no error line for a step of a gesture that is not the user's.
+    CHECK(Access::error(app).empty());
+    CHECK(restoredLines() == 1);
+}
+
+void testAgcRefusedTouchesNoGain() {
+    std::printf("  a refused AUTO on, and a radio with no stages: no gain call, no line\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.dropOnAgcOff = true;
+    {
+        cascade::gui::AppWindow app;
+        const std::size_t r = openStaged(app, true);
+        CHECK(Access::setManual(app, 0, 33.0));
+        CHECK(Access::setManual(app, 1, 21.0));
+        g_reg.refuseAgcOn = true;
+        const std::size_t before = made(r).gainCalls.size();
+        CHECK(!Access::toggle(app, true));
+        CHECK(!Access::agc(app));
+        CHECK(made(r).gainCalls.size() == before);
+        CHECK(holds(app, r, 33.0, 21.0));
+        CHECK(restoredLines() == 0);
+    }
+    // A radio that lists no stages: the switch works and nothing is restored or logged.
+    resetRegistry();
+    {
+        cascade::gui::AppWindow app;
+        const std::size_t r = openNative(app, kRtlA);
+        CHECK(Access::gainNames(app).empty());
+        CHECK(Access::toggle(app, true));
+        CHECK(Access::toggle(app, false));
+        CHECK(!Access::agc(app));
+        CHECK(made(r).gainCalls.empty());
+        CHECK(restoredLines() == 0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -553,6 +852,13 @@ int main() {
     testToggleWritesMemoryAndSavedConfig();
     testRestart();
     testRecoveryReopen();
+    testGainsComeBackAfterAgcOff(true);
+    testGainsComeBackAfterAgcOff(false);
+    testGainsComeBackAfterRememberedAgcOff();
+    testAgcOnShowsWhatTheRadioReports();
+    testBoxKeepsWhatTheRadioAccepted();
+    testGainStepRefusedIsDroppedSilently();
+    testAgcRefusedTouchesNoGain();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

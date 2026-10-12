@@ -632,6 +632,152 @@ void testRegionalEntriesCarryNoPictures() {
     }
 }
 
+// --- a plugin site's kept copy (0.99.74) ------------------------------------------------
+//
+// Each site the user adds is kept as catalogue-<16 hex of sha256(address)>.json beside a .time,
+// exactly as the official catalogue is kept as catalogue.json: written after a good read, never
+// from text the client refused, loaded at start-up, deleted when the site is removed - and, like
+// the official copy, NOT counted by the plugin folder's signature (counted, every fetch with a
+// site added would look like a changed folder and the rescan it exists to skip would run after all).
+void testSiteKeptCopy() {
+    const std::string siteA = "https://hobbyist.example/hdradio/index.json";
+    const std::string siteB = "https://other.example/index.json";
+    const std::string text = indexText();
+    const std::string jsonA = PluginRepo::siteCacheFileName(siteA);
+    const std::string timeA = PluginRepo::siteCacheTimeFileName(siteA);
+    const std::string jsonB = PluginRepo::siteCacheFileName(siteB);
+    CHECK(!jsonA.empty() && !timeA.empty() && jsonA != jsonB);
+
+    // Written after a good read, read back with its time, under its own names - and the
+    // official kept copy beside it is a different pair.
+    {
+        const fs::path d = freshDir("site_roundtrip");
+        std::string err;
+        CHECK(PluginRepo::saveSiteCache(d.string(), siteA, text, 1790000123, err));
+        CHECK(err.empty());
+        std::vector<std::string> expectedFiles{jsonA, timeA};
+        std::sort(expectedFiles.begin(), expectedFiles.end());
+        CHECK(filesIn(d) == expectedFiles);
+        CHECK(readBytes(d / jsonA) == text);
+        std::vector<PluginCatalogEntry> entries;
+        std::int64_t when = 0;
+        CHECK(PluginRepo::loadSiteCache(d.string(), siteA, entries, when, err));
+        CHECK(entries.size() == 2u);
+        CHECK(when == 1790000123);
+        // Entries come back as parseIndex() read them: `source` is the merge's to give.
+        for (const PluginCatalogEntry& e : entries) { CHECK(e.source.empty()); }
+        // Another site's copy is not this one's.
+        CHECK(!PluginRepo::loadSiteCache(d.string(), siteB, entries, when, err));
+        CHECK(entries.empty());
+        CHECK(contains(err, "no catalogue has been kept yet"));
+        // ...and the official copy is untouched by either.
+        CHECK(PluginRepo::saveCatalogueCache(d.string(), indexText(std::string(64, 'c')), 1790000999, err));
+        CHECK(PluginRepo::loadSiteCache(d.string(), siteA, entries, when, err));
+        CHECK(when == 1790000123);
+        CHECK(PluginRepo::loadCachedIndex(d.string(), entries, when, err));
+        CHECK(when == 1790000999);
+    }
+
+    // NEVER FROM TEXT THE CLIENT REFUSED, and never over the site cap: nothing is written.
+    {
+        const fs::path d = freshDir("site_refused");
+        std::string err;
+        CHECK(!PluginRepo::saveSiteCache(d.string(), siteA, "{ not json", 1790000123, err));
+        CHECK(contains(err, "not kept"));
+        CHECK(!PluginRepo::saveSiteCache(d.string(), siteA, std::string(), 1790000123, err));
+        std::string huge = text;
+        huge.append(static_cast<std::size_t>(PluginRepo::kMaxSiteIndexBytes), ' ');
+        CHECK(!PluginRepo::saveSiteCache(d.string(), siteA, huge, 1790000123, err));
+        CHECK(contains(err, std::to_string(PluginRepo::kMaxSiteIndexBytes)));
+        // The official copy's cap is the larger one (4 MiB): the same text is kept there.
+        CHECK(PluginRepo::saveCatalogueCache(d.string(), huge, 1790000123, err));
+        CHECK(!PluginRepo::saveSiteCache(d.string(), std::string(), text, 1790000123, err));
+        CHECK(filesIn(d) == (std::vector<std::string>{"catalogue.json", "catalogue.json.time"}));
+    }
+
+    // A corrupt copy is ignored with its reason, not repaired and not deleted.
+    {
+        const fs::path d = freshDir("site_corrupt");
+        writeBytes(d / jsonA, "{ this is not json");
+        writeBytes(d / timeA, "1790000123\n");
+        std::vector<PluginCatalogEntry> entries;
+        std::int64_t when = 7;
+        std::string err;
+        CHECK(!PluginRepo::loadSiteCache(d.string(), siteA, entries, when, err));
+        CHECK(entries.empty());
+        CHECK(when == 0);
+        CHECK(contains(err, "not usable and was ignored"));
+        CHECK(readBytes(d / jsonA) == "{ this is not json");
+    }
+
+    // REMOVE deletes this site's two files (and a ".part" debris) and nothing else.
+    {
+        const fs::path d = freshDir("site_remove");
+        std::string err;
+        CHECK(PluginRepo::saveSiteCache(d.string(), siteA, text, 1790000123, err));
+        CHECK(PluginRepo::saveSiteCache(d.string(), siteB, text, 1790000124, err));
+        CHECK(PluginRepo::saveCatalogueCache(d.string(), text, 1790000125, err));
+        writeBytes(d / (jsonA + ".part"), "debris");
+        writeBytes(d / "adsb-1.0.0.dll", "module");
+        writeBytes(d / "installed.json", "{}");
+        CHECK(PluginRepo::removeSiteCache(d.string(), siteA));
+        const std::vector<std::string> left = filesIn(d);
+        CHECK(std::find(left.begin(), left.end(), jsonA) == left.end());
+        CHECK(std::find(left.begin(), left.end(), timeA) == left.end());
+        CHECK(std::find(left.begin(), left.end(), jsonA + ".part") == left.end());
+        for (const char* kept : {"adsb-1.0.0.dll", "installed.json", "catalogue.json", "catalogue.json.time"}) {
+            CHECK(std::find(left.begin(), left.end(), std::string(kept)) != left.end());
+        }
+        CHECK(std::find(left.begin(), left.end(), jsonB) != left.end());
+        std::vector<PluginCatalogEntry> entries;
+        std::int64_t when = 0;
+        CHECK(!PluginRepo::loadSiteCache(d.string(), siteA, entries, when, err));
+        CHECK(PluginRepo::loadSiteCache(d.string(), siteB, entries, when, err));
+        // Removing a copy that is not there is not a failure.
+        CHECK(PluginRepo::removeSiteCache(d.string(), siteA));
+    }
+
+    // THE FOLDER'S SIGNATURE DOES NOT COUNT A SITE'S KEPT COPY, and still counts every other file.
+    {
+        const fs::path d = freshDir("site_signature");
+        writeBytes(d / "adsb-1.0.0.dll", "module");
+        writeBytes(d / "installed.json", "{}");
+        PluginDirSignature before;
+        CHECK(cascade::core::readPluginDirSignature(d.string(), before));
+        CHECK(before.files.size() == 2u);
+        std::string err;
+        CHECK(PluginRepo::saveSiteCache(d.string(), siteA, text, 1790000123, err));
+        CHECK(PluginRepo::saveSiteCache(d.string(), siteB, text, 1790000124, err));
+        writeBytes(d / (jsonA + ".part"), "debris");
+        writeBytes(d / (timeA + ".part"), "debris");
+        PluginDirSignature after;
+        CHECK(cascade::core::readPluginDirSignature(d.string(), after));
+        CHECK(after == before);
+        CHECK(after.find(jsonA) == nullptr);
+        CHECK(after.find(timeA) == nullptr);
+        CHECK(after.find(jsonB) == nullptr);
+        // A rewrite with other bytes and another time still is not a change...
+        CHECK(PluginRepo::saveSiteCache(d.string(), siteA, indexText(std::string(64, 'c')), 1790009999, err));
+        PluginDirSignature rewritten;
+        CHECK(cascade::core::readPluginDirSignature(d.string(), rewritten));
+        CHECK(rewritten == before);
+        // ...while a file that merely looks like one is, whatever its name.
+        for (const std::string& other : {std::string("catalogue-0123456789abcde.json"),     // 15 hex
+                                         std::string("catalogue-0123456789ABCDEF.json"),    // upper case
+                                         std::string("catalogue-0123456789abcdef.json.bak"),
+                                         std::string("my-catalogue-0123456789abcdef.json"),
+                                         jsonA + "x"}) {
+            writeBytes(d / other, "x");
+            PluginDirSignature changed;
+            CHECK(cascade::core::readPluginDirSignature(d.string(), changed));
+            if (changed == before) { std::printf("FAIL the signature skipped \"%s\"\n", other.c_str()); }
+            CHECK(changed != before);
+            CHECK(changed.find(other) != nullptr);
+            fs::remove(d / other);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -642,6 +788,7 @@ int main() {
     fs::create_directories(g_root, ec);
 
     testCatalogueCache();
+    testSiteKeptCopy();
     testScreenshotPaths();
     testScreenshotFetch();
     testScreenshotPrune();

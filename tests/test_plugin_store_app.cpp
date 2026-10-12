@@ -21,7 +21,13 @@
  *              module fitted), the search, SCAN AGAIN and RESET WINDOW SIZES, store-c's row with
  *              its STOP and REMOVE keys, REMOVE arming a CONFIRM beside it (and nothing deleted),
  *              STOP stopping it; a click on its name opens the module's page with ON THIS MACHINE
- *              first, then the catalogue's SCREENSHOTS, WHAT IT DOES and WHAT'S NEW.
+ *              first, then the catalogue's SCREENSHOTS, WHAT IT DOES and WHAT'S NEW;
+ *   sites      (0.99.74) a second local index in the config's pluginSites: its plugin is a card with
+ *              THIRD PARTY and no official card has the badge, the id it shares with an official
+ *              plugin is hidden and counted, its page always shows the notice box and keeps the key
+ *              greyed until the tick, SITES opens the panel, ADD does nothing until the consent is
+ *              ticked and then writes the address to the saved config and reads the site, REMOVE
+ *              forgets it and deletes its kept copy, and a site that cannot be read keeps its card.
  *
  * Every click is aimed at the rectangle a first, unscripted run of the same layout reported for
  * that key, so nothing here depends on where the window happens to open.
@@ -818,6 +824,222 @@ int main(int argc, char** argv) {
         if (rb.ok) {
             CHECK(rb.has("fitted:page:closed:back"));
             CHECK(!rb.has("fitted:page:closed:esc"));
+        }
+    }
+
+    // --- PLUGIN SITES (0.99.74) -----------------------------------------------------------------
+    //
+    // A second local index file is a SITE in the config (the local-path form of an address, which is
+    // what lets a test use files): its plugin "site-hd" and a clash with the official "store-a". The
+    // card key of a site's plugin is "<id>@<site label>", the label of a local index being its file name.
+    {
+        const std::string siteA = (g_dir / "site-index.json").generic_string();
+        const std::string siteB = (g_dir / "site-b.json").generic_string();
+        const std::string key = "site-hd@site-index.json";
+        {
+            std::ostringstream o;
+            o << "{\n  \"schemaVersion\": 1,\n  \"plugins\": [\n"
+              << pluginJson("site-hd", "Site HD Radio", "0.1.0", "broadcast", "", "0.1.0: first release.") << ",\n"
+              << pluginJson("store-a", "Impostor Alpha", "9.9.9", "aircraft", "", "9.9.9: not the official one.")
+              << "\n  ]\n}\n";
+            writeFile(g_dir / "site-index.json", o.str());
+            std::ostringstream b;
+            b << "{\n  \"schemaVersion\": 1,\n  \"plugins\": [\n"
+              << pluginJson("site-b1", "Site B One", "1.0.0", "marine", "", "1.0.0: first release.")
+              << "\n  ]\n}\n";
+            writeFile(g_dir / "site-b.json", b.str());
+        }
+        const std::string sitesConfig = ", \"pluginSites\": [ \"" + siteA + "\" ]";
+
+        Rect siteName, sitesKey, tickSite;
+        {
+            // THE LIST: the site's plugin is a card with THIRD PARTY, no official card has the badge, the
+            // clash is hidden and counted, and the status line says what the site listed.
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 90;
+            o.extraJson = sitesConfig;
+            const Result r = once("sites-browse", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.rect("store:card:" + key) != nullptr);
+                CHECK(r.has("store:badge:" + key + ":thirdparty"));
+                for (const char* official : {"store-a", "store-b", "store-c"}) {
+                    CHECK(!r.has(std::string("store:badge:") + official + ":thirdparty"));
+                    CHECK(r.rect(std::string("store:card:") + official) != nullptr);
+                }
+                // THE IMPOSTOR IS HIDDEN: no card of its own, and the official store-a is still the one.
+                CHECK(r.rect("store:card:store-a@site-index.json") == nullptr);
+                CHECK(r.has("store:key:store-a:get"));
+                CHECK(r.has("store:site:site-index.json:read:1"));
+                CHECK(r.has("store:site:site-index.json:hidden-sameid:1"));
+                CHECK(!r.has("store:site:site-index.json:failed"));
+                // GET on a site's plugin opens its page (the notice is always there), and GET EVERYTHING
+                // says it leaves it out.
+                CHECK(r.has("store:key:" + key + ":get"));
+                CHECK(r.has("store:geteverything:sitesleftout"));
+                // The key beside CHECK AGAIN, left of it.
+                CHECK(r.rect("store:sites") != nullptr);
+                if (r.rect("store:sites") != nullptr && r.rect("store:check") != nullptr) {
+                    CHECK(r.rect("store:sites")->x1 <= r.rect("store:check")->x0);
+                    CHECK(r.rect("store:tab:updates")->x1 <= r.rect("store:sites")->x0);
+                }
+                CHECK(!r.has("store:sites:open"));  // the panel is closed until the key is pressed
+                // The site's own kept copy, beside the official's.
+                CHECK(fs::exists(pluginsDir() / cascade::core::PluginRepo::siteCacheFileName(siteA)));
+                CHECK(fs::exists(pluginsDir() / "catalogue.json"));
+                siteName = need(r, "store:card:" + key + ":name");
+                sitesKey = need(r, "store:sites");
+            }
+        }
+        {
+            // THE PAGE: THIRD PARTY on the header, "from <host>" and the origin line, the notice box
+            // between WHAT'S NEW and DETAILS although the plugin published no legal notice, and the key
+            // greyed until the tick.
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 100;
+            o.extraJson = sitesConfig;
+            o.script = click(40, siteName);
+            const Result r = once("sites-page", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.has("store:page:" + key));
+                CHECK(r.has("store:page:badge:thirdparty"));
+                CHECK(r.has("store:page:origin:" + key));
+                CHECK(sectionsInOrder(r, "store", {"screenshots", "whatitdoes", "whatsnew", "beforeyoufitit", "details"}));
+                CHECK(r.has("store:page:key:greyed"));
+                CHECK(!r.has("store:page:key:get"));
+                tickSite = need(r, "store:page:tick");
+            }
+        }
+        {
+            RunOptions o;
+            o.frames = 130;
+            o.extraJson = sitesConfig;
+            o.script = click(40, siteName) + click(80, tickSite);
+            resetPluginsFolder(false);
+            const Result r = once("sites-page-tick", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.has("store:page:key:greyed"));
+                CHECK(r.has("store:page:key:get"));
+                CHECK(!r.has("store:key:" + key + ":fitting"));  // the tick fitted nothing
+            }
+        }
+        Rect fieldR, consentR, addR, removeR;
+        {
+            // THE PANEL: the key opens it; it lists the site with a REMOVE key, and has the address field,
+            // the consent and ADD - which is greyed.
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 90;
+            o.extraJson = sitesConfig;
+            o.script = click(40, sitesKey);
+            const Result r = once("sites-panel", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.has("store:sites:open"));
+                CHECK(r.rect("store:sites:panel") != nullptr);
+                CHECK(r.rect("store:sites:field") != nullptr);
+                CHECK(r.rect("store:sites:consent") != nullptr);
+                CHECK(r.rect("store:sites:remove:0") != nullptr);
+                CHECK(r.rect("store:sites:remove:1") == nullptr);
+                CHECK(r.has("store:sites:add:greyed"));
+                CHECK(!r.has("store:sites:add:ready"));
+                fieldR = need(r, "store:sites:field");
+                consentR = need(r, "store:sites:consent");
+                addR = need(r, "store:sites:add");
+                removeR = need(r, "store:sites:remove:0");
+            }
+        }
+        {
+            // ADD DOES NOTHING WITHOUT THE CONSENT: the address typed, ADD pressed, the tick never given.
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 150;
+            o.extraJson = sitesConfig;
+            o.script = click(40, sitesKey) + click(60, fieldR) + "75 text " + siteB + "\n" + click(100, addR);
+            const Result r = once("sites-add-noconsent", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.has("store:sites:add:greyed"));
+                CHECK(!r.has("store:sites:add:ready"));
+                const std::string cfgText = readFile(g_dir / "sites-add-noconsent.json");
+                CHECK(cfgText.find(siteA) != std::string::npos);
+                CHECK(cfgText.find(siteB) == std::string::npos);
+                CHECK(!r.has("store:site:site-b.json:read:1"));
+            }
+        }
+        {
+            // ADD, WITH THE CONSENT: the address is written to the saved config, the site is read, its
+            // plugin is listed with the badge, and the field and the tick are cleared for the next one.
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 220;
+            o.extraJson = sitesConfig;
+            o.script = click(40, sitesKey) + click(60, fieldR) + "75 text " + siteB + "\n" + click(100, consentR) +
+                       click(130, addR);
+            const Result r = once("sites-add", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.has("store:sites:add:greyed"));
+                CHECK(r.has("store:sites:add:ready"));
+                const std::string cfgText = readFile(g_dir / "sites-add.json");
+                const std::size_t at = cfgText.find("\"pluginSites\"");
+                CHECK(at != std::string::npos);
+                CHECK(cfgText.find(siteA, at) != std::string::npos);
+                const std::size_t atB = cfgText.find(siteB, at);
+                CHECK(atB != std::string::npos);
+                CHECK(atB > cfgText.find(siteA, at));  // the order they were added in
+                CHECK(r.has("store:site:site-b.json:read:1"));
+                CHECK(r.has("store:badge:site-b1@site-b.json:thirdparty"));
+                CHECK(fs::exists(pluginsDir() / cascade::core::PluginRepo::siteCacheFileName(siteB)));
+                CHECK(r.rect("store:sites:remove:1") != nullptr);
+            }
+        }
+        {
+            // REMOVE forgets the site: it leaves the saved config, its kept copy is deleted, the official
+            // catalogue is untouched.
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 130;
+            o.extraJson = sitesConfig;
+            o.script = click(40, sitesKey) + click(80, removeR);
+            const Result r = once("sites-remove", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                const std::string cfgText = readFile(g_dir / "sites-remove.json");
+                CHECK(cfgText.find("\"pluginSites\"") != std::string::npos);
+                CHECK(cfgText.find(siteA) == std::string::npos);
+                CHECK(!fs::exists(pluginsDir() / cascade::core::PluginRepo::siteCacheFileName(siteA)));
+                CHECK(fs::exists(pluginsDir() / "catalogue.json"));
+                CHECK(r.has("store:key:store-a:get"));
+            }
+        }
+        {
+            // A SITE THAT CANNOT BE READ never blanks the list: one run reads it and keeps its copy; the
+            // next finds the site's file gone, so the read fails - the status line says so, and the card is
+            // still listed (from the kept copy) beside an unaffected official list.
+            resetPluginsFolder(false);
+            RunOptions first;
+            first.frames = 90;
+            first.extraJson = sitesConfig;
+            CHECK(once("sites-kept-1", first).ok);
+            CHECK(fs::exists(pluginsDir() / cascade::core::PluginRepo::siteCacheFileName(siteA)));
+            std::error_code rm;
+            fs::rename(g_dir / "site-index.json", g_dir / "site-index.gone", rm);
+            RunOptions again;
+            again.frames = 90;
+            again.extraJson = sitesConfig;
+            const Result r = once("sites-kept-2", again);
+            CHECK(r.ok);
+            if (r.ok) {
+                CHECK(r.has("store:site:site-index.json:failed"));
+                CHECK(r.rect("store:card:" + key) != nullptr);  // listed from the kept copy
+                CHECK(r.has("store:key:store-a:get"));          // the official list unaffected
+            }
+            fs::rename(g_dir / "site-index.gone", g_dir / "site-index.json", rm);
         }
     }
 

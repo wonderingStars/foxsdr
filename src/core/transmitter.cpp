@@ -25,6 +25,10 @@ struct InputRow {
 constexpr InputRow kInputs[kTxInputCount] = {
     {TxInput::Microphone, FOX_TR_NOOP("MIC")},
     {TxInput::Tone, FOX_TR_NOOP("TONE")},
+    // Named so a log line or a test can say what the audio is read from; never
+    // offered on the page (so, unlike the two above, never drawn through tr() and not a
+    // catalogue key) and never accepted from a file (txInputFromName/Index).
+    {TxInput::Plugin, "PLUGIN"},
 };
 
 std::int64_t nowMs() {
@@ -44,14 +48,18 @@ const char* txInputName(TxInput in) {
 TxInput txInputFromIndex(int index) {
     // OUT OF RANGE LANDS ON THE TONE, not on the microphone. A hand-edited
     // config with a number this build does not know must not point a
-    // transmitter at a room.
-    if (index < 0 || index >= kTxInputCount) { return TxInput::Tone; }
+    // transmitter at a room. THE PLUGIN'S INDEX IS OUT OF RANGE for this: it is
+    // not an input a person or a file can choose (core/tx_audio.hpp), and a config
+    // that names it lands on the tone like any other number this build will not
+    // take.
+    if (index < 0 || index >= kTxHandInputCount) { return TxInput::Tone; }
     return static_cast<TxInput>(index);
 }
 
 bool txInputFromName(const char* name, TxInput& out) {
     if (name == nullptr) { return false; }
     for (const InputRow& row : kInputs) {
+        if (row.input == TxInput::Plugin) { continue; }  // never chosen by name
         if (std::strcmp(row.name, name) == 0) {
             out = row.input;
             return true;
@@ -178,15 +186,60 @@ const source::IqSink* Transmitter::sink() const {
 
 void Transmitter::setMode(dsp::TxMode m) {
     std::lock_guard<std::mutex> lk(stateMutex_);
-    modulator_.setMode(m);
+    pageMode_ = m;
+    // The modulator follows the page - unless a plugin's data audio is on the air
+    // with DATA (flat) ticked, when it is already on NFM and stays there.
+    modulator_.setMode(sourceIsPlugin_ && dataFlat_ ? dsp::TxMode::NFM : m);
 }
 
 dsp::TxMode Transmitter::mode() const {
     std::lock_guard<std::mutex> lk(stateMutex_);
+    return pageMode_;
+}
+
+dsp::TxMode Transmitter::effectiveMode() const {
+    std::lock_guard<std::mutex> lk(stateMutex_);
     return modulator_.mode();
 }
 
+bool Transmitter::preemphasis() const {
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    return modulator_.preemphasis();
+}
+
+void Transmitter::setDataFlat(bool on) {
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    dataFlat_ = on;
+    // Takes effect at once if a plugin's audio is the thing on the air.
+    if (sourceIsPlugin_) { applySourceLocked(true); }
+}
+
+bool Transmitter::dataFlat() const {
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    return dataFlat_;
+}
+
+void Transmitter::applySourceLocked(bool plugin) {
+    sourceIsPlugin_ = plugin;
+    if (plugin && dataFlat_) {
+        modulator_.setMode(dsp::TxMode::NFM);
+        modulator_.setPreemphasis(false);
+    } else {
+        // THE MICROPHONE AND THE TONE ARE ALWAYS PRE-EMPHASISED, and so is a plugin's
+        // audio when the operator has unticked DATA (flat): the page's mode, the
+        // product's default.
+        modulator_.setMode(pageMode_);
+        modulator_.setPreemphasis(true);
+    }
+}
+
 void Transmitter::setInput(TxInput in) {
+    // A PLUGIN IS NOT AN INPUT A HAND CAN CHOOSE. It lands on the tone, which is
+    // where every other number this build does not take lands.
+    if (in == TxInput::Plugin || static_cast<int>(in) < 0 ||
+        static_cast<int>(in) >= kTxInputCount) {
+        in = TxInput::Tone;
+    }
     std::lock_guard<std::mutex> lk(stateMutex_);
     if (in == input_) { return; }
     input_ = in;
@@ -196,6 +249,12 @@ void Transmitter::setInput(TxInput in) {
 }
 
 TxInput Transmitter::input() const {
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    return input_;
+}
+
+TxInput Transmitter::activeInput() const {
+    if (pluginOnlyKey()) { return TxInput::Plugin; }
     std::lock_guard<std::mutex> lk(stateMutex_);
     return input_;
 }
@@ -274,6 +333,83 @@ std::int64_t Transmitter::remoteHoldRemainingMs() const {
                               (nowMs() - remoteKeyedAtMs_.load(std::memory_order_relaxed));
     return left > 0 ? left : 0;
 }
+
+// --- the plugin's key (0.99.74) ------------------------------------------------
+
+void Transmitter::setPluginLink(std::shared_ptr<TxAudioLink> link) {
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    link_ = std::move(link);
+}
+
+bool Transmitter::pluginOnlyKey() const {
+    return pluginKey_.load(std::memory_order_relaxed) &&
+           !pttHeld_.load(std::memory_order_relaxed) &&
+           !latched_.load(std::memory_order_relaxed) &&
+           !remoteKeyed_.load(std::memory_order_relaxed);
+}
+
+void Transmitter::setPluginKey(bool on) {
+    if (!on) {
+        pluginKey_.store(false, std::memory_order_relaxed);
+        return;
+    }
+    // THE FAULT LATCH. A plugin whose key was cut - by the cap, by a fault, by the
+    // frozen-window handle - is not let back in by asking again: the operator arms a
+    // new window, and the caller clears the latch then. Without this the cap would
+    // be a one-frame interruption for a plugin that holds active() high for ever.
+    if (pluginFault_.load(std::memory_order_relaxed)) { return; }
+    if (!pluginKey_.load(std::memory_order_relaxed)) {
+        // The stamp BEFORE the flag, so the cap never reads a stale one.
+        {
+            std::lock_guard<std::mutex> lk(stateMutex_);
+            pluginKeyedAt_ = std::chrono::steady_clock::now();
+        }
+        pluginKey_.store(true, std::memory_order_relaxed);
+    }
+}
+
+bool Transmitter::pluginKeyRequested() const {
+    return pluginKey_.load(std::memory_order_relaxed);
+}
+
+bool Transmitter::pluginKeyed() const {
+    return transmitting_.load(std::memory_order_relaxed) && pluginOnlyKey();
+}
+
+bool Transmitter::pluginFault() const { return pluginFault_.load(std::memory_order_relaxed); }
+
+std::string Transmitter::pluginFaultReason() const {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    return pluginFaultReason_;
+}
+
+void Transmitter::clearPluginFault() {
+    pluginFault_.store(false, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    pluginFaultReason_.clear();
+}
+
+void Transmitter::cutPluginKey(const char* why) {
+    pluginKey_.store(false, std::memory_order_relaxed);
+    pluginFault_.store(true, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    pluginFaultReason_ = why != nullptr ? why : "the plugin's key was cut";
+    // The panel letters this beside the key, in the same amber as the latch's own.
+    if (autoUnkeyReason_.empty()) { autoUnkeyReason_ = pluginFaultReason_; }
+}
+
+std::uint64_t Transmitter::pluginFramesSent() const {
+    return pluginFrames_.load(std::memory_order_relaxed);
+}
+std::uint64_t Transmitter::pluginUnderruns() const {
+    return pluginUnderruns_.load(std::memory_order_relaxed);
+}
+
+std::int64_t Transmitter::msSinceTick() const {
+    return nowMs() - lastTickMs_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t Transmitter::faultCount() const { return faults_.load(std::memory_order_relaxed); }
 
 void Transmitter::setLatchTimeoutForTest(std::chrono::milliseconds t) {
     std::lock_guard<std::mutex> lk(stateMutex_);
@@ -369,9 +505,37 @@ void Transmitter::tick() {
         }
     }
 
+    // THE PLUGIN KEY'S OWN DEADLINE, and the same number as the latch's: one
+    // continuous key is never longer than kLatchTimeout, whoever is holding it. When
+    // it fires the key is cut AND latched out (cutPluginKey), so a plugin that holds
+    // active() high for ever is not simply let back in on the next frame.
+    if (pluginKey_.load(std::memory_order_relaxed)) {
+        bool expired = false;
+        long long limitMs = 0;
+        {
+            std::lock_guard<std::mutex> lk(stateMutex_);
+            expired = (std::chrono::steady_clock::now() - pluginKeyedAt_) >= latchTimeout_;
+            limitMs = static_cast<long long>(latchTimeout_.count());
+        }
+        if (expired) {
+            char note[112];
+            if (limitMs >= 1000) {
+                std::snprintf(note, sizeof(note),
+                              "a plugin held the key for %lld seconds, so it was released",
+                              limitMs / 1000);
+            } else {
+                std::snprintf(note, sizeof(note),
+                              "a plugin held the key for %lld ms, so it was released", limitMs);
+            }
+            cutPluginKey(note);
+            diagWarnf("tx: the plugin's key was cut by the %lld ms cap", limitMs);
+        }
+    }
+
     const bool want = pttHeld_.load(std::memory_order_relaxed) ||
                       latched_.load(std::memory_order_relaxed) ||
-                      remoteKeyed_.load(std::memory_order_relaxed);
+                      remoteKeyed_.load(std::memory_order_relaxed) ||
+                      pluginKey_.load(std::memory_order_relaxed);
     const bool have = transmitting_.load(std::memory_order_relaxed);
 
     if (want && !have) {
@@ -384,6 +548,12 @@ void Transmitter::tick() {
             latched_.store(false, std::memory_order_relaxed);
             pttHeld_.store(false, std::memory_order_relaxed);
             releaseRemote("the radio would not key");
+            faults_.fetch_add(1, std::memory_order_relaxed);
+            // ...and the plugin's, latched out: a refusal is a fault, and a plugin
+            // asking again on every frame must not become a retry loop on the radio.
+            if (pluginKey_.load(std::memory_order_relaxed)) {
+                cutPluginKey("the radio would not key");
+            }
         }
         return;
     }
@@ -407,6 +577,18 @@ void Transmitter::tick() {
         keyUpLocked("the transmitter stopped on its own");
         latched_.store(false, std::memory_order_relaxed);
         pttHeld_.store(false, std::memory_order_relaxed);
+        faults_.fetch_add(1, std::memory_order_relaxed);
+        // THE PLUGIN'S KEY TOO, AND LATCHED OUT. A fault or the dead-man's handle
+        // is exactly when nothing should key this radio again until a person has
+        // looked: the reason the thread recorded is the one the plugin is cut with.
+        if (pluginKey_.load(std::memory_order_relaxed)) {
+            std::string why;
+            {
+                std::lock_guard<std::mutex> elk(errorMutex_);
+                why = autoUnkeyReason_;
+            }
+            cutPluginKey(why.empty() ? "the transmitter stopped on its own" : why.c_str());
+        }
         // AND THE REMOTE'S, which is the one an operator at the far end
         // cannot see has happened. A fault or the dead-man's handle must not
         // leave a browser re-asserting into a transmitter that has already
@@ -442,6 +624,15 @@ bool Transmitter::keyDownLocked() {
     modulator_.setSampleRateHz(48000.0);
     tone_.setSampleRateHz(48000.0);
     audioIn_->drain();
+    // The plugin's ring, emptied the same way and for the same reason: audio queued
+    // before this key went down is from a transmission that is over. The TX thread is
+    // not running here, so this thread is the ring's only reader.
+    if (link_) { link_->clear(); }
+    pluginFrames_.store(0, std::memory_order_relaxed);
+    pluginUnderruns_.store(0, std::memory_order_relaxed);
+    // What the modulator runs in for THIS key: the page's mode, or NFM with the
+    // pre-emphasis off for a plugin's data audio. The thread re-checks it each block.
+    applySourceLocked(pluginOnlyKey());
     interp_.configure(48000.0, sink_->sampleRateHz());
     modulator_.setKeyed(true);
     blocks_.store(0, std::memory_order_relaxed);
@@ -466,6 +657,12 @@ void Transmitter::keyUpLocked(const char* reason) {
         // thread had to be abandoned.
         sink_->stop();
     }
+    // WHATEVER A PLUGIN HAD QUEUED IS NOT SENT LATER. The thread has been joined (every
+    // caller stops it first), so this is the ring's only reader; and the modulator is
+    // pointed back at the page's mode and the pre-emphasis, so an idle transmitter
+    // always reads as the page left it.
+    if (link_) { link_->clear(); }
+    applySourceLocked(false);
     if (reason != nullptr) {
         // DOES NOT OVERWRITE A REASON ALREADY GIVEN. When the TX thread lets
         // go on its own it has already recorded WHY - the radio faulted, or
@@ -554,6 +751,10 @@ void Transmitter::stop() {
     const bool was = transmitting_.load(std::memory_order_relaxed);
     pttHeld_.store(false, std::memory_order_relaxed);
     latched_.store(false, std::memory_order_relaxed);
+    // The plugin's request goes with the rest. It is rebuilt by the frame loop, and is
+    // refused there once the radio is gone; the FAULT LATCH is left as it is, because a
+    // stop is not a fault and not a way to clear one.
+    pluginKey_.store(false, std::memory_order_relaxed);
     // setSink() calls this, so swapping or removing a radio opens the remote
     // key too - a browser's assertion must not be inherited by the next board
     // any more than a latch is.
@@ -605,7 +806,50 @@ void Transmitter::threadBody() {
             if (sink_ == nullptr) { break; }
 
             // --- the audio --------------------------------------------------
-            if (input_ == TxInput::Tone) {
+            // A PLUGIN'S AUDIO GOES OUT ONLY WHILE ITS KEY IS THE ONLY KEY DOWN, read
+            // afresh every block: a PTT, the LATCH or the web remote taking the key
+            // takes the source with it, and the modulator is pointed at what that
+            // source needs (the page's mode and the pre-emphasis, or NFM flat).
+            //
+            // AND THE RAMP-DOWN AFTER IT STAYS THE PLUGIN'S. When the plugin's key is
+            // released with no hand on the other keys, the few milliseconds of tail the
+            // modulator plays are the plugin's too - silence, because the plugin is no
+            // longer asking - and not the microphone's or the tone's: switching source
+            // at the unkey would put a slice of the hand's input on the air that nobody
+            // keyed.
+            const bool handKey = pttHeld_.load(std::memory_order_relaxed) ||
+                                 latched_.load(std::memory_order_relaxed) ||
+                                 remoteKeyed_.load(std::memory_order_relaxed);
+            const bool pluginAsking = pluginKey_.load(std::memory_order_relaxed);
+            const bool fromPlugin = !handKey && (pluginAsking || sourceIsPlugin_);
+            if (fromPlugin != sourceIsPlugin_) {
+                // A hand has just let go and the plugin is the only key again: whatever
+                // it had queued is from before the hand took the key and is not sent now.
+                // This thread is the ring's only reader, so it may empty it.
+                if (fromPlugin && link_) { link_->clear(); }
+                applySourceLocked(fromPlugin);
+            }
+            if (fromPlugin) {
+                // Nothing is read once the plugin has stopped asking: what is still queued
+                // was discarded with the key (or is the drain, which keeps the key asked).
+                const std::size_t got =
+                    (link_ && pluginAsking) ? link_->read(audio.data(), kAudioBlock) : 0;
+                if (got < kAudioBlock) {
+                    // Silence for what the plugin has not supplied: a modem that is
+                    // between frames, or a DSP thread that is behind, costs a few
+                    // milliseconds of unmodulated carrier, never a thread that stops
+                    // noticing the key has been released.
+                    std::fill(audio.begin() + static_cast<std::ptrdiff_t>(got), audio.end(),
+                              0.0f);
+                    if (pluginAsking) { pluginUnderruns_.fetch_add(1, std::memory_order_relaxed); }
+                }
+                pluginFrames_.fetch_add(got, std::memory_order_relaxed);
+                // WHAT THE MODULATOR IS GIVEN IS FINITE AND INSIDE [-1, 1], whatever
+                // the plugin returned. A NaN into the NFM phase accumulator would
+                // poison every sample after it, and an amplitude of 50 into the AM or
+                // SSB arm is exactly the splatter the modulators are scaled to avoid.
+                sanitiseTxAudio(audio.data(), kAudioBlock);
+            } else if (input_ == TxInput::Tone) {
                 tone_.generate(audio.data(), kAudioBlock);
             } else {
                 const std::size_t got = audioIn_->read(audio.data(), kAudioBlock);

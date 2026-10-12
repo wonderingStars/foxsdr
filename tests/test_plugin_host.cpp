@@ -2007,6 +2007,128 @@ void testDuplicateIgnoresRefusedRecords() {
     fs::remove_all(d, ec);
 }
 
+// A PLUGIN SITE'S MODULE NEVER TAKES A DECLARED NAME FROM AN OFFICIAL ONE (0.99.74). The name is
+// written by whoever built the binary, and the higher-version rule alone would let a module from a
+// site the user added declare an official plugin's name with a higher version and switch the
+// official one off at load. The install records' answer (LoadedPlugin::origin) decides: an Official
+// record holds its name against every Site record of it, whatever the versions; two Site modules,
+// an unrecorded module and a scan given no records all behave exactly as before.
+LoadedPlugin originRec(const fs::path& dir, const std::string& file, const char* id,
+                       const char* version, cascade::core::PluginOrigin origin) {
+    LoadedPlugin r = loadedRec(dir, file, id, version);
+    r.origin = origin;
+    return r;
+}
+
+void testSiteModuleNeverTakesAnOfficialName() {
+    using cascade::core::PluginOrigin;
+    const fs::path d = tmpDir("dup_origin");
+    const std::vector<std::string> names = {mod("ais-official-1.0.0"), mod("ais-site-9.0.0"),
+                                            mod("ais-site-2.0.0"), mod("ais-hand-2.0.0")};
+    stageFiles(d, names);
+    const auto before = snapshotDir(d);
+
+    // The case that matters: the site's module has the HIGHER version and still loses.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official),
+                                          originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded);
+        CHECK(recs[0].error.empty());
+        CHECK(!recs[1].loaded);
+        CHECK(recs[1].iqDecoder == nullptr);  // its borrowed table is gone with it
+        CHECK(recs[1].supersededBy == names[0]);
+        // The reason says WHY, in the host's own words, naming the plugin and the file that runs.
+        CHECK(contains(recs[1].error, "Not loaded: it declares the same name as the official plugin \"AIS\""));
+        CHECK(contains(recs[1].error, names[0].c_str()));
+        CHECK(contains(recs[1].error, "plugin site"));
+        CHECK(!contains(recs[1].error, "Ignored: another copy"));
+    }
+    // ...whichever order the scan lists them in.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site),
+                                          originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded);
+        CHECK(recs[1].loaded);
+        CHECK(contains(recs[0].error, "official plugin"));
+    }
+    // Every site module of the name loses, not only the highest.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official),
+                                          originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site),
+                                          originRec(d, names[2], "AIS", "2.0.0", PluginOrigin::Site)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 2);
+        CHECK(recs[0].loaded && !recs[1].loaded && !recs[2].loaded);
+        CHECK(contains(recs[1].error, "official plugin") && contains(recs[2].error, "official plugin"));
+    }
+    // A different name is untouched by any of it.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official),
+                                          originRec(d, names[1], "HD Radio", "9.0.0", PluginOrigin::Site)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+        CHECK(recs[0].loaded && recs[1].loaded);
+    }
+    // An official file that was REFUSED holds nothing: the site's module runs.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official),
+                                          originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site)};
+        recs[0].loaded = false;
+        recs[0].error = "built for another plugin ABI";
+        recs[0].iqDecoder = nullptr;
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+    }
+
+    // UNCHANGED: two SITE modules of one name compete by version, as ever.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[2], "AIS", "2.0.0", PluginOrigin::Site),
+                                          originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+        CHECK(contains(recs[0].error, "Ignored: another copy"));
+    }
+    // UNCHANGED: no records at all (the default of every record) - the higher version wins.
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], "AIS", "1.0.0"),
+                                          loadedRec(d, names[1], "AIS", "9.0.0")};
+        CHECK(recs[0].origin == PluginOrigin::Unrecorded);
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+    }
+    // UNCHANGED: an unrecorded (hand-copied) module competes by version against an official one
+    // and against a site's - the rule is about site versus official and nothing else.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official),
+                                          originRec(d, names[3], "AIS", "2.0.0", PluginOrigin::Unrecorded)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+        CHECK(contains(recs[0].error, "Ignored: another copy"));
+    }
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site),
+                                          originRec(d, names[3], "AIS", "2.0.0", PluginOrigin::Unrecorded)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded && !recs[1].loaded);
+    }
+    // All three at once: the site's module still loses to the OFFICIAL name, and the winner among
+    // the rest is the hand-copied 2.0.0 by the version rule (which turns the official 1.0.0 off as
+    // it always did) - so no site module runs while an official one holds the name.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], "AIS", "1.0.0", PluginOrigin::Official),
+                                          originRec(d, names[1], "AIS", "9.0.0", PluginOrigin::Site),
+                                          originRec(d, names[3], "AIS", "2.0.0", PluginOrigin::Unrecorded)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 2);
+        CHECK(!recs[0].loaded && !recs[1].loaded && recs[2].loaded);
+        CHECK(contains(recs[1].error, "official plugin"));
+        CHECK(contains(recs[0].error, "Ignored: another copy"));
+    }
+
+    CHECK(snapshotDir(d) == before);  // and, as ever, nothing is deleted
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
 // THE OWNER'S RULING, pinned against the code path the product runs.
 //
 // scan() is given a directory holding a duplicate-looking pair plus unrelated
@@ -2073,6 +2195,7 @@ int main() {
     testDuplicateSkipIsReported();
     testDuplicateTieBreakIsDeterministic();
     testDuplicateIgnoresRefusedRecords();
+    testSiteModuleNeverTakesAnOfficialName();
     testScanRemovesNothingFromDisk();
     testRealPluginDirs();
     return testSummary("test_plugin_host");

@@ -10,9 +10,11 @@
 #include "core/plugin_api.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_census.hpp"
 #include "imgui.h"
 
 using cascade::i18n::tr;
+using cascade::i18n::trId;
 
 namespace cascade::gui {
 
@@ -103,6 +105,20 @@ int drawPluginSettingsForm(core::PluginApiCore& api, const std::string& pluginNa
                 if (fs.last == core::SettingEditResult::Accepted) { ++stored; }
             }
         } else {
+            // A PATH FIELD (0.99.74) IS THIS SAME BOX WITH A KEY ON ITS LINE.
+            // The owner, 2026-10-12: "have you made it easy for the user to add
+            // the nrsc5 path to the sdr software" - until now the only way was
+            // to type or paste a full path. The key is drawn only where the
+            // host has a file dialog to open (state.pick); where it has none
+            // the box stands alone, never beside a key that does nothing.
+            const bool browse = f.kind == CASCADE_SETTING_PATH && static_cast<bool>(state.pick);
+            const char* const browseLabel = browse ? trId("BROWSE FILES") : "";
+            float keyWidth = 0.0f;  // the key, and the gap before it
+            if (browse) {
+                const ImGuiStyle& st = ImGui::GetStyle();
+                keyWidth = ImGui::CalcTextSize(browseLabel, nullptr, true).x +
+                           st.FramePadding.x * 2.0f + st.ItemSpacing.x;
+            }
             const std::size_t cap = f.maxLength + 1u;
             if (fs.buf.size() != cap) {
                 fs.buf.assign(cap, '\0');
@@ -110,7 +126,7 @@ int drawPluginSettingsForm(core::PluginApiCore& api, const std::string& pluginNa
             }
             if (!fs.editing) { fillBuffer(fs.buf, shown); }
             ImGui::TextUnformatted(f.label.c_str());
-            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::SetNextItemWidth(browse ? -keyWidth : -FLT_MIN);
             ImGui::InputTextWithHint("##v", f.placeholder.c_str(), fs.buf.data(), fs.buf.size());
             fs.editing = ImGui::IsItemActive();
             if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -118,6 +134,37 @@ int drawPluginSettingsForm(core::PluginApiCore& api, const std::string& pluginNa
                 fs.last = core::commitSettingEdit(api, pluginName, f, std::string(fs.buf.data()));
                 if (fs.last == core::SettingEditResult::Accepted) { ++stored; }
                 // Next frame refills from the store: a refused edit snaps back.
+            }
+            if (browse) {
+                ImGui::SameLine();
+                const bool pressed = ImGui::Button(browseLabel);
+                if (census::enabled()) {
+                    census::note("settings:browse:", f.key);
+                    const ImVec2 a = ImGui::GetItemRectMin();
+                    const ImVec2 b = ImGui::GetItemRectMax();
+                    census::rect("settings:browse:" + f.key, a.x, a.y, b.x, b.y);
+                }
+                if (pressed) {
+                    core::FilePickRequest rq;
+                    rq.title = tr("Choose a file");
+                    rq.programsName = tr("Programs (*.exe)");
+                    rq.allFilesName = tr("All files (*.*)");
+                    rq.programs = core::placeholderNamesProgram(f.placeholder);
+                    // Read afresh: pressing the key leaves the box, which commits
+                    // what was typed in it on this very frame, and the dialog
+                    // should open beside THAT.
+                    rq.startFrom = core::settingFieldValue(api, pluginName, f);
+                    std::string chosen;
+                    // A cancel (false) changes nothing at all. A file is committed
+                    // through the call a typed edit takes - the store, and
+                    // settings_seq for the plugin - and the box shows it from the
+                    // next frame, or snaps back if the field refused it.
+                    if (state.pick(rq, chosen) && !chosen.empty()) {
+                        fs.editing = false;
+                        fs.last = core::commitSettingEdit(api, pluginName, f, chosen);
+                        if (fs.last == core::SettingEditResult::Accepted) { ++stored; }
+                    }
+                }
             }
         }
 

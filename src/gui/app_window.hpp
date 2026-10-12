@@ -38,6 +38,7 @@ struct GLFWwindow;
 #include "core/trace_hold.hpp"
 #include "core/gps_reader.hpp"
 #include "core/i18n.hpp"
+#include "core/noise_floor_tracker.hpp"
 #include "core/pipeline.hpp"
 #include "core/ppm_correction.hpp"
 #include "core/radio_setup.hpp"
@@ -467,6 +468,35 @@ inline RailFoldKeyRect railFoldKeyRect(float colX, float colY, float colW, bool 
     return RailFoldKeyRect{x0, y0, x0 + w, y0 + h};
 }
 
+// --- THE STATUS COLUMN FOLDS AWAY TOO (0.99.74 beta feedback) -----------------
+//
+// The tester, 2026-10-12: "Just like you added the << and >> to expand and
+// collapse the Function Select panel on the left side, can you do this for
+// the right side Status panel? I am just looking at it from the perspective
+// if that information is useful to the end user while they are looking at the
+// spectrum or whatever." The same key, mirrored: ">>" at the LEFT end of the
+// STATUS plate's title row (the end nearest the spectrum, as the rail's "<<"
+// sits at its right end) pushes the column away to a strip; "<<" on the strip
+// brings it back. Remembered in the config (AppConfig::statusCollapsed).
+// Logical pixels, scaled by the caller with the interface size.
+inline constexpr float kStatusW = 230.0f;        // the open column (was a local in drawUi)
+inline constexpr float kStatusFoldedW = 34.0f;   // the strip it folds to, the rail's width
+
+// The right column's width, open or folded.
+inline float statusColumnWidth(bool folded) { return folded ? kStatusFoldedW : kStatusW; }
+
+// Where the status fold key sits, in screen pixels, for a column at colX, colY
+// colW wide at interface size s: the rail's key (same size, same height, same
+// inset), mirrored - open, at the LEFT end of the title row inside the plate's
+// inset; folded, centred on the strip.
+inline RailFoldKeyRect statusFoldKeyRect(float colX, float colY, float colW, bool folded, float s) {
+    const float w = kRailFoldKeyW * s;
+    const float h = kRailFoldKeyH * s;
+    const float y0 = colY + kRailFoldKeyTop * s;
+    const float x0 = folded ? colX + (colW - w) * 0.5f : colX + kRailPlatePad * s;
+    return RailFoldKeyRect{x0, y0, x0 + w, y0 + h};
+}
+
 // THE FIVE BANK KEYS (drawRailBankKeys): the column's width shared five ways
 // after an 8 px inset each side and 4 px between keys, the word lettered at
 // fonts::kTinySize with 3 px of brass kept clear each side, and drawn smaller
@@ -784,6 +814,16 @@ private:
     // was already scattered. Drawn only when the window is wide enough that
     // taking 230 px from the spectrum is not a bad trade.
     void drawStatusColumn();
+    // The folded status column: a plate the width of kStatusFoldedW with the
+    // "<<" key that opens it, and nothing else (0.99.74).
+    void drawStatusStrip();
+    // The ">>" / "<<" key (statusFoldKeyRect), for the open column and the
+    // strip.
+    void drawStatusFoldKey(float colX, float colY, float colW);
+    // What the key does, as one function so a test can press the real thing.
+    void toggleStatusFold();
+    // The status column is folded to its strip (AppConfig::statusCollapsed).
+    bool statusCollapsed_ = false;
     // The tuned-frequency counter, drawn into the geometry the top bar hands
     // it: the screen position of the well's top-left corner, and the scale the
     // bar is drawn at. Plain floats rather than an ImVec2 because this header
@@ -798,6 +838,10 @@ private:
     void drawRailFoldKey(float colX, float colY, float colW);
     // The rail is folded to its strip (AppConfig::railCollapsed).
     bool railCollapsed_ = false;
+    // The Display section (first in the SYSTEM bank) is open
+    // (AppConfig::displayOpen). Folded on a fresh install; drawDisplaySection
+    // starts the header from it and writes the header's answer back.
+    bool displayOpen_ = false;
     // The update banner, and the work behind it. Drawn at the top of the menu
     // column because a build that cannot see the user's radio is the most
     // useful thing this application can say to them, and it is worth more than
@@ -893,6 +937,12 @@ private:
     // ShellExecute in this file goes through here or through launchInstaller;
     // there is no third spelling.
     bool shellOpen(const std::string& target);
+    // The file dialog behind a PATH settings field's BROWSE key (0.99.74,
+    // core/file_pick.hpp): true with `path` set when a file was chosen. Under
+    // the same watchdog bracket as the shell calls above - a dialog blocks this
+    // thread for as long as the person takes - or, in a bounded run that set
+    // FOXSDR_FILE_PICK, answered from filePickSeam_ with no dialog at all.
+    bool pickFile(const cascade::core::FilePickRequest& request, std::string& path);
 
     void drawSourceSection();
     // WHAT THE SOURCE ROW SAYS ABOUT RADIOS (0.99.49 beta feedback; the rules
@@ -1483,7 +1533,7 @@ private:
     void drawDecoderWindow();
     // --- the transmitter (0.95.0) --------------------------------------------
     //
-    // WHY THE SWITCH IS IN SIGNAL PATH AND NOT IN VIEW, which is where the
+    // WHY THE SWITCH IS IN SIGNAL PATH AND NOT IN TOOLS, which is where the
     // demod scope's went. The scope is a way of LOOKING at what the receiver
     // produced; the transmitter is a STAGE, the outbound one, and it belongs
     // with the source, the radio and the sinks it is the counterpart of. A
@@ -1501,6 +1551,39 @@ private:
     // Pushes the receiver's centre into the transmitter when SPLIT is off,
     // and nothing when it is on. Called once a frame.
     void followTransmitFrequency();
+
+    // --- PLUGINS THAT TRANSMIT (0.99.74, CASCADE_CAP_TX_AUDIO) ----------------
+    //
+    // THE PLUGIN'S KEY, and everything between "a plugin wants to transmit" and a
+    // radio keyed. core/tx_audio.hpp has the rule (pluginMayKey) and the window
+    // (TxArming); this is where they meet the page, the runner and the transmitter:
+    //
+    //   armTransmitPlugins    the page's ARM keys. Refused, with the reason, when no
+    //                         transmitter is open or no plugin holds the grant.
+    //   disarmTransmitPlugins closes the window and says why in the log. Every reason
+    //                         that closes it comes through here.
+    //   applyPluginTransmitKey ONCE A FRAME, in the frame loop beside the PTT and the
+    //                         LATCH and before Transmitter::tick(): closes the window
+    //                         for any of the reasons that should (the radio gone, a
+    //                         fault, the page closed, the frame loop stalled, the
+    //                         grant withdrawn, the cap) and then asks pluginMayKey().
+    //   afterTransmitTick     ONCE A FRAME, right after the tick: tells the runner the
+    //                         transmitter is keyed for the plugin (so its pull() may be
+    //                         called) and the plugins what the transmitter is doing, and
+    //                         writes the log lines.
+    // Nothing here is persisted but the grant (pluginTransmitAllowed_).
+    cascade::core::TxArming::Refusal armTransmitPlugins(int minutes);
+    void disarmTransmitPlugins(const char* reason);
+    void applyPluginTransmitKey(const cascade::gui::TxPageKey& handKey);
+    void afterTransmitTick();
+    // The grant: pushes the durable list into the runner and the plugin API (after a
+    // rescan, a config load), and the one setter the plate's key goes through.
+    void applyPluginTransmitGrants();
+    void setPluginTransmitAllowed(const std::string& pluginKey, bool allowed);
+    // True when some loaded plugin that declares TX_AUDIO holds the grant; its name
+    // ("" if none) is what the page prints beside the window.
+    bool anyTransmitGrant() const;
+    std::string firstTransmitGrantName() const;
 
     // --- the patch page ------------------------------------------------------
     // Every frame, shown or not: retires the receiver's patch sets, and when
@@ -1586,7 +1669,7 @@ private:
     // What the last action did, in a sentence under the list.
     std::string patchPresetNote_;
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
-    // rather than in VIEW by the same test that put the recorder and the
+    // rather than in TOOLS by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal
     // path, it IS the signal path, and it decides what the path consists of.
     void drawPatchSection();
@@ -1594,7 +1677,7 @@ private:
     // --- the demod scope -----------------------------------------------------
     // The page itself: the tube, its keys and its readouts.
     void drawDemodScopePage();
-    // The switch that opens it, in the VIEW bank beside the radar scope's.
+    // The switch that opens it, in the TOOLS bank beside the radar scope's.
     void drawDemodScopeSection();
     // Reads whichever tap the selected signal needs into the member buffers,
     // finds the trigger, and (in the spectrum position) transforms. Split out
@@ -2348,6 +2431,48 @@ private:
     // click. Never used to index kBwHz without a literal step beside it.
     int bandwidthIndex_ = 1;                         // 150k
     float squelchDb_ = -50.0f;
+    // AUTOMATIC SQUELCH (0.99.74; AppConfig::squelchAuto): the top bar's SQUELCH knob has an AUTO
+    // key, and while it is lit the threshold is not the user's but the measured noise floor plus
+    // 8 dB (core/noise_floor_tracker.hpp), re-set every quarter second by autoSquelchFrame - the
+    // knob and the Radio section's slider follow it because both read squelchDb_. The tester: "a
+    // button for AUTO or above the noise". A hand on the knob, the slider, the SquelchUp/Down keys
+    // or the web control is a manual choice and puts it OFF (setSquelchAuto says why in the log).
+    bool squelchAuto_ = false;
+    cascade::core::NoiseFloorTracker noiseFloor_;
+    // The last ImGui time autoSquelchFrame moved (or confirmed) the threshold, and what the
+    // tracker's readings were measured on: a retune, a new bandwidth or mode is another channel
+    // and another floor, so the history is dropped rather than carried over it.
+    double squelchAutoSetS_ = -1.0e9;
+    double squelchAutoAbsHz_ = 0.0;
+    double squelchAutoBwHz_ = 0.0;
+    int squelchAutoMode_ = -1;
+    // WHILE THE AIRBAND MONITOR LISTENS the SQUELCH dial and its AUTO key act on the monitor's
+    // own squelch (airbandSquelchDb_, -110..0) and not on the idle receiver's: the monitor plays
+    // each channel behind a squelch of its own and the VFO is not demodulated, so the receiver's
+    // threshold would change nothing anyone hears. AUTO then re-applies the monitor's "Above the
+    // noise" rule (airbandAboveTheNoise) instead of reading the noise tracker; it is one flag
+    // (squelchAuto_) for both. A dial turned for the monitor rebuilds its block on release, not
+    // every frame (airbandTuneBlock restarts the channels): the change is pending until then.
+    bool squelchAutoOnAirband_ = false;   // which of the two the tracker's history belongs to
+    bool deckAirbandDirty_ = false;       // airbandSquelchDb_ turned, its block not yet rebuilt
+    void setSquelchAuto(bool on, const char* why);
+    void autoSquelchFrame();
+    // THE TOP BAR'S GAIN KNOB (0.99.74). It drives the radio's first gain stage exactly as the scope
+    // deck's does, but is moved by a hand for as long as the hand is on it, so the radio is asked at
+    // most every kDeckGainPaceS while the dial is held and once more, with the final value, on
+    // release - a native driver can answer "busy" and must not be hammered or have its error
+    // line filled by a knob that changes every frame. The TARGET accumulates the hand's movement
+    // unquantised while the dial is held (a radio that quantises would otherwise swallow every
+    // movement smaller than its step); a refused step is dropped without a word and the knob shows
+    // the radio's readback again.
+    bool deckGainDirty_ = false;
+    bool deckGainHeld_ = false;
+    float deckGainTargetDb_ = 0.0f;
+    double deckGainSetS_ = -1.0e9;
+    int deckGainRetries_ = 0;
+    void applyDeckGain();
+    // The GAIN AUTO key's press: the Source section's "Auto gain" box, from the top bar.
+    void pressDeckAutoGain();
     // Output devices, enumerated once at construction (a hot-plug refresh can
     // come with the settings work in P5); index into devices_, -1 when empty.
     std::vector<cascade::sink::AudioDevice> devices_;
@@ -2790,11 +2915,18 @@ private:
     // adoptDeviceMirrors at every open of a radio that supports auto gain - never
     // an Airspy, whose AGC switches belong to its gain mode (airspyMemory_).
     std::map<std::string, bool> autoGainMemory_;
+    // The manual gains (stage name, dB) the mirrors held when changeAutoGain last switched auto
+    // gain ON, so that switching it OFF puts back what the USER had set and not what the radio
+    // reported while it gained itself (0.99.74). Emptied when it is used and at every open
+    // (adoptDeviceMirrors): it belongs to one radio.
+    std::vector<std::pair<std::string, float>> manualGainsBeforeAgc_;
     // THE AUTO GAIN BOX AND THE BROWSER'S "agc" SETTING BOTH COME HERE: asks the
     // open radio for `want`, and on acceptance mirrors it into deviceAgc_ and
     // remembers it for this radio. On a refusal nothing changes except
     // sourceError_ (the driver's own words). False on a refusal, with no radio
-    // open, or on a radio that has no auto gain.
+    // open, or on a radio that has no auto gain. On a change of mode the gain
+    // mirrors follow (0.99.74): read back on ON; on OFF every stage is given its
+    // manual value again, then read back.
     bool changeAutoGain(bool want);
     // Writes `on` into autoGainMemory_ for the radio `dev` opened with `args`
     // (no-op for an Airspy; a new radio past the cap is not remembered).
@@ -3332,7 +3464,7 @@ private:
     cascade::gui::BackgroundSaver markerSaver_{"markers", &cascade::core::FreqMarkers::writeFile};
     // A file dropped on the window, picked up by the next frame.
     std::string pendingDropPath_;
-    // FOXSDR_BOOKMARK_IMPORT (bounded runs): opens VIEW > Bookmarks with the
+    // FOXSDR_BOOKMARK_IMPORT (bounded runs): opens TOOLS > Bookmarks with the
     // path in the import box, for a scripted press of Import.
     bool bookmarkImportByEnv_ = false;
     bool bookmarkOpenByEnv_ = false;
@@ -3942,6 +4074,10 @@ private:
     // The same one-shot latch for FOXSDR_OPEN_DEMOD_SCOPE - see its use.
     bool demodScopeOpenedByEnv_ = false;
     bool radarScopeOpenedByEnv_ = false;   // FOXSDR_OPEN_RADAR_SCOPE, bounded runs
+    // FOXSDR_OPEN_TRANSMIT (0.99.74), bounded runs only: opens the TRANSMIT page so the plugin
+    // controls on it can be looked at and pressed (tests/test_tx_audio_page_app). Opening the
+    // page keys nothing; it is the rail switch's own action.
+    bool transmitOpenedByEnv_ = false;
     // ...and for FOXSDR_OPEN_MAP.
     bool mapOpenedByEnv_ = false;
     // The typed text and the typed contact line - IN MEMORY ONLY, per
@@ -4303,6 +4439,12 @@ private:
     // would be two answers to one question.
     bool mapTrails_ = true;
     bool mapTrailAltColours_ = true;
+    // The target list's "On screen only" switch: list only the aircraft inside
+    // the map as last drawn (MapView::isOnScreen) instead of every one heard.
+    // Persisted (AppConfig::mapListOnScreenOnly) and app-wide for the same
+    // reason the trail switches are: it is how this user wants lists to read,
+    // not a statement about one plugin's window.
+    bool mapListOnScreenOnly_ = false;
     int mapTrailStyle_ = 0;  // 0 line, 1 ribbon - see AppConfig::mapTrailStyle
     // Pixels across, every map and scope - see AppConfig::aircraftIconPx.
     int aircraftIconPx_ = cascade::gui::kAircraftIconDefaultPx;
@@ -4325,7 +4467,7 @@ private:
 
     // --- THE DEMOD SCOPE (0.94.0) --------------------------------------------
     //
-    // The bench oscilloscope in the VIEW bank: the demodulated audio on a
+    // The bench oscilloscope in the TOOLS bank: the demodulated audio on a
     // graticule, its spectrum, and the channel I/Q as two traces and as a
     // Lissajous. A PAGE rather than a mode - unlike the radar scope above,
     // which takes over the whole window - because it is something you watch
@@ -4724,6 +4866,32 @@ private:
     // thread may query the microphone while inFlight() is true.
     cascade::gui::AudioOpen micOpen_;
 
+    // --- PLUGINS THAT TRANSMIT (0.99.74) ---------------------------------------
+    // AppConfig::pluginTransmitAllowed - THE DURABLE COPY of the TRANSMIT grant, for
+    // exactly the reason pluginTuneAllowed_ is one: the live grant is in pluginUi_,
+    // is cleared by every rescan, and is re-applied from this.
+    std::vector<std::string> pluginTransmitAllowed_;
+    // THE OPERATOR'S ARMING WINDOW. Session-only: nothing in the config, nothing
+    // restored, a default-constructed window is closed (core/tx_audio.hpp).
+    cascade::core::TxArming txArming_;
+    // The ring between the runner (writer, the DSP thread) and the transmitter
+    // (reader, the TX thread), and the facts the GUI reads about the plugin.
+    std::shared_ptr<cascade::core::TxAudioLink> txLink_ = std::make_shared<cascade::core::TxAudioLink>();
+    // DATA (flat): a plugin's audio goes out as NFM with the pre-emphasis off. On by
+    // default, session-only; see Transmitter::setDataFlat.
+    bool transmitDataFlat_ = true;
+    // The last ARM press's refusal, printed under the keys until the next press.
+    cascade::core::TxArming::Refusal txArmRefusal_ = cascade::core::TxArming::Refusal::None;
+    // Bookkeeping for the log lines and the reasons: who is keyed, whether the runner has
+    // been told, how many transmitter faults the window has already seen, and why the
+    // last frame's decision was no.
+    bool txPluginKeyedPrev_ = false;
+    bool txRunnerKeyed_ = false;
+    std::string txKeyedKey_;
+    std::string txKeyedName_;
+    std::uint64_t txFaultsSeen_ = 0;
+    std::string txWhyNot_;
+
     // --- THE FUNCTION SELECT RAIL'S BANK -------------------------------------
     // Which of the five banks (gui/rail_banks.hpp) the rail is showing, as
     // 0..4; persisted as `railBank`. railBankFade_ is the progress of the
@@ -5004,6 +5172,10 @@ private:
     cascade::gui::PendingPresetRequest pendingPresetRequest_;
     // The text being typed in each drawn settings field (drawPluginSettingsFields).
     cascade::gui::PluginSettingsFormState pluginSettingsForms_;
+    // FOXSDR_FILE_PICK, read in a bounded run only: the path the BROWSE key
+    // "chooses" without a dialog; "" is a cancel; unset (nullopt) is the real
+    // dialog. See AppWindow::pickFile.
+    std::optional<std::string> filePickSeam_;
 
     // --- The user's own presets (0.99.4) ---------------------------------------
     // AppConfig::userPresets, for every plugin (see core/user_presets.hpp for
@@ -5102,6 +5274,28 @@ private:
         std::string regionalState = "not-asked";
         int regionalAdded = 0;
         int regionalDropped = 0;
+
+        // THE PLUGIN SITES (0.99.74), read on this same worker after the official
+        // catalogue, one after another, each with the regional list's short timeouts.
+        // `entries` is then the MERGED list (official, regional, then every site's,
+        // official winning an id - PluginRepo::mergeSite), whether or not the official
+        // read itself succeeded: when it did not, the official part of that list is what
+        // was on screen (or the kept copy), and `ok` says so. `sitesDone` is false when no
+        // site is configured, and then none of this was touched.
+        struct SiteResult {
+            std::string url;
+            bool ok = false;          // read this time
+            std::string error;        // !ok: the reason, verbatim
+            std::vector<std::string> parseReport;
+            int listed = 0;           // how many of its plugins the merge kept
+            int hiddenSameId = 0;
+            int hiddenOffHost = 0;
+            std::int64_t readTime = 0;  // ok: now. !ok: the kept copy's time, 0 = none or unknown
+            bool keptShown = false;   // !ok, and an earlier read or the kept copy is what is listed
+            std::string cacheError;   // ok, but the kept copy could not be written
+        };
+        bool sitesDone = false;
+        std::vector<SiteResult> sites;
     };
     struct PluginInstallResult {
         bool ok = false;
@@ -5193,11 +5387,13 @@ private:
     bool screenshotPending_ = false;
     std::deque<cascade::core::CatalogScreenshot> screenshotQueue_;
     std::map<std::string, PictureStatus> pictures_;  // by sha256
-    // Queues every picture of catalogue entry `pluginId` that is not already Ready,
-    // queued or in flight; a Failed one is queued again only when `retryFailed`
+    // Queues every picture of the catalogue entry whose catalogue KEY is `pluginId`
+    // (the id for an official plugin, "<id>@<site>" for a site's) that is not already
+    // Ready, queued or in flight; a Failed one is queued again only when `retryFailed`
     // (the view passes true on the edge of opening a page, and false on later
-    // frames, so a picture that failed is not retried sixty times a second). An
-    // id the catalogue does not hold queues nothing.
+    // frames, so a picture that failed is not retried sixty times a second). A key
+    // the catalogue does not hold queues nothing, and a site's picture whose address
+    // is not on the site's own host queues nothing either.
     void requestScreenshots(const std::string& pluginId, bool retryFailed = false);
     // The status of one picture; state None for one never requested.
     PictureStatus pictureStatus(const cascade::core::CatalogScreenshot& s) const;
@@ -5246,10 +5442,12 @@ private:
     // ABI test, the sha256, the manifest record, the rescan afterwards - a
     // module in this queue gets, because it IS a single FIT.
     //
-    // IDENTIFIED BY CATALOGUE ID, NOT BY INDEX. A run outlives many frames and
-    // a Refresh can replace catalog_ under it; an index would then name a
-    // different module. An id that is no longer in the catalogue is recorded
-    // as a failure with that reason rather than silently dropped.
+    // IDENTIFIED BY CATALOGUE KEY (PluginRepo::catalogueKey), NOT BY INDEX. A run
+    // outlives many frames and a Refresh can replace catalog_ under it; an index would
+    // then name a different module. A key that is no longer in the catalogue is
+    // recorded as a failure with that reason rather than silently dropped. (The run
+    // only ever holds official plugins - a site's are left out of GET EVERYTHING and
+    // UPDATE ALL - whose key is their id.)
     struct AddAllRun {
         bool active = false;
         std::vector<std::string> ids;
@@ -5433,6 +5631,44 @@ private:
     std::string regionalState_ = "not-asked";
     int regionalAdded_ = 0;
     int regionalDropped_ = 0;
+
+    // --- PLUGIN SITES (0.99.74) ----------------------------------------------
+    //
+    // AppConfig::pluginSites, committed: the addresses of other people's index.json
+    // the store lists beside the official catalogue (docs/THIRD-PARTY-SITES.md; the
+    // rules are the PLUGIN SITES block of core/plugin_repo.hpp). Changed only by the
+    // store's SITES panel (addPluginSite / removePluginSite), which re-checks every
+    // request, and read when the catalogue is.
+    std::vector<std::string> pluginSites_;
+    // What the last read (or the kept copy) said of each site, in the same order: the
+    // store's status lines and its SITES panel are drawn from it.
+    struct SiteStatus {
+        std::string url;
+        enum class State { NotRead, Kept, Read, Failed } state = State::NotRead;
+        int listed = 0;
+        int hiddenSameId = 0;
+        int hiddenOffHost = 0;
+        std::string error;
+    };
+    std::vector<SiteStatus> siteStatus_;
+    // Start-up: the kept copy of each site (no network) merged under the official part of
+    // catalog_, like loadCachedCatalogue() does for the official catalogue. Called when the
+    // configuration names the sites, because the constructor loads the kept official copy
+    // before it knows them.
+    void loadCachedSites();
+    // ADD, applied: re-validates (PluginRepo::normaliseSiteUrl, not already there, room),
+    // adds, and starts a catalogue read. False with `why` (English) when it refused.
+    bool addPluginSite(const std::string& url, std::string& why);
+    // REMOVE, applied: forgets the site, deletes its kept copy and its entries from the
+    // list, leaves everything installed from it installed.
+    void removePluginSite(const std::string& url);
+    // The index in catalog_ of the entry whose catalogue key is `key`
+    // (PluginRepo::catalogueKey), or -1.
+    int catalogIndexByKey(const std::string& key) const;
+    // What a finished read said of each site: rebuilds siteStatus_ (in the order of
+    // pluginSites_ - a site added or removed while the read ran is dropped or left NotRead)
+    // and writes one anonymous line to the log.
+    void applySiteResults(const std::vector<CatalogFetchResult::SiteResult>& results);
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;
@@ -5725,6 +5961,10 @@ private:
     void airbandStart();
     void airbandStop(const std::string& why);
     void airbandTuneBlock(std::size_t index);
+    // The monitor's "Above the noise" rule (the median channel level plus 8 dB), applied and the
+    // block rebuilt with it - the Airband section's key, and the top bar's squelch AUTO while the
+    // monitor listens. False when no level has been reported or the move is under minMoveDb.
+    bool airbandAboveTheNoise(float minMoveDb);
     void airbandFlushHeard();
     // The rows the section shows and the monitor plays: indices into
     // freqMgr_.list(). With a group chosen, that group's AM and NFM rows

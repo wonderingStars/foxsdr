@@ -23,6 +23,7 @@
 #include "gui/scope_face.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
+#include "gui/transmit_page.hpp"  // TxPlateState: what a plate says about transmitting
 #include "gui/ui_census.hpp"
 #include "gui/ui_scale.hpp"
 
@@ -493,17 +494,23 @@ const char* kReachRefusedText = FOX_TR_NOOP(
     "not accept it, so no capability list reached this panel and none of the module is "
     "loaded. That is not the same as a module which declares nothing.");
 const char* kReachTuneNote = FOX_TR_NOOP(
-    "The tune grant above and the radio-settings grant are the only permissions this "
-    "console does enforce: without them every request to retune, or to change the "
-    "receiver's settings, is refused. Nothing else in the list is a gate.");
+    "The tune grant above, the radio-settings grant and the transmit grant are the only "
+    "permissions this console does enforce: without them every request to retune, to "
+    "change the receiver's settings, or to transmit, is refused. Nothing else in the list "
+    "is a gate.");
 const char* kReachNoTuneNote = FOX_TR_NOOP(
-    "The only permissions this console enforces are the per-module tune and "
-    "radio-settings grants, and this module asks for neither. Nothing else in the list "
+    "The only permissions this console enforces are the per-module tune, radio-settings "
+    "and transmit grants, and this module asks for none of them. Nothing else in the list "
     "is a gate.");
 const char* kSettingsNote = FOX_TR_NOOP(
     "Radio settings lets this module change the mode, bandwidth, squelch, gains, sample "
     "rate, volume and mute, and start or stop the receiver. It is separate from receiver "
     "control, which only lets it tune.");
+const char* kTransmitNote = FOX_TR_NOOP(
+    "Transmit lets this module hand FoxSDR audio to send. It is not enough alone: you must "
+    "also ARM FOR PLUGINS on the TRANSMIT page, for 5, 15 or 60 minutes, and the arming is "
+    "never remembered. FoxSDR chooses the frequency, the power and the mode, and never keys "
+    "for longer than a minute at a time.");
 const char* kReachLeadText = FOX_TR_NOOP(
     "Declared by the maker, not enforced. A fitted module is loaded into this "
     "application's own process and runs with every privilege the application has: "
@@ -515,7 +522,7 @@ const char* kOrphanText = FOX_TR_NOOP(
     "REMOVE FILE deletes this one file and nothing else.");
 const char* kKeptText = FOX_TR_NOOP(
     "Removing deletes the file and nothing else. The stop, the "
-    "receiver-control and radio-settings grants and the mute setting are all "
+    "receiver-control, radio-settings and transmit grants and the mute setting are all "
     "remembered against this module's FILE NAME, and any map page's position "
     "and the module's own settings against the name the module calls itself, "
     "so fitting this same file again finds every one of them as it was. A "
@@ -623,8 +630,10 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
                               kReachRowGap * k;
                     }
                 }
-                const char* note = tr((plate.capabilities & CASCADE_CAP_HOST_CLIENT) != 0u ? kReachTuneNote
-                                                                                           : kReachNoTuneNote);
+                const char* note =
+                    tr((plate.capabilities & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_TX_AUDIO)) != 0u
+                           ? kReachTuneNote
+                           : kReachNoTuneNote);
                 if (draw) { dl->AddText(uf, px, ImVec2(x + pad, cy), theme::kInkMuted, note, nullptr, inner); }
                 cy += wrapH(uf, px, inner, note) + 10.0f * k;
             }
@@ -643,6 +652,13 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
                         act.file = m.file;
                         act.flag = flag;
                     }
+                    // Said to the census with the state the key is in (":on" is the REVOKE key),
+                    // and where it is (tests/test_tx_audio_plate_app).
+                    if (census::enabled()) {
+                        census::note("fitted:page:grant:", std::string(id) + (on ? ":on" : ":off"));
+                        censusRect(std::string("fitted:page:grant:") + id, x + pad, cy, x + pad + kw,
+                                   cy + kh);
+                    }
                 }
                 cy += kh + 8.0f * k;
             };
@@ -657,6 +673,29 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
                 const char* sn = tr(kSettingsNote);
                 if (draw) { dl->AddText(uf, px, ImVec2(x + pad, cy), theme::kInkMuted, sn, nullptr, inner); }
                 cy += wrapH(uf, px, inner, sn) + 8.0f * k;
+            }
+            // HOST API LEVEL 2: THE TRANSMIT GRANT, the third key and the one with the
+            // longest note. Offered only to a module that has ASKED (its active() has been
+            // non-zero), like SETTINGS, and the note says plainly that it is not enough
+            // alone: the page's arming window has to be open as well.
+            if (m.loaded && m.txCapable) {
+                grantKey(m.txAllowed ? tr("REVOKE TRANSMIT") : tr("GRANT TRANSMIT"), m.txAllowed,
+                         "granttransmit", FittedModulesAction::Kind::SetTransmit, !m.txAllowed);
+                const char* tn = tr(kTransmitNote);
+                if (draw) { dl->AddText(uf, px, ImVec2(x + pad, cy), theme::kInkMuted, tn, nullptr, inner); }
+                cy += wrapH(uf, px, inner, tn) + 8.0f * k;
+            }
+            // WHAT IT IS DOING ABOUT IT, in the transmit page's own words (TxPlateState).
+            if (m.loaded && m.txPlate != 0) {
+                const char* txText =
+                    tr(cascade::gui::txPlateText(static_cast<cascade::gui::TxPlateState>(m.txPlate)));
+                // Gold, not rust: a plugin waiting its turn is working as designed. ON AIR is
+                // the one that is plainly hot.
+                const ImU32 ink = m.txPlate == static_cast<int>(cascade::gui::TxPlateState::OnAir)
+                                      ? theme::kAlarmHot
+                                      : theme::kGold;
+                if (draw) { dl->AddText(uf, px, ImVec2(x + pad, cy), ink, txText, nullptr, inner); }
+                cy += wrapH(uf, px, inner, txText) + 8.0f * k;
             }
             // The module's own command keys, in its own words, two to a row.
             if (m.loaded && !m.stopped && !m.commands.empty()) {
@@ -739,6 +778,8 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
         };
         if (m.orphaned) { note(tr(kOrphanText), theme::kGold); }
         note(m.integrityNote, theme::kAlarmHot);
+        // From a plugin site (0.99.74): where the module came from, muted, on its row.
+        note(m.originNote, theme::kInkMuted);
         if (m.loaded && !m.notice.empty()) {
             note(m.notice, m.noticeLevel >= CASCADE_LOG_ERROR ? theme::kAlarmHot : theme::kGold);
         }

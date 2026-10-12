@@ -106,6 +106,27 @@ exactly as many.
   stores neither the code nor the address and records nothing about the
   request. Neither request carries an identifier, and the foxsdr.com request
   is not made when you have pointed the store at a different catalogue.
+- **Since 0.99.74 you can add other people's plugin catalogues ("plugin
+  sites"), and each one you add is one more address this application
+  contacts.** Only you add one: **SITES** in the plugin store's top bar, an
+  address you paste, and a box you have to tick that says the site is not
+  reviewed by FoxSDR. Nothing is added, and nothing contacted, by FoxSDR on its
+  own. Each site is read at the same two moments as the public list above (the
+  first time you open the store in a session, and whenever you press **CHECK
+  NOW**), after it, with a few seconds to answer. The request carries the
+  address and path you gave and nothing else from FoxSDR — no identifier, no
+  cookie, and a client name (`cascade-plugin-repo/1.0`) that is the same for
+  every copy — so the site sees your IP address, as any web server does. The
+  public list comes from raw.githubusercontent.com; a site is wherever its
+  address says. A site's plugin files and pictures are fetched only from the same host
+  as its catalogue, and only when you press **GET** or **UPDATE** on one of its
+  plugins or open its page. Each site's catalogue is kept, unchanged, as
+  `catalogue-<16 characters>.json` (with `.json.time`) in the plugins folder,
+  named from a hash of its address, read back at start-up and deleted when you
+  press **REMOVE** on the site; the addresses themselves are in the
+  configuration file (`pluginSites`). The failure counts below (`plug_cat`,
+  `plug_inst`) are the public catalogue's: a site that cannot be reached, or one
+  of its plugins that fails to install, is not counted.
 - **Since 0.99.72 the plugin store shows a picture of a plugin at work, and
   keeps the last catalogue it read.**
   - *The pictures.* When — and only when — you open one plugin's page in the
@@ -180,7 +201,7 @@ One report per launch, describing the session that just finished:
 | SDR model | `uhd b200` | Which radios to prioritise. **Serial numbers are stripped** before sending. |
 | Demodulators used | `WFM: 3000s` | Which modes justify further work. |
 | Panels opened | `map, decoded` | Which features are used. |
-| Installed plugins | `ADS-B 1.0.0` | Which decoders justify further work. |
+| Installed plugins | `ADS-B 1.0.0` | Which decoders justify further work. A plugin you installed from a plugin site you added (since 0.99.74) is a fitted plugin like any other: its name and version appear here, and the address of the site does not. |
 
 That is the complete list. The payload is asserted field-by-field by an
 automated test (`tests/test_telemetry.cpp`), in **both** directions, and the
@@ -325,8 +346,8 @@ others each time; a record carries at most eight different ones.
 | `upd_dl` | An update download did not complete. |
 | `upd_verify` | An update downloaded and did not match its published checksum, and was discarded. |
 | `upd_run` | The installer could not be started, or the Microsoft Store's install request failed. |
-| `plug_cat` | The plugin catalogue could not be fetched or read. |
-| `plug_inst.<class>` | A plugin install failed. |
+| `plug_cat` | The plugin catalogue could not be fetched or read. The public catalogue only: a plugin site (since 0.99.74) that cannot be reached is not counted. |
+| `plug_inst.<class>` | A plugin install failed. The public catalogue's plugins only: a failed install of a plugin from a plugin site is not counted. |
 | `plug_load.<class>` | A plugin was refused at load. Once a session for each kind. |
 | `rec_fail` | A recording could not be started: its file could not be opened. |
 | `slow.<scope>.<tier>` | Since 0.99.65. A frame of the window took 250 ms or more: one count for each such frame, under the part of the frame that took most of it and the tier it reached. Not once a session - how many is the question. |
@@ -559,7 +580,7 @@ into it, the same way a password field does:
 | Session start | `2026-09-28T12:34:56Z` | When the session began - the site stores this as when your tester entry was last used, so it is the one field here that updates something about your entry rather than only being logged. |
 | Session length | `42` minutes | How long the session ran. |
 | Features used | `spectrum, modes, bookmarks` | Which of the named beta areas you actually exercised this session, from a fixed list the site defines. |
-| Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. A decoder this build cannot match to the published catalogue (a side-loaded or hand-built plugin) is reported under the fixed id `sideloaded` with no version, rather than under a name invented for it. |
+| Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. A decoder this build cannot match to the published catalogue (a side-loaded or hand-built plugin) is reported under the fixed id `sideloaded` with no version, rather than under a name invented for it. A plugin installed from a plugin site you added (since 0.99.74) has an install record, so it is reported by its id and version like any other fitted plugin; the address of the site is not reported. |
 | Radio kinds used | `rtlsdr` | Which radio hardware kinds were opened this session — never a serial number, never args. |
 
 Exactly the same exclusions as usage reporting above apply here: **no
@@ -1127,6 +1148,17 @@ what any particular one DOES with it.
   **Nothing is sent anywhere by it until you both fill in a callsign and turn
   reporting on** - a plugin field left at its default never becomes a network
   request, per the plugin ABI's own rule for exactly this shape of setting.
+- **A plugin that can transmit** (`CASCADE_CAP_TX_AUDIO`, FoxSDR 0.99.74) is
+  shown as **"Can transmit through FoxSDR"** in the same two places. It can key
+  your transmitter only if you pressed **GRANT TRANSMIT** on its page **and**
+  armed the TRANSMIT page for 5, 15 or 60 minutes (see Transmitting). The grant
+  is stored in `config.json` on your own machine by the plugin's file name and is
+  never sent anywhere; the arming window is never stored at all. The diagnostic
+  log records the keying: `tx: armed 15 min`, `tx: plugin <name> keyed`,
+  `tx: plugin <name> unkeyed (<why>)`, `tx: disarmed (<why>)` - the plugin's
+  declared name, a reason from a fixed list and a number of minutes, **never a
+  frequency**. Those lines are scrubbed like every other log line when a bundle
+  or a report is put together.
 - **FoxSDR's own reporting (above) never carries it.** The usage, crash,
   feature and bug reports have no field for it and never will; this section
   is only about what a plugin's OWN code may read and do, through the

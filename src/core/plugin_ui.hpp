@@ -692,6 +692,16 @@ public:
         return api_->settingsGranted(pluginKey);
     }
 
+    // THE TRANSMIT GRANT (host API level 2) - the third per-plugin permission, and
+    // the one that is worth nothing on its own: the operator's arming window has to
+    // be open as well (core/tx_audio.hpp). Keyed on tuneKey(), off by default,
+    // cleared by clear() and re-applied by the owner from its config, like the other
+    // two.
+    void setTxAllowed(const std::string& pluginKey, bool allowed) {
+        api_->setTxGranted(pluginKey, allowed);
+    }
+    bool txAllowed(const std::string& pluginKey) const { return api_->txGranted(pluginKey); }
+
     // Destroys every instance. Must run BEFORE the plugin host unloads the
     // modules, for the same reason PluginRunner::clear must.
     void clear();

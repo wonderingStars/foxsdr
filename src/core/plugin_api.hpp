@@ -249,6 +249,11 @@ struct PluginApiClient {
     // host offers the grant key only where it would mean something.
     std::atomic<bool> askedSettings{false};
     std::atomic<bool> askedTune{false};
+    // CASCADE_STATE_TX_ARMED | CASCADE_STATE_TRANSMITTING for THIS plugin, published by
+    // the GUI thread once a frame (PluginApiCore::publishTxState) and read lock-free
+    // by get_state. Kept apart from `grants` because it is a state and not a grant: it
+    // changes with the operator's arming window and the key, and is never persisted.
+    std::atomic<std::uint32_t> txState{0};
 };
 
 // One queued receiver-control request. Plain data: the queue is a fixed ring.
@@ -349,12 +354,21 @@ public:
     // file names it is handed are reduced to ids, core/plugin_run.hpp).
     void setTuneGranted(const std::string& key, bool granted);
     void setSettingsGranted(const std::string& key, bool granted);
+    // CASCADE_CAP_TX_AUDIO (host API level 2): the TRANSMIT grant, third of the
+    // three, keyed on module file name like the other two.
+    void setTxGranted(const std::string& key, bool granted);
     void setStopped(const std::vector<std::string>& keys);
-    // Both grants off for every module (the stop set is kept). PluginUi's
+    // Every grant off for every module (the stop set is kept). PluginUi's
     // clear() calls this beside clearing its tune grants; the owner re-applies
-    // both from its config after the rescan.
+    // all three from its config after the rescan.
     void clearGrants();
     bool settingsGranted(const std::string& key) const;
+    bool txGranted(const std::string& key) const;
+    // What get_state's CASCADE_STATE_TX_ARMED and _TRANSMITTING say, per plugin: the
+    // arming window is open (every plugin that declared CASCADE_CAP_TX_AUDIO is told),
+    // and the transmitter is keyed for `keyedKey` (that plugin alone; "" for nobody).
+    // GUI thread, once a frame; takes the lock only for the bounded walk of the clients.
+    void publishTxState(bool armed, const std::string& keyedKey);
     // Module keys that have asked for a SETTINGS-grant function.
     std::vector<std::string> settingsRequesters() const;
 
@@ -495,6 +509,7 @@ private:
     std::vector<ClientState> state_;
     std::vector<std::string> tuneGranted_;
     std::vector<std::string> settingsGranted_;
+    std::vector<std::string> txGranted_;
     std::vector<std::string> stopped_;
     std::array<PluginControl, kControlQueue> controls_{};
     std::size_t controlHead_ = 0;

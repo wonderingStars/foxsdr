@@ -65,6 +65,17 @@ set_target_properties(preset_probe_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_preset/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_preset/$<CONFIG>")
 
+# A REAL PLUGIN MODULE THAT TRANSMITS (0.99.74, CASCADE_CAP_TX_AUDIO), for test_tx_audio_app: a
+# decoder that asks for the transmitter whenever its settings say so and hands over a 1 kHz tone
+# when it is keyed, and counts every call the host makes to it. Its own directory, like the
+# others, so nothing else is found there.
+add_library(tx_audio_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tx_audio_plugin.cpp")
+target_include_directories(tx_audio_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(tx_audio_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_txaudio/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_txaudio/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -221,6 +232,22 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} abi_mismatch_fixture abi_decline_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:abi_mismatch_fixture>"
                  "$<TARGET_FILE:abi_decline_fixture>")
+    elseif(name STREQUAL "test_tx_audio_app")
+        # A real AppWindow with the transmitting fixture fitted in a scratch plugins folder, a
+        # fake transmit radio and the real runner, driven through the page's own paths; built
+        # first.
+        add_dependencies(${name} tx_audio_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:tx_audio_fixture>")
+    elseif(name STREQUAL "test_tx_audio_plate_app")
+        # Runs the real cascade.exe (built first) with the transmitting fixture fitted and pinned to run,
+        # opens its page in Fitted modules and presses GRANT TRANSMIT with the input script.
+        add_dependencies(${name} tx_audio_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:tx_audio_fixture>")
+    elseif(name STREQUAL "test_tx_audio_page_app")
+        # Runs the real cascade.exe (built first) with the TRANSMIT page opened by the bounded-run seam
+        # and presses the plugin controls on it with the input script.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_plugin_rescan_skip")
         # Copies the two probe modules into a plugins folder of its own and
         # drives the real AppWindow's rescan against it; built first.
@@ -233,6 +260,13 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a rescan_probe_a_newer rescan_probe_b)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:rescan_probe_a_newer>" "$<TARGET_FILE:rescan_probe_b>")
+    elseif(name STREQUAL "test_plugin_host_origin")
+        # A plugin site's module never takes a declared name from an official one (0.99.74): the
+        # probe module built twice (1.0.0 and 1.1.0, one declared name), scanned by the real host and
+        # the real AppWindow with install records saying which is whose; both built first.
+        add_dependencies(${name} rescan_probe_a rescan_probe_a_newer)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
+                 "$<TARGET_FILE:rescan_probe_a_newer>")
     elseif(name STREQUAL "test_slow_frames_app")
         # Runs the real cascade.exe (built first) and, in process, a real plugin
         # reload against one of the probe modules above.
@@ -252,6 +286,11 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a image_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:image_probe_fixture>")
+    elseif(name STREQUAL "test_decoder_settings_fold_app")
+        # Runs the real cascade.exe (built first) with the settings fixture fitted and the DECODE
+        # bank up, and reads from the UI census whether the plugin's settings row is folded (0.99.74).
+        add_dependencies(${name} settings_ui_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:settings_ui_fixture>")
     elseif(name STREQUAL "test_plugin_inuse_app")
         # Runs the real cascade.exe (built first) with the same two modules fitted, and the preset
         # probe beside them, and reads from the modules' own event logs WHEN the host creates and
@@ -259,6 +298,12 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a image_probe_fixture preset_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:image_probe_fixture>" "$<TARGET_FILE:preset_probe_fixture>")
+    elseif(name STREQUAL "test_plugin_pathpick_app")
+        # Runs the real cascade.exe (built first) with the settings fixture module fitted, presses
+        # the BROWSE key its PATH field draws (0.99.74) with the file dialog's answer given by the
+        # FOXSDR_FILE_PICK seam, and reads the chosen path back from the config the run leaves.
+        add_dependencies(${name} settings_ui_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:settings_ui_fixture>")
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
@@ -310,6 +355,11 @@ endforeach()
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
 set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+# The deck-knobs test starts the real application seventeen times (as a child of
+# itself, so that a fake radio can sit behind the window; two of them run for a
+# few seconds of real time to let the noise floor be measured): 46 s on this
+# desktop, so it gets the same room the census does against a half-speed runner.
+set_tests_properties(test_deck_knobs_app PROPERTIES TIMEOUT 600)
 # The exit-cause test starts the real application eleven times (a staged run per
 # class and per case with nothing to read, then two real kills and the start that
 # reads them) and leaves a second between each kill and the next start, because a
@@ -346,11 +396,18 @@ set_tests_properties(test_plugin_store_app PROPERTIES TIMEOUT 600)
 # 100 to 110 frames each.
 # The same bound, for the same reason, as the store test.
 set_tests_properties(test_decoder_window_app PROPERTIES TIMEOUT 600)
+# The settings-fold test starts the real application three times (folded as it opens, one click,
+# two clicks), 40 to 60 frames each. The same bound, for the same reason, as the test above.
+set_tests_properties(test_decoder_settings_fold_app PROPERTIES TIMEOUT 600)
 # The in-use test starts the real application about twenty times (the scenarios in its header: a
 # layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
 # interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given
 # the generous bound its siblings are.
 set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
+# The BROWSE-key test starts the real application five times (a layout run, the press, its control,
+# the cancelled press and a relaunch), 33 to 46 frames each. The Linux runners are half this
+# desktop's speed, so it is given a bound well past the loop's two minutes.
+set_tests_properties(test_plugin_pathpick_app PROPERTIES TIMEOUT 300)
 # The audio-buffer test builds the real AppWindow three times (its sink opened and then closed, which
 # is a device open each) and makes a few hundred starved callbacks against it by hand. A few seconds
 # here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is

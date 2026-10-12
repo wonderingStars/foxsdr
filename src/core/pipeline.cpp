@@ -1706,6 +1706,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // layout, so this is a reinterpretation and not a copy.
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
         runner->processIq(reinterpret_cast<const float*>(in), n);
+        // A PLUGIN'S TRANSMIT AUDIO (CASCADE_CAP_TX_AUDIO), once per block and BEFORE any
+        // of the early returns below: whether the plugin wants the transmitter, and - only
+        // while the host has keyed it for that plugin - its next stretch of audio for the
+        // transmit thread's ring. On this thread and under the runner's lock, so the ABI's
+        // promise holds that pull() and active() are never concurrent with process() on
+        // the same handle. A no-op when no plugin declares the capability.
+        runner->pollTxAudio();
     }
 
     // THE PATCH TAPS THE SAME RAW BAND, at the same point and for exactly

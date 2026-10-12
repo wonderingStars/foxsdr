@@ -261,6 +261,11 @@ const std::vector<Wrapper>& wrappers() {
         {"setAsideDamagedFile(", "src/gui/app_window_disk_work.cpp", "keeps a damaged file aside (start-up only)"},
         {"reserveUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
         {"createUnique(", "src/core/unique_file.cpp", "creates a file under the first free name"},
+        // 0.99.74: the BROWSE key of a PATH settings field. pickFile shows a MODAL file dialog
+        // (and stats the folder it opens in); filePickAvailable looks for zenity or kdialog on
+        // PATH (Linux; it touches nothing on Windows).
+        {"core::pickFile(", "src/core/file_pick.cpp", "shows the system's open-file dialog, after a stat of its start folder"},
+        {"filePickAvailable(", "src/core/file_pick.cpp", "looks for zenity or kdialog on PATH (Linux)"},
     };
     return v;
 }
@@ -636,7 +641,18 @@ const std::vector<Allowed>& allowed() {
          "names a file the verification harness (bounded --frames runs, screenshot sweeps) reads "
          "once, before the first frame or on it. No user sets them and a normal session never "
          "reaches them; a stalled read there is a stalled test, which the harness's own timeout "
-         "reports."},
+         "reports. And, since 0.99.74, filePickAvailable(): ONCE, before the first frame, to decide "
+         "whether a PATH settings field gets a BROWSE key - on Linux a few stat calls down PATH for "
+         "zenity or kdialog (the first hit ends it; a PATH on a share that answers slowly delays "
+         "the first window, as the constructor's reads do), on Windows nothing at all."},
+        {"app_window.cpp", "AppWindow::pickFile", "helper", Pause::NotNeeded, "",
+         "0.99.74: the BROWSE key's file dialog. core::pickFile stats the folder the dialog opens in "
+         "(one call, on the press of a key) and then shows a MODAL dialog that blocks this thread "
+         "for as long as the person takes to choose. All of it runs inside runShellOpen with "
+         "watchdogShellHooks(): the user-paced pause every native modal wait goes through "
+         "(gui/shell_open.hpp), uncapped, and the wait is subtracted from the frame as 'user-wait'. "
+         "So a stall here cannot be mistaken for a hang. In a bounded run that set FOXSDR_FILE_PICK "
+         "the dialog and the stat are skipped altogether."},
         {"app_window.cpp", "AppWindow::traceScriptFrame", "stdio", Pause::NotNeeded, "",
          "The scripted-pointer trace (FOXSDR_SCRIPT_TRACE): one line appended a frame to a file "
          "the verification harness names, only in a bounded run that set the variable. Never "

@@ -51,12 +51,28 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "core/plugin_abi.h"
 
 namespace cascade::core {
+
+// WHERE A MODULE FILE CAME FROM, as the install records (PluginRepo's installed.json) say
+// (0.99.74). The host reads no manifest itself: the caller hands scan() what it already
+// loaded, by bare file name, and the host stamps each record with the answer.
+//   Unrecorded   no record names the file (hand-copied, or installed before records existed);
+//   Official     a record names it and its source is the FoxSDR catalogue's (empty);
+//   Site         a record names it and its source is a plugin site the user added.
+// Only resolveDuplicatePlugins() reads it, for the one rule that a SITE'S module never takes a
+// declared name away from an OFFICIAL one (see there).
+enum class PluginOrigin { Unrecorded = 0, Official, Site };
+
+// File name -> "installed from a plugin site". A file with an entry has an install record;
+// `true` is a site's, `false` the official catalogue's. Keys are bare module file names
+// (pluginKey), compared ASCII case-insensitively as NTFS names are.
+using PluginFileOrigins = std::map<std::string, bool>;
 
 // Why a plugin was refused. One value per distinct failure so the tests can
 // assert the exact reason instead of grepping a message, and so the UI can
@@ -144,6 +160,14 @@ enum class PluginRejection {
     MissingSettingsUiApi,
     SettingsUiStructSizeMismatch,
     SettingsUiBadTable,  // specs NULL, or count 0 or above CASCADE_MAX_SETTING_SPECS
+    // --- CASCADE_CAP_TX_AUDIO (0.99.74, host API level 2) -------------------
+    MissingTxAudioApi,
+    TxAudioStructSizeMismatch,
+    TxAudioBadRate,          // sampleRateHz is not 48000, the only rate this host takes
+    TxAudioBadChannels,      // channels is not 1
+    TxAudioReservedNotZero,  // flags is reserved and must be 0
+    MissingTxAudioFunction,  // pull or active NULL
+    TxAudioNeedsDecoder,     // declared with no decoder capability to ride on
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -184,6 +208,10 @@ struct LoadedPlugin {
     // parsing `error`, which is words for a person.
     std::string supersededBy;
 
+    // What the install records say about where this file came from (PluginOrigin), set by
+    // scan() from the PluginFileOrigins it was given; Unrecorded when it was given none.
+    PluginOrigin origin = PluginOrigin::Unrecorded;
+
     // Valid only while `loaded` and only until unloadAll()/scan()/destruction
     // - they point into the plugin's own image. Each is null unless the
     // plugin DECLARED the matching capability bit: a descriptor that supplies
@@ -212,6 +240,11 @@ struct LoadedPlugin {
     // CASCADE_CAP_AUDIO_PROCESSOR (host API level 1): transforms the
     // demodulated audio in place. Driven by PluginRunner.
     const CascadeAudioProcessorApi* audioProcessor = nullptr;
+    // CASCADE_CAP_TX_AUDIO (host API level 2): audio to TRANSMIT. Like audioOut it has
+    // no create/destroy and rides on this plugin's first decoder instance; the host
+    // keys the transmitter only under the conditions plugin_abi.h lists. Driven by
+    // PluginRunner, and never by anything else.
+    const CascadeTxAudioApi* txAudio = nullptr;
 
     // HMODULE (Windows) or dlopen handle (POSIX), as void* so this header
     // stays free of <windows.h>. Null unless `loaded`.
@@ -266,6 +299,21 @@ struct LoadedPlugin {
 //   every run - a scan that loaded a different module depending on the order
 //   the filesystem happened to return would be worse than one that is
 //   consistently wrong.
+//
+//   A PLUGIN SITE'S MODULE NEVER TAKES A NAME FROM AN OFFICIAL ONE (0.99.74).
+//   The declared name is written by whoever built the binary, and the version
+//   rule above would let a module from a site the user added declare an
+//   official plugin's name with a higher version and switch the official one
+//   off. So, for each name: if any LOADED record of it is Official (an install
+//   record whose source is the FoxSDR catalogue's), every Site record of that
+//   name is turned off whatever its version, with a reason that says so
+//   ("Not loaded: it declares the same name as the official plugin ...") and
+//   `supersededBy` naming the official module that stays. The winner among
+//   the rest is chosen by the version rule as before. Everything else is
+//   unchanged: two Site modules of one name compete by version, an Unrecorded
+//   module (hand-copied, no record) competes by version against anything, and
+//   with no origins given (every record Unrecorded) the policy is exactly the
+//   one above.
 //
 // DELETES NOTHING. It does not unlink, rename, move or truncate any file, and
 // it does not close a module either - it only marks records, leaving
@@ -415,7 +463,13 @@ public:
     //
     // Any previously loaded plugins are unloaded first, so scan() is
     // idempotent and re-scannable after the user drops in a new file.
-    void scan(const std::string& dir);
+    //
+    // `origins` is what the install records say about each file (PluginFileOrigins),
+    // handed in by the caller that already loaded the manifest; scan() stamps each
+    // record's `origin` with it and resolveDuplicatePlugins() uses it for the one rule
+    // that a plugin site's module never takes a declared name from an official one.
+    // Empty (the default) means no records: every module is Unrecorded.
+    void scan(const std::string& dir, const PluginFileOrigins& origins = PluginFileOrigins{});
 
     // Convenience: scan(defaultPluginDir()).
     void scanDefault();

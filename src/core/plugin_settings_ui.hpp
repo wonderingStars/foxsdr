@@ -32,7 +32,7 @@ struct SettingField {
     std::string placeholder;   // plugin-authored hint; "" for none
     std::string defaultValue;  // shown while the store has no value
     std::uint32_t kind = CASCADE_SETTING_TEXT;
-    // TEXT: the plugin's limit in UTF-8 bytes, clamped to
+    // TEXT and PATH: the plugin's limit in UTF-8 bytes, clamped to
     // 1..CASCADE_SETTING_VALUE_BYTES-1. NUMBER: kMaxNumberChars. BOOL: 1.
     std::size_t maxLength = 0;
 };
@@ -57,7 +57,7 @@ std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api);
 // field, and the field goes back to showing what the store holds.
 enum class SettingEditResult {
     Accepted,    // stored (or already the stored value)
-    TooLong,     // TEXT longer than the field's maxLength
+    TooLong,     // TEXT or PATH longer than the field's maxLength
     NotANumber,  // NUMBER text that is not a finite decimal number
     BadText,     // not valid UTF-8, or holds a control character
     // The three below are told apart because they are told to the user apart
@@ -70,7 +70,7 @@ enum class SettingEditResult {
     StoreError,  // settingsUiSet refused for some OTHER reason - defensive:
                  // every value reaching it has already passed the checks
                  // above, so this should not happen in practice
-    Refused,     // the field's own `kind` is not TEXT/NUMBER/BOOL - internal:
+    Refused,     // the field's own `kind` is not TEXT/NUMBER/BOOL/PATH - internal:
                  // settingFieldsFrom already filters these out, so a caller
                  // going through the normal path never sees this either
 };
@@ -82,6 +82,8 @@ enum class SettingEditResult {
 //           characters; stored exactly as typed. "" is a real value (the user
 //           cleared the field), not a deletion - a deletion would bring a
 //           non-empty default straight back.
+//   PATH:   (0.99.74) a TEXT: the path as typed or chosen in the file dialog,
+//           stored exactly - no trimming, nothing opened or checked.
 //   NUMBER: leading/trailing spaces trimmed; "" is accepted as "no number";
 //           otherwise [+-] digits [. digits] [e|E [+-] digits], finite,
 //           stored as the trimmed text the user typed.

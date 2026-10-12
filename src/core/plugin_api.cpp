@@ -255,6 +255,7 @@ void PluginApiCore::refreshGrantsLocked(PluginApiClient& c) {
     std::uint32_t g = 0;
     if (contains(tuneGranted_, c.key)) { g |= CASCADE_STATE_TUNE_GRANTED; }
     if (contains(settingsGranted_, c.key)) { g |= CASCADE_STATE_SETTINGS_GRANTED; }
+    if (contains(txGranted_, c.key)) { g |= CASCADE_STATE_TX_GRANTED; }
     // BY ID, like the host's own stop set: a stop survives the plugin's update.
     if (contains(stopped_, pluginRunId(c.key))) { g |= CASCADE_STATE_STOPPED; }
     c.grants.store(g, std::memory_order_release);
@@ -270,6 +271,32 @@ void PluginApiCore::setSettingsGranted(const std::string& key, bool granted) {
     std::lock_guard<std::mutex> lk(mutex_);
     setMember(settingsGranted_, key, granted);
     for (const std::unique_ptr<PluginApiClient>& c : clients_) { refreshGrantsLocked(*c); }
+}
+
+void PluginApiCore::setTxGranted(const std::string& key, bool granted) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    setMember(txGranted_, key, granted);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) { refreshGrantsLocked(*c); }
+}
+
+bool PluginApiCore::txGranted(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return contains(txGranted_, key);
+}
+
+void PluginApiCore::publishTxState(bool armed, const std::string& keyedKey) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        std::uint32_t bits = 0;
+        // ONLY A PLUGIN THAT DECLARED THE CAPABILITY IS TOLD, like receiverLocator: the
+        // operator's arming window and the moments the transmitter is keyed are not
+        // something every module that merely attached has any business learning.
+        if ((c->capabilities & CASCADE_CAP_TX_AUDIO) != 0u) {
+            if (armed) { bits |= CASCADE_STATE_TX_ARMED; }
+            if (!keyedKey.empty() && c->key == keyedKey) { bits |= CASCADE_STATE_TRANSMITTING; }
+        }
+        c->txState.store(bits, std::memory_order_release);
+    }
 }
 
 void PluginApiCore::setStopped(const std::vector<std::string>& keys) {
@@ -295,6 +322,7 @@ void PluginApiCore::clearGrants() {
     std::lock_guard<std::mutex> lk(mutex_);
     tuneGranted_.clear();
     settingsGranted_.clear();
+    txGranted_.clear();
     for (const std::unique_ptr<PluginApiClient>& c : clients_) { refreshGrantsLocked(*c); }
 }
 
@@ -535,6 +563,8 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     if (f.signalDb > f.squelchDb) { flags |= CASCADE_STATE_SQUELCH_OPEN; }
     if (f.stereo) { flags |= CASCADE_STATE_STEREO; }
     flags |= c.grants.load(std::memory_order_acquire);
+    // The arming window and the key, for a TX_AUDIO plugin only (publishTxState).
+    flags |= c.txState.load(std::memory_order_acquire);
     s.flags = flags;
     s.seq = p.seq;
     s.tuneSeq = p.tuneSeq;

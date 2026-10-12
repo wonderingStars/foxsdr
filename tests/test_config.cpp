@@ -132,6 +132,7 @@ AppConfig junkConfig() {
     c.mode = "garbage";
     c.bandwidthHz = -2.0;
     c.squelchDb = 999.0f;
+    c.squelchAuto = true;  // AUTOMATIC squelch (0.99.74): away from its default (off)
     c.volume = 42.0f;
     c.audioBufferMs = 777;   // not one of the four buffers: a load that forgets the field keeps it
     c.audioBufferAutoMs = 777;  // likewise for the depth AUTOMATIC remembered
@@ -185,6 +186,9 @@ AppConfig junkConfig() {
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
     c.mapTrailAltitudeColours = false;
+    // The map list's "On screen only" switch defaults OFF (0.99.74), so true
+    // is the away-from-default value here.
+    c.mapListOnScreenOnly = true;
     // Both bookmark spectrum switches default ON too, the same away-from-
     // default rule.
     c.bookmarkMarkers = false;
@@ -230,6 +234,9 @@ AppConfig junkConfig() {
     // The main view (0.99.40), not one of the two names the loader accepts,
     // so a load path that forgets it leaves junk rather than the default.
     c.mainView = "garbage";
+    // The Display section open (0.99.74): away from its folded default, so a
+    // load path that forgets the field leaves it open rather than folded.
+    c.displayOpen = true;
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;
@@ -256,6 +263,10 @@ AppConfig junkConfig() {
     // P9 fields, both away from their defaults (and the URL empty-adjacent
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
+    // A plugin site that must never survive a load: a config that names none has
+    // none, and a leftover here would have the store read - and offer the plugins
+    // of - an address the user never added (0.99.74).
+    c.pluginSites = {"junk-site"};
     c.pluginBrowserOpen = true;
     // The fitted modules window: open, and with a rectangle that is away from
     // the "nothing saved" default AND out of range, so a load path that
@@ -280,6 +291,9 @@ AppConfig junkConfig() {
     // tune permission has granted none, and a leftover here would mean a
     // plugin could move the receiver on the strength of stale memory.
     c.pluginTuneAllowed = {"junk-grant"};
+    // And the transmit grant (0.99.74): a config that does not mention it has granted none, and a
+    // leftover here would let a plugin key the radio on the strength of stale memory.
+    c.pluginTransmitAllowed = {"junk-tx-grant"};
     // A stop that must never survive a load either: a config that does not
     // mention stopped plugins has stopped none, and a leftover here would
     // silence a decoder the user never switched off.
@@ -319,6 +333,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     // be compared here or the round-trip test would not cover it at all.
     CHECK(a.patch == b.patch);
     CHECK(a.mainView == b.mainView);
+    CHECK(a.displayOpen == b.displayOpen);
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
@@ -335,6 +350,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.mode == b.mode);
     CHECK(a.bandwidthHz == b.bandwidthHz);
     CHECK(a.squelchDb == b.squelchDb);
+    CHECK(a.squelchAuto == b.squelchAuto);
     CHECK(a.volume == b.volume);
     CHECK(a.audioBufferMs == b.audioBufferMs);
     CHECK(a.audioBufferAutoMs == b.audioBufferAutoMs);
@@ -366,6 +382,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.country == b.country);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
+    CHECK(a.mapListOnScreenOnly == b.mapListOnScreenOnly);
     CHECK(a.bookmarkMarkers == b.bookmarkMarkers);
     CHECK(a.bookmarkStackNames == b.bookmarkStackNames);
     CHECK(a.spectrumTraceMode == b.spectrumTraceMode);
@@ -405,6 +422,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.gpsPort == b.gpsPort);
     CHECK(a.gpsBaud == b.gpsBaud);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
+    CHECK(a.pluginSites == b.pluginSites);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.fittedModulesOpen == b.fittedModulesOpen);
     CHECK(a.fittedModulesX == b.fittedModulesX);
@@ -417,6 +435,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.pluginStoreHeight == b.pluginStoreHeight);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
+    CHECK(a.pluginTransmitAllowed == b.pluginTransmitAllowed);
     CHECK(a.pluginsStopped == b.pluginsStopped);
     CHECK(a.pluginRun == b.pluginRun);
     CHECK(a.closedWindows == b.closedWindows);
@@ -484,6 +503,9 @@ int main() {
         // the owner asked for the last one chosen to come back.
         in.mainView = "receiver";
         in.pluginBrowserOpen = true;
+        // The plugin sites are WHAT the store lists, not whether it is open: they come
+        // through the start-up state untouched (0.99.74).
+        in.pluginSites = {"https://hobbyist.example/hdradio/index.json"};
         in.fittedModulesOpen = true;
         in.fittedModulesX = 40;
         in.fittedModulesY = 50;
@@ -526,6 +548,7 @@ int main() {
         CHECK(out.transmitPowerDb == -12.5);
         CHECK(out.transmitSplit);
         CHECK(!out.pluginBrowserOpen);
+        CHECK(out.pluginSites == in.pluginSites);
         CHECK(!out.fittedModulesOpen);
         CHECK(out.mapPages.size() == 2);
         for (const AppConfig::MapPage& pg : out.mapPages) { CHECK(!pg.open); }
@@ -561,6 +584,15 @@ int main() {
         // Idempotent, and a default config is already in its start-up state.
         checkEqual(cascade::core::startupState(out), out);
         checkEqual(cascade::core::startupState(AppConfig{}), AppConfig{});
+        // AUTOMATIC squelch (0.99.74) is a setting and not a window: a start-up keeps it as saved,
+        // either way (a restart that forgot it would put the AUTO key back to dark).
+        {
+            AppConfig s;
+            s.squelchAuto = true;
+            CHECK(cascade::core::startupState(s).squelchAuto);
+            s.squelchAuto = false;
+            CHECK(!cascade::core::startupState(s).squelchAuto);
+        }
     }
 
     // --- mainView: the patch is the main view, and the last choice returns ---
@@ -604,6 +636,52 @@ int main() {
         out = junkConfig();
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.mainView == "patch");
+    }
+
+    // --- displayOpen: the Display section starts folded and is remembered ----
+    //
+    // A tester (0.99.74): "When I open FoxSDR and go to the VIEW tab, the
+    // DISPLAY menu is always expanded. Can you have this default to closed or
+    // remember the last status." Folded on a fresh install and for a file that
+    // never heard of the field; whichever the user left it as after that; and
+    // a layout preference rather than a window, so startupState keeps it.
+    {
+        CHECK(!AppConfig{}.displayOpen);
+        CHECK(!cascade::core::startupState(AppConfig{}).displayOpen);
+        AppConfig in;
+        in.displayOpen = true;
+        CHECK(cascade::core::startupState(in).displayOpen);
+        const std::string path = p("display_open.json");
+        std::string err;
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(readAll(path).find("\"displayOpen\": true") != std::string::npos);
+        AppConfig out = junkConfig();
+        out.displayOpen = false;  // so a load that ignores the file is seen
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.displayOpen);
+        // Folded again: the file says so, over a junk object that says open.
+        in.displayOpen = false;
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(readAll(path).find("\"displayOpen\": false") != std::string::npos);
+        out = junkConfig();
+        CHECK(out.displayOpen);  // the control: the junk really is open
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+        // A file from before 0.99.74 says nothing about it: folded, the
+        // default, and not the junk's open.
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+        // The wrong type (booleans are strict): the default again.
+        CHECK(writeText(path, "{\"displayOpen\": \"yes\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+        CHECK(writeText(path, "{\"displayOpen\": 1}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
     }
 
     // THE PLUGIN STORE WINDOW'S RECTANGLE (0.99.72): written whole, read back whole, and discarded whole
@@ -755,6 +833,7 @@ int main() {
         in.mode = "USB";
         in.bandwidthHz = 2700.0;
         in.squelchDb = -63.5f;
+        in.squelchAuto = true;   // AUTOMATIC squelch (0.99.74): the default is off, so on is what survives
         in.volume = 0.85f;
         in.audioBufferMs = 480;   // the Sinks rail's AUDIO BUFFER (0.99.73): a fixed 480 ms
         in.audioBufferAutoMs = 960;  // ...and the depth AUTOMATIC had reached (kept, ignored while fixed)
@@ -817,6 +896,10 @@ int main() {
         // could not tell those apart.)
         in.mapTrails = false;
         in.mapTrailAltitudeColours = true;
+        // Defaults OFF, so true is the only away-from-default value: what
+        // proves the SAVE half is that load() resets to defaults first, so a
+        // save() that never wrote the key brings back false and fails here.
+        in.mapListOnScreenOnly = true;
         in.mapTrailStyle = 1;  // Ribbon, which is not the default
         in.aircraftIconPx = 40;  // legal, and neither the default (48) nor junk
         in.mapTrailWidthPx = 12;  // legal, not the default (4)
@@ -874,6 +957,9 @@ int main() {
         // nor junkConfig()'s value, so the roundtrip proves the FILE is what
         // came back rather than either end's fallback.
         in.pluginCatalogueUrl = "https://plugins.example.invalid/team/index.json";
+        // The plugin sites (0.99.74), in the order they are read in: an https address and a
+        // local path, so a save that kept only one kind is caught.
+        in.pluginSites = {"https://hobbyist.example/hdradio/index.json", "C:\\sites\\extra.json"};
         in.pluginBrowserOpen = true;
         // The fitted modules window, open and with a rectangle nobody would
         // arrive at by accident — a NEGATIVE x, because a second monitor to
@@ -892,6 +978,8 @@ int main() {
         // what the permission check reads, and a name silently dropped by the
         // save is a permission the user gave and did not get back.
         in.pluginTuneAllowed = {"Satellite Tracker", "ADS-B"};
+        // The transmit grant (0.99.74), different names again so a save that crossed the lists shows.
+        in.pluginTransmitAllowed = {"winlink-1.0.0-abi3-win-x64.dll"};
         // Stopped plugins, likewise in an order the roundtrip must preserve,
         // and deliberately different names from the grants above so a save
         // that crossed the two lists would show up here.
@@ -970,6 +1058,7 @@ int main() {
                         "\"centerHz\":\"high\","     // string for double
                         "\"mode\":7,"                // number for string
                         "\"squelchDb\":true,"        // bool is NOT a number
+                        "\"squelchAuto\":\"yes\","   // string for bool: strict, stays off
                         "\"splitRatio\":[0.5],"      // array for float
                         "\"vfoOffsetHz\":null,"      // null for double
                         "\"bandwidthHz\":200000.0,"  // valid, must load
@@ -997,6 +1086,8 @@ int main() {
         CHECK(out.centerHz == d.centerHz);
         CHECK(out.mode == d.mode);
         CHECK(out.squelchDb == d.squelchDb);
+        CHECK(out.squelchAuto == d.squelchAuto);  // junkConfig() had it on: a wrong type loads as off
+        CHECK(!out.squelchAuto);
         CHECK(out.splitRatio == d.splitRatio);
         CHECK(out.vfoOffsetHz == d.vfoOffsetHz);
         CHECK(out.bandwidthHz == 200000.0);
@@ -1421,6 +1512,42 @@ int main() {
             out = junkConfig();
             CHECK(ConfigStore::load(path, out, err));
             CHECK(out.autoGainByRadio == in.autoGainByRadio);
+        }
+
+        // AUTOMATIC SQUELCH (0.99.74, AppConfig::squelchAuto). A config that has never
+        // seen the key has it OFF (junkConfig set it on, so a loader that forgot the key
+        // would leave it behind); a real true loads on; anything that is not a boolean is
+        // refused and stays off; and it is WRITTEN, by name, so the next start has it.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"squelchDb\":-70}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.squelchAuto);
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"squelchDb\":-70,\"squelchAuto\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.squelchAuto);
+        CHECK(out.squelchDb == -70.0f);
+        for (const char* wrong : {"1", "\"true\"", "null", "[true]", "{}"}) {
+            out = junkConfig();
+            CHECK(writeText(path, std::string("{\"schemaVersion\":1,\"squelchAuto\":") + wrong + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(!out.squelchAuto);
+        }
+        {
+            AppConfig in;
+            in.squelchAuto = true;
+            CHECK(ConfigStore::save(path, in, err));
+            CHECK(readAll(path).find("\"squelchAuto\": true") != std::string::npos ||
+                  readAll(path).find("\"squelchAuto\":true") != std::string::npos);
+            out = junkConfig();
+            out.squelchAuto = false;
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.squelchAuto);
+            in.squelchAuto = false;
+            CHECK(ConfigStore::save(path, in, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(!out.squelchAuto);
         }
 
         // THE CONVERTERS (0.99.36), per radio. A config that predates them
@@ -2050,6 +2177,9 @@ int main() {
                 void (*apply)(AppConfig&);
             };
             const Change changes[] = {
+                // AUTOMATIC squelch (0.99.74): the AUTO key under the SQUELCH knob saves
+                // nothing itself, so the debounce has to see the switch here.
+                {"squelchAuto", [](AppConfig& c) { c.squelchAuto = true; }},
                 {"transmitMode", [](AppConfig& c) { c.transmitMode = 3; }},
                 {"transmitInput", [](AppConfig& c) { c.transmitInput = 0; }},
                 {"transmitPowerDb", [](AppConfig& c) { c.transmitPowerDb = -40.0; }},
@@ -2058,6 +2188,11 @@ int main() {
                 {"transmitToneHz", [](AppConfig& c) { c.transmitToneHz = 1750.0; }},
                 {"transmitMonitor", [](AppConfig& c) { c.transmitMonitor = true; }},
                 {"transmitArgs", [](AppConfig& c) { c.transmitArgs = "driver=plutosdr"; }},
+                // The plugin TRANSMIT grant (0.99.74): given by a key on a plugin's plate, which
+                // saves nothing itself - a grant that took effect and was not saved is a grant
+                // the next launch silently does not have.
+                {"pluginTransmitAllowed",
+                 [](AppConfig& c) { c.pluginTransmitAllowed = {"winlink-1.0.0.dll"}; }},
                 // The rtl_tcp server's address (0.99.70): typed into the Source
                 // section's box, which calls no save of its own - so a field
                 // missing here is an address that reaches the file only by
@@ -2068,6 +2203,9 @@ int main() {
                 // The main view (0.99.40): switched by a key that saves
                 // nothing itself.
                 {"mainView", [](AppConfig& c) { c.mainView = "receiver"; }},
+                // The Display section opened or folded (0.99.74): a click on
+                // its header, which saves nothing itself.
+                {"displayOpen", [](AppConfig& c) { c.displayOpen = true; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
                 // Look for network USRPs (2026-09-25): a Source-section tick
@@ -2097,6 +2235,9 @@ int main() {
                 // nothing itself.
                 {"bookmarkMarkers", [](AppConfig& c) { c.bookmarkMarkers = false; }},
                 {"bookmarkStackNames", [](AppConfig& c) { c.bookmarkStackNames = false; }},
+                // The map list's "On screen only" switch (0.99.74): a tick on
+                // the map page's toolbar that calls no save of its own.
+                {"mapListOnScreenOnly", [](AppConfig& c) { c.mapListOnScreenOnly = true; }},
             };
             for (const Change& ch : changes) {
                 AppConfig other = base;
@@ -2418,6 +2559,65 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.mapTrails);
         CHECK(out.mapTrailAltitudeColours);
+    }
+
+    // --- the map list's "On screen only" switch (documented in config.hpp,
+    // 0.99.74) ---------------------------------------------------------------
+    //
+    // A tester (2026-10-12): "add a filter or switch to list only the aircraft
+    // currently viewable on the screen". A PREFERENCE, not a "whether": it
+    // defaults OFF (the list has always shown every aircraft), it is saved, it
+    // is restored, and startupState() leaves it alone.
+    {
+        const std::string path = p("map_list_on_screen.json");
+        AppConfig out;
+        std::string err;
+
+        // DEFAULT OFF: an install that has never heard of the key lists every
+        // aircraft, exactly as before.
+        CHECK(!AppConfig{}.mapListOnScreenOnly);
+
+        // READ FROM THE FILE, which for a bool defaulting false can only be
+        // proved by writing true. RED WHEN the getBool is dropped.
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(out.mapListOnScreenOnly);
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapListOnScreenOnly);
+
+        // A FILE THAT PREDATES IT - the ordinary upgrade - gets the default,
+        // even into an object that held true before the load.
+        out.mapListOnScreenOnly = true;
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapListOnScreenOnly);
+
+        // A value of the wrong type is ignored (getBool's rule) and the default
+        // stands, rather than a number being read as a tick.
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":\"yes\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapListOnScreenOnly);
+
+        // INDEPENDENT of the trail switches it sits beside: neither key is wired
+        // to the other's field.
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":true,\"mapTrails\":false,"
+                              "\"mapTrailAltitudeColours\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mapListOnScreenOnly);
+        CHECK(!out.mapTrails);
+        CHECK(out.mapTrailAltitudeColours);
+
+        // STARTUP STATE LEAVES IT: it is how the list behaves, not whether a
+        // window is open, so it must survive the start-up clearing in both
+        // directions.
+        AppConfig on;
+        on.mapListOnScreenOnly = true;
+        CHECK(cascade::core::startupState(on).mapListOnScreenOnly);
+        AppConfig off;
+        off.mapListOnScreenOnly = false;
+        CHECK(!cascade::core::startupState(off).mapListOnScreenOnly);
     }
 
     // --- the two bookmark spectrum switches (documented in config.hpp,
@@ -3503,6 +3703,94 @@ int main() {
         CHECK(back.pluginBrowserOpen);
     }
 
+    // --- plugin sites (0.99.74, documented in config.hpp) ----------------------
+    //
+    // Other people's index.json, added by the user in the store. The loader holds each
+    // address to PluginRepo::normaliseSiteUrl - the store's ADD asks the same function - and
+    // drops what it refuses, a repeat, the official address and the override of it, and
+    // anything past the eighth; the rest keep their order.
+    {
+        const std::string path = p("plugin_sites.json");
+        const AppConfig d;
+        std::string err;
+        CHECK(d.pluginSites.empty());
+        CHECK(AppConfig::kMaxPluginSites == 8u);
+
+        // Absent: none (the junk a previous config left does not survive).
+        CHECK(writeText(path, "{}\n"));
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginSites.empty());
+
+        // https and local-path addresses are kept, trimmed, in the order given.
+        CHECK(writeText(path,
+                        "{\"pluginSites\":[\"  https://a.example/i.json \",\"C:/sites/x.json\","
+                        "\"/srv/y.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites ==
+               std::vector<std::string>{"https://a.example/i.json", "C:/sites/x.json", "/srv/y.json"}));
+
+        // What the validator refuses is dropped, entry by entry: http and other schemes, userinfo,
+        // empties, entries that are not strings. The good one beside them survives.
+        CHECK(writeText(path,
+                        "{\"pluginSites\":[\"http://a.example/i.json\",\"ftp://a.example/i\","
+                        "\"file:///C:/i.json\",\"https://u@a.example/i.json\",\"\",\"   \",7,null,[\"x\"],"
+                        "\"https://ok.example/i.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites == std::vector<std::string>{"https://ok.example/i.json"}));
+
+        // Repeats are dropped, also after trimming; the first keeps its place.
+        CHECK(writeText(path,
+                        "{\"pluginSites\":[\"https://a.example/i.json\",\"https://b.example/i.json\","
+                        "\" https://a.example/i.json\",\"https://b.example/i.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites ==
+               std::vector<std::string>{"https://a.example/i.json", "https://b.example/i.json"}));
+
+        // The official address is not a site (it would list every plugin twice, all hidden as the
+        // same id) - and neither is the override of it.
+        CHECK(writeText(path,
+                        "{\"pluginCatalogueUrl\":\"https://mirror.example/i.json\",\"pluginSites\":[\"" +
+                            cascade::core::PluginRepo::defaultIndexUrl() +
+                            "\",\"https://mirror.example/i.json\",\"https://a.example/i.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites == std::vector<std::string>{"https://a.example/i.json"}));
+
+        // At most eight, the first eight, in order.
+        {
+            std::string text = "{\"pluginSites\":[";
+            for (int i = 0; i < 12; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"https://s" + std::to_string(i) + ".example/i.json\"";
+            }
+            text += "]}\n";
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginSites.size() == AppConfig::kMaxPluginSites);
+            if (out.pluginSites.size() == AppConfig::kMaxPluginSites) {
+                CHECK(out.pluginSites.front() == "https://s0.example/i.json");
+                CHECK(out.pluginSites.back() == "https://s7.example/i.json");
+            }
+        }
+
+        // Not an array: none.
+        CHECK(writeText(path, "{\"pluginSites\":\"https://a.example/i.json\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginSites.empty());
+
+        // The list is written as an array of strings and comes back as it went.
+        AppConfig in;
+        in.pluginSites = {"https://hobbyist.example/hdradio/index.json", "C:\\sites\\extra.json"};
+        const std::string rt = p("plugin_sites_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginSites == in.pluginSites);
+        CHECK(ConfigStore::serialize(in).find("\"pluginSites\"") != std::string::npos);
+        // ...and the default config writes an empty one, not the junk of another.
+        CHECK(ConfigStore::serialize(AppConfig{}).find("\"pluginSites\": []") != std::string::npos);
+    }
+
     // --- the fitted modules window (documented in config.hpp) -----------------
     //
     // THE BUG THIS BLOCK EXISTS FOR: the store window above remembered whether
@@ -4237,6 +4525,97 @@ int main() {
         CHECK(!ConfigStore::load(g_root, out, err));
         CHECK(!err.empty());
         checkEqual(out, AppConfig{});
+    }
+
+    // --- THE PLUGIN'S TRANSMIT GRANT IS SAVED; THE ARMING WINDOW NEVER IS ---
+    //
+    // 0.99.74 (CASCADE_CAP_TX_AUDIO). A plugin may now key the radio, under two conditions the
+    // OPERATOR controls: a per-plugin GRANT (a decision about a piece of software, kept in the
+    // config like the tune and settings grants) and an ARMING WINDOW opened on the TRANSMIT page for
+    // 5, 15 or 60 minutes (a decision about NOW, which must never survive a restart - a window that
+    // did would be a transmitter that came back able to be keyed by whatever the plugin did first).
+    // So the grant is a field and the window has no field, and a file that carries one anyway
+    // changes nothing, exactly as the PTT and the latch above.
+    {
+        const std::string dir = g_root;
+        std::string err;
+
+        // Off by default, and a wrong type is off.
+        CHECK(AppConfig{}.pluginTransmitAllowed.empty());
+        {
+            const std::string path = dir + "/tx_grant_default.json";
+            {
+                std::ofstream f(path, std::ios::binary);
+                f << "{\"schemaVersion\":1,\"pluginTransmitAllowed\":\"Winlink\"}";  // not an array
+            }
+            AppConfig out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTransmitAllowed.empty());
+        }
+        // Sanitised like the other two lists: non-strings, empties and duplicates dropped, order kept.
+        {
+            const std::string path = dir + "/tx_grant_sanitise.json";
+            {
+                std::ofstream f(path, std::ios::binary);
+                f << "{\"schemaVersion\":1,\"pluginTransmitAllowed\":"
+                     "[\"a-1.0.0.dll\",7,null,\"\",\"b-2.0.0.dll\",\"a-1.0.0.dll\"]}";
+            }
+            AppConfig out;
+            CHECK(ConfigStore::load(path, out, err));
+            const std::vector<std::string> want = {"a-1.0.0.dll", "b-2.0.0.dll"};
+            CHECK(out.pluginTransmitAllowed == want);
+        }
+        // The grant round-trips, and is NOT confused with the other two grants.
+        {
+            AppConfig in;
+            in.pluginTransmitAllowed = {"winlink-1.0.0.dll"};
+            in.pluginTuneAllowed = {"satellites-1.0.0.dll"};
+            in.pluginSettingsAllowed = {"scanner-1.0.0.dll"};
+            const std::string path = dir + "/tx_grant_roundtrip.json";
+            CHECK(ConfigStore::save(path, in, err));
+            AppConfig out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTransmitAllowed == in.pluginTransmitAllowed);
+            CHECK(out.pluginTuneAllowed == in.pluginTuneAllowed);
+            CHECK(out.pluginSettingsAllowed == in.pluginSettingsAllowed);
+            // A start-up leaves the grant alone: it is a setting, and nothing in it keys anything.
+            CHECK(cascade::core::startupState(in).pluginTransmitAllowed == in.pluginTransmitAllowed);
+        }
+        // THE WINDOW: a file that names one (every spelling a future build or a hand might try)
+        // changes nothing, and the file a save writes back has no word for it.
+        {
+            const std::string path = dir + "/tx_armed.json";
+            {
+                std::ofstream f(path, std::ios::binary);
+                f << "{\"schemaVersion\":1,"
+                     "\"pluginTransmitAllowed\":[\"winlink-1.0.0.dll\"],"
+                     "\"pluginTransmitArmed\":true,"
+                     "\"transmitArmed\":true,"
+                     "\"transmitArmMinutes\":60,"
+                     "\"pluginsArmed\":true,"
+                     "\"armedUntil\":4102444800,"
+                     "\"txArmed\":true,"
+                     "\"pluginKeyed\":true}";
+            }
+            AppConfig out;
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTransmitAllowed.size() == 1u);  // the grant it does understand
+            const std::string back = dir + "/tx_armed_back.json";
+            CHECK(ConfigStore::save(back, out, err));
+            std::string lower = readAll(back);
+            for (char& ch : lower) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+            CHECK(lower.find("plugintransmitallowed") != std::string::npos);
+            CHECK(lower.find("arm") == std::string::npos);      // armed, arming, armedUntil, ...
+            CHECK(lower.find("pluginkeyed") == std::string::npos);
+            CHECK(lower.find("keyed") == std::string::npos);
+            // Every key the SAVED file has, listed: not one of them is about an arming window.
+            const AppConfig defaults;
+            const std::string defText = dir + "/tx_defaults.json";
+            CHECK(ConfigStore::save(defText, defaults, err));
+            std::string dl = readAll(defText);
+            for (char& ch : dl) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+            CHECK(dl.find("arm") == std::string::npos);
+        }
     }
 
     // --- A CONFIG FILE CANNOT KEY THE RADIO ---------------------------------

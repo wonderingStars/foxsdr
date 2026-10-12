@@ -153,6 +153,71 @@
 // document, so a hostile public OR regional index cannot grant itself the
 // download prefix's home-field advantage by simply saying so in JSON.
 //
+// ---------------------------------------------------------------------------
+// PLUGIN SITES (0.99.74): A THIRD PARTY'S OWN index.json
+// ---------------------------------------------------------------------------
+//
+// A user may paste the address of someone else's index.json into the store
+// (AppConfig::pluginSites, at most kMaxPluginSites) and the store lists, installs
+// and updates that site's plugins beside the official ones, marked as coming from
+// somewhere else. The seven rules above are NOT relaxed for it - a site's
+// entries go through the same parseIndex(), the same install() gauntlet - and
+// the following is added on top, each in one place:
+//
+//  8. A SITE'S PLUGIN IS KNOWN BY (source, id), NOT BY id. `source` is empty for
+//     the official catalogue (and its regional list, and an override of the
+//     official address) and the site's address for a site. Every join that used
+//     to be by id alone - installStateFor, planUpdates, mergePolicies,
+//     policyFor, recordInstall, the manifest itself - is by the pair, so a site
+//     that reuses an official id can neither be taken for the official plugin,
+//     nor update it, nor replace or lift its retirement floor. `source` is set
+//     in exactly one place on a catalogue entry - mergeSite() - and parseIndex()
+//     never reads a "source" key from a downloaded index, for the reason
+//     `regional` is not read either.
+//
+//  9. OFFICIAL WINS. mergeSite() drops a site's entry WHOLE when its id is
+//     already listed (official, regional, an earlier site, or earlier in the
+//     same site), and counts it; the store says "N hidden: same id as a plugin
+//     already listed". A site can never shadow, replace or retire an official
+//     plugin.
+//
+// 10. ONE HOST. Every platform url and every picture url of a site's entry must
+//     have the SAME HOST (and port) as the site's own index address
+//     (siteFilesAllowed), else that entry is dropped whole at the merge - and
+//     install() checks it again, before any socket, exactly as it checks the
+//     regional prefix. docs/THIRD-PARTY-SITES.md states the same rule to the
+//     people who host a site. (A site given as a local file path has no host to
+//     lock to: the file is the user's own, read from their own disk, exactly as
+//     the official address may be a local file.)
+//
+// 11. A SITE NEVER OVERWRITES ANOTHER PLUGIN'S FILE. install() refuses a site's
+//     entry whose destination file name is already recorded for a different
+//     plugin, or is in the folder with no record at all (a side-loaded module).
+//     Without this a site could name its file after an official module and
+//     replace it with its own bytes, which no id rule can see.
+//
+// 12. A SITE'S MODULE NEVER TAKES A DECLARED NAME FROM AN OFFICIAL ONE, AT LOAD.
+//     Rules 8 to 11 are the store's; this one is the loader's, because the
+//     name that decides which of two modules runs is the one the BINARY declares
+//     (its descriptor's `name`), which the index cannot vouch for. When two
+//     loaded modules declare one name, PluginHost used to keep the higher
+//     version, so a module installed from a site that declared an official
+//     plugin's name with a higher version switched the official one off.
+//     resolveDuplicatePlugins() now reads each file's install record
+//     (InstalledPlugin::source, handed to PluginHost::scan as PluginFileOrigins
+//     by AppWindow::rescanPlugins): an OFFICIAL record holds its name against
+//     every SITE record of it whatever the versions, and the site's module is
+//     reported not loaded - "Not loaded: it declares the same name as the
+//     official plugin ..." - in the host's ordinary reason (LoadedPlugin::error,
+//     which the Fitted modules row and the log print verbatim). Two site
+//     modules, an unrecorded (hand-copied) module and a scan with no records
+//     behave as before. See core/plugin_host.hpp.
+//
+// A site is read after the official catalogue with the regional list's short
+// timeouts and a small cap (kMaxSiteIndexBytes), and a site's failure never
+// blanks the official list. What it sends is the request itself: the address
+// and the path, nothing else, like every other catalogue read.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
@@ -265,6 +330,15 @@ struct PluginCatalogEntry {
     // hand-built struct.
     bool regional = false;
 
+    // WHERE THE ENTRY CAME FROM (0.99.74, rule 8): EMPTY for the official
+    // catalogue, its regional list and an override of the official address; the
+    // site's address (exactly as configured) for an entry that arrived from a
+    // plugin site. Set in exactly one place - mergeSite() - and NEVER by
+    // parseIndex(): a "source" key in a downloaded index is ignored, so no index
+    // can present its entry as the official one (or as another site's) by
+    // saying so. Part of the entry's identity: (source, id).
+    std::string source;
+
     // The platform record matching the host we are running on, or nullptr if
     // the catalogue has no build for it. The pointer aliases `platforms`, so
     // it dangles if the entry is modified or destroyed.
@@ -284,7 +358,13 @@ struct PluginCatalogEntry {
 // through sanitiseFileName() before any filesystem call touches it, exactly
 // like a name that came off the wire.
 struct InstalledPlugin {
-    std::string id;       // catalogue id, the key everything joins on
+    std::string id;       // catalogue id; with `source`, the key everything joins on
+    // The plugin site this was installed from (PluginCatalogEntry::source), or
+    // EMPTY for the official catalogue: a record written before sites existed has
+    // no such key and reads as official, which is what it was. An installed
+    // plugin whose site is no longer in the user's list keeps this and gets no
+    // updates (no entry carries it any more).
+    std::string source;
     std::string name;     // display name at install time, for user-facing copy
     std::string version;  // the version that was installed
     std::string file;     // bare file name inside the plugins directory
@@ -312,6 +392,7 @@ struct InstalledPlugin {
 // ever been seen for this id, which is the FAIL-OPEN state.
 struct CachedPolicy {
     std::string id;
+    std::string source;                 // PluginCatalogEntry::source; empty = official
     bool known = false;                 // has any catalogue ever described this id?
     std::string minSupportedVersion;    // empty = no floor
     std::string catalogueVersion;       // the version the catalogue offered
@@ -359,6 +440,7 @@ struct BlockedPlugin {
 // planUpdates(), so a plan must not outlive the catalogue it was planned from.
 struct PluginUpdate {
     std::string id;
+    std::string source;  // PluginCatalogEntry::source of the entry; empty = official
     std::string fromVersion;
     std::string toVersion;
     std::string reason;  // user-facing, one line
@@ -379,6 +461,7 @@ struct PluginUpdate {
 // version and is left out by the caller.
 struct ScannedModule {
     std::string id;
+    std::string source;   // the install record's source; empty = official or side-loaded
     std::string version;  // what the module's own descriptor says it is
     std::string file;     // bare module file name
 };
@@ -417,6 +500,14 @@ public:
     // purpose: 256 KiB is generous for that and stingy for anything a hostile
     // foxsdr.com-shaped host might try to hand back instead.
     static constexpr std::uint64_t kMaxRegionalIndexBytes = 256ull * 1024ull;
+
+    // A PLUGIN SITE'S INDEX (0.99.74): a hobbyist's list of a handful of plugins.
+    // 1 MiB is generous for that, a quarter of what the official catalogue may be,
+    // and the bound on what a site the user added can make the store read.
+    static constexpr std::uint64_t kMaxSiteIndexBytes = 1024ull * 1024ull;
+
+    // How many sites the store keeps (AppConfig::kMaxPluginSites says the same).
+    static constexpr std::size_t kMaxSites = 8;
 
     // Upper bound on a catalogue filename. Long enough for any sane plugin,
     // short enough that pluginsDir + name cannot approach a path limit.
@@ -526,6 +617,73 @@ public:
                                              const std::vector<PluginCatalogEntry>& regionalEntries,
                                              const std::string& downloadPrefix);
 
+    // ---- Plugin sites (see the PLUGIN SITES block above) ------------------
+    //
+    // THE KEY AN ENTRY IS NAMED BY WHEREVER ONE STRING HAS TO STAND FOR IT (the
+    // store's page, busy and result ids, its census names, ImGui ids, ADD ALL's
+    // queue): the plain id for an official entry - so every name and id that
+    // existed before sites is unchanged - and "<id>@<site label>" for a site's.
+    // Unique within one merged catalogue because mergeSite() drops a repeated id.
+    static std::string catalogueKey(const std::string& source, const std::string& id);
+
+    // The host (and port, when not the default) of an https site address, lower-
+    // cased: "raw.githubusercontent.com". Empty for anything that has none - a
+    // local path, a non-https address, an address with userinfo ("a@b"), a
+    // backslash, a control character or a space in its authority - so an
+    // address that cannot be locked to a host is never read as locked to "".
+    static std::string urlHost(const std::string& url);
+
+    // What the store calls a site: its host, or - for a local file - the file's
+    // name. Never empty for a non-empty address.
+    static std::string siteLabel(const std::string& siteUrl);
+
+    // The address as one short line for a list: host + path, cut in the middle
+    // with "..." to at most `maxChars` bytes (UTF-8 safe: only ASCII is cut).
+    static std::string siteDisplay(const std::string& siteUrl, std::size_t maxChars);
+
+    // THE ONE VALIDATOR OF A SITE ADDRESS - the config's loader, the store's ADD
+    // and the merge all ask it. Trims; refuses empty, longer than 2048 bytes, a
+    // control character, and any address with "://" that is not https with a
+    // lockable host (urlHost). A value with no "://" is a local file path, as the
+    // official address may be. On success `out` is the trimmed address; on
+    // failure `error` is a reason in English and `out` is empty.
+    static bool normaliseSiteUrl(const std::string& raw, std::string& out, std::string& error);
+
+    // The host lock (rule 10): may a file at `url` belong to the site at
+    // `siteUrl`? True iff `siteUrl` is a local path (no host to lock to), or
+    // `url` is https and urlHost(url) is non-empty and equals urlHost(siteUrl).
+    static bool siteFilesAllowed(const std::string& url, const std::string& siteUrl);
+
+    // The site's kept copy in the plugins folder (rule: not counted by the folder
+    // signature): "catalogue-<first 16 hex of sha256(siteUrl)>.json" and the same
+    // + ".time". isSiteCacheFile() is true for exactly those two names and their
+    // ".part" - nothing else - and is what core/plugin_dir_signature.cpp skips.
+    static std::string siteCacheFileName(const std::string& siteUrl);
+    static std::string siteCacheTimeFileName(const std::string& siteUrl);
+    static bool isSiteCacheFile(const std::string& fileName);
+
+    // What mergeSite() decided. `merged` is every entry of `listed`, unchanged
+    // and in the same order, followed by the site's entries that survived, each
+    // carrying source = the site's address. `added` is how many of those there
+    // are; the two `hidden` counts are the entries dropped, each counted once,
+    // the host lock first (it is the graver finding).
+    struct SiteMergeResult {
+        std::vector<PluginCatalogEntry> merged;
+        int added = 0;
+        int hiddenSameId = 0;   // id already listed: official wins
+        int hiddenOffHost = 0;  // a platform or picture url on another host
+    };
+
+    // Folds one site's parsed entries into the list already shown. PURE. An entry
+    // is dropped WHOLE when any platform url or picture url fails
+    // siteFilesAllowed(), or when its id equals any entry already in the merged
+    // list (official, regional, an earlier site, or earlier in this site's own
+    // list). A survivor has `source` forced to siteUrl whatever it held, and
+    // `regional` cleared: those two flags are this function's to give.
+    static SiteMergeResult mergeSite(const std::vector<PluginCatalogEntry>& listed,
+                                     const std::vector<PluginCatalogEntry>& siteEntries,
+                                     const std::string& siteUrl);
+
     // Host identity used to pick a platform record. Exposed so tests and the
     // UI agree with the matcher instead of re-deriving it.
     static const char* hostOs();
@@ -596,6 +754,11 @@ public:
     // PURE: no disk, no clock. It does not ask whether the entry can be
     // installed on this host (a build for it, an ABI): that is the install gate's
     // question, and an update that cannot run still is an update that exists.
+    //
+    // "SCANNED MODULE WHOSE ID IS e.id" AND "INSTALL RECORD FOR e.id" ARE BOTH BY
+    // (source, id) (0.99.74): a record or module from another source - a site's
+    // plugin that shares an official id, or the other way round - is not this
+    // plugin and says nothing about it.
     static InstallState installStateFor(const PluginCatalogEntry& e,
                                         const std::vector<InstalledPlugin>& installed,
                                         const std::vector<ScannedModule>& scanned);
@@ -796,8 +959,15 @@ public:
     //
     // The policy for `id`, or a CachedPolicy with known == false if no
     // catalogue has ever described it. Never throws, never blocks.
+    //
+    // BY (source, id) (0.99.74, rule 8). The two-argument form is the OFFICIAL
+    // plugin's (source empty) and is what every caller that predates sites
+    // meant; a plugin from a site asks with its own source and can never be
+    // answered with an official plugin's floor, nor the reverse.
     static CachedPolicy policyFor(const std::vector<CachedPolicy>& policies,
                                   const std::string& id);
+    static CachedPolicy policyFor(const std::vector<CachedPolicy>& policies,
+                                  const std::string& source, const std::string& id);
 
     // Folds a freshly fetched catalogue into the cache. An id the catalogue
     // lists is REPLACED wholesale (the catalogue is authoritative for what it
@@ -805,6 +975,12 @@ public:
     // catalogue does NOT list keeps its previous policy: a catalogue that is
     // unreachable, truncated to fewer entries, or replaced by an attacker's
     // empty document must not be able to un-retire a plugin.
+    //
+    // "AN ID" IS A (source, id) PAIR (0.99.74): an entry from a site replaces
+    // only the cached policy of the same site's same id, so a site that lists an
+    // official id - which the merge drops before it gets here, and which this
+    // would not let through if it did not - can never replace or lift an
+    // official plugin's retirement floor.
     static void mergePolicies(std::vector<CachedPolicy>& cached,
                               const std::vector<PluginCatalogEntry>& catalogue);
 
@@ -889,6 +1065,11 @@ public:
     // applyUpdate(). Every security gate lives in install(), at ONE
     // enforcement point; a second, weaker copy here would be a place for the
     // two to drift apart.
+    //
+    // AN INSTALLED PLUGIN UPDATES ONLY FROM ITS OWN SOURCE (0.99.74): the record
+    // and the entry are joined by (source, id), so a plugin installed from a
+    // site is offered nothing by the official catalogue or by another site, and
+    // an official plugin is offered nothing by a site, whatever ids they share.
     static std::vector<PluginUpdate> planUpdates(const std::vector<PluginCatalogEntry>& catalogue,
                                                  const std::vector<InstalledPlugin>& installed);
 
@@ -917,6 +1098,20 @@ public:
     // here is swallowed rather than shown.
     bool fetchRegionalIndex(const std::string& url, std::vector<PluginCatalogEntry>& out,
                             std::string& error);
+
+    // A PLUGIN SITE'S INDEX (0.99.74): the regional list's sibling in how it is
+    // read - it does NOT touch entries_ or progress_, it shares cancel_ without
+    // resetting it, and it uses the same short timeouts (4 s to connect, 8 s to
+    // receive) so a site that is down costs the store seconds and not minutes -
+    // but with kMaxSiteIndexBytes as its cap, a real parse report for the log,
+    // and its failure SHOWN (the store prints it verbatim against the site).
+    // `rawText` receives the text that parsed, for the site's kept copy. Returns
+    // false with `error` set and `out` empty on any failure - not https, the
+    // transport, an HTTP status, over the cap, not a catalogue. Not counted in
+    // the anonymous health counters, which are the official catalogue's.
+    bool fetchSiteIndex(const std::string& url, std::vector<PluginCatalogEntry>& out,
+                        std::string& rawText, std::vector<std::string>& report,
+                        std::string& error);
 
     const std::vector<PluginCatalogEntry>& entries() const { return entries_; }
 
@@ -962,6 +1157,25 @@ public:
     static bool loadCachedIndex(const std::string& pluginsDir,
                                 std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
                                 std::string& error);
+
+    // ---- A site's kept copy (0.99.74) ---------------------------------------
+    //
+    // The same two-file, text-first, atomic route as the official kept copy, under
+    // the site's own names (siteCacheFileName / siteCacheTimeFileName) and with
+    // kMaxSiteIndexBytes as the cap. Like it, only text that parsed is ever kept,
+    // and a corrupt copy is ignored, never repaired and never deleted.
+    // loadSiteCache() returns the entries as parseIndex() read them - `source` is
+    // NOT set: the caller runs them through mergeSite(), which is also where the
+    // host lock is applied to a kept copy exactly as to a fresh read.
+    static bool saveSiteCache(const std::string& pluginsDir, const std::string& siteUrl,
+                              const std::string& rawIndexText, std::int64_t readTimeUnix,
+                              std::string& error);
+    static bool loadSiteCache(const std::string& pluginsDir, const std::string& siteUrl,
+                              std::vector<PluginCatalogEntry>& entries, std::int64_t& readTime,
+                              std::string& error);
+    // Deletes the site's two kept files (and a ".part" a killed write left). True
+    // when none remains afterwards. Touches no other file.
+    static bool removeSiteCache(const std::string& pluginsDir, const std::string& siteUrl);
 
     // ---- Screenshots (0.99.72) ----------------------------------------------
     //
@@ -1009,7 +1223,13 @@ public:
     // regionalDownloadPrefix() (the SECOND check of that rule - see the
     // REGIONAL CATALOGUE block at the top of this file - because this
     // function does not trust its caller to have gone through
-    // mergeRegional()).
+    // mergeRegional()); a site's entry (non-empty `source`) whose url is not on
+    // the site's own host (rule 10, again, for the same reason), and one whose
+    // destination file belongs to a different plugin or to no record at all
+    // (rule 11).
+    //
+    // The anonymous failed-install count (health::notePluginInstallFailed) is the
+    // official catalogue's: a failure on a site's entry is not counted.
     bool install(const PluginCatalogEntry& e, const std::string& pluginsDir,
                  std::string& installedPath, std::string& error);
 
@@ -1018,9 +1238,9 @@ public:
     // plugin becomes managed - an unrecorded plugin is not broken, it is just
     // invisible to the retirement check (which then fails open for it).
     //
-    // Upserts by id and writes the whole manifest atomically. Returns false
-    // with `error` on a bad entry (no build for this host, unsanitisable file
-    // name) or a failed write.
+    // Upserts by (source, id) and writes the whole manifest atomically; the
+    // record carries the entry's `source`. Returns false with `error` on a bad
+    // entry (no build for this host, unsanitisable file name) or a failed write.
     static bool recordInstall(const std::string& pluginsDir, const PluginCatalogEntry& e,
                               std::string& error);
 

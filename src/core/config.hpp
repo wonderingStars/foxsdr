@@ -72,6 +72,10 @@
 //     download URL inside the fetched index is re-checked there too. Validating
 //     the string here as well would only add a second, weaker copy of a rule
 //     that has exactly one enforcement point today.
+//   - pluginSites: each entry must pass PluginRepo::normaliseSiteUrl (https with
+//     a usable host, or a local path); entries that do not, duplicates, the
+//     official address and the override above are dropped, and the list is capped
+//     at kMaxPluginSites, order kept. A non-array is an empty list.
 //   - pluginLastUpdateCheck: a negative value resets to 0 ("never"). A time
 //     before the epoch is either a hand-edit or a clock that went backwards,
 //     and "never checked" is the only honest reading of either.
@@ -312,6 +316,16 @@ struct AppConfig {
     std::string mode = "WFM";
     double bandwidthHz = 150000.0;
     float squelchDb = -120.0f;
+    // AUTOMATIC SQUELCH (0.99.74, the top bar's SQUELCH knob and its AUTO key): while true
+    // the threshold is not the user's but follows the measured noise floor - 8 dB above it
+    // (core/noise_floor_tracker.hpp) - and squelchDb above records where it last stood, so a
+    // restart begins from it until the first measurement. Off by default, and switched off by
+    // a hand on the knob, the Radio section's slider, the squelch keys or the web control.
+    // ONE FLAG FOR BOTH SQUELCHES: while the Airband monitor listens the same dial and key act
+    // on the monitor's own squelch (not saved) and AUTO is the monitor's "Above the noise"
+    // rule, median channel level plus 8 dB, re-applied while it is lit; the Airband section's
+    // slider and key switch it off too.
+    bool squelchAuto = false;
     float volume = 0.5f;
     // THE AUDIO BUFFER (0.99.73, the Sinks rail): how much sound is held back
     // before it plays. 0 is AUTOMATIC - 120 ms, deepened by itself through 240,
@@ -394,6 +408,22 @@ struct AppConfig {
     // the strip opens it. A layout preference, not a window, so startupState
     // keeps it like mainView.
     bool railCollapsed = false;
+    // THE STATUS COLUMN FOLDED TO A STRIP (0.99.74 beta feedback): "Just like
+    // you added the << and >> to expand and collapse the Function Select panel
+    // on the left side, can you do this for the right side Status panel?" The
+    // ">>" key in the column's title row folds it, "<<" on the strip opens it.
+    // Like railCollapsed, a layout preference and not a window, so startupState
+    // keeps it.
+    bool statusCollapsed = false;
+    // THE DISPLAY SECTION OPEN (0.99.74, a tester: "When I open FoxSDR and go
+    // to the VIEW tab, the DISPLAY menu is always expanded. Can you have this
+    // default to closed or remember the last status"). False - folded - on a
+    // fresh install and for a config from before 0.99.74, and whatever the
+    // user last left it as after that: opening or folding the section's header
+    // in the SYSTEM bank changes it. A layout preference like railCollapsed,
+    // not a window, so startupState keeps it. The section's other open/closed
+    // states are still per session; this is the one the tester asked for.
+    bool displayOpen = false;
     std::string bandPlanSelection = "world";
 
     // Ribbon size and segment-colour palette for the overlay above (issue #1:
@@ -560,6 +590,20 @@ struct AppConfig {
     // views cap it at the icon's wingspan (gui::clampTrailWidthPx).
     int mapTrailWidthPx = 4;
 
+    // THE MAP PAGE'S "On screen only" SWITCH (0.99.74): list only the aircraft
+    // inside the map as it is currently drawn, instead of every aircraft the
+    // receiver has heard. A tester (2026-10-12) asked for it so that, "zoomed in
+    // on my local little airport", the list shows only that area - and at an air
+    // show, where he had been turning the radio gain down to shrink the
+    // reception area and shed the commercial traffic.
+    //
+    // OFF BY DEFAULT: the list has always shown every live aircraft, and an
+    // install that has never heard of this key keeps it. It is a PREFERENCE
+    // about what the list shows, not a "whether" a window is open, so
+    // startupState() leaves it alone, and it is app-wide like the trail switches
+    // above rather than per page.
+    bool mapListOnScreenOnly = false;
+
     // --- The ADS-B radar scope ------------------------------------------------
     // A plan-position indicator - the receiver at the centre, range rings and
     // bearing ticks around it, aircraft plotted at their true range and
@@ -593,7 +637,7 @@ struct AppConfig {
     int scopeRangeNm = 200;
 
     // --- The DEMOD SCOPE page (0.94.0) ----------------------------------------
-    // The oscilloscope in the VIEW bank: the demodulated audio, its spectrum,
+    // The oscilloscope in the TOOLS bank: the demodulated audio, its spectrum,
     // and the channel I/Q, on a ten-by-eight graticule.
     //
     // demodScopeOpen  IS SAVED AND NOT RESTORED, exactly like scopeMode above
@@ -651,10 +695,14 @@ struct AppConfig {
     std::string transmitArgs;
 
     // railBank   which of the FUNCTION SELECT rail's five banks was showing -
-    //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
+    //            SIGNAL PATH, DECODE, TOOLS, EXTEND, SYSTEM (VIEW before
+    //            0.99.74; the index is the same), as 0..4 in that
     //            order (gui/rail_banks.hpp owns the list). Restored so the
     //            rail opens where it was left. It is the ONLY part of the
-    //            rail's state that survives a launch, and the comment here
+    //            rail's state that survives a launch - bar the fold
+    //            (railCollapsed) and the Display section's own open state
+    //            (displayOpen), each saved by hand because ImGui's is not - and
+    //            the comment here
     //            used to say it worked "exactly as a section's own
     //            open/closed state does" - which was never true: the layout is
     //            code-driven and ImGui's own ini file is disabled outright
@@ -824,6 +872,26 @@ struct AppConfig {
     // A URL with any other scheme (http://, ftp://, file://) reaches
     // fetchIndex and is refused there, which is where that decision belongs.
     std::string pluginCatalogueUrl = PluginRepo::defaultIndexUrl();
+
+    // PLUGIN SITES (0.99.74): the addresses of other people's index.json that the
+    // store lists beside the catalogue above, each marked as coming from
+    // somewhere else (docs/THIRD-PARTY-SITES.md; the rules are the PLUGIN SITES
+    // block of plugin_repo.hpp). pluginCatalogueUrl is untouched by this: it stays
+    // the OVERRIDE of the official source, and these are additional sources.
+    //
+    // Added only by the user, in the store's SITES panel, after the box saying the
+    // site is not reviewed by FoxSDR is ticked; nothing ever adds one by itself.
+    // Each is read when the store is, never at startup.
+    //
+    // Sanitised on load (sanitisePluginSites): each trimmed and checked by the one
+    // validator, PluginRepo::normaliseSiteUrl (an https:// address with a usable
+    // host, or a local path with no "://" exactly as the official field allows, so
+    // a test can use files); one that is not is dropped, as are duplicates, the
+    // official address itself (and the override above), and anything past
+    // kMaxPluginSites. Order is kept: it is the order the sites are read in, and
+    // the earlier site wins an id both list.
+    static constexpr std::size_t kMaxPluginSites = 8;
+    std::vector<std::string> pluginSites;
 
     // Whether the plugin store window was open at the last exit. Recorded,
     // and since 0.79.1 NOT restored - the application starts on the bench
@@ -998,6 +1066,22 @@ struct AppConfig {
     // Empty by default - the secure state - and sanitized on load exactly like
     // pluginTuneAllowed, by the same function.
     std::vector<std::string> pluginSettingsAllowed;
+
+    // --- Host API level 2 (0.99.74): the TRANSMIT grant --------------------------
+    // Module FILE NAMES the user has allowed to hand the host audio to transmit
+    // (plugin_abi.h, CASCADE_CAP_TX_AUDIO). The third grant list, kept separate from
+    // the other two for the reason they are separate from each other: a grant that
+    // meant "follow Doppler" must never come to mean more. Empty by default and
+    // sanitized on load by the same function as pluginTuneAllowed.
+    //
+    // THE GRANT IS SAVED AND THE ARMING WINDOW IS NOT, and that asymmetry is the
+    // design. The grant is a decision about a piece of software; the window is the
+    // operator saying "now, for the next five, fifteen or sixty minutes", and a
+    // window that survived a restart would be a transmitter that came back able to be
+    // keyed by whatever the plugin did first. There is no field for it here, no code
+    // that reads one, and tests/test_config.cpp loads a file that carries one anyway
+    // and checks that it changes nothing - the same proof the PTT and the latch have.
+    std::vector<std::string> pluginTransmitAllowed;
 
     // --- Host API level 1 (0.99.31): each plugin's own settings ---------------
     // What plugins stored through CascadeHostApi::settings_set, kept here so

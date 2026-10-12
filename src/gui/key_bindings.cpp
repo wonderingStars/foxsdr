@@ -77,7 +77,10 @@ constexpr ActionRow kActions[kKeyActionCount] = {
      FOX_TR_NOOP("Picture")},
     {KeyAction::BankSignal, "bankSignal", FOX_TR_NOOP("Bank: SIGNAL PATH"), FOX_TR_NOOP("Rail")},
     {KeyAction::BankDecode, "bankDecode", FOX_TR_NOOP("Bank: DECODE"), FOX_TR_NOOP("Rail")},
-    {KeyAction::BankView, "bankView", FOX_TR_NOOP("Bank: VIEW"), FOX_TR_NOOP("Rail")},
+    // The id is still "bankView": the bank was renamed TOOLS in 0.99.74, but
+    // this string is written into users' config.json files (see keyActionId),
+    // and a renamed id would silently unbind everyone who had rebound F3.
+    {KeyAction::BankTools, "bankView", FOX_TR_NOOP("Bank: TOOLS"), FOX_TR_NOOP("Rail")},
     {KeyAction::BankExtend, "bankExtend", FOX_TR_NOOP("Bank: EXTEND"), FOX_TR_NOOP("Rail")},
     {KeyAction::BankSystem, "bankSystem", FOX_TR_NOOP("Bank: SYSTEM"), FOX_TR_NOOP("Rail")},
     {KeyAction::OpenSettings, "openSettings", FOX_TR_NOOP("Settings and key bindings"),
@@ -423,7 +426,7 @@ KeyBindings defaultKeyBindings() {
     // change a key hunting down the rail for the row.
     set(KeyAction::BankSignal, "F1");
     set(KeyAction::BankDecode, "F2");
-    set(KeyAction::BankView, "F3");
+    set(KeyAction::BankTools, "F3");
     set(KeyAction::BankExtend, "F4");
     set(KeyAction::BankSystem, "F5");
     set(KeyAction::OpenSettings, "F7");

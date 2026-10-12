@@ -162,7 +162,12 @@ struct Result {
 fs::path g_dir;
 
 // The rail is a scrolling column and the Airband section sits at the foot of
-// the VIEW bank, below the fold of a 1000-pixel window. Every run - the layout
+// the TOOLS bank (VIEW until 0.99.74), which used to be below the fold of a
+// 1000-pixel window. Since 0.99.74 moved Display out of that bank (it is the
+// first section of SYSTEM now, and folded) every key of the section is in view
+// at 1600 x 1000 - the Listen key's top edge measured at y 906 of a rail that
+// ends at 998 - so the scroll below moves nothing there; it is left as it was.
+// Every run - the layout
 // pass and the scripted one alike - scrolls it the same way at the same frame,
 // after the layout has settled, so the rectangles the layout pass reports are
 // where the keys are when the script presses them.
@@ -453,7 +458,7 @@ int main() {
     setEnv("FOXSDR_WINDOW_SIZE", "1600x1000");
     setEnv("FOXSDR_OPEN_SECTIONS", "airband");
     // The census walks the rail through every bank unless told to hold the
-    // one the config chose (VIEW, where the Airband section is).
+    // one the config chose (TOOLS, where the Airband section is).
     setEnv("FOXSDR_CENSUS_HOLD_BANK", "1");
     setEnv("FOXSDR_PATCH_START", "");
     setEnv("FOXSDR_PATCH_FILE", "");

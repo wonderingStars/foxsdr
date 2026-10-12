@@ -44,7 +44,9 @@ ImU32 colourFor(std::uint32_t kind) {
         // pale and busy - and street tiles are now the normal case whenever a
         // basemap plugin is installed. Red is the one hue an OSM raster style
         // does not use for large areas (its reds are thin motorway lines), so
-        // an aircraft stays findable against it.
+        // an aircraft stays findable against it. (An aircraft that reports no
+        // altitude no longer draws in this red - it is grey, so it cannot be
+        // mistaken for one on final approach; see colourForTrack.)
         case CASCADE_TRACK_AIRCRAFT: c = IM_COL32(235, 40, 40, 255); break;  // theme-exempt: per-kind target colour (meaning)
         case CASCADE_TRACK_VESSEL:   c = IM_COL32(120, 255, 170, 255); break;  // theme-exempt: per-kind target colour (meaning)
         case CASCADE_TRACK_STATION:  c = IM_COL32(255, 210, 120, 255); break;  // theme-exempt: per-kind target colour (meaning)
@@ -65,12 +67,18 @@ ImU32 colourFor(std::uint32_t kind) {
 //   2. ALTITUDE BAND, when the altitude is known. This is what makes an
 //      approach and a cruise read differently at a glance, which is the whole
 //      point of colouring by altitude at all.
-//   3. THE KIND COLOUR, when it is not. altM is NaN by ABI contract when the
-//      source does not report it, and a ship or an APRS station reporting no
-//      altitude is not a thing at sea level - it is a thing whose altitude is
-//      not part of what it transmits. Those keep the per-kind colour they have
-//      always had, which is also what keeps several kinds on one map
-//      distinguishable.
+//   3. GREY, for an AIRCRAFT whose altitude is not known (0.99.74). altM is
+//      NaN by ABI contract when the source does not report it. Such an
+//      aircraft used to take the aircraft kind colour, red, and a tester could
+//      not tell it from one on final approach (the lowest band is orange):
+//      "Maybe color this in grey or black. I would like to be able to
+//      distinguish the two." Grey, and not black, which vanishes on the dark
+//      map; the legend names it (see noAltitudeStyle in track_metrics.hpp).
+//   4. THE KIND COLOUR, for everything else without an altitude. A ship or an
+//      APRS station reporting none is not a thing at sea level - it is a thing
+//      whose altitude is not part of what it transmits. Those keep the
+//      per-kind colour they have always had, which is also what keeps several
+//      kinds on one map distinguishable.
 //
 // Selection is not in this list because it is not a colour: a selected target
 // gets a RINGED marker in whatever colour it already had (see the draw loop),
@@ -115,7 +123,13 @@ ImU32 colourForTrack(const CascadeTrack& t) {
         return IM_COL32(255, 45, 45, 255);  // theme-exempt: emergency squawk hue (meaning)
     }
     const int band = bandIndexFor(t.kind, t.altM);
-    if (band < 0) { return colourFor(t.kind); }
+    if (band < 0) {
+        if (noAltitudeUsesGrey(detailTrackKind(t.kind))) {
+            const AltBandStyle& g = noAltitudeStyle();
+            return IM_COL32(g.r, g.g, g.b, 255);  // theme-exempt: "no altitude" grey (a measurement's absence)
+        }
+        return colourFor(t.kind);
+    }
     const AltBandStyle& s = bandStyleFor(t.kind, band);
     return IM_COL32(s.r, s.g, s.b, 255);  // theme-exempt: altitude-band colour (a measurement)
 }
@@ -613,11 +627,11 @@ namespace {
 // Web Mercator, normalised so the whole world is 0..1 in both axes - which is
 // the form the tile grid is defined in: at zoom z the world is 2^z tiles, so a
 // tile index is simply the normalised coordinate times 2^z.
-double mercY(double latDeg) {
-    const double lat = std::clamp(latDeg, -85.05112878, 85.05112878);
-    const double s = std::sin(lat * 3.14159265358979323846 / 180.0);
-    return 0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * 3.14159265358979323846);
-}
+//
+// One definition, in track_metrics.hpp, because MapView::isOnScreen asks the
+// same projection the same question and two copies of it are two chances to
+// disagree at the edge of the map.
+double mercY(double latDeg) { return mapMercatorY(latDeg); }
 
 double mercLat(double y) {
     const double n = 3.14159265358979323846 * (1.0 - 2.0 * y);
@@ -636,6 +650,17 @@ void MapView::goTo(double latDeg, double lonDeg, double spanDeg) {
     // would immediately drag the view somewhere else.
     fitRequested_ = false;
     fittedOnce_ = true;
+}
+
+bool MapView::isOnScreen(double latDeg, double lonDeg) const {
+    // A position that is not a number is on no map, drawn or not.
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return false; }
+    // NOTHING DRAWN YET, NOTHING TO FILTER AGAINST. The first frame of a page
+    // submits its list before its map, so for that one frame the answer is
+    // "everything" rather than an empty list that flickers full a frame later.
+    if (!(frameWidthPx_ > 0.0f) || !(frameHeightPx_ > 0.0f)) { return true; }
+    return mapPointOnScreen(centreLat_, centreLon_, spanDeg_, frameWidthPx_, frameHeightPx_,
+                            frameMercator_, latDeg, lonDeg);
 }
 
 void MapView::draw(float width, float height,
@@ -1649,6 +1674,12 @@ void MapView::draw(float width, float height,
     // and satellites needs both keys and a map carrying one needs one.
     bool anyBanded = anyBandedTrail_;
     bool anyOrbitBanded = anyOrbitTrail_;
+    // Whether anything drawn is GREY for want of an altitude, which is what
+    // earns the aviation ladder its "no altitude" row. Counted only for a mark
+    // that really is grey: an aircraft squawking an emergency with no altitude
+    // draws in the emergency hue, and a row explaining a grey that is not on
+    // the map is a key to nothing.
+    bool anyNoAltitude = false;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     // Hit radius in pixels: an aircraft icon is as big as the user made it,
     // and a click anywhere on it must select it.
@@ -1682,6 +1713,9 @@ void MapView::draw(float width, float height,
             } else {
                 anyBanded = true;
             }
+        } else if (noAltitudeUsesGrey(detailTrackKind(ht.t.kind)) &&
+                   (ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) == 0u) {
+            anyNoAltitude = true;
         }
         // An emergency also gets a ring of its own, so it survives being
         // selected (where the marker is knocked out of a disc and the emergency
@@ -1793,11 +1827,20 @@ void MapView::draw(float width, float height,
 
         // One ladder's key. Returns the height it used so a second can be
         // stacked under it without either guessing at the other's size.
+        //
+        // `noAltitudeLabel`, when not null, adds ONE row under the bands for an
+        // aircraft that reports no altitude (grey on the map - see
+        // noAltitudeStyle). It is the TRANSLATED label, because the plate's
+        // width was measured from it and the row has to draw those same words.
         const auto drawLadder = [&](const char* heading, int bandCount,
-                                    const AltBandStyle& (*styleAt)(int), float widthPx) {
+                                    const AltBandStyle& (*styleAt)(int), float widthPx,
+                                    const char* noAltitudeLabel) {
             const float headH = lh + 3.0f;
             const float boxH =
-                headH + rowStep * static_cast<float>(bandCount) + 8.0f;
+                headH +
+                rowStep * static_cast<float>(
+                              altLegendRowCount(bandCount, noAltitudeLabel != nullptr)) +
+                8.0f;
             // The heading may be wider than any band label; the plate has to
             // hold whichever is longer or it clips its own title.
             const float headW = ImGui::CalcTextSize(heading).x + pad * 2.0f;
@@ -1828,6 +1871,17 @@ void MapView::draw(float width, float height,
                 // the label beside it is a caption on glass, so it is cream.
                 dl->AddText(ImVec2(tl.x + pad + sw + pad, y), theme::kCream, s.label);
             }
+            if (noAltitudeLabel != nullptr) {
+                // AT THE FOOT, below the lowest band: it is not a band, and
+                // putting it at the head of the ladder would read as "higher
+                // than 30 kft". Same swatch and caption idiom as the rows above.
+                const AltBandStyle& g = noAltitudeStyle();
+                const float y = tl.y + 4.0f + headH + rowStep * static_cast<float>(bandCount);
+                dl->AddRectFilled(ImVec2(tl.x + pad, y + (lh - sw) * 0.5f),
+                                  ImVec2(tl.x + pad + sw, y + (lh + sw) * 0.5f),
+                                  IM_COL32(g.r, g.g, g.b, 255), 2.0f);  // theme-exempt: "no altitude" legend swatch (a measurement's absence)
+                dl->AddText(ImVec2(tl.x + pad + sw + pad, y), theme::kCream, noAltitudeLabel);
+            }
             legendY = br.y + 6.0f;
         };
 
@@ -1839,12 +1893,19 @@ void MapView::draw(float width, float height,
         if (anyOrbitBanded) {
             drawLadder(tr("ORBITAL ALTITUDE - km"), kOrbitBandCount, &orbitBandStyle,
                        orbitLegendWidth(
-                           [](const char* s) { return ImGui::CalcTextSize(s).x; }));
+                           [](const char* s) { return ImGui::CalcTextSize(s).x; }),
+                       nullptr);
         }
         if (anyBanded) {
+            // THE "NO ALTITUDE" ROW RIDES ON THIS LADDER AND ONLY WHEN IT IS
+            // UP: with no aircraft banded there is no ladder to tell the grey
+            // apart from, and a plate holding one row would be a key to a
+            // choice nobody is being asked to make.
+            const char* noAltLabel = anyNoAltitude ? tr("no altitude") : nullptr;
             drawLadder(tr("ALTITUDE - kft"), kAltBandCount, &altBandStyle,
                        altLegendWidth(
-                           [](const char* s) { return ImGui::CalcTextSize(s).x; }));
+                           [](const char* s) { return ImGui::CalcTextSize(s).x; }, noAltLabel),
+                       noAltLabel);
         }
     }
 
@@ -1965,6 +2026,13 @@ void MapView::draw(float width, float height,
                                : tr("Zoomed out as far as the map goes")));
         }
     }
+
+    // WHAT THIS FRAME WAS DRAWN IN, kept for isOnScreen. The centre and span are
+    // already members; the pixel size and the projection are not, and the list
+    // beside the map asks about them before the next frame starts.
+    frameWidthPx_ = width;
+    frameHeightPx_ = height;
+    frameMercator_ = mercator;
 
     dl->PopClipRect();
 }

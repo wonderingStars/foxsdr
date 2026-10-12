@@ -21,19 +21,41 @@
 //       pre-0.99.43 CascadeReceiverState still gets CASCADE_API_OK from
 //       get_state, a correct copy, and not one byte written past its own
 //       struct - the bug fixed in 473ae9e (the size check refused it).
+//   [P] PATH FIELDS (0.99.74, CASCADE_SETTING_PATH): the parser keeps kind 3 and
+//       stores it as text ([F] [E] [R] above), and the drawn form gives a PATH
+//       field - and only a PATH field - a BROWSE key ([P3] below): found in the
+//       UI census as "settings:browse:<key>", pressed with a real click, the
+//       chosen path committed through the call a typed edit takes (the store
+//       holds it, settings_seq moved, the plugin reads it back), a cancel
+//       changing nothing, a path the field cannot hold refused with the field's
+//       own message, and no key at all when the host has no file dialog.
 //
 // Run with the fixture module's directory as argv[1] (tests/CMakeLists.txt).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <limits>
+#include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+#include "core/file_pick.hpp"
 #include "core/maidenhead.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
@@ -42,6 +64,7 @@
 #include "core/plugin_ui.hpp"
 #include "gui/fonts.hpp"
 #include "gui/plugin_settings_form.hpp"
+#include "gui/ui_census.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "test_check.hpp"
@@ -278,6 +301,33 @@ void testFields() {
     const std::vector<SettingField> h = cascade::core::settingFieldsFrom(&ui3);
     CHECK(h.size() == 1u && h[0].label == std::string(CASCADE_SETTING_LABEL_CHARS, 'L'));
 
+    // [P1] A PATH field (0.99.74) is a field, NOT a later host's kind: it is kept, in the
+    // plugin's order, and holds what a TEXT field holds - the limit clamped the same way
+    // (0 -> 1, past the store's value size -> the store's), the placeholder kept (the
+    // BROWSE key reads ".exe" off it), and a default only if the field could hold it.
+    // Before 0.99.74 this host skipped kind 3, which is what a host that does not know
+    // the kind must keep doing (the "future" entries above).
+    CascadeSettingSpec pathSpecs[5] = {
+        spec("tool_path", "Tool path", CASCADE_SETTING_PATH, 260, "C:\\tools\\tool.exe", ""),
+        spec("huge", "Huge", CASCADE_SETTING_PATH, 99999u, "", ""),
+        spec("tiny", "Tiny", CASCADE_SETTING_PATH, 0u, "", ""),
+        spec("shown", "Shown", CASCADE_SETTING_PATH, 20, "", "C:\\def.exe"),
+        spec("cut", "Cut", CASCADE_SETTING_PATH, 4, "", "C:\\def.exe"),  // default too long
+    };
+    CascadeSettingsUiApi uiP{static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi)), 5u,
+                             pathSpecs};
+    const std::vector<SettingField> pf = cascade::core::settingFieldsFrom(&uiP);
+    CHECK(pf.size() == 5u);
+    if (pf.size() == 5u) {
+        CHECK(pf[0].key == "tool_path" && pf[0].kind == CASCADE_SETTING_PATH &&
+              pf[0].maxLength == 260u && pf[0].placeholder == "C:\\tools\\tool.exe" &&
+              pf[0].label == "Tool path" && pf[0].defaultValue.empty());
+        CHECK(pf[1].maxLength == CASCADE_SETTING_VALUE_BYTES - 1u);
+        CHECK(pf[2].maxLength == 1u);
+        CHECK(pf[3].defaultValue == "C:\\def.exe");
+        CHECK(pf[4].defaultValue.empty());
+    }
+
     // Whole-table faults: nothing, not a crash.
     CHECK(cascade::core::settingFieldsFrom(nullptr).empty());
     CascadeSettingsUiApi z = ui;
@@ -294,6 +344,10 @@ void testFields() {
 // ---------------------------------------------------------------------------
 // [E] what an edit may store
 // ---------------------------------------------------------------------------
+
+// The number a plugin built for 0.99.74 writes into CascadeSettingSpec::kind. It is part of the
+// ABI: a plugin compiled with 3 meaning "path" must still mean it in every later host.
+static_assert(CASCADE_SETTING_PATH == 3u, "CASCADE_SETTING_PATH is ABI: it is 3");
 
 SettingEditResult prep(const SettingField& f, const std::string& in, std::string& out) {
     return cascade::core::prepareSettingEdit(f, in, out);
@@ -315,6 +369,24 @@ void testEdits() {
     CHECK(prep(text, "\xC3", out) == SettingEditResult::BadText);        // cut sequence
     CHECK(prep(text, "\xED\xA0\x80", out) == SettingEditResult::BadText);  // surrogate
     CHECK(prep(text, "\xC3\xA9t\xC3\xA9", out) == SettingEditResult::Accepted);  // "été", 6 bytes
+
+    // A PATH is stored as a TEXT is (0.99.74): exactly as typed or chosen - spaces and
+    // backslashes kept, no trimming - at most maxLength bytes of clean UTF-8.
+    SettingField path;
+    path.key = "tool_path";
+    path.kind = CASCADE_SETTING_PATH;
+    path.maxLength = 33;
+    const std::string spaced = "C:\\Program Files\\nrsc5\\nrsc5.exe";  // 32 bytes
+    CHECK(spaced.size() == 32u);
+    CHECK(prep(path, spaced, out) == SettingEditResult::Accepted && out == spaced);
+    CHECK(prep(path, spaced + "x", out) == SettingEditResult::Accepted && out == spaced + "x");  // == limit
+    CHECK(prep(path, spaced + "xy", out) == SettingEditResult::TooLong && out.empty());          // limit + 1
+    CHECK(prep(path, "", out) == SettingEditResult::Accepted && out.empty());  // cleared, not deleted
+    CHECK(prep(path, "C:\\a\tb.exe", out) == SettingEditResult::BadText);
+    CHECK(prep(path, "C:\\a\nb.exe", out) == SettingEditResult::BadText);
+    CHECK(prep(path, "C:\\Users\\Zo\xC3\xAB\\a.exe", out) == SettingEditResult::Accepted);  // "Zoë"
+    CHECK(prep(path, "C:\\Users\\Zo\xC3", out) == SettingEditResult::BadText);  // cut sequence
+    CHECK(prep(path, "/usr/bin/nrsc5", out) == SettingEditResult::Accepted && out == "/usr/bin/nrsc5");
 
     SettingField num;
     num.key = "power";
@@ -607,6 +679,196 @@ void testFlushOnDisappear(PluginApiCore& api, const std::string& plugin,
     ImGui::DestroyContext();
 }
 
+// ---------------------------------------------------------------------------
+// [P3] the BROWSE key of a PATH field (0.99.74)
+// ---------------------------------------------------------------------------
+
+// What the UI census file holds right now (the file FOXSDR_UI_CENSUS names, set
+// in main() before anything asks whether the census is on).
+struct CensusRead {
+    std::set<std::string> items;
+    std::map<std::string, std::array<float, 4>> rects;
+    bool hasItemStartingWith(const char* prefix) const {
+        for (const std::string& s : items) {
+            if (s.rfind(prefix, 0) == 0) { return true; }
+        }
+        return false;
+    }
+};
+
+std::string g_censusPath;
+
+CensusRead readCensus() {
+    CensusRead c;
+    CHECK(cascade::gui::census::write());
+    std::ifstream in(g_censusPath);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.rfind("item ", 0) == 0) { c.items.insert(line.substr(5)); }
+        if (line.rfind("rect ", 0) != 0) { continue; }
+        std::istringstream ss(line.substr(5));
+        std::string name;
+        std::array<float, 4> r{};
+        ss >> name >> r[0] >> r[1] >> r[2] >> r[3];
+        c.rects[name] = r;
+    }
+    return c;
+}
+
+// A real left click at `at`, the way the existing checkbox test does it: the
+// pointer arrives, goes down a frame later, up a frame after that (the press is
+// the release), then two frames to settle.
+void clickAt(Form& f, ImVec2 at) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(at.x, at.y);
+    f.frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    f.frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    f.frames(2);
+}
+
+ImVec2 browseKeyCentre(const char* key) {
+    const CensusRead c = readCensus();
+    const auto it = c.rects.find(std::string("settings:browse:") + key);
+    CHECK(it != c.rects.end());
+    if (it == c.rects.end()) { return ImVec2(-1.0f, -1.0f); }
+    return ImVec2(0.5f * (it->second[0] + it->second[2]), 0.5f * (it->second[1] + it->second[3]));
+}
+
+// What the stand-in file dialog was asked, and what it answers.
+struct Picker {
+    int calls = 0;
+    cascade::core::FilePickRequest last;
+    bool answer = false;
+    std::string path;
+    std::function<bool(const cascade::core::FilePickRequest&, std::string&)> fn() {
+        return [this](const cascade::core::FilePickRequest& rq, std::string& out) {
+            ++calls;
+            last = rq;
+            out = answer ? path : std::string();
+            return answer;
+        };
+    }
+};
+
+void testBrowseKey(PluginApiCore& api, const std::string& plugin,
+                   const std::vector<SettingField>& fields) {
+    std::printf("[P3] the BROWSE key of a PATH field\n");
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 700.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    cascade::gui::fonts::load();
+
+    const std::string before = "C:\\tools\\nrsc5.exe";  // left in the store by [P2]
+    std::string v;
+    CHECK(api.settingsUiGet(plugin, "tool_path", v) == CASCADE_API_OK && v == before);
+
+    // A host with NO file dialog (state.pick empty - Linux with neither zenity
+    // nor kdialog): the PATH field is its text box alone. Run FIRST, because the
+    // census only ever gains items - nothing below may have drawn a key yet.
+    {
+        Form f{api, plugin, fields, {}};
+        f.frames(3);
+        CHECK(f.box("tool_path") == before);  // the box is there and shows the stored path
+        CHECK(!readCensus().hasItemStartingWith("settings:browse:"));
+    }
+
+    // A host with one: the key is drawn for the PATH field - and for no other.
+    Picker pick;
+    Form f{api, plugin, fields, {}};
+    f.state.pick = pick.fn();
+    f.frames(3);
+    {
+        const CensusRead c = readCensus();
+        CHECK(c.items.count("settings:browse:tool_path") == 1u);
+        CHECK(c.rects.count("settings:browse:tool_path") == 1u);
+        // Not for TEXT, NUMBER or BOOL: exactly one key was noted in all.
+        std::size_t keys = 0;
+        for (const std::string& s : c.items) {
+            if (s.rfind("settings:browse:", 0) == 0) { ++keys; }
+        }
+        CHECK(keys == 1u);
+        CHECK(c.rects.count("settings:browse:callsign") == 0u);
+        CHECK(c.rects.count("settings:browse:power") == 0u);
+        CHECK(c.rects.count("settings:browse:report") == 0u);
+        // It sits beside the box, to its right, on the box's own line: the box
+        // is shorter by the key's width, not pushed down a line.
+        const auto it = c.rects.find("settings:browse:tool_path");
+        if (it != c.rects.end()) { CHECK(it->second[2] > it->second[0] + 20.0f); }
+    }
+
+    // PRESSED, with a file chosen: the path is stored, settings_seq moves once,
+    // and the box shows it on the next frame. Asked for the right things.
+    const std::uint64_t seq0 = api.settingsUiSeq(plugin);
+    const int stored0 = f.stored;
+    pick.answer = true;
+    pick.path = "C:\\Tools\\New Folder\\tool.exe";
+    clickAt(f, browseKeyCentre("tool_path"));
+    CHECK(pick.calls == 1);
+    CHECK(pick.last.title == "Choose a file");
+    CHECK(pick.last.programs);                       // the placeholder ends ".exe"
+    CHECK(pick.last.startFrom == before);            // opens where the current value is
+    CHECK(!pick.last.programsName.empty() && !pick.last.allFilesName.empty());
+    CHECK(api.settingsUiGet(plugin, "tool_path", v) == CASCADE_API_OK && v == pick.path);
+    CHECK(api.settingsUiSeq(plugin) == seq0 + 1u);   // the plugin is told, as for a typed edit
+    CHECK(f.stored == stored0 + 1);
+    CHECK(f.last("tool_path") == SettingEditResult::Accepted);
+    f.frames(1);
+    CHECK(f.box("tool_path") == pick.path);
+
+    // CANCELLED: nothing changes - not the value, not the counter.
+    pick.answer = false;
+    clickAt(f, browseKeyCentre("tool_path"));
+    CHECK(pick.calls == 2);
+    CHECK(api.settingsUiGet(plugin, "tool_path", v) == CASCADE_API_OK && v == pick.path);
+    CHECK(api.settingsUiSeq(plugin) == seq0 + 1u);
+    CHECK(f.stored == stored0 + 1);
+    CHECK(f.box("tool_path") == pick.path);
+
+    // A path the field cannot hold (260 is its limit): refused with the field's
+    // own sentence, the store untouched, the box back on what the store holds.
+    pick.answer = true;
+    pick.path = std::string(261, 'p');
+    clickAt(f, browseKeyCentre("tool_path"));
+    CHECK(pick.calls == 3);
+    CHECK(f.last("tool_path") == SettingEditResult::TooLong);
+    CHECK(api.settingsUiGet(plugin, "tool_path", v) == CASCADE_API_OK &&
+          v == "C:\\Tools\\New Folder\\tool.exe");
+    CHECK(api.settingsUiSeq(plugin) == seq0 + 1u);
+    CHECK(f.box("tool_path") == "C:\\Tools\\New Folder\\tool.exe");
+
+    // And one a setting cannot store at all (a control character).
+    pick.path = "C:\\a\tb.exe";
+    clickAt(f, browseKeyCentre("tool_path"));
+    CHECK(pick.calls == 4);
+    CHECK(f.last("tool_path") == SettingEditResult::BadText);
+    CHECK(api.settingsUiSeq(plugin) == seq0 + 1u);
+
+    // A placeholder that does not end in ".exe" asks for all files, not programs
+    // (a Linux plugin's "/usr/bin/nrsc5").
+    {
+        std::vector<SettingField> other = fields;
+        for (SettingField& x : other) {
+            if (x.key == "tool_path") { x.placeholder = "/usr/bin/nrsc5"; }
+        }
+        Picker p2;
+        Form g{api, plugin, other, {}};
+        g.state.pick = p2.fn();
+        g.frames(3);
+        p2.answer = false;
+        clickAt(g, browseKeyCentre("tool_path"));
+        CHECK(p2.calls == 1);
+        CHECK(!p2.last.programs);
+        CHECK(p2.last.startFrom == "C:\\Tools\\New Folder\\tool.exe");
+    }
+
+    ImGui::DestroyContext();
+}
+
 void testRealModule(const char* dir) {
     std::printf("[R] the fixture module, through the real loader\n");
     PluginHost host;
@@ -624,15 +886,19 @@ void testRealModule(const char* dir) {
     CHECK(rec->settingsUi != nullptr);
     CHECK(rec->decoder != nullptr && rec->hostClient != nullptr);
     const std::vector<SettingField> fields = cascade::core::settingFieldsFrom(rec->settingsUi);
-    // Six entries declared; the later-kind, later-size and repeated ones are
-    // skipped - the form still has its three.
-    CHECK(fields.size() == 3u);
+    // Seven entries declared; the later-kind, later-size and repeated ones are
+    // skipped - the form still has its four (a PATH, from 0.99.74, is one of them:
+    // before it, this host skipped kind 3 and the form had three).
+    CHECK(fields.size() == 4u);
     const SettingField* call = fieldByKey(fields, "callsign");
     const SettingField* power = fieldByKey(fields, "power");
     const SettingField* report = fieldByKey(fields, "report");
-    CHECK(call != nullptr && power != nullptr && report != nullptr);
-    if (call == nullptr || power == nullptr || report == nullptr) { return; }
+    const SettingField* tool = fieldByKey(fields, "tool_path");
+    CHECK(call != nullptr && power != nullptr && report != nullptr && tool != nullptr);
+    if (call == nullptr || power == nullptr || report == nullptr || tool == nullptr) { return; }
     CHECK(call->maxLength == 12u && call->placeholder == "e.g. G4ABC");
+    CHECK(tool->kind == CASCADE_SETTING_PATH && tool->maxLength == 260u &&
+          tool->placeholder == "C:\\tools\\tool.exe");
 
     {
         PluginUi ui;
@@ -706,10 +972,25 @@ void testRealModule(const char* dir) {
         CHECK(std::strcmp(rs.receiverLocator, "IO91wm") == 0);
         CHECK((rs.flags & CASCADE_STATE_LOCATOR_KNOWN) != 0u);
 
+        // [P2] A PATH (0.99.74) goes down the same write path as any field: the plugin reads
+        // back exactly the path text, settings_seq moves once, and a path over the field's
+        // limit moves nothing.
+        CHECK(cascade::core::settingFieldValue(api, name, *tool).empty());
+        CHECK(cascade::core::commitSettingEdit(api, name, *tool, "C:\\tools\\nrsc5.exe") ==
+              SettingEditResult::Accepted);
+        CHECK(api.settingsUiSeq(name) == 4u);
+        CHECK(drain(rec->decoder, inst) ==
+              "SETTINGS seq=4 callsign=M0XYZ power=5 report=1 tool=C:\\tools\\nrsc5.exe\n");
+        CHECK(cascade::core::commitSettingEdit(api, name, *tool, std::string(261, 'p')) ==
+              SettingEditResult::TooLong);
+        CHECK(api.settingsUiSeq(name) == 4u);
+        CHECK(drain(rec->decoder, inst).empty());
+
         rec->decoder->destroy(inst);
 
         testWidget(api, name, fields);
         testFlushOnDisappear(api, name, fields);
+        testBrowseKey(api, name, fields);
 
         // [Minor] StoreFull is told apart from a generic StoreError: fill
         // this plugin's store to its key limit (CASCADE_MAX_SETTINGS_PER_
@@ -922,6 +1203,23 @@ void testOldPlugin() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // THE UI CENSUS ON, for [P3]: the form notes the BROWSE key it drew
+    // ("settings:browse:<key>" and its rectangle) only when FOXSDR_UI_CENSUS names
+    // a file, and the census reads the variable ONCE, at the first question - so it
+    // is set before anything else runs. A file of its own per process.
+    g_censusPath = (std::filesystem::temp_directory_path() /
+                    ("cascade-settings-ui-census-" + std::to_string(
+#if defined(_WIN32)
+                         _getpid()
+#else
+                         getpid()
+#endif
+                             ) + ".txt")).string();
+#if defined(_WIN32)
+    _putenv_s("FOXSDR_UI_CENSUS", g_censusPath.c_str());
+#else
+    setenv("FOXSDR_UI_CENSUS", g_censusPath.c_str(), 1);
+#endif
     testMaidenhead();
     testValidation();
     testFields();
@@ -935,5 +1233,7 @@ int main(int argc, char** argv) {
         std::printf("FAIL: no fixture module directory on the command line\n");
         CHECK(false);
     }
+    std::error_code rmEc;
+    std::filesystem::remove(g_censusPath, rmEc);
     return testSummary("test_plugin_settings_ui");
 }

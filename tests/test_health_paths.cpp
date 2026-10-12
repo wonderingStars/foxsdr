@@ -892,6 +892,52 @@ void testAPluginInstallThatFailsIsCountedByClass() {
     g->reset();
 }
 
+// THE COUNTS ARE THE OFFICIAL CATALOGUE'S (0.99.74). A plugin site the user added that cannot be read, and
+// a plugin from it that fails to install, say nothing about FoxSDR's catalogue and are not counted - while
+// the same failures on an official entry still are.
+void testAPluginSitesFailuresAreNotCounted() {
+    auto g = fresh();
+    auto s = std::make_shared<Served>();
+    serve(s);
+    const fs::path dir = scratch("site");
+    PluginRepo repo;
+    std::string err;
+    std::string path;
+    std::string raw;
+    std::vector<PluginCatalogEntry> out;
+    std::vector<std::string> report;
+
+    // A SITE that is unreachable, that is not a catalogue, and that is not https: nothing counted.
+    s->fail = true;
+    CHECK(!repo.fetchSiteIndex("https://site.example/index.json", out, raw, report, err));
+    s->fail = false;
+    s->body = "this is not a catalogue";
+    CHECK(!repo.fetchSiteIndex("https://site.example/index.json", out, raw, report, err));
+    CHECK(!repo.fetchSiteIndex("http://site.example/index.json", out, raw, report, err));
+    EXPECT_COUNTS(g, (Counts{}));
+    // ...where the official catalogue's identical failures are (the control: the probe can count).
+    CHECK(!repo.fetchIndex("https://site.example/index.json", err));
+    EXPECT_COUNTS(g, (Counts{{"plug_cat", 1}}));
+
+    // A SITE'S PLUGIN that fails on the network and on its hash: nothing counted.
+    const std::string payload = "pretend this is a plugin module";
+    PluginCatalogEntry wrongHash = entryFor("siteprobe", std::string(64, 'a'));
+    wrongHash.source = "https://example.invalid/index.json";  // the host entryFor's url is on
+    s->body = payload;
+    CHECK(!repo.install(wrongHash, (dir / "plugins").string(), path, err));
+    CHECK(err.find("integrity check") != std::string::npos);
+    s->fail = true;
+    CHECK(!repo.install(wrongHash, (dir / "plugins").string(), path, err));
+    EXPECT_COUNTS(g, (Counts{{"plug_cat", 1}}));
+    // ...and the same two failures of an OFFICIAL entry are.
+    PluginCatalogEntry official = wrongHash;
+    official.source.clear();
+    CHECK(!repo.install(official, (dir / "plugins2").string(), path, err));
+    EXPECT_COUNTS(g, (Counts{{"plug_cat", 1}, {"plug_inst.net", 1}}));
+    PluginRepo::setTransportForTest(nullptr);
+    g->reset();
+}
+
 void testPluginsRefusedAtLoadAreCounted() {
     auto g = fresh();
     const fs::path dir = scratch("load");
@@ -1025,6 +1071,7 @@ int main(int argc, char** argv) {
     testTheStoresCheckAndInstallThroughTheEnvironmentSeams();
     testACatalogueThatCannotBeHadIsCounted();
     testAPluginInstallThatFailsIsCountedByClass();
+    testAPluginSitesFailuresAreNotCounted();
     testPluginsRefusedAtLoadAreCounted();
     testARecordingThatCannotBeStartedIsCounted();
     return testSummary("test_health_paths");

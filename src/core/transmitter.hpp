@@ -7,12 +7,19 @@
 //
 // TRANSMISSION HAPPENS ONLY WHILE THE OPERATOR IS ASKING FOR IT. Not at
 // startup, not because a config file said the transmitter was on last time,
-// not because a window was left open, and not because a plugin asked. There
-// are exactly three things in this product that can key a radio - a PTT held
-// down, a LATCH switch deliberately closed, and (0.95.1) a PTT held down on
-// the web remote - and the first two are a hand on this machine while the
-// third is a hand on a browser that had to be let in. Everything else in this
-// header exists to make that true even when something goes wrong:
+// not because a window was left open, and not because a plugin asked on its own
+// account. There are exactly four things in this product that can key a radio -
+// a PTT held down, a LATCH switch deliberately closed, (0.95.1) a PTT held down
+// on the web remote, and (0.99.74) a plugin the operator has GRANTED and ARMED -
+// and the first two are a hand on this machine, the third is a hand on a
+// browser that had to be let in, and the fourth is a hand that said, on this
+// page, "this plugin may, for the next five, fifteen or sixty minutes". It used
+// to read "only a hand, not a plugin"; a Winlink-compatible link needs a plugin
+// to send audio while the key is down, the owner approved the design (2026-10-12),
+// and the sentence is now "a hand, or a plugin the operator has granted and
+// armed". Everything in the fourth case is spelled out in core/tx_audio.hpp.
+// Everything else in this header exists to make the rule true even when
+// something goes wrong:
 //
 //   - THE CONFIG CANNOT KEY IT. The mode, the power, the input and the split
 //     are saved; the PTT is not, and there is no code path that could restore
@@ -44,6 +51,21 @@
 //     state to set, because a latch is a control that keeps a radio keyed
 //     with nobody touching anything, and "nobody touching anything" is the
 //     ordinary state of a machine at the far end of a network.
+//
+//   - THE PLUGIN'S KEY IS EVERYTHING ABOVE AND MORE (0.99.74). setPluginKey() is
+//     a request the frame loop rebuilds from nothing every frame, from
+//     tx_audio.hpp's pluginMayKey(): the grant, the arming window, the page
+//     live, the frame loop ticking, the plugin's own fresh active(), a radio that
+//     has not faulted, no hand on the other keys. Any one false and the request is
+//     withdrawn. The transmitter then adds two rules that do not depend on the
+//     caller at all: THE CAP (a plugin's key is never held longer than
+//     kLatchTimeout - the latch's own number, not a second one - and when the cap
+//     fires the key is dead until the operator arms again), and THE FAULT LATCH
+//     (a fault or the frozen-window handle cuts it the way it cuts every other
+//     key, and a plugin's key stays cut until it is cleared). The plugin chooses
+//     no frequency, no power and no mode: the page's frequency, the page's
+//     power, the page's mode - or NFM with the pre-emphasis off when the
+//     operator has ticked DATA (flat).
 //
 // ============================================================================
 // THE RATE PROBLEM, AND WHY IT IS SOLVED IN TWO STAGES
@@ -99,6 +121,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/tx_audio.hpp"
 #include "dsp/modulator.hpp"
 #include "dsp/resampler.hpp"
 #include "sink/audio_in.hpp"
@@ -108,10 +131,17 @@ namespace cascade::core {
 
 // Where the audio comes from. MICROPHONE is what a transmitter is for; TONE
 // is what answers "is anything coming out at all" without needing a
-// microphone, a quiet room, or a second receiver to listen on.
-enum class TxInput : int { Microphone = 0, Tone, Count };
+// microphone, a quiet room, or a second receiver to listen on. PLUGIN
+// (0.99.74) is a data-mode plugin's audio (core/tx_audio.hpp): it is NEVER
+// something a hand selects - the page offers the first two, the config can
+// name only the first two, and setInput(Plugin) lands on the tone - it is what
+// the transmitter reads from when, and only when, the plugin's key is the only
+// key down (activeInput()).
+enum class TxInput : int { Microphone = 0, Tone, Plugin, Count };
 
 inline constexpr int kTxInputCount = static_cast<int>(TxInput::Count);
+// The inputs a person can choose from the page or write in a config file.
+inline constexpr int kTxHandInputCount = 2;
 
 const char* txInputName(TxInput in);
 TxInput txInputFromIndex(int index);
@@ -235,11 +265,31 @@ public:
     // All of these are safe to change while transmitting; the ones the radio
     // has to be told about are written through to it.
 
+    // The PAGE'S mode. What the modulator actually runs in is effectiveMode(): the
+    // same, except while a plugin's audio is being sent with DATA (flat) ticked, when
+    // it is NFM with the pre-emphasis off.
     void setMode(dsp::TxMode m);
     dsp::TxMode mode() const;
+    dsp::TxMode effectiveMode() const;
+    bool preemphasis() const;
 
+    // DATA (flat), for a plugin's audio only (0.99.74). Ticked, a plugin's audio goes
+    // out as NFM with the pre-emphasis OFF whatever mode the page shows - a data
+    // modem's tones must reach the far receiver flat, and the pre-emphasis that
+    // makes a voice sound right would tilt them. The microphone and the tone are
+    // never affected: their pre-emphasis stays on. On by default, because the plugin
+    // is a data modem; the operator who wants a plugin on USB unticks it.
+    void setDataFlat(bool on);
+    bool dataFlat() const;
+
+    // The input a HAND chose: MIC or TONE. setInput(Plugin) lands on TONE, for the
+    // reason txInputFromIndex does - nothing may point a transmitter at a plugin
+    // except the plugin's own key, below.
     void setInput(TxInput in);
     TxInput input() const;
+    // What the audio is being read from RIGHT NOW: PLUGIN while the plugin's key is
+    // the only key down, otherwise input().
+    TxInput activeInput() const;
 
     // The transmit attenuation, in the board's own negative decibels. See
     // source/tx_sink.hpp for why the direction is stated so loudly.
@@ -320,6 +370,48 @@ public:
     // holding, and read by nothing that decides anything.
     std::int64_t remoteHoldRemainingMs() const;
 
+    // --- THE PLUGIN'S KEY (0.99.74, CASCADE_CAP_TX_AUDIO) ---------------------
+    //
+    // Like setPttHeld a REQUEST rebuilt every frame - and unlike it, one the
+    // transmitter will not simply believe. See the hard rule at the top and
+    // core/tx_audio.hpp for what the caller checks before asking. What THIS object
+    // adds is below the caller:
+    //
+    //   - THE CAP. A plugin's key held for kLatchTimeout (the latch's number) is
+    //     dropped, the reason is recorded, and the fault latch below is set. The
+    //     cap is measured from the moment the request went from false to true.
+    //   - THE FAULT LATCH. The cap, a fault, the frozen-window handle and a radio
+    //     that would not key each cut the plugin's key AND set pluginFault(); while
+    //     it is set setPluginKey(true) is ignored. The caller clears it (clearPluginFault)
+    //     when the operator arms a new window - never itself, and never on a timer.
+    //   - THE LINK. The audio comes from the TxAudioLink the plugin runner writes;
+    //     with none installed a plugin's key keys a radio that sends silence.
+    //   - ONE SOURCE. Plugin audio goes out only while the plugin's key is the ONLY
+    //     key down; a PTT, the LATCH or the web remote taking the key takes the audio
+    //     with it (activeInput()).
+    void setPluginLink(std::shared_ptr<TxAudioLink> link);
+    void setPluginKey(bool on);
+    // The request as it stands now: false once the cap or a fault has cut it.
+    bool pluginKeyRequested() const;
+    // The radio is keyed AND the plugin's key is the only reason: the moment the runner
+    // may be asked for audio, and what the plugin is told by CASCADE_STATE_TRANSMITTING.
+    bool pluginKeyed() const;
+    bool pluginFault() const;
+    std::string pluginFaultReason() const;
+    void clearPluginFault();
+    // Frames of plugin audio sent since the last key down, and the 10 ms blocks that
+    // had less than a block of it queued (silence was sent for the rest).
+    std::uint64_t pluginFramesSent() const;
+    std::uint64_t pluginUnderruns() const;
+    // Milliseconds since the frame loop last ticked: the dead-man's handle's own
+    // measure, exposed so the caller's "tick fresh" is the transmit thread's.
+    std::int64_t msSinceTick() const;
+    // How many times the transmitter has let go ON ITS OWN - a fault, the frozen-window
+    // handle, a radio that would not key - since it was made. The caller closes the
+    // plugins' arming window when this moves: "any fault" is its rule, and this is the
+    // one place every fault passes through.
+    std::uint64_t faultCount() const;
+
     // What is actually happening, as against what was asked for. False
     // whenever there is no sink, the sink refused to start, or a fault has
     // been seen.
@@ -376,6 +468,14 @@ private:
     void keyUpLocked(const char* reason);
     void threadBody();
     void setError(std::string msg);
+    // The plugin's key is the only key down. Atomics only, so the TX thread and the
+    // GUI thread both ask it without a lock.
+    bool pluginOnlyKey() const;
+    // Points the modulator at what the audio source needs: the page's mode and the
+    // pre-emphasis on, or NFM with it off for a plugin's data audio. stateMutex_ held.
+    void applySourceLocked(bool plugin);
+    // Cuts the plugin's key and latches why. Any thread.
+    void cutPluginKey(const char* why);
 
     // The audio block the whole chain is quantised to. 10 ms at 48 kHz: short
     // enough that releasing the PTT stops the modulation inside a syllable,
@@ -397,11 +497,27 @@ private:
     // a room on the air the first time somebody pressed the big key to see
     // what it did. The tone is a signal the operator chose; the room is not.
 
+    // The page's mode, kept apart from the modulator's: while a plugin's data audio
+    // is on the air the modulator runs NFM whatever this says, and this is what the
+    // modulator goes back to.
+    dsp::TxMode pageMode_ = dsp::TxMode::CW;
+    bool dataFlat_ = true;
+    bool sourceIsPlugin_ = false;  // what applySourceLocked last set; stateMutex_
+    std::shared_ptr<TxAudioLink> link_;  // stateMutex_
+
     std::thread thread_;
     std::atomic<bool> run_{false};
     std::atomic<bool> transmitting_{false};
     std::atomic<bool> pttHeld_{false};
     std::atomic<bool> latched_{false};
+    // The plugin's key, when it went down (for the cap), and the fault latch.
+    std::atomic<bool> pluginKey_{false};
+    std::atomic<bool> pluginFault_{false};
+    std::chrono::steady_clock::time_point pluginKeyedAt_{};  // stateMutex_
+    std::atomic<std::uint64_t> faults_{0};
+    std::atomic<std::uint64_t> pluginFrames_{0};
+    std::atomic<std::uint64_t> pluginUnderruns_{0};
+    std::string pluginFaultReason_;  // errorMutex_
     // The web remote's key, and when it was last asserted. Steady-clock
     // milliseconds as a plain count, like lastTickMs_, so tick() can compare
     // it without taking anything.

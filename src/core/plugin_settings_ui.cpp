@@ -147,8 +147,11 @@ std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api) {
         // Size FIRST: until it agrees, no other field is at an offset this
         // host has confirmed.
         if (s.structSize != static_cast<std::uint32_t>(sizeof(CascadeSettingSpec))) { continue; }
+        // PATH (0.99.74) is TEXT for everything this file decides: a file's
+        // location is stored as the text of the path. What differs - the
+        // BROWSE key - is drawn by gui/plugin_settings_form.cpp.
         if (s.kind != CASCADE_SETTING_TEXT && s.kind != CASCADE_SETTING_NUMBER &&
-            s.kind != CASCADE_SETTING_BOOL) {
+            s.kind != CASCADE_SETTING_BOOL && s.kind != CASCADE_SETTING_PATH) {
             continue;  // a later host's kind: skipped, never refused
         }
         const std::string key(s.key, boundedLength(s.key, CASCADE_SETTING_KEY_CHARS));
@@ -168,7 +171,8 @@ std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api) {
             f.placeholder = cleanPluginText(s.placeholder, CASCADE_SETTING_PLACEHOLDER_CHARS);
         }
         switch (s.kind) {
-            case CASCADE_SETTING_TEXT: {
+            case CASCADE_SETTING_TEXT:
+            case CASCADE_SETTING_PATH: {
                 std::size_t m = s.maxLength;
                 if (m == 0u) { m = 1u; }
                 if (m > CASCADE_SETTING_VALUE_BYTES - 1u) { m = CASCADE_SETTING_VALUE_BYTES - 1u; }
@@ -201,6 +205,7 @@ SettingEditResult prepareSettingEdit(const SettingField& f, const std::string& t
     stored.clear();
     switch (f.kind) {
         case CASCADE_SETTING_TEXT:
+        case CASCADE_SETTING_PATH:
             if (typed.size() > f.maxLength) { return SettingEditResult::TooLong; }
             if (!isCleanLine(typed)) { return SettingEditResult::BadText; }
             stored = typed;

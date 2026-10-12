@@ -25,6 +25,8 @@
 // newer, and then the host would keep a plugin the updater calls stale.
 #include "core/plugin_repo.hpp"
 #include "core/plugin_run.hpp"
+// For kTxAudioRateHz, the one rate CASCADE_CAP_TX_AUDIO's table is accepted at.
+#include "core/tx_audio.hpp"
 // For registerOwnModuleFolder: a plugin and the DLLs beside it are FoxSDR's own to load, so
 // the diagnostic log's "other software's DLLs" list must not name them (0.99.69).
 #include "core/foreign_modules.hpp"
@@ -327,6 +329,10 @@ LoadedPlugin loadOne(const fs::path& p) {
                              ? static_cast<const CascadeAudioProcessorApi*>(
                                    findCapabilityTable(desc, CASCADE_CAP_AUDIO_PROCESSOR))
                              : nullptr;
+    rec.txAudio = (desc->capabilities & CASCADE_CAP_TX_AUDIO) != 0u
+                      ? static_cast<const CascadeTxAudioApi*>(
+                            findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO))
+                      : nullptr;
     rec.nativeHandle = static_cast<void*>(mod);
     rec.loaded = true;
     return rec;
@@ -583,6 +589,48 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         // let it look like a working audio source.
     }
 
+    // HOST API LEVEL 2: audio to TRANSMIT. Checked like the audio-out table it is
+    // modelled on - table size first - with the differences that matter for a
+    // table that can put a signal on the air: the rate is exactly the one this
+    // host's modulator runs at (48000, not a range), the channel count is exactly
+    // one, the reserved word is zero, and a plugin with no decoder to ride on is
+    // refused with that reason rather than loaded and silent.
+    if ((desc->capabilities & CASCADE_CAP_TX_AUDIO) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO);
+        if (raw == nullptr) {
+            return PluginRejection::MissingTxAudioApi;
+        }
+        const auto* t = static_cast<const CascadeTxAudioApi*>(raw);
+        if (t->structSize != static_cast<uint32_t>(sizeof(CascadeTxAudioApi))) {
+            return PluginRejection::TxAudioStructSizeMismatch;
+        }
+        if (t->sampleRateHz != kTxAudioRateHz) {
+            return PluginRejection::TxAudioBadRate;
+        }
+        if (t->channels != 1u) {
+            return PluginRejection::TxAudioBadChannels;
+        }
+        // Reserved means reserved: a future flag this host cannot honour must not be
+        // silently ignored on a table that can key a transmitter.
+        if (t->flags != 0u) {
+            return PluginRejection::TxAudioReservedNotZero;
+        }
+        if (t->pull == nullptr || t->active == nullptr) {
+            return PluginRejection::MissingTxAudioFunction;
+        }
+        // The handle pull() and active() are called with is a decoder instance's; with
+        // no decoder capability there is no instance, and the host would never call
+        // either. Said at load, so the author is told, rather than discovered as a
+        // transmitter that never answers.
+        constexpr std::uint32_t kDecoderBits =
+            CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER;
+        if ((desc->capabilities & kDecoderBits) == 0u) {
+            return PluginRejection::TxAudioNeedsDecoder;
+        }
+        // NOT counted toward `usable` for the reason AUDIO_OUT is not: it has no
+        // create() of its own, so on its own it provides nothing the host can drive.
+    }
+
     // HOST API LEVEL 1: an in-chain audio processor. Checked exactly like the
     // decoder tables - size first, then every mandatory pointer - and counted
     // toward `usable`: transforming the audio the user hears is a job on its
@@ -785,6 +833,21 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "audio-out declares neither mono nor stereo";
         case PluginRejection::MissingAudioOutFunction:
             return "audio-out table has a null function pointer";
+        case PluginRejection::MissingTxAudioApi:
+            return "declares CASCADE_CAP_TX_AUDIO but supplies no transmit-audio table";
+        case PluginRejection::TxAudioStructSizeMismatch:
+            return "transmit-audio table size does not match this host's";
+        case PluginRejection::TxAudioBadRate:
+            return "transmit-audio declares a sample rate this host does not take (48000 Hz only)";
+        case PluginRejection::TxAudioBadChannels:
+            return "transmit-audio declares a channel count this host does not take (mono only)";
+        case PluginRejection::TxAudioReservedNotZero:
+            return "transmit-audio sets reserved flags this host does not understand";
+        case PluginRejection::MissingTxAudioFunction:
+            return "transmit-audio table has a null function pointer";
+        case PluginRejection::TxAudioNeedsDecoder:
+            return "declares CASCADE_CAP_TX_AUDIO but no decoder capability for it to ride on "
+                   "(CASCADE_CAP_DECODER, CASCADE_CAP_IQ_DECODER or CASCADE_CAP_IMAGE_DECODER)";
         case PluginRejection::MissingAudioProcessorApi:
             return "declares CASCADE_CAP_AUDIO_PROCESSOR but supplies no processor table";
         case PluginRejection::AudioProcessorStructSizeMismatch:
@@ -961,6 +1024,32 @@ std::string describePluginRejection(PluginRejection r, const CascadePluginDesc* 
             }
             break;
         }
+        case PluginRejection::TxAudioStructSizeMismatch: {
+            const auto* t = static_cast<const CascadeTxAudioApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO));
+            if (t != nullptr) {
+                s += " (host " + std::to_string(sizeof(CascadeTxAudioApi)) + " bytes, plugin " +
+                     std::to_string(t->structSize) + ")";
+            }
+            break;
+        }
+        case PluginRejection::TxAudioBadRate: {
+            const auto* t = static_cast<const CascadeTxAudioApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO));
+            if (t != nullptr) {
+                s += " (declares " + std::to_string(t->sampleRateHz) + " Hz; must be " +
+                     std::to_string(kTxAudioRateHz) + ")";
+            }
+            break;
+        }
+        case PluginRejection::TxAudioBadChannels: {
+            const auto* t = static_cast<const CascadeTxAudioApi*>(
+                findCapabilityTable(desc, CASCADE_CAP_TX_AUDIO));
+            if (t != nullptr) {
+                s += " (declares " + std::to_string(t->channels) + "; must be 1)";
+            }
+            break;
+        }
         default:
             break;
     }
@@ -981,11 +1070,32 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
     // A linear scan of a handful of ids is the right data structure here: a
     // plugins directory holds a few files, and this keeps the FIRST-wins
     // tie-break obvious rather than hiding it in a map's ordering.
+    //
+    // A PLUGIN SITE'S MODULE DOES NOT COMPETE for a name an OFFICIAL module (an
+    // install record with the FoxSDR catalogue's source) holds (0.99.74): the
+    // declared name is the binary author's to write, and letting the highest
+    // version win would let a site's module switch an official one off by
+    // declaring its name. `heldByOfficial` is the one question, asked of the
+    // LOADED records only (an official file that was refused holds nothing).
+    const auto heldByOfficial = [&records](const std::string& name) {
+        for (const LoadedPlugin& o : records) {
+            if (o.loaded && o.origin == PluginOrigin::Official && o.name == name) { return true; }
+        }
+        return false;
+    };
+    // Decided HERE, before pass two turns anything off: an official record that pass two
+    // turns off as an older copy of an unrecorded newer one is still the reason a site's
+    // module of that name does not run.
+    std::vector<char> lostToOfficial(records.size(), 0);
     std::vector<std::pair<std::string, std::size_t>> winners;  // id -> index
     for (std::size_t i = 0; i < records.size(); ++i) {
         const LoadedPlugin& r = records[i];
         if (!r.loaded || r.name.empty()) {
             continue;
+        }
+        if (r.origin == PluginOrigin::Site && heldByOfficial(r.name)) {
+            lostToOfficial[i] = 1;
+            continue;  // it has already lost: pass two turns it off, whatever its version
         }
         bool seen = false;
         for (std::pair<std::string, std::size_t>& w : winners) {
@@ -1029,9 +1139,20 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         // this is, which file is running instead, and what the user may do
         // about the file in front of them. The Plugins section prints this
         // under the file's own name, and offers Remove on the same row.
-        r.error = "Ignored: another copy of \"" + r.name + "\" is installed. Version " +
-                  kept.version + " in " + pluginKey(kept) + " is loaded; this file is " +
-                  r.version + " and is not running. It can be deleted with Remove.";
+        if (lostToOfficial[i] != 0) {
+            // A SITE'S MODULE THAT LOST A NAME TO AN OFFICIAL ONE says that, in those words
+            // (0.99.74): it is not an old copy of anything, and "another copy is installed"
+            // would send the user looking for a version problem that is not there.
+            r.error = "Not loaded: it declares the same name as the official plugin \"" + r.name +
+                      "\". Version " + kept.version + " in " + pluginKey(kept) +
+                      " is loaded instead; this file, version " + r.version +
+                      ", was installed from a plugin site and is not running. It can be deleted "
+                      "with Remove.";
+        } else {
+            r.error = "Ignored: another copy of \"" + r.name + "\" is installed. Version " +
+                      kept.version + " in " + pluginKey(kept) + " is loaded; this file is " +
+                      r.version + " and is not running. It can be deleted with Remove.";
+        }
         r.loaded = false;
         r.supersededBy = pluginKey(kept);
         // Every borrowed pointer goes: they point into an image the caller is
@@ -1050,6 +1171,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.trackInfo = nullptr;
         r.audioOut = nullptr;
         r.audioProcessor = nullptr;
+        r.txAudio = nullptr;
         ++skipped;
     }
     return skipped;
@@ -1253,7 +1375,7 @@ bool PluginHost::hasPluginExtension(const std::string& filename) {
 #endif
 }
 
-void PluginHost::scan(const std::string& dir) {
+void PluginHost::scan(const std::string& dir, const PluginFileOrigins& origins) {
     unloadAll();
     directory_ = dir;
     // BEFORE any plugin is mapped. The per-user plugins folder is not under the program's,
@@ -1304,10 +1426,36 @@ void PluginHost::scan(const std::string& dir) {
     // and a UI list that reshuffles between runs looks broken.
     std::sort(candidates.begin(), candidates.end());
 
+    // THE INSTALL RECORDS' ANSWER, keyed by lower-cased file name (the names are NTFS's): what
+    // the caller loaded from the manifest, stamped on each record for the one rule in
+    // resolveDuplicatePlugins that reads it.
+    std::map<std::string, bool> originOf;
+    for (const auto& [file, fromSite] : origins) {
+        std::string key = file;
+        for (char& c : key) {
+            if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+        }
+        // A file named by two records, one of them a site's, is a site's: the stricter reading.
+        const auto at = originOf.find(key);
+        if (at == originOf.end()) {
+            originOf.emplace(std::move(key), fromSite);
+        } else {
+            at->second = at->second || fromSite;
+        }
+    }
+
     plugins_.reserve(candidates.size());
     for (const auto& [path, bytes] : candidates) {
         LoadedPlugin rec = loadOne(path);
         rec.fileBytes = bytes;
+        std::string leaf = path.filename().string();
+        for (char& c : leaf) {
+            if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+        }
+        const auto known = originOf.find(leaf);
+        if (known != originOf.end()) {
+            rec.origin = known->second ? PluginOrigin::Site : PluginOrigin::Official;
+        }
         plugins_.push_back(std::move(rec));
     }
 

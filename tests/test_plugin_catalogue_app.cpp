@@ -58,6 +58,8 @@
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "gui/app_window.hpp"
+#include "gui/plugin_store_view.hpp"
+#include "net/web_control.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -117,6 +119,46 @@ struct AppWindowTestAccess {
         return a.pluginInstallBlockedReason(idx, true);
     }
     static void startInstall(AppWindow& a, const PluginCatalogEntry& e) { a.startInstall(e); }
+
+    // --- plugin sites (0.99.74) ---
+    static void setSites(AppWindow& a, std::vector<std::string> s) { a.pluginSites_ = std::move(s); }
+    static const std::vector<std::string>& sites(const AppWindow& a) { return a.pluginSites_; }
+    static void loadCachedSites(AppWindow& a) { a.loadCachedSites(); }
+    static bool addSite(AppWindow& a, const std::string& url, std::string& why) {
+        return a.addPluginSite(url, why);
+    }
+    static void removeSite(AppWindow& a, const std::string& url) { a.removePluginSite(url); }
+    static int indexByKey(const AppWindow& a, const std::string& key) { return a.catalogIndexByKey(key); }
+    struct SiteState {
+        int state = 0;  // 0 not read, 1 kept, 2 read, 3 failed, -1 no such site
+        int listed = 0;
+        int hiddenSameId = 0;
+        int hiddenOffHost = 0;
+        std::string error;
+    };
+    static SiteState siteState(const AppWindow& a, const std::string& url) {
+        for (const AppWindow::SiteStatus& s : a.siteStatus_) {
+            if (s.url != url) { continue; }
+            SiteState out;
+            out.state = static_cast<int>(s.state);
+            out.listed = s.listed;
+            out.hiddenSameId = s.hiddenSameId;
+            out.hiddenOffHost = s.hiddenOffHost;
+            out.error = s.error;
+            return out;
+        }
+        SiteState none;
+        none.state = -1;
+        return none;
+    }
+    static std::size_t siteStatusCount(const AppWindow& a) { return a.siteStatus_.size(); }
+    static const std::string& installError(const AppWindow& a) { return a.installError_; }
+    static void control(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
+    static cascade::gui::PluginStoreModel model(AppWindow& a) {
+        cascade::gui::PluginStoreModel m;
+        a.buildPluginStoreModel(m);
+        return m;
+    }
 };
 
 }  // namespace cascade::gui
@@ -541,6 +583,282 @@ void testPictures() {
     PluginRepo::setTransportForTest(nullptr);
 }
 
+// --- the plugin sites (0.99.74) ---------------------------------------------------------------
+//
+// A site's index is another file the REAL AppWindow reads on the same worker after the official one
+// (the local-path form of a site, exactly as the official address has): its plugins are merged under
+// the official ones - official winning an id - and carry their source; a site that fails never
+// blanks the list; each site is kept as its own copy and loaded at start-up; ADD and REMOVE change
+// the list, REMOVE deletes the kept copy and leaves what was installed; and the install gate and the
+// web control treat a site's plugin as the third-party code it is.
+std::string siteText(const std::vector<std::string>& ids, bool withBuild = true) {
+    std::string t = "{\"schemaVersion\":1,\"plugins\":[";
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        if (i != 0) { t += ","; }
+        t += "{\"id\":\"" + ids[i] + "\",\"name\":\"Site " + ids[i] + "\",\"version\":\"0.1.0\","
+             "\"licence\":\"GPL-3.0-or-later\",\"abiVersion\":" +
+             std::to_string(static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION));
+        if (withBuild) {
+            t += ",\"platforms\":[{\"os\":\"" + std::string(PluginRepo::hostOs()) + "\",\"arch\":\"" +
+                 PluginRepo::hostArch() + "\",\"file\":\"" + ids[i] + "-0.1.0" +
+#if defined(_WIN32)
+                 ".dll"
+#else
+                 ".so"
+#endif
+                 "\",\"url\":\"https://hobbyist.example/files/" + ids[i] + "\",\"sha256\":\"" +
+                 std::string(64, 'a') + "\"}]";
+        }
+        t += "}";
+    }
+    return t + "]}";
+}
+
+void testPluginSites() {
+    clearPluginsFolder();
+    const fs::path siteA = g_scratch / "site-a.json";
+    const fs::path siteB = g_scratch / "site-b.json";
+    writeAll(g_localCatalogue, catalogueText(2));            // official: p1, p2
+    writeAll(siteA, siteText({"hdradio", "p2"}));            // p2 clashes with the official p2
+    writeAll(siteB, siteText({"other"}));
+    const std::string urlA = siteA.string();
+    const std::string urlB = siteB.string();
+    const std::string labelA = PluginRepo::siteLabel(urlA);  // "site-a.json"
+    CHECK(labelA == "site-a.json");
+
+    // READ: the site's plugins join the official ones, carry their source, and the official p2 wins.
+    {
+        cascade::gui::AppWindow app;
+        Access::setSites(app, {urlA});
+        CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
+        const auto& cat = Access::catalogue(app);
+        CHECK(cat.size() == 3u);  // p1, p2, hdradio
+        int officialP2 = 0, siteP2 = 0, hd = 0;
+        for (const PluginCatalogEntry& e : cat) {
+            if (e.id == "p2") { (e.source.empty() ? officialP2 : siteP2) += 1; }
+            if (e.id == "hdradio") {
+                ++hd;
+                CHECK(e.source == urlA);
+            }
+        }
+        CHECK(officialP2 == 1 && siteP2 == 0 && hd == 1);
+        const Access::SiteState st = Access::siteState(app, urlA);
+        CHECK(st.state == 2);  // read
+        CHECK(st.listed == 1);
+        CHECK(st.hiddenSameId == 1);
+        CHECK(st.hiddenOffHost == 0);
+        // The official status counts the official plugins only.
+        CHECK(Access::error(app).empty());
+        // THE KEPT COPY: the site's own pair of files, exactly as read.
+        const std::string kept = PluginRepo::siteCacheFileName(urlA);
+        CHECK(!kept.empty() && fs::is_regular_file(g_dir / kept));
+        CHECK(fs::is_regular_file(g_dir / PluginRepo::siteCacheTimeFileName(urlA)));
+        CHECK(readAll(g_dir / kept) == siteText({"hdradio", "p2"}));
+        // The store's model: the key, the badge fields, the notice that is always there.
+        const cascade::gui::PluginStoreModel model = Access::model(app);
+        CHECK(model.sites.size() == 1u);
+        if (model.sites.size() == 1u) {
+            CHECK(model.sites[0].state == cascade::gui::StoreSite::State::Read);
+            CHECK(model.sites[0].plugins == 1);
+            CHECK(model.sites[0].label == labelA);
+        }
+        int cards = 0;
+        for (const cascade::gui::StoreModule& sm : model.modules) {
+            if (sm.plate.name == "Site hdradio") {
+                ++cards;
+                CHECK(sm.thirdParty);
+                CHECK(sm.id == "hdradio@" + labelA);
+                CHECK(sm.siteHost == labelA);
+                CHECK(sm.plate.legalNotice.find("comes from " + labelA) != std::string::npos);
+                CHECK(!sm.plate.originNote.empty());
+                // The gate, with a site's plugin that publishes no legal notice of its own: the
+                // acknowledgement is still asked for, and given it, it passes.
+                const int idx = Access::indexByKey(app, sm.id);
+                CHECK(idx >= 0);
+                CHECK(Access::blockedReason(app, idx).empty());
+                CHECK(sm.blockedReasonIfAcknowledged.empty());
+                CHECK(sm.blockedReason == "the legal notice must be acknowledged first");
+            } else {
+                CHECK(!sm.thirdParty);
+                CHECK(sm.siteHost.empty());
+                CHECK(sm.id == (sm.plate.name == "Plugin p1" ? "p1" : "p2"));
+            }
+        }
+        CHECK(cards == 1);
+        CHECK(Access::indexByKey(app, "hdradio@" + labelA) >= 0);
+        CHECK(Access::indexByKey(app, "hdradio") == -1);  // the bare id names no entry of a site
+
+        // THE WEB CONTROL FITS OFFICIAL PLUGINS ONLY: a site's id is refused with a reason.
+        cascade::net::ControlRequest req;
+        req.pluginInstall = "hdradio";
+        req.acknowledgeNotice = true;
+        Access::control(app, req);
+        CHECK(!Access::installPending(app));
+        CHECK(Access::installError(app).find("can only be fitted from the plugin store on this computer") !=
+              std::string::npos);
+
+        // A SITE THAT FAILS THE NEXT TIME never blanks the list: its earlier entries stay, with the reason.
+        fs::remove(siteA);
+        CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));  // the OFFICIAL read is fine
+        CHECK(Access::catalogue(app).size() == 3u);
+        const Access::SiteState gone = Access::siteState(app, urlA);
+        CHECK(gone.state == 3);  // failed
+        CHECK(!gone.error.empty());
+        CHECK(gone.listed == 1);
+        CHECK(Access::error(app).empty());  // the official list's own status is not the site's
+        // ...and the kept copy is untouched by the failure.
+        CHECK(readAll(g_dir / kept) == siteText({"hdradio", "p2"}));
+        writeAll(siteA, siteText({"hdradio", "p2"}));
+    }
+
+    // A NEW WINDOW loads the kept copy of each site (no request), under the official kept copy.
+    {
+        DiagLog::instance().resetForTest();
+        cascade::gui::AppWindow app;
+        CHECK(Access::catalogue(app).size() == 2u);  // the official kept copy only: no sites yet
+        Access::setSites(app, {urlA});
+        Access::loadCachedSites(app);
+        CHECK(Access::catalogue(app).size() == 3u);
+        CHECK(Access::fromCache(app));
+        CHECK(!Access::readThisSession(app));
+        CHECK(!Access::catalogPending(app));
+        const Access::SiteState st = Access::siteState(app, urlA);
+        CHECK(st.state == 1);  // kept
+        CHECK(st.listed == 1 && st.hiddenSameId == 1);
+        // A site with no kept copy is not read yet.
+        Access::setSites(app, {urlA, urlB});
+        Access::loadCachedSites(app);
+        CHECK(Access::siteState(app, urlB).state == 0);
+        CHECK(Access::catalogue(app).size() == 3u);
+    }
+
+    // THE OFFICIAL CATALOGUE FAILING does not stop the sites: they are read anyway and merged under what stood
+    // in the official catalogue's place.
+    {
+        cascade::gui::AppWindow app;
+        Access::setSites(app, {urlA});
+        CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
+        CHECK(Access::catalogue(app).size() == 3u);
+        writeAll(siteA, siteText({"hdradio", "newcomer"}));
+        CHECK(!Access::fetchCatalogue(app, (g_scratch / "no-such-catalogue.json").string()));
+        CHECK(!Access::error(app).empty());                  // the official failure is shown
+        CHECK(Access::catalogue(app).size() == 4u);          // p1, p2 (earlier), hdradio, newcomer
+        bool newcomer = false;
+        for (const PluginCatalogEntry& e : Access::catalogue(app)) {
+            if (e.id == "newcomer") { newcomer = (e.source == urlA); }
+        }
+        CHECK(newcomer);
+        CHECK(Access::siteState(app, urlA).state == 2);
+        writeAll(siteA, siteText({"hdradio", "p2"}));
+    }
+
+    // ADD AND REMOVE.
+    {
+        clearPluginsFolder();
+        writeAll(g_localCatalogue, catalogueText(2));
+        cascade::gui::AppWindow app;
+        CHECK(Access::fetchCatalogue(app, g_localCatalogue.string()));
+        std::string why;
+        // Refused: not a site address, a repeat, the official address, a transfer in flight.
+        CHECK(!Access::addSite(app, "http://hobbyist.example/i.json", why));
+        CHECK(!why.empty());
+        CHECK(Access::sites(app).empty());
+        CHECK(Access::addSite(app, "  " + urlA + "  ", why));
+        CHECK(Access::sites(app).size() == 1u && Access::sites(app)[0] == urlA);
+        CHECK(Access::catalogPending(app));  // ADD starts a read
+        CHECK(!Access::addSite(app, urlB, why));  // not while it runs
+        CHECK(why.find("transfer is already in progress") != std::string::npos);
+        CHECK(Access::pollUntil(app, [&] { return !Access::catalogPending(app); }));
+        CHECK(Access::catalogue(app).size() == 3u);
+        CHECK(Access::siteState(app, urlA).state == 2);
+        CHECK(!Access::addSite(app, urlA, why));
+        CHECK(why.find("already in the list") != std::string::npos);
+        CHECK(!Access::addSite(app, PluginRepo::defaultIndexUrl(), why));
+        // A second site, then an INSTALLED plugin from the first (a record and its file), then REMOVE.
+        CHECK(Access::addSite(app, urlB, why));
+        CHECK(Access::pollUntil(app, [&] { return !Access::catalogPending(app); }));
+        CHECK(Access::catalogue(app).size() == 4u);
+        CHECK(Access::siteStatusCount(app) == 2u);
+        const std::string module = std::string("hdradio-0.1.0") +
+#if defined(_WIN32)
+                                   ".dll";
+#else
+                                   ".so";
+#endif
+        writeAll(g_dir / module, "installed bytes");
+        std::string manifest = "{\"schemaVersion\":1,\"plugins\":[{\"id\":\"hdradio\",\"source\":\"";
+        for (const char c : urlA) {
+            if (c == '\\') { manifest += "\\\\"; } else { manifest += c; }
+        }
+        manifest += "\",\"version\":\"0.1.0\",\"file\":\"" + module + "\"}]}";
+        writeAll(g_dir / "installed.json", manifest);
+        const std::string manifestBefore = readAll(g_dir / "installed.json");
+        const std::string keptA = PluginRepo::siteCacheFileName(urlA);
+        const std::string keptB = PluginRepo::siteCacheFileName(urlB);
+        CHECK(fs::is_regular_file(g_dir / keptA) && fs::is_regular_file(g_dir / keptB));
+
+        Access::removeSite(app, urlA);
+        CHECK(Access::sites(app).size() == 1u && Access::sites(app)[0] == urlB);
+        CHECK(Access::siteState(app, urlA).state == -1);
+        CHECK(Access::catalogue(app).size() == 3u);  // p1, p2, other: hdradio left with its site
+        for (const PluginCatalogEntry& e : Access::catalogue(app)) { CHECK(e.source != urlA); }
+        // Its kept copy is gone (and B's is not); what was installed from it stays installed.
+        CHECK(!fs::exists(g_dir / keptA));
+        CHECK(!fs::exists(g_dir / PluginRepo::siteCacheTimeFileName(urlA)));
+        CHECK(fs::is_regular_file(g_dir / keptB));
+        CHECK(readAll(g_dir / module) == "installed bytes");
+        CHECK(readAll(g_dir / "installed.json") == manifestBefore);
+        // The store's model has one site, and it is the second.
+        CHECK(Access::model(app).sites.size() == 1u);
+        // Removing one that is not there changes nothing.
+        Access::removeSite(app, urlA);
+        CHECK(Access::sites(app).size() == 1u);
+    }
+
+    // A SITE'S PICTURE ON ANOTHER HOST IS NEVER REQUESTED, whatever got into the list: mergeSite holds every
+    // url to the site's host when the list is made, and the request is the second look (it is the request
+    // that contacts an address). One picture on the site's host is queued; the one elsewhere is not.
+    {
+        clearPluginsFolder();
+        cascade::gui::AppWindow app;
+        PluginCatalogEntry e;
+        e.id = "pic";
+        e.name = "Pic";
+        e.version = "1.0.0";
+        e.source = "https://hobbyist.example/index.json";
+        CatalogScreenshot onHost;
+        onHost.url = "https://hobbyist.example/shots/ok.png";
+        onHost.sha256 = std::string(64, 'a');
+        onHost.caption = "on the site's host";
+        CatalogScreenshot elsewhere;
+        elsewhere.url = "https://tracker.example/pixel.png";
+        elsewhere.sha256 = std::string(64, 'b');
+        elsewhere.caption = "somewhere else";
+        e.screenshots = {onHost, elsewhere};
+        Access::setCatalogue(app, {e});
+        Access::request(app, "pic@hobbyist.example");
+        CHECK(Access::status(app, onHost).state == PictureState::Pending);
+        CHECK(Access::status(app, elsewhere).state == PictureState::None);
+        CHECK(Access::queued(app) == 1u);
+        // The bare id names no entry of a site: nothing more is queued.
+        Access::request(app, "pic");
+        CHECK(Access::queued(app) == 1u);
+    }
+
+    // AT MOST EIGHT.
+    {
+        clearPluginsFolder();
+        cascade::gui::AppWindow app;
+        std::vector<std::string> many;
+        for (int i = 0; i < 8; ++i) { many.push_back("https://s" + std::to_string(i) + ".example/i.json"); }
+        Access::setSites(app, many);
+        std::string why;
+        CHECK(!Access::addSite(app, "https://ninth.example/i.json", why));
+        CHECK(why.find("full") != std::string::npos);
+        CHECK(Access::sites(app).size() == 8u);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -548,6 +866,7 @@ int main() {
     isolate();
     testCatalogueKept();
     testPictures();
+    testPluginSites();
     std::error_code ec;
     fs::remove_all(g_scratch, ec);
     return testSummary("test_plugin_catalogue_app");

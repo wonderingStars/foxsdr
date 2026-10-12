@@ -28,8 +28,9 @@
 //     every scaled quantity is a plain multiply by a float that IS 1.0f.
 //
 //   - a fixed choice — 100/125/150/175/200/250 percent, offered in Display
-//     settings as "Interface size" (the View tab a tester actually opened)
-//     and by Ctrl+=/Ctrl+-/Ctrl+0 — pins S to that value on every monitor,
+//     settings as "Interface size" (the View tab a tester actually opened;
+//     Display is the first section of SYSTEM since 0.99.74) and by
+//     Ctrl+=/Ctrl+-/Ctrl+0 — pins S to that value on every monitor,
 //     ignoring what Windows reports. This is the override the tester asked
 //     for: "allow people to increase the size of the font" when Windows'
 //     own number is not what they want, or is not being read correctly by

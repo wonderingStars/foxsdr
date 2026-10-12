@@ -34,9 +34,19 @@
 namespace cascade::gui {
 
 // The five banks, in the order the rail's captions always had them: what the
-// samples pass through, what is made of them, how it is shown, the ways in
-// from outside, and the application talking about itself.
-enum class RailBank : int { SignalPath = 0, Decode = 1, View = 2, Extend = 3, System = 4 };
+// samples pass through, what is made of them, the instruments and tools that
+// work on it, the ways in from outside, and the application talking about
+// itself.
+//
+// THE THIRD BANK WAS "VIEW" UNTIL 0.99.74, and was renamed TOOLS because of a
+// tester's reading of it (2026-10-12): "the various scopes, the scanner and the
+// airband are not really VIEW related". They are things you pick up and use -
+// the demod scope, the radar scope, the bookmarks, the scanner, the airband
+// monitor - and the one section that really was about how the screen LOOKS,
+// Display, moved to SYSTEM beside the other settings. The index (2) did not
+// move: the config, the census ("bank:2"), F3 and the key-binding id all go by
+// it.
+enum class RailBank : int { SignalPath = 0, Decode = 1, Tools = 2, Extend = 3, System = 4 };
 inline constexpr int kRailBankCount = 5;
 
 // The word on the key. Short, because five keys share the rail's width and a
@@ -46,7 +56,7 @@ inline const char* railBankLabel(RailBank b) {
     switch (b) {
         case RailBank::SignalPath: return FOX_TR_NOOP("SIGNAL");
         case RailBank::Decode: return FOX_TR_NOOP("DECODE");
-        case RailBank::View: return FOX_TR_NOOP("VIEW");
+        case RailBank::Tools: return FOX_TR_NOOP("TOOLS");
         case RailBank::Extend: return FOX_TR_NOOP("EXTEND");
         case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }
@@ -59,7 +69,7 @@ inline const char* railBankCaption(RailBank b) {
     switch (b) {
         case RailBank::SignalPath: return FOX_TR_NOOP("SIGNAL PATH");
         case RailBank::Decode: return FOX_TR_NOOP("DECODE");
-        case RailBank::View: return FOX_TR_NOOP("VIEW");
+        case RailBank::Tools: return FOX_TR_NOOP("TOOLS");
         case RailBank::Extend: return FOX_TR_NOOP("EXTEND");
         case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }

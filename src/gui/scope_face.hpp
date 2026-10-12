@@ -193,8 +193,16 @@ void drawFreqDrumWell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br);
 // second, drifting copy of it.
 void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float angleDeg);
 
-// The VOLUME dial: brass ring, cream pointer, and a tick arc. Returns the new
-// value in 0..1, or a negative number when the user did not move it.
+// The deck's DIAL: brass ring, cream pointer, and a tick arc. Returns the new
+// value in 0..1, or a negative number when the user did not move it. `id` is
+// the dial's own ImGui id (and so its own drag state): the top bar has three
+// side by side since 0.99.74 (GAIN, SQUELCH, VOLUME), so two of them must
+// never share one. `live` false draws the dial veiled and answers nothing.
+float drawBrassKnob(ImDrawList* dl, const ImVec2& centre, float radius, float value,
+                    const char* id, bool live = true);
+
+// The VOLUME dial, as it has always been called: drawBrassKnob under the id it
+// has always had. Kept so no other caller changes.
 float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
                           float value);
 

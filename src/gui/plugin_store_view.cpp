@@ -697,6 +697,8 @@ const char* storeBuildBadge(const StoreModule& sm) {
     return "";
 }
 
+const char* storeThirdPartyBadge() { return tr("THIRD PARTY"); }
+
 std::string storeHeaderMeta(const StoreModule& sm, const std::string& hostPlatform) {
     const ModulePlate& p = sm.plate;
     std::string out = p.maker.empty() ? std::string(tr("maker not stated")) : p.maker;
@@ -708,7 +710,106 @@ std::string storeHeaderMeta(const StoreModule& sm, const std::string& hostPlatfo
     } else {
         add(tr("no build for this system"));
     }
+    // WHERE IT COMES FROM, last (0.99.74): the one fact that is not about the plugin.
+    if (sm.thirdParty) {
+        add(cascade::core::formatText(tr("from %s"),
+                                      sm.siteHost.empty() ? "?" : sm.siteHost.c_str()));
+    }
     return out;
+}
+
+std::string storeThirdPartyNotice(const std::string& host) {
+    return cascade::core::formatText(
+        tr("This plugin comes from %s, not from the FoxSDR catalogue. FoxSDR has not reviewed it."),
+        host.empty() ? "?" : host.c_str());
+}
+
+std::string storeComposeNotice(const std::string& host, const std::string& makersNotice) {
+    std::string out = storeThirdPartyNotice(host);
+    // THE MAKER'S WORDS FOLLOW, VERBATIM (the box already says it will not paraphrase them).
+    if (!makersNotice.empty()) { out += "\n\n" + makersNotice; }
+    return out;
+}
+
+const char* storeSiteConsentText() {
+    return tr("Plugins from this site are not reviewed by FoxSDR. They run with the same access as "
+              "this application. Only add a site you trust.");
+}
+
+const char* storeSitesLeftOutNote() {
+    return tr("Plugins from sites you added are not included here. Fit each one from its own page, after "
+              "reading its notice, and update each with its own UPDATE key.");
+}
+
+std::vector<StoreSiteLine> storeSiteLines(const StoreSite& s) {
+    std::vector<StoreSiteLine> out;
+    const std::string who = s.label.empty() ? s.url : s.label;
+    const std::string n = std::to_string(s.plugins);
+    const auto add = [&](std::string text, StoreLineTone tone, std::string census) {
+        StoreSiteLine l;
+        l.text = std::move(text);
+        l.tone = tone;
+        l.census = std::move(census);
+        out.push_back(std::move(l));
+    };
+    switch (s.state) {
+        case StoreSite::State::NotRead:
+            add(cascade::core::formatText(tr("%s: not read yet"), who.c_str()), StoreLineTone::Muted,
+                who + ":notread");
+            break;
+        case StoreSite::State::Kept:
+            add(cascade::core::formatText(s.plugins == 1
+                                              ? tr("%s: %d plugin (kept copy from an earlier session)")
+                                              : tr("%s: %d plugins (kept copy from an earlier session)"),
+                                          who.c_str(), s.plugins),
+                StoreLineTone::Muted, who + ":kept:" + n);
+            break;
+        case StoreSite::State::Read:
+            add(cascade::core::formatText(s.plugins == 1 ? tr("%s: %d plugin") : tr("%s: %d plugins"),
+                                          who.c_str(), s.plugins),
+                StoreLineTone::Muted, who + ":read:" + n);
+            break;
+        case StoreSite::State::Failed:
+            // THE REASON IS THE USER'S EVIDENCE, verbatim, as the catalogue's is.
+            add(cascade::core::formatText(tr("%s: could not be read: %s"), who.c_str(), s.error.c_str()),
+                StoreLineTone::Amber, who + ":failed");
+            break;
+    }
+    if (s.hiddenSameId > 0) {
+        add(cascade::core::formatText(tr("%s: %d hidden: same id as a plugin already listed"), who.c_str(),
+                                      s.hiddenSameId),
+            StoreLineTone::Amber, who + ":hidden-sameid:" + std::to_string(s.hiddenSameId));
+    }
+    if (s.hiddenOffHost > 0) {
+        add(cascade::core::formatText(tr("%s: %d hidden: files not on the site's own host"), who.c_str(),
+                                      s.hiddenOffHost),
+            StoreLineTone::Amber, who + ":hidden-offhost:" + std::to_string(s.hiddenOffHost));
+    }
+    return out;
+}
+
+std::string storeCheckSiteAdd(const std::string& raw, const std::vector<StoreSite>& sites,
+                              std::size_t maxSites, const std::string& officialUrl,
+                              std::string& normalised) {
+    normalised.clear();
+    std::string url;
+    std::string why;
+    if (!cascade::core::PluginRepo::normaliseSiteUrl(raw, url, why)) {
+        return tr("That is not a site address. It must start with https:// (or be the path of an "
+                  "index.json on this computer).");
+    }
+    // The official catalogue is already listed, by definition: a second copy of it as a "site"
+    // would list every plugin twice, all hidden as the same id.
+    bool already = url == officialUrl || url == cascade::core::PluginRepo::defaultIndexUrl();
+    for (const StoreSite& s : sites) {
+        if (s.url == url) { already = true; }
+    }
+    if (already) { return tr("That site is already in the list."); }
+    if (sites.size() >= maxSites) {
+        return tr("The list is full. Remove a site before adding another.");
+    }
+    normalised = url;
+    return {};
 }
 
 std::string storeFromTo(const std::string& from, const std::string& to) {
@@ -869,6 +970,16 @@ std::vector<ReachRow> moduleReachRows(const ModulePlate& m) {
     if ((c & CASCADE_CAP_AUDIO_PROCESSOR) != 0u) {
         add(tr("Audio processor"), tr("Changes the receiver's audio before you hear it."), false);
     }
+    if ((c & CASCADE_CAP_TX_AUDIO) != 0u) {
+        // OUTWARD, and the one row in this list that is a signal on the air: said plainly,
+        // with the three things that stand between the module and the antenna.
+        add(tr("Can transmit through FoxSDR"),
+            tr("Sends the host audio to transmit. Nothing goes out unless you grant it the "
+               "TRANSMIT permission AND arm it on the TRANSMIT page; FoxSDR chooses the "
+               "frequency, the power and the mode, and any fault, the page closing or the "
+               "arming window running out stops it."),
+            true);
+    }
     if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) {
         add(tr("Map targets"), tr("Publishes positions the host draws on its map."), false);
     }
@@ -888,8 +999,9 @@ std::vector<ReachRow> moduleReachRows(const ModulePlate& m) {
     if ((c & CASCADE_CAP_HOST_CLIENT) != 0u) {
         std::string d;
         if (!m.haveTuneGrant) {
-            d = tr("Refused unless you grant it, per module. This grant and the radio-settings "
-                   "grant are the only permissions the console actually enforces.");
+            d = tr("Refused unless you grant it, per module. This grant, the radio-settings "
+                   "grant and the transmit grant are the only permissions the console "
+                   "actually enforces.");
         } else if (m.tuneGranted) {
             d = tr("GRANTED. It may retune the receiver on its own, without asking again.");
         } else {
@@ -952,6 +1064,12 @@ std::string moduleReachSummary(const ModulePlate& m) {
         return m.haveTuneGrant && m.tuneGranted ? tr("granted: may move the receiver")
                                                 : tr("asks to move the receiver");
     }
+    // A module that can put a signal on the air says so in its summary, not only in the
+    // list: it is the furthest reach a module has, and "publishes to the host only" would
+    // be the wrong sentence for it.
+    if ((m.capabilities & CASCADE_CAP_TX_AUDIO) != 0u) {
+        return tr("may transmit when you grant and arm it");
+    }
     if ((m.capabilities & (CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
         return tr("may fetch from a server it chose");
     }
@@ -960,8 +1078,8 @@ std::string moduleReachSummary(const ModulePlate& m) {
 
 ImU32 moduleReachColour(const ModulePlate& m) {
     if (!m.haveCapabilities) { return theme::kInkFaint; }
-    if ((m.capabilities &
-         (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO)) != 0u) {
+    if ((m.capabilities & (CASCADE_CAP_HOST_CLIENT | CASCADE_CAP_BASEMAP | CASCADE_CAP_TRACK_INFO |
+                           CASCADE_CAP_TX_AUDIO)) != 0u) {
         return theme::kGold;
     }
     return theme::kInkMuted;
@@ -1176,6 +1294,13 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
 
     for (int i = 0; i < static_cast<int>(model.modules.size()); ++i) {
         const StoreModule& sm = model.modules[static_cast<std::size_t>(i)];
+        // A PLUGIN FROM A SITE THE USER ADDED IS NEVER IN THE RUN (0.99.74), neither to fetch nor
+        // to update, and is not listed as passed over either: it has not been reviewed by FoxSDR,
+        // its notice is always on its page, and a bulk key that fitted native code from someone
+        // else's server without the user having opened that page would be the one way to skip the
+        // consent. Each is fitted - and updated - from its own page. The key's words say so
+        // (storeSitesLeftOutNote).
+        if (sm.thirdParty) { continue; }
         const std::string& name = sm.plate.name;
         const std::string shown = name.empty() ? std::string(tr("(unnamed module)")) : name;
         if (sm.plate.fitted || sm.install != StoreInstallKind::NotInstalled) {
@@ -1340,8 +1465,11 @@ bool drawChassisKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
     return pressed;
 }
 
-bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std::size_t bufSize,
-                     KeyRect* out) {
+// The text field of the top bar (the search) and of the SITES panel (the address): one
+// well, one look. `withLoupe` is the search's glass; `id` is the ImGui id, so the two
+// fields on one window are two widgets.
+static bool drawFieldWell(const ImVec2& tl, float w, const char* hint, const char* id, char* buf,
+                          std::size_t bufSize, KeyRect* out, bool withLoupe) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImFont* uf = fonts::ui();
     const float px = fonts::uiPx();
@@ -1349,9 +1477,11 @@ bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std
     const ImVec2 br(tl.x + w, tl.y + fieldH);
     dl->AddRectFilled(tl, br, theme::kVoid, 2.0f);
     dl->AddRect(tl, br, theme::kBrassDark, 2.0f, 0, 1.0f);
-    drawLoupe(dl, ImVec2(tl.x + 16.0f * S(), tl.y + fieldH * 0.5f - 2.0f * S()), 5.0f * S(),
-              theme::kInkFaint);
-    const float padL = 32.0f * S();
+    if (withLoupe) {
+        drawLoupe(dl, ImVec2(tl.x + 16.0f * S(), tl.y + fieldH * 0.5f - 2.0f * S()), 5.0f * S(),
+                  theme::kInkFaint);
+    }
+    const float padL = (withLoupe ? 32.0f : 12.0f) * S();
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                         ImVec2(padL, std::max(2.0f, (fieldH - faceH(uf, px)) * 0.5f)));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));  // theme-exempt: transparent over the well
@@ -1364,7 +1494,7 @@ bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std
     ImGui::PushFont(uf, px / uiscale::factor());
     ImGui::SetCursorScreenPos(tl);
     ImGui::SetNextItemWidth(w);
-    const bool changed = inputTextWithFittedHint("##search", hint, buf, bufSize);
+    const bool changed = inputTextWithFittedHint(id, hint, buf, bufSize);
     ImGui::PopFont();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(6);
@@ -1376,6 +1506,11 @@ bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std
         out->br = br;
     }
     return changed;
+}
+
+bool drawSearchField(const ImVec2& tl, float w, const char* hint, char* buf, std::size_t bufSize,
+                     KeyRect* out) {
+    return drawFieldWell(tl, w, hint, "##search", buf, bufSize, out, true);
 }
 
 float drawSectionHeading(ImDrawList* dl, const ImVec2& tl, float width, const char* text) {
@@ -2114,13 +2249,21 @@ CardResult drawCard(ImDrawList* dl, const StoreModule& sm, const StoreKey& key, 
         float bx = tx;
         const float by = rowY + (rowH - badgeHeight()) * 0.5f;
         const float room = (key.kind == StoreKeyKind::Update ? ktl.x - 150.0f * k : ktl.x) - bx;
-        const auto badge = [&](const char* label, ImU32 ink) {
-            if (label == nullptr || label[0] == '\0') { return; }
+        const auto badge = [&](const char* label, ImU32 ink, bool always = false) {
+            if (label == nullptr || label[0] == '\0') { return false; }
             const float bw = badgeWidth(label);
-            if (bx + bw - tx > room) { return; }
+            if (!always && bx + bw - tx > room) { return false; }
             drawBadge(dl, ImVec2(bx, by), label, ink);
             bx += bw + 5.0f * k;
+            return true;
         };
+        // THIRD PARTY FIRST, and never dropped for want of room (0.99.74): of every word a
+        // card can carry it is the one that must not be missing. The census says it was DRAWN,
+        // not that it was meant to be.
+        if (sm.thirdParty) {
+            const bool tpDrawn = badge(storeThirdPartyBadge(), theme::kAmber, true);
+            if (tpDrawn && census::enabled()) { census::note("store:badge:", sm.id + ":thirdparty"); }
+        }
         if (sm.plate.experimental) { badge(storeExperimentalBadge(), theme::kAmber); }
         badge(storeBuildBadge(sm), theme::kInkMuted);
     }
@@ -2133,6 +2276,159 @@ CardResult drawCard(ImDrawList* dl, const StoreModule& sm, const StoreKey& key, 
     }
     ImGui::PopID();
     return res;
+}
+
+// ===========================================================================
+// THE PLUGIN SITES (0.99.74): the status lines and the SITES panel
+// ===========================================================================
+
+// One status line per site (two or three when the merge hid something), muted or amber, at the top of
+// the list. Returns the height used. Each line is noted in the census.
+float drawSiteStatus(ImDrawList* dl, const ImVec2& tl, float width, const PluginStoreModel& model) {
+    if (model.sites.empty()) { return 0.0f; }
+    const float k = S();
+    ImFont* uf = fonts::ui();
+    const float upx = fonts::uiPx();
+    float y = tl.y;
+    for (const StoreSite& s : model.sites) {
+        for (const StoreSiteLine& line : storeSiteLines(s)) {
+            dl->AddText(uf, upx, ImVec2(tl.x, y), line.tone == StoreLineTone::Amber ? theme::kAmber : theme::kInkMuted,
+                        line.text.c_str(), nullptr, width);
+            y += wrapH(uf, upx, width, line.text.c_str()) + 4.0f * k;
+            if (census::enabled()) { census::note("store:site:", line.census); }
+        }
+    }
+    return (y - tl.y) + 8.0f * k;
+}
+
+// The SITES panel: the list with a REMOVE key on each, the address field with ADD, and the consent that
+// has to be ticked before ADD does anything. Draws into the body child. `addOut` / `removeOut` receive
+// a press (the address to add - already checked by storeCheckSiteAdd - and the address to forget).
+// Returns the height used.
+float drawSitesPanel(ImDrawList* dl, const ImVec2& tl, float width, const PluginStoreModel& model,
+                     PluginStoreDeck& deck, std::string& addOut, std::string& removeOut) {
+    const float k = S();
+    ImFont* uf = fonts::ui();
+    const float upx = fonts::uiPx();
+    const float pad = 14.0f * k;
+    const float innerX = tl.x + pad;
+    const float innerW = std::max(120.0f, width - pad * 2.0f);
+    // The panel's outline is drawn last, once the height is known (an outline over the contents, not a fill
+    // behind them: there is nothing under it to hide).
+    const float boxTop = tl.y;
+    float y = boxTop + pad;
+
+    // --- the sites already added -----------------------------------------------
+    const char* removeLabel = tr("REMOVE");
+    const float rmW = outlineKeyWidth(removeLabel) + 8.0f * k;
+    const float rowH = std::max(outlineKeyHeight(), faceH(uf, upx)) + 6.0f * k;
+    if (model.sites.empty()) {
+        dl->AddText(uf, upx, ImVec2(innerX, y), theme::kInkMuted, tr("No sites added."), nullptr, innerW);
+        y += faceH(uf, upx) + 10.0f * k;
+    }
+    for (std::size_t i = 0; i < model.sites.size(); ++i) {
+        const StoreSite& s = model.sites[i];
+        ImGui::PushID(static_cast<int>(i));
+        const float textW2 = std::max(60.0f, innerW - rmW - 16.0f * k);
+        const std::string shown = ellipsize(uf, upx, s.display.c_str(), textW2);
+        dl->AddText(uf, upx, ImVec2(innerX, y + (rowH - faceH(uf, upx)) * 0.5f), theme::kIvory, shown.c_str());
+        KeyRect rk;
+        // A transfer is in flight: the list does not change under it.
+        const bool can = !model.busy;
+        if (drawOutlineKey(dl, ImVec2(innerX + innerW - rmW, y), ImVec2(innerX + innerW, y + outlineKeyHeight()),
+                           removeLabel, theme::kInkMuted, can, "remove",
+                           can ? tr("Forgets this site. What you installed from it stays installed, and gets no more updates.")
+                               : tr("a transfer is already in progress"),
+                           &rk)) {
+            removeOut = s.url;
+        }
+        censusRect("store:sites:remove:" + std::to_string(i), rk.tl.x, rk.tl.y, rk.br.x, rk.br.y);
+        ImGui::PopID();
+        y += rowH;
+    }
+    y += 6.0f * k;
+
+    // --- the address, and ADD ----------------------------------------------------
+    const char* addLabel = tr("ADD");
+    const float addW = outlineKeyWidth(addLabel) + 8.0f * k;
+    const float fieldW = std::max(160.0f, innerW - addW - 12.0f * k);
+    KeyRect fr;
+    if (drawFieldWell(ImVec2(innerX, y), fieldW, tr("index.json URL"), "##siteurl", deck.siteUrl,
+                      sizeof deck.siteUrl, &fr, false)) {
+        deck.siteError.clear();
+    }
+    censusRect("store:sites:field", fr.tl.x, fr.tl.y, fr.br.x, fr.br.y);
+    const float fieldH = fr.br.y - fr.tl.y;
+    const bool haveText = deck.siteUrl[0] != '\0';
+    // WHY ADD IS GREYED, in the order the user can cure it.
+    const char* why = nullptr;
+    if (model.busy) {
+        why = tr("a transfer is already in progress");
+    } else if (!haveText) {
+        why = tr("Type the address of the site's index.json first.");
+    } else if (!deck.siteConsent) {
+        why = tr("Tick the box below first.");
+    }
+    KeyRect ak;
+    ImGui::PushID("addsite");
+    const float ah = outlineKeyHeight();
+    if (drawOutlineKey(dl, ImVec2(innerX + innerW - addW, y + (fieldH - ah) * 0.5f),
+                       ImVec2(innerX + innerW, y + (fieldH - ah) * 0.5f + ah), addLabel, theme::kPhosphor,
+                       why == nullptr, "add", why, &ak)) {
+        std::string checked;
+        const std::string refusal = storeCheckSiteAdd(deck.siteUrl, model.sites, model.maxSites, model.sourceUrl, checked);
+        if (refusal.empty()) {
+            addOut = checked;
+            // EACH SITE IS A FRESH DECISION: the field and the tick go with the press.
+            deck.siteUrl[0] = '\0';
+            deck.siteConsent = false;
+            deck.siteError.clear();
+        } else {
+            deck.siteError = refusal;
+        }
+    }
+    ImGui::PopID();
+    censusRect("store:sites:add", ak.tl.x, ak.tl.y, ak.br.x, ak.br.y);
+    if (census::enabled()) { census::note("store:sites:add:", why == nullptr ? "ready" : "greyed"); }
+    y += fieldH + 10.0f * k;
+
+    // --- the consent ---------------------------------------------------------------
+    {
+        const char* text = storeSiteConsentText();
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float boxSide = upx + st.FramePadding.y * 2.0f;
+        const float textX = innerX + boxSide + 10.0f * k;
+        const float textWrap = std::max(80.0f, innerW - boxSide - 10.0f * k);
+        const float textH = wrapH(uf, upx, textWrap, text);
+        ImGui::SetCursorScreenPos(ImVec2(innerX, y));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, theme::vec(theme::kAmber));
+        ImGui::PushFont(uf, upx / uiscale::factor());
+        ImGui::Checkbox("##siteconsent", &deck.siteConsent);
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        ImGui::PopFont();
+        ImGui::PopStyleColor();
+        censusRect("store:sites:consent", a.x, a.y, b.x, b.y);
+        if (census::enabled() && deck.siteConsent) { census::note("store:sites:consent:", "ticked"); }
+        // The sentence is the label: pressing it ticks the box too.
+        dl->AddText(uf, upx, ImVec2(textX, y), theme::kIvory, text, nullptr, textWrap);
+        ImGui::SetCursorScreenPos(ImVec2(textX, y));
+        if (ImGui::InvisibleButton("##siteconsenttext", ImVec2(textWrap, std::max(textH, boxSide)))) {
+            deck.siteConsent = !deck.siteConsent;
+        }
+        y += std::max(textH, boxSide) + 8.0f * k;
+    }
+    if (!deck.siteError.empty()) {
+        dl->AddText(uf, upx, ImVec2(innerX, y), theme::kAmber, deck.siteError.c_str(), nullptr, innerW);
+        y += wrapH(uf, upx, innerW, deck.siteError.c_str()) + 8.0f * k;
+        if (census::enabled()) { census::note("store:sites:error"); }
+    }
+    y += pad - 8.0f * k;
+
+    // The box, drawn behind what was just drawn.
+    const ImVec2 btl(tl.x, boxTop), bbr(tl.x + width, y);
+    dl->AddRect(btl, bbr, theme::withAlpha(theme::kBrassDark, 0.9f), 0.0f, 0, 1.0f);
+    censusRect("store:sites:panel", btl.x, btl.y, bbr.x, bbr.y);
+    return (y - boxTop) + 12.0f * k;
 }
 
 }  // namespace
@@ -2148,6 +2444,8 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     fitIndex_ = -1;
     updateIndex_ = -1;
     pageOpened_.clear();
+    addSite_.clear();
+    removeSite_.clear();
 
     ImGui::PushID("pluginstore");
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -2211,7 +2509,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
     const float keyH = outlineKeyHeight();
     {
         // search
-        const float sw = std::clamp(width * 0.2f, 200.0f * k, 300.0f * k);
+        // 170 px at the narrowest (it was 200 before the SITES key joined CHECK NOW in the bar, 0.99.74):
+        // the field gives up 30 px of a 900 px window so the catalogue line keeps its room in the
+        // languages with the longest words. Wider windows are unchanged (20% of the width, 200 px up).
+        const float sw = std::clamp(width * 0.2f, 170.0f * k, 300.0f * k);
         KeyRect sr;
         const float fieldH = std::max(30.0f * k, upx + 14.0f * k);
         if (drawSearchField(ImVec2(origin.x + pad, cy - fieldH * 0.5f), sw, tr("Search plugins"),
@@ -2262,11 +2563,23 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             checkNow_ = true;
         }
         censusRect("store:check", ck.tl.x, ck.tl.y, ck.br.x, ck.br.y);
-        float rightEdge = ckx - 14.0f * k;
+        // SITES, beside CHECK NOW (0.99.74): the key that opens the panel of other people's
+        // catalogues. Always there, busy or not - looking at the list is not a transfer.
+        const char* sitesLabel = tr("SITES");
+        const float sitesW = chassisKeyWidth(sitesLabel);
+        const float sitesX = ckx - 10.0f * k - sitesW;
+        KeyRect sk;
+        if (drawChassisKey(dl, ImVec2(sitesX, cy - keyH * 0.5f), ImVec2(sitesX + sitesW, cy + keyH * 0.5f),
+                           sitesLabel, true, "sites", &sk)) {
+            deck.sitesOpen = !deck.sitesOpen;
+        }
+        censusRect("store:sites", sk.tl.x, sk.tl.y, sk.br.x, sk.br.y);
+        if (deck.sitesOpen && census::enabled()) { census::note("store:sites:open"); }
+        float rightEdge = sitesX - 14.0f * k;
         if (model.busy) {
             const char* cl = tr("CANCEL");
             const float clw = chassisKeyWidth(cl);
-            const float clx = ckx - 10.0f * k - clw;
+            const float clx = sitesX - 10.0f * k - clw;
             if (drawChassisKey(dl, ImVec2(clx, cy - keyH * 0.5f), ImVec2(clx + clw, cy + keyH * 0.5f), cl,
                                true, "cancel")) {
                 cancel_ = true;
@@ -2326,6 +2639,16 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             cdl->AddText(uf, upx, ImVec2(x0, y), theme::kAlarmHot, text.c_str(), nullptr, contentW);
             if (census::enabled()) { census::note("store:error:", model.resultId); }
             y += wrapH(uf, upx, contentW, text.c_str()) + 10.0f * k;
+        };
+
+        // THE PLUGIN SITES (0.99.74), at the top of both lists and never on a page: the panel when the
+        // SITES key has opened it, and under it a status line for each site - what it listed, what it
+        // hid and why, or why it could not be read - so a site that failed is never silent.
+        const auto drawSites = [&]() {
+            if (deck.sitesOpen) {
+                y += drawSitesPanel(cdl, ImVec2(x0, y), contentW, model, deck, addSite_, removeSite_);
+            }
+            y += drawSiteStatus(cdl, ImVec2(x0, y), contentW, model);
         };
 
         const CatalogueState cs = catalogueState(model);
@@ -2389,7 +2712,9 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             const float textColW = std::max(80.0f, colW - hpad * 3.0f - gb - keyW2 - 10.0f * k);
             const float nameH = wrapH(uf, namePx, textColW, p.name.c_str());
             const float metaH = wrapH(uf, upx, textColW, meta.c_str());
-            const float badgeRowH = (p.experimental || storeBuildBadge(sm)[0] != '\0') ? badgeHeight() + 6.0f * k : 0.0f;
+            const float badgeRowH = (sm.thirdParty || p.experimental || storeBuildBadge(sm)[0] != '\0')
+                                        ? badgeHeight() + 6.0f * k
+                                        : 0.0f;
             const float headH = std::max(gb + hpad * 2.0f, hpad * 2.0f + nameH + 4.0f * k + metaH + badgeRowH);
             const ImVec2 htl(x0, y), hbr(x0 + colW, y + headH);
             cdl->AddRectFilled(htl, hbr, theme::kEnamelDark);
@@ -2407,6 +2732,11 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             hy += metaH + 6.0f * k;
             {
                 float bx = tx;
+                if (sm.thirdParty) {
+                    drawBadge(cdl, ImVec2(bx, hy), storeThirdPartyBadge(), theme::kAmber);
+                    bx += badgeWidth(storeThirdPartyBadge()) + 5.0f * k;
+                    if (census::enabled()) { census::note("store:page:badge:", "thirdparty"); }
+                }
                 if (p.experimental) {
                     drawBadge(cdl, ImVec2(bx, hy), storeExperimentalBadge(), theme::kAmber);
                     bx += badgeWidth(storeExperimentalBadge()) + 5.0f * k;
@@ -2470,6 +2800,15 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 }
             }
             y = hbr.y;
+            // WHERE IT COMES FROM, one muted line directly under the header (0.99.74): a regional
+            // plugin's sentence, or a plugin site's. ModulePlate::originNote was set for the regional
+            // ones from 0.99.72 and never drawn.
+            if (!p.originNote.empty()) {
+                y += 10.0f * k;
+                cdl->AddText(uf, upx, ImVec2(x0, y), theme::kInkMuted, p.originNote.c_str(), nullptr, colW);
+                y += wrapH(uf, upx, colW, p.originNote.c_str());
+                if (census::enabled()) { census::note("store:page:origin:", sm.id); }
+            }
             // THE INSTALL REPORT AND ERROR, directly UNDER the header (and its key) of the plugin they
             // concern and of no other: PluginRepo's own words, verbatim - a sha256 mismatch names both
             // digests, and paraphrasing it would throw away the only evidence the user has.
@@ -2506,6 +2845,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             y = ImGui::GetCursorScreenPos().y;
         } else if (deck.tab == 0) {
             // ================= BROWSE ================================================
+            drawSites();
             drawError();
             const std::vector<StoreSection> sections = storeBrowseSections(model, query);
             if (sections.empty()) {
@@ -2563,7 +2903,10 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const AddAllPlan plan = planAddAll(model, deck.addAllAck);
                 int noticeModules = 0;
                 std::string noticeNames;
+                bool anyThirdParty = false;
                 for (const StoreModule& sm : model.modules) {
+                    // A site's plugin is not in this run, so its notice is not one this tick covers.
+                    if (sm.thirdParty) { anyThirdParty = true; continue; }
                     if (sm.install != StoreInstallKind::NotInstalled || sm.plate.fitted || sm.plate.legalNotice.empty()) { continue; }
                     if (!sm.blockedReasonIfAcknowledged.empty()) { continue; }
                     ++noticeModules;
@@ -2627,6 +2970,13 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     ImGui::PopStyleColor();
                     ny = b.y + 6.0f * k;
                 }
+                // THE PLUGINS OF THE SITES THE USER ADDED ARE LEFT OUT, and the key says so (0.99.74).
+                if (anyThirdParty) {
+                    ny += 6.0f * k;
+                    cdl->AddText(uf, upx, ImVec2(nx, ny), theme::kInkMuted, storeSitesLeftOutNote(), nullptr, nw);
+                    ny += wrapH(uf, upx, nw, storeSitesLeftOutNote());
+                    if (census::enabled()) { census::note("store:geteverything:sitesleftout"); }
+                }
                 if (!model.addAllSummary.empty()) {
                     ny += 4.0f * k;
                     cdl->AddText(uf, upx, ImVec2(nx, ny), model.addAllFailed ? theme::kAlarmHot : theme::kPhosphor,
@@ -2637,6 +2987,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             }
         } else {
             // ================= UPDATES ===============================================
+            drawSites();
             drawError();
             const std::vector<int> rows = storeUpdateRows(model, query);
             const bool haveRows = updateCount > 0;
@@ -2704,6 +3055,15 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const float rpx = fonts::tinyPx() * 1.15f;
                 cdl->AddText(rf, rpx, ImVec2(tx + nw + 14.0f * k, ty + (nameH - faceH(rf, rpx)) * 0.5f),
                              theme::kAmber, ft.c_str());
+                // THIRD PARTY beside the versions (0.99.74), when the row has the room for it.
+                if (sm.thirdParty) {
+                    const char* tp = storeThirdPartyBadge();
+                    const float bx = tx + nw + 14.0f * k + textW(rf, rpx, ft.c_str()) + 12.0f * k;
+                    if (bx + badgeWidth(tp) < ktl.x - 8.0f * k) {
+                        drawBadge(cdl, ImVec2(bx, ty + (nameH - badgeHeight()) * 0.5f), tp, theme::kAmber);
+                    }
+                    if (census::enabled()) { census::note("store:badge:", sm.id + ":thirdparty"); }
+                }
                 const std::string& line = !sm.plate.whatsNew.empty() ? sm.plate.whatsNew : sm.updateReason;
                 addEllipsized(cdl, uf, upx, ImVec2(tx, ty + nameH + 2.0f * k), theme::kInkMuted, line.c_str(), tw);
                 KeyRect kr;
@@ -2739,6 +3099,17 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                 const char* note = tr("Updates are fetched when you press CHECK AGAIN. Nothing updates itself.");
                 cdl->AddText(uf, upx, ImVec2(x0, y), theme::kInkMuted, note, nullptr, contentW);
                 y += wrapH(uf, upx, contentW, note) + 16.0f * k;
+                // UPDATE ALL does not take a site's plugins either (0.99.74): say so where the key is.
+                bool anySiteRow = false;
+                for (const int mi : rows) {
+                    if (model.modules[static_cast<std::size_t>(mi)].thirdParty) { anySiteRow = true; }
+                }
+                if (anySiteRow) {
+                    cdl->AddText(uf, upx, ImVec2(x0, y), theme::kInkMuted, storeSitesLeftOutNote(), nullptr,
+                                 contentW);
+                    y += wrapH(uf, upx, contentW, storeSitesLeftOutNote()) + 16.0f * k;
+                    if (census::enabled()) { census::note("store:updateall:sitesleftout"); }
+                }
             }
             // ---- CLEAN UP OLD VERSIONS, at the foot ------------------------------------
             ImGui::SetCursorScreenPos(ImVec2(x0, y));

@@ -422,6 +422,25 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
         audioInstances_.push_back(std::move(a));
     }
 
+    // THE PLUGIN'S TRANSMIT AUDIO (host API level 2). Rides on the same borrowed
+    // handle the audio-out table does, and is registered under the same rule: a
+    // plugin whose decoder did not start has nothing to pull from, and the status
+    // row its decoder already pushed says why. Registering it asks nothing of the
+    // plugin and keys nothing: pollTxAudio only ever calls active() until the host
+    // has keyed the transmitter for it.
+    if (lp.txAudio != nullptr && audioHandle != nullptr) {
+        TxInstance t;
+        t.api = lp.txAudio;
+        t.handle = audioHandle;
+        t.name = lp.name;
+        t.key = key;
+        // Reserved here, on the control thread: the real-time pull never allocates.
+        if (txPullBuf_.size() < TxAudioLink::kMaxPullFrames) {
+            txPullBuf_.resize(TxAudioLink::kMaxPullFrames);
+        }
+        txInstances_.push_back(std::move(t));
+    }
+
     // AN IN-CHAIN AUDIO PROCESSOR (host API level 1). Its own instance,
     // not riding on a decoder's the way the audio-out table does: it is
     // fed the audio the user hears, not a decoder's stream, and a plugin
@@ -607,6 +626,12 @@ void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     audioGapFrames_ = 0;
     audioGapsReported_ = 0;
     audioGapFramesReported_ = 0;
+    // THE TRANSMIT CLAIMS GO FIRST TOO, for the same reason, and what the GUI has
+    // been told about the holder goes with them: with no instance nobody wants the key.
+    foldTxAskedLocked();
+    txInstances_.clear();
+    txHolder_ = kNoTx;
+    if (txLink_) { txLink_->publishNone(TxAudioLink::nowMs()); }
 
     // MOVED OUT, THEN DESTROYED WITH THE LOCK DROPPED. See the declaration in
     // the header for why: a plugin's destroy() may ask the host for the time
@@ -698,6 +723,22 @@ void PluginRunner::removePluginLocked(const std::string& key,
         }
         audioInstances_ = std::move(keep);
         playing_ = newPlaying;
+    }
+    // ...AND ITS TRANSMIT CLAIM, with the holder re-pointed (or dropped) the same way.
+    {
+        foldTxAskedLocked();
+        std::vector<TxInstance> keep;
+        keep.reserve(txInstances_.size());
+        std::size_t newHolder = kNoTx;
+        for (std::size_t i = 0; i < txInstances_.size(); ++i) {
+            if (txInstances_[i].key == key) { continue; }
+            if (i == txHolder_) { newHolder = keep.size(); }
+            keep.push_back(std::move(txInstances_[i]));
+        }
+        const bool lostHolder = txHolder_ != kNoTx && newHolder == kNoTx;
+        txInstances_ = std::move(keep);
+        txHolder_ = newHolder;
+        if (lostHolder && txLink_) { txLink_->publishNone(TxAudioLink::nowMs()); }
     }
 
     // THIS PLUGIN'S INSTANCES OUT, everyone else's left exactly as they are.
@@ -1013,6 +1054,178 @@ std::uint64_t PluginRunner::audioGaps() const {
 std::uint64_t PluginRunner::audioGapFrames() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return audioGapFrames_;
+}
+
+// ---------------------------------------------------------------------------
+// The plugin transmit path
+// ---------------------------------------------------------------------------
+
+void PluginRunner::setTxLink(std::shared_ptr<TxAudioLink> link) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    txLink_ = std::move(link);
+}
+
+void PluginRunner::setTxGranted(std::vector<std::string> keys) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    txGranted_ = std::move(keys);
+    // A GRANT TAKEN BACK TAKES THE HOLDER WITH IT AT ONCE, not at the next audio block: the
+    // GUI thread reads who holds the transmitter every frame, and a holder it was told about
+    // a block ago must not outlive the permission it was holding by.
+    if (txHolder_ != kNoTx && txHolder_ < txInstances_.size() &&
+        std::find(txGranted_.begin(), txGranted_.end(), txInstances_[txHolder_].key) ==
+            txGranted_.end()) {
+        txHolder_ = kNoTx;
+        if (txLink_) { txLink_->publishNone(TxAudioLink::nowMs()); }
+    }
+}
+
+void PluginRunner::setTxKeyed(bool keyed) {
+    // UNDER THE LOCK, which is the point. pollTxAudio holds it for the whole of a block
+    // including the pull(), so once this returns false no pull is in flight and none
+    // will start: the caller can then empty the ring knowing nothing is still arriving.
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (txLink_) { txLink_->setKeyed(keyed); }
+}
+
+void PluginRunner::pollTxAudio() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pollTxAudioLocked();
+}
+
+void PluginRunner::pollTxAudioLocked() {
+    if (txInstances_.empty() || !txLink_) { return; }
+    const std::int64_t now = TxAudioLink::nowMs();
+    const auto granted = [this](const TxInstance& t) {
+        return std::find(txGranted_.begin(), txGranted_.end(), t.key) != txGranted_.end();
+    };
+
+    // EVERY INSTANCE IS ASKED active() EVERY BLOCK, granted or not, keyed or not. That
+    // is how a plugin comes to have ASKED (and so to be offered the grant), and how a
+    // second plugin gets the transmitter after the first lets go. active() is defined
+    // as a read of state the plugin has already decided, so asking costs nothing and
+    // puts nothing on the air.
+    for (TxInstance& t : txInstances_) {
+        if (t.stopped) {
+            t.active = false;
+            continue;
+        }
+        t.active = t.api->active(t.handle) != 0;
+        if (t.active) { t.asked = true; }
+    }
+
+    // WHO HOLDS THE TRANSMITTER. Decided afresh while the key is open - the first
+    // plugin in load order that is granted and wants it, so two asking at once is
+    // settled by load order and not by which block the question was asked in - and
+    // STICKY while it is closed on one: a second plugin that starts wanting the key in
+    // the middle of a transmission waits for the next one.
+    const bool keyed = txLink_->keyed();
+    if (!keyed) {
+        txHolder_ = kNoTx;
+        for (std::size_t i = 0; i < txInstances_.size(); ++i) {
+            const TxInstance& t = txInstances_[i];
+            if (!t.stopped && t.active && granted(t)) {
+                txHolder_ = i;
+                break;
+            }
+        }
+    } else if (txHolder_ != kNoTx && txInstances_[txHolder_].stopped) {
+        // A holder that has stopped for good stops holding at once. (One whose grant is taken
+        // back is dropped by setTxGranted, under this same lock, before any block can see it.)
+        txHolder_ = kNoTx;
+    }
+
+    if (txHolder_ == kNoTx) {
+        txLink_->publishNone(now);
+        return;
+    }
+    TxInstance& h = txInstances_[txHolder_];
+    txLink_->publishActive(h.active, now);
+
+    // PULL ONLY WHILE KEYED FOR THIS PLUGIN AND IT WANTS THE KEY. Being the holder IS having
+    // the grant (a holder is chosen among the granted, and dropped the moment the grant goes);
+    // being keyed is the host's decision, and wanting the key is the plugin's. With active()
+    // zero the host stops asking and lets the ring play out.
+    if (!keyed || !h.active) { return; }
+    const std::size_t fill = txLink_->backlog();
+    if (fill >= TxAudioLink::kLeadFrames) { return; }
+    const std::size_t ask = std::min(TxAudioLink::kLeadFrames - fill, TxAudioLink::kMaxPullFrames);
+    if (txPullBuf_.size() < ask) { return; }  // not reserved: never grow on this thread
+    const std::int32_t got = h.api->pull(h.handle, txPullBuf_.data(), ask);
+    if (got < 0) {
+        // The ABI's "stopped for good": never pulled or asked again, and nothing queued
+        // is worth sending. The link says nobody wants the key; the GUI thread unkeys.
+        h.stopped = true;
+        h.active = false;
+        txHolder_ = kNoTx;
+        txLink_->publishNone(now);
+        return;
+    }
+    if (got > 0) {
+        std::size_t n = static_cast<std::size_t>(got);
+        if (n > ask) { n = ask; }  // a plugin that overstated itself
+        txLink_->write(txPullBuf_.data(), n);
+    }
+}
+
+void PluginRunner::foldTxAskedLocked() {
+    for (const TxInstance& t : txInstances_) {
+        if (!t.asked) { continue; }
+        if (std::find(txAsked_.begin(), txAsked_.end(), t.key) == txAsked_.end()) {
+            txAsked_.push_back(t.key);
+        }
+    }
+}
+
+PluginRunner::TxPluginState PluginRunner::txState(const std::string& pluginKey) const {
+    TxPluginState s;
+    if (pluginKey.empty()) { return s; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    s.asked = std::find(txAsked_.begin(), txAsked_.end(), pluginKey) != txAsked_.end();
+    for (std::size_t i = 0; i < txInstances_.size(); ++i) {
+        const TxInstance& t = txInstances_[i];
+        if (t.key != pluginKey) { continue; }
+        s.declared = true;
+        s.name = t.name;
+        s.asked = s.asked || t.asked;
+        s.stopped = t.stopped;
+        s.holder = (i == txHolder_);
+        const bool isGranted =
+            std::find(txGranted_.begin(), txGranted_.end(), t.key) != txGranted_.end();
+        s.waiting = isGranted && t.active && !s.holder && txHolder_ != kNoTx;
+        break;
+    }
+    return s;
+}
+
+std::vector<std::string> PluginRunner::txAskers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> out = txAsked_;
+    for (const TxInstance& t : txInstances_) {
+        if (t.asked && std::find(out.begin(), out.end(), t.key) == out.end()) {
+            out.push_back(t.key);
+        }
+    }
+    return out;
+}
+
+std::string PluginRunner::txHolderName() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return txHolder_ == kNoTx ? std::string() : txInstances_[txHolder_].name;
+}
+
+std::string PluginRunner::txHolderKey() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return txHolder_ == kNoTx ? std::string() : txInstances_[txHolder_].key;
+}
+
+std::string PluginRunner::txFirstGrantedName() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const TxInstance& t : txInstances_) {
+        if (std::find(txGranted_.begin(), txGranted_.end(), t.key) != txGranted_.end()) {
+            return t.name;
+        }
+    }
+    return std::string();
 }
 
 void PluginRunner::pollAudioDiagnostics() {

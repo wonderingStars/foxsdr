@@ -106,7 +106,9 @@ enum class KeyAction : int {
     Fullscreen,
     BankSignal,
     BankDecode,
-    BankView,
+    // The third bank, called VIEW until 0.99.74 (see gui/rail_banks.hpp). Its
+    // config id is still "bankView", and has to stay: see keyActionId below.
+    BankTools,
     BankExtend,
     BankSystem,
     OpenSettings,

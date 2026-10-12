@@ -153,6 +153,15 @@ struct FittedModule {
     // for it.
     bool settingsCapable = false;
     bool settingsAllowed = false;
+    // --- HOST API LEVEL 2 (0.99.74): the TRANSMIT grant -----------------------------
+    // The runner has seen this module's active() non-zero at least once, so the grant
+    // means something for it: the key is offered only then, as SETTINGS is, and a module
+    // that has never wanted the transmitter never has a TRANSMIT key on its plate.
+    bool txCapable = false;
+    bool txAllowed = false;
+    // What the plate says about its transmit state (TxPlateState as an int, so this header
+    // needs nothing from the page's); NotAsked prints nothing.
+    int txPlate = 0;
     // The module's own command keys (CascadeHostApi::add_command), in the order it
     // added them. Labels are the module's own text, drawn as given.
     struct Command {
@@ -168,6 +177,13 @@ struct FittedModule {
     // ones sha256-verified when it was installed. Empty when they are, or when no
     // install record exists. The HOST's finding, never the module's.
     std::string integrityNote;
+
+    // WHERE IT WAS INSTALLED FROM, when that was a plugin site rather than the FoxSDR
+    // catalogue (0.99.74; from the install record's `source`): "Installed from <host>, not
+    // from the FoxSDR catalogue.", or - for a site the user has since removed - that it is
+    // from a site they removed and gets no updates. One muted line on the module's row. Empty
+    // for every other module.
+    std::string originNote;
 
     // ORPHANED (0.99.69): core::classifyPluginFiles() says this file is not known to
     // the plugin index AND is not running. The row then says so and REMOVE deletes
@@ -277,6 +293,8 @@ struct FittedModulesAction {
         // Host API level 1: AppWindow::setPluginSettingsAllowed(file, flag), and a
         // press of one of the module's own command keys (id).
         SetSettings,
+        // Host API level 2: AppWindow::setPluginTransmitAllowed(file, flag).
+        SetTransmit,
         Command,
         // AppWindow::resetPageWindows(). THE WAY BACK FROM A WINDOW DRAGGED TOO SMALL
         // TO USE: a page's resize grip is invisible by design, so a decoder window

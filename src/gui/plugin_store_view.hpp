@@ -26,7 +26,7 @@
 //
 // So REACHES is stated in plain words, and its CLAIM is "declared by the maker,
 // not enforced" (kReachLead in the .cpp). The one thing that IS enforced is named
-// as such - the per-module tune and radio-settings grants, which PluginUi refuses
+// as such - the per-module tune, radio-settings and transmit grants, which PluginUi refuses
 // without - and nothing else is dressed up as a guarantee.
 //
 // THE SAME RULE APPLIES TO THE DOWNLOAD. NOTHING IN THIS PRODUCT VERIFIES A
@@ -101,7 +101,11 @@ struct ModulePlate {
 
     std::string homepage;
     std::string legalNotice;  // shown verbatim; the acknowledgement gate is the store's
-    std::string originNote;   // ONE MUTED LINE for a regional plugin; empty draws nothing
+    // ONE MUTED LINE saying where the plugin comes from, drawn under the page's header
+    // (0.99.74; it was set for a regional plugin from 0.99.72 and never drawn): the
+    // regional list's sentence, or a plugin site's ("from <host>" is also in the header
+    // line and THIRD PARTY on the badge). Empty draws nothing.
+    std::string originNote;
 
     // Bare file name in the plugins directory. Empty when not installed here.
     std::string fileName;
@@ -354,9 +358,20 @@ struct StoreModule {
     // Everything the page draws (see ModulePlate): identity, what it does, facts.
     ModulePlate plate;
 
-    // PluginCatalogEntry::id - the key an update is planned against, the page is
-    // opened by, and the census names a card by.
+    // THE CATALOGUE KEY (PluginRepo::catalogueKey): the plugin's id for an official
+    // entry, "<id>@<site label>" for a plugin site's. What the page is opened by
+    // (PluginStoreDeck::pageId), what the busy and result ids are compared with, what
+    // the census names a card by and what an ImGui id is built from - so every name
+    // that existed before sites is unchanged.
     std::string id;
+
+    // THE PLUGIN COMES FROM A SITE THE USER ADDED, not from the FoxSDR catalogue
+    // (0.99.74). `siteHost` is what to call the site: its host, or the file name of a
+    // local index. Such a card carries the THIRD PARTY badge, its page says "from
+    // <host>" and always shows the notice box while it is not fitted, and GET
+    // EVERYTHING leaves it out.
+    bool thirdParty = false;
+    std::string siteHost;
 
     // IS THERE A BUILD THIS MACHINE COULD RUN? PluginCatalogEntry::compatible
     // (abiVersion exactly this host's) AND thisPlatform() != nullptr. A STABLE
@@ -405,9 +420,34 @@ struct StoreOldCopy {
     std::string keptVersion;  // the copy that stays and is running
 };
 
+// ONE PLUGIN SITE THE USER ADDED, as the SITES panel and the status lines show it
+// (0.99.74; AppConfig::pluginSites, read by AppWindow::startCatalogFetch).
+struct StoreSite {
+    std::string url;      // exactly as configured: what REMOVE names
+    std::string label;    // PluginRepo::siteLabel - its host, or a local index's file name
+    std::string display;  // PluginRepo::siteDisplay - host + path, cut to fit one line
+
+    enum class State {
+        NotRead,  // no read yet this session and no kept copy to show
+        Kept,     // not read yet this session; the copy kept from an earlier session is listed
+        Read,     // read this session
+        Failed,   // the last read failed (`error`); a kept copy or an earlier read may be listed
+    };
+    State state = State::NotRead;
+    int plugins = 0;         // how many of its plugins the store lists
+    int hiddenSameId = 0;    // dropped: the id is already listed (official wins)
+    int hiddenOffHost = 0;   // dropped: a file or picture is not on the site's own host
+    std::string error;       // Failed: the reason, verbatim and in English
+};
+
 // Everything the store draws that it cannot work out for itself.
 struct PluginStoreModel {
     std::vector<StoreModule> modules;
+
+    // THE PLUGIN SITES the user added, in the order they are read (0.99.74), and how
+    // many the list may hold (AppConfig::kMaxPluginSites).
+    std::vector<StoreSite> sites;
+    std::size_t maxSites = 8;
 
     // THE OLD COPIES UPDATES LEFT ON DISK, every one of which may be removed
     // (core/plugin_cleanup.hpp). Non-empty draws "CLEAN UP OLD VERSIONS (N)" at the
@@ -513,11 +553,42 @@ const char* storeKeyCensusState(const StoreKey& k);
 // entry's builds are all one operating system. Empty otherwise.
 const char* storeBuildBadge(const StoreModule& sm);
 const char* storeExperimentalBadge();
+// THIRD PARTY (0.99.74): on every card and page of a plugin that comes from a site the
+// user added. The word is the whole point of the badge - it is never left off a
+// card by a layout that runs out of room (a badge that does not fit is drawn first).
+const char* storeThirdPartyBadge();
 
 // The line under a page's name: "<maker> · version <v> · <size> · <builds>", the
 // size and builds of THIS host's build, or "no build for this system" in their
-// place. `hostPlatform` is "windows/x64" or empty.
+// place; then, for a plugin from a site, "from <host>". `hostPlatform` is
+// "windows/x64" or empty.
 std::string storeHeaderMeta(const StoreModule& sm, const std::string& hostPlatform);
+
+// THE NOTICE A SITE'S PLUGIN ALWAYS CARRIES (0.99.74): "This plugin comes from <host>,
+// not from the FoxSDR catalogue. FoxSDR has not reviewed it." followed, if the maker
+// published a legal notice of their own, by that notice - a blank line between, the
+// maker's words verbatim. The page's notice box shows it and the tick under the box
+// is the consent; the acknowledgement gate is the one a legal notice always had.
+std::string storeThirdPartyNotice(const std::string& host);
+std::string storeComposeNotice(const std::string& host, const std::string& makersNotice);
+
+// The sentence under the SITES panel's address field, which has to be ticked before
+// ADD works. Verbatim from the design: it states what FoxSDR did not do (review the
+// site) and what the plugin may do (everything this application can).
+const char* storeSiteConsentText();
+
+// May this address be added, given the sites already listed and the room? Empty when
+// it may; otherwise the sentence for the panel, translated. On success `normalised`
+// is the address to store (trimmed). The same validator the config's loader uses
+// (PluginRepo::normaliseSiteUrl), then the two rules only the list knows: not already
+// there (also the official address), and room for it.
+std::string storeCheckSiteAdd(const std::string& raw, const std::vector<StoreSite>& sites,
+                              std::size_t maxSites, const std::string& officialUrl,
+                              std::string& normalised);
+
+// The words under GET EVERYTHING and UPDATE ALL that say they leave a site's plugins
+// out (0.99.74), each fitted from its own page.
+const char* storeSitesLeftOutNote();
 
 // "%s to %s": the update's two versions.
 std::string storeFromTo(const std::string& from, const std::string& to);
@@ -554,6 +625,20 @@ struct StoreCatalogueLine {
 // can fix both; the default uses the machine's.
 StoreCatalogueLine storeCatalogueLine(const PluginStoreModel& m, std::int64_t nowUnix);
 
+// The status lines of one site, under the catalogue line (0.99.74): "<host>: 7 plugins"
+// (muted), "<host>: could not be read: <reason>" (amber, the reason verbatim), and - when
+// the merge dropped something - "<host>: 2 hidden: same id as a plugin already listed" and
+// "<host>: 1 hidden: files not on the site's own host" (amber). A site whose kept copy is
+// what is listed says so, and one never read says "not read yet". One to three lines.
+struct StoreSiteLine {
+    std::string text;
+    StoreLineTone tone = StoreLineTone::Muted;
+    // What the census notes ("store:site:" + this): "<label>:read:7", "<label>:failed",
+    // "<label>:hidden-sameid:2", "<label>:hidden-offhost:1", "<label>:notread", "<label>:kept:7".
+    std::string census;
+};
+std::vector<StoreSiteLine> storeSiteLines(const StoreSite& s);
+
 // Columns of cards: three at 1120 px of content and wider, two below. (The window's
 // minimum usable width is 900.)
 int storeColumnsFor(float contentWidth);
@@ -588,6 +673,16 @@ struct PluginStoreDeck {
     // THE GET EVERYTHING ACKNOWLEDGEMENT, a DIFFERENT tick: it covers every plugin
     // in the run that carries a notice, and is not persisted anywhere.
     bool addAllAck = false;
+
+    // --- the SITES panel (0.99.74) ----------------------------------------------
+    bool sitesOpen = false;     // the panel under the top bar is showing
+    char siteUrl[512] = {0};    // the address being typed (an edit buffer)
+    // THE CONSENT for adding ONE site: the box under the field. ADD does nothing
+    // until it is ticked, and it is cleared when the site is added, so each site is a
+    // fresh decision. Not persisted.
+    bool siteConsent = false;
+    // Why the last ADD was refused (translated), or empty. Cleared when the text changes.
+    std::string siteError;
 };
 
 // THE CATALOGUE IS BEING REPLACED: every consent given against the old one goes
@@ -724,12 +819,21 @@ public:
     bool updateAllRequested() const { return updateAll_; }
     // CLEAN UP OLD VERSIONS was pressed AND its one confirmation accepted.
     bool cleanupRequested() const { return cleanup_; }
-    // The id of the plugin whose page was OPENED this frame (the edge), or empty:
-    // the caller asks for its pictures then. pageId() is the page showing now.
+    // The catalogue key of the plugin whose page was OPENED this frame (the edge), or
+    // empty: the caller asks for its pictures then. pageId() is the page showing now.
     const std::string& pageOpened() const { return pageOpened_; }
     const std::string& pageId() const { return pageId_; }
+    // ADD was pressed in the SITES panel with the consent ticked and an address that
+    // passed storeCheckSiteAdd: the address to add (already normalised), or empty. The
+    // caller adds it, saves, and starts a fetch - re-checking, as it does for every request.
+    const std::string& addSiteRequested() const { return addSite_; }
+    // REMOVE was pressed on a site: its address (as listed), or empty. The caller forgets
+    // it, deletes its kept copy and leaves what was installed from it installed.
+    const std::string& removeSiteRequested() const { return removeSite_; }
 
 private:
+    std::string addSite_;
+    std::string removeSite_;
     bool cleanup_ = false;
     bool checkNow_ = false;
     bool cancel_ = false;

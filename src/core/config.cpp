@@ -128,9 +128,10 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
     dst = std::move(v);
 }
 
-// The shared rule for the five string lists the config carries
-// (pluginTuneAllowed, pluginsStopped, pluginMuteOverride, closedWindows,
-// keyBindings): drop empties, drop duplicates, cap the length. One function
+// The shared rule for the string lists the config carries
+// (pluginTuneAllowed, pluginSettingsAllowed, pluginTransmitAllowed,
+// pluginsStopped, pluginMuteOverride, closedWindows, keyBindings): drop empties,
+// drop duplicates, cap the length. One function
 // rather than five loops, because the lists are the same shape and a rule that applied to
 // only some of them would be a rule nobody could rely on. Name every caller
 // here when another list arrives — an enumeration that stops being exhaustive
@@ -147,6 +148,30 @@ std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in)
         if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
         out.push_back(n);
         if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
+    }
+    return out;
+}
+
+// The plugin sites (AppConfig::pluginSites, 0.99.74), entry by entry, so one bad
+// address costs only itself: each goes through the ONE validator
+// (PluginRepo::normaliseSiteUrl - the store's ADD asks the same function), then is
+// dropped if it repeats an earlier one, or is the official address or the override
+// of it (a site that is the official catalogue would list every plugin twice and
+// have all of them hidden as the same id), and the list stops at kMaxPluginSites.
+// Order is kept: it is the order the sites are read in.
+std::vector<std::string> sanitisePluginSites(const std::vector<std::string>& in,
+                                             const std::string& overrideUrl) {
+    static_assert(AppConfig::kMaxPluginSites == PluginRepo::kMaxSites,
+                  "the config's site cap and the repository's are one number");
+    std::vector<std::string> out;
+    for (const std::string& raw : in) {
+        std::string url;
+        std::string why;
+        if (!PluginRepo::normaliseSiteUrl(raw, url, why)) { continue; }
+        if (url == PluginRepo::defaultIndexUrl() || url == overrideUrl) { continue; }
+        if (std::find(out.begin(), out.end(), url) != out.end()) { continue; }
+        out.push_back(url);
+        if (out.size() >= AppConfig::kMaxPluginSites) { break; }
     }
     return out;
 }
@@ -395,6 +420,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "mode", out.mode);
     getDouble(j, "bandwidthHz", out.bandwidthHz);
     getFloat(j, "squelchDb", out.squelchDb);
+    getBool(j, "squelchAuto", out.squelchAuto);
     getFloat(j, "volume", out.volume);
     getInt(j, "audioBufferMs", out.audioBufferMs);
     getInt(j, "audioBufferAutoMs", out.audioBufferAutoMs);
@@ -450,6 +476,11 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "mainView", out.mainView);
     // Absent in a config from before 0.99.49: the rail opens (the default).
     getBool(j, "railCollapsed", out.railCollapsed);
+    // Absent in a config from before 0.99.74: the status column opens.
+    getBool(j, "statusCollapsed", out.statusCollapsed);
+    // Absent in a config from before 0.99.74: the Display section is folded
+    // (the default), which is what the tester who asked for it wanted.
+    getBool(j, "displayOpen", out.displayOpen);
     if (out.mainView != "patch" && out.mainView != "receiver") { out.mainView = "patch"; }
     getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Carried as written, like bandPlanSelection: which codes are real is a
@@ -566,6 +597,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     out.aircraftIconPx = std::clamp(out.aircraftIconPx, 16, 96);
     getInt(j, "mapTrailWidthPx", out.mapTrailWidthPx);
     out.mapTrailWidthPx = std::clamp(out.mapTrailWidthPx, 1, 96);
+    // Defaults false, so a file that predates the key lists every aircraft as
+    // it always has; a bool read by getBool is the value in the file or the
+    // default, and there is no range to clamp.
+    getBool(j, "mapListOnScreenOnly", out.mapListOnScreenOnly);
     // The radar scope. The range is SNAPPED TO THE LADDER the view defines,
     // never trusted: the file is user-editable, and every ring radius, every
     // ring label and the corner readout are derived from this one number, so a
@@ -669,6 +704,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "gpsPort", out.gpsPort);
     getInt(j, "gpsBaud", out.gpsBaud);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
+    getStringArray(j, "pluginSites", out.pluginSites);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     // The fitted modules window, open flag and rectangle. Its rectangle is
     // sanitized with the map's below, by the same lambda, so the two stores
@@ -704,6 +740,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // that is not an object, or a value that is not a string, is a hand-edit
     // and is skipped rather than failing the whole file.
     getStringArray(j, "pluginSettingsAllowed", out.pluginSettingsAllowed);
+    // Host API level 2 (0.99.74): the TRANSMIT grant, the third list of module file
+    // names. The grant is saved and the operator's arming window is NOT: there is no
+    // key for the window below and no code that could read one (see config.hpp).
+    getStringArray(j, "pluginTransmitAllowed", out.pluginTransmitAllowed);
     {
         const auto it = j.find("pluginSettings");
         if (it != j.end() && it->is_object()) {
@@ -1044,6 +1084,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.pluginCatalogueUrl.empty()) {
         out.pluginCatalogueUrl = defaults.pluginCatalogueUrl;
     }
+    // The plugin sites, after the override above is settled (a site equal to it is
+    // dropped). See sanitisePluginSites.
+    out.pluginSites = sanitisePluginSites(out.pluginSites, out.pluginCatalogueUrl);
     // A timestamp before the epoch is a hand-edit or a backwards clock; either
     // way "never checked" is the only reading that cannot mislead the UI.
     if (out.pluginLastUpdateCheck < 0) {
@@ -1092,6 +1135,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     out.pluginMuteOverride = sanitisePluginNames(out.pluginMuteOverride);
     // The settings grant: the same list of module file names, the same rule.
     out.pluginSettingsAllowed = sanitisePluginNames(out.pluginSettingsAllowed);
+    // And the transmit grant, from the same function again: an empty name matches no
+    // plugin and a duplicate would make revoking look like it failed - on the one
+    // grant where a grant that cannot be taken back matters most.
+    out.pluginTransmitAllowed = sanitisePluginNames(out.pluginTransmitAllowed);
     // The plugins' own settings, by the SAME bounds the live API enforces on
     // settings_set, so nothing a hand-edit put in the file can reach a plugin
     // that the plugin could not have written itself.
@@ -1169,6 +1216,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mode"] = cfg.mode;
     j["bandwidthHz"] = cfg.bandwidthHz;
     j["squelchDb"] = cfg.squelchDb;
+    j["squelchAuto"] = cfg.squelchAuto;
     j["volume"] = cfg.volume;
     j["audioBufferMs"] = cfg.audioBufferMs;
     j["audioBufferAutoMs"] = cfg.audioBufferAutoMs;
@@ -1200,6 +1248,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["patchPresetPrevious"] = cfg.patchPresetPrevious;
     j["mainView"] = cfg.mainView;
     j["railCollapsed"] = cfg.railCollapsed;
+    j["statusCollapsed"] = cfg.statusCollapsed;
+    j["displayOpen"] = cfg.displayOpen;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["language"] = cfg.language;
     j["country"] = cfg.country;
@@ -1222,6 +1272,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["aircraftIconPx"] = cfg.aircraftIconPx;
     j["mapTrailWidthPx"] = cfg.mapTrailWidthPx;
+    j["mapListOnScreenOnly"] = cfg.mapListOnScreenOnly;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["demodScopeOpen"] = cfg.demodScopeOpen;
@@ -1283,6 +1334,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["gpsPort"] = cfg.gpsPort;
     j["gpsBaud"] = cfg.gpsBaud;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
+    j["pluginSites"] = cfg.pluginSites;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["fittedModulesOpen"] = cfg.fittedModulesOpen;
     j["fittedModulesX"] = cfg.fittedModulesX;
@@ -1304,6 +1356,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     }
     j["pluginMuteOverride"] = cfg.pluginMuteOverride;
     j["pluginSettingsAllowed"] = cfg.pluginSettingsAllowed;
+    // The grant, and ONLY the grant: the arming window is session-only and has no key.
+    j["pluginTransmitAllowed"] = cfg.pluginTransmitAllowed;
     {
         json ps = json::object();
         for (const auto& [plugin, kv] : cfg.pluginSettings) {

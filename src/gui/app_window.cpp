@@ -628,6 +628,25 @@ void applyWindowIcon(GLFWwindow* window) {
 // place for one of them to be wrong. Both now come from gui/track_metrics.hpp,
 // which is where they are tested against known pairs.
 
+// HOW MANY ROWS A MAP PAGE'S TARGET LIST HAS, and it is asked in three places -
+// the toolbar's count, the list's own heading, and its empty state - which must
+// agree to the row. A track is listed when the host still considers it live
+// (the same rule the map applies) and, with "On screen only" ticked, when the
+// map as last drawn has it inside its edges. Nothing here is exempt: a selected
+// or followed target that has scrolled off the map is not listed either, because
+// the list shows what the map shows.
+std::size_t listedTrackCount(const MapView& view,
+                             const std::vector<cascade::core::HostTrack>& tracks,
+                             bool onScreenOnly) {
+    std::size_t n = 0;
+    for (const cascade::core::HostTrack& ht : tracks) {
+        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
+        if (onScreenOnly && !view.isOnScreen(ht.t.latDeg, ht.t.lonDeg)) { continue; }
+        ++n;
+    }
+    return n;
+}
+
 }  // namespace
 
 // Field-wise AppConfig comparison for the save debounce. DECLARED IN
@@ -662,6 +681,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
+           // AUTOMATIC squelch (0.99.74): the AUTO key under the SQUELCH knob
+           // saves nothing itself.
+           a.squelchAuto == b.squelchAuto &&
            // The Sinks rail's AUDIO BUFFER (0.99.73): a combo whose pick saves
            // nothing by itself, so the debounce has to see it here.
            a.audioBufferMs == b.audioBufferMs && a.audioBufferAutoMs == b.audioBufferAutoMs &&
@@ -683,11 +705,17 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mainView == b.mainView &&
            // The rail folded to its strip (0.99.49): the key calls no save.
            a.railCollapsed == b.railCollapsed &&
+           // The status column folded to its strip (0.99.74): same.
+           a.statusCollapsed == b.statusCollapsed &&
+           // The Display section opened or folded (0.99.74): its header calls
+           // no save, so the debounce has to see the flag change.
+           a.displayOpen == b.displayOpen &&
            a.bandPlanSelection == b.bandPlanSelection &&
            // Language and country: chosen in a combo on the SYSTEM bank.
            a.language == b.language && a.country == b.country &&
            a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
-           // The frequency display style: picked in the VIEW bank, so without
+           // The frequency display style: picked in the Display section (the
+           // SYSTEM bank since 0.99.74, the VIEW bank before), so without
            // it here a choice would reach the file only when something else
            // changed in the same session.
            a.tunerDisplayStyle == b.tunerDisplayStyle &&
@@ -710,6 +738,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.mapTrailStyle == b.mapTrailStyle &&
            a.aircraftIconPx == b.aircraftIconPx &&
            a.mapTrailWidthPx == b.mapTrailWidthPx &&
+           // The map list's "On screen only" tick: a click that calls no save
+           // of its own.
+           a.mapListOnScreenOnly == b.mapListOnScreenOnly &&
            // The scope's mode and range. Both are user switches that change
            // only on a click or a wheel notch, so they belong here: without
            // them, leaving the application in scope mode - or on a range other
@@ -740,6 +771,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // choice would reach the file only when something else changed.
            a.gpsPort == b.gpsPort && a.gpsBaud == b.gpsBaud &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
+           // The plugin sites (0.99.74): added and removed in the store's SITES panel, so
+           // without this a change would reach the file only when something else changed.
+           a.pluginSites == b.pluginSites &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            // The fitted modules window, open flag AND rectangle, because
            // this comparison is what decides
@@ -762,6 +796,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // settings grant, would reach the file only when something else
            // happened to change in the same session.
            a.pluginSettingsAllowed == b.pluginSettingsAllowed &&
+           // And the transmit grant (0.99.74): a grant that took effect and was not
+           // saved is a grant the next launch silently does not have.
+           a.pluginTransmitAllowed == b.pluginTransmitAllowed &&
            a.pluginSettings == b.pluginSettings &&
            a.pluginsStopped == b.pluginsStopped &&
            // How each plugin runs (0.99.73): a "keep running" tick must reach the file.
@@ -887,7 +924,8 @@ bool equalsFileNameAscii(const std::string& a, const std::string& b) {
 bool readLocalCatalogue(const std::string& path,
                         std::vector<cascade::core::PluginCatalogEntry>& out,
                         std::string& error, std::string* rawText = nullptr,
-                        std::vector<std::string>* report = nullptr) {
+                        std::vector<std::string>* report = nullptr,
+                        std::uint64_t cap = cascade::core::PluginRepo::kMaxIndexBytes) {
     out.clear();
     error.clear();
     if (rawText != nullptr) { rawText->clear(); }
@@ -897,9 +935,11 @@ bool readLocalCatalogue(const std::string& path,
         error = "cannot read the catalogue file \"" + path + "\": " + ec.message();
         return false;
     }
-    if (size > cascade::core::PluginRepo::kMaxIndexBytes) {
-        error = "the catalogue file \"" + path + "\" is larger than the " +
-                std::to_string(cascade::core::PluginRepo::kMaxIndexBytes) + "-byte limit";
+    // `cap` is the official limit unless the caller reads a plugin SITE's file (0.99.74), which
+    // is held to the site cap whether it came over the network or off the user's own disk.
+    if (size > cap) {
+        error = "the catalogue file \"" + path + "\" is larger than the " + std::to_string(cap) +
+                "-byte limit";
         return false;
     }
     std::ifstream f(path, std::ios::binary);
@@ -1139,6 +1179,11 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // either. The opener is the Transmitter's and owns the microphone.
     micOpen_.bind(transmitter_.microphoneOpener(), [this] { watchdog_.pause(); },
                   [this] { watchdog_.resume(); });
+    // The ring a transmitting plugin's audio arrives through (host API level 2). The
+    // runner holds the writing end (setTxLink, at the plugin rebuild); this is the
+    // reading end, and it is harmless with no plugin: nothing writes, nothing reads
+    // unless the plugin's key is the only key down.
+    transmitter_.setPluginLink(txLink_);
 
     // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
     // EITHER. gui/config_writer.hpp carries the field report ("hang ntdll.dll
@@ -1749,6 +1794,23 @@ int AppWindow::run(int frames) {
         // byte-identical-stdout contract of a plain --frames run is untouched.
         const char* status = std::getenv("CASCADE_PLUGIN_STATUS");
         pluginStatusHook_ = (status != nullptr && *status != '\0');
+        // THE BROWSE KEY'S ANSWER WITHOUT A DIALOG (core/file_pick.hpp,
+        // AppWindow::pickFile): FOXSDR_FILE_PICK=<path> is the file "chosen",
+        // FOXSDR_FILE_PICK= (set, empty) is the dialog cancelled. A native dialog
+        // cannot be pressed from a test, and the key's whole path - the press,
+        // the commit, the plugin seeing settings_seq move - can. Bounded runs
+        // only, like every hook here: an interactive session can never have its
+        // file dialog replaced by a stray variable.
+        if (const char* pickSeam = std::getenv("FOXSDR_FILE_PICK"); pickSeam != nullptr) {
+            filePickSeam_ = std::string(pickSeam);
+        }
+    }
+    // A PATH settings field draws its BROWSE key only where there is a file dialog
+    // to open (the system's on Windows; zenity or kdialog on Linux) - or the test
+    // seam above to stand in for one.
+    if (filePickSeam_.has_value() || cascade::core::filePickAvailable()) {
+        pluginSettingsForms_.pick = [this](const cascade::core::FilePickRequest& rq,
+                                           std::string& path) { return pickFile(rq, path); };
     }
 
     // THE GPS READ AT START-UP, when FOXSDR_GPS_PORT names a device (and
@@ -2056,6 +2118,15 @@ int AppWindow::run(int frames) {
             demodScopeOpenedByEnv_ = true;
             demodScopeOpen_ = true;
         }
+        // THE TRANSMIT PAGE, BOUNDED RUNS ONLY (0.99.74): the plugin controls on it (ARM FOR
+        // PLUGINS, DATA (flat)) can only be judged drawn and pressed, and transmitOpen is cleared at
+        // start-up so that no window opens itself. This is the rail switch's own action - it opens a
+        // page and keys nothing - and it is not offered outside a --frames run.
+        if (frames >= 0 && !transmitOpenedByEnv_ && std::getenv("FOXSDR_OPEN_TRANSMIT") != nullptr &&
+            std::getenv("FOXSDR_OPEN_TRANSMIT")[0] != '\0') {
+            transmitOpenedByEnv_ = true;
+            transmitOpen_ = true;
+        }
         // THE RADAR SCOPE, the same way but BOUNDED RUNS ONLY (0.99.42): its
         // tiles and their credit can only be judged with it on screen
         // (tests/test_patch_map_credit), and scopeMode is cleared at start-up.
@@ -2103,14 +2174,15 @@ int AppWindow::run(int frames) {
                     }
                 }
             }
-            // A FREQUENCY LIST IN THE IMPORT BOX (0.99.19): VIEW opened on
-            // Bookmarks with FOXSDR_BOOKMARK_IMPORT's path typed in, so a
-            // scripted click on Import goes through the button a user presses.
+            // A FREQUENCY LIST IN THE IMPORT BOX (0.99.19): the TOOLS bank (VIEW
+            // then) opened on Bookmarks with FOXSDR_BOOKMARK_IMPORT's path typed
+            // in, so a scripted click on Import goes through the button a user
+            // presses.
             if (!bookmarkImportByEnv_) {
                 bookmarkImportByEnv_ = true;
                 if (const char* p = std::getenv("FOXSDR_BOOKMARK_IMPORT"); p != nullptr && *p != '\0') {
                     cascade::core::formatUtf8(bookmarkImportPath_, sizeof(bookmarkImportPath_), "%s", p);
-                    railBank_ = static_cast<int>(cascade::gui::RailBank::View);
+                    railBank_ = static_cast<int>(cascade::gui::RailBank::Tools);
                     bookmarkOpenByEnv_ = true;
                     bookmarkScrollByEnv_ = true;
                 }
@@ -3471,6 +3543,16 @@ bool benchSection(const char* label, bool defaultOpen, const char* chipText = nu
 
     const ImVec2 tl = ImGui::GetItemRectMin();
     const ImVec2 br = ImGui::GetItemRectMax();
+    // The header row's rectangle, for the tests that press it (0.99.74: the
+    // Display section's remembered open state is checked by clicking it). A
+    // census "rect" line is read by splitting on blanks, so the label's own
+    // blanks ("Language & country###language") become underscores - and the
+    // name is only built when a census is being kept.
+    if (cascade::gui::census::enabled()) {
+        std::string rowName(label != nullptr ? label : "");
+        std::replace(rowName.begin(), rowName.end(), ' ', '_');
+        cascade::gui::census::rect("section:" + rowName, tl.x, tl.y, br.x, br.y);
+    }
     const float h = br.y - tl.y;
     const bool hovered = ImGui::IsItemHovered();
     const bool held = ImGui::IsItemActive();
@@ -3870,8 +3952,15 @@ void AppWindow::drawUi() {
         // calling it every frame the key is down costs nothing beyond that
         // first call.
         if (key.latched || key.pttHeld) { testerUsage_.noteFeature("transmit"); }
+        // THE PLUGIN'S KEY (0.99.74), asked here and nowhere else, beside the hand's
+        // two and for the same reason: rebuilt from nothing every frame, from the
+        // state of this instant, and before the tick that acts on it. It is the
+        // hand's key that has precedence - the plugin is refused while either is down.
+        applyPluginTransmitKey(key);
     }
     transmitter_.tick();
+    // And what the tick did, told to the runner and the plugins and written to the log.
+    afterTransmitTick();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -4063,8 +4152,14 @@ void AppWindow::drawUi() {
             // It is dropped entirely on a narrow window: the spectrum is what this
             // application is for, and squeezing it to keep a status card visible
             // has the priority backwards.
-            constexpr float kStatusWidthBase = 230.0f;
-            const float kStatusWidth = cascade::gui::uiscale::px(kStatusWidthBase);
+            //
+            // FOLDED TO A STRIP when the user has put it away (0.99.74): the
+            // width asked for, and so the test below, is the CURRENT one. A
+            // strip needs 34 px beside the spectrum's 520, not 230, so a window
+            // too narrow for the full column still shows the strip - and the
+            // key on it that brings the column back.
+            const float kStatusWidth = cascade::gui::uiscale::px(
+                cascade::gui::statusColumnWidth(statusCollapsed_));
             // The centre's own floor (520) stays UNSCALED on purpose: it is a
             // floor on raw spectrum/waterfall pixels, not a font or a layout
             // pixel, and scaling it (tried once) raised the bar so far that a
@@ -4099,7 +4194,20 @@ void AppWindow::drawUi() {
                 ImGui::SameLine();
                 ImGui::BeginChild("##status_column", ImVec2(kStatusWidth, 0.0f),
                                   ImGuiChildFlags_None);
-                drawStatusColumn();
+                {
+                    // Not "status:..." - the theme census counts those as cards.
+                    const ImVec2 c0 = ImGui::GetWindowPos();
+                    const ImVec2 cs = ImGui::GetWindowSize();
+                    cascade::gui::census::note(statusCollapsed_ ? "statuscol:folded"
+                                                                : "statuscol:open");
+                    cascade::gui::census::rect("statuscol:column", c0.x, c0.y, c0.x + cs.x,
+                                               c0.y + cs.y);
+                }
+                if (statusCollapsed_) {
+                    drawStatusStrip();
+                } else {
+                    drawStatusColumn();
+                }
                 ImGui::EndChild();
             }
         }
@@ -4159,6 +4267,10 @@ void AppWindow::drawUi() {
     // the user-wins detection inside sees this frame's state, not last
     // frame's. Inert while the scanner is Idle — including every hermetic
     // --frames run.
+    //
+    // AUTOMATIC squelch goes first, so the scanner judges "open" against the
+    // threshold this frame's measurement has just set.
+    autoSquelchFrame();
     scannerFrame();
     // The Airband monitor's driver, for the same reason and in the same place:
     // a retune the user made this frame is already applied when it looks.
@@ -4754,6 +4866,9 @@ void AppWindow::drawStatusColumn() {
     const ImVec2 colBR(colTL.x + colSize.x, colTL.y + colSize.y);
     if (colSize.x < 40.0f || colSize.y < 60.0f) { return; }
     const float bodyTop = cascade::gui::addBenchPlate(dl, colTL, colBR, tr("STATUS"));
+    // THE FOLD KEY, ">>", at the left end of the title row (0.99.74): the end
+    // nearest the spectrum, the rail's "<<" mirrored.
+    drawStatusFoldKey(colTL.x, colTL.y, colSize.x);
 
     ImFont* legendF = cascade::gui::fonts::legend();
     ImFont* uiF = cascade::gui::fonts::ui();
@@ -5485,33 +5600,50 @@ static_assert(kCounterDividerX >= kFreqPlateRightX + 8.0f,
               "the counter's divider must clear the tuner plate's right edge - narrow the "
               "plate or move the divider, never let the groove cross the plate");
 
-// THE VOLUME DIAL'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the
-// bar's scale floor is a promise about this one control and a promise checked
-// against a number typed somewhere else is not checked at all. The dial keeps
-// the 61 units it has always stood past its divider.
-constexpr float kVolumeCx = kCounterDividerX + 61.0f;  // the dial's centre, in reference units
-constexpr float kVolumeR = 26.0f;    // ...and its radius
-constexpr float kVolumeEdgePad = 6.0f;
-// The cluster ends past the dial, never inside it: kCoreW is what the meters
-// and the mute banner keep clear of, so a dial reaching past it would be a
-// dial the meters could be drawn over.
-static_assert(kVolumeCx + kVolumeR + kVolumeEdgePad <= kCoreW,
-              "the volume dial must stand inside the fixed cluster (kCoreW)");
+// THE KNOB ROW'S OWN GEOMETRY, HOISTED OUT OF drawToolbar, because the bar's
+// scale floor is a promise about these controls and a promise checked against
+// a number typed somewhere else is not checked at all. Three dials since
+// 0.99.74 - GAIN, SQUELCH, VOLUME, left to right - whose centres, radius and
+// pitch live in gui/tune_control.hpp (deckGainCx and its two neighbours) so a
+// test can pin them; this is where the cluster's right-hand end, the last
+// dial's tick arc and its edge pad, is held against kCoreW and the floor.
+constexpr float kLastDialCx =
+    kCounterDividerX + cascade::gui::kDeckKnobFirstX + 2.0f * cascade::gui::kDeckKnobPitch;
+constexpr float kKnobRowEndX =
+    kLastDialCx + cascade::gui::kDeckKnobTickR * cascade::gui::kDeckKnobR +
+    cascade::gui::kDeckKnobEdgePad;
+// The cluster ends past the last dial, never inside it: kCoreW is what the
+// meters and the mute banner keep clear of, so a dial reaching past it would
+// be a dial the meters could be drawn over.
+static_assert(kKnobRowEndX <= kCoreW,
+              "the knob row must stand inside the fixed cluster (kCoreW)");
 
 // The bar only ever shrinks, and it stops here: below this the counter's
-// digits stop being figures and the dial stops being a control (its primitive
-// draws nothing under a 6 px radius, which at this scale is a long way off).
-constexpr float kBarMinScale = 0.62f;
+// digits stop being figures and the dials stop being controls (their
+// primitive draws nothing under a 6 px radius, which at this scale is a long
+// way off). 0.62 until 0.99.74; the two extra dials made the cluster 111
+// units wider, and the floor that keeps it inside the narrowest window
+// (below) fell with it: 624 less the cabinet's 54 is 570, over 998.4.
+constexpr float kBarMinScale = 0.57f;
 
 // AND THE FLOOR IS ONLY HONEST IF THE WINDOW CANNOT GO NARROWER THAN IT NEEDS.
 // kMinWindowW is the width limit run() puts on the OS window; the cabinet eats
 // at most kCabinetInsetMaxPx of it before the bar is drawn. If someone lowers
-// that limit, or moves the dial right, this stops compiling rather than
+// that limit, or moves the dials right, this stops compiling rather than
 // quietly clipping the only volume control out of the application.
-static_assert((kVolumeCx + kVolumeR + kVolumeEdgePad) * kBarMinScale <=
+static_assert(kKnobRowEndX * kBarMinScale <=
                   static_cast<float>(kMinWindowW) - kCabinetInsetMaxPx,
-              "the top bar's floor scale must leave the volume dial inside the "
+              "the top bar's floor scale must leave the knob row inside the "
               "narrowest window run() allows");
+
+// THE GAIN KNOB'S PACE (applyDeckGain): the radio is asked at most this often
+// while the dial is held, and the final value once more on release; a step the
+// radio refuses is tried again at this pace up to kDeckGainRetries times, then
+// let go and the dial shows the radio's own readback. (RtlSdrSource::setGainDb
+// answers "the radio is busy" when its control lock is held, and says so by
+// failing, not by waiting.)
+constexpr double kDeckGainPaceS = 0.05;
+constexpr int kDeckGainRetries = 8;
 
 // THE COUNTER, CELL BY CELL, AND SHARED WITH drawFrequencyReadout. The bar
 // sizes its middle section from the same numbers the readout draws with,
@@ -5575,10 +5707,16 @@ float barTrackedWidth(ImFont* f, float px, const char* text, float track) {
 // Nothing else about the treatment changes and no other surface is touched: the
 // maker's plate at the foot of the status column keeps the shallow cut, because
 // a maker's plate is decoration and is not read for information.
-void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool centred) {
+//
+// `trackFrac` is the letter-spacing as a fraction of the size. 0.24 is the deck's;
+// the three dials' captions (GAIN, SQUELCH, VOLUME - a pitch of 72 units each)
+// close it up when the longest of them, in the language it is read in, will not
+// fit its cell at the engraving's own spacing.
+void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool centred,
+                float trackFrac = 0.24f) {
     if (dl == nullptr || text == nullptr || text[0] == '\0') { return; }
     ImFont* f = cascade::gui::fonts::legend();
-    const float track = px * 0.24f;
+    const float track = px * trackFrac;
     if (centred) { at.x -= barTrackedWidth(f, px, text, track) * 0.5f; }
     const ImU32 lip =
         cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassTint, 0.75f);
@@ -5593,6 +5731,95 @@ void barEngrave(ImDrawList* dl, ImVec2 at, float px, const char* text, bool cent
         x += f->CalcTextSizeA(px, FLT_MAX, 0.0f, p, p + bytes).x + track;
         p += bytes;
     }
+}
+
+// --- THE DECK'S AUTO KEYS (0.99.74) --------------------------------------------
+//
+// One small LATCHED brass key under the GAIN dial and one under the SQUELCH dial,
+// lettered AUTO - the tester: "a switch for Auto Gain" and "a button for AUTO or
+// above the noise". It is the function selector's key (benchBankKey: it stays
+// down while it is on, with a phosphor strip lit under it, the display's colour
+// for "this is what is on") with one state the selector never has: DEAD. A radio
+// with no automatic gain still shows the key - a control that vanishes when it
+// cannot be used is a control nobody learns - engraved dark, with no lamp, and a
+// press does nothing; the tooltip says why.
+//
+// A real ImGui item, so it is reached with Tab and takes part in the same input
+// arbitration as everything else on the bar. `censusName` names it in the
+// interface census ("deck:gainauto", "deck:squelchauto") and is its item id.
+// Returns true on a press that should act (never for a dead key).
+bool deckAutoKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool on, bool enabled,
+                 const char* tooltip, const char* censusName) {
+    if (dl == nullptr || br.x - tl.x < 12.0f || br.y - tl.y < 8.0f) { return false; }
+    cascade::gui::census::note(censusName);
+    cascade::gui::census::rect(censusName, tl.x, tl.y, br.x, br.y);
+    ImGui::PushID(censusName);
+    ImGui::SetCursorScreenPos(tl);
+    const bool clicked = ImGui::InvisibleButton("##deckauto", ImVec2(br.x - tl.x, br.y - tl.y));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = enabled && ImGui::IsItemActive();
+    const bool focused = ImGui::IsItemFocused();
+    if (hovered && tooltip != nullptr) { ImGui::SetTooltip("%s", tooltip); }
+    ImGui::PopID();
+
+    const float r = cascade::gui::theme::kKeyRounding;
+    const bool down = enabled && (on || held);
+    if (!enabled) {
+        // Dead: the well's dark with the brass only in the outline, like
+        // benchWordKey's disabled key.
+        dl->AddRectFilled(tl, br, cascade::gui::theme::kWell, r);
+        dl->AddRect(tl, br,
+                    cascade::gui::theme::withAlpha(cascade::gui::theme::kBrassDark, 0.80f), r, 0,
+                    cascade::gui::theme::kHairline);
+    } else {
+        // Proud metal casts a shadow and pressed metal does not: the state
+        // indication before any colour is used.
+        if (!down) {
+            dl->AddRectFilled(ImVec2(tl.x + 1.0f, tl.y + 2.0f), ImVec2(br.x + 1.0f, br.y + 2.0f),
+                              theme::shadowOf(0x0D, 0x0B, 0x07, 115), r);
+        }
+        const ImU32 top = down      ? theme::toneHex(0x6E6552, 255, theme::ink::ActiveBgTop)
+                          : hovered ? theme::toneMix(0xEF, 0xE7, 0xD2, 255, theme::ink::CtrlTop,
+                                                     theme::ink::ActiveBgTop, 0.35f)
+                                    : theme::toneHex(0xD8CFB4, 255, theme::ink::CtrlTop);
+        const ImU32 bot = down ? theme::toneHex(0x4A4234, 255, theme::ink::ActiveBgBot)
+                               : theme::toneHex(0x8B8069, 255, theme::ink::CtrlBot);
+        dl->AddRectFilled(tl, br, bot, r);
+        if (br.x - tl.x > r * 2.0f) {
+            dl->AddRectFilledMultiColor(ImVec2(tl.x + r, tl.y), ImVec2(br.x - r, br.y), top, top,
+                                        bot, bot);
+        }
+        cascade::gui::addBenchBevel(dl, tl, br, r, !down);
+        // THE LAMP STRIP: lit phosphor under the key that is in, dark glass
+        // under the one that is out. Two pixels high and two below the key,
+        // where the selector's is three and three: the bar's foot rail stands
+        // 3 px above its edge, and at the smallest scale the bar is drawn at
+        // the key is only ten pixels tall.
+        const ImVec2 sTL(tl.x + 3.0f, br.y + 2.0f);
+        const ImVec2 sBR(br.x - 3.0f, br.y + 4.0f);
+        dl->AddRectFilled(sTL, sBR, cascade::gui::theme::kWell, 1.0f);
+        if (on) {
+            dl->AddRectFilled(ImVec2(sTL.x - 1.0f, sTL.y - 1.0f), ImVec2(sBR.x + 1.0f, sBR.y + 1.0f),
+                              theme::toneHex(0x8FD9A0, 64, theme::ink::ActiveLine), 2.0f);
+            dl->AddRectFilled(sTL, sBR, theme::toneHex(0x8FD9A0, 255, theme::ink::ActiveLine), 1.0f);
+        }
+    }
+    if (focused) {
+        dl->AddRect(ImVec2(tl.x - 2.0f, tl.y - 2.0f), ImVec2(br.x + 2.0f, br.y + 2.0f),
+                    cascade::gui::theme::kBrassBright, r + 1.0f, 0,
+                    cascade::gui::theme::kHairline);
+    }
+    // The word is cut into the brass: ink on metal, never amber. Lettered at the
+    // key's height less its edges, never under nine pixels, and fitted to the
+    // key's width for a language whose word for AUTO is longer.
+    const float px = std::max(9.0f, std::min(cascade::gui::fonts::tinyPx(), (br.y - tl.y) - 4.0f));
+    cascade::gui::addFittedCentred(
+        dl, cascade::gui::fonts::ui(), px, tl, br,
+        !enabled ? cascade::gui::theme::kInkFaint
+        : on     ? theme::toneHex(0xEFE7D2, 255, theme::ink::ActiveText)
+                 : theme::toneHex(0x2A251C, 255, theme::ink::CtrlText),
+        tr("AUTO"), cascade::gui::uiscale::px(2.0f), down ? 1.0f : 0.0f, 8.0f);
+    return clicked && enabled;
 }
 
 }  // namespace
@@ -5846,7 +6073,10 @@ void AppWindow::drawToolbar() {
     if (const cascade::gui::BiasTeePanel bk = biasKeyPanel(); bk.present) {
         const cascade::gui::FreqRect area = cascade::gui::deckBiasKeyArea();
         const ImVec2 kTL(X(area.x0), Y(area.y0));
-        const float kSize = S(cascade::gui::kDeckBiasKeySize);
+        // Never under 12 px (kDeckBiasKeyMinPx): the bar's floor scale fell with the
+        // GAIN and SQUELCH dials (0.99.74), and 20 units at 0.57 is 11.4.
+        const float kSize =
+            std::max(S(cascade::gui::kDeckBiasKeySize), cascade::gui::kDeckBiasKeyMinPx);
         const bool pressed = cascade::gui::drawBenchKey(dl, kTL, kSize, bk.shown);
         const bool keyHovered = ImGui::IsItemHovered();
         cascade::gui::drawBenchLamp(dl, ImVec2(kTL.x + kSize * 0.5f, kTL.y + kSize * 0.5f),
@@ -5898,37 +6128,266 @@ void AppWindow::drawToolbar() {
                                Y(kPlateTopY + cascade::gui::counterPlateH(layout)));
     cascade::gui::addBenchDivider(dl, X(cascade::gui::deckCounterDividerX(layout)), Y(30.0f),
                                   Y(135.0f));
-    // THE VOLUME IS A DIAL, in the handoff's 1960s brass. A slider is a
-    // perfectly good control and completely wrong on a bench receiver; this
-    // one turns, carries its own tick arc, and answers the wheel as well as
-    // the hand so it is still usable without a drag.
+    // THE KNOB ROW: GAIN, SQUELCH, VOLUME - dials, in the handoff's 1960s brass.
+    // A slider is a perfectly good control and completely wrong on a bench
+    // receiver; these turn, carry their own tick arc, and answer the wheel as
+    // well as the hand so they are still usable without a drag.
+    //
+    // THREE SINCE 0.99.74, in the order the signal goes through the system (the
+    // tester: "I would put these knobs in the order of gain, squelch and volume
+    // just as that is the order the signal goes through the system"). The deck
+    // had only the volume dial, and the tester "find[s] myself adjusting the
+    // gain for certain things often ... without having to go to the Signal
+    // tab/Source menu. This area is also empty space"; the same was said of the
+    // squelch, adjusted "often" while using the Airband tool. Geometry:
+    // gui/tune_control.hpp (kDeckKnobR and the rest); the AUTO keys under the
+    // first two are deckAutoKey's.
     {
-        const float cx = X(cascade::gui::deckVolumeCx(layout));
-        barEngrave(dl, ImVec2(cx, Y(42.0f)), capPx, tr("VOLUME"), true);
-        cascade::gui::census::note("deck:volume");
-        cascade::gui::census::rect("deck:volume", cx - S(kVolumeR), Y(82.0f) - S(kVolumeR),
-                                   cx + S(kVolumeR), Y(82.0f) + S(kVolumeR));
-        const float moved = cascade::gui::drawBrassVolumeKnob(
-            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), volume_);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", tr("Volume - drag the dial, or scroll over it"));
+        namespace g = cascade::gui;
+        const float knobR = S(g::kDeckKnobR);
+        const float knobCy = Y(g::kDeckKnobCy);
+        const float cell = S(g::kDeckKnobPitch);  // each dial's own width on the bar
+        const float cxs[3] = {X(g::deckGainCx(layout)), X(g::deckSquelchCx(layout)),
+                              X(g::deckVolumeCx(layout))};
+        const char* const caps[3] = {tr("GAIN"), tr("SQUELCH"), tr("VOLUME")};
+
+        // THE CAPTIONS, ONE SIZE FOR ALL THREE and fitted to the cell: SQUELCH is
+        // twice the width of GAIN and wider than the 72-unit pitch at the deck's
+        // own caption size, and a translated caption is longer again. The order
+        // of what gives way is fitCellWords': the size first, down to the nine
+        // pixels below which an engraving is dirt on the panel; then the
+        // letter-spacing, which is decoration; and a word that still does not
+        // fit is cut at its own cell's edge, never run into its neighbour's.
+        ImFont* capFont = g::fonts::legend();
+        float capSize = capPx;
+        float capTrack = 0.24f;
+        {
+            const float room = cell - S(6.0f);
+            for (const float tf : {0.24f, 0.10f, 0.0f}) {
+                float sz = capPx;
+                for (const char* c : caps) {
+                    sz = std::min(sz, g::fitSize(
+                                          capPx, room,
+                                          [&](float z) { return barTrackedWidth(capFont, z, c, z * tf); },
+                                          9.0f));
+                }
+                capSize = sz;
+                capTrack = tf;
+                bool whole = true;
+                for (const char* c : caps) {
+                    whole = whole && barTrackedWidth(capFont, sz, c, sz * tf) <= room + 0.5f;
+                }
+                if (whole) { break; }
+            }
         }
-        if (moved >= 0.0f) {
-            volume_ = moved;
-            pipeline_.audio().setVolume(volume_);
+        for (int i = 0; i < 3; ++i) {
+            dl->PushClipRect(ImVec2(cxs[i] - cell * 0.5f, barTL.y), ImVec2(cxs[i] + cell * 0.5f, barBR.y),
+                             true);
+            barEngrave(dl, ImVec2(cxs[i], Y(g::kDeckKnobCaptionY)), capSize, caps[i], true, capTrack);
+            dl->PopClipRect();
         }
-        // THE SETTING, IN CREAM, AND DELIBERATELY NOT IN AMBER. This is where
-        // the hand has put the control, not something the radio measured, and
-        // the palette reserves amber for a reading. Figures, so the monospaced
-        // face: the number stops shuffling sideways as the dial turns.
-        char vtxt[16];
-        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume_));
-        ImFont* vf = cascade::gui::fonts::reading();
-        const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale *
-                                              cascade::gui::theme::readingsScale());
-        const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, vtxt);
-        dl->AddText(vf, vpx, ImVec2(cx - vs.x * 0.5f, Y(118.0f)),
-                    theme::toneHex(0xD8CFB4, 255, theme::ink::DeckInk), vtxt);
+        // THE SETTING, IN CREAM, AND DELIBERATELY NOT IN AMBER. This is where the
+        // hand has put the control, not something the radio measured, and the
+        // palette reserves amber for a reading. Figures, so the monospaced face:
+        // the number stops shuffling sideways as the dial turns. Fitted to the
+        // cell like the captions: "-120 dB" at the 1.4x readings size is wider
+        // than the pitch.
+        const auto reading = [&](int i, const char* txt) {
+            ImFont* vf = g::fonts::reading();
+            float vpx = std::max(11.0f, g::fonts::kReadingSize * scale * g::theme::readingsScale());
+            vpx = g::fitTextPx(vf, vpx, txt, cell - S(6.0f), 9.0f);
+            const ImVec2 vs = vf->CalcTextSizeA(vpx, FLT_MAX, 0.0f, txt);
+            dl->AddText(vf, vpx, ImVec2(cxs[i] - vs.x * 0.5f, Y(g::kDeckKnobReadingY)),
+                        theme::toneHex(0xD8CFB4, 255, theme::ink::DeckInk), txt);
+        };
+        const float autoKeyW = S(g::kDeckAutoKeyW);
+        // Never under ten pixels, so its word stays a word at the smallest scale.
+        const float autoKeyH = std::max(S(g::kDeckAutoKeyH), 10.0f);
+        const float autoKeyTop = Y(g::kDeckAutoKeyY);
+
+        // --- GAIN: the radio's first stage -----------------------------------------
+        //
+        // The scope deck's GAIN knob is the precedent (drawScopeKnob in
+        // drawScopeFace): the FIRST gain stage the device reports, over that
+        // stage's own range, set through setGainDb and read back. It refuses to
+        // pretend, as that one does: with no radio, or no gain stage, there is
+        // nothing to set and it reads N/A; under automatic gain a manual gain
+        // would fight the radio, so it is dead and reads AUTO. Either way it is
+        // drawn, veiled, and answers nothing.
+        {
+            const bool haveGain = device_ != nullptr && !deviceGainNames_.empty();
+            const bool gainLive = haveGain && !deviceAgc_;
+            float loDb = kSoapyGainMinDb;
+            float hiDb = kSoapyGainMaxDb;
+            if (!deviceGainRanges_.empty() &&
+                deviceGainRanges_[0].maxDb > deviceGainRanges_[0].minDb) {
+                loDb = static_cast<float>(deviceGainRanges_[0].minDb);
+                hiDb = static_cast<float>(deviceGainRanges_[0].maxDb);
+            }
+            // WHERE THE DIAL STANDS: the hand's target while the hand is on it, the
+            // radio's readback otherwise (the radio quantises, and a dial that kept
+            // showing 21.4 while the tuner sat at 20.7 would be the same lie the
+            // antenna combo was fixed for).
+            float shownDb = loDb;
+            if (haveGain) {
+                shownDb = (deckGainHeld_ || deckGainDirty_) ? deckGainTargetDb_ : deviceGainsDb_[0];
+            }
+            const float frac =
+                hiDb > loDb ? std::clamp((shownDb - loDb) / (hiDb - loDb), 0.0f, 1.0f) : 0.0f;
+            g::census::note("deck:gain");
+            g::census::rect("deck:gain", cxs[0] - knobR, knobCy - knobR, cxs[0] + knobR,
+                            knobCy + knobR);
+            const float moved =
+                g::drawBrassKnob(dl, ImVec2(cxs[0], knobCy), knobR, frac, "##deckgain", gainLive);
+            const bool handOn = ImGui::IsItemActive();
+            if (ImGui::IsItemHovered()) {
+                std::string tip = tr("Gain - the radio's first stage; drag the dial, or scroll over it");
+                if (haveGain) {
+                    tip += "\n";
+                    tip += deviceGainNames_[0];
+                }
+                ImGui::SetTooltip("%s", tip.c_str());
+            }
+            // THE FRAME THE HAND LANDS ON THE DIAL: the target starts from where the dial
+            // stands, so that the frames that follow (which read the target, the hand being
+            // on it) accumulate from there and not from whatever the target last held.
+            if (gainLive && handOn && !deckGainHeld_ && !deckGainDirty_) {
+                deckGainTargetDb_ = shownDb;
+            }
+            if (moved >= 0.0f && gainLive) {
+                const float want = loDb + moved * (hiDb - loDb);
+                if (std::fabs(want - shownDb) > 1.0e-4f) {
+                    deckGainTargetDb_ = want;
+                    deckGainDirty_ = true;
+                    deckGainRetries_ = 0;
+                }
+            }
+            deckGainHeld_ = gainLive && handOn;
+            // PACED: at most one setGainDb every kDeckGainPaceS while the dial is
+            // held (a native driver can answer "busy", and a dial that moves every
+            // frame must not hammer it), and the final value as soon as the hand
+            // lets go.
+            if (deckGainDirty_ && !gainLive) {
+                deckGainDirty_ = false;  // automatic gain came on, or the radio went
+            } else if (deckGainDirty_ &&
+                       (ImGui::GetTime() - deckGainSetS_ >= kDeckGainPaceS ||
+                        (!handOn && deckGainRetries_ == 0))) {
+                applyDeckGain();
+            }
+            std::string gainTxt;
+            if (!haveGain) {
+                gainTxt = tr("N/A");
+            } else if (deviceAgc_) {
+                gainTxt = tr("AUTO");
+            } else {
+                // In the first stage's OWN unit: over an Airspy it reads "7", the
+                // step it is on, not "7 dB" of nothing.
+                gainTxt = g::formatGainValue(
+                    static_cast<double>((deckGainHeld_ || deckGainDirty_) ? deckGainTargetDb_
+                                                                          : deviceGainsDb_[0]),
+                    firstGainUnit());
+            }
+            reading(0, gainTxt.c_str());
+            const bool agcOk = device_ != nullptr && deviceAgcSupported_;
+            if (deckAutoKey(dl, ImVec2(cxs[0] - autoKeyW * 0.5f, autoKeyTop),
+                            ImVec2(cxs[0] + autoKeyW * 0.5f, autoKeyTop + autoKeyH), deviceAgc_,
+                            agcOk,
+                            agcOk ? tr("Automatic gain - the radio sets its own gain")
+                                  : tr("This radio has no automatic gain"),
+                            "deck:gainauto")) {
+                pressDeckAutoGain();
+            }
+        }
+
+        // --- SQUELCH: where the gate opens ------------------------------------------
+        //
+        // Over the Radio section slider's own [-120, 0] dB span, so the dial, the
+        // slider, the S-meter bar and the keys share one scale. A hand on the dial
+        // is a manual choice and puts AUTOMATIC off; AUTOMATIC itself moves the
+        // dial (autoSquelchFrame sets squelchDb_, which this reads).
+        //
+        // WHILE THE AIRBAND MONITOR LISTENS IT IS THE MONITOR'S SQUELCH (the tester:
+        // "I really like the Airband tool and find myself adjusting the Squelch often
+        // when doing so"): the monitor plays each channel behind a squelch of its own,
+        // airbandSquelchDb_ over -110..0, and the idle receiver's threshold would
+        // change nothing that is heard. The dial reads and sets that one, the reading
+        // under it is the value in use, and the receiver's is left where it was; the
+        // caption is the same word and the tooltip says which it is. The monitor's
+        // block is rebuilt with a new threshold on release (airbandTuneBlock restarts
+        // its channels), not every frame of a drag.
+        {
+            const bool onAirband = airbandListening_;
+            float& sq = onAirband ? airbandSquelchDb_ : squelchDb_;
+            const float sqLo = onAirband ? -110.0f : -120.0f;
+            const float frac = std::clamp((sq - sqLo) / (0.0f - sqLo), 0.0f, 1.0f);
+            g::census::note("deck:squelch");
+            g::census::rect("deck:squelch", cxs[1] - knobR, knobCy - knobR, cxs[1] + knobR,
+                            knobCy + knobR);
+            const float moved =
+                g::drawBrassKnob(dl, ImVec2(cxs[1], knobCy), knobR, frac, "##decksquelch", true);
+            const bool handOn = ImGui::IsItemActive();
+            if (ImGui::IsItemHovered()) {
+                std::string tip = tr("Squelch - drag the dial, or scroll over it");
+                if (onAirband) {
+                    tip += "\n";
+                    tip += tr("Airband is listening: this sets the Airband squelch");
+                }
+                ImGui::SetTooltip("%s", tip.c_str());
+            }
+            if (moved >= 0.0f) {
+                const float want = std::clamp(sqLo + moved * (0.0f - sqLo), sqLo, 0.0f);
+                // Pressing the dial without turning it is not a choice of threshold.
+                if (std::fabs(want - sq) > 1.0e-4f) {
+                    sq = want;
+                    if (onAirband) {
+                        deckAirbandDirty_ = true;
+                    } else {
+                        pipeline_.setSquelchDb(squelchDb_);
+                    }
+                    setSquelchAuto(false, "knob");
+                }
+            }
+            // The monitor's new threshold takes effect when the hand lets go (or at once for a
+            // wheel notch, which is never held), and is dropped if it stopped listening meanwhile.
+            if (deckAirbandDirty_ && !airbandListening_) {
+                deckAirbandDirty_ = false;
+            } else if (deckAirbandDirty_ && !handOn) {
+                deckAirbandDirty_ = false;
+                airbandTuneBlock(airbandBlock_);
+            }
+            char sqTxt[16];
+            std::snprintf(sqTxt, sizeof(sqTxt), "%.0f dB", static_cast<double>(sq));
+            reading(1, sqTxt);
+            if (deckAutoKey(dl, ImVec2(cxs[1] - autoKeyW * 0.5f, autoKeyTop),
+                            ImVec2(cxs[1] + autoKeyW * 0.5f, autoKeyTop + autoKeyH), squelchAuto_,
+                            true,
+                            squelchAuto_
+                                ? tr("Automatic squelch - sits 8 dB above the measured noise floor")
+                                : tr("Automatic squelch - follows the noise floor so weak carriers "
+                                     "open it and noise does not"),
+                            "deck:squelchauto")) {
+                setSquelchAuto(!squelchAuto_, "AUTO key");
+            }
+        }
+
+        // --- VOLUME: as it has always been -------------------------------------------
+        {
+            g::census::note("deck:volume");
+            g::census::rect("deck:volume", cxs[2] - knobR, knobCy - knobR, cxs[2] + knobR,
+                            knobCy + knobR);
+            const float moved =
+                g::drawBrassVolumeKnob(dl, ImVec2(cxs[2], knobCy), knobR, volume_);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", tr("Volume - drag the dial, or scroll over it"));
+            }
+            if (moved >= 0.0f) {
+                volume_ = moved;
+                pipeline_.audio().setVolume(volume_);
+            }
+            char vtxt[16];
+            std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume_));
+            reading(2, vtxt);
+        }
     }
 
     // THE TWO METERS, and BOTH ARE DRIVEN BY THE FIGURE PRINTED UNDER THEM.
@@ -6089,12 +6548,19 @@ void AppWindow::drawToolbar() {
             if (i > 0) { ImGui::PopFont(); }
         };
         measure(0);
+        // THE MIDDLE'S RULE IS MEASURED AGAINST THE CLUSTER AS DRAWN, FOR EVERY
+        // COUNTER (0.99.74). It was only for the enlarged one (layout.scale >= 2):
+        // today's counter was drawn at full size wherever the meters were, so the
+        // unscaled rule gave the same answer. The GAIN and SQUELCH dials made the
+        // cluster 999 units, and the first-launch bar now shows the meters by
+        // drawing the deck smaller (deckScale) - an unscaled rule would call the
+        // meters absent there and offer the banner a middle they are standing in.
         cascade::gui::MuteBannerLayout mb = cascade::gui::layoutMuteBanner(
-            barW, scale, coreW, layout.scale >= 2, showMeters, sizes, 1, st.FramePadding.x,
+            barW, scale, coreW, true, showMeters, sizes, 1, st.FramePadding.x,
             st.ItemSpacing.x);
         if (mb.slot != 0) {
             for (int i = 1; i < n; ++i) { measure(i); }
-            mb = cascade::gui::layoutMuteBanner(barW, scale, coreW, layout.scale >= 2, showMeters,
+            mb = cascade::gui::layoutMuteBanner(barW, scale, coreW, true, showMeters,
                                                 sizes, n, st.FramePadding.x, st.ItemSpacing.x);
         }
         drawMuteBanner(mb, barTL, words);
@@ -7182,6 +7648,51 @@ void AppWindow::drawRailStrip() {
     drawRailFoldKey(tl.x, tl.y, size.x);
 }
 
+void AppWindow::toggleStatusFold() {
+    statusCollapsed_ = !statusCollapsed_;
+    cascade::core::diagLogf("status: %s", statusCollapsed_ ? "folded" : "opened");
+}
+
+void AppWindow::drawStatusFoldKey(float colX, float colY, float colW) {
+    // The rail's key (drawRailFoldKey), mirrored for the right-hand panel
+    // (0.99.74, the tester: "Just like you added the << and >> ... can you do
+    // this for the right side Status panel?"). At the LEFT end of the title row
+    // when the column is open - the end nearest the spectrum, as the rail's
+    // sits at its right end - and centred on the strip when it is folded.
+    // The chevrons point the other way round: ">>" on the open column pushes it
+    // away to the right, "<<" on the strip brings it back toward the spectrum.
+    // Pressing it is the whole of folding: the next frame lays the column out
+    // at its new width, and currentConfig carries the choice to the save.
+    const cascade::gui::RailFoldKeyRect r = cascade::gui::statusFoldKeyRect(
+        colX, colY, colW, statusCollapsed_, cascade::gui::uiscale::factor());
+    const ImVec2 tl(r.x0, r.y0);
+    const ImVec2 br(r.x1, r.y1);
+    const bool pressed = benchWordKey(ImGui::GetWindowDrawList(), tl, br, "", true,
+                                      statusCollapsed_ ? "statusunfold" : "statusfold");
+    engraveFoldChevrons(ImGui::GetWindowDrawList(), tl, br, statusCollapsed_, ImGui::IsItemActive());
+    cascade::gui::census::rect(statusCollapsed_ ? "statuskey:unfold" : "statuskey:fold", tl.x,
+                               tl.y, br.x, br.y);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", statusCollapsed_
+                                    ? tr("Show the Status panel")
+                                    : tr("Fold the Status panel away to give the spectrum its "
+                                         "width"));
+    }
+    if (pressed) { toggleStatusFold(); }
+}
+
+void AppWindow::drawStatusStrip() {
+    // THE FOLDED STATUS COLUMN: the plate's ground and bevel, the width of a
+    // key, and the one key that opens it. As narrow as the rail's strip and
+    // for the same reason - the point of folding it is the width - and it
+    // bypasses drawStatusColumn's 40-px guard, which would draw nothing here.
+    const ImVec2 tl = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    cascade::gui::addBenchPlate(ImGui::GetWindowDrawList(), tl,
+                                ImVec2(tl.x + size.x, tl.y + size.y), nullptr);
+    drawStatusFoldKey(tl.x, tl.y, size.x);
+}
+
 void AppWindow::drawMenuColumn() {
     // THE RAIL IS A PLATE, not a column of headers. addBenchPlate lays the
     // ground, the bevel, the engraved title and the rule under it, and hands
@@ -7246,7 +7757,7 @@ void AppWindow::drawMenuColumn() {
             drawRadioSection();
             drawAudioFilterSection();
             drawSinksSection();
-            // The way OUT. Here rather than in VIEW - where the demod scope's
+            // The way OUT. Here rather than in TOOLS - where the demod scope's
             // switch went - because the transmitter is a stage in the signal
             // path and not a way of looking at one; see drawTransmitSection.
             drawTransmitSection();
@@ -7255,16 +7766,20 @@ void AppWindow::drawMenuColumn() {
         case cascade::gui::RailBank::Decode:
             drawDecodeBank();
             break;
-        case cascade::gui::RailBank::View:
-            // --- VIEW: how what was decoded is shown. The radar scope is a
-            // way of LOOKING at the traffic the decoders produce, which is
-            // why it sits beside Display rather than among the decoders.
-            benchGroup(tr("VIEW"));
-            drawDisplaySection();
-            // The bench oscilloscope. Here, beside Display and the radar
-            // scope, because it is a way of LOOKING at what the receiver
-            // produced rather than a stage in producing it - the same
-            // argument that put the radar scope in this bank.
+        case cascade::gui::RailBank::Tools:
+            // --- TOOLS (called VIEW until 0.99.74): the instruments and
+            // utilities that work on what the receiver produced - the two
+            // scopes, the frequency list, the scanner and the airband
+            // monitor. A tester's reading of the old name (2026-10-12): "the
+            // various scopes, the scanner and the airband are not really VIEW
+            // related". Display, the one section here that WAS about how the
+            // screen looks, is the first section of SYSTEM now, beside the
+            // other settings.
+            benchGroup(tr("TOOLS"));
+            // The bench oscilloscope. Here, beside the radar scope, because
+            // it is a way of LOOKING at what the receiver produced rather
+            // than a stage in producing it - the same argument that put the
+            // radar scope in this bank.
             drawDemodScopeSection();
             drawRadarSection();
             drawBookmarksSection();
@@ -7280,6 +7795,15 @@ void AppWindow::drawMenuColumn() {
             break;
         case cascade::gui::RailBank::System:
             benchGroup(tr("SYSTEM"));
+            // DISPLAY, FIRST AND FOLDED (0.99.74), moved here from the bank
+            // that was called VIEW. A tester: "the DISPLAY settings could be
+            // moved to the SYSTEM tab as all of the other items listed on the
+            // VIEW tab are more than just view options". The interface size,
+            // the theme, the spectrum's dB range and the band plan are
+            // settings, and this bank is where the settings are. The section
+            // starts closed and remembers how the user left it
+            // (AppConfig::displayOpen); see drawDisplaySection.
+            drawDisplaySection();
             drawLanguageSection();
             // The crystal correction (0.99.56): the owner asked for it "in
             // settings"; the Source section carries the same controls.
@@ -7406,6 +7930,7 @@ void AppWindow::drawRadioSection() {
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Squelch")), &squelchDb_,
                                -120.0f, 0.0f, "%.0f dB")) {
             pipeline_.setSquelchDb(squelchDb_);
+            setSquelchAuto(false, "slider");  // a hand on the slider is a manual choice
         }
         // Only meaningful for the FM modes; shown greyed elsewhere so the
         // setting is discoverable without implying it does anything to SSB.
@@ -7869,12 +8394,34 @@ void AppWindow::drawDisplaySection() {
     // reading of "you switched it on and there is nothing installed".
     const bool planDrawing = bandPlanOverlay_ && bandPlanError_.empty() &&
                              !bandPlan_.entries().empty();
-    if (benchSection(trId("Display"), true, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
-                     cascade::gui::theme::kPhosphor, planDrawing)) {
+    // FOLDED UNTIL THE USER OPENS IT, AND IT REMEMBERS (0.99.74, a tester):
+    // "When I open FoxSDR and go to the VIEW tab, the DISPLAY menu is always
+    // expanded. Can you have this default to closed or remember the last
+    // status. I am going to the VIEW tab often to use the Airband feature and
+    // I always have to collapse the DISPLAY menu." It used to be
+    // benchSection(..., true, ...), open on every launch. displayOpen_ is the
+    // DEFAULT state ImGui's storage starts from (applyConfig put the saved one
+    // there before the first frame), and what the header reports is written
+    // straight back into it, so currentConfig() saves what the user left. The
+    // answer lags a click by the drawer's 0.18 s fold - benchSection reports
+    // "open" while a section is still folding - which the 2 s save debounce
+    // swallows. Not written while another bank is showing: the section is not
+    // drawn then, and what the user left is still what they left.
+    const bool displayShown =
+        benchSection(trId("Display"), displayOpen_, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
+                     cascade::gui::theme::kPhosphor, planDrawing);
+    displayOpen_ = displayShown;
+    if (displayShown) {
+        // What the folded-by-default test looks for (tests/test_display_fold_app.cpp):
+        // a note that only an OPEN Display section makes, since the section's
+        // own header is noted whether it is open or not.
+        cascade::gui::census::note("display:body");
         // THE INTERFACE SIZE (2026-09-28). A tester on a 4K monitor: "the
         // fonts are too small, I tried other settings in the View tab but
         // couldn't make it bigger" - this row is that setting, in the tab
-        // they actually opened. First, ahead of even the theme, because a
+        // they actually opened (the VIEW bank then; SYSTEM since 0.99.74, and
+        // folded until opened - Ctrl+= and Ctrl+- do not need it open). First,
+        // ahead of even the theme, because a
         // reader who cannot see the rail cannot find anything else here
         // either. "Auto" (the default) follows the monitor's own Windows/
         // X11/Wayland scale, wherever the window is; a fixed percent
@@ -8135,9 +8682,9 @@ void AppWindow::drawDisplaySection() {
 
 // The DECODE bank of the rail, in the reading order its comment explains.
 // The radar scope and the recorder used to be listed here too; they moved
-// to VIEW and SIGNAL PATH when the rail became five banks, because a bank
-// is chosen by what a control IS, and a scope is a view while a recorder
-// is part of the signal path.
+// to VIEW (TOOLS since 0.99.74) and SIGNAL PATH when the rail became five
+// banks, because a bank is chosen by what a control IS, and a scope is an
+// instrument while a recorder is part of the signal path.
 void AppWindow::selectDecodeBankForCapture() {
     // The other half of FOXSDR_OPEN_DECODERS above: the section lives on the
     // DECODE bank, and a capture of a rail showing SIGNAL PATH would prove
@@ -8262,7 +8809,7 @@ static bool benchBankKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     }
     // The word, cut into the brass: ink on metal, never amber. Fitted to the
     // key, like benchWordKey's: five keys share the rail's width, and a bank's
-    // name in most languages is longer than SIGNAL or VIEW. DOWN TO THE
+    // name in most languages is longer than SIGNAL or TOOLS. DOWN TO THE
     // ABSOLUTE FLOOR, not seven tenths: this is the narrowest key on the
     // bench, and "JÄRJESTELMÄ" (fi) and "РАСШИРЕНИЯ" (ru) were cut at seven
     // tenths (app_window.hpp, kBankKeyWordFloorPx).
@@ -8528,6 +9075,29 @@ bool AppWindow::shellOpen(const std::string& target) {
         return cascade::gui::posixShellOpen(target);
 #endif
     });
+}
+
+bool AppWindow::pickFile(const cascade::core::FilePickRequest& request, std::string& path) {
+    path.clear();
+    // THE TEST SEAM (bounded runs only, set in run()): no dialog, the answer is the
+    // variable's text, and an empty one is a cancel.
+    if (filePickSeam_.has_value()) {
+        path = *filePickSeam_;
+        return !path.empty();
+    }
+    // A MODAL DIALOG BLOCKS THIS THREAD for as long as the person takes to choose,
+    // which is the case gui/shell_open.hpp names for the watchdog's user-paced
+    // pause: the same bracket every shell call goes through, so a person reading
+    // a file dialog is not filed as a hang of a healthy application, and the wait
+    // is not counted as a slow frame. The dialog is modal to the main window.
+    cascade::core::FilePickRequest rq = request;
+    rq.owner = cascade::gui::frame::nativeHandle(mainWindow_);
+    bool chosen = false;
+    cascade::gui::runShellOpen(watchdogShellHooks(), [&]() -> bool {
+        chosen = cascade::core::pickFile(rq, path);
+        return chosen;
+    });
+    return chosen;
 }
 
 bool AppWindow::launchInstaller(const std::string& path) {
@@ -11179,6 +11749,7 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
     deviceGainRanges_ = dev.gains();
     deviceGainNames_.clear();
     deviceGainsDb_.clear();
+    manualGainsBeforeAgc_.clear();  // another radio's numbers are not this one's
     for (const cascade::source::GainInfo& g : deviceGainRanges_) {
         deviceGainNames_.push_back(g.name);
         deviceGainsDb_.push_back(0.0f);
@@ -11303,6 +11874,7 @@ void AppWindow::rememberAutoGain(cascade::source::DeviceSource& dev, const std::
 
 bool AppWindow::changeAutoGain(bool want) {
     if (device_ == nullptr || !deviceAgcSupported_) { return false; }
+    const bool wasAgc = deviceAgc_;
     if (!device_->setAutoGain(want)) {
         sourceError_ = device_->lastError();
         return false;  // the device did not change mode: the box stays where it was
@@ -11312,7 +11884,175 @@ bool AppWindow::changeAutoGain(bool want) {
     // gain stays on manual gain at its next open. The debounced save notices
     // through configsEqual (autoGainByRadio); this calls no save of its own.
     rememberAutoGain(*device_, deviceArgs_, want);
+    if (want == wasAgc) { return true; }  // nothing changed mode: nothing for the gains to follow
+
+    // THE GAINS FOLLOW THE SWITCH (0.99.74, found live on the B200 by the verifier of the top
+    // bar's GAIN dial). Leaving automatic gain a radio may fall to the BOTTOM of every stage (a
+    // B200 under SoapyUHD sat about 35 dB below the 76 dB the mirror, and so the dial, still
+    // showed), and this window used to read nothing back for any radio but an Airspy: the dial
+    // lied until the hand touched it. So:
+    //   ON   the mirrors are read back, the dial shows what the radio reports - after keeping the
+    //        numbers the user had set (manualGainsBeforeAgc_), because what a radio reports while
+    //        it gains itself is not what they will want back;
+    //   OFF  every stage is given its manual value again (the kept numbers, else the mirror's: a
+    //        radio opened already on automatic gain has only what the open read), a step the radio
+    //        turns down is dropped without a word as the dial's own steps are, and then every stage
+    //        is read back, so the mirror is what the radio really holds.
+    const bool airspy = cascade::gui::asAirspy(device_) != nullptr;
+    if (want) {
+        manualGainsBeforeAgc_.clear();
+        for (std::size_t i = 0; i < deviceGainNames_.size() && i < deviceGainsDb_.size(); ++i) {
+            manualGainsBeforeAgc_.emplace_back(deviceGainNames_[i], deviceGainsDb_[i]);
+        }
+        refreshDeviceGainMirrors();
+    } else {
+        std::size_t restored = 0;
+        for (std::size_t i = 0; i < deviceGainNames_.size() && i < deviceGainsDb_.size(); ++i) {
+            float db = deviceGainsDb_[i];
+            for (const auto& kept : manualGainsBeforeAgc_) {
+                if (kept.first == deviceGainNames_[i]) {
+                    db = kept.second;
+                    break;
+                }
+            }
+            if (device_->setGainDb(deviceGainNames_[i], static_cast<double>(db))) { ++restored; }
+        }
+        manualGainsBeforeAgc_.clear();
+        refreshDeviceGainMirrors();
+        if (restored > 0) { cascade::core::diagLogf("source: manual gain restored after auto gain off"); }
+    }
+    // The box is what the radio ACCEPTED, as it has always been for every radio but an Airspy (whose
+    // two AGC switches the readback above is the authority on): refreshDeviceGainMirrors re-read
+    // autoGain(), which a driver need not keep in step.
+    if (!airspy) { deviceAgc_ = want; }
     return true;
+}
+
+// --- THE TOP BAR'S GAIN AND SQUELCH CONTROLS (0.99.74) -----------------------------
+//
+// The tester: "a gain knob, just like the Volume knob ... with a switch for Auto Gain" and "a
+// Squelch knob, like the gain knob above but with a button for AUTO or above the noise". The
+// dials and their keys are drawn in drawToolbar; what they DO is here.
+
+void AppWindow::pressDeckAutoGain() {
+    if (device_ == nullptr || !deviceAgcSupported_) { return; }
+    // A step of the gain dial still waiting for its turn would only fight the switch.
+    deckGainDirty_ = false;
+    // The Source section's "Auto gain" box, from the bar: changeAutoGain asks the radio, mirrors
+    // an accepted change into deviceAgc_, remembers it for this radio and, on a refusal, leaves
+    // the key where it was and puts the driver's words in the Source section's error line.
+    if (changeAutoGain(!deviceAgc_)) {
+        // An Airspy's two AGCs are part of its gain mode: the gain list and the memory follow,
+        // as they do for the same switch from the web control.
+        if (cascade::gui::asAirspy(device_) != nullptr) {
+            refreshDeviceGainMirrors();
+            airspyRememberOpen();
+        }
+    }
+}
+
+void AppWindow::applyDeckGain() {
+    deckGainSetS_ = ImGui::GetTime();
+    if (device_ == nullptr || deviceGainNames_.empty() || deviceAgc_) {
+        deckGainDirty_ = false;
+        return;
+    }
+    // Rounded to the stage's own step from its own minimum, inside its range, so a drag asks for
+    // a value the radio has.
+    double db = static_cast<double>(deckGainTargetDb_);
+    if (!deviceGainRanges_.empty()) {
+        const cascade::source::GainInfo& gi = deviceGainRanges_[0];
+        if (gi.maxDb > gi.minDb) {
+            db = std::clamp(db, gi.minDb, gi.maxDb);
+            if (gi.stepDb > 0.0) {
+                db = std::clamp(gi.minDb + std::round((db - gi.minDb) / gi.stepDb) * gi.stepDb,
+                                gi.minDb, gi.maxDb);
+            }
+        }
+    }
+    if (device_->setGainDb(deviceGainNames_[0], db)) {
+        // THE READBACK, not the request - the radio quantises (the Source section's sliders say
+        // the same) - and an Airspy's gains are remembered with its mode.
+        deviceGainsDb_[0] = static_cast<float>(device_->gainDb(deviceGainNames_[0]));
+        airspyRememberOpen();
+        deckGainDirty_ = false;
+        deckGainRetries_ = 0;
+    } else if (++deckGainRetries_ > kDeckGainRetries) {
+        // DROPPED WITHOUT A WORD: sourceError_ is the Source section's error line, and a dial
+        // that moves every frame must not fill it. The dial goes back to the last readback.
+        deckGainDirty_ = false;
+        deckGainRetries_ = 0;
+    }
+}
+
+void AppWindow::setSquelchAuto(bool on, const char* why) {
+    if (squelchAuto_ == on) { return; }
+    squelchAuto_ = on;
+    // Either way the history is another session's: the floor was measured with the threshold
+    // somewhere else, or not at all.
+    noiseFloor_.reset();
+    squelchAutoSetS_ = -1.0e9;
+    cascade::core::diagLogf("squelch: auto %s (%s)", on ? "on" : "off", why != nullptr ? why : "");
+}
+
+void AppWindow::autoSquelchFrame() {
+    if (!squelchAuto_) { return; }
+    const double now = ImGui::GetTime();
+    // WHILE THE AIRBAND MONITOR LISTENS, AUTO IS THE MONITOR'S OWN RULE: the median channel
+    // level plus 8 dB (airbandAboveTheNoise - the Airband section's "Above the noise" key, the
+    // one place it is written), re-applied every quarter second to the monitor's squelch, and
+    // not the noise tracker, which measures the receiver's VFO channel - the one thing the
+    // monitor is not playing. The block is rebuilt only when the value moves by half a decibel
+    // or more. The receiver's own threshold is left where it was; the tracker starts afresh when
+    // the monitor stops, on whichever channel the receiver is then on.
+    if (airbandListening_) {
+        if (!squelchAutoOnAirband_) {
+            squelchAutoOnAirband_ = true;
+            noiseFloor_.reset();
+            squelchAutoSetS_ = -1.0e9;
+        }
+        if (now - squelchAutoSetS_ >= 0.25) {
+            squelchAutoSetS_ = now;
+            airbandAboveTheNoise(0.5f);
+        }
+        return;
+    }
+    if (squelchAutoOnAirband_) {
+        squelchAutoOnAirband_ = false;
+        noiseFloor_.reset();
+        squelchAutoSetS_ = -1.0e9;
+    }
+    // Nothing to measure while the receiver is stopped (the meter reads "no data" then), and the
+    // history from before it stopped is not the channel it will start on.
+    if (!pipeline_.running()) {
+        noiseFloor_.reset();
+        return;
+    }
+    // A retune, another bandwidth or another mode is another channel and another floor: the
+    // history belongs to the one before, and the threshold it set stays until the new one has
+    // half a second of its own.
+    const double absHz = currentAbsoluteHz();
+    if (std::fabs(absHz - squelchAutoAbsHz_) > 1.0 || vfoBandwidthHz_ != squelchAutoBwHz_ ||
+        modeIndex_ != squelchAutoMode_) {
+        noiseFloor_.reset();
+        squelchAutoAbsHz_ = absHz;
+        squelchAutoBwHz_ = vfoBandwidthHz_;
+        squelchAutoMode_ = modeIndex_;
+    }
+    // THE GATE IS TOLD TO THE TRACKER: while the squelch is open the signal is being passed, which
+    // is not the noise, and once there is a floor estimate such readings are not fed - a carrier
+    // never teaches the floor (core/noise_floor_tracker.hpp has the rule and its one valve).
+    noiseFloor_.push(static_cast<double>(pipeline_.signalPowerDb()), now, pipeline_.squelchOpen());
+    if (now - squelchAutoSetS_ < 0.25) { return; }
+    const double target = cascade::core::autoSquelchTargetDb(noiseFloor_.floorDb());
+    if (std::isnan(target)) { return; }
+    squelchAutoSetS_ = now;
+    // Half a decibel is the smallest move worth a call: the floor's own wobble must not turn the
+    // dial and the gate every quarter second.
+    if (std::fabs(target - static_cast<double>(squelchDb_)) >= 0.5) {
+        squelchDb_ = static_cast<float>(target);
+        pipeline_.setSquelchDb(squelchDb_);
+    }
 }
 
 // --- RESTART SDRPLAY SERVICE (0.99.55, source/sdrplay_service.hpp) ---------
@@ -12573,7 +13313,14 @@ void AppWindow::rescanPlugins() {
     }
 
     phases.begin("load");
-    pluginHost_.scan(pluginDir_);
+    // WHERE EACH FILE CAME FROM (0.99.74), from the install records the inventory above already
+    // read - the host reads no manifest of its own. It is what lets the loader refuse to let a
+    // plugin site's module take a declared name from an official one (resolveDuplicatePlugins).
+    cascade::core::PluginFileOrigins origins;
+    for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
+        if (!ip.file.empty()) { origins[ip.file] = !ip.source.empty(); }
+    }
+    pluginHost_.scan(pluginDir_, origins);
     phases.begin("restart");
 
     // WHICH PLUGINS ARE MAPPED, one line each, because plugins are
@@ -12808,7 +13555,9 @@ void AppWindow::drawPluginStoreSection() {
         ImGui::SetTooltip(tr("An https:// catalogue, or a path to a local index.json.\n"
                           "Read when you first open the plugin store in a session, or\n"
                           "press CHECK NOW there - never at startup. Plugin downloads\n"
-                          "are always https and always sha256-verified."));
+                          "are always https and always sha256-verified.\n"
+                          "This replaces the FoxSDR catalogue. To add someone else's\n"
+                          "catalogue beside it, use SITES in the plugin store."));
     }
 
     // THE RETIRED MODULES HANG UNDER THE STORE'S KEY, and they are the one
@@ -12934,7 +13683,13 @@ void AppWindow::drawDecodersSection() {
                                  !cascade::core::settingFieldsFrom(p.settingsUi).empty();
         if (!hasPresets && !isDecoder && !hasSettings) { continue; }
         anyRow = true;
-        ImGui::PushID(static_cast<int>(i));
+        // THE ROW IS IDENTIFIED BY THE PLUGIN, NOT BY ITS PLACE IN THE LIST (0.99.74). The index
+        // was the id while every item in the row was a button, which keeps no state. The
+        // "Plugin settings" node below does - its open state is ImGui's, kept against this id -
+        // and a rescan (a plugin installed, updated or removed) moves every index after it, so
+        // a fold opened on one plugin would have reappeared open on the NEXT one's row. The
+        // run id is the module's file name without its version, so an update keeps it too.
+        ImGui::PushID(cascade::core::pluginRunId(cascade::core::pluginKey(p)).c_str());
         ImGui::SeparatorText(p.name.c_str());
         drawPluginPresets(p);
         if (isDecoder) {
@@ -12988,10 +13743,32 @@ void AppWindow::drawDecodersSection() {
                                   "silences nothing. The volume setting is not touched."));
             }
         }
-        // THE PLUGIN'S OWN FORM (CASCADE_CAP_SETTINGS_UI), under its keys.
-        // Safe inside this loop: an edit writes only the settings store,
-        // which nothing here iterates, and rebuilds no instance.
-        if (hasSettings) { drawPluginSettingsFields(p, "rail"); }
+        // THE PLUGIN'S OWN FORM (CASCADE_CAP_SETTINGS_UI), under its keys, FOLDED BY DEFAULT
+        // (0.99.74). A tester scrolling this bank (2026-10-12): "if I am scrolling down through
+        // the various decoders, you get to the Demod Analyzer and have to scroll past a bunch of
+        // settings. It would be nice if these were inside of a sub-menu that was collapsed by
+        // default instead". Flags 0 is closed until clicked, as the plugin's own window folds
+        // the same form (drawPluginSettingsSection); a tree node because benchSection keeps its
+        // pending press in statics and cannot nest inside the section this is drawn in. A box
+        // half typed in when the fold closes is committed by flushUntouchedSettingsEdits, as it
+        // is when a window closes. Safe inside this loop: an edit writes only the settings
+        // store, which nothing here iterates, and rebuilds no instance.
+        if (hasSettings) {
+            const bool settingsOpen = ImGui::TreeNodeEx(trId("Plugin settings##railsettings"), 0);
+            if (cascade::gui::census::enabled()) {
+                // The state without reading pixels, and where the line is, so a test can press it.
+                const ImVec2 nodeMin = ImGui::GetItemRectMin();
+                const ImVec2 nodeMax = ImGui::GetItemRectMax();
+                cascade::gui::census::rect("decoders:settingsnode", nodeMin.x, nodeMin.y,
+                                           nodeMax.x, nodeMax.y);
+                cascade::gui::census::note(settingsOpen ? "decoders:settings:open"
+                                                        : "decoders:settings:folded");
+            }
+            if (settingsOpen) {
+                drawPluginSettingsFields(p, "rail");
+                ImGui::TreePop();
+            }
+        }
         ImGui::PopID();
     }
     if (toggleMuteIdx >= 0 && static_cast<std::size_t>(toggleMuteIdx) < list.size()) {
@@ -13224,6 +14001,8 @@ std::vector<cascade::core::ScannedModule> AppWindow::scannedModules() const {
         for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
             if (!ip.id.empty() && equalsFileNameAscii(ip.file, m.file)) {
                 m.id = ip.id;
+                // ...and the source it was installed from (0.99.74): the id alone does not name it.
+                m.source = ip.source;
                 break;
             }
         }
@@ -13324,7 +14103,13 @@ std::string AppWindow::pluginInstallBlockedReason(int idx, bool acknowledged) co
     if (catalogEntryInstalled(e)) { return FOX_TR_NOOP("already installed"); }
     // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between
     // a compatible, licensed, not-yet-installed plugin and the download.
-    if (!e.legalNotice.empty() && !acknowledged) {
+    //
+    // A PLUGIN FROM A SITE THE USER ADDED ALWAYS CARRIES A NOTICE (0.99.74): the page says it comes
+    // from somewhere else and that FoxSDR has not reviewed it, whether or not its maker published a
+    // legal notice of their own, and the tick under that box is the consent. So the gate asks for
+    // the acknowledgement of every such plugin - the same sentence, the same tick, the same web
+    // and ADD ALL paths a legal notice always had.
+    if ((!e.legalNotice.empty() || !e.source.empty()) && !acknowledged) {
         return FOX_TR_NOOP("the legal notice must be acknowledged first");
     }
     return {};
@@ -13345,6 +14130,152 @@ void AppWindow::loadCachedCatalogue() {
         // words, and names the kept file only as "the kept catalogue".
         cascade::core::diagWarnf("plugin store: kept catalogue ignored - %s", error.c_str());
     }
+}
+
+int AppWindow::catalogIndexByKey(const std::string& key) const {
+    for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
+        const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(i)];
+        if (cascade::core::PluginRepo::catalogueKey(e.source, e.id) == key) { return i; }
+    }
+    return -1;
+}
+
+void AppWindow::loadCachedSites() {
+    // The official part of whatever is on screen stays; each site's kept copy is merged under the
+    // same rules a fresh read is (PluginRepo::mergeSite: official wins an id, one host).
+    std::vector<cascade::core::PluginCatalogEntry> merged;
+    for (const cascade::core::PluginCatalogEntry& e : catalog_) {
+        if (e.source.empty()) { merged.push_back(e); }
+    }
+    siteStatus_.clear();
+    bool anyKept = false;
+    for (const std::string& url : pluginSites_) {
+        SiteStatus st;
+        st.url = url;
+        std::vector<cascade::core::PluginCatalogEntry> kept;
+        std::int64_t when = 0;
+        std::string error;
+        if (cascade::core::PluginRepo::loadSiteCache(pluginDir_, url, kept, when, error)) {
+            const cascade::core::PluginRepo::SiteMergeResult m =
+                cascade::core::PluginRepo::mergeSite(merged, kept, url);
+            merged = m.merged;
+            st.state = SiteStatus::State::Kept;
+            st.listed = m.added;
+            st.hiddenSameId = m.hiddenSameId;
+            st.hiddenOffHost = m.hiddenOffHost;
+            anyKept = anyKept || m.added > 0;
+        } else if (error != "no catalogue has been kept yet") {
+            // The reason is PluginRepo's, in words, and names the file only as "the kept
+            // catalogue": never an address or a path in the log.
+            cascade::core::diagWarnf("plugin store: a site's kept catalogue ignored - %s", error.c_str());
+        }
+        siteStatus_.push_back(std::move(st));
+    }
+    catalog_ = std::move(merged);
+    // A list made of kept copies is not a read of this session (see catalogueFromCache_).
+    if (anyKept) { catalogueFromCache_ = true; }
+}
+
+void AppWindow::applySiteResults(const std::vector<CatalogFetchResult::SiteResult>& results) {
+    std::vector<SiteStatus> next;
+    int read = 0;
+    int failed = 0;
+    int hidden = 0;
+    for (const std::string& url : pluginSites_) {
+        SiteStatus st;
+        st.url = url;
+        for (const CatalogFetchResult::SiteResult& r : results) {
+            if (r.url != url) { continue; }
+            st.listed = r.listed;
+            st.hiddenSameId = r.hiddenSameId;
+            st.hiddenOffHost = r.hiddenOffHost;
+            if (r.ok) {
+                st.state = SiteStatus::State::Read;
+                ++read;
+            } else {
+                st.state = SiteStatus::State::Failed;
+                st.error = r.error;
+                ++failed;
+            }
+            hidden += r.hiddenSameId + r.hiddenOffHost;
+            // What parseIndex() dropped, a few lines at most, as for the official catalogue - ids and
+            // words only (never the address).
+            constexpr std::size_t kMaxSiteNotes = 4;
+            for (std::size_t i = 0; i < r.parseReport.size() && i < kMaxSiteNotes; ++i) {
+                cascade::core::diagLogf("plugin store: site note - %s", r.parseReport[i].c_str());
+            }
+            break;
+        }
+        // A site the read did not know (added while it ran) keeps its earlier status.
+        if (st.state == SiteStatus::State::NotRead) {
+            for (const SiteStatus& old : siteStatus_) {
+                if (old.url == url) { st = old; break; }
+            }
+        }
+        next.push_back(std::move(st));
+    }
+    siteStatus_ = std::move(next);
+    if (!pluginSites_.empty()) {
+        cascade::core::diagLogf("plugin store: %zu plugin sites - %d read, %d could not be read, %d plugins hidden",
+                                pluginSites_.size(), read, failed, hidden);
+    }
+}
+
+bool AppWindow::addPluginSite(const std::string& raw, std::string& why) {
+    why.clear();
+    // The list does not change under a read or an install in flight: the read hands back a merged
+    // list made from the sites it was started with.
+    if (catalogPending_ || installPending_) {
+        why = "a transfer is already in progress";
+        return false;
+    }
+    std::string url;
+    if (!cascade::core::PluginRepo::normaliseSiteUrl(raw, url, why)) { return false; }
+    if (url == cascade::core::PluginRepo::defaultIndexUrl() || url == pluginCatalogueUrl_ ||
+        std::find(pluginSites_.begin(), pluginSites_.end(), url) != pluginSites_.end()) {
+        why = "that site is already in the list";
+        return false;
+    }
+    if (pluginSites_.size() >= cascade::core::AppConfig::kMaxPluginSites) {
+        why = "the list of sites is full";
+        return false;
+    }
+    pluginSites_.push_back(url);
+    SiteStatus st;
+    st.url = url;
+    siteStatus_.push_back(std::move(st));
+    // The config follows through the debounced save (configsEqual notices pluginSites_). The read
+    // that follows is the store's own CHECK NOW; if a transfer is running it is refused and the
+    // site waits, "not read yet", for the next one.
+    cascade::core::diagLogf("plugin store: a plugin site was added (%zu now)", pluginSites_.size());
+    startCatalogFetch();
+    return true;
+}
+
+void AppWindow::removePluginSite(const std::string& url) {
+    // Not under a read or an install in flight (see addPluginSite): the read would hand back the
+    // site's plugins into a list that had just forgotten it.
+    if (catalogPending_ || installPending_) { return; }
+    const auto it = std::find(pluginSites_.begin(), pluginSites_.end(), url);
+    if (it == pluginSites_.end()) { return; }
+    pluginSites_.erase(it);
+    siteStatus_.erase(std::remove_if(siteStatus_.begin(), siteStatus_.end(),
+                                     [&](const SiteStatus& s) { return s.url == url; }),
+                      siteStatus_.end());
+    // ITS PLUGINS LEAVE THE LIST; what was installed from it stays installed (the files and the
+    // records are untouched - the records keep their source, and no entry carries it any more, so
+    // they get no updates) and its kept copy goes.
+    catalog_.erase(std::remove_if(catalog_.begin(), catalog_.end(),
+                                  [&](const cascade::core::PluginCatalogEntry& e) { return e.source == url; }),
+                   catalog_.end());
+    forgetStalePictures();
+    if (pluginStoreDeck_) { cascade::gui::forgetCatalogueConsent(*pluginStoreDeck_); }
+    {
+        // A few small deletes on the GUI thread, under a pause, as the other removals here are.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        (void)cascade::core::PluginRepo::removeSiteCache(pluginDir_, url);
+    }
+    cascade::core::diagLogf("plugin store: a plugin site was removed (%zu left)", pluginSites_.size());
 }
 
 void AppWindow::startCatalogFetch() {
@@ -13372,8 +14303,72 @@ void AppWindow::startCatalogFetch() {
 
     const std::string url = pluginCatalogueUrl_;
     const std::string dir = pluginDir_;
-    catalogFuture_ = std::async(std::launch::async, [this, url, dir] {
+    // THE PLUGIN SITES (0.99.74) are read on this same worker, after the official catalogue, and what
+    // is on screen is handed over by value: a site that cannot be read this time is listed from the
+    // earlier read of this session, or from its kept copy, exactly as the official catalogue is.
+    const std::vector<std::string> sites = pluginSites_;
+    const std::vector<cascade::core::PluginCatalogEntry> shown =
+        sites.empty() ? std::vector<cascade::core::PluginCatalogEntry>{} : catalog_;
+    catalogFuture_ = std::async(std::launch::async, [this, url, dir, sites, shown] {
         CatalogFetchResult r;
+        // Reads every site in order and merges each into r.entries, OFFICIAL WINNING an id
+        // (PluginRepo::mergeSite, which also holds each site's files to its own host). `fresh`
+        // receives the merged entries of the sites READ THIS TIME: only those may write a
+        // retirement floor. A site that fails never touches the list it found - it contributes
+        // its earlier entries, or none.
+        const auto readSites = [&](std::vector<cascade::core::PluginCatalogEntry>& fresh) {
+            r.sitesDone = true;
+            for (const std::string& siteUrl : sites) {
+                CatalogFetchResult::SiteResult sr;
+                sr.url = siteUrl;
+                std::vector<cascade::core::PluginCatalogEntry> got;
+                std::string siteText;
+                if (siteUrl.find("://") == std::string::npos) {
+                    // A local index (the test seam, and a share): read from disk, held to the same cap.
+                    sr.ok = readLocalCatalogue(siteUrl, got, sr.error, &siteText, &sr.parseReport,
+                                               cascade::core::PluginRepo::kMaxSiteIndexBytes);
+                } else {
+                    sr.ok = pluginRepo_.fetchSiteIndex(siteUrl, got, siteText, sr.parseReport, sr.error);
+                }
+                if (sr.ok) {
+                    sr.readTime = static_cast<std::int64_t>(std::time(nullptr));
+                    if (!cascade::core::PluginRepo::saveSiteCache(dir, siteUrl, siteText, sr.readTime,
+                                                                  sr.cacheError)) {
+                        sr.cacheError = "the site loaded, but could not be kept for the next start: " +
+                                        sr.cacheError;
+                    }
+                } else {
+                    // The earlier read of this session, else the kept copy: never an empty store
+                    // for a site that is only down for a moment.
+                    got.clear();
+                    for (const cascade::core::PluginCatalogEntry& e : shown) {
+                        if (e.source == siteUrl) { got.push_back(e); }
+                    }
+                    if (got.empty()) {
+                        std::int64_t when = 0;
+                        std::string keptError;
+                        if (cascade::core::PluginRepo::loadSiteCache(dir, siteUrl, got, when, keptError)) {
+                            sr.readTime = when;
+                        } else {
+                            got.clear();
+                        }
+                    }
+                    sr.keptShown = !got.empty();
+                }
+                const cascade::core::PluginRepo::SiteMergeResult merge =
+                    cascade::core::PluginRepo::mergeSite(r.entries, got, siteUrl);
+                r.entries = merge.merged;
+                sr.listed = merge.added;
+                sr.hiddenSameId = merge.hiddenSameId;
+                sr.hiddenOffHost = merge.hiddenOffHost;
+                if (sr.ok) {
+                    for (const cascade::core::PluginCatalogEntry& e : r.entries) {
+                        if (e.source == siteUrl) { fresh.push_back(e); }
+                    }
+                }
+                r.sites.push_back(std::move(sr));
+            }
+        };
         std::string rawText;  // the index as read, once it parsed - what the cache keeps
         if (url.find("://") == std::string::npos) {
             // No scheme at all: a local file (see readLocalCatalogue). A URL
@@ -13448,8 +14443,20 @@ void AppWindow::startCatalogFetch() {
             // plugin's floor is cached exactly like any public one (and a
             // later fetch made outside the region cannot remove it — see
             // mergePolicies' own fail-open rule).
+            //
+            // THE PLUGIN SITES JOIN THE LIST HERE (0.99.74), after the regional step and before
+            // this, so the policy cache and the picture prune below are judged against the MERGED
+            // list. Only what was read this time writes a floor: the official catalogue's (and the
+            // regional list's) entries, and each site's that was read - a site that failed
+            // contributes its earlier entries to the list and nothing to the cache.
+            std::vector<cascade::core::PluginCatalogEntry> freshForPolicy = r.entries;
+            if (!sites.empty()) {
+                std::vector<cascade::core::PluginCatalogEntry> freshFromSites;
+                readSites(freshFromSites);
+                freshForPolicy.insert(freshForPolicy.end(), freshFromSites.begin(), freshFromSites.end());
+            }
             std::string policyError;
-            if (!cascade::core::PluginRepo::cacheCataloguePolicies(dir, r.entries,
+            if (!cascade::core::PluginRepo::cacheCataloguePolicies(dir, freshForPolicy,
                                                                    policyError)) {
                 r.policyError = "the catalogue loaded, but its plugin version policy could "
                                 "not be saved, so it will not be remembered: " +
@@ -13458,6 +14465,7 @@ void AppWindow::startCatalogFetch() {
             // PICTURES THE CATALOGUE NO LONGER NAMES go from the store-cache
             // folder (0.99.72), here on the worker with the other disk work, judged
             // against the list just read - never against a kept copy or a failure.
+            // The MERGED list (0.99.74): a site's pictures are named by its entries.
             r.pruned = cascade::core::PluginRepo::pruneScreenshotCache(dir, r.entries).size();
         } else {
             // THE READ FAILED: bring back the kept copy for the GUI to show if it
@@ -13470,6 +14478,27 @@ void AppWindow::startCatalogFetch() {
                 r.keptEntries.clear();
                 r.keptTime = 0;
             }
+            // THE SITES ARE READ ANYWAY (0.99.74): a user whose official source is down - or is a
+            // share that is gone - still has the sites they added. Under them goes what stands in the
+            // official catalogue's place: what was on screen, else the kept copy. Nothing is pruned
+            // and no floor is written from the official part, which was not read.
+            if (!sites.empty()) {
+                for (const cascade::core::PluginCatalogEntry& e : shown) {
+                    if (e.source.empty()) { r.entries.push_back(e); }
+                }
+                if (r.entries.empty()) { r.entries = r.keptEntries; }
+                std::vector<cascade::core::PluginCatalogEntry> freshFromSites;
+                readSites(freshFromSites);
+                if (!freshFromSites.empty()) {
+                    std::string policyError;
+                    if (!cascade::core::PluginRepo::cacheCataloguePolicies(dir, freshFromSites,
+                                                                           policyError)) {
+                        r.policyError = "the sites loaded, but their plugin version policy could "
+                                        "not be saved, so it will not be remembered: " +
+                                        policyError;
+                    }
+                }
+            }
         }
         return r;
     });
@@ -13480,8 +14509,10 @@ void AppWindow::startInstall(cascade::core::PluginCatalogEntry entry) {
     installError_.clear();
     installReport_.clear();
     installBusyName_ = entry.name;
-    installBusyId_ = entry.id;
-    installResultId_ = entry.id;
+    // BY CATALOGUE KEY (0.99.74): the store compares these with a card's key, which is the id for an
+    // official plugin and "<id>@<site>" for a site's.
+    installBusyId_ = cascade::core::PluginRepo::catalogueKey(entry.source, entry.id);
+    installResultId_ = installBusyId_;
     installPending_ = true;
     const std::string dir = pluginDir_;
     installFuture_ = std::async(
@@ -13510,8 +14541,8 @@ void AppWindow::startUpdate(const cascade::core::PluginUpdate& u) {
     installError_.clear();
     installReport_.clear();
     installBusyName_ = u.entry->name;
-    installBusyId_ = u.entry->id;
-    installResultId_ = u.entry->id;
+    installBusyId_ = cascade::core::PluginRepo::catalogueKey(u.entry->source, u.entry->id);
+    installResultId_ = installBusyId_;
     installPending_ = true;
     const std::string dir = pluginDir_;
     // The plan's entry aliases catalog_, which the GUI may replace while this
@@ -13541,6 +14572,9 @@ void AppWindow::pollPluginAsync() {
         regionalState_ = r.regionalState;
         regionalAdded_ = r.regionalAdded;
         regionalDropped_ = r.regionalDropped;
+        // WHAT EACH PLUGIN SITE SAID (0.99.74), whether or not the official read succeeded: the
+        // status lines and the SITES panel are drawn from this.
+        if (r.sitesDone) { applySiteResults(r.sites); }
         if (r.ok) {
             catalog_ = std::move(r.entries);
             // READ THIS SESSION, now: the kept copy (if that is what was on
@@ -13562,11 +14596,17 @@ void AppWindow::pollPluginAsync() {
                 cascade::core::diagLogf("plugin store: catalogue note - and %zu more",
                                         r.parseReport.size() - kMaxNoteLines);
             }
+            // "In the catalogue" is the OFFICIAL catalogue's count (and the regional list's): a
+            // site's plugins are counted on its own status line (0.99.74).
+            std::size_t officialCount = 0;
+            for (const cascade::core::PluginCatalogEntry& ce : catalog_) {
+                if (ce.source.empty()) { ++officialCount; }
+            }
             std::string statusBuf;
             cascade::core::formatUtf8(statusBuf,
-                          catalog_.size() == 1u ? tr("%zu plugin in the catalogue")
-                                                : tr("%zu plugins in the catalogue"),
-                          catalog_.size());
+                          officialCount == 1u ? tr("%zu plugin in the catalogue")
+                                              : tr("%zu plugins in the catalogue"),
+                          officialCount);
             catalogStatus_ = statusBuf;
             // "When the user last chose to look" — recorded here, never acted
             // on: no code path reads this to decide whether to fetch (see
@@ -13601,7 +14641,20 @@ void AppWindow::pollPluginAsync() {
             // <date>; could not refresh: <reason>" of it and catalogueReadTime_.
             catalogError_ = r.error;
             catalogueRefreshFailed_ = true;
-            if (catalog_.empty() && !r.keptEntries.empty()) {
+            if (r.sitesDone) {
+                // The sites were read anyway (startCatalogFetch), and r.entries is the list they
+                // were merged into: what stood in the official catalogue's place - the list on
+                // screen, else the kept copy - and then each site's. Same official part either
+                // way, so replacing the list loses nothing.
+                const bool wasEmpty = catalog_.empty();
+                catalog_ = std::move(r.entries);
+                forgetStalePictures();
+                if (wasEmpty && !r.keptEntries.empty()) {
+                    catalogueReadTime_ = r.keptTime;
+                    catalogueFromCache_ = true;
+                }
+                if (!r.policyError.empty()) { catalogError_ += " " + r.policyError; }
+            } else if (catalog_.empty() && !r.keptEntries.empty()) {
                 catalog_ = std::move(r.keptEntries);
                 catalogueReadTime_ = r.keptTime;
                 catalogueFromCache_ = true;
@@ -13707,8 +14760,14 @@ void AppWindow::pollPluginAsync() {
 
 void AppWindow::requestScreenshots(const std::string& pluginId, bool retryFailed) {
     for (const cascade::core::PluginCatalogEntry& e : catalog_) {
-        if (e.id != pluginId) { continue; }
+        if (cascade::core::PluginRepo::catalogueKey(e.source, e.id) != pluginId) { continue; }
         for (const cascade::core::CatalogScreenshot& s : e.screenshots) {
+            // A SITE'S PICTURE IS FETCHED ONLY FROM THE SITE'S OWN HOST (0.99.74). mergeSite() held every
+            // url to it when the list was made; this is the second look, at the moment of the request,
+            // because the request is what contacts an address.
+            if (!e.source.empty() && !cascade::core::PluginRepo::siteFilesAllowed(s.url, e.source)) {
+                continue;
+            }
             PictureStatus& st = pictures_[s.sha256];
             if (st.state == PictureState::Ready || st.state == PictureState::Pending) { continue; }
             if (st.state == PictureState::Failed && !retryFailed) { continue; }
@@ -13842,13 +14901,9 @@ void AppWindow::pumpAddAll() {
         // THE ROW IS LOOKED UP AGAIN BY ID. catalog_ may have been replaced
         // since the queue was built, and an entry that is no longer there is a
         // failure with a reason rather than a silent skip.
-        int idx = -1;
-        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-            if (catalog_[static_cast<std::size_t>(i)].id == id) {
-                idx = i;
-                break;
-            }
-        }
+        // (`id` is a catalogue KEY, 0.99.74: the plan only ever holds official plugins, whose key is
+        // their id, but the lookup is by key like every other.)
+        const int idx = catalogIndexByKey(id);
         if (idx < 0) {
             ++addAllRun_.failed;
             addAllRun_.failures.emplace_back(id, FOX_TR_NOOP("no longer in the catalogue"));
@@ -13863,7 +14918,7 @@ void AppWindow::pumpAddAll() {
             const std::vector<cascade::core::PluginUpdate> plans = plannedPluginUpdates();
             bool started = false;
             for (const cascade::core::PluginUpdate& u : plans) {
-                if (u.id != id) { continue; }
+                if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) != id) { continue; }
                 startUpdate(u);
                 started = installPending_;
                 break;
@@ -14088,10 +15143,14 @@ void AppWindow::refreshPluginRunner() {
     // answered by the grant the user gave, not by a clear() the rescan did.
     applyPluginTuneGrants();
     applyPluginSettingsGrants();
+    applyPluginTransmitGrants();
     pluginUi_.rebuild(pluginHost_.plugins());
     // The receiver's stream clock, which the runner writes and the
     // level-1 get_stream_info reads (CascadeStreamInfo).
     pluginRunner_.setStreamClock(pluginUi_.api().streamClock());
+    // The ring a transmitting plugin's audio travels through (host API level 2): the
+    // same one the transmitter reads, so neither holds a pointer to the other.
+    pluginRunner_.setTxLink(txLink_);
     pipeline_.setPluginRunner(nullptr);
     if (patchRunning_) {
         // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
@@ -14135,6 +15194,7 @@ void AppWindow::refreshPluginRunner() {
     // the tracker that worked a moment ago would go quiet with no explanation.
     applyPluginTuneGrants();
     applyPluginSettingsGrants();
+    applyPluginTransmitGrants();
 }
 
 void AppWindow::attachBasemapAndTrackInfo() {
@@ -18093,7 +19153,11 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
 void AppWindow::fillStoreModule(int i, const std::vector<cascade::core::PluginUpdate>& updates,
                                 cascade::gui::StoreModule& sm) const {
     const cascade::core::PluginCatalogEntry& e = catalog_[static_cast<std::size_t>(i)];
-    sm.id = e.id;
+    // THE CATALOGUE KEY (0.99.74): the id for an official plugin - so every page id, census name and
+    // ImGui id that existed before sites is unchanged - and "<id>@<site>" for a site's.
+    sm.id = cascade::core::PluginRepo::catalogueKey(e.source, e.id);
+    sm.thirdParty = !e.source.empty();
+    sm.siteHost = sm.thirdParty ? cascade::core::PluginRepo::siteLabel(e.source) : std::string();
     cascade::gui::ModulePlate& p = sm.plate;
     p.name = e.name;
     p.version = e.version;
@@ -18105,11 +19169,22 @@ void AppWindow::fillStoreModule(int i, const std::vector<cascade::core::PluginUp
     // distinction necessary.
     p.summary = e.summary;
     p.homepage = e.homepage;
-    p.legalNotice = e.legalNotice;
-    // REGIONAL CATALOGUE: the one line the design calls for on a regional entry, drawn
-    // muted. Empty for every other one - ModulePlate::originNote draws nothing then.
-    p.originNote = e.regional ? std::string(tr("Offered by foxsdr.com in some countries only."))
-                              : std::string();
+    // A plugin from a site the user added ALWAYS carries a notice (0.99.74): that it comes from
+    // somewhere else and has not been reviewed, then the maker's own legal notice if there is one,
+    // verbatim. The page's notice box, its tick and the acknowledgement gate all follow from the
+    // notice being there.
+    p.legalNotice = sm.thirdParty ? cascade::gui::storeComposeNotice(sm.siteHost, e.legalNotice)
+                                  : e.legalNotice;
+    // WHERE IT COMES FROM, one muted line under the page's header (drawn since 0.99.74; it was set
+    // for a regional entry from 0.99.72 and never drawn). Empty for every other plugin -
+    // ModulePlate::originNote draws nothing then.
+    if (e.regional) {
+        p.originNote = tr("Offered by foxsdr.com in some countries only.");
+    } else if (sm.thirdParty) {
+        p.originNote = cascade::core::formatText(
+            tr("From a site you added: %s"),
+            cascade::core::PluginRepo::siteDisplay(e.source, 90).c_str());
+    }
     // THE SHOP-WINDOW FIELDS (0.99.72), read from the catalogue as they came.
     p.category = e.category;
     p.experimental = e.experimental;
@@ -18195,7 +19270,7 @@ void AppWindow::fillStoreModule(int i, const std::vector<cascade::core::PluginUp
         std::string bestFile;
         std::string bestVersion;
         for (const cascade::core::ScannedModule& m : scannedModules()) {
-            if (m.id != e.id) { continue; }
+            if (m.id != e.id || m.source != e.source) { continue; }
             if (bestFile.empty() ||
                 cascade::core::PluginRepo::compareVersions(m.version, bestVersion) > 0) {
                 bestFile = m.file;
@@ -18231,14 +19306,14 @@ void AppWindow::fillStoreModule(int i, const std::vector<cascade::core::PluginUp
     // disagree. THE TICK BELONGS TO ONE PLUGIN, the one whose page is open: every other row
     // is asked as unacknowledged, so a tick given to the plugin the user just read about
     // cannot unblock a different plugin's key.
-    const bool acked = pluginStoreDeck_ && e.id == pluginStoreDeck_->pageId && pluginStoreDeck_->legalAck;
+    const bool acked = pluginStoreDeck_ && sm.id == pluginStoreDeck_->pageId && pluginStoreDeck_->legalAck;
     sm.blockedReason = pluginInstallBlockedReason(i, acked);
     // ...AND THE SAME QUESTION ASKED AS IF THE NOTICE WERE ACKNOWLEDGED, which is what lets
     // GET EVERYTHING count the plugins one tick would add and name them. Identical to the
     // line above for every plugin with no notice.
     sm.blockedReasonIfAcknowledged = pluginInstallBlockedReason(i, true);
     for (const cascade::core::PluginUpdate& u : updates) {
-        if (u.id != e.id) { continue; }
+        if (u.id != e.id || u.source != e.source) { continue; }
         sm.updateToVersion = u.toVersion;
         sm.updateReason = u.reason;
         break;
@@ -18283,6 +19358,34 @@ void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
     model.sourceUrl = pluginCatalogueUrl_;
     model.hostPlatform = std::string(cascade::core::PluginRepo::hostOs()) + "/" +
                          cascade::core::PluginRepo::hostArch();
+    // THE PLUGIN SITES (0.99.74), in the order they are read, each with how many of its plugins the
+    // list holds NOW (counted from catalog_, which is what the cards are made from) and what the last
+    // read or the kept copy said of it.
+    model.maxSites = cascade::core::AppConfig::kMaxPluginSites;
+    model.sites.clear();
+    for (const std::string& siteUrl : pluginSites_) {
+        cascade::gui::StoreSite s;
+        s.url = siteUrl;
+        s.label = cascade::core::PluginRepo::siteLabel(siteUrl);
+        s.display = cascade::core::PluginRepo::siteDisplay(siteUrl, 90);
+        for (const cascade::core::PluginCatalogEntry& ce : catalog_) {
+            if (ce.source == siteUrl) { ++s.plugins; }
+        }
+        for (const SiteStatus& st : siteStatus_) {
+            if (st.url != siteUrl) { continue; }
+            switch (st.state) {
+                case SiteStatus::State::NotRead: s.state = cascade::gui::StoreSite::State::NotRead; break;
+                case SiteStatus::State::Kept: s.state = cascade::gui::StoreSite::State::Kept; break;
+                case SiteStatus::State::Read: s.state = cascade::gui::StoreSite::State::Read; break;
+                case SiteStatus::State::Failed: s.state = cascade::gui::StoreSite::State::Failed; break;
+            }
+            s.hiddenSameId = st.hiddenSameId;
+            s.hiddenOffHost = st.hiddenOffHost;
+            s.error = st.error;
+            break;
+        }
+        model.sites.push_back(std::move(s));
+    }
     // Every old copy an update left behind (core/plugin_cleanup.hpp), and what the last
     // clean-up did about them.
     model.cleanupReport = pluginCleanupReport_;
@@ -18527,12 +19630,14 @@ void AppWindow::drawPluginStoreWindow() {
             // whose page is open and to no other, so a fit asked for from any other card is
             // asked for unacknowledged.
             const cascade::core::PluginCatalogEntry& fe = catalog_[static_cast<std::size_t>(fitIdx)];
+            // (The page is named by catalogue key, 0.99.74: for a site's plugin the key is not the id.)
+            const std::string feKey = cascade::core::PluginRepo::catalogueKey(fe.source, fe.id);
             const std::string blocked = pluginInstallBlockedReason(
-                fitIdx, fe.id == pluginStoreDeck_->pageId && pluginStoreDeck_->legalAck);
+                fitIdx, feKey == pluginStoreDeck_->pageId && pluginStoreDeck_->legalAck);
             if (blocked.empty()) {
                 startInstall(fe);
             } else {
-                installResultId_ = fe.id;
+                installResultId_ = feKey;
                 installError_ = blocked;
             }
         }
@@ -18541,14 +19646,30 @@ void AppWindow::drawPluginStoreWindow() {
             // The plan is looked up again rather than captured with the model: planUpdates'
             // entries point INTO catalog_, and the frame that built the model is not the frame
             // that acts on it.
-            const std::string& id = catalog_[static_cast<std::size_t>(updIdx)].id;
+            const cascade::core::PluginCatalogEntry& ue = catalog_[static_cast<std::size_t>(updIdx)];
             const std::vector<cascade::core::PluginUpdate> plans = plannedPluginUpdates();
             for (const cascade::core::PluginUpdate& u : plans) {
-                if (u.id == id) {
+                // BY (source, id): the update of this entry, not of an official plugin that shares its id.
+                if (u.id == ue.id && u.source == ue.source) {
                     startUpdate(u);
                     break;
                 }
             }
+        }
+        // THE SITES PANEL's two requests (0.99.74). Each is re-checked here - the address by the same
+        // validator the config loader uses, the list by what it holds now - and neither does anything
+        // while a read or an install is in flight. ADD saves through the debounced config write and
+        // starts a read; REMOVE forgets the site and its kept copy and leaves what was installed.
+        if (!pluginStoreView_->addSiteRequested().empty()) {
+            std::string why;
+            if (!addPluginSite(pluginStoreView_->addSiteRequested(), why)) {
+                // The panel has already refused what it could (storeCheckSiteAdd), and ADD is greyed
+                // under a transfer; this is the application's own refusal of anything that got past.
+                cascade::core::diagLogf("plugin store: a plugin site was not added - %s", why.c_str());
+            }
+        }
+        if (!pluginStoreView_->removeSiteRequested().empty()) {
+            removePluginSite(pluginStoreView_->removeSiteRequested());
         }
         // THE PICTURES OF THE PAGE THAT IS OPEN: asked for on the edge of opening it (a
         // failed one is tried again then), and on later frames only what is not yet asked
@@ -18656,6 +19777,18 @@ void AppWindow::drawFittedModulesWindow() {
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) !=
                                 settingsAskers.end();
             m.settingsAllowed = pluginUi_.settingsAllowed(file);
+            // Host API level 2: the TRANSMIT grant, offered to a module whose active() has
+            // been non-zero at least once - or that already holds it, because a permission
+            // nobody can see is one nobody can take back - and what the plate says about
+            // where the module stands (armed, on air, waiting for another).
+            if ((p.capabilities & CASCADE_CAP_TX_AUDIO) != 0u) {
+                const cascade::core::PluginRunner::TxPluginState ts = pluginRunner_.txState(file);
+                m.txAllowed = pluginUi_.txAllowed(file);
+                m.txCapable = ts.asked || m.txAllowed;
+                const bool onAir = ts.holder && transmitter_.pluginKeyed() && txKeyedKey_ == file;
+                m.txPlate = static_cast<int>(cascade::gui::txPlateState(
+                    ts.asked, m.txAllowed, txArming_.armed(), onAir, ts.waiting, ts.stopped));
+            }
             for (const cascade::core::HostCommand& hc : pluginUi_.api().commands(file)) {
                 m.commands.push_back(cascade::gui::FittedModule::Command{hc.id, hc.label});
             }
@@ -18682,14 +19815,27 @@ void AppWindow::drawFittedModulesWindow() {
                 m.abiVersion = ip.abiVersion;
                 m.fittedAtUnix = ip.installedAtUnix;
                 if (!ip.id.empty()) {
-                    m.catalogueId = ip.id;
-                    m.id = ip.id;
+                    // The catalogue KEY (0.99.74): the id for an official plugin, "<id>@<site>" for
+                    // one installed from a site - what the store's model names its modules by.
+                    m.catalogueId = cascade::core::PluginRepo::catalogueKey(ip.source, ip.id);
+                    m.id = m.catalogueId;
+                }
+                // WHERE IT CAME FROM, when it was a plugin site (0.99.74). A site the user has since
+                // removed is said so, and that it gets no updates: nothing lists it any more.
+                if (!ip.source.empty()) {
+                    const std::string label = cascade::core::PluginRepo::siteLabel(ip.source);
+                    const bool stillListed =
+                        std::find(pluginSites_.begin(), pluginSites_.end(), ip.source) != pluginSites_.end();
+                    m.originNote = cascade::core::formatText(
+                        stillListed ? tr("Installed from %s, not from the FoxSDR catalogue.")
+                                    : tr("Installed from %s, a site you removed. It gets no updates."),
+                        label.c_str());
                 }
                 break;
             }
             if (!m.catalogueId.empty()) {
                 for (const cascade::core::PluginCatalogEntry& ce : catalog_) {
-                    if (ce.id == m.catalogueId) {
+                    if (cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) == m.catalogueId) {
                         m.category = ce.category;
                         break;
                     }
@@ -18786,6 +19932,9 @@ void AppWindow::drawFittedModulesWindow() {
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetSettings:
                 setPluginSettingsAllowed(act.file, act.flag);
+                break;
+            case cascade::gui::FittedModulesAction::Kind::SetTransmit:
+                setPluginTransmitAllowed(act.file, act.flag);
                 break;
             case cascade::gui::FittedModulesAction::Kind::Command:
                 // Queued for the plugin to take with poll_command; nothing of the plugin's runs
@@ -19218,11 +20367,47 @@ void AppWindow::drawPluginWindows() {
                 // targets the staleness rule has dropped, and a count of
                 // everything reported over a map showing only what is live is a
                 // number that contradicts the picture beside it.
+                const std::size_t total = cascade::core::visibleTrackCount(pageTracks_);
+                // ...AND, WITH "On screen only" TICKED, counted the way the list
+                // beside the map is filtered: the number must be the rows below
+                // it. When the switch hid something it says so - "3 of 41
+                // targets" - because a bare "3 targets" over a receiver that has
+                // heard 41 would read as a receiver that has heard 3. The rail
+                // chip keeps the TOTAL (page.visibleCount): that is what the page
+                // holds, wherever the map happens to be looking.
                 const std::size_t shown =
-                    cascade::core::visibleTrackCount(pageTracks_);
-                // Singular and plural as two whole strings, not an "s" suffix.
-                ImGui::TextDisabled(shown == 1 ? tr("%d target") : tr("%d targets"),
-                                    static_cast<int>(shown));
+                    listedTrackCount(*page.view, pageTracks_, mapListOnScreenOnly_);
+                // The two numbers the heading prints, for a bounded run that has to read them
+                // without reading pixels (the 0.99.74 verification against a live ADS-B feed:
+                // with the tick on and the map zoomed in shown < total, with it off they are
+                // equal). One note, "<shown>/<total>", so the pair stays a pair. The name is
+                // only put together when the census is asked for (ui_census.hpp: free when off).
+                if (cascade::gui::census::enabled()) {
+                    cascade::gui::census::note("tracklist:count:",
+                                               std::to_string(shown) + "/" + std::to_string(total));
+                }
+                if (shown < total) {
+                    ImGui::TextDisabled(tr("%d of %d targets"), static_cast<int>(shown),
+                                        static_cast<int>(total));
+                } else {
+                    // Singular and plural as two whole strings, not an "s" suffix.
+                    ImGui::TextDisabled(shown == 1 ? tr("%d target") : tr("%d targets"),
+                                        static_cast<int>(shown));
+                }
+                // THE FILTER BESIDE THE COUNT IT CHANGES (0.99.74): "Could you add
+                // a filter or switch to list only the aircraft currently viewable
+                // on the screen. This way if I am zoomed in on my local little
+                // airport and watching aircraft I only see the area I am
+                // interested in" - and at an air show, where he had been turning
+                // the radio gain down to shrink the reception area. Applied to
+                // EVERY page's list: how a list reads is a preference.
+                ImGui::SameLine();
+                ImGui::Checkbox(trId("On screen only"), &mapListOnScreenOnly_);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tr(
+                        "Lists only the aircraft inside the map you are looking at.\n"
+                        "Zoom in on an airfield or an air show and the list follows."));
+                }
 
                 // --- the coverage overlay's controls ---------------------------
                 // A second row, because the first is already the position entry and
@@ -20174,19 +21359,38 @@ void AppWindow::drawTrackList(MapPage& page,
     // dropped must not still be occupying a row: the list is what makes the
     // window need a scrollbar, and a decoder that never evicts - the shipped
     // ADS-B one does not - grows it without limit over a session.
-    const std::size_t shown = cascade::core::visibleTrackCount(tracks);
+    //
+    // AND, WITH "On screen only" TICKED (0.99.74), THE SAME RULE AGAIN FOR THE
+    // MAP'S EDGES: a target outside the map as last drawn is not a row. `total`
+    // is every live target, `shown` is the rows, and they differ only when the
+    // switch hid something - which is when the count says "N of M".
+    const std::size_t total = cascade::core::visibleTrackCount(tracks);
+    const std::size_t shown = listedTrackCount(*page.view, tracks, mapListOnScreenOnly_);
     if (shown == 0u) {
-        ImGui::TextDisabled("%s", tr("No targets."));
-        // Wrapped to the list's width, which is narrow: the English is cut
-        // there already, and a translation more so.
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", tr("Decoded aircraft, ships and stations appear here."));
-        ImGui::PopTextWrapPos();
+        if (total == 0u) {
+            ImGui::TextDisabled("%s", tr("No targets."));
+            // Wrapped to the list's width, which is narrow: the English is cut
+            // there already, and a translation more so.
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", tr("Decoded aircraft, ships and stations appear here."));
+            ImGui::PopTextWrapPos();
+        } else {
+            // THE SWITCH HID EVERYTHING, which is not "nothing has been heard":
+            // say what is true, and keep the count of what is out of view so the
+            // empty list does not read as a dead receiver. "Decoded aircraft ...
+            // appear here" would be false - they are decoded, just elsewhere.
+            ImGui::TextDisabled("%s", tr("No targets on screen."));
+            ImGui::TextDisabled(tr("%d of %d targets"), 0, static_cast<int>(total));
+        }
         return;
     }
 
-    // Singular and plural as two whole strings, not an "s" suffix.
-    ImGui::Text(shown == 1 ? tr("%d target") : tr("%d targets"), static_cast<int>(shown));
+    if (shown < total) {
+        ImGui::Text(tr("%d of %d targets"), static_cast<int>(shown), static_cast<int>(total));
+    } else {
+        // Singular and plural as two whole strings, not an "s" suffix.
+        ImGui::Text(shown == 1 ? tr("%d target") : tr("%d targets"), static_cast<int>(shown));
+    }
     // FOLLOW is a toggle rather than a mode buried in a menu, because its
     // effect - the map moving on its own - is confusing if you cannot see at a
     // glance that you asked for it.
@@ -20210,6 +21414,12 @@ void AppWindow::drawTrackList(MapPage& page,
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         const cascade::core::HostTrack& ht = tracks[i];
         if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
+        // The map's edges, when asked for. The selected or followed target is
+        // NOT exempt: the list shows what the map shows, and a followed target
+        // is centred on the map anyway.
+        if (mapListOnScreenOnly_ && !page.view->isOnScreen(ht.t.latDeg, ht.t.lonDeg)) {
+            continue;
+        }
         TrackRow r;
         // The LABEL is the callsign where one has been decoded and the id
         // otherwise. An aircraft's ICAO address is known from its first frame
@@ -22787,6 +23997,9 @@ void AppWindow::openTransmitRadio() {
     transmitter_.setMode(cascade::dsp::txModeFromIndex(transmitModeIndex_));
     transmitter_.setInput(cascade::core::txInputFromIndex(transmitInputIndex_));
     transmitter_.setToneHz(transmitToneHz_);
+    transmitter_.setDataFlat(transmitDataFlat_);
+    // An ARM refusal that said "no transmitter is open" is answered by this.
+    txArmRefusal_ = cascade::core::TxArming::Refusal::None;
     followTransmitFrequency();
 }
 
@@ -22796,6 +24009,9 @@ void AppWindow::closeTransmitRadio() {
     // unkeys before either runs.
     transmitter_.setSink(nullptr);
     transmitError_.clear();
+    // The radio is gone, and so is the operator's authorisation to key it: a window armed
+    // over one board does not carry over to the next one opened.
+    disarmTransmitPlugins("the transmit radio was closed");
 }
 
 void AppWindow::followTransmitFrequency() {
@@ -22810,10 +24026,220 @@ void AppWindow::followTransmitFrequency() {
     if (!transmitter_.setFrequencyHz(want)) { transmitError_ = transmitter_.lastError(); }
 }
 
+// --- PLUGINS THAT TRANSMIT (0.99.74, CASCADE_CAP_TX_AUDIO) ------------------------
+//
+// THE RULE THIS CHANGES. "Only a hand can key it" became "a hand, or a plugin the
+// operator has granted and armed" on the owner's written approval of 2026-10-12, for a
+// Winlink-compatible link. Every function below exists to keep the second half as hard
+// to satisfy by accident as the first always was; core/tx_audio.hpp lists the
+// conditions and tests/test_tx_audio.cpp flips each in turn.
+
+bool AppWindow::anyTransmitGrant() const {
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || p.txAudio == nullptr) { continue; }
+        const std::string k = cascade::core::pluginKey(p);
+        if (std::find(pluginTransmitAllowed_.begin(), pluginTransmitAllowed_.end(), k) !=
+            pluginTransmitAllowed_.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string AppWindow::firstTransmitGrantName() const {
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || p.txAudio == nullptr) { continue; }
+        const std::string k = cascade::core::pluginKey(p);
+        if (std::find(pluginTransmitAllowed_.begin(), pluginTransmitAllowed_.end(), k) !=
+            pluginTransmitAllowed_.end()) {
+            return p.name;
+        }
+    }
+    return std::string();
+}
+
+cascade::core::TxArming::Refusal AppWindow::armTransmitPlugins(int minutes) {
+    // A radio that is open AND has not faulted: arming a window over a board that has
+    // already stopped answering is arming nothing.
+    const bool radioOpen =
+        transmitter_.haveSink() && !(transmitter_.sink() != nullptr && transmitter_.sink()->faulted());
+    const cascade::core::TxArming::Refusal r =
+        txArming_.arm(minutes, radioOpen, anyTransmitGrant(), cascade::core::TxArming::Clock::now());
+    txArmRefusal_ = r;
+    if (r != cascade::core::TxArming::Refusal::None) { return r; }
+    // A NEW WINDOW IS A NEW DECISION. A plugin whose key was cut - by the cap, a fault,
+    // the frozen-window handle - stays cut until the operator arms again; this is the
+    // arming, and the only place that clears it.
+    transmitter_.clearPluginFault();
+    txFaultsSeen_ = transmitter_.faultCount();
+    cascade::core::diagLogf("tx: armed %d min", minutes);
+    return r;
+}
+
+void AppWindow::disarmTransmitPlugins(const char* reason) {
+    if (txArming_.disarm(reason)) {
+        cascade::core::diagLogf("tx: disarmed (%s)", reason != nullptr ? reason : "no reason given");
+    }
+}
+
+void AppWindow::applyPluginTransmitKey(const cascade::gui::TxPageKey& handKey) {
+    namespace cc = cascade::core;
+    const cc::TxArming::Clock::time_point now = cc::TxArming::Clock::now();
+
+    // THE WINDOW'S OWN TIMER first: a window whose time has come is closed before
+    // anything below can count it as open.
+    bool expired = false;
+    txArming_.update(now, &expired);
+    if (expired) { cc::diagLogf("tx: disarmed (%s)", txArming_.lastReason().c_str()); }
+
+    const bool haveSink = transmitter_.haveSink();
+    const bool sinkFaulted =
+        haveSink && transmitter_.sink() != nullptr && transmitter_.sink()->faulted();
+    const bool tickFresh = transmitter_.msSinceTick() <=
+                           static_cast<std::int64_t>(cc::Transmitter::kKeyAliveWait.count());
+    const bool anyGrant = anyTransmitGrant();
+    const std::uint64_t faults = transmitter_.faultCount();
+
+    // WHAT CLOSES THE WINDOW, as against what merely withholds the key. A fault, the
+    // page going, the radio going, the frame loop having stalled and the grant being
+    // taken back each end the operator's authorisation outright - the next time the
+    // plugin may transmit is when a person arms it again.
+    if (txArming_.armed()) {
+        std::string why;
+        if (!haveSink) {
+            why = "the transmit radio was closed";
+        } else if (sinkFaulted) {
+            why = "the radio faulted";
+        } else if (faults != txFaultsSeen_) {
+            why = "the transmitter stopped on its own";
+        } else if (transmitter_.pluginFault()) {
+            why = transmitter_.pluginFaultReason();
+        } else if (!transmitPageLive_) {
+            why = "the TRANSMIT page was closed";
+        } else if (!tickFresh) {
+            why = "the window stopped responding";
+        } else if (!anyGrant) {
+            why = "no plugin holds the TRANSMIT grant any more";
+        }
+        if (!why.empty()) { disarmTransmitPlugins(why.c_str()); }
+    }
+    txFaultsSeen_ = faults;
+
+    // THE DECISION. The plugin that would hold the transmitter is the one keyed now, or
+    // else the runner's holder (the first granted plugin that wants it); its grant is
+    // checked HERE as well as in the runner, from the durable list, so neither alone can
+    // let an ungranted plugin through.
+    const bool keyedNow = transmitter_.pluginKeyed();
+    // The runner's lock is taken only when a window is open: with none, nothing can be keyed
+    // and the question has no use, so a machine that never arms a plugin never asks it.
+    const std::string holder =
+        keyedNow ? txKeyedKey_
+                 : (txArming_.armed() ? pluginRunner_.txHolderKey() : std::string());
+    cc::PluginKeyInputs in;
+    in.granted = !holder.empty() && std::find(pluginTransmitAllowed_.begin(),
+                                              pluginTransmitAllowed_.end(),
+                                              holder) != pluginTransmitAllowed_.end();
+    in.armed = txArming_.armed();
+    in.pageLive = transmitPageLive_;
+    in.tickFresh = tickFresh;
+    in.active = txLink_->wantsKey(cc::TxAudioLink::nowMs());
+    in.radioOk = haveSink && !sinkFaulted;
+    in.handsOff = !handKey.latched && !handKey.pttHeld && !transmitter_.remoteKeyed();
+    in.faulted = transmitter_.pluginFault();
+    const bool may = cc::pluginMayKey(in);
+    transmitter_.setPluginKey(may);
+
+    // WHY NOT, for the log line that says why a plugin was unkeyed: the first condition
+    // that failed, in the order that tells the operator the most.
+    if (may) {
+        txWhyNot_.clear();
+    } else if (in.faulted) {
+        txWhyNot_ = transmitter_.pluginFaultReason();
+    } else if (!in.radioOk) {
+        txWhyNot_ = "the radio is not available";
+    } else if (!in.pageLive) {
+        txWhyNot_ = "the TRANSMIT page was closed";
+    } else if (!in.armed) {
+        txWhyNot_ = txArming_.lastReason().empty() ? std::string("the arming window is closed")
+                                                   : txArming_.lastReason();
+    } else if (!in.tickFresh) {
+        txWhyNot_ = "the window stopped responding";
+    } else if (!in.granted) {
+        txWhyNot_ = "the TRANSMIT grant was withdrawn";
+    } else if (!in.handsOff) {
+        txWhyNot_ = "a hand took the key";
+    } else if (!holder.empty() && pluginRunner_.txState(holder).stopped) {
+        txWhyNot_ = "its transmit audio reported a permanent error";
+    } else {
+        txWhyNot_ = "the plugin let go (active() is zero)";
+    }
+}
+
+void AppWindow::afterTransmitTick() {
+    namespace cc = cascade::core;
+    const bool keyed = transmitter_.pluginKeyed();
+    if (keyed && !txPluginKeyedPrev_) {
+        txKeyedKey_ = pluginRunner_.txHolderKey();
+        txKeyedName_ = pluginRunner_.txHolderName();
+        cc::diagLogf("tx: plugin %s keyed", txKeyedName_.c_str());
+        // The same anonymous "the radio was actually keyed" mark the hand's key makes.
+        testerUsage_.noteFeature("transmit");
+    }
+    if (!keyed && txPluginKeyedPrev_) {
+        // The cap fires INSIDE the tick, after this frame's decision was made, so its
+        // reason is read from the transmitter first.
+        std::string why = transmitter_.pluginFault() ? transmitter_.pluginFaultReason()
+                                                     : txWhyNot_;
+        if (why.empty()) { why = "the key was released"; }
+        cc::diagLogf("tx: plugin %s unkeyed (%s)", txKeyedName_.c_str(), why.c_str());
+        txKeyedKey_.clear();
+    }
+    txPluginKeyedPrev_ = keyed;
+
+    // A FAULT THAT HAPPENED INSIDE THE TICK (the cap) closes the window the same frame,
+    // so the very next decision already has it closed.
+    if (transmitter_.pluginFault() && txArming_.armed()) {
+        disarmTransmitPlugins(transmitter_.pluginFaultReason().c_str());
+    }
+
+    // THE RUNNER IS TOLD ONLY WHEN THIS CHANGES (setTxKeyed takes its lock): from the
+    // frame the transmitter is keyed for the plugin, pull() may be called; from the one
+    // it is not, it will not be, and when the call returns nothing is still in flight.
+    if (keyed != txRunnerKeyed_) {
+        pluginRunner_.setTxKeyed(keyed);
+        txRunnerKeyed_ = keyed;
+    }
+
+    // WHAT THE PLUGINS ARE TOLD (get_state's CASCADE_STATE_TX_ARMED / _TRANSMITTING).
+    pluginUi_.api().publishTxState(txArming_.armed(), keyed ? txKeyedKey_ : std::string());
+}
+
+void AppWindow::applyPluginTransmitGrants() {
+    for (const std::string& k : pluginTransmitAllowed_) { pluginUi_.setTxAllowed(k, true); }
+    pluginRunner_.setTxGranted(pluginTransmitAllowed_);
+}
+
+void AppWindow::setPluginTransmitAllowed(const std::string& pluginKey, bool allowed) {
+    // The live grant and the durable one in one place, exactly as the other two do, so a
+    // grant that took effect can never fail to be saved - and one that was taken back
+    // reaches the runner the same moment, which stops pulling at the next block.
+    pluginUi_.setTxAllowed(pluginKey, allowed);
+    const auto it = std::find(pluginTransmitAllowed_.begin(), pluginTransmitAllowed_.end(), pluginKey);
+    if (allowed && it == pluginTransmitAllowed_.end()) {
+        pluginTransmitAllowed_.push_back(pluginKey);
+    } else if (!allowed && it != pluginTransmitAllowed_.end()) {
+        pluginTransmitAllowed_.erase(it);
+    }
+    pluginRunner_.setTxGranted(pluginTransmitAllowed_);
+    // An ARM refusal that said "no plugin has been granted TRANSMIT" is answered by this.
+    if (allowed) { txArmRefusal_ = cascade::core::TxArming::Refusal::None; }
+}
+
 void AppWindow::drawTransmitPage() {
     if (!transmitOpen_) { return; }
     constexpr float kTxW = 560.0f;
-    constexpr float kTxH = 520.0f;
+    // 520 -> 640 (0.99.74): the ARM FOR PLUGINS block and the DATA (flat) tick.
+    constexpr float kTxH = 640.0f;
     // The opening rectangle is the call site's job - see drawDemodScopePage
     // for the frame this page was found in when it was left to ImGui.
     const ImGuiViewport* mv = ImGui::GetMainViewport();
@@ -23006,7 +24432,9 @@ void AppWindow::drawTransmitPage() {
     // the microphone, and a second press could only queue a second open.
     const bool micOpening = micOpen_.inFlight();
     ImGui::BeginDisabled(micOpening);
-    for (int i = 0; i < cascade::core::kTxInputCount; ++i) {
+    // THE KEYS ARE THE INPUTS A HAND CAN CHOOSE (MIC and TONE). A plugin's audio is not
+    // one of them: it is read only while the plugin's own key is the only key down.
+    for (int i = 0; i < cascade::core::kTxHandInputCount; ++i) {
         ImGui::SameLine();
         const bool on = (transmitInputIndex_ == i);
         const cascade::core::TxInput in = cascade::core::txInputFromIndex(i);
@@ -23178,6 +24606,123 @@ void AppWindow::drawTransmitPage() {
         ImGui::PopStyleColor();
     }
     ImGui::EndDisabled();  // !have
+
+    // --- PLUGINS THAT TRANSMIT (0.99.74, CASCADE_CAP_TX_AUDIO) ----------------
+    //
+    // THE OPERATOR'S HALF OF A PLUGIN'S KEY, and it lives on this page for the reason
+    // the PTT does: every control that can put RF out of a connector is where somebody
+    // looking at the lamp can reach it. A plugin that has been granted TRANSMIT (on its
+    // page in Fitted modules) can key this transmitter only while a window opened HERE
+    // is open - 5, 15 or 60 minutes, closing itself, never saved, never restored - and
+    // only while this page is on screen. OFF closes it at once. The keys are enabled
+    // with no radio open, because pressing one then is how the page says why it cannot
+    // (the refusal below): a greyed key that explains nothing is a key that looks broken.
+    ImGui::Separator();
+    {
+        const bool armed = txArming_.armed();
+        ImGui::TextUnformatted(tr("ARM FOR PLUGINS"));
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tr("Lets a plugin you have granted TRANSMIT key this radio, for\n"
+                                       "the time you choose. It chooses nothing else: the\n"
+                                       "frequency, the power and the mode are the ones on this page,\n"
+                                       "and any fault, closing this page or the time running out\n"
+                                       "stops it. Nothing here is remembered next time."));
+        }
+        for (int i = 0; i < 3; ++i) {
+            ImGui::SameLine();
+            const int minutes = cascade::core::TxArming::kChoicesMinutes[i];
+            const bool on = armed && txArming_.minutes() == minutes;
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      cascade::gui::theme::vec(cascade::gui::theme::kBrassDark));
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      cascade::gui::theme::vec(cascade::gui::theme::legible(
+                                          cascade::gui::theme::kPhosphor,
+                                          cascade::gui::theme::kBrassDark)));
+            }
+            const char* label = i == 0   ? trId("5 MIN##txarm5")
+                                : i == 1 ? trId("15 MIN##txarm15")
+                                         : trId("60 MIN##txarm60");
+            if (ImGui::Button(label, ImVec2(70.0f, 0.0f))) { armTransmitPlugins(minutes); }
+            if (cascade::gui::census::enabled()) {
+                // The key drawn, and where (tests/test_tx_audio_page_app).
+                const std::string nm = "transmit:arm" + std::to_string(minutes);
+                cascade::gui::census::note(nm);
+                cascade::gui::census::rect(nm, ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                           ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+            }
+            if (on) { ImGui::PopStyleColor(2); }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(trId("OFF##txarmoff"), ImVec2(70.0f, 0.0f))) {
+            disarmTransmitPlugins("you pressed OFF");
+            txArmRefusal_ = cascade::core::TxArming::Refusal::None;
+        }
+        cascade::gui::census::note("transmit:armoff");
+        cascade::gui::census::note(armed ? "transmit:armed" : "transmit:notarmed");
+        if (armed) {
+            char left[16];
+            cascade::gui::formatTxArmCountdown(
+                left, sizeof(left), txArming_.secondsLeft(cascade::core::TxArming::Clock::now()));
+            std::string line;
+            cascade::core::formatUtf8(line, tr("ARMED: %s may key this transmitter, %s left."),
+                                      firstTransmitGrantName().c_str(), left);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(transmitter_.pluginKeyed()
+                                                               ? cascade::gui::theme::kAlarmHot
+                                                               : cascade::gui::theme::kAmber));
+            ImGui::TextWrapped("%s", line.c_str());
+            ImGui::PopStyleColor();
+            if (transmitter_.pluginKeyed()) {
+                std::string onAirLine;
+                cascade::core::formatUtf8(onAirLine, tr("ON AIR for %s."), txKeyedName_.c_str());
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+                ImGui::TextWrapped("%s", onAirLine.c_str());
+                ImGui::PopStyleColor();
+            }
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+            ImGui::TextWrapped("%s", tr("Not armed: no plugin can key this transmitter."));
+            ImGui::PopStyleColor();
+        }
+        if (txArmRefusal_ != cascade::core::TxArming::Refusal::None) {
+            cascade::gui::census::note("transmit:refusal", static_cast<int>(txArmRefusal_));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
+            ImGui::TextWrapped("%s", tr(cascade::gui::txArmRefusalText(txArmRefusal_)));
+            ImGui::PopStyleColor();
+        }
+        // WHY THE WINDOW LAST CLOSED, when it did not close by the operator's own OFF: the
+        // sentence the log carries, so a plugin that lost its key never leaves the person
+        // at the desk wondering.
+        if (!armed && !txArming_.lastReason().empty() &&
+            txArming_.lastReason() != "you pressed OFF") {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  cascade::gui::theme::vec(cascade::gui::theme::kAmber));
+            ImGui::TextWrapped("%s", txArming_.lastReason().c_str());
+            ImGui::PopStyleColor();
+        }
+        if (ImGui::Checkbox(trId("DATA (flat)"), &transmitDataFlat_)) {
+            transmitter_.setDataFlat(transmitDataFlat_);
+        }
+        if (cascade::gui::census::enabled()) {
+            cascade::gui::census::note(transmitDataFlat_ ? "transmit:dataflat:on"
+                                                         : "transmit:dataflat:off");
+            cascade::gui::census::rect("transmit:dataflat", ImGui::GetItemRectMin().x,
+                                       ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s",
+                              tr("A plugin's audio goes out as NFM with the pre-emphasis off, whatever\n"
+                                 "mode is selected above: a data modem's tones must reach the far\n"
+                                 "receiver flat. Untick it to send the plugin's audio in the mode\n"
+                                 "selected above instead. The microphone and the tone are never\n"
+                                 "affected."));
+        }
+    }
 
     // --- THE SENTENCE --------------------------------------------------------
     //
@@ -25332,6 +26877,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
             squelchDb_ = std::clamp(squelchDb_ + step, -120.0f, 0.0f);
             pipeline_.setSquelchDb(squelchDb_);
+            setSquelchAuto(false, "keys");  // a hand on the keys is a manual choice
             testerUsage_.noteFeature("cleanup");
             break;
         }
@@ -25427,7 +26973,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             break;
         case KeyAction::BankSignal: setRailBank(0); break;
         case KeyAction::BankDecode: setRailBank(1); break;
-        case KeyAction::BankView: setRailBank(2); break;
+        case KeyAction::BankTools: setRailBank(2); break;
         case KeyAction::BankExtend: setRailBank(3); break;
         case KeyAction::BankSystem: setRailBank(4); break;
         case KeyAction::OpenSettings:
@@ -27112,6 +28658,12 @@ void AppWindow::publishWebSnapshot() {
         // browser and the window can never disagree about what may be
         // installed, and the notice itself is still a separate, explicit act.
         c.blockedReason = pluginInstallBlockedReason(i, /*acknowledged=*/true);
+        // The browser is told what the install request would be told (0.99.74): a site's plugin is
+        // fitted from the desktop store only, so its key is greyed with the same reason.
+        if (!e.source.empty()) {
+            c.blockedReason = FOX_TR_NOOP("plugins from sites you added can only be fitted from the "
+                                          "plugin store on this computer");
+        }
         s.catalogue.push_back(std::move(c));
     }
 
@@ -27277,6 +28829,7 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
     if (r.squelchDb.has_value()) {
         squelchDb_ = static_cast<float>(*r.squelchDb);
         pipeline_.setSquelchDb(squelchDb_);
+        setSquelchAuto(false, "remote");  // the web control's threshold is a manual choice
     }
     if (r.volume.has_value()) {
         volume_ = static_cast<float>(*r.volume);
@@ -27534,6 +29087,16 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
         for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
             if (catalog_[static_cast<std::size_t>(i)].id != *r.pluginInstall) {
                 continue;
+            }
+            // A PLUGIN FROM A SITE THE USER ADDED IS FITTED FROM THE DESKTOP STORE ONLY (0.99.74): its
+            // page, its notice and the tick under it are what stand between a stranger's native code
+            // and this machine, and a request from the browser cannot have read any of them. (An id
+            // is unique in the merged list, so this entry is the only one with that id.)
+            if (!catalog_[static_cast<std::size_t>(i)].source.empty()) {
+                installError_ = FOX_TR_NOOP("plugins from sites you added can only be fitted from the "
+                                            "plugin store on this computer");
+                done = true;
+                break;
             }
             const std::string blocked = pluginInstallBlockedReason(i, ack);
             if (!blocked.empty()) {
@@ -29206,6 +30769,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     splitRatio_ = cfg.splitRatio;
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
+    squelchAuto_ = cfg.squelchAuto;  // quietly: a restored setting is not a decision to log
+    noiseFloor_.reset();
     // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
     // that a config whose saved radio does not open (unplugged, or still on
     // its vendor driver) does not have the setting quietly rewritten to false
@@ -29277,6 +30842,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // patch stays stopped - showing it starts nothing.
     patchOpen_ = cfg.mainView != "receiver";
     railCollapsed_ = cfg.railCollapsed;
+    statusCollapsed_ = cfg.statusCollapsed;
+    // The Display section's open state (0.99.74): read here, before the first
+    // frame, because it is the DEFAULT the section's header starts from the
+    // first time it is drawn (drawDisplaySection).
+    displayOpen_ = cfg.displayOpen;
     bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
     bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // applyConfig runs AFTER the startup loadBandPlan(), so a restored
@@ -29324,6 +30894,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // makes a mid-session change take effect on the very next frame.
     mapTrails_ = cfg.mapTrails;
     mapTrailAltColours_ = cfg.mapTrailAltitudeColours;
+    mapListOnScreenOnly_ = cfg.mapListOnScreenOnly;
     mapTrailStyle_ = cfg.mapTrailStyle;
     // Bookmark spectrum markers and their stacking (0.99.54): PREVIOUSLY not
     // in AppConfig at all, so bookmarkMarkers_ kept its true default at every
@@ -29434,6 +31005,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // first-open read from ever being a startup fetch.
     pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginCatalogueUrl_.c_str());
+    // The plugin sites (0.99.74), and their kept copies - a file read each, no request: the
+    // constructor loaded the official kept copy before the configuration named any site.
+    pluginSites_ = cfg.pluginSites;
+    loadCachedSites();
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
     // The fitted modules window: its rectangle is restored, its open flag
     // arrives cleared for the same reason. Opening it later starts no scan,
@@ -29463,6 +31038,13 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // attach() finds them there.
     pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
     applyPluginSettingsGrants();
+    // Host API level 2: the TRANSMIT grant, applied on the same terms. The arming
+    // window is NOT in the config and therefore not here: a freshly loaded config
+    // always leaves it CLOSED, whatever the window was doing before (a config loaded
+    // mid-session closes it too, so a restored grant is never a restored authorisation).
+    pluginTransmitAllowed_ = cfg.pluginTransmitAllowed;
+    applyPluginTransmitGrants();
+    disarmTransmitPlugins("a configuration was loaded");
     pluginSettings_ = cfg.pluginSettings;
     pluginUi_.api().loadSettings(pluginSettings_);
     pluginSettingsGen_ = pluginUi_.api().settingsGeneration();
@@ -30575,6 +32157,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.patchPresetPrevious = patchPresets_.previous();
     cfg.mainView = patchOpen_ ? "patch" : "receiver";
     cfg.railCollapsed = railCollapsed_;
+    cfg.statusCollapsed = statusCollapsed_;
+    cfg.displayOpen = displayOpen_;
     // WHILE THE PATCH PAGE HOLDS THE RECEIVER'S RADIO (0.99.17) the receiver
     // runs on the generator only because the page borrowed its radio, so the
     // radio is what is saved - the same rule as a restore that could not
@@ -30653,6 +32237,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.mode = kModeNames[modeIndex_];
     cfg.bandwidthHz = vfoBandwidthHz_;
     cfg.squelchDb = squelchDb_;
+    cfg.squelchAuto = squelchAuto_;
     cfg.volume = volume_;
     cfg.audioBufferMs = audioBufferMs_;
     cfg.audioBufferAutoMs = audioBufferAutoMs_;
@@ -30689,6 +32274,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.interfaceScale = interfaceScale_;
     cfg.mapTrails = mapTrails_;
     cfg.mapTrailAltitudeColours = mapTrailAltColours_;
+    cfg.mapListOnScreenOnly = mapListOnScreenOnly_;
     cfg.mapTrailStyle = mapTrailStyle_;
     cfg.bookmarkMarkers = bookmarkMarkers_;
     cfg.bookmarkStackNames = bookmarkStackNames_;
@@ -30737,6 +32323,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.gpsPort = gpsPort_;
     cfg.gpsBaud = gpsBaud_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
+    cfg.pluginSites = pluginSites_;
     cfg.pluginBrowserOpen = pluginBrowseOpen_;
     cfg.fittedModulesOpen = fittedWindowOpen_;
     cfg.fittedModulesX = fittedWinX_;
@@ -30750,6 +32337,9 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
+    // The grant is saved; the arming window (txArming_) is deliberately not - there is
+    // no field in AppConfig to put it in.
+    cfg.pluginTransmitAllowed = pluginTransmitAllowed_;
     cfg.pluginSettings = pluginSettings_;
     // The old file-name list is dropped (0.99.73): applyConfig migrated it, by id, into pluginRun,
     // and an older build that reads this file sees nothing stopped rather than a stale list.

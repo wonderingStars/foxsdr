@@ -3023,7 +3023,8 @@ int main() {
                 "CASCADE_CAP_PRESET",         "CASCADE_CAP_BASEMAP",
                 "CASCADE_CAP_TRACK_INFO",     "CASCADE_CAP_INSTRUMENT",
                 "CASCADE_CAP_AUDIO_OUT",      "CASCADE_CAP_AUDIO_PROCESSOR",
-                "CASCADE_CAP_SETTINGS_UI",    "CASCADE_CAP_RECEIVER_LOCATOR"};
+                "CASCADE_CAP_SETTINGS_UI",    "CASCADE_CAP_RECEIVER_LOCATOR",
+                "CASCADE_CAP_TX_AUDIO"};
             const std::uint32_t bits[] = {
                 CASCADE_CAP_DECODER,        CASCADE_CAP_IQ_DECODER,
                 CASCADE_CAP_IMAGE_DECODER,  CASCADE_CAP_TRACK_SOURCE,
@@ -3031,7 +3032,8 @@ int main() {
                 CASCADE_CAP_PRESET,         CASCADE_CAP_BASEMAP,
                 CASCADE_CAP_TRACK_INFO,     CASCADE_CAP_INSTRUMENT,
                 CASCADE_CAP_AUDIO_OUT,      CASCADE_CAP_AUDIO_PROCESSOR,
-                CASCADE_CAP_SETTINGS_UI,    CASCADE_CAP_RECEIVER_LOCATOR};
+                CASCADE_CAP_SETTINGS_UI,    CASCADE_CAP_RECEIVER_LOCATOR,
+                CASCADE_CAP_TX_AUDIO};
             std::uint32_t all = 0;
             for (std::size_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
                 CHECK(PluginRepo::capabilityBitForName(names[i]) == bits[i]);
@@ -3254,6 +3256,549 @@ int main() {
             CHECK(PluginRepo::planUpdates(
                       cat, {installedRec("adsb", "1.8.1", hostAbi, mod("adsb-1.8.1"))})
                       .empty());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 0.99.74: PLUGIN SITES - rules 8 to 11 of plugin_repo.hpp (identity by
+    // (source, id), official wins, one host, never another plugin's file).
+    // ---------------------------------------------------------------------
+    {
+        const std::string siteA = "https://hobbyist.example/hdradio/index.json";
+        const std::string siteB = "https://other.example/index.json";
+        // One entry as a site publishes it: this host's platform, a file on `fileHost`.
+        const auto siteCat = [](const std::string& id, const std::string& version,
+                                const std::string& fileHost) {
+            PluginCatalogEntry e = catEntry(id, version);
+            e.platforms[0].url = "https://" + fileHost + "/files/" + mod(id);
+            e.platforms[0].file = mod(id);
+            return e;
+        };
+
+        // ---- S1: the key an entry is named by ----------------------------------
+        CHECK(PluginRepo::catalogueKey("", "pocsag") == "pocsag");
+        CHECK(PluginRepo::catalogueKey(siteA, "hdradio") == "hdradio@hobbyist.example");
+        CHECK(PluginRepo::catalogueKey("C:\\sites\\mine.json", "x") == "x@mine.json");
+        CHECK(PluginRepo::catalogueKey("/srv/sites/mine.json", "x") == "x@mine.json");
+        // One id on two sites gives two keys.
+        CHECK(PluginRepo::catalogueKey(siteA, "x") != PluginRepo::catalogueKey(siteB, "x"));
+
+        // ---- S2: urlHost - what the host lock compares -------------------------
+        CHECK(PluginRepo::urlHost("https://Raw.GitHubUserContent.com/a/b") == "raw.githubusercontent.com");
+        CHECK(PluginRepo::urlHost("https://host.example:8443/x") == "host.example:8443");
+        CHECK(PluginRepo::urlHost("https://host.example:443/x") == "host.example");  // the default port
+        CHECK(PluginRepo::urlHost("https://host.example") == "host.example");
+        CHECK(PluginRepo::urlHost("https://host.example?q=1") == "host.example");
+        CHECK(PluginRepo::urlHost("https://[::1]/x") == "[::1]");
+        for (const char* bad : {"http://host.example/x", "https://", "https:///x",
+                                "https://good.example@evil.example/x", "https://host.example\\evil/x",
+                                "https://host.example:/x", "https://host.example:99999999/x",
+                                "https://host.example:80a/x", "https://ho st.example/x",
+                                "https://host.example\t/x", "https://h\xc3\xb6st.example/x",
+                                "C:/x/index.json", "/srv/index.json", ""}) {
+            const std::string h = PluginRepo::urlHost(bad);
+            if (!h.empty()) { std::printf("FAIL urlHost gave \"%s\" for \"%s\"\n", h.c_str(), bad); }
+            CHECK(h.empty());
+        }
+
+        // ---- S3: normaliseSiteUrl - the one validator --------------------------
+        {
+            std::string out, why;
+            CHECK(PluginRepo::normaliseSiteUrl("  https://hobbyist.example/i.json \r\n", out, why));
+            CHECK(out == "https://hobbyist.example/i.json");
+            CHECK(why.empty());
+            CHECK(PluginRepo::normaliseSiteUrl("C:\\sites\\index.json", out, why));
+            CHECK(out == "C:\\sites\\index.json");
+            CHECK(PluginRepo::normaliseSiteUrl("/srv/sites/index.json", out, why));
+            for (const char* bad : {"", "   ", "http://hobbyist.example/i.json", "ftp://hobbyist.example/i",
+                                    "file:///C:/i.json", "https://good.example@evil.example/i.json",
+                                    "https://", "https://hobbyist.example/i\x01.json"}) {
+                std::string o2 = "stale", w2;
+                const bool ok = PluginRepo::normaliseSiteUrl(bad, o2, w2);
+                if (ok) { std::printf("FAIL normaliseSiteUrl accepted \"%s\"\n", bad); }
+                CHECK(!ok);
+                CHECK(o2.empty());
+                CHECK(!w2.empty());
+            }
+            CHECK(!PluginRepo::normaliseSiteUrl("https://hobbyist.example/" + std::string(2100, 'a'), out, why));
+            CHECK(contains(why, "2048"));
+        }
+
+        // ---- S4: siteFilesAllowed - the host lock ------------------------------
+        CHECK(PluginRepo::siteFilesAllowed("https://hobbyist.example/files/a.dll", siteA));
+        CHECK(PluginRepo::siteFilesAllowed("https://HOBBYIST.example:443/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("https://evil.example/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("https://cdn.hobbyist.example/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("https://hobbyist.example:8443/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("https://hobbyist.example.evil.example/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("https://hobbyist.example@evil.example/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("http://hobbyist.example/a.dll", siteA));
+        CHECK(!PluginRepo::siteFilesAllowed("", siteA));
+        // A site that is itself unusable locks nothing open.
+        CHECK(!PluginRepo::siteFilesAllowed("https://hobbyist.example/a.dll", "http://hobbyist.example/i.json"));
+        // A local index has no host: its file is the user's own.
+        CHECK(PluginRepo::siteFilesAllowed("https://anywhere.example/a.dll", "C:\\sites\\index.json"));
+
+        // ---- S5: the kept copy's names, and what the folder signature skips ----
+        {
+            const std::string j = PluginRepo::siteCacheFileName(siteA);
+            CHECK(j.size() == std::string("catalogue-").size() + 16u + std::string(".json").size());
+            CHECK(j == PluginRepo::siteCacheFileName(siteA));  // stable
+            CHECK(j != PluginRepo::siteCacheFileName(siteB));  // one per site
+            CHECK(PluginRepo::siteCacheTimeFileName(siteA) == j + ".time");
+            // 16 hex of the sha256 of the address, nothing else.
+            std::string hex, herr;
+            CHECK(PluginRepo::sha256Hex(siteA.data(), siteA.size(), hex, herr));
+            CHECK(j == "catalogue-" + hex.substr(0, 16) + ".json");
+            CHECK(PluginRepo::isSiteCacheFile(j));
+            CHECK(PluginRepo::isSiteCacheFile(j + ".time"));
+            CHECK(PluginRepo::isSiteCacheFile(j + ".part"));
+            CHECK(PluginRepo::isSiteCacheFile(j + ".time.part"));
+            for (const std::string& notOne : {std::string("catalogue.json"), std::string("catalogue.json.time"),
+                                              std::string("catalogue-.json"),
+                                              std::string("catalogue-0123456789abcde.json"),     // 15 hex
+                                              std::string("catalogue-0123456789ABCDEF.json"),    // upper case
+                                              std::string("catalogue-0123456789abcdeg.json"),    // not hex
+                                              std::string("catalogue-0123456789abcdef.json.bak"),
+                                              std::string("catalogue-0123456789abcdef"),
+                                              std::string("catalogue-0123456789abcdef.dll"),
+                                              std::string("xcatalogue-0123456789abcdef.json"),
+                                              std::string("installed.json"), mod("catalogue-0123456789abcdef"),
+                                              std::string()}) {
+                if (PluginRepo::isSiteCacheFile(notOne)) {
+                    std::printf("FAIL isSiteCacheFile accepted \"%s\"\n", notOne.c_str());
+                }
+                CHECK(!PluginRepo::isSiteCacheFile(notOne));
+            }
+        }
+
+        // ---- S6: mergeSite -----------------------------------------------------
+        {
+            // Distinct ids: the official list is untouched and in order, the site's
+            // survivors follow it carrying `source`, and `regional` is the merge's to clear.
+            const PluginCatalogEntry a = catEntry("aaa", "1.0.0");
+            PluginCatalogEntry r = catEntry("rrr", "1.0.0");
+            r.regional = true;
+            const std::vector<PluginCatalogEntry> listed = {a, r};
+            PluginCatalogEntry s1 = siteCat("hdradio", "0.1.0", "hobbyist.example");
+            PluginCatalogEntry s2 = siteCat("other", "2.0.0", "hobbyist.example");
+            s2.regional = true;          // a hostile entry cannot grant itself the regional flag...
+            s2.source = "https://evil";  // ...nor pick its own source
+            const PluginRepo::SiteMergeResult m = PluginRepo::mergeSite(listed, {s1, s2}, siteA);
+            CHECK(m.merged.size() == 4u);
+            CHECK(m.added == 2);
+            CHECK(m.hiddenSameId == 0);
+            CHECK(m.hiddenOffHost == 0);
+            if (m.merged.size() == 4u) {
+                CHECK(m.merged[0].id == "aaa" && m.merged[0].source.empty() && !m.merged[0].regional);
+                CHECK(m.merged[1].id == "rrr" && m.merged[1].source.empty() && m.merged[1].regional);
+                CHECK(m.merged[2].id == "hdradio" && m.merged[2].source == siteA);
+                CHECK(m.merged[3].id == "other" && m.merged[3].source == siteA && !m.merged[3].regional);
+            }
+        }
+        {
+            // OFFICIAL WINS: an id already listed - official, regional, an earlier site, or the
+            // site's own earlier entry - drops the site's copy whole, and counts it.
+            PluginCatalogEntry official = catEntry("shared", "1.0.0");
+            official.minSupportedVersion = "1.0.0";
+            PluginCatalogEntry regionalOne = catEntry("regional-one", "1.0.0");
+            regionalOne.regional = true;
+            const PluginRepo::SiteMergeResult first = PluginRepo::mergeSite(
+                {official, regionalOne}, {siteCat("early", "1.0.0", "other.example")}, siteB);
+            CHECK(first.added == 1);
+            PluginCatalogEntry clash = siteCat("shared", "9.9.9", "hobbyist.example");
+            clash.minSupportedVersion = "9.9.9";  // would retire the official plugin if it got through
+            const PluginRepo::SiteMergeResult m = PluginRepo::mergeSite(
+                first.merged,
+                {clash, siteCat("regional-one", "5.0.0", "hobbyist.example"),
+                 siteCat("early", "5.0.0", "hobbyist.example"), siteCat("mine", "1.0.0", "hobbyist.example"),
+                 siteCat("mine", "2.0.0", "hobbyist.example")},
+                siteA);
+            CHECK(m.hiddenSameId == 4);  // shared, regional-one, early, and the second "mine"
+            CHECK(m.hiddenOffHost == 0);
+            CHECK(m.added == 1);
+            CHECK(m.merged.size() == first.merged.size() + 1u);
+            if (m.merged.size() == first.merged.size() + 1u) {
+                const PluginCatalogEntry& kept = m.merged.back();
+                CHECK(kept.id == "mine" && kept.version == "1.0.0" && kept.source == siteA);
+            }
+            // ...and the official entry is exactly what it was.
+            for (const PluginCatalogEntry& e : m.merged) {
+                if (e.id == "shared") {
+                    CHECK(e.version == "1.0.0");
+                    CHECK(e.source.empty());
+                    CHECK(e.minSupportedVersion == "1.0.0");
+                }
+            }
+        }
+        {
+            // ONE HOST: any platform or picture url off the site's host drops the entry whole,
+            // counted apart from the id collisions.
+            PluginCatalogEntry offFile = siteCat("offfile", "1.0.0", "hobbyist.example");
+            offFile.platforms.push_back(offFile.platforms[0]);
+            offFile.platforms[1].os = "linux";
+            offFile.platforms[1].url = "https://evil.example/files/x.so";  // one bad platform of two
+            PluginCatalogEntry offPic = siteCat("offpic", "1.0.0", "hobbyist.example");
+            cascade::core::CatalogScreenshot pic;
+            pic.url = "https://tracker.example/pixel.png";
+            pic.sha256 = kHashA;
+            pic.caption = "a picture elsewhere";
+            offPic.screenshots.push_back(pic);
+            PluginCatalogEntry goodPic = siteCat("goodpic", "1.0.0", "hobbyist.example");
+            pic.url = "https://hobbyist.example/shots/a.png";
+            goodPic.screenshots.push_back(pic);
+            PluginCatalogEntry both = siteCat("shared", "1.0.0", "evil.example");  // off host AND an id clash
+            const PluginRepo::SiteMergeResult m = PluginRepo::mergeSite(
+                {catEntry("shared", "1.0.0")}, {offFile, offPic, goodPic, both}, siteA);
+            CHECK(m.hiddenOffHost == 3);  // offfile, offpic and "both" (host lock is judged first)
+            CHECK(m.hiddenSameId == 0);
+            CHECK(m.added == 1);
+            CHECK(m.merged.size() == 2u);
+            if (m.merged.size() == 2u) { CHECK(m.merged[1].id == "goodpic"); }
+        }
+        {
+            // A LOCAL INDEX has no host to lock to; an EMPTY address admits nothing.
+            const PluginRepo::SiteMergeResult local = PluginRepo::mergeSite(
+                {}, {siteCat("l1", "1.0.0", "anywhere.example")}, "C:\\sites\\index.json");
+            CHECK(local.added == 1 && local.hiddenOffHost == 0);
+            if (local.merged.size() == 1u) { CHECK(local.merged[0].source == "C:\\sites\\index.json"); }
+            const PluginRepo::SiteMergeResult none = PluginRepo::mergeSite(
+                {catEntry("aaa", "1.0.0")}, {siteCat("l1", "1.0.0", "anywhere.example")}, std::string());
+            CHECK(none.added == 0);
+            CHECK(none.merged.size() == 1u);
+            for (const PluginCatalogEntry& e : none.merged) { CHECK(e.source.empty() && e.id == "aaa"); }
+        }
+        {
+            // parseIndex never reads "source" (or "regional") off the wire.
+            const std::string doc = std::string(R"JSON({
+  "schemaVersion": 1,
+  "plugins": [
+    { "id": "sneaky", "name": "Sneaky", "version": "1.0.0", "source": "", "regional": true,
+      "abiVersion": )JSON") + abiText() + R"JSON(, "platforms": [] } ] })JSON";
+            std::vector<PluginCatalogEntry> v;
+            std::string err;
+            CHECK(PluginRepo::parseIndex(doc, v, err));
+            CHECK(v.size() == 1u);
+            if (v.size() == 1u) { CHECK(v[0].source.empty() && !v[0].regional); }
+            const std::string doc2 = std::string(R"JSON({
+  "schemaVersion": 1,
+  "plugins": [
+    { "id": "sneaky", "name": "Sneaky", "version": "1.0.0", "source": "https://evil.example/i.json",
+      "abiVersion": )JSON") + abiText() + R"JSON(, "platforms": [] } ] })JSON";
+            CHECK(PluginRepo::parseIndex(doc2, v, err));
+            CHECK(v.size() == 1u);
+            if (v.size() == 1u) { CHECK(v[0].source.empty()); }
+        }
+
+        // ---- S7: every join is by (source, id) --------------------------------
+        const std::uint32_t hostAbi = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+        {
+            // installStateFor: a record or a module of the same id from another source says
+            // nothing about this plugin - in either direction.
+            PluginCatalogEntry officialE = catEntry("clash", "2.0.0");
+            PluginCatalogEntry siteE = catEntry("clash", "2.0.0");
+            siteE.source = siteA;
+            InstalledPlugin officialRec = installedRec("clash", "1.0.0", hostAbi, mod("clash-off"));
+            InstalledPlugin siteRec = installedRec("clash", "1.0.0", hostAbi, mod("clash-site"));
+            siteRec.source = siteA;
+            const auto st = [](const PluginCatalogEntry& e, const std::vector<InstalledPlugin>& r,
+                               const std::vector<cascade::core::ScannedModule>& s) {
+                return PluginRepo::installStateFor(e, r, s);
+            };
+            CHECK(st(siteE, {officialRec}, {}).kind == cascade::core::InstallStateKind::NotInstalled);
+            CHECK(st(officialE, {siteRec}, {}).kind == cascade::core::InstallStateKind::NotInstalled);
+            CHECK(st(siteE, {siteRec}, {}).kind == cascade::core::InstallStateKind::UpdateAvailable);
+            CHECK(st(officialE, {officialRec}, {}).kind == cascade::core::InstallStateKind::UpdateAvailable);
+            // ...and the same through the scan.
+            cascade::core::ScannedModule offMod;
+            offMod.id = "clash";
+            offMod.version = "2.0.0";
+            offMod.file = mod("clash-off");
+            cascade::core::ScannedModule siteMod = offMod;
+            siteMod.source = siteA;
+            siteMod.file = mod("clash-site");
+            CHECK(st(siteE, {}, {offMod}).kind == cascade::core::InstallStateKind::NotInstalled);
+            CHECK(st(officialE, {}, {siteMod}).kind == cascade::core::InstallStateKind::NotInstalled);
+            CHECK(st(siteE, {}, {siteMod}).kind == cascade::core::InstallStateKind::Installed);
+            // Another site's record is no more this site's than the official one is.
+            InstalledPlugin otherRec = siteRec;
+            otherRec.source = siteB;
+            CHECK(st(siteE, {otherRec}, {}).kind == cascade::core::InstallStateKind::NotInstalled);
+        }
+        {
+            // planUpdates: an installed plugin updates only from its own source.
+            PluginCatalogEntry siteE = catEntry("clash", "2.0.0");
+            siteE.source = siteA;
+            PluginCatalogEntry officialE = catEntry("clash", "3.0.0");
+            InstalledPlugin officialRec = installedRec("clash", "1.0.0");
+            InstalledPlugin siteRec = installedRec("clash", "1.0.0", hostAbi, mod("clash-site"));
+            siteRec.source = siteA;
+            // The official copy is installed: a site listing the same id offers it nothing.
+            CHECK(PluginRepo::planUpdates({siteE}, {officialRec}).empty());
+            // The site's copy is installed: the official catalogue offers it nothing.
+            CHECK(PluginRepo::planUpdates({officialE}, {siteRec}).empty());
+            // Own source: planned, and the plan carries the source.
+            const std::vector<PluginUpdate> mine = PluginRepo::planUpdates({siteE}, {siteRec});
+            CHECK(mine.size() == 1u);
+            if (mine.size() == 1u) {
+                CHECK(mine[0].source == siteA);
+                CHECK(mine[0].toVersion == "2.0.0");
+            }
+            // Both installed, both listed: each updates from its own entry, to its own version.
+            const std::vector<PluginCatalogEntry> bothCat = {officialE, siteE};
+            const std::vector<PluginUpdate> both =
+                PluginRepo::planUpdates(bothCat, {officialRec, siteRec});
+            CHECK(both.size() == 2u);
+            if (both.size() == 2u) {
+                CHECK(both[0].source.empty() && both[0].toVersion == "3.0.0");
+                CHECK(both[1].source == siteA && both[1].toVersion == "2.0.0");
+            }
+        }
+        {
+            // mergePolicies / policyFor: a site's entry can neither replace nor lift an official
+            // plugin's retirement floor, and a site's own floor is its own.
+            PluginCatalogEntry officialE = catEntry("clash", "1.0.0");
+            officialE.minSupportedVersion = "0.9.0";
+            std::vector<CachedPolicy> cached;
+            PluginRepo::mergePolicies(cached, {officialE});
+            PluginCatalogEntry siteE = catEntry("clash", "9.0.0");
+            siteE.source = siteA;
+            siteE.minSupportedVersion = "";  // would lift the floor if it replaced by id
+            PluginRepo::mergePolicies(cached, {siteE});
+            CHECK(cached.size() == 2u);
+            CHECK(PluginRepo::policyFor(cached, "clash").minSupportedVersion == "0.9.0");
+            CHECK(PluginRepo::policyFor(cached, "", "clash").catalogueVersion == "1.0.0");
+            CHECK(PluginRepo::policyFor(cached, siteA, "clash").known);
+            CHECK(PluginRepo::policyFor(cached, siteA, "clash").catalogueVersion == "9.0.0");
+            CHECK(!PluginRepo::policyFor(cached, siteB, "clash").known);
+            // The floor binds the official plugin and not the site's.
+            InstalledPlugin officialRec = installedRec("clash", "0.5.0");
+            InstalledPlugin siteRec = installedRec("clash", "0.5.0", hostAbi, mod("clash-site"));
+            siteRec.source = siteA;
+            CHECK(PluginRepo::blockedCount({officialRec}, cached) == 1u);
+            CHECK(PluginRepo::blockedCount({siteRec}, cached) == 0u);
+            CHECK(PluginRepo::blockedPlugins({officialRec, siteRec}, cached).size() == 1u);
+            // A site's own floor retires only that site's plugin.
+            PluginCatalogEntry siteFloor = catEntry("only-mine", "5.0.0");
+            siteFloor.source = siteA;
+            siteFloor.minSupportedVersion = "4.0.0";
+            std::vector<CachedPolicy> c2;
+            PluginRepo::mergePolicies(c2, {siteFloor});
+            InstalledPlugin mineRec = installedRec("only-mine", "3.0.0", hostAbi, mod("only-mine"));
+            mineRec.source = siteA;
+            InstalledPlugin sameIdOfficial = installedRec("only-mine", "3.0.0", hostAbi, mod("only-off"));
+            CHECK(PluginRepo::blockedCount({mineRec}, c2) == 1u);
+            CHECK(PluginRepo::blockedCount({sameIdOfficial}, c2) == 0u);
+        }
+        {
+            // The manifest round-trips `source`, reads its absence as official, writes nothing
+            // for an official record (its bytes are what they were before sites), and keeps two
+            // records of one id from two sources apart.
+            InstalledPlugin off = installedRec("clash", "1.0.0", hostAbi, mod("clash-off"));
+            InstalledPlugin site = installedRec("clash", "1.0.0", hostAbi, mod("clash-site"));
+            site.source = siteA;
+            CachedPolicy pOff = policy("clash", "0.9.0", "1.0.0");
+            CachedPolicy pSite = policy("clash", "0.1.0", "1.0.0");
+            pSite.source = siteA;
+            const std::string text = PluginRepo::serialiseManifest({off, site}, {pOff, pSite});
+            std::vector<InstalledPlugin> back;
+            std::vector<CachedPolicy> backPol;
+            std::vector<std::string> notes;
+            std::string err;
+            CHECK(PluginRepo::parseManifest(text, back, backPol, notes, err));
+            CHECK(back.size() == 2u);
+            CHECK(backPol.size() == 2u);
+            CHECK(notes.empty());
+            if (back.size() == 2u && backPol.size() == 2u) {
+                CHECK(back[0].source.empty());
+                CHECK(back[1].source == siteA);
+                CHECK(backPol[0].source.empty() && backPol[0].minSupportedVersion == "0.9.0");
+                CHECK(backPol[1].source == siteA && backPol[1].minSupportedVersion == "0.1.0");
+            }
+            const std::string officialOnly = PluginRepo::serialiseManifest({off}, {pOff});
+            CHECK(!contains(officialOnly, "source"));
+            // A manifest written before sites existed: no key, official.
+            const std::string old = "{\"schemaVersion\":1,\"plugins\":[{\"id\":\"clash\",\"version\":\"1.0.0\","
+                                    "\"file\":\"" + mod("clash-off") + "\"}],\"policies\":[{\"id\":\"clash\","
+                                    "\"minSupportedVersion\":\"0.5.0\"}]}";
+            CHECK(PluginRepo::parseManifest(old, back, backPol, notes, err));
+            CHECK(back.size() == 1u && backPol.size() == 1u);
+            if (back.size() == 1u && backPol.size() == 1u) {
+                CHECK(back[0].source.empty());
+                CHECK(backPol[0].source.empty());
+            }
+            // The same pair twice is a repeat; the same id from another source is not.
+            const std::string dup = "{\"schemaVersion\":1,\"plugins\":["
+                                    "{\"id\":\"a\",\"version\":\"1\",\"file\":\"" + mod("a1") + "\"},"
+                                    "{\"id\":\"a\",\"version\":\"2\",\"file\":\"" + mod("a2") + "\"},"
+                                    "{\"id\":\"a\",\"source\":\"" + siteA + "\",\"version\":\"3\",\"file\":\"" +
+                                    mod("a3") + "\"}]}";
+            notes.clear();
+            CHECK(PluginRepo::parseManifest(dup, back, backPol, notes, err));
+            CHECK(back.size() == 2u);
+            CHECK(notes.size() == 1u);
+        }
+        {
+            // recordInstall upserts by (source, id): an official and a site's record of one id
+            // sit side by side, each updated in place, and the site's floor is cached under its
+            // own source.
+            const fs::path d = tmpDir("site_record");
+            PluginCatalogEntry off = catEntry("clash", "1.0.0", CASCADE_PLUGIN_ABI_VERSION, mod("clash-off"));
+            PluginCatalogEntry site = catEntry("clash", "7.0.0", CASCADE_PLUGIN_ABI_VERSION, mod("clash-site"));
+            site.source = siteA;
+            site.minSupportedVersion = "6.0.0";
+            std::string err;
+            CHECK(PluginRepo::recordInstall(d.string(), off, err));
+            CHECK(PluginRepo::recordInstall(d.string(), site, err));
+            PluginCatalogEntry site2 = site;
+            site2.version = "7.1.0";
+            CHECK(PluginRepo::recordInstall(d.string(), site2, err));
+            PluginInventory inv;
+            std::string lerr;
+            (void)PluginRepo::loadInventory(d.string(), inv, lerr);
+            CHECK(inv.plugins.size() == 2u);
+            if (inv.plugins.size() == 2u) {
+                CHECK(inv.plugins[0].source.empty() && inv.plugins[0].version == "1.0.0");
+                CHECK(inv.plugins[1].source == siteA && inv.plugins[1].version == "7.1.0");
+            }
+            CHECK(PluginRepo::policyFor(inv.policies, siteA, "clash").minSupportedVersion == "6.0.0");
+            CHECK(PluginRepo::policyFor(inv.policies, "", "clash").minSupportedVersion.empty());
+            std::error_code ec;
+            fs::remove_all(d, ec);
+        }
+
+        // ---- S8: install() re-checks the host lock and the file rule -----------
+        {
+            // A site's entry whose download url is on another host is refused BEFORE any socket
+            // or any directory. The target is a closed local port and the assertion is on
+            // install()'s own sentence, which no network error can produce.
+            PluginRepo repo;
+            PluginCatalogEntry e = makeEntry(mod("hdradio"), "https://127.0.0.1:1/files/" + mod("hdradio"),
+                                             kHashA, hostAbi);
+            e.id = "hdradio";
+            e.source = siteA;
+            const fs::path d = tmpDir("site_install_host");
+            std::string installedPath, err;
+            CHECK(!repo.install(e, d.string(), installedPath, err));
+            CHECK(contains(err, "may only download from that site's own host"));
+            CHECK(contains(err, "hobbyist.example"));
+            CHECK(!contains(err, "127.0.0.1"));
+            CHECK(installedPath.empty());
+            std::error_code ec;
+            CHECK(!fs::exists(d, ec));
+            fs::remove_all(d, ec);
+        }
+        {
+            // RULE 11. A site's entry may not write a file the manifest records for another
+            // plugin, nor one that is in the folder with no record; its own earlier install is
+            // an update and passes this gate (and then meets the closed port, which is the proof
+            // that the gate let it through).
+            PluginRepo repo;
+            const fs::path d = tmpDir("site_install_file");
+            fs::create_directories(d);
+            PluginCatalogEntry officialOwner = catEntry("official-owner", "1.0.0", hostAbi, mod("owned"));
+            std::string err;
+            CHECK(PluginRepo::recordInstall(d.string(), officialOwner, err));
+            writeText(d / mod("owned"), "official bytes");
+            writeText(d / mod("sideloaded"), "somebody's own module");
+
+            const auto siteEntry = [&](const std::string& id, const std::string& file) {
+                PluginCatalogEntry e = makeEntry(file, "https://127.0.0.1:1/files/" + file, kHashA, hostAbi);
+                e.id = id;
+                e.source = "C:\\sites\\index.json";  // a local index: no host lock, only the file rule
+                return e;
+            };
+            std::string installedPath;
+            // Another plugin's recorded file.
+            CHECK(!repo.install(siteEntry("hdradio", mod("owned")), d.string(), installedPath, err));
+            CHECK(contains(err, "belongs to another plugin"));
+            CHECK(readAll(d / mod("owned")) == "official bytes");
+            // A file with no record at all.
+            CHECK(!repo.install(siteEntry("hdradio", mod("sideloaded")), d.string(), installedPath, err));
+            CHECK(contains(err, "not recorded as this plugin"));
+            CHECK(readAll(d / mod("sideloaded")) == "somebody's own module");
+            // Case does not get round it on a case-insensitive file system.
+#if defined(_WIN32)
+            CHECK(!repo.install(siteEntry("hdradio", mod("OWNED")), d.string(), installedPath, err));
+            CHECK(contains(err, "belongs to another plugin"));
+#endif
+            // A fresh name passes the gate and reaches the (closed) network.
+            CHECK(!repo.install(siteEntry("hdradio", mod("fresh")), d.string(), installedPath, err));
+            CHECK(!contains(err, "may not replace"));
+            // Its own record: an update. The gate lets it through as well.
+            PluginCatalogEntry mine = siteEntry("hdradio", mod("hdradio"));
+            CHECK(PluginRepo::recordInstall(d.string(), mine, err));
+            writeText(d / mod("hdradio"), "hdradio 1");
+            CHECK(!repo.install(mine, d.string(), installedPath, err));
+            CHECK(!contains(err, "may not replace"));
+            // The official entry that names that same file is NOT held to this rule (it is the
+            // catalogue the product ships with; the rule is about what a site may overwrite).
+            PluginCatalogEntry officialSame = makeEntry(mod("owned"), "https://127.0.0.1:1/files/" + mod("owned"),
+                                                       kHashA, hostAbi);
+            officialSame.id = "official-owner";
+            CHECK(!repo.install(officialSame, d.string(), installedPath, err));
+            CHECK(!contains(err, "may not replace"));
+            std::error_code ec;
+            fs::remove_all(d, ec);
+        }
+        {
+            // fetchSiteIndex refuses http:// before any socket and says why, leaves its outputs
+            // empty, and returns promptly when cancelled (against a real black hole).
+            PluginRepo repo;
+            std::vector<PluginCatalogEntry> out;
+            std::vector<std::string> report;
+            std::string raw = "stale", err;
+            CHECK(!repo.fetchSiteIndex("http://hobbyist.example/i.json", out, raw, report, err));
+            CHECK(out.empty() && raw.empty() && report.empty());
+            CHECK(contains(err, "non-https"));
+            BlackHoleListener hole;
+            CHECK(hole.start());
+            PluginRepo repo2;
+            repo2.cancel();
+            const auto t0 = std::chrono::steady_clock::now();
+            CHECK(!repo2.fetchSiteIndex(hole.url(), out, raw, report, err));
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - t0).count();
+            hole.stop();
+            CHECK(ms < 1000);
+            static_assert(PluginRepo::kMaxSiteIndexBytes == 1024ull * 1024ull, "a site index may be 1 MiB");
+        }
+        {
+            // Through the transport stand-in: a site's index is parsed under the site's cap, its
+            // text is kept for the kept copy, a refused document keeps nothing, and a body over
+            // the cap is refused with the cap named.
+            const std::string good = std::string("{\"schemaVersion\":1,\"plugins\":[{\"id\":\"hdradio\","
+                                                 "\"name\":\"HD Radio\",\"version\":\"0.1.0\",\"abiVersion\":") +
+                                     abiText() + "}]}";
+            std::string body = good;
+            PluginRepo::setTransportForTest([&body](const std::string&, std::uint64_t,
+                                                    const std::function<bool(const void*, std::size_t)>& sink,
+                                                    std::string&) {
+                std::size_t at = 0;
+                while (at < body.size()) {
+                    const std::size_t left = body.size() - at;
+                    const std::size_t n = left < 65536u ? left : 65536u;
+                    if (!sink(body.data() + at, n)) { return false; }
+                    at += n;
+                }
+                return true;
+            });
+            PluginRepo repo;
+            std::vector<PluginCatalogEntry> out;
+            std::vector<std::string> report;
+            std::string raw, err;
+            CHECK(repo.fetchSiteIndex("https://hobbyist.example/i.json", out, raw, report, err));
+            CHECK(out.size() == 1u && out[0].id == "hdradio");
+            CHECK(raw == good);
+            body = "not json";
+            CHECK(!repo.fetchSiteIndex("https://hobbyist.example/i.json", out, raw, report, err));
+            CHECK(out.empty() && raw.empty());
+            CHECK(contains(err, "not valid JSON"));
+            body = good + std::string(static_cast<std::size_t>(PluginRepo::kMaxSiteIndexBytes), ' ');
+            CHECK(!repo.fetchSiteIndex("https://hobbyist.example/i.json", out, raw, report, err));
+            CHECK(contains(err, "1024 KiB"));
+            CHECK(out.empty() && raw.empty());
+            PluginRepo::setTransportForTest(nullptr);
         }
     }
 

@@ -215,8 +215,13 @@ inline constexpr float kAltLegendPad = 5.0f;
 // than no legend because the user cannot tell it is truncated. The measuring
 // function is passed in so this stays free of ImGui and testable; the caller
 // hands it ImGui::CalcTextSize with the font actually in use.
+//
+// `noAltitudeLabel` is the TRANSLATED text of the "no altitude" row that sits
+// under the six bands when some aircraft on the map reports no altitude, or
+// null when the legend is drawn without it. "no altitude" is longer than any
+// band label, so a panel measured without the row it then draws clips it.
 template <typename MeasureTextWidth>
-float altLegendWidth(MeasureTextWidth&& measureTextWidth);
+float altLegendWidth(MeasureTextWidth&& measureTextWidth, const char* noAltitudeLabel = nullptr);
 
 // The same measurement for the ORBITAL ladder, and it is not the same number:
 // "850-1200 km" is eleven characters where the widest aviation label,
@@ -650,10 +655,12 @@ inline const AltBandStyle& altBandStyle(int index) {
     // palette cannot quietly drift out of it.
     //
     // NO RED ANYWHERE IN IT, deliberately: red is the aircraft KIND colour
-    // (which an unknown-altitude target keeps) and the emergency colour, and
-    // both of those have to win. A band that was also red would put an
-    // ordinary aircraft at circuit height in the same colour as one squawking
-    // 7700.
+    // and the emergency colour, and both of those have to win. A band that was
+    // also red would put an ordinary aircraft at circuit height in the same
+    // colour as one squawking 7700. (An aircraft that reports NO altitude used
+    // to keep that kind red, close enough to the lowest band's orange that a
+    // tester could not tell "no altitude" from "below 1,000 ft"; since 0.99.74
+    // it is the grey of noAltitudeStyle() below, which belongs to no band.)
     static const AltBandStyle kBands[kAltBandCount] = {
         {255, 122, 20, "< 1 kft"},     // circuit, final approach
         {255, 190, 30, "1-5 kft"},     // departure, arrival
@@ -665,6 +672,39 @@ inline const AltBandStyle& altBandStyle(int index) {
     if (index < 0) { index = 0; }
     if (index >= kAltBandCount) { index = kAltBandCount - 1; }
     return kBands[index];
+}
+
+// --- "no altitude" ------------------------------------------------------------
+
+// AN AIRCRAFT THAT REPORTS NO ALTITUDE IS DRAWN GREY, and that is the whole of
+// the rule. Until 0.99.74 it kept the aircraft KIND colour, which is red, and a
+// tester wrote (2026-10-12): "instead of highlighting aircraft that are not
+// transmitting the altitude in red, which is the same as <1,000 ft. Maybe color
+// this in grey or black. I would like to be able to distinguish the two." The
+// lowest band is orange, and on a busy map at a few pixels a red marker and an
+// orange one are not two colours.
+//
+// ONLY AIRCRAFT. A ship or an APRS station reporting no altitude is not an
+// aircraft whose altitude went missing - it is a thing whose altitude is not
+// part of what it transmits - so those keep the per-kind colour that tells
+// several kinds on one map apart. A satellite always reports one.
+inline bool noAltitudeUsesGrey(TrackKind kind) { return kind == TrackKind::Aircraft; }
+
+// THE GREY, and why this grey. Mid-luminance, for the reason the palette above
+// gives: the map is either a near-black empty field or a pale OSM raster, and
+// black - which the request offered as an alternative - vanishes on the first
+// of them, while the radar scope's pale 196/204/212 (a phosphor face, no tiles)
+// would wash out on the second. 150 on all three channels sits at luma 150, the
+// middle of the 90..210 window the palette test pins, and NEUTRAL, so it
+// carries no hue that could be read as a band. Its nearest band is 42.1 away in
+// CIE Lab (1976), further than the 38.8 the closest pair of bands is, and the
+// nearest alarm hue is 54.6 away. The test measures all three.
+//
+// The label is the English fallback; the drawing code translates it, because
+// this header is free of the i18n layer.
+inline const AltBandStyle& noAltitudeStyle() {
+    static const AltBandStyle kNone = {150, 150, 150, "no altitude"};
+    return kNone;
 }
 
 inline int orbitBandIndex(double altM) {
@@ -738,7 +778,8 @@ namespace detail {
 // written separately they did not.
 template <typename BandStyleAt, typename MeasureTextWidth>
 inline float legendWidth(int count, BandStyleAt&& bandStyleAt,
-                         MeasureTextWidth&& measureTextWidth) {
+                         MeasureTextWidth&& measureTextWidth,
+                         const char* extraRowLabel = nullptr) {
     // The LONGEST label decides the width, so the panel is sized by the one
     // that would otherwise overflow rather than by the one that happened to be
     // measured. All of them are measured every call: this runs once per frame
@@ -749,18 +790,105 @@ inline float legendWidth(int count, BandStyleAt&& bandStyleAt,
         const float w = measureTextWidth(bandStyleAt(i).label);
         if (w > longest) { longest = w; }
     }
+    // THE EXTRA ROW, when the legend carries one, is a label like the rest: the
+    // "no altitude" row is longer than any band ("no altitude" against
+    // "20-30 kft"), so a panel measured without it clips its own last line.
+    if (extraRowLabel != nullptr) {
+        const float w = measureTextWidth(extraRowLabel);
+        if (w > longest) { longest = w; }
+    }
     return kAltLegendPad + kAltLegendSwatch + kAltLegendPad + longest + kAltLegendPad;
 }
 }  // namespace detail
 
 template <typename MeasureTextWidth>
-inline float altLegendWidth(MeasureTextWidth&& measureTextWidth) {
-    return detail::legendWidth(kAltBandCount, altBandStyle, measureTextWidth);
+inline float altLegendWidth(MeasureTextWidth&& measureTextWidth, const char* noAltitudeLabel) {
+    return detail::legendWidth(kAltBandCount, altBandStyle, measureTextWidth, noAltitudeLabel);
+}
+
+// How many rows the ladder draws under its heading: the bands, plus the "no
+// altitude" row when some aircraft on the map has none. The plate's height is
+// this many rows, so the row cannot be drawn outside it.
+inline int altLegendRowCount(int bandCount, bool noAltitudeRow) {
+    return bandCount + (noAltitudeRow ? 1 : 0);
 }
 
 template <typename MeasureTextWidth>
 inline float orbitLegendWidth(MeasureTextWidth&& measureTextWidth) {
     return detail::legendWidth(kOrbitBandCount, orbitBandStyle, measureTextWidth);
+}
+
+// --- where the map puts a point ------------------------------------------------
+
+// Web Mercator, normalised so the whole world is 0..1 in both axes (north at 0),
+// which is the form the tile grid is defined in. Latitude is clamped to the
+// projection's own limit, so a point at 89 degrees lands where 85.05 does - the
+// same as the tiles do, and the same as the map's drawing code, which calls this.
+inline double mapMercatorY(double latDeg) {
+    const double lat = std::clamp(latDeg, -85.05112878, 85.05112878);
+    const double s = std::sin(lat * detail::kPi / 180.0);
+    return 0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * detail::kPi);
+}
+
+struct MapPixel {
+    double x, y;
+};
+
+// WHERE MapView::draw PUTS A POINT, in pixels from the top-left of the map, and
+// it is the same arithmetic as that function's toScreen - not a similar one -
+// because the list of aircraft "on screen" has to be the aircraft the map draws
+// there, and two derivations of one projection are two chances to disagree by a
+// pixel at the edge.
+//
+//   - The view is `spanDeg` of LONGITUDE across `widthPx`; the latitude that
+//     fits is derived from the aspect ratio, so a degree is the same size
+//     across and down. (Equirectangular. The ground distance of a degree is not
+//     the same in both directions away from the equator; that is the
+//     projection's known distortion, not this function's.)
+//   - With `mercator`, the vertical scale is taken from the SAME pixels per
+//     degree of longitude, which keeps the projection conformal.
+//   - A longitude takes the SHORT WAY ROUND the antimeridian: a point at +179
+//     seen from a view centred on -179 is two degrees away, not 358. One fold
+//     in each direction, exactly as toScreen does it.
+inline MapPixel mapProjectPoint(double centreLat, double centreLon, double spanDeg,
+                                double widthPx, double heightPx, bool mercator,
+                                double latDeg, double lonDeg) {
+    const double lonSpan = spanDeg;
+    const double latSpan = spanDeg * heightPx / widthPx;
+    double dx = lonDeg - centreLon;
+    if (dx > 180.0) { dx -= 360.0; }
+    if (dx < -180.0) { dx += 360.0; }
+    const double x = dx / lonSpan * widthPx + widthPx * 0.5;
+    double y;
+    if (mercator) {
+        const double pixPerWorld = widthPx * 360.0 / lonSpan;
+        y = (mapMercatorY(latDeg) - mapMercatorY(centreLat)) * pixPerWorld + heightPx * 0.5;
+    } else {
+        y = (centreLat - latDeg) / latSpan * heightPx + heightPx * 0.5;
+    }
+    return MapPixel{x, y};
+}
+
+// WHETHER A POINT IS INSIDE THE MAP YOU ARE LOOKING AT, with NO margin: the
+// edge of the drawn map is the edge. (The marker loop keeps a 40 px margin so a
+// symbol half over the edge still draws; a LIST of what is on screen should
+// match what is visibly drawn, not what is about to be.) A point exactly on an
+// edge counts as inside.
+//
+// FALSE for a NaN or infinite coordinate - a target with no position is not on
+// any screen - and for a view with no area or no span, which has nothing in it.
+inline bool mapPointOnScreen(double centreLat, double centreLon, double spanDeg,
+                             float widthPx, float heightPx, bool mercator,
+                             double latDeg, double lonDeg) {
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return false; }
+    if (!std::isfinite(centreLat) || !std::isfinite(centreLon)) { return false; }
+    if (!(spanDeg > 0.0) || !std::isfinite(spanDeg)) { return false; }
+    if (!(widthPx > 0.0f) || !(heightPx > 0.0f)) { return false; }
+    const double w = static_cast<double>(widthPx);
+    const double h = static_cast<double>(heightPx);
+    const MapPixel p =
+        mapProjectPoint(centreLat, centreLon, spanDeg, w, h, mercator, latDeg, lonDeg);
+    return p.x >= 0.0 && p.x <= w && p.y >= 0.0 && p.y <= h;
 }
 
 inline TrackSortKey trackSortKeyForMenuIndex(int index) {

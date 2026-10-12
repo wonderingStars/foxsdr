@@ -31,6 +31,9 @@
 // catalogue.json.time and the ".part" each is renamed from - is not counted. A
 // good catalogue read rewrites it every time, it decides nothing about which
 // modules load, and counted it made every fetch look like a changed folder.
+// A plugin site's kept copy (0.99.74) is the same thing and gets the same
+// treatment: catalogue-<16 hex>.json, catalogue-<16 hex>.json.time and the ".part"
+// of each (PluginRepo::isSiteCacheFile).
 //
 // WHAT IT CANNOT SEE, stated so nobody assumes otherwise: a file replaced by
 // one with the same size and the same last-write time (a copy that preserves

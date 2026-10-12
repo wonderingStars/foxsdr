@@ -13,10 +13,12 @@
 #ifndef CASCADE_GUI_PLUGIN_SETTINGS_FORM_HPP
 #define CASCADE_GUI_PLUGIN_SETTINGS_FORM_HPP
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "core/file_pick.hpp"
 #include "core/plugin_settings_ui.hpp"
 
 namespace cascade::core {
@@ -58,6 +60,17 @@ struct SettingFieldState {
 // plugin drawn in two places at once keeps two independent boxes.
 struct PluginSettingsFormState {
     std::map<std::string, SettingFieldState> fields;
+
+    // WHAT A PATH FIELD'S BROWSE KEY DOES (0.99.74, CASCADE_SETTING_PATH): asks the
+    // person for a file and returns true with its path, or false when they
+    // cancelled (or nothing could be shown). EMPTY MEANS THIS MACHINE HAS NO FILE
+    // DIALOG (Linux with neither zenity nor kdialog): a PATH field is then its text
+    // box alone - never a key that does nothing. The application sets it once
+    // (AppWindow::pickFile: the system's dialog under the watchdog's pause, or the
+    // FOXSDR_FILE_PICK test seam); a test sets its own. It is called from inside
+    // drawPluginSettingsForm, on the GUI thread, and may block until the dialog
+    // closes.
+    std::function<bool(const core::FilePickRequest&, std::string&)> pick;
 };
 
 // Draws the fields into the current ImGui window, full width, in the plugin's
@@ -67,6 +80,10 @@ struct PluginSettingsFormState {
 // or NUMBER edit is committed when the box is LEFT (Enter, Tab, or a click
 // elsewhere), never per keystroke: a plugin reporting a callsign must never
 // see "G4", then "G4A", as the user types. A checkbox commits on the click.
+// A PATH field is the text box shortened by a BROWSE key (when state.pick is
+// set): the key asks state.pick for a file and commits what comes back through
+// the same call a typed edit takes, so the plugin sees settings_seq move; a
+// cancel changes nothing.
 // Returns how many edits were stored this frame.
 int drawPluginSettingsForm(core::PluginApiCore& api, const std::string& pluginName,
                            const std::vector<core::SettingField>& fields,

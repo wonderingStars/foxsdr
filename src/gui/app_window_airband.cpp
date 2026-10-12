@@ -520,6 +520,28 @@ void AppWindow::airbandTuneBlock(std::size_t index) {
     }
 }
 
+// THE MONITOR'S "ABOVE THE NOISE" RULE, the one place it is written: the Airband section's key
+// calls it once, and the top bar's SQUELCH AUTO calls it every quarter second while it is lit
+// and the monitor listens (autoSquelchFrame, 0.99.74). 8 dB over the MEDIAN channel level: most
+// channels are quiet most of the time, so the median is the noise, and a talker sits well above.
+// Sets airbandSquelchDb_ and rebuilds the block's set with it (airbandTuneBlock - the runner's
+// live squelch slots belong to the patch page). False, and nothing done, when no channel has
+// reported a level yet or the result is within `minMoveDb` of where the threshold is: a rebuild
+// restarts the block's channels, which AUTO must not do for a wobble of a tenth of a decibel.
+bool AppWindow::airbandAboveTheNoise(float minMoveDb) {
+    std::vector<float> lv;
+    for (const AirbandChan& c : airbandChans_) {
+        if (c.levelDb > -199.0f) { lv.push_back(c.levelDb); }
+    }
+    if (lv.empty()) { return false; }
+    std::nth_element(lv.begin(), lv.begin() + static_cast<std::ptrdiff_t>(lv.size() / 2), lv.end());
+    const float db = std::clamp(lv[lv.size() / 2] + 8.0f, -110.0f, 0.0f);
+    if (std::fabs(db - airbandSquelchDb_) < minMoveDb) { return false; }
+    airbandSquelchDb_ = db;
+    airbandTuneBlock(airbandBlock_);
+    return true;
+}
+
 void AppWindow::airbandFlushHeard() {
     bool changed = false;
     for (AirbandChan& c : airbandChans_) {
@@ -1224,7 +1246,13 @@ void AppWindow::drawAirbandSection() {
 
     // --- listening ------------------------------------------------------------
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::SliderFloat("##airband_sq", &airbandSquelchDb_, -110.0f, 0.0f, tr("squelch %.0f dB"));
+    const bool squelchEdited =
+        ImGui::SliderFloat("##airband_sq", &airbandSquelchDb_, -110.0f, 0.0f, tr("squelch %.0f dB"));
+    census::rect("airband:squelch", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                 ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+    // A hand on this slider is a manual choice: the top bar's AUTO key (one flag for the
+    // receiver's squelch and this one) goes off, as it does for the dial.
+    if (squelchEdited) { setSquelchAuto(false, "Airband slider"); }
     if (ImGui::IsItemDeactivatedAfterEdit() && airbandListening_) {
         // A new threshold rebuilds the block's set (the runner's live squelch
         // slots belong to the patch page); on release, not every frame of a
@@ -1237,18 +1265,14 @@ void AppWindow::drawAirbandSection() {
                                    "for you from the quiet channels."));
     }
     ImGui::BeginDisabled(!airbandListening_);
-    if (ImGui::SmallButton(trId("Above the noise"))) {
-        // 8 dB over the MEDIAN channel level: most channels are quiet most of
-        // the time, so the median is the noise, and a talker sits well above.
-        std::vector<float> lv;
-        for (const AirbandChan& c : airbandChans_) {
-            if (c.levelDb > -199.0f) { lv.push_back(c.levelDb); }
-        }
-        if (!lv.empty()) {
-            std::nth_element(lv.begin(), lv.begin() + static_cast<std::ptrdiff_t>(lv.size() / 2), lv.end());
-            airbandSquelchDb_ = std::clamp(lv[lv.size() / 2] + 8.0f, -110.0f, 0.0f);
-            airbandTuneBlock(airbandBlock_);
-        }
+    const bool aboveNoisePressed = ImGui::SmallButton(trId("Above the noise"));
+    census::rect("airband:abovenoise", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                 ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+    if (aboveNoisePressed) {
+        airbandAboveTheNoise(0.0f);
+        // Pressed by hand, it is a choice of its own: the top bar's AUTO (which re-applies
+        // this same rule for as long as it is lit) goes off, like the slider's.
+        setSquelchAuto(false, "Airband Above the noise");
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1282,6 +1306,8 @@ void AppWindow::drawAirbandSection() {
         if (ImGui::Button(trId("STOP##airband"), ImVec2(scanning ? half : -FLT_MIN, 0.0f))) {
             airbandStop("");
         }
+        census::rect("airband:stop", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                     ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
         if (scanning) {
             ImGui::SameLine();
             if (ImGui::Button(trId("Next block"), ImVec2(-FLT_MIN, 0.0f))) { airbandScanner_.skip(); }

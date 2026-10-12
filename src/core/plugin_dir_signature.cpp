@@ -18,7 +18,14 @@ namespace {
 bool isCatalogueCacheFile(const std::string& name) {
     const std::string json = PluginRepo::catalogueCacheFileName();
     const std::string time = PluginRepo::catalogueCacheTimeFileName();
-    return name == json || name == time || name == json + ".part" || name == time + ".part";
+    if (name == json || name == time || name == json + ".part" || name == time + ".part") {
+        return true;
+    }
+    // A PLUGIN SITE'S KEPT COPY (0.99.74) is the same thing under its own name:
+    // "catalogue-<16 hex>.json", ".json.time" and the ".part" of each. Every good
+    // read of a site rewrites it, and counted, each fetch with a site added would be
+    // the changed folder the official copy's exclusion exists to prevent.
+    return PluginRepo::isSiteCacheFile(name);
 }
 
 }  // namespace
@@ -56,7 +63,8 @@ bool readPluginDirSignature(const std::string& dir, PluginDirSignature& out) {
         // catalogue read rewrites catalogue.json and catalogue.json.time, beside
         // the modules; counted, each fetch would look like a changed folder and the
         // rescan it exists to skip would run after all (the 0.99.63 fault). Only
-        // those two names, and the ".part" a write is renamed from.
+        // those two names, and the ".part" a write is renamed from - and a plugin
+        // site's kept copy's two names and theirs (isSiteCacheFile, 0.99.74).
         if (isCatalogueCacheFile(e.name)) { continue; }
         // Both come with the listing's entry (on Windows, from the find data it
         // was made from): neither is a question to the file.

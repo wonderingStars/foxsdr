@@ -701,6 +701,55 @@ void testFoldKeyClearsTheTitle() {
     CHECK(clashes == 0);
 }
 
+// --- 5d. THE STATUS COLUMN'S FOLD KEY LEAVES ITS TITLE WHOLE (0.99.74) -------------
+//
+// The same measurement for the right-hand panel, with the key at the LEFT end
+// of the STATUS plate's title row (gui::statusFoldKeyRect): the centred title
+// must begin to the right of the key's far edge, in every language and at the
+// interface sizes the column is drawn at. The column is 230 px against the
+// rail's 384, so there is far less room to spare, and "СОСТОЯНИЕ" is nine
+// capitals where "STATUS" is six.
+void testStatusFoldKeyClearsTheTitle() {
+    std::printf("  every language: the STATUS title stays clear of its fold key\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    cascade::gui::uiscale::setMonitorDpi(96);
+    int clashes = 0;
+    int checked = 0;
+    for (const char* choice : {"auto", "150", "200"}) {
+        cascade::gui::uiscale::setChoice(choice);
+        const float s = cascade::gui::uiscale::factor();
+        const float colW = cascade::gui::kStatusW * s;
+        const cascade::gui::RailFoldKeyRect key =
+            cascade::gui::statusFoldKeyRect(0.0f, 0.0f, colW, false, s);
+        // Inside the plate's inset, in its left half, and a key rather than a speck.
+        CHECK(key.x0 >= cascade::gui::kRailPlatePad * s - 0.01f && key.x1 < colW * 0.5f);
+        for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+            if (!useLanguage(l.code)) { continue; }
+            ImFont* f = cascade::gui::fonts::legend();
+            const char* title = cascade::i18n::tr("STATUS");
+            constexpr float kTitleTrack = 0.20f;  // addBenchPlate's
+            const float px = cascade::gui::fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                                        kTitleTrack, colW - 16.0f * s);
+            const float tw = cascade::gui::trackedWidth(f, px, title, px * kTitleTrack);
+            const float x0 = std::max(colW * 0.5f - tw * 0.5f, 8.0f * s);
+            ++checked;
+            if (x0 < key.x1 + 2.0f * s) {
+                std::printf("      %s at S=%.1f: \"%s\" starts at %.1f, the key ends at %.1f\n",
+                            l.code.c_str(), static_cast<double>(s), title,
+                            static_cast<double>(x0), static_cast<double>(key.x1));
+                ++clashes;
+            }
+        }
+    }
+    useLanguage("en");
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    std::printf("    %d titles measured, %d under the key\n", checked, clashes);
+    CHECK(checked > 30);
+    CHECK(clashes == 0);
+}
+
 // --- 6. the Serial ports row's chip names what it counts ---------------------
 //
 // "0" alone would read as "off"; this row is never off, it just sometimes
@@ -747,6 +796,7 @@ int main() {
     testRailScalesWithInterfaceSize();
     testBenchPlateTitleScalesWithInterfaceSize();
     testFoldKeyClearsTheTitle();
+    testStatusFoldKeyClearsTheTitle();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

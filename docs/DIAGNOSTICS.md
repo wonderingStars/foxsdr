@@ -129,6 +129,32 @@ describe code this product can be held responsible for.
   next open. Written once per open, never for an Airspy (its AGC switches are
   part of its gain mode) and not for the reopen after a driver fault (that
   restores what the user had a moment ago).
+- `source: manual gain restored after auto gain off` - written (0.99.74) when
+  automatic gain was switched OFF (the Auto gain box, the AUTO key under the GAIN
+  dial, or the web control's `agc`) and the window gave the radio its manual gains
+  back. A radio may fall to the bottom of every gain stage when it leaves
+  automatic gain (a B200 under SoapyUHD did, about 35 dB below what the Source
+  section's sliders and the GAIN dial still showed), so every stage is set again to
+  the value the user had before auto gain went on (for a radio opened already on
+  auto gain, the value the open read), a step the radio turns down is dropped
+  without a word, and every stage is then read back so the sliders and the dial
+  show what the radio really holds. Written once per switch-off, only when at
+  least one stage accepted its value; not for a radio with no gain stages and not
+  when the radio refused the switch itself.
+- `squelch: auto on (AUTO key)` / `squelch: auto off (knob)` - AUTOMATIC squelch
+  changing state (0.99.74, `squelchAuto` in `config.json`), once per change and
+  never for the state restored from the config at start. The word in brackets
+  says who: `AUTO key` is the key under the SQUELCH dial on the top bar (on or
+  off); `knob` (the dial), `slider` (the Radio section's), `keys` (the Squelch
+  up / down keys), `remote` (the web control), `Airband slider` and `Airband
+  Above the noise` (the Airband section's own two squelch controls) are a hand
+  taking the threshold back, so they only ever say `off`. The line does not
+  repeat while AUTOMATIC re-sets the threshold (every quarter second, at most):
+  the threshold itself is in the squelch line of the report's sound block, which
+  is how a report shows where it ended up. While the Airband monitor listens the
+  same flag drives the MONITOR's squelch (its "Above the noise" rule, which
+  restarts the block's channels when the value moves by 0.5 dB or more), and the
+  report's squelch line is still the receiver's.
 - The stream-health line below is written by the native drivers too, in the
   same format and on the same rules.
 - The Airspy drivers write the same shapes under their own names - the open
@@ -486,6 +512,34 @@ the panel:
   network is in the same log. A `keyed by the web remote` with no matching
   release before the log ends means the application died keyed - and then the
   driver's own lines above say whether the board was silenced on the way out.
+- **A plugin's key (0.99.74)** writes four lines, so a transmission nobody at
+  the desk made by hand is identifiable as a plugin's and the log says whose and
+  why it stopped: `tx: armed 15 min` when the operator opens the arming window
+  on the TRANSMIT page (5, 15 or 60), `tx: disarmed (<why>)` when it closes,
+  `tx: plugin <name> keyed` when the radio is keyed for that plugin, and
+  `tx: plugin <name> unkeyed (<why>)` when it is not any more. `<name>` is the
+  name the plugin declares; no frequency and no mode are in these lines (the
+  `tx: keyed - ...` line above, which follows `armed`, carries the mode and the
+  rate as it always did). The reasons a window **disarms**: `you pressed OFF`,
+  `the arming window ran out`, `the TRANSMIT page was closed`, `the transmit
+  radio was closed`, `the radio faulted`, `the transmitter stopped on its own`
+  (a fault or the frozen-window handle got there first), `the window stopped
+  responding` (the frame loop stalled for more than a second), `no plugin holds
+  the TRANSMIT grant any more`, `a configuration was loaded` (a restored grant is
+  never a restored window), and `a plugin held the key for 60 seconds, so it was
+  released` (the cap; the plugin then stays cut until the operator arms again,
+  and the cap also writes `tx: the plugin's key was cut by the 60000 ms cap`
+  **as a warning**, beside the latch's own line above).
+  The reasons a plugin is **unkeyed** are those, and also `the plugin let go
+  (active() is zero)` (the ordinary end of a transmission), `its transmit audio
+  reported a permanent error`, `a hand took the key` (the PTT, the LATCH or the
+  web remote), `the TRANSMIT grant was withdrawn` and `the radio is not
+  available`. An `unkeyed (a plugin held the key for 60 seconds ...)` or a
+  `disarmed` with a fault in it is the one to look for: the key was opened by
+  the application rather than by the plugin or the operator. A `plugin <name>
+  keyed` with no matching `unkeyed` before the log ends means the application
+  died keyed, and the driver's own lines above then say whether the board was
+  silenced on the way out.
 - `tx: the writer thread did not return within 1500 ms and was abandoned; the
   board may still be transmitting` is the one line in this product that says
   the radio's state is unknown. It is written when the bounded join in
@@ -2613,6 +2667,38 @@ plugin only, under the clean-up key's rules; the lines are the clean-up's own,
 unchanged: `plugin: removed old copy adsb-1.0.0.dll`, or `plugin: old copy
 adsb-1.0.0.dll is in use - queued for the next start`.
 
+### What the plugin store writes about plugin sites (0.99.74)
+
+A user may add other people's catalogues ("plugin sites", `pluginSites` in the
+configuration file; docs/THIRD-PARTY-SITES.md). Each site is kept as
+`catalogue-<16 hex>.json` beside the official `catalogue.json` and is left out of
+the plugins folder's rescan signature like it. None of these lines names a site's
+address, a file or a path; the reason a site could not be read (which can carry the
+address) is on screen under the store's top bar, not here.
+
+- **After a read, `info`**, one line, when any site is configured: `plugin store:
+  2 plugin sites - 1 read, 1 could not be read, 3 plugins hidden` (the third number
+  is the entries the merge dropped: an id the catalogue already lists, or a file or
+  picture not on the site's own host).
+- **After a read, `info`**, at most four lines for each site (nothing when it
+  dropped nothing) in the form of the catalogue's own: `plugin store: site note -
+  plugin "hdradio" screenshot 1: dropped: url is not https`.
+- **At start-up, `warn`**, when a site's kept copy was found and could not be used:
+  `plugin store: a site's kept catalogue ignored - the kept catalogue is not usable
+  and was ignored: plugin index: not valid JSON`. The file is left where it is.
+- **When the user adds or removes a site, `info`**: `plugin store: a plugin site was
+  added (2 now)` / `plugin store: a plugin site was removed (1 left)`; and, if the
+  application refused an add the panel had let through, `plugin store: a plugin site
+  was not added - that site is already in the list` (or `the list of sites is full`,
+  `a transfer is already in progress`).
+- **At a plugin scan, `warn`**, the existing `plugin: NOT loaded <file> (<reason>)` line, with
+  a reason for a module installed from a plugin site whose binary declares the same name as
+  an official plugin's: `plugin: NOT loaded hdradio-0.1.0.dll (Not loaded: it declares the same
+  name as the official plugin "ADS-B". Version 1.2.0 in adsb-1.2.0.dll is loaded instead; this
+  file, version 9.0.0, was installed from a plugin site and is not running. It can be deleted
+  with Remove.)`. The loader decides it from the install records (`source`), whatever the
+  versions; the Fitted modules window shows the same words on the module's row.
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it
@@ -2936,6 +3022,17 @@ A hang report captures every thread because *a deadlock is only legible as a
 pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
 CAT server's mutex while the CAT thread waits inside a socket close" is the bug,
 and it is only visible if both stacks are in the same file.
+
+### The side panels' fold keys (0.99.49, 0.99.74)
+
+Each side panel's fold key writes one line when it is pressed, so a log tail (and
+the 256 lines every crash and freeze report carries) says why a screenshot or a
+report has a panel missing: `rail: folded` or `rail: opened` for the FUNCTION
+SELECT rail on the left (0.99.49), and `status: folded` or `status: opened` for
+the STATUS column on the right (0.99.74). The state the keys leave is also in
+the configuration file (`railCollapsed`, `statusCollapsed`), and a launch that
+starts with a panel folded writes no line, because nothing was pressed: read the
+file for that. Nothing else is logged and no figure is attached.
 
 ## The 5-second threshold, and why it is not a guess
 

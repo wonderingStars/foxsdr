@@ -59,6 +59,9 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_AUDIO_PROCESSOR, p.audioProcessor},
         // Fields the host draws for the user (0.99.43).
         {CASCADE_CAP_SETTINGS_UI, p.settingsUi},
+        // Audio to transmit (host API level 2, 0.99.74). Rides on a decoder instance like
+        // the audio-out table, and for the same reason needs its own line.
+        {CASCADE_CAP_TX_AUDIO, p.txAudio},
     };
     for (const Entry& e : table) {
         if ((capMask & e.bit) != 0u && e.table != nullptr) { return true; }

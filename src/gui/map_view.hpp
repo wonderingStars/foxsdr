@@ -449,6 +449,23 @@ public:
     double viewCentreLatDeg() const { return centreLat_; }
     double viewCentreLonDeg() const { return centreLon_; }
 
+    // WHETHER A POINT IS INSIDE THE MAP AS LAST DRAWN, with no margin: what the
+    // user is looking at. The flight list's "On screen only" switch asks this of
+    // every row, so zoomed in on an airfield or an air show the list follows
+    // the picture instead of naming every aircraft the receiver has heard.
+    //
+    // It uses the geometry of the LAST frame draw() finished - the view's
+    // centre and span as they stand, with the pixel size and the projection
+    // that frame was drawn in - because the list is submitted before the map in
+    // the same frame and can only ever know the previous one. A frame behind is
+    // invisible: the list is a count of names, not a pixel position.
+    //
+    // TRUE BEFORE ANY FRAME HAS BEEN DRAWN, since there is nothing to filter
+    // against yet and a list that opened empty would look like a fault. A NaN or
+    // infinite coordinate is never on screen. The arithmetic is
+    // mapPointOnScreen in track_metrics.hpp, which is toScreen's own.
+    bool isOnScreen(double latDeg, double lonDeg) const;
+
     // Centres the view on everything currently plotted. A map that opens on
     // the Atlantic while every target is over England is a map the user has to
     // fight before it is useful.
@@ -498,6 +515,11 @@ private:
     double centreLat_ = 54.0;   // somewhere sane before anything is plotted
     double centreLon_ = -2.0;
     double spanDeg_ = 20.0;
+    // The last drawn frame's size in pixels and projection, for isOnScreen.
+    // Zero until draw() has finished a frame, which is how "never drawn" is told.
+    float frameWidthPx_ = 0.0f;
+    float frameHeightPx_ = 0.0f;
+    bool frameMercator_ = false;
 
     bool hasHome_ = false;
     double homeLat_ = 0.0;

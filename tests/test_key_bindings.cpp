@@ -235,9 +235,36 @@ int main() {
         // its tooltips already claim for them.
         CHECK(formatChord(kb[KeyAction::BankSignal]) == "F1");
         CHECK(formatChord(kb[KeyAction::BankDecode]) == "F2");
-        CHECK(formatChord(kb[KeyAction::BankView]) == "F3");
+        CHECK(formatChord(kb[KeyAction::BankTools]) == "F3");
         CHECK(formatChord(kb[KeyAction::BankExtend]) == "F4");
         CHECK(formatChord(kb[KeyAction::BankSystem]) == "F5");
+    }
+
+    // --- the third bank is TOOLS, and its config id is still "bankView" -------
+    {
+        // 0.99.74 renamed the VIEW bank TOOLS (a tester: "the various scopes,
+        // the scanner and the airband are not really VIEW related"). The words
+        // in the settings list say so...
+        CHECK(std::strcmp(keyActionName(KeyAction::BankTools), "Bank: TOOLS") == 0);
+        CHECK(std::strcmp(keyActionGroup(KeyAction::BankTools), "Rail") == 0);
+        // ...but the id is the file format: a user who rebound F3 has
+        // "bankView=..." in config.json, and renaming the id would unbind them
+        // in silence.
+        CHECK(std::strcmp(keyActionId(KeyAction::BankTools), "bankView") == 0);
+        KeyAction found = KeyAction::Count;
+        CHECK(keyActionFromId("bankView", found));
+        CHECK(found == KeyAction::BankTools);
+        // The id a rename would have invented does not exist.
+        CHECK(!keyActionFromId("bankTools", found));
+        // An old config still binds: "bankView=Ctrl+F3" is the TOOLS bank's key
+        // now, and everything it did not mention is untouched.
+        const KeyBindings old = keyBindingsFromConfig({"bankView=Ctrl+F3"});
+        CHECK(old[KeyAction::BankTools] == chordOf("Ctrl+F3"));
+        CHECK(old[KeyAction::BankExtend] == defaultKeyBindings()[KeyAction::BankExtend]);
+        // ...and what it writes back keeps the id.
+        const std::vector<std::string> written = keyBindingsToConfig(old);
+        CHECK(written.size() == 1);
+        if (written.size() == 1) { CHECK(written[0] == "bankView=Ctrl+F3"); }
     }
 
     // --- conflicts -----------------------------------------------------------

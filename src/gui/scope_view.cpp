@@ -261,14 +261,15 @@ double mercLat(double y) {
 //   1. an EMERGENCY takes the reserved hue and outranks everything;
 //   2. the ALTITUDE BAND when the altitude is known, which is what makes an
 //      approach and a cruise read differently at a glance;
-//   3. the aircraft kind colour when it is not - and the marker is drawn
-//      HOLLOW in that case, so "no reported altitude" and "at sea level" are
-//      not two shades of one thing.
+//   3. a neutral grey when it is not - the map says the same since 0.99.74,
+//      in its own mid grey (noAltitudeStyle), where this dark face takes a
+//      paler one - and the marker is drawn HOLLOW in that case, so "no
+//      reported altitude" and "at sea level" are not two shades of one thing.
 ImU32 targetColour(const CascadeTrack& t) {
     if ((t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) { return kAlert; }
     const int band = altitudeBandIndex(t.altM);
     if (band < 0) {
-        // NOT A RED. The map's kind colour for an aircraft is a red one hue
+        // NOT A RED. The aircraft kind colour is a red one hue
         // away from the alert red reserved for a 7500/7600/7700 squawk, and on
         // a scope face - small marks, phosphor surround, no legend beside them
         // - a reviewer could not tell the two apart. The product's own rule is
@@ -1588,35 +1589,56 @@ void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float
 
 float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
                           float value) {
-    if (dl == nullptr || radius < 6.0f) { return -1.0f; }
+    return drawBrassKnob(dl, centre, radius, value, "##volknob", true);
+}
+
+float drawBrassKnob(ImDrawList* dl, const ImVec2& centre, float radius, float value,
+                    const char* id, bool live) {
+    if (dl == nullptr || radius < 6.0f || id == nullptr) { return -1.0f; }
     ImGui::SetCursorScreenPos(ImVec2(centre.x - radius, centre.y - radius));
-    ImGui::InvisibleButton("##volknob", ImVec2(radius * 2.0f, radius * 2.0f));
+    ImGui::InvisibleButton(id, ImVec2(radius * 2.0f, radius * 2.0f));
     float out = -1.0f;
 
     // THE SAME TWIST THE RANGE KNOB USES, for the same reason: a dial that
     // answered a vertical slide would be a dial in appearance only. Volume is
     // continuous, so unlike the range knob this one reports the angle itself
     // rather than detents.
-    static float lastAngle = 0.0f;
-    if (ImGui::IsItemActive()) {
+    //
+    // THE ANGLE THE HAND WAS LAST AT IS KEPT PER DIAL, in the window's state
+    // storage under the dial's own item id. It was one `static float` while
+    // there was one dial on the bar; with GAIN, SQUELCH and VOLUME side by side
+    // (0.99.74) three dials sharing it would each have taken the previous
+    // dial's angle as their own start, so the first frame of a drag would have
+    // jumped by the difference between them. Only the active dial reads or
+    // writes its entry, and it is refreshed on the frame the drag begins.
+    //
+    // A DIAL THAT IS NOT `live` is drawn and answers nothing: the radio has no
+    // gain stage to set, or is setting its own (automatic gain) - a knob that
+    // turned and changed nothing would be worse than one that visibly cannot.
+    if (live && ImGui::IsItemActive()) {
+        ImGuiStorage* st = ImGui::GetStateStorage();
+        const ImGuiID sid = ImGui::GetItemID();
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float a =
             std::atan2(m.x - centre.x, centre.y - m.y) * 180.0f / 3.14159265f;
-        if (ImGui::IsItemActivated()) { lastAngle = a; }
+        const float lastAngle = ImGui::IsItemActivated() ? a : st->GetFloat(sid, a);
         float d = a - lastAngle;
         while (d > 180.0f) { d -= 360.0f; }
         while (d < -180.0f) { d += 360.0f; }
-        lastAngle = a;
+        st->SetFloat(sid, a);
         out = std::clamp(value + d / 270.0f, 0.0f, 1.0f);
     }
-    if (ImGui::IsItemHovered()) {
+    if (live && ImGui::IsItemHovered()) {
         const float wheel = ImGui::GetIO().MouseWheel;
         if (wheel != 0.0f) { out = std::clamp(value + wheel * 0.05f, 0.0f, 1.0f); }
     }
 
     // Nine ticks on the same 270-degree arc the pointer sweeps - the volume
     // dial's OWN decoration, because only a bounded control has a full-scale
-    // arc to mark; drawBenchKnobFace below draws none.
+    // arc to mark; drawBenchKnobFace below draws none. THE OUTER 1.38 IS
+    // kDeckKnobTickR in gui/tune_control.hpp: the top bar's cluster width (and
+    // the tick arcs' clearance of their captions) is built from it, and
+    // tests/test_tune_control.cpp pins it - change both together.
     for (int i = 0; i < 9; ++i) {
         const float deg = -135.0f + 270.0f * static_cast<float>(i) / 8.0f;
         const float a = deg * 3.14159265f / 180.0f;
@@ -1632,6 +1654,8 @@ float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
     if (f > 1.0f) { f = 1.0f; }
     const float deg = -135.0f + 270.0f * f;
     drawBenchKnobFace(dl, centre, radius, deg);
+    // A dead dial is veiled, so it reads as one before anyone turns it.
+    if (!live) { dl->AddCircleFilled(centre, radius * 1.02f, theme::shadow(95), 0); }
     return out;
 }
 
