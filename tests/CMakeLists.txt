@@ -355,11 +355,22 @@ endforeach()
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
 set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
-# The deck-knobs test starts the real application seventeen times (as a child of
-# itself, so that a fake radio can sit behind the window; two of them run for a
-# few seconds of real time to let the noise floor be measured): 46 s on this
-# desktop, so it gets the same room the census does against a half-speed runner.
+# The deck-knobs test starts the real application dozens of times (as a child of
+# itself, so that a fake radio can sit behind the window; the noise-floor and Airband
+# runs hold a few seconds of real time each): 46 s on this desktop before the Airband
+# scenarios, 140 to 150 s with them, and 321 s (x64) and 335 s (arm64) on the GitHub
+# Linux runners (CI run 38288445561), so it gets the same room the census does.
 set_tests_properties(test_deck_knobs_app PROPERTIES TIMEOUT 600)
+# The TRANSMIT-grant plate test starts the real cascade eight times (the Fitted modules
+# window with a real plugin module pinned to run and the receiver running, 1013 frames
+# in all): 19 to 37 s on this desktop (about 4 s of each run is start-up, shutdown and its
+# sleeps). Both GitHub Linux runners were still in it when the loop's two minutes ended
+# (CI run 38288445561, x64 and arm64), its siblings that start the real application
+# (test_tx_audio_page_app 24 s there against 8 s here) run at 3 times this desktop's
+# time, and the deck-knobs test shows frames of 50 ms or more there. It prints each run's
+# start and duration unbuffered, so a run stopped by this bound still says which one was
+# in hand.
+set_tests_properties(test_tx_audio_plate_app PROPERTIES TIMEOUT 600)
 # The exit-cause test starts the real application eleven times (a staged run per
 # class and per case with nothing to read, then two real kills and the start that
 # reads them) and leaves a second between each kill and the next start, because a

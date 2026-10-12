@@ -435,19 +435,35 @@ void testRingNeverBlocks() {
     // Two threads for 300 ms: the writer pushes bursts as fast as it can without ever
     // sleeping, the reader takes 480 frames (one transmit block) every couple of milliseconds.
     // The writer must keep GOING (a blocking write would stop it at the first full ring), and
-    // what the reader gets is an ordered subsequence of what was written.
+    // what the reader gets is what the ring ACCEPTED, in order, every frame of it.
+    //
+    // THE VALUE OF A FRAME IS ITS POSITION IN THE ACCEPTED STREAM (0, 1, 2 ...), not its
+    // position among the frames OFFERED. A float counts whole numbers exactly only up to
+    // 2^24 = 16,777,216, and a writer that spins against a full ring offers hundreds of
+    // millions of frames in 300 ms (511 to 895 million measured here and on the runners): past
+    // 2^24 neighbouring offered positions share one float, so "each value is above the last"
+    // failed for a reason that has nothing to do with the ring - and only on a machine whose
+    // reader got past the 65,536 frames already queued when the ring filled. Windows' 2 ms
+    // sleep lasts about 15 ms, so the reader took 9,120 frames there and never left the first
+    // fill (green); Linux's lasts 2 ms, the reader took 69,600 on both GitHub runners and
+    // reached the later bursts (FAIL test_tx_audio.cpp:474 ordered, CI run 38288445561).
+    // Counting accepted frames keeps every value below the ring's capacity plus whatever the
+    // reader drained, and makes the check the whole property: the next frame out is the
+    // previous one plus one - nothing reordered, nothing repeated, nothing lost.
     std::atomic<bool> stopWriter{false};
     std::atomic<std::size_t> offered{0};
     std::atomic<std::size_t> accepted2{0};
     std::thread writer([&] {
         std::vector<float> burst(512);
-        std::size_t next = 0;
+        std::size_t seq = 0;  // the value the next ACCEPTED frame carries
         while (!stopWriter.load(std::memory_order_acquire)) {
-            for (std::size_t i = 0; i < burst.size(); ++i) { burst[i] = static_cast<float>(next + i); }
+            for (std::size_t i = 0; i < burst.size(); ++i) { burst[i] = static_cast<float>(seq + i); }
+            // A full ring takes a prefix of the burst; the rest is dropped (it does not wait) and
+            // the next burst starts at the first frame that was not taken.
             const std::size_t put = link.write(burst.data(), burst.size());
             accepted2.fetch_add(put, std::memory_order_relaxed);
             offered.fetch_add(burst.size(), std::memory_order_relaxed);
-            next += burst.size();  // moves on whether or not it was accepted: it does not wait
+            seq += put;
         }
     });
     std::vector<float> got(480);
@@ -458,7 +474,7 @@ void testRingNeverBlocks() {
     while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(300)) {
         const std::size_t n = link.read(got.data(), got.size());
         for (std::size_t i = 0; i < n; ++i) {
-            if (!(got[i] > last)) { ordered = false; }
+            if (got[i] != last + 1.0f) { ordered = false; }
             last = got[i];
         }
         readTotal += n;
@@ -471,7 +487,14 @@ void testRingNeverBlocks() {
     CHECK(offered.load() > 20 * TxAudioLink::kRingFrames);  // it kept going, far past one ring
     CHECK(accepted2.load() < offered.load() / 2);           // and was much faster than the reader
     CHECK(readTotal > 1000u);                               // while the reader really did read
-    CHECK(ordered);                                         // what got through is in order
+    // The counter above is only exact below 2^24: if a machine ever accepts more than that in
+    // 300 ms the test says so here instead of failing `ordered` for the float's sake.
+    if (accepted2.load() >= (std::size_t{1} << 24)) {
+        std::printf("    the ring accepted %zu frames: past 2^24 a float no longer counts them\n",
+                    accepted2.load());
+    }
+    CHECK(accepted2.load() < (std::size_t{1} << 24));
+    CHECK(ordered);                                         // what got through is in order, whole
 }
 
 void testLinkWantsKey() {

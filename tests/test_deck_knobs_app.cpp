@@ -20,9 +20,10 @@
  *              radio's own setAutoGain call, and the remembered per-radio switch in the saved
  *              config), a second press OFF; on a radio WITHOUT automatic gain the key is
  *              drawn and a press asks the radio for nothing;
- *   gain knob  a twist of "deck:gain" sets the radio's first stage, at most a handful of
- *              calls for the whole gesture (it is paced) with the last one the value the hand
- *              ended on; under automatic gain the knob is dead and the radio is not asked;
+ *   gain knob  a twist of "deck:gain" sets the radio's first stage, paced (never more than one
+ *              call a 50 ms slot of the run's OWN clock, read back from its frame times: a slow
+ *              machine's frames are each a slot of their own) with the last call the value the
+ *              hand ended on; under automatic gain the knob is dead and the radio is not asked;
  *   squelch    a twist of "deck:squelch" changes the saved squelchDb; a press of
  *              "deck:squelchauto" saves squelchAuto true; a twist AFTER that saves it false
  *              (a hand on the knob is a manual choice); and with AUTOMATIC on the threshold
@@ -332,6 +333,9 @@ struct Result {
     cascade::core::AppConfig saved;
     std::vector<std::string> log;  // the fake radio's calls, in order
     std::map<std::string, double> state;  // squelch / airband / auto, as the run ended
+    // Frame number -> the application's own clock in seconds (ImGui::GetTime, the one the dial's
+    // pace is read against), from FOXSDR_SCRIPT_TRACE; filled only for a run asked to trace.
+    std::map<long, double> frameT;
     double st(const char* k) const {
         const auto it = state.find(k);
         return it == state.end() ? std::numeric_limits<double>::quiet_NaN() : it->second;
@@ -361,6 +365,7 @@ const char* kTwoRows =
 struct Extra {
     bool airband = false;     // the two ticked rows above, the TOOLS bank with the Airband section
     std::string burst;        // "from,to,db" for the fake radio (seconds from its first read)
+    bool trace = false;       // keep the run's frame times (needs a script), in Result::frameT
 };
 
 // `radio` is "agc" or "noagc"; `script` may be empty; `extraConfig` is JSON members to append.
@@ -372,6 +377,7 @@ Result once(const std::string& tag, const std::string& radio, const std::string&
     const fs::path census = g_dir / (tag + ".census");
     const fs::path log = g_dir / (tag + ".fakelog");
     const fs::path state = g_dir / (tag + ".state");
+    const fs::path trace = g_dir / (tag + ".trace");
     {
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
         f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
@@ -391,6 +397,9 @@ Result once(const std::string& tag, const std::string& radio, const std::string&
     std::error_code ec;
     fs::remove(log, ec);
     fs::remove(state, ec);
+    fs::remove(trace, ec);
+    // One line a frame, "frame N t=<seconds>", appended by the child (a scripted run only).
+    setEnv("FOXSDR_SCRIPT_TRACE", ex.trace ? trace.string() : std::string());
     setEnv("CASCADE_CONFIG_TEST", cfg.string());
     setEnv("FOXSDR_UI_CENSUS", census.string());
     setEnv("FOXSDR_WINDOW_SIZE", size);
@@ -447,6 +456,15 @@ Result once(const std::string& tag, const std::string& radio, const std::string&
         std::string k;
         double v = 0.0;
         while (in >> k >> v) { r.state[k] = v; }
+    }
+    if (ex.trace) {
+        std::ifstream in(trace);
+        std::string line;
+        while (std::getline(in, line)) {
+            long frame = 0;
+            double t = 0.0;
+            if (std::sscanf(line.c_str(), "frame %ld t=%lf", &frame, &t) == 2) { r.frameT[frame] = t; }
+        }
     }
     std::string err;
     if (!cascade::core::ConfigStore::load(cfg.string(), r.saved, err)) {
@@ -532,6 +550,31 @@ std::vector<std::string> agcCalls(const Result& r) {
         if (l.rfind("agc ", 0) == 0) { v.push_back(l); }
     }
     return v;
+}
+
+// WHAT A SCRIPTED GESTURE TOOK, from the run's own frame times (Result::frameT): the clock a
+// dial's pace is read against, so a count of radio calls can be judged against it and not
+// against a number of frames, which are a different length on every machine.
+struct Timing {
+    bool ok = false;             // every frame from `first` to `last` is in the trace
+    double spanMs = 0.0;         // frame `first` to frame `last`
+    double frameMs = 0.0;        // the mean frame inside it
+    double shortestGapMs = 0.0;  // the shortest frame-to-frame gap over frames gapFrom..gapTo
+};
+
+Timing timingOf(const Result& r, long first, long last, long gapFrom, long gapTo) {
+    Timing t;
+    for (long f = std::min(first, gapFrom - 1); f <= std::max(last, gapTo); ++f) {
+        if (r.frameT.count(f) == 0) { return t; }
+    }
+    t.spanMs = (r.frameT.at(last) - r.frameT.at(first)) * 1000.0;
+    t.frameMs = t.spanMs / static_cast<double>(last - first);
+    t.shortestGapMs = std::numeric_limits<double>::infinity();
+    for (long f = gapFrom; f <= gapTo; ++f) {
+        t.shortestGapMs = std::min(t.shortestGapMs, (r.frameT.at(f) - r.frameT.at(f - 1)) * 1000.0);
+    }
+    t.ok = true;
+    return t;
 }
 
 int memoryOf(const cascade::core::AppConfig& c) {
@@ -675,14 +718,59 @@ void gainKnob(const Rect& knob) {
     // the hand is on it, and once more when it lets go) - with the last request the value the
     // hand ended on: 10 + 50 * 170/270 = 41.5 dB. A dial that asked every frame would make
     // thirty-four calls.
-    const Result slow =
-        once("gain-slow", "agc", settle() + slowTwist(knob, 30, 34, 5.0f), "1600x1000", "");
+    //
+    // "FEWER" IS A FACT ABOUT THE CLOCK, NOT ABOUT FRAMES (CI run 38288445561, 2026-10-12). The
+    // pace is 50 ms of the application's own time, so what a 34-frame gesture costs depends on how
+    // long a frame is. This desktop draws one in about 8 to 15 ms: the gesture lasts under half a
+    // second and the radio is asked 6 times. Both GitHub Linux runners (x64 and arm64) asked it 34
+    // times, the dial doing exactly what it is meant to - 34 calls in 34 frames means every frame
+    // was a fresh 50 ms slot, frames of 50 ms or more - so a constant (12) failed there. The run
+    // therefore keeps its own frame times (FOXSDR_SCRIPT_TRACE: ImGui's clock, the one the dial's
+    // pace is read against) and the count is judged against them:
+    //   - never more than one call per 50 ms slot of the time the hand was on the dial, plus the
+    //     release's own call and a slot of slack: ceil(duration / 50 ms) + 2;
+    //   - and, where the run shows the pace could bite, fewer than one call a frame. A call a
+    //     frame needs EVERY gap between the frames that move the dial to be a full slot (the last
+    //     frame's call may be the release's, which is not paced), so one shorter gap, with the
+    //     count still under the frame count, is the pace at work. Where every gap is a full slot
+    //     or more nothing can be proved either way (a dial that asked every frame looks the
+    //     same), and the run says so instead of passing silently.
+    constexpr int kAt = 30;       // the script frame the gesture starts at
+    constexpr int kSteps = 34;    // frames that move the dial
+    constexpr double kSlotMs = 50.0;  // kDeckGainPaceS
+    constexpr long kLanded = kAt + 1;               // button down on the dial
+    constexpr long kFirstMove = kAt + 2;            // the first frame that turns it
+    constexpr long kLastMove = kAt + 1 + kSteps;    // the last
+    constexpr long kReleased = kAt + 2 + kSteps;    // button up: the final value goes out
+    Extra traced;
+    traced.trace = true;
+    const Result slow = once("gain-slow", "agc", settle() + slowTwist(knob, kAt, kSteps, 5.0f),
+                             "1600x1000", "", kFrames, -60.0, false, traced);
     CHECK(slow.ok);
     const std::vector<double> sg = gainCalls(slow);
     std::printf("    a thirty-four-frame twist asked the radio %zu time(s), the last for %.1f\n",
                 sg.size(), sg.empty() ? 0.0 : sg.back());
     CHECK(sg.size() >= 1);
-    CHECK(sg.size() <= 12);
+    {
+        const Timing tm = timingOf(slow, kLanded, kReleased, kFirstMove + 1, kLastMove - 1);
+        if (!tm.ok) { std::printf("    the run's frame times do not cover the gesture\n"); }
+        CHECK(tm.ok);
+        if (tm.ok) {
+            const double allowed = std::ceil(tm.spanMs / kSlotMs) + 2.0;
+            std::printf("    the hand was on the dial for %.0f ms over %ld frames (%.1f ms a frame, "
+                        "the shortest gap %.1f ms): a paced dial is asked at most %.0f times\n",
+                        tm.spanMs, kReleased - kLanded, tm.frameMs, tm.shortestGapMs, allowed);
+            CHECK(static_cast<double>(sg.size()) <= allowed);
+            if (tm.shortestGapMs < kSlotMs - 1.0) {
+                CHECK(sg.size() < static_cast<std::size_t>(kSteps));
+            } else {
+                std::printf("    frames here are as long as the pace (%.0f ms or more a gap): this run "
+                            "cannot tell a paced dial from one asked every frame, so only the count "
+                            "against the run's own clock is judged\n",
+                            kSlotMs);
+            }
+        }
+    }
     if (!sg.empty()) {
         CHECK_NEAR(sg.back(), 10.0 + 50.0 * 170.0 / 270.0, 4.0);
         for (std::size_t i = 1; i < sg.size(); ++i) { CHECK(sg[i] >= sg[i - 1] - 1.0e-6); }

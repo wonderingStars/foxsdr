@@ -211,7 +211,15 @@ Result once(const std::string& tag, int frames, const std::string& script, bool 
     // tests): a module is asked whether it wants the transmitter by the DSP thread, and the
     // DSP thread runs only while the receiver does.
     setEnv("CASCADE_DECODE_TEST", "1");
+    // SAID BEFORE AND AFTER EVERY RUN (0.99.74): on both GitHub Linux runners this test was killed
+    // at ctest's 120 s with no output at all (CI run 38288445561, x64 and arm64) - eight real
+    // application runs, 1013 frames, 19 to 37 s on this desktop - and nothing said whether a run was
+    // slow or stuck. The run in hand is now named before it starts and timed when it ends.
+    std::printf("  run %s: %d frames ...\n", tag.c_str(), frames);
+    const auto started = std::chrono::steady_clock::now();
     r.out = run("\"" + exePath() + "\" --frames " + std::to_string(frames) + " 2>&1");
+    std::printf("  run %s: ended after %.1f s\n", tag.c_str(),
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
     r.log = readTree(diag);
     r.config = readFile(cfg);
     const bool rendered = r.out.find("rendered " + std::to_string(frames) + " frames") != std::string::npos;
@@ -275,6 +283,8 @@ std::string grantList(const std::string& config) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // UNBUFFERED, so that a run stopped by the timeout still says how far it got.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("test_tx_audio_plate_app\n");
     if (argc < 2) {
         std::printf("usage: test_tx_audio_plate_app <tx_audio_fixture module>\n");
