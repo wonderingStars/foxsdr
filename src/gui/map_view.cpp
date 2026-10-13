@@ -641,6 +641,10 @@ double mercLat(double y) {
 }  // namespace
 
 void MapView::goTo(double latDeg, double lonDeg, double spanDeg) {
+    // A place that is not a place is not gone to (0.99.75): a NaN centre is a NaN in
+    // every projected coordinate on the page. Nothing is asked of the view at all,
+    // so a pending fit is not cancelled either.
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return; }
     centreLat_ = latDeg;
     centreLon_ = lonDeg;
     // Tightened only, never loosened - see the header for why.
@@ -661,6 +665,20 @@ bool MapView::isOnScreen(double latDeg, double lonDeg) const {
     if (!(frameWidthPx_ > 0.0f) || !(frameHeightPx_ > 0.0f)) { return true; }
     return mapPointOnScreen(centreLat_, centreLon_, spanDeg_, frameWidthPx_, frameHeightPx_,
                             frameMercator_, latDeg, lonDeg);
+}
+
+std::size_t listedTrackCount(const MapView& view,
+                             const std::vector<cascade::core::HostTrack>& tracks,
+                             bool onScreenOnly) {
+    std::size_t n = 0;
+    for (const cascade::core::HostTrack& ht : tracks) {
+        // Not a placed row, and never on screen (see the header).
+        if (!cascade::core::trackHasPosition(ht.t)) { continue; }
+        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
+        if (onScreenOnly && !view.isOnScreen(ht.t.latDeg, ht.t.lonDeg)) { continue; }
+        ++n;
+    }
+    return n;
 }
 
 void MapView::draw(float width, float height,
@@ -708,6 +726,9 @@ void MapView::draw(float width, float height,
         double minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
         bool any = false;
         for (const auto& ht : tracks) {
+            // A target heard without a position is not plotted, so it is not
+            // fitted to (0.99.75): a NaN here would make the centre NaN.
+            if (!cascade::core::trackHasPosition(ht.t)) { continue; }
             if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
                 continue;
             }
@@ -772,6 +793,9 @@ void MapView::draw(float width, float height,
                 if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
                     break;
                 }
+                // Nothing to follow to while it has no position (0.99.75): the map
+                // stays where it is, as it does for a dropped target.
+                if (!cascade::core::trackHasPosition(ht.t)) { break; }
                 centreLat_ = ht.t.latDeg;
                 centreLon_ = ht.t.lonDeg;
                 break;
@@ -1696,6 +1720,12 @@ void MapView::draw(float width, float height,
         const cascade::core::TrackPresentation pres =
             cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
         if (!pres.visible) { continue; }
+        // NEVER DRAWN WITHOUT A POSITION (0.99.75). The application keeps a target
+        // heard and not placed out of this vector altogether; this is the map
+        // defending itself, because the test below does not: toScreen of a NaN is
+        // NaN, every comparison with NaN is false, and so a NaN marker is not
+        // skipped - it is drawn, at NaN, and could be hit.
+        if (!cascade::core::trackHasPosition(ht.t)) { continue; }
         const ImVec2 s = toScreen(ht.t.latDeg, ht.t.lonDeg);
         if (s.x < origin.x - 40 || s.x > origin.x + width + 40 || s.y < origin.y - 40 ||
             s.y > origin.y + height + 40) {

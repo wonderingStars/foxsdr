@@ -243,6 +243,30 @@ last request. `get_sample_rates(ctx, out, cap)` returns how many rates the open
 radio offers and copies up to `cap` of them; call it with `cap` 0 to ask the
 count. Both answer "none" (`NOT_FOUND`, 0) with no radio open.
 
+### Targets you hear but cannot place yet (0.99.75)
+
+A track source (`CASCADE_CAP_TRACK_SOURCE`) used to be able to publish only
+targets that had a position, so an ADS-B decoder had to hide every aircraft whose
+position message had not arrived. From FoxSDR 0.99.75 `get_state` reports
+`CASCADE_STATE_LISTS_UNPLACED_TRACKS` (0x00008000) in every state it fills, and a
+plugin that sees it may publish such an aircraft anyway: set
+`CASCADE_TRACK_FLAG_NO_POSITION` (0x00000004) in `CascadeTrack::flags` and leave
+`latDeg` and `lonDeg` NaN. Fill in what you do know (`id`, `label`, `altM`,
+`ageMs`, `kind`).
+
+The host **lists** such a target, below the placed ones, dimmed, with its altitude
+and the words "no position yet", and counts it separately in the list's heading
+("12 targets, 3 heard without a position"). It never draws it, never fits the map
+to it, never counts it in the coverage map or as "on screen", and gives it no
+trail (a `CascadePath` whose id is a no-position target's is dropped). It fades and
+is dropped on the same `ageMs` rule as a placed target of its kind; when the
+position arrives, publish the track again without the flag. The host treats any
+track whose coordinates are not finite as having no position, flag or not, so a
+plugin that leaves NaN in without the flag is listed rather than drawn at NaN - but
+it must not rely on that: **a host older than 0.99.75 drops such a track**, so
+publish them only when the bit is set, and keep working (placed targets only) when
+it is not.
+
 ## Changing the receiver
 
 Every `set_*` is a **request**: validated and permission-checked at once,

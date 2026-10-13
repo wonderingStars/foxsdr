@@ -672,6 +672,8 @@ typedef struct CascadeIqDecoderApi {
 /* Optional per-track hints. */
 #define CASCADE_TRACK_FLAG_EMERGENCY 0x00000001u
 #define CASCADE_TRACK_FLAG_SELECTED 0x00000002u
+/* latDeg/lonDeg are NaN; the source hears this target but cannot place it yet; a host lists it and must not draw it (FoxSDR 0.99.75). */
+#define CASCADE_TRACK_FLAG_NO_POSITION 0x00000004u
 
 /*
  * WHAT KIND OF AIRCRAFT, carried in five bits of `flags` rather than in a
@@ -1530,6 +1532,8 @@ typedef struct CascadeAudioProcessorApi {
 #define CASCADE_STATE_TX_GRANTED 0x00001000u     /* THIS plugin may send transmit audio */
 #define CASCADE_STATE_TX_ARMED 0x00002000u       /* the operator's arming window is open */
 #define CASCADE_STATE_TRANSMITTING 0x00004000u   /* the transmitter is keyed now */
+/* the host understands CASCADE_TRACK_FLAG_NO_POSITION and lists such tracks; a plugin may publish them only when it sees this bit. */
+#define CASCADE_STATE_LISTS_UNPLACED_TRACKS 0x00008000u
 
 #define CASCADE_DEVICE_NAME_CHARS 64
 #define CASCADE_LOCATOR_CHARS 8 /* 6-char Maidenhead grid + NUL + 1 spare */

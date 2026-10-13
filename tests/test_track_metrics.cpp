@@ -2225,5 +2225,102 @@ int main() {
     // --- the target detail block ---------------------------------------------
     testTrackDetailLines();
 
+    // --- targets heard without a position (0.99.75) ---------------------------
+    //
+    // The heading over the target list, and the second line of a row for a target
+    // the source hears and cannot place yet. Both take the translator as an
+    // argument and are run here with the identity, so what is pinned is the
+    // English the catalogues are keyed on.
+    {
+        const auto english = [](const char* s) { return s; };
+        using cascade::gui::targetCountText;
+        // NOTHING HEARD UNPLACED: the lines are the ones the list has always had.
+        CHECK(targetCountText(0, 0, 0, english) == "0 targets");
+        CHECK(targetCountText(1, 1, 0, english) == "1 target");
+        CHECK(targetCountText(3, 3, 0, english) == "3 targets");
+        CHECK(targetCountText(3, 41, 0, english) == "3 of 41 targets");
+        CHECK(targetCountText(0, 12, 0, english) == "0 of 12 targets");
+        // SOME HEARD WITHOUT A POSITION: the second number is said, in the wording
+        // the owner gave, with the singular and the "N of M" forms as whole strings
+        // of their own.
+        CHECK(targetCountText(3, 3, 2, english) == "3 targets, 2 heard without a position");
+        CHECK(targetCountText(0, 0, 5, english) == "0 targets, 5 heard without a position");
+        CHECK(targetCountText(1, 1, 1, english) == "1 target, 1 heard without a position");
+        CHECK(targetCountText(3, 41, 2, english) ==
+              "3 of 41 targets, 2 heard without a position");
+        // THE TRANSLATOR IS APPLIED TO THE WHOLE FORMAT, and the numbers go in after.
+        const auto marked = [](const char* s) {
+            static std::string held;
+            held = std::string("<") + s + ">";
+            return held.c_str();
+        };
+        CHECK(targetCountText(3, 3, 2, marked) == "<3 targets, 2 heard without a position>");
+        CHECK(targetCountText(3, 3, 0, marked) == "<3 targets>");
+
+        // THE ROW'S SECOND LINE: the altitude where one is known, then the words.
+        using cascade::gui::TrackKind;
+        using cascade::gui::unplacedRowNote;
+        const double kNaN = std::numeric_limits<double>::quiet_NaN();
+        CHECK(unplacedRowNote(kNaN, TrackKind::Aircraft, english) == "no position yet");
+        CHECK(unplacedRowNote(10668.0, TrackKind::Aircraft, english) ==
+              "35000 ft - no position yet");
+        CHECK(unplacedRowNote(0.0, TrackKind::Aircraft, english) == "0 ft - no position yet");
+        CHECK(unplacedRowNote(421000.0, TrackKind::Satellite, english) ==
+              "421 km - no position yet");
+        CHECK(unplacedRowNote(10668.0, TrackKind::Aircraft, marked) == "35000 ft - <no position yet>");
+
+        // THE DETAIL BLOCK: a target with no position says so where the position
+        // would be, prints no coordinates and no range or bearing (they have nothing
+        // to be measured to), and still says everything else it knows.
+        cascade::gui::TrackDetailInput in;
+        in.label = "BAW123";
+        in.id = "400A1B";
+        in.source = "ADS-B";
+        in.hasPosition = false;
+        in.latDeg = kNaN;
+        in.lonDeg = kNaN;
+        in.altM = 10668.0;
+        in.hasHome = true;
+        in.homeLatDeg = 51.0;
+        in.homeLonDeg = 0.0;
+        in.ageMs = 2500;
+        std::string text;
+        for (const cascade::gui::TrackDetailLine& l : cascade::gui::buildTrackDetailLines(in)) {
+            text += l.text;
+            text += '\n';
+        }
+        std::printf("--- unplaced block ---\n%s", text.c_str());
+        CHECK(text.find("pos     no position yet") != std::string::npos);
+        CHECK(text.find("nan") == std::string::npos);
+        CHECK(text.find("range") == std::string::npos);
+        CHECK(text.find("alt     10668 m") != std::string::npos);
+        CHECK(text.find("age     2.5 s") != std::string::npos);
+        // ...and the same target WITH a position is unchanged: coordinates, range.
+        in.hasPosition = true;
+        in.latDeg = 52.0;
+        in.lonDeg = 1.0;
+        text.clear();
+        for (const cascade::gui::TrackDetailLine& l : cascade::gui::buildTrackDetailLines(in)) {
+            text += l.text;
+            text += '\n';
+        }
+        CHECK(text.find("pos     52.00000, 1.00000") != std::string::npos);
+        CHECK(text.find("range   ") != std::string::npos);
+        CHECK(text.find("no position yet") == std::string::npos);
+
+        // A NaN POSITION NEVER REACHES THE COVERAGE MAP, whatever the caller did:
+        // the accumulator refuses a sighting it cannot measure.
+        CoverageMap cov;
+        recordCoverage(cov, 51.0, 0.0, kNaN, kNaN, cascade::gui::TrackKind::Aircraft);
+        recordCoverage(cov, 51.0, 0.0, kNaN, 0.5, cascade::gui::TrackKind::Aircraft);
+        recordCoverage(cov, 51.0, 0.0, 51.2, std::numeric_limits<double>::infinity(),
+                       cascade::gui::TrackKind::Aircraft);
+        CHECK(cov.peakKm() == 0.0);
+        CHECK(cov.empty());
+        recordCoverage(cov, 51.0, 0.0, 51.2, 0.5, cascade::gui::TrackKind::Aircraft);
+        CHECK(cov.peakKm() > 0.0);
+        CHECK(cov.filledBuckets() == 1);
+    }
+
     return testSummary("test_track_metrics");
 }

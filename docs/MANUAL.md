@@ -30,7 +30,7 @@ are still moving. What is in the current build:
   lettered in the unit that stage is really measured in — decibels on every
   radio but the Airspy R2/Mini, whose gains are the hardware's own
   register steps and are shown as bare step numbers rather than invented
-  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead); the AUTO key under the GAIN dial on the top bar is the same switch. Switching it off puts your manual gains back on the radio — some radios, a B200 among them, fall to the bottom of every stage when they leave automatic gain — and the sliders and the GAIN dial then show what the radio really holds. Developed against an Ettus B200
+  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead); the AUTO key under the GAIN dial on the top bar is the same switch. Switching it off puts your manual gains back on the radio — some radios, a B200 among them, fall to the bottom of every stage when they leave automatic gain — and the sliders and the GAIN dial then show what the radio really holds. From 0.99.75 the gain you set with a slider, the GAIN dial or the scope's gain knob is remembered per radio, stage by stage, and put back when that radio is opened again (it replaces the 30 dB a SoapySDR radio such as a B200 used to start every stage at; a stage the radio no longer has is ignored, and an Airspy keeps its gains with its gain mode). Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
   mean it runs with no radio at all.
   A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR
@@ -193,7 +193,14 @@ are still moving. What is in the current build:
   and the list shows only the aircraft inside the map as you are looking at it:
   zoom in on an airfield or an air show and the list follows, instead of naming
   everything the receiver has heard. The count then reads "3 of 41 targets",
-  and the setting is remembered.
+  and the setting is remembered. An aircraft the receiver has heard but cannot
+  yet place (its position message has not arrived) is listed too, below the
+  others and dimmed, with its altitude where it is known and "no position yet",
+  and the count says so: "12 targets, 3 heard without a position". It is not
+  drawn on the map, and it is not in the list while **On screen only** is
+  ticked; it moves up into the list proper, and onto the map, when its position
+  arrives. This needs ADS-B plugin 1.9.0 or newer; older plugins list only the
+  aircraft they can place.
   Give it your antenna's position once and it also builds a **coverage map**:
   the furthest anything has been heard in each direction, drawn over the map,
   which is the cheapest antenna diagnostic there is. Decoder plugins produce

@@ -53,6 +53,7 @@
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "gui/app_window.hpp"
+#include "net/web_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
 
@@ -69,7 +70,17 @@ struct Record {
     // mirror (deviceGainsDb_) is only a copy of.
     std::vector<std::pair<std::string, double>> gainCalls;
     std::map<std::string, double> gainNow;
+    // Every setGainDb and setAutoGain the radio received, in ONE list and in order ("gain LNA
+    // 33.0", "agc 1"): the two calls above are in lists of their own, which cannot say which came
+    // first - and the manual gain is put back BEFORE the remembered auto gain (0.99.75).
+    std::vector<std::string> events;
 };
+
+std::string gainEvent(const std::string& name, double db) {
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "gain %s %.1f", name.c_str(), db);
+    return buf;
+}
 
 struct Registry {
     std::mutex m;
@@ -93,6 +104,9 @@ struct Registry {
     // A driver whose autoGain() getter is not kept in step with the switch (it says "off" whatever
     // it was asked): the box has always shown what the radio ACCEPTED, not what the getter says.
     std::atomic<bool> autoGainGetterStale{false};
+    // TWENTY stages, S00..S19 (0..40 dB, 1 dB steps), for the cap on how many stages of one radio the
+    // manual gain memory keeps (0.99.75). Takes the place of the LNA/PGA pair.
+    std::atomic<bool> manyStages{false};
 };
 Registry g_reg;
 
@@ -151,13 +165,27 @@ public:
     void closeDevice() override { open_ = false; }
     bool isOpen() const override { return open_; }
     std::vector<cascade::source::GainInfo> gains() const override {
+        if (g_reg.manyStages.load()) {
+            std::vector<cascade::source::GainInfo> v;
+            for (int i = 0; i < 20; ++i) { v.push_back({manyName(i), 0.0, kLnaMax, 1.0}); }
+            return v;
+        }
         if (!g_reg.stages.load()) { return {}; }
         return {{"LNA", 0.0, kLnaMax, 1.0}, {"PGA", 0.0, kPgaMax, 1.0}};
     }
     bool setGainDb(const std::string& name, double db) override {
+        if (g_reg.manyStages.load()) {
+            std::lock_guard<std::mutex> lk(g_reg.m);
+            rec_->gainCalls.emplace_back(name, db);
+            rec_->events.push_back(gainEvent(name, db));
+            many_[name] = std::round(std::min(std::max(db, 0.0), kLnaMax));
+            rec_->gainNow[name] = many_[name];
+            return true;
+        }
         if (!g_reg.stages.load()) { return false; }
         std::lock_guard<std::mutex> lk(g_reg.m);
         rec_->gainCalls.emplace_back(name, db);
+        rec_->events.push_back(gainEvent(name, db));
         if (name == "LNA") {
             lna_ = std::round(std::min(std::max(db, 0.0), kLnaMax));
             rec_->gainNow[name] = lna_;
@@ -172,6 +200,10 @@ public:
         return false;
     }
     double gainDb(const std::string& name) const override {
+        if (g_reg.manyStages.load()) {
+            const auto it = many_.find(name);
+            return it == many_.end() ? 0.0 : it->second;
+        }
         if (!g_reg.stages.load()) { return 0.0; }
         if (agc_ && g_reg.agcReportsOwn.load()) { return kAgcOwnDb; }
         return name == "LNA" ? lna_ : (name == "PGA" ? pga_ : 0.0);
@@ -181,6 +213,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(g_reg.m);
             rec_->agcCalls.push_back(on);
+            rec_->events.push_back(on ? "agc 1" : "agc 0");
         }
         if (!kindHasAutoGain(kind_)) { return false; }
         if (on && g_reg.refuseAgcOn.load()) {
@@ -213,6 +246,10 @@ public:
     std::string faultedWhile() const override { return {}; }
 
 private:
+    static std::string manyName(int i) {
+        return std::string("S") + (i < 10 ? "0" : "") + std::to_string(i);
+    }
+    std::map<std::string, double> many_;  // the stages of the manyStages radio
     std::string kind_;
     std::shared_ptr<Record> rec_;
     std::atomic<bool> abort_{true};
@@ -295,6 +332,7 @@ void resetRegistry() {
     g_reg.agcReportsOwn = false;
     g_reg.refusePga = false;
     g_reg.autoGainGetterStale = false;
+    g_reg.manyStages = false;
     cc::DiagLog::instance().resetForTest();
 }
 
@@ -389,6 +427,26 @@ struct AppWindowTestAccess {
     }
     static void clearError(AppWindow& a) { a.sourceError_.clear(); }
     static std::string error(const AppWindow& a) { return a.sourceError_; }
+
+    // THE MANUAL GAIN MEMORY (0.99.75). `userGain` is the path the Source section's sliders and the
+    // top bar's GAIN dial both take to the radio; `controlGain` is a browser's gain control
+    // (applyControlRequest); `autoGainMemory` above and this are seeded the way applyConfig seeds them.
+    using GainList = std::vector<std::pair<std::string, double>>;
+    static const std::map<std::string, GainList>& manualMemory(const AppWindow& a) {
+        return a.manualGainMemory_;
+    }
+    static void rememberManual(AppWindow& a, const std::string& key, GainList g) {
+        a.manualGainMemory_[key] = std::move(g);
+    }
+    static bool userGain(AppWindow& a, std::size_t stage, double db) {
+        return a.applyUserGain(stage, db);
+    }
+    static void controlGain(AppWindow& a, const std::string& name, double db) {
+        cascade::net::ControlRequest r;
+        r.gainName = name;
+        r.gainDb = db;
+        a.applyControlRequest(r);
+    }
 };
 
 }  // namespace cascade::gui
@@ -836,6 +894,334 @@ void testAgcRefusedTouchesNoGain() {
     }
 }
 
+// --- THE MANUAL GAIN IS REMEMBERED PER RADIO (0.99.75) -----------------------------------------------
+//
+// The owner runs his B200 at 76 dB and every open pushed a mid-dial 30 dB into each stage of a Soapy
+// radio (kSoapyGainDefaultDb), with nothing remembering the number his hand had chosen. What is proved
+// here, through the real AppWindow on the same fake radios (an LNA 0..40 and a PGA 0..76 that quantise
+// to whole decibels and hold what they are given):
+//   * only a gain the USER chose is written - not the open's own 30 dB push, not the restore, not a
+//     refused step, not anything while auto gain is on - and what is written is the radio's READBACK;
+//   * every path a user's gain takes writes it: applyUserGain (the sliders and the GAIN dial) and a
+//     browser's gain control (the scope face's knob is the one path with no test: it is drawn by ImGui);
+//   * it is put back at an ordinary open: after the push, clamped into the stage's range, only for
+//     stages the radio still lists, a refused step skipped, the mirror reading what the radio took, one
+//     log line, and BEFORE the remembered auto gain - while a recovery reopen restores nothing;
+//   * it survives a restart through the saved config file, and is capped per radio and in radios.
+
+using ManualList = Access::GainList;
+
+const char* const kManualRestoredPrefix = "source: manual gain restored - ";
+
+std::vector<std::string> manualRestoredLines() {
+    std::vector<std::string> out;
+    for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) {
+        if (line.find(kManualRestoredPrefix) != std::string::npos) { out.push_back(line); }
+    }
+    return out;
+}
+
+bool manualMemoryIs(const cascade::gui::AppWindow& app, const std::string& key, const ManualList& want) {
+    const auto& m = Access::manualMemory(app);
+    const auto it = m.find(key);
+    if (it == m.end()) {
+        std::printf("    no manual gain entry for %s\n", key.c_str());
+        return false;
+    }
+    if (it->second != want) {
+        std::printf("    the entry for %s holds:", key.c_str());
+        for (const auto& p : it->second) { std::printf(" %s %.2f", p.first.c_str(), p.second); }
+        std::printf("\n");
+        return false;
+    }
+    return true;
+}
+
+// Where an event is in the radio's one list of calls, or npos.
+std::size_t eventIndex(const Record& r, const std::string& what, bool last) {
+    std::size_t found = std::string::npos;
+    for (std::size_t i = 0; i < r.events.size(); ++i) {
+        if (r.events[i] == what) {
+            found = i;
+            if (!last) { return i; }
+        }
+    }
+    return found;
+}
+
+void testManualNothingRemembered() {
+    std::printf("  manual gain: nothing remembered, so the open's own push is all there is and nothing is written\n");
+    resetRegistry();
+    g_reg.stages = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, true);
+    // THE B200'S WAY: a mid-dial 30 dB into every stage, and nothing else.
+    CHECK(holds(app, r, 30.0, 30.0));
+    CHECK(made(r).gainCalls == (ManualList{{"LNA", 30.0}, {"PGA", 30.0}}));
+    // ...and that push is not the user's: nothing is remembered because of it.
+    CHECK(Access::manualMemory(app).empty());
+    CHECK(manualRestoredLines().empty());
+    CHECK(Access::saved(app).manualGainByRadio.empty());
+}
+
+void testManualUserGainIsRemembered() {
+    std::printf("  manual gain: a stage the user sets is remembered as the radio's readback, per stage, and a "
+                "refusal or auto gain writes nothing\n");
+    resetRegistry();
+    g_reg.stages = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, true);
+    CHECK(Access::manualMemory(app).empty());
+
+    // THE HAND ON THE PGA: 76 dB, the owner's number. Only that stage is written - the LNA the open
+    // pushed to 30 is not the user's choice and is not in it.
+    CHECK(Access::userGain(app, 1, 76.0));
+    CHECK(holds(app, r, 30.0, 76.0));
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"PGA", 76.0}}));
+
+    // THE READBACK, not the request: the radio rounds 33.4 to 33. Stages are kept sorted by name.
+    CHECK(Access::userGain(app, 0, 33.4));
+    CHECK(holds(app, r, 33.0, 76.0));
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"LNA", 33.0}, {"PGA", 76.0}}));
+
+    // THE SAVED CONFIG CARRIES IT, and the save debounce would notice the change.
+    {
+        const cascade::core::AppConfig cfg = Access::saved(app);
+        CHECK(cfg.manualGainByRadio == Access::manualMemory(app));
+        CHECK(cfg.manualGainByRadio.count(kKeySoapy) == 1);
+    }
+
+    // A REFUSAL writes nothing: the radio turns the PGA step down, so the memory keeps the 76.
+    g_reg.refusePga = true;
+    CHECK(!Access::userGain(app, 1, 10.0));
+    g_reg.refusePga = false;
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"LNA", 33.0}, {"PGA", 76.0}}));
+
+    // AUTO GAIN ON: the radio takes the step but reports its own choice while it gains itself, so
+    // nothing is written (the user's numbers are the ones already there).
+    CHECK(Access::toggle(app, true));
+    CHECK(Access::userGain(app, 1, 50.0));
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"LNA", 33.0}, {"PGA", 76.0}}));
+    // ...and a stage the radio does not list, or no stage at all, is nothing to write.
+    CHECK(!Access::userGain(app, 9, 5.0));
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"LNA", 33.0}, {"PGA", 76.0}}));
+}
+
+void testManualBrowserGainIsRemembered() {
+    std::printf("  manual gain: a gain a browser sets is remembered like one the hand sets\n");
+    resetRegistry();
+    g_reg.stages = true;
+    cascade::gui::AppWindow app;
+    const std::size_t r = openStaged(app, true);
+    Access::controlGain(app, "PGA", 60.0);
+    CHECK(holds(app, r, 30.0, 60.0));
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"PGA", 60.0}}));
+    // A stage the radio has no such name for: refused, and nothing written.
+    Access::controlGain(app, "GHOST", 5.0);
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"PGA", 60.0}}));
+}
+
+void testManualRestoredAtOpen(bool soapy) {
+    std::printf("  manual gain: put back at the open (%s), after the push, the mirror reading what the radio "
+                "took, one line\n",
+                soapy ? "Soapy, the B200's way" : "native");
+    resetRegistry();
+    g_reg.stages = true;
+    cascade::gui::AppWindow app;
+    const std::string key = soapy ? kKeySoapy : kKeyA;
+    Access::rememberManual(app, key, {{"LNA", 33.0}, {"PGA", 76.0}});
+    const std::size_t r = openStaged(app, soapy);
+    // THE RADIO HOLDS THEM AND THE MIRROR (the dial) SHOWS THEM.
+    CHECK(holds(app, r, 33.0, 76.0));
+    // After the push on a Soapy radio (30, 30 first), and alone on a native one (its driver chose
+    // its own state at open and is left alone).
+    const ManualList wantCalls = soapy ? ManualList{{"LNA", 30.0}, {"PGA", 30.0}, {"LNA", 33.0}, {"PGA", 76.0}}
+                                       : ManualList{{"LNA", 33.0}, {"PGA", 76.0}};
+    CHECK(made(r).gainCalls == wantCalls);
+    // One line, naming the stages and what they hold.
+    const std::vector<std::string> lines = manualRestoredLines();
+    CHECK(lines.size() == 1u);
+    CHECK(lines.size() == 1u &&
+          lines[0].find("source: manual gain restored - LNA 33.0, PGA 76.0") != std::string::npos);
+    // The open does not rewrite the memory.
+    CHECK(manualMemoryIs(app, key, {{"LNA", 33.0}, {"PGA", 76.0}}));
+    CHECK(Access::manualMemory(app).size() == 1u);
+    // ...and nothing was remembered for the other family of radio.
+    CHECK(Access::memory(app).empty());
+}
+
+void testManualClampedAndFiltered() {
+    std::printf("  manual gain: clamped into the stage's range, and only for stages the radio still reports\n");
+    resetRegistry();
+    g_reg.stages = true;
+    cascade::gui::AppWindow app;
+    // GHOST is a stage this radio does not list; -5 is below the LNA's 0 and 200 above the PGA's 76.
+    Access::rememberManual(app, kKeySoapy, {{"GHOST", 12.0}, {"LNA", -5.0}, {"PGA", 200.0}});
+    const std::size_t r = openStaged(app, true);
+    CHECK(holds(app, r, 0.0, 76.0));
+    // The radio was asked for the CLAMPED numbers, and never for the ghost.
+    const Record rec = made(r);
+    CHECK(rec.gainCalls ==
+          (ManualList{{"LNA", 30.0}, {"PGA", 30.0}, {"LNA", 0.0}, {"PGA", 76.0}}));
+    for (const auto& c : rec.gainCalls) { CHECK(c.first != "GHOST"); }
+    const std::vector<std::string> lines = manualRestoredLines();
+    CHECK(lines.size() == 1u);
+    CHECK(lines.size() == 1u &&
+          lines[0].find("source: manual gain restored - LNA 0.0, PGA 76.0") != std::string::npos);
+    // The stage the radio does not list is kept for a radio that does (nothing is erased at open).
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"GHOST", 12.0}, {"LNA", -5.0}, {"PGA", 200.0}}));
+}
+
+void testManualRefusedStageSkipped() {
+    std::printf("  manual gain: a stage the radio turns down is skipped without a word, the others come back\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.refusePga = true;
+    cascade::gui::AppWindow app;
+    Access::rememberManual(app, kKeyA, {{"LNA", 20.0}, {"PGA", 70.0}});
+    const std::size_t r = openStaged(app, false);
+    // The LNA is back; the PGA stayed where its driver left it (12) and the mirror says so.
+    CHECK(holds(app, r, 20.0, 12.0));
+    CHECK(Access::error(app).empty());
+    const std::vector<std::string> lines = manualRestoredLines();
+    CHECK(lines.size() == 1u);
+    CHECK(lines.size() == 1u &&
+          lines[0].find("source: manual gain restored - LNA 20.0") != std::string::npos);
+    CHECK(lines.size() == 1u && lines[0].find("PGA") == std::string::npos);
+}
+
+void testManualNotOnARecoveryReopen() {
+    std::printf("  manual gain: a reopen after a driver fault puts back the gains the user had a moment ago, "
+                "not the memory\n");
+    resetRegistry();
+    g_reg.stages = true;
+    cascade::gui::AppWindow app;
+    Access::rememberManual(app, kKeySoapy, {{"PGA", 70.0}});
+    const std::size_t first = openStaged(app, true);
+    CHECK(holds(app, first, 30.0, 70.0));
+    CHECK(manualRestoredLines().size() == 1u);
+    // The radio is moved by something that is not the user's hand on a control (the test hook
+    // writes the radio and the mirror and not the memory): the memory still says 70.
+    CHECK(Access::setManual(app, 1, 25.0));
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"PGA", 70.0}}));
+    const std::size_t again = madeCount();
+    Access::reopen(app);
+    CHECK(Access::waitOpen(app));
+    CHECK(madeCount() == again + 1);
+    // The new radio has the 25 the user had, not the remembered 70; and no second line.
+    CHECK(holds(app, again, 30.0, 25.0));
+    CHECK(manualRestoredLines().size() == 1u);
+    CHECK(manualMemoryIs(app, kKeySoapy, {{"PGA", 70.0}}));
+}
+
+void testManualBeforeTheRememberedAutoGain() {
+    std::printf("  manual gain: put back BEFORE the remembered auto gain, so the numbers are under it for the "
+                "switch to return to\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.dropOnAgcOff = true;
+    cascade::gui::AppWindow app;
+    Access::rememberManual(app, kKeyA, {{"LNA", 33.0}, {"PGA", 76.0}});
+    Access::remember(app, kKeyA, true);
+    const std::size_t r = openStaged(app, false);
+    CHECK(Access::agc(app));
+    // IN THE RADIO'S OWN ORDER OF CALLS: the manual probe, both stages, then the switch ON.
+    const Record rec = made(r);
+    const std::size_t agcOn = eventIndex(rec, "agc 1", false);
+    const std::size_t lastGain = eventIndex(rec, "gain PGA 76.0", true);
+    CHECK(agcOn != std::string::npos && lastGain != std::string::npos);
+    CHECK(lastGain < agcOn);
+    // Switched off, the numbers the user had come back (the B200 falls to the bottom of every stage).
+    CHECK(Access::toggle(app, false));
+    CHECK(!Access::agc(app));
+    CHECK(holds(app, r, 33.0, 76.0));
+}
+
+void testManualRestart() {
+    std::printf("  manual gain: a restart through the saved file brings the radio back at the gain it was left\n");
+    resetRegistry();
+    g_reg.stages = true;
+    const std::string path = (g_scratch / "restart-manual.json").string();
+    std::string err;
+    {
+        cascade::gui::AppWindow app;
+        openStaged(app, false);
+        CHECK(Access::userGain(app, 0, 33.0));
+        CHECK(Access::userGain(app, 1, 70.0));
+        const cascade::core::AppConfig cfg = Access::saved(app);
+        CHECK(cfg.sourceKind == "rtlsdr" && cfg.nativeArgs == kRtlA);
+        CHECK(cfg.manualGainByRadio.count(kKeyA) == 1);
+        CHECK(cascade::core::ConfigStore::save(path, cfg, err));
+    }
+    {
+        cascade::core::AppConfig cfg;
+        CHECK(cascade::core::ConfigStore::load(path, cfg, err));
+        CHECK(cfg.manualGainByRadio.count(kKeyA) == 1 &&
+              cfg.manualGainByRadio.at(kKeyA) == (ManualList{{"LNA", 33.0}, {"PGA", 70.0}}));
+        cascade::gui::AppWindow app;
+        const std::size_t idx = madeCount();
+        Access::restore(app, cfg);
+        CHECK(madeCount() == idx + 1);
+        CHECK(made(idx).args == kRtlA);
+        CHECK(holds(app, idx, 33.0, 70.0));
+        CHECK(manualMemoryIs(app, kKeyA, {{"LNA", 33.0}, {"PGA", 70.0}}));
+    }
+}
+
+void testManualCaps() {
+    std::printf("  manual gain: at most 64 radios and 16 stages of one radio are remembered; an entry already "
+                "there is always updated\n");
+    resetRegistry();
+    g_reg.stages = true;
+    {
+        cascade::gui::AppWindow app;
+        // 63 other radios and the one about to be opened: the memory is full at 64.
+        for (int i = 0; i < 63; ++i) {
+            Access::rememberManual(app, cc::biasTeeRadioKey("rtlsdr", "serial=F" + std::to_string(1000 + i)),
+                                   {{"LNA", 5.0}});
+        }
+        Access::rememberManual(app, kKeyA, {{"LNA", 5.0}});
+        CHECK(Access::manualMemory(app).size() == 64u);
+        // A radio already in the memory is updated at the cap...
+        openStaged(app, false);
+        CHECK(Access::userGain(app, 0, 12.0));
+        CHECK(manualMemoryIs(app, kKeyA, {{"LNA", 12.0}}));
+        CHECK(Access::manualMemory(app).size() == 64u);
+        // ...and a radio that is not in it is not added.
+        openNative(app, kRtlB);
+        CHECK(Access::userGain(app, 0, 7.0));
+        CHECK(Access::manualMemory(app).size() == 64u);
+        CHECK(Access::manualMemory(app).count(kKeyB) == 0u);
+    }
+    resetRegistry();
+    g_reg.manyStages = true;
+    {
+        cascade::gui::AppWindow app;
+        const std::size_t r = openNative(app, kRtlA);
+        (void)r;
+        CHECK(Access::gainNames(app).size() == 20u);
+        for (std::size_t i = 0; i < 20u; ++i) { CHECK(Access::userGain(app, i, static_cast<double>(i + 1u))); }
+        // S00..S15 are in; S16..S19 are not.
+        const auto it = Access::manualMemory(app).find(kKeyA);
+        CHECK(it != Access::manualMemory(app).end());
+        if (it != Access::manualMemory(app).end()) {
+            CHECK(it->second.size() == 16u);
+            CHECK(!it->second.empty() && it->second.front() == std::make_pair(std::string("S00"), 1.0));
+            CHECK(!it->second.empty() && it->second.back() == std::make_pair(std::string("S15"), 16.0));
+        }
+        // A stage already remembered is still updated past the cap.
+        CHECK(Access::userGain(app, 0, 40.0));
+        CHECK(manualMemoryIs(app, kKeyA, [] {
+            ManualList want;
+            for (int i = 0; i < 16; ++i) {
+                want.emplace_back(std::string("S") + (i < 10 ? "0" : "") + std::to_string(i),
+                                  i == 0 ? 40.0 : static_cast<double>(i + 1));
+            }
+            return want;
+        }()));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -859,6 +1245,18 @@ int main() {
     testBoxKeepsWhatTheRadioAccepted();
     testGainStepRefusedIsDroppedSilently();
     testAgcRefusedTouchesNoGain();
+
+    testManualNothingRemembered();
+    testManualUserGainIsRemembered();
+    testManualBrowserGainIsRemembered();
+    testManualRestoredAtOpen(true);
+    testManualRestoredAtOpen(false);
+    testManualClampedAndFiltered();
+    testManualRefusedStageSkipped();
+    testManualNotOnARecoveryReopen();
+    testManualBeforeTheRememberedAutoGain();
+    testManualRestart();
+    testManualCaps();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

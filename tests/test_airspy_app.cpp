@@ -184,6 +184,17 @@ int main() {
         CHECK(Access::gainValues(app).size() == 3 && Access::gainValues(app)[0] == 5.0f);
         CHECK(memOf(Access::config(app)).lna == 5);
         CHECK(memOf(Access::config(app)).mode == "free");
+        // AN AIRSPY'S GAINS ARE NOT IN THE PER-RADIO MANUAL GAIN MEMORY (0.99.75,
+        // AppConfig::manualGainByRadio): they are part of its gain mode, remembered above,
+        // and a second record here would be a second witness that could disagree.
+        CHECK(Access::config(app).manualGainByRadio.empty());
+        // ...which that request cannot show: it switched the radio's mode, so the stage list was
+        // still the old mode's when the request was handled and the stage was not found in it by
+        // name. The SAME request again finds LNA in Free mode's list, which is where any other
+        // radio's gain would be written to the memory.
+        Access::control(app, r);
+        CHECK(Access::gainValues(app).size() == 3 && Access::gainValues(app)[0] == 5.0f);
+        CHECK(Access::config(app).manualGainByRadio.empty());
 
         // --- one AGC: the auto-gain mirror reads both-on only ------------------
         CHECK(Access::agc(app, false, true));

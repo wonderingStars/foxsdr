@@ -267,6 +267,34 @@ struct AppConfig {
     // load: an entry that is not a bool, or whose key is not "<kind>|<args>", is
     // skipped, and the map is capped at core::kBiasTeeMemoryCap.
     std::map<std::string, bool> autoGainByRadio;
+    // EACH RADIO'S MANUAL GAIN (0.99.75), remembered per radio under the same key as
+    // the two memories above (core::biasTeeRadioKey) -> the stages the user has set
+    // and what the radio held after it took each one, as (stage name, dB) pairs
+    // SORTED BY STAGE NAME (so a file round-trips to the same vector: a JSON object
+    // comes back in key order). Stored as the object "manualGainByRadio":
+    // { "<key>": { "<stage>": dB, ... } }. The owner runs a B200 at 76 dB, and every
+    // open pushed a mid-dial 30 dB into each stage of a Soapy radio (adoptDeviceMirrors:
+    // kSoapyGainDefaultDb) and nothing remembered the number the hand had chosen, so
+    // every start began 46 dB down.
+    //
+    // WRITTEN when the USER changes a stage and the radio accepts it - the Source
+    // section's sliders, the top bar's GAIN dial, the scope face's GAIN knob and a
+    // browser's gain control - with the radio's READBACK (it quantises), and never by
+    // the open's own 30 dB push, never by the restore itself and never while auto gain
+    // is on (a radio gaining itself reports its own choice, not the user's). PUT BACK
+    // at open, on an ordinary open and not a recovery reopen, after the push and the
+    // mirror readback and before the remembered auto gain is re-applied, for the stages
+    // the radio still reports, clamped to each stage's own range; the mirror is then
+    // read back so the dial shows what the radio took. Not for an Airspy: its gains
+    // are part of its gain mode, which AppConfig::airspy already remembers.
+    //
+    // EMPTY BY DEFAULT, which is today's behaviour. Element-wise tolerant on load: a
+    // radio whose value is not an object or whose key is not "<kind>|<args>" is
+    // skipped, a stage whose value is not a finite number is skipped (and a stage
+    // with no name), the first kMaxManualGainStages stages of a radio are kept, and at
+    // most core::kBiasTeeMemoryCap radios. A radio left with no stage is dropped.
+    static constexpr std::size_t kMaxManualGainStages = 16;
+    std::map<std::string, std::vector<std::pair<std::string, double>>> manualGainByRadio;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //

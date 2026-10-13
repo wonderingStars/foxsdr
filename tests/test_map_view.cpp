@@ -1024,6 +1024,138 @@ void testIsOnScreen() {
     CHECK(!dateline.isOnScreen(0.0, 170.0));
 }
 
+// --- TARGETS HEARD WITHOUT A POSITION ARE NEVER DRAWN (0.99.75) ---------------------
+//
+// A source may publish an aircraft it hears and cannot place yet
+// (CASCADE_TRACK_FLAG_NO_POSITION, NaN coordinates). The host LISTS it; the map
+// must not draw it, fit to it, follow it or let it be hit. The application never
+// hands a map one (PluginUi keeps them apart), and the map defends itself anyway:
+// a NaN projected to the screen compares false against every edge, so an
+// unguarded marker loop does not skip it, it draws it - at NaN. Measured here as
+// the draw data: the same picture with and without the unplaced targets, every
+// vertex finite.
+struct DrawStats {
+    int vertices = 0;
+    bool allFinite = true;
+};
+
+DrawStats measureDrawData() {
+    DrawStats s;
+    ImDrawData* dd = ImGui::GetDrawData();
+    for (int l = 0; dd != nullptr && l < dd->CmdListsCount; ++l) {
+        const ImDrawList* cl = dd->CmdLists[l];
+        s.vertices += cl->VtxBuffer.Size;
+        for (int i = 0; i < cl->VtxBuffer.Size; ++i) {
+            const ImDrawVert& v = cl->VtxBuffer[i];
+            if (!std::isfinite(v.pos.x) || !std::isfinite(v.pos.y)) { s.allFinite = false; }
+        }
+    }
+    return s;
+}
+
+void testUnplacedTargetsAreNotDrawn() {
+    const double lat = 50.85;
+    const double lon = -1.35;
+    const double kNaN = std::nan("");
+    const cascade::core::HostTrack placed =
+        makeTarget("AB1234", "M", CASCADE_TRACK_AIRCRAFT, lat, lon, 3000.0);
+    // The contract: the flag and NaN. A buggy plugin: the flag and numbers inside the
+    // view. An old plugin: NaN and no flag. One more: the flag and numbers far away.
+    cascade::core::HostTrack flaggedNaN =
+        makeTarget("U00001", "UNPLACED1", CASCADE_TRACK_AIRCRAFT, kNaN, kNaN, 3000.0,
+                   CASCADE_TRACK_FLAG_NO_POSITION);
+    cascade::core::HostTrack flaggedInView =
+        makeTarget("U00002", "UNPLACED2", CASCADE_TRACK_AIRCRAFT, lat + 0.05, lon + 0.05,
+                   3000.0, CASCADE_TRACK_FLAG_NO_POSITION);
+    cascade::core::HostTrack nanNoFlag =
+        makeTarget("U00003", "UNPLACED3", CASCADE_TRACK_AIRCRAFT, kNaN, lon, 3000.0);
+    cascade::core::HostTrack flaggedFar =
+        makeTarget("U00004", "UNPLACED4", CASCADE_TRACK_AIRCRAFT, -33.0, 150.0, 3000.0,
+                   CASCADE_TRACK_FLAG_NO_POSITION);
+    const std::vector<cascade::core::HostTrack> onlyPlaced{placed};
+    const std::vector<cascade::core::HostTrack> mixed{placed, flaggedNaN, flaggedInView,
+                                                      nanNoFlag, flaggedFar};
+
+    // THE PICTURE: the same number of vertices as the placed one alone, and none
+    // of them at NaN.
+    cascade::gui::MapView alone;
+    alone.goTo(lat, lon, 2.0);
+    for (int f = 0; f < 3; ++f) { drawTargetsFrame(alone, onlyPlaced); }
+    const DrawStats aloneStats = measureDrawData();
+    cascade::gui::MapView with;
+    with.goTo(lat, lon, 2.0);
+    for (int f = 0; f < 3; ++f) { drawTargetsFrame(with, mixed); }
+    const DrawStats withStats = measureDrawData();
+    std::printf("  map draw data: %d vertices placed alone, %d with four unplaced beside it"
+                " (all finite: %d / %d)\n",
+                aloneStats.vertices, withStats.vertices, aloneStats.allFinite ? 1 : 0,
+                withStats.allFinite ? 1 : 0);
+    CHECK(aloneStats.vertices > 0);
+    CHECK(aloneStats.allFinite);
+    CHECK(withStats.allFinite);
+    CHECK(withStats.vertices == aloneStats.vertices);
+
+    // THE AUTO-FIT: fitting to everything plotted ignores them, so the view lands
+    // where the placed target alone puts it.
+    cascade::gui::MapView fitAlone;
+    fitAlone.requestFitToTracks();
+    drawTargetsFrame(fitAlone, onlyPlaced);
+    cascade::gui::MapView fitMixed;
+    fitMixed.requestFitToTracks();
+    drawTargetsFrame(fitMixed, mixed);
+    std::printf("  auto-fit centre: %.4f, %.4f placed alone; %.4f, %.4f with unplaced beside it\n",
+                fitAlone.viewCentreLatDeg(), fitAlone.viewCentreLonDeg(),
+                fitMixed.viewCentreLatDeg(), fitMixed.viewCentreLonDeg());
+    CHECK_NEAR(fitAlone.viewCentreLatDeg(), lat, 1e-9);
+    CHECK_NEAR(fitMixed.viewCentreLatDeg(), fitAlone.viewCentreLatDeg(), 1e-9);
+    CHECK_NEAR(fitMixed.viewCentreLonDeg(), fitAlone.viewCentreLonDeg(), 1e-9);
+    CHECK_NEAR(fitMixed.spanDeg(), fitAlone.spanDeg(), 1e-9);
+    // ...and with ONLY unplaced targets there is nothing to fit to: the request is
+    // left pending and the view does not move to NaN.
+    cascade::gui::MapView fitNone;
+    const double lat0 = fitNone.viewCentreLatDeg();
+    const double lon0 = fitNone.viewCentreLonDeg();
+    fitNone.requestFitToTracks();
+    drawTargetsFrame(fitNone, std::vector<cascade::core::HostTrack>{flaggedNaN, flaggedFar});
+    CHECK_NEAR(fitNone.viewCentreLatDeg(), lat0, 1e-9);
+    CHECK_NEAR(fitNone.viewCentreLonDeg(), lon0, 1e-9);
+
+    // FOLLOWING one does not move the view: the centre stays a real place.
+    cascade::gui::MapView follow;
+    follow.goTo(lat, lon, 2.0);
+    follow.setFollowed("U00001");
+    drawTargetsFrame(follow, mixed);
+    CHECK(std::isfinite(follow.viewCentreLatDeg()));
+    CHECK(std::isfinite(follow.viewCentreLonDeg()));
+    CHECK_NEAR(follow.viewCentreLatDeg(), lat, 1e-9);
+    follow.setFollowed("U00004");  // flagged, with real-looking far-away numbers
+    drawTargetsFrame(follow, mixed);
+    CHECK_NEAR(follow.viewCentreLatDeg(), lat, 1e-9);
+    CHECK_NEAR(follow.viewCentreLonDeg(), lon, 1e-9);
+
+    // "GO TO" a target without a place does nothing (the details window's key is
+    // dead for one, and this is the map refusing too).
+    follow.goTo(kNaN, kNaN);
+    follow.goTo(lat, kNaN);
+    CHECK_NEAR(follow.viewCentreLatDeg(), lat, 1e-9);
+    CHECK_NEAR(follow.viewCentreLonDeg(), lon, 1e-9);
+
+    // THE LIST'S COUNT of placed rows (listedTrackCount): the unplaced are never
+    // rows of it and never "on screen", with the switch ticked or not. Placed: one
+    // in view (the target itself) and one on the far side of the world; unplaced:
+    // the four above, one of which has numbers that WOULD be in view.
+    cascade::gui::MapView counted;
+    counted.goTo(lat, lon, 2.0);
+    for (int f = 0; f < 2; ++f) { drawTargetsFrame(counted, onlyPlaced); }
+    std::vector<cascade::core::HostTrack> listed = mixed;
+    listed.push_back(makeTarget("FAR001", "FAR", CASCADE_TRACK_AIRCRAFT, -33.0, 150.0, 3000.0));
+    CHECK(counted.isOnScreen(flaggedInView.t.latDeg, flaggedInView.t.lonDeg));
+    CHECK(cascade::gui::listedTrackCount(counted, listed, false) == 2u);
+    CHECK(cascade::gui::listedTrackCount(counted, listed, true) == 1u);
+    CHECK(cascade::gui::listedTrackCount(counted, mixed, false) == 1u);
+    CHECK(cascade::gui::listedTrackCount(counted, mixed, true) == 1u);
+}
+
 int main() {
     testWholeWorldSpan();
     testCoordApertures();
@@ -1048,6 +1180,7 @@ int main() {
     testNoAltitudeIsGreyNotRed();
     testNoAltitudeLegendRow();
     testIsOnScreen();
+    testUnplacedTargetsAreNotDrawn();
 
     ImGui::DestroyContext();
     return testSummary("test_map_view");

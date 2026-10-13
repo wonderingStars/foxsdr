@@ -76,6 +76,17 @@ set_target_properties(tx_audio_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_txaudio/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_txaudio/$<CONFIG>")
 
+# A REAL PLUGIN MODULE THAT IS A TRACK SOURCE (0.99.75), for test_unplaced_list_app: an aircraft
+# source that keeps the ADS-B plugin 1.9.0's contract - it asks the host's get_state for
+# CASCADE_STATE_LISTS_UNPLACED_TRACKS and publishes aircraft it has heard without a position
+# (CASCADE_TRACK_FLAG_NO_POSITION) only when the host says it understands. Its own directory.
+add_library(track_probe_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/track_probe_plugin.cpp")
+target_include_directories(track_probe_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(track_probe_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_track/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_track/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -291,6 +302,12 @@ foreach(src ${CASCADE_TESTS})
         # bank up, and reads from the UI census whether the plugin's settings row is folded (0.99.74).
         add_dependencies(${name} settings_ui_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:settings_ui_fixture>")
+    elseif(name STREQUAL "test_unplaced_list_app")
+        # Runs the real cascade.exe (built first) with the track fixture fitted and its map page opened
+        # by FOXSDR_OPEN_MAP, and reads the target list's heading and rows from the UI census: aircraft
+        # heard without a position are listed after the placed ones and never drawn (0.99.75).
+        add_dependencies(${name} track_probe_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
     elseif(name STREQUAL "test_plugin_inuse_app")
         # Runs the real cascade.exe (built first) with the same two modules fitted, and the preset
         # probe beside them, and reads from the modules' own event logs WHEN the host creates and
@@ -410,6 +427,9 @@ set_tests_properties(test_decoder_window_app PROPERTIES TIMEOUT 600)
 # The settings-fold test starts the real application three times (folded as it opens, one click,
 # two clicks), 40 to 60 frames each. The same bound, for the same reason, as the test above.
 set_tests_properties(test_decoder_settings_fold_app PROPERTIES TIMEOUT 600)
+# The unplaced-list test starts the real application three times (the heard rows, a bare NaN, and
+# "On screen only"), 80 frames each. The same bound, for the same reason, as the test above.
+set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
 # The in-use test starts the real application about twenty times (the scenarios in its header: a
 # layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
 # interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given

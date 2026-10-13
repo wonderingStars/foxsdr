@@ -565,6 +565,12 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     flags |= c.grants.load(std::memory_order_acquire);
     // The arming window and the key, for a TX_AUDIO plugin only (publishTxState).
     flags |= c.txState.load(std::memory_order_acquire);
+    // IN EVERY STATE THIS HOST FILLS, for every client, with no capability or grant
+    // behind it (0.99.75): the host lists a track flagged CASCADE_TRACK_FLAG_NO_POSITION
+    // (PluginUi::unplacedTracks) instead of dropping it, and a plugin may publish one
+    // only when it sees this bit. A host that did not set it would be telling the ADS-B
+    // plugin to go on hiding every aircraft it has heard and not yet placed.
+    flags |= CASCADE_STATE_LISTS_UNPLACED_TRACKS;
     s.flags = flags;
     s.seq = p.seq;
     s.tuneSeq = p.tuneSeq;

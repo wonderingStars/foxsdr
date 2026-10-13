@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP only: targetCountText names the catalogue keys
+
 namespace cascade::gui {
 
 // --- geodesy -----------------------------------------------------------------
@@ -463,6 +465,11 @@ struct TrackDetailInput {
     TrackKind kind = TrackKind::Aircraft;
     double latDeg = 0.0;
     double lonDeg = 0.0;
+    // false for a target the source hears but cannot place yet (0.99.75,
+    // CASCADE_TRACK_FLAG_NO_POSITION): latDeg/lonDeg are then not a position at
+    // all, and the block says so instead of printing them. True by default, which
+    // is what every caller before this field meant.
+    bool hasPosition = true;
     // NaN means the source does not know, exactly as the ABI says.
     double altM = std::numeric_limits<double>::quiet_NaN();
     double speedMps = std::numeric_limits<double>::quiet_NaN();
@@ -491,6 +498,34 @@ struct TrackDetailInput {
 // The block, in the order it is read: who, then what the registry knows, then
 // what the radio heard.
 std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput& in);
+
+// THE HEADING OVER A TARGET LIST (0.99.75): how many rows it has, how many the
+// page holds, and - when the source hears aircraft it cannot place yet - how many
+// of those. `shown` is the placed rows listed, `total` the placed targets live,
+// `unplaced` the targets heard without a position. They differ when the list's
+// "On screen only" switch hid some (`shown` < `total`), which is when the line
+// says "N of M".
+//
+//   unplaced == 0   "%d target" / "%d targets" / "%d of %d targets", exactly the
+//                   three lines the list has always had.
+//   unplaced  > 0   the same three with the second number said:
+//                   "%d targets, %d heard without a position", its singular, and
+//                   "%d of %d targets, %d heard without a position".
+//
+// SIX WHOLE STRINGS and no suffix pasted on, for the reason the singular/plural
+// pair has always been two strings: a suffix is a clause no catalogue can reorder.
+// `translate` is the language lookup (core::tr in the application, the identity in
+// a test), applied to the whole format; the English formats are the catalogue keys,
+// marked FOX_TR_NOOP so the key tool finds them in this header.
+std::string targetCountText(std::size_t shown, std::size_t total, std::size_t unplaced,
+                            const char* (*translate)(const char*));
+
+// THE SECOND LINE OF A ROW FOR A TARGET HEARD WITHOUT A POSITION: the altitude where
+// the source reported one, then the words that stand where the distance and the
+// bearing would be. "35000 ft - no position yet"; just "no position yet" when the
+// altitude is not known either. Feet for everything but a satellite, which is
+// lettered in kilometres, as the detail block letters it (a station reports feet).
+std::string unplacedRowNote(double altM, TrackKind kind, const char* (*translate)(const char*));
 
 // ============================================================================
 // Implementation. Header-only because every piece of it is a handful of lines
@@ -1184,8 +1219,16 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     out.push_back({detail::detailPrintf("id      %s", in.id.c_str()), true, false, false});
     out.push_back(
         {detail::detailPrintf("from    %s", in.source.c_str()), true, false, false});
-    out.push_back({detail::detailPrintf("pos     %.5f, %.5f", in.latDeg, in.lonDeg), true,
-                   false, false});
+    if (in.hasPosition) {
+        out.push_back({detail::detailPrintf("pos     %.5f, %.5f", in.latDeg, in.lonDeg), true,
+                       false, false});
+    } else {
+        // HEARD AND NOT PLACED (0.99.75): the coordinates are NaN and printing
+        // them would put "nan, nan" in front of the user. Said in words, dimmed
+        // like every other thing the source does not know - and the range and
+        // bearing below, which have nothing to be measured to, are left out.
+        out.push_back({"pos     no position yet", false, false, false});
+    }
 
     if (!std::isnan(in.altM)) {
         // The band is NAMED as well as measured, so the colour on the map and
@@ -1252,7 +1295,7 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     // what a link budget is computed from, the ground distance is what says how
     // near overhead it is - so an orbital target prints both, each named as
     // what it is.
-    if (in.hasHome) {
+    if (in.hasHome && in.hasPosition) {
         const double km =
             greatCircleKm(in.homeLatDeg, in.homeLonDeg, in.latDeg, in.lonDeg);
         const double brg =
@@ -1290,6 +1333,40 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
                                         static_cast<double>(in.ageMs) / 1000.0),
                    true, false, false});
     return out;
+}
+
+inline std::string targetCountText(std::size_t shown, std::size_t total, std::size_t unplaced,
+                                   const char* (*translate)(const char*)) {
+    const int s = static_cast<int>(shown);
+    const int t = static_cast<int>(total);
+    const int u = static_cast<int>(unplaced);
+    if (unplaced == 0u) {
+        if (shown < total) {
+            return detail::detailPrintf(translate(FOX_TR_NOOP("%d of %d targets")), s, t);
+        }
+        // Singular and plural as two whole strings, not an "s" suffix.
+        return detail::detailPrintf(shown == 1u ? translate(FOX_TR_NOOP("%d target"))
+                                                : translate(FOX_TR_NOOP("%d targets")),
+                                    s);
+    }
+    if (shown < total) {
+        return detail::detailPrintf(
+            translate(FOX_TR_NOOP("%d of %d targets, %d heard without a position")), s, t, u);
+    }
+    return detail::detailPrintf(
+        shown == 1u ? translate(FOX_TR_NOOP("%d target, %d heard without a position"))
+                    : translate(FOX_TR_NOOP("%d targets, %d heard without a position")),
+        s, u);
+}
+
+inline std::string unplacedRowNote(double altM, TrackKind kind,
+                                   const char* (*translate)(const char*)) {
+    const std::string words = translate(FOX_TR_NOOP("no position yet"));
+    if (!std::isfinite(altM)) { return words; }
+    const std::string alt = (kind == TrackKind::Satellite)
+                                ? detail::detailPrintf("%.0f km", altM / 1000.0)
+                                : detail::detailPrintf("%.0f ft", altM * detail::kMetresToFeet);
+    return alt + " - " + words;
 }
 
 }  // namespace cascade::gui

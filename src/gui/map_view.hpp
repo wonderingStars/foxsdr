@@ -585,4 +585,20 @@ private:
     bool followInterrupt_ = false;
 };
 
+// HOW MANY PLACED ROWS A MAP PAGE'S TARGET LIST HAS (moved here from
+// app_window.cpp in 0.99.75 so a test can reach it), and it is asked in three
+// places - the toolbar's count, the list's own heading, and its empty state - which
+// must agree to the row. A track is listed when the host still considers it live
+// (the same rule the map applies) and, with "On screen only" ticked, when the map
+// as last drawn has it inside its edges. Nothing here is exempt: a selected or
+// followed target that has scrolled off the map is not listed either, because the
+// list shows what the map shows.
+//
+// A TARGET HEARD WITHOUT A POSITION IS NOT COUNTED HERE, switch or no switch: it has
+// no place on the map, so it is never "on screen" and it is not a placed row. Those
+// are counted by core::visibleUnplacedTrackCount and listed after the placed rows.
+std::size_t listedTrackCount(const MapView& view,
+                             const std::vector<cascade::core::HostTrack>& tracks,
+                             bool onScreenOnly);
+
 }  // namespace cascade::gui

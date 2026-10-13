@@ -403,6 +403,37 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             }
         }
     }
+    // EACH RADIO'S MANUAL GAIN, PER RADIO (0.99.75, AppConfig::manualGainByRadio).
+    // Element-wise tolerant, a level deeper than the memories above: a radio whose
+    // value is not an object, or whose key is not "<kind>|<args>", is skipped; inside
+    // one, a stage with no name or whose value is not a FINITE NUMBER (a string, a
+    // bool, null - which is what a NaN is written as - an object) is skipped and the
+    // rest are kept; at most AppConfig::kMaxManualGainStages stages of a radio are
+    // kept (the first ones, which a JSON object hands back in name order, so the
+    // vector is sorted); a radio left with no stage is not kept; and at most
+    // kBiasTeeMemoryCap radios. A file without the key has none.
+    {
+        const auto it = j.find("manualGainByRadio");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_object()) { continue; }
+                const std::string& key = e.key();
+                const std::size_t bar = key.find('|');
+                if (bar == std::string::npos || bar == 0) { continue; }
+                std::vector<std::pair<std::string, double>> stages;
+                for (auto s = e.value().begin(); s != e.value().end(); ++s) {
+                    if (s.key().empty() || !s.value().is_number()) { continue; }
+                    const double db = s.value().get<double>();
+                    if (!std::isfinite(db)) { continue; }
+                    if (stages.size() >= AppConfig::kMaxManualGainStages) { break; }
+                    stages.emplace_back(s.key(), db);
+                }
+                if (stages.empty()) { continue; }
+                if (out.manualGainByRadio.size() >= kBiasTeeMemoryCap) { break; }
+                out.manualGainByRadio[key] = std::move(stages);
+            }
+        }
+    }
     getString(j, "plutoUri", out.plutoUri);
     getString(j, "rtlTcpAddr", out.rtlTcpAddr);
     getString(j, "soapyAntenna", out.soapyAntenna);
@@ -1203,6 +1234,19 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         json agc = json::object();
         for (const auto& [radio, on] : cfg.autoGainByRadio) { agc[radio] = on; }
         j["autoGainByRadio"] = std::move(agc);
+    }
+    {
+        // A stage that is not a finite number is not written (JSON has no NaN: it would
+        // come back as null and be skipped), and a radio with no stage left is not either.
+        json mg = json::object();
+        for (const auto& [radio, stages] : cfg.manualGainByRadio) {
+            json o = json::object();
+            for (const auto& [stage, db] : stages) {
+                if (!stage.empty() && std::isfinite(db)) { o[stage] = db; }
+            }
+            if (!o.empty()) { mg[radio] = std::move(o); }
+        }
+        j["manualGainByRadio"] = std::move(mg);
     }
     j["plutoUri"] = cfg.plutoUri;
     j["rtlTcpAddr"] = cfg.rtlTcpAddr;

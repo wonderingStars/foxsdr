@@ -141,6 +141,22 @@ describe code this product can be held responsible for.
   show what the radio really holds. Written once per switch-off, only when at
   least one stage accepted its value; not for a radio with no gain stages and not
   when the radio refused the switch itself.
+- `source: manual gain restored - <stage> <dB>, <stage> <dB>` - written (0.99.75)
+  at an open, after the stages' first readback and before the remembered auto
+  gain is put back, when the manual gain the user last set on this radio
+  (`manualGainByRadio` in `config.json`, per radio, under the bias tee's key, one
+  value per stage) was given back to the radio. It names each stage that took its
+  value and the number the radio READ BACK (a radio quantises, and the Source
+  section's sliders and the GAIN dial show that number). A SoapySDR radio is
+  first given a mid-dial 30 dB in every stage, as it always was, and this line
+  says what replaced it; a stage the radio no longer lists is ignored, a value is
+  clamped into the stage's own range, and a stage the radio turns down is dropped
+  without a word. Written once per open and only when at least one stage took its
+  value; never for an Airspy (its gains are part of its gain mode) and not for the
+  reopen after a driver fault (that restores what the user had a moment ago). The
+  gain is written to that memory only by the user - a slider, the GAIN dial, the
+  scope's gain knob or the web control - never by the open's own 30 dB, by this
+  restore, or while automatic gain is on.
 - `squelch: auto on (AUTO key)` / `squelch: auto off (knob)` - AUTOMATIC squelch
   changing state (0.99.74, `squelchAuto` in `config.json`), once per change and
   never for the state restored from the config at start. The word in brackets

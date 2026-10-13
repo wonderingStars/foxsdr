@@ -1163,6 +1163,28 @@ void testOldPlugin() {
     CHECK(std::strcmp(ls.receiverLocator, "IO91wm") == 0);
     CHECK((ls.flags & CASCADE_STATE_LOCATOR_KNOWN) != 0u);
 
+    // [0.99.75] EVERY state this host fills says it LISTS TARGETS HEARD WITHOUT A
+    // POSITION (CASCADE_STATE_LISTS_UNPLACED_TRACKS): a plugin may publish a
+    // CASCADE_TRACK_FLAG_NO_POSITION track only when it sees this bit, so the bit
+    // must be on for the plugin that declared nothing, for the one that declared the
+    // locator, and for a plugin whose struct stops before the locator field. The value is the
+    // contract (the plugins repository carries the same line), and it is a new bit.
+    static_assert(CASCADE_STATE_LISTS_UNPLACED_TRACKS == 0x00008000u,
+                  "the state flag's value is part of the contract");
+    static_assert((CASCADE_STATE_LISTS_UNPLACED_TRACKS &
+                   (CASCADE_STATE_RUNNING | CASCADE_STATE_DEVICE_OPEN | CASCADE_STATE_MUTED |
+                    CASCADE_STATE_DEVICE_AGC | CASCADE_STATE_AGC_SUPPORTED |
+                    CASCADE_STATE_SQUELCH_OPEN | CASCADE_STATE_STEREO | CASCADE_STATE_TUNE_GRANTED |
+                    CASCADE_STATE_SETTINGS_GRANTED | CASCADE_STATE_STOPPED |
+                    CASCADE_STATE_LOCATOR_KNOWN | CASCADE_STATE_TX_GRANTED |
+                    CASCADE_STATE_TX_ARMED | CASCADE_STATE_TRANSMITTING)) == 0u,
+                  "a new bit, not an old one reused");
+    static_assert(CASCADE_TRACK_FLAG_NO_POSITION == 0x00000004u,
+                  "the track flag's value is part of the contract");
+    CHECK((s.flags & CASCADE_STATE_LISTS_UNPLACED_TRACKS) != 0u);
+    CHECK((ls.flags & CASCADE_STATE_LISTS_UNPLACED_TRACKS) != 0u);
+    CHECK((old.flags & CASCADE_STATE_LISTS_UNPLACED_TRACKS) != 0u);
+
     // [M2] A position change must advance `seq`, or a plugin that re-reads
     // only when seq moves would never notice "Set RX here" or a GPS fix -
     // there is no dedicated locator counter, so this is the ONLY signal.

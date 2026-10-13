@@ -304,10 +304,14 @@ int main() {
         CHECK(std::isnan(ui.tracks()[0].t.altM));
     }
 
-    // --- a track with no valid position is DROPPED, not plotted ----------
+    // --- a track with no valid position is not PLOTTED --------------------
     {
         // (0,0) is a real place in the Atlantic. A plugin that emits an
-        // out-of-range or NaN position must not put a phantom target there.
+        // out-of-range position must not put a phantom target there. A NaN one
+        // is not plotted either, and since 0.99.75 it is no longer thrown away:
+        // it is the "heard without a position" list's business (the block
+        // below). Finite coordinates outside the globe are still a bad report,
+        // and still dropped.
         resetAll();
         const CascadeTrackSourceApi api = makeTrackApi(false);
         g_tr.emit = {track("good", 51.5, -0.12), track("bad", 91.0, 0.0),
@@ -319,6 +323,214 @@ int main() {
         ui.poll();
         CHECK(ui.tracks().size() == 1u);
         CHECK(std::string(ui.tracks()[0].t.id) == "good");
+        CHECK(ui.unplacedTracks().size() == 1u);
+        CHECK(ui.unplacedTracks().size() == 1u &&
+              std::string(ui.unplacedTracks()[0].t.id) == "nan");
+    }
+
+    // --- heard but not yet placed (CASCADE_TRACK_FLAG_NO_POSITION, 0.99.75) --
+    // The ADS-B plugin 1.9.0 publishes an aircraft it has heard and cannot place
+    // yet, when the host says it understands them. The host LISTS such a target
+    // and never DRAWS it, and the way that is guaranteed is that it never enters
+    // the vector the map, the coverage map, the scope, the web snapshot and the
+    // auto-fit are all fed from: it is kept apart, in unplacedTracks().
+    {
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        const double kNaN = std::nan("");
+        // The contract: the flag, and NaN coordinates.
+        CascadeTrack flagged = track("FLG001", kNaN, kNaN);
+        flagged.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        flagged.altM = 10668.0;
+        // A buggy plugin that sets the flag and leaves real-looking numbers in:
+        // the flag wins, the host must not plot them.
+        CascadeTrack flaggedNumbers = track("FLG002", 51.5, -0.12);
+        flaggedNumbers.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        // An old or buggy plugin that publishes NaN and no flag, and an infinity.
+        const CascadeTrack nanNoFlag = track("NAN003", kNaN, 1.0);
+        const CascadeTrack infNoFlag =
+            track("INF004", 51.0, std::numeric_limits<double>::infinity());
+        g_tr.emit = {track("PLACED", 53.98, -2.27), flagged, flaggedNumbers, nanNoFlag,
+                     infNoFlag, track("bad", 91.0, 0.0)};
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        ui.poll();
+
+        // The placed list holds the placed target and nothing else.
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.tracks().size() == 1u && std::string(ui.tracks()[0].t.id) == "PLACED");
+        CHECK(ui.tracks().size() == 1u && cascade::core::trackHasPosition(ui.tracks()[0].t));
+
+        // The heard list holds the four, in the order sent, tagged with their
+        // plugin, every one reading back as unplaced: flag set, NaN coordinates.
+        const auto& heard = ui.unplacedTracks();
+        CHECK(heard.size() == 4u);
+        const char* const want[] = {"FLG001", "FLG002", "NAN003", "INF004"};
+        for (std::size_t i = 0; i < heard.size() && i < 4u; ++i) {
+            CHECK(std::string(heard[i].t.id) == want[i]);
+            CHECK(heard[i].plugin == "ADS-B");
+            CHECK(!cascade::core::trackHasPosition(heard[i].t));
+            CHECK((heard[i].t.flags & CASCADE_TRACK_FLAG_NO_POSITION) != 0u);
+            CHECK(std::isnan(heard[i].t.latDeg));
+            CHECK(std::isnan(heard[i].t.lonDeg));
+        }
+        // What it does know survives: the altitude, the label.
+        CHECK(heard.size() >= 1u && heard[0].t.altM == 10668.0);
+        CHECK(heard.size() >= 1u && std::string(heard[0].t.label) == "L-FLG001");
+
+        // The counts: placed ones count as targets on the map, heard ones are
+        // counted separately and never as placed - over either vector alone, and
+        // over the two joined (a caller that mixes them must still get this).
+        CHECK(cascade::core::visibleTrackCount(ui.tracks()) == 1u);
+        CHECK(cascade::core::visibleUnplacedTrackCount(heard) == 4u);
+        std::vector<cascade::core::HostTrack> mixed = ui.tracks();
+        mixed.insert(mixed.end(), heard.begin(), heard.end());
+        CHECK(cascade::core::visibleTrackCount(mixed) == 1u);
+        CHECK(cascade::core::visibleUnplacedTrackCount(mixed) == 4u);
+
+        // Nothing for the map to draw is nothing to open the map for.
+        CHECK(cascade::core::anyVisibleTarget(ui.tracks(), {}));
+        CHECK(!cascade::core::anyVisibleTarget(heard, {}));
+        CHECK(cascade::core::anyVisibleTarget(mixed, {}));
+
+        // A second poll does not accumulate: the lists are rebuilt each frame.
+        ui.poll();
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.unplacedTracks().size() == 4u);
+        // ...and a plugin that stops publishing them empties the list.
+        g_tr.emit = {track("PLACED", 53.98, -2.27)};
+        ui.poll();
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.unplacedTracks().empty());
+    }
+
+    // --- ...and it fades and drops on the rule for its KIND, like a placed one --
+    {
+        const double kNaN = std::nan("");
+        const auto heardTrack = [kNaN](const char* id, std::uint32_t kind, std::uint64_t ageMs) {
+            cascade::core::HostTrack ht;
+            std::snprintf(ht.t.id, CASCADE_TRACK_ID_CHARS, "%s", id);
+            ht.t.latDeg = kNaN;
+            ht.t.lonDeg = kNaN;
+            ht.t.altM = kNaN;
+            ht.t.kind = kind;
+            ht.t.ageMs = ageMs;
+            ht.t.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+            ht.plugin = "ADS-B";
+            return ht;
+        };
+        std::vector<cascade::core::HostTrack> v;
+        v.push_back(heardTrack("A0", CASCADE_TRACK_AIRCRAFT, 0ull));        // fresh
+        v.push_back(heardTrack("A45", CASCADE_TRACK_AIRCRAFT, 45000ull));   // faded, kept
+        v.push_back(heardTrack("A59", CASCADE_TRACK_AIRCRAFT, 59999ull));   // last ms kept
+        v.push_back(heardTrack("A60", CASCADE_TRACK_AIRCRAFT, 60000ull));   // dropped
+        v.push_back(heardTrack("V90", CASCADE_TRACK_VESSEL, 90000ull));     // a ship at 90 s is fine
+        CHECK(cascade::core::visibleUnplacedTrackCount(v) == 4u);
+        CHECK(cascade::core::visibleTrackCount(v) == 0u);
+        using cascade::core::trackPresentation;
+        CHECK_NEAR(trackPresentation(v[0].t.ageMs, v[0].t.kind).alpha, 1.0f, 1e-6);
+        CHECK_NEAR(trackPresentation(v[1].t.ageMs, v[1].t.kind).alpha, 0.65f, 1e-3);
+        CHECK(!trackPresentation(v[3].t.ageMs, v[3].t.kind).visible);
+        // Re-acquired: the plugin hears it again and the same row is back.
+        v[3].t.ageMs = 250ull;
+        CHECK(cascade::core::visibleUnplacedTrackCount(v) == 5u);
+
+        // Through the real poll: the host holds what the plugin publishes and the
+        // rule, not the store, decides what is shown.
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        CascadeTrack stale = track("STALE1", kNaN, kNaN);
+        stale.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        stale.ageMs = 61000ull;
+        CascadeTrack fresh = track("FRESH1", kNaN, kNaN);
+        fresh.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        fresh.ageMs = 500ull;
+        g_tr.emit = {stale, fresh};
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        ui.poll();
+        CHECK(ui.unplacedTracks().size() == 2u);
+        CHECK(cascade::core::visibleUnplacedTrackCount(ui.unplacedTracks()) == 1u);
+    }
+
+    // --- ...and stopping its plugin takes it off the list AT ONCE -------------
+    {
+        resetAll();
+        const CascadeTrackSourceApi api = makeTrackApi(false);
+        CascadeTrack flagged = track("FLG001", std::nan(""), std::nan(""));
+        flagged.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        g_tr.emit = {flagged, track("PLACED", 53.98, -2.27)};
+        LoadedPlugin p = plugAt("ADS-B", "C:/plugins/adsb-1.9.0-abi3-win-x64.dll");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        ui.poll();
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.unplacedTracks().size() == 1u);
+        ui.stopPlugin("adsb-1.9.0-abi3-win-x64.dll");
+        // Not on the next poll: now. Nothing of a sleeping plugin stays listed.
+        CHECK(ui.tracks().empty());
+        CHECK(ui.unplacedTracks().empty());
+    }
+
+    // --- ...and it never gets a trail ----------------------------------------
+    {
+        resetAll();
+        const double kNaN = std::nan("");
+        const CascadeTrackSourceApi api = makeTrackApi(true);
+        g_tr.emitPath = true;  // the fake publishes one path, owned by "orbit"
+        g_tr.pathPts = {{10.0, 20.0}, {11.0, 21.0}, {12.0, 22.0}};
+        CascadeTrack owner = trackAlt("orbit", kNaN, kNaN, 8000.0);
+        owner.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        g_tr.emit = {owner};
+        LoadedPlugin p = plug("ADS-B");
+        p.trackSource = &api;
+        PluginUi ui;
+        ui.rebuild({p});
+        ui.poll();
+        CHECK(ui.unplacedTracks().size() == 1u);
+        // The owner is heard without a position: its trail is not kept.
+        CHECK(ui.paths().empty());
+
+        // The same id, now placed (it got a fix): the trail is kept, and the
+        // altitude store answers at the position as it always has. (That the
+        // earlier no-position report recorded no observation is not asserted:
+        // a NaN observation does not change this answer, so no check here could
+        // tell, and none is claimed.)
+        g_tr.emit = {trackAlt("orbit", 51.0, 0.0, 9000.0)};
+        ui.poll();
+        CHECK(ui.unplacedTracks().empty());
+        CHECK(ui.tracks().size() == 1u);
+        CHECK(ui.paths().size() == 1u);
+        double altM = 0.0;
+        CHECK(ui.altitudeNear("ADS-B", "orbit", 51.0, 0.0, altM));
+        CHECK_NEAR(altM, 9000.0, 1e-9);
+
+        // A path with no owning track at all (a footprint) is kept, as before.
+        g_tr.emit = {};
+        ui.poll();
+        CHECK(ui.paths().size() == 1u);
+
+        // The pure rule too: an owner without a position hides its trail.
+        std::vector<cascade::core::HostTrack> tr(1);
+        std::snprintf(tr[0].t.id, CASCADE_TRACK_ID_CHARS, "A01");
+        tr[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        tr[0].t.latDeg = kNaN;
+        tr[0].t.lonDeg = kNaN;
+        tr[0].t.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        tr[0].plugin = "probe";
+        cascade::core::HostPath trail;
+        trail.id = "A01";
+        trail.plugin = "probe";
+        CHECK(!cascade::core::pathPresentation(trail, tr).visible);
+        tr[0].t.latDeg = 51.0;
+        tr[0].t.lonDeg = 0.0;
+        tr[0].t.flags = 0u;
+        CHECK(cascade::core::pathPresentation(trail, tr).visible);
     }
 
     // --- paths are COPIED out of the plugin's buffer ---------------------

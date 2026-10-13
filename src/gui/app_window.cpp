@@ -628,24 +628,9 @@ void applyWindowIcon(GLFWwindow* window) {
 // place for one of them to be wrong. Both now come from gui/track_metrics.hpp,
 // which is where they are tested against known pairs.
 
-// HOW MANY ROWS A MAP PAGE'S TARGET LIST HAS, and it is asked in three places -
-// the toolbar's count, the list's own heading, and its empty state - which must
-// agree to the row. A track is listed when the host still considers it live
-// (the same rule the map applies) and, with "On screen only" ticked, when the
-// map as last drawn has it inside its edges. Nothing here is exempt: a selected
-// or followed target that has scrolled off the map is not listed either, because
-// the list shows what the map shows.
-std::size_t listedTrackCount(const MapView& view,
-                             const std::vector<cascade::core::HostTrack>& tracks,
-                             bool onScreenOnly) {
-    std::size_t n = 0;
-    for (const cascade::core::HostTrack& ht : tracks) {
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
-        if (onScreenOnly && !view.isOnScreen(ht.t.latDeg, ht.t.lonDeg)) { continue; }
-        ++n;
-    }
-    return n;
-}
+// (listedTrackCount - how many rows a map page's target list has - moved to
+// gui/map_view.{hpp,cpp} in 0.99.75, beside the isOnScreen it asks, so a test can
+// reach it. It is called below exactly as before.)
 
 }  // namespace
 
@@ -676,6 +661,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // Each radio's Auto gain switch (0.99.73): ticked in the Source
            // section, which calls no save of its own.
            a.autoGainByRadio == b.autoGainByRadio &&
+           // Each radio's manual gain (0.99.75): moved by the Source section's
+           // sliders, the top bar's GAIN dial and the scope's knob, none of which
+           // saves on its own.
+           a.manualGainByRadio == b.manualGainByRadio &&
            a.plutoUri == b.plutoUri && a.rtlTcpAddr == b.rtlTcpAddr &&
            a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
@@ -10014,19 +10003,15 @@ void AppWindow::drawSourceSection() {
             if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(deviceGainNames_[i].c_str()),
                                    &deviceGainsDb_[i], loDb, hiDb,
                                    cascade::gui::gainSliderFormat(gainUnitAt(i)))) {
-                if (!device_->setGainDb(deviceGainNames_[i],
-                                       static_cast<double>(deviceGainsDb_[i]))) {
+                // THE READBACK, not the request, and REMEMBERED for this radio (0.99.75):
+                // applyUserGain is the one path a gain the user chose takes to the radio
+                // (see there for both). Every one of these radios quantises: the R820T's
+                // LNA moves in fifteen discrete steps and its aggregate gain in
+                // twenty-nine, and a slider that kept showing 21.4 dB while the tuner sat
+                // at 20.7 would be the same lie the antenna combo was fixed for. It makes
+                // the slider feel notched, because the hardware is notched.
+                if (!applyUserGain(i, static_cast<double>(deviceGainsDb_[i]))) {
                     sourceError_ = device_->lastError();
-                } else {
-                    // THE READBACK, not the request. Every one of these
-                    // radios quantises: the R820T's LNA moves in fifteen
-                    // discrete steps and its aggregate gain in twenty-nine,
-                    // and a slider that kept showing 21.4 dB while the tuner
-                    // sat at 20.7 would be the same lie the antenna combo was
-                    // fixed for. It makes the slider feel notched, because
-                    // the hardware is notched.
-                    deviceGainsDb_[i] =
-                        static_cast<float>(device_->gainDb(deviceGainNames_[i]));
                 }
             }
             ImGui::PopID();
@@ -11778,6 +11763,26 @@ void AppWindow::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std
         deviceGainsDb_[i] = static_cast<float>(dev.gainDb(deviceGainNames_[i]));
     }
 
+    // THE MANUAL GAIN THE USER LEFT THIS RADIO AT (0.99.75): the 30 dB pushed into every
+    // stage of a Soapy radio just above is a boot value, and the owner runs his B200 at
+    // 76 dB - every start began 46 dB down. Whatever stage the user last set on THIS radio
+    // (the same key as the switch below: driver and serial, the whole args for a radio with
+    // no serial) is put back here: only for a stage the radio still reports, clamped into
+    // that stage's own range, and the mirror is read back so the dial and the sliders show
+    // what the radio TOOK. After the push and the first readback, because it overrides the
+    // one and is read in place of the other; BEFORE the remembered auto gain below, so a
+    // radio that comes back on auto gain has the user's numbers under it, to return to
+    // when the switch goes off.
+    //
+    // ONLY ON AN ORDINARY OPEN (restoreRemembered): a recovery reopen after a driver fault
+    // gets the gains the user had a moment ago from its caller. NOT AN AIRSPY: its gains are
+    // part of its gain mode, which airspyMemory_ already puts back. A refused stage is
+    // skipped without a word - it is the radio's to turn down - and one line says what went
+    // back, so a gain that came back different from the dial's last position can be traced.
+    if (restoreRemembered && cascade::gui::asAirspy(&dev) == nullptr) {
+        restoreManualGain(dev, args);
+    }
+
     // THE AUTO GAIN THE USER LEFT THIS RADIO ON (0.99.73): the probe above has
     // put every radio but an Airspy on manual gain, and the sliders have read
     // the manual values off it - so a radio whose box was ticked when it was
@@ -11870,6 +11875,82 @@ void AppWindow::rememberAutoGain(cascade::source::DeviceSource& dev, const std::
         return;
     }
     autoGainMemory_[key] = on;
+}
+
+void AppWindow::rememberManualGain(std::size_t stage) {
+    if (device_ == nullptr || stage >= deviceGainNames_.size()) { return; }
+    // An Airspy's gains are part of its gain mode, remembered in airspyMemory_ by
+    // airspyRememberOpen; a second record here would be a second witness that could disagree.
+    if (cascade::gui::asAirspy(device_) != nullptr) { return; }
+    // A radio gaining itself reports ITS choice, not the user's: the user's numbers are the
+    // ones kept from before the switch went on (manualGainsBeforeAgc_) and from the last
+    // hand on a slider, which this memory already holds.
+    if (deviceAgc_) { return; }
+    const std::string& name = deviceGainNames_[stage];
+    // THE READBACK, not the request: the radio quantises, and the number to put back at the
+    // next open is the one the radio actually held.
+    const double db = device_->gainDb(name);
+    if (!std::isfinite(db)) { return; }
+    const std::string key = cascade::core::biasTeeRadioKey(device_->driverKey(), deviceArgs_);
+    auto it = manualGainMemory_.find(key);
+    if (it == manualGainMemory_.end()) {
+        // A new radio past the cap is not remembered (the bias tee's rule); one already in
+        // the map is always updated.
+        if (manualGainMemory_.size() >= cascade::core::kBiasTeeMemoryCap) { return; }
+        it = manualGainMemory_.emplace(key, std::vector<std::pair<std::string, double>>{}).first;
+    }
+    auto& stages = it->second;
+    // Kept sorted by stage name, which is the order a saved file hands it back in.
+    const auto at = std::lower_bound(
+        stages.begin(), stages.end(), name,
+        [](const std::pair<std::string, double>& p, const std::string& n) { return p.first < n; });
+    if (at != stages.end() && at->first == name) {
+        at->second = db;
+        return;
+    }
+    if (stages.size() >= cascade::core::AppConfig::kMaxManualGainStages) { return; }
+    stages.insert(at, std::make_pair(name, db));
+}
+
+void AppWindow::restoreManualGain(cascade::source::DeviceSource& dev, const std::string& args) {
+    const auto mem =
+        manualGainMemory_.find(cascade::core::biasTeeRadioKey(dev.driverKey(), args));
+    if (mem == manualGainMemory_.end()) { return; }
+    std::string restored;
+    for (const auto& [stage, wantDb] : mem->second) {
+        std::size_t i = 0;
+        while (i < deviceGainNames_.size() && deviceGainNames_[i] != stage) { ++i; }
+        if (i >= deviceGainNames_.size()) { continue; }  // the radio no longer has it
+        double db = wantDb;
+        if (i < deviceGainRanges_.size() &&
+            deviceGainRanges_[i].maxDb > deviceGainRanges_[i].minDb) {
+            db = std::min(std::max(db, deviceGainRanges_[i].minDb), deviceGainRanges_[i].maxDb);
+        }
+        if (!dev.setGainDb(stage, db)) { continue; }
+        const double took = dev.gainDb(stage);
+        if (i < deviceGainsDb_.size()) { deviceGainsDb_[i] = static_cast<float>(took); }
+        char one[96];
+        std::snprintf(one, sizeof one, "%s%s %.1f", restored.empty() ? "" : ", ", stage.c_str(),
+                      took);
+        restored += one;
+    }
+    if (!restored.empty()) {
+        cascade::core::diagLogf("source: manual gain restored - %s", restored.c_str());
+    }
+}
+
+bool AppWindow::applyUserGain(std::size_t stage, double db) {
+    if (device_ == nullptr || stage >= deviceGainNames_.size()) { return false; }
+    if (!device_->setGainDb(deviceGainNames_[stage], db)) { return false; }
+    // THE READBACK, not the request. Every one of these radios quantises: the R820T's LNA
+    // moves in fifteen discrete steps and its aggregate gain in twenty-nine, and a slider
+    // that kept showing 21.4 dB while the tuner sat at 20.7 would be the same lie the
+    // antenna combo was fixed for.
+    if (stage < deviceGainsDb_.size()) {
+        deviceGainsDb_[stage] = static_cast<float>(device_->gainDb(deviceGainNames_[stage]));
+    }
+    rememberManualGain(stage);
+    return true;
 }
 
 bool AppWindow::changeAutoGain(bool want) {
@@ -11970,10 +12051,10 @@ void AppWindow::applyDeckGain() {
             }
         }
     }
-    if (device_->setGainDb(deviceGainNames_[0], db)) {
+    if (applyUserGain(0, db)) {
         // THE READBACK, not the request - the radio quantises (the Source section's sliders say
-        // the same) - and an Airspy's gains are remembered with its mode.
-        deviceGainsDb_[0] = static_cast<float>(device_->gainDb(deviceGainNames_[0]));
+        // the same) - remembered for this radio as its manual gain (0.99.75), and an Airspy's
+        // gains are remembered with its mode.
         airspyRememberOpen();
         deckGainDirty_ = false;
         deckGainRetries_ = 0;
@@ -19029,6 +19110,9 @@ void AppWindow::drawScopeMode() {
                     sourceError_ = device_->lastError();
                 } else {
                     airspyRememberOpen();  // a no-op for any radio but an Airspy
+                    // ...and its counterpart for every other radio (0.99.75): the gain the
+                    // hand set on this knob is that radio's manual gain at its next open.
+                    rememberManualGain(0);
                 }
             }
         }
@@ -20151,9 +20235,16 @@ void AppWindow::drawPluginWindows() {
         // per-plugin caps in PluginUi — a few dozen structs per frame, which
         // is why nothing here is measured or cached across frames.
         pageTracks_.clear();
+        pageUnplaced_.clear();
         pagePaths_.clear();
         for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
             if (ht.plugin == page.plugin) { pageTracks_.push_back(ht); }
+        }
+        // THE TARGETS THIS PAGE'S SOURCE HEARS AND CANNOT PLACE YET (0.99.75): for
+        // the list and its heading only. pageTracks_ is what the map, the satellite
+        // panel and the fit are handed, and these are never in it.
+        for (const cascade::core::HostTrack& ht : pluginUi_.unplacedTracks()) {
+            if (ht.plugin == page.plugin) { pageUnplaced_.push_back(ht); }
         }
         for (const cascade::core::HostPath& hp : pluginUi_.paths()) {
             if (hp.plugin == page.plugin) { pagePaths_.push_back(hp); }
@@ -20382,18 +20473,22 @@ void AppWindow::drawPluginWindows() {
                 // with the tick on and the map zoomed in shown < total, with it off they are
                 // equal). One note, "<shown>/<total>", so the pair stays a pair. The name is
                 // only put together when the census is asked for (ui_census.hpp: free when off).
+                // ...AND THE TARGETS THIS PAGE'S SOURCE HEARS WITHOUT A POSITION
+                // (0.99.75), said as a second number on the same line when there are
+                // any. They are not in `total` or `shown`: neither is a marker on
+                // the map, and neither number is allowed to count what is not drawn.
+                const std::size_t heardUnplaced =
+                    cascade::core::visibleUnplacedTrackCount(pageUnplaced_);
                 if (cascade::gui::census::enabled()) {
                     cascade::gui::census::note("tracklist:count:",
                                                std::to_string(shown) + "/" + std::to_string(total));
+                    cascade::gui::census::note("tracklist:unplaced:",
+                                               std::to_string(heardUnplaced));
                 }
-                if (shown < total) {
-                    ImGui::TextDisabled(tr("%d of %d targets"), static_cast<int>(shown),
-                                        static_cast<int>(total));
-                } else {
-                    // Singular and plural as two whole strings, not an "s" suffix.
-                    ImGui::TextDisabled(shown == 1 ? tr("%d target") : tr("%d targets"),
-                                        static_cast<int>(shown));
-                }
+                // The wording (and the six whole strings it chooses between) is
+                // targetCountText's, where it is tested.
+                ImGui::TextDisabled(
+                    "%s", cascade::gui::targetCountText(shown, total, heardUnplaced, tr).c_str());
                 // THE FILTER BESIDE THE COUNT IT CHANGES (0.99.74): "Could you add
                 // a filter or switch to list only the aircraft currently viewable
                 // on the screen. This way if I am zoomed in on my local little
@@ -20529,7 +20624,7 @@ void AppWindow::drawPluginWindows() {
                 const float listWidth =
                     std::min(300.0f, std::max(190.0f, mapAvail.x * 0.36f));
                 ImGui::BeginChild("##tracklist", ImVec2(listWidth, 0.0f), true);
-                drawTrackList(page, pageTracks_);
+                drawTrackList(page, pageTracks_, pageUnplaced_);
                 ImGui::EndChild();
                 ImGui::SameLine();
 
@@ -21351,7 +21446,8 @@ void AppWindow::drawMapPageSections() {
 }
 
 void AppWindow::drawTrackList(MapPage& page,
-                              const std::vector<cascade::core::HostTrack>& tracks) {
+                              const std::vector<cascade::core::HostTrack>& tracks,
+                              const std::vector<cascade::core::HostTrack>& heard) {
     // `tracks` is this page's plugin's tracks only — the caller filtered them
     // by the tag each HostTrack carries — so every row here belongs to the
     // page it is drawn in, and a click can only ever land on this page's map.
@@ -21366,8 +21462,15 @@ void AppWindow::drawTrackList(MapPage& page,
     // switch hid something - which is when the count says "N of M".
     const std::size_t total = cascade::core::visibleTrackCount(tracks);
     const std::size_t shown = listedTrackCount(*page.view, tracks, mapListOnScreenOnly_);
-    if (shown == 0u) {
-        if (total == 0u) {
+    // AND THE TARGETS HEARD WITHOUT A POSITION (0.99.75), counted on their own and
+    // never into `total` or `shown`: they are not on the map. They are rows, after
+    // every placed one - unless the "On screen only" switch is ticked, because
+    // they have no place on the map and so are never on screen, and the list shows
+    // what the map shows. The heading still says how many there are.
+    const std::size_t heardCount = cascade::core::visibleUnplacedTrackCount(heard);
+    const std::size_t heardRows = mapListOnScreenOnly_ ? 0u : heardCount;
+    if (shown + heardRows == 0u) {
+        if (total == 0u && heardCount == 0u) {
             ImGui::TextDisabled("%s", tr("No targets."));
             // Wrapped to the list's width, which is narrow: the English is cut
             // there already, and a translation more so.
@@ -21380,17 +21483,14 @@ void AppWindow::drawTrackList(MapPage& page,
             // empty list does not read as a dead receiver. "Decoded aircraft ...
             // appear here" would be false - they are decoded, just elsewhere.
             ImGui::TextDisabled("%s", tr("No targets on screen."));
-            ImGui::TextDisabled(tr("%d of %d targets"), 0, static_cast<int>(total));
+            ImGui::TextDisabled(
+                "%s", cascade::gui::targetCountText(0u, total, heardCount, tr).c_str());
         }
         return;
     }
 
-    if (shown < total) {
-        ImGui::Text(tr("%d of %d targets"), static_cast<int>(shown), static_cast<int>(total));
-    } else {
-        // Singular and plural as two whole strings, not an "s" suffix.
-        ImGui::Text(shown == 1 ? tr("%d target") : tr("%d targets"), static_cast<int>(shown));
-    }
+    // The wording and its six whole strings are targetCountText's, where it is tested.
+    ImGui::TextUnformatted(cascade::gui::targetCountText(shown, total, heardCount, tr).c_str());
     // FOLLOW is a toggle rather than a mode buried in a menu, because its
     // effect - the map moving on its own - is confusing if you cannot see at a
     // glance that you asked for it.
@@ -21413,6 +21513,10 @@ void AppWindow::drawTrackList(MapPage& page,
     rows.reserve(shown);
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         const cascade::core::HostTrack& ht = tracks[i];
+        // A placed row needs a place: its distance and bearing are measured to it.
+        // (`tracks` never holds a target heard without a position - those are
+        // `heard`, below - so this is the list defending itself, as the count does.)
+        if (!cascade::core::trackHasPosition(ht.t)) { continue; }
         if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
         // The map's edges, when asked for. The selected or followed target is
         // NOT exempt: the list shows what the map shows, and a followed target
@@ -21595,6 +21699,14 @@ void AppWindow::drawTrackList(MapPage& page,
             page.view->setSelected(ht.t.id);
             page.view->goTo(ht.t.latDeg, ht.t.lonDeg);
         }
+        // Where this row's label is, for a bounded run that has to see the order of the rows
+        // without reading pixels (0.99.75: the placed rows, then the heard-without-a-position
+        // ones). The name is only put together when the census is asked for.
+        if (cascade::gui::census::enabled()) {
+            cascade::gui::census::rect("tracklist:row:" + r.id, ImGui::GetItemRectMin().x,
+                                       ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                       ImGui::GetItemRectMax().y);
+        }
         // Double click starts following, which is the natural escalation of
         // "take me there" and needs no extra control.
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -21632,6 +21744,69 @@ void AppWindow::drawTrackList(MapPage& page,
 
         ImGui::PopStyleVar();
         ImGui::PopID();
+    }
+
+    // --- HEARD WITHOUT A POSITION, AFTER EVERY PLACED ROW (0.99.75) ----------------
+    // An aircraft the receiver hears and has not yet placed (its position message
+    // has not arrived): the owner wanted these counted and listed rather than
+    // invisible until the position turns up. Always below the placed rows, whatever
+    // the sort - they have no distance or bearing to be ordered by - and DIMMED:
+    // fainter than a placed row at the same age, and fading further on the same
+    // ageMs rule as one of its kind until it is dropped.
+    //
+    // A ROW, NOT A BUTTON TO NOWHERE. Clicking a placed row flies the map to the
+    // target; there is nowhere to fly to, so the label is plain text with a tooltip
+    // (the same detail block, whose position line says "no position yet") and the
+    // only press is the Details button, which opens that block in its window. The
+    // second line is the altitude where one is known and the words that stand where
+    // the distance and the bearing would. With "On screen only" ticked there are no
+    // such rows: they are never on screen (heardRows above).
+    if (!mapListOnScreenOnly_) {
+        constexpr float kHeardRowDim = 0.6f;
+        for (std::size_t i = 0; i < heard.size(); ++i) {
+            const cascade::core::HostTrack& ht = heard[i];
+            const cascade::core::TrackPresentation pres =
+                cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+            if (!pres.visible) { continue; }
+            // The id and label are third-party fixed arrays: bounded, not trusted to
+            // be terminated.
+            const std::string id(ht.t.id, ::strnlen(ht.t.id, CASCADE_TRACK_ID_CHARS));
+            const std::string label =
+                (ht.t.label[0] != '\0')
+                    ? std::string(ht.t.label, ::strnlen(ht.t.label, CASCADE_TRACK_LABEL_CHARS))
+                    : id;
+            const std::string note = cascade::gui::unplacedRowNote(
+                ht.t.altM, cascade::gui::detailTrackKind(ht.t.kind), tr);
+            ImGui::TableNextRow();
+            // After the placed rows' ids (their indexes are 0..tracks.size()-1).
+            ImGui::PushID(static_cast<int>(tracks.size() + i));
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+                                ImGui::GetStyle().Alpha * pres.alpha * kHeardRowDim);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(label.c_str());
+            if (cascade::gui::census::enabled()) {
+                cascade::gui::census::rect("tracklist:heardrow:" + id, ImGui::GetItemRectMin().x,
+                                           ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                           ImGui::GetItemRectMax().y);
+            }
+            bool hovered = ImGui::IsItemHovered();
+            ImGui::TextDisabled("%s", note.c_str());
+            hovered = hovered || ImGui::IsItemHovered();
+            if (hovered) {
+                ImGui::BeginTooltip();
+                drawTrackDetailOf(ht, &trackInfo_, rxSet_, rxLat_, rxLon_);
+                ImGui::EndTooltip();
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", id.c_str());
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton(detailsLabel)) {
+                detailsTrackId_ = id;
+                detailsOpen_ = true;
+            }
+            ImGui::PopStyleVar();
+            ImGui::PopID();
+        }
     }
     ImGui::EndTable();
     ImGui::PopStyleVar();  // CellPadding
@@ -21700,6 +21875,16 @@ const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& i
     // staleness rule still shows count: a dropped target must read as "no
     // longer being heard", not as its last stale values.
     for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
+        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            continue;
+        }
+        if (id == ht.t.id) { return &ht; }
+    }
+    // AND THE TARGETS HEARD WITHOUT A POSITION (0.99.75), which have a Details
+    // button of their own in the list: the detail block says "no position yet" and
+    // the registry lookup works for them as for any other. Placed ones first, so an
+    // id both lists hold (a target that has just got its fix) answers as placed.
+    for (const cascade::core::HostTrack& ht : pluginUi_.unplacedTracks()) {
         if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
             continue;
         }
@@ -21795,6 +21980,9 @@ void AppWindow::drawTargetDetailsSection() {
     // page of the plugin that decoded THIS target — the track carries its
     // plugin's name — and open that page, because "go to on map" from here
     // is the one route to a page whose window is currently shut.
+    // NOT FOR A TARGET HEARD WITHOUT A POSITION (0.99.75): there is nowhere on the
+    // map to go to or to follow it to, so both keys are dead until it has a fix.
+    ImGui::BeginDisabled(!cascade::core::trackHasPosition(found->t));
     if (ImGui::SmallButton(trId("Go to on map"))) {
         MapPage& pg = ensureMapPage(found->plugin);
         pg.view->setSelected(found->t.id);
@@ -21815,6 +22003,7 @@ void AppWindow::drawTargetDetailsSection() {
             pg.open = true;
         }
     }
+    ImGui::EndDisabled();
 }
 
 void AppWindow::drawTargetDetailsWindow() {
@@ -21872,6 +22061,10 @@ void AppWindow::drawTargetDetailsWindow() {
             // Routed to the page of the plugin that decoded this target, and
             // that page is opened — the details window outlives its map page
             // being closed, so the gesture must be able to bring it back.
+            //
+            // BOTH DEAD FOR A TARGET HEARD WITHOUT A POSITION (0.99.75): there is
+            // nowhere on the map to go to, or to follow it to, until it has a fix.
+            ImGui::BeginDisabled(!cascade::core::trackHasPosition(found->t));
             if (ImGui::Button(trId("Go to on map"))) {
                 MapPage& pg = ensureMapPage(found->plugin);
                 pg.view->setSelected(found->t.id);
@@ -21892,6 +22085,7 @@ void AppWindow::drawTargetDetailsWindow() {
                     pg.open = true;
                 }
             }
+            ImGui::EndDisabled();
         }
         ImGui::Separator();
         if (ImGui::Button(trId("Close"))) { detailsOpen_ = false; }
@@ -28979,6 +29173,9 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
                         // slider while the radio holds another.
                         deviceGainsDb_[i] =
                             static_cast<float>(device_->gainDb(*r.gainName));
+                        // A gain a browser chose is remembered for this radio like one
+                        // the hand chose here (0.99.75; not an Airspy's, not under auto gain).
+                        rememberManualGain(i);
                     }
                 }
                 // AN AIRSPY's gain list is its MODE's, and a name from
@@ -30787,6 +30984,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // radio's own open (0.99.73). Seeded here, before any open, so a saved
     // radio that does not open this launch keeps its entry for the next save.
     autoGainMemory_ = cfg.autoGainByRadio;
+    // Each radio's manual gain (0.99.75), put back by adoptDeviceMirrors on that radio's
+    // own open - seeded here for the same reason as the switch above.
+    manualGainMemory_ = cfg.manualGainByRadio;
     // THE PLUTO'S ADDRESS IS SEEDED HERE TOO, and it has to be before the
     // scanNative() further down: that is what builds the Pluto's row, the
     // row's args are "uri=" plus this box, and the restore below finds the
@@ -32210,6 +32410,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.airspy = airspyMemory_;
     // Every radio's Auto gain switch, open now or not (0.99.73).
     cfg.autoGainByRadio = autoGainMemory_;
+    // Every radio's manual gain, open now or not (0.99.75).
+    cfg.manualGainByRadio = manualGainMemory_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be

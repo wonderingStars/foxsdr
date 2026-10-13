@@ -32,6 +32,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include <limits>  // the manual gain memory's non-finite stages
+
 #include "core/plugin_repo.hpp"  // defaultIndexUrl(), the default catalogue URL
 // kSerialBaudRates and kMaxSerialPortNameChars: the GPS port block asserts
 // against the port layer's own list and limit, so a change there is a change
@@ -117,6 +119,8 @@ AppConfig junkConfig() {
     c.biasTee["garbage|serial=1"] = true;
     // An auto gain memory the file never mentioned must not survive a load.
     c.autoGainByRadio["garbage|serial=1"] = true;
+    // A manual gain memory the file never mentioned must not survive a load.
+    c.manualGainByRadio["garbage|serial=1"] = {{"GARBAGE", 99.0}};
     // A converter the file never mentioned must not survive a load.
     c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
     // A crystal correction the file never mentioned must not survive a load.
@@ -339,6 +343,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.biasTee == b.biasTee);
     CHECK(a.autoGainByRadio == b.autoGainByRadio);
+    CHECK(a.manualGainByRadio == b.manualGainByRadio);
     CHECK(a.converters == b.converters);
     CHECK(a.ppmCorrection == b.ppmCorrection);
     CHECK(a.ppm == b.ppm);
@@ -522,9 +527,12 @@ int main() {
         // whether a window shows: it comes through the start-up state untouched.
         in.autoGainByRadio["rtlsdr|serial=00000042"] = true;
         in.autoGainByRadio["hackrf|serial=abc"] = false;
+        // ...and so is a radio's remembered manual gain (0.99.75).
+        in.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
         const AppConfig out = cascade::core::startupState(in);
         CHECK(out.autoGainByRadio.size() == 2);
         CHECK(out.autoGainByRadio == in.autoGainByRadio);
+        CHECK(out.manualGainByRadio == in.manualGainByRadio);
         CHECK(!out.scopeMode);
         // The demod scope is a WINDOW, so it obeys the same rule the radar
         // scope and the two plugin windows do: what was showing is recorded
@@ -780,6 +788,12 @@ int main() {
         in.autoGainByRadio["rtlsdr|serial=00000042"] = true;
         in.autoGainByRadio["hackrf|serial=abc"] = false;
         in.autoGainByRadio["rtlsdr|index=0"] = true;
+        // EACH RADIO'S MANUAL GAIN (0.99.75): the owner's B200 at 76 dB, a dongle with two
+        // stages (kept sorted by stage name, which is the order a file hands them back in),
+        // and a gain with a fraction.
+        in.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
+        in.manualGainByRadio["rtlsdr|serial=00000042"] = {{"LNA", 33.0}, {"VGA", -4.7}};
+        in.manualGainByRadio["hackrf|serial=abc"] = {{"AMP", 14.0}, {"LNA", 16.0}, {"VGA", 20.5}};
         // THE CONVERTERS, one of each shape: the tester's 125 MHz up-converter
         // on a dongle, an inverting down-converter set explicitly on the
         // generator, and one switched OFF that keeps the LO it was given.
@@ -1514,6 +1528,118 @@ int main() {
             CHECK(out.autoGainByRadio == in.autoGainByRadio);
         }
 
+        // EACH RADIO'S MANUAL GAIN (0.99.75, AppConfig::manualGainByRadio). A config that
+        // has never seen the key has none (junkConfig set one, so a loader that forgot the
+        // key would leave it behind).
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.empty());
+        // Two radios, one with two stages the file lists out of order: they come back
+        // sorted by stage name, integers and fractions alike.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"manualGainByRadio\":{"
+                              "\"soapy|driver=uhd,serial=31E0000\":{\"PGA\":76},"
+                              "\"rtlsdr|serial=00000042\":{\"VGA\":-4.7,\"LNA\":33.5}}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.size() == 2);
+        {
+            const std::vector<std::pair<std::string, double>> b200 = {{"PGA", 76.0}};
+            const std::vector<std::pair<std::string, double>> dongle = {{"LNA", 33.5},
+                                                                        {"VGA", -4.7}};
+            CHECK(out.manualGainByRadio.count("soapy|driver=uhd,serial=31E0000") == 1 &&
+                  out.manualGainByRadio.at("soapy|driver=uhd,serial=31E0000") == b200);
+            CHECK(out.manualGainByRadio.count("rtlsdr|serial=00000042") == 1 &&
+                  out.manualGainByRadio.at("rtlsdr|serial=00000042") == dongle);
+        }
+        // A MALFORMED ENTRY IS DROPPED AND THE REST ARE KEPT, a level deeper than the
+        // switches': a radio whose value is a number, a string, null or an array; a key
+        // with no "<kind>|" and one with an empty kind; inside a radio, a stage that is a
+        // string, a bool, null, an object or has no name (each skipped, the good stage
+        // beside them kept); and a radio left with nothing (all bad, or none) is not kept.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"manualGainByRadio\":{"
+                              "\"a|1\":5,\"a|2\":\"x\",\"a|3\":null,\"a|4\":[1],"
+                              "\"nobar\":{\"PGA\":1},\"|serial=nokind\":{\"PGA\":1},"
+                              "\"b|1\":{\"PGA\":\"76\",\"LNA\":true,\"VGA\":null,"
+                              "\"MIX\":{\"x\":1},\"\":3,\"OK\":12.5},"
+                              "\"c|1\":{\"PGA\":\"x\"},\"d|1\":{},"
+                              "\"keep|serial=k\":{\"PGA\":40}}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.size() == 2);
+        {
+            const std::vector<std::pair<std::string, double>> ok = {{"OK", 12.5}};
+            const std::vector<std::pair<std::string, double>> keep = {{"PGA", 40.0}};
+            CHECK(out.manualGainByRadio.count("b|1") == 1 && out.manualGainByRadio.at("b|1") == ok);
+            CHECK(out.manualGainByRadio.count("keep|serial=k") == 1 &&
+                  out.manualGainByRadio.at("keep|serial=k") == keep);
+        }
+        // Not an object at all: nothing remembered, and the rest of the file still loads.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"hackrf\","
+                              "\"manualGainByRadio\":[1,2]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.empty());
+        CHECK(out.sourceKind == "hackrf");
+        // THE CAPS: 65 radios load 64 (the bias tee memory's bound), and 17 stages of one
+        // radio load 16 - the first sixteen by name.
+        {
+            std::string text = "{\"schemaVersion\":1,\"manualGainByRadio\":{";
+            for (int i = 0; i < 65; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"rtlsdr|serial=" + std::to_string(1000 + i) + "\":{\"LNA\":10}";
+            }
+            text += "}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            std::printf("  a 65-radio manual gain memory loads %zu\n", out.manualGainByRadio.size());
+            CHECK(out.manualGainByRadio.size() == 64);
+
+            text = "{\"schemaVersion\":1,\"manualGainByRadio\":{\"soapy|many\":{";
+            for (int i = 0; i < 17; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"S" + std::string(i < 10 ? "0" : "") + std::to_string(i) + "\":" +
+                        std::to_string(i);
+            }
+            text += "}}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.manualGainByRadio.size() == 1);
+            const auto many = out.manualGainByRadio.find("soapy|many");
+            std::printf("  a 17-stage radio loads %zu stages\n",
+                        many == out.manualGainByRadio.end() ? std::size_t{0} : many->second.size());
+            CHECK(many != out.manualGainByRadio.end() && many->second.size() == 16);
+            CHECK(many != out.manualGainByRadio.end() && many->second.size() == 16 &&
+                  many->second.front().first == "S00" && many->second.back().first == "S15");
+        }
+        // AND IT IS WRITTEN: save then load keeps every stage of every radio, and the file
+        // names the key. A stage that is not a finite number is not written, and a radio
+        // left with nothing is not either (JSON has no NaN: it would come back as null).
+        {
+            AppConfig in;
+            in.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
+            in.manualGainByRadio["rtlsdr|serial=1"] = {{"LNA", 33.0}, {"VGA", -4.7}};
+            CHECK(ConfigStore::save(path, in, err));
+            CHECK(readAll(path).find("\"manualGainByRadio\"") != std::string::npos);
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.manualGainByRadio == in.manualGainByRadio);
+
+            AppConfig odd;
+            odd.manualGainByRadio["x|1"] = {{"LNA", 5.0},
+                                            {"PGA", std::numeric_limits<double>::quiet_NaN()},
+                                            {"VGA", std::numeric_limits<double>::infinity()}};
+            odd.manualGainByRadio["y|1"] = {{"PGA", std::numeric_limits<double>::quiet_NaN()}};
+            CHECK(ConfigStore::save(path, odd, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.manualGainByRadio.size() == 1);
+            const std::vector<std::pair<std::string, double>> lnaOnly = {{"LNA", 5.0}};
+            CHECK(out.manualGainByRadio.count("x|1") == 1 && out.manualGainByRadio.at("x|1") == lnaOnly);
+        }
+
         // AUTOMATIC SQUELCH (0.99.74, AppConfig::squelchAuto). A config that has never
         // seen the key has it OFF (junkConfig set it on, so a loader that forgot the key
         // would leave it behind); a real true loads on; anything that is not a boolean is
@@ -2164,6 +2290,22 @@ int main() {
             agcOff.autoGainByRadio["rtlsdr|serial=00000042"] = false;
             CHECK(!cascade::gui::configsEqual(agcOn, agcOff));
             CHECK(!cascade::gui::configsEqual(agcOff, agcOn));
+            // The per-radio manual gain memory (0.99.75), every way it can change: a radio
+            // appearing, a stage appearing on it, and a stage's number moving. The sliders,
+            // the GAIN dial and the scope's knob call no save of their own.
+            AppConfig gainOn = base;
+            gainOn.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
+            CHECK(!cascade::gui::configsEqual(base, gainOn));
+            CHECK(!cascade::gui::configsEqual(gainOn, base));
+            AppConfig gainMoved = gainOn;
+            gainMoved.manualGainByRadio["soapy|driver=uhd,serial=31E0000"][0].second = 60.0;
+            CHECK(!cascade::gui::configsEqual(gainOn, gainMoved));
+            CHECK(!cascade::gui::configsEqual(gainMoved, gainOn));
+            AppConfig gainStage = gainOn;
+            gainStage.manualGainByRadio["soapy|driver=uhd,serial=31E0000"].push_back({"VGA", 5.0});
+            CHECK(!cascade::gui::configsEqual(gainOn, gainStage));
+            CHECK(!cascade::gui::configsEqual(gainStage, gainOn));
+            CHECK(cascade::gui::configsEqual(gainOn, gainOn));
 
             // The transmitter's settings, the rail bank, the rebound keys and
             // the update-check switch: every one of them is changed by a click

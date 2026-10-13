@@ -1122,8 +1122,14 @@ private:
     // Per page now: `tracks` is the page's plugin's tracks only, already
     // filtered by the caller, and every selection/follow gesture lands on that
     // page's own MapView.
-    void drawTrackList(MapPage& page,
-                       const std::vector<cascade::core::HostTrack>& tracks);
+    //
+    // `heard` (0.99.75) is the same plugin's targets HEARD WITHOUT A POSITION
+    // (PluginUi::unplacedTracks, filtered the same way): listed after every placed
+    // row, dimmed, with their altitude and the words "no position yet", and
+    // counted in the heading. They are never drawn on the map and never fly it
+    // anywhere - there is nowhere to fly to.
+    void drawTrackList(MapPage& page, const std::vector<cascade::core::HostTrack>& tracks,
+                       const std::vector<cascade::core::HostTrack>& heard);
     // The compact sort control above the list: which key, and which way. It is
     // the ONLY way the list is ordered - the table itself is no longer
     // ImGui-sortable, because ImGui offers no public way to write the header's
@@ -2915,6 +2921,33 @@ private:
     // adoptDeviceMirrors at every open of a radio that supports auto gain - never
     // an Airspy, whose AGC switches belong to its gain mode (airspyMemory_).
     std::map<std::string, bool> autoGainMemory_;
+    // EACH RADIO'S MANUAL GAIN, REMEMBERED (0.99.75, AppConfig::manualGainByRadio): radio key
+    // (the same biasTeeRadioKey) -> the (stage, dB) pairs, sorted by stage name, the user last
+    // set on it, each the radio's READBACK. Seeded by applyConfig; written by rememberManualGain
+    // from every path a gain the USER chose takes to the radio (applyUserGain: the Source
+    // section's sliders and the top bar's GAIN dial; the scope face's knob; a browser's gain
+    // control) and by nothing else - not the open's own push, not the restore, not auto gain;
+    // put back by adoptDeviceMirrors at an ordinary open, never an Airspy's (airspyMemory_).
+    std::map<std::string, std::vector<std::pair<std::string, double>>> manualGainMemory_;
+    // Writes the READBACK of gain stage `stage` of the open radio into manualGainMemory_. Does
+    // nothing for an Airspy (its gains are part of its gain mode), while auto gain is on (a
+    // radio gaining itself reports its own choice), for a stage the radio does not list or
+    // whose readback is not a number; and a new radio past kBiasTeeMemoryCap, or a stage past
+    // AppConfig::kMaxManualGainStages, is not remembered (an entry already there is updated).
+    void rememberManualGain(std::size_t stage);
+    // Puts back what manualGainMemory_ holds for the radio `dev` was opened with `args`: each
+    // stage the radio still reports, clamped into that stage's range, the mirror read back
+    // afterwards, one diag line naming what went back. Called by adoptDeviceMirrors on an
+    // ordinary open only (never a recovery reopen, never an Airspy), after the 30 dB push and
+    // the first readback and before the remembered auto gain. Writes nothing to the memory.
+    void restoreManualGain(cascade::source::DeviceSource& dev, const std::string& args);
+    // THE ONE PATH A GAIN THE USER CHOSE TAKES TO THE RADIO for the Source section's sliders and
+    // the top bar's GAIN dial: asks the radio for `db` on stage `stage`; on acceptance the mirror
+    // takes the radio's READBACK (it quantises) and the gain is remembered for this radio. False
+    // on a refusal (or no radio, or no such stage) with the mirror untouched; the caller decides
+    // what a refusal looks like (the sliders put the driver's words on the error line, the dial
+    // stays silent and retries).
+    bool applyUserGain(std::size_t stage, double db);
     // The manual gains (stage name, dB) the mirrors held when changeAutoGain last switched auto
     // gain ON, so that switching it OFF puts back what the USER had set and not what the radio
     // reported while it gained itself (0.99.74). Emptied when it is used and at every open
@@ -3694,6 +3727,9 @@ private:
     // so the per-frame filter allocates nothing in the steady state. The
     // per-plugin caps in PluginUi bound what lands here.
     std::vector<cascade::core::HostTrack> pageTracks_;
+    // The same plugin's targets heard without a position (0.99.75): listed, never
+    // drawn - see drawTrackList. Filled beside pageTracks_ and cleared with it.
+    std::vector<cascade::core::HostTrack> pageUnplaced_;
     std::vector<cascade::core::HostPath> pagePaths_;
     // --- Anonymous usage reporting (opt-in; see PRIVACY.md) ----------------
     // Counters for the session in progress, journalled to the config at exit

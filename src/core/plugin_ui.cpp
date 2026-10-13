@@ -14,8 +14,10 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string_view>
+#include <unordered_set>
 
 namespace cascade::core {
 namespace {
@@ -152,6 +154,14 @@ TrackPresentation pathPresentation(const HostPath& path,
         // comparison is exact rather than approximate.
         if (ht.plugin != path.plugin) { continue; }
         if (path.id != ht.t.id) { continue; }
+        // An owner the host cannot place has no marker, and so no trail (see
+        // the header): hidden outright, not faded.
+        if (!trackHasPosition(ht.t)) {
+            TrackPresentation hidden;
+            hidden.visible = false;
+            hidden.alpha = 0.0f;
+            return hidden;
+        }
         // The OWNER'S kind decides, not the path's: the age being judged is
         // the owner's, and judging it against a cadence the owner does not
         // report at would be the same mistake one global threshold was.
@@ -164,6 +174,18 @@ TrackPresentation pathPresentation(const HostPath& path,
 std::size_t visibleTrackCount(const std::vector<HostTrack>& tracks) {
     std::size_t n = 0;
     for (const HostTrack& ht : tracks) {
+        // A target with no position is not on the map, so it is not counted
+        // here; visibleUnplacedTrackCount counts it (see the header).
+        if (!trackHasPosition(ht.t)) { continue; }
+        if (trackPresentation(ht.t.ageMs, ht.t.kind).visible) { ++n; }
+    }
+    return n;
+}
+
+std::size_t visibleUnplacedTrackCount(const std::vector<HostTrack>& tracks) {
+    std::size_t n = 0;
+    for (const HostTrack& ht : tracks) {
+        if (trackHasPosition(ht.t)) { continue; }
         if (trackPresentation(ht.t.ageMs, ht.t.kind).visible) { ++n; }
     }
     return n;
@@ -716,6 +738,9 @@ void PluginUi::stopPlugin(const std::string& pluginKey) {
         tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
                                      [&](const HostTrack& h) { return ofThisPlugin(h.plugin); }),
                       tracks_.end());
+        unplaced_.erase(std::remove_if(unplaced_.begin(), unplaced_.end(),
+                                       [&](const HostTrack& h) { return ofThisPlugin(h.plugin); }),
+                        unplaced_.end());
         paths_.erase(std::remove_if(paths_.begin(), paths_.end(),
                                     [&](const HostPath& h) { return ofThisPlugin(h.plugin); }),
                      paths_.end());
@@ -1281,6 +1306,7 @@ void PluginUi::destroyInstances() {
     instruments_.clear();
     demoCount_ = 0;
     tracks_.clear();
+    unplaced_.clear();
     paths_.clear();
     panels_.clear();
     // THE OBSERVATIONS GO WITH THE INSTANCES THAT PRODUCED THEM. Every entry
@@ -1298,6 +1324,7 @@ void PluginUi::poll() {
                       .count());
     }
     tracks_.clear();
+    unplaced_.clear();
     paths_.clear();
     // ARMED HERE, cleared as each track is seen below, and read after every
     // instance has been polled: an entry still unseen belongs to a track no
@@ -1314,9 +1341,32 @@ void PluginUi::poll() {
                 std::min(static_cast<std::uint32_t>(n), kMaxTracksPerPlugin);
             for (std::uint32_t i = 0; i < count; ++i) {
                 const CascadeTrack& t = trackScratch_[i];
-                // A track with no position is not a track. Silently dropping
-                // beats plotting something at (0,0), which is a real place in
-                // the Atlantic and would look like a target.
+                // HEARD AND NOT PLACED (0.99.75): the source says so with
+                // CASCADE_TRACK_FLAG_NO_POSITION, or hands over a coordinate that
+                // is not a number at all (an old or buggy plugin; see
+                // trackHasPosition). It is kept, in a list of its own, so the
+                // target list can say "heard without a position" - and it is kept
+                // OUT of tracks_, the only vector anything draws, fits to, follows,
+                // hit-tests or plots coverage from, so it cannot be put on a map by
+                // any of them. Stored in one canonical shape whatever arrived: the
+                // flag set and both coordinates NaN, so a flagged track whose
+                // numbers a plugin filled in anyway cannot leak a position either.
+                // No altitude observation is taken: that store is keyed on where
+                // the altitude was measured, and there is no where.
+                if (!trackHasPosition(t)) {
+                    HostTrack heard;
+                    heard.t = t;
+                    heard.t.flags |= CASCADE_TRACK_FLAG_NO_POSITION;
+                    heard.t.latDeg = std::numeric_limits<double>::quiet_NaN();
+                    heard.t.lonDeg = std::numeric_limits<double>::quiet_NaN();
+                    heard.plugin = ti.name;
+                    unplaced_.push_back(std::move(heard));
+                    continue;
+                }
+                // A track with a position that is not on the globe is not a
+                // track. Silently dropping beats plotting something at (0,0),
+                // which is a real place in the Atlantic and would look like a
+                // target.
                 if (!(t.latDeg >= -90.0 && t.latDeg <= 90.0) ||
                     !(t.lonDeg >= -180.0 && t.lonDeg <= 180.0)) {
                     continue;
@@ -1353,6 +1403,26 @@ void PluginUi::poll() {
             hp.points.assign(p.points, p.points + n2);
             paths_.push_back(std::move(hp));
         }
+    }
+
+    // A TARGET WITH NO POSITION HAS NO TRAIL (0.99.75). A path whose owner - the
+    // same plugin's track with the same id, as pathPresentation matches them - was
+    // reported without a position is dropped here, so no drawing code is ever
+    // handed a line leading to a marker the host has decided not to draw. Keyed
+    // on a set rather than compared pairwise: both sides are plugin output, and a
+    // plugin at its caps would otherwise cost frame time quadratically. Only built
+    // when there is something to match against.
+    if (!unplaced_.empty() && !paths_.empty()) {
+        std::unordered_set<std::string> heardKeys;
+        heardKeys.reserve(unplaced_.size());
+        for (const HostTrack& u : unplaced_) {
+            heardKeys.insert(u.plugin + '\n' + bounded(u.t.id, CASCADE_TRACK_ID_CHARS));
+        }
+        paths_.erase(std::remove_if(paths_.begin(), paths_.end(),
+                                    [&heardKeys](const HostPath& hp) {
+                                        return heardKeys.count(hp.plugin + '\n' + hp.id) != 0u;
+                                    }),
+                     paths_.end());
     }
 
     // THE TRACKS THAT DID NOT REPORT THIS FRAME ARE GONE FROM THE STORE. Not
