@@ -82,6 +82,7 @@
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
+#include "gui/imgui_debug_policy.hpp"
 #include "gui/map_view.hpp"
 // WHY EVERY "nothing here" SENTENCE IN THIS FILE COMES FROM ONE PLACE. An empty
 // list from PluginUi or PluginRunner is not evidence about the disk - both skip
@@ -1608,6 +1609,32 @@ int AppWindow::run(int frames) {
         cascade::core::diagLogf("%s", why);
     }
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // DEAR IMGUI'S "PROGRAMMER ERROR" BOX STAYS OUT OF SHIPPED BUILDS (0.99.77). A US tester
+    // (2026-10-13, 0.99.75) had a red "Programmer error: 2 visible items with conflicting ID!" box
+    // open over the waterfall, outlining the "+ Save" keys of two TETRA sections - two loaded copies
+    // of one plugin, which the host resolves now. ImGui turns io.ConfigDebugHighlightIdConflicts ON
+    // by default and the box itself says to switch it off "in non-programmers builds", which is
+    // what this is. It stays ON in a Debug build and under the test hooks of a bounded run
+    // (FOXSDR_UI_CENSUS, FOXSDR_INPUT_SCRIPT), so a test can still surface a conflict: the frame loop
+    // notes `imgui:idconflict` in the census when ImGui reports one (it does so for an item the
+    // pointer is over), and the line below says which way this run went.
+    {
+        const char* inputScript = std::getenv("FOXSDR_INPUT_SCRIPT");
+#ifdef NDEBUG
+        constexpr bool kDebugBuild = false;
+#else
+        constexpr bool kDebugBuild = true;
+#endif
+        const char* idBoxWhy = cascade::gui::idConflictBoxReason(
+            kDebugBuild, frames, cascade::gui::census::enabled(),
+            inputScript != nullptr && *inputScript != '\0');
+        ImGui::GetIO().ConfigDebugHighlightIdConflicts = *idBoxWhy != '\0';
+        if (*idBoxWhy != '\0') {
+            cascade::core::diagLogf("imgui: ID-conflict box on (%s)", idBoxWhy);
+        } else {
+            cascade::core::diagLogf("imgui: ID-conflict box off (shipped build)");
+        }
+    }
     // TORN-OFF WINDOWS GET NO FRAME FROM THE OPERATING SYSTEM (0.78.0). From
     // 0.66.0 they had one - a native title bar with the desktop's own
     // minimise, maximise and close, added after a user could not find a way
@@ -2059,6 +2086,13 @@ int AppWindow::run(int frames) {
         ImGui_ImplGlfw_NewFrame();
         if (inputScriptActive_) { applyInputScript(rendered); }
         ImGui::NewFrame();
+        // DEAR IMGUI SAYS IT FOUND TWO ITEMS WITH ONE ID (0.99.77): the census records it, so a bounded
+        // run can assert there is none. ImGui sets this in NewFrame for the item the pointer was over
+        // last frame, and only while the highlighter is on (gui/imgui_debug_policy.hpp: a Debug build or
+        // a test hook), so a shipped run never reaches the note.
+        if (cascade::gui::census::enabled() && ImGui::GetCurrentContext()->DebugDrawIdConflictsId != 0) {
+            cascade::gui::census::note("imgui:idconflict");
+        }
         // Ctrl+=/Ctrl+-/Ctrl+0: read inside the frame (ImGui owns the
         // keyboard state here), applied on the NEXT pass through
         // applyPendingUiScale above - one frame later, same as every other

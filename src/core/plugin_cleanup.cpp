@@ -4,6 +4,7 @@
 #include "core/plugin_cleanup.hpp"
 
 #include "core/file_read.hpp"
+#include "core/plugin_run.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -65,9 +66,16 @@ std::vector<SupersededPlugin> supersededPlugins(const std::vector<LoadedPlugin>&
     for (const LoadedPlugin& old : records) {
         // Only what the host itself turned off as another copy of a plugin.
         if (old.loaded || old.name.empty() || old.supersededBy.empty()) { continue; }
+        // THE COPY THE HOST NAMED, and it has to be the same plugin: the same declared name, or the
+        // same run id (the file name without its version) for a plugin whose declared name changed
+        // between its files (0.99.77: "TETRA" in tetra-decoder-0.1.0, "TETRA Monitor (data only, no
+        // voice)" in tetra-decoder-0.1.2, which the host turns the older file off for). An empty run
+        // id is no id.
+        const std::string oldId = pluginRunId(pluginKey(old));
         const LoadedPlugin* kept = nullptr;
         for (const LoadedPlugin& r : records) {
-            if (r.loaded && r.name == old.name && sameFile(pluginKey(r), old.supersededBy)) {
+            if (!r.loaded || !sameFile(pluginKey(r), old.supersededBy)) { continue; }
+            if (r.name == old.name || (!oldId.empty() && pluginRunId(pluginKey(r)) == oldId)) {
                 kept = &r;
                 break;
             }

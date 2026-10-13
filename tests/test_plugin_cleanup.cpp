@@ -18,7 +18,9 @@
 //       start still finds it superseded; a queued name that has since become
 //       the newest copy is let go untouched;
 //   [7] one update cleans up its own plugin and nobody else's;
-//   [8] the queue never names anything outside the plugins directory.
+//   [8] the queue never names anything outside the plugins directory;
+//   [11] (0.99.77) the old copy of a plugin whose DECLARED NAME changed between two files is
+//       an old copy the clean-up may remove, as one of an unchanged name is.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_cleanup.hpp"
@@ -493,6 +495,61 @@ int main() {
         CHECK(cascade::core::removeOrphanedPlugin(od.string(), mod("ELSEWHERE"), orecs, omanifest, {},
                                                   spy, err));
         CHECK(handed == mod("elsewhere"));
+    }
+
+    // --- [11] A RENAMED PLUGIN'S OLD COPY (0.99.77) -------------------------------------------
+    //
+    // A US tester (2026-10-13): two TETRA sections in the DECODE bank, "TETRA" and "TETRA Monitor
+    // (data only, no voice)" - the plugin's declared name changed between 0.1.0 and 0.1.1, and
+    // the host used to load both files because it grouped by declared name alone. The host now
+    // turns the older file off as another copy of the newer whatever the two call themselves
+    // (they share the run id the file names carry), and the clean-up has to count it: the copy
+    // that stays is found by the file the host named, not by an equal declared name.
+    {
+        const std::string kOld = "TETRA";
+        const std::string kNew = "TETRA Monitor (data only, no voice)";
+        const std::string oldFile = mod("tetra-decoder-0.1.0-abi3-win-x64");
+        const std::string newFile = mod("tetra-decoder-0.1.2-abi3-win-x64");
+        const fs::path d = freshDir("renamed", {oldFile, newFile});
+
+        // The records exactly as the host leaves them: through the real policy, not built by hand.
+        std::vector<LoadedPlugin> scan = {rec(d, oldFile, kOld, "0.1.0", true),
+                                          rec(d, newFile, kNew, "0.1.2", true)};
+        CHECK(cascade::core::resolveDuplicatePlugins(scan) == 1u);
+        CHECK(!scan[0].loaded && scan[0].supersededBy == newFile);
+
+        // Hand-copied 0.1.0, 0.1.2 from the store: the old file may go, and the answer names both.
+        const std::vector<InstalledPlugin> manifest = {installed("tetra-decoder", newFile, "0.1.2")};
+        const auto s = cascade::core::supersededPlugins(scan, manifest);
+        CHECK(s.size() == 1u);
+        CHECK(!s.empty() && s[0].file == oldFile && s[0].keptFile == newFile);
+        CHECK(!s.empty() && s[0].name == kOld && s[0].version == "0.1.0" && s[0].keptVersion == "0.1.2");
+        // ...and the same answer from records as a scan hands them over after the host has done it.
+        const std::vector<LoadedPlugin> byHand = {
+            rec(d, oldFile, kOld, "0.1.0", false, newFile), rec(d, newFile, kNew, "0.1.2", true)};
+        CHECK(files(cascade::core::supersededPlugins(byHand, manifest)) == (std::set<std::string>{oldFile}));
+        // The update of that one plugin takes it with it, and nobody else's.
+        CHECK(cascade::core::supersededBy(s, newFile).size() == 1u);
+        CHECK(cascade::core::supersededBy(s, mod("other-1.0.0")).empty());
+        const auto res = cascade::core::removeSupersededPlugins(d.string(), s, remover);
+        CHECK(res.removed.size() == 1u && contains(res.removed, oldFile));
+        CHECK(!exists(d, oldFile));
+        CHECK(exists(d, newFile));  // THE LOADED, NEWEST COPY STAYS
+
+        // The rules of [4] and [5] hold across a rename as they do within one name: the copy that
+        // stays must be a catalogue copy, the file to go must not be one the store manages, and a
+        // "kept" file of another plugin entirely (another name, another run id) is no kept copy.
+        CHECK(cascade::core::supersededPlugins(byHand, {}).empty());
+        CHECK(cascade::core::supersededPlugins(
+                  byHand, {installed("tetra-decoder", newFile, "0.1.2"),
+                           installed("tetra-decoder-old", oldFile, "0.1.0")})
+                  .empty());
+        const std::vector<LoadedPlugin> strangers = {
+            rec(d, oldFile, kOld, "0.1.0", false, mod("unrelated-9.9.9")),
+            rec(d, mod("unrelated-9.9.9"), "Unrelated", "9.9.9", true)};
+        CHECK(cascade::core::supersededPlugins(
+                  strangers, {installed("unrelated", mod("unrelated-9.9.9"), "9.9.9")})
+                  .empty());
     }
 
     const int rc = testSummary("test_plugin_cleanup");

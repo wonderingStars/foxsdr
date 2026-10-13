@@ -16,7 +16,10 @@
 //
 //   - only a copy the host itself turned off as ANOTHER COPY of a loaded
 //     plugin is a candidate (LoadedPlugin::supersededBy): a file that failed
-//     to load, or that is the only copy, is never touched;
+//     to load, or that is the only copy, is never touched. ANOTHER COPY means
+//     the same declared name, or the same run id (the file name without its
+//     version) when the plugin's declared name changed between the two files
+//     (0.99.77: "TETRA" and "TETRA Monitor (data only, no voice)");
 //   - the copy that stays must be LOADED and STRICTLY NEWER (the host's own
 //     comparator, PluginRepo::compareVersions) - never the loaded copy, never
 //     the newest, never one of two copies of the same version;

@@ -2715,6 +2715,28 @@ address) is on screen under the store's top bar, not here.
   with Remove.)`. The loader decides it from the install records (`source`), whatever the
   versions; the Fitted modules window shows the same words on the module's row.
 
+### Two files of one plugin under two names, and ImGui's ID-conflict box (0.99.77)
+
+A plugin whose declared name changed between two of its files (a US tester had the TETRA decoder's
+0.1.0 file, "TETRA", beside its 0.1.2 file, "TETRA Monitor (data only, no voice)") used to load both,
+because the host grouped modules by declared name alone. The file name without its version is the
+plugin's run id (`tetra-decoder` for both) and the host now treats two loaded modules with one run id
+as one plugin. Nothing new is written for it; the lines that were already there carry it:
+
+- **At a plugin scan, `warn`**, the existing `plugin: NOT loaded <file> (<reason>)` line for the older
+  file, whose reason names the name of the file that runs: `plugin: NOT loaded
+  tetra-decoder-0.1.0-abi3-win-x64.dll (Ignored: another copy of "TETRA Monitor (data only, no voice)"
+  is installed. Version 0.1.2 in tetra-decoder-0.1.2-abi3-win-x64.dll is loaded; ...` (the log cuts a
+  line at its width; the Fitted modules row carries the whole sentence). For a plugin site's module
+  whose file name is an official plugin's the reason reads `Not loaded: its file name is the official
+  plugin "<name>". ...`.
+- **At start-up, `info`**, one new line, `imgui: ID-conflict box off (shipped build)`, or `imgui:
+  ID-conflict box on (a debug build)` / `on (a test hook is up)`. Dear ImGui 1.92.8 draws a red
+  "Programmer error: N visible items with conflicting ID!" box over the picture by default; it is off in
+  a shipped run and on in a Debug build and in a bounded `--frames` run with `FOXSDR_UI_CENSUS` or
+  `FOXSDR_INPUT_SCRIPT` set, where the census also records `imgui:idconflict` for a frame in which ImGui
+  reports one (it does so for the item the pointer is over).
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it

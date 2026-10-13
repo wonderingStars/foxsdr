@@ -363,7 +363,10 @@ A module installed from a site also never takes a *declared name* from an offici
 loads one module per name the plugin's own binary declares, normally the highest version, but when the
 FoxSDR catalogue's plugin holds the name the site's module is not loaded whatever its version, and its
 row in the Fitted modules window (and the log) says "Not loaded: it declares the same name as the
-official plugin ...". Nothing is deleted; **REMOVE** takes the file away.
+official plugin ...". Nothing is deleted; **REMOVE** takes the file away. The same holds for the
+file's name: a site's module whose file name is an official plugin's (the name before the version,
+`tetra-decoder` in `tetra-decoder-0.1.2-abi3-win-x64.dll`) is not loaded either, and says "Not loaded: its
+file name is the official plugin ...".
 
 Everything a site's plugin goes through is what any plugin goes through - https only, the byte
 cap, the exact ABI match, the sha256 the site published, no redirect to another host - and a site's
@@ -395,7 +398,13 @@ host only) or, for a module the host refused, the host's own reason; at the righ
 **FED**, **IDLE**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED** or **REFUSED**, with its lamp
 - then **STOP** (or **START**: a stopped module and an idle one both offer it) and **REMOVE**, which
 asks twice: **CONFIRM** appears beside it for five seconds. **CLEAN UP OLD VERSIONS (n)** is at the
-foot when an update left copies behind. A click on a module's name opens its **page**: its header
+foot when an update left copies behind. One version of a plugin runs, never two: an older file of a
+plugin that is still in the folder reads **REFUSED** with "Ignored: another copy of ... is installed",
+and that holds when the plugin's own name changed between the two files (0.99.77: a US tester had both
+the "TETRA" file and the "TETRA Monitor (data only, no voice)" file, and the DECODE bank listed the
+plugin twice). Two files are one plugin when their names are the same *or* their file names are the
+same before the version; the higher version runs, and the older file is one **CLEAN UP OLD VERSIONS**
+counts. A click on a module's name opens its **page**: its header
 with the same **STOP** (or **START**) key, then **ON THIS MACHINE** - the state with its lamp, what
 the module reaches, the sentence that explains the state (for a refused module, why it is not
 running, in the host's words), the **Keep running** tick (see **When a plugin runs**, below), the

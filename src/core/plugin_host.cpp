@@ -1083,11 +1083,36 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         }
         return false;
     };
+    // THE RUN ID (0.99.77), which a record's FILE NAME carries and its declared name does not: the
+    // file name without its version ("tetra-decoder-0.1.2-abi3-win-x64.dll" -> "tetra-decoder"),
+    // pluginRunId(), the key the DECODE bank scopes a section's widgets by and the stop set, the
+    // saved presets and the dormancy clock are kept under. Two loaded files with one run id are one
+    // plugin to every one of those, whatever the descriptors inside them say. EMPTY for a record
+    // with no path, and an empty id matches nothing (as everywhere else it is used).
+    const auto runIdOf = [](const LoadedPlugin& r) { return pluginRunId(pluginKey(r)); };
+    constexpr std::size_t kNone = static_cast<std::size_t>(-1);
+    // The first LOADED Official record of that run id, or kNone: the same question heldByOfficial
+    // asks of the declared name, asked of the file name.
+    const auto officialWithRunId = [&records, &runIdOf](const std::string& id) {
+        if (id.empty()) { return kNone; }
+        for (std::size_t i = 0; i < records.size(); ++i) {
+            const LoadedPlugin& o = records[i];
+            if (o.loaded && !o.name.empty() && o.origin == PluginOrigin::Official && runIdOf(o) == id) {
+                return i;
+            }
+        }
+        return kNone;
+    };
     // Decided HERE, before pass two turns anything off: an official record that pass two
     // turns off as an older copy of an unrecorded newer one is still the reason a site's
     // module of that name does not run.
+    //   1  a site's module that declares an Official's NAME;
+    //   2  a site's module whose FILE NAME is an Official's run id (0.99.77): the file name is as
+    //      much the publisher's to write as the declared name, and the version rule alone would
+    //      let a site's `tetra-decoder-9.9.9` switch an official `tetra-decoder-0.1.2` off.
     std::vector<char> lostToOfficial(records.size(), 0);
-    std::vector<std::pair<std::string, std::size_t>> winners;  // id -> index
+    std::vector<std::size_t> heldBy(records.size(), kNone);  // for 2: the Official record
+    std::vector<std::pair<std::string, std::size_t>> winners;  // declared name -> index
     for (std::size_t i = 0; i < records.size(); ++i) {
         const LoadedPlugin& r = records[i];
         if (!r.loaded || r.name.empty()) {
@@ -1096,6 +1121,14 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         if (r.origin == PluginOrigin::Site && heldByOfficial(r.name)) {
             lostToOfficial[i] = 1;
             continue;  // it has already lost: pass two turns it off, whatever its version
+        }
+        if (r.origin == PluginOrigin::Site) {
+            const std::size_t o = officialWithRunId(runIdOf(r));
+            if (o != kNone) {
+                lostToOfficial[i] = 2;
+                heldBy[i] = o;
+                continue;
+            }
         }
         bool seen = false;
         for (std::pair<std::string, std::size_t>& w : winners) {
@@ -1116,20 +1149,82 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         }
     }
 
-    // Pass two: turn off every loaded record that is not its id's winner.
+    // WHICH RECORD EACH ONE YIELDS TO: itself when it stays. A record that lost on its declared name
+    // points at that name's winner; a site's module that lost to an Official on the file name points
+    // at that Official. Pass one-b may then point a name's winner at a better one by run id, so the
+    // answer for a record is the END of the chain (`finalOf`), never the first link.
+    std::vector<std::size_t> yields(records.size());
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        yields[i] = i;
+        const LoadedPlugin& r = records[i];
+        if (!r.loaded || r.name.empty()) {
+            continue;
+        }
+        if (lostToOfficial[i] == 2) {
+            yields[i] = heldBy[i];
+            continue;
+        }
+        for (const std::pair<std::string, std::size_t>& w : winners) {
+            if (w.first == r.name) {
+                yields[i] = w.second;
+                break;
+            }
+        }
+    }
+
+    // Pass one-b (0.99.77): ONE RUN ID IS ONE PLUGIN, WHATEVER IT CALLS ITSELF. The name winners
+    // that are left share a run id when they are two files of one plugin whose declared name
+    // changed between them (the tester's TETRA: "TETRA" in tetra-decoder-0.1.0, "TETRA Monitor
+    // (data only, no voice)" in tetra-decoder-0.1.2), and both stayed loaded because the pass above
+    // looks at names alone. The same rule decides: the HIGHEST version wins, STRICTLY, so an equal
+    // version leaves the incumbent and the FIRST record wins the tie (walked in record order, which
+    // scan() sorted by path). A name's losers are not walked: they are off already, and they follow
+    // their winner's chain. Two different plugins never meet here - different names AND different
+    // run ids - and a record with no run id meets nothing.
+    std::vector<std::pair<std::string, std::size_t>> idWinners;  // run id -> index
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        const LoadedPlugin& r = records[i];
+        if (!r.loaded || r.name.empty() || yields[i] != i) {
+            continue;
+        }
+        const std::string id = runIdOf(r);
+        if (id.empty()) {
+            continue;
+        }
+        bool seen = false;
+        for (std::pair<std::string, std::size_t>& w : idWinners) {
+            if (w.first != id) {
+                continue;
+            }
+            seen = true;
+            if (PluginRepo::compareVersions(r.version, records[w.second].version) > 0) {
+                yields[w.second] = i;  // the incumbent yields to the newer file
+                w.second = i;
+            } else {
+                yields[i] = w.second;
+            }
+            break;
+        }
+        if (!seen) {
+            idWinners.emplace_back(id, i);
+        }
+    }
+    // The end of a record's chain. Each link points at a record that was a winner when it was set
+    // and only ever moves to a higher version, so the chain is short and cannot loop; the bound is
+    // for a reader, not for a case.
+    const auto finalOf = [&yields](std::size_t i) {
+        for (std::size_t hops = 0; yields[i] != i && hops < yields.size(); ++hops) { i = yields[i]; }
+        return i;
+    };
+
+    // Pass two: turn off every loaded record that is not its plugin's winner.
     std::size_t skipped = 0;
     for (std::size_t i = 0; i < records.size(); ++i) {
         LoadedPlugin& r = records[i];
         if (!r.loaded || r.name.empty()) {
             continue;
         }
-        std::size_t keep = i;
-        for (const std::pair<std::string, std::size_t>& w : winners) {
-            if (w.first == r.name) {
-                keep = w.second;
-                break;
-            }
-        }
+        const std::size_t keep = finalOf(i);
         if (keep == i) {
             continue;
         }
@@ -1139,7 +1234,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         // this is, which file is running instead, and what the user may do
         // about the file in front of them. The Plugins section prints this
         // under the file's own name, and offers Remove on the same row.
-        if (lostToOfficial[i] != 0) {
+        if (lostToOfficial[i] == 1) {
             // A SITE'S MODULE THAT LOST A NAME TO AN OFFICIAL ONE says that, in those words
             // (0.99.74): it is not an old copy of anything, and "another copy is installed"
             // would send the user looking for a version problem that is not there.
@@ -1148,8 +1243,19 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
                       " is loaded instead; this file, version " + r.version +
                       ", was installed from a plugin site and is not running. It can be deleted "
                       "with Remove.";
+        } else if (lostToOfficial[i] == 2) {
+            // ...and one whose FILE NAME is an official plugin's (0.99.77), which says that.
+            r.error = "Not loaded: its file name is the official plugin \"" + records[heldBy[i]].name +
+                      "\". Version " + kept.version + " in " + pluginKey(kept) +
+                      " is loaded instead; this file, version " + r.version +
+                      ", was installed from a plugin site and is not running. It can be deleted "
+                      "with Remove.";
         } else {
-            r.error = "Ignored: another copy of \"" + r.name + "\" is installed. Version " +
+            // NAMES THE WINNER, not this file (0.99.77): for two files of one name they are the
+            // same word, and for a plugin whose declared name changed between two files it is the
+            // name the user sees on the section that stays ("TETRA Monitor (data only, no voice)"
+            // for the old "TETRA" file, whose own name is already on its row above this).
+            r.error = "Ignored: another copy of \"" + kept.name + "\" is installed. Version " +
                       kept.version + " in " + pluginKey(kept) + " is loaded; this file is " +
                       r.version + " and is not running. It can be deleted with Remove.";
         }

@@ -286,6 +286,22 @@ struct LoadedPlugin {
 //   is precisely what changes between two copies of one plugin. Compared
 //   exactly, byte for byte.
 //
+//   ...AND THE RUN ID (0.99.77). The declared name can change between two
+//   files of one plugin - a US tester had "TETRA" in tetra-decoder-0.1.0 and
+//   "TETRA Monitor (data only, no voice)" in tetra-decoder-0.1.2, both
+//   loaded, and the DECODE bank drew two sections under one widget-id scope.
+//   The file name without its version (pluginRunId(pluginKey(r)),
+//   "tetra-decoder") is the key the bank scopes by and the stop set, the
+//   saved presets and the dormancy clock are kept under, so two LOADED records
+//   with one run id are ONE plugin to all of those whatever each declares. The
+//   rule is applied to what the name pass leaves: the highest version of those
+//   candidates that share a run id wins (same comparator, same first-record
+//   tie-break), the others are turned off with the same words - naming the
+//   WINNER's name - and `supersededBy` naming the winner's file, which is what
+//   the clean-up (core/plugin_cleanup.hpp) finds the copy that stays by. Two
+//   records that differ in name AND in run id are two plugins and never meet;
+//   a record with no path has no run id, and an empty run id matches nothing.
+//
 //   THE WINNER is the HIGHEST VERSION, ordered by PluginRepo::compareVersions
 //   - the catalogue's own comparator, reused rather than reimplemented so the
 //   host and the update check can never disagree about which of two versions
@@ -313,7 +329,10 @@ struct LoadedPlugin {
 //   unchanged: two Site modules of one name compete by version, an Unrecorded
 //   module (hand-copied, no record) competes by version against anything, and
 //   with no origins given (every record Unrecorded) the policy is exactly the
-//   one above.
+//   one above. The FILE NAME is the publisher's to write as much as the
+//   declared name is (0.99.77), so the same holds for the run id: a Site record
+//   whose run id an Official record holds is turned off whatever its version,
+//   with "Not loaded: its file name is the official plugin ...".
 //
 // DELETES NOTHING. It does not unlink, rename, move or truncate any file, and
 // it does not close a module either - it only marks records, leaving

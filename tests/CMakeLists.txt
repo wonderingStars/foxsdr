@@ -295,6 +295,14 @@ foreach(src ${CASCADE_TESTS})
         add_dependencies(${name} rescan_probe_a rescan_probe_a_newer)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
                  "$<TARGET_FILE:rescan_probe_a_newer>")
+    elseif(name STREQUAL "test_plugin_dup_app")
+        # Runs the real cascade.exe (built first) with two files of ONE plugin whose declared name
+        # differs - probe b 1.0.0 and probe a 1.1.0, copied under file names that share a run id - in a
+        # scratch plugins folder (0.99.77): one section in the DECODE bank, the older file REFUSED in
+        # Fitted modules, the clean-up counting it, and no Dear ImGui ID-conflict report.
+        add_dependencies(${name} rescan_probe_b rescan_probe_a_newer cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_b>"
+                 "$<TARGET_FILE:rescan_probe_a_newer>")
     elseif(name STREQUAL "test_slow_frames_app")
         # Runs the real cascade.exe (built first) and, in process, a real plugin
         # reload against one of the probe modules above.
@@ -466,6 +474,11 @@ set_tests_properties(test_row_keys_app PROPERTIES TIMEOUT 600)
 # interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given
 # the generous bound its siblings are.
 set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
+# The duplicate-plugin test starts the real application five times (the bank's layout, a pointer sweep of
+# 110 frames, the Fitted modules window with and without an install record, and a run with no hook), 12 to
+# 110 frames each. The Linux runners are half this desktop's speed, so it is given the generous bound its
+# siblings are.
+set_tests_properties(test_plugin_dup_app PROPERTIES TIMEOUT 600)
 # The BROWSE-key test starts the real application five times (a layout run, the press, its control,
 # the cancelled press and a relaunch), 33 to 46 frames each. The Linux runners are half this
 # desktop's speed, so it is given a bound well past the loop's two minutes.

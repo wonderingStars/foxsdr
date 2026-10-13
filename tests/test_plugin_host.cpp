@@ -42,6 +42,7 @@
 #include "core/plugin_host.hpp"
 
 #include "core/leak_on_purpose.hpp"
+#include "core/plugin_run.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2129,6 +2130,223 @@ void testSiteModuleNeverTakesAnOfficialName() {
     fs::remove_all(d, ec);
 }
 
+// TWO FILES OF ONE PLUGIN WHOSE DECLARED NAME CHANGED BETWEEN THEM ARE STILL ONE PLUGIN (0.99.77).
+//
+// A US tester (2026-10-13, 0.99.75): the DECODE bank's "Turn on and off plugins" list showed TWO
+// TETRA sections, "TETRA" and "TETRA Monitor (data only, no voice)", and Dear ImGui's red
+// "Programmer error: 2 visible items with conflicting ID!" box was open over the waterfall. The
+// TETRA plugin's descriptor name was "TETRA" at 0.1.0 and became "TETRA Monitor (data only, no
+// voice)" at 0.1.1; a user who put 0.1.0 in by hand and later took 0.1.2 from the store has both
+// files. The host grouped loaded records by declared NAME alone, so both stayed loaded. The file
+// name carries the plugin's run id (pluginRunId: the name without its version, "tetra-decoder"
+// for both), which is what the DECODE bank scopes a section's widgets by, what the stop set, the
+// presets and the dormancy clock are keyed on - so the two sections had identical widget ids, and
+// the host treated two running modules as one plugin. A second loaded record whose run id is a
+// winner's is now another copy of it, whatever it calls itself.
+void testRenamedPluginOldCopyIsAnotherCopy() {
+    using cascade::core::PluginOrigin;
+    const std::string kOldName = "TETRA";
+    const std::string kNewName = "TETRA Monitor (data only, no voice)";
+    const fs::path d = tmpDir("dup_renamed");
+    const std::vector<std::string> names = {mod("tetra-decoder-0.1.0-abi3-win-x64"),
+                                            mod("tetra-decoder-0.1.2-abi3-win-x64")};
+    // Every file any case below names, staged BEFORE the snapshot so the no-deletion check at the end
+    // compares the same directory.
+    stageFiles(d, names);
+    stageFiles(d, {mod("tetra-decoder-0.10.0-abi3-win-x64"), mod("tetra-decoder-0.9.0-abi3-win-x64"),
+                   mod("tetra-decoder-0.1.1-abi3-win-x64"), mod("chain-p-1.0.0"), mod("chain-q-2.0.0"),
+                   mod("chain-q-3.0.0"), mod("thing-a-1.0.0"), mod("thing-b-2.0.0"),
+                   mod("tetra-decoder-1.0.0"), mod("tetra-decoder-extra-9.0.0"), mod("tetra-1.0.0")});
+    const auto before = snapshotDir(d);
+
+    // THE TESTER'S CASE: the older file (listed first, as the sorted scan lists it) has the old name.
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], kOldName.c_str(), "0.1.0"),
+                                          loadedRec(d, names[1], kNewName.c_str(), "0.1.2")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(loadedIn(recs) == 1);
+        CHECK(!recs[0].loaded);
+        CHECK(recs[1].loaded);
+        CHECK(recs[1].error.empty());
+        CHECK(recs[1].supersededBy.empty());
+        CHECK(recs[0].supersededBy == names[1]);
+        CHECK(recs[0].iqDecoder == nullptr);  // its borrowed table goes with it
+        CHECK(recs[1].iqDecoder != nullptr);
+        // The existing "another copy" wording, naming the WINNER's name (the old file's own row
+        // already shows its name), the file that runs, both versions, and what the user can do.
+        const std::string& why = recs[0].error;
+        CHECK(contains(why, ("Ignored: another copy of \"" + kNewName + "\" is installed.").c_str()));
+        CHECK(contains(why, ("Version 0.1.2 in " + names[1] + " is loaded; this file is 0.1.0 and is not running.").c_str()));
+        CHECK(contains(why, "It can be deleted with Remove."));
+        CHECK(!contains(why, "official plugin"));
+        std::printf("  renamed-copy skip reason: %s\n", why.c_str());
+    }
+    // THE SAME WINNER whichever order the records arrive in.
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[1], kNewName.c_str(), "0.1.2"),
+                                          loadedRec(d, names[0], kOldName.c_str(), "0.1.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded && !recs[1].loaded);
+        CHECK(recs[1].supersededBy == names[1]);
+        CHECK(contains(recs[1].error, kNewName.c_str()));
+    }
+    // THE NEWER NAME IS NOT WHAT WINS: the version is. A rename the other way (the NEWER file keeps
+    // the old name) keeps the newer file, and it is again one section.
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], kNewName.c_str(), "0.1.0"),
+                                          loadedRec(d, names[1], kOldName.c_str(), "0.1.2")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+        CHECK(contains(recs[0].error, ("another copy of \"" + kOldName + "\"").c_str()));
+    }
+    // The version rule is numeric across names too: 0.10.0 beats 0.9.0 though "0.9.0" sorts later as text.
+    {
+        const std::vector<std::string> nm = {mod("tetra-decoder-0.10.0-abi3-win-x64"),
+                                             mod("tetra-decoder-0.9.0-abi3-win-x64")};
+        std::vector<LoadedPlugin> recs = {loadedRec(d, nm[0], kNewName.c_str(), "0.10.0"),
+                                          loadedRec(d, nm[1], kOldName.c_str(), "0.9.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded && !recs[1].loaded);
+    }
+    // EQUAL VERSIONS: the first record wins, as for a shared name, and reversing the list keeps the
+    // same FILE, not the same index.
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[0], kOldName.c_str(), "0.1.2"),
+                                          loadedRec(d, names[1], kNewName.c_str(), "0.1.2")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded && !recs[1].loaded);
+        CHECK(recs[1].supersededBy == names[0]);
+    }
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[1], kNewName.c_str(), "0.1.2"),
+                                          loadedRec(d, names[0], kOldName.c_str(), "0.1.2")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded && !recs[1].loaded);
+        CHECK(recs[1].supersededBy == names[1]);
+    }
+
+    // THREE FILES, TWO RENAMES (0.1.0 "TETRA", 0.1.1 and 0.1.2 "TETRA Monitor ..."): the name pass
+    // leaves two candidates, the id pass picks 0.1.2, and BOTH losers name the file that runs.
+    {
+        const std::vector<std::string> nm = {mod("tetra-decoder-0.1.0-abi3-win-x64"),
+                                             mod("tetra-decoder-0.1.1-abi3-win-x64"),
+                                             mod("tetra-decoder-0.1.2-abi3-win-x64")};
+        std::vector<LoadedPlugin> recs = {loadedRec(d, nm[0], kOldName.c_str(), "0.1.0"),
+                                          loadedRec(d, nm[1], kNewName.c_str(), "0.1.1"),
+                                          loadedRec(d, nm[2], kNewName.c_str(), "0.1.2")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 2);
+        CHECK(loadedIn(recs) == 1);
+        CHECK(!recs[0].loaded && !recs[1].loaded && recs[2].loaded);
+        CHECK(recs[0].supersededBy == nm[2]);
+        CHECK(recs[1].supersededBy == nm[2]);
+        CHECK(contains(recs[0].error, ("Version 0.1.2 in " + nm[2]).c_str()));
+        CHECK(contains(recs[1].error, ("Version 0.1.2 in " + nm[2]).c_str()));
+    }
+    // A CHAIN THAT CROSSES BOTH GROUPINGS: A and B share a name, B and C share a run id, C is the
+    // newest. A yields to B by name and B to C by id, so A's answer is C, not the file that was
+    // itself switched off.
+    {
+        const std::vector<std::string> nm = {mod("chain-p-1.0.0"), mod("chain-q-2.0.0"), mod("chain-q-3.0.0")};
+        std::vector<LoadedPlugin> recs = {loadedRec(d, nm[0], "Chain X", "1.0.0"),
+                                          loadedRec(d, nm[1], "Chain X", "2.0.0"),
+                                          loadedRec(d, nm[2], "Chain Y", "3.0.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 2);
+        CHECK(!recs[0].loaded && !recs[1].loaded && recs[2].loaded);
+        CHECK(recs[0].supersededBy == nm[2]);
+        CHECK(recs[1].supersededBy == nm[2]);
+        CHECK(contains(recs[0].error, "another copy of \"Chain Y\""));
+    }
+
+    // TWO IDS, ONE NAME: still resolved by name, as it always was (the run ids differ).
+    {
+        const std::vector<std::string> nm = {mod("thing-a-1.0.0"), mod("thing-b-2.0.0")};
+        std::vector<LoadedPlugin> recs = {loadedRec(d, nm[0], "Thing", "1.0.0"),
+                                          loadedRec(d, nm[1], "Thing", "2.0.0")};
+        CHECK(cascade::core::pluginRunId(nm[0]) != cascade::core::pluginRunId(nm[1]));
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+        CHECK(contains(recs[0].error, "another copy of \"Thing\""));
+    }
+    // TWO DIFFERENT PLUGINS NEVER COLLAPSE: different names AND different run ids, including a stem
+    // that merely starts with the other's ("tetra-decoder" and "tetra-decoder-extra").
+    {
+        const std::vector<std::string> nm = {mod("tetra-decoder-1.0.0"), mod("tetra-decoder-extra-9.0.0"),
+                                             mod("tetra-1.0.0")};
+        std::vector<LoadedPlugin> recs = {loadedRec(d, nm[0], "TETRA", "1.0.0"),
+                                          loadedRec(d, nm[1], "TETRA Extra", "9.0.0"),
+                                          loadedRec(d, nm[2], "TETRA Lite", "1.0.0")};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+        CHECK(loadedIn(recs) == 3);
+        for (const LoadedPlugin& r : recs) { CHECK(r.error.empty() && r.supersededBy.empty()); }
+    }
+    // AN EMPTY ID MATCHES NOTHING: records with no path have no run id, so two of them with different
+    // names are two plugins (as the stop set and the presets already treat an empty key).
+    {
+        LoadedPlugin a = loadedRec(d, "x", "No Path A", "1.0.0");
+        LoadedPlugin b = loadedRec(d, "x", "No Path B", "2.0.0");
+        a.path.clear();
+        b.path.clear();
+        std::vector<LoadedPlugin> recs = {a, b};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+        CHECK(loadedIn(recs) == 2);
+    }
+    // A FILE THAT DID NOT LOAD has no descriptor and no id, whatever its file name: it is neither a
+    // winner nor a loser, and the loaded copy beside it keeps running.
+    {
+        std::vector<LoadedPlugin> recs = {loadedRec(d, names[1], kNewName.c_str(), "0.1.2"),
+                                          loadedRec(d, names[0], kOldName.c_str(), "0.1.0")};
+        recs[1].loaded = false;
+        recs[1].name.clear();
+        recs[1].iqDecoder = nullptr;
+        recs[1].error = "built for another plugin ABI";
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 0);
+        CHECK(recs[0].loaded);
+        CHECK(recs[1].error == "built for another plugin ABI");
+    }
+
+    // THE OFFICIAL-VERSUS-SITE RULE HOLDS ON THE FILE NAME TOO. A plugin site's module that shares an
+    // OFFICIAL module's run id (its file name is the same stem) never switches it off by the higher
+    // version it declares - the same reason a site's module never takes an official module's declared
+    // name. Its reason says so in other words than a version problem.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], kOldName.c_str(), "0.1.0", PluginOrigin::Official),
+                                          originRec(d, names[1], kNewName.c_str(), "0.1.2", PluginOrigin::Site)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(recs[0].loaded && recs[0].error.empty());
+        CHECK(!recs[1].loaded);
+        CHECK(recs[1].supersededBy == names[0]);
+        CHECK(contains(recs[1].error, "Not loaded: its file name is the official plugin"));
+        CHECK(contains(recs[1].error, names[0].c_str()));
+        CHECK(contains(recs[1].error, "plugin site"));
+        CHECK(!contains(recs[1].error, "Ignored: another copy"));
+    }
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[1], kNewName.c_str(), "0.1.2", PluginOrigin::Site),
+                                          originRec(d, names[0], kOldName.c_str(), "0.1.0", PluginOrigin::Official)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+    }
+    // ...while the version rule decides everywhere else: an official file against a hand-copied one,
+    // and two site files.
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], kOldName.c_str(), "0.1.0", PluginOrigin::Official),
+                                          originRec(d, names[1], kNewName.c_str(), "0.1.2", PluginOrigin::Unrecorded)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+        CHECK(contains(recs[0].error, "Ignored: another copy"));
+    }
+    {
+        std::vector<LoadedPlugin> recs = {originRec(d, names[0], kOldName.c_str(), "0.1.0", PluginOrigin::Site),
+                                          originRec(d, names[1], kNewName.c_str(), "0.1.2", PluginOrigin::Site)};
+        CHECK(cascade::core::resolveDuplicatePlugins(recs) == 1);
+        CHECK(!recs[0].loaded && recs[1].loaded);
+    }
+
+    CHECK(snapshotDir(d) == before);  // and nothing is deleted
+    std::error_code ec;
+    fs::remove_all(d, ec);
+}
+
 // THE OWNER'S RULING, pinned against the code path the product runs.
 //
 // scan() is given a directory holding a duplicate-looking pair plus unrelated
@@ -2196,6 +2414,7 @@ int main() {
     testDuplicateTieBreakIsDeterministic();
     testDuplicateIgnoresRefusedRecords();
     testSiteModuleNeverTakesAnOfficialName();
+    testRenamedPluginOldCopyIsAnotherCopy();
     testScanRemovesNothingFromDisk();
     testRealPluginDirs();
     return testSummary("test_plugin_host");
