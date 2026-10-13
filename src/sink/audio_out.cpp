@@ -182,6 +182,12 @@ std::string AudioOut::openedDeviceName() const {
     return openedName_;
 }
 
+void AudioOut::refreshOpenedDeviceName(std::string& lastGood) const {
+    std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
+    if (!lk.owns_lock() || openedName_.empty()) { return; }
+    lastGood.assign(openedName_);
+}
+
 bool AudioOut::streamAlive() const {
     // AN OPEN IN PROGRESS IS NOT A DEAD STREAM, and answering false here would
     // be worse than useless: the audio watchdog reacts to false by opening the

@@ -1,17 +1,21 @@
 // test_engine_publish_alloc.cpp - the engine's per-pass publish takes no heap
-// allocation for the transmitter's error text (engine stage 4, review F8).
+// allocation (engine stage 4, review F8).
 //
 // Engine::fillPublishedState runs once a control pass, and the tree's rule is
 // that a pass allocates nothing. The transmit page's error line (API 0.3 state
 // 8.1, FoxReceiverState::txError) used to be filled through
 // Transmitter::lastError(), which returns a std::string by value: a copy, and a
 // heap allocation whenever the text is longer than the small-string buffer
-// (every real error sentence is). Held here by counting the calling thread's
+// (every real error sentence is); the audio sink's name was read the same way
+// (AudioOut::openedDeviceName()). Held here by counting the calling thread's
 // global operator new around the publish:
 //
 //   A  the publish allocates exactly as often with a 300-character error as
-//      with none (the text adds nothing), and what it publishes is the error,
-//      cut to the field on a character boundary, as it always was
+//      with none (the text adds nothing) and not at all; what it publishes is
+//      the error, cut to the field on a character boundary, as it always was,
+//      and the audio sink's name
+//   A2 AudioOut::refreshOpenedDeviceName: the last good name stands when the
+//      sink has none to offer
 //   B  Transmitter::lastErrorInto: the whole text when it fits, a cut that
 //      never splits a UTF-8 character when it does not, a NUL always, and no
 //      write at all with no room
@@ -27,6 +31,7 @@
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_test_env.hpp"
+#include "sink/audio_out.hpp"
 #include "test_check.hpp"
 
 // --- the counter: the calling thread's allocations, while armed -----------------
@@ -84,6 +89,10 @@ struct AppWindowTestAccess {
     // The radio refuses a retune with the sink's current text: that text is
     // now the Transmitter's last error.
     static void provokeError(cascade::engine::Engine& e) { (void)e.transmitter_.setFrequencyHz(100.0e6); }
+    static std::string sinkName(cascade::engine::Engine& e) { return e.pipeline_.audio().openedDeviceName(); }
+    static void refreshSink(cascade::engine::Engine& e, std::string& lastGood) {
+        e.pipeline_.audio().refreshOpenedDeviceName(lastGood);
+    }
     static void errorInto(cascade::engine::Engine& e, char* out, std::size_t cap) {
         e.transmitter_.lastErrorInto(out, cap);
     }
@@ -132,6 +141,11 @@ int main() {
     std::printf("A: %d publishes, heap allocations with no error text: %ld, with a %zu-character one: %ld\n",
                 kPublishes, quiet, text.size(), loud);
     CHECK(loud == quiet);
+    // ...and the publish of a settled engine allocates nothing at all: not the
+    // audio sink's name (AudioOut::openedDeviceName() is a std::string by
+    // value) nor anything else the pass reads.
+    CHECK(quiet == 0);
+    CHECK(loud == 0);
 
     // ...and what it publishes is the text, cut to the field (the buffer less
     // its NUL), as before.
@@ -140,6 +154,23 @@ int main() {
     const std::size_t cap = sizeof(ps.rx.txError);
     CHECK(std::strlen(ps.rx.txError) == cap - 1);
     CHECK(std::string(ps.rx.txError) == text.substr(0, cap - 1));
+    // The sink name published is the sink's own (the hermetic engine opens the
+    // default output; on a machine with none both are empty).
+    CHECK(std::string(ps.rx.sinkName) == Access::sinkName(e).substr(0, sizeof(ps.rx.sinkName) - 1));
+
+    // AudioOut::refreshOpenedDeviceName keeps keepLastGoodName's rule: a sink
+    // that was never opened has no name to offer, so the last good one stands;
+    // an opened one's name replaces it.
+    {
+        cascade::sink::AudioOut fresh;
+        std::string last = "Speakers";
+        fresh.refreshOpenedDeviceName(last);
+        CHECK(last == "Speakers");
+        const std::string opened = Access::sinkName(e);
+        std::string old = "previous sink";
+        Access::refreshSink(e, old);
+        CHECK(old == (opened.empty() ? std::string("previous sink") : opened));
+    }
 
     // B: lastErrorInto on its own.
     const auto setError = [&](const std::string& s) {

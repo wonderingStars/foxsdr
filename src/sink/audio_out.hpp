@@ -127,6 +127,13 @@ public:
     // Empty while an open is in progress - see streamAlive() for why that is
     // answered rather than waited for.
     std::string openedDeviceName() const;
+    // openedDeviceName() for a caller that keeps the last good name (the
+    // engine's per-pass publish): the same try-lock, and `lastGood` is left
+    // alone when the lock is busy or the name is empty, else assigned - into
+    // the capacity it already has, so a name that has not grown costs no
+    // allocation. Exactly keepLastGoodName(lastGood, openedDeviceName()),
+    // minus the two std::string temporaries.
+    void refreshOpenedDeviceName(std::string& lastGood) const;
 
     // Channel layout of the most recent SUCCESSFUL open (1 until one
     // succeeds). Deliberately retained across close(): it describes how the

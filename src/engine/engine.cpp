@@ -3502,12 +3502,12 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.txKeyOwner = key.owner;
     cascade::core::formatUtf8(r.deviceName, sizeof(r.deviceName), "%s",
                               src.name() != nullptr ? src.name() : "");
-    // openedDeviceName() try-locks and answers "" while an open holds the
+    // The sink's name try-locks and answers nothing while an open holds the
     // lock: that is not a change of sink, so the last good name is kept and
-    // no counter moves.
-    cascade::core::formatUtf8(
-        r.sinkName, sizeof(r.sinkName), "%s",
-        cascade::core::keepLastGoodName(sinkNameLastGood_, sink.openedDeviceName()).c_str());
+    // no counter moves (keepLastGoodName's rule, without openedDeviceName()'s
+    // std::string copy every pass).
+    sink.refreshOpenedDeviceName(sinkNameLastGood_);
+    cascade::core::formatUtf8(r.sinkName, sizeof(r.sinkName), "%s", sinkNameLastGood_.c_str());
     cascade::core::formatUtf8(r.faultMessage, sizeof(r.faultMessage), "%s",
                               testFault_.empty() ? faultMessage.c_str() : testFault_.c_str());
     // Why the key last opened ON ITS OWN - the rules' sentence ("" when the
