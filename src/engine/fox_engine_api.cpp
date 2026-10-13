@@ -1823,9 +1823,12 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
             }
             break;
         case FOXAPI_LIST_BOOKMARKS: {
-            const auto& all = *b->bookmarks;
-            if (want(b->bookmarks ? all.size() : 0)) {
-                const cascade::core::Bookmark& bm = all[index];
+            // The default block (no publish yet, or a rebuilt host) has no
+            // bookmarks pointer: test it BEFORE dereferencing (a reference
+            // bound through a null shared_ptr is undefined behaviour, and
+            // aborts a standard library built with assertions).
+            if (want(b->bookmarks ? b->bookmarks->size() : 0)) {
+                const cascade::core::Bookmark& bm = (*b->bookmarks)[index];
                 it.id = bm.id;
                 copyText(it.name, bm.name.c_str());
                 copyText(it.detail, bm.group.c_str());

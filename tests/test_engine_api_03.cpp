@@ -23,6 +23,10 @@
 //   X   the transmitter as its page draws it (state, 8.1): split, input,
 //       tone, monitor, the board's power range, the device, where it would
 //       transmit, the power setting with no board open
+//   G   the lists BEFORE THE FIRST PUBLISH: a session opened on an engine no
+//       pass has run on (what gui::AppWindow does in its constructor) reads
+//       every list as empty; the bookmarks list used to dereference a block
+//       that has none yet (review F4)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -487,6 +491,46 @@ void testTransmitterState() {
     CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_CLOSE)).result.status, FOXAPI_OK);
 }
 
+// G: a session on an engine that has never run a pass - no list block has been
+// published, so read_list answers from an EMPTY one whose bookmarks and presets
+// pointers are null. gui::AppWindow opens its session exactly here
+// (openUiSession, in its constructor, before the first frame), and
+// configureApi drops the block again until the next publish. Nothing may be
+// dereferenced: the lists the block carries are empty, and every list is
+// served (a count, never an error).
+void testListsBeforeFirstPublish() {
+    const auto readEveryList = [](testing::Session& s, const char* when) {
+        CHECK(s.ok());
+        for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_RADIOS; ++l) {
+            if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            const int32_t n = api()->read_list(s.raw(), l, 0, &it);
+            if (n < 0) { std::printf("  G (%s): list %u answered %d\n", when, l, n); }
+            CHECK(n >= 0);
+        }
+    };
+    {
+        cascade::engine::Engine eng;  // built, never initialised, never passed
+        testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        // The reported case, on its own and at both calls a client makes.
+        CHECK_EQ(api()->read_list(s.raw(), FOXAPI_LIST_BOOKMARKS, 0, nullptr), 0);
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        CHECK_EQ(api()->read_list(s.raw(), FOXAPI_LIST_BOOKMARKS, 0, &it), 0);
+        CHECK_EQ(api()->read_list(s.raw(), FOXAPI_LIST_BOOKMARK_GROUPS, 0, nullptr), 0);
+        CHECK_EQ(api()->read_list(s.raw(), FOXAPI_LIST_PRESETS, 0, nullptr), 0);
+        readEveryList(s, "fresh engine");
+    }
+    {
+        cascade::engine::Engine eng;
+        eng.configureApi(kHooks);  // the host is rebuilt: no block until the next publish
+        testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK_EQ(api()->read_list(s.raw(), FOXAPI_LIST_BOOKMARKS, 0, nullptr), 0);
+        readEveryList(s, "after configureApi");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -506,5 +550,6 @@ int main() {
     testStore();
     testBiasTee();
     testTransmitterState();
+    testListsBeforeFirstPublish();
     return check::finish("test_engine_api_03");
 }
