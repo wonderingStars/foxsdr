@@ -5,19 +5,19 @@ Run once on the real thing before release, 2026-10-13: this build, installed, op
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.75.exe`:**
-`TBD`
+`b6fe9e3e85e2c7c115be01286d654a38c83a875d5936587e6b9a5710635df27a`
 
 **SHA-256 of `FoxSDR-0.99.75-x86_64.AppImage`:**
-`TBD`
+`91d7ccc8387aed08d93f7892279cf6bfb2e206a8d8dfef18b0202c628505ae46`
 
 **SHA-256 of `foxsdr-0.99.75-linux-x64.tar.gz`:**
-`TBD`
+`74e9045199f657e0ca28451825aaabcb8135acc614691660ba3cfadf0cfadc19`
 
 **SHA-256 of `FoxSDR-0.99.75-aarch64.AppImage`:**
-`TBD`
+`e0a10a6902cc61333768eeb017fb9e1017d4df5d1b84cd5d4b3030cd7e745d02`
 
 **SHA-256 of `foxsdr-0.99.75-linux-arm64.tar.gz`:**
-`TBD`
+`d817be866ad6da81250a1c9046ff3fb3c3de4d4bb644b07b382ef10eb2f70a90`
 
 ## Features and fixes, 2026-10-12
 
