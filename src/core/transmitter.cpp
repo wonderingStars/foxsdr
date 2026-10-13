@@ -7,6 +7,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"  // FOX_TR_NOOP: the input names are drawn through trId()
+#include "core/utf8_text.hpp"  // formatUtf8: lastErrorInto cuts on a character
 
 #include <algorithm>
 #include <cmath>
@@ -307,6 +308,12 @@ void Transmitter::setError(std::string msg) {
 std::string Transmitter::lastError() const {
     std::lock_guard<std::mutex> lk(errorMutex_);
     return lastError_;
+}
+
+void Transmitter::lastErrorInto(char* out, std::size_t cap) const {
+    if (out == nullptr || cap == 0) { return; }
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    formatUtf8(out, cap, "%s", lastError_.c_str());
 }
 
 std::string Transmitter::lastAutoUnkeyReason() const {

@@ -3493,7 +3493,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.txInputPeak = static_cast<double>(transmitter_.takeInputPeak());
         cascade::core::formatUtf8(r.txDeviceName, sizeof(r.txDeviceName), "%s",
                                   txSink != nullptr && txSink->name() != nullptr ? txSink->name() : "");
-        cascade::core::formatUtf8(r.txError, sizeof(r.txError), "%s", transmitter_.lastError().c_str());
+        // Copied into the field under the Transmitter's lock: lastError()
+        // would build a std::string every pass.
+        transmitter_.lastErrorInto(r.txError, sizeof(r.txError));
     }
     r.txHoldRemainingMs = key.holdRemainingMs;
     r.txLatchRemainingMs = key.latchRemainingMs;

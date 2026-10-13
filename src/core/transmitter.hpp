@@ -397,6 +397,12 @@ public:
     // Empty when nothing has gone wrong. Set from the TX thread, read from
     // the GUI thread, so it is snapshotted rather than handed out by pointer.
     std::string lastError() const;
+    // The same text copied into a caller's buffer (cut on a character, never
+    // in the middle of one; always NUL-terminated; nothing written with no
+    // room), under the same lock and without allocating - for the engine's
+    // per-pass publish, where lastError()'s std::string copy would be a heap
+    // allocation every pass.
+    void lastErrorInto(char* out, std::size_t cap) const;
 
     // Why the key last opened on its own, for the panel to letter: empty when
     // the operator opened it themselves.
