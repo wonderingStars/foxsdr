@@ -349,6 +349,28 @@ StoreCategory storeCategoryFor(const std::string& catalogueId);
 const char* storeCategoryHeading(StoreCategory c);      // translated, capitals
 const char* storeCategoryCensusName(StoreCategory c);   // "aircraft", ..., "voice", "maps", "other"
 
+// THE STORE'S GROUPS ON THE LISTS OF WHAT IS INSTALLED (0.99.77). A US tester, through the owner
+// (2026-10-13): "I really like how the store groups plugins by function ... Implement this sorting on
+// the Plugins panel and the 'Turn on and off plugins' menu as well: if you install them all, the list
+// is quite long, intermixed and kind-of alphabetical." The Fitted modules window and the DECODE bank's
+// section both list installed modules, so both use these two functions and cannot disagree about which
+// heading a module sits under or whether there are headings at all.
+//
+// One entry per listed plugin. `category` is the CATALOGUE'S category for it ("aircraft", "broadcast",
+// ...) and is "" for a plugin the catalogue does not know - a side-loaded module, or any module before a
+// catalogue was read or kept. `name` is what the list sorts by.
+struct StoreListEntry {
+    std::string category;
+    std::string name;
+};
+// Whether the list is shown in groups: at least one entry has a catalogue category. With none, a fresh
+// install that never read a catalogue, the list is left exactly as it always was and carries no headings.
+bool storeListIsGrouped(const std::vector<StoreListEntry>& entries);
+// The order the list is shown in, as indices into `entries`: by the store's group (AIRCRAFT first, OTHER
+// last - an entry with no category, or one this build does not know, is OTHER), then lower-cased name,
+// then index. When the list is not grouped, the order it came in (0, 1, 2, ...) and nothing else.
+std::vector<int> storeGroupedOrder(const std::vector<StoreListEntry>& entries);
+
 // The install state the catalogue card speaks for, from the install records and the
 // scan by plugin id and version (PluginRepo::installStateFor).
 enum class StoreInstallKind { NotInstalled, Installed, UpdateAvailable, NewerInstalled };

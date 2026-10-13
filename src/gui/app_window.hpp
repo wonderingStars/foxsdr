@@ -1230,6 +1230,19 @@ private:
     // The window half of a preset press: the plugin's map page, picture,
     // panels and instruments, or Decoder output for a text decoder.
     void openPluginWindowsFor(const cascade::core::LoadedPlugin& p);
+    // A DOUBLE-CLICK ON A FITTED MODULES ROW (0.99.77): shows the ONE window the module has of its own -
+    // its panel, else its picture window, else its instrument, else its map page
+    // (gui/plugins_view.hpp, fittedOwnWindowOf) - and nothing else: no tune, no preset, no Decoder
+    // output window. It only marks the window shown; the plugin lifecycle sees it on the next frame
+    // and wakes a dormant plugin (`plugin: <name> woke - window open`). False, and nothing done, for a
+    // module that is not loaded, is stopped, or has no window of its own.
+    bool openPluginOwnWindow(const std::string& pluginKey);
+    // THE CATALOGUE'S CATEGORY for an installed module ("aircraft", "broadcast", ...): the install
+    // record that names this file, joined to the catalogue entry of that record's id and site. ""
+    // when no record names the file (a hand-fitted module) or no catalogue has been read or kept that
+    // lists it. The Fitted modules window and the DECODE bank both group by it (0.99.77), so they
+    // cannot put one module under two headings.
+    std::string pluginCategoryOf(const cascade::core::LoadedPlugin& p) const;
     // THE ONE ENUMERATION, used by drawPluginPresets, maybeAutoPreset,
     // rebuildMuteStates and the web status snapshot: walks `p`'s preset table
     // (capped at kMaxPresetsPerPlugin, exactly as every consumer has always

@@ -13788,6 +13788,19 @@ void AppWindow::drawDecodersSection() {
     std::string stopKey;   // a row's STOP/START key, applied after the loop
     bool stopTo = false;
     bool anyRow = false;
+    // WHICH PLUGINS GET A ROW, DECIDED ONCE, AND IN WHAT ORDER (0.99.77). It was decided inside the loop;
+    // it is decided before it now because the order depends on it: a US tester, through the owner
+    // (2026-10-13), asked for the store's grouping here as well - "if you install them all, the list is
+    // quite long, intermixed and kind-of alphabetical" - and a heading goes only over a group that has a
+    // row. Each module is asked exactly once per frame, as before (settingFieldsFrom is a call into the
+    // plugin).
+    struct RailRow {
+        std::size_t index = 0;  // into `list`
+        bool hasPresets = false;
+        bool isDecoder = false;
+        bool hasSettings = false;
+    };
+    std::vector<RailRow> railRows;
     for (std::size_t i = 0; i < list.size(); ++i) {
         const cascade::core::LoadedPlugin& p = list[i];
         // A REFUSED CANDIDATE HAS NOTHING TO SET. Its reason is printed in the
@@ -13795,16 +13808,57 @@ void AppWindow::drawDecodersSection() {
         // checkbox on a module that never loaded would imply the silence is
         // something the user chose.
         if (!p.loaded) { continue; }
-        const bool hasPresets = p.preset != nullptr && p.preset->count() > 0u;
-        const bool isDecoder =
-            p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
+        RailRow rr;
+        rr.index = i;
+        rr.hasPresets = p.preset != nullptr && p.preset->count() > 0u;
+        rr.isDecoder = p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
         // A plugin with a settings form gets a row even when it is neither a
         // decoder nor a preset publisher: the form is the one place the user
         // can reach what it asks for.
-        const bool hasSettings = p.settingsUi != nullptr &&
-                                 !cascade::core::settingFieldsFrom(p.settingsUi).empty();
-        if (!hasPresets && !isDecoder && !hasSettings) { continue; }
+        rr.hasSettings = p.settingsUi != nullptr &&
+                         !cascade::core::settingFieldsFrom(p.settingsUi).empty();
+        if (!rr.hasPresets && !rr.isDecoder && !rr.hasSettings) { continue; }
+        railRows.push_back(rr);
+    }
+    // THE STORE'S GROUPS, when any module has a catalogue category (the same join the Fitted modules
+    // window groups by); otherwise the scan order this list has always had, with no headings.
+    std::vector<cascade::gui::StoreListEntry> railEntries;
+    railEntries.reserve(railRows.size());
+    for (const RailRow& rr : railRows) {
+        const cascade::core::LoadedPlugin& p = list[rr.index];
+        railEntries.push_back(cascade::gui::StoreListEntry{pluginCategoryOf(p), p.name});
+    }
+    const bool railGrouped = cascade::gui::storeListIsGrouped(railEntries);
+    const std::vector<int> railOrder = cascade::gui::storeGroupedOrder(railEntries);
+    bool railHaveGroup = false;
+    cascade::gui::StoreCategory railGroup = cascade::gui::StoreCategory::Other;
+    for (const int railPos : railOrder) {
+        const RailRow& rr = railRows[static_cast<std::size_t>(railPos)];
+        const std::size_t i = rr.index;
+        const cascade::core::LoadedPlugin& p = list[i];
+        const bool isDecoder = rr.isDecoder;
+        const bool hasSettings = rr.hasSettings;
         anyRow = true;
+        if (railGrouped) {
+            const cascade::gui::StoreCategory g = cascade::gui::storeCategoryFor(
+                railEntries[static_cast<std::size_t>(railPos)].category);
+            if (!railHaveGroup || g != railGroup) {
+                // The store's heading over the group, in the section's own idiom and in the phosphor the
+                // rail letters its sections in, so it reads one step above the plugin names under it.
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
+                ImGui::SeparatorText(cascade::gui::storeCategoryHeading(g));
+                ImGui::PopStyleColor();
+                if (cascade::gui::census::enabled()) {
+                    const std::string name = cascade::gui::storeCategoryCensusName(g);
+                    cascade::gui::census::note("decoders:group:", name);
+                    const ImVec2 hMin = ImGui::GetItemRectMin();
+                    const ImVec2 hMax = ImGui::GetItemRectMax();
+                    cascade::gui::census::rect("decoders:group:" + name, hMin.x, hMin.y, hMax.x, hMax.y);
+                }
+                railHaveGroup = true;
+                railGroup = g;
+            }
+        }
         // THE ROW IS IDENTIFIED BY THE PLUGIN, NOT BY ITS PLACE IN THE LIST (0.99.74). The index
         // was the id while every item in the row was a button, which keeps no state. The
         // "Plugin settings" node below does - its open state is ImGui's, kept against this id -
@@ -13813,6 +13867,12 @@ void AppWindow::drawDecodersSection() {
         // run id is the module's file name without its version, so an update keeps it too.
         ImGui::PushID(cascade::core::pluginRunId(cascade::core::pluginKey(p)).c_str());
         ImGui::SeparatorText(p.name.c_str());
+        if (cascade::gui::census::enabled()) {
+            // WHERE EACH PLUGIN'S ENTRY STARTS, so a test can read the order the bank lists them in.
+            const ImVec2 eMin = ImGui::GetItemRectMin();
+            const ImVec2 eMax = ImGui::GetItemRectMax();
+            cascade::gui::census::rect("decoders:entry:" + p.name, eMin.x, eMin.y, eMax.x, eMax.y);
+        }
         drawPluginPresets(p);
         if (isDecoder) {
             // ONE KEY, THE ONE THAT CHANGES WHAT YOU ARE LOOKING AT (0.99.8).
@@ -19987,19 +20047,14 @@ void AppWindow::drawFittedModulesWindow() {
                 }
                 break;
             }
-            if (!m.catalogueId.empty()) {
-                for (const cascade::core::PluginCatalogEntry& ce : catalog_) {
-                    if (cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) == m.catalogueId) {
-                        m.category = ce.category;
+            // THE CATALOGUE'S CATEGORY, from the one join the DECODE bank groups by as well (0.99.77): the
+            // glyph, and the heading the row is listed under.
+            m.category = pluginCategoryOf(p);
+            if (!m.catalogueId.empty() && !catalogueModules.empty()) {
+                for (int ci = 0; ci < static_cast<int>(catalogueModules.size()); ++ci) {
+                    if (catalogueModules[static_cast<std::size_t>(ci)].id == m.catalogueId) {
+                        m.catalogueIndex = ci;
                         break;
-                    }
-                }
-                if (!catalogueModules.empty()) {
-                    for (int ci = 0; ci < static_cast<int>(catalogueModules.size()); ++ci) {
-                        if (catalogueModules[static_cast<std::size_t>(ci)].id == m.catalogueId) {
-                            m.catalogueIndex = ci;
-                            break;
-                        }
                     }
                 }
             }
@@ -20103,6 +20158,12 @@ void AppWindow::drawFittedModulesWindow() {
             case cascade::gui::FittedModulesAction::Kind::CleanUp:
                 cleanUpOldVersionsConfirmed();
                 break;
+            case cascade::gui::FittedModulesAction::Kind::OpenWindow:
+                // A double-click on a row (0.99.77). The panel only asks for a module that has a window
+                // of its own and is not stopped; were the module gone since, there is nothing to open
+                // and the list is simply what it was.
+                openPluginOwnWindow(act.file);
+                break;
             case cascade::gui::FittedModulesAction::Kind::None:
                 break;
         }
@@ -20129,8 +20190,30 @@ namespace {
 // The rows a plugin publishes, as a table: a PANEL's whole window and an
 // INSTRUMENT's memory beneath its face are the same feed drawn the same way,
 // so one drawing serves both and the two cannot drift apart.
-void drawRowTable(const std::vector<std::string>& headings,
-                  const std::vector<CascadePanelRow>& rows) {
+//
+// A ROW THAT IS A KEY (0.99.77, CASCADE_ROW_FLAG_KEY). "If I click on HD2 on the
+// screen below, it should select that program, instead of having to go into the
+// plugin settings and change the Programme to 1" (a US tester, 2026-10-13): a table
+// row whose flags carry the flag and the id of a command the plugin registered is
+// drawn as ONE selectable spanning the row - the file's own idiom for a row that
+// can be pressed (the map's target list) - with the cell texts drawn over it as
+// they always were, so GOOD, WARN and MUTED still apply and the row lights under
+// the pointer. The id of the one pressed this frame is RETURNED (0 when none), and
+// the caller queues it the way the plate does (PluginApiCore::pressCommand); this
+// function touches nothing of the plugin's. `registered` is the plugin's commands:
+// a key whose id is not among them is drawn as the text it was before, because
+// pressCommand would refuse it and a key that does nothing is a lie.
+//
+// `plugin` names the window in the UI census: panelrow:<plugin>:<id>:key is a row
+// that is pressable (with its rectangle, for a scripted click), :text is a row
+// that asked to be a key and is not (tests/test_row_keys_app). An instrument's
+// memory rows pass the suffix ":memory", so they are not taken for the panel's;
+// the names are put together only when the census is on.
+std::uint32_t drawRowTable(const std::vector<std::string>& headings,
+                           const std::vector<CascadePanelRow>& rows,
+                           const std::vector<cascade::core::HostCommand>& registered,
+                           const std::string& plugin, const char* censusSuffix) {
+    std::uint32_t pressed = 0u;
     const int cols = static_cast<int>(headings.size());
     if (cols > 0 &&
         ImGui::BeginTable("##rows", cols,
@@ -20140,7 +20223,9 @@ void drawRowTable(const std::vector<std::string>& headings,
             ImGui::TableSetupColumn(h.c_str());
         }
         ImGui::TableHeadersRow();
+        int rowNo = 0;
         for (const CascadePanelRow& r : rows) {
+            ++rowNo;
             if (r.kind == CASCADE_ROW_SEPARATOR) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -20156,8 +20241,36 @@ void drawRowTable(const std::vector<std::string>& headings,
                 ImGui::PopStyleColor();
                 continue;
             }
+            const std::uint32_t asked = cascade::core::panelRowKeyId(r);
+            const std::uint32_t keyId = cascade::core::panelRowPressable(r, registered);
             for (int c = 0; c < cols; ++c) {
                 ImGui::TableNextColumn();
+                if (c == 0 && keyId != 0u) {
+                    // THE WHOLE ROW IS THE KEY. Submitted first and spanning every column, so
+                    // the cell texts below are drawn over it; AllowOverlap is what keeps a later
+                    // cell's item from being swallowed by it (the map's target list's reason,
+                    // above). A press is the release over it, as for every other key here.
+                    ImGui::PushID(rowNo);
+                    if (ImGui::Selectable("##rowkey", false,
+                                          ImGuiSelectableFlags_SpanAllColumns |
+                                              ImGuiSelectableFlags_AllowOverlap)) {
+                        pressed = keyId;
+                    }
+                    if (ImGui::IsItemHovered()) { ImGui::SetMouseCursor(ImGuiMouseCursor_Hand); }
+                    if (cascade::gui::census::enabled()) {
+                        const std::string name = "panelrow:" + plugin + censusSuffix + ":" +
+                                                 std::to_string(keyId) + ":key";
+                        cascade::gui::census::note(name);
+                        cascade::gui::census::rect(name, ImGui::GetItemRectMin().x,
+                                                   ImGui::GetItemRectMin().y,
+                                                   ImGui::GetItemRectMax().x,
+                                                   ImGui::GetItemRectMax().y);
+                    }
+                    ImGui::PopID();
+                    // Back onto the selectable's own line, so the first cell's text starts where
+                    // the cell does.
+                    ImGui::SameLine(0.0f, 0.0f);
+                }
                 // BOUNDED, AND UNFORMATTED. The ABI says the cells are
                 // NUL-terminated, but a plugin that fills every byte must
                 // not walk the host off the end of the array, so the end is
@@ -20186,11 +20299,45 @@ void drawRowTable(const std::vector<std::string>& headings,
                 } else {
                     ImGui::TextUnformatted(cell, cellEnd);
                 }
+                // A row that ASKED to be a key and is not one (an id the plugin never
+                // registered): said to the census with where its first cell is, so a bounded
+                // run can press it and see that nothing reaches the plugin.
+                if (c == 0 && asked != 0u && keyId == 0u && cascade::gui::census::enabled()) {
+                    const std::string name = "panelrow:" + plugin + censusSuffix + ":" +
+                                             std::to_string(asked) + ":text";
+                    cascade::gui::census::note(name);
+                    cascade::gui::census::rect(name, ImGui::GetItemRectMin().x,
+                                               ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                               ImGui::GetItemRectMax().y);
+                }
             }
         }
         ImGui::EndTable();
     }
     if (rows.empty()) { ImGui::TextDisabled("%s", tr("Nothing to show yet.")); }
+    return pressed;
+}
+
+// One plugin's rows drawn and, when one of them is pressed, delivered: the commands the plugin
+// registered are asked for only when a row asks to be a key (most panels have none), and a press
+// is queued for the plugin exactly as a press of a key on its plate is - it takes it with
+// poll_command from wherever it runs, and nothing of its runs here, on the GUI thread's frame.
+// `fileKey` is the module file the plugin was loaded from, which is what the commands are filed
+// under; `plugin` is its display name, which is what the census calls it, followed by
+// `censusSuffix` (":memory" for an instrument's rows).
+void drawPluginRows(cascade::core::PluginUi& ui, const std::string& fileKey,
+                    const std::string& plugin, const char* censusSuffix,
+                    const std::vector<std::string>& headings,
+                    const std::vector<CascadePanelRow>& rows) {
+    std::vector<cascade::core::HostCommand> registered;
+    for (const CascadePanelRow& r : rows) {
+        if (cascade::core::panelRowKeyId(r) != 0u) {
+            registered = ui.api().commands(fileKey);
+            break;
+        }
+    }
+    const std::uint32_t pressed = drawRowTable(headings, rows, registered, plugin, censusSuffix);
+    if (pressed != 0u) { ui.api().pressCommand(fileKey, pressed); }
 }
 
 // A plugin's page named on its rail in the bench's capitals: "%s MAP" with the
@@ -20947,10 +21094,22 @@ void AppWindow::drawPluginWindows() {
         // The plugin's own title in capitals, a character at a time: a
         // plugin may name itself in any language.
         const std::string railName = cascade::core::upperLegend(p.title);
-        if (beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH)) {
+        const bool panelDrawn = beginPage(id.c_str(), railName.c_str(), &panelOpen, 0, kPanelW, kPanelH);
+        // WHERE THE PANEL'S WINDOW IS, every frame it is shown (the census; the picture window's twin),
+        // and how many rows it holds, so a test can ask whether it is open (tests/test_row_keys_app).
+        // Nothing is put together unless the census is on.
+        if (cascade::gui::census::enabled()) {
+            noteWindowRectInCensus("panel:window:" + p.plugin, id.c_str());
+            cascade::gui::census::note("panel:rows:",
+                                       p.plugin + ":" + std::to_string(p.rows.size()));
+        }
+        if (panelDrawn) {
             drawPluginPresetBar(p.plugin);
             drawPluginSettingsSection(p.plugin);
-            drawRowTable(p.headings, p.rows);
+            // A row may be a key bound to one of the plugin's commands (0.99.77): the press is
+            // queued for the plugin by the file its commands are filed under.
+            drawPluginRows(pluginUi_, pluginKeyForDisplayName(p.plugin), p.plugin, "", p.headings,
+                           p.rows);
         }
         endPage();
         if (!panelOpen) { pluginWindows_.hide(id); }
@@ -20977,7 +21136,10 @@ void AppWindow::drawPluginWindows() {
         ImGui::SetNextWindowSize(ImVec2(kInstrumentW, kInstrumentH), ImGuiCond_FirstUseEver);
         bool open = true;
         const std::string railName = cascade::core::upperLegend(in.title);
-        if (beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH)) {
+        const bool instrumentDrawn = beginPage(id.c_str(), railName.c_str(), &open, 0, kInstrumentW, kInstrumentH);
+        // WHERE THE INSTRUMENT'S WINDOW IS, every frame it is shown (the census).
+        if (cascade::gui::census::enabled()) { noteWindowRectInCensus("instrument:window:" + in.plugin, id.c_str()); }
+        if (instrumentDrawn) {
             drawPluginPresetBar(in.plugin);
             drawPluginSettingsSection(in.plugin);
             const double now = ImGui::GetTime();
@@ -21003,7 +21165,10 @@ void AppWindow::drawPluginWindows() {
             ImGui::Dummy(ImVec2(avail.x, std::max(used, 1.0f)));
             if (hasMemory) {
                 ImGui::Spacing();
-                drawRowTable(in.headings, in.rows);
+                // The memory rows are the panel contract's, so a row may be a key here too (the
+                // census calls them "<plugin>:memory", so they are not taken for the panel's).
+                drawPluginRows(pluginUi_, pluginKeyForDisplayName(in.plugin), in.plugin, ":memory",
+                               in.headings, in.rows);
             }
         }
         endPage();
@@ -22531,6 +22696,57 @@ void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
         cascade::core::diagLogf("preset: opened the Decoder output window for %s",
                                 p.name.c_str());
     }
+}
+
+bool AppWindow::openPluginOwnWindow(const std::string& pluginKey) {
+    // THE ONE WINDOW A DOUBLE-CLICK ON A FITTED MODULES ROW OPENS (0.99.77), the owner (2026-10-13):
+    // "when I double click on the plugin it should show the plugin window". The same ids the draw loops
+    // and the rail rows build from the module's declared names, so it is the window the rail's own row
+    // would toggle; only ONE of a module's windows, in the order fittedOwnWindowOf says, where a preset
+    // press opens them all. Marking it shown is the whole of the work: updatePluginLifecycle sees the
+    // window on the next frame and wakes a dormant plugin, which is how it has always been woken.
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded || cascade::core::pluginKey(p) != pluginKey) { continue; }
+        // A STOPPED plugin has no instances, and so no window could draw: the rail lists no rows for
+        // one, and a stopped tracker has no map page. Nothing is marked shown for it.
+        if (pluginIsStopped(pluginKey)) { return false; }
+        switch (cascade::gui::fittedOwnWindowOf(p)) {
+            case cascade::gui::FittedOwnWindow::Panel:
+                pluginWindows_.show(panelWindowId(p.name, panelTitleOf(p)));
+                return true;
+            case cascade::gui::FittedOwnWindow::Picture:
+                pluginWindows_.show(imageWindowId(p.name));
+                return true;
+            case cascade::gui::FittedOwnWindow::Instrument:
+                pluginWindows_.show(instrumentWindowIdFor(p.name, instrumentTitleOf(p)));
+                return true;
+            case cascade::gui::FittedOwnWindow::Map:
+                ensureMapPage(p.name).open = true;
+                return true;
+            case cascade::gui::FittedOwnWindow::None:
+                return false;
+        }
+        return false;
+    }
+    return false;
+}
+
+std::string AppWindow::pluginCategoryOf(const cascade::core::LoadedPlugin& p) const {
+    // THE INSTALL RECORD, by file: the catalogue id (and site) it gave the module, which is the key the
+    // catalogue's entry is found by - exactly the join the Fitted modules window has always made for
+    // the module's glyph. A module with no record is a hand-fitted one and has no category, and neither
+    // has one whose catalogue was never read or kept.
+    const std::string file = cascade::core::pluginKey(p);
+    for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
+        if (!equalsFileNameAscii(ip.file, file)) { continue; }
+        if (ip.id.empty()) { return std::string(); }
+        const std::string key = cascade::core::PluginRepo::catalogueKey(ip.source, ip.id);
+        for (const cascade::core::PluginCatalogEntry& ce : catalog_) {
+            if (cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) == key) { return ce.category; }
+        }
+        return std::string();
+    }
+    return std::string();
 }
 
 void AppWindow::applyPluginTuneGrants() {

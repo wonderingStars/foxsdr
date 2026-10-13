@@ -859,6 +859,29 @@ std::vector<StoreSection> storeBrowseSections(const PluginStoreModel& m,
     return out;
 }
 
+bool storeListIsGrouped(const std::vector<StoreListEntry>& entries) {
+    for (const StoreListEntry& e : entries) {
+        if (!e.category.empty()) { return true; }
+    }
+    return false;
+}
+
+std::vector<int> storeGroupedOrder(const std::vector<StoreListEntry>& entries) {
+    std::vector<int> order(entries.size());
+    for (std::size_t i = 0; i < order.size(); ++i) { order[i] = static_cast<int>(i); }
+    if (!storeListIsGrouped(entries)) { return order; }
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        const StoreListEntry& x = entries[static_cast<std::size_t>(a)];
+        const StoreListEntry& y = entries[static_cast<std::size_t>(b)];
+        const StoreCategory gx = storeCategoryFor(x.category), gy = storeCategoryFor(y.category);
+        if (gx != gy) { return gx < gy; }
+        const std::string la = lowerAscii(x.name), lb = lowerAscii(y.name);
+        if (la != lb) { return la < lb; }
+        return a < b;
+    });
+    return order;
+}
+
 std::vector<int> storeUpdateRows(const PluginStoreModel& m, const std::string& lowerQuery) {
     std::vector<int> rows;
     for (int i = 0; i < static_cast<int>(m.modules.size()); ++i) {
@@ -2161,6 +2184,23 @@ CardResult drawCard(ImDrawList* dl, const StoreModule& sm, const StoreKey& key, 
                 0.0f, 0, 1.0f);
 
     ImGui::PushID(sm.id.c_str());
+    // THE WHOLE CARD IS ONE TARGET (0.99.77). The owner, relaying a tester (2026-10-13): "on the plugin
+    // store the whole [card] should be clickable not just the text of the plugin". Only the picture and
+    // the name opened the page; the rest of the card - the summary line, the strip along the bottom, the
+    // space between - did nothing. This button covers the card and is submitted FIRST under
+    // SetNextItemAllowOverlap, so the glyph, the name and the key laid over it afterwards take the
+    // pointer where they are and this has it everywhere else: a press on GET, UPDATE or the other key
+    // is that key's alone and never also opens the page. (The arbitration benchSwitchRow uses, and the
+    // reason a hover on the key does not light the card's name.)
+    // (NoNav: the card adds no invisible stop to the Tab order, where the glyph, the name and the key
+    // are stops already.)
+    ImGui::SetCursorScreenPos(tl);
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+    const bool cardPressed = ImGui::InvisibleButton("##card", ImVec2(w, h));
+    ImGui::PopItemFlag();
+    if (cardPressed) { res.openPage = true; }
+    const bool cardHover = ImGui::IsItemHovered();
     // --- the glyph ------------------------------------------------------------
     const float gb = 58.0f * k;
     const ImVec2 gtl(tl.x + pad, tl.y + (h - gb) * 0.5f);
@@ -2187,7 +2227,7 @@ CardResult drawCard(ImDrawList* dl, const StoreModule& sm, const StoreKey& key, 
     const bool nHover = ImGui::IsItemHovered();
     const ImVec2 nmin = ImGui::GetItemRectMin(), nmax = ImGui::GetItemRectMax();
     dl->AddText(uf, npx, ImVec2(tx, ty + (nameH - faceH(uf, npx)) * 0.5f),
-                nHover || gHover ? theme::kPhosphor : theme::kIvory, shownName.c_str());
+                nHover || gHover || cardHover ? theme::kPhosphor : theme::kIvory, shownName.c_str());
     ty += nameH + 2.0f * k;
     const std::string& sum = sm.plate.summary.empty() ? sm.plate.blurb : sm.plate.summary;
     addEllipsized(dl, uf, fonts::uiPx(), ImVec2(tx, ty), theme::kInkMuted, sum.c_str(), tw);

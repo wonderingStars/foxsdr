@@ -67,6 +67,7 @@
 #ifndef CASCADE_GUI_PLUGINS_VIEW_HPP
 #define CASCADE_GUI_PLUGINS_VIEW_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -88,6 +89,14 @@ enum class FittedState {
     Refused,    // found on disk and rejected at load
     Idle,       // AUTO and dormant: not in use, so not running (0.99.73)
 };
+
+// THE WINDOW A MODULE OPENS WHEN ITS ROW IS DOUBLE-CLICKED (0.99.77), in the order a plugin with
+// several is asked: its panel, else its picture window, else its instrument, else its map page. The
+// owner (2026-10-13): "when you open the plugins Fitted modules window, when I double click on the
+// plugin it should show the plugin window". None is a module with no window of its own (a text
+// decoder is read in the shared Decoder output window, a basemap draws nothing): its row opens its
+// module page, which is what a single click on its name does.
+enum class FittedOwnWindow { None, Panel, Picture, Instrument, Map };
 
 // One module as this window shows it. EVERY FIELD NAMES ITS SOURCE, because the
 // whole value of this window is that nothing on it was invented here.
@@ -205,6 +214,10 @@ struct FittedModule {
     // FittedModulesModel::catalogue, or -1. Filled only while this module's page is
     // open.
     int catalogueIndex = -1;
+
+    // Which window a double-click on the row opens (0.99.77): from the TABLE POINTERS the host
+    // kept (fittedOwnWindowOf), never from the declared bits, for the reason tuneCapable is.
+    FittedOwnWindow ownWindow = FittedOwnWindow::None;
 };
 
 // The record as the SHARED page wants it, for a module the catalogue does not know
@@ -268,6 +281,17 @@ struct FittedModulesDeck {
     // caller asks for its pictures; the caller clears it.
     std::string pageOpenedCatalogueId;
     std::string lastPageFile;
+    // THE FIRST CLICK OF A DOUBLE-CLICK ON A ROW'S NAME OR PICTURE (0.99.77). That click opens the
+    // module's page, as it always has, so the second press of the pair lands on the page and not on
+    // the row: the page reads it (a double-click within the double-click time of this click) and
+    // hands the user the module's window in place of the page. The module file the click opened, and
+    // the ImGui time it did.
+    std::string rowOpenedFile;
+    double rowOpenedAt = 0.0;
+    // SET WHEN THE SECOND PRESS HAS BEEN TAKEN AS THE DOUBLE-CLICK, until that press is released: the list
+    // is drawn again in the same frame, with the button still down over the name that opened the page,
+    // and its release must not open the page a second time.
+    bool swallowRowClick = false;
     // The decoded pictures of the page, kept for the window's life.
     PagePictureCache pictures;
 };
@@ -303,6 +327,10 @@ struct FittedModulesAction {
         // CLEAN UP OLD VERSIONS, confirmed once for all of them
         // (AppWindow::cleanUpOldVersionsConfirmed).
         CleanUp,
+        // A DOUBLE-CLICK ON A ROW (0.99.77): AppWindow::openPluginOwnWindow(file) shows the module's own
+        // window - its panel, picture, instrument or map page, in that order - and the plugin lifecycle
+        // wakes it. Only ever asked for a module that fittedOpensOwnWindow() says has one.
+        OpenWindow,
     };
     Kind kind = Kind::None;
     std::string file;   // empty for Rescan
@@ -368,11 +396,46 @@ FittedCounts countStates(const std::vector<FittedModule>& modules, bool receiver
 // scanned yet." when none has been.
 std::string fittedVerdictLine(bool receiverRunning, const std::string& directory);
 
-// Which modules the chips leave on screen, and in what order: sorted by name (the file
-// name for a module whose name was never read), filtered by the chips and by `lowerQuery`
-// over name, file and version. Indices into `modules`.
+// Which modules the chips leave on screen, and in what order: sorted by the store's group
+// (fittedGroupOf) and then by name (the file name for a module whose name was never read),
+// filtered by the chips and by `lowerQuery` over name, file and version. Indices into
+// `modules`. With no category anywhere every module is in one group, so this is the name
+// sort it was before 0.99.77.
 std::vector<int> fittedVisibleRows(const std::vector<FittedModule>& modules, bool receiverRunning,
                                    const FittedModulesDeck& deck);
+
+// THE LIST UNDER THE STORE'S HEADINGS (0.99.77): a US tester, through the owner (2026-10-13), "I really
+// like how the store groups plugins by function ... Implement this sorting on the Plugins panel ...
+// if you install them all, the list is quite long, intermixed and kind-of alphabetical." So the
+// rows above are ordered by the store's group first (AIRCRAFT, MARINE, SATELLITES AND WEATHER, METERS
+// AND PAGING, VOICE AND DATA, MAPS AND TOOLS, OTHER) and by name inside it. The group is the store's
+// own answer for the module's catalogue category (FittedModule::category); a module the catalogue does
+// not know, or one whose category this build does not, is OTHER, and sorts last.
+StoreCategory fittedGroupOf(const FittedModule& m);
+// Whether the list carries headings: at least one fitted module has a catalogue category. A fresh
+// install that never read or kept a catalogue has none, and its list is the flat name-sorted list it
+// always was. A fact of the WHOLE list and not of what the chips and the search leave on screen, so
+// headings do not come and go as someone types.
+bool fittedIsGrouped(const std::vector<FittedModule>& modules);
+// Where the headings go: for each position in `rows` (as fittedVisibleRows returns them) whose group
+// differs from the row before it - the first row included - the position and the group. Empty when
+// the list is not grouped, and when no row is left.
+struct FittedGroupBreak {
+    std::size_t at = 0;
+    StoreCategory group = StoreCategory::Other;
+};
+std::vector<FittedGroupBreak> fittedGroupBreaks(const std::vector<FittedModule>& modules,
+                                                const std::vector<int>& rows);
+
+// The window a double-click on this module's row opens, from the table pointers the host kept: the
+// panel, else the picture window, else the instrument, else the map page, else None. A module that is
+// not loaded has none.
+FittedOwnWindow fittedOwnWindowOf(const cascade::core::LoadedPlugin& p);
+// Whether the double-click opens a WINDOW for this row: loaded, has one, and is not stopped. A stopped
+// plugin has no instances, so no window of its could draw (the rail lists no window rows for one, and
+// a stopped tracker has no map page); its double-click opens its module page, which says STOPPED and
+// offers START.
+bool fittedOpensOwnWindow(const FittedModule& m);
 
 // "fitted 2026-10-07" for a module whose install record says when, else empty.
 std::string fittedDateText(const FittedModule& m);

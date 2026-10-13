@@ -945,6 +945,52 @@ int main() {
         CHECK(ui.panels()[0].rows.empty());
     }
 
+    // --- panel: a pressable row (0.99.77) reaches the host with its flags whole ------------------
+    // The command id rides in the row's flags (bits 8..15) because CascadePanelRow has no
+    // structSize, so the host's copy of the row must keep every bit the plugin wrote: the key flag,
+    // the id and the emphasis. An instrument's memory rows are the same feed and the same copy.
+    {
+        resetAll();
+        g_in = FakeInstrument{};
+        const CascadePanelApi api = makePanelApi();
+        const CascadeInstrumentApi iapi = makeInstrumentApi(true);
+        LoadedPlugin p = plug("Tracker");
+        p.panel = &api;
+        LoadedPlugin q = plug("FLEX");
+        q.instrument = &iapi;
+        PluginUi ui;
+        ui.rebuild({p, q});
+        CascadePanelRow keyed{};
+        keyed.kind = CASCADE_ROW_CELLS;
+        keyed.flags = CASCADE_ROW_KEY_FLAGS(12u) | CASCADE_ROW_FLAG_GOOD;
+        std::snprintf(keyed.cells[0], CASCADE_PANEL_CELL_CHARS, "HD2");
+        CascadePanelRow plain{};
+        plain.kind = CASCADE_ROW_CELLS;
+        plain.flags = CASCADE_ROW_FLAG_MUTED;
+        std::snprintf(plain.cells[0], CASCADE_PANEL_CELL_CHARS, "HD3");
+        g_pn.rows = {keyed, plain};
+        g_in.answer = 1;
+        ui.poll();
+        CHECK(ui.panels().size() == 1u);
+        CHECK(ui.instruments().size() == 1u);
+        if (ui.panels().size() == 1u && ui.panels()[0].rows.size() == 2u) {
+            const std::vector<CascadePanelRow>& got = ui.panels()[0].rows;
+            CHECK(got[0].flags == (CASCADE_ROW_KEY_FLAGS(12u) | CASCADE_ROW_FLAG_GOOD));
+            CHECK(cascade::core::panelRowKeyId(got[0]) == 12u);
+            CHECK(std::string(got[0].cells[0]) == "HD2");
+            CHECK(got[1].flags == CASCADE_ROW_FLAG_MUTED);
+            CHECK(cascade::core::panelRowKeyId(got[1]) == 0u);
+        } else {
+            CHECK(false);
+        }
+        if (ui.instruments().size() == 1u && ui.instruments()[0].rows.size() == 2u) {
+            CHECK(cascade::core::panelRowKeyId(ui.instruments()[0].rows[0]) == 12u);
+            CHECK(cascade::core::panelRowKeyId(ui.instruments()[0].rows[1]) == 0u);
+        } else {
+            CHECK(false);
+        }
+    }
+
     // --- instrument: state polled each frame, memory rows like a panel ----
     {
         resetAll();

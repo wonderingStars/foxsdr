@@ -19,6 +19,15 @@
  *   again     a second click folds it back: the same row is back where it was folded, so the
  *             node is a toggle and not a one-way door.
  *
+ * AND (0.99.77) two things the owner and a US tester asked for on 2026-10-13:
+ *
+ *   nogroups  "Implement [the store's] sorting on the ... 'Turn on and off plugins' menu as well":
+ *             with no catalogue kept the fixture has no category, so the bank carries no group
+ *             heading and the plugin's entry is listed as it always was;
+ *   dblclick  "when I double click on the plugin it should show the plugin window": with the
+ *             Fitted modules window up, a double-click on the fixture's row opens its panel
+ *             window (the fixture declares a panel); one click on the same place does not.
+ *
  * WHAT MOVES WITH THE DEFECT. Before the fold the form was drawn inline, always: there was no
  * folded note, no node rectangle, and the panel row sat below the whole form in the default
  * run. The assertions on the note, the rectangle and the row's height all fail on that build.
@@ -147,8 +156,11 @@ void installFixture() {
     CHECK(!ec);
 }
 
-// One run of the application, `script` being FOXSDR_INPUT_SCRIPT (empty = none).
-Result once(const std::string& tag, int frames, const std::string& script) {
+// One run of the application, `script` being FOXSDR_INPUT_SCRIPT (empty = none). `openFitted` also opens
+// the Fitted modules window, in a rectangle inside the main window (it opens a stagger slot past the main
+// window's right edge when nothing is saved, which in a single viewport is outside the only window there
+// is).
+Result once(const std::string& tag, int frames, const std::string& script, bool openFitted = false) {
     Result r;
     const fs::path cfg = g_dir / (tag + ".json");
     const fs::path census = g_dir / (tag + ".census");
@@ -162,11 +174,16 @@ Result once(const std::string& tag, int frames, const std::string& script) {
     // section; the config says it too so the census (which cycles the banks unless it is held)
     // has nothing to move.
     writeFile(cfg,
-              "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"sourceKind\": "
-              "\"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", \"mainView\": "
-              "\"receiver\", \"railBank\": 1, \"bandPlanOverlay\": false }\n");
+              std::string("{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"sourceKind\": "
+                          "\"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", \"mainView\": "
+                          "\"receiver\", \"railBank\": 1, \"bandPlanOverlay\": false") +
+                  (openFitted ? ", \"fittedModulesX\": 60, \"fittedModulesY\": 50, \"fittedModulesWidth\": 1400, "
+                                "\"fittedModulesHeight\": 880"
+                              : "") +
+                  " }\n");
     const std::string scriptPath = (g_dir / (tag + ".script")).string();
     writeFile(scriptPath, script);
+    setEnv("FOXSDR_OPEN_FITTED_MODULES", openFitted ? "1" : "");
     setEnv("CASCADE_CONFIG_TEST", cfg.string());
     setEnv("FOXSDR_UI_CENSUS", census.string());
     setEnv("FOXSDR_DIAG_DIR", diag.string());
@@ -221,6 +238,8 @@ const char* const kPanelRow = "switchrow:Settings Fixture Panel";
 
 int main(int argc, char** argv) {
     std::printf("test_decoder_settings_fold_app\n");
+    // Unbuffered, so a run that a timeout stops still says how far it got.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 2) {
         std::printf("usage: test_decoder_settings_fold_app <settings fixture module>\n");
         return 2;
@@ -326,6 +345,66 @@ int main(int argc, char** argv) {
                             foldedRowY);
                 CHECK(std::fabs(row->y0 - foldedRowY) <= 1.0f);
             }
+        }
+    }
+
+    // --- NO CATALOGUE KEPT: THE BANK HAS NO GROUP HEADINGS (0.99.77) -------------------------------------
+    //
+    // A US tester, through the owner (2026-10-13), asked for the store's grouping on this section too. A
+    // fixture the catalogue does not know is a module with no category, and a bank in which no module has
+    // one is listed exactly as before: no heading, the plugin's entry where it always was. (The grouped
+    // bank, with a catalogue kept, is test_plugin_inuse_app's.)
+    {
+        const Result r = once("nogroups", 40, "");
+        CHECK(r.ok);
+        if (r.ok) {
+            CHECK(r.rect("decoders:entry:Settings Form Fixture") != nullptr);
+            for (const char* g : {"aircraft", "marine", "satellites", "meters", "voice", "maps", "other"}) {
+                CHECK(!r.has(std::string("decoders:group:") + g));
+            }
+            // ...and the fold the rest of this file is about is still there.
+            CHECK(r.has("decoders:settings:folded"));
+        }
+    }
+
+    // --- A DOUBLE-CLICK ON THE FITTED MODULES ROW OPENS THE PLUGIN'S PANEL (0.99.77) --------------------
+    //
+    // The owner (2026-10-13): "when you open the plugins Fitted modules window, when I double click on the
+    // plugin it should show the plugin window". The fixture declares a panel, so its own window is the panel.
+    {
+        const std::string rowId = std::string("fitted:row:settings_ui_fixture") + kExt;
+        const Result lay = once("fitted-layout", 50, "", true);
+        CHECK(lay.ok);
+        const Rect* row = lay.ok ? lay.rect(rowId) : nullptr;
+        const Rect* name = lay.ok ? lay.rect(rowId + ":name") : nullptr;
+        const Rect* key = lay.ok ? lay.rect(rowId + ":key") : nullptr;
+        CHECK(row != nullptr && name != nullptr && key != nullptr);
+        if (lay.ok) {
+            // Nothing opened the panel: the layout run draws no panel window.
+            CHECK(lay.rect("panel:window:Settings Form Fixture") == nullptr);
+        }
+        if (row != nullptr && name != nullptr && key != nullptr) {
+            // A point on the row that is no item's: a third of the way from the end of the name to the key.
+            Rect spot;
+            spot.x0 = spot.x1 = name->x1 + 0.3f * (key->x0 - name->x1);
+            spot.y0 = spot.y1 = 0.5f * (row->y0 + row->y1);
+            char dbl[200];
+            // (The pointer two frames before the first press; then down, up, down, up in consecutive frames.)
+            std::snprintf(dbl, sizeof(dbl), "20 screen %.1f %.1f\n22 down\n23 up\n24 down\n25 up\n", spot.cx(), spot.cy());
+            const Result d = once("fitted-dblclick", 70, dbl, true);
+            CHECK(d.ok);
+            if (d.ok) {
+                const bool open = d.rect("panel:window:Settings Form Fixture") != nullptr;
+                std::printf("    double-click on the fixture's Fitted modules row (%.0f,%.0f): its panel window is %s\n",
+                            spot.cx(), spot.cy(), open ? "open" : "NOT open");
+                CHECK(open);
+            }
+            // THE CONTROL: one click at the same place opens nothing.
+            char one[160];
+            std::snprintf(one, sizeof(one), "20 screen %.1f %.1f\n22 down\n24 up\n", spot.cx(), spot.cy());
+            const Result c = once("fitted-click", 70, one, true);
+            CHECK(c.ok);
+            if (c.ok) { CHECK(c.rect("panel:window:Settings Form Fixture") == nullptr); }
         }
     }
 

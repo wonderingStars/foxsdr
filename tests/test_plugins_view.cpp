@@ -989,9 +989,202 @@ void testIdleChipAndRows() {
     CHECK(fittedState(built, true) == FittedState::Idle);
 }
 
+// ---------------------------------------------------------------------------
+// 12. THE LIST UNDER THE STORE'S HEADINGS (0.99.77)
+// ---------------------------------------------------------------------------
+//
+// A US tester, through the owner (2026-10-13): "I really like how the store groups plugins by
+// function (Aircraft, Marine, Satellites and Weather, etc). That really makes it easier to browse.
+// Implement this sorting on the Plugins panel ... if you install them all, the list is quite long,
+// intermixed and kind-of alphabetical."
+//
+// The expectations below are written from that sentence and the store's own order (AIRCRAFT, MARINE,
+// SATELLITES AND WEATHER, METERS AND PAGING, VOICE AND DATA, MAPS AND TOOLS, OTHER), not read off the
+// code: a module the catalogue has no category for goes LAST, under OTHER.
+FittedModule catalogued(const char* file, const char* name, const char* category) {
+    FittedModule m = module(true, false, kDecoderBit, false);
+    m.file = file;
+    m.name = name;
+    m.category = category;
+    return m;
+}
+
+std::vector<FittedModule> sevenModules() {
+    return {
+        catalogued("alpha-1.0.0.dll", "Alpha", "broadcast"),           // 0  VOICE AND DATA
+        catalogued("bravo-1.0.0.dll", "bravo", "aircraft"),            // 1  AIRCRAFT
+        catalogued("charlie-1.0.0.dll", "Charlie", ""),                // 2  side-loaded: OTHER
+        catalogued("delta-1.0.0.dll", "Delta", "marine"),              // 3  MARINE
+        catalogued("echo-1.0.0.dll", "Echo", "aircraft"),              // 4  AIRCRAFT
+        catalogued("foxtrot-1.0.0.dll", "Foxtrot", "regional-radar"),  // 5  a category this build does not know: OTHER
+        catalogued("golf-1.0.0.dll", "Golf", "satellites-weather"),    // 6  SATELLITES AND WEATHER
+    };
+}
+
+void testRowsGroupedByCategory() {
+    using cascade::gui::StoreCategory;
+    std::vector<FittedModule> mods = sevenModules();
+    FittedModulesDeck deck;
+
+    // (group, then name, then index): Aircraft bravo, Echo - Marine Delta - Satellites Golf - Voice Alpha -
+    // Other Charlie, Foxtrot. Under the old name-only sort this was 0,1,2,3,4,5,6.
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 4, 3, 6, 0, 2, 5}));
+
+    // THE CHIPS AND THE SEARCH STILL FILTER FIRST, and the order of what is left is the same order.
+    deck.showNoSignal = false;  // none of these is a no-signal module: nothing leaves
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 4, 3, 6, 0, 2, 5}));
+    deck.showNoSignal = true;
+    std::snprintf(deck.search, sizeof deck.search, "%s", "o");  // bravo, Echo, Foxtrot and Golf have an o
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 4, 6, 5}));
+    deck.search[0] = '\0';
+
+    // A NAME TIE inside one group falls back to the index, so the order is total and stable.
+    mods.push_back(catalogued("bravo-2.0.0.dll", "BRAVO", "aircraft"));  // 7: same name as 1, other case
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 7, 4, 3, 6, 0, 2, 5}));
+    mods.pop_back();
+
+    // FLAT WHEN NO MODULE HAS A CATEGORY: exactly the name sort the window always had.
+    for (FittedModule& m : mods) { m.category.clear(); }
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{0, 1, 2, 3, 4, 5, 6}));
+}
+
+void testGroupBreaks() {
+    using cascade::gui::fittedGroupBreaks;
+    using cascade::gui::fittedGroupOf;
+    using cascade::gui::fittedIsGrouped;
+    using cascade::gui::FittedGroupBreak;
+    using cascade::gui::StoreCategory;
+    std::vector<FittedModule> mods = sevenModules();
+    FittedModulesDeck deck;
+
+    // The group a module's catalogue category puts it in is the STORE'S answer for that category.
+    CHECK(fittedGroupOf(mods[1]) == StoreCategory::Aircraft);
+    CHECK(fittedGroupOf(mods[3]) == StoreCategory::Marine);
+    CHECK(fittedGroupOf(mods[6]) == StoreCategory::SatellitesWeather);
+    CHECK(fittedGroupOf(mods[0]) == StoreCategory::VoiceData);
+    CHECK(fittedGroupOf(mods[2]) == StoreCategory::Other);  // no category
+    CHECK(fittedGroupOf(mods[5]) == StoreCategory::Other);  // a category this build does not know
+    FittedModule maps = catalogued("m.dll", "M", "maps-tools");
+    FittedModule meters = catalogued("p.dll", "P", "meters-paging");
+    CHECK(fittedGroupOf(maps) == StoreCategory::MapsTools);
+    CHECK(fittedGroupOf(meters) == StoreCategory::MetersPaging);
+
+    // A heading starts a group: one at every row whose group differs from the row before it, the first
+    // row included. Rows 1,4 | 3 | 6 | 0 | 2,5 are at positions 0,2,3,4,5 of the shown order.
+    CHECK(fittedIsGrouped(mods));
+    std::vector<int> rows = fittedVisibleRows(mods, true, deck);
+    std::vector<FittedGroupBreak> br = fittedGroupBreaks(mods, rows);
+    CHECK(br.size() == 5u);
+    if (br.size() == 5u) {
+        CHECK(br[0].at == 0u && br[0].group == StoreCategory::Aircraft);
+        CHECK(br[1].at == 2u && br[1].group == StoreCategory::Marine);
+        CHECK(br[2].at == 3u && br[2].group == StoreCategory::SatellitesWeather);
+        CHECK(br[3].at == 4u && br[3].group == StoreCategory::VoiceData);
+        CHECK(br[4].at == 5u && br[4].group == StoreCategory::Other);
+    }
+
+    // A GROUP WITH NO ROW LEFT HAS NO HEADING: the search "c" leaves Charlie (OTHER) and Echo (AIRCRAFT).
+    std::snprintf(deck.search, sizeof deck.search, "%s", "c");
+    rows = fittedVisibleRows(mods, true, deck);
+    br = fittedGroupBreaks(mods, rows);
+    CHECK((rows == std::vector<int>{4, 2}));
+    CHECK(br.size() == 2u);
+    if (br.size() == 2u) {
+        CHECK(br[0].at == 0u && br[0].group == StoreCategory::Aircraft);
+        CHECK(br[1].at == 1u && br[1].group == StoreCategory::Other);
+    }
+    // ...and no row at all has no heading at all.
+    std::snprintf(deck.search, sizeof deck.search, "%s", "nothing like this");
+    CHECK(fittedGroupBreaks(mods, fittedVisibleRows(mods, true, deck)).empty());
+    deck.search[0] = '\0';
+
+    // WHETHER THE LIST IS GROUPED IS A FACT OF THE WHOLE LIST, not of what the filter left: a search
+    // that happens to leave only side-loaded modules still shows their OTHER heading, so headings do
+    // not come and go as a tester types.
+    std::snprintf(deck.search, sizeof deck.search, "%s", "charlie");
+    rows = fittedVisibleRows(mods, true, deck);
+    br = fittedGroupBreaks(mods, rows);
+    CHECK((rows == std::vector<int>{2}));
+    CHECK(br.size() == 1u);
+    if (br.size() == 1u) { CHECK(br[0].at == 0u && br[0].group == StoreCategory::Other); }
+    deck.search[0] = '\0';
+
+    // FLAT WHEN NO MODULE HAS A CATEGORY - a fresh install that never read a catalogue: no heading.
+    for (FittedModule& m : mods) { m.category.clear(); }
+    CHECK(!fittedIsGrouped(mods));
+    CHECK(fittedGroupBreaks(mods, fittedVisibleRows(mods, true, deck)).empty());
+    // ONE catalogued module among side-loaded ones is enough to group them (it gets its heading, the rest OTHER).
+    mods[3].category = "marine";
+    CHECK(fittedIsGrouped(mods));
+    br = fittedGroupBreaks(mods, fittedVisibleRows(mods, true, deck));
+    CHECK(br.size() == 2u);
+    if (br.size() == 2u) {
+        CHECK(br[0].at == 0u && br[0].group == StoreCategory::Marine);
+        CHECK(br[1].at == 1u && br[1].group == StoreCategory::Other);
+    }
+    // No modules: nothing grouped, nothing to head.
+    CHECK(!fittedIsGrouped({}));
+    CHECK(fittedGroupBreaks({}, {}).empty());
+}
+
+// WHICH WINDOW A DOUBLE-CLICK OPENS. The owner (2026-10-13): "when you open the plugins Fitted modules
+// window, when I double click on the plugin it should show the plugin window". A plugin with a panel
+// opens its panel; failing that its picture window; failing that its instrument; failing that its
+// map page; and a plugin with none of those has only its module page.
+void testOwnWindow() {
+    using cascade::gui::fittedOpensOwnWindow;
+    using cascade::gui::fittedOwnWindowOf;
+    using cascade::gui::FittedOwnWindow;
+    static CascadePanelApi kPanel{};
+    static CascadeImageDecoderApi kImage{};
+    static CascadeInstrumentApi kInstrument{};
+    static CascadeTrackSourceApi kTrack{};
+
+    LoadedPlugin p;
+    p.path = "/p/thing-1.0.0.dll";
+    p.name = "Thing";
+    p.loaded = true;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::None);  // a plain decoder has no window of its own
+    p.trackSource = &kTrack;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Map);
+    p.instrument = &kInstrument;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Instrument);
+    p.imageDecoder = &kImage;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Picture);
+    p.panel = &kPanel;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Panel);
+    // THE RECORD CARRIES IT, from the pointers the host kept and not the declared bits.
+    CHECK(makeFittedModule(p, false, false, "", false).ownWindow == FittedOwnWindow::Panel);
+    LoadedPlugin bitOnly;
+    bitOnly.path = "/p/bit-1.0.0.dll";
+    bitOnly.loaded = true;
+    bitOnly.capabilities = CASCADE_CAP_PANEL | CASCADE_CAP_IMAGE_DECODER;  // declared, table cleared by the host
+    CHECK(makeFittedModule(bitOnly, false, false, "", false).ownWindow == FittedOwnWindow::None);
+    // A REFUSED module never opens anything, whatever pointers a stale record holds.
+    p.loaded = false;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::None);
+    p.loaded = true;
+
+    // The double-click opens a window only for a module that is loaded, has one, and is not stopped (a
+    // stopped plugin has no instances, so no window could draw: it gets its module page, which says so).
+    FittedModule m = makeFittedModule(p, false, false, "", false);
+    CHECK(fittedOpensOwnWindow(m));
+    m.stopped = true;
+    CHECK(!fittedOpensOwnWindow(m));
+    m.stopped = false;
+    m.loaded = false;
+    CHECK(!fittedOpensOwnWindow(m));
+    m.loaded = true;
+    m.ownWindow = FittedOwnWindow::None;
+    CHECK(!fittedOpensOwnWindow(m));
+}
+
 }  // namespace
 
 int main() {
+    testRowsGroupedByCategory();
+    testGroupBreaks();
+    testOwnWindow();
     testStateSweep();
     testImpossibleInputs();
     testStateWords();

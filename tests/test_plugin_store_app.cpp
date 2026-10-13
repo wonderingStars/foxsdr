@@ -14,6 +14,10 @@
  *   notice     GET on store-b's card OPENS ITS PAGE rather than fitting it; BEFORE YOU FIT IT sits
  *              between WHAT'S NEW and DETAILS; the page's key is GREYED until the tick - and after
  *              a scripted click on the tick it is GET;
+ *   card       (0.99.77) the owner, relaying a tester: "on the plugin store the whole [card] should be
+ *              clickable not just the text of the plugin": a click on the line under the name, on the
+ *              strip along the bottom or on the card's padding opens the page, a click in the gap
+ *              between cards does not, and a click on the card's GET key is the key's alone;
  *   updates    the UPDATES tab lists store-c with "1.0.0 to 1.1.0" and its UPDATE key;
  *   rectangle  the store window's rectangle is saved by one run and is where the next run opens
  *              it - and a rectangle put in the config by hand is the one the run reports back;
@@ -356,6 +360,8 @@ bool sectionsInOrder(const Result& r, const char* prefix, const std::vector<std:
 
 int main(int argc, char** argv) {
     std::printf("test_plugin_store_app\n");
+    // Unbuffered, so a run that a timeout stops still says how far it got.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 2) {
         std::printf("usage: test_plugin_store_app <probe module>\n");
         return 2;
@@ -394,7 +400,7 @@ int main(int argc, char** argv) {
     writeFile(indexPath(), indexText());
 
     // --- BROWSE ---------------------------------------------------------------
-    Rect nameA, keyB, tabUpdates;
+    Rect nameA, keyB, tabUpdates, cardA, keyA;
     {
         resetPluginsFolder(false);
         RunOptions o;
@@ -442,6 +448,8 @@ int main(int argc, char** argv) {
                 CHECK(r.rect("store:search") != nullptr && c.y0 > r.rect("store:search")->y1);
             }
             nameA = need(r, "store:card:store-a:name");
+            cardA = need(r, "store:card:store-a");
+            keyA = need(r, "store:card:store-a:key");
             keyB = need(r, "store:card:store-b:key");
             tabUpdates = need(r, "store:tab:updates");
             // GET EVERYTHING sits at the foot, below the last card.
@@ -521,6 +529,75 @@ int main(int argc, char** argv) {
         if (rb.ok) {
             CHECK(rb.has("store:page:closed:back"));
             CHECK(!rb.has("store:page:closed:esc"));
+        }
+    }
+
+    // --- THE WHOLE CARD IS ONE TARGET (0.99.77) ---------------------------------------------------
+    //
+    // The owner, relaying a tester (2026-10-13): "on the plugin store the whole [card] should be
+    // clickable not just the text of the plugin". Until then only the picture and the name opened the
+    // page. A click on any part of the card that is not a key - the line under the name, the strip
+    // along the bottom, the card's own padding - opens it now; a click on the card's KEY is the key's
+    // alone and does not also open the page.
+    {
+        struct Spot {
+            const char* tag;
+            float x, y;
+        };
+        // Every spot is chosen from the rectangles a layout run reported and is clear of the picture, the
+        // name (their own targets since 0.99.72) and the key. The line under the name is the summary; the
+        // strip is the bottom row left of the key (where the badges go); the padding is the card's left edge.
+        const Spot spots[] = {
+            {"card-summary", nameA.x0 + 30.0f, nameA.y1 + 8.0f},
+            {"card-strip", nameA.x0 + 20.0f, keyA.cy()},
+            {"card-padding", cardA.x0 + 3.0f, cardA.cy()},
+        };
+        for (const Spot& s : spots) {
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 80;
+            Rect at;
+            at.x0 = at.x1 = s.x;
+            at.y0 = at.y1 = s.y;
+            o.script = click(40, at);
+            const Result r = once(s.tag, o);
+            CHECK(r.ok);
+            if (r.ok) {
+                std::printf("    %s: a click at %.0f,%.0f on the card %.0f..%.0f x %.0f..%.0f\n", s.tag, s.x, s.y,
+                            cardA.x0, cardA.x1, cardA.y0, cardA.y1);
+                CHECK(s.x > cardA.x0 && s.x < cardA.x1 && s.y > cardA.y0 && s.y < cardA.y1);
+                CHECK(r.has("store:page:store-a"));
+            }
+        }
+        // THE CONTROL: the same click on the empty well BETWEEN the cards opens nothing, so the page
+        // above was opened by the card and not by any click in this window.
+        {
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 80;
+            Rect gap;
+            gap.x0 = gap.x1 = cardA.x0 - 4.0f;
+            gap.y0 = gap.y1 = cardA.cy();
+            o.script = click(40, gap);
+            const Result r = once("card-gap", o);
+            CHECK(r.ok);
+            if (r.ok) { CHECK(!r.has("store:page:store-a")); }
+        }
+        // THE KEY TAKES ITS OWN PRESS: GET on store-a (no legal notice) starts fitting it and does NOT
+        // open the page, though the key sits on the card.
+        {
+            resetPluginsFolder(false);
+            RunOptions o;
+            o.frames = 80;
+            o.script = click(40, keyA);
+            const Result r = once("card-key", o);
+            CHECK(r.ok);
+            if (r.ok) {
+                std::printf("    GET on store-a: page opened %s; fitting %s\n", r.has("store:page:store-a") ? "yes" : "no",
+                            r.has("store:key:store-a:fitting") ? "yes" : "no");
+                CHECK(!r.has("store:page:store-a"));
+                CHECK(r.has("store:key:store-a:fitting"));
+            }
         }
     }
 

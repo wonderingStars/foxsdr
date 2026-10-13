@@ -87,6 +87,17 @@ set_target_properties(track_probe_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_track/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_track/$<CONFIG>")
 
+# A REAL PLUGIN MODULE WHOSE PANEL ROWS ARE KEYS (0.99.77), for test_row_keys_app: a programme
+# chooser that marks its rows CASCADE_ROW_FLAG_KEY only when get_state says the host draws them
+# (CASCADE_STATE_ROW_KEYS), registers its commands with add_command, and writes every press it is
+# handed by poll_command to a file. Its own directory.
+add_library(row_keys_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/row_keys_plugin.cpp")
+target_include_directories(row_keys_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(row_keys_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rowkeys/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_rowkeys/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT DECLARES THE WRONG ABI, for test_health_paths: the
 # plugin host loads it as any plugin and refuses it, which is the "abi" word of
 # the anonymous failure count (core/health_events.hpp). Its own directory.
@@ -314,6 +325,14 @@ foreach(src ${CASCADE_TESTS})
         # heard without a position are listed after the placed ones and never drawn (0.99.75).
         add_dependencies(${name} track_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
+    elseif(name STREQUAL "test_row_keys_app")
+        # Runs the real cascade.exe (built first) with the row-keys fixture fitted and pinned to run,
+        # opens its panel from the DECODE bank's row, presses its rows with the input script and reads
+        # from the UI census and from the fixture's own log that a pressable row (0.99.77) is listed,
+        # that a press reaches the plugin's poll_command with the id, and that sixteen commands are
+        # sixteen keys on its page.
+        add_dependencies(${name} row_keys_fixture cascade)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:row_keys_fixture>")
     elseif(name STREQUAL "test_plugin_inuse_app")
         # Runs the real cascade.exe (built first) with the same two modules fitted, and the preset
         # probe beside them, and reads from the modules' own event logs WHEN the host creates and
@@ -436,6 +455,12 @@ set_tests_properties(test_decoder_settings_fold_app PROPERTIES TIMEOUT 600)
 # The unplaced-list test starts the real application three times (the heard rows, a bare NaN, and
 # "On screen only"), 80 frames each. The same bound, for the same reason, as the test above.
 set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
+# The row-keys test starts the real application twelve times (a layout run, the window open, a
+# press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
+# geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
+# keys), 60 to 160 frames each with a half-second sleep in most: 28 s on this desktop. The same
+# bound, for the same reason, as the tests above.
+set_tests_properties(test_row_keys_app PROPERTIES TIMEOUT 600)
 # The in-use test starts the real application about twenty times (the scenarios in its header: a
 # layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
 # interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given

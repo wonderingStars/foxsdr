@@ -95,6 +95,30 @@ void setMember(std::vector<std::string>& v, const std::string& k, bool on) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// Pressable panel rows (0.99.77)
+// ---------------------------------------------------------------------------
+
+std::uint32_t panelRowKeyId(const CascadePanelRow& row) {
+    // ONLY A TABLE ROW, AND ONLY WITH THE FLAG: a heading and a separator are never keys, and id
+    // bits without CASCADE_ROW_FLAG_KEY are not read - a plugin that wrote junk into the bits above
+    // the three emphasis flags before 0.99.77 must not find its rows pressable now.
+    if (row.kind != CASCADE_ROW_CELLS || (row.flags & CASCADE_ROW_FLAG_KEY) == 0u) { return 0u; }
+    return CASCADE_ROW_KEY_ID(row.flags);
+}
+
+std::uint32_t panelRowPressable(const CascadePanelRow& row,
+                                const std::vector<HostCommand>& registered) {
+    const std::uint32_t id = panelRowKeyId(row);
+    if (id == 0u) { return 0u; }
+    // ONLY AN ID THE PLUGIN REGISTERED: pressCommand refuses any other, so a key drawn for one
+    // would take the click and do nothing - a control that lies about having done something.
+    for (const HostCommand& c : registered) {
+        if (c.id == id) { return id; }
+    }
+    return 0u;
+}
+
+// ---------------------------------------------------------------------------
 // Real-time marker
 // ---------------------------------------------------------------------------
 
@@ -571,6 +595,12 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     // only when it sees this bit. A host that did not set it would be telling the ADS-B
     // plugin to go on hiding every aircraft it has heard and not yet placed.
     flags |= CASCADE_STATE_LISTS_UNPLACED_TRACKS;
+    // LIKEWISE (0.99.77): the host draws a panel row that carries CASCADE_ROW_FLAG_KEY as a key
+    // and delivers its press through poll_command (drawRowTable, PluginApiCore::pressCommand), and
+    // a plugin shows "press to choose" wording, and registers the commands only its row keys need,
+    // only when it sees this bit. A host that did not set it would be telling the IBOC plugin to
+    // go on offering HD1 to HD8 as text.
+    flags |= CASCADE_STATE_ROW_KEYS;
     s.flags = flags;
     s.seq = p.seq;
     s.tuneSeq = p.tuneSeq;

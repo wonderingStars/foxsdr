@@ -20,6 +20,9 @@
  *             are never on screen - and the heading still counts them;
  *   only heard nothing placed at all: the two heard rows are still drawn (the list is not the
  *             "No targets." empty state while it has rows).
+ *   dblclick  (0.99.77) with the map seam off and the Fitted modules window up instead, a double-click
+ *             on the fixture's row opens its map page - the fixture has no panel, picture or
+ *             instrument, so the map is its own window - and one click on the same place does not.
  *
  * The census carries the heading's numbers ("tracklist:count:<shown>/<total>" and
  * "tracklist:unplaced:<n>") and a rectangle for each row's label ("tracklist:row:<id>" and
@@ -165,9 +168,12 @@ void installFixture() {
     CHECK(!ec);
 }
 
-// One run of the application. `onScreenOnly` is the saved "On screen only" tick.
+// One run of the application. `onScreenOnly` is the saved "On screen only" tick. `fitted` (0.99.77) runs
+// WITHOUT the map seam and with the Fitted modules window up instead, in a rectangle inside the main
+// window (it opens a stagger slot past the main window's right edge when nothing is saved, which in a
+// single viewport is outside the only window there is), driven by `script` (FOXSDR_INPUT_SCRIPT).
 Result once(const std::string& tag, int frames, bool onScreenOnly, bool bareNan,
-            bool onlyHeard = false) {
+            bool onlyHeard = false, bool fitted = false, const std::string& script = std::string()) {
     Result r;
     const fs::path cfg = g_dir / (tag + ".json");
     const fs::path census = g_dir / (tag + ".census");
@@ -181,7 +187,16 @@ Result once(const std::string& tag, int frames, bool onScreenOnly, bool bareNan,
                                "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", "
                                "\"interfaceScale\": \"100\", \"mainView\": \"receiver\", "
                                "\"bandPlanOverlay\": false, \"mapListOnScreenOnly\": ") +
-                       (onScreenOnly ? "true" : "false") + " }\n");
+                       (onScreenOnly ? "true" : "false") +
+                       (fitted ? ", \"fittedModulesX\": 60, \"fittedModulesY\": 50, \"fittedModulesWidth\": 1400, "
+                                 "\"fittedModulesHeight\": 880"
+                               : "") +
+                       " }\n");
+    const std::string scriptPath = (g_dir / (tag + ".script")).string();
+    writeFile(scriptPath, script);
+    setEnv("FOXSDR_OPEN_MAP", fitted ? "" : "Track Probe");
+    setEnv("FOXSDR_OPEN_FITTED_MODULES", fitted ? "1" : "");
+    setEnv("FOXSDR_INPUT_SCRIPT", script.empty() ? std::string() : scriptPath);
     setEnv("CASCADE_CONFIG_TEST", cfg.string());
     setEnv("FOXSDR_UI_CENSUS", census.string());
     setEnv("FOXSDR_DIAG_DIR", diag.string());
@@ -355,6 +370,47 @@ int main(int argc, char** argv) {
             CHECK(r.rect("tracklist:row:PLACED") == nullptr);
             CHECK(r.rect("tracklist:heardrow:HEARD1") != nullptr);
             CHECK(r.rect("tracklist:heardrow:HEARD2") != nullptr);
+        }
+    }
+
+    // --- A DOUBLE-CLICK ON THE TRACKER'S FITTED MODULES ROW OPENS ITS MAP PAGE (0.99.77) -----------------
+    //
+    // The owner (2026-10-13): "when you open the plugins Fitted modules window, when I double click on the
+    // plugin it should show the plugin window". The fixture is a track source and declares no panel,
+    // picture or instrument, so its own window is its map page. Nothing but the Fitted modules window is
+    // opened here (no map seam), so the page's target list appearing in the census (its heading, with the
+    // numbers above) can only be the double-click's doing.
+    {
+        const Result lay = once("fitted-layout", 50, false, false, false, true);
+        CHECK(lay.ok);
+        const std::string rowId = std::string("fitted:row:track_probe_fixture") + kExt;
+        const Rect* row = lay.ok ? lay.rect(rowId) : nullptr;
+        const Rect* name = lay.ok ? lay.rect(rowId + ":name") : nullptr;
+        const Rect* key = lay.ok ? lay.rect(rowId + ":key") : nullptr;
+        CHECK(row != nullptr && name != nullptr && key != nullptr);
+        if (lay.ok) {
+            CHECK(lay.itemsWith("tracklist:count:").empty());  // nothing opened the map page
+        }
+        if (row != nullptr && name != nullptr && key != nullptr) {
+            const float x = name->x1 + 0.3f * (key->x0 - name->x1);
+            const float y = 0.5f * (row->y0 + row->y1);
+            char dbl[200];
+            // (The pointer two frames before the first press; then down, up, down, up in consecutive frames.)
+            std::snprintf(dbl, sizeof(dbl), "20 screen %.1f %.1f\n22 down\n23 up\n24 down\n25 up\n", x, y);
+            const Result d = once("fitted-dblclick", 90, false, false, false, true, dbl);
+            CHECK(d.ok);
+            if (d.ok) {
+                const std::set<std::string> count = d.itemsWith("tracklist:count:");
+                std::printf("    double-click on the tracker's row (%.0f,%.0f): its map page's target list says %s\n", x, y,
+                            Result::join(count).c_str());
+                CHECK(!count.empty());
+                CHECK(d.rect("tracklist:row:PLACED") != nullptr);
+            }
+            char one[160];
+            std::snprintf(one, sizeof(one), "20 screen %.1f %.1f\n22 down\n24 up\n", x, y);
+            const Result c = once("fitted-click", 90, false, false, false, true, one);
+            CHECK(c.ok);
+            if (c.ok) { CHECK(c.itemsWith("tracklist:count:").empty()); }
         }
     }
 

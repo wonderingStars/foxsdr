@@ -267,6 +267,63 @@ it must not rely on that: **a host older than 0.99.75 drops such a track**, so
 publish them only when the bit is set, and keep working (placed targets only) when
 it is not.
 
+### Panel rows the user can press (0.99.77)
+
+A panel (`CASCADE_CAP_PANEL`) used to be read-only: the host drew the rows and a
+click on one went nowhere. The IBOC Radio plugin lists its eight HD programmes in
+its panel, and a tester asked for the obvious thing - "if I click on HD2 on the
+screen below, it should select that program, instead of having to go into the
+plugin settings and change the Programme to 1". From FoxSDR 0.99.77 a table row
+(`CASCADE_ROW_CELLS`) can be a **key bound to one of your commands**:
+
+```c
+host->add_command(host->ctx, 12, "HD2");              /* once, as for a plate key */
+...
+row.kind  = CASCADE_ROW_CELLS;
+row.flags = CASCADE_ROW_KEY_FLAGS(12) | CASCADE_ROW_FLAG_GOOD;   /* a key for command 12, lit */
+...
+while (host->poll_command(host->ctx, &id) == 1) { if (id == 12) choose_programme(2); }
+```
+
+`CASCADE_ROW_FLAG_KEY` (0x00000008) marks the row and the command id rides in
+bits 8..15 of `flags` (`CASCADE_ROW_KEY_ID_MASK` 0x0000FF00, shifted by
+`CASCADE_ROW_KEY_ID_SHIFT`); `CASCADE_ROW_KEY_FLAGS(id)` builds the two together and
+`CASCADE_ROW_KEY_ID(flags)` reads the id back. The id is in `flags` and not a new
+field because `CascadePanelRow` has no `structSize` - the host allocates the array
+and you write it - so it cannot grow. That makes the id 1..255; `GOOD`, `WARN` and
+`MUTED` still apply to a key.
+
+The host draws the whole row as a key (it lights under the pointer, and the cell
+texts stay as you wrote them) and delivers a press exactly as it delivers a press of
+a key on your plate: it queues the command id, and you take it with `poll_command`
+from wherever you already run regularly - your `poll_rows` is the natural place.
+Three things are not keys, and are drawn as the text they always were: a heading or
+a separator, a row whose id is 0, and **a row whose id you never registered with
+`add_command`** (a key the host would refuse to press). Pressing it never reaches
+you, and neither does a press while the plugin is stopped.
+
+**Use it only when you see the bit.** From 0.99.77 `get_state` reports
+`CASCADE_STATE_ROW_KEYS` (0x00010000) in every state it fills, with no grant. A
+host older than that draws a flagged row as plain text - harmless, but a heading
+that says "press one to choose" would be a lie - so show that wording, and
+register the commands only the keys need, when the bit is set:
+
+```c
+CascadeReceiverState s = {0};
+s.structSize = sizeof s;
+int keys = host->get_state(host->ctx, &s) == CASCADE_API_OK &&
+           (s.flags & CASCADE_STATE_ROW_KEYS) != 0;
+```
+
+**The command limit went from 8 to 16 in the same release**
+(`CASCADE_MAX_COMMANDS_PER_PLUGIN`), because a chooser for eight programmes needs
+eight commands beside the keys a plugin already had. A host before 0.99.77 refuses
+the ninth `add_command` with `CASCADE_API_LIMIT`: register the keys you can live
+without last, or register the row keys only when `CASCADE_STATE_ROW_KEYS` is set, as
+above. An instrument's memory rows (`CASCADE_CAP_INSTRUMENT` with a row feed) follow
+the same contract and behave the same way. The web remote does not show panel rows
+at all, so a flagged row is not delivered to a browser.
+
 ## Changing the receiver
 
 Every `set_*` is a **request**: validated and permission-checked at once,
@@ -553,8 +610,12 @@ uint32_t id;
 while (host->poll_command(host->ctx, &id) == 1) { run_command(id); }
 ```
 
-Up to 8 keys, drawn on your plate in Fitted modules in the order you added them,
-labelled in your own words (the host does not translate them). A press is queued
+Up to 16 keys (8 before FoxSDR 0.99.77, which refuses the ninth with `LIMIT`),
+drawn on your plate in Fitted modules in the order you added them, two to a line,
+labelled in your own words (the host does not translate them). A command can also
+be bound to a row of your panel, so the user presses the row instead of a key on
+your plate ([Panel rows the user can press](#panel-rows-the-user-can-press-09977)).
+A press is queued
 (16 deep; the oldest is dropped past that) until you take it with
 `poll_command`, which you should call from wherever your plugin already runs
 regularly - a `poll_rows`, a `poll_state`, a `process()`. `remove_command(id)`

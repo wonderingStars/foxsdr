@@ -305,12 +305,52 @@ std::vector<int> fittedVisibleRows(const std::vector<FittedModule>& modules, boo
         const FittedModule& m = modules[static_cast<std::size_t>(i)];
         return lowerAscii(m.loaded && !m.name.empty() ? m.name : m.file);
     };
+    // THE STORE'S GROUP FIRST (0.99.77), then the name. With no category on any module every row is in
+    // OTHER, and this is the name sort the window always had.
     std::sort(rows.begin(), rows.end(), [&](int a, int b) {
+        const StoreCategory ga = fittedGroupOf(modules[static_cast<std::size_t>(a)]);
+        const StoreCategory gb = fittedGroupOf(modules[static_cast<std::size_t>(b)]);
+        if (ga != gb) { return ga < gb; }
         const std::string la = label(a), lb = label(b);
         if (la != lb) { return la < lb; }
         return a < b;
     });
     return rows;
+}
+
+StoreCategory fittedGroupOf(const FittedModule& m) { return storeCategoryFor(m.category); }
+
+bool fittedIsGrouped(const std::vector<FittedModule>& modules) {
+    for (const FittedModule& m : modules) {
+        if (!m.category.empty()) { return true; }
+    }
+    return false;
+}
+
+std::vector<FittedGroupBreak> fittedGroupBreaks(const std::vector<FittedModule>& modules,
+                                                const std::vector<int>& rows) {
+    std::vector<FittedGroupBreak> out;
+    if (!fittedIsGrouped(modules)) { return out; }
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const StoreCategory g = fittedGroupOf(modules[static_cast<std::size_t>(rows[i])]);
+        if (i == 0 || g != fittedGroupOf(modules[static_cast<std::size_t>(rows[i - 1])])) {
+            out.push_back(FittedGroupBreak{i, g});
+        }
+    }
+    return out;
+}
+
+FittedOwnWindow fittedOwnWindowOf(const cascade::core::LoadedPlugin& p) {
+    if (!p.loaded) { return FittedOwnWindow::None; }
+    if (p.panel != nullptr) { return FittedOwnWindow::Panel; }
+    if (p.imageDecoder != nullptr) { return FittedOwnWindow::Picture; }
+    if (p.instrument != nullptr) { return FittedOwnWindow::Instrument; }
+    if (p.trackSource != nullptr) { return FittedOwnWindow::Map; }
+    return FittedOwnWindow::None;
+}
+
+bool fittedOpensOwnWindow(const FittedModule& m) {
+    return m.loaded && !m.stopped && m.ownWindow != FittedOwnWindow::None;
 }
 
 std::string fittedDateText(const FittedModule& m) {
@@ -352,6 +392,8 @@ FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped
     // otherwise be offered a grant it cannot use.
     m.tuneCapable = (p.hostClient != nullptr);
     m.tuneAllowed = tuneAllowed;
+    // THE WINDOW A DOUBLE-CLICK OPENS, from the same table pointers (0.99.77).
+    m.ownWindow = fittedOwnWindowOf(p);
     // THE RECORD'S SIZE, measured once by the scan (LoadedPlugin::fileBytes) and carried,
     // never looked up here: this runs for every module on every frame the window is open,
     // and a stat per module per frame froze windows whose plugin folder was slow. 0 is "not
@@ -712,6 +754,14 @@ float drawOnThisMachine(ImDrawList* dl, const FittedModule& m, const ModulePlate
                             act.file = m.file;
                             act.commandId = m.commands[ci].id;
                         }
+                        // WHERE EACH COMMAND KEY IS (0.99.77: a plugin may have sixteen, two to a
+                        // line, and the page must lay every one of them out - the page's body
+                        // scrolls, so a ninth key below the fold is reached by scrolling, not lost).
+                        if (census::enabled()) {
+                            census::note("fitted:page:cmd:", std::to_string(ci));
+                            censusRect("fitted:page:cmd:" + std::to_string(ci), kx, cy, kx + halfW,
+                                       cy + kh);
+                        }
                     }
                     if (!left || ci + 1u == m.commands.size()) { cy += kh + 8.0f * k; }
                 }
@@ -866,6 +916,26 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
             }
         }
         if (pageIdx < 0) { deck.pageFile.clear(); }
+    }
+    // THE SECOND PRESS OF A DOUBLE-CLICK ON A ROW'S NAME OR PICTURE (0.99.77). The first click of the pair
+    // opened this module's page, as a single click on either always has, so the second lands on the page
+    // and not on the row. It is recognised here, before the page draws a thing it could press: a
+    // double-click within the double-click time of the click that opened the page. A module with a
+    // window of its own hands the user that window and the list comes back; one without has only the
+    // page, which stays.
+    if (pageIdx >= 0 && deck.rowOpenedFile == deck.pageFile && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+        now - deck.rowOpenedAt <= static_cast<double>(ImGui::GetIO().MouseDoubleClickTime)) {
+        const FittedModule& dm = model.modules[static_cast<std::size_t>(pageIdx)];
+        deck.rowOpenedFile.clear();
+        if (fittedOpensOwnWindow(dm)) {
+            act.kind = FittedModulesAction::Kind::OpenWindow;
+            act.file = dm.file;
+            deck.pageFile.clear();
+            pageIdx = -1;
+            // The list is drawn again below with this press still down over the name that opened the
+            // page; its release is the double-click's, not a second click on the name.
+            deck.swallowRowClick = true;
+        }
     }
     if (deck.pageFile != deck.lastPageFile) {
         deck.page.reset();
@@ -1127,7 +1197,27 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
             const float rmW = removeKeyWidth();
             const float rowGap = 8.0f * k;
             const float rightW = 14.0f * k + rmW + rowGap + stopW + 16.0f * k + stW + 14.0f * k;
+            // THE STORE'S HEADINGS (0.99.77), drawn in the store's own idiom and noted in the census as
+            // "fitted:group:<name>" - the names the store's sections carry ("store:section:<name>").
+            // None at all while no module has a catalogue category.
+            const std::vector<FittedGroupBreak> breaks = fittedGroupBreaks(model.modules, rows);
+            std::size_t nextBreak = 0;
+            // (Read once, before the loop: the release that ends a swallowed press is itself a press of
+            // the name's button, in a frame in which the button is no longer down.)
+            const bool swallowClick = deck.swallowRowClick;
             for (std::size_t ri = 0; ri < rows.size(); ++ri) {
+                if (nextBreak < breaks.size() && breaks[nextBreak].at == ri) {
+                    const StoreCategory g = breaks[nextBreak].group;
+                    ++nextBreak;
+                    if (ri > 0) { cy += 8.0f * k; }
+                    const float hh = drawSectionHeading(cdl, ImVec2(cx0, cy), cw, storeCategoryHeading(g));
+                    if (census::enabled()) {
+                        census::note("fitted:group:", storeCategoryCensusName(g));
+                        census::rect(std::string("fitted:group:") + storeCategoryCensusName(g), cx0, cy, cx0 + cw,
+                                     cy + hh);
+                    }
+                    cy += hh;
+                }
                 const FittedModule& m = model.modules[static_cast<std::size_t>(rows[ri])];
                 const FittedState st = fittedState(m, model.receiverRunning);
                 const FittedRowNote note = fittedRowNote(m, model.receiverRunning);
@@ -1171,7 +1261,13 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
                     addEllipsized(cdl, uf, upx, ImVec2(tx, ty + nameH + 2.0f * k),
                                   note.warning ? theme::kAmber : theme::kInkMuted, note.text.c_str(), tw);
                 }
-                if (open) { deck.pageFile = m.file; }
+                if (open && !swallowClick) {
+                    deck.pageFile = m.file;
+                    // The first click of a double-click, when it is one: the page it opens is handed back
+                    // by the second press (see the top of this function).
+                    deck.rowOpenedFile = m.file;
+                    deck.rowOpenedAt = now;
+                }
                 // the right cluster: the state with its lamp, STOP or START, REMOVE
                 float rx = rbr.x - 14.0f * k;
                 const bool armed = deck.confirmRemove == m.file;
@@ -1243,9 +1339,30 @@ FittedModulesAction drawFittedModulesPanel(FittedModulesDeck& deck, const Fitted
                     census::rect("fitted:row:" + m.id + ":name", tx, ty, tx + nw, ty + nameH);
                     census::note("fitted:state:", m.id + ":" + censusStateName(st));
                 }
+                // A DOUBLE-CLICK ANYWHERE ON THE ROW BUT ON AN ITEM OF ITS OWN (0.99.77). The owner (2026-10-13):
+                // "when I double click on the plugin it should show the plugin window". Read here, after the
+                // glyph, the name and the keys have been submitted, so that a press on any of them is theirs:
+                // IsWindowHovered is false while one of them is held, which a press is, and no item is hovered
+                // where the rest is true (a double-click on REMOVE, say, is REMOVE's, twice:
+                // tests/test_plugin_inuse_app.cpp, dbl-key). It is a hover test and not a button laid
+                // over the row, because this application lets a window be dragged by any empty part of it
+                // (io.ConfigWindowsMoveFromTitleBarOnly is off) and a button would have taken that from every
+                // row. A module with a window of its own gets that window; one without gets its page, which
+                // is what a single click on its name gives. A single click on the empty part still does nothing.
+                if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(rtl, rbr) &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) {
+                    if (fittedOpensOwnWindow(m)) {
+                        act.kind = FittedModulesAction::Kind::OpenWindow;
+                        act.file = m.file;
+                    } else {
+                        deck.pageFile = m.file;
+                    }
+                }
                 ImGui::PopID();
                 cy += rowH + 8.0f * k;
             }
+            // The swallowed press is over once the button is up (its release was swallowed above).
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) { deck.swallowRowClick = false; }
             // ---- CLEAN UP OLD VERSIONS, at the foot ----------------------------------------
             cy += 6.0f * k;
             ImGui::SetCursorScreenPos(ImVec2(cx0, cy));

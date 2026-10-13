@@ -40,6 +40,21 @@
  *              DIFFERENT version of the file - creates nothing, and the next save carries the
  *              stop in `pluginRun` and an empty `pluginsStopped`.
  *
+ * AND THE FITTED MODULES LIST (0.99.77), which the owner and a US tester asked for in these words
+ * (2026-10-13): "when you open the plugins Fitted modules window, when I double click on the plugin
+ * it should show the plugin window", and "I really like how the store groups plugins by function
+ * ... Implement this sorting on the Plugins panel and the 'Turn on and off plugins' menu as well":
+ *
+ *   groups     the three fitted modules, two of them known to a kept catalogue (the picture decoder as
+ *              AIRCRAFT, the text decoder as VOICE AND DATA) and one side-loaded: the Fitted modules
+ *              window lists them under the store's headings in the store's order, OTHER last, and the
+ *              DECODE bank's "Turn on and off plugins" section does the same; with no catalogue kept
+ *              neither has a heading and the Fitted modules list is the name-sorted list it was;
+ *   dblclick   a double-click on a row's empty part, and on its name, opens the picture decoder's own
+ *              window and wakes the plugin (`woke - window open`, one decoder created, nothing
+ *              pinned), and the list comes back; the text decoder, which has no window of its own,
+ *              gets its page; a stopped plugin gets its page and no window.
+ *
  * NO NETWORK: every telemetry address is a discard port and the update check is off.
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -65,6 +80,8 @@
 #include <unistd.h>
 #endif
 
+#include "core/plugin_abi.h"
+#include "core/plugin_repo.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -215,9 +232,65 @@ void installPlugins(const std::string& textFile, const std::string& imageFile,
     }
 }
 
+// A CATALOGUE THAT KNOWS TWO OF THE THREE FITTED MODULES (0.99.77), for the runs that look at how the
+// lists are grouped: the picture decoder is "grp-image" in AIRCRAFT and the text decoder "grp-text" in
+// VOICE AND DATA (the catalogue's `broadcast`); the preset probe is in neither the records nor the
+// catalogue, like a module dropped into the folder by hand. The kept copy is what the application loads
+// at start-up; the same text is the local index the config names, so nothing is ever fetched.
+std::string catalogueEntry(const std::string& id, const std::string& name, const std::string& category,
+                           const std::string& file) {
+    std::ostringstream o;
+    o << "    {\n"
+      << "      \"id\": \"" << id << "\", \"name\": \"" << name << "\", \"version\": \"1.0.0\",\n"
+      << "      \"author\": \"Grouping Test Maker\", \"licence\": \"MIT\", \"abiVersion\": "
+      << CASCADE_PLUGIN_ABI_VERSION << ",\n"
+      << "      \"capabilities\": [\"CASCADE_CAP_DECODER\"],\n"
+      << "      \"summary\": \"The summary of " << name << ".\",\n"
+      << "      \"description\": \"What " << name << " does.\",\n"
+      << "      \"category\": \"" << category << "\", \"experimental\": false,\n"
+      << "      \"whatsNew\": \"1.0.0: first release.\", \"published\": \"2026-10-13\",\n"
+      << "      \"homepage\": \"https://example.invalid/" << id << "\",\n"
+      << "      \"platforms\": [ { \"os\": \"" << cascade::core::PluginRepo::hostOs() << "\", \"arch\": \""
+      << cascade::core::PluginRepo::hostArch() << "\", \"file\": \"" << file << "\", \"url\": "
+      << "\"https://example.invalid/" << id << "/" << file << "\", \"sha256\": \"" << std::string(64, 'c')
+      << "\", \"sizeBytes\": 4096 } ]\n"
+      << "    }";
+    return o.str();
+}
+
+std::string catalogueText() {
+    std::ostringstream o;
+    o << "{\n  \"schemaVersion\": 1,\n  \"generated\": \"2026-10-13T00:00:00Z\",\n  \"plugins\": [\n"
+      << catalogueEntry("grp-image", "Image Probe", "aircraft", std::string("image_probe") + kExt) << ",\n"
+      << catalogueEntry("grp-text", "Rescan Probe a", "broadcast", std::string("rescan_probe_a") + kExt)
+      << "\n  ]\n}\n";
+    return o.str();
+}
+
+fs::path indexPath() { return g_dir / "index.json"; }
+
+// The install records and the kept catalogue, written over whatever installPlugins() left.
+void writeCatalogue() {
+    std::ostringstream m;
+    m << "{ \"schemaVersion\": 1, \"plugins\": [ "
+      << "{ \"id\": \"grp-image\", \"name\": \"Image Probe\", \"version\": \"1.0.0\", \"file\": \"image_probe"
+      << kExt << "\", \"abiVersion\": " << CASCADE_PLUGIN_ABI_VERSION << ", \"installedAt\": 1790000000 }, "
+      << "{ \"id\": \"grp-text\", \"name\": \"Rescan Probe a\", \"version\": \"1.0.0\", \"file\": "
+         "\"rescan_probe_a"
+      << kExt << "\", \"abiVersion\": " << CASCADE_PLUGIN_ABI_VERSION << ", \"installedAt\": 1790000000 } ] }\n";
+    writeFile(pluginsDir() / "installed.json", m.str());
+    writeFile(pluginsDir() / "catalogue.json", catalogueText());
+    writeFile(pluginsDir() / "catalogue.json.time", "1790000000\n");
+    writeFile(indexPath(), catalogueText());
+}
+
+// The config line that points the catalogue at that local file (so no run reaches the network).
+std::string catalogueConfig() { return ", \"pluginCatalogueUrl\": \"" + indexPath().generic_string() + "\""; }
+
 struct RunOptions {
     int frames = 60;
     std::string script;           // FOXSDR_INPUT_SCRIPT, empty = none
+    bool openDecoders = false;    // FOXSDR_OPEN_DECODERS: the DECODE bank's "Turn on and off plugins" open
     bool openFitted = false;      // FOXSDR_OPEN_FITTED_MODULES, in a rectangle inside the main window
     bool openDecoderOutput = false;  // FOXSDR_OPEN_DECODER_OUTPUT (the capture seam)
     std::string dormantAfterMs;   // FOXSDR_DORMANT_AFTER_MS, empty = the real 30 s
@@ -264,6 +337,7 @@ Result once(const std::string& tag, const RunOptions& o) {
     setEnv("FOXSDR_INPUT_SCRIPT", o.script.empty() ? std::string() : scriptPath);
     setEnv("FOXSDR_SCRIPT_TRACE", (g_dir / (tag + ".trace")).string());
     setEnv("FOXSDR_OPEN_FITTED_MODULES", o.openFitted ? "1" : "");
+    setEnv("FOXSDR_OPEN_DECODERS", o.openDecoders ? "1" : "");
     setEnv("FOXSDR_OPEN_DECODER_OUTPUT", o.openDecoderOutput ? "1" : "");
     setEnv("FOXSDR_DORMANT_AFTER_MS", o.dormantAfterMs);
     setEnv("FOXSDR_PRESS_PRESET", o.press);
@@ -314,6 +388,27 @@ std::string click(int frame, const Rect& at) {
     return buf;
 }
 
+// A DOUBLE-CLICK at the centre of `at`: the pointer arrives at `frame` (two frames before the first press, so the
+// row under it has been hovered for a frame), and the button goes down and up in consecutive frames twice, so the
+// second press follows the first by two frames and the release by one - inside ImGui's 0.30 s double-click time
+// unless a frame takes 150 ms, and on the same pixel.
+std::string dblclick(int frame, const Rect& at) {
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "%d screen %.1f %.1f\n%d down\n%d up\n%d down\n%d up\n", frame, at.cx(), at.cy(),
+                  frame + 2, frame + 3, frame + 4, frame + 5);
+    return buf;
+}
+
+// A point on a Fitted modules row that belongs to no item of its own: on the row's centre line, a third of
+// the way from the end of the name to the START/STOP key (clear of the picture, the name, the state word
+// and the keys). A one-pixel rectangle, so click() and dblclick() aim at it.
+Rect emptySpot(const Rect& row, const Rect& name, const Rect& key) {
+    Rect r;
+    r.x0 = r.x1 = name.x1 + 0.3f * (key.x0 - name.x1);
+    r.y0 = r.y1 = 0.5f * (row.y0 + row.y1);
+    return r;
+}
+
 // Real time between frames: `16 ms` in every frame from `from` to `to`, so a run that has to outlast an
 // interval measured in milliseconds does (a bounded run otherwise draws as fast as it can).
 std::string pace(int from, int to) {
@@ -338,6 +433,8 @@ const std::string kImageFile = "image_probe";
 
 int main(int argc, char** argv) {
     std::printf("test_plugin_inuse_app\n");
+    // Unbuffered, so a run that a timeout stops still says how far it got.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 4) {
         std::printf("usage: test_plugin_inuse_app <text probe module> <image probe module> "
                     "<preset probe module>\n");
@@ -380,7 +477,7 @@ int main(int argc, char** argv) {
     setEnv("CASCADE_PLUGIN_TEST", "");
 
     // --- START: two plugins fitted, nothing open ----------------------------------------------------
-    Rect imageRow, textKey, textName;
+    Rect imageRow, textKey, textName, fImage, fImageName, fImageKey, fImageRemove, fText;
     {
         installPlugins(kTextFile, kImageFile);
         RunOptions o;
@@ -415,6 +512,12 @@ int main(int argc, char** argv) {
             imageRow = need(r, "switchrow:Image Probe image");
             textKey = need(r, "fitted:row:" + kTextFile + kExt + ":key");
             textName = need(r, "fitted:row:" + kTextFile + kExt + ":name");
+            // THE ROWS THEMSELVES, for the double-click scenarios below.
+            fImage = need(r, "fitted:row:" + kImageFile + kExt);
+            fImageName = need(r, "fitted:row:" + kImageFile + kExt + ":name");
+            fImageKey = need(r, "fitted:row:" + kImageFile + kExt + ":key");
+            fImageRemove = need(r, "fitted:row:" + kImageFile + kExt + ":remove");
+            fText = need(r, "fitted:row:" + kTextFile + kExt);
             std::printf("    idle at start: a create %d, image create %d; image row at %.0f,%.0f\n",
                         r.count("a", "create"), r.count("image", "create"), imageRow.cx(), imageRow.cy());
         }
@@ -780,6 +883,234 @@ int main(int argc, char** argv) {
             CHECK(a.has("fitted:state:" + newBuild + kExt + ":idle"));
             CHECK(!a.has("fitted:state:" + newBuild + kExt + ":stopped"));
             CHECK(a.config.find("\"" + kTextFile + "\": \"stopped\"") == std::string::npos);
+        }
+    }
+
+    // --- THE LISTS UNDER THE STORE'S HEADINGS (0.99.77) -------------------------------------------------
+    //
+    // A US tester, through the owner (2026-10-13): "if you install them all, the list is quite long,
+    // intermixed and kind-of alphabetical." Three modules are fitted: the picture decoder (AIRCRAFT in
+    // the kept catalogue), the text decoder (VOICE AND DATA) and the preset probe, which no record or
+    // catalogue names (OTHER). By name they would be Image Probe, Preset Probe, Rescan Probe a; under the
+    // store's headings, in the store's order, Image Probe (AIRCRAFT), Rescan Probe a (VOICE AND DATA),
+    // Preset Probe (OTHER, last).
+    {
+        const std::string presetFile = "preset_probe";
+        const char* const kAllGroups[] = {"aircraft", "marine", "satellites", "meters", "voice", "maps", "other"};
+        const auto yOf = [](const Result& r, const std::string& name) {
+            const Rect* p = r.rect(name);
+            CHECK(p != nullptr);
+            if (p == nullptr) { std::printf("    missing rect %s\n", name.c_str()); }
+            return p != nullptr ? p->y0 : -1.0e9f;
+        };
+
+        // THE FITTED MODULES WINDOW, the catalogue kept.
+        installPlugins(kTextFile, kImageFile, presetFile);
+        writeCatalogue();
+        RunOptions fit;
+        fit.frames = 80;
+        fit.openFitted = true;
+        fit.extraJson = catalogueConfig();
+        const Result f = once("groups-fitted", fit);
+        CHECK(f.ok);
+        if (f.ok) {
+            CHECK(f.has("fitted:group:aircraft"));
+            CHECK(f.has("fitted:group:voice"));
+            CHECK(f.has("fitted:group:other"));
+            // Only the groups that have a row get a heading.
+            for (const char* g : {"marine", "satellites", "meters", "maps"}) {
+                CHECK(!f.has(std::string("fitted:group:") + g));
+            }
+            const float hAir = yOf(f, "fitted:group:aircraft"), hVoice = yOf(f, "fitted:group:voice"),
+                        hOther = yOf(f, "fitted:group:other");
+            const float rImage = yOf(f, "fitted:row:grp-image"), rText = yOf(f, "fitted:row:grp-text"),
+                        rPreset = yOf(f, "fitted:row:" + presetFile + kExt);
+            std::printf("    Fitted modules, catalogue kept: AIRCRAFT y %.0f > Image %.0f | VOICE AND DATA %.0f > "
+                        "Rescan %.0f | OTHER %.0f > Preset %.0f\n",
+                        hAir, rImage, hVoice, rText, hOther, rPreset);
+            // Each heading above its own row, in the store's order: AIRCRAFT, VOICE AND DATA, OTHER.
+            CHECK(hAir < rImage && rImage < hVoice && hVoice < rText && rText < hOther && hOther < rPreset);
+            // ...which is not the name order (the preset probe would sit between the other two).
+            CHECK(rPreset > rText);
+        }
+
+        // THE SAME FOLDER WITH NO CATALOGUE KEPT: no module has a category, so no heading, and the list is
+        // the name-sorted list the window always was.
+        installPlugins(kTextFile, kImageFile, presetFile);
+        RunOptions flat = fit;
+        flat.extraJson.clear();
+        const Result fl = once("groups-flat", flat);
+        CHECK(fl.ok);
+        if (fl.ok) {
+            for (const char* g : kAllGroups) { CHECK(!fl.has(std::string("fitted:group:") + g)); }
+            const float rImage = yOf(fl, "fitted:row:" + kImageFile + kExt),
+                        rPreset = yOf(fl, "fitted:row:" + presetFile + kExt),
+                        rText = yOf(fl, "fitted:row:" + kTextFile + kExt);
+            CHECK(rImage < rPreset && rPreset < rText);
+        }
+
+        // THE DECODE BANK'S "Turn on and off plugins" SECTION, the catalogue kept: the same headings over the
+        // same entries.
+        installPlugins(kTextFile, kImageFile, presetFile);
+        writeCatalogue();
+        RunOptions dec;
+        dec.frames = 60;
+        dec.openDecoders = true;
+        dec.extraJson = catalogueConfig();
+        const Result d = once("groups-decode", dec);
+        CHECK(d.ok);
+        if (d.ok) {
+            CHECK(d.has("section:Turn on and off plugins###decoders"));
+            CHECK(d.has("decoders:group:aircraft"));
+            CHECK(d.has("decoders:group:voice"));
+            CHECK(d.has("decoders:group:other"));
+            for (const char* g : {"marine", "satellites", "meters", "maps"}) {
+                CHECK(!d.has(std::string("decoders:group:") + g));
+            }
+            const float hAir = yOf(d, "decoders:group:aircraft"), hVoice = yOf(d, "decoders:group:voice"),
+                        hOther = yOf(d, "decoders:group:other");
+            const float eImage = yOf(d, "decoders:entry:Image Probe"), eText = yOf(d, "decoders:entry:Rescan Probe a"),
+                        ePreset = yOf(d, "decoders:entry:Preset Probe");
+            std::printf("    DECODE bank, catalogue kept: AIRCRAFT y %.0f > Image Probe %.0f | VOICE AND DATA %.0f > "
+                        "Rescan Probe a %.0f | OTHER %.0f > Preset Probe %.0f\n",
+                        hAir, eImage, hVoice, eText, hOther, ePreset);
+            CHECK(hAir < eImage && eImage < hVoice && hVoice < eText && eText < hOther && hOther < ePreset);
+        }
+
+        // ...AND WITH NO CATALOGUE: no heading, the entries in the scan order they always had.
+        installPlugins(kTextFile, kImageFile, presetFile);
+        RunOptions decFlat = dec;
+        decFlat.extraJson.clear();
+        const Result df = once("groups-decode-flat", decFlat);
+        CHECK(df.ok);
+        if (df.ok) {
+            CHECK(df.has("section:Turn on and off plugins###decoders"));
+            for (const char* g : kAllGroups) { CHECK(!df.has(std::string("decoders:group:") + g)); }
+            const float eImage = yOf(df, "decoders:entry:Image Probe"), ePreset = yOf(df, "decoders:entry:Preset Probe"),
+                        eText = yOf(df, "decoders:entry:Rescan Probe a");
+            CHECK(eImage < ePreset && ePreset < eText);
+        }
+    }
+
+    // --- A DOUBLE-CLICK ON A FITTED MODULES ROW OPENS THE PLUGIN'S OWN WINDOW (0.99.77) -----------------
+    //
+    // The owner (2026-10-13): "when you open the plugins Fitted modules window, when I double click on the
+    // plugin it should show the plugin window". The picture decoder's window is its own; the text decoder
+    // has none (it is read in the shared Decoder output window), so its row gives its page.
+    if (fImage.x1 > fImage.x0 && fImageName.x1 > fImageName.x0) {
+        const Rect spotImage = emptySpot(fImage, fImageName, fImageKey);
+        const Rect spotText = emptySpot(fText, textName, textKey);
+        std::printf("    double-click aimed at the image row's empty part %.0f,%.0f\n", spotImage.cx(), spotImage.cy());
+
+        // THE CONTROL: ONE click on that empty part does nothing at all.
+        installPlugins(kTextFile, kImageFile);
+        RunOptions one;
+        one.frames = 80;
+        one.openFitted = true;
+        one.script = click(30, spotImage);
+        const Result c = once("dbl-control", one);
+        CHECK(c.ok);
+        if (c.ok) {
+            CHECK(c.rect("image:window:Image Probe") == nullptr);
+            CHECK(c.count("image", "create") == 0);
+            CHECK(!c.has("fitted:page:" + kImageFile + kExt));
+            CHECK(!c.logHas("woke -"));
+        }
+
+        // ON A KEY OF THE ROW the double-click is the key's: REMOVE pressed twice arms and disarms its
+        // confirmation (nothing is deleted), and no window opens and no page.
+        installPlugins(kTextFile, kImageFile);
+        RunOptions onKey = one;
+        onKey.script = dblclick(30, fImageRemove);
+        const Result k = once("dbl-key", onKey);
+        CHECK(k.ok);
+        if (k.ok) {
+            CHECK(k.rect("image:window:Image Probe") == nullptr);
+            CHECK(!k.has("fitted:page:" + kImageFile + kExt));
+            CHECK(k.count("image", "create") == 0);
+            CHECK(!k.logHas("woke -"));
+            CHECK(fs::exists(pluginsDir() / (kImageFile + kExt)));
+        }
+
+        // ON THE EMPTY PART OF THE ROW: the picture window opens, the plugin wakes through the lifecycle
+        // (one decoder, the other plugin untouched), and a window is not a pin.
+        installPlugins(kTextFile, kImageFile);
+        RunOptions two = one;
+        two.script = dblclick(30, spotImage);
+        const Result r = once("dbl-row", two);
+        CHECK(r.ok);
+        if (r.ok) {
+            const bool win = r.rect("image:window:Image Probe") != nullptr;
+            std::printf("    double-click on the row: picture window %s; image create %d; woke %d\n", win ? "open" : "NOT open",
+                        r.count("image", "create"), r.logCount("plugin: Image Probe woke - window open"));
+            CHECK(win);
+            CHECK(r.logCount("plugin: Image Probe woke - window open") == 1);
+            CHECK(r.count("image", "create") == 1);
+            CHECK(r.count("a", "create") == 0);
+            CHECK(!r.has("fitted:page:" + kImageFile + kExt));
+            CHECK(r.config.find("\"" + kImageFile + "\"") == std::string::npos);
+        }
+
+        // ON THE NAME: the first click of the pair opens the module's page, as a single click on the name
+        // always has; the second hands over the window and the list comes back. That the list is back is
+        // read by pressing the row's key afterwards: the plugin is awake by then, so the key reads STOP, and
+        // its press stops the plugin - which could not happen were the page still on screen.
+        installPlugins(kTextFile, kImageFile);
+        RunOptions three = one;
+        three.frames = 100;
+        three.script = dblclick(30, fImageName) + click(60, fImageKey);
+        const Result n = once("dbl-name", three);
+        CHECK(n.ok);
+        if (n.ok) {
+            const bool win = n.rect("image:window:Image Probe") != nullptr;
+            std::printf("    double-click on the name: picture window %s; then the row's key stopped it: %s\n",
+                        win ? "open" : "NOT open",
+                        n.config.find("\"" + kImageFile + "\": \"stopped\"") != std::string::npos ? "yes" : "no");
+            CHECK(win);
+            CHECK(n.logCount("plugin: Image Probe woke - window open") == 1);
+            CHECK(n.count("image", "create") == 1);
+            CHECK(n.config.find("\"" + kImageFile + "\": \"stopped\"") != std::string::npos);
+        }
+
+        // A MODULE WITH NO WINDOW OF ITS OWN gets its page, on the row and on the name, and is not woken.
+        installPlugins(kTextFile, kImageFile);
+        RunOptions four = one;
+        four.script = dblclick(30, spotText);
+        const Result t = once("dbl-text-row", four);
+        CHECK(t.ok);
+        if (t.ok) {
+            CHECK(t.has("fitted:page:" + kTextFile + kExt));
+            CHECK(t.rect("image:window:Image Probe") == nullptr);
+            CHECK(t.count("a", "create") == 0);
+            CHECK(!t.logHas("woke -"));
+            CHECK(!t.has("fitted:page:closed:back"));
+        }
+        installPlugins(kTextFile, kImageFile);
+        RunOptions five = one;
+        five.script = dblclick(30, textName);
+        const Result tn = once("dbl-text-name", five);
+        CHECK(tn.ok);
+        if (tn.ok) {
+            // The page opened by the first click is still the page after the second: nothing took it away.
+            CHECK(tn.has("fitted:page:" + kTextFile + kExt));
+            CHECK(tn.count("a", "create") == 0);
+            CHECK(!tn.logHas("woke -"));
+        }
+
+        // A STOPPED PLUGIN has no instances, so no window of its could draw: the double-click gives its
+        // page (which says STOPPED and has START), opens no window and wakes nothing.
+        installPlugins(kTextFile, kImageFile);
+        RunOptions six = one;
+        six.extraJson = ", \"pluginRun\": { \"" + kImageFile + "\": \"stopped\" }";
+        six.script = dblclick(30, spotImage);
+        const Result s = once("dbl-stopped", six);
+        CHECK(s.ok);
+        if (s.ok) {
+            CHECK(s.has("fitted:state:" + kImageFile + kExt + ":stopped"));
+            CHECK(s.has("fitted:page:" + kImageFile + kExt));
+            CHECK(s.rect("image:window:Image Probe") == nullptr);
+            CHECK(s.count("image", "create") == 0);
+            CHECK(!s.logHas("woke -"));
         }
     }
 

@@ -447,6 +447,62 @@ void testCategories() {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. THE STORE'S GROUPS ON THE LISTS OF INSTALLED PLUGINS (0.99.77)
+// ---------------------------------------------------------------------------
+//
+// The DECODE bank's "Turn on and off plugins" section is ordered by these two functions. A US tester,
+// through the owner (2026-10-13): "Implement this sorting on the Plugins panel and the 'Turn on and off
+// plugins' menu as well: if you install them all, the list is quite long, intermixed and
+// kind-of alphabetical." Written from the store's order and that sentence, not from the code.
+void testGroupedLists() {
+    using cascade::gui::storeGroupedOrder;
+    using cascade::gui::storeListIsGrouped;
+    using cascade::gui::StoreListEntry;
+
+    // A list in host scan order (file-name order): none of it grouped, so none of it moves.
+    std::vector<StoreListEntry> e = {{"", "Zulu"}, {"", "alpha"}, {"", "Mike"}};
+    CHECK(!storeListIsGrouped(e));
+    CHECK((storeGroupedOrder(e) == std::vector<int>{0, 1, 2}));  // as it came, NOT sorted by name
+    CHECK(storeGroupedOrder({}).empty());
+
+    // One catalogued plugin is enough to group the list; the others are OTHER and go last.
+    e[1].category = "marine";
+    CHECK(storeListIsGrouped(e));
+    CHECK((storeGroupedOrder(e) == std::vector<int>{1, 2, 0}));  // MARINE alpha; OTHER Mike, Zulu
+
+    // The store's own group order, then lower-cased name, then the index.
+    e = {{"broadcast", "DMR"},         // 0  VOICE AND DATA
+         {"aircraft", "Beta Air"},     // 1  AIRCRAFT
+         {"", "Side-loaded"},          // 2  OTHER
+         {"maps-tools", "Atlas"},      // 3  MAPS AND TOOLS
+         {"aircraft", "alpha air"},    // 4  AIRCRAFT
+         {"newer-category", "Aaa"},    // 5  a category this build does not know: OTHER
+         {"meters-paging", "Pager"},   // 6  METERS AND PAGING
+         {"satellites-weather", "Sat"},// 7  SATELLITES AND WEATHER
+         {"marine", "Boats"},          // 8  MARINE
+         {"aircraft", "ALPHA AIR"}};   // 9  AIRCRAFT, the same name as 4 in another case
+    CHECK((storeGroupedOrder(e) == std::vector<int>{4, 9, 1, 8, 7, 6, 0, 3, 5, 2}));
+    // THE SAME HEADINGS IN THE SAME SEQUENCE AS THE BROWSE TAB'S OWN SECTIONS. (Compared as the sequence
+    // of groups: BROWSE breaks a name tie on the module id and this list on the index, and the two
+    // "alpha air" entries are the one tie in the list.)
+    PluginStoreModel m;
+    m.haveCatalogue = true;
+    for (std::size_t i = 0; i < e.size(); ++i) {
+        const std::string id = "m" + std::to_string(i);
+        m.modules.push_back(row(id.c_str(), e[i].name.c_str(), e[i].category.c_str()));
+    }
+    std::vector<int> viaSections;
+    for (const cascade::gui::StoreSection& s : storeBrowseSections(m, "")) {
+        for (int i : s.modules) { viaSections.push_back(i); }
+    }
+    std::vector<StoreCategory> groupsA, groupsB;
+    for (int i : storeGroupedOrder(e)) { groupsA.push_back(storeCategoryFor(e[static_cast<std::size_t>(i)].category)); }
+    for (int i : viaSections) { groupsB.push_back(storeCategoryFor(e[static_cast<std::size_t>(i)].category)); }
+    CHECK(groupsA == groupsB);
+    CHECK(viaSections.size() == e.size());
+}
+
+// ---------------------------------------------------------------------------
 // 6. the search
 // ---------------------------------------------------------------------------
 void testSearch() {
@@ -1217,6 +1273,7 @@ int main() {
     testNoticeGate();
     testBadges();
     testCategories();
+    testGroupedLists();
     testSearch();
     testUpdatesTab();
     testPageSections();

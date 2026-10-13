@@ -280,9 +280,12 @@ comes from a site you added rather than from the FoxSDR catalogue (**THIRD PARTY
 and one key at the right: **GET**, **FITTING...** while its download runs, **INSTALLED** or
 **UPDATE** with the two versions beside it. A key that cannot act is drawn greyed and says why
 when you rest the pointer on it - the plugin was built for another plugin ABI, there is no build
-for this system, the catalogue states no licence, another transfer is running. A click on a
-card's name or drawing opens that plugin's **page**; **GET** on a plugin whose maker attached a
-legal notice does the same instead of fitting it, because the notice cannot be skipped.
+for this system, the catalogue states no licence, another transfer is running. A click anywhere
+on a card - its name, its drawing, the line about it, the strip along the bottom (0.99.77; it
+used to be the name and the drawing only) - opens that plugin's **page**, and a click on the
+card's key is the key's alone: it does not also open the page. **GET** on a plugin whose maker
+attached a legal notice opens the page instead of fitting it, because the notice cannot be
+skipped.
 
 A plugin's page is what an app store's would be: a header with its name, its maker, version,
 download size and the build for this system, and the one key; then **SCREENSHOTS**, a strip of
@@ -380,8 +383,13 @@ sites are added beside it.
 with their lamps and counts - **FED**, **IDLE**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED**,
 **REFUSED**, each a toggle - and **SCAN AGAIN** and **RESET WINDOW SIZES**. Under it one muted line
 says whether the receiver is running (a module with a matched decoder is only fed while it is) and,
-after a dot, which folder the modules were read from. Then one row per module, sorted by name: its
-drawing, name and version, under the name an amber warning when it reaches beyond FoxSDR ("asks to
+after a dot, which folder the modules were read from. Then one row per module, under the store's own
+headings - AIRCRAFT, MARINE, SATELLITES AND WEATHER, METERS AND PAGING, VOICE AND DATA, MAPS AND TOOLS
+and OTHER - and sorted by name inside each (0.99.77). A module's heading is the catalogue's category
+for it: one the catalogue has not filed - a module you dropped into the folder by hand, or any module
+before a catalogue has been read or kept - is listed last, under OTHER, and while no module has a
+category at all, as on a fresh install, the list is the plain list sorted by name with no headings.
+A row has its drawing, name and version, under the name an amber warning when it reaches beyond FoxSDR ("asks to
 move the receiver", "may fetch from a server it chose" - nothing for a module that publishes to the
 host only) or, for a module the host refused, the host's own reason; at the right what it is doing -
 **FED**, **IDLE**, **NOT DECODING**, **TAKES NO SIGNAL**, **STOPPED** or **REFUSED**, with its lamp
@@ -394,6 +402,14 @@ running, in the host's words), the **Keep running** tick (see **When a plugin ru
 file it was loaded from, its plugin ABI and the day it was fitted - and, for a module the
 catalogue knows, the same pictures, description and notes the store's page shows, and the facts
 behind **SHOW DETAILS**.
+
+**Double-click a row**, anywhere but on its keys, to open the plugin's own window instead of its
+page (0.99.77): its panel if it has one, otherwise its picture window, its instrument or its map
+page. A dormant plugin wakes as the window opens (see **When a plugin runs**), as it does from its
+row on the rail, but nothing is tuned - the rail's rows also tune to the plugin's preset, and this
+does not. A module with no window of its own - a text decoder, read in the shared **Decoder
+output** window - gets its page, and so does a stopped one: with its instances gone no window of
+its could draw, and the page says so and offers **START**.
 
 Neither window reopens by itself: since 0.79.1 FoxSDR always starts on the main window alone,
 whatever was showing when it was closed - no page, no map, no decoder output, and the bench rather
@@ -409,6 +425,14 @@ main window's right edge, and on a main window that reached the edge of the scre
 strip of its frame showed - "a partial vertical bar" - where the lines should have been. Drag it
 by its top rail to put it beside the radio or on another screen; **RESET WINDOW SIZES** in the
 Fitted modules window brings it back.
+
+**A row in a plugin's panel can be a key** (0.99.77). Where a plugin lists things to choose between -
+the IBOC Radio plugin's programmes HD1 to HD8, say - press the row to choose it, rather than going
+into the plugin's settings to type the number: the row lights under the pointer, and the plugin gets
+the press exactly as it gets a press of one of the keys on its page in Fitted modules (a plugin may
+now have sixteen of those, where it had eight). A row that is only text - a heading, or a line the
+plugin has not made into a key - does nothing when pressed. A plugin that is written for an older
+FoxSDR draws the same rows as text.
 
 A plugin may declare several capabilities. Decoders are fed real samples —
 either the tuned, demodulated audio or the raw receiver band — and produce
@@ -531,6 +555,12 @@ are both off by default, so all functions decode as text. **Numeric messages**
 forces numeric decoding. **Use function codes** takes precedence when enabled:
 function 3 decodes as text and functions 0-2 decode as numeric messages. Baud
 rate and discriminator polarity are detected automatically.
+
+**Order in the rail.** The rail's **Turn on and off plugins** section (the DECODE bank) lists each
+loaded decoder under the same headings as the store and the Fitted modules window (0.99.77), by
+name inside each, when the catalogue has filed any of them; a decoder it has not filed is listed
+last under OTHER. With none filed it lists them in the order the plugin folder is read, with no
+headings.
 
 **Plugin settings.** A plugin that has a settings form of its own (a callsign to report
 under, a tolerance) shows it on its row in the **Decoders** section of the rail, under its

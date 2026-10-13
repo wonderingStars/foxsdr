@@ -847,6 +847,19 @@ typedef struct CascadeTrackSourceApi {
 #define CASCADE_ROW_FLAG_GOOD 0x00000001u
 #define CASCADE_ROW_FLAG_WARN 0x00000002u
 #define CASCADE_ROW_FLAG_MUTED 0x00000004u
+/* A row the user can PRESS (hosts from 0.99.77; an older host draws it as text). The host
+ * delivers the press through poll_command with the command id packed in bits 8..15, exactly as
+ * a plate key would, so the id must have been registered with add_command (1..255 here). WHY
+ * NOT A FIELD: CascadePanelRow has no structSize - the host allocates the array and the plugin
+ * writes it - so the id rides in `flags`, as CascadeTrack's category does. A host that draws
+ * pressable rows sets CASCADE_STATE_ROW_KEYS; a plugin may show "press to choose" wording only
+ * when it sees that bit. */
+#define CASCADE_ROW_FLAG_KEY 0x00000008u
+#define CASCADE_ROW_KEY_ID_SHIFT 8u
+#define CASCADE_ROW_KEY_ID_MASK 0x0000FF00u
+#define CASCADE_ROW_KEY_ID(flags) (((flags) & CASCADE_ROW_KEY_ID_MASK) >> CASCADE_ROW_KEY_ID_SHIFT)
+#define CASCADE_ROW_KEY_FLAGS(id) \
+    (CASCADE_ROW_FLAG_KEY | (((uint32_t)(id) << CASCADE_ROW_KEY_ID_SHIFT) & CASCADE_ROW_KEY_ID_MASK))
 
 typedef struct CascadePanelRow {
     uint32_t kind;
@@ -1534,6 +1547,9 @@ typedef struct CascadeAudioProcessorApi {
 #define CASCADE_STATE_TRANSMITTING 0x00004000u   /* the transmitter is keyed now */
 /* the host understands CASCADE_TRACK_FLAG_NO_POSITION and lists such tracks; a plugin may publish them only when it sees this bit. */
 #define CASCADE_STATE_LISTS_UNPLACED_TRACKS 0x00008000u
+/* The host draws a panel row that carries CASCADE_ROW_FLAG_KEY as a key and delivers its press
+ * (hosts from 0.99.77). Set in every CascadeReceiverState the host fills, with no grant. */
+#define CASCADE_STATE_ROW_KEYS 0x00010000u
 
 #define CASCADE_DEVICE_NAME_CHARS 64
 #define CASCADE_LOCATOR_CHARS 8 /* 6-char Maidenhead grid + NUL + 1 spare */
@@ -1670,9 +1686,11 @@ typedef struct CascadeMarker {
 #define CASCADE_LOG_ERROR 3u   /* ...likewise, drawn as an alarm */
 #define CASCADE_LOG_TEXT_BYTES 512u /* longer text is cut at a code point */
 
-/* Commands: keys the host draws on the plugin's plate in Fitted modules. */
+/* Commands: keys the host draws on the plugin's plate in Fitted modules.
+ * (16 from 0.99.77; a host before that refuses the ninth add_command with CASCADE_API_LIMIT, so
+ * register the keys you can live without last, or only when CASCADE_STATE_ROW_KEYS is set) */
 #define CASCADE_COMMAND_LABEL_CHARS 32
-#define CASCADE_MAX_COMMANDS_PER_PLUGIN 8u
+#define CASCADE_MAX_COMMANDS_PER_PLUGIN 16u
 
 typedef struct CascadeHostApi {
     /* sizeof(CascadeHostApi) as the HOST compiled it. THIS IS THE TABLE'S

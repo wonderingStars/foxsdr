@@ -1299,6 +1299,140 @@ void testCommands() {
 }
 
 // ===========================================================================
+// [0.99.77] Pressable panel rows: the command cap, the packing, the host's reading of a row
+// ===========================================================================
+//
+// "If I click on HD2 on the screen below, it should select that program, instead of having to go
+// into the plugin settings and change the Programme to 1." (a US tester, 2026-10-13). A panel row
+// may carry CASCADE_ROW_FLAG_KEY with a command id in bits 8..15; the id must have been registered
+// with add_command, which is why the cap on a plugin's commands went from 8 to 16 (HD1..HD8 beside
+// the three it already had).
+// The header's two packing macros, behind functions: a CHECK on a macro of constants is a constant
+// condition, which the compiler says so about on every build.
+std::uint32_t keyFlagsOf(std::uint32_t id) { return CASCADE_ROW_KEY_FLAGS(id); }
+std::uint32_t keyIdOf(std::uint32_t flags) { return CASCADE_ROW_KEY_ID(flags); }
+
+void testRowKeys() {
+    std::printf("[0.99.77] pressable panel rows\n");
+
+    // THE VALUES ARE THE CONTRACT (the plugins repository carries the same header, byte for byte).
+    static_assert(CASCADE_ROW_FLAG_KEY == 0x00000008u, "the row flag's value is part of the contract");
+    static_assert(CASCADE_ROW_KEY_ID_SHIFT == 8u, "the id's shift is part of the contract");
+    static_assert(CASCADE_ROW_KEY_ID_MASK == 0x0000FF00u, "the id's mask is part of the contract");
+    static_assert((CASCADE_ROW_FLAG_KEY &
+                   (CASCADE_ROW_FLAG_GOOD | CASCADE_ROW_FLAG_WARN | CASCADE_ROW_FLAG_MUTED)) == 0u,
+                  "a new bit, not an emphasis bit reused");
+    static_assert((CASCADE_ROW_FLAG_KEY & CASCADE_ROW_KEY_ID_MASK) == 0u,
+                  "the flag is not inside the id's byte");
+
+    // The packing round-trips every id a row can name (1..255; 0 is "no key").
+    bool roundTrips = true;
+    bool staysInItsBits = true;
+    for (std::uint32_t id = 0; id <= 255u; ++id) {
+        const std::uint32_t f = CASCADE_ROW_KEY_FLAGS(id);
+        roundTrips = roundTrips && CASCADE_ROW_KEY_ID(f) == id && (f & CASCADE_ROW_FLAG_KEY) != 0u;
+        staysInItsBits =
+            staysInItsBits && (f & ~(CASCADE_ROW_FLAG_KEY | CASCADE_ROW_KEY_ID_MASK)) == 0u;
+    }
+    CHECK(roundTrips);
+    CHECK(staysInItsBits);
+    // An id wider than a byte is cut to the byte, never spilled into the bits above it (which a
+    // later header may give a meaning).
+    CHECK(keyFlagsOf(0x1FFu) == keyFlagsOf(0xFFu));
+    CHECK((keyFlagsOf(0xFFFFFFFFu) & 0xFFFF0000u) == 0u);
+    // The id is read out of flags that also carry the emphasis, and nothing else.
+    const std::uint32_t lit = CASCADE_ROW_FLAG_GOOD | CASCADE_ROW_FLAG_WARN | CASCADE_ROW_FLAG_MUTED |
+                              keyFlagsOf(0x5Au);
+    CHECK(keyIdOf(lit) == 0x5Au);
+    CHECK(keyIdOf(CASCADE_ROW_FLAG_GOOD | CASCADE_ROW_FLAG_MUTED) == 0u);
+
+    // THE CAP. HD1..HD8 and the three keys a plugin already had are eleven commands, so a plugin
+    // may register sixteen; the seventeenth is refused with LIMIT (a literal 16, not the macro: a
+    // test of the macro against itself could not notice the cap going back to 8).
+    {
+        resetCaps();
+        ServiceLog slog;
+        PluginUi ui;
+        ui.setServices(services(&slog));
+        ui.rebuild({plug(0, "Keys")});
+        CHECK(H(0) != nullptr);
+        if (H(0) == nullptr) { return; }
+        const CascadeHostApi* h = H(0);
+        void* c = C(0);
+        const std::string key = keyOf("Keys");
+        std::uint32_t accepted = 0;
+        for (std::uint32_t id = 1; id <= 16u; ++id) {
+            if (h->add_command(c, id, "k") == CASCADE_API_OK) { ++accepted; }
+        }
+        CHECK(accepted == 16u);
+        CHECK(ui.api().commands(key).size() == 16u);
+        CHECK(h->add_command(c, 17, "one too many") == CASCADE_API_LIMIT);
+        CHECK(ui.api().commands(key).size() == 16u);
+        // A relabel at the cap is not a new key.
+        CHECK(h->add_command(c, 16, "relabelled") == CASCADE_API_OK);
+        CHECK(ui.api().commands(key).size() == 16u);
+        // Room made is room to use; and the largest id a row can name (255) is a command like any.
+        CHECK(h->remove_command(c, 16) == CASCADE_API_OK);
+        CHECK(h->add_command(c, 255, "last id a row can name") == CASCADE_API_OK);
+        CHECK(ui.api().commands(key).size() == 16u);
+
+        // A press the way a pressable row delivers it: the same pressCommand, the same queue, the
+        // same poll_command as a plate key - the id comes back whole.
+        CHECK(ui.api().pressCommand(key, 255));
+        CHECK(ui.api().pressCommand(key, 11));
+        std::uint32_t id = 0;
+        CHECK(h->poll_command(c, &id) == 1 && id == 255u);
+        CHECK(h->poll_command(c, &id) == 1 && id == 11u);
+        CHECK(h->poll_command(c, &id) == 0);
+        // One that was never registered is refused, as it always was.
+        CHECK(!ui.api().pressCommand(key, 99));
+        CHECK(h->poll_command(c, &id) == 0);
+    }
+
+    // WHAT THE HOST DOES WITH A ROW: panelRowKeyId asks, panelRowPressable decides.
+    {
+        const std::vector<cascade::core::HostCommand> registered = {{11u, "HD1"}, {12u, "HD2"}};
+        CascadePanelRow row{};
+        row.kind = CASCADE_ROW_CELLS;
+        row.flags = CASCADE_ROW_KEY_FLAGS(11u);
+        CHECK(cascade::core::panelRowKeyId(row) == 11u);
+        CHECK(cascade::core::panelRowPressable(row, registered) == 11u);
+        // GOOD, WARN and MUTED still apply to a key (the programme playing is lit).
+        row.flags = CASCADE_ROW_KEY_FLAGS(12u) | CASCADE_ROW_FLAG_GOOD;
+        CHECK(cascade::core::panelRowPressable(row, registered) == 12u);
+        row.flags = CASCADE_ROW_KEY_FLAGS(12u) | CASCADE_ROW_FLAG_MUTED;
+        CHECK(cascade::core::panelRowPressable(row, registered) == 12u);
+        // A key bound to an id the plugin never registered asks, and is not pressable: it would be
+        // a key that does nothing.
+        row.flags = CASCADE_ROW_KEY_FLAGS(99u);
+        CHECK(cascade::core::panelRowKeyId(row) == 99u);
+        CHECK(cascade::core::panelRowPressable(row, registered) == 0u);
+        // ...and nothing registered at all.
+        row.flags = CASCADE_ROW_KEY_FLAGS(11u);
+        CHECK(cascade::core::panelRowPressable(row, {}) == 0u);
+        // Id 0 is "no key", flag or not.
+        row.flags = CASCADE_ROW_FLAG_KEY;
+        CHECK(cascade::core::panelRowKeyId(row) == 0u);
+        CHECK(cascade::core::panelRowPressable(row, registered) == 0u);
+        // Id bits without the flag are not read: an old plugin's stray bits are not a key.
+        row.flags = (11u << CASCADE_ROW_KEY_ID_SHIFT) | CASCADE_ROW_FLAG_GOOD;
+        CHECK(cascade::core::panelRowKeyId(row) == 0u);
+        CHECK(cascade::core::panelRowPressable(row, registered) == 0u);
+        // An old-style row is not a key.
+        row.flags = CASCADE_ROW_FLAG_WARN;
+        CHECK(cascade::core::panelRowPressable(row, registered) == 0u);
+        // Only a table row can be a key: a heading, a separator and a kind this host does not know
+        // are drawn as they always were.
+        for (const std::uint32_t kind : {CASCADE_ROW_HEADING, CASCADE_ROW_SEPARATOR, 7u}) {
+            row.kind = kind;
+            row.flags = CASCADE_ROW_KEY_FLAGS(11u);
+            CHECK(cascade::core::panelRowKeyId(row) == 0u);
+            CHECK(cascade::core::panelRowPressable(row, registered) == 0u);
+        }
+    }
+}
+
+// ===========================================================================
 // [U] Detach, unload and teardown - including calls racing them
 // ===========================================================================
 
@@ -1887,6 +2021,7 @@ int main() {
     testConfigRoundTrip();
     testLog();
     testCommands();
+    testRowKeys();
     testDetach();
     testStreamInfo();
     testProcessorValidation();

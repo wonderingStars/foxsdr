@@ -1185,6 +1185,26 @@ void testOldPlugin() {
     CHECK((ls.flags & CASCADE_STATE_LISTS_UNPLACED_TRACKS) != 0u);
     CHECK((old.flags & CASCADE_STATE_LISTS_UNPLACED_TRACKS) != 0u);
 
+    // [0.99.77] EVERY state this host fills says it DRAWS A PANEL ROW THAT CARRIES
+    // CASCADE_ROW_FLAG_KEY AS A KEY and delivers its press (CASCADE_STATE_ROW_KEYS), on the same
+    // terms as the bit above: a plugin shows "press to choose" wording only when it sees this one,
+    // so it must be on for the plugin that declared nothing, for the one that declared the
+    // locator, and for a plugin whose struct stops before the locator field - and it is a new bit.
+    static_assert(CASCADE_STATE_ROW_KEYS == 0x00010000u,
+                  "the state flag's value is part of the contract");
+    static_assert((CASCADE_STATE_ROW_KEYS &
+                   (CASCADE_STATE_RUNNING | CASCADE_STATE_DEVICE_OPEN | CASCADE_STATE_MUTED |
+                    CASCADE_STATE_DEVICE_AGC | CASCADE_STATE_AGC_SUPPORTED |
+                    CASCADE_STATE_SQUELCH_OPEN | CASCADE_STATE_STEREO | CASCADE_STATE_TUNE_GRANTED |
+                    CASCADE_STATE_SETTINGS_GRANTED | CASCADE_STATE_STOPPED |
+                    CASCADE_STATE_LOCATOR_KNOWN | CASCADE_STATE_TX_GRANTED |
+                    CASCADE_STATE_TX_ARMED | CASCADE_STATE_TRANSMITTING |
+                    CASCADE_STATE_LISTS_UNPLACED_TRACKS)) == 0u,
+                  "a new bit, not an old one reused");
+    CHECK((s.flags & CASCADE_STATE_ROW_KEYS) != 0u);
+    CHECK((ls.flags & CASCADE_STATE_ROW_KEYS) != 0u);
+    CHECK((old.flags & CASCADE_STATE_ROW_KEYS) != 0u);
+
     // [M2] A position change must advance `seq`, or a plugin that re-reads
     // only when seq moves would never notice "Set RX here" or a GPS fix -
     // there is no dedicated locator counter, so this is the ONLY signal.
