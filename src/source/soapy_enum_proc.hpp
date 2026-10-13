@@ -155,6 +155,8 @@
 #define CASCADE_SOURCE_SOAPY_ENUM_PROC_HPP
 
 #include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -172,6 +174,54 @@ enum class EnumOutcome {
 
 // For logs and test output. Never nullptr.
 const char* enumOutcomeName(EnumOutcome outcome) noexcept;
+
+// HOW A HELPER'S END IS READ (0.99.76). The exit codes the parent meets, and the
+// ones this file defines:
+//
+//   0                         the helper answered and ended cleanly.
+//   74  (kEnumChildExitPipeClosed)
+//                             the helper could not write to the parent: the pipe
+//                             had no reader left (EPIPE). sysexits.h's EX_IOERR.
+//   141 (kEnumChildExitSigpipe)
+//                             POSIX only, 128 + SIGPIPE(13): the same thing for a
+//                             helper that did not ignore SIGPIPE. Nothing on
+//                             Windows exits with it. The helper has ignored SIGPIPE
+//                             since 0.99.76 (armEnumerateHelperProcess), so only an
+//                             older helper, or a vendor module that put the default
+//                             disposition back, dies this way now.
+//   0xC0000005 and friends    Windows: the exception code the helper's filter
+//                             terminated with. POSIX: 128 + the signal (139 SIGSEGV,
+//                             134 SIGABRT). A real death: contained, reported.
+//   0xE0454E55                Windows: the parent's own timeout kill (never read as
+//                             an exit code; the outcome is ChildTimedOut).
+//
+// Field reports 862234B08B9FC33D and 30BCD594C128766D (0.99.73, Linux): six
+// "crashes" from one session in one second, every one exit 0x8D = 141, the last
+// of them blaming the rtlsdr driver alone - which then went on the session's
+// do-not-ask list, so a working RTL-SDR was left out of every later scan. A
+// helper that ends because nobody is reading its pipe has not crashed and has
+// not shown its driver to be bad.
+inline constexpr int kEnumChildExitPipeClosed = 74;
+inline constexpr int kEnumChildExitSigpipe = 141;
+
+// What a helper's end means. A pure function of the exit code the parent read and
+// whether the parent had already given up on the child (`parentGaveUp`: its
+// budget ran out and it killed the child), so the reading is tested without a
+// child.
+enum class ChildEnd {
+    Clean,       // exit 0
+    Died,        // anything else, while the parent was still listening: a death
+    PipeClosed,  // kEnumChildExitPipeClosed or kEnumChildExitSigpipe: not a death
+    TimedOut,    // the parent gave up first; whatever the status says, it is the kill's
+};
+ChildEnd classifyChildEnd(unsigned long exitCode, bool parentGaveUp) noexcept;
+
+// THE HELPER'S WRITE TO THE PARENT: `size` bytes of `data` to `out`, flushed.
+// False when and only when the write failed because the reader is gone (EPIPE);
+// the caller's question is only whether anyone is listening, so any other
+// failure answers true. With SIGPIPE ignored this is how a helper learns it is
+// talking to nobody.
+bool writeToParent(std::FILE* out, const char* data, std::size_t size);
 
 struct EnumResult {
     std::vector<SoapyDeviceInfo> devices;
@@ -236,6 +286,14 @@ struct EnumResult {
     // separate parent processes, every parent surviving.
     int childDeaths = 0;
     unsigned long deathExitCode = 0;  // the most recent death's code
+
+    // THE MOST RECENT CHILD ENDED ON A CLOSED PIPE (0.99.76) - classifyChildEnd
+    // says PipeClosed - and `closedPipeEnds` is how many of `childDeaths` did, kept
+    // through a retry like it. Such an end is counted as a death, retried, and
+    // swept like one; it is not filed as a crash, and it does not put its driver on
+    // the session's do-not-ask list. See kEnumChildExitPipeClosed.
+    bool endedOnClosedPipe = false;
+    int closedPipeEnds = 0;
 
     // THE PER-DRIVER SWEEP: set when the whole-bus probe died on every attempt
     // and each driver was then asked in a child of its own. Field report
@@ -513,6 +571,16 @@ std::string enumerateHelperPath();
 // The directory is created here if it does not exist; it is only ever the one
 // the parent already had armed.
 //
+// POSIX: SIGPIPE is IGNORED here, first and whatever the directory (0.99.76), so
+// a write to a descriptor nobody reads - the pipe to the parent, the stderr it
+// inherited, a socket a vendor module opened - fails with EPIPE where it used to
+// kill the helper with exit 141. What the helper got before depended on its
+// parent: an ignored signal stays ignored across fork and exec, and
+// httplib::Server's constructor (third_party/cpp_httplib, run by
+// WebServer::start) ignores SIGPIPE for the whole process - so a helper started
+// after the web server was constructed already had it ignored, and one started
+// before did not.
+//
 // `reasonSuffix` (null or empty: none) is what this process says on the end of
 // the `reason:` line of its own report - see enumerateChildReasonSuffix. It is
 // rendered by the caller on the healthy path and installed with the handlers
@@ -553,7 +621,9 @@ std::string enumerateChildReasonSuffix(bool listDrivers, const char* driver, int
 //   {"schema":1,"runtime":true,"guardedCalls":1,"capture":false,
 //    "devices":[{"label":..,"args":..}]}
 //
-// Returns 0 on success. Called only from main() when the hidden
+// Returns 0 on success, and kEnumChildExitPipeClosed when no one was reading
+// the pipe to the parent (the walk is finished first, so that the module that
+// must say goodbye still does). Called only from main() when the hidden
 // --enumerate-json flag is present, before ANY of the application's start-up
 // work: no config is read, no window is opened, no telemetry marker is
 // touched. `crashDir` is the one thing the parent hands down - see CRASH

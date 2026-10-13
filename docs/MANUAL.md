@@ -843,6 +843,48 @@ peak or the average again; so does retuning, or changing the sample rate,
 because a held trace from another frequency would be wrong. The mode and the
 length apply to every spectrum and are remembered.
 
+## The range of the spectrum and the waterfall
+
+If the spectrum and the waterfall look milky - the noise floor sitting in the
+middle of the colours, so a weak signal does not stand out - the picture is
+being drawn through too wide a window. **Right-click the spectrum or the
+waterfall** (the receiver's, or a patch Spectrum part's): below the trace
+choices, or below the marker list, the menu ends with a **Display** block:
+
+- **Range: Automatic** is the window FoxSDR starts with: -110 to 0 dB on the
+  receiver's spectrum and waterfall, and, on a patch Spectrum part, a window it
+  fits to the signal on every line (the 20th-percentile bin, which is the
+  noise, up to the loudest bin, never less than 30 dB).
+- **Range: Manual** uses your own **Floor** and **Ceiling** on all of them
+  together: the receiver's spectrum scale, the waterfall's colours, the
+  strength key, and every patch Spectrum part. The two sliders are live only
+  in Manual. The floor is the level shown as the quietest colour and the
+  ceiling the level shown as the strongest, so raising the floor to just under
+  the noise - look at where the trace sits - and lowering the ceiling toward
+  your strongest signal stretches the colours over what you want to see. The
+  ceiling is kept at least 10 dB above the floor: the slider you are dragging
+  is the one that stops. The strength key on the waterfall says **MANUAL**
+  beside its title while your window is in force, and its **FLOOR / CEILING**
+  line names the two numbers.
+- **Reset display to defaults** puts back Automatic, forgets the floor and
+  ceiling you had, and returns the spectrum to its normal trace.
+
+The two sliders are the same two numbers as **Min dB** and **Max dB** in
+SYSTEM → Display (which now shows the window in force, and moves to Manual when
+you drag it), so either place changes both. The choice is remembered in the
+configuration file (`waterfallRangeMode`, with `dbMin` and `dbMax` for the
+floor and ceiling); a file from before the menu that already had a range of
+its own opens in Manual. Choosing Automatic again keeps the floor and ceiling
+for the next time you choose Manual. The waterfall keeps the colours it has
+already painted: after a change the key says **APPLIES TO** the newest lines
+only, with a **RANGE CHANGED** rule across the picture, and the older lines
+scroll away.
+
+Hold the pointer still over the spectrum or the waterfall for about four
+seconds and a small tip says **Right-click to change the range and display**.
+Moving the pointer, pressing a button, opening the menu or leaving the panel
+puts it away; it comes back after another four seconds of rest.
+
 ## The patch view
 
 The patch is FoxSDR's main view (0.99.40): a canvas where a receiver is built
@@ -864,7 +906,7 @@ itself, operated on its own face.
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
-| **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. Right-click its waterfall for the [marker menu](#markers-on-the-waterfall), its trace for [peak hold and average](#peak-hold-and-average-on-the-spectrum). |
+| **Spectrum** | A live trace and waterfall: of the whole capture (every channel marked and named) when wired to the Radio, of one channel when wired to that channel. Right-click its waterfall for the [marker menu](#markers-on-the-waterfall), its trace for [peak hold and average](#peak-hold-and-average-on-the-spectrum); both menus end with the [display range](#the-range-of-the-spectrum-and-the-waterfall): Automatic (the part fits its window to the signal) or your own floor and ceiling. |
 | **Text out** | A log of the lines from every decoder wired to it. |
 | **Map** | Aircraft, ships and stations from up to five decoders on one live map - each decoder's map output wired to one of its five inputs, so ADS-B from one radio and AIS from another share it. The same map, basemap and target details as the map pages; with a map imagery plugin fitted, its attribution is lettered under the chart, as on the map pages. |
 | **Decoders** | One part per installed decoder plugin, by name. An I/Q decoder wired to a Channel is fed *that channel*, tuned, so several decoders on several frequencies run off one radio at once; wired to the Radio it gets the whole capture. An audio decoder goes behind a Demod. Picture decoders (APT, WEFAX, SSTV) are parts too and show their picture on the node. |
@@ -1059,7 +1101,8 @@ plugin store, the fitted modules, the decoders, target details and the
 satellites map; TOOLS (called VIEW before 0.99.74) is the demod scope, the
 radar scope, bookmarks, the scanner and airband; EXTEND is browser access and
 CAT control; SYSTEM is the **Display** settings (interface size, theme, the
-spectrum's range, the band plan), language, updates, diagnostics and usage
+spectrum's range - also on the right-click menu of the spectrum and the
+waterfall - the band plan), language, updates, diagnostics and usage
 reporting. **F1 to F5** press the same five keys from
 the keyboard. Each section still opens and closes with its own key and
 keeps that state as you move between banks; a section unfolds rather than

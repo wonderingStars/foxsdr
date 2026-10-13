@@ -142,6 +142,7 @@ AppConfig junkConfig() {
     c.audioBufferAutoMs = 777;  // likewise for the depth AUTOMATIC remembered
     c.dbMin = 5.0f;
     c.dbMax = -5.0f;
+    c.waterfallRangeMode = "garbage";   // neither spelling: a load that forgets the field keeps it
     c.splitRatio = 77.0f;
     c.vfoOffsetHz = 1e18;
     c.sampleRateHz = -3.0;
@@ -361,6 +362,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.audioBufferAutoMs == b.audioBufferAutoMs);
     CHECK(a.dbMin == b.dbMin);
     CHECK(a.dbMax == b.dbMax);
+    CHECK(a.waterfallRangeMode == b.waterfallRangeMode);
     CHECK(a.splitRatio == b.splitRatio);
     CHECK(a.vfoOffsetHz == b.vfoOffsetHz);
     CHECK(a.sampleRateHz == b.sampleRateHz);
@@ -853,6 +855,7 @@ int main() {
         in.audioBufferAutoMs = 960;  // ...and the depth AUTOMATIC had reached (kept, ignored while fixed)
         in.dbMin = -97.0f;
         in.dbMax = -12.5f;  // -97 < -22.5: survives the span rule
+        in.waterfallRangeMode = "manual";   // not the default ("auto"); the pair above is its window
         in.splitRatio = 0.62f;
         in.vfoOffsetHz = -125000.0;
         in.sampleRateHz = 2400000.0;
@@ -1231,8 +1234,18 @@ int main() {
         CHECK(out.dbMin == -110.0f);
         CHECK(out.dbMax == 0.0f);
 
-        // exactly 10 dB: contract is strict (dbMin < dbMax - 10), so reset
+        // exactly 10 dB is KEPT (0.99.76). This line used to expect a reset - "the contract is
+        // strict, dbMin < dbMax - 10" - but the Display sliders, the web control and now the
+        // right-click menu all enforce "at least 10 dB" (core/display_range.hpp,
+        // kMinRangeSpanDb), so a user who left the two ends exactly 10 apart had them thrown
+        // away at the next start. Anything thinner is still refused, below.
         CHECK(writeText(path, "{\"dbMin\":-80.0,\"dbMax\":-70.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.dbMin == -80.0f);
+        CHECK(out.dbMax == -70.0f);
+
+        // a hair under 10 dB is refused, both ends reset
+        CHECK(writeText(path, "{\"dbMin\":-80.0,\"dbMax\":-70.5}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.dbMin == -110.0f);
         CHECK(out.dbMax == 0.0f);
@@ -4980,6 +4993,127 @@ int main() {
         AppConfig typed;
         CHECK(ConfigStore::load(bad, typed, err));
         CHECK(!typed.radioSetupDontShow);
+    }
+
+    // --- the window the spectrum and the waterfall are drawn through (0.99.76) -----------------
+    //
+    // The owner, answering a dislike ("the spectrum and the waterfall are very milky"): "allow the
+    // users to set it themselves to what they prefer by right clicking on it". The choice is two
+    // keys - waterfallRangeMode, new, and dbMin / dbMax, which are the Display section's Min dB and
+    // Max dB and have been in the file since the first release. The file is user-editable and
+    // old: a missing, wrong-typed or unknown mode is read from the pair, so a range somebody set
+    // before there was a mode is still theirs, and a hand-edit cannot produce a third spelling.
+    {
+        std::string err;
+        const std::string path = p("range_mode.json");
+        CHECK(AppConfig{}.waterfallRangeMode == "auto");
+
+        // Nothing in the file: Automatic and the program's own pair, whatever the caller held.
+        CHECK(writeText(path, "{}\n"));
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+        CHECK(out.dbMin == -110.0f && out.dbMax == 0.0f);
+
+        // A 0.99.75 file whose user had moved Min dB / Max dB: that range is theirs.
+        CHECK(writeText(path, "{\"dbMin\":-95.0,\"dbMax\":-20.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "manual");
+        CHECK(out.dbMin == -95.0f && out.dbMax == -20.0f);
+
+        // ...and one that left them at the defaults stays Automatic.
+        CHECK(writeText(path, "{\"dbMin\":-110.0,\"dbMax\":0.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+
+        // The word wins over the pair, both ways: Automatic keeps the pair Manual returns to.
+        CHECK(writeText(path, "{\"waterfallRangeMode\":\"auto\",\"dbMin\":-95.0,\"dbMax\":-20.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+        CHECK(out.dbMin == -95.0f && out.dbMax == -20.0f);
+        CHECK(writeText(path, "{\"waterfallRangeMode\":\"manual\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "manual");
+        CHECK(out.dbMin == -110.0f && out.dbMax == 0.0f);
+
+        // A word nobody wrote, or a value that is not a word, is read from the pair.
+        for (const char* bad : {"\"sideways\"", "\"MANUAL\"", "\"\"", "7", "true", "null", "[]"}) {
+            CHECK(writeText(path, std::string("{\"waterfallRangeMode\":") + bad +
+                                      ",\"dbMin\":-95.0,\"dbMax\":-20.0}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.waterfallRangeMode != "manual") {
+                std::printf("FAIL mode %s with a range of its own loaded as \"%s\"\n", bad,
+                            out.waterfallRangeMode.c_str());
+            }
+            CHECK(out.waterfallRangeMode == "manual");
+            CHECK(writeText(path, std::string("{\"waterfallRangeMode\":") + bad + "}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.waterfallRangeMode == "auto");
+        }
+
+        // A pair the loader refuses is reset (both ends), and the mode is then read from what is
+        // left: a thin pair with no word is Automatic, not Manual on a window nobody chose.
+        CHECK(writeText(path, "{\"dbMin\":-20.0,\"dbMax\":-15.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+        CHECK(out.dbMin == -110.0f && out.dbMax == 0.0f);
+
+        // It is written under its own name, in one of its two spellings, and comes back.
+        for (const char* mode : {"manual", "auto"}) {
+            AppConfig in;
+            in.waterfallRangeMode = mode;
+            in.dbMin = -70.0f;
+            in.dbMax = -30.0f;
+            const std::string text = ConfigStore::serialize(in);
+            CHECK(text.find(std::string("\"waterfallRangeMode\": \"") + mode + "\"") !=
+                      std::string::npos ||
+                  text.find(std::string("\"waterfallRangeMode\":\"") + mode + "\"") != std::string::npos);
+            const std::string rt = p("range_mode_roundtrip.json");
+            CHECK(ConfigStore::save(rt, in, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(rt, out, err));
+            CHECK(out.waterfallRangeMode == mode);
+            CHECK(out.dbMin == -70.0f && out.dbMax == -30.0f);
+        }
+
+        // Exactly 10 dB apart survives a save and a load, which is what "at least 10" means.
+        {
+            AppConfig in;
+            in.waterfallRangeMode = "manual";
+            in.dbMin = -50.0f;
+            in.dbMax = -40.0f;
+            const std::string rt = p("range_mode_tight.json");
+            CHECK(ConfigStore::save(rt, in, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(rt, out, err));
+            CHECK(out.waterfallRangeMode == "manual");
+            CHECK(out.dbMin == -50.0f && out.dbMax == -40.0f);
+        }
+
+        // THE SAVE DEBOUNCE HAS TO SEE EACH OF THE THREE: the menu's radio keys and sliders call
+        // no save of their own, so configsEqual is the only thing that writes the file before a
+        // clean exit.
+        const AppConfig base;
+        CHECK(cascade::gui::configsEqual(base, base));  // control
+        AppConfig mode = base;
+        mode.waterfallRangeMode = "manual";
+        CHECK(!cascade::gui::configsEqual(base, mode));
+        CHECK(!cascade::gui::configsEqual(mode, base));
+        AppConfig floorMoved = base;
+        floorMoved.dbMin = -90.0f;
+        CHECK(!cascade::gui::configsEqual(base, floorMoved));
+        CHECK(!cascade::gui::configsEqual(floorMoved, base));
+        AppConfig ceilingMoved = base;
+        ceilingMoved.dbMax = -10.0f;
+        CHECK(!cascade::gui::configsEqual(base, ceilingMoved));
+        CHECK(!cascade::gui::configsEqual(ceilingMoved, base));
     }
 
     const int rc = testSummary("test_config");

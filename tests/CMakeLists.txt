@@ -259,6 +259,12 @@ foreach(src ${CASCADE_TESTS})
         # and presses the plugin controls on it with the input script.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_display_menu_app")
+        # Runs the real cascade.exe (built first) and right-clicks the spectrum, the waterfall and a
+        # patch Spectrum part with the input script (0.99.76): the display range menu, the strength
+        # key's MANUAL, and the tip that appears after four seconds of rest.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_plugin_rescan_skip")
         # Copies the two probe modules into a plugins folder of its own and
         # drives the real AppWindow's rescan against it; built first.
@@ -439,6 +445,13 @@ set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
 # the cancelled press and a relaunch), 33 to 46 frames each. The Linux runners are half this
 # desktop's speed, so it is given a bound well past the loop's two minutes.
 set_tests_properties(test_plugin_pathpick_app PROPERTIES TIMEOUT 300)
+# The display-menu test starts the real application twenty-three times (the menu on the waterfall and the
+# spectrum, Manual with its sliders, the ten-decibel rule, Reset, a restart, a 0.99.75 config, a patch
+# Spectrum part, and nine runs that hold the frame loop with `sleep` steps for the 4-second tip, 4 to
+# 9 s each): 95 s on this desktop. The Linux runners are half this desktop's speed and the tip runs
+# measure real time, so it is given the generous bound its siblings are rather than the loop's two
+# minutes.
+set_tests_properties(test_display_menu_app PROPERTIES TIMEOUT 600)
 # The audio-buffer test builds the real AppWindow three times (its sink opened and then closed, which
 # is a device open each) and makes a few hundred starved callbacks against it by hand. A few seconds
 # here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is

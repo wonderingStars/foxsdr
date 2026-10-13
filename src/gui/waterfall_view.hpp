@@ -160,6 +160,14 @@ public:
         // "1090 MHz ADS-B - DECODING". nullptr or empty draws no line; this
         // widget has no way to find out for itself and must not invent it.
         const char* decoding = nullptr;
+
+        // The floor and ceiling the key names are the USER'S (the display range's Manual mode,
+        // chosen from the menu on a right-click: core/display_range.hpp), not the program's own
+        // window. The key then carries the word MANUAL on its title line, so the person who set
+        // them - or the one who is shown the screen afterwards - can tell a stretched picture from
+        // a default one. The numbers themselves are still the range the newest line was mapped
+        // through (dbFloor()/dbCeiling()), whichever mode produced them.
+        bool manualRange = false;
     };
 
     // Windowed draw plus the bench chrome the design calls for: a recessed

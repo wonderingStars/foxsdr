@@ -15,6 +15,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -428,14 +430,17 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     // the job kills nothing that is still wanted.
     if (job != nullptr) { ::CloseHandle(job); }
 
-    if (out.outcome == EnumOutcome::ChildTimedOut) {
+    const ChildEnd end =
+        classifyChildEnd(out.exitCode, out.outcome == EnumOutcome::ChildTimedOut);
+    if (end == ChildEnd::TimedOut) {
         out.inFlightDrivers = probesStillRunning(text);
         out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
         return;
     }
-    if (exitCode != 0) {
+    if (end != ChildEnd::Clean) {
         out.outcome = EnumOutcome::ChildDied;
+        out.endedOnClosedPipe = end == ChildEnd::PipeClosed;
         out.inFlightDrivers = probesStillRunning(text);
         out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
@@ -602,14 +607,16 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     }
     out.exitCode = exitCode;
 
-    if (out.outcome == EnumOutcome::ChildTimedOut) {
+    const ChildEnd end = classifyChildEnd(exitCode, out.outcome == EnumOutcome::ChildTimedOut);
+    if (end == ChildEnd::TimedOut) {
         out.inFlightDrivers = probesStillRunning(text);
         out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
         return;
     }
-    if (exitCode != 0) {
+    if (end != ChildEnd::Clean) {
         out.outcome = EnumOutcome::ChildDied;
+        out.endedOnClosedPipe = end == ChildEnd::PipeClosed;
         out.inFlightDrivers = probesStillRunning(text);
         out.probesBegan = anyProbeBegan(text);
         out.childFaultLine = childFaultLineFrom(text);
@@ -899,6 +906,43 @@ const char* enumOutcomeName(EnumOutcome outcome) noexcept {
     return "?";
 }
 
+ChildEnd classifyChildEnd(unsigned long exitCode, bool parentGaveUp) noexcept {
+    // The parent's own kill is what ended it, whatever the status says: a child
+    // killed at the end of its budget can have been dying of a closed pipe in
+    // the same instant, and the budget running out is the older fact.
+    if (parentGaveUp) { return ChildEnd::TimedOut; }
+    if (exitCode == 0) { return ChildEnd::Clean; }
+    if (exitCode == static_cast<unsigned long>(kEnumChildExitPipeClosed) ||
+        exitCode == static_cast<unsigned long>(kEnumChildExitSigpipe)) {
+        return ChildEnd::PipeClosed;
+    }
+    return ChildEnd::Died;
+}
+
+bool writeToParent(std::FILE* out, const char* data, std::size_t size) {
+    errno = 0;
+#ifdef _WIN32
+    ::SetLastError(0);
+#endif
+    const bool wrote = std::fwrite(data, 1, size, out) == size && std::fflush(out) == 0;
+    if (wrote) { return true; }
+    // errno is read only after a failure: a successful call is allowed to leave
+    // anything in it.
+#ifdef _WIN32
+    // THE CRT DOES NOT SAY EPIPE FOR A BROKEN PIPE. Measured (UCRT, Windows 11
+    // 10.0.22631, a pipe whose read end was closed): fwrite buffers, fflush fails
+    // with errno 22 (EINVAL) and GetLastError() 232 (ERROR_NO_DATA, "the pipe is
+    // being closed"). The system error is the honest answer; the two other ways
+    // Windows names a pipe nobody reads are listed with it.
+    const DWORD sysError = ::GetLastError();
+    if (sysError == ERROR_NO_DATA || sysError == ERROR_BROKEN_PIPE ||
+        sysError == ERROR_PIPE_NOT_CONNECTED) {
+        return false;
+    }
+#endif
+    return errno != EPIPE;
+}
+
 std::string enumerateHelperPath() {
     if (const char* over = std::getenv("CASCADE_ENUM_HELPER")) {
         if (*over != '\0') { return std::string(over); }
@@ -1085,6 +1129,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 // leaving it out of later scans would hide its radio. The death
                 // is still counted and filed, once, saying when it happened.
                 result.childDeaths += 1;
+                if (one.endedOnClosedPipe) { result.closedPipeEnds += 1; }
                 noteContainedChildDeath();
                 result.deathExitCode = one.exitCode;
                 result.childFaultLine = one.childFaultLine;
@@ -1092,8 +1137,10 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                     "SDR device enumeration child process for driver=" + reportSafeName(driver) +
                         " died after its answer was complete (contained: the answer was used)",
                     one.childFaultLine);
-                reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
-                                               childFaultSignatureTag(driver));
+                if (!one.endedOnClosedPipe) {
+                    reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
+                                                   childFaultSignatureTag(driver));
+                }
                 core::diagWarnf(
                     "soapy: the '%s' driver's child died with exit 0x%08lX after its answer was "
                     "complete - its answer was used",
@@ -1103,7 +1150,18 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
         }
         // The most recent death's or kill's own words, as the header promises.
         result.childFaultLine = one.childFaultLine;
-        if (one.outcome == EnumOutcome::ChildDied) {
+        if (one.outcome == EnumOutcome::ChildDied && one.endedOnClosedPipe) {
+            // A CHILD THAT LOST ITS PIPE IS NOT A DRIVER THAT FAULTED (0.99.76,
+            // field report 30BCD594C128766D): it is counted, as a death is, and
+            // that is all. No report, because nothing crashed; and the driver is
+            // NOT remembered, because that list is what leaves a driver out of
+            // every later scan of the session - and the report that named rtlsdr
+            // this way took a working RTL-SDR off the Source menu.
+            result.childDeaths += 1;
+            result.closedPipeEnds += 1;
+            noteContainedChildDeath();
+            result.deathExitCode = one.exitCode;
+        } else if (one.outcome == EnumOutcome::ChildDied) {
             result.childDeaths += 1;
             noteContainedChildDeath();
             result.deathExitCode = one.exitCode;
@@ -1135,6 +1193,11 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 "soapy: the '%s' driver did not answer within %lu ms and was stopped - it is "
                 "skipped for this scan",
                 driver.c_str(), childMs);
+        } else if (one.endedOnClosedPipe) {
+            core::diagWarnf(
+                "soapy: the '%s' driver's child ended on a closed pipe (exit 0x%08lX) - not a "
+                "crash and nothing filed; it is skipped for this scan and asked again the next",
+                driver.c_str(), one.exitCode);
         } else {
             core::diagWarnf(
                 "soapy: the '%s' driver faulted during discovery (exit 0x%08lX) - it is "
@@ -1251,6 +1314,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // Carried across attempts on purpose: a retry that SUCCEEDS must
             // not erase the death that made it necessary.
             attempt.childDeaths = result.childDeaths;
+            attempt.closedPipeEnds = result.closedPipeEnds;
             attempt.deathExitCode = result.deathExitCode;
             runOneChild(helper, options.timeoutMs, childCrashDir, attempt, skipArg, i + 1);
             // ...and neither must it erase which probes that death interrupted.
@@ -1264,6 +1328,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // for why a timeout is not.
             if (result.outcome != EnumOutcome::ChildDied) { break; }
             result.childDeaths += 1;
+            if (result.endedOnClosedPipe) { result.closedPipeEnds += 1; }
             noteContainedChildDeath();
             result.deathExitCode = result.exitCode;
 
@@ -1323,8 +1388,15 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                     " (contained: the parent survived and " +
                     (answered ? "used its answer)" : "re-probed)") + running,
                 result.childFaultLine);
-            reportChildDeathUnlessChildDid(childCrashDir, result, reason, i + 1,
-                                           childFaultSignatureTag(std::string()));
+
+            // NOT FILED WHEN THE PIPE WAS CLOSED (0.99.76, field reports
+            // 862234B08B9FC33D and 30BCD594C128766D): a helper whose pipe had no
+            // reader left did not fault, and a report of it is a crash group for
+            // something that is not one. It is counted, logged below and retried.
+            if (!result.endedOnClosedPipe) {
+                reportChildDeathUnlessChildDid(childCrashDir, result, reason, i + 1,
+                                               childFaultSignatureTag(std::string()));
+            }
 
             // THE ANSWER WAS COMPLETE, so it is the answer: no retry, and no
             // sweep - asking every driver again cannot improve on a walk that
@@ -1340,10 +1412,17 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             }
 
             if (i + 1 < maxAttempts) {
-                core::diagWarnf(
-                    "soapy: enumeration child died with exit 0x%08lX (attempt %d of %d)%s - "
-                    "contained; retrying",
-                    result.exitCode, i + 1, maxAttempts, running.c_str());
+                if (result.endedOnClosedPipe) {
+                    core::diagWarnf(
+                        "soapy: enumeration child ended on a closed pipe, exit 0x%08lX "
+                        "(attempt %d of %d)%s - not a crash and nothing filed; retrying",
+                        result.exitCode, i + 1, maxAttempts, running.c_str());
+                } else {
+                    core::diagWarnf(
+                        "soapy: enumeration child died with exit 0x%08lX (attempt %d of %d)%s - "
+                        "contained; retrying",
+                        result.exitCode, i + 1, maxAttempts, running.c_str());
+                }
             }
         }
         // THE WHOLE BUS ANSWERED IN TIME, every driver on it included (the
@@ -1399,18 +1478,34 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
             // still a driver fault that happened, and a machine losing one
             // scan in twenty to one is worth a line - otherwise the only trace
             // of the whole problem is that it stopped being a crash.
-            if (result.childDeaths > 0) {
+            if (result.childDeaths > result.closedPipeEnds) {
                 core::diagWarnf(
                     "soapy: enumeration succeeded after %d child death(s) (last exit "
                     "0x%08lX) - a driver on this machine is faulting during device "
                     "discovery",
-                    result.childDeaths, result.deathExitCode);
+                    result.childDeaths - result.closedPipeEnds, result.deathExitCode);
+            }
+            // ...AND NOT THE SAME SENTENCE FOR A HELPER THAT ONLY LOST ITS PIPE
+            // (0.99.76): that is no driver faulting, and saying so sends a reader
+            // after the wrong thing.
+            if (result.closedPipeEnds > 0) {
+                core::diagWarnf(
+                    "soapy: enumeration succeeded after %d child(ren) ended on a closed "
+                    "pipe - not a crash; nothing was filed",
+                    result.closedPipeEnds);
             }
             break;
         case EnumOutcome::ChildDied:
             // The report for each death was already filed in the retry loop
             // above, at the moment it happened - deliberately, because the
             // case that reaches HERE (every attempt died) is the rare one.
+            if (result.endedOnClosedPipe) {
+                core::diagWarnf(
+                    "soapy: enumeration failed - the last child ended on a closed pipe (exit "
+                    "0x%08lX, %d attempts); not a crash; no devices listed this scan",
+                    result.exitCode, result.attempts);
+                break;
+            }
             core::diagWarnf(
                 "soapy: enumeration failed - every child died (last exit 0x%08lX, %d "
                 "attempts); no devices listed this scan",
@@ -1467,6 +1562,21 @@ void armEnumerateHelperProcess(const char* crashDir, const char* reasonSuffix,
     // fault occasionally by design, and a dialog on a hidden process is a hang
     // that nobody can see to dismiss.
     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#else
+    // SIGPIPE IS IGNORED, ALSO FIRST AND ALSO UNCONDITIONALLY (0.99.76). The helper
+    // writes to descriptors whose readers it does not control - the pipe to the
+    // parent, the stderr it inherited, whatever socket a vendor module opens - and
+    // with the default disposition the first write to one that has gone kills it
+    // with exit 141 (128 + SIGPIPE): six of those in one second on one Linux
+    // machine were filed as six crashes (862234B08B9FC33D, 30BCD594C128766D). Ignored,
+    // the write fails with EPIPE, which the vendor module's own error handling or
+    // writeToParent deals with. What the helper inherits from its parent cannot be
+    // relied on: httplib::Server's constructor ignores SIGPIPE process-wide, so a
+    // helper started after the web server had it ignored and one before did not.
+    struct sigaction ignorePipe {};
+    ignorePipe.sa_handler = SIG_IGN;
+    ::sigemptyset(&ignorePipe.sa_mask);
+    ::sigaction(SIGPIPE, &ignorePipe, nullptr);
 #endif
 
     if (crashDir != nullptr && *crashDir != '\0') {
@@ -1652,11 +1762,18 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
         }
     }
     std::mutex logMutex;
-    const auto onProbe = [&logMutex](bool begin, const std::string& name) {
+    // NO ONE IS READING (0.99.76): a probe line that could not be written because the
+    // pipe has no reader left. The walk still runs to its end - the module that must
+    // say goodbye (endEnumerateHelperProcess) still does - but nothing more is
+    // written, and the helper ends with kEnumChildExitPipeClosed instead of dying
+    // of the signal. Written under logMutex, read after the walk.
+    std::atomic<bool> parentGone{false};
+    const auto onProbe = [&logMutex, &parentGone](bool begin, const std::string& name) {
         const std::string line = probeMarkerLine(begin, name);
         std::lock_guard<std::mutex> lk(logMutex);
-        std::fwrite(line.data(), 1, line.size(), stdout);
-        std::fflush(stdout);
+        if (!parentGone.load() && !writeToParent(stdout, line.data(), line.size())) {
+            parentGone.store(true);
+        }
         // ...AND INTO THIS PROCESS'S OWN LOG RING (2026-10-04), which is what
         // this child's crash report carries. The parent no longer files a
         // report of a death that this child's report covers, and the
@@ -1677,9 +1794,14 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
     const std::string line = enumerationReportJson(
         runtime, static_cast<unsigned long long>(vendorGuardCallCount() - before),
         captureArmed, devices, names);
-    std::fwrite(line.data(), 1, line.size(), stdout);
-    std::fputc('\n', stdout);
-    std::fflush(stdout);
+    // The answer is one line, written in one piece; a pipe with no reader is
+    // learned of here or by a probe line above, and is its own exit code.
+    const std::string answer = line + "\n";
+    if (parentGone.load() || !writeToParent(stdout, answer.data(), answer.size())) {
+        core::diagLogf("enumeration helper: the pipe to the parent has no reader - answer not "
+                       "written");
+        return kEnumChildExitPipeClosed;
+    }
     return 0;
 }
 

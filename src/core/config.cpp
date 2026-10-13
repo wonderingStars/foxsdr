@@ -3,6 +3,7 @@
 
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
+#include "core/display_range.hpp"
 #include "core/file_read.hpp"
 #include "core/patch_presets.hpp"
 #include "core/ppm_correction.hpp"
@@ -973,10 +974,25 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     out.nrStrength = clampf(out.nrStrength, 0.0f, 1.0f);
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
-    if (!(out.dbMin < out.dbMax - 10.0f)) {
+    // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
+    // Display sliders, the web control, the right-click menu: core/display_range.hpp). It used to
+    // be MORE than 10 dB, so a pair a person left exactly 10 apart was accepted all session and
+    // thrown away at the next start.
+    if (!(std::isfinite(out.dbMin) && std::isfinite(out.dbMax) &&
+          spanIsEnough(out.dbMin, out.dbMax))) {
         // Reset BOTH: clamping one end would invent a range nobody chose.
         out.dbMin = defaults.dbMin;
         out.dbMax = defaults.dbMax;
+    }
+    // WHICH WINDOW THAT PAIR IS (0.99.76): the word the file carries, or - for a file from before
+    // there was one, when the pair WAS the window - Manual if the pair is anything but the program's
+    // own. Read after the repair above, so a pair that was refused is not Manual on defaults it
+    // never chose. One of two spellings in memory whatever the file held.
+    {
+        std::string word;
+        getString(j, "waterfallRangeMode", word);
+        out.waterfallRangeMode =
+            rangeModeName(resolveRangeMode(word, DbPair{out.dbMin, out.dbMax}));
     }
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
         out.sourceKind != "soapy" && out.sourceKind != "rtlsdr" &&
@@ -1266,6 +1282,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["audioBufferAutoMs"] = cfg.audioBufferAutoMs;
     j["dbMin"] = cfg.dbMin;
     j["dbMax"] = cfg.dbMax;
+    j["waterfallRangeMode"] = cfg.waterfallRangeMode;
     j["splitRatio"] = cfg.splitRatio;
     j["vfoOffsetHz"] = cfg.vfoOffsetHz;
     j["sampleRateHz"] = cfg.sampleRateHz;

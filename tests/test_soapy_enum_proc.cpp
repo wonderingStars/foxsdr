@@ -64,6 +64,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -92,12 +93,17 @@
 
 #include "test_check.hpp"
 
+using cascade::source::ChildEnd;
+using cascade::source::classifyChildEnd;
 using cascade::source::EnumOptions;
 using cascade::source::EnumOutcome;
 using cascade::source::EnumResult;
 using cascade::source::enumerateHelperPath;
 using cascade::source::enumerateIsolated;
 using cascade::source::enumOutcomeName;
+using cascade::source::kEnumChildExitPipeClosed;
+using cascade::source::kEnumChildExitSigpipe;
+using cascade::source::writeToParent;
 
 namespace {
 
@@ -302,6 +308,21 @@ CASCADE_UBSAN_EXEMPT __attribute__((noinline)) void storeThroughNull() {
     *p = 1;
 }
 #endif
+
+// The write end of a pipe whose read end is already closed, as a stdio stream:
+// the pipe to a parent that has stopped reading. Null when it could not be made.
+std::FILE* closedPipeWriter() {
+    int fds[2] = {-1, -1};
+#ifdef _WIN32
+    if (::_pipe(fds, 4096, _O_BINARY) != 0) { return nullptr; }
+    ::_close(fds[0]);
+    return ::_fdopen(fds[1], "wb");
+#else
+    if (::pipe(fds) != 0) { return nullptr; }
+    ::close(fds[0]);
+    return ::fdopen(fds[1], "wb");
+#endif
+}
 
 // --- the fake helper -------------------------------------------------------
 int fakeHelper(int argc, char** argv) {
@@ -694,6 +715,66 @@ int fakeHelper(int argc, char** argv) {
         }
         dieOfHeapCorruption();
     }
+    // --- 0.99.76: a helper that ENDS ON A CLOSED PIPE is not a crash -----------
+    // (field reports 862234B08B9FC33D and 30BCD594C128766D: exit 0x8D = 141 =
+    // 128 + SIGPIPE, six "crashes" in a second.)
+    if (mode == "pipeclosed") {
+        // Ends the way the real helper ends when nobody is reading its pipe.
+        return kEnumChildExitPipeClosed;
+    }
+    if (mode == "pipeflaky") {
+        // pipeclosed the first time it is asked, and an answer the second: the
+        // retry has to survive a closed-pipe end exactly as it survives a death.
+        const std::string counter = envOr(kCounterVar, "");
+        std::error_code ec;
+        if (!counter.empty() && !std::filesystem::exists(std::filesystem::path(counter), ec)) {
+            std::ofstream(counter, std::ios::binary) << "1";
+            return kEnumChildExitPipeClosed;
+        }
+        printOkJson(gotCrashDir);
+        return 0;
+    }
+    if (mode == "pipesweep") {
+        // field report 30BCD594C128766D's MACHINE, faked: the whole bus ends on a
+        // closed pipe EVERY time, so the parent lists the drivers and asks each
+        // alone; "bad" ends the same way, "good" answers.
+        const std::string driver = driverArg(argc, argv);
+        const char* cap = gotCrashDir ? "true" : "false";
+        if (askedToListDrivers(argc, argv)) {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"drivers\":[\"good\",\"bad\"],\"devices\":[]}\n",
+                        cap);
+            return 0;
+        }
+        if (driver == "good") {
+            std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                        "\"devices\":[{\"label\":\"good radio\",\"args\":\"driver=good,serial=9\"}]}\n",
+                        cap);
+            return 0;
+        }
+        return kEnumChildExitPipeClosed;
+    }
+    if (mode == "armedpipe") {
+        // THE REAL CHILD'S SETUP, then a write to a pipe with no reader: the
+        // production armEnumerateHelperProcess, then the production writeToParent.
+        // Where SIGPIPE is ignored (POSIX: armEnumerateHelperProcess does it) the
+        // write fails with EPIPE and this ends with kEnumChildExitPipeClosed; where
+        // it is not, the kernel ends this process with 141 first.
+        cascade::source::armEnumerateHelperProcess(nullptr);
+        std::FILE* w = closedPipeWriter();
+        if (w == nullptr) { return 29; }  // the probe was not set up: a broken test, not a pass
+        return writeToParent(w, "x", 1) ? 0 : kEnumChildExitPipeClosed;
+    }
+#ifndef _WIN32
+    if (mode == "sigpipe") {
+        // A REAL SIGPIPE DEATH, which is what the field helper died of: default
+        // disposition, then the signal. The parent reads WIFSIGNALED as 128 + 13.
+        std::fflush(stdout);
+        std::signal(SIGPIPE, SIG_DFL);
+        std::raise(SIGPIPE);
+        std::_Exit(99);  // unreachable
+    }
+#endif
     if (mode == "garbage") {
         std::printf("this is not json at all\n");
         return 0;
@@ -1188,6 +1269,132 @@ int main(int argc, char** argv) {
                 CHECK(same == (a == b));
             }
         }
+    }
+
+    // --- 0.99.76: HOW A HELPER'S END IS READ, as a pure function ------------
+    //
+    // Field reports 862234B08B9FC33D and 30BCD594C128766D: six "crashes" in one
+    // second from one Linux session, every one exit 0x8D = 141 = 128 + SIGPIPE,
+    // one of them blaming the rtlsdr driver alone. A helper whose pipe has no
+    // reader has not faulted; a helper that aborted while the parent listened
+    // has. The function is the whole of that distinction, so it is tested on its
+    // own, on every platform, before any child is spawned.
+    {
+        CHECK(kEnumChildExitSigpipe == 141);
+        CHECK(kEnumChildExitSigpipe == 0x8D);  // the number in the field rows
+        CHECK(kEnumChildExitPipeClosed == 74);
+        CHECK(kEnumChildExitPipeClosed != kEnumChildExitSigpipe);
+
+        CHECK(classifyChildEnd(0ul, false) == ChildEnd::Clean);
+
+        // THE FIELD ROW, and the code the helper itself now ends with.
+        CHECK(classifyChildEnd(0x8Dul, false) == ChildEnd::PipeClosed);
+        CHECK(classifyChildEnd(static_cast<unsigned long>(kEnumChildExitSigpipe), false) ==
+              ChildEnd::PipeClosed);
+        CHECK(classifyChildEnd(static_cast<unsigned long>(kEnumChildExitPipeClosed), false) ==
+              ChildEnd::PipeClosed);
+
+        // A REAL DEATH WHILE THE PARENT LISTENED stays a death: an abort, a
+        // segfault, the Windows exceptions, a plain nonzero exit - and the codes
+        // either side of the two above, so a range test cannot pass for them.
+        CHECK(classifyChildEnd(128ul + 6ul, false) == ChildEnd::Died);   // SIGABRT
+        CHECK(classifyChildEnd(128ul + 11ul, false) == ChildEnd::Died);  // SIGSEGV
+        CHECK(classifyChildEnd(0xC0000005ul, false) == ChildEnd::Died);
+        CHECK(classifyChildEnd(0xC0000374ul, false) == ChildEnd::Died);
+        CHECK(classifyChildEnd(7ul, false) == ChildEnd::Died);
+        CHECK(classifyChildEnd(73ul, false) == ChildEnd::Died);
+        CHECK(classifyChildEnd(75ul, false) == ChildEnd::Died);
+        CHECK(classifyChildEnd(140ul, false) == ChildEnd::Died);
+        CHECK(classifyChildEnd(142ul, false) == ChildEnd::Died);
+
+        // THE PARENT GAVE UP FIRST: whatever the status says, the budget running
+        // out is what ended it - including a status that would read as a closed
+        // pipe or as a death, and the clean one.
+        CHECK(classifyChildEnd(0ul, true) == ChildEnd::TimedOut);
+        CHECK(classifyChildEnd(128ul + 9ul, true) == ChildEnd::TimedOut);  // SIGKILL
+        CHECK(classifyChildEnd(0xE0454E55ul, true) == ChildEnd::TimedOut);
+        CHECK(classifyChildEnd(static_cast<unsigned long>(kEnumChildExitSigpipe), true) ==
+              ChildEnd::TimedOut);
+        CHECK(classifyChildEnd(static_cast<unsigned long>(kEnumChildExitPipeClosed), true) ==
+              ChildEnd::TimedOut);
+        CHECK(classifyChildEnd(128ul + 6ul, true) == ChildEnd::TimedOut);
+    }
+
+    // --- 0.99.76: writeToParent - "is anyone reading", from a real pipe -----
+    {
+#ifndef _WIN32
+        // THE HELPER'S SETUP IGNORES SIGPIPE: put the default back, run the
+        // production setup, ask the kernel. Without it, the closed-pipe write
+        // below would end THIS process with 141 - which is the field fault.
+        {
+            struct sigaction dfl {};
+            dfl.sa_handler = SIG_DFL;
+            ::sigemptyset(&dfl.sa_mask);
+            ::sigaction(SIGPIPE, &dfl, nullptr);
+            struct sigaction before {};
+            ::sigaction(SIGPIPE, nullptr, &before);
+            CHECK(before.sa_handler == SIG_DFL);  // the probe is set up
+            cascade::source::armEnumerateHelperProcess(nullptr);
+            struct sigaction after {};
+            ::sigaction(SIGPIPE, nullptr, &after);
+            CHECK(after.sa_handler == SIG_IGN);
+        }
+#endif
+        // A reader present: the write goes, and the answer is true.
+        {
+            int fds[2] = {-1, -1};
+#ifdef _WIN32
+            CHECK(::_pipe(fds, 4096, _O_BINARY) == 0);
+            std::FILE* w = (fds[1] >= 0) ? ::_fdopen(fds[1], "wb") : nullptr;
+#else
+            CHECK(::pipe(fds) == 0);
+            std::FILE* w = (fds[1] >= 0) ? ::fdopen(fds[1], "wb") : nullptr;
+#endif
+            CHECK(w != nullptr);
+            if (w != nullptr) {
+                CHECK(writeToParent(w, "x", 1));
+                std::fclose(w);
+            }
+#ifdef _WIN32
+            if (fds[0] >= 0) { ::_close(fds[0]); }
+#else
+            if (fds[0] >= 0) { ::close(fds[0]); }
+#endif
+        }
+        // No reader left: false, and the process is still here to say so.
+        {
+            std::FILE* w = closedPipeWriter();
+            CHECK(w != nullptr);
+            if (w != nullptr) {
+                CHECK(!writeToParent(w, "x", 1));
+                CHECK(!writeToParent(w, "x", 1));  // and it stays false
+                // fclose would flush the failed buffer once more; the process
+                // is about to leave this stream alone either way.
+            }
+        }
+        // A failure that is NOT a closed pipe is not "no one is listening": a
+        // stream opened for reading cannot be written to, and says true.
+        {
+#ifdef _WIN32
+            std::FILE* ro = std::fopen("NUL", "rb");
+#else
+            std::FILE* ro = std::fopen("/dev/null", "rb");
+#endif
+            CHECK(ro != nullptr);
+            if (ro != nullptr) {
+                CHECK(writeToParent(ro, "x", 1));
+                std::fclose(ro);
+            }
+        }
+#ifndef _WIN32
+        // Put the default back for the children this process spawns next.
+        {
+            struct sigaction dfl {};
+            dfl.sa_handler = SIG_DFL;
+            ::sigemptyset(&dfl.sa_mask);
+            ::sigaction(SIGPIPE, &dfl, nullptr);
+        }
+#endif
     }
 
     // --- helper resolution --------------------------------------------------
@@ -2842,6 +3049,8 @@ int main(int argc, char** argv) {
             const EnumResult dd = enumerateIsolated(once);
             const std::string ddText = allReportText(dir);
             CHECK(dd.outcome == EnumOutcome::ChildDied);
+            CHECK(!dd.endedOnClosedPipe);  // a real death is not a closed pipe
+            CHECK(dd.closedPipeEnds == 0);
             CHECK(crashReports(dir).size() == 1u);
             CHECK(!reportHasStack(ddText));
             CHECK(ddText.find("code: 0x00000007") != std::string::npos);
@@ -2857,6 +3066,165 @@ int main(int argc, char** argv) {
             const EnumResult hh = enumerateIsolated(slow);
             CHECK(hh.outcome == EnumOutcome::ChildTimedOut);
             CHECK(crashReports(dir).empty());
+
+            setMode("");
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+        }
+
+        // --- 0.99.76: A HELPER THAT ENDED ON A CLOSED PIPE IS NOT A CRASH -----
+        //
+        // Field reports 862234B08B9FC33D and 30BCD594C128766D (0.99.73, Linux):
+        // six "crashes" in one second, every one a helper that ended with
+        // 141 = 128 + SIGPIPE, the last of them "probing driver=rtlsdr" - after
+        // which rtlsdr was on the session's do-not-ask list and a working
+        // RTL-SDR was off the Source menu. Each case below is the SAME scan run
+        // twice, once as a closed pipe and once as a real death, so a pass means
+        // the two are told apart and not that nothing is ever filed.
+        {
+            namespace health = cascade::core::health;
+            const auto clearReports = [&dir]() {
+                std::error_code rec;
+                for (const auto& p : crashReports(dir)) { std::filesystem::remove(p, rec); }
+            };
+            cascade::source::clearSessionFaultedDriversForTest();
+            clearReports();
+            EnumOptions once;
+            once.helperPath = self;
+            once.allowInProcessFallback = false;
+            once.attempts = 1;
+            once.perDriverSweep = false;
+
+            // (1) ONE HELPER ENDS ON A CLOSED PIPE: still a death for the retry's
+            // sake (the outcome is ChildDied, counted, with its code), a
+            // closed-pipe end for everything else, and NOTHING FILED. The usage
+            // counter still counts it: a child ended and was contained.
+            auto g = health::globalLedger();
+            g->reset();
+            g->arm("", cascade::core::newInstallId(), false);
+            const std::size_t filesBefore = filesIn(dir);
+            setMode("pipeclosed");
+            const EnumResult pc = enumerateIsolated(once);
+            std::printf("closed pipe: outcome=%s exit=%lu endedOnClosedPipe=%d deaths=%d "
+                        "closedPipeEnds=%d reports=%zu files=%zu\n",
+                        enumOutcomeName(pc.outcome), pc.deathExitCode,
+                        pc.endedOnClosedPipe ? 1 : 0, pc.childDeaths, pc.closedPipeEnds,
+                        crashReports(dir).size(), filesIn(dir));
+            CHECK(pc.outcome == EnumOutcome::ChildDied);
+            CHECK(pc.endedOnClosedPipe);
+            CHECK(pc.deathExitCode == static_cast<unsigned long>(kEnumChildExitPipeClosed));
+            CHECK(pc.childDeaths == 1);
+            CHECK(pc.closedPipeEnds == 1);
+            CHECK(crashReports(dir).empty());
+            CHECK(filesIn(dir) == filesBefore);  // no file of any name, from either process
+            CHECK(g->counts() == (health::Counts{{"recovered.enumchild", 1}}));
+            g->reset();
+
+            // ...AND THE REAL DEATH BESIDE IT is filed, once, as ever (exit 7: a
+            // helper that failed while the parent listened).
+            clearReports();
+            setMode("die");
+            const EnumResult rd = enumerateIsolated(once);
+            CHECK(rd.outcome == EnumOutcome::ChildDied);
+            CHECK(!rd.endedOnClosedPipe);
+            CHECK(rd.closedPipeEnds == 0);
+            CHECK(crashReports(dir).size() == 1u);
+
+            // (2) THE RETRY IS KEPT: the first helper ends on a closed pipe, the
+            // second answers. Two children, the answer used, one death counted of
+            // which one is a closed pipe, and no report.
+            clearReports();
+            const std::filesystem::path counter =
+                std::filesystem::temp_directory_path(ec) /
+                ("enum_pipeflaky_" + std::to_string(currentPid()) + ".txt");
+            std::filesystem::remove(counter, ec);
+            setMode("pipeflaky");
+            setEnvVar(kCounterVar, counter.string().c_str());
+            EnumOptions twice;
+            twice.helperPath = self;
+            twice.allowInProcessFallback = false;
+            const EnumResult pf = enumerateIsolated(twice);
+            std::printf("closed pipe then answer: outcome=%s attempts=%d deaths=%d "
+                        "closedPipeEnds=%d reports=%zu\n",
+                        enumOutcomeName(pf.outcome), pf.attempts, pf.childDeaths,
+                        pf.closedPipeEnds, crashReports(dir).size());
+            CHECK(pf.outcome == EnumOutcome::Ok);
+            CHECK(pf.attempts == 2);
+            CHECK(rowsOf(pf) == expectedOkRows());
+            CHECK(pf.childDeaths == 1);
+            CHECK(pf.closedPipeEnds == 1);
+            CHECK(crashReports(dir).empty());
+            std::filesystem::remove(counter, ec);
+            setEnvVar(kCounterVar, "");
+
+            // (3) THE SWEEP: the whole bus ends on a closed pipe every time, then
+            // each driver is asked alone and "bad" ends the same way. Nothing is
+            // filed - and "bad" is NOT put on the session's do-not-ask list, so the
+            // next scan asks it again. The same machine with a REAL death (the
+            // "onebaddriver" helper, exit 7) files three reports and remembers it.
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("pipesweep");
+            EnumOptions full;
+            full.helperPath = self;
+            full.allowInProcessFallback = false;
+            const EnumResult ps = enumerateIsolated(full);
+            std::printf("closed pipe in the sweep: outcome=%s deaths=%d closedPipeEnds=%d "
+                        "faulted=%zu remembered=%zu reports=%zu\n",
+                        enumOutcomeName(ps.outcome), ps.childDeaths, ps.closedPipeEnds,
+                        ps.faultedDrivers.size(), cascade::source::sessionFaultedDrivers().size(),
+                        crashReports(dir).size());
+            CHECK(ps.sweptPerDriver);
+            CHECK(ps.outcome == EnumOutcome::Ok);  // "good" answered
+            CHECK(ps.childDeaths == 3);            // two whole-bus children and "bad"
+            CHECK(ps.closedPipeEnds == 3);
+            CHECK(ps.faultedDrivers == std::vector<std::string>{"bad"});
+            CHECK(cascade::source::sessionFaultedDrivers().empty());
+            CHECK(crashReports(dir).empty());
+
+            clearReports();
+            cascade::source::clearSessionFaultedDriversForTest();
+            setMode("onebaddriver");
+            const EnumResult ob = enumerateIsolated(full);
+            CHECK(ob.sweptPerDriver);
+            CHECK(ob.childDeaths == 3);
+            CHECK(ob.closedPipeEnds == 0);
+            CHECK(ob.faultedDrivers == std::vector<std::string>{"bad"});
+            CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);
+            CHECK(crashReports(dir).size() == 3u);
+
+            // (4) THE PARENT'S TIMEOUT IS STILL A TIMEOUT, and files nothing.
+            clearReports();
+            setMode("hang");
+            EnumOptions slow = once;
+            slow.timeoutMs = 1500;
+            const EnumResult hang = enumerateIsolated(slow);
+            CHECK(hang.outcome == EnumOutcome::ChildTimedOut);
+            CHECK(!hang.endedOnClosedPipe);
+            CHECK(crashReports(dir).empty());
+
+#ifndef _WIN32
+            // (5) POSIX ONLY: a REAL SIGPIPE death, read as the field read it
+            // (WIFSIGNALED, 128 + 13), is a closed-pipe end and files nothing...
+            clearReports();
+            setMode("sigpipe");
+            const EnumResult sp = enumerateIsolated(once);
+            CHECK(sp.outcome == EnumOutcome::ChildDied);
+            CHECK(sp.deathExitCode == static_cast<unsigned long>(kEnumChildExitSigpipe));
+            CHECK(sp.endedOnClosedPipe);
+            CHECK(crashReports(dir).empty());
+
+            // ...and a helper that has run the production setup does not die of the
+            // signal at all: the write fails with EPIPE and it ends with its own
+            // code (74), not the kernel's (141).
+            clearReports();
+            setMode("armedpipe");
+            const EnumResult ap = enumerateIsolated(once);
+            CHECK(ap.outcome == EnumOutcome::ChildDied);
+            CHECK(ap.deathExitCode == static_cast<unsigned long>(kEnumChildExitPipeClosed));
+            CHECK(ap.endedOnClosedPipe);
+            CHECK(crashReports(dir).empty());
+#endif
 
             setMode("");
             cascade::source::clearSessionFaultedDriversForTest();

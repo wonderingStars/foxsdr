@@ -36,6 +36,8 @@ struct GLFWwindow;
 #include "core/freq_manager.hpp"
 #include "core/freq_markers.hpp"
 #include "core/trace_hold.hpp"
+#include "core/display_range.hpp"
+#include "gui/hover_dwell.hpp"
 #include "core/gps_reader.hpp"
 #include "core/i18n.hpp"
 #include "core/noise_floor_tracker.hpp"
@@ -2238,6 +2240,29 @@ private:
     void drawTraceModeLabel(float x0, float y0, float scale);
     unsigned int traceColour() const;
 
+    // --- The display range (0.99.76; core/display_range.hpp) --------------------
+    // Right-click the spectrum or the waterfall - the receiver's or a patch
+    // Spectrum part's - and the menu that opens (the trace menu above, the marker
+    // menu) ends with the same Display block: Range Automatic / Manual, Floor and
+    // Ceiling, and Reset. The block is drawn by drawDisplayMenuBlock, inside each
+    // popup, so the two menus cannot drift apart.
+    //
+    // displayRange_ is the state; dbMin_/dbMax_ (below) are its window IN FORCE,
+    // mirrored because the dozen places that map dB to pixels read them. Every
+    // change goes through the four functions here, which end in applyDisplayRange.
+    void applyDisplayRange();
+    void setRangeMode(cascade::core::RangeMode m);
+    // A slider moved: clamped to the sliders' bounds and 10 dB apart, the end that
+    // moved giving way, and Manual from then on.
+    void setManualRange(float floorDb, float ceilingDb, bool floorMoved);
+    // Automatic, the program's own window and the normal trace.
+    void resetDisplay();
+    void drawDisplayMenuBlock();
+    // The tip that says the menu exists, after four seconds of rest (gui/hover_dwell.hpp).
+    // Asked once a frame for each region that could show it; `over` is whether the
+    // pointer is over that region and free to be told something.
+    void showDisplayTip(std::uint64_t region, bool over, const char* name);
+
     // --- Config persistence (P5) ---------------------------------------------
     // Pushes every AppConfig field into the pipeline/panel mirrors; source
     // restore failures (file gone, device unplugged) fall back to the
@@ -2416,9 +2441,16 @@ private:
     std::uint64_t waterfallLinesAtWindow_ = 0;
     float framesPerSecond_ = 0.0f;
 
-    // Display range for both the spectrum axis and the waterfall colormap.
+    // Display range for both the spectrum axis and the waterfall colormap: the
+    // window IN FORCE, which is displayRange_.inForce() (Automatic is -110 to 0,
+    // Manual the user's floor and ceiling). Written only by applyDisplayRange.
     float dbMin_ = -110.0f;
     float dbMax_ = 0.0f;
+    cascade::core::DisplayRange displayRange_;
+    // The 4-second tip's clock, and whether it was drawn this frame (the census's
+    // "wfm:tip:state").
+    cascade::gui::HoverDwell displayTip_;
+    bool displayTipShown_ = false;
 
     // Radio/Sinks control state. The pipeline owns the live DSP values; these
     // mirrors exist because ImGui widgets edit by pointer. Defaults match the

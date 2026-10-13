@@ -29,10 +29,17 @@
 //                                           height makes the divider
 //                                           ungrabbable — the user could
 //                                           never recover by mouse)
-//   - dbMin/dbMax must satisfy dbMin < dbMax - 10; otherwise BOTH reset to
-//     defaults (the display maps dB to pixels via 1/(dbMax-dbMin); a
-//     degenerate or inverted span is a divide-by-zero, and clamping only one
-//     end would invent a range the user never chose)
+//   - dbMin/dbMax must be at least 10 dB apart (core/display_range.hpp,
+//     spanIsEnough; exactly 10 is legal, as it is for every writer of the
+//     pair - it used to be "more than 10", which threw away a pair the
+//     sliders allowed); otherwise BOTH reset to defaults (the display maps
+//     dB to pixels via 1/(dbMax-dbMin); a degenerate or inverted span is a
+//     divide-by-zero, and clamping only one end would invent a range the
+//     user never chose)
+//   - waterfallRangeMode  "auto" | "manual"; read AFTER the repair above. A
+//     file without it, or with a word that is not one of the two, is "manual"
+//     if the pair is anything but -110/0 (before the key existed the pair WAS
+//     the window, so a range somebody set is theirs) and "auto" otherwise
 //   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf" |
 //     "airspy" | "airspyhf" | "sdrplay" | "mirisdr" | "rx888" | "pluto" |
 //     "soundcard" (a sound card's input, settings in `soundCard` below) |
@@ -370,6 +377,17 @@ struct AppConfig {
     // audioBufferMs; 0 means "AUTOMATIC has never had to deepen".
     int audioBufferAutoMs = 0;
     float dbMin = -110.0f, dbMax = 0.0f;
+    // WHICH WINDOW THE SPECTRUM AND THE WATERFALL ARE DRAWN THROUGH (0.99.76; see
+    // core/display_range.hpp): "auto" - the program's own, -110 to 0 dB on the receiver and a
+    // window fitted to the signal on a patch Spectrum part - or "manual", where dbMin and dbMax
+    // above are the user's floor and ceiling on all of them. dbMin/dbMax are KEPT under "auto" as
+    // the pair Manual returns to, so choosing Automatic and Manual again loses nothing.
+    //
+    // A DIALOGUE WITH EVERY OLD FILE: before this key the pair was the window (the Display
+    // section's Min dB and Max dB), so a file with no mode and a pair other than -110/0 loads as
+    // "manual" - a range somebody set is theirs. An unknown word is read the same way; the loader
+    // normalises to one of the two spellings.
+    std::string waterfallRangeMode = "auto";
     float splitRatio = 0.4f;
     double vfoOffsetHz = 300000.0;
     double sampleRateHz = 2000000.0;

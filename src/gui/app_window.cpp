@@ -6,6 +6,7 @@
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
+#include "gui/page_resize_id.hpp"
 #include "gui/patch_view.hpp"
 
 #include <algorithm>
@@ -271,10 +272,18 @@ constexpr float kAveragingAlpha = 0.5f;
 // scroll-back, plenty for a demo signal while keeping the texture small.
 constexpr int kWaterfallHistory = 512;
 
-// The Display sliders keep at least this many dB between min and max: a
-// thinner span renders as a near-solid waterfall and a wall-to-wall trace,
-// and a zero/inverted span would degrade to the widgets' flat-line fallback.
-constexpr float kMinDbSpan = 10.0f;
+// The Display sliders - and, since 0.99.76, the right-click menu's - keep at
+// least this many dB between min and max: a thinner span renders as a
+// near-solid waterfall and a wall-to-wall trace, and a zero/inverted span would
+// degrade to the widgets' flat-line fallback. One number, in
+// core/display_range.hpp, with the config loader's.
+constexpr float kMinDbSpan = cascade::core::kMinRangeSpanDb;
+
+// The regions the 4-second tip is asked about (gui/hover_dwell.hpp). A patch
+// part's regions are (node id << 2) | 1 for its trace and | 2 for its waterfall,
+// which for any node (ids start at 1) is 5 or more, so these two cannot meet one.
+constexpr std::uint64_t kTipRegionSpectrum = 1;
+constexpr std::uint64_t kTipRegionWaterfall = 2;
 
 // "Enlarge every reading": the size every live figure is drawn at when the
 // Display checkbox or the counter's menu turns it on - Bench Classic XL's own
@@ -677,6 +686,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // nothing by itself, so the debounce has to see it here.
            a.audioBufferMs == b.audioBufferMs && a.audioBufferAutoMs == b.audioBufferAutoMs &&
            a.dbMin == b.dbMin && a.dbMax == b.dbMax &&
+           // Automatic or Manual (0.99.76): chosen by two radio keys in the right-click menu
+           // that save nothing themselves, so the debounce has to see the word change. The
+           // pair above is the floor and ceiling Manual uses.
+           a.waterfallRangeMode == b.waterfallRangeMode &&
            a.splitRatio == b.splitRatio && a.vfoOffsetHz == b.vfoOffsetHz &&
            a.sampleRateHz == b.sampleRateHz &&
            a.stereoEnabled == b.stereoEnabled &&
@@ -4066,6 +4079,7 @@ void AppWindow::drawUi() {
     // and the frequency, which are what keeps the aircraft arriving at all -
     // and drawScopeMode draws its own way back before anything else.
     if (scopeMode_) {
+        displayTip_.reset();   // the spectrum and waterfall are not drawn: no rest is being timed
         frameScope.to(cascade::core::FrameScope::Spectrum);
         // THE SPECTRUM IS STILL CONSUMED IN SCOPE MODE, even though nothing
         // here draws it. getLatestFrame is what advances lastFrame_, and
@@ -8493,18 +8507,23 @@ void AppWindow::drawDisplaySection() {
         }
         // One shared dB range drives both the spectrum axis and the waterfall
         // colormap so the two panels always agree on what "hot" means.
+        //
+        // THE SAME TWO NUMBERS THE RIGHT-CLICK MENU SETS (0.99.76): right-click the
+        // spectrum or the waterfall for Range: Automatic / Manual, Floor and Ceiling.
+        // These two sliders show the window in force, and dragging either is
+        // choosing a range - it is Manual from then on (setManualRange).
+        float floorEdit = dbMin_;
+        float ceilingEdit = dbMax_;
         const bool minChanged =
-            ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Min dB")), &dbMin_,
-                               -160.0f, -20.0f, "%.0f");
+            ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Min dB")), &floorEdit,
+                               cascade::core::kFloorMinDb, cascade::core::kFloorMaxDb, "%.0f");
         const bool maxChanged =
-            ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Max dB")), &dbMax_,
-                               -100.0f, 20.0f, "%.0f");
+            ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Max dB")), &ceilingEdit,
+                               cascade::core::kCeilingMinDb, cascade::core::kCeilingMaxDb, "%.0f");
         // Keep at least kMinDbSpan between the endpoints by pushing back the
         // slider the user is actually dragging — correcting the *other* value
         // would make an untouched slider jump under the user's eyes.
-        if (minChanged && dbMin_ > dbMax_ - kMinDbSpan) { dbMin_ = dbMax_ - kMinDbSpan; }
-        if (maxChanged && dbMax_ < dbMin_ + kMinDbSpan) { dbMax_ = dbMin_ + kMinDbSpan; }
-        if (minChanged || maxChanged) { spectrum_->setRange(dbMin_, dbMax_); }
+        if (minChanged || maxChanged) { setManualRange(floorEdit, ceilingEdit, minChanged); }
 
         // THE FREQUENCY DISPLAY (GitHub issue #1: "Would be nice to be able
         // to swap the frequency display for easier to read display? Maybe a
@@ -12351,6 +12370,7 @@ void AppWindow::drawCenterPanels() {
     // nothing new arrived — cheap enough to run unconditionally, which also
     // catches a frame published between the last poll and a Stop click.
     const double nowS = ImGui::GetTime();
+    displayTipShown_ = false;   // set again below by whichever panel shows the 4-second tip
     if (pipeline_.getLatestFrame(lastFrame_)) {
         // One waterfall line per *new* frame (not per GUI frame): duplicate
         // lines would fake scroll speed while the pipeline is stalled.
@@ -12422,7 +12442,10 @@ void AppWindow::drawCenterPanels() {
     const float usable = avail.y - splitterThickness - 2.0f * ImGui::GetStyle().ItemSpacing.y;
     // A squeezed window can drive the region to zero; drawing into negative
     // sizes asserts inside ImGui, so just skip the panels that frame.
-    if (usable < 40.0f || avail.x < 40.0f) { return; }
+    if (usable < 40.0f || avail.x < 40.0f) {
+        displayTip_.reset();
+        return;
+    }
 
     const float width = avail.x;
     const float spectrumHeight = splitRatio_ * usable;
@@ -12592,6 +12615,11 @@ void AppWindow::drawCenterPanels() {
     const bool specHovered = ImGui::IsItemHovered();
     cascade::gui::census::rect("trc:spec:receiver", specPos.x, specPos.y, specPos.x + width,
                                specPos.y + spectrumHeight);
+    // The window the trace was drawn through on this frame, as the SpectrumView holds it - what
+    // tests/test_display_menu_app reads to hold the spectrum, the waterfall's key and the saved
+    // pair to one range.
+    cascade::gui::census::rect("rx:spec:range", spectrum_->rangeMin(), spectrum_->rangeMax(), 0.0f,
+                               0.0f);
 
     // Band plan behind the trace (see kBandFillAlphaScale for why "behind"
     // is achieved with a translucent fill painted after it). Before the
@@ -12696,11 +12724,15 @@ void AppWindow::drawCenterPanels() {
             scale_.resetView();  // double-click on empty spectrum: unzoom
         }
     }
-    // RIGHT-CLICK: the trace-mode menu. The right button does nothing else on
-    // this panel; every tuning gesture above is the left one.
+    // RIGHT-CLICK: the trace-mode menu, which also carries the display range
+    // (drawDisplayMenuBlock). The right button does nothing else on this panel;
+    // every tuning gesture above is the left one.
     if (specHovered && vfoDrag_ == VfoDrag::None && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         traceMenuPending_ = true;
     }
+    // AFTER FOUR SECONDS OF REST the tip that says there is a menu (owner, 2026-10-13). Below the
+    // gesture tip above on purpose: it replaces that one for as long as the hand stays still.
+    showDisplayTip(kTipRegionSpectrum, specHovered, "spectrum");
     if (vfoHidden) {
         cascade::gui::census::note("airband:vfo-hidden");
         cascade::gui::census::rect("rx:vfo", 0.0f, 0.0f, 0.0f, 0.0f);
@@ -12792,6 +12824,8 @@ void AppWindow::drawCenterPanels() {
         }
     }
     wfChrome.decoding = !decodeLine.empty() ? decodeLine.c_str() : nullptr;
+    // The strength key says MANUAL when the floor and ceiling it names are the user's.
+    wfChrome.manualRange = displayRange_.manual();
     waterfall_->draw(width, waterfallHeight, u0, u1, wfChrome);
     const bool wfHovered = ImGui::IsItemHovered();
     // Plugin marks down the waterfall too, unless a mark asked to stay on the
@@ -12871,6 +12905,13 @@ void AppWindow::drawCenterPanels() {
         requestMarkerMenu(scale_.xToHz(mouseFrac),
                           (scale_.viewHighHz() - scale_.viewLowHz()) / static_cast<double>(width));
     }
+    // AFTER FOUR SECONDS OF REST the tip that says the menu has a display range in it - the
+    // marker tip above is the only thing the waterfall has ever said about its right button.
+    showDisplayTip(kTipRegionWaterfall, wfHovered && !wfPanning_, "waterfall");
+    // Whether the tip was up on this frame, and how long the pointer has rested: the census keeps
+    // the last, so a test reads the end of a run (tests/test_display_menu_app).
+    cascade::gui::census::rect("wfm:tip:state", displayTipShown_ ? 1.0f : 0.0f,
+                               static_cast<float>(displayTip_.restS(ImGui::GetTime())), 0.0f, 0.0f);
 
     // Wheel over EITHER panel zooms about the cursor (1.3x per notch; the
     // zoom floor and full-span clamp live in FreqScale). Both panels share
@@ -15762,9 +15803,20 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
                                          mouse.y - pc.gripMy, nw, nh);
             ImGui::SetWindowSize(id, ImVec2(nw, nh));
         }
+        // THE CORNER'S ID IS ASKED OF gui/page_resize_id.hpp, NEVER OF IMGUI (0.99.76).
+        // ImGui::GetWindowResizeCornerID reads window->DockNode->HostWindow->ID
+        // for a window that is DockIsActive, and a window being dropped into or
+        // pulled out of a dock node is DockIsActive in frames where the node has
+        // no host window yet: 0xC0000005 at GetWindowResizeCornerID+0x1b, called
+        // from here, fatal, in field reports D94CCD4584724FAC (0.99.58) and
+        // DE3F72AAE6B69997 (0.99.75, a machine that had opened the WEFAX window
+        // minutes before and had complained that inserting a window with the
+        // mouse did not work). The helper answers 0 in those frames, and
+        // pageGripIdHot does not read 0 == 0 as "the pointer is on the grip".
+        const ImGuiID cornerId = cascade::gui::pageResizeCornerId(self);
         const bool gripLit = gripLive || ImGui::IsItemHovered() ||
-                             ImGui::GetHoveredID() == ImGui::GetWindowResizeCornerID(self, 0) ||
-                             ImGui::GetActiveID() == ImGui::GetWindowResizeCornerID(self, 0);
+                             cascade::gui::pageGripIdHot(cornerId, ImGui::GetHoveredID(),
+                                                         ImGui::GetActiveID());
         if (gripLit) { ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); }
         const ImU32 groove = gripLit ? cascade::gui::theme::kPhosphor
                                      : cascade::gui::theme::kEnamelDark;
@@ -17307,7 +17359,18 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
 
                 std::vector<float> colsDb;
                 pg::binsToColumns(specDb, rate, lo, hi, cols, -200.0f, colsDb);
-                const pg::DbRange range = pg::autoRange(colsDb);
+                // THE WINDOW THIS PART IS DRAWN THROUGH (0.99.76). Automatic is what it has
+                // always been, fitted to the line in hand; Manual is the user's floor and
+                // ceiling - the same two numbers the receiver's spectrum, waterfall and strength
+                // key use - so a part that was milky can be stretched from its own right-click
+                // menu. See core/display_range.hpp.
+                const bool rangeManual = displayRange_.manual();
+                const pg::DbRange range = rangeManual
+                                              ? pg::DbRange{displayRange_.inForce().floorDb,
+                                                            displayRange_.inForce().ceilingDb}
+                                              : pg::autoRange(colsDb);
+                cascade::gui::census::rect("wfm:patch:range", range.lo, range.hi,
+                                           rangeManual ? 1.0f : 0.0f, 0.0f);
                 pg::ScopeHistory& hist = patchScopes_[n.id];
                 hist.reshape(cols, rows, lo, hi);
                 std::uint64_t& seq = patchScopeSeq_[n.id];
@@ -17367,11 +17430,15 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // Right-click on the trace: the trace-mode menu (the picture
                 // below it has the marker menu). Hovered through the canvas's
                 // own active button, as the marker menu is - see there.
-                if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                    ImGui::IsMouseHoveringRect(ImVec2(x0, y0), ImVec2(x1, y0 + traceH)) &&
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                const bool traceHot =
+                    ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                    ImGui::IsMouseHoveringRect(ImVec2(x0, y0), ImVec2(x1, y0 + traceH));
+                if (traceHot && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     traceMenuPending_ = true;
                 }
+                // The 4-second tip, per part: a region of its own for the trace and one for the
+                // picture, from the node's id (kTipRegionSpectrum's note).
+                showDisplayTip((static_cast<std::uint64_t>(n.id) << 2) | 1u, traceHot, "spectrum");
 
                 // The waterfall, newest at the top, in the main waterfall's
                 // own colour map.
@@ -17430,14 +17497,17 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     // already the ACTIVE item on the frame of the press -
                     // without it the window never reads as hovered then, and
                     // the first scripted click opened no menu at all.
-                    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                        ImGui::IsMouseHoveringRect(ImVec2(x0, wy0), ImVec2(x1, y1)) &&
-                        ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    const bool pictureHot =
+                        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                        ImGui::IsMouseHoveringRect(ImVec2(x0, wy0), ImVec2(x1, y1));
+                    if (pictureHot && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                         const double frac = static_cast<double>(ImGui::GetIO().MousePos.x - x0) /
                                             static_cast<double>(x1 - x0);
                         requestMarkerMenu(centre + lo + frac * (hi - lo),
                                           (hi - lo) / static_cast<double>(x1 - x0));
                     }
+                    showDisplayTip((static_cast<std::uint64_t>(n.id) << 2) | 2u, pictureHot,
+                                   "waterfall");
                 }
                 break;
             }
@@ -27902,7 +27972,127 @@ void AppWindow::drawTraceModeMenu() {
         ImGui::EndMenu();
     }
     itemRect("trc:menu:length");
+    // The display range, last: a right-click on the spectrum finds it here and a right-click on
+    // the waterfall finds it at the foot of the marker menu (drawMarkerMenu), the same block.
+    drawDisplayMenuBlock();
     ImGui::EndPopup();
+}
+
+// --- The display range (0.99.76) -----------------------------------------------
+//
+// THE DISLIKE (a French user on 0.99.75, RTL-SDR V4): "the spectrum and the waterfall are very
+// milky, one cannot see the signals ... an effort on this problem would be welcome". The owner:
+// "allow the users to set it themselves to what they prefer by right clicking on it". The window
+// the picture is drawn through was always adjustable - Display > Min dB and Max dB - but that
+// section is folded until opened (0.99.74), so a person with a milky picture had no reason to
+// look there. The menu is the same two numbers where the picture is; nothing new in the signal
+// path. See core/display_range.hpp for what Automatic and Manual each mean on the receiver and
+// on a patch Spectrum part.
+
+void AppWindow::applyDisplayRange() {
+    const cascade::core::DbPair w = displayRange_.inForce();
+    dbMin_ = w.floorDb;
+    dbMax_ = w.ceilingDb;
+    spectrum_->setRange(dbMin_, dbMax_);
+}
+
+void AppWindow::setRangeMode(cascade::core::RangeMode m) {
+    displayRange_.setMode(m);
+    applyDisplayRange();
+}
+
+void AppWindow::setManualRange(float floorDb, float ceilingDb, bool floorMoved) {
+    displayRange_.setManual(floorDb, ceilingDb, floorMoved);
+    applyDisplayRange();
+}
+
+void AppWindow::resetDisplay() {
+    displayRange_.reset();
+    applyDisplayRange();
+    // The trace is the other half of what the spectrum looks like; a person who has been through
+    // Peak hold and Manual and wants the picture they started with wants both back.
+    setSpectrumTraceMode(cascade::core::TraceMode::Normal);
+    resetSpectrumTraces();
+}
+
+void AppWindow::drawDisplayMenuBlock() {
+    using cascade::core::RangeMode;
+    // Each item's rectangle, for tests/test_display_menu_app to aim at.
+    const auto itemRect = [](const char* name) {
+        const ImVec2 a = ImGui::GetItemRectMin();
+        const ImVec2 b = ImGui::GetItemRectMax();
+        cascade::gui::census::rect(name, a.x, a.y, b.x, b.y);
+    };
+    cascade::gui::census::note("wfm:menu");
+    ImGui::SeparatorText(tr("Display"));
+
+    // Two radio keys and not menu items: a MenuItem closes the popup on a click, and the next
+    // thing a person who has just chosen Manual does is drag the sliders under it.
+    const bool manual = displayRange_.manual();
+    if (ImGui::RadioButton(tr("Range: Automatic"), !manual)) { setRangeMode(RangeMode::Auto); }
+    itemRect("wfm:menu:auto");
+    bool explain = ImGui::IsItemHovered();
+    if (ImGui::RadioButton(tr("Range: Manual"), manual)) { setRangeMode(RangeMode::Manual); }
+    itemRect("wfm:menu:manual");
+    explain = explain || ImGui::IsItemHovered();
+    if (explain) {
+        ImGui::SetTooltip("%s", tr("Automatic: the standard window; a patch Spectrum part fits\n"
+                                   "itself to the signal. Manual: the floor and ceiling below,\n"
+                                   "on the spectrum, the waterfall and every patch Spectrum part."));
+    }
+
+    // The sliders are the user's, so they are live only in Manual. They show the window in force
+    // (the standard one under Automatic) and the census records each one's FRAME, not the label
+    // beside it, so a test can click a fraction of the way along it.
+    ImGui::BeginDisabled(!manual);
+    float floorEdit = dbMin_;
+    float ceilingEdit = dbMax_;
+    const float sliderW = cascade::gui::uiscale::px(180.0f);
+    ImGui::SetNextItemWidth(sliderW);
+    const bool floorChanged = ImGui::SliderFloat(tr("Floor"), &floorEdit, cascade::core::kFloorMinDb,
+                                                 cascade::core::kFloorMaxDb, "%.0f dB");
+    cascade::gui::census::rect("wfm:menu:floor", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMin().x + sliderW, ImGui::GetItemRectMax().y);
+    ImGui::SetNextItemWidth(sliderW);
+    const bool ceilingChanged =
+        ImGui::SliderFloat(tr("Ceiling"), &ceilingEdit, cascade::core::kCeilingMinDb,
+                           cascade::core::kCeilingMaxDb, "%.0f dB");
+    cascade::gui::census::rect("wfm:menu:ceiling", ImGui::GetItemRectMin().x,
+                               ImGui::GetItemRectMin().y, ImGui::GetItemRectMin().x + sliderW,
+                               ImGui::GetItemRectMax().y);
+    ImGui::EndDisabled();
+    if (floorChanged || ceilingChanged) { setManualRange(floorEdit, ceilingEdit, floorChanged); }
+
+    if (ImGui::MenuItem(tr("Reset display to defaults"))) { resetDisplay(); }
+    itemRect("wfm:menu:reset");
+}
+
+void AppWindow::showDisplayTip(std::uint64_t region, bool over, const char* name) {
+    // WHAT KEEPS THE TIP DOWN, besides the pointer leaving: a button held (a press, a drag on the
+    // band and a pan of the waterfall are each one), and the menu it advertises, which is the
+    // moment it stops being news - opening this frame (the pending flags) or open already. ImGui
+    // already reports nothing under an open popup as hovered, so for an open menu `over` and this
+    // agree; the rule is stated here as well so that it does not rest on ImGui's hover bookkeeping.
+    const bool buttonDown = ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                            ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                            ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+    const bool blocked = buttonDown || vfoDrag_ != VfoDrag::None || wfPanning_ ||
+                         traceMenuPending_ || markerMenuPending_ ||
+                         ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!displayTip_.update(region, over, blocked, io.MousePos.x, io.MousePos.y, ImGui::GetTime())) {
+        return;
+    }
+    // SetTooltip replaces any tooltip already set this frame (the panels' gesture tips, drawn
+    // above), so the one line is what is shown while the hand rests.
+    ImGui::SetTooltip("%s", tr("Right-click to change the range and display"));
+    displayTipShown_ = true;
+    cascade::gui::census::note("wfm:tip:", name);
+    // The rest the pointer had on the LAST frame the tip was up (the census keeps the last rect):
+    // a test that moves or presses afterwards compares the rest it ends with against this one, the
+    // two measured by the same clock in the same run, instead of against a number of seconds.
+    cascade::gui::census::rect("wfm:tip:lastshown",
+                               static_cast<float>(displayTip_.restS(ImGui::GetTime())), 0.0f, 0.0f, 0.0f);
 }
 
 void AppWindow::requestMarkerMenu(double hz, double hzPerPx) {
@@ -27961,6 +28151,9 @@ void AppWindow::drawMarkerMenu() {
         if (ImGui::MenuItem(yes.c_str())) { freqMarkers_.clear(); }
         ImGui::EndMenu();
     }
+    // The display range (0.99.76): the waterfall's right-click is the markers', and the same
+    // block as the spectrum's menu ends it.
+    drawDisplayMenuBlock();
     ImGui::EndPopup();
 }
 
@@ -29045,9 +29238,11 @@ void AppWindow::applyControlRequest(const cascade::net::ControlRequest& r) {
                 hi = lo + kMinDbSpan;
             }
         }
-        dbMin_ = lo;
-        dbMax_ = hi;
-        spectrum_->setRange(dbMin_, dbMax_);
+        // A range asked for is a range chosen: Manual, as a slider is. restore() rather than
+        // setManual() so the request keeps the exact pair it passed the checks above with - the
+        // web page's own sanity bound is wider than the sliders' (0.99.76).
+        displayRange_.restore(cascade::core::RangeMode::Manual, cascade::core::DbPair{lo, hi});
+        applyDisplayRange();
     }
     if (r.deemphasisIndex.has_value()) {
         deemphIndex_ = *r.deemphasisIndex;
@@ -30960,9 +31155,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             audioBufferAutoMs_ = remembered;
         }
     }
-    dbMin_ = cfg.dbMin;
-    dbMax_ = cfg.dbMax;
-    spectrum_->setRange(dbMin_, dbMax_);
+    // The display window (0.99.76): the pair is the user's floor and ceiling, kept whichever mode
+    // is saved; the mode says whether it is in force. The loader has already read a file without
+    // a mode from the pair, and resolveRangeMode here is that same rule for a config handed in
+    // by a test or the remote control without going through it.
+    displayRange_.restore(cascade::core::resolveRangeMode(
+                              cfg.waterfallRangeMode, cascade::core::DbPair{cfg.dbMin, cfg.dbMax}),
+                          cascade::core::DbPair{cfg.dbMin, cfg.dbMax});
+    applyDisplayRange();
     splitRatio_ = cfg.splitRatio;
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
@@ -32443,8 +32643,11 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.volume = volume_;
     cfg.audioBufferMs = audioBufferMs_;
     cfg.audioBufferAutoMs = audioBufferAutoMs_;
-    cfg.dbMin = dbMin_;
-    cfg.dbMax = dbMax_;
+    // The pair saved is the one Manual uses, in force or not (Automatic keeps it, so choosing
+    // Manual again returns to the numbers the user had); the mode says which window is in force.
+    cfg.dbMin = displayRange_.manualPair().floorDb;
+    cfg.dbMax = displayRange_.manualPair().ceilingDb;
+    cfg.waterfallRangeMode = cascade::core::rangeModeName(displayRange_.mode());
     cfg.splitRatio = splitRatio_;
     cfg.vfoOffsetHz = pipeline_.vfoOffsetHz();
     // The live rate, EXCEPT when the source being saved is a remembered radio

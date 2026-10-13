@@ -2767,6 +2767,53 @@ containment is exactly what would have made the fault invisible. (The report is
 the helper's own when its handler ran, and the parent's third kind above when it
 did not.)
 
+**A helper that ends on a closed pipe is not a death to report (0.99.76).** Field
+reports `862234B08B9FC33D` and `30BCD594C128766D` (0.99.73, Linux) were six
+"crashes" from one session in one second, every one exit `0x8D` = 141 = 128 +
+`SIGPIPE`, the last of them `probing driver=rtlsdr` — after which rtlsdr was on the
+session's do-not-ask list and a working RTL-SDR was off the Source menu. Since
+0.99.76:
+
+- **The helper ignores `SIGPIPE`** (POSIX; `armEnumerateHelperProcess`, first thing,
+  whatever the crash directory). A write to a descriptor nobody reads — the pipe
+  to the parent, the stderr it inherited, a socket a vendor module opened — now
+  fails with `EPIPE` instead of killing it. Its own writes go through
+  `writeToParent`; when the pipe to the parent has no reader the walk is finished
+  (so the module that must say goodbye still does) and the helper ends with
+  **exit 74** (`kEnumChildExitPipeClosed`, sysexits.h `EX_IOERR`) instead of an
+  answer. The exit codes are listed in `source/soapy_enum_proc.hpp`.
+- **The parent reads 74, and 141 from a helper that did not ignore the signal, as
+  a closed pipe** (`classifyChildEnd`): `EnumResult::endedOnClosedPipe`. It is still
+  a child that ended without answering — the outcome is `ChildDied`, so it is
+  retried, swept and counted (`childDeaths`, and the usage record's
+  `recovered.enumchild`, as ever) — but **no report is filed** for it, from either
+  process, and **its driver is not put on the session's do-not-ask list**. Anything
+  else a helper dies of while the parent is listening is reported exactly as before,
+  and a helper the parent timed out and killed is still a timeout whatever status it
+  carried.
+- **Log lines** (`warn`, `foxsdr.log`): `soapy: enumeration child ended on a closed
+  pipe, exit 0x0000008D (attempt 1 of 2) - still probing when it died: rtlsdr,
+  plutosdr - not a crash and nothing filed; retrying` (the whole bus);
+  `soapy: the 'rtlsdr' driver's child ended on a closed pipe (exit 0x0000008D) - not a
+  crash and nothing filed; it is skipped for this scan and asked again the next` (the
+  sweep); `soapy: enumeration succeeded after 1 child(ren) ended on a closed pipe -
+  not a crash; nothing was filed`; and `soapy: enumeration failed - the last child
+  ended on a closed pipe (exit 0x..., N attempts); not a crash; no devices listed
+  this scan`. The "faulting during device discovery" sentence is now said only of
+  children that did die of something else. A helper that finds its pipe closed adds
+  `enumeration helper: the pipe to the parent has no reader - answer not written` to
+  its own log ring.
+- **What is not established.** The parent keeps the read end of the helper's stdout
+  open until it has reaped the child — on the timeout path too, where it kills the
+  helper's process group first — so the pipe that was closed in the field was not
+  that one while the parent was waiting; six deaths in one second are not timeouts,
+  and a `--driver=rtlsdr` child dying alone points at a descriptor the helper
+  inherited or opened (its stderr, or a socket in a vendor module). That an ignored
+  signal stays ignored across `fork` and `exec`, and that `httplib::Server`'s
+  constructor ignores `SIGPIPE` for the whole process, so a helper started before the
+  web server was constructed died of it and one started after did not, is read from
+  the code and not reproduced on a Linux machine.
+
 **One report per death (0.99.62).** Before this, one death could leave
 *three* reports: the helper's own (the stack and the module list), the parent's
 whole-bus report of it (no stack; the drivers still probing) and — after a

@@ -374,7 +374,14 @@ int main() {
     if (!plearn.hasRect("fmk:wf:patch")) { return testSummary("test_freq_markers_app"); }
     const Rect pw = plearn.rects.at("fmk:wf:patch");
     const float px = pw.x0 + 0.30f * (pw.x1 - pw.x0);
-    const float py = pw.y0 + 0.20f * (pw.y1 - pw.y0);
+    // HIGH IN THE PICTURE (0.99.76: 5%, it was 20%). The marker menu now ends with the Display
+    // block of the display range menu and is about 314 px tall once it has its Remove item, so
+    // from 20% down this part (y = 638 on a 1600x900 window) the second menu no longer fitted
+    // below the pointer, ImGui moved it up by 21 px, and the "List markers" offset learned from
+    // the receiver's menu above (which does fit) pointed at "Copy markers" instead - the click
+    // opened no window. From 5% down it is the same distance from the window's foot as the
+    // receiver's click (597 against 589) and the offsets learned there hold.
+    const float py = pw.y0 + 0.05f * (pw.y1 - pw.y0);
     std::printf("    patch waterfall %.0f,%.0f..%.0f,%.0f; clicking %.0f,%.0f\n", pw.x0, pw.y0,
                 pw.x1, pw.y1, px, py);
     // Drop, then right-click the same place again and open the list - after

@@ -299,6 +299,11 @@ public:
     // safe behavior for it, and silently reordering would hide the caller's
     // bug instead of degrading visibly (flat-lined plot, no grid).
     void setRange(float dbMin, float dbMax);
+    // The range setRange last left (or the default, before one), so the UI census can say which
+    // window the trace was actually drawn through (tests/test_display_menu_app.cpp) instead of
+    // the window its caller believes it handed over.
+    float rangeMin() const { return dbMin_; }
+    float rangeMax() const { return dbMax_; }
 
     // HOW MANY 10 dB GRIDLINES TO STEP BETWEEN LABELS on the dB axis, so the
     // ladder cannot collide with itself.
