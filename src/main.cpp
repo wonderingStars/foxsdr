@@ -44,6 +44,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/exit_record.hpp"
 #include "core/sentinel.hpp"
 #include "core/tester_link.hpp"
 
@@ -1423,6 +1424,10 @@ int main(int argc, char** argv) {
             cascade::core::SentinelOptions so;
             so.crashDir = cascade::core::diagCrashDir();
             so.logDir = cascade::core::diagLogDir();
+            // HOW THIS PROCESS ENDS, written down for the watcher (0.99.78, core/exit_record.hpp):
+            // a Linux watcher is this process's child and cannot ask the kernel. A no-op where
+            // the watcher reads the exit code from the operating system (Windows).
+            cascade::core::installExitRecording();
             cascade::core::sentinelConfigure(so);
             cascade::core::sentinelSetEnabled(wanted);
             cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::BuildingApp);

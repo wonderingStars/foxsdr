@@ -45,6 +45,7 @@
 #include "core/crash_upload.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/exit_record.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/report_reader.hpp"
 #include "core/sentinel.hpp"
@@ -193,6 +194,11 @@ int standIn(int argc, char** argv) {
         installCrashHandlers(cfg);
     }
 
+    // LINUX (0.99.78): the application writes down how it ends, as main() arranges it before it
+    // starts the sentinel (core/exit_record.hpp) - the status of an exit(), the number of a
+    // signal that would end it. A no-op on Windows, where these scenarios are not run.
+    if (scenario == "exit3" || scenario == "exit1-startup" || scenario == "term") { installExitRecording(); }
+
     SentinelOptions so;
     so.crashDir = crashes.string();
     so.logDir = logs.string();
@@ -251,6 +257,24 @@ int standIn(int argc, char** argv) {
         while (std::chrono::steady_clock::now() < until) { drawFrames(1); }
         breadcrumb::setPhase(Phase::ShutdownClosingWindow);
         return 0;
+    }
+    if (scenario == "exit3") {  // Linux: leaves by itself with a status, from anywhere in the program
+        toRunning(40);
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::exit(3);
+    }
+    if (scenario == "exit1-startup") {  // Linux: the field report's ending - a failed glfwInit returns 1
+        breadcrumb::setPhase(Phase::CreatingWindow);
+        diagLogf("stand-in: window being created");
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::exit(1);
+    }
+    if (scenario == "term") {  // Linux: drawing, until the test sends SIGTERM
+        toRunning(40);
+        say("READY %lu\n", 0);
+        for (;;) { drawFrames(1); }
     }
     if (scenario == "toggle") {  // Diagnostics switched off, then on, mid-session
         toRunning(40);
@@ -1224,7 +1248,80 @@ int main(int argc, char** argv) {
                 CHECK(parseReportText(readFile(r[0]), p));
                 CHECK(p.reason.rfind(kSentinelReasonOutside, 0) == 0);
                 CHECK(contains(p.reason, "exit status not available on this platform"));
+                // 0.99.78: and now the words say which sources were asked, so nobody mistakes
+                // "no record" for "not looked for". SIGKILL cannot be caught: nothing is written.
+                CHECK(contains(p.reason, "(no exit record; not its parent)"));
                 CHECK(p.code == "unknown");
+            }
+            ::close(fd);
+        }
+        // 0.99.78: THE PROCESS SAYS HOW IT ENDED. The watcher is its child and cannot ask the
+        // kernel; the status of an exit() and the number of a signal are written into the shared
+        // page by the application (core/exit_record.hpp) and read by the watcher after the pipe
+        // closes.
+        //
+        // The field report's ending: out at the window, with exit status 1.
+        {
+            int fd = -1;
+            const pid_t app = start("exit1-startup", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonStartup, 0) == 0);
+                CHECK(contains(p.reason, "exit code 1 (the process ended itself)"));
+                CHECK(contains(p.reason, "phase creating the window"));
+                CHECK(!contains(p.reason, "not available on this platform"));
+                CHECK(p.code == "0x50580101");
+            }
+            ::close(fd);
+        }
+        // Left by itself while drawing, with status 3: a crash class, sent.
+        {
+            int fd = -1;
+            const pid_t app = start("exit3", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 3);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonCrash, 0) == 0);
+                CHECK(contains(p.reason, "exit code 3 (the process ended itself)"));
+                CHECK(p.code == "0x50580103");
+            }
+            ::close(fd);
+        }
+        // SIGTERM while drawing: the handler records it and the process STILL ends by that signal
+        // (the shell and the kernel see the same status as before), and the report is the
+        // local-only ending from outside.
+        {
+            int fd = -1;
+            const pid_t app = start("term", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            ::kill(app, SIGTERM);
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonOutside, 0) == 0);
+                CHECK(contains(p.reason, "killed by signal 15 (SIGTERM)"));
+                CHECK(p.code == "0x5058020F");
             }
             ::close(fd);
         }

@@ -3,18 +3,29 @@
 // and sentinel_host_win.cpp for the Windows half this mirrors.
 //
 // WHAT IS DIFFERENT HERE, and it is a limit of the platform and not a choice: a
-// watcher that is not the parent of a process cannot learn how it ended. The
+// watcher that is not the parent of a process cannot ask how it ended. The
 // application starts the sentinel itself, so the sentinel is the application's
-// CHILD, and the kernel gives the exit status of a child to its parent only. So
-// the watcher is told when the application has GONE and nothing about HOW: the
-// application keeps the write end of a pipe open for as long as it lives, the
-// sentinel holds the read end, and end-of-file is the application ending by any
-// route, including SIGKILL (the OOM killer, `kill -9`). The in-process POSIX
-// handler already catches the fatal signals and writes its report; what is left
-// for this watcher is exactly the endings it cannot see - SIGKILL, and a window
-// that froze and was then killed - and every report it writes says in words that
-// the cause is not available on this platform. The process tree is NOT
-// restructured: the application is still nobody's child but the shell's.
+// CHILD, and the kernel gives the exit status of a child to its parent only
+// (waitid(2): ECHILD for any other process). So the kernel tells the watcher
+// when the application has GONE and nothing about HOW: the application keeps the
+// write end of a pipe open for as long as it lives, the sentinel holds the read
+// end, and end-of-file is the application ending by any route, including SIGKILL
+// (the OOM killer, `kill -9`). The process tree is NOT restructured: the
+// application is still nobody's child but the shell's.
+//
+// WHAT THE APPLICATION TELLS IT (0.99.78, core/exit_record.hpp). Field report
+// A0E0967441A8E6B4 (0.99.75, Ubuntu 24.04 AppImage) ended in the phase "creating
+// the window" and could say only `code: unknown`. So the application writes down
+// how it is ending into the shared page the watcher already reads: the status of
+// an exit() or a return from main (an on_exit hook), and the number of a fatal
+// signal (the crash handler for the fault signals, a small handler for SIGHUP,
+// SIGINT, SIGQUIT, SIGTERM and SIGPIPE that records it and lets the signal end the
+// process as it would have). What nothing can write down is SIGKILL, and an
+// _exit() from a place that does not record: the page is empty, and the report
+// says so in words that name the two sources asked (the process's own record, and
+// waitpid, which is not possible for a non-parent). A newer kernel (6.15) can give
+// the exit code of a non-child through a pidfd (PIDFD_INFO_EXIT); that is not used:
+// the kernel in the field report is 6.8 and it could not be tried here.
 //
 // WHAT IT IS GIVEN: the read end of the pipe and a memfd holding the breadcrumb
 // (unnamed, so nothing for another user to open), both by descriptor number on
@@ -326,9 +337,14 @@ int runSentinelMain(int argc, char** argv) {
 
     SentinelEnd end;
     end.appPid = appPid;
-    end.exitKnown = false;  // a watcher that is not the parent cannot learn it
     end.osSessionEnding = false;
     end.crumb = breadcrumb::read(static_cast<const breadcrumb::Block*>(view));
+    // HOW IT ENDED (0.99.78). A watcher that is not the parent cannot ask the kernel - waitpid
+    // answers ECHILD - so it reads what the application wrote into the page as it ended: the
+    // status of an exit(), or the signal of a fatal one (core/exit_record.hpp). Nothing
+    // written (SIGKILL, an _exit() that does not record) leaves the exit unknown, and the
+    // report says which sources were asked.
+    sentinelTakeExitRecord(end);
     end.crashDir = crashDir;
     end.logDir = logDir;
     (void)finishSentinelWatch(end);

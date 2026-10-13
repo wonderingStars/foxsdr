@@ -287,7 +287,10 @@ int main() {
         CHECK(rt<std::size_t>(offsetof(Block, activity)) == 44);
         CHECK(rt<std::size_t>(offsetof(Block, flags)) == 48);
         CHECK(rt<std::size_t>(offsetof(Block, frameScope)) == 52);
-        CHECK(rt<std::size_t>(offsetof(Block, reserved)) == 56);
+        // 0.99.78: the first four reserved bytes became the exit record, the last four are still
+        // reserved. (Until 0.99.77 `reserved` was eight bytes at offset 56.)
+        CHECK(rt<std::size_t>(offsetof(Block, exitRecord)) == 56);
+        CHECK(rt<std::size_t>(offsetof(Block, reserved)) == 60);
         CHECK(rt(std::is_standard_layout_v<Block>) && rt(std::is_trivially_copyable_v<Block>));
         CHECK(rt(breadcrumb::kMagic) == 0x43425846u);  // "FXBC" little-endian
         CHECK(rt(breadcrumb::kLayout) == 1u);
@@ -409,8 +412,12 @@ int main() {
         CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagReportsOff) == 0);
 
         // NO ROOM FOR TEXT: after every writer has run, the reserved bytes are
-        // still zero, and a reader reads nothing but the ten numbers above.
-        for (const std::uint32_t r : blk.reserved) { CHECK(r == 0u); }
+        // still zero, and a reader reads nothing but the ten numbers above. (Since 0.99.78 the
+        // four bytes before them are the exit record, written by noteExit and by nothing else:
+        // zero here, where no writer of the sort ran.)
+        CHECK(blk.reserved == 0u);
+        CHECK(blk.exitRecord == 0u);
+        CHECK(breadcrumb::read(&blk).exitHow == breadcrumb::ExitHow::None);
 
         // A corrupt page is refused or clamped, never believed.
         const std::uint32_t savedMagic = blk.magic;
@@ -2114,6 +2121,403 @@ int main() {
         const std::size_t main = host.find("int runSentinelMain(");
         const std::size_t sem = host.find("SEM_NOGPFAULTERRORBOX");
         CHECK(main != std::string::npos && sem != std::string::npos && sem > main);
+    }
+
+    // =======================================================================
+    // 14. HOW A LINUX PROCESS ENDED (0.99.78)
+    //
+    // Field report A0E0967441A8E6B4 (0.99.75, Ubuntu 24.04 AppImage): the process ended in the
+    // phase "creating the window" and the report could say only `code: unknown` and "exit
+    // status not available on this platform". The Linux watcher is the application's CHILD, so
+    // the kernel will not tell it how its parent ended (waitid(2): ECHILD); what it can read is
+    // the record the application writes into the shared page as it ends. Everything below is
+    // platform-neutral and runs on Windows with synthetic values; the application's own
+    // writers (exit_record.cpp, crash_handler_posix.cpp) are Linux and are in
+    // test_sentinel_proc.cpp's Linux half.
+    // =======================================================================
+    using breadcrumb::ExitHow;
+    const auto px = [](ExitHow how, std::uint32_t value) { return sentinelPosixExitCode(how, value); };
+
+    // --- 14a. the page: the writer, the reader, and what the reader refuses ---------------
+    {
+        alignas(64) static breadcrumb::Block blk;
+        std::memset(&blk, 0, sizeof(blk));
+        breadcrumb::attach(&blk);
+        CHECK(breadcrumb::read(&blk).exitHow == ExitHow::None);
+
+        breadcrumb::noteExit(ExitHow::Exited, 3);
+        CHECK(blk.exitRecord == ((1u << 16) | 3u));
+        breadcrumb::Snapshot s = breadcrumb::read(&blk);
+        CHECK(s.valid && s.exitHow == ExitHow::Exited && s.exitValue == 3);
+        // The last thing written is the truth: a signal after an exit() is how it really ended.
+        breadcrumb::noteExit(ExitHow::Signalled, 11);
+        s = breadcrumb::read(&blk);
+        CHECK(s.exitHow == ExitHow::Signalled && s.exitValue == 11);
+
+        // A status is 0..255 and a signal 1..64; anything else is nothing, never believed.
+        for (const std::uint32_t raw : {0xFFFFFFFFu, (7u << 16) | 5u, (1u << 16) | 256u, (1u << 16) | 0xFFFFu,
+                                        (2u << 16) | 0u, (2u << 16) | 65u, 5u, (3u << 16), (1u << 24) | 3u}) {
+            blk.exitRecord = raw;
+            const breadcrumb::Snapshot j = breadcrumb::read(&blk);
+            CHECK(j.valid && j.exitHow == ExitHow::None && j.exitValue == 0);
+        }
+        blk.exitRecord = (1u << 16) | 255u;
+        CHECK(breadcrumb::read(&blk).exitHow == ExitHow::Exited && breadcrumb::read(&blk).exitValue == 255);
+        blk.exitRecord = (1u << 16) | 0u;
+        CHECK(breadcrumb::read(&blk).exitHow == ExitHow::Exited && breadcrumb::read(&blk).exitValue == 0);
+        blk.exitRecord = (2u << 16) | 1u;
+        CHECK(breadcrumb::read(&blk).exitHow == ExitHow::Signalled && breadcrumb::read(&blk).exitValue == 1);
+        blk.exitRecord = (2u << 16) | 64u;
+        CHECK(breadcrumb::read(&blk).exitHow == ExitHow::Signalled && breadcrumb::read(&blk).exitValue == 64);
+        // A writer asked for a status the page cannot hold writes nothing believable.
+        breadcrumb::noteExit(ExitHow::Exited, 300);
+        CHECK(breadcrumb::read(&blk).exitHow == ExitHow::None);
+
+        // No other writer touches it, and the bytes after it stay reserved.
+        blk.exitRecord = 0;
+        breadcrumb::setPhase(Phase::Running);
+        breadcrumb::beat();
+        breadcrumb::setActivity(breadcrumb::kOpeningRadio, true);
+        breadcrumb::setFlag(breadcrumb::kFlagReportsOff, true);
+        breadcrumb::noteSessionEnding();
+        breadcrumb::setFrameScope(3);
+        CHECK(blk.exitRecord == 0u && blk.reserved == 0u);
+
+        // Allocation-free, because a signal handler calls it.
+        g_allocs.store(0);
+        g_counting.store(true);
+        breadcrumb::noteExit(ExitHow::Exited, 1);
+        breadcrumb::noteExit(ExitHow::Signalled, 15);
+        g_counting.store(false);
+        CHECK(g_allocs.load() == 0);
+
+        // Detached, it is a no-op.
+        breadcrumb::attach(nullptr);
+        const std::uint32_t before = blk.exitRecord;
+        breadcrumb::noteExit(ExitHow::Signalled, 9);
+        CHECK(blk.exitRecord == before);
+    }
+
+    // --- 14b. the tagged code: round trip, and what is NOT one ----------------------------
+    {
+        CHECK(px(ExitHow::Signalled, 11) == 0x5058020Bul);
+        CHECK(px(ExitHow::Exited, 3) == 0x50580103ul);
+        CHECK(px(ExitHow::Exited, 0) == 0x50580100ul);
+        CHECK(px(ExitHow::None, 5) == 0ul);  // there is no tagged value for "nothing"
+        CHECK(rt(kPosixExitTag) == 0x50580000ul);
+        for (std::uint32_t n : {0u, 1u, 3u, 127u, 255u}) {
+            ExitHow how = ExitHow::None;
+            std::uint32_t value = 99;
+            CHECK(sentinelPosixExitFromCode(px(ExitHow::Exited, n), how, value) && how == ExitHow::Exited && value == n);
+        }
+        for (std::uint32_t n = 1; n <= 64; ++n) {
+            ExitHow how = ExitHow::None;
+            std::uint32_t value = 99;
+            CHECK(sentinelPosixExitFromCode(px(ExitHow::Signalled, n), how, value) && how == ExitHow::Signalled && value == n);
+        }
+        // Not a tagged value: every Windows code the table knows, small numbers, and near misses.
+        for (const unsigned long code : {0ul, 1ul, 3ul, 11ul, 0xC0000005ul, 0xC0000409ul, 0xFFFFFFFFul, 0x40010004ul,
+                                         0xDEADBEEFul, 0x50580000ul, 0x50580300ul, 0x50580200ul, 0x50580241ul,
+                                         0x50590103ul, 0x00580103ul, 0x5058FF03ul}) {
+            ExitHow how = ExitHow::Exited;
+            std::uint32_t value = 77;
+            CHECK(!sentinelPosixExitFromCode(code, how, value));
+            CHECK(how == ExitHow::Exited && value == 77);  // untouched
+            CHECK(sentinelExitWords(true, code).find("killed by signal") == std::string::npos);
+            CHECK(sentinelExitWords(true, code).find("the process ended itself") == std::string::npos);
+        }
+        // A tagged value is a crash-like ending when the PROGRAM did it (it faulted, or left
+        // by itself with an error status) and not when somebody sent a signal, or it left with 0.
+        for (const std::uint32_t sig : {4u, 5u, 6u, 7u, 8u, 11u}) {
+            CHECK(isCrashLikeExitCode(px(ExitHow::Signalled, sig)));
+            CHECK(sentinelIsFaultSignal(static_cast<int>(sig)));
+        }
+        for (const std::uint32_t sig : {1u, 2u, 3u, 9u, 13u, 15u, 10u, 14u}) {
+            CHECK(!isCrashLikeExitCode(px(ExitHow::Signalled, sig)));
+            CHECK(!sentinelIsFaultSignal(static_cast<int>(sig)));
+        }
+        CHECK(isCrashLikeExitCode(px(ExitHow::Exited, 1)) && isCrashLikeExitCode(px(ExitHow::Exited, 255)));
+        CHECK(!isCrashLikeExitCode(px(ExitHow::Exited, 0)));
+        CHECK(!sentinelIsFaultSignal(0) && !sentinelIsFaultSignal(-1) && !sentinelIsFaultSignal(65));
+        // The names are LINUX numbers (x86-64 and arm64), not <csignal>'s.
+        const struct {
+            int n;
+            const char* name;
+        } names[] = {{1, "SIGHUP"},  {2, "SIGINT"},  {3, "SIGQUIT"}, {4, "SIGILL"},  {5, "SIGTRAP"}, {6, "SIGABRT"},
+                     {7, "SIGBUS"},  {8, "SIGFPE"},  {9, "SIGKILL"}, {11, "SIGSEGV"}, {13, "SIGPIPE"}, {15, "SIGTERM"}};
+        for (const auto& row : names) {
+            const char* got = sentinelSignalName(row.n);
+            CHECK(got != nullptr && std::string(got) == row.name);
+        }
+        CHECK(sentinelSignalName(0) == nullptr && sentinelSignalName(34) == nullptr && sentinelSignalName(-1) == nullptr &&
+              sentinelSignalName(99) == nullptr);
+    }
+
+    // --- 14c. the words ---------------------------------------------------------------------
+    {
+        CHECK(sentinelExitWords(true, px(ExitHow::Exited, 0)) == "exit code 0 before the shutdown had finished");
+        CHECK(sentinelExitWords(true, px(ExitHow::Exited, 1)) == "exit code 1 (the process ended itself)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Exited, 255)) == "exit code 255 (the process ended itself)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 11)) == "killed by signal 11 (SIGSEGV)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 6)) == "killed by signal 6 (SIGABRT)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 9)) == "killed by signal 9 (SIGKILL)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 15)) == "killed by signal 15 (SIGTERM)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 7)) == "killed by signal 7 (SIGBUS)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 8)) == "killed by signal 8 (SIGFPE)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 4)) == "killed by signal 4 (SIGILL)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 34)) == "killed by signal 34");  // no name here
+        // Windows' words are what they were, for the codes they were measured for.
+        CHECK(sentinelExitWords(true, 1) == "ended by another process (exit code 1, as taskkill /F does)");
+        CHECK(sentinelExitWords(true, 0xC0000005ul) == "access violation");
+        // When NOTHING answered: the old words, and now which sources were tried.
+        CHECK(sentinelExitWords(false, 0) == "exit status not available on this platform");
+        CHECK(sentinelExitWords(false, 0, true) ==
+              "exit status not available on this platform (no exit record; not its parent)");
+        CHECK(sentinelExitWords(true, px(ExitHow::Exited, 1), true).find("not available") == std::string::npos);
+    }
+
+    // --- 14d. the watcher's one source: the record in the page ---------------------------------
+    {
+        SentinelEnd e;
+        e.crumb.valid = true;
+        e.crumb.exitHow = ExitHow::Signalled;
+        e.crumb.exitValue = 11;
+        sentinelTakeExitRecord(e);
+        CHECK(e.exitKnown && e.exitCode == 0x5058020Bul && !e.exitRecordTried);
+
+        SentinelEnd x;
+        x.crumb.valid = true;
+        x.crumb.exitHow = ExitHow::Exited;
+        x.crumb.exitValue = 0;
+        sentinelTakeExitRecord(x);
+        CHECK(x.exitKnown && x.exitCode == 0x50580100ul && !x.exitRecordTried);  // exit(0) is a record, not an absence
+
+        SentinelEnd none;
+        none.exitKnown = true;  // anything it held before is replaced by the answer
+        none.exitCode = 0xC0000005ul;
+        none.crumb.valid = true;
+        sentinelTakeExitRecord(none);
+        CHECK(!none.exitKnown && none.exitCode == 0ul && none.exitRecordTried);
+
+        SentinelEnd unreadable;  // the page could not be read at all
+        sentinelTakeExitRecord(unreadable);
+        CHECK(!unreadable.exitKnown && unreadable.exitRecordTried);
+    }
+
+    // --- 14e. the decision, for a Linux ending ------------------------------------------------
+    {
+        using C = SentinelClass;
+        const std::uint64_t steady = HangWatchdog::kDefaultThresholdMs;
+        const unsigned long segv = px(ExitHow::Signalled, 11);
+        const unsigned long term = px(ExitHow::Signalled, 15);
+        const unsigned long kill9 = px(ExitHow::Signalled, 9);
+
+        // THE FIELD REPORT'S ENDING: creating the window, and the process left with status 1
+        // (a failed glfwInit returns 1 from main). Sent, with the status in words and in `code`.
+        {
+            const SentinelVerdict v = decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 0), px(ExitHow::Exited, 1)));
+            CHECK(v.cls == C::Startup && v.upload() && v.codeKnown && v.code == 0x50580101ul);
+            CHECK(v.reason == "sentinel: ended before the first frame - exit code 1 (the process ended itself); "
+                              "phase creating the window; silent 0 s");
+            CHECK(v.signatureTag == "sentinel:startup:creating-window");
+        }
+        for (const Phase p : {Phase::Starting, Phase::BuildingApp, Phase::CreatingWindow, Phase::AwaitingFirstFrame}) {
+            for (const unsigned long code : {segv, term, kill9, px(ExitHow::Exited, 1), px(ExitHow::Exited, 0)}) {
+                const SentinelVerdict v = decideSentinel(facts(crumb(p, p == Phase::AwaitingFirstFrame ? 1 : 0, 50), code));
+                CHECK(v.cls == C::Startup && v.upload() && v.codeKnown && v.code == code);
+                CHECK(!contains(v.reason, "not available"));
+            }
+        }
+        // Different endings are different groups: the code is part of the signature.
+        CHECK(sentinelSignature(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 0), segv)), nullptr) !=
+              sentinelSignature(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 0), px(ExitHow::Exited, 11))), nullptr));
+        CHECK(sentinelSignature(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 0), segv)), nullptr) !=
+              sentinelSignature(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 0), term)), nullptr));
+
+        // While drawing: the program faulting, or leaving by itself, is a crash and is sent...
+        for (const unsigned long code : {segv, px(ExitHow::Signalled, 6), px(ExitHow::Signalled, 7), px(ExitHow::Signalled, 8),
+                                         px(ExitHow::Signalled, 4), px(ExitHow::Exited, 1), px(ExitHow::Exited, 3),
+                                         px(ExitHow::Exited, 0)}) {
+            const SentinelVerdict v = decideSentinel(facts(crumb(Phase::Running, 500, 100), code));
+            CHECK(v.cls == C::Crash && v.upload() && v.codeKnown && v.code == code);
+            CHECK(v.signatureTag == "sentinel:crash:running");
+        }
+        CHECK(contains(decideSentinel(facts(crumb(Phase::Running, 500, 100), px(ExitHow::Exited, 0))).reason,
+                       "exit code 0 before the shutdown had finished"));
+        // ...and a signal somebody sent is an ending from outside, kept here.
+        for (const unsigned long code : {term, px(ExitHow::Signalled, 1), px(ExitHow::Signalled, 2), px(ExitHow::Signalled, 3),
+                                         px(ExitHow::Signalled, 13), kill9}) {
+            const SentinelVerdict v = decideSentinel(facts(crumb(Phase::Running, 500, 120), code));
+            CHECK(v.cls == C::Outside && !v.upload() && sentinelReasonIsLocalOnly(v.reason));
+            CHECK(v.codeKnown && v.code == code);
+        }
+        CHECK(contains(decideSentinel(facts(crumb(Phase::Running, 500, 120), term)).reason, "killed by signal 15 (SIGTERM)"));
+        // A window that had stopped drawing and was then killed is still frozen.
+        CHECK(decideSentinel(facts(crumb(Phase::Running, 500, steady + 1), kill9)).cls == C::Frozen);
+        CHECK(decideSentinel(facts(crumb(Phase::Running, 500, steady + 1), term)).cls == C::Frozen);
+        // The clean exit: status 0 after the shutdown reached its last stage.
+        CHECK(decideSentinel(facts(crumb(Phase::ShutdownClosingWindow, 500, 100), px(ExitHow::Exited, 0))).cls == C::None);
+        CHECK(decideSentinel(facts(crumb(Phase::Finished, 500, 100), px(ExitHow::Exited, 0))).cls == C::None);
+        CHECK(decideSentinel(facts(breadcrumb::Snapshot{}, px(ExitHow::Exited, 0))).cls == C::None);
+        // ...and a non-zero status is not clean however far the shutdown got.
+        CHECK(decideSentinel(facts(crumb(Phase::Finished, 500, 100), px(ExitHow::Exited, 1))).cls == C::Crash);
+        // The session closing, off means off, and one report per death keep their precedence.
+        CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagSessionEnding), term)).cls == C::Session);
+        CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagReportsOff), segv)).cls == C::None);
+        {
+            SentinelFacts f = facts(crumb(Phase::Running, 500, 100), segv);
+            f.crashReportExists = true;
+            CHECK(decideSentinel(f).cls == C::None);
+        }
+        // Windows' crash record is asked for only on Windows: a tagged code never asks.
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 100), segv))));
+        CHECK(!sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 100), segv))));
+        CHECK(sentinelWantsOsCrashRecord(decideSentinel(facts(crumb(Phase::Running, 500, 100), 0xC0000409ul))));
+
+        // NO RECORD: the old words, now naming what was tried. Still never a crash class.
+        {
+            SentinelFacts f = facts(crumb(Phase::Running, 500, 100), 0, false);
+            f.exitRecordTried = true;
+            const SentinelVerdict v = decideSentinel(f);
+            CHECK(v.cls == C::Outside && !v.codeKnown && !v.upload());
+            CHECK(contains(v.reason, "exit status not available on this platform (no exit record; not its parent); phase running"));
+            f.crumb = crumb(Phase::CreatingWindow, 0, 100);
+            const SentinelVerdict s = decideSentinel(f);
+            CHECK(s.cls == C::Startup && s.upload());
+            CHECK(contains(s.reason, "(no exit record; not its parent)"));
+            // Without the flag (a failed GetExitCodeProcess) the words are the old ones, exactly.
+            f.exitRecordTried = false;
+            CHECK(decideSentinel(f).reason.find("(no exit record") == std::string::npos);
+        }
+    }
+
+    // --- 14f. the closed vocabulary still fits the site, for every new ending ----------------------
+    {
+        int written = 0;
+        std::set<std::string> endings;
+        struct Case {
+            bool known;
+            unsigned long code;
+            bool tried;
+        };
+        std::vector<Case> cases;
+        for (const unsigned long c : {px(ExitHow::Exited, 0), px(ExitHow::Exited, 1), px(ExitHow::Exited, 255),
+                                      px(ExitHow::Signalled, 1), px(ExitHow::Signalled, 6), px(ExitHow::Signalled, 9),
+                                      px(ExitHow::Signalled, 11), px(ExitHow::Signalled, 15), px(ExitHow::Signalled, 64)}) {
+            cases.push_back({true, c, false});
+        }
+        cases.push_back({false, 0, true});
+        cases.push_back({false, 0, false});
+        for (std::uint32_t p = 0; p <= 12; ++p) {
+            for (const std::uint32_t activity : {0u, 1u, 2u, 4u}) {
+                for (const Case& k : cases) {
+                    for (const std::uint64_t silent : {0ull, 6000ull, 4000000000ull}) {
+                        for (const std::uint32_t scope : {0u, 1u, static_cast<std::uint32_t>(kFrameScopeCount),
+                                                          static_cast<std::uint32_t>(kFrameScopeCount) + 1u}) {
+                            breadcrumb::Snapshot c = crumb(static_cast<Phase>(p <= 11 ? p : 0), 500, silent, activity, 0);
+                            c.frameScope = scope;
+                            SentinelFacts f = facts(c, k.code, k.known);
+                            f.exitRecordTried = k.tried;
+                            const SentinelVerdict v = decideSentinel(f);
+                            if (!v.write()) { continue; }
+                            ++written;
+                            endings.insert(v.reason.substr(v.reason.find(" - ") + 3, v.reason.find("; phase ") - v.reason.find(" - ") - 3));
+                            CHECK(v.reason.size() <= 200);
+                            bool printable = true;
+                            for (const char ch : v.reason) {
+                                if (ch < 0x20 || ch > 0x7E) { printable = false; }
+                            }
+                            CHECK(printable);
+                            CHECK(contains(v.reason, "; phase "));
+                            // Whole, never cut: the seconds of silence are the last of it.
+                            if (v.silentMs >= 0) {
+                                CHECK(v.reason.size() >= 2 && v.reason.compare(v.reason.size() - 2, 2, " s") == 0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        CHECK(written > 500);
+        // Every ending's words came out of the closed list of sentences, and no other.
+        CHECK(endings.count("exit code 1 (the process ended itself)") == 1);
+        CHECK(endings.count("killed by signal 11 (SIGSEGV)") == 1);
+        CHECK(endings.count("killed by signal 64") == 1);
+        CHECK(endings.count("exit status not available on this platform (no exit record; not its parent)") == 1);
+        CHECK(endings.count("exit status not available on this platform") == 1);
+    }
+
+    // --- 14g. the whole chain, as the watcher runs it: page -> record -> verdict -> report -------------
+    {
+        const fs::path dir = scratchDir("posixend");
+        const fs::path logs = scratchDir("posixendlogs");
+        writeFile(logs / "foxsdr.log", "12:00:00.000 info FoxSDR 0.99.78 (abc123def456) starting\n"
+                                       "12:00:01.000 info window: platform chosen: x11\n");
+        auto endFrom = [&](unsigned long pid, const breadcrumb::Block& page) {
+            SentinelEnd e;
+            e.appPid = pid;
+            e.crumb = breadcrumb::read(&page);
+            sentinelTakeExitRecord(e);  // what runSentinelMain does after the pipe closes
+            e.crashDir = dir.string();
+            e.logDir = logs.string();
+            return e;
+        };
+        auto pageIn = [](Phase p) {
+            static breadcrumb::Block page;
+            std::memset(&page, 0, sizeof(page));
+            breadcrumb::attach(&page);
+            breadcrumb::setPhase(p);
+            return &page;
+        };
+
+        // The field report's ending, as the next report will read: exit status 1 in the phase
+        // "creating the window".
+        {
+            breadcrumb::Block* page = pageIn(Phase::CreatingWindow);
+            breadcrumb::noteExit(ExitHow::Exited, 1);
+            const SentinelOutcome o = finishSentinelWatch(endFrom(8001, *page));
+            CHECK(o.verdict.cls == SentinelClass::Startup && !o.reportPath.empty());
+            const std::string text = readFile(o.reportPath);
+            CHECK(contains(text, "\ncode: 0x50580101\n"));
+            CHECK(contains(text, "\nreason: sentinel: ended before the first frame - exit code 1 (the process ended itself); "
+                                 "phase creating the window; silent "));
+            CHECK(!contains(text, "not available on this platform"));
+            CHECK(contains(text, "window: platform chosen: x11"));  // the log tail carries the window lines
+            ParsedReport p;
+            CHECK(parseReportText(text, p) && p.code == "0x50580101");
+        }
+        // A signal in the phase "waiting for the first frame".
+        {
+            breadcrumb::Block* page = pageIn(Phase::AwaitingFirstFrame);
+            breadcrumb::noteExit(ExitHow::Signalled, 11);
+            const SentinelOutcome o = finishSentinelWatch(endFrom(8002, *page));
+            CHECK(o.verdict.cls == SentinelClass::Startup);
+            const std::string text = readFile(o.reportPath);
+            CHECK(contains(text, "\ncode: 0x5058020B\n") && contains(text, "killed by signal 11 (SIGSEGV)"));
+        }
+        // NOTHING WRITTEN (SIGKILL): the old words, naming what was tried, and `code: unknown`.
+        {
+            breadcrumb::Block* page = pageIn(Phase::CreatingWindow);
+            const SentinelOutcome o = finishSentinelWatch(endFrom(8003, *page));
+            CHECK(o.verdict.cls == SentinelClass::Startup);
+            const std::string text = readFile(o.reportPath);
+            CHECK(contains(text, "\ncode: unknown\n"));
+            CHECK(contains(text, "exit status not available on this platform (no exit record; not its parent)"));
+            ParsedReport p;
+            CHECK(parseReportText(text, p) && p.code == "unknown");
+        }
+        // A clean exit writes nothing.
+        {
+            breadcrumb::Block* page = pageIn(Phase::ShutdownClosingWindow);
+            breadcrumb::noteExit(ExitHow::Exited, 0);
+            CHECK(finishSentinelWatch(endFrom(8004, *page)).reportPath.empty());
+        }
+        breadcrumb::attach(nullptr);
+        std::error_code ec;
+        if (g_checksFailed == 0) {
+            fs::remove_all(dir, ec);
+            fs::remove_all(logs, ec);
+        }
     }
 
     return testSummary("test_sentinel");

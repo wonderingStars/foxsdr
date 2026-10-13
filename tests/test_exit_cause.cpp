@@ -203,6 +203,37 @@ void testRuleRows() {
     CHECK(classify(listing({crashReport(kSentStartup, "0xFFFFFFFF", 1500)})).cls == ExitClass::Killed);
     CHECK(classify(listing({crashReport(kSentStartup, "0xC000013A", 1500)})).cls == ExitClass::Killed);
     CHECK(classify(listing({crashReport(kSentStartup, "", 1500)})).cls == ExitClass::Unknown);  // Linux: no code
+    // 0.99.78: a Linux watcher reads how the process ended from the record the process wrote
+    // as it ended, and carries it in `code:` as a tagged value (core/sentinel.hpp,
+    // kPosixExitTag: 0x5058, then 1 for an exit or 2 for a signal, then the status or the
+    // signal). Before the first frame, by what: the program ending ITSELF (any exit status) or
+    // faulting (SEGV, ABRT, BUS, FPE, ILL, TRAP) died; a signal somebody sent, or an exit
+    // before the first frame with status 0, is killed/ended from outside - and the words are
+    // the POSIX ones, never Windows' (exit code 1 there means taskkill).
+    {
+        const ExitVerdict exit3 = classify(listing({crashReport(kSentStartup, "0x50580103", 1500)}));
+        CHECK(exit3.cls == ExitClass::Died);
+        CHECK(contains(exit3.detail, "exit code 3 (the process ended itself)"));
+        const ExitVerdict exit1 = classify(listing({crashReport(kSentStartup, "0x50580101", 1500)}));
+        CHECK(exit1.cls == ExitClass::Died);
+        CHECK(!contains(exit1.detail, "taskkill"));
+        const ExitVerdict segv = classify(listing({crashReport(kSentStartup, "0x5058020B", 1500)}));
+        CHECK(segv.cls == ExitClass::Died);
+        CHECK(contains(segv.detail, "killed by signal 11 (SIGSEGV)"));
+        CHECK(classify(listing({crashReport(kSentStartup, "0x50580206", 1500)})).cls == ExitClass::Died);   // ABRT
+        const ExitVerdict term = classify(listing({crashReport(kSentStartup, "0x5058020F", 1500)}));
+        CHECK(term.cls == ExitClass::Killed);
+        CHECK(contains(term.detail, "killed by signal 15 (SIGTERM)"));
+        CHECK(classify(listing({crashReport(kSentStartup, "0x50580209", 1500)})).cls == ExitClass::Killed);  // KILL
+        CHECK(classify(listing({crashReport(kSentStartup, "0x50580100", 1500)})).cls == ExitClass::Killed);  // exit 0
+        // After the first frame.
+        const ExitVerdict outsideTerm = classify(listing({crashReport(kSentOutside + " - killed by signal 15 (SIGTERM)",
+                                                                       "0x5058020F", 1500)}));
+        CHECK(outsideTerm.cls == ExitClass::Killed);
+        CHECK(contains(outsideTerm.detail, "killed by signal 15 (SIGTERM)"));
+        CHECK(classify(listing({crashReport(kSentCrash + " - killed by signal 11 (SIGSEGV)", "0x5058020B", 1500)})).cls ==
+              ExitClass::Died);
+    }
     // A sentinel sentence a later build writes, and this one has never heard of.
     CHECK(classify(listing({crashReport("sentinel: ended in some new way", "0x00000001", 1500)})).cls ==
           ExitClass::Unknown);

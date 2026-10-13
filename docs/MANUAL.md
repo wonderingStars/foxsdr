@@ -1676,6 +1676,32 @@ holds the request, the code and that document to each other in both directions.
   exercised. The design, the decision table, every fixed sentence and what is
   proven are in [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) ("The sentinel"); what a
   report carries is in [PRIVACY.md](../PRIVACY.md), and a test holds the two to the code.
+- **On Linux, an ending before the window appears now says how the process ended
+  and which window system was used, and you can choose the window system**
+  (0.99.78). A report from FoxSDR 0.99.75 on Ubuntu 24.04 (an AppImage) said only
+  that it ended "while creating the window", with no exit status and no word from the
+  window library, so nobody could tell a crash from a refused connection to the
+  display. The watcher on Linux cannot ask the operating system how FoxSDR ended
+  (it is not FoxSDR's parent), so FoxSDR now writes it down itself as it ends - the
+  status of an `exit`, or the number of the signal that ended it - and the report
+  says `exit code 1 (the process ended itself)` or `killed by signal 11 (SIGSEGV)`.
+  An ending by `SIGKILL` (the out-of-memory killer, `kill -9`) cannot be written
+  down by the process that is being killed, and the report says that it looked and
+  found nothing. The log also gets one line per step of opening the window, each
+  beginning `window:`: which window systems this build has, whether `DISPLAY` and
+  `WAYLAND_DISPLAY` are set (set or not - never their values), which one was chosen,
+  the window library's own error messages, and the graphics driver's name and version.
+  **If FoxSDR ends before its window appears on Linux**, start it with
+  `FOXSDR_WINDOW_PLATFORM=x11` (or `wayland`) in front of the command, for example
+  `FOXSDR_WINDOW_PLATFORM=x11 ./FoxSDR-0.99.78-x86_64.AppImage`, and send the lines of
+  the log (`~/.local/state/foxsdr/logs/foxsdr.log`) that begin `window:`. `x11`,
+  `wayland` or `any` (the default - the window library chooses); anything else, or a
+  system this build does not have, is noted in the log and ignored. Checked in
+  FoxSDR's tests on Windows - the lines, their order, the value of `DISPLAY` kept out,
+  and a value that names nothing ignored with the run still starting - and the Linux
+  side against stand-in declarations only: **none of it has run on Linux**, and whether
+  forcing a window system cures that report is not known. Details in
+  [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) ("If FoxSDR ends before its window appears").
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a

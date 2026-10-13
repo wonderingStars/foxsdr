@@ -33,6 +33,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/crash_handler_posix.hpp"
 
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 
@@ -489,7 +490,11 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
 
 void finish(unsigned long exitCode) {
     if (!g_exitAfterReport) { return; }
-    ::_exit(static_cast<int>(exitCode == 0 ? 1u : (exitCode & 0x7Fu ? exitCode & 0x7Fu : 1u)));
+    const int status = static_cast<int>(exitCode == 0 ? 1u : (exitCode & 0x7Fu ? exitCode & 0x7Fu : 1u));
+    // HOW THIS PROCESS ENDS, for the sentinel (0.99.78, core/exit_record.hpp): _exit() runs no
+    // exit hook, so the status is written down here.
+    breadcrumb::noteExit(breadcrumb::ExitHow::Exited, static_cast<std::uint32_t>(status));
+    ::_exit(status);
 }
 
 // The parent's line (CrashHandlerConfig::faultLineToStdout), written before
@@ -543,6 +548,7 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
         e.str("\n");
         writeLineOnce(e);
     }
+    breadcrumb::noteExit(breadcrumb::ExitHow::Exited, 0xE2u);  // see finish()
     ::_exit(0xE2);
 }
 
@@ -578,6 +584,11 @@ const char* reasonForSignal(int sig) {
 // (crash_handler.cpp's Windows report uses ExceptionAddress, the faulting
 // INSTRUCTION, for the same reason).
 void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
+    // HOW THIS PROCESS IS ENDING, for the sentinel (0.99.78, core/exit_record.hpp), first of
+    // all: if the report below cannot be written, or this handler is itself killed, the
+    // watcher still reads which signal it was. One relaxed store; replaced by a later write
+    // if the process ends another way (handlerCannotRun, finish).
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(sig));
     // Another thread's report is waited for; a fault inside this handler on
     // this thread still dies with 0xE2, saying so first.
     enterFatal(reasonForSignal(sig), static_cast<unsigned long>(sig));
@@ -628,6 +639,9 @@ void onTerminatePosix() {
     ::sigemptyset(&dfl.sa_mask);
     ::sigaction(SIGABRT, &dfl, nullptr);
     if (g_prevTerminate != nullptr && g_prevTerminate != &onTerminatePosix) { g_prevTerminate(); }
+    // abort() below ends the process with SIGABRT at its default disposition (stood down
+    // above), which this handler therefore never sees: the sentinel is told here (0.99.78).
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(SIGABRT));
     ::abort();
 }
 
@@ -663,6 +677,7 @@ extern "C" void __cxa_pure_virtual() {
     dfl.sa_handler = SIG_DFL;
     ::sigemptyset(&dfl.sa_mask);
     ::sigaction(SIGABRT, &dfl, nullptr);
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(SIGABRT));  // see onTerminatePosix
     ::abort();
 }
 
@@ -809,6 +824,7 @@ int captureFramesForTest(bool mayWalkCurrentThread) {
         ::sigemptyset(&dfl.sa_mask);
         ::sigaction(SIGABRT, &dfl, nullptr);
     }
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(SIGABRT));  // see onTerminatePosix
     ::abort();
 }
 

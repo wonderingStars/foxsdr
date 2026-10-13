@@ -13,7 +13,8 @@
 //
 // WHAT IT HOLDS, and the rule that keeps it small: ENUMERATED OR NUMERIC VALUES
 // ONLY. A phase (a closed list, below), a few bits that say what else was going
-// on, a frame count, and four clock readings. Never a string - so never a name,
+// on, a frame count, four clock readings and (0.99.78, Linux) how the process ended -
+// one small number, below. Never a string - so never a name,
 // a path, a frequency, a radio or an address, and a reader cannot be made to
 // print one by a corrupt page. Nothing here is personal and nothing can become
 // so without changing the layout, which a test pins field by field.
@@ -102,6 +103,18 @@ enum Flag : std::uint32_t {
     kFlagReportsOff = 1u << 1,
 };
 
+// HOW THE PROCESS ENDED, as far as the process could write it down itself (0.99.78,
+// Linux; the Windows watcher reads the exit code from the operating system). A watcher
+// that is not a process's parent cannot ask the kernel how it ended, so the process says:
+// an exit() records `Exited` with the status, a fatal signal's handler records `Signalled`
+// with the number. A process killed by SIGKILL records nothing, and that absence is the
+// only thing it can be told by.
+enum class ExitHow : std::uint32_t {
+    None = 0,
+    Exited = 1,     // value: the exit status, 0..255
+    Signalled = 2,  // value: the signal number, 1..64
+};
+
 constexpr std::uint32_t kMagic = 0x43425846u;  // "FXBC", little-endian
 constexpr std::uint32_t kLayout = 1;
 
@@ -122,7 +135,10 @@ constexpr std::uint32_t kLayout = 1;
 //    48      4    flags       Flag bits
 //    52      4    frameScope  which part of the frame the GUI thread is in, as
 //                             core::FrameScope + 1 (0: no frame has begun)
-//    56      8    reserved    zero
+//    56      4    exitRecord  how the process ended, as the process wrote it down
+//                             itself (0.99.78, Linux): ExitHow << 16 | a number, or
+//                             0 for nothing written
+//    60      4    reserved    zero
 struct Block {
     std::uint32_t magic;
     std::uint32_t layout;
@@ -134,7 +150,8 @@ struct Block {
     std::uint32_t activity;
     std::uint32_t flags;
     std::uint32_t frameScope;
-    std::uint32_t reserved[2];
+    std::uint32_t exitRecord;
+    std::uint32_t reserved;
 };
 static_assert(sizeof(Block) == 64, "the breadcrumb is one cache line");
 static_assert(offsetof(Block, magic) == 0 && offsetof(Block, layout) == 4 &&
@@ -142,7 +159,7 @@ static_assert(offsetof(Block, magic) == 0 && offsetof(Block, layout) == 4 &&
                   offsetof(Block, frames) == 24 && offsetof(Block, phaseMs) == 32 &&
                   offsetof(Block, phase) == 40 && offsetof(Block, activity) == 44 &&
                   offsetof(Block, flags) == 48 && offsetof(Block, frameScope) == 52 &&
-                  offsetof(Block, reserved) == 56,
+                  offsetof(Block, exitRecord) == 56 && offsetof(Block, reserved) == 60,
               "the breadcrumb's layout is a contract with the watcher");
 static_assert(std::atomic_ref<std::uint64_t>::is_always_lock_free &&
                   std::atomic_ref<std::uint32_t>::is_always_lock_free,
@@ -228,6 +245,19 @@ inline void setFlag(Flag f, bool on) noexcept {
 
 inline void noteSessionEnding() noexcept { setFlag(kFlagSessionEnding, true); }
 
+// WRITES DOWN HOW THIS PROCESS IS ENDING (0.99.78, Linux), the last thing it does: from an
+// exit() hook with the status, from the handler of a fatal signal with the number. One
+// relaxed store of one word into a page that already exists - no allocation, no lock, no
+// call into the C library - because a signal handler calls it. The LAST write is the
+// truth (an exit() after which a destructor faults is a signal, and the handler's write
+// replaces the exit hook's). Nothing is written in a process with no watcher.
+inline void noteExit(ExitHow how, std::uint32_t value) noexcept {
+    Block* b = g_block.load(std::memory_order_relaxed);
+    if (b == nullptr) { return; }
+    detail::at(b->exitRecord)
+        .store((static_cast<std::uint32_t>(how) << 16) | (value & 0xFFFFu), std::memory_order_relaxed);
+}
+
 // WHICH PART OF THE FRAME the GUI thread has just entered (core/frame_timing.hpp
 // calls this at every change of scope, with FrameScope + 1). A number from a
 // closed list, like the phase: a death or a freeze with no stack can then still
@@ -273,6 +303,8 @@ struct Snapshot {
     std::uint32_t activity = 0;
     std::uint32_t flags = 0;
     std::uint32_t frameScope = 0;  // core::FrameScope + 1 as written; 0 for none
+    ExitHow exitHow = ExitHow::None;  // what the process wrote down about its ending
+    std::uint32_t exitValue = 0;      // the status or the signal number, with exitHow
 };
 
 inline Snapshot read(const Block* b) noexcept {
@@ -294,6 +326,18 @@ inline Snapshot read(const Block* b) noexcept {
     s.flags = detail::at(m.flags).load(std::memory_order_relaxed) &
               (kFlagSessionEnding | kFlagReportsOff);
     s.frameScope = detail::at(m.frameScope).load(std::memory_order_relaxed);
+    // The exit record is believed only when it is one: a status is 0..255, a signal 1..64,
+    // and anything else - a corrupt page, a layout this build does not know - is "nothing".
+    const std::uint32_t rec = detail::at(m.exitRecord).load(std::memory_order_relaxed);
+    const std::uint32_t how = rec >> 16;
+    const std::uint32_t value = rec & 0xFFFFu;
+    if (how == static_cast<std::uint32_t>(ExitHow::Exited) && value <= 255u) {
+        s.exitHow = ExitHow::Exited;
+        s.exitValue = value;
+    } else if (how == static_cast<std::uint32_t>(ExitHow::Signalled) && value >= 1u && value <= 64u) {
+        s.exitHow = ExitHow::Signalled;
+        s.exitValue = value;
+    }
     return s;
 }
 

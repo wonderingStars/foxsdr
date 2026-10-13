@@ -15,9 +15,11 @@
 // (SYNCHRONIZE and PROCESS_QUERY_LIMITED_INFORMATION - nothing more), (2) the
 // breadcrumb block the application writes into deliberately
 // (core/breadcrumb.hpp) and (3) files the application already writes: the log
-// and the report folder. On Linux a watcher that is not the parent cannot learn
-// an exit status, so it gets (1) as a pipe whose write end the application holds:
-// end-of-file means the application has gone, and nothing more.
+// and the report folder. On Linux a watcher that is not the parent cannot ask the
+// kernel for an exit status, so it gets (1) as a pipe whose write end the application
+// holds: end-of-file means the application has gone. HOW it went (0.99.78) is what the
+// application wrote into the page as it ended - the status of an exit(), the number of
+// a fatal signal - and nothing is there for a SIGKILL (core/exit_record.hpp).
 //
 // WHAT IT DECIDES. When the application ends it answers one question - is there
 // anything the application could not itself report - and writes ONE report in
@@ -127,14 +129,46 @@ bool isCrashLikeExitCode(unsigned long code);
 // code" for any value not in the table; the table is checked against the Windows
 // SDK's ntstatus.h and, for the two codes a forced kill leaves, against a
 // measurement (docs/DIAGNOSTICS.md, "The sentinel").
-std::string sentinelExitWords(bool exitKnown, unsigned long code);
+//
+// `exitRecordTried` (Linux, 0.99.78): with `exitKnown` false, says that the process's own
+// exit record WAS asked for and held nothing, so the words name what was tried; false (the
+// default) is the Windows case of a failed GetExitCodeProcess and keeps the old words.
+std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried = false);
+
+// ---------------------------------------------------------------------------
+// HOW A POSIX PROCESS ENDED, carried through the platform-neutral `code` (0.99.78).
+//
+// The Linux watcher is its application's CHILD and so cannot wait for it: the kernel
+// gives a process's exit status to its parent only (waitid(2) answers ECHILD for anything
+// else). What it can read is the record the application wrote into the shared page
+// (breadcrumb::noteExit) as it ended. That record is carried in the same 32-bit `code`
+// every other part of the sentinel already moves - the report's `code:` line, the
+// signature, the previous-session classification - as a TAGGED value:
+//
+//     0x5058 HH VV      "PX", HH the ExitHow (1 exit, 2 signal), VV the status or signal
+//
+// A tag nothing on Windows produces (its exit codes are NTSTATUS values, whose top nibble
+// is 8, C or E, or small numbers), so a Windows code is never read as a POSIX one and
+// `sentinelExitWords(true, code)` and `isCrashLikeExitCode(code)` need no platform switch.
+// ---------------------------------------------------------------------------
+inline constexpr unsigned long kPosixExitTag = 0x50580000ul;
+unsigned long sentinelPosixExitCode(breadcrumb::ExitHow how, std::uint32_t value);
+// False for anything that is not a tagged value; `how` and `value` are then untouched.
+bool sentinelPosixExitFromCode(unsigned long code, breadcrumb::ExitHow& how, std::uint32_t& value);
+// "SIGSEGV" for 11 and so on, nullptr for a number with no name here. LINUX numbering
+// (x86-64 and arm64): not <csignal>'s, which on Windows has SIGABRT as 22.
+const char* sentinelSignalName(int signal);
+// A signal that means the program itself faulted (ILL, TRAP, ABRT, BUS, FPE, SEGV), as
+// opposed to one somebody sent it (TERM, HUP, INT, QUIT, KILL, PIPE...).
+bool sentinelIsFaultSignal(int signal);
 
 // ---------------------------------------------------------------------------
 // The decision, a pure function of what was observed.
 // ---------------------------------------------------------------------------
 struct SentinelFacts {
-    bool exitKnown = false;          // false on Linux: only "it has gone" is known
+    bool exitKnown = false;          // false when no source could say how it ended
     unsigned long exitCode = 0;
+    bool exitRecordTried = false;    // Linux: the process's own record was read and was empty
     breadcrumb::Snapshot crumb;      // .valid false when the block could not be read
     std::uint64_t nowMs = 0;         // breadcrumb::nowMs() as the watcher woke
     bool osSessionEnding = false;    // the operating system says the session is closing
@@ -274,6 +308,7 @@ struct SentinelEnd {
     unsigned long appPid = 0;
     bool exitKnown = false;
     unsigned long exitCode = 0;
+    bool exitRecordTried = false;  // see SentinelFacts
     bool osSessionEnding = false;
     bool appStartedKnown = false;
     std::chrono::system_clock::time_point appStarted{};  // when the application began
@@ -294,6 +329,12 @@ struct SentinelEnd {
     // what the watcher always uses. Only a test says otherwise, to keep its own run short.
     std::chrono::milliseconds osRecordBudget{-1};
 };
+
+// The Linux watcher's one source of an exit status (0.99.78): fills `exitKnown`,
+// `exitCode` (tagged, see above) and `exitRecordTried` of `end` from the exit record in
+// `end.crumb`, which the application wrote as it ended. An empty or unreadable record
+// leaves `exitKnown` false and `exitRecordTried` true.
+void sentinelTakeExitRecord(SentinelEnd& end);
 
 struct SentinelOutcome {
     SentinelVerdict verdict;

@@ -107,6 +107,7 @@
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
 #include "gui/win_frame.hpp"
+#include "gui/window_platform.hpp"
 // Where a slow frame spent its time (0.99.64): the scope guards below.
 #include "core/frame_timing.hpp"
 #include "source/iq_file_source.hpp"
@@ -561,6 +562,24 @@ std::atomic<unsigned> g_glfwDisplayErrors{0};
 void glfwErrorCallback(int code, const char* description) {
     std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
                  description ? description : "(no description)");
+    // THE SAME TEXT IN THE DIAGNOSTICS LOG (0.99.78), flushed by diagLogf before it returns.
+    // Field report A0E0967441A8E6B4 (0.99.75, Linux, an AppImage): the process ended while the
+    // window was being created and the log had nothing from GLFW, because stderr is all this
+    // callback ever wrote to and an AppImage keeps none. The first lines are the ones that say
+    // why; a driver that errors on every call must not fill the log, so the rest is counted
+    // and said once. The one name GLFW puts in a message - the display it could not open - is
+    // taken out (gui/window_platform.hpp).
+    {
+        static std::atomic<unsigned> logged{0};
+        constexpr unsigned kLoggedErrors = 50;
+        const unsigned n = logged.fetch_add(1u, std::memory_order_relaxed);
+        if (n < kLoggedErrors) {
+            cascade::core::diagLogf("%s",
+                                    cascade::gui::windowplatform::glfwErrorLine(code, description).c_str());
+        } else if (n == kLoggedErrors) {
+            cascade::core::diagLogf("window: further GLFW errors are not logged (%u so far)", kLoggedErrors);
+        }
+    }
     // Matched on the MESSAGE as well as the code: GLFW_PLATFORM_ERROR covers
     // most of what the Win32 backend can refuse, and only the display-settings
     // one says the desktop is being reconfigured. Anything else keeps the
@@ -1411,10 +1430,41 @@ int AppWindow::run(int frames) {
     // stages this function really has, set at the line that begins each of them.
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::CreatingWindow);
     glfwSetErrorCallback(&glfwErrorCallback);
+    // THE WINDOW SYSTEM, IN THE LOG BEFORE GLFW IS ASKED FOR ANYTHING (0.99.78). A Linux start-up
+    // death at this point (field report A0E0967441A8E6B4, 0.99.75, an AppImage on Ubuntu 24.04)
+    // could not say which window system GLFW had chosen, whether DISPLAY or WAYLAND_DISPLAY was
+    // there at all, or what GLFW had complained of. These lines are flushed one by one, so the
+    // last one on disk is the last step reached. Presence only - never the value of DISPLAY.
+    //
+    // FOXSDR_WINDOW_PLATFORM=x11|wayland|any is applied here, before glfwInit: the workaround
+    // for a machine where GLFW's own choice (Wayland first when the session says wayland) is the
+    // one that fails. Anything else is logged and ignored.
+    {
+        namespace wp = cascade::gui::windowplatform;
+        std::vector<std::string> supported;
+        for (const int id : {wp::kWin32, wp::kCocoa, wp::kWayland, wp::kX11}) {
+            if (glfwPlatformSupported(id) == GLFW_TRUE) { supported.emplace_back(wp::platformName(id)); }
+        }
+        cascade::core::diagLogf(
+            "%s", wp::environmentLine(glfwGetVersionString(), supported, std::getenv("DISPLAY"),
+                                      std::getenv("WAYLAND_DISPLAY"), std::getenv("XDG_SESSION_TYPE"))
+                      .c_str());
+        const wp::Request request = wp::parseRequest(std::getenv("FOXSDR_WINDOW_PLATFORM"));
+        const bool buildHasIt = request.platform == wp::kAny || glfwPlatformSupported(request.platform) == GLFW_TRUE;
+        const std::string requestLine = wp::requestLine(request, buildHasIt);
+        if (!requestLine.empty()) { cascade::core::diagLogf("%s", requestLine.c_str()); }
+        if (request.set && request.valid && request.platform != wp::kAny && buildHasIt) {
+            glfwInitHint(GLFW_PLATFORM, request.platform);
+        }
+    }
     if (!glfwInit()) {
         std::fprintf(stderr, "cascade: glfwInit failed\n");
+        cascade::core::diagWarnf(
+            "window: glfwInit failed; the GLFW error line before this, if there is one, says why");
         return 1;
     }
+    cascade::core::diagLogf("window: GLFW initialised; platform chosen: %s",
+                            cascade::gui::windowplatform::platformName(glfwGetPlatform()));
 
     const std::string title =
         std::string(cascade::appName()) + " " + cascade::versionString();
@@ -1432,9 +1482,12 @@ int AppWindow::run(int frames) {
     mainWindow_ = window;
     if (window == nullptr) {
         std::fprintf(stderr, "cascade: glfwCreateWindow failed\n");
+        cascade::core::diagWarnf(
+            "window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why");
         glfwTerminate();
         return 1;
     }
+    cascade::core::diagLogf("window: window created (hidden until its frame is settled)");
     // THE INTERFACE SCALE'S "auto": the monitor this window is about to open
     // on, read BEFORE anything below is sized against it - GLFW already
     // knows a hidden window's target monitor content scale. FOXSDR_UI_SCALE
@@ -1549,6 +1602,15 @@ int AppWindow::run(int frames) {
     applyWindowIcon(window);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);  // vsync: the GUI thread paces itself off the display
+    // WHICH DRIVER ANSWERED, in the log (0.99.78): the context is current, so these strings are
+    // the ones every frame will be drawn with. A death after this line and before the first
+    // frame is the driver's or ImGui's, not the window system's.
+    cascade::core::diagLogf(
+        "%s", cascade::gui::windowplatform::glLine(
+                  reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
+                  reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+                  reinterpret_cast<const char*>(glGetString(GL_VERSION)))
+                  .c_str());
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1686,6 +1748,7 @@ int AppWindow::run(int frames) {
     // and drawCabinetRail draws no keys.
     cascade::gui::frame::install(window);
     glfwShowWindow(window);
+    cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
     // The window is up. Everything from here to the end of the first frame - the
     // receiver, the watchdog, the config save, the first draw - is still start-up
     // to the sentinel; the second heartbeat (HangWatchdog::heartbeat) ends it.

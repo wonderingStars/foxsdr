@@ -276,6 +276,12 @@ foreach(src ${CASCADE_TESTS})
         # key's MANUAL, and the tip that appears after four seconds of rest.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_window_platform_app")
+        # Runs the real cascade.exe (built first) in bounded runs and reads the diagnostics log it
+        # leaves for the `window:` lines (0.99.78): their order before the first frame, the value of
+        # DISPLAY that is not in them, and FOXSDR_WINDOW_PLATFORM ignored when it names no platform.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_plugin_rescan_skip")
         # Copies the two probe modules into a plugins folder of its own and
         # drives the real AppWindow's rescan against it; built first.
@@ -490,6 +496,11 @@ set_tests_properties(test_plugin_pathpick_app PROPERTIES TIMEOUT 300)
 # measure real time, so it is given the generous bound its siblings are rather than the loop's two
 # minutes.
 set_tests_properties(test_display_menu_app PROPERTIES TIMEOUT 600)
+# The window-platform test starts the real application five times (a default run, =bad, =any, the
+# platform Windows does not have, a forced one on Linux), a few seconds each; the Linux runners are
+# half this desktop's speed and open the window slowly under a virtual display, so it is given the
+# generous bound its siblings are rather than the loop's two minutes.
+set_tests_properties(test_window_platform_app PROPERTIES TIMEOUT 600)
 # The audio-buffer test builds the real AppWindow three times (its sink opened and then closed, which
 # is a device open each) and makes a few hundred starved callbacks against it by hand. A few seconds
 # here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is

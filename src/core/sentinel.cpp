@@ -141,7 +141,107 @@ bool sentinelUserPaced(const breadcrumb::Snapshot& b) {
     return b.frameScope == static_cast<std::uint32_t>(FrameScope::UserWait) + 1u;
 }
 
+// ---------------------------------------------------------------------------
+// How a POSIX process ended (0.99.78), in the platform-neutral `code`
+// ---------------------------------------------------------------------------
+unsigned long sentinelPosixExitCode(breadcrumb::ExitHow how, std::uint32_t value) {
+    if (how != breadcrumb::ExitHow::Exited && how != breadcrumb::ExitHow::Signalled) { return 0ul; }
+    return kPosixExitTag | (static_cast<unsigned long>(how) << 8) | (static_cast<unsigned long>(value) & 0xFFul);
+}
+
+bool sentinelPosixExitFromCode(unsigned long code, breadcrumb::ExitHow& how, std::uint32_t& value) {
+    if ((code & 0xFFFF0000ul) != kPosixExitTag) { return false; }
+    const unsigned long h = (code >> 8) & 0xFFul;
+    const unsigned long v = code & 0xFFul;
+    if (h == static_cast<unsigned long>(breadcrumb::ExitHow::Exited)) {
+        how = breadcrumb::ExitHow::Exited;
+    } else if (h == static_cast<unsigned long>(breadcrumb::ExitHow::Signalled) && v >= 1ul && v <= 64ul) {
+        how = breadcrumb::ExitHow::Signalled;
+    } else {
+        return false;
+    }
+    value = static_cast<std::uint32_t>(v);
+    return true;
+}
+
+const char* sentinelSignalName(int signal) {
+    // LINUX numbers (x86-64 and arm64; signal(7)). <csignal>'s own differ on Windows.
+    switch (signal) {
+        case 1: return "SIGHUP";
+        case 2: return "SIGINT";
+        case 3: return "SIGQUIT";
+        case 4: return "SIGILL";
+        case 5: return "SIGTRAP";
+        case 6: return "SIGABRT";
+        case 7: return "SIGBUS";
+        case 8: return "SIGFPE";
+        case 9: return "SIGKILL";
+        case 11: return "SIGSEGV";
+        case 13: return "SIGPIPE";
+        case 15: return "SIGTERM";
+        default: break;
+    }
+    return nullptr;
+}
+
+bool sentinelIsFaultSignal(int signal) {
+    return signal == 4 || signal == 5 || signal == 6 || signal == 7 || signal == 8 || signal == 11;
+}
+
+void sentinelTakeExitRecord(SentinelEnd& end) {
+    const breadcrumb::Snapshot& c = end.crumb;
+    if (c.valid && c.exitHow != breadcrumb::ExitHow::None) {
+        end.exitKnown = true;
+        end.exitCode = sentinelPosixExitCode(c.exitHow, c.exitValue);
+        end.exitRecordTried = false;
+    } else {
+        // Nothing written: SIGKILL (the OOM killer, `kill -9`), _exit() from a place that
+        // does not record, or a page that could not be read. The watcher is not the
+        // process's parent, so the kernel will not say either.
+        end.exitKnown = false;
+        end.exitCode = 0ul;
+        end.exitRecordTried = true;
+    }
+}
+
+namespace {
+
+// The two questions the decision asks of an exit code, answered for a tagged POSIX one
+// and for a Windows one.
+//
+//   zero:  the process left "successfully" - a clean exit if the shutdown had finished,
+//          "exit code 0 before the shutdown had finished" if it had not.
+//   fault: the PROGRAM ended it - it faulted, or it left by itself with a status
+//          (Windows: a crash-like code, or 0 before the shutdown finished). A signal
+//          somebody sent is neither: that is an ending from outside.
+bool endIsZero(unsigned long code) {
+    breadcrumb::ExitHow how = breadcrumb::ExitHow::None;
+    std::uint32_t value = 0;
+    if (sentinelPosixExitFromCode(code, how, value)) {
+        return how == breadcrumb::ExitHow::Exited && value == 0u;
+    }
+    return code == 0ul;
+}
+
+bool endIsFault(unsigned long code) {
+    breadcrumb::ExitHow how = breadcrumb::ExitHow::None;
+    std::uint32_t value = 0;
+    if (sentinelPosixExitFromCode(code, how, value)) {
+        return how == breadcrumb::ExitHow::Exited || sentinelIsFaultSignal(static_cast<int>(value));
+    }
+    return isCrashLikeExitCode(code) || code == 0ul;
+}
+
+}  // namespace
+
 bool isCrashLikeExitCode(unsigned long code) {
+    // A tagged POSIX ending (0.99.78): the program faulted, or left by itself with an
+    // error status. Exit status 0 and a signal somebody sent are not faults.
+    breadcrumb::ExitHow how = breadcrumb::ExitHow::None;
+    std::uint32_t value = 0;
+    if (sentinelPosixExitFromCode(code, how, value)) {
+        return how == breadcrumb::ExitHow::Exited ? value != 0u : sentinelIsFaultSignal(static_cast<int>(value));
+    }
     // STATUS_CONTROL_C_EXIT (0xC000013A, "The application terminated as a result
     // of a CTRL+C") is a request to end, not a fault.
     if (code == 0xC000013Aul) { return false; }
@@ -149,8 +249,26 @@ bool isCrashLikeExitCode(unsigned long code) {
     return nibble == 0x8ul || nibble == 0xCul || nibble == 0xEul;
 }
 
-std::string sentinelExitWords(bool exitKnown, unsigned long code) {
-    if (!exitKnown) { return "exit status not available on this platform"; }
+std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried) {
+    if (!exitKnown) {
+        // Linux (0.99.78): the process's own record was read and held nothing, and the
+        // watcher is not its parent, so those are the two sources there are; the words say so.
+        return exitRecordTried ? "exit status not available on this platform (no exit record; not its parent)"
+                               : "exit status not available on this platform";
+    }
+    {
+        // A tagged POSIX ending (0.99.78), worded from what the process wrote down.
+        breadcrumb::ExitHow how = breadcrumb::ExitHow::None;
+        std::uint32_t value = 0;
+        if (sentinelPosixExitFromCode(code, how, value)) {
+            if (how == breadcrumb::ExitHow::Exited) {
+                if (value == 0u) { return "exit code 0 before the shutdown had finished"; }
+                return "exit code " + std::to_string(value) + " (the process ended itself)";
+            }
+            const char* name = sentinelSignalName(static_cast<int>(value));
+            return "killed by signal " + std::to_string(value) + (name != nullptr ? std::string(" (") + name + ")" : std::string());
+        }
+    }
     // Each row is a value from the Windows SDK's ntstatus.h with its message, or a
     // value a forced kill was MEASURED to leave: `taskkill /F` gives 1, and
     // Stop-Process and .NET's Process.Kill() give -1 (docs/DIAGNOSTICS.md, "The
@@ -206,14 +324,14 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
     // counts as clean, as it always has (docs/DIAGNOSTICS.md, "Where the
     // clean-exit marker is written").
     const bool shutdownDone = b.valid && b.phase >= Phase::ShutdownClosingWindow;
-    if (f.exitKnown ? (f.exitCode == 0 && (shutdownDone || !b.valid)) : shutdownDone) { return v; }
+    if (f.exitKnown ? (endIsZero(f.exitCode) && (shutdownDone || !b.valid)) : shutdownDone) { return v; }
 
     SentinelClass c = SentinelClass::Outside;
     if ((b.valid && (b.flags & breadcrumb::kFlagSessionEnding) != 0) || f.osSessionEnding) {
         c = SentinelClass::Session;
     } else if (b.valid && b.phase < Phase::Running) {
         c = SentinelClass::Startup;
-    } else if (f.exitKnown && (isCrashLikeExitCode(f.exitCode) || f.exitCode == 0)) {
+    } else if (f.exitKnown && endIsFault(f.exitCode)) {
         c = SentinelClass::Crash;
     } else if (b.valid && v.silentMs >= 0 &&
                static_cast<std::uint64_t>(v.silentMs) > sentinelFreezeThresholdMs(b) &&
@@ -235,7 +353,7 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
 
     v.cls = c;
     std::string reason = sentinelClassReason(c);
-    reason += " - " + sentinelExitWords(f.exitKnown, f.exitCode);
+    reason += " - " + sentinelExitWords(f.exitKnown, f.exitCode, f.exitRecordTried);
     reason += std::string("; phase ") + v.phase.words;
     // WHICH PART OF THE FRAME, from the frame timer's closed list of names
     // (core/frame_timing.hpp): the nearest thing to a stack this report can have.
@@ -255,6 +373,10 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
 // The report
 // ---------------------------------------------------------------------------
 bool sentinelWantsOsCrashRecord(const SentinelVerdict& v) {
+    // Windows' own record of a death: a tagged POSIX ending (0.99.78) has no such record.
+    breadcrumb::ExitHow how = breadcrumb::ExitHow::None;
+    std::uint32_t value = 0;
+    if (v.codeKnown && sentinelPosixExitFromCode(v.code, how, value)) { return false; }
     return (v.cls == SentinelClass::Crash || v.cls == SentinelClass::Startup) && v.codeKnown &&
            isCrashLikeExitCode(v.code);
 }
@@ -509,6 +631,7 @@ SentinelOutcome finishSentinelWatch(const SentinelEnd& e) {
     SentinelFacts f;
     f.exitKnown = e.exitKnown;
     f.exitCode = e.exitCode;
+    f.exitRecordTried = e.exitRecordTried;
     f.crumb = e.crumb;
     f.nowMs = nowMs;
     f.osSessionEnding = e.osSessionEnding;

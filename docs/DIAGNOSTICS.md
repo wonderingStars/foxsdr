@@ -3564,6 +3564,7 @@ the table):
 | `1` | `ended by another process (exit code 1, as taskkill /F does)` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager |
 | `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
 | `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
+| `0x5058....` (since 0.99.78, Linux) | `exit code N (the process ended itself)`, `killed by signal N (SIGSEGV)`, ... | not an operating-system value: the application's own record of how it ended, tagged so that no Windows code reads as one - see *Platforms* below |
 | anything else | `unknown exit code` | - |
 
 ### What Windows gives a process when the session ends, and what the sentinel does about it
@@ -4172,22 +4173,64 @@ application's child, started with `fork`+`exec` in its own session (so a Ctrl-C 
 terminal does not end it with the application) with every other descriptor closed. The
 application keeps the write end of a pipe open for its life and the sentinel blocks on
 `read`; end-of-file means the application has gone, by any route including `SIGKILL` (the
-OOM killer, `kill -9`). The breadcrumb is a `memfd` (unnamed), the exit code is unknown, so:
-the report's `code:` is `unknown`, its reason ends `exit status not available on this
-platform`, there is no *crash* class and no *session* class, and the decision uses the
-marker stage, the heartbeat age and the existing-report check - the in-process POSIX
-handler already catches the fatal signals, so what is left for this watcher is `SIGKILL`
-and a window that froze and was then killed. **Not verified: any of it runs on Linux.** What
-was done: `sentinel_host_posix.cpp` passes GCC 16.1 `-fsyntax-only -Wall -Wextra` against
-stand-in declarations of the Linux calls it makes (the real headers are not on the Windows
-machine this was written on), which checks syntax and the types as *declared by those
+OOM killer, `kill -9`). The breadcrumb is a `memfd` (unnamed).
+
+**How the process ended, on Linux (0.99.78).** Until 0.99.77 that was the end of what the
+watcher knew: the report's `code:` was `unknown` and its reason ended `exit status not
+available on this platform`, which is all that field report `A0E0967441A8E6B4` (0.99.75,
+an AppImage on Ubuntu 24.04, ended in the phase "creating the window") could say. What was
+looked up, not assumed: `waitid(2)`/`waitpid(2)` apply to a *child* and answer `ECHILD` for
+any other process (the man page for `waitid`, read 2026-10-13), so the watcher cannot ask;
+a pidfd can give the exit code of a task that is not one's child only from Linux 6.15
+(`PIDFD_INFO_EXIT`, from the kernel's pidfs changes as reported on the LTP list; whether a
+non-parent may read it was **not established**), and the machine in the report ran 6.8, so
+it is not used. What the watcher *can* read is what the application wrote down itself, in
+the one place that survives it - the breadcrumb page, whose last four reserved bytes are now
+the **exit record** (`ExitHow << 16 | number`; `breadcrumb::noteExit`, one relaxed store, so a
+signal handler may call it):
+
+| How it ends | Who writes the record |
+|---|---|
+| `exit()` and a return from `main` | an `on_exit` hook (glibc; another C library registers nothing and the report says no record was found) records the status |
+| a fault signal (SEGV, BUS, ILL, FPE, TRAP, ABRT) | the crash handler (`faultSignalHandler`, and `abort()` after `std::terminate` or a pure call), before it writes its report; a second fault inside the handler, and the handler that cannot run, record the `_exit(0xE2)` they end with |
+| `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGPIPE` | `installExitRecording()` (`exit_record.cpp`): a handler that records the number, restores the default disposition (`SA_RESETHAND`) and raises the signal again, so the process ends exactly as before - only for a signal whose disposition was the default; one that was ignored or handled is left alone |
+| `SIGKILL` (OOM killer, `kill -9`), `_exit()` elsewhere | **nobody can**: the record is empty, and the report says which sources were asked |
+
+The last write wins (an `exit()` after which a destructor faults is a signal). The record is
+carried through the platform-neutral `code` as a tagged value, `0x5058` + `01` (exit) or `02`
+(signal) + the status or signal number (`kPosixExitTag`; `0x50580103` is `exit(3)`,
+`0x5058020B` is signal 11), a tag no Windows exit code carries, so `sentinelExitWords`,
+`isCrashLikeExitCode`, the signature and the previous-session classification (`exit_cause.cpp`)
+need no platform switch. The reason's words:
+
+| Record | The report says | Class (while drawing / before the first frame) |
+|---|---|---|
+| exit status 0 | `exit code 0 before the shutdown had finished` (a clean exit after the shutdown reached its last stage writes nothing) | crash / startup |
+| exit status N | `exit code N (the process ended itself)` | crash / startup |
+| SEGV, BUS, ILL, FPE, TRAP, ABRT | `killed by signal N (SIGSEGV)` and so on | crash / startup |
+| HUP, INT, QUIT, TERM, PIPE (and KILL, when it is somehow recorded) | `killed by signal N (SIGTERM)` | outside, kept here (frozen if it had stopped drawing) / startup |
+| a signal with no name here | `killed by signal 34` | outside |
+| no record | `exit status not available on this platform (no exit record; not its parent)` - the old words, now naming the two sources asked | outside (frozen) / startup |
+
+Signal names are Linux's numbers (x86-64 and arm64), not `<csignal>`'s. A fault signal is
+normally reported by the in-process handler, in which case the sentinel writes nothing
+(one report per death); the record matters when that report could not be written. An
+`exit()` while drawing is a *crash* class and is sent, as Windows' exit code 0 before the
+shutdown finished already was; if that proves noisy (a session closing by an exit status) it
+is one line in `decideSentinel` to keep it on the machine.
+
+**Not verified: any of it runs on Linux.** What was done: `sentinel_host_posix.cpp`,
+`exit_record.cpp` and `crash_handler_posix.cpp` pass GCC 16.1 `-fsyntax-only -Wall -Wextra`
+against stand-in declarations of the Linux calls they make (the real headers are not on the
+Windows machine this was written on), which checks syntax and the types as *declared by those
 stand-ins*, not that the real glibc and kernel behave as assumed; the portable code in
 `sentinel.cpp` is compiled and tested on Windows only (GCC accepts its Windows branch
 too, as a second compiler and standard library), so its three `#else` branches (the
 epoch-second report name, `_exit` in the deadline, the pid-0 freeze-report name) are
 unchecked; and the Linux half of `tests/test_sentinel_proc.cpp` (a `SIGKILL` while drawing,
-a `SIGKILL` before the first frame, a clean exit) is **unrun** - it passed the same
-syntax-only check, lifted out as a function, against the same stand-ins.
+a `SIGKILL` before the first frame, a clean exit, and since 0.99.78 an exit with status 1 at
+the window, an exit with status 3 while drawing and a `SIGTERM`) is **unrun** - it passed the
+same syntax-only check, with `_WIN32` flipped in a copy, against the same stand-ins.
 
 **The Microsoft Store package** (`installer/msix/README.md`) does not forbid or change
 anything here, as far as can be read: it is a full-trust (`mediumIL`) desktop app, the
@@ -4198,6 +4241,56 @@ documentation says nothing either way about a packaged process starting another 
 own executable (the page was read for it and is silent), and no signed package was run here.
 What a Store update does to the package's processes - it ends them, and the sentinel with
 them - could leave a local-only *outside* report; that is the safe direction.
+
+### If FoxSDR ends before its window appears (the `window:` lines, 0.99.78)
+
+Field report `A0E0967441A8E6B4` (0.99.75, Linux, an AppImage): audio opened, plugins scanned,
+and the process ended in the phase "creating the window" - and the log held nothing about the
+window system, because GLFW's error text and the two messages `glfwInit failed` and
+`glfwCreateWindow failed` went to standard error, which an AppImage does not keep. Every step of
+the window's start-up now writes one line to the diagnostics log, beginning `window:`. The log
+flushes each line to the operating system before the call returns (`DiagLog::appendToFileLocked`;
+pinned by `tests/test_window_platform.cpp`), so the last `window:` line on disk is the last step
+reached even if the process dies at once. In order (a real run on this desktop; the Linux ones
+differ only in the words):
+
+```
+window: supports win32; DISPLAY not set; WAYLAND_DISPLAY not set; XDG_SESSION_TYPE unset; GLFW 3.4.0 Win32 WGL Null EGL OSMesa VisualC
+window: FOXSDR_WINDOW_PLATFORM=bad is not x11, wayland or any; ignored        (only when the variable is set)
+window: GLFW initialised; platform chosen: win32
+window: window created (hidden until its frame is settled)
+window: GL vendor NVIDIA Corporation; renderer NVIDIA GeForce RTX 4090/PCIe/SSE2; version 4.6.0 NVIDIA 610.88
+window: window shown; the Dear ImGui backends are up
+```
+
+and, wherever GLFW complains (at most the first fifty, then one line saying the rest are not
+logged), `window: GLFW error 65544: ...`, and `window: glfwInit failed ...` /
+`window: glfwCreateWindow failed ...` when those fail. **Never logged:** the *value* of `DISPLAY`
+or `WAYLAND_DISPLAY` (the line says only set or not set - an SSH-forwarded `DISPLAY` names a
+computer), the name GLFW puts in "X11: Failed to open display <name>" (taken out), or an
+`XDG_SESSION_TYPE` other than `x11`, `wayland`, `tty`, `mir`, `unspecified` (`other`). Lines are
+cut to 170 characters so that the log's 192-byte line never cuts them. The sentinel's
+report carries them in its log tail, so a report of a start-up death shows how far the start-up
+got and why it stopped. The sentinel phase stays `creating the window` for the whole stretch
+(GLFW, the window, the context, Dear ImGui): the phases are an ordered, numbered list the site
+reads, and a finer phase would renumber it, so the finer step is the last `window:` line.
+
+**If FoxSDR ends before its window appears on Linux:** run it with
+`FOXSDR_WINDOW_PLATFORM=x11 ./FoxSDR-...AppImage` (or `wayland`), and send the diagnostics log
+lines beginning `window:` (and the report, if one was written). `FOXSDR_WINDOW_PLATFORM` is
+`x11`, `wayland` or `any` (the default, GLFW's own choice: for a build with both, `XDG_SESSION_TYPE`
+of `wayland` with `WAYLAND_DISPLAY` set, or `x11` with `DISPLAY` set, picks that one, and
+otherwise Wayland is tried first and then X11 - `_glfwSelectPlatform` in
+`third_party/glfw/src/platform.c`, read for this note); it is applied with `glfwInitHint(GLFW_PLATFORM, ...)` before `glfwInit`. A value that names no
+platform, or a platform this build of GLFW was not compiled with, is logged
+(`FOXSDR_WINDOW_PLATFORM=... ignored`) and the start-up goes on with GLFW's own choice. There is
+no fall-back if the platform you force cannot start: that is the point of forcing it. It is an
+environment variable and not a setting because it is needed before there is a window to set it
+in. Tested by `tests/test_window_platform.cpp` (the parser, every line's words and width, the
+presence-only rule, the flush) and `tests/test_window_platform_app.cpp` (the real application's
+lines in order before the first frame, `bad` ignored with the run still starting, `x11`
+refused on Windows, a forced platform on Linux). **Not verified:** that forcing `x11` or
+`wayland` cures the field report - its cause is not known; nothing here ran on Linux.
 
 ### Known limits
 
@@ -4241,7 +4334,12 @@ sentinel killed first, one that cannot start, two instances at once, the Diagnos
 in both directions, the start-up cost); `tests/test_sentinel_app.cpp` (the real `cascade.exe`:
 a clean scripted run, the replaceable file, an ending from outside with the real phase and
 heartbeat, a real `WM_ENDSESSION`, the real Diagnostics switch, stored Diagnostics off,
-Diagnostics switched on mid-session). **Not exercised by any test:** a real log off or
+Diagnostics switched on mid-session). Since 0.99.78 `tests/test_sentinel.cpp` also holds the
+Linux ending (section 14: the exit record in the page and what the reader refuses, the tagged code,
+the words, the decision for a Linux ending, the closed vocabulary's width, and the chain from the
+page to the report), `tests/test_exit_cause.cpp` the previous-session classes it gives,
+`tests/test_window_platform.cpp` and `tests/test_window_platform_app.cpp` the `window:` lines. **Not
+exercised by any test:** a real log off or
 shutdown; a real Task Manager *End task* (the exit code was measured with `taskkill /F`, not
 with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
