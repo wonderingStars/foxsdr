@@ -350,3 +350,18 @@ the real application at fixed frame numbers and misses under several
 software-rendered GUI tests at once - patch 1's tree fails the same way under
 the same mix (2 of 3 runs; this tree 1 of 3), and it passes alone and under
 plain CPU load (5 of 5 each).
+
+A Windows finding on the ported merge sweep, not the product: on this
+machine test_engine_api_merge never reached its summary line, because each
+worker kept its engine in a `thread_local`. MSVC destroys thread-local
+objects inside LdrShutdownThread with the process loader lock held; the
+engine's destructor joins the control thread, whose last act joins the
+transmitter's TX thread, and no thread can finish exiting without that
+lock - so 23 workers queued behind the one that held it (two full dumps,
+the lock's owner waiting in the join in Engine::stopControlThread). Linux
+has no loader lock around TLS destructors, which is why the sweep passed
+there in about 45 s. Each worker now owns its engine on its own stack and
+destroys it before the thread function returns; the product never destroys
+an engine from a thread-local destructor. THE RULE FOR TESTS: never keep
+anything whose destructor joins a thread in a `thread_local` - on Windows
+that deadlocks at thread exit.

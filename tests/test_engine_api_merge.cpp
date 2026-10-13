@@ -67,14 +67,9 @@ private:
     testing::Session admin_;
 };
 
-Engine1& workerEngine() {
-    thread_local Engine1 e;
-    return e;
-}
-
 class Rig {
 public:
-    Rig() : eng_(workerEngine()) {
+    explicit Rig(Engine1& eng) : eng_(eng) {
         for (int i = 0; i < 3; ++i) {
             s_[i] = std::make_unique<testing::Session>(api(), eng_.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
             ids_[i] = sessionId(*s_[i]);
@@ -180,8 +175,8 @@ struct Outcome {
 };
 
 // All of `seq` in one control pass: repeats of a session's safer command merge.
-Outcome runMerged(Start start, const std::vector<Step>& seq) {
-    Rig r;
+Outcome runMerged(Engine1& eng, Start start, const std::vector<Step>& seq) {
+    Rig r(eng);
     Outcome o;
     o.clean = setUp(r, start);
     bool got = false;
@@ -232,8 +227,8 @@ Outcome runMerged(Start start, const std::vector<Step>& seq) {
 
 // The same, one command per pass, each result read before the next is sent:
 // nothing merges.
-Outcome runSeparately(Start start, const std::vector<Step>& seq) {
-    Rig r;
+Outcome runSeparately(Engine1& eng, Start start, const std::vector<Step>& seq) {
+    Rig r(eng);
     Outcome o;
     o.clean = setUp(r, start);
     for (const Step& st : seq) {
@@ -334,10 +329,18 @@ int main() {
     std::vector<std::thread> pool;
     for (unsigned w = 0; w < workers; ++w) {
         pool.emplace_back([&] {
+            // PORT: THE ENGINE IS THE WORKER'S, ON ITS OWN STACK. Never a
+            // thread_local: Windows runs thread_local destructors inside
+            // LdrShutdownThread with the process loader lock held, and
+            // ~Engine1 joins the engine's control thread (which joins the
+            // transmitter's TX thread), neither of which can finish exiting
+            // without that lock - the whole pool deadlocks at worker exit.
+            // Never join a thread from a thread_local destructor.
+            auto engine = std::make_unique<Engine1>();
             for (std::size_t i = next++; i < cases.size(); i = next++) {
                 const Case& k = cases[i];
-                const Outcome m = runMerged(k.start, k.seq);
-                const Outcome u = runSeparately(k.start, k.seq);
+                const Outcome m = runMerged(*engine, k.start, k.seq);
+                const Outcome u = runSeparately(*engine, k.start, k.seq);
                 if (m.merged > 0) ++mergedCases;
                 if (!m.clean || !u.clean) ++unclean;
                 if (m.state != u.state || m.state.empty()) {
@@ -346,6 +349,7 @@ int main() {
                                        "\n    merged:     " + m.state + "\n    one a pass: " + u.state);
                 }
             }
+            engine.reset();  // the engine is gone before the thread function returns
         });
     }
     for (auto& t : pool) t.join();
