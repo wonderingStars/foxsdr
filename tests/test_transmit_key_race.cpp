@@ -259,13 +259,27 @@ int main() {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lastBeat).count();
         const int startsAtRelease = raw->starts.load();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));   // the control side runs on, alone
-        std::printf("D: front end frozen with the PTT held: released %.0f ms after its last heartbeat; radio started "
+        std::printf("D: front end frozen with the PTT held: released %.3f ms after its last heartbeat; radio started "
                     "%d more times in the next 300 ms\n",
                     ms, raw->starts.load() - startsAtRelease);
         CHECK(released);
         // The keep-alive is 1000 ms, judged once a pass (5 ms here) and by the
         // TX thread once a 10 ms block; 150 ms covers both and a scheduler
         // tick of Windows' 15.6 ms several times over.
+        //
+        // The LOWER bound needs no millisecond of slack for truncation. Both
+        // judges - TxKeyRules::tick and the TX thread's front-end check - work
+        // in whole milliseconds, a stamp and a "now" each the FLOOR of
+        // steady_clock (the host's steadyMs() and the Transmitter's nowMs()
+        // are the same expression), and release only when
+        // floor(now) - floor(stamp) > 1000, that is >= 1001 whole ms. Since
+        // floor(stamp) > stamp - 1, that is now - stamp > 1000 ms of the real
+        // clock, and the stamp is taken after lastBeat (the heartbeat is the
+        // first thing frame() does) while ms is read after the release was
+        // seen: ms > 1000 always. A strict ">" over two floors cannot lose the
+        // millisecond a ">=" would (test_transmit_dead_man's case 6 allows
+        // 1 ms; it is not needed here). The value printed above shows the
+        // margin: 40 consecutive runs measured 1004.2 to 1031.9 ms.
         CHECK(ms >= 1000.0 && ms <= 1150.0);
         CHECK(raw->starts.load() == startsAtRelease);
         e.stopControlThread();
