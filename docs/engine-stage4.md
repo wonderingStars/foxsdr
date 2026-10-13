@@ -165,7 +165,7 @@ comments kept). Every difference is marked PORT in the file; they are:
 | SCAN_DEVICES, SELECT_SOURCE | synchronous | on a worker (an open has taken 57 s in the field): OK means started; `listSeq` / DEVICE_OPEN say when it landed |
 | SET_SAMPLE_RATE off the list | OUT_OF_RANGE | OK + CLAMPED with the rate that landed: the radio coerces, as real drivers do |
 | audio stream, settings store, decoders | served | capability bits clear, calls UNSUPPORTED - not served through the table yet |
-| the merge sweep | a fresh engine per case | one engine per worker, reset between cases (`test.resetKey`); 5450 cases by default (all of length <= 3, 1000 random of 4), `FOXSDR_MERGE_FULL=1` runs all 70450 - run once: 0 differ, 584 s |
+| the merge sweep | a fresh engine per case | one engine per worker, reset between cases (`test.resetKey`); 5450 cases by default (4450 exhaustive: 3 starting states, every case of 1-3 commands from sessions A/B/C over LATCH0, LATCH1, RUN0, TX_CLOSE and PTT0, up to renaming; plus 1000 random of 5-8 commands, fixed seed); `FOXSDR_MERGE_FULL=1` runs 70450 (64450 exhaustive of 1-4 commands, plus 6000 random of 5-8) - run once: 0 differ, 584 s; re-run on the tree with the per-worker engine fix: 0 differ, 83 s on 24 threads (the default sweep: 6 s) |
 
 Red first: 72 conformance failures before the host existed; 14 session
 mutants each red.
