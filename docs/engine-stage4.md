@@ -365,3 +365,54 @@ destroys it before the thread function returns; the product never destroys
 an engine from a thread-local destructor. THE RULE FOR TESTS: never keep
 anything whose destructor joins a thread in a `thread_local` - on Windows
 that deadlocks at thread exit.
+
+OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
+F3 is recorded, not fixed; F5 was checked and needs nothing).
+
+F3, the key rules are touched from more than the pass. `TxKeyRules` is
+single-threaded by contract (core/tx_key_rules.hpp, THREADING: one thread,
+the one that runs the control pass; nothing in it locks), and
+`ApiHostImpl::rules_` is reached from `Engine::applyCommand` as well as from
+`txPass`: RUN 0, TX_OPEN and TX_CLOSE call `api_->endKeyFromEngine`, the web
+remote's TX_PTT calls `api_->webRemotePtt`, and
+FOXAPP_OP_WEB_CONTROL_STOPPED calls `api_->webRemoteStopped`. The window calls
+`engine_.applyCommand` and `engine_.applyControlRequest` from its frame
+(`AppWindow::applyWebControls` among them). Today that is safe, because the
+window's frame IS the pumping thread. When this step's end moves the pump to
+the engine's control thread, `txPass` -> `rules_.tick` runs there while the
+GUI thread applies a browser PTT, a RUN 0 or a TX_CLOSE: both mutate
+`keyOwner_`, `holdUntilMs_` and the `marks_` map, and a torn update can leave
+`rules_.keyed()` true with no owner the tick can find, so `txPass` keeps
+driving `setLatched` and `setPttHeld` from it and only the Transmitter's own
+deadlines (`kLatchTimeout`, `kKeyAliveWait`) would end the key, not the 2 s
+hold. THE FIX THE REVIEW PROPOSES, and to make with the move: send the web
+PTT and every engine-ended key through the API queue (or `submitCommand`), so
+`rules_` is only ever touched on the pumping thread. Until then the window must
+remain the one thread that pumps: the only caller of `startControlThread()`
+outside the engine itself is the table's `create()` (an engine the host
+process does not own, which has no window beside it).
+
+F5, the TX thread's front-end stamp is NOT written in two clock bases. The
+stamp is written by `Transmitter::frontEndAlive()` (the key holder's
+heartbeat) with the Transmitter's `nowMs()`, and by a key grant through
+`frontEndAliveAt(lastBeatMs)` with the session's `lastBeatMs`, which the host
+takes from its own `steadyMs()`. The two functions are the same expression:
+
+    // src/engine/fox_engine_api.cpp
+    std::int64_t steadyMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count();
+    }
+    // src/core/transmitter.cpp
+    std::int64_t nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+(`SteadyClock` is `std::chrono::steady_clock`.) One clock has one epoch in a
+process, so the stamps share an origin and the TX thread's
+`now - frontEndAliveMs_ > kKeyAliveWait` compares like with like; a stamp can
+be neither far in the past nor in the future. Nothing to fix. The two
+functions are duplicates, though: if either is ever changed to another clock,
+change both (or give them one definition), because no test can tell them apart
+while they read the same clock.
