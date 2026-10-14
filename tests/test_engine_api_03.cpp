@@ -31,6 +31,10 @@
 //       changes): the sink's words, the output ring and its rate, the decoder
 //       output total (a measurement), who mutes and who plays (the texts move
 //       audioSeq), the GAINS unit token, the recordings' elapsed seconds
+//   U   the usage report's panel names (FOXAPP_OP_NOTE_PANEL, window port
+//       group 3): a LOCAL session names a panel, the engine lists it once and
+//       stops at 16; a REMOTE session and an empty name add nothing. Read back from the engine's own list, with the
+//       passes driven from the test thread (no control thread, no race).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -58,6 +62,8 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.nativeScan = &engine_api_test::fakeNativeScan;
         cascade::engine::Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
     }
+    // The panel names the usage report would list (group U).
+    static std::vector<std::string> panels(cascade::engine::Engine& e) { return e.telemetryPanels_; }
 };
 }  // namespace cascade::gui
 
@@ -805,6 +811,84 @@ void testListsBeforeFirstPublish() {
     }
 }
 
+// U: the usage report's panel names. The engine is driven from THIS thread -
+// submit, then controlPass() until the ticket's result lands - so reading its
+// list afterwards is not a race with a control thread.
+testing::Outcome pumped(cascade::engine::Engine& eng, testing::Session& s, const FoxCommand& c) {
+    testing::Outcome o;
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = api()->submit(s.raw(), &c, 1, &sr);
+    o.submitStatus = n < 0 ? n : sr.status;
+    if (o.submitStatus != FOXAPI_OK) { return o; }
+    for (int pass = 0; pass < 20 && !o.landed; ++pass) {
+        eng.controlPass();
+        FoxCommandResult r[16];
+        for (auto& x : r) { x.structSize = sizeof(x); }
+        const int32_t got = api()->poll_results(s.raw(), r, 16);
+        for (int32_t i = 0; i < got; ++i) {
+            if (r[i].ticket == sr.ticket) {
+                o.landed = true;
+                o.result = r[i];
+            }
+        }
+    }
+    return o;
+}
+
+FoxCommand notePanel(const char* name) { return testing::cmd(FOXAPP_OP_NOTE_PANEL, 0.0, 0, name); }
+
+void testNotePanel() {
+    using Names = std::vector<std::string>;
+    using Access = cascade::gui::AppWindowTestAccess;
+    cascade::engine::Engine eng;
+    eng.configureApi(kHooks);
+    eng.initialise();
+    eng.controlPass();
+    // VIEW is the grant it needs, and all it needs.
+    testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+    CHECK(s.ok());
+    CHECK(Access::panels(eng).empty());
+
+    // radar twice, cat once: listed once each, in the order first said.
+    const testing::Outcome r1 = pumped(eng, s, notePanel("radar"));
+    CHECK(r1.landed);
+    CHECK_EQ(r1.status(), FOXAPI_OK);
+    CHECK_EQ(pumped(eng, s, notePanel("radar")).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(eng, s, notePanel("cat")).status(), FOXAPI_OK);
+    CHECK(Access::panels(eng) == (Names{"radar", "cat"}));
+
+    // A REMOTE session holds VIEW too, and its pages are not this
+    // installation's usage: refused, nothing listed.
+    {
+        testing::Session r(api(), eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+        CHECK(r.ok());
+        CHECK_EQ(pumped(eng, r, notePanel("map")).status(), FOXAPI_DENIED);
+        CHECK(Access::panels(eng) == (Names{"radar", "cat"}));
+    }
+    // (There is no session "without VIEW": open_session grants it to every
+    // one. The grant is pinned the other way: the LOCAL session above holds
+    // VIEW and nothing else, and its names were listed - an op needing
+    // SETTINGS, the default, would have been DENIED to it.)
+    // An empty name names no panel.
+    CHECK_EQ(pumped(eng, s, notePanel("")).status(), FOXAPI_BAD_ARGUMENT);
+    CHECK(Access::panels(eng) == (Names{"radar", "cat"}));
+
+    // The cap: 16 names, then no more - and a name already there stays one.
+    for (int i = 3; i <= 16; ++i) {
+        CHECK_EQ(pumped(eng, s, notePanel(("panel " + std::to_string(i)).c_str())).status(), FOXAPI_OK);
+    }
+    CHECK_EQ(Access::panels(eng).size(), 16u);
+    CHECK_EQ(pumped(eng, s, notePanel("panel 17")).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(eng, s, notePanel("radar")).status(), FOXAPI_OK);
+    const Names full = Access::panels(eng);
+    CHECK_EQ(full.size(), 16u);
+    CHECK(std::find(full.begin(), full.end(), std::string("panel 17")) == full.end());
+    CHECK_EQ(std::count(full.begin(), full.end(), std::string("radar")), 1);
+    std::printf("U: radar x2 and cat x1 listed as {radar, cat}; the 17th name not listed (%zu names)\n",
+                full.size());
+}
+
 }  // namespace
 
 int main() {
@@ -828,5 +912,6 @@ int main() {
     testStatusColumnGains();
     testStatusColumnRecordings();
     testListsBeforeFirstPublish();
+    testNotePanel();
     return check::finish("test_engine_api_03");
 }

@@ -137,6 +137,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_DECODER_STOP_LIST, "APP_DECODER_STOP_LIST", true},
     {FOXAPP_OP_STORE_UPDATE, "APP_STORE_UPDATE", true},
     {FOXAPP_OP_STORE_REMOVE_BLOCKED, "APP_STORE_REMOVE_BLOCKED", true},
+    {FOXAPP_OP_NOTE_PANEL, "APP_NOTE_PANEL", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

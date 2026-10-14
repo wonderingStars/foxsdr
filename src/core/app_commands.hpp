@@ -168,6 +168,18 @@
 // the ONE module whose own notice tick is on (the store's selected row), or
 // empty. FOXAPI_OP_STORE_UPDATE_ALL is the same with no per-module tick.
 #define FOXAPP_OP_STORE_ADD_ALL          0x841Eu /* ival[0]: 0/1 every notice acknowledged; text: the one module id acknowledged by its own tick */
+// A PANEL WAS OPENED (engine stage 4, window port group 3): the anonymous
+// usage report lists which of the window's pages were used this run, and the
+// window used to hand each page's name to the engine from its own frame, every
+// frame the page was open. The page now SAYS it once, as this op: text, the
+// panel's name. The Engine records it once (a name already listed is not
+// listed twice) and stops at 16 names, exactly as the direct call did. An
+// empty name is BAD_ARGUMENT. LOCAL sessions only (every app op is): a remote
+// session's pages are not this installation's usage. Grant VIEW: it reads and
+// changes nothing but that list. Not one of the "safer" commands, so never
+// merged - a repeat is answered by the engine's own de-dupe, and the window
+// sends each name once a run (AppWindow::uiNotePanel).
+#define FOXAPP_OP_NOTE_PANEL             0x841Fu /* text: the panel's name, as the usage report lists it ("radar", "map") */
 // FOXAPP_OP_PATCH_SET_GRAPH's ival[0]: set when the graph is a NEW DOCUMENT
 // (the config's patch, a patch file) rather than an edit of the graph the
 // engine already has. The Engine counts these (Engine::patchGraphEpoch_), so a

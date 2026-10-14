@@ -6122,6 +6122,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
                                           cascade::versionString());
             return res;
+        case FOXAPP_OP_NOTE_PANEL:
+            // Window port group 3: the page names itself ONCE a run (the
+            // window's own once-per-name set), where it used to call
+            // telemetryNotePanel from its frame every frame it was open. The
+            // list is the usage report's `panels`: de-duplicated and capped at
+            // 16 by telemetryNotePanel, so a repeat or a seventeenth name is
+            // an answered no-op, not a refusal. A REMOTE session never gets
+            // here (every app op is refused it, validate): its pages are not
+            // this installation's usage.
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no panel named"); }
+            telemetryNotePanel(text.c_str());
+            return res;
 
         // --- status lines and flags a panel used to clear or consume in place
         // (engine/stage3b-pre 2c, docs/engine-stage3.md OPEN 1) --------------

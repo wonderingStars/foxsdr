@@ -1021,7 +1021,7 @@ private:
             case FOXAPP_OP_STORE_UPDATE: case FOXAPP_OP_STORE_REMOVE_BLOCKED: case FOXAPP_OP_STORE_ADD_ALL:
             case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
                 return FOXAPI_GRANT_ADMIN;
-            case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST:
+            case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST: case FOXAPP_OP_NOTE_PANEL:
                 return FOXAPI_GRANT_VIEW;
             default:
                 if ((op & 0xFF00u) == 0x0A00u) { return FOXAPI_GRANT_TRANSMIT; }

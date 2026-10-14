@@ -529,6 +529,7 @@ struct AppWindowTestAccess {
     static const std::string& catalogueUrl(AppWindow& a) { return a.engine_.pluginCatalogueUrl_; }
     static bool telemetryEnabled(AppWindow& a) { return a.engine_.telemetryEnabled_; }
     static const std::string& telemetryInstallId(AppWindow& a) { return a.engine_.telemetryInstallId_; }
+    static const std::vector<std::string>& telemetryPanels(AppWindow& a) { return a.engine_.telemetryPanels_; }
     static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return a.engine_.soundCard_; }
     static bool storeBusy(AppWindow& a) { return a.engine_.catalogPending_ || a.engine_.installPending_; }
     static bool waitStore(AppWindow& a) {
@@ -2133,6 +2134,24 @@ void otherOps(AppWindow& a) {
         A::drain(a);
         CHECK(!A::telemetryEnabled(a));
         CHECK(A::telemetryInstallId(a).empty());
+    }
+
+    covering(FOXAPP_OP_NOTE_PANEL);
+    {
+        // Window port group 3: was engine_.telemetryNotePanel(name) from the
+        // page's frame, every frame. Applied here as the op: the name is
+        // listed once (a repeat is an answered no-op), an empty name is
+        // BAD_ARGUMENT and lists nothing. (The cap of 16 and the REMOTE
+        // refusal are test_engine_api_03's group U.)
+        const std::vector<std::string> before = A::telemetryPanels(a);
+        CHECK(before.size() < 16u);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_NOTE_PANEL, "stage1-panel-note"))));
+        CHECK(A::telemetryPanels(a).size() == before.size() + 1u);
+        CHECK(A::telemetryPanels(a).back() == "stage1-panel-note");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_NOTE_PANEL, "stage1-panel-note"))));
+        CHECK(A::telemetryPanels(a).size() == before.size() + 1u);
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_NOTE_PANEL, "")), FOXAPI_BAD_ARGUMENT));
+        CHECK(A::telemetryPanels(a).size() == before.size() + 1u);
     }
 
     covering(FOXAPI_OP_GPS);

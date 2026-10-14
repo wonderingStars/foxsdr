@@ -261,6 +261,18 @@ running.
 they are this machine's ports): the engine lists them on its own thread; the
 result arrives as `SERIAL_PORTS` changing.
 
+`FOXAPP_OP_NOTE_PANEL` (0x841F, VIEW, **LOCAL sessions only** — an app op,
+like every `FOXAPP_OP_*`, and a remote session's pages are not this
+installation's usage): `text` is the name of a page the standard window has
+open ("radar", "map"). The engine adds it to the list the anonymous usage
+report sends as `panels` — **once**: a name already listed is a no-op, and the
+list stops at **16** names, so a seventeenth is a no-op too (both answer OK;
+nothing is refused or merged). An empty name is `BAD_ARGUMENT`; a REMOTE
+session is `DENIED` and adds nothing. The window sends each name once a run
+(`AppWindow::uiNotePanel`), where it used to call the engine from the page's
+frame, every frame the page was open. Not a "safer" command (API.md 7.2): it
+is never merged, because a repeat is already free.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7): the RDS snapshot (1), the auto-notch readout
