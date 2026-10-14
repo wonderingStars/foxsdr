@@ -8,11 +8,13 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/plugin_repo.hpp"
 
@@ -57,6 +59,31 @@ std::string stringField(const json& j, const char* key) {
 bool boolField(const json& j, const char* key) {
     const auto it = j.find(key);
     return it != j.end() && it->is_boolean() && it->get<bool>();
+}
+
+// `s` cut to at most `maxBytes` WITHOUT splitting a UTF-8 sequence: backing off over
+// continuation bytes (10xxxxxx) lands on the lead byte of the character the cut would have
+// broken, and that whole character goes - the same rule as user_presets.cpp's cleanLabel.
+// A team message is drawn word-wrapped, and a half letter at the end of a line is garbage.
+std::string clipUtf8(std::string s, std::size_t maxBytes) {
+    if (s.size() <= maxBytes) { return s; }
+    std::size_t cut = maxBytes;
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0u) == 0x80u) { --cut; }
+    s.resize(cut);
+    return s;
+}
+
+// The canned answer's file (FOXSDR_FAKE_UPDATE_MANIFEST), at most a manifest's worth of it.
+// False when it is not there or cannot be opened.
+bool readCannedManifest(std::string& body) {
+    const char* const path = std::getenv("FOXSDR_FAKE_UPDATE_MANIFEST");
+    if (path == nullptr || *path == '\0') { return false; }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { return false; }
+    body.assign(static_cast<std::size_t>(kMaxManifestBytes), '\0');
+    in.read(&body[0], static_cast<std::streamsize>(kMaxManifestBytes));
+    body.resize(static_cast<std::size_t>(in.gcount()));
+    return true;
 }
 
 // 64 lower- or upper-case hex digits and nothing else. Written here rather
@@ -162,6 +189,25 @@ bool wellFormedVersion(const std::string& v) {
     return segment != 0;
 }
 
+bool wellFormedMessageId(const std::string& id) {
+    // A charset is the right test here (unlike a version there is no structure to get
+    // wrong): the id is never a path, only a key into a list, so what matters is that
+    // nothing outside [A-Za-z0-9_-] gets in and that it is short.
+    if (id.empty() || id.size() > kMaxTeamMessageIdBytes) { return false; }
+    for (const char ch : id) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '_' || c == '-';
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+bool updateManifestFakeSet() {
+    const char* const v = std::getenv("FOXSDR_FAKE_UPDATE_MANIFEST");
+    return v != nullptr && *v != '\0';
+}
+
 int compareVersions(const std::string& a, const std::string& b) {
     std::string aPre, bPre;
     const std::vector<int> an = numericParts(a, aPre);
@@ -244,6 +290,38 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
         }
     }
 
+    // MESSAGES FROM THE TEAM (0.99.79), present whether or not `newer`: that is what they
+    // are for. Each is kept or dropped ON ITS OWN, the policy malformed notes already
+    // follow, so one broken entry costs only itself and never the manifest or the messages
+    // beside it. What is kept is bounded - at most kMaxTeamMessages, each with at most
+    // kMaxTeamMessageLines lines clipped to kMaxTeamMessageLineBytes - because the answer is
+    // data from a service over the network and the window draws all of it. A message with
+    // an id that fails wellFormedMessageId is dropped, because that id is written into the
+    // settings file; one with no line of text is dropped, because there is nothing to say.
+    // A blank line is skipped rather than drawn as an empty bullet. The first ten USABLE
+    // messages are kept, so a broken entry does not take a place.
+    if (j.contains("messages") && j["messages"].is_array()) {
+        for (const json& m : j["messages"]) {
+            if (out.messages.size() >= kMaxTeamMessages) { break; }
+            if (!m.is_object()) { continue; }
+            TeamMessage msg;
+            msg.id = stringField(m, "id");
+            if (!wellFormedMessageId(msg.id)) { continue; }
+            msg.date = clipUtf8(stringField(m, "date"), kMaxTeamMessageDateBytes);
+            msg.important = boolField(m, "important");
+            if (m.contains("lines") && m["lines"].is_array()) {
+                for (const json& line : m["lines"]) {
+                    if (msg.lines.size() >= kMaxTeamMessageLines) { break; }
+                    if (!line.is_string()) { continue; }
+                    std::string text =
+                        clipUtf8(line.get<std::string>(), kMaxTeamMessageLineBytes);
+                    if (!text.empty()) { msg.lines.push_back(std::move(text)); }
+                }
+            }
+            if (!msg.lines.empty()) { out.messages.push_back(std::move(msg)); }
+        }
+    }
+
     // Also recomputed, for the same reason.
     out.critical = false;
     if (out.newer) {
@@ -270,6 +348,24 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
                     const std::string& channel, UpdateInfo& out, std::string& error) {
     out = UpdateInfo{};
     error.clear();
+    // THE TEST SEAM (updater.hpp, FOXSDR_FAKE_UPDATE_MANIFEST): the answer is a file, no URL
+    // is built and fetchText is not called. The log line says so and carries neither the path
+    // nor anything the file said. Counted as a failed check, like the real one, when it fails.
+    if (updateManifestFakeSet()) {
+        diagLogf("update: FOXSDR_FAKE_UPDATE_MANIFEST set - canned answer, foxsdr.com was not "
+                 "asked");
+        std::string canned;
+        if (!readCannedManifest(canned)) {
+            error = "the canned update manifest could not be read";
+            health::noteUpdateCheckFailed();
+            return false;
+        }
+        if (!parseUpdateManifest(canned, currentVersion, out, error)) {
+            health::noteUpdateCheckFailed();
+            return false;
+        }
+        return true;
+    }
     if (baseUrl.empty()) {
         error = "no update endpoint configured";
         return false;

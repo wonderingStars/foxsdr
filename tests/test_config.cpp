@@ -319,6 +319,10 @@ AppConfig junkConfig() {
     // nothing about key bindings has rebound none, so every action keeps its
     // shipped chord. A leftover here would move a key the user never touched.
     c.keyBindings = {"mute=Ctrl+Junk"};
+    // And a message marked Seen that must not survive either (0.99.79): a config that says
+    // nothing about team messages has seen none, and a leftover here would hide a message
+    // from someone who never pressed Seen on it.
+    c.messagesSeen = {"junkmsg"};
     // P11 web server: every field away from its default, and the two that
     // matter set to the DANGEROUS value — web access on, bound to every
     // interface — so any load path that forgets to assign them is caught by a
@@ -448,6 +452,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.closedWindows == b.closedWindows);
     CHECK(a.pluginMuteOverride == b.pluginMuteOverride);
     CHECK(a.keyBindings == b.keyBindings);
+    CHECK(a.messagesSeen == b.messagesSeen);
     CHECK(a.webEnabled == b.webEnabled);
     CHECK(a.webBindAddress == b.webBindAddress);
     CHECK(a.webPort == b.webPort);
@@ -1016,6 +1021,9 @@ int main() {
         // And the rebound keys, a fifth list of strings kept beside four lists
         // of names: a save that crossed any two of the five would show here.
         in.keyBindings = {"mute=Ctrl+Shift+M", "record=None"};
+        // And the team messages marked Seen (0.99.79), ids of their own, so a save that
+        // crossed this list with any of the six above would show here.
+        in.messagesSeen = {"k3f9x2ab", "q7w1z0cd"};
         // P11: values distinguishable from both the defaults and junkConfig().
         in.webEnabled = true;
         in.webBindAddress = "192.168.1.20";
@@ -2363,6 +2371,10 @@ int main() {
                 {"displayOpen", [](AppConfig& c) { c.displayOpen = true; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+                // A team message marked Seen (0.99.79): a press on the card's Seen key.
+                // The press asks for a save of its own, but the prune that follows a
+                // check does not, and the periodic writer is what catches that one.
+                {"messagesSeen", [](AppConfig& c) { c.messagesSeen = {"k3f9x2ab"}; }},
                 // Look for network USRPs (2026-09-25): a Source-section tick
                 // that calls no save of its own.
                 {"lookForNetworkUsrps", [](AppConfig& c) { c.lookForNetworkUsrps = true; }},
@@ -4429,6 +4441,72 @@ int main() {
         CHECK(back.pluginMuteOverride == Names({"sstv-decoder-1.0.0-abi3-win-x64.dll"}));
         CHECK(back.pluginsStopped == Names({"ais-decoder-1.0.1-abi3-win-x64.dll"}));
         CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
+    }
+
+    // --- Team messages marked Seen (0.99.79) ----------------------------------
+    //
+    // "They click Seen and it doesn't show up again" is this list surviving a restart. A
+    // list that did not come back would show the same message at every launch; a list that
+    // came back with something nobody pressed would hide a message from a person who never
+    // saw it; one that grew without bound would be a settings file that a service's ids
+    // could fill. So: absent means none, the usable entries survive, and the cap keeps the
+    // NEWEST (the list is oldest first), unlike the grant lists, whose cap keeps the first.
+    {
+        const std::string path = p("messages_seen.json");
+        const AppConfig d;
+        using Names = std::vector<std::string>;
+        CHECK(d.messagesSeen.empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"messagesSeen\":\"k3f9x2ab\"}\n"));  // not an array
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen.empty());
+
+        CHECK(writeText(path, "{\"messagesSeen\":[\"k3f9x2ab\",\"q7w1z0cd\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen == Names({"k3f9x2ab", "q7w1z0cd"}));
+
+        // Empties, repeats and entries that are not strings are noise a hand-edit left; the
+        // first copy of a repeat keeps its place.
+        CHECK(writeText(
+            path, "{\"messagesSeen\":[\"m1\",\"\",\"m1\",7,null,\"m2\",\"m1\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen == Names({"m1", "m2"}));
+
+        // FIFTY-ONE ids keep fifty, and the one that goes is the OLDEST.
+        {
+            std::string big = "{\"messagesSeen\":[";
+            for (std::size_t i = 0; i <= AppConfig::kMaxMessagesSeen; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"id" + std::to_string(i) + "\"";
+            }
+            big += "]}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(AppConfig::kMaxMessagesSeen == 50u);
+            CHECK(out.messagesSeen.size() == AppConfig::kMaxMessagesSeen);
+            if (out.messagesSeen.size() == AppConfig::kMaxMessagesSeen) {
+                CHECK(out.messagesSeen.front() == "id1");
+                CHECK(out.messagesSeen.back() == "id50");
+            }
+        }
+
+        // THE ROUND TRIP, and the list is its own list: it must not turn up in the keys.
+        AppConfig in;
+        in.messagesSeen = {"k3f9x2ab", "q7w1z0cd"};
+        in.keyBindings = {"mute=Ctrl+Shift+M"};
+        const std::string rt = p("messages_seen_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.messagesSeen == Names({"k3f9x2ab", "q7w1z0cd"}));
+        CHECK(back.keyBindings == Names({"mute=Ctrl+Shift+M"}));
     }
 
     // --- keyboard shortcuts ---------------------------------------------------

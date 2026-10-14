@@ -120,7 +120,12 @@
 //     build does not know, a missing '=' or a chord it cannot read are each
 //     dropped there, one line at a time, so one bad line never costs the user
 //     the good ones beside it.
+//   - messagesSeen (0.99.79): a non-array resets to empty (nothing marked Seen,
+//     which is what a fresh install has). Empty and repeated ids are dropped, and
+//     the list is capped at kMaxMessagesSeen KEEPING THE LAST ones - it is oldest
+//     first, so unlike the lists above (whose cap keeps the first) the oldest go.
 //
+
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
 // target leaves either the complete old config or the complete new one on
@@ -1212,6 +1217,21 @@ struct AppConfig {
     // identifier, no cookie kept. It is NOT the usage report (telemetry.hpp)
     // and the two share nothing.
     bool updateCheckEnabled = true;
+
+    // The ids of the team messages (core/updater.hpp, TeamMessage) whose "Seen" key was
+    // pressed, oldest first (0.99.79). "They click Seen and it doesn't show up again" is
+    // this list: a message whose id is in it is not drawn.
+    //
+    // LOCAL ONLY, NEVER SENT: it rides in this file and nowhere else - the update check
+    // still sends the running version and nothing more, so the site cannot tell which
+    // messages anyone has read.
+    //
+    // PRUNED TO WHAT THE LAST SUCCESSFUL CHECK STILL CARRIED (AppWindow::pollUpdateAsync),
+    // so the list cannot grow for ever and a message the owner withdraws and later sends
+    // again is shown again - a withdrawn message is gone, not "read". At most
+    // kMaxMessagesSeen are kept, the newest, because the server shows ten at most.
+    std::vector<std::string> messagesSeen;
+    static constexpr std::size_t kMaxMessagesSeen = 50;
 
     // --- Anonymous usage reporting (see PRIVACY.md) -------------------------
     //

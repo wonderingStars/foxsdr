@@ -20,6 +20,18 @@ version - which is shown to you in the application, so you can decide whether
 an update is worth the interruption rather than being told only that one
 exists.
 
+**The answer may also carry a short message from the FoxSDR team** (since
+0.99.79): a few lines written when something is wrong with the software or the
+service, which the application shows at the top of its menu column whether or
+not there is an update, until you press **Seen**. **Nothing new is sent to
+receive it** - the request above is unchanged, one line with the version
+running. The ids of the messages you have marked Seen are kept in your
+`config.json`, on this computer, so that a message does not come back; they are
+never sent anywhere, and the service cannot tell which messages anyone has
+read. An id for a message the service has stopped sending is forgotten at the
+next check. With the update check switched off nothing is asked and no message
+is shown, and a copy from the Microsoft Store never receives one.
+
 **Nothing is downloaded or installed unless you press the button.** When you
 do, the installer is fetched over https and its SHA-256 is checked against the
 digest the server published *before* the file is given a name anything could
@@ -92,6 +104,9 @@ exactly as many.
   sends **the version you are running and nothing else** — no identifier, no
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
+  The answer may carry a short message from the FoxSDR team (since 0.99.79),
+  shown until you press **Seen**; the ids of the messages you marked Seen stay in
+  `config.json` on this computer, and nothing new is sent to receive one.
   A copy from the Microsoft Store asks the **Microsoft Store** instead, once
   per launch when its box is ticked, and never foxsdr.com; nothing of ours is
   sent (see **The update check** above).

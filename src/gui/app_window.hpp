@@ -850,6 +850,13 @@ private:
     // whatever they opened the panel for.
     void drawUpdatesSection();
     void drawUpdateBanner();
+    // A MESSAGE FROM THE TEAM (0.99.79): a card above the update banner for each message the
+    // update service carries that this copy has not marked Seen - whether or not there is an
+    // update. Not drawn when the Updates tick is off, or for a Microsoft Store copy (which
+    // asks the Store, not foxsdr.com, and so never hears one).
+    void drawTeamMessages();
+    // Has the Seen key been pressed for the message with this id (messagesSeen_).
+    bool teamMessageSeen(const std::string& id) const;
     void startUpdateCheck();
     void startUpdateDownload();
     void pollUpdateAsync();
@@ -5753,6 +5760,11 @@ private:
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;
+    // The ids of the team messages whose Seen key was pressed, oldest first
+    // (AppConfig::messagesSeen, 0.99.79). Local only; pruned to the ids the last successful
+    // check still carried (pollUpdateAsync). "Not now" on the update banner
+    // (updateDismissed_) does not touch it, and Seen does not touch updateDismissed_.
+    std::vector<std::string> messagesSeen_;
     bool updateStarted_ = false;      // one check per launch, no retry storm
     bool updateDismissed_ = false;    // "not now" hides it until next launch
     bool updatePending_ = false;      // a check or a download is in flight

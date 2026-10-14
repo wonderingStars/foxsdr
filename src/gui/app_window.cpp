@@ -897,6 +897,10 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
            a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
            a.updateCheckEnabled == b.updateCheckEnabled &&
+           // The team messages marked Seen (0.99.79): the Seen key asks for a save of its
+           // own, but the prune that follows an update check (pollUpdateAsync) does not -
+           // and a press whose save is lost to a crash must still reach the file from here.
+           a.messagesSeen == b.messagesSeen &&
            // The bookmark spectrum markers and their stacking (0.99.54):
            // both are switched in the Bookmarks section, which calls no
            // save of its own - without them here bookmarkMarkers_ reset to
@@ -1239,6 +1243,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             telemetryStartup(cfg);
             testerUsageStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
+            messagesSeen_ = cfg.messagesSeen;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
             // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
@@ -1955,8 +1960,15 @@ int AppWindow::run(int frames) {
     // seam set still takes the foxsdr.com path (at whatever FOXSDR_UPDATE_URL
     // the test points it at), which is what lets tests/test_store_update_app
     // prove an unpackaged copy never asks the Store.
+    //
+    // AND A SECOND (0.99.79): FOXSDR_FAKE_UPDATE_MANIFEST set names a FILE that is
+    // foxsdr.com's answer (core/updater.hpp), so a --frames run can watch a team message
+    // arrive and be marked Seen. A loopback stub cannot stand in for the site, because the
+    // fetch refuses anything that is not https; a file is read by checkForUpdate itself and
+    // reaches no network at all, so the run stays as hermetic as it was.
     if (frames >= 0 &&
-        cascade::core::storeUpdateFake() != cascade::core::StoreUpdateFake::Off) {
+        (cascade::core::storeUpdateFake() != cascade::core::StoreUpdateFake::Off ||
+         cascade::core::updateManifestFakeSet())) {
         startUpdateCheck();
     }
     if (frames < 0) {
@@ -7834,6 +7846,9 @@ void AppWindow::drawMenuColumn() {
                       ImVec2(colSize.x - kPlatePad * 2.0f, -(footerHeight + kPlatePad)),
                       ImGuiChildFlags_None);
     ImGui::PopStyleColor();
+    // A message from the team goes ABOVE the update banner: it is what the owner chose to say
+    // to everyone right now, and it is shown whether or not there is an update (0.99.79).
+    drawTeamMessages();
     drawUpdateBanner();
 
     // ONE BANK AT A TIME. The five captions the rail always carried are now
@@ -9094,6 +9109,26 @@ void AppWindow::pollUpdateAsync() {
         updatePending_ = false;
         if (checked.ok) {
             update_ = checked.info;
+            // THE SEEN LIST FORGETS WHAT THE SERVICE NO LONGER CARRIES (0.99.79): only ids
+            // the last SUCCESSFUL check still named stay, so the list cannot grow for ever
+            // and a message the owner withdraws and later sends again is shown again - a
+            // withdrawn message is gone, not "read". A failed check leaves the list alone
+            // (below): not hearing from the service is not the service withdrawing
+            // anything. A change is saved at once (a hermetic run has no file and skips
+            // it); configsEqual sees it too, so the periodic writer covers a lost write.
+            std::vector<std::string> kept;
+            for (const std::string& id : messagesSeen_) {
+                for (const cascade::core::TeamMessage& m : update_.messages) {
+                    if (m.id == id) {
+                        kept.push_back(id);
+                        break;
+                    }
+                }
+            }
+            if (kept.size() != messagesSeen_.size()) {
+                messagesSeen_ = std::move(kept);
+                if (!configPath_.empty()) { saveConfigNow(); }
+            }
         } else {
             // A failed check is NOT shown. The user did not ask, and an
             // application that interrupts listening to say it could not reach a
@@ -9240,6 +9275,67 @@ bool AppWindow::launchInstaller(const std::string& path) {
 #endif
 }
 
+bool AppWindow::teamMessageSeen(const std::string& id) const {
+    return std::find(messagesSeen_.begin(), messagesSeen_.end(), id) != messagesSeen_.end();
+}
+
+// A MESSAGE FROM THE TEAM (0.99.79). The owner's request (2026-10-14): "the broadcast system
+// for the software should send the broadcast out even if there isn't an update; it should post
+// to the user, then they click Seen and it doesn't show up again". Until now the website's
+// broadcast rode inside the release notes of an update and was drawn only by the update banner
+// below, which exists only when a newer build does - so a copy on the current version never
+// saw one. The update service now sends them as their own list (core/updater.hpp,
+// TeamMessage), and this draws a card for each one not yet marked Seen.
+//
+// ABOVE THE UPDATE BANNER and independent of it: "Not now" there (updateDismissed_) does not
+// hide a message, and Seen here does not dismiss the banner. Red for the owner's "Important"
+// tick, amber otherwise - the split the banner makes for a critical update.
+//
+// NOT DRAWN when the Updates tick is off (nobody was asked, so there is nothing to show), nor
+// for a Microsoft Store copy, which asks the Store and not foxsdr.com and so never hears one.
+void AppWindow::drawTeamMessages() {
+    if (!updateCheckEnabled_ || cascade::core::runningInPackage()) { return; }
+    int index = 0;
+    for (const cascade::core::TeamMessage& m : update_.messages) {
+        if (teamMessageSeen(m.id)) { continue; }
+        // The id is each card's ImGui identity: two cards both carry a key labelled "Seen",
+        // and without this the second's press would land on the first.
+        ImGui::PushID(m.id.c_str());
+        cascade::gui::census::note("message:card");
+        cascade::gui::census::note("message:card:", index);
+        cascade::gui::census::note("message:id:", m.id);
+        if (m.important) { cascade::gui::census::note("message:important"); }
+
+        ImGui::PushStyleColor(ImGuiCol_Text, m.important ? kErrorRed : cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", tr("Message from the FoxSDR team"));
+        ImGui::PopStyleColor();
+        if (!m.date.empty()) { ImGui::TextDisabled("%s", m.date.c_str()); }
+        for (const std::string& line : m.lines) {
+            ImGui::Bullet();
+            ImGui::TextWrapped("%s", line.c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button(trId("Seen"), ImVec2(-FLT_MIN, 0.0f))) {
+            // REMEMBERED, AND SAVED AT ONCE: "it doesn't show up again" has to survive a quit
+            // or a crash that comes straight after the press. The list is oldest first and
+            // bounded the way the config loads it, dropping the oldest.
+            messagesSeen_.push_back(m.id);
+            while (messagesSeen_.size() > cascade::core::AppConfig::kMaxMessagesSeen) {
+                messagesSeen_.erase(messagesSeen_.begin());
+            }
+            if (!configPath_.empty()) { saveConfigNow(); }
+        }
+        const ImVec2 k0 = ImGui::GetItemRectMin();
+        const ImVec2 k1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("message:seen:", index, k0.x, k0.y, k1.x, k1.y);
+        // The first card's key under a name of its own, for the test that has only one.
+        if (index == 0) { cascade::gui::census::rect("message:seen", k0.x, k0.y, k1.x, k1.y); }
+        ImGui::Separator();
+        ImGui::PopID();
+        ++index;
+    }
+}
+
 void AppWindow::drawUpdateBanner() {
     if (!updateCheckEnabled_ || updateDismissed_) { return; }
     if (cascade::core::runningInPackage()) {
@@ -9248,6 +9344,10 @@ void AppWindow::drawUpdateBanner() {
     }
     if (!update_.newer && updateError_.empty()) { return; }
     if (!update_.newer) { return; }
+    // For the census (0.99.79): the foxsdr.com banner was drawn - the Store's has had
+    // "update:store-banner" since 0.99.53. tests/test_team_message_app pins that a message
+    // and an update are drawn together, and that a message alone draws no update banner.
+    cascade::gui::census::note("update:site-banner");
 
     // Amber for an ordinary update, red for one that fixes a build which could
     // not do its job. The distinction is the server's `critical` flag, and it
@@ -30355,6 +30455,21 @@ void AppWindow::drawUpdatesSection() {
     if (packaged) {
         ImGui::TextDisabled(tr("package: %s"), cascade::core::packageIdentity().fullName.c_str());
     }
+    // HOW MANY MESSAGES FROM THE TEAM ARE WAITING (0.99.79), under the version line: the
+    // cards are at the top of the column, and this says there is something there when the
+    // section is read on its own. Only the UNSEEN ones count, and nothing at all is drawn
+    // when none are - a "0 messages" line would be noise on every launch. Not for a Store
+    // copy, which never hears one.
+    if (!packaged && updateCheckEnabled_) {
+        int unseen = 0;
+        for (const cascade::core::TeamMessage& m : update_.messages) {
+            if (!teamMessageSeen(m.id)) { ++unseen; }
+        }
+        if (unseen > 0) {
+            cascade::gui::census::note("updates:messages");
+            ImGui::TextDisabled(tr("%d message(s) from the FoxSDR team"), unseen);
+        }
+    }
     if (!updateCheckEnabled_) {
         ImGui::TextDisabled("%s", tr("checking is off, so you will not be told about a new version"));
     } else if (updatePending_) {
@@ -32365,6 +32480,8 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     // GUI's copy of the config is written back before the file is saved. It
     // has nothing to do with telemetry and shares no state with it.
     cfg.updateCheckEnabled = updateCheckEnabled_;
+    // ...and so does the list of team messages marked Seen (0.99.79), for the same reason.
+    cfg.messagesSeen = messagesSeen_;
 
     // Same rationale: this is the one place the GUI's copy of the config is
     // written back, so the diagnostics switches ride along here too.

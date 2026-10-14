@@ -1423,6 +1423,20 @@ each says what starts it:
   default and is the **Check for updates at startup** tick in **SYSTEM →
   Updates**; nothing is downloaded or installed unless you press the button.
   It is not the usage report and the two share nothing.
+
+  **A message from the FoxSDR team** (since 0.99.79). The same answer may carry
+  a few lines written when something is wrong with the software or the service,
+  or when no one is there to answer. They are shown as a card, headed
+  **Message from the FoxSDR team**, at the top of the menu column, above the
+  update banner and whether or not there is an update — red when it is marked
+  important, amber otherwise. Press **Seen** and it does not come back; **Not
+  now** on the update banner does not hide it, and **Seen** does not hide the
+  banner. SYSTEM → Updates says how many unseen messages are waiting. The ids
+  of the messages you marked **Seen** are kept in `config.json` on this
+  computer only, and are forgotten once the service stops sending that message
+  (so one that is withdrawn and later sent again is shown again). Nothing is
+  sent to receive a message, none is shown with the tick off, and a copy from
+  the Microsoft Store never receives one: it asks the Store, not foxsdr.com.
 - **The plugin catalogue.** Fetched when you open the Plugin store window
   (the first time in a session, since 0.99.16) and whenever you press
   **CHECK NOW** in it. Nothing is fetched at startup — since 0.79.1 that

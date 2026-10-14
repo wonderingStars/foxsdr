@@ -142,6 +142,10 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
 // and keyBindings holds "actionId=chord" lines. Both are the same shape and
 // want the same treatment, and keeping one rule is worth more than further
 // functions that would only differ in their names.
+//
+// messagesSeen (0.99.79) is deliberately NOT one of its callers: this keeps the FIRST
+// entries when the list is too long, which for a list that grows at the end would forget
+// the message somebody had just marked Seen. See sanitiseMessagesSeen.
 std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in) {
     std::vector<std::string> out;
     for (const std::string& n : in) {
@@ -149,6 +153,25 @@ std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in)
         if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
         out.push_back(n);
         if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
+    }
+    return out;
+}
+
+// The ids of the team messages marked Seen (AppConfig::messagesSeen, 0.99.79): empties and
+// repeats dropped, the first copy of a repeat keeping its place, then at most
+// kMaxMessagesSeen kept - THE LAST ones. The list is oldest first (a press appends), so
+// when a hand-edit or a long run of messages makes it too long it is the oldest that go; a
+// cap that kept the first would forget the message just marked Seen and show it again.
+std::vector<std::string> sanitiseMessagesSeen(const std::vector<std::string>& in) {
+    std::vector<std::string> out;
+    for (const std::string& n : in) {
+        if (n.empty()) { continue; }
+        if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
+        out.push_back(n);
+    }
+    if (out.size() > AppConfig::kMaxMessagesSeen) {
+        out.erase(out.begin(),
+                  out.begin() + static_cast<std::ptrdiff_t>(out.size() - AppConfig::kMaxMessagesSeen));
     }
     return out;
 }
@@ -822,6 +845,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
     getBool(j, "updateCheckEnabled", out.updateCheckEnabled);
+    getStringArray(j, "messagesSeen", out.messagesSeen);
     getBool(j, "telemetryEnabled", out.telemetryEnabled);
     getString(j, "telemetryInstallId", out.telemetryInstallId);
     getUint64(j, "telemetryLaunches", out.telemetryLaunches);
@@ -1174,6 +1198,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // and duplicates dropped, length capped. A window identity is longer than
     // a plugin name but is bounded by the same reasoning.
     out.closedWindows = sanitisePluginNames(out.closedWindows);
+    // The team messages marked Seen (0.99.79): the same empties-and-repeats rule, but its
+    // own function, because its cap keeps the newest.
+    out.messagesSeen = sanitiseMessagesSeen(out.messagesSeen);
     out.pluginsStopped = sanitisePluginNames(out.pluginsStopped);
     out.pluginRun = sanitisePluginRun(out.pluginRun);
     // And the mute overrides, for the third time from the same function. A
@@ -1450,6 +1477,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
     j["updateCheckEnabled"] = cfg.updateCheckEnabled;
+    j["messagesSeen"] = cfg.messagesSeen;
     j["telemetryEnabled"] = cfg.telemetryEnabled;
     j["telemetryInstallId"] = cfg.telemetryInstallId;
     j["telemetryLaunches"] = cfg.telemetryLaunches;
