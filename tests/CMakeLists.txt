@@ -411,6 +411,11 @@ endforeach()
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
 set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+# The team-message test starts the real application fourteen times, 70 frames each.
+# CI run 38564730541: x64 passed in 61.98 s; arm64 hit the inherited 120 s
+# bound at 120.11 s without stdout (Store test: 35.27 s x64, 69.55 s arm64).
+# Give only this test 300 s; unbuffered launch tags identify a child if it hangs.
+set_tests_properties(test_team_message_app PROPERTIES TIMEOUT 300)
 # The deck-knobs test starts the real application dozens of times (as a child of
 # itself, so that a fake radio can sit behind the window; the noise-floor and Airband
 # runs hold a few seconds of real time each): 46 s on this desktop before the Airband

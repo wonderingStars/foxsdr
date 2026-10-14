@@ -202,6 +202,7 @@ Result once(const Run& r) {
         f.close();
         setEnv("FOXSDR_INPUT_SCRIPT", sp.string());
     }
+    std::printf("    launching %s (%d frames)\n", r.tag.c_str(), kFrames);
     const std::string stdoutText =
         run("\"" + exePath() + "\" --frames " + std::to_string(kFrames) + " 2>&1");
     const bool rendered =
@@ -476,6 +477,7 @@ void testTwo() {
 }  // namespace
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("test_team_message_app\n");
     g_dir = fs::temp_directory_path() / ("cascade-team-message-" + std::to_string(pid()));
     std::error_code ec;
