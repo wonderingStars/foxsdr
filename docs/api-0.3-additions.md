@@ -82,6 +82,8 @@ published in the same block as the lists, in the same pass.
 | `fact.biasTee.radioKey` | the radio it would be remembered for | LOCAL |
 | `fact.biasTee.radioName` | the radio's name as the confirmation dialog says it: the driver's own name, or the stand-in's words while the stand-in is in front of the key; `""` with none | |
 | `fact.bandPlan.name` | the name of the band plan LOADED, as the Display section captions it: the plans of its chain joined with `" + "` ("ITU Region 1 + United Kingdom"), or every installed plan joined when none is selected. Not the `ACTIVE` `BAND_PLANS` entry's name, which is one plan's. An interface translates each part where it draws it; `""` with no plan (section 8.4) | |
+| `fact.bookmarks.version` | the bookmark store's version counter, as a decimal: bumped by every add, edit, star, removal and import, and by nothing else. `BOOKMARKS` is copied again when it moves and not when `listSeq` does, since `listSeq` also moves when a decoder prints a line (section 8.5) | |
+| `fact.input.rateHz` | the DSP chain's input rate in Hz, written to the digit it reads back by (`%.17g`): the rate the spectrum's axis, the VFO's reach and a click on the spectrum are measured against. It follows the source's rate (`sampleRateHz`) except after a change of the source's rate that the chain refused (section 8.5) | |
 
 ## 5. Lists (appended to 7.4)
 
@@ -404,6 +406,79 @@ empty value hands the member back to the real source. Everything after the hook
 number of entries were already in the fingerprint.
 
 `FOXAPI_MIN_RECEIVER_STATE` is the whole 0.3 layout, ending at `rdsRadioText`.
+
+### 8.5 The tuning surface as its pages draw it
+
+The top bar (the transport, the master lamps, the volume dial and its two
+meters, the frequency readout), the keyboard and the centre panels (the
+spectrum, the waterfall, the band markers and the VFO overlay) read the
+engine's table only. 0.3 had nearly all of it: the state (`tunedHz`,
+`centreHz`, `vfoOffsetHz`, `bandwidthHz`, `demodMode`, `volume`, `squelchDb`,
+`dbMin`, `dbMax`, `sampleRateHz`, `channelRateHz`, and the flags `RUNNING`,
+`FAULTED`, `MUTED`, `DECODER_ACTIVE`, `RECORDING_AUDIO`, `TX_KEYED`, with
+`audioMutedBy` and the transmitter's `FOXAPI_TX_MONITOR`), the lists
+`BOOKMARKS` and `DECODERS`, `read_scope(FOXAPI_SCOPE_AUDIO)` for the volume
+meter, `read_spectrum` for the trace and the waterfall, and
+`fact.converter.live` / `.name` for the readout's "via ..." line. This adds two
+facts (section 4). Nothing is appended to `FoxReceiverState`, and no op is new:
+every command the surface sends is one it always sent.
+
+- **`fact.bookmarks.version`**: the bookmark store's own version counter
+  (`FreqManager::version`), which the list fingerprint already hashed. The
+  markers on the spectrum come from `BOOKMARKS` (sorted by frequency, so the
+  ones in view are two binary searches; `value[0]` the Hz, `FAVOURITE`, `name`,
+  cut at the list item's 95 bytes), which can hold tens of thousands of
+  entries. `listSeq` moves for far more than the store - every line a decoder
+  prints moves it - so an interface that copies the rows when `listSeq` moves
+  copies them all the time. It copies them when this fact moves, and reads
+  nothing else of the list between.
+- **`fact.input.rateHz`**: the DSP chain's input rate. `sampleRateHz` is the
+  SOURCE's. They are the same number until the source's rate is changed to one
+  the chain refuses (no decimation gives an exact channel, or the rate is out
+  of the range it accepts): the radio then streams at the new rate while the
+  chain, and so the VFO's reach (`vfoOffsetInsideSpan`) and every decoder, stay
+  on the old one, and the display is deliberately drawn against the old one
+  too (`Engine::followInputRate`). An interface that draws the spectrum, keeps
+  the VFO band inside it or turns a click into a frequency uses this and not
+  `sampleRateHz`. It moves `listSeq`, in the same publish as the rate.
+
+**The surface's own rules, over what the table serves.**
+
+- The MUTE lamp is lit when `FOXAPI_RX_MUTED` is set or `audioMutedBy` is not
+  empty (the user's mute, or a plugin's). The volume meter's hard mute is that
+  AND a keyed transmitter that is not monitored (`FOXAPI_RX_TX_KEYED` without
+  `FOXAPI_TX_MONITOR`): the pipeline's own `audioMuted`.
+- The DEC lamp is `FOXAPI_RX_DECODER_ACTIVE`; the waterfall's caption counts the
+  `DECODERS` entries with `FOXAPI_ITEM_FED` and names the first.
+- The spectrum is drawn from ONE `read_spectrum` a frame, into a buffer the
+  interface keeps, at the engine's own bin count (a `cap` that is the bin count
+  of the last frame, so nothing is reduced); `FOXAPI_NO_CHANGE` keeps the frame
+  and adds nothing to the waterfall. The waterfall is the history of this
+  stream (API.md 6.5): one row for each NEW `seq` the interface reads and none
+  for a `NO_CHANGE`, so a row is never drawn twice. `seq` is the ring's own
+  counter, one for each pass that had a frame; an interface that reads once a
+  frame sees the newest of the frames published since, as `getLatestFrame` did.
+  The centre of the axis is the state's `centreHz`, not the frame's, so the axis
+  follows a retune while the receiver is stopped and no frame arrives.
+- A command the interface needs the RESULT of in the same frame (a drag that
+  moves the VFO band and draws it moved) is not served by the table, whose
+  commands land at the engine's next pass: the interface applies the engine's
+  own limits itself for the frame (`vfoOffsetInsideSpan(offset, fact.input.
+  rateHz, bandwidthHz)`, and `bandwidth` into [3 kHz, 0.9 x `channelRateHz`])
+  and sends the same numbers; the next read carries the result.
+- `FOXAPI_OP_SET_FREQUENCY` is refused outside (0, 6 GHz] (`OUT_OF_RANGE`),
+  where the window's typed entry used to hand the driver any figure; the window
+  checks the range itself and says so, and shows any other refusal of its
+  ticket from `poll_results` a pass later.
+
+**What moves `listSeq`, beyond 8.1 to 8.4.** The chain's input rate. The
+store's version (and its size) were already in the fingerprint.
+
+**Test seam.** `ApiHost::publishSpectrumForTest(bins, count, centreHz, spanHz)`
+puts one frame into the ring as `endPass` does (engine-side C++, not the table;
+nothing in the product calls it), so a hermetic engine that runs no pipeline -
+a window test must not open a sound device - can hand an interface a spectrum
+whose every bin is known.
 
 ## 9. Events and ops
 

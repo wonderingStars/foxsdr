@@ -71,6 +71,13 @@ public:
     // The pumping thread hands over a new list block (before the publish
     // whose listSeq says it changed).
     void setLists(std::shared_ptr<const ApiListBlock> lists);
+    // TESTS ONLY - nothing in the product calls it: put one spectrum frame in
+    // the ring the way endPass puts the pipeline's newest there (the next
+    // sequence number, `count` bins of dB, the centre and span the frame
+    // names). A hermetic engine that runs no pipeline (a window test must not
+    // open a sound device) can then hand an interface a spectrum whose every
+    // bin is known. The pumping thread's call.
+    void publishSpectrumForTest(const float* bins, std::size_t count, double centreHz, double spanHz);
 
     // --- THE KEY (core/tx_key_rules.hpp), the pumping thread ---------------------
     // An end the ENGINE makes, whoever asked for it (Engine::applyCommand's

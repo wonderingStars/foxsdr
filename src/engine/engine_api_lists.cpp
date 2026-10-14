@@ -144,6 +144,10 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(vfoBandwidthHz_);
     f.value(freqMgr_.version());
     f.value(freqMgr_.list().size());
+    // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
+    // unless the chain refused a change of it, and then the one the display is
+    // measured against.
+    f.value(pipeline_.inputRateHz());
     f.text(sourceKind_);
     f.text(deviceArgs_);
     for (const auto& d : nativeDevices_) {
@@ -521,6 +525,20 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("biasTee.mayRemember", biasKeyMayRememberNow() ? "1" : "0");
     fact("biasTee.radioKey", biasKeyRadioNow(), true);
     fact("biasTee.radioName", biasKeyRadioName());
+    // THE TUNING SURFACE (API 0.3 8.5). The bookmark store's own version counter -
+    // the one the fingerprint hashes, bumped by every add, edit, star and
+    // removal - so an interface copies its marker rows when the STORE changed,
+    // not whenever listSeq moves (a decoder printing a line moves it too). And
+    // the DSP chain's input rate, to the digit it round-trips by: what the
+    // spectrum's axis, the VFO's reach and the click-to-tune are measured
+    // against; the source's own rate (sampleRateHz) differs from it after a
+    // change of rate the chain refused.
+    fact("bookmarks.version", std::to_string(freqMgr_.version()));
+    {
+        char rateText[40];
+        std::snprintf(rateText, sizeof(rateText), "%.17g", pipeline_.inputRateHz());
+        fact("input.rateHz", rateText);
+    }
     // AN AIRSPY's gain modes and decimation factors.
     if (cascade::source::AirspySource* a = asAirspyDevice()) {
         const int mode = static_cast<int>(a->gainMode());

@@ -685,6 +685,13 @@ public:
         return copyOut(st, out, FOXAPI_MIN_RECEIVER_STATE);
     }
 
+    // TESTS ONLY (ApiHost::publishSpectrumForTest; nothing in the product calls it): one frame
+    // into the ring, as endPass puts the pipeline's newest there, so a hermetic engine that
+    // runs no pipeline can still hand an interface a spectrum whose every bin is known.
+    void publishSpectrumForTest(const float* bins, std::size_t count, double centreHz, double spanHz) {
+        spectrum_.publish(bins, count, centreHz, spanHz, unixMs());
+    }
+
     int32_t readSpectrum(uint64_t since, FoxSpectrumInfo* info, float* bins, uint32_t cap) {
         if (info == nullptr || info->structSize < FOXAPI_MIN_SPECTRUM_INFO || (bins == nullptr && cap != 0)) {
             return FOXAPI_BAD_ARGUMENT;
@@ -2266,6 +2273,9 @@ void ApiHost::engineStopping() { impl_->engineStopping(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }
 void ApiHost::setLists(std::shared_ptr<const ApiListBlock> lists) { impl_->setLists(std::move(lists)); }
 void ApiHost::endPass() { impl_->endPass(); }
+void ApiHost::publishSpectrumForTest(const float* bins, std::size_t count, double centreHz, double spanHz) {
+    impl_->publishSpectrumForTest(bins, count, centreHz, spanHz);
+}
 
 // ---------------------------------------------------------------------------
 // The C table

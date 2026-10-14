@@ -54,6 +54,12 @@
 //       auto-notch's lamp (a mode-group flag) and frequency (a measurement),
 //       R5 the audio watchdog's note as a status line, R7 the pilot lock,
 //       R8 the loaded band plan's name; R6 (MUTE_CAUSES) was not needed.
+//   Q   the tuning surface (window port group 6, API 0.3 section 8.5): Q1
+//       fact.bookmarks.version moves with the bookmark store (an add, a star
+//       that keeps the list's size, a remove) and with nothing else; Q2
+//       fact.input.rateHz is the DSP chain's input rate, not the source's, and
+//       moves listSeq; Q3 the test seam that puts a known spectrum frame in the
+//       ring (ApiHost::publishSpectrumForTest), read back through read_spectrum.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -147,6 +153,11 @@ struct AppWindowTestAccess {
         (void)h->setBiasT(true);
         return h->deviceDead();
     }
+    // Group Q: the DSP chain's input rate, moved behind the source's back - the
+    // state a refused rate change leaves (Engine::followInputRate): the chain on
+    // one rate and the source on another.
+    static bool setChainRate(cascade::engine::Engine& e, double hz) { return e.pipeline_.setInputRateHz(hz); }
+    static double chainRate(cascade::engine::Engine& e) { return e.pipeline_.inputRateHz(); }
 };
 }  // namespace cascade::gui
 
@@ -1894,6 +1905,161 @@ void testBandPlanName() {
     }
 }
 
+// --- Q: the tuning surface (window port group 6, API 0.3 section 8.5) --------------------
+//
+// The toolbar, the frequency readout, the keys and the centre panels (the
+// spectrum, the waterfall and the bookmark markers) read the table. It had all
+// but two things: the bookmark store's version, which tells the window when to
+// copy its markers again (listSeq also moves whenever a decoder prints a line),
+// and the DSP chain's own input rate, which the spectrum's axis, the VFO's
+// reach and the click-to-tune are measured against. Each is driven from the
+// test thread (controlPass), so what is read is not a race with a control thread.
+
+// A fact read as a decimal number: -1 when the engine does not serve it, -2
+// when what it serves is not a whole number.
+long long decimalFact(testing::Session& s, const char* key) {
+    int32_t status = 0;
+    const std::string v = fact(s, key, &status);
+    if (status < 0) { return -1; }
+    char* end = nullptr;
+    const long long n = std::strtoll(v.c_str(), &end, 10);
+    return (!v.empty() && end != nullptr && *end == '\0') ? n : -2;
+}
+
+// Q1: the version moves with the store and with nothing else.
+void testBookmarksVersionFact() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    const long long v0 = decimalFact(s, "fact.bookmarks.version");
+    std::printf("Q1: fact.bookmarks.version is %lld at the start\n", v0);
+    CHECK(v0 >= 0);
+
+    // Passes with nothing to say leave it, and listSeq, where they were.
+    const std::uint64_t list0 = s.state().listSeq;
+    for (int i = 0; i < 5; ++i) { d.eng.controlPass(); }
+    CHECK_EQ(decimalFact(s, "fact.bookmarks.version"), v0);
+    CHECK_EQ(s.state().listSeq, list0);
+
+    // A decoder printing a line moves listSeq - the signal the window reads
+    // its facts on - and NOT the store's version: the markers are not copied
+    // again for it.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=TEST|a line")).status(),
+             FOXAPI_OK);
+    const std::uint64_t list1 = s.state().listSeq;
+    std::printf("Q1: a decoder line: listSeq %llu -> %llu, version %lld\n", static_cast<unsigned long long>(list0),
+                static_cast<unsigned long long>(list1), decimalFact(s, "fact.bookmarks.version"));
+    CHECK(list1 != list0);
+    CHECK_EQ(decimalFact(s, "fact.bookmarks.version"), v0);
+
+    // An add moves it, and the list grows.
+    const int32_t n0 = count(s, FOXAPI_LIST_BOOKMARKS);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.bookmark=Alpha|100300000|2|150000|"))
+                 .status(),
+             FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_BOOKMARKS), n0 + 1);
+    const long long v1 = decimalFact(s, "fact.bookmarks.version");
+    CHECK(v1 > v0);
+    CHECK(s.state().listSeq != list1);
+    std::uint64_t id = 0;
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_BOOKMARKS); ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_BOOKMARKS, static_cast<uint32_t>(i));
+        if (std::string(it.name) == "Alpha") { id = it.id; }
+    }
+    CHECK(id != 0u);
+
+    // A star on it: the list keeps its size and its order, the store changed.
+    const std::uint64_t list2 = s.state().listSeq;
+    FoxCommand star = testing::cmd(FOXAPI_OP_BOOKMARK_FAVOURITE, 0, static_cast<long long>(id));
+    star.ival[1] = 1;
+    CHECK_EQ(pumped(d.eng, s, star).status(), FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_BOOKMARKS), n0 + 1);
+    const long long v2 = decimalFact(s, "fact.bookmarks.version");
+    std::printf("Q1: add: %lld -> %lld; a star (the list still has %d): -> %lld\n", v0, v1, n0 + 1, v2);
+    CHECK(v2 > v1);
+    CHECK(s.state().listSeq != list2);
+
+    // A remove.
+    const std::uint64_t list3 = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_BOOKMARK_REMOVE, 0, static_cast<long long>(id))).status(),
+             FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_BOOKMARKS), n0);
+    CHECK(decimalFact(s, "fact.bookmarks.version") > v2);
+    CHECK(s.state().listSeq != list3);
+}
+
+// Q2: the input rate is the chain's, to the digit, and moving it moves listSeq.
+void testInputRateFact() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    int32_t status = 0;
+    const std::string text0 = fact(s, "fact.input.rateHz", &status);
+    CHECK(status >= 0);
+    const double rate0 = std::strtod(text0.c_str(), nullptr);
+    std::printf("Q2: fact.input.rateHz \"%s\"; the chain's %.17g, the source's %.17g\n", text0.c_str(),
+                Access::chainRate(d.eng), s.state().sampleRateHz);
+    CHECK(rate0 > 0.0);
+    CHECK_EQ(rate0, Access::chainRate(d.eng));          // the digit it round-trips by
+    CHECK_EQ(rate0, s.state().sampleRateHz);            // the chain follows the source at rest
+
+    // The chain on another rate than the source (a refused rate change leaves it so): the fact
+    // is the chain's - the one the display, the VFO's reach and the click-to-tune are measured
+    // against - and sampleRateHz is still the source's.
+    const double other = rate0 == 2.0e6 ? 1.0e6 : 2.0e6;
+    const std::uint64_t list0 = s.state().listSeq;
+    CHECK(Access::setChainRate(d.eng, other));
+    for (int i = 0; i < 3; ++i) { d.eng.controlPass(); }
+    CHECK_EQ(Access::chainRate(d.eng), other);
+    const double rate1 = std::strtod(fact(s, "fact.input.rateHz").c_str(), nullptr);
+    std::printf("Q2: chain moved to %.0f: fact %.17g, sampleRateHz %.17g, listSeq %llu -> %llu\n", other, rate1,
+                s.state().sampleRateHz, static_cast<unsigned long long>(list0),
+                static_cast<unsigned long long>(s.state().listSeq));
+    CHECK_EQ(rate1, other);
+    CHECK_EQ(s.state().sampleRateHz, rate0);
+    CHECK(s.state().listSeq != list0);
+
+    // Stable across passes that change nothing.
+    const std::uint64_t list1 = s.state().listSeq;
+    for (int i = 0; i < 5; ++i) { d.eng.controlPass(); }
+    CHECK_EQ(s.state().listSeq, list1);
+}
+
+// Q3: the test seam: a frame of known bins in the ring, read through read_spectrum.
+void testSpectrumSeam() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    std::vector<float> got(1024, -1.0f);
+    FoxSpectrumInfo info{};
+    info.structSize = sizeof(info);
+    // No pipeline is running: no frame yet.
+    CHECK_EQ(api()->read_spectrum(s.raw(), 0, &info, got.data(), 1024), FOXAPI_NO_CHANGE);
+    std::vector<float> frame(1024);
+    for (int k = 1; k <= 3; ++k) {
+        for (int i = 0; i < 1024; ++i) { frame[static_cast<std::size_t>(i)] = static_cast<float>(k * 1000 + i) * 0.001f; }
+        d.eng.api().publishSpectrumForTest(frame.data(), frame.size(), 100.3e6 + k, 2.4e6);
+    }
+    CHECK_EQ(api()->read_spectrum(s.raw(), 0, &info, got.data(), 1024), FOXAPI_OK);
+    std::printf("Q3: three frames published; the newest read: seq %llu, %u bins, centre %.0f, span %.0f\n",
+                static_cast<unsigned long long>(info.seq), info.copied, info.centreHz, info.spanHz);
+    CHECK_EQ(info.seq, 3ull);
+    CHECK_EQ(info.binCount, 1024u);
+    CHECK_EQ(info.copied, 1024u);
+    CHECK_EQ(info.centreHz, 100.3e6 + 3);
+    CHECK_EQ(info.spanHz, 2.4e6);
+    int wrong = 0;
+    for (int i = 0; i < 1024; ++i) {
+        if (got[static_cast<std::size_t>(i)] != static_cast<float>(3 * 1000 + i) * 0.001f) { ++wrong; }
+    }
+    CHECK_EQ(wrong, 0);
+    // Nothing newer than a cursor at the newest; the one before it reads the newest again.
+    CHECK_EQ(api()->read_spectrum(s.raw(), 3, &info, got.data(), 1024), FOXAPI_NO_CHANGE);
+    CHECK_EQ(api()->read_spectrum(s.raw(), 2, &info, got.data(), 1024), FOXAPI_OK);
+    CHECK_EQ(info.seq, 3ull);
+}
+
 }  // namespace
 
 int main() {
@@ -1932,5 +2098,9 @@ int main() {
     testPilotLock();
     testAudioHealthLine();
     testBandPlanName();
+    // Group Q: the tuning surface (window port group 6).
+    testBookmarksVersionFact();
+    testInputRateFact();
+    testSpectrumSeam();
     return check::finish("test_engine_api_03");
 }
