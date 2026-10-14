@@ -1,5 +1,7 @@
 **FoxSDR 0.99.78: an aircraft at the edge of range no longer blinks off the ADS-B map between its bursts - with ADS-B plugin 1.9.1 or newer its position is carried forward along its last course and speed for up to 180 s after the last fix, drawn with a thin ring and listed with the word "estimated" beside its id, and the plugin itself no longer lists aircraft invented by noise and places cruise-altitude aircraft from one frame once it knows how far the station reaches. On Linux, a start-up death at the window now says how the process ended and which window system it was using, the log carries the window library's own error text and the graphics driver's name, and `FOXSDR_WINDOW_PLATFORM=x11` or `wayland` makes FoxSDR use that window system instead of the window library's own choice.**
 
+Still not fixed, and not a fault in FoxSDR: an aircraft the receiver does not hear cannot be shown. The measurements behind this release (five minutes of recorded sky on a B200 with an unfiltered 1090 MHz antenna) found the decoder hearing 6 of the 23 aircraft an aggregator placed within 100 nautical miles, and the 17 it never heard produced no decodable signal at all; a 1090 MHz filter and amplifier at the antenna is the remedy, not a setting. The Microsoft Store copy stays at 0.99.77 until the next submission is certified.
+
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.78.exe`:**
