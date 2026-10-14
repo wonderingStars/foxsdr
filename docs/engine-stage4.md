@@ -926,6 +926,170 @@ a process, so it is set before the first AppWindow; and a click that sends a com
 QUEUED on the session, so the sweep drops the queue (closes and reopens the session) before the
 next pass applies it.
 
+GROUP 8, the decoders, the presets, the marks, the plugin-mute cluster and the tune grants
+(drawDecodersSection, drawDecoderStatusRows, drawDecoderWindow, drawPluginPresets, drawPresetKeys,
+drawDecoderPresetBars, drawPluginTuneControls, drawPluginMarkers, drawMutePopup, muteBannerSubject,
+drawMuteBanner and muteStateForDisplayName - twelve members in app_window.cpp - with
+drawPluginPresetBar, which calls the lookup, and five helpers the window gained: pluginLists,
+decoderLines, clearDecoderLines, pumpUiEvents and askAboutMutedPlugins): API 0.3 section 8.7,
+FoxReceiverState unchanged at 1400 bytes. The brief's survey counted 68 uses (40 field reads, 28
+calls); the window's own, written before the first edit (build\g8-survey.md), found 66 (the same 40
+reads, 26 calls: 17 commands and 9 queries), the brief having counted two calls the code does not
+make. Every one of the 17 commands was an op the window already sent: the brief's D2 expected a
+FOXAPP_OP_PLUGIN_GRANT and the stale-grant checkbox sends FOXAPI_OP_PLUGIN_GRANT already (the
+settings grant is toggled only from the fitted-modules window, group 9), so no op is added. What
+moved into the table (commit fdcfa91, step A):
+- D1, the plugin-mute cluster: list MUTE_CAUSES (36), one entry for each plugin muting the audio now,
+  in the order audioMutedBy names them (name, the module file name in `detail`, `value[0]` = 1 while
+  the mute is HELD after a tune-away); facts `mute.subject` (the whole sentence, where the state's
+  audioMutedBy is cut at 127 bytes) and `mute.keptRunning`; event FOXAPI_EVENT_MUTE_TUNE_AWAY (11,
+  `value[0]` = how many plugins); item flag MUTES on DECODERS (the plugin's effective "mute audio
+  while running" setting, Engine::pluginMutesFor, the allocation-free form of pluginMutes). THE
+  EVENT IS RAISED BY THE NEXT PASS'S PUBLISH, not at the decision: Engine::updateAudioMute runs in
+  pumpAudioMute AFTER pumpPublish, so what a pass decides the pass after is the first to publish;
+  ApiHost::muteTuneAway arms it and the next endPass broadcasts it, after the lists that show the
+  mute, so a client that is told finds MUTE_CAUSES already naming the plugins and
+  fact.mute.keptRunning already 1 (the mutant that broadcasts at the decision fails the test that
+  reads them the moment the event arrives). mutePopupQueued_ stays in the engine, read by nothing
+  in the table;
+- D2, the grants: item flags TUNE_ALLOWED and SETTINGS_ALLOWED on PLUGINS (from the durable lists
+  the config saves, which pluginUi_ mirrors), PLUGINS `value[0]` = the capability word as declared
+  (CASCADE_CAP_*), fact `plugin.lastDenied` = the module file name (the key a grant is held under)
+  of the last refused request to tune. Two additions the brief did not list, found by the survey:
+  item flag STOPPED on PLUGINS (the runner's status list is empty exactly when no loaded plugin is
+  un-stopped, and only decoders had a stop state in the table), and list STALE_GRANTS (37): the tune
+  grants no LOADED module holds, in the config's order, REFUSED when the host holds a record of that
+  file that did not load. A grant held for a module the host has no record of at all cannot be a
+  flag on a PLUGINS entry, and drawPluginTuneControls exists to show exactly those;
+- D3, DECODER_LINES no longer moves listSeq: publishApiLists returned the fingerprint XOR the line
+  count, so a busy decoder moved listSeq once a line and every cache the window keeps on it read its
+  lists once a line. The ring still takes the lines; the count is `decoderLinesTotal`, a state
+  measurement, and the window's line cache is keyed on that. Three sentences of the draft that said
+  otherwise are corrected (section 4's bookmarks row, 8.4, 8.5), and test_engine_api_03 Y and Q1,
+  which held that a line DOES move listSeq, hold that it does not. The helper aLineAppears of
+  test_rail_reads, test_recorder_bookmarks_scanner and test_tuning_surface, which moved listSeq with
+  `++decoderLinesTotal_` to stand in for "a change the cache must not re-read the rows for", now
+  changes the preset note (a status line, which moves listSeq all the same); their assertions are
+  untouched;
+- from the survey, not in the brief: item flag DEVICE_CENTRE on PRESETS (the "already tuned to" test
+  compares the DEVICE centre for such a preset, and the list had no way to say so) and item flags
+  SPAN, DASHED and SPECTRUM_ONLY on MARKERS (the geometry needs the kind of a mark and its two
+  drawing flags). And a bug found on the way: the decoder lines the track-info provider writes
+  ("Aircraft info", the only place a user sees why it is quiet) had never been counted in
+  decoderLinesTotal_, so the ring - which takes the lines the count says are new - never saw them,
+  and a window that draws the Decoder output from the ring would have lost them. They are counted.
+The pattern held, with these additions to it (commit 24cdc86, step B):
+- THE PLUGIN CACHE, `pluginLists()` (gui/decoder_reads.hpp, PluginRow): PLUGINS merged with its
+  DECODERS, PRESETS and USER_PRESETS entries into one row a plugin, the MARKERS rebuilt as the
+  plugin ABI's CascadeMarker rows so pluginMarkerGeometry is unchanged, MUTE_CAUSES, STALE_GRANTS and
+  the three facts, read again ONLY when listSeq moves (and, since D3, a decoder line does not move
+  it). A plugin is matched to its entries by display name (the host runs one loaded plugin a name,
+  resolveDuplicatePlugins) and its saved presets by userPresetKey(file); the position among a
+  plugin's own saved presets IS the ordinal the saved-preset ops take, a preset's raw index the
+  plugin-preset op's. muteStateForDisplayName answers with a row of this cache, its presets built as
+  rebuildMuteStates built them (the plugin's own first, then the user's at 1000 + ordinal; a
+  bandwidth kept only when 0 < bw < 1e12; the label falling back to the plugin's name). The engine's
+  muteStates_ stays (the audio mute and its tests use it) and the window stops reading it. Held by
+  test A (the same two plugins' presets equal to the engine's own snapshot) and A2 (the decision
+  rules over every combination of a row's states: 8232 of them, against the model they restate).
+  A settled frame allocates nothing (1000 reads of an unchanged state: 0); a refresh of the cache
+  costs four allocations, none of them from get_setting;
+- THE DECODER LINES, `decoderLines()`: the window's one copy of DECODER_LINES, read only when
+  `decoderLinesTotal` has moved, and then only the entries above the highest id it holds, from the
+  newest back to that id, bounded at kDecoderLogMax with the newest kept. Clear empties the copy at
+  once and the ids at or below the highest it held are never taken again, so a line that arrives
+  after is copied and one the ring still holds is not. The Decoder output window, the status rows
+  and the rail's line count read this copy and nothing else reads list 31. 1000 lines in 100
+  frames are 1000 copied in 100 ring reads, the window holds 500, the newest id is 1000;
+- THE EVENT, drained once a frame: the session subscribes to MUTE_TUNE_AWAY, pumpTransmitKey drains
+  the events (pumpUiEvents) and askAboutMutedPlugins captures the names and the module keys from
+  MUTE_CAUSES when one arrives - the dialog is about THOSE plugins however the lists move on - and
+  asks drawMutePopup to open. The dialog is withdrawn when fact.mute.keptRunning reads 0 (the
+  engine clears the latch exactly when it withdraws its own popup: an arrival on a preset, or the
+  named plugins stopped) or the operator answers; Keep it running closes it at once and sends the
+  op. The banner is drawn while the latch reads 1 and names the fact's whole sentence;
+- THE CENSUS RULE, once: gui/module_census gains the overload that counts a module from a row (same
+  rule: loaded and providing, stopped, refused by capability word, unread when the word is empty),
+  so the status rows' census follows the rule the module-list census always had; test A2 holds
+  the overload against that rule written out, over every combination of a row's states.
+
+THE SAME-FRAME SITES (decision 3), five looked at (the survey's list); none needs a copy beyond what
+the window already kept. (1) The tune-away dialog opens in the frame AFTER the pass that decided it
+(above); the window keeps the names and the keys it captured, as the engine's own popup subject did.
+(2) "Mute audio while running": a click toggles the checkbox's local bool at once, the command lands
+at the top of the next frame and is published and read before anything draws, so the next frame
+draws the engine's value. (3) A preset key's LIT look and a STOP/START label follow the state one pass
+behind a click, as every ported control's does. (4) Clear in the decoder window: the engine clears
+its log one pass later and the window empties its copy now. (5) The grant checkbox exists only on a
+stale row, which goes the frame after the toggle. Three commands that were applied at once
+(CLEAR_STATUS in the decoder window, CLEAR_STATUS and MUTE_KEEP_RUNNING in the dialog) now land at
+the engine's next pass; the dialog's CLEAR_STATUS goes away with the event.
+
+Ratchet: 111 fields / 539 reads -> 105 / 499 (the 40 reads of the twelve members; the survey
+predicted it before the first edit and the guard prints it), the budgets exactly the printed counts.
+The six fields that left: decoderLinesTotal_, muteKeptRunning_, mutePopupQueued_, mutePopup_,
+mutedByKeys_ and pluginMarkers_; seven the twelve read stay because unported members read them
+(decoderLog_, muteStates_, pipeline_, pluginHost_, pluginRunner_, pluginTuneAllowed_, pluginUi_).
+The twelve members, drawPluginPresetBar and the five helpers join `kPortedMembers`. Two kReadOnly
+entries lost their last caller and are retired: pipeline_.vfoOffsetHz and
+pluginUi_.lastDeniedPlugin; no kControlMayCall or kLineAllowed entry became unused. The guard goes
+red on a single `engine_.` read put back into drawDecodersSection (mutant G1: "AppWindow::
+drawDecodersSection is PORTED ... reaches the engine directly", and 105 fields / 500 reads against
+the budget).
+
+D3, MEASURED (tests/test_decoders_mute_grants.cpp C, 1000 decoder lines one a pass, the window's
+three caches read after every pass): with the count folded back into the fingerprint (the mutant,
+which is the engine as it was before step A) listSeq goes 1 -> 1001 and the rail, tuning and plugin
+caches each re-read their lists 1000 times; now listSeq stays at 1 and each re-reads 0 times. Ten
+lines a frame for 100 frames: 1 -> 101 and 100 re-reads each before, 0 now. The band plan's ROW COPY
+the brief asked about was 0 in both runs: the rail's row cache (group 3) compares the plan's count,
+id and name before it copies, so a refresh already re-read the plan and device lists and the three
+facts and not the rows. The test asserts 0 and says so; what it holds D3 by is listSeq and the three
+refresh counts, which do move with the bug.
+
+What the operator sees: the tune-away dialog opens one frame later than it did (the old code opened
+it in the frame of the decision); a decoded line in the Decoder output window is cut at the table's
+159 bytes (it showed the whole line); a plugin that is not a decoder and whose every preset fails
+validation no longer gets a row of its own with only a name on it (it had nothing to press).
+Everything else is drawn as before. Drawn by the build before this group and by this one - the
+application's own framebuffer capture in bounded runs, four runs of each build in each of four
+states, 1500x1380, the signal generator at volume 0, FOXSDR_SINGLE_VIEWPORT=1, the two fixture
+modules fitted (build\g8-vis-final.txt is the table, vis8.py and campaign8.py in the session's
+scratch): the Decoders section with one decoder stopped and one fed (13 areas: the header and chip,
+the output key and line count, each plugin's rows, the pointer line, the status column's two cards,
+the marks on the spectrum and the waterfall, the master lamps, the banner's place); both fed with
+STOP ALL offered (7 areas); the Decoder output page open with 40 lines and the text decoder's preset
+bar (9 areas: the page, its header row, the preset bar, the log, the rail's output key and section,
+the two cards); and the tune-away (Group Eight's channel preset pressed, then another plugin's:
+the dialog; then Keep it running: the banner; 7 areas at each of two shots). At tolerance 24, 0
+pixels differ in every area of every state, between the two builds AND between two runs of one
+build (6 control-against-control pairs and 16 control-against-port pairs each). At tolerance 0 the
+most is 8 pixels (the dialog's place at the first mute shot), 107 against 101 in the dialog's place
+at the second (the waterfall behind it, where the dialog was) and 6 in the status column's output
+card; the runs of one build differ by the same amounts. The gesture's outcome was the same in all
+eight runs of the mute scenario (the dialog up at the first shot, down with the banner at the
+second), so no run was set aside.
+
+What could move a measured number: the engine's pass hashes more per plugin (the capability word,
+the settings grant and the mute setting from the cached module keys, the tune grants as one list,
+the last refusal and the mute cluster), all in place and held at 0 allocations by
+tests/test_engine_publish_alloc cases F and F2 (40 fingerprints and 40 passes with unchanged
+lists, with two muting plugins and a held mute, and with two real plugins loaded and a grant, a
+mute override and a stop each moving the fingerprint); the table serves two more lists
+(MUTE_CAUSES, STALE_GRANTS); the window's plugin cache costs one refresh per change of the lists
+(four allocations), and no longer one per decoder line, which is the saving D3 buys; the decoder
+ring is read once a frame in which the total moved, copying only the new lines; the "Aircraft info"
+lines now count, so a reader of decoderLinesTotal sees them (and the status column's decoder-output
+rate, which is built from that count, includes them).
+
+THE TEST-ACCESSOR TRAP did not bite: no existing test drives these members through the engine's
+fields and then reads them back. The tests that drive them (the new one) look first, as drawUi
+does, and let the engine's pass take the session's commands after the draw. Three things a test of
+this group must mind, besides group 7's: pumpTransmitKey drains the session's answers as well as its
+events, so a replay of a command's answer reads through the window's own look and not the session;
+and a sweep for widgets skips the title bar (a spot with y under 26), where the window's collapse
+arrow swallows the click and folds it.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
