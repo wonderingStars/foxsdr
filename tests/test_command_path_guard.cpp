@@ -924,10 +924,12 @@ const char* const kPortedMembers[] = {
     "drawTransmitPage", "drawTransmitSection", "setTransmitPageOpen",
     // the session's own helpers
     "uiSubmit", "uiFact", "refreshUiState", "pumpTransmitKey",
+    // GROUP 2, the STATUS column and the list reads it keeps
+    "drawStatusColumn", "refreshStatusLists",
 };
 
 constexpr int kWindowFieldsReadBudget = 152;
-constexpr int kWindowFieldReadsBudget = 761;
+constexpr int kWindowFieldReadsBudget = 723;
 
 struct Report {
     int violations = 0;

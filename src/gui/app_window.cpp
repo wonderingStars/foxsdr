@@ -3328,6 +3328,11 @@ void AppWindow::drawStatusColumn() {
     const ImVec2 colSize = ImGui::GetWindowSize();
     const ImVec2 colBR(colTL.x + colSize.x, colTL.y + colSize.y);
     if (colSize.x < 40.0f || colSize.y < 60.0f) { return; }
+    // THE COLUMN DRAWS FROM THE WINDOW'S ENGINE API SESSION ONLY (window port,
+    // group 2): the state read once this frame (refreshUiState, after the
+    // publish) and three small things from the lists, re-read when listSeq
+    // moves. A figure lands one engine pass after it changed (decision 2).
+    refreshStatusLists();
     const float bodyTop = cascade::gui::addBenchPlate(dl, colTL, colBR, tr("STATUS"));
 
     ImFont* legendF = cascade::gui::fonts::legend();
@@ -3503,7 +3508,8 @@ void AppWindow::drawStatusColumn() {
     // something other than the band the frequency readout names, and neither
     // may say so without the other. Empty is the ordinary case and changes
     // nothing on either card.
-    const std::string audioFrom = engine_.pluginRunner_.playingPlugin();
+    const char* const audioFrom = uiState_.audioPlayingPlugin;
+    const bool audioFromPlugin = audioFrom[0] != '\0';
 
     // --- AUDIO ---------------------------------------------------------------
     //
@@ -3517,7 +3523,6 @@ void AppWindow::drawStatusColumn() {
     // keeps going silent" reports — so the second line finally prints the
     // real number the artboard always wanted, instead of leaving it invented
     // or absent.
-    const cascade::sink::AudioOut& audioSink = engine_.pipeline_.audio();
     // HELD, NOT LIVE (0.99.4): every figure on this card is read into one
     // snapshot that is refreshed twice a second (gui/readout_hold.hpp) - the
     // ring level moves every callback and a starving sink's count climbs by
@@ -3525,14 +3530,16 @@ void AppWindow::drawStatusColumn() {
     // colour and the wording follow the SAME held figures, so the card never
     // says "no callback has starved yet" beside a non-zero count.
     AudioReadout liveAudio;
-    liveAudio.underruns = static_cast<unsigned long long>(audioSink.underruns());
+    liveAudio.underruns = static_cast<unsigned long long>(uiState_.audioUnderruns);
     {
-        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
-        liveAudio.ringMs = 1000.0 * static_cast<double>(audioSink.ringFrames()) / rateHz;
-        liveAudio.capMs = 1000.0 * static_cast<double>(audioSink.ringCapacityFrames()) / rateHz;
+        // The ring's frames over the finished audio's rate, both from the
+        // state. A state not yet read (no session) has no rate: no figure.
+        const double rateHz = uiState_.audioRateHz;
+        liveAudio.ringMs = rateHz > 0.0 ? 1000.0 * static_cast<double>(uiState_.audioRingFrames) / rateHz : 0.0;
+        liveAudio.capMs = rateHz > 0.0 ? 1000.0 * static_cast<double>(uiState_.audioRingCapacityFrames) / rateHz : 0.0;
     }
-    liveAudio.gaps = static_cast<unsigned long long>(engine_.pluginRunner_.audioGaps());
-    liveAudio.gapFrames = static_cast<unsigned long long>(engine_.pluginRunner_.audioGapFrames());
+    liveAudio.gaps = static_cast<unsigned long long>(uiState_.audioPluginGaps);
+    liveAudio.gapFrames = static_cast<unsigned long long>(uiState_.audioPluginGapFrames);
     const AudioReadout& shownAudio = audioHold_.value(ImGui::GetTime(), liveAudio);
     const unsigned long long under = shownAudio.underruns;
     cascade::core::formatUtf8(v, "%llu", under);
@@ -3546,7 +3553,7 @@ void AppWindow::drawStatusColumn() {
             {l1.c_str(), kFaint},
             {nullptr, kFaint}};
         int n = 2;
-        if (!audioFrom.empty()) {
+        if (audioFromPlugin) {
             // THE PLUGIN PATH'S OWN STARVATION, beside the sink's and never
             // instead of it. A decoder that cannot hand over a full block
             // sounds exactly like a device whose ring ran dry, and the two
@@ -3584,14 +3591,14 @@ void AppWindow::drawStatusColumn() {
     // five-minute mean.
     if (decoderRateWindowS_ < 0.0 || nowS - decoderRateWindowS_ > 2.0 * kRateWindowS) {
         decoderRateWindowS_ = nowS;
-        decoderLinesAtWindow_ = engine_.decoderLinesTotal_;
+        decoderLinesAtWindow_ = uiState_.decoderLinesTotal;
     } else if (nowS - decoderRateWindowS_ >= kRateWindowS) {
         decoderRateSpanS_ = nowS - decoderRateWindowS_;
         decoderLinesPerSec_ = static_cast<float>(
-            static_cast<double>(engine_.decoderLinesTotal_ - decoderLinesAtWindow_) /
+            static_cast<double>(uiState_.decoderLinesTotal - decoderLinesAtWindow_) /
             decoderRateSpanS_);
         decoderRateWindowS_ = nowS;
-        decoderLinesAtWindow_ = engine_.decoderLinesTotal_;
+        decoderLinesAtWindow_ = uiState_.decoderLinesTotal;
     }
     // BEING FED IS TWO CONDITIONS, NOT ONE. PluginRunner::activeCount says its
     // instances exist and are matched to the rate the pipeline is configured
@@ -3599,12 +3606,12 @@ void AppWindow::drawStatusColumn() {
     // hands them nothing, so the run state is checked alongside it everywhere
     // below - the first render of this column read "2 running" and "DECODING"
     // with the pipeline stopped and the picture frozen.
-    const bool rxRunning = engine_.pipeline_.running();
+    const bool rxRunning = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
     // PER MODULE, not per instance - the same population the "of N fitted"
     // denominator below counts. activeCount() counts decoder INSTANCES, and a
     // module that declares both an audio decoder and an I/Q one has two, so
     // the old pair could print "3 running of 2 fitted".
-    const std::size_t matched = engine_.fedDecoderCount();
+    const std::size_t matched = uiState_.decodersMatched;
     const std::size_t feeding = rxRunning ? matched : 0;
     {
         StatusLine lines[1];
@@ -3648,7 +3655,7 @@ void AppWindow::drawStatusColumn() {
     // doing exactly what they were fitted to do were reported as two decoders
     // that had stopped working. loadedDecoderCount() asks the runner's own
     // question instead: does this module supply a decoder table at all.
-    const std::size_t installed = engine_.loadedDecoderCount();
+    const std::size_t installed = uiState_.decodersFitted;
     if (!rxRunning) {
         // READY, NOT RUNNING. The instances are built and matched; the receiver
         // that would feed them is stopped, so nothing is decoding and the card
@@ -3679,10 +3686,11 @@ void AppWindow::drawStatusColumn() {
     // what it saw last frame and the clock starts when that changes. A mute that
     // began before the application did, or while this column was hidden, gets no
     // duration line rather than a fabricated one.
-    const std::string muteBy = engine_.muteSubjectText();
-    if (muteBy != muteSubjectSeen_) {
+    const char* const muteBy = uiState_.audioMutedBy;
+    const bool muteSubject = muteBy[0] != '\0';
+    if (muteSubjectSeen_ != muteBy) {
         muteSubjectSeen_ = muteBy;
-        muteSinceS_ = muteBy.empty() ? -1.0 : nowS;
+        muteSinceS_ = muteSubject ? nowS : -1.0;
     }
     {
         StatusLine lines[3];
@@ -3694,8 +3702,8 @@ void AppWindow::drawStatusColumn() {
         // this" is owed the answer in the state where they ask it.
         const char* value = tr("OPEN");
         ImU32 valueCol = cascade::gui::theme::kPhosphor;
-        if (!muteBy.empty()) {
-            cascade::core::formatUtf8(l0, tr("by %s"), muteBy.c_str());
+        if (muteSubject) {
+            cascade::core::formatUtf8(l0, tr("by %s"), muteBy);
             lines[n++] = {l0.c_str(), kFaint};
             if (muteSinceS_ >= 0.0) {
                 char elapsed[24];
@@ -3705,18 +3713,18 @@ void AppWindow::drawStatusColumn() {
             }
             value = tr("MUTED");
             valueCol = cascade::gui::theme::kAmber;
-        } else if (engine_.audioOpen_.inFlight()) {
+        } else if ((uiState_.audioFlags & FOXAPI_AUDIO_OPENING) != 0u) {
             // Same rule as the Sinks lamp: while a worker is inside the
             // driver's open, nothing about the sink may be asked, so this says
             // the one true thing there is to say.
             lines[n++] = {tr("waiting for the output device"), kFaint};
             value = tr("OPENING");
             valueCol = cascade::gui::theme::kAmber;
-        } else if (!engine_.pipeline_.audio().everOpened()) {
+        } else if ((uiState_.audioFlags & FOXAPI_AUDIO_EVER_OPENED) == 0u) {
             lines[n++] = {tr("no output device was opened"), kFaint};
             value = tr("NO DEVICE");
             valueCol = kMuted;
-        } else if (!engine_.pipeline_.audio().streamAlive()) {
+        } else if ((uiState_.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) == 0u) {
             // The dead-stream case the audio watchdog exists for: everything
             // upstream stays healthy and the speakers go quiet, so it has to be
             // visible from the panel rather than inferred from silence.
@@ -3724,8 +3732,7 @@ void AppWindow::drawStatusColumn() {
             value = tr("STOPPED");
             valueCol = cascade::gui::theme::kAlarm;
         } else {
-            cascade::core::formatUtf8(l0, "%s",
-                          engine_.pipeline_.audio().openedDeviceName().c_str());
+            cascade::core::formatUtf8(l0, "%s", uiState_.sinkName);
             lines[n++] = {l0.c_str(), kFaint, true};
         }
         // WHAT IS COMING OUT, when it is not the receiver. In PHOSPHOR, the ink
@@ -3734,8 +3741,8 @@ void AppWindow::drawStatusColumn() {
         // nothing else. Without this line a decoded DAB programme and a
         // receiver that has wandered onto a different station are the same
         // picture: the frequency readout names a carrier nobody is hearing.
-        if (!audioFrom.empty()) {
-            cascade::core::formatUtf8(l2, tr("playing: %s"), audioFrom.c_str());
+        if (audioFromPlugin) {
+            cascade::core::formatUtf8(l2, tr("playing: %s"), audioFrom);
             lines[n++] = {l2.c_str(), cascade::gui::theme::kPhosphor};
         }
         card(tr("SINK"), valueCol, value, lines, n);
@@ -3749,17 +3756,50 @@ void AppWindow::drawStatusColumn() {
     // stamp the recorder section already takes. ONLY A LIVE RECORDER'S BYTES ARE
     // ADDED - a stopped one keeps its final total by design, and including it
     // would inflate the take that is running with the size of one that ended.
-    const bool iqTaping = engine_.iqRecorder_.recording();
-    const bool audioTaping = engine_.audioRecorder_.recording();
+    //
+    // THE TWO TAKES ARE THE RECORDINGS LIST'S ENTRIES for the I/Q and the audio
+    // recorder (kind 1 and 2, found when listSeq moves - refreshStatusLists),
+    // READ LIVE here: a take's bytes, its seconds (the recorder's own steady
+    // clock, API 0.3 8.2) and its ACTIVE / STALLED / FULL flags are read at
+    // read time, so a growing file moves nothing in the lists. At most two
+    // reads a frame, and none until a take has ever started.
+    struct TakeNow {
+        bool active = false;
+        bool stalled = false;
+        bool full = false;
+        double bytes = 0.0;
+        double seconds = 0.0;
+    };
+    const auto takeNow = [&](int index, double kind) {
+        TakeNow t;
+        if (index < 0 || uiSession_ == nullptr) { return t; }
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        // Filled only when the entry is still there, and the one it was
+        // found as (a list that moved since is read afresh next frame).
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_RECORDINGS, static_cast<uint32_t>(index), &it) <= index ||
+            it.value[0] != kind) {
+            return t;
+        }
+        t.active = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        t.stalled = (it.flags & FOXAPI_ITEM_STALLED) != 0u;
+        t.full = (it.flags & FOXAPI_ITEM_FULL) != 0u;
+        t.bytes = it.value[1];
+        t.seconds = it.value[3];
+        return t;
+    };
+    const TakeNow iqTake = takeNow(statusTakeIq_, 1.0);
+    const TakeNow audioTake = takeNow(statusTakeAudio_, 2.0);
+    const bool iqTaping = iqTake.active;
+    const bool audioTaping = audioTake.active;
     if (iqTaping || audioTaping) {
         const char* what =
             (iqTaping && audioTaping) ? tr("IQ + AUDIO") : (iqTaping ? "IQ" : tr("AUDIO"));
-        const double startS = iqTaping ? engine_.iqRecordStartS_ : engine_.audioRecordStartS_;
         char elapsed[24];
-        statusElapsed(elapsed, sizeof(elapsed), nowS - startS);
+        statusElapsed(elapsed, sizeof(elapsed), iqTaping ? iqTake.seconds : audioTake.seconds);
         double bytes = 0.0;
-        if (iqTaping) { bytes += static_cast<double>(engine_.iqRecorder_.bytesWritten()); }
-        if (audioTaping) { bytes += static_cast<double>(engine_.audioRecorder_.bytesWritten()); }
+        if (iqTaping) { bytes += iqTake.bytes; }
+        if (audioTaping) { bytes += audioTake.bytes; }
         cascade::core::formatUtf8(l0, tr("%s elapsed"), elapsed);
         cascade::core::formatUtf8(l1, tr("%.1f MB written"), bytes / (1024.0 * 1024.0));
         // A DISK THAT STOPPED TAKING THE FILE IS SAID, NOT LEFT TO BE NOTICED.
@@ -3767,8 +3807,7 @@ void AppWindow::drawStatusColumn() {
         // removed, gone read-only) and stops paying for a dead stream; from
         // out here that used to look like a take whose MB counter had frozen,
         // with the card still reading IQ in rust as if all were well.
-        const bool diskFault = (iqTaping && engine_.iqRecorder_.writeFailed()) ||
-                               (audioTaping && engine_.audioRecorder_.writeFailed());
+        const bool diskFault = (iqTaping && iqTake.stalled) || (audioTaping && audioTake.stalled);
         if (diskFault) {
             const StatusLine lines[2] = {{l1.c_str(), kFaint},
                                          {tr("disk refused the file - nothing more is being kept"),
@@ -3778,7 +3817,7 @@ void AppWindow::drawStatusColumn() {
             const StatusLine lines[2] = {{l0.c_str(), kFaint}, {l1.c_str(), kFaint}};
             card(tr("RECORDER"), cascade::gui::theme::kAlarm, what, lines, 2);
         }
-    } else if (engine_.iqRecorder_.sizeLimitReached() || engine_.audioRecorder_.sizeLimitReached()) {
+    } else if (iqTake.full || audioTake.full) {
         // THE TAKE ENDED ITSELF, AND SAYS SO. A WAV's data chunk is a 32-bit
         // byte count, so a recording stops at 4 GiB or stops being a valid
         // file - about four and a half minutes of I/Q at 2 MS/s. The recorder
@@ -3794,7 +3833,7 @@ void AppWindow::drawStatusColumn() {
         // file", and a full file and a refused disk both answer no. Without
         // this order a finished recording would one day be reported as a
         // failing disk.
-        const bool iqFull = engine_.iqRecorder_.sizeLimitReached();
+        const bool iqFull = iqTake.full;
         const StatusLine lines[2] = {
             {iqFull ? tr("I/Q take reached the 4 GB limit for a WAV file")
                     : tr("audio take reached the 4 GB limit for a WAV file"),
@@ -3849,23 +3888,26 @@ void AppWindow::drawStatusColumn() {
     // own readback of what it is delivering, so it is amber: the palette's rule
     // is that amber belongs to a measurement and nothing else.
     {
-        const bool faulted = engine_.pipeline_.faulted();
+        const bool faulted = (uiState_.flags & FOXAPI_RX_FAULTED) != 0u;
+        // A radio (not the built-in generator) is open: the state's flag.
+        const bool deviceOpen = (uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u;
         StatusLine lines[4];
         int n = 0;
         // Translated when it is the built-in generator; a driver's own device
         // name is in no catalogue and passes through tr() unchanged.
-        cascade::core::formatUtf8(l0, "%s", tr(engine_.pipeline_.activeSource().name()));
+        cascade::core::formatUtf8(l0, "%s", tr(uiState_.deviceName));
         lines[n++] = {l0.c_str(), cascade::gui::theme::kCream, true};
-        if (engine_.device_ != nullptr && !engine_.deviceAntenna_.empty()) {
-            cascade::core::formatUtf8(l1, tr("ANTENNA %s"), engine_.deviceAntenna_.c_str());
+        // The antenna in use is the ANTENNAS entry that is ACTIVE (read when
+        // listSeq moved), the gain's stage 0 the first GAINS entry.
+        if (deviceOpen && !statusAntenna_.empty()) {
+            cascade::core::formatUtf8(l1, tr("ANTENNA %s"), statusAntenna_.c_str());
             lines[n++] = {l1.c_str(), cascade::gui::theme::kCream};
         }
         l2.clear();
-        if (engine_.device_ != nullptr) {
-            if (engine_.deviceAgc_) {
+        if (deviceOpen) {
+            if ((uiState_.flags & FOXAPI_RX_DEVICE_AGC) != 0u) {
                 cascade::core::formatUtf8(l2, "%s", tr("GAIN AUTO - AGC ON"));
-            } else if (!engine_.deviceGainNames_.empty() &&
-                       engine_.deviceGainsDb_.size() == engine_.deviceGainNames_.size()) {
+            } else if (uiState_.gainCount > 0u && statusGainHave_) {
                 // The first element by name, and a count of the rest. Summing
                 // them would print a total this application never commanded and
                 // the driver never reported.
@@ -3873,19 +3915,18 @@ void AppWindow::drawStatusColumn() {
                 // LETTERED BY THE DRIVER'S OWN UNIT (gui::formatGain): an
                 // Airspy's "LNA 7" is a register step, and this card said
                 // "LNA 7 dB" until 0.92.0.
-                const std::string gainText = cascade::gui::formatGain(
-                    engine_.deviceGainNames_[0], static_cast<double>(engine_.deviceGainsDb_[0]),
-                    engine_.firstGainUnit());
-                if (engine_.deviceGainNames_.size() == 1) {
+                const std::string gainText =
+                    cascade::gui::formatGain(statusGain0Name_, statusGain0Db_, statusGain0Unit_);
+                if (uiState_.gainCount == 1u) {
                     cascade::core::formatUtf8(l2, "%s", gainText.c_str());
                 } else {
                     cascade::core::formatUtf8(l2, tr("%s +%zu more"), gainText.c_str(),
-                                  engine_.deviceGainNames_.size() - 1);
+                                  static_cast<std::size_t>(uiState_.gainCount) - 1u);
                 }
             }
             if (!l2.empty()) { lines[n++] = {l2.c_str(), cascade::gui::theme::kCream}; }
         }
-        const double rate = engine_.pipeline_.activeSource().sampleRateHz();
+        const double rate = uiState_.sampleRateHz;
         if (std::isfinite(rate) && rate > 0.0) {
             cascade::core::formatUtf8(l3, "%.3f MS/s", rate / 1.0e6);
             lines[n++] = {l3.c_str(), cascade::gui::theme::kAmber};
@@ -15247,6 +15288,46 @@ void AppWindow::refreshUiState() {
     st.structSize = sizeof(st);
     // A read that keeps overlapping a publish answers BUSY: the last good one stands.
     if (engineApi_->read_state(uiSession_, &st) == FOXAPI_OK) { uiState_ = st; }
+}
+
+// THE STATUS COLUMN'S LIST READS, only when listSeq has moved (the members are
+// in app_window.hpp): the first gain stage, the antenna in use, and where the
+// two recorders' takes sit in RECORDINGS. A handful of read_list calls into
+// the stack, and nothing allocated unless a name changed.
+void AppWindow::refreshStatusLists() {
+    if (uiSession_ == nullptr || uiState_.listSeq == statusListsSeq_) { return; }
+    statusListsSeq_ = uiState_.listSeq;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    FoxListItem it{};
+    entry(it);
+    statusGainHave_ = engineApi_->read_list(uiSession_, FOXAPI_LIST_GAINS, 0, &it) > 0;
+    if (statusGainHave_) {
+        statusGain0Name_ = it.name;
+        statusGain0Db_ = it.value[3];
+        statusGain0Unit_ = cascade::gui::gainUnitFromWire(it.detail);
+    }
+    statusAntenna_.clear();
+    const int32_t antennas = engineApi_->read_list(uiSession_, FOXAPI_LIST_ANTENNAS, 0, nullptr);
+    for (int32_t i = 0; i < antennas; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_ANTENNAS, static_cast<uint32_t>(i), &it) < 0) { break; }
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) {
+            statusAntenna_ = it.name;
+            break;
+        }
+    }
+    statusTakeIq_ = -1;
+    statusTakeAudio_ = -1;
+    const int32_t takes = engineApi_->read_list(uiSession_, FOXAPI_LIST_RECORDINGS, 0, nullptr);
+    for (int32_t i = 0; i < takes; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_RECORDINGS, static_cast<uint32_t>(i), &it) < 0) { break; }
+        if (it.value[0] == 1.0 && statusTakeIq_ < 0) { statusTakeIq_ = static_cast<int>(i); }
+        if (it.value[0] == 2.0 && statusTakeAudio_ < 0) { statusTakeAudio_ = static_cast<int>(i); }
+    }
 }
 
 // THE KEY, ONCE A FRAME (see the members in app_window.hpp): this frame's

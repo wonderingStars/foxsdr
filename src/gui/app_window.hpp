@@ -2141,6 +2141,22 @@ private:
     const std::string& uiFact(const char* key);
     std::map<std::string, std::string> uiFacts_;
     std::uint64_t uiFactsListSeq_ = 0;
+    // WHAT THE STATUS COLUMN TAKES FROM THE LISTS (window port, group 2), read
+    // when listSeq moves and kept here, the way uiFacts_ is: the RECEIVER
+    // card's first gain stage (its name, its value, its unit token read back
+    // as a GainUnit), the antenna in use, and where the two recorders' takes
+    // sit in the RECORDINGS list (kind 1 I/Q, 2 audio; -1 none) - whose LIVE
+    // figures the column reads each frame, one read_list apiece. Everything
+    // else on the column is the state, read once a frame.
+    void refreshStatusLists();
+    std::uint64_t statusListsSeq_ = 0;   // listSeq the members below were read at; 0: never
+    bool statusGainHave_ = false;        // the GAINS list has a stage 0
+    std::string statusGain0Name_;
+    double statusGain0Db_ = 0.0;
+    cascade::source::GainUnit statusGain0Unit_ = cascade::source::GainUnit::Decibels;
+    std::string statusAntenna_;          // the ANTENNAS entry that is ACTIVE; "" none
+    int statusTakeIq_ = -1;
+    int statusTakeAudio_ = -1;
     // THE TRANSMIT PAGE IS OPEN - the window's own page, so the window's own
     // flag: restored from the config it hands the engine (applyConfig), moved
     // by its own clicks, each told to the engine
