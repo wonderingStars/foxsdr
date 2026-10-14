@@ -778,6 +778,154 @@ its logic is split into members that can (`dragVfoCentre`, `dragVfoEdge`, `readS
 Still reading the engine directly in the toolbar's neighbourhood, for group 8: `muteBannerSubject`
 (`muteKeptRunning_`, `muteSubjectText`), called from drawToolbar.
 
+GROUP 7, the recorder, the bookmarks and the scanner (drawRecorderSection, drawBookmarksSection,
+rebuildBookmarkView, drawScannerSection and commitScannerDraft - five members in app_window.cpp -
+with the commit flushScannerDraft makes and `readTake`, the one reader of a recorder's take, which
+the status column's RECORDER card now shares): API 0.3 section 8.6, FoxReceiverState 1336 -> 1400
+bytes. These were the last sections that read the recorders, the bookmark store and the scanner
+directly. The brief's survey counted 71 uses for six members (50 field reads, 21 calls, 16
+commands); the window's own, written before the first edit (build\g7-survey.md), found 66 for the
+five (48 reads, 18 calls: the same 16 commands and two queries), drawBookmarkMarkers having gone
+with group 6. What moved into the table:
+- the scanner as its section draws it (S1): `scanSeq`, `scanCurrentHz`, `scanStartHz`,
+  `scanStopHz`, `scanStepHz`, `scannerState` (FOXAPI_SCANNER_IDLE, SCANNING, PAUSED, HOLDING) and
+  the four timings. The seven settings are a group of their own - they move `scanSeq` and `seq` -
+  and the state word and the frequency are live state that moves `seq` alone, as the scanner's
+  flag does (a scan steps at every dwell, and the receiver's tuning moves `tuneSeq` with it). The
+  range is published as STORED, in Hz, the engine's own product of its megahertz and kilohertz
+  fields, so a value that is not exact in megahertz reads back as that product; the timings are
+  whole milliseconds, rounded to the nearest (a half goes up), 0 for a negative (the scanner
+  floors it too) and saturating at 4294967295. Plain numbers: the publish still allocates nothing
+  (tests/test_engine_publish_alloc case E: a scan running, stepping, paused, holding and stopped);
+- the Bookmarks section's note and red line as STATUS_LINES keys `bookmarkNote` (level 1) and
+  `bookmarkError` (level 3), with `fact.status.*`, the fingerprint, the engine's handed-over copy
+  and the guard's kPublishedOnly (S2);
+- one op (S3), FOXAPP_OP_BOOKMARK_EXPORT: the ids of the rows the section shows go by the long-text
+  channel and the ENGINE writes those bookmarks, whole and in the store's order, as SDR#'s
+  frequencies.xml under the record folder, and sets the note. It is not the window writing the
+  file from its copy because the table's BOOKMARKS item cuts a name at 95 bytes and a group at 159
+  and carries the mode as a code (a mode no code names reads 0): a file made from the copy would
+  shorten and rewrite what the user shares. One pass over the store, not a search per id (the
+  mutant that searched per id ran 40 000 ids in 831 ms against 37 ms for the pass, which the first
+  cost test let live; it now exports 100 000 under a ceiling of 2.5 s, the mutant taking 5.7 s and
+  the pass 139 ms). Every other command the three sections send was an op already: the survey found
+  no Engine method they call that is not one;
+- S4, BOOKMARK_GROUPS (21): NO engine change. The window derives its group names from its one copy
+  of BOOKMARKS - sorted, distinct, as the old code derived them from the store - and does not read
+  the list, so the names can never disagree with the rows they filter, and the section needs no
+  second read. The list is as it was (built per call from the published block, O(bookmarks) per
+  entry read): a client that wants the groups of a long list should not read it, which section 8.6
+  says. The test holds the window's names equal to the list's, on 10 000 entries;
+- nothing for the recorder: RECORDINGS' `value[1]` (bytes) and `value[3]` (seconds) are live since
+  group 2 and the paths are LOCAL facts.
+The pattern held, with these additions to it:
+- THE BOOKMARK COPY, decision 2's rule widened. The markers' rows (group 6) became the window's ONE
+  copy of BOOKMARKS: `BookmarkRow` (gui/tuning_reads.hpp; `MarkerRow` stays as its name for the
+  markers) carries the id the commands name, the group, the mode code and the bandwidth beside the
+  frequency, the star and the name, and `tuningLists()` copies the rows only when
+  `fact.bookmarks.version` moves - never on a `listSeq` move, never per frame. The Bookmarks
+  section, its chip's count, its view and its group names read that copy, so the list is walked
+  once per change of the store and held once. Measured, this desktop, Release (test_recorder_
+  bookmarks_scanner B and C): 33 299 rows (a 33 000-entry import and the rest) are copied once in
+  4.1 ms and hold 3 463 864 bytes (104 a row: sizeof(BookmarkRow), the test list's names and
+  groups all fitting the strings' own 15-byte buffers; a longer name or group adds its own heap, up
+  to 96 and 160 bytes); group 6's three-field row copied 33 199 rows in 2.7 ms, and 3.2 ms with the wider row
+  on that same list (no groups in it); the group names and the view are built in 1.1 ms; an
+  unchanged view costs four comparisons a frame (1000 rebuilds over 42 290 entries: 0.01 ms in
+  all, 0 allocations - the old code built a key string a call). The groups are built by sorting
+  pointers and copying the distinct names, so a list of 33 000 makes a dozen strings, not 33 000.
+  A chosen group stays chosen by NAME when the list changes and is dropped when its group goes.
+- THE SAME-FRAME SITES (decision 3), three looked at; none needs a copy beyond what the window
+  already kept. (1) THE SCANNER'S DRAFT (`scanDraft_`, its pending bits and ids) is the window's
+  form and stays: an idle scanner commits each edit as it is typed, a running one on deactivate,
+  and a field is re-seeded from the engine only while it is neither active nor holding a pending
+  edit. What is new is the lag: a command lands one pass later, so a field is re-seeded the frame
+  AFTER it stops being active, by which time the pass has run (the queue is drained, published and
+  read, in that order, at the top of the frame); before the first state has been read the form
+  keeps its defaults, which are Scanner::Params. (2) THE FLUSH. flushScannerDraft commits a running
+  scan's edit left pending by a section that stopped being drawn, and the CONFIG command it builds
+  carries the engine's own values for the fields nobody edited - the state's. It stood at the top of
+  drawUi, before the publish and the read, where the state is a pass old and a timing set by the
+  frame before would be set back; it now stands right after refreshUiState, beside the keyboard
+  (group 6's reasoning), and a test reads drawUi's source for it. (3) START carries the range the
+  engine stores (the state's), as the old code carried scannerParams(); a Start in the frame of
+  the last keystroke would carry the range one pass old, and a click and a key in one 16 ms frame
+  is not a gesture a hand makes - the draft path (type, then Start with the field still active)
+  has frames between, and test_scanner_draft_input C holds it. There is no bookmark rename in the
+  section (the name field is the NEXT bookmark's name, the window's buffer).
+- The view's state (`bookmarkViewCopies_`, the group chosen, favourites-only and the filter it was
+  built from) replaces `bookmarkViewVersion_` and a key string; the engine's host hook
+  `onBookmarksChanged`, called inside the engine's own pass, is empty: the view follows the copy's
+  version the frame after, and calling the window's session from the pass is not where it reads.
+- `gui/section_reads.hpp` (new, no engine, no ImGui): the take's samples (an I/Q frame is 8 bytes,
+  an audio frame 2: Recorder::flushStage counts them so), the group names, the view's filter, the
+  form's seven values from the state and the three commands the scanner sends (the timings, the
+  range with its edit mask, Start), as pure functions held against the models they restate.
+- THE RECORDER: its seconds are the recorder's own steady clock (RECORDINGS `value[3]`), where the
+  window subtracted two frame-clock readings; the note under an audio take is `audioHardMuted` (held
+  equal to Pipeline::audioMuted in group 6) and `audioMutedBy`, which the engine fills from
+  muteSubjectText; the two takes are found by refreshStatusLists and read, live, by `readTake`.
+
+Ratchet: 126 fields / 587 reads -> 111 / 539 (the 48 reads of the five members; the fields that
+left: audioRecordStartS_, audioRecorder_, bookmarkError_, bookmarkImportNote_, freqMgr_,
+iqRecordStartS_, iqRecorder_, scanDwellMs_, scanHoldMs_, scanListenMs_, scanResumeMs_,
+scanStartMhz_, scanStepKhz_, scanStopMhz_ and scanner_ - 15; `pipeline_` and `recordDir_` are read
+elsewhere and stay), the budgets exactly the printed counts (the brief expected about 113 / 545;
+the predictor said 111 / 539 before the edit and the guard prints it). The five members,
+flushScannerDraft and readTake join `kPortedMembers`; `bookmarkImportNote_` and `bookmarkError_`
+join `kPublishedOnly`. Twelve `kReadOnly` entries lost their last caller and are retired: the two
+recorders' recording / bytesWritten / samplesWritten, freqMgr_.list / .list().size / .version and
+scanner_.active / .currentHz / .state. Fifty-two older entries of that list had no caller before
+this group either; they are left, as they are not this group's to retire. The guard goes red on a
+single `engine_.` read put back into drawScannerSection (mutant G1: "AppWindow::drawScannerSection
+is PORTED ... reaches the engine directly", and 112 fields / 540 reads against the budget).
+
+What the operator sees: nothing new. Drawn by the build before this group and by this one - the
+application's own framebuffer capture in bounded runs, four runs of each build in each of five
+states, 1500x1380, the signal generator, FOXSDR_SINGLE_VIEWPORT=1 so that the input script's
+coordinates are the window's own (build\g7-vis-final.txt is the table): the Recorder idle; with an
+audio and an I/Q take running (pressed through FOXSDR_INPUT_SCRIPT); the VIEW bank scrolled to the end
+over a bookmarks file of 400 entries in view (a favourite, six groups, their markers on the
+spectrum); after Start scan (Paused at 88.0000 MHz: the generator's signal opens the squelch); and
+with the group combo opened. At tolerance 24, area by area: 0 pixels differ in the recorder's header,
+folder line and both buttons, in the scanner's header, seven fields, buttons and state line, and in
+the marker strip and its labels; at most 3 pixels in the bookmarks' twelve rows, which is also the
+most between two runs of one build. What differs as it does between two runs of one build is what
+runs with the clock: the take's counter line (941 pixels at tolerance 24 in both pairings, "IQ 0.9 s
+| 1799168 samples | 14.4 MB" against "IQ 0.9 s | 1739776 samples | 13.9 MB") and the status column's
+RECORDER card (159 pixels in both). A setting lands one engine pass after the click (decision 2),
+as every ported member's does; the Record, Start and Stop buttons swap their words a frame later,
+and a scanner edit typed on an idle scanner shows in the engine a pass after the keystroke.
+Two things the capture taught. With the window's own viewports on (the default) the input
+script's pointer lands where the OS put the window, which differs from run to run - the first batch
+here pressed Start scan on the Dwell field - so a bounded run for a gesture sets
+FOXSDR_SINGLE_VIEWPORT=1. And the batch's runs are sorted by what they landed (visall7.py in the
+session's scratch) and compared only within an outcome; with single viewport all eight runs of
+every scenario landed the same.
+
+What could move a measured number: FoxReceiverState is 64 bytes larger, copied once per publish and
+once per window read; the window's bookmark copy is wider (above: 2.7 -> 3.2 ms for group 6's own
+33 199-row list, 4.1 ms for a list whose rows mostly have a group) and costs once per change of the
+store; the engine's pass copies two more status strings (the 16th and 17th line of
+EngineStatusText) and hashes them in the list fingerprint; `seq` moves at every step of a running
+scan (one counter increment a step, so a reader of `seq` - the web page, a plugin through the
+snapshot - sees movement the scanner's flag alone did not give it; the plugin ABI's own counters
+are unchanged); a take is read with a `read_list` a frame (two at most, as the status column's
+card already did); an export now runs on the engine's pass (100 000 bookmarks, 139 ms) where the
+window wrote the file in its frame.
+
+THE TEST-ACCESSOR TRAP bit once, in tests/test_scanner_draft_input.cpp, which drives
+drawScannerSection and flushScannerDraft through ImGui's own input queue and read the engine's
+fields back: its frame now looks first (the engine publishes, the window reads its state) and lets
+the engine's pass take the session's commands after the draw, as drawUi does; its 44 assertions
+are untouched. Three things a test of this group must mind: benchSection leaves a drawer child
+open for the next rail primitive to end when its section is folding, so a test that CLICKS a
+section's header folds it and draws a frame the rail's own flush never ends (a sweep of the window
+for widgets skips the header band; the title bar is part of it); FOXSDR_OPEN_SECTIONS is read once
+a process, so it is set before the first AppWindow; and a click that sends a command leaves it
+QUEUED on the session, so the sweep drops the queue (closes and reopens the session) before the
+next pass applies it.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
