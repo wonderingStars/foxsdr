@@ -19,7 +19,8 @@
 #                 manifest (name, publisher, version) and the exe inside it.
 #   install-test  silent per-user install, the installed exe against the built one,
 #                 --version, --selftest, a bounded --frames run, silent uninstall, and
-#                 the install directory gone afterwards.
+#                 every install-log file (including shortcuts) and generated uninstaller
+#                 gone, registry/URL handler gone; only user plugins may remain in {app}.
 #   ci            find the GitHub Actions run for HEAD, wait for it, download its
 #                 artifacts, check every file, write the five hashes into the notes.
 #   symbols       mirror the Windows and Linux symbols to the NAS, append the index
@@ -684,13 +685,72 @@ function Get-InstalledState {
     return $found
 }
 
-function Wait-ForGone([string]$Path, [int]$TimeoutSec) {
+function Get-InstallTestFiles([string]$LogPath, [string]$InstallDir) {
+    Assert-Check (Test-Path -LiteralPath $LogPath -PathType Leaf) 'install log valid' $LogPath 'missing install log; cannot verify which files Setup installed'
+    $text = [System.IO.File]::ReadAllText($LogPath)
+    $stamp = '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+'
+    $files = @()
+    $valid = $text -match ('(?m)^' + $stamp + 'Installation process succeeded\.\s*$')
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line -notmatch 'Dest filename:|Creating new uninstall log:') { continue }
+        $m = [regex]::Match($line, ('^' + $stamp + '(?:Dest filename:|Creating new uninstall log:) (.+)$'))
+        if (-not $m.Success) { $valid = $false; continue }
+        $path = $m.Groups[1].Value
+        # Read every destination, including shortcuts outside {app}. Never delete
+        # through this list; it is only evidence for the disappearance check.
+        if ($path -notmatch '^(?:[a-zA-Z]:\\|\\\\[^\\]+\\[^\\]+\\)' -or $path.IndexOfAny([System.IO.Path]::GetInvalidPathChars()) -ge 0) {
+            $valid = $false; continue
+        }
+        $files += $path
+    }
+    # A success marker without a payload manifest must not pass vacuously.
+    foreach ($name in @('cascade.exe', 'SoapySDR.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe')) {
+        if ($files -notcontains (Join-Path $InstallDir $name)) { $valid = $false }
+    }
+    Assert-Check $valid 'install log valid' ($files.Count.ToString() + ' file records') 'expected timestamped absolute file paths, the core payload and Installation process succeeded; read verify\install.log'
+    # Inno generates its .dat separately from normal Dest filename records.
+    return @($files + (Join-Path $InstallDir 'unins000.dat') | Sort-Object -Unique)
+}
+
+function Get-InstallTestRemaining([string[]]$Files, [string]$InstallDir) {
+    $unexpected = @()
+    $retained = @()
+    $rootPresent = Test-Path -LiteralPath $InstallDir
+    if ($rootPresent) {
+        if (-not (Test-Path -LiteralPath $InstallDir -PathType Container)) {
+            $unexpected += $InstallDir
+        } else {
+            foreach ($item in (Get-ChildItem -LiteralPath $InstallDir -Force)) {
+                # Beside-exe plugins are user data (PluginHost::defaultPluginDir).
+                # Logged payload inside plugins is still checked independently.
+                if ($item.Name -ne 'plugins' -or -not $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                    $unexpected += $item.FullName
+                } else {
+                    $retained += $item.FullName
+                }
+            }
+        }
+    }
+    return @{
+        Files = @($Files | Where-Object { Test-Path -LiteralPath $_ })
+        Unexpected = $unexpected
+        Retained = $retained
+        RootPresent = $rootPresent
+        Keys = @(Get-InstalledState)
+        Protocols = @('HKCU:\Software\Classes\foxsdr', 'HKLM:\Software\Classes\foxsdr' | Where-Object { Test-Path -LiteralPath $_ })
+    }
+}
+
+function Wait-ForInstallTestCleanup([string[]]$Files, [string]$InstallDir, [int]$TimeoutSec) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while (Test-Path -LiteralPath $Path) {
-        if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) { return -1.0 }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $remaining = Get-InstallTestRemaining $Files $InstallDir
+        if ($remaining.Files.Count + $remaining.Unexpected.Count + $remaining.Keys.Count + $remaining.Protocols.Count -eq 0 -or (Get-Date) -ge $deadline) {
+            return @{ Remaining = $remaining; Seconds = $sw.Elapsed.TotalSeconds }
+        }
         Start-Sleep -Milliseconds 500
     }
-    return $sw.Elapsed.TotalSeconds
 }
 
 function Step-InstallTest {
@@ -717,13 +777,17 @@ function Step-InstallTest {
     }
     $instArgs = @('/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG=' + (Join-Path $RC.Verify 'install.log')))
     if ($script:Ctx.DryRun) {
-        Write-Plan 'check' ('no FoxSDR installed in either scope, and ' + $installDir + ' absent')
+        if ($AllowReplaceInstalled) {
+            Write-Plan 'check' ('report any existing directory/uninstall keys; replacement allowed by -AllowReplaceInstalled: ' + $installDir)
+        } else {
+            Write-Plan 'check' ('refuse if FoxSDR installed in either scope or ' + $installDir + ' exists')
+        }
         Write-Result 'DRY' 'install (per user)' (Format-CommandLine $setup $instArgs)
         Write-Plan 'check' 'installed cascade.exe and SoapySDR.dll have the sha256 of the built files; the other payload files are present'
         Write-Plan 'check' 'installed cascade.exe --version prints "FoxSDR <version>" (read from redirected pipes, so a windows-subsystem exe works)'
         Write-Plan 'check' 'installed cascade.exe --selftest prints "selftest PASS", and --frames 60 exits 0 having rendered 60 frames, with scratch APPDATA/LOCALAPPDATA/CASCADE_CONFIG_TEST'
         Write-Result 'DRY' 'uninstall' (Format-CommandLine (Join-Path $installDir 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG=' + (Join-Path $RC.Verify 'uninstall.log'))))
-        Write-Plan 'check' ($installDir + ' is gone afterwards (polled: the uninstaller returns before it has finished), and so are its registry keys')
+        Write-Plan 'check' ('validate install.log; poll every recorded installed file (including shortcuts outside the app), unins000.exe/.dat, uninstall keys and foxsdr: handlers until gone; only an unlogged plugins directory may remain under ' + $installDir)
         return 'done'
     }
 
@@ -732,18 +796,26 @@ function Step-InstallTest {
     if (($already.Count -gt 0 -or $dirThere) -and -not $AllowReplaceInstalled) {
         Assert-Check $false 'no FoxSDR installed before the test' (($already -join ', ') + ' ' + $installDir) 'The installer silently uninstalls a FoxSDR it finds in the OTHER scope (installer\cascade.iss PrepareToInstall), and this test would remove an install it did not make. Uninstall it yourself, or pass -AllowReplaceInstalled.'
     }
-    Write-Result 'PASS' 'nothing installed before the test' ($installDir + ' absent, no uninstall key in HKCU/HKLM')
+    if ($already.Count -gt 0 -or $dirThere) {
+        Write-Result 'WARN' 'replacing existing install (-AllowReplaceInstalled)' ($installDir + ' present: ' + $dirThere + '; uninstall keys: ' + ($already -join ', '))
+    } else {
+        Write-Result 'PASS' 'nothing installed before the test' ($installDir + ' absent, no uninstall key in HKCU/HKLM')
+    }
     foreach ($d in @($scratch, $env1['APPDATA'], $env1['LOCALAPPDATA'])) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
     [System.IO.File]::WriteAllText($env1['CASCADE_CONFIG_TEST'], '{"telemetryEnabled": false, "updateCheckEnabled": false}' + "`r`n", (Get-Utf8NoBom))
 
     $buildInfo = Get-StepInfo 'build'
     $installed = $false
     $ur = $null
+    # Still attempt cleanup if log validation or a later application check fails.
+    $installedFiles = @('cascade.exe', 'unins000.exe', 'unins000.dat' | ForEach-Object { Join-Path $installDir $_ })
+    $cleanup = $null
     try {
         $r = Invoke-Planned -What 'install' -File $setup -Arguments $instArgs -TimeoutSec 600
         # Setup exit codes (jrsoftware.org/ishelp/topic_setupexitcodes.htm): 0 is success.
         Assert-Check ($r.ExitCode -eq 0) 'installer exit code' ([string]$r.ExitCode) 'Setup returned non-zero (1 failed to initialise, 3 fatal while preparing, 4 fatal during install, 5 cancelled, 7/8 cannot proceed); read verify\install.log'
         $installed = $true
+        $installedFiles = @(Get-InstallTestFiles (Join-Path $RC.Verify 'install.log') $installDir)
         $exe = Join-Path $installDir 'cascade.exe'
         Assert-Check (Test-Path -LiteralPath $exe) 'installed cascade.exe' $exe 'the installer reported success but the file is not there'
         $instSha = Get-Sha256 $exe
@@ -784,10 +856,11 @@ function Step-InstallTest {
                 $ur = Invoke-Exe -File $unins -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG=' + (Join-Path $RC.Verify 'uninstall.log'))) -TimeoutSec 300
                 # The uninstaller copies itself to TEMP and returns before the copy has
                 # finished (jrsoftware.org/ishelp/topic_uninstexitcodes.htm), so the
-                # directory is POLLED for rather than looked at once.
+                # payload and registrations are POLLED together; retained user
+                # plugins do not require the install root to disappear.
                 Write-Result 'INFO' 'uninstaller exit code' ([string]$ur.ExitCode)
-                $gone = Wait-ForGone $installDir 120
-                Write-Result 'INFO' 'uninstall wait' ('{0:N1} s' -f $gone)
+                $cleanup = Wait-ForInstallTestCleanup $installedFiles $installDir 120
+                Write-Result 'INFO' 'uninstall wait' ('{0:N1} s' -f $cleanup.Seconds)
             }
         }
     }
@@ -797,14 +870,18 @@ function Step-InstallTest {
         return 'done'
     }
     Assert-Check ($null -ne $ur -and $ur.ExitCode -eq 0) 'uninstaller exit code' ($(if ($null -eq $ur) { 'unins000.exe was not found' } else { [string]$ur.ExitCode })) 'any non-zero exit means the uninstaller did not run to completion'
-    $left = @(Get-InstalledState)
-    $dirGone = -not (Test-Path -LiteralPath $installDir)
-    if (-not $dirGone) {
-        Write-Detail (((Get-ChildItem -LiteralPath $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) | Select-Object -First 10) -join "`n      ")
+    $remaining = $cleanup.Remaining
+    Assert-Check ($remaining.Files.Count -eq 0) 'installed files gone after uninstall' ($remaining.Files -join ', ') 'a logged installed file or generated uninstaller remains'
+    Assert-Check ($remaining.Unexpected.Count -eq 0) 'only user plugins remain under install directory' ($remaining.Unexpected -join ', ') 'unexpected files/directories remain; only the plugins directory is allowed'
+    Assert-Check ($remaining.Keys.Count -eq 0) 'uninstall registry keys gone' ($remaining.Keys -join ', ') 'uninstall registration remains in HKCU/HKLM'
+    Assert-Check ($remaining.Protocols.Count -eq 0) 'foxsdr: protocol keys gone' ($remaining.Protocols -join ', ') 'the uninstaller left a URL handler registered'
+    if ($remaining.Retained.Count -gt 0) {
+        Write-Result 'INFO' 'retained install data' (($remaining.Retained -join ', ') + ': user-installed plugins preserved without /CLEANDATA')
+    } elseif ($remaining.RootPresent) {
+        Write-Result 'INFO' 'install directory after uninstall' ($installDir + ' empty')
+    } else {
+        Write-Result 'INFO' 'install directory after uninstall' ($installDir + ' absent')
     }
-    Assert-Check $dirGone 'install directory gone after uninstall' $installDir 'the uninstaller left files behind (a running cascade.exe holds them: close it and uninstall by hand)'
-    Assert-Check ($left.Count -eq 0) 'uninstall registry keys gone' ('none in HKCU/HKLM') ('still present: ' + ($left -join ', '))
-    Assert-Check (-not (Test-Path -LiteralPath 'HKCU:\Software\Classes\foxsdr')) 'foxsdr: protocol key gone' 'HKCU\Software\Classes\foxsdr removed' 'the uninstaller left the URL handler registered'
     Write-Result 'PASS' 'install-test' ('installed, ran, uninstalled; exe sha256 ' + $buildInfo['exeSha256'])
     Write-JsonFile (Join-Path $RC.Verify 'install-test.json') @{ head = $RC.Head; exeSha256 = $buildInfo['exeSha256']; installerSha256 = (Get-Sha256 $setup); when = (Get-Date).ToUniversalTime().ToString('o') }
     Set-StepDone 'install-test' @{ 'verify\install-test.json' = (Get-Sha256 (Join-Path $RC.Verify 'install-test.json')) } @{ exeSha256 = $buildInfo['exeSha256'] }

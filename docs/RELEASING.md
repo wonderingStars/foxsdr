@@ -103,7 +103,7 @@ versions, `ssh <host> true`, `gh auth status`, the public Store catalogue query 
 | `build` | Configure; the binary's version string is the project version; build twice (the second pass should change nothing); `cascade.exe --version` prints `FoxSDR <version>`; only `SoapySDR.dll` beside it; symbols archived for exactly that binary (PDB, exe, symbol map, index row); the copy in `msix-in\` equals the build. |
 | `installer` | ISCC from PowerShell; `generated-version.iss` says the version; the installer exists, its size and sha256; it is not code-signed (stated). |
 | `msix` | `build-msix.ps1` with the Store identity; the package's own `AppxManifest.xml` has the right Name, Publisher and Version (product major + 1); the `cascade.exe` inside has the sha256 of the built one. |
-| `install-test` | Nothing installed before (the installer silently removes a copy in the other scope, so it refuses to run over one); silent per-user install exits 0; the installed `cascade.exe` and `SoapySDR.dll` equal the built ones; payload and registry entries present; `--version`, `--selftest` and `--frames 60` run (with scratch `APPDATA`/`LOCALAPPDATA`/`CASCADE_CONFIG_TEST`, usage reporting off and its URLs pointed at a discard port); silent uninstall; the install directory (polled: the uninstaller returns before it has finished), the registry keys and the `foxsdr:` handler gone. A failure still uninstalls. |
+| `install-test` | Refuses an existing directory or uninstall entry unless `-AllowReplaceInstalled`; reports an authorized replacement truthfully. Silent per-user install exits 0; the installed `cascade.exe` and `SoapySDR.dll` equal the built ones; payload and registry entries present; `--version`, `--selftest` and `--frames 60` run (with scratch `APPDATA`/`LOCALAPPDATA`/`CASCADE_CONFIG_TEST`, usage reporting off and its URLs pointed at a discard port). Validates the timestamped Inno install log and its success marker. Silent uninstall polls every recorded installed path (including Start Menu/Desktop shortcuts outside the app directory and shipped files inside plugins), generated `unins000.exe`/`.dat`, uninstall keys in both scopes and the `foxsdr:` handlers together. Only the user `plugins` directory may remain under the install root; unknown files, other directories and a file named plugins fail. A failure still attempts uninstall. |
 | `ci` | The run for HEAD exists; the required jobs (`linux`, `arm64`) succeeded; every artifact downloaded (three tries each); every tarball is gzip and every AppImage ELF, over 1 MB; the five hashes written into the notes. |
 | `symbols` | Every file sent by `cat >` into a `.part` name, its sha256 read back on the far side, then renamed; a file already there with the same hash is skipped and one with a different hash stops the run; the NAS index must end in a newline and have no BOM before a row is appended, and grows by exactly one row; the symbol maps go to the Pi as `cascade-<build id>.json.gz` and `cascade-<id>.linux.json.gz`. |
 | `github` | HEAD is on `origin/master`; the notes' hashes equal the files'; annotated tag `v<version>` on HEAD, pushed; draft release; every asset's name, size and digest equal the local file's; only then `--draft=false --latest`. |
@@ -119,6 +119,35 @@ download already on the Pi with a different hash stops the run), `swap` (`swap-s
 Pi; waits at least 180 s; a rollback is a FAIL), `verify` (refuses to make any `/download`
 request until all five files are read back on the Pi; then `/healthz` through Cloudflare,
 `/api/update?v=<previous>`, and the five downloads and `/download/latest` by sha256).
+
+## Fake install-test regression suite
+
+Run from the repository root, without building or installing anything:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_release_install.ps1
+pwsh -NoProfile -File tests\test_release_install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\release.ps1 -Steps install-test -DryRun -ReleaseRoot build\release-install-test-fix\dry-run
+```
+
+The standalone suite extracts function definitions through the PowerShell AST and
+executes the actual `Step-InstallTest` with fake installer, executable and registry
+state. It never runs the release script's main body. Each run creates a unique scratch
+tree under ignored `build\release-install-test-fix\`; logged shortcut paths also live
+there. It checks asynchronous removal, permitted retained plugins, every leftover
+category, invalid/missing logs, replacement/refusal reporting, and a dry run with no
+installer calls or writes to user paths. Polling time is accelerated by a fake clock.
+No network, real installation or real uninstallation is involved. `-Cases a,b` selects
+cases, and `-SourcePath <scratch-script>` supports mutation checks without editing the
+production script. No C++ suite is required for this unversioned release tooling.
+
+Silent uninstall preserves data without `/CLEANDATA`. Beside-exe plugins are supported
+by `PluginHost::defaultPluginDir` in `src/core/plugin_host.cpp`; other caches/settings
+are profile data (see `installer/cascade.iss`), so they do not broaden the app-root
+allowlist. Retained plugins never exempt a file recorded by Setup. The directory may
+remain empty or contain only this plugins directory; it need not disappear.
+The step prints the retained plugins path and why it is acceptable, or reports the
+root as empty/absent. A plugins file or junction is rejected.
 
 ## The Microsoft Store
 
