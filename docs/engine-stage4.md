@@ -442,6 +442,97 @@ the note reaches the engine on its next pass instead of inside the frame, and
 the report's `panels` is the same list (tests/test_panel_note_once.cpp scenario
 E reads it back from the usage record the engine writes: `"panels":["radar","cat"]`).
 
+GROUP 4, the radio-specific panels (drawAirspyControls; biasKeyPanel,
+biasKeyPressed, biasKeyAnswered, drawBiasKeyConfirm; converterAliasNote,
+converterStatusLine, converterModesOffered, converterUnusableNote,
+drawConverterControls - ten members in app_window_airspy.cpp,
+app_window_bias_key.cpp and app_window_converter.cpp - and the two readers that
+keep what they take of the lists, airspyLists and converterLists): API 0.3
+section 8.3. What moved into the table:
+- the Airspy's gain modes, decimation factors and stages were in the table
+  already; what was missing is `FOXAPI_ITEM_AGC` on a GAINS stage its own AGC is
+  driving (the LNA's and the mixer's, which the panel greys and whose two
+  checkboxes it lettered from the published state);
+- the Converter rows: the converter in force (`fact.converter.live`), the note
+  about a SoapySDR fallback (`fact.converter.alias`: which of the two sentences,
+  or none; the sentences stay in the window), the modes the source offers
+  (`fact.converter.modes`), whether a stored Up goes unused on a sound card
+  (`fact.converter.upIgnored`), the radio's own centre for "via ... - radio at
+  ..." (CONVERTERS `value[3]` on the ACTIVE entry, read LIVE from an atomic the
+  pass writes - the one place `rawSource()` is read, in engine_converter.cpp,
+  where tests/test_converter_call_sites.cpp allows it), and
+  `FOXAPI_RX_DEVICE_OPENING` for the rows' greyed state;
+- the bias tee key: `fact.biasTee.reachable` includes the stand-in, the lamp is
+  `FOXAPI_RX_BIAS_TEE_ON` whatever it is drawn over, the dialog's radio line is
+  `fact.biasTee.radioName`, and the stand-in (FOXSDR_FORCE_BIAS_KEY) is the
+  ENGINE's: the window knows none (run()'s one exempt line sets it, as before).
+The pattern held, with one addition to it: the window keeps what it reads of
+the lists in a small cache per panel, re-read when `listSeq` moves
+(`airspyCache_`, `converterCache_`; `uiFacts_` now compares by C string, so a
+fact read every frame builds no temporary), and `biasKeyPanel` hands back a
+member rather than a copy (a `BiasTeePanel` holds a map, one heap node even
+empty on this standard library, and the deck draws the key every frame).
+tests/test_radio_panel_reads.cpp measures it: 4000 reads of an unchanged state,
+0 allocations.
+
+THE HAZARD THIS GROUP CLOSES (N9). The window decides from what it last READ;
+the engine's pass, on its own thread once the pump moves, may have swapped the
+radio before the command lands - and `submit` stamps the command with the
+generation of the radio open AT SUBMIT TIME, so the host's "the radio this was
+sent for has closed" drop does not see it. A yes for radio A would then have
+switched radio B on, with nobody asked about B. `FOXAPI_OP_SET_BIAS_TEE` now
+carries, in `text`, the radio the person was asked about (the deck's key puts
+`fact.biasTee.radioKey` in every ON, the confirmed press as well as the yes) and
+the engine refuses it, NOT_FOUND "the radio changed", when another is the open
+one. tests/test_bias_key_app.cpp [14] makes the swap between the window's last
+read and its submit, with the window's view deliberately stale, against the
+shipping HackRF driver on a fake wire: no request reaches the wire; with the
+engine's check removed, it does.
+
+Ratchet: 152 fields / 723 reads -> 149 / 694 (the 29 reads of the ten members;
+biasStandInOn_, converterKeyAlias_ and converterNotCarried_ are no longer read by
+the window at all). The brief's "149 / 732" was computed from group 2's
+starting 761; the tree was already at 723. `kControlMayCall` loses nothing to
+this port: `currentAbsoluteHz` is still called by two unported members, and the
+two entries with no caller in src/gui, `airspyRememberOpen` and `muteNameList`,
+had none before it (left in place; their removal is not this group's).
+
+What the operator sees: nothing new. A setting lands one engine pass after the
+click (decision 2), the bias lamp and the converter rows likewise. Checked
+against the unchanged window by the tests that drove the old members: the
+bias key (its thirteen existing scenarios, [5]'s dangerous case among them), the converter rows'
+alias note, the sound card's offered modes and unusable-Up note, the Airspy's
+commands, and the real application with the stand-in key (tests/test_bias_key_run).
+
+What could move a measured number: the list fingerprint, computed every pass,
+gained the bias tee's reachability (a dynamic_cast chain and `deviceDead()`),
+the memory's size, the stand-in, the radio's name (a strlen), the converter in
+force (ONE more acquisition of the pipeline's lock; `converterAliasState` takes
+two more, but only when the block is rebuilt), the alias set (empty in
+practice), the sound card's device, host API and format (two strings and an
+enum) and the language code - all hashed in place, no allocation (tests/
+test_engine_publish_alloc is unchanged and passes); and the pass makes one
+`rawSource().centerFrequencyHz()` and one relaxed atomic store, the same
+readback it already makes through the air view for `centreHz`.
+
+THE TEST-ACCESSOR TRAP, for the next group: a test that calls a ported member
+without a frame reads the SESSION, not the engine. Its harness must run what a
+frame runs - `engine_.publishReceiverState(); refreshUiState();` before the
+member, and `engine_.pumpFrameBegin(); engine_.pumpPublish();` after it (the
+old `drainLocalCommands()` applies only the window's local queue). The helpers
+are `look` and `pass` in tests/test_bias_key_app.cpp and
+tests/test_radio_panel_reads.cpp; the assertions of the tests that were
+re-plumbed are untouched.
+
+ONE TIMEOUT THE FULL RUN FOUND, not explained. The run after the port
+(build\ctest-g4b.log) ended with test_engine_api_transmit at its 600 s timeout,
+once; every other test took within 0.3 s of the run before, so the machine was
+not loaded. The test is engine-only (it links no window). Re-run alone 11 times
+it passed each time, about 101.5 s by ctest's clock, as in the logs of groups 2
+and 3 (102.00 and 101.75 s). If it recurs: take a dump of the process while it
+is still alive (`rundll32 comsvcs.dll, MiniDump <pid> <file> full` does not end
+it) before ctest's timeout does.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
