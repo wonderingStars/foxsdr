@@ -499,6 +499,9 @@ private:
     // The EFFECTIVE "mute audio while running" setting for one plugin: the
     // default its capabilities imply, flipped if the user has overridden it.
     bool pluginMutes(const cascade::core::LoadedPlugin& p) const;
+    // The same with the plugin's key already in hand (the engine's cached one): the lists' fingerprint asks
+    // for every plugin every pass and builds no string to do it.
+    bool pluginMutesFor(const cascade::core::LoadedPlugin& p, const std::string& key) const;
     // Records the user's choice as an override of the capability default, so
     // ticking the box back to the default REMOVES the entry rather than
     // recording a second kind of "yes". Rebuilds the mute snapshot.

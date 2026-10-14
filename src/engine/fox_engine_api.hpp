@@ -71,6 +71,12 @@ public:
     // The pumping thread hands over a new list block (before the publish
     // whose listSeq says it changed).
     void setLists(std::shared_ptr<const ApiListBlock> lists);
+    // API 0.3 8.7: the receiver tuned off the presets of `names` plugins that are still running and muting the
+    // audio, and the engine has armed the question (Engine::updateAudioMute, on the pumping thread, AFTER the
+    // pass's publish). The event FOXAPI_EVENT_MUTE_TUNE_AWAY is broadcast by the NEXT endPass - after the
+    // publish that carries the held mute in MUTE_CAUSES - so an interface that is told finds the plugins
+    // already named. Once per call; a call before that endPass replaces the one waiting.
+    void muteTuneAway(std::uint32_t names);
     // TESTS ONLY - nothing in the product calls it: put one spectrum frame in
     // the ring the way endPass puts the pipeline's newest there (the next
     // sequence number, `count` bins of dB, the centre and span the frame
@@ -166,6 +172,14 @@ struct ApiListBlock {
         bool decoder = false;
         bool running = false;
         std::string status;
+        // API 0.3 8.7: the capability word (CASCADE_CAP_* of the plugin ABI), whether the user has stopped the
+        // plugin (any loaded plugin, not only a decoder), the two grants the config holds for its module file,
+        // and - for a decoder - the effective "mute audio while running" setting.
+        std::uint32_t capabilities = 0;
+        bool stopped = false;
+        bool tuneAllowed = false;
+        bool settingsAllowed = false;
+        bool mutes = false;
     };
     std::vector<Plugin> plugins;
 
@@ -176,6 +190,7 @@ struct ApiListBlock {
         std::string status;          // why it is idle, or "" running
         bool running = false;
         bool fed = false;
+        bool mutes = false;          // API 0.3 8.7: "mute audio while running" is on
     };
     std::vector<Decoder> decoders;
     struct StoreEntry {
@@ -192,6 +207,8 @@ struct ApiListBlock {
         std::string label, plugin;
         double freqHz = 0.0, widthHz = 0.0;
         std::uint32_t colourRgba = 0;
+        // API 0.3 8.7: what the plugin's mark is, beyond where it is.
+        bool span = false, dashed = false, spectrumOnly = false;
     };
     std::vector<Marker> markers;
     struct Band {
@@ -209,6 +226,7 @@ struct ApiListBlock {
         std::string label, plugin;
         double freqHz = 0.0, bandwidthHz = 0.0;
         std::uint32_t demodMode = 0, index = 0;
+        bool deviceCentre = false;   // API 0.3 8.7: moves the radio's centre, not the VFO
     };
     std::shared_ptr<const std::vector<Preset>> presets;  // plugin presets: rebuilt only when the plugins change
     std::uint64_t presetsFingerprint = 0;
@@ -240,6 +258,20 @@ struct ApiListBlock {
     };
     std::vector<Choice> gainModes;
     std::vector<Choice> decimations;
+    // API 0.3 8.7: the plugins muting the audio now, in the order Engine::mutedBy_ names them; `key` is the
+    // module file name; `kept` is the mute held after a tune-away (Engine::muteKeptRunning_).
+    struct MuteCause {
+        std::string name, key;
+        bool kept = false;
+    };
+    std::vector<MuteCause> muteCauses;
+    // API 0.3 8.7: the tune grants no LOADED module holds, in the config's order; `refused` when the host holds
+    // a record of that file and it did not load.
+    struct StaleGrant {
+        std::string file;
+        bool refused = false;
+    };
+    std::vector<StaleGrant> staleGrants;
     struct PatchNode {
         std::uint64_t id = 0;
         std::string name;

@@ -60,6 +60,12 @@ struct Fingerprint {
 
 std::string deviceId(const std::string& kind, const std::string& args) { return kind + ":" + args; }
 
+// Does a durable list of module file names (the grants the config holds) name `key`? An empty key never matches,
+// the rule PluginUi::tuneAllowed and PluginStopSet follow.
+bool listHolds(const std::vector<std::string>& list, const std::string& key) {
+    return !key.empty() && std::find(list.begin(), list.end(), key) != list.end();
+}
+
 // A GAIN STAGE ITS OWN AGC IS DRIVING (API 0.3 8.3, FOXAPI_ITEM_AGC): an
 // Airspy's LNA or MIXER with its automatic gain control on. The stage is named
 // by the Airspy driver, so the rule is the panel's own (the "driven" test it
@@ -189,7 +195,21 @@ std::uint64_t Engine::apiListsFingerprint() {
         const cascade::core::LoadedPlugin& p = pluginHost_.plugins()[i];
         f.value(p.loaded);
         f.value(pluginIsStopped(apiPluginKeys_[i]));
+        // API 0.3 8.7: what PLUGINS and DECODERS say beyond that - the capability word, the settings grant and the
+        // "mute audio while running" setting. The keys are the cached ones: nothing here allocates.
+        f.value(p.capabilities);
+        f.value(listHolds(pluginSettingsAllowed_, apiPluginKeys_[i]));
+        f.value(pluginMutesFor(p, apiPluginKeys_[i]));
     }
+    // ...the tune grants held for any module - PLUGINS' TUNE_ALLOWED is a plugin's key in this list, and
+    // STALE_GRANTS lists the ones no loaded module holds - the last refused request to tune
+    // (fact.plugin.lastDenied), and the plugin-mute cluster (MUTE_CAUSES, fact.mute.*): who is muting, by
+    // which module file, and whether the mute is held after a tune-away.
+    for (const std::string& g : pluginTuneAllowed_) { f.text(g); }
+    f.text(pluginUi_.lastDeniedPlugin());
+    for (const std::string& n : mutedBy_) { f.text(n); }
+    for (const std::string& k : mutedByKeys_) { f.text(k); }
+    f.value(muteKeptRunning_);
     // Which decoders are FED: the keys the pass's publish already took from
     // the runner in ONE acquisition of its lock (the lock its DSP thread
     // takes per block) - never asked again here.
@@ -372,6 +392,12 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         w.decoder = p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
         w.running = w.decoder && p.loaded && !pluginIsStopped(w.key);
         w.status = p.loaded ? std::string() : p.error;
+        // API 0.3 8.7.
+        w.capabilities = p.capabilities;
+        w.stopped = p.loaded && pluginIsStopped(w.key);
+        w.tuneAllowed = listHolds(pluginTuneAllowed_, w.key);
+        w.settingsAllowed = listHolds(pluginSettingsAllowed_, w.key);
+        w.mutes = w.decoder && pluginMutesFor(p, w.key);
         b->plugins.push_back(std::move(w));
     }
     buildApiLists03(*b);
@@ -394,6 +420,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             d.name = p.name;
             d.key = p.key;
             d.running = p.running;
+            d.mutes = p.mutes;
             d.fed = pipeline_.running() && std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(),
                                                      p.key) != feedingKeysScratch_.end();
             for (const cascade::core::DecoderStatus& st : status) {
@@ -430,7 +457,31 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("transmit.args", b.txArgs, true);
     // PLUGIN MARKS on the spectrum.
     for (const cascade::core::HostMarker& m : pluginMarkers_) {
-        b.markers.push_back({m.m.id, m.m.label, m.name, m.m.freqHz, m.m.widthHz, m.m.colourRgba});
+        b.markers.push_back({m.m.id, m.m.label, m.name, m.m.freqHz, m.m.widthHz, m.m.colourRgba,
+                             m.m.kind == CASCADE_MARKER_SPAN, (m.m.flags & CASCADE_MARKER_FLAG_DASHED) != 0u,
+                             (m.m.flags & CASCADE_MARKER_FLAG_SPECTRUM_ONLY) != 0u});
+    }
+    // THE PLUGIN-MUTE CLUSTER (API 0.3 8.7): who is muting the receiver's audio (the names and, beside them,
+    // the module files the Stop key acts on), whether the mute is held after a tune-away, and the sentence
+    // that names them - whole, where the state's audioMutedBy is cut.
+    for (std::size_t i = 0; i < mutedBy_.size(); ++i) {
+        b.muteCauses.push_back({mutedBy_[i], i < mutedByKeys_.size() ? mutedByKeys_[i] : std::string(), muteKeptRunning_});
+    }
+    fact("mute.subject", muteSubjectText());
+    fact("mute.keptRunning", muteKeptRunning_ ? "1" : "0");
+    // THE TUNE GRANTS (API 0.3 8.7): the last request to tune that was refused (the module file name, as the
+    // grants are keyed), and the grants no LOADED module holds - removed, renamed aside, or refused - each
+    // flagged when the host holds a record of that file that did not load.
+    fact("plugin.lastDenied", pluginUi_.lastDeniedPlugin());
+    for (const std::string& g : pluginTuneAllowed_) {
+        bool loadedHere = false;
+        bool present = false;
+        for (const ApiListBlock::Plugin& p : b.plugins) {
+            if (p.key != g) { continue; }
+            present = true;
+            loadedHere = loadedHere || p.loaded;
+        }
+        if (!loadedHere) { b.staleGrants.push_back({g, present}); }
     }
     // THE BAND PLAN in force, and the plans there are.
     for (const cascade::core::BandEntry& e : bandPlan_.entries()) {
@@ -452,7 +503,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             if (!p.loaded) { continue; }
             for (const cascade::gui::IndexedPreset& ip : validatedPresets(p)) {
                 v->push_back({ip.preset.label, p.name, ip.preset.frequencyHz, ip.preset.bandwidthHz,
-                              ip.preset.demodMode, ip.index});
+                              ip.preset.demodMode, ip.index, (ip.preset.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u});
             }
         }
         b.presets = std::move(v);
@@ -641,9 +692,12 @@ std::uint64_t Engine::publishApiLists() {
         api_->setLists(apiLists_);
     }
     // The decoder-output backlog goes to the host's own fixed ring (no block
-    // rebuild per line); its count moves listSeq with the rest.
+    // rebuild per line). Its count does NOT move listSeq (API 0.3 8.7, D3): a busy decoder (ADS-B, tens of
+    // lines a second) would otherwise move it once a line and make every interface re-read every list it
+    // keeps, once a line. The count is a measurement, decoderLinesTotal, which an interface that wants the
+    // backlog watches.
     api_->takeDecoderLines(decoderLog_, decoderLinesTotal_);
-    return fp ^ (decoderLinesTotal_ * 0x9E3779B97F4A7C15ull);
+    return fp;
 }
 
 }  // namespace cascade::engine

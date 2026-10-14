@@ -68,6 +68,13 @@
 //       the window's own copy), including the real writer of the note.
 //   O   FOXAPP_OP_BOOKMARK_EXPORT: the ids it takes, the file it writes whole under the
 //       record folder, the note, what it refuses, and its cost on a long list.
+//   M   the decoders, the presets, the marks, the plugin-mute cluster and the tune grants (window
+//       port group 8, API 0.3 section 8.7): M1 MUTE_CAUSES, fact.mute.* and the tune-away event
+//       (R6 of group R, which was not needed there); M2 PLUGINS' capability word and flags,
+//       DECODERS' MUTES, STALE_GRANTS and fact.plugin.lastDenied, against two real modules in a
+//       scratch folder; M3 PRESETS' device-centre flag and raw ids and MARKERS' kind and flags;
+//       M4 (D3) a decoder line moves decoderLinesTotal and not listSeq, and a track-info line is
+//       counted.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -181,6 +188,12 @@ struct AppWindowTestAccess {
     static cascade::core::FreqManager& store(cascade::engine::Engine& e) { return e.freqMgr_; }
     static void setRecordDir(cascade::engine::Engine& e, const std::string& dir) { e.recordDir_ = dir; }
     static const std::string& note(cascade::engine::Engine& e) { return e.bookmarkImportNote_; }
+    // Group M: the folder the engine looks for plugins in (null: the default).
+    static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
+    // Group M: a plugin asks to tune the receiver (the host bridge's request_tune), by its module file name.
+    static std::int32_t askToTune(cascade::engine::Engine& e, const std::string& key) {
+        return e.pluginUi_.tuneRequestFromPlugin(key, 100.0e6);
+    }
 };
 }  // namespace cascade::gui
 
@@ -355,7 +368,7 @@ void testEveryListIsServed() {
     testing::Engine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_RADIOS; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_STALE_GRANTS; ++l) {
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -792,7 +805,10 @@ void testStatusColumnState() {
     CHECK_EQ(st.decoderLinesTotal, base.decoderLinesTotal + 3u);
     CHECK_EQ(st.seq, base.seq);
     CHECK_EQ(st.audioSeq, base.audioSeq);
-    CHECK(st.listSeq != base.listSeq);
+    // (API 0.3 8.7, D3: a line is a measurement and moves no list counter. It used to move listSeq,
+    // and with it every cache an interface keeps of a list, once a line; an interface that wants the
+    // backlog watches decoderLinesTotal. Group M4 holds it at 1,060 lines.)
+    CHECK_EQ(st.listSeq, base.listSeq);
     const int32_t lines = count(s, FOXAPI_LIST_DECODER_LINES);
     CHECK(lines >= 3);
     CHECK_EQ(item(s, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(lines - 1)).id, st.decoderLinesTotal);
@@ -987,7 +1003,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_RADIOS; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_STALE_GRANTS; ++l) {
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -1965,15 +1981,15 @@ void testBookmarksVersionFact() {
     CHECK_EQ(decimalFact(s, "fact.bookmarks.version"), v0);
     CHECK_EQ(s.state().listSeq, list0);
 
-    // A decoder printing a line moves listSeq - the signal the window reads
-    // its facts on - and NOT the store's version: the markers are not copied
-    // again for it.
+    // A decoder printing a line moves neither listSeq (API 0.3 8.7, D3: it used to, once a line, and
+    // with it every cache a window keeps on listSeq - the markers' among them) nor the store's version:
+    // the markers are not copied again for it, and not re-read either.
     CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=TEST|a line")).status(),
              FOXAPI_OK);
     const std::uint64_t list1 = s.state().listSeq;
     std::printf("Q1: a decoder line: listSeq %llu -> %llu, version %lld\n", static_cast<unsigned long long>(list0),
                 static_cast<unsigned long long>(list1), decimalFact(s, "fact.bookmarks.version"));
-    CHECK(list1 != list0);
+    CHECK_EQ(list1, list0);
     CHECK_EQ(decimalFact(s, "fact.bookmarks.version"), v0);
 
     // An add moves it, and the list grows.
@@ -2589,6 +2605,491 @@ void testBookmarkExportCost() {
     }
 }
 
+// --- M: the decoders, the presets, the marks, the plugin-mute cluster and the tune grants (8.7) ------
+//
+// Window port group 8. Each case drives the engine from THIS thread (controlPass until the thing has
+// happened), as groups U and Z do, so what the test reads and what the friend sets is not a race with a
+// control thread. The plugins are two REAL modules loaded from a scratch folder
+// (tests/fixture_stage1_plugin.cpp: an audio decoder with two presets; tests/fixture_group8_plugin.cpp:
+// an I/Q decoder with a device-centre preset, a preset the host drops, a preset with no label and two
+// marks) and a third file that is not a module at all, which the host refuses.
+
+std::vector<FoxEvent> takeEvents(testing::Session& s) {
+    std::vector<FoxEvent> out;
+    for (;;) {
+        FoxEvent ev[16];
+        for (auto& x : ev) { x.structSize = sizeof(x); }
+        const int32_t got = api()->poll_events(s.raw(), ev, 16);
+        for (int32_t i = 0; i < got; ++i) { out.push_back(ev[i]); }
+        if (got < 16) { break; }
+    }
+    return out;
+}
+
+int tuneAways(const std::vector<FoxEvent>& v) {
+    int n = 0;
+    for (const FoxEvent& e : v) { n += e.kind == FOXAPI_EVENT_MUTE_TUNE_AWAY ? 1 : 0; }
+    return n;
+}
+
+void passes(cascade::engine::Engine& eng, int n) {
+    for (int i = 0; i < n; ++i) { eng.controlPass(); }
+}
+
+// The entry of `list` called `name` (a zeroed item, id 0 and no structSize, when there is none) and where.
+FoxListItem entryNamed(testing::Session& s, uint32_t list, const std::string& name, int* index = nullptr) {
+    const int32_t n = count(s, list);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, list, static_cast<uint32_t>(i));
+        if (name == it.name) {
+            if (index != nullptr) { *index = i; }
+            return it;
+        }
+    }
+    if (index != nullptr) { *index = -1; }
+    return FoxListItem{};
+}
+
+FoxCommand grantCmd(const std::string& file, int which, int on) {
+    FoxCommand c = testing::cmd(FOXAPI_OP_PLUGIN_GRANT, 0, which, file.c_str());
+    c.ival[1] = on;
+    return c;
+}
+
+// M1: who is muting the audio (MUTE_CAUSES, fact.mute.*) and the tune-away event.
+void testMuteCauses() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session mute(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);  // never subscribes
+    CHECK(mute.ok());
+    CHECK_EQ(api()->subscribe(s.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY)), FOXAPI_OK);
+    passes(d.eng, 3);
+    int32_t st = 0;
+    // Nothing is muting: an empty list, and both facts are SERVED (an engine that predates them says -1).
+    CHECK_EQ(count(s, FOXAPI_LIST_MUTE_CAUSES), 0);
+    CHECK_EQ(fact(s, "fact.mute.subject", &st), std::string());
+    CHECK_EQ(st, 0);
+    CHECK_EQ(fact(s, "fact.mute.keptRunning", &st), std::string("0"));
+    CHECK_EQ(st, 1);
+    CHECK_EQ(tuneAways(takeEvents(s)), 0);
+
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s,
+                    testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0,
+                                 "test.muteBy=Alpha decoder@145500000;Beta decoder@145500000"))
+                 .status(),
+             FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_MUTE_CAUSES), 0);  // not on their preset yet
+    const uint64_t before = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_MUTE_CAUSES) == 2; }));
+    // The list names the plugins, in the order the state's text does, with their module file names.
+    const FoxListItem a = item(s, FOXAPI_LIST_MUTE_CAUSES, 0);
+    const FoxListItem b = item(s, FOXAPI_LIST_MUTE_CAUSES, 1);
+    CHECK_EQ(std::string(a.name), std::string("Alpha decoder"));
+    CHECK_EQ(std::string(a.detail), std::string("Alpha decoder.dll"));
+    CHECK_EQ(std::string(b.name), std::string("Beta decoder"));
+    CHECK_EQ(std::string(b.detail), std::string("Beta decoder.dll"));
+    CHECK((a.flags & FOXAPI_ITEM_ACTIVE) != 0u && (b.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    CHECK_EQ(a.value[0], 0.0);  // on the preset: not a held mute
+    CHECK_EQ(b.value[0], 0.0);
+    CHECK(s.state().listSeq != before);  // the list moved listSeq
+    CHECK_EQ(fact(s, "fact.mute.subject"), std::string("Alpha decoder and Beta decoder"));
+    CHECK_EQ(std::string(s.state().audioMutedBy), fact(s, "fact.mute.subject"));  // the state's text, whole
+    CHECK_EQ(fact(s, "fact.mute.keptRunning"), std::string("0"));
+    CHECK_EQ(tuneAways(takeEvents(s)), 0);  // arriving on a preset is not a tune-away
+
+    // TUNED AWAY with both still running: the mute is held, and the event is raised ONCE, by the publish
+    // that shows the held mute - so the list already names them when the event arrives.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).status(), FOXAPI_OK);
+    {
+        // The event is polled after EVERY pass, and the lists read the moment it arrives: that moment is the
+        // point of raising it from the publish that shows the held mute.
+        std::vector<FoxEvent> got;
+        std::string keptWhenTold;
+        double valueWhenTold = -1.0;
+        for (int i = 0; i < 40; ++i) {
+            got = takeEvents(s);
+            if (!got.empty()) {
+                keptWhenTold = fact(s, "fact.mute.keptRunning");
+                valueWhenTold = item(s, FOXAPI_LIST_MUTE_CAUSES, 0).value[0];
+                break;
+            }
+            d.eng.controlPass();
+        }
+        CHECK_EQ(tuneAways(got), 1);
+        CHECK_EQ(keptWhenTold, std::string("1"));  // the lists already carry the held mute when it arrives
+        CHECK_EQ(valueWhenTold, 1.0);
+        for (const FoxEvent& e : got) {
+            if (e.kind != FOXAPI_EVENT_MUTE_TUNE_AWAY) { continue; }
+            CHECK_EQ(e.value[0], 2.0);
+            CHECK_EQ(count(s, FOXAPI_LIST_MUTE_CAUSES), 2);  // named already
+        }
+        CHECK_EQ(takeEvents(mute).size(), 0u);  // a session that did not subscribe is told nothing
+    }
+    CHECK_EQ(fact(s, "fact.mute.keptRunning"), std::string("1"));
+    CHECK_EQ(item(s, FOXAPI_LIST_MUTE_CAUSES, 0).value[0], 1.0);
+    CHECK_EQ(item(s, FOXAPI_LIST_MUTE_CAUSES, 1).value[0], 1.0);
+    CHECK_EQ(fact(s, "fact.mute.subject"), std::string("Alpha decoder and Beta decoder"));  // kept with the latch
+    // ...and not again, however many passes go by.
+    passes(d.eng, 30);
+    CHECK_EQ(tuneAways(takeEvents(s)), 0);
+    CHECK_EQ(count(s, FOXAPI_LIST_MUTE_CAUSES), 2);
+
+    // "Keep it running": the mute stays (the banner's), nothing is raised.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_MUTE_KEEP_RUNNING)).status(), FOXAPI_OK);
+    passes(d.eng, 5);
+    CHECK_EQ(fact(s, "fact.mute.keptRunning"), std::string("1"));
+    CHECK_EQ(count(s, FOXAPI_LIST_MUTE_CAUSES), 2);
+    CHECK_EQ(tuneAways(takeEvents(s)), 0);
+
+    // The banner's stop key: both plugins stopped, the mute ended, the list empty, the facts quiet.
+    CHECK_EQ(pumped(d.eng, s,
+                    testing::cmd(FOXAPP_OP_DECODER_STOP_LIST, 0, 1, "Alpha decoder.dll\nBeta decoder.dll"))
+                 .status(),
+             FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_MUTE_CAUSES) == 0; }));
+    CHECK_EQ(fact(s, "fact.mute.keptRunning"), std::string("0"));
+    CHECK_EQ(fact(s, "fact.mute.subject", &st), std::string());
+    CHECK_EQ(st, 0);
+
+    // A SECOND tune-away is a second event (arriving on a preset re-arms), with one name this time.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.muteBy=Alpha decoder@145500000"))
+                 .status(),
+             FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_MUTE_CAUSES) == 1; }));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).status(), FOXAPI_OK);
+    {
+        std::vector<FoxEvent> got;
+        for (int i = 0; i < 40 && got.empty(); ++i) {
+            got = takeEvents(s);
+            if (got.empty()) { d.eng.controlPass(); }
+        }
+        CHECK_EQ(tuneAways(got), 1);
+        for (const FoxEvent& e : got) {
+            if (e.kind == FOXAPI_EVENT_MUTE_TUNE_AWAY) { CHECK_EQ(e.value[0], 1.0); }
+        }
+    }
+    CHECK(passUntil(d.eng, [&] { return fact(s, "fact.mute.keptRunning") == "1"; }));
+    // Arriving back on the preset lets the latch go (the popup would be withdrawn): no event.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return fact(s, "fact.mute.keptRunning") == "0"; }));
+    CHECK_EQ(item(s, FOXAPI_LIST_MUTE_CAUSES, 0).value[0], 0.0);
+    CHECK_EQ(tuneAways(takeEvents(s)), 0);
+
+    // A plugin that stopped muting before the receiver left its preset leaves nothing to ask about: the
+    // tune-away raises no event and holds no mute.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.muteBy=")).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).status(), FOXAPI_OK);
+    passes(d.eng, 10);
+    CHECK_EQ(tuneAways(takeEvents(s)), 0);
+    CHECK_EQ(count(s, FOXAPI_LIST_MUTE_CAUSES), 0);
+    CHECK_EQ(fact(s, "fact.mute.keptRunning"), std::string("0"));
+
+    // A SUBJECT LONGER THAN THE STATE'S FIELD: the fact is whole, the state's audioMutedBy is cut at 127 bytes.
+    {
+        const std::string n1(70, 'a');
+        const std::string n2(70, 'b');
+        CHECK_EQ(pumped(d.eng, s,
+                        testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0,
+                                     ("test.muteBy=" + n1 + "@145500000;" + n2 + "@145500000").c_str()))
+                     .status(),
+                 FOXAPI_OK);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_MUTE_CAUSES) == 2; }));
+        CHECK_EQ(fact(s, "fact.mute.subject"), n1 + " and " + n2);
+        CHECK_EQ(std::strlen(s.state().audioMutedBy), 127u);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.muteBy=")).status(), FOXAPI_OK);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).status(), FOXAPI_OK);
+        passes(d.eng, 6);
+    }
+    std::printf("M1: MUTE_CAUSES names the muting plugins, the latch flags them, one event a tune-away\n");
+}
+
+// The scratch plugin folder of group M: the two fixture modules, and a third file that is not one.
+struct PluginWorld {
+    std::filesystem::path dir;
+    static std::string hook;
+    PluginWorld() {
+        const char* base = std::getenv("LOCALAPPDATA");
+        dir = std::filesystem::path(base != nullptr ? base : ".") / "plugins_group8";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        for (const char* src : {FIXTURE_STAGE1_PLUGIN, FIXTURE_GROUP8_PLUGIN}) {
+            const std::filesystem::path p(src);
+            std::filesystem::copy_file(p, dir / p.filename(), std::filesystem::copy_options::overwrite_existing, ec);
+            CHECK(!ec);
+        }
+        std::ofstream junk(dir / "zz_refused.dll", std::ios::binary);
+        junk << "this is not a portable executable";
+        junk.close();
+        hook = dir.string();
+        cascade::gui::AppWindowTestAccess::setPluginDir(&PluginWorld::path);
+    }
+    ~PluginWorld() {
+        cascade::gui::AppWindowTestAccess::setPluginDir(nullptr);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+    static std::string path() { return hook; }
+    static std::string fileOf(const char* fixture) { return std::filesystem::path(fixture).filename().string(); }
+};
+std::string PluginWorld::hook;
+
+// M2: the plugins as the table lists them (PLUGINS' capability word and flags, DECODERS' MUTES), the grants
+// (TUNE_ALLOWED, SETTINGS_ALLOWED, STALE_GRANTS) and what the last refused tune request was.
+void testPluginLists() {
+    PluginWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    const std::string stage1 = PluginWorld::fileOf(FIXTURE_STAGE1_PLUGIN);
+    const std::string g8 = PluginWorld::fileOf(FIXTURE_GROUP8_PLUGIN);
+
+    // PLUGINS: the host's order (by file name), the capability word, loaded -> ACTIVE.
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 3);
+    const FoxListItem pg = entryNamed(s, FOXAPI_LIST_PLUGINS, "Group Eight Fixture");
+    const FoxListItem ps1 = entryNamed(s, FOXAPI_LIST_PLUGINS, "Stage One Fixture");
+    const FoxListItem refused = entryNamed(s, FOXAPI_LIST_PLUGINS, "zz_refused.dll");
+    CHECK_EQ(std::string(pg.detail), g8);
+    CHECK_EQ(std::string(ps1.detail), stage1);
+    CHECK_EQ(std::string(refused.detail), std::string("zz_refused.dll"));
+    CHECK_EQ(static_cast<unsigned>(pg.value[0]),
+             static_cast<unsigned>(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_PRESET | CASCADE_CAP_HOST_CLIENT));
+    CHECK_EQ(static_cast<unsigned>(ps1.value[0]),
+             static_cast<unsigned>(CASCADE_CAP_DECODER | CASCADE_CAP_PRESET | CASCADE_CAP_HOST_CLIENT));
+    CHECK_EQ(refused.value[0], 0.0);  // refused before a descriptor was accepted: no word to read
+    CHECK((pg.flags & FOXAPI_ITEM_ACTIVE) != 0u && (ps1.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    CHECK((refused.flags & FOXAPI_ITEM_ACTIVE) == 0u);
+    const uint32_t grantBits = FOXAPI_ITEM_TUNE_ALLOWED | FOXAPI_ITEM_SETTINGS_ALLOWED | FOXAPI_ITEM_STOPPED;
+    CHECK_EQ(pg.flags & grantBits, 0u);
+    CHECK_EQ(ps1.flags & grantBits, 0u);
+
+    // DECODERS: both modules, with MUTES at the capability default - an I/Q decoder mutes, an audio one does
+    // not - and the toggle (FOXAPI_OP_PLUGIN_MUTE, named by file) moves it for one and not the other.
+    CHECK_EQ(count(s, FOXAPI_LIST_DECODERS), 2);
+    const auto muting = [&](const char* name) {
+        return (entryNamed(s, FOXAPI_LIST_DECODERS, name).flags & FOXAPI_ITEM_MUTES) != 0u;
+    };
+    CHECK(muting("Group Eight Fixture"));
+    CHECK(!muting("Stage One Fixture"));
+    const uint64_t seq0 = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_MUTE, 0, 1, stage1.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(muting("Stage One Fixture"));
+    CHECK(muting("Group Eight Fixture"));
+    CHECK(s.state().listSeq != seq0);  // the flag is in the fingerprint
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_MUTE, 0, 0, g8.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(!muting("Group Eight Fixture"));  // the override of the default
+    CHECK(muting("Stage One Fixture"));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_MUTE, 0, 0, stage1.c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_MUTE, 0, 1, g8.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(!muting("Stage One Fixture") && muting("Group Eight Fixture"));
+
+    // STOPPED follows STOP and START, on PLUGINS (any plugin) and as DECODERS' ACTIVE (a decoder running).
+    const auto stopped = [&](const char* name) {
+        return (entryNamed(s, FOXAPI_LIST_PLUGINS, name).flags & FOXAPI_ITEM_STOPPED) != 0u;
+    };
+    const auto running = [&](const char* name) {
+        return (entryNamed(s, FOXAPI_LIST_DECODERS, name).flags & FOXAPI_ITEM_ACTIVE) != 0u;
+    };
+    CHECK(!stopped("Stage One Fixture") && running("Stage One Fixture"));
+    const uint64_t seq1 = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_STOP, 0, 0, stage1.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(stopped("Stage One Fixture") && !running("Stage One Fixture"));
+    CHECK(!stopped("Group Eight Fixture") && running("Group Eight Fixture"));
+    CHECK(s.state().listSeq != seq1);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_START, 0, 0, stage1.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(!stopped("Stage One Fixture") && running("Stage One Fixture"));
+
+    // THE GRANTS: tune and settings are separate item flags, set and revoked by FOXAPI_OP_PLUGIN_GRANT.
+    const auto flag = [&](const char* name, uint32_t bit) {
+        return (entryNamed(s, FOXAPI_LIST_PLUGINS, name).flags & bit) != 0u;
+    };
+    CHECK_EQ(pumped(d.eng, s, grantCmd(g8, 1, 1)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(flag("Group Eight Fixture", FOXAPI_ITEM_TUNE_ALLOWED));
+    CHECK(!flag("Group Eight Fixture", FOXAPI_ITEM_SETTINGS_ALLOWED));
+    CHECK(!flag("Stage One Fixture", FOXAPI_ITEM_TUNE_ALLOWED));
+    CHECK_EQ(pumped(d.eng, s, grantCmd(g8, 2, 1)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(flag("Group Eight Fixture", FOXAPI_ITEM_SETTINGS_ALLOWED) &&
+          flag("Group Eight Fixture", FOXAPI_ITEM_TUNE_ALLOWED));
+    CHECK_EQ(pumped(d.eng, s, grantCmd(g8, 1, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(!flag("Group Eight Fixture", FOXAPI_ITEM_TUNE_ALLOWED));
+    CHECK(flag("Group Eight Fixture", FOXAPI_ITEM_SETTINGS_ALLOWED));
+    CHECK_EQ(pumped(d.eng, s, grantCmd(g8, 2, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(entryNamed(s, FOXAPI_LIST_PLUGINS, "Group Eight Fixture").flags & grantBits, 0u);
+
+    // STALE_GRANTS: a tune grant no LOADED module holds - a module the host has no record of at all, and one
+    // it refused - in the order the grants were given; a loaded module's grant is not stale.
+    CHECK_EQ(count(s, FOXAPI_LIST_STALE_GRANTS), 0);
+    CHECK_EQ(pumped(d.eng, s, grantCmd("removed-module.dll", 1, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, grantCmd("zz_refused.dll", 1, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, grantCmd(g8, 1, 1)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_STALE_GRANTS), 2);
+    const FoxListItem gone = item(s, FOXAPI_LIST_STALE_GRANTS, 0);
+    const FoxListItem broken = item(s, FOXAPI_LIST_STALE_GRANTS, 1);
+    CHECK_EQ(std::string(gone.name), std::string("removed-module.dll"));
+    CHECK((gone.flags & FOXAPI_ITEM_REFUSED) == 0u);  // no such file
+    CHECK_EQ(std::string(broken.name), std::string("zz_refused.dll"));
+    CHECK((broken.flags & FOXAPI_ITEM_REFUSED) != 0u);  // the file is there and the host refused it
+    CHECK_EQ(pumped(d.eng, s, grantCmd("removed-module.dll", 1, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_STALE_GRANTS), 1);
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_STALE_GRANTS, 0).name), std::string("zz_refused.dll"));
+
+    // THE LAST REFUSAL: "" until a module asks to tune without the grant, then the module file name (the key
+    // the grant is held under); a rescan forgets it.
+    using Access = cascade::gui::AppWindowTestAccess;
+    CHECK_EQ(fact(s, "fact.plugin.lastDenied"), std::string());
+    const uint64_t seq2 = s.state().listSeq;
+    CHECK_EQ(Access::askToTune(d.eng, stage1), static_cast<int32_t>(CASCADE_TUNE_DENIED));
+    passes(d.eng, 2);
+    CHECK_EQ(fact(s, "fact.plugin.lastDenied"), stage1);
+    CHECK(s.state().listSeq != seq2);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(fact(s, "fact.plugin.lastDenied"), std::string());
+    std::printf("M2: PLUGINS' flags and word, DECODERS' MUTES, STALE_GRANTS and the last refusal follow the engine\n");
+}
+
+// M3: PRESETS' device-centre flag and raw indexes, and MARKERS' kind and flags (what the plugin set).
+void testPresetsAndMarks() {
+    PluginWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    // PRESETS: the host drops the entry whose frequency is not one, so the raw indexes (the ids) skip it.
+    int n8 = 0;
+    std::vector<FoxListItem> g8;
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_PRESETS); ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PRESETS, static_cast<uint32_t>(i));
+        if (std::string(it.detail) == "Group Eight Fixture") { g8.push_back(it); }
+        ++n8;
+    }
+    CHECK_EQ(g8.size(), 2u);
+    if (g8.size() == 2u) {
+        CHECK_EQ(g8[0].id, 0u);
+        CHECK_EQ(std::string(g8[0].name), std::string("G8 centre"));
+        CHECK_EQ(g8[0].value[0], 1090.0e6);
+        CHECK((g8[0].flags & FOXAPI_ITEM_DEVICE_CENTRE) != 0u);
+        CHECK_EQ(g8[1].id, 2u);  // raw index 2: index 1 was dropped
+        CHECK_EQ(std::string(g8[1].name), std::string());  // no label of its own: the interface supplies the plugin's
+        CHECK_EQ(g8[1].value[0], 162.4e6);
+        CHECK_EQ(g8[1].value[2], 25000.0);
+        CHECK((g8[1].flags & FOXAPI_ITEM_DEVICE_CENTRE) == 0u);
+    }
+    CHECK_EQ(n8, 4);  // the other module's two as well
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_PRESETS); ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PRESETS, static_cast<uint32_t>(i));
+        if (std::string(it.detail) == "Stage One Fixture") { CHECK((it.flags & FOXAPI_ITEM_DEVICE_CENTRE) == 0u); }
+    }
+
+    // MARKERS: the two marks the module set when it was attached - a plain point with the host's own colour,
+    // and a dashed, spectrum-only span with a colour of its own.
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_MARKERS) == 2; }));
+    FoxListItem point{}, span{};
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_MARKERS); ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_MARKERS, static_cast<uint32_t>(i));
+        (it.id == 6u ? point : span) = it;
+    }
+    CHECK_EQ(point.id, 6u);
+    CHECK_EQ(std::string(point.name), std::string("G8 mark"));
+    CHECK_EQ(std::string(point.detail), std::string("Group Eight Fixture"));
+    CHECK_EQ(point.value[0], 100.1e6);
+    CHECK_EQ(point.value[2], 0.0);
+    CHECK_EQ(point.flags & (FOXAPI_ITEM_SPAN | FOXAPI_ITEM_DASHED | FOXAPI_ITEM_SPECTRUM_ONLY), 0u);
+    CHECK_EQ(span.id, 5u);
+    CHECK_EQ(std::string(span.name), std::string("G8 span"));
+    CHECK_EQ(span.value[0], 162.4e6);
+    CHECK_EQ(span.value[1], 25000.0);
+    CHECK_EQ(span.value[2], static_cast<double>(0x11223344u));
+    CHECK_EQ(span.flags & (FOXAPI_ITEM_SPAN | FOXAPI_ITEM_DASHED | FOXAPI_ITEM_SPECTRUM_ONLY),
+             FOXAPI_ITEM_SPAN | FOXAPI_ITEM_DASHED | FOXAPI_ITEM_SPECTRUM_ONLY);
+    std::printf("M3: PRESETS' device-centre flag and raw ids, MARKERS' kind and flags\n");
+}
+
+// A host whose track-info plugin has something to say (the window's own does, through its cache).
+struct TrackInfoHost : cascade::engine::EngineHost {
+    std::vector<std::string> pending;
+    std::vector<std::string> drainTrackInfoText() override {
+        std::vector<std::string> out;
+        out.swap(pending);
+        return out;
+    }
+};
+
+// M4 (D3): a decoder line moves decoderLinesTotal and NOT listSeq; the lines still reach the backlog, track-info
+// status lines among them; anything else that changes a list still moves listSeq.
+void testDecoderLinesLeaveListSeqAlone() {
+    TrackInfoHost host;
+    cascade::engine::Engine eng(host);
+    eng.configureApi(kHooks);
+    eng.initialise();
+    eng.controlPass();
+    testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(eng, 3);
+    const FoxReceiverState base = s.state();
+    for (int i = 0; i < 60; ++i) {
+        CHECK_EQ(pumped(eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=POCSAG|a line")).status(),
+                 FOXAPI_OK);
+    }
+    const FoxReceiverState after = s.state();
+    CHECK_EQ(after.decoderLinesTotal, base.decoderLinesTotal + 60u);  // measured
+    CHECK_EQ(after.listSeq, base.listSeq);                            // ...and no list moved
+    // 1,000 lines more, in batches (the session's queue holds 256): still not.
+    for (int round = 0; round < 10; ++round) {
+        const std::vector<FoxCommand> batch(100, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=SPAM|x"));
+        CHECK_EQ(api()->submit(s.raw(), batch.data(), 100, nullptr), 100);
+        passes(eng, 2);
+        FoxCommandResult drain[16];
+        for (auto& x : drain) { x.structSize = sizeof(x); }
+        while (api()->poll_results(s.raw(), drain, 16) > 0) {}
+    }
+    const FoxReceiverState lots = s.state();
+    CHECK_EQ(lots.decoderLinesTotal, base.decoderLinesTotal + 1060u);
+    CHECK_EQ(lots.listSeq, base.listSeq);
+    // The backlog is there: the ring holds the newest 500, numbered from the same counter.
+    CHECK_EQ(count(s, FOXAPI_LIST_DECODER_LINES), 500);
+    CHECK_EQ(item(s, FOXAPI_LIST_DECODER_LINES, 499).id, lots.decoderLinesTotal);
+    // A status line is a list change, and moves listSeq as it did.
+    CHECK_EQ(pumped(eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=presetNote|hello")).status(),
+             FOXAPI_OK);
+    passes(eng, 2);
+    const uint64_t afterStatus = s.state().listSeq;
+    CHECK(afterStatus != base.listSeq);
+
+    // THE TRACK-INFO PLUGIN'S STATUS LINES go to the decoder output as they always did - and are COUNTED, so
+    // they reach the backlog an interface reads (an uncounted line never did).
+    host.pending = {"cannot reach the registry"};
+    passes(eng, 2);
+    const FoxReceiverState info = s.state();
+    CHECK_EQ(info.decoderLinesTotal, lots.decoderLinesTotal + 1u);
+    const int32_t n = count(s, FOXAPI_LIST_DECODER_LINES);
+    CHECK_EQ(n, 500);
+    const FoxListItem last = item(s, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(n - 1));
+    CHECK_EQ(std::string(last.name), std::string("Aircraft info"));
+    CHECK_EQ(std::string(last.detail), std::string("cannot reach the registry"));
+    CHECK_EQ(last.id, info.decoderLinesTotal);
+    CHECK_EQ(info.listSeq, afterStatus);  // a line of any kind leaves the lists alone
+    std::printf("M4: 1,060 decoder lines moved decoderLinesTotal and not listSeq; track-info lines are counted\n");
+}
+
 }  // namespace
 
 int main() {
@@ -2639,5 +3140,10 @@ int main() {
     testBookmarkStatusLines();
     testBookmarkExport();
     testBookmarkExportCost();
+    // Group 8: the decoders, presets, marks, the plugin-mute cluster and the tune grants.
+    testMuteCauses();
+    testPluginLists();
+    testPresetsAndMarks();
+    testDecoderLinesLeaveListSeqAlone();
     return check::finish("test_engine_api_03");
 }

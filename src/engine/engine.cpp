@@ -3952,8 +3952,11 @@ std::string Engine::pluginKeyForDisplayName(const std::string& displayName) cons
 }
 
 bool Engine::pluginMutes(const cascade::core::LoadedPlugin& p) const {
+    return pluginMutesFor(p, cascade::core::pluginKey(p));
+}
+
+bool Engine::pluginMutesFor(const cascade::core::LoadedPlugin& p, const std::string& key) const {
     const bool def = cascade::core::muteDefaultForCaps(p.capabilities);
-    const std::string key = cascade::core::pluginKey(p);
     if (key.empty()) { return def; }
     const bool overridden = std::find(pluginMuteOverride_.begin(),
                                       pluginMuteOverride_.end(),
@@ -4078,6 +4081,9 @@ void Engine::updateAudioMute() {
                                                  stillRunning, mutedBy_, mutedByKeys_);
     if (mutePopup_.open && !wasOpen) {
         mutePopupQueued_ = true;
+        // API 0.3 8.7: tell the interfaces that asked (FOXAPI_EVENT_MUTE_TUNE_AWAY), with how many plugins the
+        // question is about. Sent by the next pass's endPass, after the publish that names them.
+        api_->muteTuneAway(static_cast<std::uint32_t>(mutePopup_.names.size()));
     } else if (!mutePopup_.open) {
         // A withdrawal has to cancel a queue as well as an open window: the
         // queue is one frame long, and opening a dialog the frame after the
@@ -4175,6 +4181,11 @@ void Engine::pumpDecoderOutput() {
         cascade::core::DecodedLine l;
         l.plugin = "Aircraft info";
         l.text = std::move(s);
+        // COUNTED like every other line (API 0.3 8.7): an uncounted one never reached the backlog an
+        // interface reads (the ring takes the lines the count says are new), so the window that now draws
+        // the Decoder output window from that backlog would have lost the only place a user sees why the
+        // track-info plugin is quiet.
+        ++decoderLinesTotal_;
         decoderLog_.push_back(std::move(l));
     }
     // THE PATCH'S DECODERS, drained every frame for the same reason the

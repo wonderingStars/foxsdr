@@ -886,6 +886,10 @@ public:
         return FOXAPI_OK;
     }
 
+    // API 0.3 8.7: a tune-away is waiting to be told (set by Engine::updateAudioMute, taken by the next
+    // endPass - both on the pumping thread, so no lock). -1: none.
+    void muteTuneAway(std::uint32_t names) { pendingMuteTuneAway_ = static_cast<std::int64_t>(names); }
+
     // The pumping thread hands over the decoder-output backlog: the lines
     // since the last pass go into a FIXED ring (no allocation, whatever the
     // decoders say), cut to what a list item holds.
@@ -1202,6 +1206,9 @@ public:
     }
 
 private:
+
+    // API 0.3 8.7: a tune-away waiting for the next endPass to tell it (the number of plugins muting); -1 none.
+    std::int64_t pendingMuteTuneAway_ = -1;
 
     // What the last pass's snapshot carried, for FOXAPI_EVENT_STATE.
     bool haveLastSeqs_ = false;
@@ -1869,6 +1876,16 @@ void ApiHostImpl::endPass() {
         lastPatchEpoch_ = b->patchEpoch;
         lastPatchRunning_ = b->patchRunning;
     }
+    // API 0.3 8.7: FOXAPI_EVENT_MUTE_TUNE_AWAY - the receiver tuned off its muting plugins' presets while they
+    // were still running (armed by Engine::updateAudioMute, which runs after the pass's publish). Broadcast HERE,
+    // after the publish that shows the held mute, so MUTE_CAUSES already names them when this arrives.
+    if (pendingMuteTuneAway_ >= 0) {
+        FoxEvent e{};
+        e.kind = FOXAPI_EVENT_MUTE_TUNE_AWAY;
+        e.value[0] = static_cast<double>(pendingMuteTuneAway_);
+        pendingMuteTuneAway_ = -1;
+        broadcast(e);
+    }
     if (stallAfterPassMs_ > 0) {  // test seam: test.stallAfterPass
         const int ms = stallAfterPassMs_;
         stallAfterPassMs_ = 0;
@@ -1996,7 +2013,13 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.id = index + 1u;
                 copyText(it.name, p.name.empty() ? p.fileName.c_str() : p.name.c_str());
                 copyText(it.detail, p.fileName.c_str());
+                // 0.3 (8.7): the capability word as the plugin declared it (a refused file's is empty or, for a
+                // duplicate, kept), and the three states a window draws a plugin's row from.
+                it.value[0] = static_cast<double>(p.capabilities);
                 if (p.loaded) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (p.stopped) { it.flags |= FOXAPI_ITEM_STOPPED; }
+                if (p.tuneAllowed) { it.flags |= FOXAPI_ITEM_TUNE_ALLOWED; }
+                if (p.settingsAllowed) { it.flags |= FOXAPI_ITEM_SETTINGS_ALLOWED; }
             }
             break;
         // ---- the 0.2 lists step 1 left out ----------------------------------
@@ -2008,6 +2031,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 copyText(it.detail, d.status.c_str());
                 if (d.running) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                 if (d.fed) { it.flags |= FOXAPI_ITEM_FED; }
+                if (d.mutes) { it.flags |= FOXAPI_ITEM_MUTES; }  // 0.3 (8.7)
             }
             break;
         case FOXAPI_LIST_CATALOGUE:
@@ -2039,6 +2063,10 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[0] = m.freqHz;
                 it.value[1] = m.widthHz;
                 it.value[2] = m.colourRgba;
+                // 0.3 (8.7): the kind of mark and its two drawing flags.
+                if (m.span) { it.flags |= FOXAPI_ITEM_SPAN; }
+                if (m.dashed) { it.flags |= FOXAPI_ITEM_DASHED; }
+                if (m.spectrumOnly) { it.flags |= FOXAPI_ITEM_SPECTRUM_ONLY; }
             }
             break;
         case FOXAPI_LIST_BAND_PLAN:
@@ -2060,6 +2088,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[0] = pr.freqHz;
                 it.value[1] = pr.demodMode;
                 it.value[2] = pr.bandwidthHz;
+                if (pr.deviceCentre) { it.flags |= FOXAPI_ITEM_DEVICE_CENTRE; }  // 0.3 (8.7)
             }
             break;
         case FOXAPI_LIST_USER_PRESETS:
@@ -2235,6 +2264,25 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 if (pl.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;
+        // ---- API 0.3 8.7: the plugin-mute cluster and the tune grants -----------------------------------
+        case FOXAPI_LIST_MUTE_CAUSES:
+            if (want(b->muteCauses.size())) {
+                const auto& c = b->muteCauses[index];
+                it.id = index + 1u;
+                copyText(it.name, c.name.c_str());
+                copyText(it.detail, c.key.c_str());
+                it.value[0] = c.kept ? 1.0 : 0.0;
+                it.flags |= FOXAPI_ITEM_ACTIVE;  // every entry is muting now: that is what listing it says
+            }
+            break;
+        case FOXAPI_LIST_STALE_GRANTS:
+            if (want(b->staleGrants.size())) {
+                const auto& g = b->staleGrants[index];
+                it.id = index + 1u;
+                copyText(it.name, g.file.c_str());
+                if (g.refused) { it.flags |= FOXAPI_ITEM_REFUSED; }
+            }
+            break;
         default:
             return FOXAPI_UNSUPPORTED;
     }
@@ -2270,6 +2318,7 @@ void ApiHost::webRemoteBeat() { impl_->webRemoteBeat(); }
 void ApiHost::takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log, std::uint64_t total) {
     impl_->takeDecoderLines(log, total);
 }
+void ApiHost::muteTuneAway(std::uint32_t names) { impl_->muteTuneAway(names); }
 void ApiHost::webRemoteStopped(const char* why) { impl_->webRemoteStopped(why); }
 void ApiHost::engineStopping() { impl_->engineStopping(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }

@@ -97,6 +97,21 @@ target_include_directories(fixture_stage1_plugin PRIVATE "${CMAKE_SOURCE_DIR}/sr
 add_dependencies(test_apply_command fixture_stage1_plugin)
 target_compile_definitions(test_apply_command PRIVATE
     FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>")
+# THE GROUP-8 FIXTURE (window port group 8, API 0.3 section 8.7): a second real module - an I/Q
+# decoder (mute-while-running defaults ON), a DEVICE-CENTRE preset, a preset the host drops, a
+# preset with no label, and two marks on the spectrum - loaded beside the stage-1 fixture by the
+# tests that read the plugin lists (test_engine_api_03 groups M, test_decoders_mute_grants). Each
+# copies them into a plugin directory of its own (Engine::testHooks_.pluginDir).
+add_library(fixture_group8_plugin SHARED fixture_group8_plugin.cpp)
+target_include_directories(fixture_group8_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_mute_grants)
+    if(TARGET ${_t})
+        add_dependencies(${_t} fixture_stage1_plugin fixture_group8_plugin)
+        target_compile_definitions(${_t} PRIVATE
+            FIXTURE_STAGE1_PLUGIN="$<TARGET_FILE:fixture_stage1_plugin>"
+            FIXTURE_GROUP8_PLUGIN="$<TARGET_FILE:fixture_group8_plugin>")
+    endif()
+endforeach()
 # test_snapshot_app loads three decoders at once (engine stage 2): the same
 # fixture built under three descriptor names, since the host runs one plugin
 # per name.

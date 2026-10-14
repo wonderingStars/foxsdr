@@ -29,6 +29,13 @@
 //      publish allocates nothing and says state, frequency, range and timings;
 //      stepping across the range, paused on a signal and stopped again, the
 //      same
+//   F  the plugin-mute cluster (API 0.3 8.7): with two plugins muting the audio
+//      and the mute held after a tune-away, the lists' fingerprint (computed
+//      every pass) allocates nothing, a pass whose lists did not change builds
+//      no block, and the fingerprint moves with each of the three things the
+//      cluster adds to it (a name, a module key, the latch); and with two real
+//      plugins loaded (the PLUGINS flags, the grants, the mute setting hashed
+//      for each every pass) the same holds
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
@@ -37,6 +44,9 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <string>
+
+#include <filesystem>
 #include <string>
 
 #include "core/transmitter.hpp"
@@ -157,12 +167,30 @@ struct AppWindowTestAccess {
         e.squelchDb_ = squelchDb;
         e.scannerFrame();
     }
+    // The plugin-mute cluster (API 0.3 8.7), as updateAudioMute leaves it: the plugins muting (their
+    // names and their module file names, in step) and whether the mute is held after a tune-away.
+    static void muteCluster(cascade::engine::Engine& e, std::vector<std::string> names, std::vector<std::string> keys,
+                            bool kept) {
+        e.mutedBy_ = std::move(names);
+        e.mutedByKeys_ = std::move(keys);
+        e.muteKeptRunning_ = kept;
+    }
+    static std::uint64_t fingerprint(cascade::engine::Engine& e) { return e.apiListsFingerprint(); }
+    // The folder the engine looks for plugins in (null: the default), and a command applied at once.
+    static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
+    static void apply(cascade::engine::Engine& e, const FoxCommand& c) { (void)e.applyCommand(c); }
+    static std::uint64_t publishLists(cascade::engine::Engine& e) { return e.publishApiLists(); }
 };
 }  // namespace cascade::gui
 
 using Access = cascade::gui::AppWindowTestAccess;
 
 namespace {
+
+// The scratch folder of the plugin case: the two fixture modules of tests/fixture_stage1_plugin.cpp and
+// tests/fixture_group8_plugin.cpp.
+std::string g_pluginDir;
+std::string pluginDirHook() { return g_pluginDir; }
 
 constexpr int kPublishes = 40;
 
@@ -372,6 +400,122 @@ int main() {
         CHECK(ps4.rx.scannerState == FOXAPI_SCANNER_IDLE);
         CHECK((ps4.rx.flags & FOXAPI_RX_SCANNER_ACTIVE) == 0u);
         CHECK(ps4.rx.scanCurrentHz == 144.0125e6);
+    }
+
+    // F: the plugin-mute cluster (API 0.3 8.7) is hashed in place into the lists' fingerprint, which the
+    // pass computes every time: two plugins muting (names longer than any small string), the mute held after
+    // a tune-away, and the fingerprint allocates nothing - and a pass whose lists did not change builds no
+    // block either. The three things the cluster added are each IN it.
+    {
+        const std::string longName = "A decoder plugin whose name is longer than any small-string buffer";
+        const std::string longKey = "a-decoder-plugin-whose-module-file-name-is-long-1.2.3-abi3-win-x64.dll";
+        Access::muteCluster(e, {}, {}, false);
+        const std::uint64_t quiet0 = Access::fingerprint(e);
+        Access::muteCluster(e, {longName, "AIS"}, {longKey, "ais.dll"}, true);
+        const std::uint64_t held = Access::fingerprint(e);  // (warm-up: anything the first call sizes)
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e); }
+        t_counting = false;
+        std::printf("F: %d fingerprints with two plugins muting and the mute held: %ld heap allocations\n",
+                    kPublishes, t_news);
+        CHECK(t_news == 0);
+        (void)Access::publishLists(e);  // the block is built here, once (and may allocate)
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e); }
+        t_counting = false;
+        std::printf("F: %d passes whose lists did not change: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        CHECK(held != quiet0);
+        // A name, a module key and the latch are each in the fingerprint: change one and it moves, put it
+        // back and it is the same again.
+        Access::muteCluster(e, {longName, "AIS 2"}, {longKey, "ais.dll"}, true);
+        CHECK(Access::fingerprint(e) != held);
+        Access::muteCluster(e, {longName, "AIS"}, {longKey, "ais2.dll"}, true);
+        CHECK(Access::fingerprint(e) != held);
+        Access::muteCluster(e, {longName, "AIS"}, {longKey, "ais.dll"}, false);
+        CHECK(Access::fingerprint(e) != held);
+        Access::muteCluster(e, {longName, "AIS"}, {longKey, "ais.dll"}, true);
+        CHECK(Access::fingerprint(e) == held);
+        // Handed back: the fingerprint of an engine with nothing muting.
+        Access::muteCluster(e, {}, {}, false);
+        CHECK(Access::fingerprint(e) == quiet0);
+    }
+
+    // F2: the same with two REAL plugins loaded - the fingerprint hashes, for each plugin and every pass, its
+    // capability word, its two grants and its mute setting from the cached module keys, and builds no string to
+    // do it. A grant, a mute override and a stop each move it; none allocates.
+    {
+        const char* base = std::getenv("LOCALAPPDATA");
+        const std::filesystem::path dir = std::filesystem::path(base != nullptr ? base : ".") / "plugins_alloc";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        for (const char* src : {FIXTURE_STAGE1_PLUGIN, FIXTURE_GROUP8_PLUGIN}) {
+            const std::filesystem::path p(src);
+            std::filesystem::copy_file(p, dir / p.filename(), std::filesystem::copy_options::overwrite_existing, ec);
+            CHECK(!ec);
+        }
+        g_pluginDir = dir.string();
+        Access::setPluginDir(&pluginDirHook);
+        {
+            cascade::engine::Engine e2;
+            e2.initialise();
+            Access::setPluginDir(nullptr);
+            const std::string key1 = std::filesystem::path(FIXTURE_STAGE1_PLUGIN).filename().string();
+            const std::string key8 = std::filesystem::path(FIXTURE_GROUP8_PLUGIN).filename().string();
+            const std::uint64_t plain = Access::fingerprint(e2);  // (warm-up: the cached keys are built here)
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e2); }
+            t_counting = false;
+            std::printf("F2: %d fingerprints with two plugins loaded: %ld heap allocations\n", kPublishes, t_news);
+            CHECK(t_news == 0);
+            (void)Access::publishLists(e2);
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e2); }
+            t_counting = false;
+            CHECK(t_news == 0);
+            // Each of the things hashed moves it.
+            FoxCommand grant{};
+            grant.structSize = sizeof(grant);
+            grant.op = FOXAPI_OP_PLUGIN_GRANT;
+            grant.ival[0] = 1;
+            grant.ival[1] = 1;
+            std::snprintf(grant.text, sizeof(grant.text), "%s", key8.c_str());
+            Access::apply(e2, grant);
+            const std::uint64_t granted = Access::fingerprint(e2);
+            CHECK(granted != plain);
+            grant.ival[0] = 2;
+            Access::apply(e2, grant);
+            const std::uint64_t both = Access::fingerprint(e2);
+            CHECK(both != granted);
+            FoxCommand mute{};
+            mute.structSize = sizeof(mute);
+            mute.op = FOXAPI_OP_PLUGIN_MUTE;
+            mute.ival[0] = 1;
+            std::snprintf(mute.text, sizeof(mute.text), "%s", key1.c_str());
+            Access::apply(e2, mute);
+            const std::uint64_t muting = Access::fingerprint(e2);
+            CHECK(muting != both);
+            FoxCommand stop{};
+            stop.structSize = sizeof(stop);
+            stop.op = FOXAPI_OP_DECODER_STOP;
+            std::snprintf(stop.text, sizeof(stop.text), "%s", key8.c_str());
+            Access::apply(e2, stop);
+            CHECK(Access::fingerprint(e2) != muting);
+            // ...and with all of it in force, still nothing allocates.
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e2); }
+            t_counting = false;
+            std::printf("F2: %d fingerprints with grants, a mute override and a stop in force: %ld heap allocations\n",
+                        kPublishes, t_news);
+            CHECK(t_news == 0);
+        }
+        std::filesystem::remove_all(dir, ec);
     }
 
     return testSummary("test_engine_publish_alloc");

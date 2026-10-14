@@ -190,7 +190,13 @@ struct AppWindowTestAccess {
     static cascade::core::Recorder& iqRecorder(AppWindow& a) { return a.engine_.iqRecorder_; }
     static void setSquelch(AppWindow& a, float db) { a.engine_.squelchDb_ = db; }
     static void muteBy(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
-    static void aLineAppears(AppWindow& a) { ++a.engine_.decoderLinesTotal_; }
+    // A change of the lists that touches nothing these tests read. A decoder line used to be it (it moved
+    // listSeq once a line); since API 0.3 8.7 (D3) a line moves no list counter, so the preset note - a
+    // status line the Decoders section letters - changes instead, and moves listSeq all the same.
+    static void aLineAppears(AppWindow& a) {
+        static unsigned n = 0;
+        a.engine_.presetNote_ = "note " + std::to_string(++n);
+    }
     static const std::string& recordDir(AppWindow& a) { return a.engine_.recordDir_; }
     static cascade::core::Scanner::Params engineParams(AppWindow& a) { return a.engine_.scannerParams(); }
     static double engineStartMhz(AppWindow& a) { return a.engine_.scanStartMhz_; }

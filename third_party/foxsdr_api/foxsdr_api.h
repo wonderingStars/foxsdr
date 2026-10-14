@@ -707,6 +707,7 @@ typedef struct FoxCommandResult {
 #define FOXAPI_EVENT_SESSION      8u  /* text: e.g. "keep-alive late" */
 #define FOXAPI_EVENT_OVERFLOW     9u  /* value[0]: events dropped */
 #define FOXAPI_EVENT_PATCH        10u /* 0.3; value[0]: graph epoch; value[1]: 1 running */
+#define FOXAPI_EVENT_MUTE_TUNE_AWAY 11u /* 0.3 (8.7); value[0]: how many plugins were muting the audio when the receiver tuned off their preset (FOXAPI_LIST_MUTE_CAUSES names them); once per tune-away */
 #define FOXAPI_EVENT_MASK(kind) (1ull << (kind))
 
 typedef struct FoxEvent {
@@ -735,16 +736,16 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_GAINS         5u  /* name; detail: the unit token ("dB" or "step", 0.3); value[0..3]: min, max, step, current; FOXAPI_ITEM_AGC (0.3) */
 #define FOXAPI_LIST_ANTENNAS      6u
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
-#define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text */
-#define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name */
+#define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text; 0.3 (8.7): MUTES */
+#define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name; 0.3 (8.7): value[0]: the capability word (CASCADE_CAP_* of the plugin ABI); ACTIVE loaded; STOPPED, TUNE_ALLOWED, SETTINGS_ALLOWED */
 #define FOXAPI_LIST_CATALOGUE     10u /* the store's entries */
 #define FOXAPI_LIST_AUDIO_DEVICES 11u
 #define FOXAPI_LIST_TX_DEVICES    12u
 /*      13u retired in 0.2 (FREQ_LISTS): imported lists are bookmark groups */
 #define FOXAPI_LIST_TRACKS        14u /* map tracks: value[0..2]: lat, lon, alt */
-#define FOXAPI_LIST_MARKERS       15u /* plugin marks on the spectrum: value[0]: Hz, value[1]: width */
+#define FOXAPI_LIST_MARKERS       15u /* plugin marks on the spectrum: value[0]: Hz, value[1]: width; 0.3 (8.7): value[2]: colour 0xRRGGBBAA, SPAN, DASHED, SPECTRUM_ONLY */
 #define FOXAPI_LIST_BAND_PLAN     16u /* value[0], value[1]: start, stop Hz */
-#define FOXAPI_LIST_PRESETS       17u /* plugin presets: name; detail: plugin; value[0]: Hz */
+#define FOXAPI_LIST_PRESETS       17u /* plugin presets: name; detail: plugin; value[0]: Hz; 0.3 (8.7): DEVICE_CENTRE */
 #define FOXAPI_LIST_DEVICE_OPTIONS 18u /* radio-specific switches (RSP notches, HDR, dither...) */
 #define FOXAPI_LIST_SERIAL_PORTS  19u
 #define FOXAPI_LIST_USER_PRESETS  20u
@@ -764,6 +765,8 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_STORE_UPDATES 33u /* name: catalogue id; detail: "from -> to" */
 #define FOXAPI_LIST_BAND_PLANS    34u /* the plans SET_BAND_PLAN takes: name; detail: id; ACTIVE */
 #define FOXAPI_LIST_PATCH_RADIOS  35u /* id: node; name: device; detail: error; value[0]: rate Hz; ACTIVE open, FAULT */
+#define FOXAPI_LIST_MUTE_CAUSES   36u /* 0.3 (8.7): the plugins muting the receiver's audio now. name: plugin; detail: its module file name; value[0]: 1 when the mute is held after a tune-away; ACTIVE */
+#define FOXAPI_LIST_STALE_GRANTS  37u /* 0.3 (8.7): the tune grants no loaded module holds. name: the module file name; REFUSED when the host holds a record of that file that did not load */
 
 #define FOXAPI_ITEM_ACTIVE    0x00000001u /* the selected / running / current entry */
 #define FOXAPI_ITEM_FAVOURITE 0x00000002u /* a bookmark marked as a favourite */
@@ -776,6 +779,14 @@ typedef struct FoxEvent {
 #define FOXAPI_ITEM_INSTALLED  0x00000080u /* a catalogue entry installed here */
 #define FOXAPI_ITEM_COMPATIBLE 0x00000100u /* a catalogue entry this build can load */
 #define FOXAPI_ITEM_AGC        0x00000200u /* a gain stage its own automatic gain control is driving now (an Airspy's LNA or MIXER) */
+#define FOXAPI_ITEM_MUTES      0x00000400u /* a decoder whose "mute audio while running" setting is on (DECODERS, 8.7) */
+#define FOXAPI_ITEM_TUNE_ALLOWED 0x00000800u /* a plugin granted control of the receiver's tuning (PLUGINS, 8.7) */
+#define FOXAPI_ITEM_SETTINGS_ALLOWED 0x00001000u /* a plugin granted control of the radio's settings (PLUGINS, 8.7) */
+#define FOXAPI_ITEM_STOPPED    0x00002000u /* a loaded plugin the user has stopped (PLUGINS, 8.7) */
+#define FOXAPI_ITEM_DEVICE_CENTRE 0x00004000u /* a preset that moves the radio's centre, not the VFO (PRESETS, 8.7) */
+#define FOXAPI_ITEM_SPAN       0x00008000u /* a mark that is a shaded band from value[0] to value[0] + value[1], not a line (MARKERS, 8.7) */
+#define FOXAPI_ITEM_DASHED     0x00010000u /* a mark drawn dashed (MARKERS, 8.7) */
+#define FOXAPI_ITEM_SPECTRUM_ONLY 0x00020000u /* a mark that is not drawn on the waterfall (MARKERS, 8.7) */
 
 typedef struct FoxListItem {
     uint32_t structSize;

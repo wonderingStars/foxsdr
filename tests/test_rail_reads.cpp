@@ -143,8 +143,13 @@ struct AppWindowTestAccess {
         return t_allocs - mark;
     }
     static void submit(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { a.uiSubmit(q); }
-    // A decoder line, which moves listSeq and nothing the rail reads.
-    static void aLineAppears(AppWindow& a) { ++a.engine_.decoderLinesTotal_; }
+    // A change of the lists that touches nothing these tests read. A decoder line used to be it (it moved
+    // listSeq once a line); since API 0.3 8.7 (D3) a line moves no list counter, so the preset note - a
+    // status line the Decoders section letters - changes instead, and moves listSeq all the same.
+    static void aLineAppears(AppWindow& a) {
+        static unsigned n = 0;
+        a.engine_.presetNote_ = "note " + std::to_string(++n);
+    }
     // The engine's side, for comparison.
     static const cascade::core::BandPlan& plan(AppWindow& a) { return a.engine_.bandPlan_; }
     static const std::vector<cascade::core::PlanInfo>& choices(AppWindow& a) { return a.engine_.bandPlanChoices_; }

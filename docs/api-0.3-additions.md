@@ -82,8 +82,11 @@ published in the same block as the lists, in the same pass.
 | `fact.biasTee.radioKey` | the radio it would be remembered for | LOCAL |
 | `fact.biasTee.radioName` | the radio's name as the confirmation dialog says it: the driver's own name, or the stand-in's words while the stand-in is in front of the key; `""` with none | |
 | `fact.bandPlan.name` | the name of the band plan LOADED, as the Display section captions it: the plans of its chain joined with `" + "` ("ITU Region 1 + United Kingdom"), or every installed plan joined when none is selected. Not the `ACTIVE` `BAND_PLANS` entry's name, which is one plan's. An interface translates each part where it draws it; `""` with no plan (section 8.4) | |
-| `fact.bookmarks.version` | the bookmark store's version counter, as a decimal: bumped by every add, edit, star, removal and import, and by nothing else. `BOOKMARKS` is copied again when it moves and not when `listSeq` does, since `listSeq` also moves when a decoder prints a line (section 8.5) | |
+| `fact.bookmarks.version` | the bookmark store's version counter, as a decimal: bumped by every add, edit, star, removal and import, and by nothing else. `BOOKMARKS` is copied again when it moves and not when `listSeq` does: `listSeq` moves for every other list change (section 8.5), and an interface that keeps a copy of a long list should not take it again for those | |
 | `fact.input.rateHz` | the DSP chain's input rate in Hz, written to the digit it reads back by (`%.17g`): the rate the spectrum's axis, the VFO's reach and a click on the spectrum are measured against. It follows the source's rate (`sampleRateHz`) except after a change of the source's rate that the chain refused (section 8.5) | |
+| `fact.mute.subject` | the plugins muting the audio, "A", "A and B", "A, B and C", **whole** (`audioMutedBy` is the same text cut at 127 bytes); `""` when none is (section 8.7) | |
+| `fact.mute.keptRunning` | `1` while the mute is held after a tune-away and the operator has not answered the question, else `0` (section 8.7) | |
+| `fact.plugin.lastDenied` | the module file name of the last plugin whose request to tune the receiver was refused; `""` none, and again after a rescan (section 8.7) | |
 
 ## 5. Lists (appended to 7.4)
 
@@ -104,11 +107,13 @@ says when to read again.
 | `PATCH_PROBLEMS` (28) | what the plan found wrong. `id`: node; `name`: the problem's code; `detail`: what the page says |
 | `PATCH_PARTS` (29) | the decoder parts a graph may use. `name`; `detail`: key; `value[0]`: the port type it is fed (0 I/Q, 1 audio, 2 text, 3 control, 4 track); `value[1]`: the rate it needs, Hz |
 | `RECORDINGS` (30) | the recorders' takes (current or last), then the patch's files. `name`: file; `detail`: path (LOCAL sessions only); `value[0]`: 1 I/Q, 2 audio, 3 patch; `value[1]`: bytes, **read live** (a growing file moves this without moving `listSeq`); `value[2]`: rate Hz; `value[3]`: the take's length in **seconds**, **read live** like `value[1]` (a take that is running moves it without moving `listSeq`; section 8.2); `ACTIVE` recording; `FULL` at its size limit; `STALLED` writes failing (FULL wins when both) |
-| `DECODER_LINES` (31) | the decoder-output backlog, oldest first, at most 500. `id`: line number (1 = the first line since the engine started); `name`: plugin; `detail`: the line (cut to 159 bytes) |
+| `DECODER_LINES` (31) | the decoder-output backlog, oldest first, at most 500. `id`: line number (1 = the first line since the engine started); `name`: plugin; `detail`: the line (cut to 159 bytes). **A line does not move `listSeq`** (8.7): watch `decoderLinesTotal` (the state's measurement) and read the lines above the last `id` you hold |
 | `STORE_BLOCKED` (32) | installed plugins the store's policy refuses to load. `name`: file; `detail`: why |
 | `STORE_UPDATES` (33) | the updates the store would install. `name`: catalogue id; `detail`: "from -> to" |
 | `BAND_PLANS` (34) | the plans `SET_BAND_PLAN` takes. `name`; `detail`: id; `ACTIVE` |
 | `PATCH_RADIOS` (35) | the patch's radios. `id`: node; `name`: device; `detail`: why it faulted or did not open; `value[0]`: rate Hz; `ACTIVE` open; `FAULT` |
+| `MUTE_CAUSES` (36) | the plugins muting the receiver's audio now (8.7). `name`: the plugin; `detail`: its module file name; `value[0]`: `1` when the mute is held after a tune-away; `ACTIVE` on every entry. Empty when nothing mutes |
+| `STALE_GRANTS` (37) | the tune grants no loaded module holds (8.7). `name`: the module file name; `REFUSED` when the host holds a record of that file that did not load. In the order the grants were given |
 
 ### 5.2 0.2 lists now served
 
@@ -123,6 +128,10 @@ service; `value[0..2]`: start, stop, colour), `PRESETS` and `USER_PRESETS`
 ones the open radio has), `SERIAL_PORTS` (`name`; filled by
 `SCAN_SERIAL_PORTS`). `TRACKS` stays **GAP** (`UNSUPPORTED`): map tracks come
 through the map page's plugin APIs, which are not served yet.
+
+In 0.3 (8.7) `PLUGINS` carries `value[0]`, the plugin's capability word, and `STOPPED`, `TUNE_ALLOWED`
+and `SETTINGS_ALLOWED`; `DECODERS` carries `MUTES`; `PRESETS` carries `DEVICE_CENTRE`; `MARKERS` carries
+`value[2]`, the colour, and `SPAN`, `DASHED` and `SPECTRUM_ONLY`.
 
 `GAINS` (0.2: `name`; `value[0..3]`: min, max, step, current) gains one word
 (0.3): `detail` is the stage's **unit token**, so an interface can letter a
@@ -150,6 +159,13 @@ switched off. Switching an AGC moves `listSeq`.
 `FOXAPI_ITEM_REFUSED`, `FAULT` (patch), `STALLED`, `FULL` (recordings),
 `FED` (decoders), `INSTALLED`, `COMPATIBLE` (catalogue), `AGC` (a gain stage its
 own AGC is driving; `GAINS`, section 5.2).
+
+Section 8.7 adds eight, each on the list named: `FOXAPI_ITEM_MUTES` 0x400 (`DECODERS`:
+"mute audio while running" is on), `TUNE_ALLOWED` 0x800 and `SETTINGS_ALLOWED` 0x1000
+(`PLUGINS`: the module is granted control of the tuning / the settings), `STOPPED` 0x2000
+(`PLUGINS`: a loaded plugin the user stopped), `DEVICE_CENTRE` 0x4000 (`PRESETS`: moves the
+radio's centre, not the VFO), `SPAN` 0x8000, `DASHED` 0x10000 and `SPECTRUM_ONLY` 0x20000
+(`MARKERS`: a shaded band, drawn dashed, kept off the waterfall).
 
 ## 6. Scope taps — `read_scope` (closes 0.2 gap 5)
 
@@ -379,8 +395,8 @@ ones nested inside it; the band under a frequency is the NARROWEST entry
 containing it (both edges inclusive, the first on a tie), and the entries a
 view shows are those with `start < high && stop > low` (strict at both edges).
 An interface that draws it every frame keeps its own copy of the rows and reads
-them again only when the plan changed - `listSeq` also moves when a decoder
-prints a line, so it is not the plan's own signal: the number of entries, the
+them again only when the plan changed - `listSeq` also moves for every other
+list change, so it is not the plan's own signal: the number of entries, the
 `ACTIVE` `BAND_PLANS` entry and `fact.bandPlan.name` are.
 
 **Names are cut at the list item's size** (`name[96]`): an audio output device
@@ -428,8 +444,8 @@ every command the surface sends is one it always sent.
   markers on the spectrum come from `BOOKMARKS` (sorted by frequency, so the
   ones in view are two binary searches; `value[0]` the Hz, `FAVOURITE`, `name`,
   cut at the list item's 95 bytes), which can hold tens of thousands of
-  entries. `listSeq` moves for far more than the store - every line a decoder
-  prints moves it - so an interface that copies the rows when `listSeq` moves
+  entries. `listSeq` moves for far more than the store - a gain, a status line, a
+  preset note - so an interface that copies the rows when `listSeq` moves
   copies them all the time. It copies them when this fact moves, and reads
   nothing else of the list between.
 - **`fact.input.rateHz`**: the DSP chain's input rate. `sampleRateHz` is the
@@ -538,11 +554,102 @@ frame is two: one 16-bit sample), which is what the recorder counts a frame as. 
 under an audio take is `audioMutedBy` while the audio is hard-muted (the user's mute or a
 plugin's, or a keyed transmitter that is not monitored: section 8.5).
 
+### 8.7 The decoders, the presets, the marks, the plugin-mute cluster and the tune grants as their sections draw them
+
+The Decoders rail section, the Decoder output window, the preset bars, the marks on the
+spectrum, the "sound is muted" banner and dialog, and the Receiver control rows read the
+engine's table only. 0.3 had most of it (`DECODERS`, `PLUGINS`, `PRESETS`, `USER_PRESETS`,
+`MARKERS`, `DECODER_LINES`, `decodersRunning`, `decodersFitted`, `decodersMatched`,
+`decoderLinesTotal`, `audioMutedBy`, and every command the surfaces send); this adds what it
+lacked. **No member of `FoxReceiverState` is added, no op, and no struct changes.**
+
+**The plugin-mute cluster** (D1). While the receiver sits on a muting plugin's preset the audio
+is muted for that plugin; tuned away from it with the plugin still running, the mute is HELD
+(the engine keeps the audio down until the operator answers) and the engine asks. The cluster
+is the list, two facts and an event:
+
+| | |
+|---|---|
+| `MUTE_CAUSES` (36) | one entry for each plugin muting the receiver's audio now, in the order `audioMutedBy` names them. `name`: the plugin; `detail`: its **module file name** (what `FOXAPP_OP_DECODER_STOP_LIST` takes); `value[0]`: `1` when the mute is **held after a tune-away** (the plugin keeps decoding while the audio stays down), `0` while the receiver is on its preset; `ACTIVE` on every entry (an entry is listed because it is muting). Empty when nothing mutes. The user's own mute is `FOXAPI_RX_MUTED` and is not here |
+| `fact.mute.subject` | the same sentence as `audioMutedBy` ("A", "A and B", "A, B and C"), **whole**: the state's text is cut at 127 bytes |
+| `fact.mute.keptRunning` | `1` while the mute is held after a tune-away and the operator has not stopped the plugins, `0` otherwise. The banner an interface keeps up is exactly this |
+| `FOXAPI_EVENT_MUTE_TUNE_AWAY` (11) | the receiver tuned off the presets of plugins that are still running and muting, and the engine is asking whether to stop them. `value[0]`: how many plugins (`MUTE_CAUSES` names them and carries `value[0] = 1`). **Once for each tune-away** - arriving on a preset re-arms it - and never raised for a plugin that stopped first or for the user stopping one. It is raised by the **publish that shows the held mute**, which is the pass after the one that decided it (the engine decides the mute after a pass's publish), so when an interface receives it the list already names the plugins and `fact.mute.keptRunning` already reads `1` |
+
+An interface that asks the question captures the names and keys from `MUTE_CAUSES` when the
+event arrives and keeps them: the dialog must not re-aim itself at plugins that muted later. It
+is **withdrawn** when `fact.mute.keptRunning` reads `0` again (the engine lets the hold go
+exactly when it withdraws its own question: the receiver is back on a preset, or the plugins
+named were stopped). "Keep it running" (`FOXAPP_OP_MUTE_KEEP_RUNNING`) leaves the hold in
+place and the question closed; "Stop ... and resume sound" is `FOXAPP_OP_DECODER_STOP_LIST`
+with `ival[0] = 1` and the captured keys. `mutePopupQueued_`, the flag a window used to
+consume, stays in the engine and nothing in the table reads it.
+
+**The decoders and plugins** (D2). `DECODERS` (section 5.2) gains `FOXAPI_ITEM_MUTES`: the
+plugin's effective "mute audio while running" setting (the default its capabilities imply -
+on for an I/Q decoder, off for an audio decoder - or the operator's override of it).
+`PLUGINS` gains, for **every** record the host holds (loaded or not):
+
+| | |
+|---|---|
+| `value[0]` | the plugin's **capability word** as it declared it, `CASCADE_CAP_*` of `src/core/plugin_abi.h` (`DECODER` 0x1, `IQ_DECODER` 0x2, `IMAGE_DECODER` 0x4, `TRACK_SOURCE` 0x8, `PANEL` 0x10, `HOST_CLIENT` 0x20, `PRESET` 0x40, `BASEMAP` 0x80, `TRACK_INFO` 0x100, `INSTRUMENT` 0x200, `AUDIO_OUT` 0x400, `AUDIO_PROCESSOR` 0x800). 0 for a file refused before a descriptor was accepted; for a duplicate the host turned off, the word it declared. For a LOADED plugin a declared bit has its table behind it (the host proves it), so the word says what the plugin offers |
+| `FOXAPI_ITEM_STOPPED` | a loaded plugin the user stopped (any plugin; a decoder's stop also shows as `DECODERS`' `ACTIVE` clearing) |
+| `FOXAPI_ITEM_TUNE_ALLOWED`, `FOXAPI_ITEM_SETTINGS_ALLOWED` | the plugin's module file is granted control of the receiver's tuning / the radio's settings (`FOXAPI_OP_PLUGIN_GRANT`, `ival[0]` 1 / 2, `ival[1]` on / off, `text` the module file name). The grants the config holds, which the plugin host mirrors |
+
+`STALE_GRANTS` (37) is the half a flag on `PLUGINS` cannot carry: a grant is held for a module
+file, and the file may be gone. One entry for each **tune** grant no loaded module holds, in
+the order the grants were given: `name`: the module file name; `FOXAPI_ITEM_REFUSED` when the
+host holds a record of that file and it did not load (the file is on the disk and was refused),
+clear when no file of that name is fitted at all. An interface shows them so a permission
+nobody can see is one somebody can take back - toggling is the same `FOXAPI_OP_PLUGIN_GRANT`.
+`fact.plugin.lastDenied` is the module file name of the last plugin whose request to tune the
+receiver was refused ("" none; a rescan clears it): the key the grant is held under, and so the
+key to look up in `PLUGINS`.
+
+**The presets and the marks** (from the survey). `PRESETS` gains `FOXAPI_ITEM_DEVICE_CENTRE`:
+the preset moves the radio's centre rather than the VFO, and is "already tuned to" by that
+comparison (|centre - frequency| within half the radio's rate) and not by the tuned frequency's
+(within the larger of half the bandwidth and 5 kHz). `id` of a `PRESETS` entry is the
+plugin's own RAW index (what `FOXAPI_OP_PLUGIN_PRESET` takes); the host drops a preset whose
+frequency is not a frequency, so the ids may skip. `detail` is the plugin's display name; an
+empty `name` is a preset with no label of its own, which an interface letters with the plugin's
+name. `USER_PRESETS`' `detail` is the version-stripped module id the operator's own presets are
+filed under (`core::userPresetKey` of the module file name), and the position among one
+plugin's entries is the ordinal `FOXAPP_OP_USER_PRESET_APPLY` and `_FORGET_AT` take.
+`MARKERS` gains `FOXAPI_ITEM_SPAN` (a shaded band from `value[0]` to `value[0] + value[1]`,
+not a line), `FOXAPI_ITEM_DASHED` and `FOXAPI_ITEM_SPECTRUM_ONLY` (not drawn on the waterfall);
+`value[2]` is the colour, 0xRRGGBBAA, 0 meaning the host's own.
+
+**The decoder lines** (D3). `DECODER_LINES` NO LONGER MOVES `listSeq`. A decoder that prints
+tens of lines a second (ADS-B) used to move it once a line, and every interface that keeps a
+cache on `listSeq` read every list it keeps again, once a line. A line is a measurement:
+`decoderLinesTotal` climbs and nothing else moves. An interface that shows the backlog watches
+`decoderLinesTotal` and, when it has moved, reads `DECODER_LINES` from the end back to the last
+`id` it holds (the ids are the line numbers, so only the new lines are read; the list is a
+ring of 500, and an interface that falls more than 500 behind has lost the older ones). A
+line is cut to the item's 159 bytes. The lines the track-info plugin writes ("Aircraft info":
+why it cannot reach its registry) are counted like every other; they were not before, and so
+never reached the backlog.
+
+**Timing.** A command through the table lands at the engine's next pass and the lists show it
+after that pass's publish: the mute setting, a stop or start, a grant, a preset's effect on
+where the receiver sits. An interface whose control reads such a thing back sees its own change
+one pass later; one that toggles a local copy at the click and re-reads the list the frame after
+draws the engine's value from then on. `PLUGINS`, `DECODERS`, `PRESETS`, `USER_PRESETS`,
+`MARKERS`, `MUTE_CAUSES` and `STALE_GRANTS` move `listSeq` when they change. Nothing here
+allocates in the pass: the module keys are the cached ones, the mute cluster's names are hashed
+in place, and the block is rebuilt only when the fingerprint moves.
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
 whether it runs moved in the pass; `value[0]`: the epoch, `value[1]`: 1
 running.
+
+`FOXAPI_EVENT_MUTE_TUNE_AWAY` (11): the receiver tuned off the presets of plugins that
+are still running and muting the audio, and the engine holds the mute and asks whether to
+stop them. `value[0]`: how many plugins; `MUTE_CAUSES` names them (`value[0] = 1` on each).
+Once for each tune-away, raised by the publish that shows the held mute (section 8.7).
+Subscribe with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY)`.
 
 `FOXAPI_OP_SCAN_SERIAL_PORTS` (0x0F03, SETTINGS, **LOCAL sessions only** —
 they are this machine's ports): the engine lists them on its own thread; the
