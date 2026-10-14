@@ -27,6 +27,10 @@
 //       pass has run on (what gui::AppWindow does in its constructor) reads
 //       every list as empty; the bookmarks list used to dereference a block
 //       that has none yet (review F4)
+//   Y   the status column as its page draws it (state, 8.2, and the two list
+//       changes): the sink's words, the output ring and its rate, the decoder
+//       output total (a measurement), who mutes and who plays (the texts move
+//       audioSeq), the GAINS unit token, the recordings' elapsed seconds
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -491,6 +495,276 @@ void testTransmitterState() {
     CHECK_EQ(s.run(cmd(FOXAPI_OP_TX_CLOSE)).result.status, FOXAPI_OK);
 }
 
+// --- Y: the status column as its page draws it (API 0.3 8.2) ----------------------
+
+// The state once it has stopped changing: the audio open the engine starts at
+// boot (on a worker) and its first passes have landed - `seq` has held still
+// for 300 ms - so a test that compares counters before and after a command
+// is not comparing against a sink that was still opening.
+FoxReceiverState settled(testing::Session& s) {
+    using Clock = std::chrono::steady_clock;
+    FoxReceiverState st = s.state();
+    auto since = Clock::now();
+    const auto end = since + std::chrono::seconds(10);
+    while (Clock::now() < end) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        FoxReceiverState now = s.state();
+        if (now.seq != st.seq) {
+            since = Clock::now();
+        } else if (Clock::now() - since >= std::chrono::milliseconds(300)) {
+            return now;
+        }
+        st = now;
+    }
+    return st;
+}
+
+int32_t setting(testing::Session& s, const std::string& keyValue) {
+    return s.run(cmd(FOXAPI_OP_SETTING_SET, 0, 0, keyValue.c_str())).result.status;
+}
+
+// AUDIO and SINK and DECODER OUTPUT and DECODERS: the state's new members.
+void testStatusColumnState() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    FoxReceiverState st = settled(s);
+    std::printf("Y: sink flags 0x%x, sinkName '%s', ring %llu of %llu frames at %.0f Hz, running %u of %u fitted (%u matched)\n",
+                st.audioFlags, st.sinkName, static_cast<unsigned long long>(st.audioRingFrames),
+                static_cast<unsigned long long>(st.audioRingCapacityFrames), st.audioRateHz, st.decodersRunning,
+                st.decodersFitted, st.decodersMatched);
+
+    // THE SINK'S WORDS with a hermetic engine: whether this machine has an
+    // output device or not, they tell the same story as 0.2's own members.
+    CHECK((st.audioFlags & FOXAPI_AUDIO_OPENING) == 0u);  // settled: no open is still going
+    CHECK((st.audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) == 0u);
+    CHECK_EQ(std::string(st.audioPlayingPlugin), std::string());
+    CHECK_EQ(std::string(st.audioMutedBy), std::string());
+    const bool everOpened = (st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u;
+    // sinkName is the device the last successful open landed on: there is one
+    // exactly when an open has succeeded.
+    CHECK_EQ(everOpened, std::strlen(st.sinkName) != 0u);
+    // ...a stream cannot be alive that was never opened, and the 0.2 flag for
+    // an open sink says the same as the watchdog's view.
+    CHECK_EQ((st.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u, (st.flags & FOXAPI_RX_SINK_OPEN) != 0u);
+    if ((st.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u) { CHECK(everOpened); }
+
+    // THE RING AND ITS RATE: the finished audio is 48 kHz; the ring's size is
+    // fixed by the sink (present with or without a device) and its fill never
+    // exceeds it; the level the AUDIO card letters is a real number of
+    // milliseconds.
+    CHECK_EQ(st.audioRateHz, 48000.0);
+    CHECK(st.audioRingCapacityFrames > 0u);
+    // ...and a ring that is being served is never found brim full: the fill
+    // is not the size (it is 0 with no device, a few thousand frames with one).
+    CHECK(st.audioRingFrames < st.audioRingCapacityFrames);
+    const double capMs = 1000.0 * static_cast<double>(st.audioRingCapacityFrames) / st.audioRateHz;
+    CHECK(capMs >= 10.0 && capMs <= 10000.0);
+
+    // THE DECODERS: no plugin is loaded here. Running <= matched <= fitted
+    // always (matched is the count of a stopped receiver too).
+    CHECK_EQ(st.decodersFitted, 0u);
+    CHECK_EQ(st.decodersMatched, 0u);
+    CHECK(st.decodersRunning <= st.decodersMatched && st.decodersMatched <= st.decodersFitted);
+
+    // DECODER OUTPUT: the total climbs with the lines the decoders emit, the
+    // DECODER_LINES ids are numbered from the same counter, and a line - a
+    // MEASUREMENT - moves neither seq nor audioSeq (only the lists' counter:
+    // the line is a list entry).
+    const FoxReceiverState base = settled(s);
+    const FoxCommand three[3] = {cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=POCSAG|one"),
+                                 cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=POCSAG|two"),
+                                 cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=ACARS|three")};
+    CHECK_EQ(api()->submit(s.raw(), three, 3, nullptr), 3);
+    CHECK(check::waitFor([&] { return s.state().decoderLinesTotal == base.decoderLinesTotal + 3u; }, 2000));
+    st = s.state();
+    CHECK_EQ(st.decoderLinesTotal, base.decoderLinesTotal + 3u);
+    CHECK_EQ(st.seq, base.seq);
+    CHECK_EQ(st.audioSeq, base.audioSeq);
+    CHECK(st.listSeq != base.listSeq);
+    const int32_t lines = count(s, FOXAPI_LIST_DECODER_LINES);
+    CHECK(lines >= 3);
+    CHECK_EQ(item(s, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(lines - 1)).id, st.decoderLinesTotal);
+    // A RING OF 500 IS NOT A TOTAL: past the backlog's size the list stops
+    // growing and the total keeps counting (a rate differenced over a window
+    // must not flatten at 500).
+    {
+        const uint64_t before = st.decoderLinesTotal;
+        const std::vector<FoxCommand> batch(100, cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=SPAM|x"));
+        for (uint64_t round = 1; round <= 6; ++round) {
+            CHECK_EQ(api()->submit(s.raw(), batch.data(), 100, nullptr), 100);
+            CHECK(check::waitFor([&] { return s.state().decoderLinesTotal == before + 100u * round; }, 3000));
+            FoxCommandResult drain[16];  // the answers are read, as a session must
+            for (auto& x : drain) { x.structSize = sizeof(x); }
+            while (api()->poll_results(s.raw(), drain, 16) > 0) {}
+        }
+        st = s.state();
+        CHECK_EQ(st.decoderLinesTotal, before + 600u);
+        CHECK_EQ(count(s, FOXAPI_LIST_DECODER_LINES), 500);
+        CHECK_EQ(item(s, FOXAPI_LIST_DECODER_LINES, 499).id, st.decoderLinesTotal);
+    }
+
+    // WHO MUTES: the decoder plugins whose preset the receiver sits on. Two
+    // of them, on one frequency, are named as the mute banner names them. The
+    // text moves audioSeq (and so seq) once, when it appears and when it goes.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).result.status, FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.muteBy=Alpha decoder@145500000;Beta decoder@145500000"), FOXAPI_OK);
+    const FoxReceiverState off = settled(s);
+    CHECK_EQ(std::string(off.audioMutedBy), std::string());  // not on their preset yet
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor([&] { return std::string(s.state().audioMutedBy) == "Alpha decoder and Beta decoder"; }, 2000));
+    const FoxReceiverState on = settled(s);
+    CHECK_EQ(std::string(on.audioMutedBy), std::string("Alpha decoder and Beta decoder"));
+    CHECK_EQ(on.audioSeq, off.audioSeq + 1u);
+    CHECK(on.seq > off.seq);
+    // Tuned away with the plugins still running, the mute's subject stays (the
+    // audio is kept down until the operator answers); with them gone it ends.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).result.status, FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.muteBy="), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return std::string(s.state().audioMutedBy).empty(); }, 2000));
+    const FoxReceiverState gone = settled(s);
+    CHECK_EQ(gone.audioSeq, on.audioSeq + 1u);
+    // The USER'S mute is the 0.2 flag and not this text: it moves audioSeq all
+    // the same, and leaves the subject empty.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_MUTED, 0, 1)).result.status, FOXAPI_OK);
+    st = s.state();
+    CHECK((st.flags & FOXAPI_RX_MUTED) != 0u);
+    CHECK_EQ(std::string(st.audioMutedBy), std::string());
+    CHECK(st.audioSeq > gone.audioSeq);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_MUTED, 0, 0)).result.status, FOXAPI_OK);
+
+    // WHO PLAYS: a plugin holding the speakers replaces the receiver's audio.
+    // The flag and the name arrive together (one audioSeq step); the gap
+    // counters are MEASUREMENTS and move nothing when only they change. The
+    // receiver is stopped first: a running one pulls blocks, and the first
+    // block drops a stand-in that has no audio API behind it.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RUN, 0, 0)).result.status, FOXAPI_OK);
+    const FoxReceiverState quiet = settled(s);
+    CHECK_EQ(setting(s, "test.audioPlaying=DAB Radio|7|960"), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return (s.state().audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) != 0u; }, 2000));
+    const FoxReceiverState playing = settled(s);
+    CHECK_EQ(std::string(playing.audioPlayingPlugin), std::string("DAB Radio"));
+    CHECK_EQ(playing.audioPluginGaps, 7u);
+    CHECK_EQ(playing.audioPluginGapFrames, 960u);
+    CHECK_EQ(playing.audioSeq, quiet.audioSeq + 1u);
+    CHECK_EQ(setting(s, "test.audioPlaying=DAB Radio|9|1200"), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return s.state().audioPluginGaps == 9u; }, 2000));
+    st = settled(s);
+    CHECK_EQ(st.audioPluginGapFrames, 1200u);
+    CHECK_EQ(st.audioSeq, playing.audioSeq);  // only counters moved
+    CHECK_EQ(st.seq, playing.seq);
+    // ...and another plugin taking the speakers is the TEXT alone moving.
+    CHECK_EQ(setting(s, "test.audioPlaying=Packet TNC|9|1200"), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return std::string(s.state().audioPlayingPlugin) == "Packet TNC"; }, 2000));
+    const FoxReceiverState other = settled(s);
+    CHECK((other.audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) != 0u);
+    CHECK_EQ(other.audioFlags, st.audioFlags);
+    CHECK_EQ(other.audioSeq, st.audioSeq + 1u);
+    CHECK_EQ(setting(s, "test.audioPlaying="), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return (s.state().audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) == 0u; }, 2000));
+    st = settled(s);
+    CHECK_EQ(std::string(st.audioPlayingPlugin), std::string());
+    CHECK_EQ(st.audioPluginGaps, 0u);
+    CHECK_EQ(st.audioSeq, other.audioSeq + 1u);
+
+    // THE STREAM DIES under a healthy receiver (a USB sound card
+    // re-enumerating: the SINK card's STOPPED): the watchdog's view falls with
+    // the 0.2 open flag while EVER_OPENED stays, and the engine's own watchdog
+    // then reopens it. Only on a machine that has an output device to lose.
+    if (everOpened) {
+        CHECK((st.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u);
+        CHECK_EQ(setting(s, "test.audioClose="), FOXAPI_OK);
+        st = s.state();
+        CHECK((st.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) == 0u);
+        CHECK((st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u);
+        CHECK((st.flags & FOXAPI_RX_SINK_OPEN) == 0u);
+        CHECK(check::waitFor([&] { return (s.state().audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u; }, 15000));
+        const FoxReceiverState back = settled(s);
+        CHECK((back.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u);
+        CHECK((back.audioFlags & FOXAPI_AUDIO_OPENING) == 0u);
+        CHECK((back.flags & FOXAPI_RX_SINK_OPEN) != 0u);
+    }
+}
+
+// RECEIVER: the GAINS entries carry the unit token.
+void testStatusColumnGains() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK_EQ(count(s, FOXAPI_LIST_GAINS), 0);  // no radio, no stages
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SCAN_DEVICES)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_DEVICES) == 2; }, 3000));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, engine_api_test::kFakeRadioId)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor([&] { return (s.state().flags & FOXAPI_RX_DEVICE_OPEN) != 0u; }, 3000));
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_GAINS) == 1; }, 2000));
+    // The fake radio's one stage is a gain in decibels.
+    FoxListItem g = item(s, FOXAPI_LIST_GAINS, 0);
+    CHECK_EQ(std::string(g.name), std::string("TUNER"));
+    CHECK_EQ(std::string(g.detail), std::string("dB"));
+    CHECK_EQ(g.value[1], 49.6);
+    // A radio whose stages are the hardware's own steps (an Airspy's) says
+    // so, and the block is rebuilt for it (listSeq).
+    const uint64_t seq0 = s.state().listSeq;
+    CHECK_EQ(setting(s, "test.gainUnit=step"), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return std::string(item(s, FOXAPI_LIST_GAINS, 0).detail) == "step"; }, 2000));
+    CHECK(s.state().listSeq != seq0);
+    g = item(s, FOXAPI_LIST_GAINS, 0);
+    CHECK_EQ(std::string(g.name), std::string("TUNER"));  // the rest of the entry is as it was
+    CHECK_EQ(g.value[1], 49.6);
+    CHECK_EQ(setting(s, "test.gainUnit=dB"), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return std::string(item(s, FOXAPI_LIST_GAINS, 0).detail) == "dB"; }, 2000));
+}
+
+// RECORDER: RECORDINGS' value[3] is the take's seconds, read live.
+void testStatusColumnRecordings() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    using Clock = std::chrono::steady_clock;
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RUN, 0, 1)).result.status, FOXAPI_OK);
+    const auto t0 = Clock::now();
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_RECORDINGS) == 1; }, 2000));
+    const double v0 = item(s, FOXAPI_LIST_RECORDINGS, 0).value[3];
+    CHECK(v0 >= 0.0);
+    // It climbs while the take runs (Windows' timer tick is 15.6 ms: wait
+    // well past one), without moving the list's counter.
+    const uint64_t listSeq = s.state().listSeq;
+    CHECK(check::waitFor([&] { return item(s, FOXAPI_LIST_RECORDINGS, 0).value[3] >= v0 + 0.15; }, 3000));
+    CHECK_EQ(s.state().listSeq, listSeq);
+    // ...and it is the take's own clock, not the engine's: never more than
+    // the wall time since the command that started it.
+    const FoxListItem live = item(s, FOXAPI_LIST_RECORDINGS, 0);
+    const double wall = std::chrono::duration<double>(Clock::now() - t0).count();
+    CHECK((live.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    CHECK(live.value[3] > 0.0 && live.value[3] <= wall);
+    // A second take, started later, has run for less: each entry keeps its own.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RECORD_AUDIO, 0, 1)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_RECORDINGS) == 2; }, 2000));
+    CHECK(check::waitFor([&] { return item(s, FOXAPI_LIST_RECORDINGS, 1).value[3] >= 0.15; }, 3000));
+    const FoxListItem iq = item(s, FOXAPI_LIST_RECORDINGS, 0);
+    const FoxListItem au = item(s, FOXAPI_LIST_RECORDINGS, 1);
+    CHECK_EQ(iq.value[0], 1.0);
+    CHECK_EQ(au.value[0], 2.0);
+    CHECK((iq.flags & FOXAPI_ITEM_ACTIVE) != 0u && (au.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    CHECK(iq.value[3] > au.value[3]);
+    // Stopped, a take keeps the length it had when it ended: fixed, not zero.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).result.status, FOXAPI_OK);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor(
+        [&] {
+            return (item(s, FOXAPI_LIST_RECORDINGS, 0).flags & FOXAPI_ITEM_ACTIVE) == 0u &&
+                   (item(s, FOXAPI_LIST_RECORDINGS, 1).flags & FOXAPI_ITEM_ACTIVE) == 0u;
+        },
+        2000));
+    const FoxListItem iqEnd = item(s, FOXAPI_LIST_RECORDINGS, 0);
+    const FoxListItem auEnd = item(s, FOXAPI_LIST_RECORDINGS, 1);
+    CHECK(iqEnd.value[3] >= iq.value[3]);
+    CHECK(auEnd.value[3] >= au.value[3]);
+    CHECK(iqEnd.value[3] > auEnd.value[3]);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK_EQ(item(s, FOXAPI_LIST_RECORDINGS, 0).value[3], iqEnd.value[3]);
+    CHECK_EQ(item(s, FOXAPI_LIST_RECORDINGS, 1).value[3], auEnd.value[3]);
+    s.run(cmd(FOXAPI_OP_RUN, 0, 0));
+}
+
 // G: a session on an engine that has never run a pass - no list block has been
 // published, so read_list answers from an EMPTY one whose bookmarks and presets
 // pointers are null. gui::AppWindow opens its session exactly here
@@ -550,6 +824,9 @@ int main() {
     testStore();
     testBiasTee();
     testTransmitterState();
+    testStatusColumnState();
+    testStatusColumnGains();
+    testStatusColumnRecordings();
     testListsBeforeFirstPublish();
     return check::finish("test_engine_api_03");
 }

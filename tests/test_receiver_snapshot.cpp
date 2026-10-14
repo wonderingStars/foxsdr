@@ -453,6 +453,36 @@ void countersMoveByGroup() {
         {"key", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_TX_KEYED; }, "seq tx"},
         {"tx power", [](PublishedState& p) { p.rx.txPowerDb = -10.0; }, "seq tx"},
         {"an extension figure (position)", [](PublishedState& p) { p.app.rxLatDeg = 53.8; }, ""},
+        // API 0.3 8.2, the status column's members: the sink's words and the
+        // two texts move the audio group; the counters are measurements.
+        {"the sink's state words (ever opened)",
+         [](PublishedState& p) { p.rx.audioFlags |= FOXAPI_AUDIO_EVER_OPENED; }, "seq audio"},
+        {"the sink's state words (stream alive)",
+         [](PublishedState& p) { p.rx.audioFlags |= FOXAPI_AUDIO_STREAM_ALIVE; }, "seq audio"},
+        {"a plugin holding the speakers (flag and name)",
+         [](PublishedState& p) {
+             p.rx.audioFlags |= FOXAPI_AUDIO_PLUGIN_PLAYING;
+             std::snprintf(p.rx.audioPlayingPlugin, sizeof(p.rx.audioPlayingPlugin), "%s", "DAB");
+         },
+         "seq audio"},
+        {"the plugin's name alone", [](PublishedState& p) {
+             std::snprintf(p.rx.audioPlayingPlugin, sizeof(p.rx.audioPlayingPlugin), "%s", "DAB+");
+         },
+         "seq audio"},
+        {"who mutes the audio (a text)",
+         [](PublishedState& p) { std::snprintf(p.rx.audioMutedBy, sizeof(p.rx.audioMutedBy), "%s", "ADS-B and AIS"); },
+         "seq audio"},
+        {"the finished audio's rate", [](PublishedState& p) { p.rx.audioRateHz = 44100.0; }, "seq audio"},
+        {"ring fill and size, plugin gaps, gap frames, decoder lines (measurements)",
+         [](PublishedState& p) {
+             p.rx.audioRingFrames = 4800;
+             p.rx.audioRingCapacityFrames = 96000;
+             p.rx.audioPluginGaps = 3;
+             p.rx.audioPluginGapFrames = 1440;
+             p.rx.decoderLinesTotal = 99;
+         },
+         ""},
+        {"decoders matched (ready)", [](PublishedState& p) { p.rx.decodersMatched = 2; }, "seq"},
     };
     for (const Step& st : steps) {
         const Seqs before = seqs(snap);

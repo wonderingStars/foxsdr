@@ -1306,6 +1306,48 @@ int main() {
         silent.name = "VGA";
         CHECK(silent.unit == GainUnit::Decibels);
         CHECK(formatGain(silent.name, 16.0, silent.unit) == "VGA 16 dB");
+
+        // THE WORD BACK (API 0.3, the GAINS list's detail): each unit's wire
+        // word reads back as that unit, and a word an engine that predates the
+        // token would leave - empty - is decibels, as every gain was.
+        using cascade::gui::gainUnitFromWire;
+        CHECK(gainUnitFromWire(gainUnitWire(GainUnit::Decibels)) == GainUnit::Decibels);
+        CHECK(gainUnitFromWire(gainUnitWire(GainUnit::Steps)) == GainUnit::Steps);
+        CHECK(gainUnitFromWire("") == GainUnit::Decibels);
+        CHECK(gainUnitFromWire(nullptr) == GainUnit::Decibels);
+        CHECK(gainUnitFromWire("dB") == GainUnit::Decibels);
+    }
+
+    // --- joinMuteNamesInto: the engine's per-pass publish writes the mute's
+    // subject (FoxReceiverState::audioMutedBy) into a fixed buffer ------------
+    {
+        using cascade::gui::joinMuteNames;
+        using cascade::gui::joinMuteNamesInto;
+        const std::vector<std::string> names = {"ADS-B", "AIS", "ACARS", "POCSAG"};
+        char buf[128];
+        // The same words and joins as the string form, for none to four names.
+        for (std::size_t n = 0; n <= names.size(); ++n) {
+            const std::vector<std::string> some(names.begin(), names.begin() + static_cast<std::ptrdiff_t>(n));
+            std::memset(buf, 'Z', sizeof(buf));
+            joinMuteNamesInto(buf, sizeof(buf), some);
+            CHECK(std::string(buf) == joinMuteNames(some));
+        }
+        // Cut on a whole character when the room is short, always terminated,
+        // and nothing written past the room given.
+        std::memset(buf, 'Z', sizeof(buf));
+        joinMuteNamesInto(buf, 8, names);  // "ADS-B, A..." cut to 7 bytes
+        CHECK(std::string(buf) == "ADS-B, ");
+        CHECK(buf[8] == 'Z');
+        std::memset(buf, 'Z', sizeof(buf));
+        joinMuteNamesInto(buf, 4, {"a\xC3\xA9"});  // "a" and a two-byte e-acute: three bytes
+        CHECK(std::string(buf) == "a\xC3\xA9");
+        std::memset(buf, 'Z', sizeof(buf));
+        joinMuteNamesInto(buf, 3, {"a\xC3\xA9"});  // room for two: the acute would be split
+        CHECK(std::string(buf) == "a");
+        std::memset(buf, 'Z', sizeof(buf));
+        joinMuteNamesInto(buf, 0, names);  // no room: no write
+        CHECK(buf[0] == 'Z');
+        joinMuteNamesInto(nullptr, 8, names);  // no buffer: no crash
     }
 
     // --- rememberedSourceAfterFailedOpen / sourceToSave ----------------------

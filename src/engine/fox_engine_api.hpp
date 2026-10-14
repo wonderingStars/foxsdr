@@ -133,6 +133,10 @@ struct ApiListBlock {
     struct Gain {
         std::string name;
         double minDb = 0.0, maxDb = 0.0, stepDb = 0.0, currentDb = 0.0;
+        // THE UNIT TOKEN (API 0.3, GAINS' detail): "dB" or "step" - one of
+        // gui::gainUnitWire's two static strings, so a block never allocates
+        // for it.
+        const char* unit = "dB";
     };
     std::vector<Gain> gains;
     std::vector<std::string> antennas;

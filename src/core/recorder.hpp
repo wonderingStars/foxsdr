@@ -143,6 +143,15 @@ public:
     // a 32-bit RIFF size field can describe. Cleared by the next start().
     bool sizeLimitReached() const { return sizeLimit_.load(std::memory_order_acquire); }
 
+    // How long the current take has been running, in seconds, and for a take
+    // that has ended the length it had when it ended (stop(), the size limit);
+    // 0 before any take has started. From the STEADY clock, stamped by start()
+    // and by the finalising of the file - the same clock for the whole take,
+    // and nobody's frame clock: any thread may read it (the engine API's
+    // RECORDINGS list does, live, like bytesWritten()). Two atomic stores a
+    // take and nothing on the sample path.
+    double elapsedSeconds() const;
+
     // Pure and testable: "iq_20260815_143059_2000000Hz.wav",
     // "audio_20260815_143059_48000Hz.wav". The rate is rounded to the
     // nearest integer Hz (WAV itself stores an integer rate anyway).
@@ -182,6 +191,12 @@ private:
     // Same reason, and the discriminator between the two ways a take stops
     // taking — see writeFailed()/sizeLimitReached().
     std::atomic<bool> sizeLimit_{false};
+    // The take's stamps on the steady clock, in nanoseconds since its epoch
+    // (never 0 once set): start() writes the first and clears the second
+    // BEFORE recording_ goes true; finalizeFile() writes the second, once, when
+    // it closes the file. See elapsedSeconds().
+    std::atomic<std::int64_t> startedNs_{0};
+    std::atomic<std::int64_t> endedNs_{0};
     // The data-chunk ceiling in bytes: kMaxDataBytes (just under 4 GiB) in
     // the product, and only setMaxDataBytesForTest ever moves it. Plain
     // rather than atomic because nothing changes it while a take runs.

@@ -2,6 +2,7 @@
 #include "core/recorder.hpp"
 
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -38,6 +39,15 @@ void putU32(unsigned char* p, std::uint32_t x) {
     p[1] = static_cast<unsigned char>((x >> 8) & 0xFFu);
     p[2] = static_cast<unsigned char>((x >> 16) & 0xFFu);
     p[3] = static_cast<unsigned char>((x >> 24) & 0xFFu);
+}
+
+// The steady clock in nanoseconds since its epoch: the take's stamps. Never
+// 0 (an epoch of 0 would read as "not stamped").
+std::int64_t steadyNs() {
+    const std::int64_t n = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                               .count();
+    return n > 0 ? n : 1;
 }
 
 }  // namespace
@@ -174,6 +184,10 @@ bool Recorder::start(RecordKind kind, const std::string& directory, double sampl
     dataBytes_.store(0, std::memory_order_relaxed);
     kind_.store(kind, std::memory_order_relaxed);
     file_ = f;
+    // The take's clock starts here, before recording() can read true: a
+    // reader that sees the take running finds its start already stamped.
+    endedNs_.store(0, std::memory_order_relaxed);
+    startedNs_.store(steadyNs(), std::memory_order_relaxed);
     recording_.store(true, std::memory_order_release);
     return true;
 }
@@ -334,6 +348,10 @@ void Recorder::finalizeFile() {
     }
     std::FILE* f = file_;
     file_ = nullptr;
+    // THE TAKE'S END, stamped once: this is the one place every way of ending
+    // passes through (stop(), the size limit), and only the first of them gets
+    // here with an open file.
+    endedNs_.store(steadyNs(), std::memory_order_release);
     const std::uint64_t data = dataBytes_.load(std::memory_order_relaxed);
     unsigned char sz[4];
     // Flush the tail of the sample stream before seeking: fseek on an
@@ -380,6 +398,18 @@ std::uint64_t Recorder::samplesWritten() const {
 
 std::uint64_t Recorder::bytesWritten() const {
     return dataBytes_.load(std::memory_order_relaxed);
+}
+
+double Recorder::elapsedSeconds() const {
+    const std::int64_t start = startedNs_.load(std::memory_order_acquire);
+    if (start == 0) { return 0.0; }  // no take has started
+    // A take that is running is measured to now. One that has ended is
+    // measured to its stamped end; the few microseconds between recording()
+    // going false and finalizeFile()'s stamp read as "to now", which is the
+    // length it has.
+    std::int64_t end = recording_.load(std::memory_order_acquire) ? 0 : endedNs_.load(std::memory_order_acquire);
+    if (end == 0) { end = steadyNs(); }
+    return end > start ? static_cast<double>(end - start) * 1.0e-9 : 0.0;
 }
 
 }  // namespace cascade::core

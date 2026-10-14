@@ -21,6 +21,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
 #include "core/user_presets.hpp"
+#include "core/utf8_text.hpp"  // utf8Floor: joinMuteNamesInto cuts on a character
 // normalisedSerial lives with the driver that needs it, and the prefer-native
 // rule has to use the SAME normalisation the driver's own open() matches on -
 // a rule stricter than the driver's would point at a device the driver then
@@ -1255,6 +1256,29 @@ inline std::string joinMuteNames(const std::vector<std::string>& names) {
     return s;
 }
 
+// joinMuteNames into a fixed buffer, for the engine's per-pass publish
+// (FoxReceiverState::audioMutedBy), which has no std::string to spare: the
+// same words and joins, cut on a whole character when the room is short,
+// always NUL-terminated, and nothing allocated.
+inline void joinMuteNamesInto(char* out, std::size_t cap, const std::vector<std::string>& names) {
+    if (out == nullptr || cap == 0) { return; }
+    std::size_t used = 0;
+    const auto put = [&](const char* s, std::size_t n) {
+        const std::size_t k = std::min(n, cap - 1 - used);
+        std::memcpy(out + used, s, k);
+        used += k;
+    };
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) {
+            const char* join = (i + 1 == names.size()) ? " and " : ", ";
+            put(join, std::strlen(join));
+        }
+        put(names[i].data(), names[i].size());
+    }
+    out[used] = '\0';
+    out[cascade::core::utf8Floor(out, used)] = '\0';
+}
+
 // --- WHAT A GAIN READS AS, and it is not always decibels --------------------
 //
 // THE DEFECT THIS EXISTS FOR. Every consumer of source::GainInfo lettered its
@@ -1276,6 +1300,15 @@ inline std::string joinMuteNames(const std::vector<std::string>& names) {
 // JSON's "unit" field is this string.
 inline const char* gainUnitWire(cascade::source::GainUnit unit) {
     return unit == cascade::source::GainUnit::Steps ? "step" : "dB";
+}
+
+// ...and the way back, for an interface that reads the engine API's GAINS list
+// (API 0.3, the entry's `detail` is this word): "step" is the hardware's own
+// steps, anything else - "dB", an empty word from an engine that predates it -
+// is decibels, which is what a gain was before the Airspy.
+inline cascade::source::GainUnit gainUnitFromWire(const char* token) {
+    return token != nullptr && std::strcmp(token, "step") == 0 ? cascade::source::GainUnit::Steps
+                                                               : cascade::source::GainUnit::Decibels;
 }
 
 // The ImGui slider's own format string. A step is a whole number and takes no

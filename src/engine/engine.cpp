@@ -3377,22 +3377,38 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // modules. The DEC lamp's predicate is running && active > 0; the DECODERS
     // card's count is the loaded decoder modules the runner feeds
     // (fedDecoderCount / loadedDecoderCount, asked the same way here).
+    //
+    // THE STATUS COLUMN'S "READY" (API 0.3 8.2, decodersMatched): the same
+    // count with the receiver stopped too - instances built and matched to
+    // the rate, nothing flowing - which the DECODERS card letters as "N ready".
+    // That needs the runner's answer while stopped, so the one acquisition is
+    // taken either way; with the receiver stopped there is no DSP thread
+    // taking that lock per block to be held up by it. The modules' keys are
+    // the cached ones (refreshApiPluginKeys hashes the plugins' paths and
+    // names, and rebuilds the keys only when those moved): no key string is
+    // built per plugin per pass.
     std::size_t runnerActive = 0;
-    std::uint32_t fedModules = 0;
+    std::uint32_t matchedModules = 0;
     std::uint32_t fittedModules = 0;
-    if (running) { pluginRunner_.feedSnapshot(runnerActive, feedingKeysScratch_); }
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (!p.loaded) { continue; }
-        if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) { continue; }
-        ++fittedModules;
-        if (!running) { continue; }
-        const std::string key = cascade::core::pluginKey(p);
-        if (key.empty()) { continue; }
-        if (std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), key) !=
-            feedingKeysScratch_.end()) {
-            ++fedModules;
+    pluginRunner_.feedSnapshot(runnerActive, feedingKeysScratch_);
+    refreshApiPluginKeys();
+    {
+        const auto& plugins = pluginHost_.plugins();
+        for (std::size_t i = 0; i < plugins.size(); ++i) {
+            const cascade::core::LoadedPlugin& p = plugins[i];
+            if (!p.loaded) { continue; }
+            if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) { continue; }
+            ++fittedModules;
+            const std::string& key = apiPluginKeys_[i];
+            if (key.empty()) { continue; }
+            if (std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), key) !=
+                feedingKeysScratch_.end()) {
+                ++matchedModules;
+            }
         }
     }
+    // RUNNING is fed with the receiver running; stopped, nothing is fed.
+    const std::uint32_t fedModules = running ? matchedModules : 0u;
 
     // THE FLAGS: each condition, from its own source, into its own bit
     // (core::receiverFlags; test_snapshot_app walks them one at a time).
@@ -3557,14 +3573,45 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.rdsGroups = rds.state.groupsDecoded;
     e.rdsErrors = rds.state.blockErrors;
     e.sourceBusy = soapyScanPending_ || deviceOpenPending_;
+    // THE STATUS COLUMN AS A PAGE DRAWS IT (API 0.3, docs/api-0.3-additions.md
+    // 8.2): the AUDIO / SINK / DECODER OUTPUT / DECODERS cards' figures, from
+    // the same calls the column made from its frame until stage 4 - each read
+    // ONCE, here, for both the /api/status extension and the state a session
+    // reads. Nothing below allocates, and the runner's lock is taken once.
     {
         const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+        const std::uint64_t ringFrames = sink.ringFrames();
+        const std::uint64_t ringCapacityFrames = sink.ringCapacityFrames();
         e.audioPrimingCallbacks = sink.primingCallbacks();
-        e.audioRingMs = 1000.0 * static_cast<double>(sink.ringFrames()) / rateHz;
-        e.audioRingCapacityMs = 1000.0 * static_cast<double>(sink.ringCapacityFrames()) / rateHz;
+        e.audioRingMs = 1000.0 * static_cast<double>(ringFrames) / rateHz;
+        e.audioRingCapacityMs = 1000.0 * static_cast<double>(ringCapacityFrames) / rateHz;
+        r.audioRateHz = rateHz;
+        r.audioRingFrames = ringFrames;
+        r.audioRingCapacityFrames = ringCapacityFrames;
     }
-    e.audioPluginGaps = pluginRunner_.audioGaps();
-    e.audioPluginGapFrames = pluginRunner_.audioGapFrames();
+    // The plugin audio path's gap counters and who holds the speakers: ONE
+    // acquisition of the runner's lock (it was two, audioGaps() and
+    // audioGapFrames(); the name is the third read, and the status text's own
+    // publish still asks for it separately).
+    const bool pluginPlaying = pluginRunner_.audioPathSnapshot(
+        e.audioPluginGaps, e.audioPluginGapFrames, r.audioPlayingPlugin, sizeof(r.audioPlayingPlugin));
+    r.audioPluginGaps = e.audioPluginGaps;
+    r.audioPluginGapFrames = e.audioPluginGapFrames;
+    {
+        // The SINK card's four states, as the column asked them: a worker
+        // inside the device's open first (nothing else about the sink may be
+        // asked then: STREAM_ALIVE is clear while OPENING), then whether any
+        // open ever succeeded, then the watchdog's view of the stream.
+        const bool opening = audioOpen_.inFlight();
+        r.audioFlags = 0;
+        if (opening) { r.audioFlags |= FOXAPI_AUDIO_OPENING; }
+        if (sink.everOpened()) { r.audioFlags |= FOXAPI_AUDIO_EVER_OPENED; }
+        if (!opening && sink.streamAlive()) { r.audioFlags |= FOXAPI_AUDIO_STREAM_ALIVE; }
+        if (pluginPlaying) { r.audioFlags |= FOXAPI_AUDIO_PLUGIN_PLAYING; }
+        r.decodersMatched = matchedModules;
+        r.decoderLinesTotal = decoderLinesTotal_;
+        cascade::gui::joinMuteNamesInto(r.audioMutedBy, sizeof(r.audioMutedBy), mutedBy_);
+    }
     e.iqBytes = iqRecorder_.bytesWritten();
     e.audioBytes = audioRecorder_.bytesWritten();
     switch (scanner_.state()) {

@@ -19,8 +19,11 @@
 //   B  Transmitter::lastErrorInto: the whole text when it fits, a cut that
 //      never splits a UTF-8 character when it does not, a NUL always, and no
 //      write at all with no room
+//   C  the status column's texts (API 0.3 8.2): with decoders muting the audio
+//      and a plugin holding the speakers, the publish allocates nothing
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -95,6 +98,11 @@ struct AppWindowTestAccess {
     }
     static void errorInto(cascade::engine::Engine& e, char* out, std::size_t cap) {
         e.transmitter_.lastErrorInto(out, cap);
+    }
+    // The status column's mute subject and playing plugin (API 0.3 8.2).
+    static void muteBy(cascade::engine::Engine& e, std::vector<std::string> names) { e.mutedBy_ = std::move(names); }
+    static void playing(cascade::engine::Engine& e, const std::string& name) {
+        e.pluginRunner_.setPlayingForTest(name, 3, 400);
     }
     static void publish(cascade::engine::Engine& e, cascade::core::PublishedState& ps) {
         const std::string fault;
@@ -202,6 +210,32 @@ int main() {
     fillBuf();
     Access::errorInto(e, buf, sizeof(buf));
     CHECK(buf[0] == '\0');              // no error: an empty line
+
+    // C: the status column's two texts (API 0.3 8.2) are copied into the state,
+    // not built as strings every pass: with decoders muting the audio and a
+    // plugin holding the speakers (both longer than a small string), the
+    // publish still allocates nothing, and says who.
+    {
+        const std::string longName = "A decoder plugin whose name is longer than any small-string buffer";
+        Access::muteBy(e, {longName, "AIS", "ACARS"});
+        Access::playing(e, longName);
+        const long busy = allocationsOfPublishes(e);
+        std::printf("C: %d publishes with a mute subject and a playing plugin: %ld heap allocations\n", kPublishes, busy);
+        CHECK(busy == 0);
+        cascade::core::PublishedState ps2;
+        Access::publish(e, ps2);
+        CHECK(std::string(ps2.rx.audioMutedBy) == longName + ", AIS and ACARS");
+        CHECK(std::string(ps2.rx.audioPlayingPlugin) == longName);
+        CHECK((ps2.rx.audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) != 0u);
+        CHECK(ps2.rx.audioPluginGaps == 3u && ps2.rx.audioPluginGapFrames == 400u);
+        // ...and handed back, both go quiet.
+        Access::muteBy(e, {});
+        Access::playing(e, std::string());
+        Access::publish(e, ps2);
+        CHECK(std::string(ps2.rx.audioMutedBy).empty());
+        CHECK(std::string(ps2.rx.audioPlayingPlugin).empty());
+        CHECK((ps2.rx.audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) == 0u);
+    }
 
     return testSummary("test_engine_publish_alloc");
 }

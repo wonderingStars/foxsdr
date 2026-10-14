@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "core/diag_log.hpp"
+#include "core/utf8_text.hpp"  // utf8Floor: audioPathSnapshot cuts a name on a character
 
 namespace cascade::core {
 namespace {
@@ -816,6 +817,48 @@ std::uint64_t PluginRunner::audioGaps() const {
 std::uint64_t PluginRunner::audioGapFrames() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return audioGapFrames_;
+}
+
+bool PluginRunner::audioPathSnapshot(std::uint64_t& gaps, std::uint64_t& gapFrames, char* playing,
+                                     std::size_t cap) const {
+    bool any = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        gaps = audioGaps_;
+        gapFrames = audioGapFrames_;
+        any = playing_ != kNoAudio;
+        if (playing != nullptr && cap > 0) {
+            playing[0] = '\0';
+            if (any) {
+                // A copy of bytes, no formatting and no allocation: the cut
+                // onto a whole character is made after the lock is let go.
+                const std::string& n = audioInstances_[playing_].name;
+                const std::size_t k = std::min(n.size(), cap - 1);
+                std::memcpy(playing, n.data(), k);
+                playing[k] = '\0';
+            }
+        }
+    }
+    if (playing != nullptr && cap > 0) {
+        const std::size_t len = std::strlen(playing);
+        playing[utf8Floor(playing, len)] = '\0';
+    }
+    return any;
+}
+
+void PluginRunner::setPlayingForTest(const std::string& name, std::uint64_t gaps, std::uint64_t gapFrames) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    audioGaps_ = gaps;
+    audioGapFrames_ = gapFrames;
+    audioInstances_.clear();
+    playing_ = kNoAudio;
+    if (name.empty()) { return; }
+    AudioInstance a;
+    a.name = name;
+    a.key = name;
+    a.stopped = true;
+    audioInstances_.push_back(std::move(a));
+    playing_ = 0;
 }
 
 void PluginRunner::pollAudioDiagnostics() {

@@ -1447,6 +1447,55 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         engine_.decoderLog_.push_back({val.substr(0, bar), bar == std::string::npos ? std::string() : val.substr(bar + 1)});
         while (engine_.decoderLog_.size() > Engine::kDecoderLogMax) { engine_.decoderLog_.pop_front(); }
         ++engine_.decoderLinesTotal_;
+    } else if (key == "test.muteBy") {
+        // Stands in for decoder plugins that mute the audio on their preset:
+        // "name@hz;name@hz" - each a running, muting plugin with one preset at
+        // that frequency (so tuning there mutes, by that name, in the next
+        // pass). An empty value takes them all away: with none running, the
+        // latch the pass keeps after a tune-away lets go.
+        engine_.muteStates_.clear();
+        std::size_t a = 0;
+        while (a < val.size()) {
+            const std::size_t semi = val.find(';', a);
+            const std::string one = val.substr(a, semi == std::string::npos ? std::string::npos : semi - a);
+            const std::size_t at = one.find('@');
+            if (at != std::string::npos) {
+                cascade::core::MutePlugin m;
+                m.name = one.substr(0, at);
+                m.key = m.name + ".dll";  // a module's file name, as pluginKey gives one: not its name
+                m.running = true;
+                m.mutes = true;
+                cascade::core::MutePreset ps;
+                ps.frequencyHz = std::atof(one.c_str() + at + 1);
+                ps.label = m.name;
+                m.presets.push_back(std::move(ps));
+                engine_.muteStates_.push_back(std::move(m));
+            }
+            if (semi == std::string::npos) { break; }
+            a = semi + 1;
+        }
+    } else if (key == "test.audioPlaying") {
+        // Stands in for an audio-out plugin holding the speakers, or handing
+        // them back (empty): "name|gaps|gapFrames", the counters optional.
+        // PluginRunner::setPlayingForTest.
+        const std::size_t b1 = val.find('|');
+        const std::size_t b2 = b1 == std::string::npos ? b1 : val.find('|', b1 + 1);
+        const std::uint64_t gaps = b1 == std::string::npos ? 0 : std::strtoull(val.c_str() + b1 + 1, nullptr, 10);
+        const std::uint64_t gapFrames = b2 == std::string::npos ? 0 : std::strtoull(val.c_str() + b2 + 1, nullptr, 10);
+        engine_.pluginRunner_.setPlayingForTest(val.substr(0, b1), gaps, gapFrames);
+    } else if (key == "test.audioClose") {
+        // The output stream dies under a healthy receiver (a USB sound card
+        // re-enumerating - the case the audio watchdog exists for): the stream
+        // is closed from under the engine, which notices within its second and
+        // reopens it. Never while a worker is inside the device's open.
+        if (!engine_.audioOpen_.inFlight()) { engine_.pipeline_.audio().close(); }
+    } else if (key == "test.gainUnit") {
+        // The open radio's gain stages read in this unit: "step" (the
+        // hardware's own steps, an Airspy's) or "dB". The fake radio has only
+        // decibels.
+        for (cascade::source::GainInfo& g : engine_.deviceGainRanges_) {
+            g.unit = val == "step" ? cascade::source::GainUnit::Steps : cascade::source::GainUnit::Decibels;
+        }
     } else if (key == "test.statusLine") {
         // Stands in for whatever writes a status line: "key|text".
         const std::size_t bar = val.find('|');
@@ -1810,6 +1859,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
             if (want(b->gains.size())) {
                 const auto& g = b->gains[index];
                 copyText(it.name, g.name.c_str());
+                copyText(it.detail, g.unit);  // 0.3: "dB" or "step" (docs/api-0.3-additions.md 5.1)
                 it.value[0] = g.minDb;
                 it.value[1] = g.maxDb;
                 it.value[2] = g.stepDb;
@@ -2062,6 +2112,10 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 if (const auto* rec = static_cast<const cascade::core::Recorder*>(r.recorder)) {
                     // LIVE: the recorder's own atomics, no rebuild per block.
                     it.value[1] = static_cast<double>(rec->bytesWritten());
+                    // ...and the take's length from the recorder's own steady
+                    // stamps (0.3): live too, so a take that is growing moves
+                    // neither the block nor listSeq.
+                    it.value[3] = rec->elapsedSeconds();
                     if (rec->recording()) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                     if (rec->sizeLimitReached()) {
                         it.flags |= FOXAPI_ITEM_FULL;

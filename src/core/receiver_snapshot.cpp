@@ -19,7 +19,10 @@ bool sameText(const char* a, const char* b, std::size_t n) { return std::strncmp
 // measurement changes; the measurements are signalDb, sMeter, audioLevelDb,
 // audioUnderruns and the two key timers, and - read as measurements here
 // though API 0.2's list does not name it - pilotLevel, which follows the
-// signal exactly as signalDb does (docs/engine-stage2.md, OPEN).
+// signal exactly as signalDb does (docs/engine-stage2.md, OPEN). API 0.3 adds
+// txInputPeak (8.1) and, from the status column (8.2), the output ring's two
+// frame counts, the two plugin gap counters and the decoder line total: they
+// climb or swing with the stream, and a reader that wants them reads them.
 constexpr std::uint32_t kModeFlags =
     FOXAPI_RX_STEREO_ENABLED | FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH;
 constexpr std::uint32_t kDeviceFlags = FOXAPI_RX_RUNNING | FOXAPI_RX_DEVICE_OPEN |
@@ -125,7 +128,13 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                         !sameText(f.faultMessage, o.faultMessage, FOXAPI_MESSAGE_CHARS) ||
                         gainsMoved;
     const bool audio = first || f.volume != o.volume || changed(f.flags, o.flags, kAudioFlags) ||
-                       !sameText(f.sinkName, o.sinkName, FOXAPI_NAME_CHARS);
+                       !sameText(f.sinkName, o.sinkName, FOXAPI_NAME_CHARS) ||
+                       // 0.3 (8.2): the sink's state words and the two texts the SINK card
+                       // letters (not the ring, the gap counters or the line total:
+                       // measurements)
+                       f.audioFlags != o.audioFlags || f.audioRateHz != o.audioRateHz ||
+                       !sameText(f.audioMutedBy, o.audioMutedBy, FOXAPI_MESSAGE_CHARS) ||
+                       !sameText(f.audioPlayingPlugin, o.audioPlayingPlugin, FOXAPI_MESSAGE_CHARS);
     const bool display = first || f.dbMin != o.dbMin || f.dbMax != o.dbMax;
     const bool tx = first || changed(f.flags, o.flags, kTxFlags) || f.txMode != o.txMode ||
                     e.txKeyOwner != oe.txKeyOwner ||
@@ -140,7 +149,7 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     // Every other flag (recording, scanner, decoder lamp, web listener, the
     // squelch and stereo lamps) and the decoder counts: the overall counter.
     const bool other = first || f.flags != o.flags || f.decodersRunning != o.decodersRunning ||
-                       f.decodersFitted != o.decodersFitted;
+                       f.decodersFitted != o.decodersFitted || f.decodersMatched != o.decodersMatched;
     f.seq = o.seq + ((tune || mode || device || audio || display || tx || other) ? 1u : 0u);
     f.tuneSeq = o.tuneSeq + (tune ? 1u : 0u);
     f.modeSeq = o.modeSeq + (mode ? 1u : 0u);

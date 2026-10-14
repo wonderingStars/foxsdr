@@ -149,6 +149,7 @@ std::uint64_t Engine::apiListsFingerprint() {
             f.value(g.minDb);
             f.value(g.maxDb);
             f.value(g.stepDb);
+            f.value(g.unit);  // the GAINS entry's unit token (0.3)
             if (i < deviceGainsDb_.size()) { f.value(deviceGainsDb_[i]); }
         }
         for (const auto& a : deviceAntennas_) { f.text(a); }
@@ -295,7 +296,8 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         for (std::size_t i = 0; i < deviceGainRanges_.size(); ++i) {
             const auto& g = deviceGainRanges_[i];
             b->gains.push_back({g.name, g.minDb, g.maxDb, g.stepDb,
-                                i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0});
+                                i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0,
+                                cascade::gui::gainUnitWire(g.unit)});
         }
         b->antennas = deviceAntennas_;
         b->antenna = deviceAntenna_;

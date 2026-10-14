@@ -21,6 +21,7 @@
 #include "core/recorder.hpp"
 
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -30,6 +31,7 @@
 #include <ctime>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -599,6 +601,52 @@ int main() {
             CHECK(static_cast<std::int16_t>(u16le(&b[44 + 2])) == -16384);
             CHECK(static_cast<std::int16_t>(u16le(&b[44 + 8])) == 4096);
         }
+    }
+
+    {
+        // ELAPSED SECONDS (the engine API's RECORDINGS value[3], API 0.3 8.2):
+        // 0 before any take, climbing while one runs, fixed at the length it
+        // had once it has ended - by stop() or by the size limit - and a new
+        // take starts again from the beginning. The steady clock's tick on
+        // this machine is coarse (15.6 ms on Windows): nothing is expected to
+        // move inside 100 ms.
+        const std::string dir = tmpDir("elapsed");
+        Recorder r;
+        CHECK(r.elapsedSeconds() == 0.0);  // no take has ever started
+        std::string err;
+        CHECK(r.start(RecordKind::Audio, dir, 48000.0, err));
+        CHECK(r.elapsedSeconds() >= 0.0 && r.elapsedSeconds() < 0.1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        const double running = r.elapsedSeconds();
+        CHECK(running >= 0.1 && running < 5.0);
+        r.stop();
+        const double ended = r.elapsedSeconds();
+        CHECK(ended >= running && ended < 5.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        CHECK(r.elapsedSeconds() == ended);  // fixed, not climbing, not zero
+        r.stop();                            // a second stop restamps nothing
+        CHECK(r.elapsedSeconds() == ended);
+        // The next take starts its own clock.
+        const std::string dir2 = tmpDir("elapsed_next");
+        CHECK(r.start(RecordKind::Audio, dir2, 48000.0, err));
+        CHECK(r.elapsedSeconds() < ended);
+        r.stop();
+        // A take that ends itself at the size limit is stamped at its end.
+        const std::string dir3 = tmpDir("elapsed_cap");
+        Recorder c;
+        c.setMaxDataBytesForTest(11);
+        CHECK(c.start(RecordKind::Audio, dir3, 48000.0, err));
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        const float a[12] = {0.5f, -0.5f, 0.25f, -0.25f, 0.125f, -0.125f, 0.75f, -0.75f, 1.0f, -1.0f, 0.0f, 0.375f};
+        c.writeAudio(a, 12);
+        CHECK(!c.recording());
+        CHECK(c.sizeLimitReached());
+        const double capEnd = c.elapsedSeconds();
+        CHECK(capEnd >= 0.1 && capEnd < 5.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        CHECK(c.elapsedSeconds() == capEnd);
+        c.stop();  // a no-op on a take that already ended itself
+        CHECK(c.elapsedSeconds() == capEnd);
     }
 
     const int rc = testSummary("test_recorder");

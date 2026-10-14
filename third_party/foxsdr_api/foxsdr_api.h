@@ -333,6 +333,20 @@ typedef struct FoxReceiverState {
     double txInputPeak;         /* the input's peak since the last publish, 0..1 - measured */
     char txDeviceName[FOXAPI_NAME_CHARS];     /* the open transmitter; "" with none */
     char txError[FOXAPI_MESSAGE_CHARS];       /* the transmitter's last error; "" none */
+    /* ---- 0.3 (docs/api-0.3-additions.md 8.2): the status column as a page
+     * draws it. audioFlags, audioRateHz and the two texts move audioSeq;
+     * decodersMatched moves seq; the counters after audioRateHz are
+     * MEASUREMENTS and move nothing. ---- */
+    uint32_t audioFlags;               /* FOXAPI_AUDIO_* */
+    uint32_t decodersMatched;          /* decoder modules built and matched to the receiver's rate, running or not */
+    double audioRateHz;                /* the finished audio's rate (what the ring's frames are counted at) */
+    uint64_t audioRingFrames;          /* frames waiting in the output ring - measured */
+    uint64_t audioRingCapacityFrames;  /* the ring's size in frames - measured */
+    uint64_t audioPluginGaps;          /* blocks the playing plugin came up short in, since the plugins were last rebuilt - measured */
+    uint64_t audioPluginGapFrames;     /* ...and the frames of silence that cost - measured */
+    uint64_t decoderLinesTotal;        /* every decoder output line since the engine started - measured */
+    char audioMutedBy[FOXAPI_MESSAGE_CHARS];       /* the plugins muting the audio, "A and B"; "" when none is */
+    char audioPlayingPlugin[FOXAPI_MESSAGE_CHARS]; /* the plugin holding the speakers; "" when the receiver's own audio plays */
 } FoxReceiverState;
 
 
@@ -343,10 +357,16 @@ typedef struct FoxReceiverState {
 #define FOXAPI_TX_INPUT_OPENING 0x00000008u /* the microphone chosen is still opening */
 #define FOXAPI_TX_POWER_RANGE   0x00000010u /* the board published a power range (txPowerMin/MaxDb) */
 
+/* FoxReceiverState::audioFlags (0.3) */
+#define FOXAPI_AUDIO_OPENING        0x00000001u /* a worker is inside the output device's open */
+#define FOXAPI_AUDIO_EVER_OPENED    0x00000002u /* an open of the output device has succeeded since the engine started */
+#define FOXAPI_AUDIO_STREAM_ALIVE   0x00000004u /* the watchdog's view: the stream's callback is still being served (clear while OPENING) */
+#define FOXAPI_AUDIO_PLUGIN_PLAYING 0x00000008u /* a plugin holding CASCADE_CAP_AUDIO_OUT replaces the demodulated audio (audioPlayingPlugin names it) */
+
 /* Every FOXAPI_MIN_* is the whole layout of the oldest accepted version
  * (rule 4), written as the end of its last member so it never moves when
  * members are appended. */
-#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, txError) + FOXAPI_MESSAGE_CHARS)
+#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, audioPlayingPlugin) + FOXAPI_MESSAGE_CHARS)
 
 /* ---------------------------------------------------------------------------
  * The spectrum stream. The waterfall is NOT a separate stream: it is the
@@ -665,7 +685,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_BANDWIDTHS    2u  /* value[0]: Hz (the stepped choices) */
 #define FOXAPI_LIST_DEVICES       3u  /* name: label; detail: id to pass to SELECT_SOURCE */
 #define FOXAPI_LIST_SAMPLE_RATES  4u  /* value[0]: Hz */
-#define FOXAPI_LIST_GAINS         5u  /* name; value[0..3]: min, max, step, current dB */
+#define FOXAPI_LIST_GAINS         5u  /* name; detail: the unit token ("dB" or "step", 0.3); value[0..3]: min, max, step, current */
 #define FOXAPI_LIST_ANTENNAS      6u
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
 #define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text */
@@ -691,7 +711,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_PATCH_WIRES   27u /* value[0]: from node, [1]: its port, [2]: to node, [3]: its port */
 #define FOXAPI_LIST_PATCH_PROBLEMS 28u /* id: node; name: problem; detail: what the page says */
 #define FOXAPI_LIST_PATCH_PARTS   29u /* the parts a graph may use: name; detail: key; value[0]: feed port type, [1]: rate Hz it needs */
-#define FOXAPI_LIST_RECORDINGS    30u /* name: file; detail: path (LOCAL only); value[0]: 1 I/Q 2 audio 3 patch, [1]: bytes, [2]: rate Hz; ACTIVE, STALLED, FULL */
+#define FOXAPI_LIST_RECORDINGS    30u /* name: file; detail: path (LOCAL only); value[0]: 1 I/Q 2 audio 3 patch, [1]: bytes, [2]: rate Hz, [3]: the take's seconds (0.3; live, like [1]); ACTIVE, STALLED, FULL */
 #define FOXAPI_LIST_DECODER_LINES 31u /* the decoder-output backlog, oldest first: id: line number; name: plugin; detail: text */
 #define FOXAPI_LIST_STORE_BLOCKED 32u /* name: file; detail: why it was refused */
 #define FOXAPI_LIST_STORE_UPDATES 33u /* name: catalogue id; detail: "from -> to" */

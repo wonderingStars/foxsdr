@@ -267,6 +267,25 @@ public:
     std::uint64_t audioGaps() const;
     std::uint64_t audioGapFrames() const;
 
+    // THE AUDIO PATH'S THREE FIGURES FOR THE ENGINE'S PER-PASS PUBLISH, in ONE
+    // acquisition of the lock (audioGaps(), audioGapFrames() and
+    // playingPlugin() are one each, and the last allocates): the gap counters,
+    // and the playing plugin's descriptor name copied into `playing` (cap
+    // bytes, cut on a character, always NUL-terminated; "" when the
+    // demodulated audio plays). Returns whether a plugin holds the speakers.
+    // `playing` may be null when only the counters and the answer are wanted.
+    bool audioPathSnapshot(std::uint64_t& gaps, std::uint64_t& gapFrames, char* playing,
+                           std::size_t cap) const;
+
+    // TEST HOOK (the engine API's test hooks, testHooks=1 only): make the
+    // runner report a plugin of this name as holding the speakers (an empty
+    // name hands them back), with these gap counters. The instance is a
+    // stopped one with no API table, so the DSP thread never calls into it
+    // and its first block drops it; no test can load an audio-out module
+    // here, and the status column's PLUGIN_PLAYING / audioPlayingPlugin / gap
+    // figures have to be drivable. Never called by the application.
+    void setPlayingForTest(const std::string& name, std::uint64_t gaps = 0, std::uint64_t gapFrames = 0);
+
     // GUI thread. Writes the diagnostics the audio path recorded: one line per
     // takeover transition, and a once-a-minute gap digest when there is
     // anything to say.

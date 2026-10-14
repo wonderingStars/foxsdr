@@ -24,7 +24,7 @@ serves only its own minor, so a 0.3 engine answers `foxsdr_engine_query(0, 2)`
 with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
 is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
 and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
-at its end (section 8.1). `FoxScopeInfo` is new, with its own
+at its end (sections 8.1 and 8.2). `FoxScopeInfo` is new, with its own
 `FOXAPI_MIN_SCOPE_INFO`. No other struct changed.
 
 ## 2. Capabilities
@@ -95,7 +95,7 @@ says when to read again.
 | `PATCH_WIRES` (27) | `value[0]`: from node, `[1]`: its output port, `[2]`: to node, `[3]`: its input port |
 | `PATCH_PROBLEMS` (28) | what the plan found wrong. `id`: node; `name`: the problem's code; `detail`: what the page says |
 | `PATCH_PARTS` (29) | the decoder parts a graph may use. `name`; `detail`: key; `value[0]`: the port type it is fed (0 I/Q, 1 audio, 2 text, 3 control, 4 track); `value[1]`: the rate it needs, Hz |
-| `RECORDINGS` (30) | the recorders' takes (current or last), then the patch's files. `name`: file; `detail`: path (LOCAL sessions only); `value[0]`: 1 I/Q, 2 audio, 3 patch; `value[1]`: bytes, **read live** (a growing file moves this without moving `listSeq`); `value[2]`: rate Hz; `ACTIVE` recording; `FULL` at its size limit; `STALLED` writes failing (FULL wins when both) |
+| `RECORDINGS` (30) | the recorders' takes (current or last), then the patch's files. `name`: file; `detail`: path (LOCAL sessions only); `value[0]`: 1 I/Q, 2 audio, 3 patch; `value[1]`: bytes, **read live** (a growing file moves this without moving `listSeq`); `value[2]`: rate Hz; `value[3]`: the take's length in **seconds**, **read live** like `value[1]` (a take that is running moves it without moving `listSeq`; section 8.2); `ACTIVE` recording; `FULL` at its size limit; `STALLED` writes failing (FULL wins when both) |
 | `DECODER_LINES` (31) | the decoder-output backlog, oldest first, at most 500. `id`: line number (1 = the first line since the engine started); `name`: plugin; `detail`: the line (cut to 159 bytes) |
 | `STORE_BLOCKED` (32) | installed plugins the store's policy refuses to load. `name`: file; `detail`: why |
 | `STORE_UPDATES` (33) | the updates the store would install. `name`: catalogue id; `detail`: "from -> to" |
@@ -115,6 +115,21 @@ service; `value[0..2]`: start, stop, colour), `PRESETS` and `USER_PRESETS`
 ones the open radio has), `SERIAL_PORTS` (`name`; filled by
 `SCAN_SERIAL_PORTS`). `TRACKS` stays **GAP** (`UNSUPPORTED`): map tracks come
 through the map page's plugin APIs, which are not served yet.
+
+`GAINS` (0.2: `name`; `value[0..3]`: min, max, step, current) gains one word
+(0.3): `detail` is the stage's **unit token**, so an interface can letter a
+stage in the unit the radio speaks. Two tokens, one per
+`cascade::source::GainUnit`, the same words `/api/status` calls `unit`:
+
+| `detail` | `GainUnit` | The values are | Lettered |
+|---|---|---|---|
+| `dB` | `Decibels` | a gain in decibels (or the HF+'s negative attenuation) | "TUNER 30 dB" |
+| `step` | `Steps` | the hardware's own register steps or table positions (an Airspy's LNA, MIXER, VGA...), whose range and step are in index units | "LNA 7", **no unit** |
+
+Every stage of the radios shipped carries the same token, and an interface that
+letters one gain for the whole radio reads stage 0's. An empty `detail` (an
+engine that predates the token) is read as `dB`, which is what a gain was
+before the Airspy.
 
 ### 5.3 New item flags
 
@@ -178,6 +193,61 @@ Two 0.2 members are made exact: `txFrequencyHz` is WHERE IT WOULD TRANSMIT -
 board is open or not (the engine keeps an open board there once a pass) - and
 `txPowerDb` is the setting, which is the board's readback once one is open,
 never the 0 dB a closed board would read as.
+
+### 8.2 The status column as a page draws it (appended to FoxReceiverState)
+
+The STATUS column (cards AUDIO, DECODER OUTPUT, DECODERS, SINK, RECORDER,
+RECEIVER) letters what the receiver is doing in one place. 0.2's state carried
+the running flag, the device and sink names, the underrun count and the
+decoder counts; it had no read for the sink's four states, the output ring,
+the plugin audio path, the mute's subject, the decoder output total, the
+recorders' elapsed time or the gain's unit. Appended after `txError`. The
+group says which counter a change moves (`seq` moves for every group but a
+measurement, as always); a **measurement** moves none:
+
+| Member | Group | |
+|---|---|---|
+| `audioFlags` | `audioSeq` | `FOXAPI_AUDIO_OPENING` (a worker is inside the output device's open: nothing else about the sink may be asked), `FOXAPI_AUDIO_EVER_OPENED` (an open of the device has succeeded since the engine started; clear on a machine with no output device), `FOXAPI_AUDIO_STREAM_ALIVE` (the audio watchdog's view: the stream's callback is still being served; **clear while OPENING**, where the watchdog's question is not asked), `FOXAPI_AUDIO_PLUGIN_PLAYING` (a plugin holding `CASCADE_CAP_AUDIO_OUT` replaces the demodulated audio; `audioPlayingPlugin` names it) |
+| `audioRateHz` | `audioSeq` | the finished audio's rate (48 kHz): what the ring's frames are counted at, so `1000 * audioRingFrames / audioRateHz` is the ring's level in milliseconds |
+| `audioRingFrames`, `audioRingCapacityFrames` | measurement | the output ring's fill and size, in frames |
+| `audioPluginGaps`, `audioPluginGapFrames` | measurement | blocks in which the playing plugin handed over less than a full block, and the frames of silence that cost; since the plugins were last rebuilt. The plugin path's sibling of `audioUnderruns` |
+| `decoderLinesTotal` | measurement | every decoder output line since the engine started. `DECODER_LINES` ids are numbered from the same counter, but that list is a ring of 500 and its ids are not a total an interface can difference over a window once it wraps; this one is. It climbs with every line and must not rebuild anything |
+| `decodersMatched` | `seq` | decoder modules (of `decodersFitted`) the runner has built and matched to the receiver's rate, **running or not**: the "N ready" of a stopped receiver. `decodersRunning` is this while `FOXAPI_RX_RUNNING` and 0 while stopped |
+| `audioMutedBy` | `audioSeq` | the decoder plugins muting the audio because the receiver sits on one of their presets, "A", "A and B", "A, B and C"; "" when none is (the user's own mute is `FOXAPI_RX_MUTED`, not this). Cut on a character at 127 bytes |
+| `audioPlayingPlugin` | `audioSeq` | the descriptor name of the plugin holding the speakers; "" when the receiver's own audio plays. Cut on a character at 127 bytes |
+
+`sinkName` (0.2) is the device the last successful open landed on. Not live:
+while an open holds the sink's lock the last good name stands (it is the name
+of a sink that is still there), and nothing counter-wise moves.
+
+How a page letters the SINK card from these, in the order it asks (the first
+that holds wins; the plugin line is added under every one): `audioMutedBy`
+non-empty is MUTED, "by `audioMutedBy`"; `FOXAPI_AUDIO_OPENING` is OPENING;
+no `FOXAPI_AUDIO_EVER_OPENED` is NO DEVICE; no `FOXAPI_AUDIO_STREAM_ALIVE` is
+STOPPED; otherwise OPEN, with `sinkName`.
+
+**Two lists change.** `GAINS` entries carry the unit token in `detail` (section
+5.2), and `RECORDINGS` entries carry the take's elapsed seconds in
+`value[3]` (section 5.1):
+
+- `value[3]` is read **live** from the recorder at read time, like `value[1]`,
+  from a **steady-clock** stamp the recorder takes when the take starts: not
+  any interface's frame clock, and readable from any thread. For a take that
+  is `ACTIVE` it is the time since the stamp; for one that is not (stopped, or
+  ended at its size limit) it is the length the take had when it ended, which
+  the recorder stamps too. 0 when unknown (a patch recording, or no take has
+  ever started). Nothing about a running take moves `listSeq`.
+- A page reads the recorders' state from the state's flags
+  (`FOXAPI_RX_RECORDING_IQ`, `FOXAPI_RX_RECORDING_AUDIO`) and the entries'
+  flags: `STALLED` on an `ACTIVE` entry is a disk that stopped taking the
+  file; `FULL` on an entry that is not `ACTIVE` is a take that ended itself at
+  4 GB. The entry with `value[0]` 1 is the I/Q take, 2 the audio take; both
+  exist once a take has started and stay (the last take) until the next.
+
+The RECEIVER card's other readings are already in the table: `deviceName`,
+`sampleRateHz`, `FOXAPI_RX_RUNNING`, `FOXAPI_RX_FAULTED`,
+`FOXAPI_RX_DEVICE_OPEN`, `FOXAPI_RX_DEVICE_AGC`, `gainCount`, the `GAINS` list
+and the `ANTENNAS` entry that is `ACTIVE`.
 
 `FOXAPI_MIN_RECEIVER_STATE` is the whole 0.3 layout.
 

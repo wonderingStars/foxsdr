@@ -286,12 +286,19 @@ void decodersAndCost(AppWindow& a) {
     const cascade::core::PublishedState s = A::state(a);
     CHECK(s.rx.decodersRunning == A::fedDecoders(a));
     CHECK(s.rx.decodersFitted == A::loadedDecoders(a));
+    // API 0.3 8.2: the DECODERS card's "N ready" is the count the column asked
+    // of the runner whether or not the receiver runs (fedDecoderCount).
+    CHECK(s.rx.decodersMatched == A::fedDecoders(a));
     CHECK(((s.rx.flags & FOXAPI_RX_DECODER_ACTIVE) != 0u) == (A::running(a) && A::runnerActive(a) > 0u));
     CHECK(ok(A::apply(a, cmd::makeInt(FOXAPI_OP_RUN, 0))));
     A::publish(a);
     const cascade::core::PublishedState t = A::state(a);
     CHECK(t.rx.decodersRunning == 0u && (t.rx.flags & FOXAPI_RX_DECODER_ACTIVE) == 0u);
     CHECK(t.rx.decodersFitted == 3u);
+    std::printf("      stopped: matched %u, window's fedDecoderCount %zu\n", t.rx.decodersMatched,
+                A::fedDecoders(a));
+    CHECK(t.rx.decodersMatched == A::fedDecoders(a));
+    CHECK(t.rx.decodersMatched > 0u);  // ready, though nothing is running
 }
 
 // --- [2] walking one through the window: each source condition -> its own flag -----------
