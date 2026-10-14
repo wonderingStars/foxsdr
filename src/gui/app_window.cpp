@@ -5797,26 +5797,28 @@ void AppWindow::drawMenuColumn() {
     // for. Two clipped lines rather than one wrapped one: a long device name
     // must not push the numbers out of the reserved footer space.
     ImGui::Separator();
-    const cascade::source::IqSource& src = engine_.pipeline_.activeSource();
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the
+    // state the last pass published, and the band plan the rail's cache keeps.
+    const FoxReceiverState& st = uiState_;
+    const RailListCache& rail = railLists();
     // Line 1: the active source, and — when a band plan is loaded — the band
     // the TUNED frequency (source centre + VFO offset, i.e. what the VFO
     // marker sits on) falls in. BandPlan::at returns the narrowest match, so
     // this names "ISS Downlink" rather than the 2 m band containing it.
-    const cascade::core::BandEntry* band =
-        engine_.bandPlan_.entries().empty() ? nullptr : engine_.bandPlan_.at(engine_.currentAbsoluteHz());
+    const cascade::gui::BandRow* band = cascade::gui::bandRowAt(rail.bands, st.tunedHz);
     // tr() on the name: the built-in generator's name is a sentence of ours
     // ("Signal generator") and is translated; a driver's device name is not
     // in any catalogue and comes back unchanged.
     if (band != nullptr) {
-        ImGui::Text("%s | %s", tr(src.name()), band->name.c_str());
+        ImGui::Text("%s | %s", tr(st.deviceName), band->name.c_str());
     } else {
-        ImGui::TextUnformatted(tr(src.name()));
+        ImGui::TextUnformatted(tr(st.deviceName));
     }
     // Source rate | DSP channel rate (the Vfo's output rate the demodulator
     // runs at — this is what makes rate-follow visible) | buffer health.
     ImGui::Text(tr("%.4g MS/s | ch %.4g kHz | underruns %llu"),
-                src.sampleRateHz() / 1.0e6, engine_.pipeline_.channelRateHz() / 1.0e3,
-                static_cast<unsigned long long>(engine_.pipeline_.audio().underruns()));
+                st.sampleRateHz / 1.0e6, st.channelRateHz / 1.0e3,
+                static_cast<unsigned long long>(st.audioUnderruns));
     if (!converterLine.empty()) {
         // The short form when the full name would run off the column.
         const bool fits = ImGui::CalcTextSize(converterLine.c_str()).x <=
@@ -5837,9 +5839,14 @@ void AppWindow::drawMenuColumn() {
 void AppWindow::drawRadioSection() {
     // kModeNames is the one table the mode buttons and this chip both read,
     // so the rail cannot claim a mode the buttons do not show.
-    const bool radioOpen = benchSection(trId("Radio"), true, kModeNames[engine_.modeIndex_],
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the state
+    // the engine's last pass published, read once a frame. The keys are in
+    // kModeNames' order and FOXAPI_DEMOD_* is that order, 1-based.
+    const FoxReceiverState& st = uiState_;
+    const int modeIndex = cascade::gui::railModeIndex(st.demodMode);
+    const bool radioOpen = benchSection(trId("Radio"), true, kModeNames[modeIndex],
                                         cascade::gui::theme::kPhosphor,
-                                        engine_.pipeline_.running());
+                                        (st.flags & FOXAPI_RX_RUNNING) != 0u);
     if (radioOpen) {
         // Mode/bandwidth tables live at namespace scope (kModeNames &co):
         // the band-snap logic and the config store share them.
@@ -5850,7 +5857,7 @@ void AppWindow::drawRadioSection() {
             static_cast<float>(kColumns);
         for (int i = 0; i < 8; ++i) {
             if (i % kColumns != 0) { ImGui::SameLine(); }
-            const bool selected = (i == engine_.modeIndex_);
+            const bool selected = (i == modeIndex);
             // The lit key: today's pressed brass, or foxsdr-ui/1's activeText
             // on activeBg (Field Radio lettered it cream on gold, 1.57:1).
             const int litPushed = selected ? cascade::gui::theme::pushLitKeyColours() : 0;
@@ -5859,7 +5866,7 @@ void AppWindow::drawRadioSection() {
             // does" is how a key ends up setting the demodulator without its
             // bandwidth. FOXAPI_DEMOD_* is this table's order, 1-based.
             if (ImGui::Button(kModeNames[i], ImVec2(cellWidth, 0.0f))) {
-                engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, i + 1));
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, i + 1));
             }
             if (litPushed > 0) { ImGui::PopStyleColor(litPushed); }
         }
@@ -5874,11 +5881,11 @@ void AppWindow::drawRadioSection() {
         // A COPY is edited, never the receiver's own figure: the command
         // (APP_SET_VFO_OFFSET_FREE - the slider's own span, not clamped into
         // the band) is what moves it, at the top of the next frame.
-        float vfoKhz = engine_.vfoOffsetKhz_;
+        float vfoKhz = static_cast<float>(st.vfoOffsetHz / 1000.0);
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("VFO")), &vfoKhz,
                                -500.0f, 500.0f, "%.0f kHz")) {
-            engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SET_VFO_OFFSET_FREE,
-                                                      1000.0 * static_cast<double>(vfoKhz)));
+            uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_VFO_OFFSET_FREE,
+                                                 1000.0 * static_cast<double>(vfoKhz)));
         }
         // THE PREVIEW IS THE BANDWIDTH THE RECEIVER IS RUNNING, whether or not
         // it is one of the steps below. ImGui::Combo can only show one of its
@@ -5889,38 +5896,41 @@ void AppWindow::drawRadioSection() {
         // separates the two: the word comes from the live bandwidth, and only
         // a deliberate pick from the list changes it.
         char bwPreview[32];
-        formatBandwidth(engine_.vfoBandwidthHz_, bwPreview, sizeof(bwPreview));
+        formatBandwidth(st.bandwidthHz, bwPreview, sizeof(bwPreview));
+        // WHICH STEP THE VFO IS ON (-1: none): the pure function over the table that the
+        // engine sets its own index with, on the bandwidth the state carries.
+        const int bandwidthIndex = bandwidthStepIndex(st.bandwidthHz);
         if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Bandwidth")), bwPreview)) {
             for (int i = 0; i < kBwCount; ++i) {
-                if (ImGui::Selectable(kBwLabels[i], engine_.bandwidthIndex_ == i)) {
+                if (ImGui::Selectable(kBwLabels[i], bandwidthIndex == i)) {
                     // One of the steps, exactly - never clamped (the combo's
                     // own rule, APP_SET_BANDWIDTH_STEP).
-                    engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_BANDWIDTH_STEP, i));
+                    uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SET_BANDWIDTH_STEP, i));
                 }
                 // What ImGui::Combo does for its own list, kept so opening
                 // this one from the keyboard still lands on the step in use.
-                // With bandwidthIndex_ at -1 nothing takes the focus, which is
+                // With the index at -1 nothing takes the focus, which is
                 // the honest answer when the VFO is on none of them.
-                if (engine_.bandwidthIndex_ == i) { ImGui::SetItemDefaultFocus(); }
+                if (bandwidthIndex == i) { ImGui::SetItemDefaultFocus(); }
             }
             ImGui::EndCombo();
         }
         // A COPY is edited; SET_SQUELCH moves the receiver's threshold.
-        float squelch = engine_.squelchDb_;
+        float squelch = static_cast<float>(st.squelchDb);
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Squelch")), &squelch,
                                -120.0f, 0.0f, "%.0f dB")) {
-            engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SQUELCH, squelch));
+            uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SQUELCH, squelch));
         }
         // Only meaningful for the FM modes; shown greyed elsewhere so the
         // setting is discoverable without implying it does anything to SSB.
-        const bool fmMode = (engine_.modeIndex_ == 0 || engine_.modeIndex_ == 1);  // NFM, WFM
+        const bool fmMode = (modeIndex == 0 || modeIndex == 1);  // NFM, WFM
         ImGui::BeginDisabled(!fmMode);
         const char* deemphItems[kDeemphCount];
         for (int k = 0; k < kDeemphCount; ++k) { deemphItems[k] = tr(kDeemphLabels[k]); }
-        int deemph = engine_.deemphIndex_;
+        int deemph = static_cast<int>(st.deemphasis);
         if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("De-emph")), &deemph,
                          deemphItems, kDeemphCount)) {
-            engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEEMPHASIS, deemph));
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEEMPHASIS, deemph));
         }
         ImGui::EndDisabled();
         if (fmMode && ImGui::IsItemHovered()) {
@@ -5930,11 +5940,11 @@ void AppWindow::drawRadioSection() {
 
         // Stereo indicator + force-mono toggle + the RDS readout. Only in
         // WFM: nothing below it exists on any other demodulator.
-        if (engine_.modeIndex_ == 1) { drawStereoRdsControls(); }
+        if (modeIndex == 1) { drawStereoRdsControls(); }
 
         // S-meter: channel power mapped over the squelch slider's own
         // [-120, 0] dB span, so the bar and the threshold share a scale.
-        const float sDb = engine_.pipeline_.signalPowerDb();
+        const float sDb = static_cast<float>(st.signalDb);
         float frac = (sDb + 120.0f) / 120.0f;
         frac = std::clamp(frac, 0.0f, 1.0f);
         char overlay[32];
@@ -5968,14 +5978,19 @@ void AppWindow::drawSinksSection() {
         // application, amber while a plugin holds the mute, rust while the
         // stream is dead, and dark only when no output device has ever been
         // opened - which is the one case where there is nothing to report.
-    const bool sinkMuted = !engine_.muteSubjectText().empty();
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the sink's
+    // four states are the state's audioFlags, who mutes is audioMutedBy, the outputs
+    // are AUDIO_DEVICES and the watchdog's note is a status line.
+    const FoxReceiverState& st = uiState_;
+    const RailListCache& rail = railLists();
+    const bool sinkMuted = st.audioMutedBy[0] != '\0';
     // AN OPEN IN FLIGHT IS NOT A STATE OF THE SINK, it is a state of the
     // driver, and asking the sink anything while a worker is inside its open()
     // is the race engine/audio_open.hpp forbids. So it is reported on its own
     // terms and nothing below is consulted.
-    const bool sinkOpening = engine_.audioOpen_.inFlight();
-    const bool sinkOpened = !sinkOpening && engine_.pipeline_.audio().everOpened();
-    const bool sinkAlive = sinkOpened && engine_.pipeline_.audio().streamAlive();
+    const bool sinkOpening = (st.audioFlags & FOXAPI_AUDIO_OPENING) != 0u;
+    const bool sinkOpened = !sinkOpening && (st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u;
+    const bool sinkAlive = sinkOpened && (st.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u;
     const char* sinkChip = tr("ON");
     ImU32 sinkLamp = cascade::gui::theme::kPhosphor;
     if (sinkOpening) {
@@ -5995,17 +6010,18 @@ void AppWindow::drawSinksSection() {
     const bool sinksOpen =
         benchSection(trId("Sinks"), true, sinkChip, sinkLamp, sinkOpened || sinkOpening);
     if (sinksOpen) {
-        if (engine_.devices_.empty()) {
+        if (rail.sinks.empty()) {
             ImGui::TextDisabled(tr("No audio output devices"));
         } else if (ImGui::BeginCombo(
                        cascade::gui::labelAboveIfNeeded(trId("Device")),
-                       engine_.devices_[static_cast<std::size_t>(engine_.deviceIndex_)].name.c_str())) {
-            for (int i = 0; i < static_cast<int>(engine_.devices_.size()); ++i) {
-                const auto& dev = engine_.devices_[static_cast<std::size_t>(i)];
+                       rail.activeSink >= 0 ? rail.sinks[static_cast<std::size_t>(rail.activeSink)].name.c_str()
+                                            : "")) {
+            for (int i = 0; i < static_cast<int>(rail.sinks.size()); ++i) {
+                const auto& dev = rail.sinks[static_cast<std::size_t>(i)];
                 // PushID: PortAudio lists one physical device once per host
                 // API with an identical name; the index keeps ImGui IDs unique.
                 ImGui::PushID(i);
-                if (ImGui::Selectable(dev.name.c_str(), i == engine_.deviceIndex_)) {
+                if (ImGui::Selectable(dev.name.c_str(), i == rail.activeSink)) {
                     // Re-open on change: open() closes the old stream first,
                     // so this is the whole device-switch operation. Through
                     // audioOpen_, never straight at the sink (AUDIO_DEVICE's
@@ -6014,7 +6030,7 @@ void AppWindow::drawSinksSection() {
                     // frame loop for 57 seconds. The gate waits a bound for the
                     // device and then lets the frame go on without it. Named
                     // by the PortAudio index the list carries.
-                    engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_AUDIO_DEVICE, dev.index));
+                    uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_AUDIO_DEVICE, dev.index));
                 }
                 ImGui::PopID();
             }
@@ -6025,9 +6041,8 @@ void AppWindow::drawSinksSection() {
         // output device, not the radio, or the next report reads "the radio
         // keeps going silent" and points the search at the wrong end of the
         // chain.
-        if (!engine_.audioHealthNote_.empty()) {
-            ImGui::TextColored(cascade::gui::theme::warning(), "%s",
-                               engine_.audioHealthNote_.c_str());
+        if (!rail.audioHealth.empty()) {
+            ImGui::TextColored(cascade::gui::theme::warning(), "%s", rail.audioHealth.c_str());
         }
         // WHY THERE IS NO SOUND, said where the sound settings are. This is the
         // panel a user goes to when the speakers are silent, and finding a
@@ -6035,9 +6050,9 @@ void AppWindow::drawSinksSection() {
         // there - with no explanation - is exactly the dead end the 0.58.0
         // audio investigation started from. Wrapped, because the menu column
         // is narrow and a plugin name is the plugin's to choose.
-        if (!engine_.mutedBy_.empty()) {
+        if (sinkMuted) {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-            ImGui::TextWrapped(tr("Muted by %s"), engine_.muteSubjectText().c_str());
+            ImGui::TextWrapped(tr("Muted by %s"), st.audioMutedBy);
             ImGui::PopStyleColor();
             // Said separately rather than folded into the line above, because
             // the two halves answer different questions: what is doing it, and
@@ -6154,8 +6169,11 @@ void AppWindow::drawDisplaySection() {
     // The lamp is the overlay ACTUALLY DRAWING - asked for, no load error, and
     // a plan with bands in it - so "PLAN" with the lamp out is the honest
     // reading of "you switched it on and there is nothing installed".
-    const bool planDrawing = bandPlanOverlay_ && statusLines_.bandPlanError.empty() &&
-                             !engine_.bandPlan_.entries().empty();
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the display
+    // range is the state's, the plans and the loaded plan's rows are the rail's cache.
+    const FoxReceiverState& st = uiState_;
+    const RailListCache& rail = railLists();
+    const bool planDrawing = bandPlanOverlay_ && rail.bandPlanError.empty() && !rail.bands.empty();
     if (benchSection(trId("Display"), true, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
                      cascade::gui::theme::kPhosphor, planDrawing)) {
         // THE THEME (2026-09-25): the six looks, by the names the owner
@@ -6186,15 +6204,15 @@ void AppWindow::drawDisplaySection() {
         // least kMinDbSpan between the endpoints by pushing back the end the
         // user is actually dragging - correcting the *other* value would make
         // an untouched slider jump under the user's eyes.
-        float dbMin = engine_.dbMin_;
-        float dbMax = engine_.dbMax_;
+        float dbMin = static_cast<float>(st.dbMin);
+        float dbMax = static_cast<float>(st.dbMax);
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Min dB")), &dbMin, -160.0f,
                                -20.0f, "%.0f")) {
-            engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MIN, dbMin));
+            uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MIN, dbMin));
         }
         if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Max dB")), &dbMax, -100.0f,
                                20.0f, "%.0f")) {
-            engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MAX, dbMax));
+            uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MAX, dbMax));
         }
 
         // THE FREQUENCY DISPLAY (GitHub issue #1: "Would be nice to be able
@@ -6306,12 +6324,12 @@ void AppWindow::drawDisplaySection() {
             // see BandPlan::loadSelection. Only shown when there is more than
             // one plan to choose between: a single-plan install has no
             // decision to offer, and an empty combo would read as breakage.
-            if (engine_.bandPlanChoices_.size() > 1) {
+            if (rail.plans.size() > 1) {
                 // The plan's NAME IS TRANSLATED WHERE IT IS DRAWN
                 // (core::displayPlanName); the file's own name stays data.
                 std::string preview = tr("(all installed)");
-                for (const cascade::core::PlanInfo& p : engine_.bandPlanChoices_) {
-                    if (p.id == engine_.bandPlanSelection_) { preview = cascade::core::displayPlanName(p.name); }
+                if (rail.activePlan >= 0) {
+                    preview = cascade::core::displayPlanName(rail.plans[static_cast<std::size_t>(rail.activePlan)].name);
                 }
                 if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Region")),
                                       preview.c_str())) {
@@ -6327,9 +6345,9 @@ void AppWindow::drawDisplaySection() {
                     // and stops at the click; nothing touches the list again
                     // until EndCombo has run. See gui/list_pick.hpp.
                     const std::size_t pick = cascade::gui::pickFromList(
-                        engine_.bandPlanChoices_,
-                        [&](const cascade::core::PlanInfo& p, std::size_t) {
-                            const bool selected = (p.id == engine_.bandPlanSelection_);
+                        rail.plans,
+                        [&](const RailListCache::Plan& p, std::size_t at) {
+                            const bool selected = (static_cast<int>(at) == rail.activePlan);
                             // Keyed on the plan's id, so the row's identity
                             // does not change with the language.
                             const std::string row =
@@ -6343,21 +6361,20 @@ void AppWindow::drawDisplaySection() {
                     // bandPlanChoices_) at the top of the next frame - well
                     // away from any walk of the list.
                     if (pick != cascade::gui::kNoPick) {
-                        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN,
-                                                                   engine_.bandPlanChoices_[pick].id));
+                        uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, rail.plans[pick].id));
                     }
                 }
             }
-            if (!statusLines_.bandPlanError.empty()) {
+            if (!rail.bandPlanError.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-                ImGui::TextWrapped("%s", statusLines_.bandPlanError.c_str());
+                ImGui::TextWrapped("%s", rail.bandPlanError.c_str());
                 ImGui::PopStyleColor();
-            } else if (engine_.bandPlan_.entries().empty()) {
+            } else if (rail.bands.empty()) {
                 ImGui::TextDisabled(tr("no band plan installed"));
             } else {
                 ImGui::TextDisabled(tr("%s (%d bands)"),
-                                    cascade::core::displayPlanName(engine_.bandPlan_.name()).c_str(),
-                                    static_cast<int>(engine_.bandPlan_.entries().size()));
+                                    cascade::core::displayPlanName(rail.bandPlanName).c_str(),
+                                    static_cast<int>(rail.bands.size()));
             }
         }
     }
@@ -8029,9 +8046,11 @@ void AppWindow::drawStereoRdsControls() {
     // Force-mono toggle. The pipeline routes WFM through the stereo decoder
     // either way, so this only opens or closes its difference-channel gate —
     // which is what makes the switch click-free and tone-neutral.
-    bool stereo = engine_.stereoEnabled_;
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4).
+    const FoxReceiverState& st = uiState_;
+    bool stereo = (st.flags & FOXAPI_RX_STEREO_ENABLED) != 0u;
     if (ImGui::Checkbox(trId("Stereo"), &stereo)) {
-        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_STEREO, stereo ? 1 : 0));
+        uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_STEREO, stereo ? 1 : 0));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("Decode the 38 kHz difference channel when a 19 kHz\n"
@@ -8041,8 +8060,8 @@ void AppWindow::drawStereoRdsControls() {
     // The indicator reports the DECODER, not the checkbox: lit only when a
     // pilot is actually locked AND stereo is enabled, dim-but-present when a
     // pilot is locked while the user forced mono, and greyed with no pilot.
-    const bool locked = engine_.pipeline_.pilotLocked();
-    const bool active = engine_.pipeline_.stereoActive();
+    const bool locked = (st.flags & FOXAPI_RX_PILOT_LOCKED) != 0u;
+    const bool active = (st.flags & FOXAPI_RX_STEREO_ACTIVE) != 0u;
     if (active) {
         ImGui::TextColored(cascade::gui::theme::good(), "ST");
     } else if (locked) {
@@ -8052,36 +8071,35 @@ void AppWindow::drawStereoRdsControls() {
     }
     if (locked) {
         ImGui::SameLine();
-        ImGui::TextDisabled(tr("pilot %.2f"), static_cast<double>(engine_.pipeline_.pilotLevel()));
+        ImGui::TextDisabled(tr("pilot %.2f"), st.pilotLevel);
     }
 
     // --- RDS ------------------------------------------------------------------
-    const cascade::core::RdsSnapshot rds = engine_.pipeline_.rdsSnapshot();
+    const std::uint32_t rds = st.rdsFlags;
     ImGui::SeparatorText("RDS");
-    if (!rds.state.piValid && !rds.state.psValid && rds.state.radioText.empty()) {
+    if ((rds & (FOXAPI_RDS_PI_VALID | FOXAPI_RDS_PS_VALID | FOXAPI_RDS_RT_VALID)) == 0u) {
         // Distinguish "listening, nothing yet" from "not receiving at all":
         // synced means the block decoder found the 1187.5 bit/s stream and is
         // simply waiting for the first complete field.
-        ImGui::TextDisabled(rds.synced ? tr("RDS: syncing...") : tr("RDS: no data"));
+        ImGui::TextDisabled((rds & FOXAPI_RDS_SYNCED) != 0u ? tr("RDS: syncing...") : tr("RDS: no data"));
         return;
     }
-    if (rds.state.psValid) {
-        ImGui::Text("PS  %s", rds.state.ps.c_str());
+    if ((rds & FOXAPI_RDS_PS_VALID) != 0u) {
+        ImGui::Text("PS  %s", st.rdsPs);
     } else {
         ImGui::TextDisabled("PS  --------");
     }
-    if (rds.state.piValid) {
-        ImGui::Text("PI  %04X   PTY %u%s%s", rds.state.pi,
-                    static_cast<unsigned>(rds.state.pty),
-                    rds.state.tp ? "  TP" : "", rds.state.ta ? "  TA" : "");
+    if ((rds & FOXAPI_RDS_PI_VALID) != 0u) {
+        ImGui::Text("PI  %04X   PTY %u%s%s", st.rdsPi, st.rdsPty,
+                    (rds & FOXAPI_RDS_TP) != 0u ? "  TP" : "", (rds & FOXAPI_RDS_TA) != 0u ? "  TA" : "");
     } else {
         ImGui::TextDisabled("PI  ----");
     }
-    if (!rds.state.radioText.empty()) {
-        ImGui::TextWrapped("%s", rds.state.radioText.c_str());
+    if ((rds & FOXAPI_RDS_RT_VALID) != 0u) {
+        ImGui::TextWrapped("%s", st.rdsRadioText);
     }
-    ImGui::TextDisabled(tr("groups %u | block errors %u"), rds.state.groupsDecoded,
-                        rds.state.blockErrors);
+    ImGui::TextDisabled(tr("groups %u | block errors %u"), static_cast<unsigned>(st.rdsGroups),
+                        static_cast<unsigned>(st.rdsErrors));
 }
 
 // --- Audio filters: noise reduction + notch (P7) --------------------------------
@@ -8091,8 +8109,11 @@ void AppWindow::drawAudioFilterSection() {
     // section has that is either on or off. The three switches below are what
     // the count is taken from, so the chip cannot claim a filter the panel
     // does not show engaged.
-    const int filtersOn = (engine_.nrEnabled_ ? 1 : 0) + (engine_.notchEnabled_ ? 1 : 0) +
-                          (engine_.autoNotch_ ? 1 : 0);
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4).
+    const FoxReceiverState& st = uiState_;
+    const int filtersOn = ((st.flags & FOXAPI_RX_NR) != 0u ? 1 : 0) +
+                          ((st.flags & FOXAPI_RX_NOTCH) != 0u ? 1 : 0) +
+                          ((st.flags & FOXAPI_RX_AUTO_NOTCH) != 0u ? 1 : 0);
     std::string filterChip;
     if (filtersOn == 0) {
         filterChip = tr("OFF");
@@ -8118,46 +8139,45 @@ void AppWindow::drawAudioFilterSection() {
     // greyed out, so a tick greys or ungreys its slider in the frame it is
     // clicked, as it always did.
     namespace cmd = cascade::core::cmd;
-    bool nr = engine_.nrEnabled_;
+    bool nr = (st.flags & FOXAPI_RX_NR) != 0u;
     if (ImGui::Checkbox(trId("Noise reduction"), &nr)) {
-        engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_NR, nr ? 1 : 0, 0));
+        uiSubmit(cmd::makeInt(FOXAPI_OP_SET_NR, nr ? 1 : 0, 0));
     }
     ImGui::BeginDisabled(!nr);
-    float nrStrength = engine_.nrStrength_;
+    float nrStrength = static_cast<float>(st.nrStrength);
     if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Strength")), &nrStrength,
                            0.0f, 1.0f, "%.2f")) {
-        engine_.submitCommand(cmd::makeNum(FOXAPP_OP_SET_NR_STRENGTH, nrStrength));
+        uiSubmit(cmd::makeNum(FOXAPP_OP_SET_NR_STRENGTH, nrStrength));
     }
     ImGui::EndDisabled();
 
     ImGui::Separator();
-    bool notch = engine_.notchEnabled_;
+    bool notch = (st.flags & FOXAPI_RX_NOTCH) != 0u;
     if (ImGui::Checkbox(trId("Notch"), &notch)) {
-        engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_NOTCH, notch ? 1 : 0, 0));
+        uiSubmit(cmd::makeInt(FOXAPI_OP_SET_NOTCH, notch ? 1 : 0, 0));
     }
     ImGui::BeginDisabled(!notch);
     // Logarithmic: a linear 10 Hz..20 kHz slider spends 90% of its travel
     // above 2 kHz, where almost no heterodyne a user wants to remove lives.
-    float notchHz = engine_.notchFreqHz_;
+    float notchHz = static_cast<float>(st.notchHz);
     if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Freq")), &notchHz,
                            10.0f, 20000.0f, "%.0f Hz", ImGuiSliderFlags_Logarithmic)) {
-        engine_.submitCommand(cmd::makeNum(FOXAPP_OP_SET_NOTCH_FREQUENCY, notchHz));
+        uiSubmit(cmd::makeNum(FOXAPP_OP_SET_NOTCH_FREQUENCY, notchHz));
     }
-    float notchQ = engine_.notchQ_;
+    float notchQ = static_cast<float>(st.notchQ);
     if (ImGui::SliderFloat("Q", &notchQ, 1.0f, 200.0f, "%.0f")) {
-        engine_.submitCommand(cmd::makeNum(FOXAPP_OP_SET_NOTCH_Q, notchQ));
+        uiSubmit(cmd::makeNum(FOXAPP_OP_SET_NOTCH_Q, notchQ));
     }
     ImGui::EndDisabled();
 
-    bool autoNotch = engine_.autoNotch_;
+    bool autoNotch = (st.flags & FOXAPI_RX_AUTO_NOTCH) != 0u;
     if (ImGui::Checkbox(trId("Auto notch"), &autoNotch)) {
-        engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_AUTO_NOTCH, autoNotch ? 1 : 0));
+        uiSubmit(cmd::makeInt(FOXAPI_OP_SET_AUTO_NOTCH, autoNotch ? 1 : 0));
     }
     if (autoNotch) {
         ImGui::SameLine();
-        if (engine_.pipeline_.autoNotchEngaged()) {
-            ImGui::TextColored(cascade::gui::theme::good(), tr("on %.0f Hz"),
-                               engine_.pipeline_.autoNotchFrequencyHz());
+        if ((st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) != 0u) {
+            ImGui::TextColored(cascade::gui::theme::good(), tr("on %.0f Hz"), st.autoNotchHz);
         } else {
             ImGui::TextDisabled(tr("searching"));
         }
@@ -15264,16 +15284,26 @@ const std::string& AppWindow::uiFact(const char* key) {
     const auto it = uiFacts_.find(key);
     if (it != uiFacts_.end()) { return it->second; }
     std::string v;
+    readFactText(key, v);
+    return uiFacts_.emplace(key, std::move(v)).first->second;
+}
+
+// A FACT'S TEXT, WHOLE, into a string the caller keeps (cleared first; "" when
+// the engine has none): what uiFact reads, for a reader that holds its own copy
+// and so builds no map node - the rail's cache (railLists) re-reads three of them
+// whenever listSeq moves, which a running decoder makes it do every pass.
+void AppWindow::readFactText(const char* key, std::string& out) {
+    out.clear();
+    if (uiSession_ == nullptr) { return; }
     char buf[512];
     int32_t n = engineApi_->get_setting(uiSession_, key, buf, sizeof(buf));
     if (n >= static_cast<int32_t>(sizeof(buf))) {
-        v.resize(static_cast<std::size_t>(n) + 1u);
-        n = engineApi_->get_setting(uiSession_, key, v.data(), v.size());
-        v.resize(n >= 0 ? std::min(static_cast<std::size_t>(n), v.size() - 1u) : 0u);
+        out.resize(static_cast<std::size_t>(n) + 1u);
+        n = engineApi_->get_setting(uiSession_, key, out.data(), out.size());
+        out.resize(n >= 0 ? std::min(static_cast<std::size_t>(n), out.size() - 1u) : 0u);
     } else if (n >= 0) {
-        v.assign(buf, static_cast<std::size_t>(n));
+        out.assign(buf, static_cast<std::size_t>(n));
     }
-    return uiFacts_.emplace(key, std::move(v)).first->second;
 }
 
 // --- THE WINDOW'S ENGINE API SESSION (engine stage 4) --------------------------
@@ -15347,6 +15377,83 @@ void AppWindow::refreshStatusLists() {
         if (it.value[0] == 1.0 && statusTakeIq_ < 0) { statusTakeIq_ = static_cast<int>(i); }
         if (it.value[0] == 2.0 && statusTakeAudio_ < 0) { statusTakeAudio_ = static_cast<int>(i); }
     }
+}
+
+// THE RAIL'S AND THE DISPLAY'S READS OF THE TABLE'S LISTS AND FACTS, only when
+// listSeq has moved (the cache is in app_window.hpp, with the argument for what is
+// read again and when): the plans and the one in force, the audio outputs and the
+// one in use, the loaded plan's name, the two status lines - and the loaded plan's
+// ROWS only when the plan itself changed, since they are hundreds and the overlay
+// walks them every frame. Strings and vectors keep their room, so a refresh that
+// finds nothing bigger allocates nothing here.
+const AppWindow::RailListCache& AppWindow::railLists() {
+    RailListCache& c = railCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    ++c.refreshes;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    // `got <= i` is the end of a list that changed under the read (a count taken
+    // from one publish, an entry from the next): what was read stands, nothing stale is kept.
+    FoxListItem it{};
+    readFactText("fact.bandPlan.name", c.bandPlanName);
+    readFactText("fact.status.bandPlanError", c.bandPlanError);
+    readFactText("fact.status.audioHealth", c.audioHealth);
+
+    const int32_t plans = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_BAND_PLANS, 0, nullptr));
+    c.plans.resize(static_cast<std::size_t>(plans));
+    c.activePlan = -1;
+    for (int32_t i = 0; i < plans; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_BAND_PLANS, static_cast<uint32_t>(i), &it) <= i) {
+            c.plans.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        c.plans[static_cast<std::size_t>(i)].id = it.detail;
+        c.plans[static_cast<std::size_t>(i)].name = it.name;
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.activePlan = static_cast<int>(i); }
+    }
+
+    const int32_t sinks = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_AUDIO_DEVICES, 0, nullptr));
+    c.sinks.resize(static_cast<std::size_t>(sinks));
+    c.activeSink = -1;
+    for (int32_t i = 0; i < sinks; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_AUDIO_DEVICES, static_cast<uint32_t>(i), &it) <= i) {
+            c.sinks.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        c.sinks[static_cast<std::size_t>(i)].name = it.name;
+        c.sinks[static_cast<std::size_t>(i)].index = static_cast<int>(it.value[0]);
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.activeSink = static_cast<int>(i); }
+    }
+
+    // The rows, when the plan changed.
+    static const std::string kNoPlan;
+    const std::string& activeId = c.activePlan >= 0 ? c.plans[static_cast<std::size_t>(c.activePlan)].id : kNoPlan;
+    const int32_t bands = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_BAND_PLAN, 0, nullptr));
+    if (bands != c.bandsCount || activeId != c.bandsPlanId || c.bandPlanName != c.bandsPlanName) {
+        c.bandsCount = bands;
+        c.bandsPlanId = activeId;
+        c.bandsPlanName = c.bandPlanName;
+        c.bands.resize(static_cast<std::size_t>(bands));
+        for (int32_t i = 0; i < bands; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_BAND_PLAN, static_cast<uint32_t>(i), &it) <= i) {
+                c.bands.resize(static_cast<std::size_t>(i));
+                break;
+            }
+            cascade::gui::BandRow& row = c.bands[static_cast<std::size_t>(i)];
+            row.startHz = it.value[0];
+            row.endHz = it.value[1];
+            row.name = it.name;
+            row.service = it.detail;
+        }
+        ++c.bandReads;
+    }
+    return c;
 }
 
 // THE KEY, ONCE A FRAME (see the members in app_window.hpp): this frame's
@@ -16871,10 +16978,14 @@ void AppWindow::reportPluginStatus() {
 // --- Band plan overlay (P7) -----------------------------------------------------
 
 void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float height) {
-    if (engine_.bandPlan_.entries().empty()) { return; }
-    const std::vector<const cascade::core::BandEntry*> vis =
-        engine_.bandPlan_.visible(scale_.viewLowHz(), scale_.viewHighHz());
-    if (vis.empty()) { return; }
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the loaded
+    // plan's rows, copied when the plan changed and walked here with the model's own
+    // rule for what a view shows (gui/rail_reads.hpp), never copied per frame.
+    const RailListCache& rail = railLists();
+    const double viewLowHz = scale_.viewLowHz();
+    const double viewHighHz = scale_.viewHighHz();
+    const std::size_t visibleBands = cascade::gui::bandRowsVisible(rail.bands, viewLowHz, viewHighHz);
+    if (visibleBands == 0u) { return; }
 
     // Size and palette (issue #1). The two enums are declared in the same
     // Small/Medium/Large and Classic/Vivid/Mono order as the Combo boxes
@@ -16894,8 +17005,10 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
     // The rectangles the names drawn so far occupy (x0, y0, x1, y1), so a
     // later name can keep off them. A handful per frame at most.
     std::vector<ImVec4> placedLabels;
-    placedLabels.reserve(vis.size());
-    for (const cascade::core::BandEntry* b : vis) {
+    placedLabels.reserve(visibleBands);
+    for (const cascade::gui::BandRow& row : rail.bands) {
+        if (!cascade::gui::bandRowVisible(row, viewLowHz, viewHighHz)) { continue; }
+        const cascade::gui::BandRow* b = &row;
         // entries()/visible() are ordered widest-first on a shared start, so
         // walking the vector paints containing bands before the narrower ones
         // nested inside them — the draw order the model already guarantees.

@@ -908,6 +908,9 @@ const char* const kPublishedOnly[] = {
     "sourceError_", "gpsRefusal_", "catalogError_", "bandPlanError_", "tuneMismatchNote_",
     "transmitError_", "soundCardMissing_", "sdrPlayApiDetail_", "sdrPlayAdvice_", "recordNotice_",
     "recordError_", "presetNote_", "pluginEnforceError_", "restoreKeepLabel_",
+    // The Sinks section's watchdog note (API 0.3 8.4: the STATUS_LINES key
+    // audioHealth, and the fifteenth line of EngineStatusText).
+    "audioHealthNote_",
 };
 
 // THE RATCHET ON EVERY OTHER DIRECT READ (OPEN 3). The window still reads the
@@ -942,10 +945,19 @@ const char* const kPortedMembers[] = {
     "biasKeyPanel", "biasKeyPressed", "biasKeyAnswered", "drawBiasKeyConfirm",
     "converterAliasNote", "converterStatusLine", "converterModesOffered", "converterUnusableNote",
     "drawConverterControls", "converterLists",
+    // GROUP 5, the receiver rail and the display: the footer of the menu column,
+    // the Radio section with its WFM stereo and RDS controls, the audio filters,
+    // the Sinks section, the Display section, the Language section's country
+    // picker (its band plan) and the band plan overlay on the spectrum - and the
+    // two readers they share: the rail's cache of the lists and facts, and the
+    // fact reader that fills its strings.
+    "drawMenuColumn", "drawRadioSection", "drawStereoRdsControls", "drawAudioFilterSection",
+    "drawSinksSection", "drawDisplaySection", "drawLanguageSection", "drawBandPlanOverlay",
+    "railLists", "readFactText",
 };
 
-constexpr int kWindowFieldsReadBudget = 149;
-constexpr int kWindowFieldReadsBudget = 694;
+constexpr int kWindowFieldsReadBudget = 132;
+constexpr int kWindowFieldReadsBudget = 631;
 
 struct Report {
     int violations = 0;

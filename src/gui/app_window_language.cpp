@@ -261,6 +261,12 @@ void AppWindow::drawLanguageSection() {
     }
 
     const cascade::core::Country* chosen = cascade::core::findCountry(countrySetting_);
+    // THE BAND PLAN IN FORCE, from the engine's table (window port, group 5, API 0.3
+    // section 8.4): the BAND_PLANS entry that is ACTIVE, "" when none is.
+    const RailListCache& rail = railLists();
+    static const std::string kNoPlan;
+    const std::string& activePlanId =
+        rail.activePlan >= 0 ? rail.plans[static_cast<std::size_t>(rail.activePlan)].id : kNoPlan;
     bool pickedNone = false;
     std::size_t pickedCountry = cascade::gui::kNoPick;
     if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Country")),
@@ -310,27 +316,34 @@ void AppWindow::drawLanguageSection() {
     } else if (pickedCountry != cascade::gui::kNoPick) {
         chosen = &all[pickedCountry];
         countrySetting_ = chosen->code;
-        // The same command the Region picker in Display submits
-        // (SET_BAND_PLAN, applied at the top of the next frame): loadBandPlan()
-        // rebuilds bandPlanChoices_, so it must never run under a walk of it.
-        if (engine_.bandPlanSelection_ != chosen->bandPlan) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, chosen->bandPlan));
+        // The same command the Region picker in Display submits (SET_BAND_PLAN,
+        // applied by the engine's next pass): the plans' list is rebuilt when it
+        // is, so the window's copy of it is read at the top of a frame and never
+        // changes under a walk of it.
+        if (activePlanId != chosen->bandPlan) {
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, chosen->bandPlan));
+            // What it asked for, and what was in force when it asked: the plan is
+            // applied in the engine's next pass, and the note below must not call
+            // it "a different band plan" meanwhile (gui/rail_reads.hpp).
+            bandPlanAsk_ = cascade::gui::BandPlanAsk{chosen->bandPlan, activePlanId, ImGui::GetFrameCount()};
         }
     }
 
     if (chosen != nullptr) {
         // Which plan the country chose, by the name the Region picker shows.
         std::string planName = chosen->bandPlan;
-        for (const cascade::core::PlanInfo& p : engine_.bandPlanChoices_) {
+        for (const RailListCache::Plan& p : rail.plans) {
             if (p.id == chosen->bandPlan) { planName = cascade::core::displayPlanName(p.name); }
         }
         std::string line;
         cascade::core::formatUtf8(line, tr("Band plan: %s"), planName.c_str());
         wrappedHint(line.c_str());
-        // Not on the frame the country was picked: its plan is applied at the
-        // top of the next frame, and "set to a different band plan" would be
-        // a one-frame falsehood about the plan it has just asked for.
-        if (engine_.bandPlanSelection_ != chosen->bandPlan && pickedCountry == cascade::gui::kNoPick) {
+        // Not on the frame the country was picked, and not while the plan it asked
+        // for is still on its way: the engine applies it in its next pass, and
+        // "set to a different band plan" would be a falsehood about the plan it has
+        // just asked for (bandPlanNoteDue says when the note is due).
+        if (cascade::gui::bandPlanNoteDue(bandPlanAsk_, chosen->bandPlan, activePlanId, ImGui::GetFrameCount(),
+                                          pickedCountry != cascade::gui::kNoPick)) {
             wrappedHint(tr("Display has since been set to a different band plan."));
         }
 

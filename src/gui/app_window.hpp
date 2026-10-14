@@ -62,6 +62,7 @@ struct GLFWwindow;
 #include "gui/page_geometry.hpp"
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
+#include "gui/rail_reads.hpp"
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
@@ -2216,6 +2217,52 @@ private:
     std::string statusAntenna_;          // the ANTENNAS entry that is ACTIVE; "" none
     int statusTakeIq_ = -1;
     int statusTakeAudio_ = -1;
+    // WHAT THE RECEIVER RAIL AND THE DISPLAY TAKE FROM THE LISTS AND FACTS
+    // (window port, group 5, API 0.3 section 8.4), read when listSeq moves and
+    // kept: the plans SET_BAND_PLAN takes (BAND_PLANS) and the one in force, the
+    // audio outputs (AUDIO_DEVICES) and the one in use, the loaded plan's name
+    // (fact.bandPlan.name), and the two status lines the rail letters
+    // (fact.status.bandPlanError, fact.status.audioHealth) - read into strings
+    // that keep their room, so a refresh allocates only when something grew.
+    //
+    // THE LOADED PLAN'S ROWS (BAND_PLAN: hundreds of them, walked every frame by
+    // the overlay and the footer) are copied ONCE: listSeq also moves when a
+    // decoder prints a line, so it is not the plan's own signal. They are read
+    // again only when the plan changed - the number of rows, the plan in force
+    // or its name, which are what the engine's own fingerprint hashes for it.
+    // railLists() is the one call a member makes; listSeq 0 is "never read".
+    struct RailListCache {
+        std::uint64_t listSeq = 0;
+        std::uint32_t refreshes = 0;       // times everything but the rows was read again (a test reads it)
+        struct Plan {
+            std::string id;                // what SET_BAND_PLAN takes
+            std::string name;              // the plan's own name, untranslated
+        };
+        std::vector<Plan> plans;
+        int activePlan = -1;               // the entry that is ACTIVE; -1: none ("all installed")
+        struct Sink {
+            std::string name;              // cut at the list item's size (95 bytes)
+            int index = 0;                 // what FOXAPI_OP_AUDIO_DEVICE takes
+        };
+        std::vector<Sink> sinks;
+        int activeSink = -1;
+        std::string bandPlanName;          // fact.bandPlan.name: the loaded plan, a chain joined with " + "
+        std::string bandPlanError;         // fact.status.bandPlanError
+        std::string audioHealth;           // fact.status.audioHealth
+        std::vector<cascade::gui::BandRow> bands;
+        int bandsCount = -1;               // what the rows were read for: their number...
+        std::string bandsPlanId;           // ...the plan in force...
+        std::string bandsPlanName;         // ...and its name
+        std::uint32_t bandReads = 0;       // times the rows were copied (a test reads it)
+    };
+    RailListCache railCache_;
+    const RailListCache& railLists();
+    // A fact's text into `out` (cleared first, "" when the engine has none), whole:
+    // what uiFact caches, for a reader that keeps its own string.
+    void readFactText(const char* key, std::string& out);
+    // THE LANGUAGE SECTION'S NOTE ABOUT THE BAND PLAN (gui/rail_reads.hpp): what
+    // a country picked there asked the engine for, and when.
+    cascade::gui::BandPlanAsk bandPlanAsk_;
     // THE TRANSMIT PAGE IS OPEN - the window's own page, so the window's own
     // flag: restored from the config it hands the engine (applyConfig), moved
     // by its own clicks, each told to the engine
