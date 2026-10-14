@@ -2134,6 +2134,13 @@ private:
     // a frame with the key's (pumpTransmitKey).
     void uiSubmit(const cascade::core::cmd::QueuedCommand& q);
     void uiSubmit(const FoxCommand& c) { uiSubmit(cascade::core::cmd::QueuedCommand{c, {}}); }
+    // THE USAGE REPORT'S PANEL NAMES (window port, group 3): a page calls
+    // this every frame it is open, and the name goes to the engine ONCE a run
+    // as FOXAPP_OP_NOTE_PANEL. uiNotedPanels_ is the names already sent, kept
+    // sorted: a repeat is one binary search with no allocation (the window has
+    // 21 page names, so it never holds more).
+    void uiNotePanel(const char* name);
+    std::vector<std::string> uiNotedPanels_;
     // A FACT (API 0.3, get_setting("fact.<key>")), cached until the lists'
     // publish moves listSeq - read on the first ask after that, so a page
     // drawn every frame costs nothing between changes. "" when the engine

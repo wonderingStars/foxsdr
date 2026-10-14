@@ -228,9 +228,9 @@ const char* const kControlMayCall[] = {
     // session on it (openUiSession), and what it changes through that
     // session goes by the table's submit - the command path itself.
     "apiHandle",
-    // Usage telemetry: the window reports which panel was opened (a counter
-    // in the report, not receiver state).
-    "telemetryNotePanel",
+    // (telemetryNotePanel was allowed here until window port group 3: the
+    // window names a panel through AppWindow::uiNotePanel now, as
+    // FOXAPP_OP_NOTE_PANEL, so a direct call is rule 1's again.)
     // the config snapshot the save compares and writes (window machinery; it accrues the usage report)
     "currentConfig",
     // a query: the tuned frequency (not declared const: activeSource() is not)
@@ -926,6 +926,13 @@ const char* const kPortedMembers[] = {
     "uiSubmit", "uiFact", "refreshUiState", "pumpTransmitKey",
     // GROUP 2, the STATUS column and the list reads it keeps
     "drawStatusColumn", "refreshStatusLists",
+    // GROUP 3, the panel notes: the seven pages whose only engine reach was
+    // telemetryNotePanel, and the once-per-name helper they now call.
+    // (The same call at 14 more sites in members not ported yet went through
+    // it too, so no window member calls the engine for it any more.)
+    "drawRadarSection", "drawCatSection", "drawWebSection", "drawUpdatesSection",
+    "drawKeyBindingsSection", "drawDiagnosticsSection", "drawDiagnosticsOffer",
+    "uiNotePanel",
 };
 
 constexpr int kWindowFieldsReadBudget = 152;

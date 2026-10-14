@@ -8103,7 +8103,7 @@ void AppWindow::drawAudioFilterSection() {
                       cascade::gui::theme::kPhosphor, filtersOn > 0)) {
         return;
     }
-    engine_.telemetryNotePanel("audio filters");
+    uiNotePanel("audio filters");
 
     // The order is the pipeline's, spelled out because it is the part a user
     // cannot infer from the controls.
@@ -8295,7 +8295,7 @@ void AppWindow::drawDecodersSection() {
                       cascade::gui::theme::kPhosphor, fed > 0)) {
         return;
     }
-    engine_.telemetryNotePanel("decoders");
+    uiNotePanel("decoders");
 
     drawDecoderStatusRows();
 
@@ -9696,7 +9696,7 @@ void AppWindow::drawRadarSection() {
     if (!benchSection(trId("Radar"), false, tr("OFF"), cascade::gui::theme::kPhosphor, false)) {
         return;
     }
-    engine_.telemetryNotePanel("radar");
+    uiNotePanel("radar");
 
     drawScopeModeControl();
 }
@@ -11306,7 +11306,7 @@ void AppWindow::drawScopeModeControl() {
 }
 
 void AppWindow::drawScopeMode() {
-    engine_.telemetryNotePanel("scope");
+    uiNotePanel("scope");
 
     // --- the bar, drawn FIRST and unconditionally ---------------------------
     // The way out comes before anything that can run out of room. Everything
@@ -12152,7 +12152,7 @@ void AppWindow::drawPluginStoreWindow() {
         pluginBrowseOpen_ = true;
     }
     if (!pluginBrowseOpen_) { return; }
-    engine_.telemetryNotePanel("plugin store");
+    uiNotePanel("plugin store");
     // THE FIRST OPEN READS THE CATALOGUE (0.99.16, gui/store_first_open.hpp):
     // once per session, never at startup, never retried on its own.
     if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, !engine_.catalog_.empty(),
@@ -12351,7 +12351,7 @@ void AppWindow::drawFittedModulesWindow() {
         fittedWindowOpen_ = true;
     }
     if (!fittedWindowOpen_) { return; }
-    engine_.telemetryNotePanel("fitted modules");
+    uiNotePanel("fitted modules");
 
     ImGuiWindowClass fittedClass;
     fittedClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
@@ -12742,7 +12742,7 @@ void AppWindow::drawPluginWindows() {
         // screen unless they open it. The count above still runs for a closed
         // page: its rail row carries it, and that row is the invitation.
         if (!page.open) { continue; }
-        engine_.telemetryNotePanel("map");
+        uiNotePanel("map");
         // PLACED SO IT DOES NOT FIT INSIDE THE APPLICATION WINDOW, which is
         // what makes ImGui give it a real operating system window rather than
         // merging it into the main one. There is no "always be a separate
@@ -13175,7 +13175,7 @@ void AppWindow::drawPluginWindows() {
         // waiting, which is the truth and what the user asked to see.
         const std::string id = im.plugin + " image###image_" + im.plugin;
         if (!pluginWindows_.shown(id)) { continue; }
-        engine_.telemetryNotePanel("image");
+        uiNotePanel("image");
         // Its own operating system window, for the same reason as the map: a
         // received picture is something to put beside the radio, or on another
         // screen, not a panel inside it. Staggered per decoder so two plugins
@@ -15098,7 +15098,7 @@ void AppWindow::drawDecoderWindow() {
         decoderWindowOpen_ = true;
     }
     if (!decoderWindowOpen_) { return; }
-    engine_.telemetryNotePanel("decoded");
+    uiNotePanel("decoded");
 
     placeAsSeparateWindow(9);
     if (openForCapture) {
@@ -15233,6 +15233,25 @@ void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) {
         (void)engineApi_->submit_text(uiSession_, &q.c, q.longText.data(),
                                       static_cast<uint32_t>(q.longText.size()), nullptr);
     }
+}
+
+// A PAGE SAYS ITS NAME TO THE USAGE REPORT, ONCE A RUN (window port, group 3).
+// Pages call this every frame they are open; the engine records a name once
+// whatever it is told, so what keeps the cost at nothing is HERE: a name
+// already sent is one binary search over a sorted vector of at most 21 short
+// strings (the window has 21 page names), compared against the C string with
+// no temporary, so no allocation and no engine session traffic after the
+// first frame. A name's first sighting inserts it (one allocation, once) and
+// submits FOXAPP_OP_NOTE_PANEL (one ticket and one command string, once).
+// Without this set a submit per frame would fill the session's 256-ticket
+// queue and allocate every frame.
+void AppWindow::uiNotePanel(const char* name) {
+    if (name == nullptr || name[0] == '\0') { return; }
+    const auto at = std::lower_bound(uiNotedPanels_.begin(), uiNotedPanels_.end(), name,
+                                     [](const std::string& have, const char* want) { return have.compare(want) < 0; });
+    if (at != uiNotedPanels_.end() && *at == name) { return; }
+    uiNotedPanels_.insert(at, name);
+    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_NOTE_PANEL, name));
 }
 
 const std::string& AppWindow::uiFact(const char* key) {
@@ -16979,7 +16998,7 @@ void AppWindow::drawRecorderSection() {
                      taping ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
                      taping);
     if (!recorderOpen) { return; }
-    engine_.telemetryNotePanel("recorder");
+    uiNotePanel("recorder");
 
     // Destination, always visible so the user knows where takes land. The
     // directory is created by Recorder::start on the first record.
@@ -17468,7 +17487,7 @@ void AppWindow::drawBookmarksSection() {
                       bookmarkCount > 0)) {
         return;
     }
-    engine_.telemetryNotePanel("bookmarks");
+    uiNotePanel("bookmarks");
     if (bookmarkScrollByEnv_) {
         bookmarkScrollByEnv_ = false;
         ImGui::SetScrollHereY(0.0f);
@@ -17768,7 +17787,7 @@ void AppWindow::drawScannerSection() {
         benchSection(trId("Scanner"), false, engine_.scanner_.active() ? tr("SCAN") : tr("IDLE"),
                      cascade::gui::theme::kPhosphor, engine_.scanner_.active());
     if (!scannerOpen) { return; }
-    engine_.telemetryNotePanel("scanner");
+    uiNotePanel("scanner");
 
     // THE FIELDS ARE A FORM (docs/engine-stage1.md, the view-state line): the
     // stored parameters change nothing the receiver does until a command
@@ -18275,7 +18294,7 @@ void AppWindow::drawCatSection() {
                       !catStatus_.empty() || catServer_.running())) {
         return;
     }
-    engine_.telemetryNotePanel("cat");
+    uiNotePanel("cat");
 
     ImGui::TextWrapped(
         "%s",
@@ -18341,7 +18360,7 @@ void AppWindow::drawWebSection() {
         webRefused ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
         webServer_.running() || webRefused);
     if (!webOpen) { return; }
-    engine_.telemetryNotePanel("web");
+    uiNotePanel("web");
 
     if (!webAddressesScanned_) {
         webLocalAddresses_ = cascade::net::localInterfaceAddresses();
@@ -18495,7 +18514,7 @@ void AppWindow::drawUpdatesSection() {
         }
     }
     if (!benchSection(trId("Updates"), false, updateChip, updateLamp, updateLit)) { return; }
-    engine_.telemetryNotePanel("updates");
+    uiNotePanel("updates");
 
     if (packaged) {
         // No checkbox: there is nothing here for the user to decide. A tick
@@ -18567,7 +18586,7 @@ void AppWindow::drawUsageReportingSection() {
                       cascade::gui::theme::kPhosphor, engine_.telemetryEnabled_)) {
         return;
     }
-    engine_.telemetryNotePanel("usage reporting");
+    uiNotePanel("usage reporting");
 
     ImGui::TextWrapped(
         "%s",
@@ -18625,7 +18644,7 @@ void AppWindow::drawUsageReportingSection() {
     }
     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", cascade::core::kPrivacyPolicyUrl); }
     if (privacyNoticeOpen_) {
-        engine_.telemetryNotePanel("privacy notice");
+        uiNotePanel("privacy notice");
         ImGui::Indent();
         // BOTH PAYLOADS, IN PRIVACY.MD'S OWN ORDER. The beat's three fields
         // were missing from this list entirely, so the one place in the
@@ -18695,7 +18714,7 @@ void AppWindow::drawSerialPortsSection() {
     serialPortsSectionWasOpen_ = open;
     if (!open) { return; }
     if (justOpened) { serialPortsList_ = cascade::core::enumerateSerialPorts(); }
-    engine_.telemetryNotePanel("serial ports");
+    uiNotePanel("serial ports");
 
     ImGui::TextWrapped(
         "%s",
@@ -18802,7 +18821,7 @@ void AppWindow::drawKeyBindingsSection() {
                       !changed.empty())) {
         return;
     }
-    engine_.telemetryNotePanel("key bindings");
+    uiNotePanel("key bindings");
 
     ImGui::TextWrapped(
         "%s",
@@ -18946,7 +18965,7 @@ void AppWindow::drawDiagnosticsSection() {
                       cascade::gui::theme::kPhosphor, diagnosticsEnabled_)) {
         return;
     }
-    engine_.telemetryNotePanel("diagnostics");
+    uiNotePanel("diagnostics");
 
     ImGui::TextWrapped(
         "%s",
@@ -19046,7 +19065,7 @@ void AppWindow::drawDiagnosticsOffer() {
     ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
     if (ImGui::Begin(trId("FoxSDR did not close normally last time"), &diagOfferOpen_,
                      ImGuiWindowFlags_AlwaysAutoResize)) {
-        engine_.telemetryNotePanel("diagnostics offer");
+        uiNotePanel("diagnostics offer");
         // WHY THE SENDING IS DESCRIBED CONDITIONALLY. The sweep running on this
         // start does not always send. It declines a signature already sent
         // inside the dedup window, a machine that has used up its per-window
