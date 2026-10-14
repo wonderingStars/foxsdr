@@ -641,6 +641,143 @@ leaves open for the next rail primitive to end (`g_railPending`; drawMenuColumn
 ends with `benchRailFlush()`, a test frame does not): a guess, not a
 measurement. If a drawing test of the rail ever dies like this, start there.
 
+GROUP 6, the tuning surface (drawToolbar, drawFrequencyReadout, applyKeyAction and
+drawCenterPanels - four members in app_window.cpp - and what they share: the bookmark
+markers' reader drawBookmarkMarkers, and the window's own tuningLists, readSpectrum,
+dragVfoCentre, dragVfoEdge and commitTypedFrequency): API 0.3 section 8.5. The top bar's
+transport, master lamps, volume dial and meters, the counter, the keyboard, and the spectrum
+and waterfall are the highest-traffic surface in the window. What moved into the table:
+- `fact.bookmarks.version`, the bookmark store's own version counter (the one the list
+  fingerprint already hashed), so the markers' rows are copied when the STORE changes and
+  not on every listSeq move;
+- `fact.input.rateHz`, the DSP chain's input rate to the digit (`%.17g`), added to the
+  fingerprint. NOT in the brief's list: the spectrum's axis (`scale_.setSpan`), the VFO's
+  reach (`vfoOffsetInsideSpan`) and the click-to-tune are measured against it, and it is not
+  `sampleRateHz`, the SOURCE's - they differ after a change of the source's rate that the
+  chain refused (`Engine::followInputRate`: "the display span then reflects the OLD rate").
+- Nothing else: no op is new (the survey found every one of the 27 commands to be an op
+  already sent: 23 `submitCommand`, 4 `applyCommand`), FoxReceiverState did not grow, and the
+  three queries (`currentAbsoluteHz`, `converterName`, `muteSubjectText`) are answered by
+  state and facts the table already had (`tunedHz`; `fact.converter.live` and `.name`; the
+  MUTED flag and `audioMutedBy`).
+The pattern held, with these additions to it:
+- ONE `read_spectrum` a frame (decision 1), in `refreshUiState` after the state, into
+  `lastFrame_` (the vector is sized to the engine's bin count once; a different count is
+  the only thing that resizes it): the three places that polled the pipeline for a frame
+  (drawUi in scope mode and in the patch view, drawCenterPanels) read it, and the waterfall
+  is fed where it is read - one row for each NEW sequence, none for NO_CHANGE. The ring's
+  sequence is its own counter, one for each engine pass that had a frame, so the window sees
+  the newest of the frames published since its last read, as `getLatestFrame` handed over.
+  tests/test_tuning_surface.cpp B counts rows against published sequences: 40 frames read
+  one a look give 40 rows for 40 sequences, three frames between two reads give one row (the
+  newest), NO_CHANGE feeds nothing, the buffer never moves, and a refresh allocates 0.
+  What a frame costs, measured (this desktop, Release): the copy out of the stream, 1024 bins
+  = 4096 bytes, 0.2 to 0.3 us; the whole of the window's read including the waterfall's row
+  (work the old poll sites did too), about 2 us; a refresh that finds nothing new, about
+  0.12 us; `read_scope` for the volume meter, about 0.1 us a call before any sample is copied.
+- THE MARKERS (decision 2): `tuningLists()` copies BOOKMARKS' rows only when
+  `fact.bookmarks.version` moved. Twenty-five decoder lines move listSeq twenty-five times
+  and copy the rows 0 times; an add, a star (the list keeps its size) and a remove copy them
+  once each; a 33 000-entry import copies once, 33 199 rows in 2.8 ms. The draw's search over
+  the copy is `core::FreqManager::range`'s rule (41 103 views held equal, edges, NaN and
+  duplicates included). The names are cut at the list item's 95 bytes.
+- SAME-FRAME SITES (decision 3), three looked at: (1) THE VFO AND BANDWIDTH DRAGS are real
+  ones. The passband the panel measures PEAK IN PASSBAND over and paints is the one the
+  drag just set, so the window keeps what the step sent for the rest of the frame
+  (`tuneLocal_`), worked out by the engine's own functions (`vfoOffsetInsideSpan` over the
+  chain's input rate and the bandwidth; [kVfoBwMinHz, kVfoBwMaxChanFrac x channel rate]),
+  and `refreshUiState` drops it - one pass. Test D holds the copy equal to the engine's
+  result over 552 steps (four chain rates, every bandwidth step, the limits at both edges);
+  the centre drag sends the CLAMPED offset (the table refuses 1e8 or more, which a pointer
+  dragged far past the panel on a wide source reaches, where the engine clamps), the edge
+  drag sends the width as asked. (2) THE TYPED ENTRY'S RED LINE IS NOT ONE, though the old
+  code's comment said so: the line is drawn from the status copy drawUi takes at the top of
+  the frame, before the readout, so the old direct `applyCommand` showed on the NEXT frame;
+  a session command made during a frame lands at the top of the next, before that copy -
+  the same frame (test E shows both). What the port must keep is the ORDER: the old code
+  applied the clear at once and queued the tune, so the clear came first; the port submits
+  the clear before the tune, so a tune error the radio posts survives it. (3) THE KEYS read
+  the value they change. `dispatchKeyBindings` stood at the top of the frame, before the
+  publish, so a key repeating on consecutive frames (a held volume key at 20 frames a
+  second or less) started from a state a pass older than the last command and lost a step.
+  It now stands right after `refreshUiState` in drawUi (nothing between draws or touches
+  WantTextInput or the popup stack): eight volume repeats, one a frame, land exactly 0.7.
+- THE ENTRY (decision 3): `commitTypedFrequency` checks the figure as the table will
+  (`typedFrequencyTunable`: more than 0 Hz and at most 6 GHz, held against what the table
+  answers at 17 figures, NaN and infinities included) and says so on the red line with the
+  existing translated sentence ("could not read frequency"): a new sentence would be a new
+  `tr()` key in 33 catalogues. A refusal only the table judges is read from `poll_results`
+  by `pumpTransmitKey` into `freqEntryRefusal_`, which the readout puts on the red line in
+  the engine's own words (the transmit page's key note does the same), so it shows one
+  pass after the answer: the accepted lag. Where the old path asked the driver and the
+  generator took any figure, a typed 0 Hz or more than 6 GHz is now refused.
+- `gui/tuning_reads.hpp` (new, no engine, no ImGui): the mute lamp and the volume meter's
+  hard mute (`masterMuteLamp`, `audioHardMuted`: the pipeline's own `audioMuted` is the
+  lamp's two causes and a keyed transmitter that is not monitored - the brief's two-term
+  expression would have left the third out), the markers' row and search, the decoders the
+  waterfall's caption counts (`FedDecoders`: per plugin, where the old loop counted status
+  lines; nothing in the tree gives a plugin two), and the typed range.
+- `AppWindow::uiSubmitTap_` (a test seam, null in the product, read at one place): every
+  command `uiSubmit` takes, in order, so the 27 commands are held against the old expressions
+  without a pass applying them (a key that starts the receiver or a take).
+
+Ratchet: 132 fields / 631 reads -> 126 / 587 (the 36 reads of the four members, the two
+reads of `drawBookmarkMarkers` and the six of the polls in drawUi; the fields that left:
+dbMax_, dbMin_, squelchDb_, userMuted_, vfoBandwidthHz_, volume_), the budgets exactly the
+printed counts. The four members, `drawBookmarkMarkers`, `tuningLists`, `readSpectrum`,
+`dragVfoCentre`, `dragVfoEdge` and `commitTypedFrequency` join `kPortedMembers`.
+`currentAbsoluteHz` leaves `kControlMayCall`: its last caller was the readout. The brief
+said the readout's `applyCommand` line was among `kLineAllowed`; it was not (those two calls
+passed because `applyCommand` is in `kControlMayCall`, where it stays: drawUi, the mute popup
+and the sections not ported yet call it), so nothing left that list. The guard goes red on a
+single `engine_.` read put back into drawToolbar (mutant G1: "AppWindow::drawToolbar is
+PORTED ... reaches the engine directly").
+
+What the operator sees: nothing new. Drawn by the build before this one and by this one -
+the application's own framebuffer capture in bounded runs, twice for each of five states
+(the default tuning; 2.5 MHz, a band-rich stretch of the world plan; a bookmarks file with
+a starred bookmark in view; a receiver left stopped; the patch view open for the first 200
+frames) - the top bar, the counter, the volume dial and meters, the spectrum, its marker
+strip, the VFO band, the waterfall and its caption differ in 0 pixels at a tolerance of 24
+between the two builds in every state, except the waterfall: up to 77 of 336 200 pixels
+between builds, up to 55 between two runs of the same build (the rows land on different
+frames from run to run). At tolerance 0 no area differs by more than 346 pixels (the
+spectrum's trace and grid), against 326 between two runs of the same build
+(build\g6-vis-summary.txt is the table, build\g6-vis-<state>.txt each pairing). Gestures
+through the application's own input queue (FOXSDR_INPUT_SCRIPT: a VFO centre drag, an edge
+drag, a click on a tube with typed text, a click on the waterfall, a wheel on a digit), six
+runs of each build: the readout and the rail's VFO and bandwidth fields reach the same three
+outcomes at each of four shots in both builds, pixel for pixel (the same hashes). Which
+outcome a run reaches varies from run to run in the control as well (a bounded run's window
+has no OS focus, and a scripted gesture lands or does not), and the typed entry and the wheel
+reached none in either build - those two are held by tests/test_tuning_surface.cpp E and F,
+not by this capture. A command from a key lands one pass after the press, as a widget's
+does (the second drain that applied it at once is no longer how a key is applied); the
+entry's refusal shows one pass after the answer.
+
+What could move a measured number: the window copies the spectrum from the ring (0.2 to
+0.3 us a frame) where it copied it from the pipeline's frame slot under a mutex - the pass's
+own copy into the ring was already there since stage 4; the toolbar's meter reads
+`read_scope`, which also takes a snapshot of the published state to fill its info (about 0.1
+us a call); a refresh on a listSeq move now reads two more facts (`fact.input.rateHz`,
+`fact.bookmarks.version`) and the DECODERS list, and the longer key costs ONE allocation
+inside the table's `get_setting` (a temporary string for a key longer than the string's own
+buffer; test H: 100 refreshes, 100 allocations, none of them the window's), on every pass
+while decoder lines flow; the list fingerprint hashes one more double.
+
+THE TEST-ACCESSOR TRAP held, and did not bite: no test drove the four members, so none was
+re-plumbed; test_tuning_surface runs `look` (`publishReceiverState(); refreshUiState()`) before
+a member and a frame in drawUi's order (`pumpFrameBegin`, `pumpPublish`, the status copy,
+`refreshUiState`, a key, `pumpTransmitKey`) for the rest. Two things a test of this group must
+mind: a key that starts the receiver or a take stays QUEUED on the session until a pass, so
+the test drops the queue (closes and reopens the session) before it runs a pass; and
+`drawCenterPanels` cannot be drawn without a GL context (the waterfall uploads its texture), so
+its logic is split into members that can (`dragVfoCentre`, `dragVfoEdge`, `readSpectrum`,
+`tuningLists`) and the drawn whole is held by the bounded-run comparison above.
+
+Still reading the engine directly in the toolbar's neighbourhood, for group 8: `muteBannerSubject`
+(`muteKeptRunning_`, `muteSubjectText`), called from drawToolbar.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
