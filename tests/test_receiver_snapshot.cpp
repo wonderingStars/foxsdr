@@ -483,6 +483,10 @@ void countersMoveByGroup() {
          },
          ""},
         {"decoders matched (ready)", [](PublishedState& p) { p.rx.decodersMatched = 2; }, "seq"},
+        // API 0.3 8.3: a radio being opened is a device-group flag (the plugin
+        // ABI's device counters do not name it: a plugin never sees it).
+        {"a radio being opened", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_DEVICE_OPENING; },
+         "seq device"},
     };
     for (const Step& st : steps) {
         const Seqs before = seqs(snap);
@@ -1027,6 +1031,7 @@ void walkingOneSources() {
         {"biasTeePresent", &S::biasTeePresent, FOXAPI_RX_BIAS_TEE_PRESENT},
         {"biasTeeOn", &S::biasTeeOn, FOXAPI_RX_BIAS_TEE_ON},
         {"patchRunning", &S::patchRunning, FOXAPI_RX_PATCH_RUNNING},
+        {"deviceOpening", &S::deviceOpening, FOXAPI_RX_DEVICE_OPENING},  // 8.3
     };
     // Every member of RxFlagSources is a bool and is walked here: the struct
     // holds nothing else, so its size counts them.
@@ -1044,7 +1049,7 @@ void walkingOneSources() {
         seen |= w.want;
     }
     // Every flag but the two per-session ones has a source.
-    CHECK(seen == (0x07FFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: three more
+    CHECK(seen == (0x0FFFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: four more
     std::printf("      %zu sources, each to its own flag; flags covered %08x\n",
                 sizeof(srcs) / sizeof(srcs[0]), seen);
 }

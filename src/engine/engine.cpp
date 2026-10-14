@@ -3441,8 +3441,17 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     fs.sinkOpen = sink.running();
     // API 0.3: the bias tee's key (the radio's readback), and the patch.
     fs.biasTeePresent = device_ != nullptr && biasTeePanel_.present;
-    fs.biasTeeOn = fs.biasTeePresent && biasTeePanel_.shown;
+    // THE KEY'S LAMP, whatever it is drawn over (8.3): the stand-in's state
+    // while the test stand-in is in front of the key (it is only ever active
+    // where no real radio with a bias tee is reachable), else the radio's own
+    // readback. The window draws the lamp from this flag and knows no stand-in.
+    fs.biasTeeOn = biasStandInActive() ? biasStandInOn_ : (fs.biasTeePresent && biasTeePanel_.shown);
     fs.patchRunning = patchRunning_;
+    // A radio is being opened (8.3): the converter rows are greyed meanwhile.
+    fs.deviceOpening = deviceOpenPending_;
+    // The radio's own centre, for the CONVERTERS list to read live (8.3): one
+    // atomic store a pass. (Defined beside the converter's other readbacks.)
+    converterRadioCentre_.store(converterRadioCentreHz(), std::memory_order_relaxed);
     // Handed over by the front end (OPEN 4), not asked of it while publishing.
     const FrontEndFacts facts = frontEndFacts();
     fs.webListening = facts.webListening;
@@ -5578,6 +5587,15 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_SET_BIAS_TEE:
             // The Source panel's box and the deck's key both end here, after
             // the key's own question has been answered (biasKeyPressed).
+            //
+            // API 0.3 (8.3/9): the radio the sender was ASKED about may ride in
+            // the text. The key asked about radio A, the person said yes, and
+            // by the time this runs B may be the open one: the answer was not
+            // given for B, so nothing is switched. No text, no check - the
+            // Source panel's box and every other sender are as they were.
+            if (!text.empty() && text != biasKeyRadioNow()) {
+                return refuse(FOXAPI_NOT_FOUND, "the radio changed");
+            }
             switchBiasTee(on);
             return res;
         case FOXAPI_OP_SET_DEVICE_OPTION: {

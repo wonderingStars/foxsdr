@@ -274,6 +274,7 @@ extern "C" {
 #define FOXAPI_RX_BIAS_TEE_PRESENT 0x01000000u /* the open radio has a bias tee this engine can switch */
 #define FOXAPI_RX_BIAS_TEE_ON      0x02000000u /* ...and it is on (the radio's readback) */
 #define FOXAPI_RX_PATCH_RUNNING    0x04000000u /* the patch page's graph is running */
+#define FOXAPI_RX_DEVICE_OPENING   0x08000000u /* a radio is being opened: the open runs on a worker and has not finished */
 
 #define FOXAPI_NAME_CHARS 64
 #define FOXAPI_MESSAGE_CHARS 128
@@ -470,7 +471,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_GAIN          0x0304u /* text: stage name as listed; num[0]: dB */
 #define FOXAPI_OP_SET_DEVICE_AGC    0x0305u /* ival[0]: 0/1 */
 #define FOXAPI_OP_SET_ANTENNA       0x0306u /* text */
-#define FOXAPI_OP_SET_BIAS_TEE      0x0307u /* ival[0]: 0/1 */
+#define FOXAPI_OP_SET_BIAS_TEE      0x0307u /* ival[0]: 0/1; text (0.3, optional): the radio ("fact.biasTee.radioKey") the sender asked about - FOXAPI_NOT_FOUND if another is open now */
 #define FOXAPI_OP_SET_DEVICE_OPTION 0x0308u /* text: option name from FOXAPI_LIST_DEVICE_OPTIONS; ival[0] / num[0]: value */
 /* Recorder (grant: SETTINGS; the directory is NOT settable remotely) */
 #define FOXAPI_OP_RECORD_IQ         0x0401u /* ival[0]: 0/1 */
@@ -685,7 +686,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_BANDWIDTHS    2u  /* value[0]: Hz (the stepped choices) */
 #define FOXAPI_LIST_DEVICES       3u  /* name: label; detail: id to pass to SELECT_SOURCE */
 #define FOXAPI_LIST_SAMPLE_RATES  4u  /* value[0]: Hz */
-#define FOXAPI_LIST_GAINS         5u  /* name; detail: the unit token ("dB" or "step", 0.3); value[0..3]: min, max, step, current */
+#define FOXAPI_LIST_GAINS         5u  /* name; detail: the unit token ("dB" or "step", 0.3); value[0..3]: min, max, step, current; FOXAPI_ITEM_AGC (0.3) */
 #define FOXAPI_LIST_ANTENNAS      6u
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
 #define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text */
@@ -704,7 +705,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_BOOKMARK_GROUPS 21u /* name: group; value[0]: bookmarks in it */
 /* 0.3 (docs/api-0.3-additions.md) */
 #define FOXAPI_LIST_STATUS_LINES  22u /* name: key; detail: text (whole: "fact.status.<key>"); value[0]: level 1 info 2 warn 3 error */
-#define FOXAPI_LIST_CONVERTERS    23u /* detail: radio key; value[0]: 0 off 1 up 2 down, [1]: LO Hz, [2]: 1 inverted; ACTIVE: the open radio's */
+#define FOXAPI_LIST_CONVERTERS    23u /* detail: radio key; value[0]: 0 off 1 up 2 down, [1]: LO Hz, [2]: 1 inverted; ACTIVE: the open radio's, whose value[3] is the radio's own centre readback in Hz, read live (0.3) */
 #define FOXAPI_LIST_GAIN_MODES    24u /* name; value[0]: mode code (the op that takes it names it); ACTIVE */
 #define FOXAPI_LIST_DECIMATIONS   25u /* value[0]: factor, value[1]: resulting rate Hz; ACTIVE */
 #define FOXAPI_LIST_PATCH_NODES   26u /* id: node; name; detail: kind; value[0..1]: x, y; [2]: Hz; [3]: rate Hz; ACTIVE on, REFUSED, FAULT */
@@ -728,6 +729,7 @@ typedef struct FoxEvent {
 #define FOXAPI_ITEM_FED        0x00000040u /* a decoder being fed signal now */
 #define FOXAPI_ITEM_INSTALLED  0x00000080u /* a catalogue entry installed here */
 #define FOXAPI_ITEM_COMPATIBLE 0x00000100u /* a catalogue entry this build can load */
+#define FOXAPI_ITEM_AGC        0x00000200u /* a gain stage its own automatic gain control is driving now (an Airspy's LNA or MIXER) */
 
 typedef struct FoxListItem {
     uint32_t structSize;

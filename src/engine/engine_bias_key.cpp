@@ -67,6 +67,14 @@ std::string Engine::biasKeyRadioNow() const {
     return biasKeyRadio(sourceKind_, deviceArgs_);
 }
 
+std::string Engine::biasKeyRadioName() const {
+    // Which radio the dialog names: the driver's own name for it (the stand-in
+    // says what it is, in the words the window drew for it).
+    if (biasStandInActive()) { return "stand-in radio (FOXSDR_FORCE_BIAS_KEY)"; }
+    if (device_ != nullptr) { return device_->name(); }
+    return {};
+}
+
 bool Engine::biasKeyMayRememberNow() const {
     // The stand-in is a serial-named radio with an unbounded memory of one.
     if (biasStandInActive()) { return biasKeyMayRemember(kStandInArgs); }

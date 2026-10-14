@@ -30,6 +30,7 @@
 #ifndef CASCADE_ENGINE_FOX_ENGINE_API_HPP
 #define CASCADE_ENGINE_FOX_ENGINE_API_HPP
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -137,6 +138,9 @@ struct ApiListBlock {
         // gui::gainUnitWire's two static strings, so a block never allocates
         // for it.
         const char* unit = "dB";
+        // THE STAGE'S OWN AGC IS DRIVING IT (API 0.3 8.3, FOXAPI_ITEM_AGC): an
+        // Airspy's LNA or MIXER with its automatic gain control switched on.
+        bool agc = false;
     };
     std::vector<Gain> gains;
     std::vector<std::string> antennas;
@@ -215,6 +219,11 @@ struct ApiListBlock {
         int mode = 0;                // 0 off, 1 up, 2 down
         double loHz = 0.0;
         bool inverted = false, active = false;
+        // The ACTIVE entry's value[3] (API 0.3 8.3): the radio's own centre
+        // readback, read LIVE from the atomic the pass writes
+        // (Engine::converterRadioCentre_), like a recording's byte count, so a
+        // retune never rebuilds the block. Null on every other entry.
+        const std::atomic<double>* radioCentre = nullptr;
     };
     std::vector<Converter> converters;
     struct Choice {

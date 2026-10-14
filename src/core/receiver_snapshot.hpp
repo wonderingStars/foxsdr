@@ -232,6 +232,9 @@ struct RxFlagSources {
     bool biasTeePresent = false;
     bool biasTeeOn = false;
     bool patchRunning = false;
+    // A radio is being opened (docs/api-0.3-additions.md 8.3): the open runs on a
+    // worker and has not finished.
+    bool deviceOpening = false;
 };
 std::uint32_t receiverFlags(const RxFlagSources& s);
 

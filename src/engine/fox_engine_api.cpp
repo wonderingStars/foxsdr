@@ -1489,6 +1489,14 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         // is closed from under the engine, which notices within its second and
         // reopens it. Never while a worker is inside the device's open.
         if (!engine_.audioOpen_.inFlight()) { engine_.pipeline_.audio().close(); }
+    } else if (key == "test.biasStandIn") {
+        // Stands in for FOXSDR_FORCE_BIAS_KEY (a bounded run's census seam): "accept" or
+        // "refuse" puts the stand-in bias tee in front of the key (while no real radio with
+        // one is open) and "none" takes it away; either way it starts off. API 0.3 8.3.
+        engine_.biasStandIn_ = val == "accept"   ? cascade::gui::BiasStandIn::Accept
+                               : val == "refuse" ? cascade::gui::BiasStandIn::Refuse
+                                                 : cascade::gui::BiasStandIn::None;
+        engine_.biasStandInOn_ = false;
     } else if (key == "test.gainUnit") {
         // The open radio's gain stages read in this unit: "step" (the
         // hardware's own steps, an Airspy's) or "dB". The fake radio has only
@@ -1864,6 +1872,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[1] = g.maxDb;
                 it.value[2] = g.stepDb;
                 it.value[3] = g.currentDb;
+                if (g.agc) { it.flags |= FOXAPI_ITEM_AGC; }  // 0.3 (8.3): its own AGC is driving it
             }
             break;
         case FOXAPI_LIST_ANTENNAS:
@@ -2033,6 +2042,9 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[0] = c.mode;
                 it.value[1] = c.loHz;
                 it.value[2] = c.inverted ? 1.0 : 0.0;
+                // 0.3 (8.3), the open radio's entry: the radio's own centre
+                // readback, LIVE from the pass's atomic (a retune rebuilds no block).
+                if (c.radioCentre != nullptr) { it.value[3] = c.radioCentre->load(std::memory_order_relaxed); }
                 if (c.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;

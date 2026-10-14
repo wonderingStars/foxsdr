@@ -32,6 +32,15 @@ constexpr const char* kFakeRadioDriver = "rtlsdr";
 constexpr const char* kFakeRadioArgs = "serial=00000001";
 constexpr const char* kFakeRadioId = "rtlsdr:serial=00000001";
 
+// A name a test may give the open radio (empty: the mock's own), to show that
+// the engine notices a radio's NAME changing when nothing else about it does
+// (tests/test_engine_api_03.cpp, the bias tee dialog's radio line). Only a test
+// that drives the engine from its own thread sets it.
+inline std::string& fakeRadioNameOverride() {
+    static std::string name;
+    return name;
+}
+
 class FakeRadio final : public cascade::source::DeviceSource {
 public:
     explicit FakeRadio(std::string kind) : kind_(std::move(kind)) {}
@@ -60,7 +69,10 @@ public:
         for (std::size_t i = 0; i < n; ++i) { dst[i] = {0.0f, 0.0f}; }
         return n;
     }
-    const char* name() const override { return "Mock RTL-SDR (serial 00000001)"; }
+    const char* name() const override {
+        const std::string& given = fakeRadioNameOverride();
+        return given.empty() ? "Mock RTL-SDR (serial 00000001)" : given.c_str();
+    }
     const char* lastError() const override { return ""; }
     const char* driverKey() const override { return kind_.c_str(); }
     bool open(const std::string&) override {

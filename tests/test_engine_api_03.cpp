@@ -35,25 +35,53 @@
 //       group 3): a LOCAL session names a panel, the engine lists it once and
 //       stops at 16; a REMOTE session and an empty name add nothing. Read back from the engine's own list, with the
 //       passes driven from the test thread (no control thread, no race).
+//   Z   the radio panels as their pages draw them (window port group 4, API
+//       0.3 section 8.3), each driven from the test thread against a fake radio:
+//       Z1 FOXAPI_RX_DEVICE_OPENING while an open is held on its worker;
+//       Z2 an Airspy's gain stages carry FOXAPI_ITEM_AGC (and the gain-mode and
+//       decimation lists the panel reads are pinned); Z3 the converter in force
+//       (fact.converter.live) and the radio's own centre (CONVERTERS value[3],
+//       live); Z4 the alias note, the modes offered and the ignored up-converter
+//       (a sound card's), and the second sound card moving listSeq; Z5 the
+//       bias tee's stand-in (test.biasStandIn) and the asked-about radio an
+//       ON may carry (N9); Z6 the same against the HackRF driver on a fake wire,
+//       and the fingerprint gaps (a radio that dies, a full memory); Z7 a
+//       language switch moving the translated converter name.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "airspy_fake_usb.hpp"
 #include "check.hpp"
 #include "core/app_commands.hpp"
+#include "core/freq_converter.hpp"
+#include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
 #include "core/patch_graph.hpp"
+#include "engine/bias_tee.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/soundcard_panel.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "engine_api_test_env.hpp"
 #include "engine_client.hpp"
 #include "foxsdr_api.h"
+#include "hackrf_fake_usb.hpp"
+#include "source/airspy_source.hpp"
+#include "source/hackrf_source.hpp"
+
+namespace radios83 {
+std::unique_ptr<cascade::source::DeviceSource> make(const std::string& kind);
+std::vector<cascade::source::NativeDeviceInfo> scan();
+}  // namespace radios83
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
@@ -62,10 +90,146 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.nativeScan = &engine_api_test::fakeNativeScan;
         cascade::engine::Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
     }
+    // Group Z: the fake mock radio, an Airspy and a HackRF on fake wires.
+    static void installRadios83() {
+        cascade::engine::Engine::testHooks_.makeDevice = &radios83::make;
+        cascade::engine::Engine::testHooks_.nativeScan = &radios83::scan;
+        cascade::engine::Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
+    }
     // The panel names the usage report would list (group U).
     static std::vector<std::string> panels(cascade::engine::Engine& e) { return e.telemetryPanels_; }
+    // The converter's and the sound card's inputs, set directly: no sound card
+    // backend runs in this test, so the engine is told it is on one (Z4).
+    static void setSourceKind(cascade::engine::Engine& e, const std::string& kind) { e.sourceKind_ = kind; }
+    static void setCard(cascade::engine::Engine& e, const std::string& device, const std::string& hostApi,
+                        cascade::source::SoundCardFormat format) {
+        e.soundCardLive_.device = device;
+        e.soundCardLive_.hostApi = hostApi;
+        e.soundCardLive_.format = format;
+    }
+    static std::string keyNow(cascade::engine::Engine& e) { return e.converterRadioKeyNow(); }
+    static std::string rawKey(cascade::engine::Engine& e) { return e.converterRawKeyNow(); }
+    static void storeConverter(cascade::engine::Engine& e, const std::string& key,
+                               const cascade::core::ConverterSetting& s) {
+        e.converters_[key] = s;
+    }
+    static void aliasKey(cascade::engine::Engine& e, const std::string& from, const std::string& to) {
+        e.converterKeyAlias_[from] = to;
+    }
+    // The converter in force changed with nothing stored or sourced differently:
+    // what a source install does to the pipeline (applyConverterForSource).
+    static void setPipelineConverter(cascade::engine::Engine& e, const cascade::core::ConverterSetting& s) {
+        e.pipeline_.setConverter(s);
+    }
+    static void clearAlias(cascade::engine::Engine& e) {
+        e.converterKeyAlias_.clear();
+        e.converterNotCarried_.clear();
+    }
+    static void notCarried(cascade::engine::Engine& e, const std::string& key) { e.converterNotCarried_.insert(key); }
+    // The bias tee memory filled to `n` radios other than the open one (Z6).
+    static void fillBiasMemory(cascade::engine::Engine& e, std::size_t n) {
+        e.biasTeePanel_.remembered.clear();
+        for (std::size_t i = 0; i < n; ++i) { e.biasTeePanel_.remembered["filler|" + std::to_string(i)] = false; }
+    }
+    // The open HackRF's request, made behind the engine's back: it fails (the
+    // wire is told to) and the driver treats the radio as dead from then on.
+    static bool breakHackRf(cascade::engine::Engine& e) {
+        auto* h = dynamic_cast<cascade::source::HackRfSource*>(e.device_);
+        if (h == nullptr) { return false; }
+        (void)h->setBiasT(true);
+        return h->deviceDead();
+    }
 };
 }  // namespace cascade::gui
+
+// --- the radios of group Z ---------------------------------------------------------------
+//
+// The mock RTL-SDR the other groups use, the SHIPPING Airspy driver and the
+// SHIPPING HackRF driver, each on a fake USB wire (tests/airspy_fake_usb.hpp,
+// tests/hackrf_fake_usb.hpp): nothing on the desk is enumerated or opened. The
+// Airspy's wire hands its device out only while the gate is open, so a test can
+// hold an open on its worker (Z1).
+namespace radios83 {
+
+constexpr const char* kAirspySerial = "644866c83f1a51df";
+const std::string kAirspyId = std::string("airspy:serial=") + kAirspySerial;
+constexpr const char* kHackSerial = "0000000000000000457863c8";
+const std::string kHackArgs = std::string("serial=") + kHackSerial;
+const std::string kHackId = std::string("hackrf:") + kHackArgs;
+constexpr std::uint8_t kAntennaEnable = 23;  // libhackrf's ANTENNA_ENABLE: the bias-T request
+
+std::atomic<bool> g_gateOpen{true};
+std::mutex g_mutex;
+cascade::test::FakeHackRfUsb* g_hack = nullptr;
+
+std::unique_ptr<cascade::source::DeviceSource> make(const std::string& kind) {
+    if (kind == "airspy") {
+        auto src = std::make_unique<cascade::source::AirspySource>();
+        cascade::usb::UsbDeviceInfo d;
+        d.vid = 0x1D50;
+        d.pid = 0x60A1;
+        d.path = "\\\\?\\usb#vid_1d50&pid_60a1#fake#{a5dcbf10}";
+        d.serial = kAirspySerial;
+        d.description = "AIRSPY";
+        auto holder = std::make_shared<std::unique_ptr<cascade::usb::UsbDevice>>(
+            std::make_unique<cascade::test::FakeAirspyUsb>());
+        src->setTransportForTest({d}, [holder](const std::string&, std::string& error) {
+            // The open waits here, on its worker, for as long as the test says
+            // (never more than ten seconds: a test that forgets cannot hang).
+            for (int i = 0; i < 10000 && !g_gateOpen.load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (*holder == nullptr) { error = "fake: already handed out"; }
+            return std::move(*holder);
+        });
+        return src;
+    }
+    if (kind == "hackrf") {
+        auto src = std::make_unique<cascade::source::HackRfSource>();
+        cascade::usb::UsbDeviceInfo d;
+        d.vid = 0x1D50;
+        d.pid = 0x6089;
+        d.path = std::string("\\\\?\\usb#vid_1d50&pid_6089#fake") + kHackSerial;
+        d.serial = kHackSerial;
+        d.description = "HackRF One";
+        auto owned = std::make_unique<cascade::test::FakeHackRfUsb>();
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_hack = owned.get();
+        }
+        auto holder = std::make_shared<std::unique_ptr<cascade::usb::UsbDevice>>(std::move(owned));
+        src->setTransportForTest({d}, [holder](const std::string&, std::string& error) {
+            if (*holder == nullptr) { error = "fake: already handed out"; }
+            return std::move(*holder);
+        });
+        return src;
+    }
+    return engine_api_test::makeFakeRadio(kind);
+}
+
+std::vector<cascade::source::NativeDeviceInfo> scan() {
+    return {{engine_api_test::kFakeRadioDriver, "Mock RTL-SDR (serial 00000001)", engine_api_test::kFakeRadioArgs},
+            {"airspy", "Airspy R2", std::string("serial=") + kAirspySerial},
+            {"hackrf", "HackRF One", kHackArgs}};
+}
+
+cascade::test::FakeHackRfUsb* hack() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    return g_hack;
+}
+
+// The bias-T requests the driver has sent since the transcript was cleared, as
+// the values it asked for (1 on, 0 off).
+std::vector<int> biasRequests() {
+    std::vector<int> out;
+    if (hack() == nullptr) { return out; }
+    for (const cascade::test::ControlRecord& c : hack()->controls()) {
+        if (!c.in && c.request == kAntennaEnable) { out.push_back(c.value); }
+    }
+    return out;
+}
+
+}  // namespace radios83
 
 using testing::cmd;
 using testing::kAllGrants;
@@ -889,6 +1053,518 @@ void testNotePanel() {
                 full.size());
 }
 
+// --- Z: the radio panels as their pages draw them (API 0.3 section 8.3) ------------------
+//
+// Window port group 4: the Airspy panel, the deck's bias tee key and the
+// Converter rows draw from the table. Each group below drives the engine from
+// THIS thread (controlPass until the thing has happened) against a fake radio,
+// so what the test reads and what the friend sets is not a race with a control
+// thread.
+
+struct Direct {
+    cascade::engine::Engine eng;
+    Direct() {
+        eng.configureApi(kHooks);
+        eng.initialise();
+        eng.controlPass();
+    }
+};
+
+// Passes until `done` holds (at most timeoutMs).
+template <class F>
+bool passUntil(cascade::engine::Engine& eng, F done, int timeoutMs = 4000) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < end) {
+        eng.controlPass();
+        if (done()) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
+}
+
+// Scans, selects `id` and passes until the radio is open.
+bool openRadio(cascade::engine::Engine& eng, testing::Session& s, const std::string& id) {
+    if (pumped(eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status() != FOXAPI_OK) { return false; }
+    if (!passUntil(eng, [&] { return count(s, FOXAPI_LIST_DEVICES) == 4; })) { return false; }
+    if (pumped(eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, id.c_str())).status() != FOXAPI_OK) {
+        return false;
+    }
+    return passUntil(eng, [&] { return (s.state().flags & FOXAPI_RX_DEVICE_OPEN) != 0u; });
+}
+
+// The entry of `list` that is ACTIVE (a zeroed item when none is), and where.
+FoxListItem activeItem(testing::Session& s, uint32_t list, int* index = nullptr) {
+    const int32_t n = count(s, list);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, list, static_cast<uint32_t>(i));
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) {
+            if (index != nullptr) { *index = i; }
+            return it;
+        }
+    }
+    if (index != nullptr) { *index = -1; }
+    return FoxListItem{};
+}
+
+FoxCommand converterCmd(int mode, double loHz, int inverted) {
+    FoxCommand c = testing::cmd(FOXAPP_OP_SET_CONVERTER, loHz, mode);
+    c.ival[1] = inverted;
+    return c;
+}
+
+// Z1 - N1: a radio is being opened. The open is held on its worker by the
+// Airspy's wire; the state says so, in the device group, and the converter the
+// page greys its controls for is refused meanwhile.
+void testDeviceOpening() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    radios83::g_gateOpen = true;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_DEVICES) == 4; }));
+    FoxReceiverState rest = s.state();
+    CHECK((rest.flags & FOXAPI_RX_DEVICE_OPENING) == 0u);  // nothing opening at rest
+
+    radios83::g_gateOpen = false;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, radios83::kAirspyId.c_str())).status(),
+             FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return (s.state().flags & FOXAPI_RX_DEVICE_OPENING) != 0u; }));
+    FoxReceiverState opening = s.state();
+    CHECK((opening.flags & FOXAPI_RX_DEVICE_OPEN) == 0u);  // still held
+    // A device-group change: the flag alone moved deviceSeq (the radio is not open yet).
+    CHECK(opening.deviceSeq > rest.deviceSeq);
+    // The engine refuses a converter meanwhile (the reason the page is greyed).
+    CHECK_EQ(pumped(d.eng, s, converterCmd(1, 125.0e6, 0)).status(), FOXAPI_BUSY);
+
+    radios83::g_gateOpen = true;
+    CHECK(passUntil(d.eng, [&] { return (s.state().flags & FOXAPI_RX_DEVICE_OPEN) != 0u; }));
+    const FoxReceiverState open = s.state();
+    CHECK((open.flags & FOXAPI_RX_DEVICE_OPENING) == 0u);  // the open has finished
+    CHECK(open.deviceSeq > opening.deviceSeq);
+    std::printf("Z1: OPENING while the Airspy's open was held (deviceSeq %llu -> %llu), clear once open (%llu)\n",
+                static_cast<unsigned long long>(rest.deviceSeq), static_cast<unsigned long long>(opening.deviceSeq),
+                static_cast<unsigned long long>(open.deviceSeq));
+}
+
+// Z2 - N7, and the contract the Airspy panel relies on: GAIN_MODES, DECIMATIONS
+// and the stages. A stage its own AGC drives carries FOXAPI_ITEM_AGC, and
+// switching an AGC moves listSeq.
+void testAirspyLists() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    radios83::g_gateOpen = true;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK_EQ(count(s, FOXAPI_LIST_GAIN_MODES), 0);  // not an Airspy: no panel
+    CHECK(openRadio(d.eng, s, radios83::kAirspyId));
+    d.eng.controlPass();
+
+    // As it opens: Free mode, three stages in steps, no AGC.
+    CHECK_EQ(count(s, FOXAPI_LIST_GAIN_MODES), 3);
+    int at = -1;
+    CHECK_EQ(activeItem(s, FOXAPI_LIST_GAIN_MODES, &at).value[0], 2.0);  // Free
+    CHECK_EQ(count(s, FOXAPI_LIST_GAINS), 3);
+    const auto stage = [&](uint32_t i) { return item(s, FOXAPI_LIST_GAINS, i); };
+    CHECK_EQ(std::string(stage(0).name), std::string("LNA"));
+    CHECK_EQ(std::string(stage(1).name), std::string("MIXER"));
+    CHECK_EQ(std::string(stage(2).name), std::string("VGA"));
+    for (uint32_t i = 0; i < 3; ++i) {
+        CHECK_EQ(std::string(stage(i).detail), std::string("step"));
+        CHECK((stage(i).flags & FOXAPI_ITEM_AGC) == 0u);
+    }
+
+    // The LNA's AGC: its stage (and only its stage) says so, and the block moved.
+    const uint64_t seq0 = s.state().listSeq;
+    FoxCommand agc = testing::cmd(FOXAPP_OP_AIRSPY_AGC, 0.0, 0);
+    agc.ival[1] = 1;
+    CHECK_EQ(pumped(d.eng, s, agc).status(), FOXAPI_OK);
+    CHECK((stage(0).flags & FOXAPI_ITEM_AGC) != 0u);
+    CHECK((stage(1).flags & FOXAPI_ITEM_AGC) == 0u);
+    CHECK((stage(2).flags & FOXAPI_ITEM_AGC) == 0u);
+    CHECK(s.state().listSeq != seq0);
+    // The mixer's too; then the LNA's off again.
+    agc.ival[0] = 1;
+    CHECK_EQ(pumped(d.eng, s, agc).status(), FOXAPI_OK);
+    CHECK((stage(0).flags & FOXAPI_ITEM_AGC) != 0u);
+    CHECK((stage(1).flags & FOXAPI_ITEM_AGC) != 0u);
+    CHECK((stage(2).flags & FOXAPI_ITEM_AGC) == 0u);
+    const uint64_t seq1 = s.state().listSeq;
+    agc.ival[0] = 0;
+    agc.ival[1] = 0;
+    CHECK_EQ(pumped(d.eng, s, agc).status(), FOXAPI_OK);
+    CHECK((stage(0).flags & FOXAPI_ITEM_AGC) == 0u);
+    CHECK((stage(1).flags & FOXAPI_ITEM_AGC) != 0u);
+    CHECK(s.state().listSeq != seq1);
+    agc.ival[0] = 1;
+    CHECK_EQ(pumped(d.eng, s, agc).status(), FOXAPI_OK);
+    CHECK((stage(1).flags & FOXAPI_ITEM_AGC) == 0u);
+
+    // The decimation list: the factors in the combo's order, the active one with
+    // the rate it gives; the board's own rate is that rate times the factor.
+    const FoxReceiverState st0 = s.state();
+    CHECK(count(s, FOXAPI_LIST_DECIMATIONS) > 1);
+    int di = -1;
+    const FoxListItem dec1 = activeItem(s, FOXAPI_LIST_DECIMATIONS, &di);
+    CHECK_EQ(dec1.value[0], 1.0);
+    CHECK_EQ(dec1.value[1], st0.sampleRateHz);
+    const double hardware = dec1.value[1] * dec1.value[0];
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_AIRSPY_DECIMATION, 0.0, 2)).status(), FOXAPI_OK);
+    const FoxListItem dec2 = activeItem(s, FOXAPI_LIST_DECIMATIONS, &di);
+    CHECK_EQ(dec2.value[0], 2.0);
+    CHECK_EQ(dec2.value[1] * dec2.value[0], hardware);  // the same board rate
+    CHECK_EQ(dec2.value[1], s.state().sampleRateHz);
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_DECIMATIONS); ++i) {
+        const FoxListItem e = item(s, FOXAPI_LIST_DECIMATIONS, static_cast<uint32_t>(i));
+        CHECK_EQ(e.value[1] * e.value[0], hardware);
+    }
+
+    // Linearity: one stage, no AGC, and the mode list follows.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_AIRSPY_GAIN_MODE, 0.0, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(activeItem(s, FOXAPI_LIST_GAIN_MODES, &at).value[0], 0.0);
+    CHECK_EQ(count(s, FOXAPI_LIST_GAINS), 1);
+    CHECK_EQ(std::string(stage(0).name), std::string("LINEARITY"));
+    CHECK((stage(0).flags & FOXAPI_ITEM_AGC) == 0u);
+    std::printf("Z2: Airspy: LNA then MIXER AGC flagged on their stages (listSeq moved each time), decimation 2 "
+                "keeps the board at %.0f S/s\n", hardware);
+}
+
+// Z3 - N2 and N6: the converter in force, and the radio's own centre, live.
+void testConverterFacts() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK(openRadio(d.eng, s, engine_api_test::kFakeRadioId));
+    d.eng.controlPass();
+
+    // Nothing set: the starting point of the controls. A radio with no AGC of its own carries no flag.
+    CHECK_EQ(fact(s, "fact.converter.live"), std::string("0 0 0"));
+    CHECK_EQ(count(s, FOXAPI_LIST_CONVERTERS), 0);
+    CHECK_EQ(count(s, FOXAPI_LIST_GAINS), 1);
+    CHECK((item(s, FOXAPI_LIST_GAINS, 0).flags & FOXAPI_ITEM_AGC) == 0u);
+
+    // The converter in force is the PIPELINE's, not the stored setting: changed
+    // alone (as a source install does), it still moves the block.
+    Access::setPipelineConverter(d.eng, cascade::core::ConverterSetting{cascade::core::ConverterMode::Down, 7.0e6, false});
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.live"), std::string("2 7000000 0"));
+    CHECK_EQ(count(s, FOXAPI_LIST_CONVERTERS), 0);  // nothing is stored
+    Access::setPipelineConverter(d.eng, cascade::core::ConverterSetting{});
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.live"), std::string("0 0 0"));
+
+    // The dialog's radio line follows the radio's NAME when only that changes.
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string("Mock RTL-SDR (serial 00000001)"));
+    engine_api_test::fakeRadioNameOverride() = "Renamed radio";
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string("Renamed radio"));
+    engine_api_test::fakeRadioNameOverride().clear();
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string("Mock RTL-SDR (serial 00000001)"));
+
+    // An up-converter on 125 MHz.
+    CHECK_EQ(pumped(d.eng, s, converterCmd(1, 125.0e6, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.converter.live"), std::string("1 125000000 0"));
+    const std::string name = fact(s, "fact.converter.name");
+    CHECK(name.find("125 MHz") != std::string::npos);
+    CHECK(name.find("up-converter") != std::string::npos);
+    int at = -1;
+    FoxListItem cv = activeItem(s, FOXAPI_LIST_CONVERTERS, &at);
+    CHECK_EQ(count(s, FOXAPI_LIST_CONVERTERS), 1);
+    CHECK_EQ(cv.value[0], 1.0);
+    CHECK_EQ(cv.value[1], 125.0e6);
+    CHECK_EQ(cv.value[2], 0.0);
+    CHECK_EQ(std::string(cv.detail), fact(s, "fact.converter.radioKey"));
+    FoxReceiverState st = s.state();
+    // The radio's OWN readback (not the air frequency the state speaks): air + LO.
+    CHECK(cv.value[3] != st.centreHz);
+    CHECK_EQ(cv.value[3], st.centreHz + 125.0e6);
+
+    // Inverting, on a higher oscillator: radio = LO - air.
+    CHECK_EQ(pumped(d.eng, s, converterCmd(1, 250.0e6, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.converter.live"), std::string("1 250000000 1"));
+    cv = activeItem(s, FOXAPI_LIST_CONVERTERS, &at);
+    CHECK_EQ(cv.value[2], 1.0);
+    st = s.state();
+    CHECK_EQ(cv.value[3], 250.0e6 - st.centreHz);
+
+    // LIVE: a retune moves the radio's figure with no new block (no listSeq).
+    const uint64_t listSeq = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_FREQUENCY, 110.0e6)).status(), FOXAPI_OK);
+    const double radioBefore = cv.value[3];
+    // (The tuned frequency is 110 MHz; the centre sits the VFO offset below it.)
+    const bool followed = passUntil(d.eng, [&] {
+        const FoxReceiverState now = s.state();
+        return now.tunedHz == 110.0e6 && activeItem(s, FOXAPI_LIST_CONVERTERS).value[3] == 250.0e6 - now.centreHz;
+    });
+    const double radioAfter = activeItem(s, FOXAPI_LIST_CONVERTERS).value[3];
+    std::printf("Z3: radio centre followed the retune to 110 MHz: %s (%.1f -> %.1f Hz; listSeq %llu -> %llu)\n",
+                followed ? "yes" : "NO", radioBefore, radioAfter, static_cast<unsigned long long>(listSeq),
+                static_cast<unsigned long long>(s.state().listSeq));
+    CHECK(followed);
+    CHECK(radioAfter != radioBefore);
+    CHECK_EQ(s.state().listSeq, listSeq);
+
+    // A setting remembered for another radio is not the open one's: no readback on it.
+    Access::storeConverter(d.eng, "rtlsdr|serial=elsewhere", cascade::core::ConverterSetting{
+                                                                   cascade::core::ConverterMode::Down, 50.0e6, false});
+    d.eng.controlPass();
+    CHECK_EQ(count(s, FOXAPI_LIST_CONVERTERS), 2);
+    for (int32_t i = 0; i < 2; ++i) {
+        const FoxListItem e = item(s, FOXAPI_LIST_CONVERTERS, static_cast<uint32_t>(i));
+        if ((e.flags & FOXAPI_ITEM_ACTIVE) != 0u) {
+            CHECK(e.value[3] != 0.0);
+        } else {
+            CHECK_EQ(std::string(e.detail), std::string("rtlsdr|serial=elsewhere"));
+            CHECK_EQ(e.value[3], 0.0);
+        }
+    }
+
+    // Off again: the live converter reads off, whatever is remembered.
+    CHECK_EQ(pumped(d.eng, s, converterCmd(0, 250.0e6, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.converter.live").substr(0, 2), std::string("0 "));
+}
+
+// Z4 - N3, N4, N5 and the sound card's fingerprint gap. No sound card backend
+// runs here: the engine is told it is on one (the same members the window's
+// tests set), and the facts are read back from the table.
+void testConverterAliasAndCards() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    using Fmt = cascade::source::SoundCardFormat;
+    Access::installRadios83();
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+
+    // The generator: every mode offered, nothing aliased, nothing ignored.
+    CHECK_EQ(fact(s, "fact.converter.modes"), std::string("0,1,2"));
+    CHECK_EQ(fact(s, "fact.converter.alias"), std::string());
+    CHECK_EQ(fact(s, "fact.converter.upIgnored"), std::string("0"));
+
+    // The alias note: said until the user sets a converter themselves...
+    const std::string raw = Access::rawKey(d.eng);
+    Access::notCarried(d.eng, raw);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.alias"), std::string("notCarried"));
+    CHECK_EQ(pumped(d.eng, s, converterCmd(1, 125.0e6, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.converter.alias"), std::string());  // a converter set here ends the note
+    // ...and "the converter still applies" while an alias is in force and one is on.
+    Access::clearAlias(d.eng);
+    Access::aliasKey(d.eng, raw, "native|serial=0001");
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.alias"), std::string("carried"));
+    CHECK_EQ(pumped(d.eng, s, converterCmd(0, 125.0e6, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.converter.alias"), std::string());  // off: nothing to carry
+    Access::clearAlias(d.eng);
+    d.eng.controlPass();
+
+    // A sound card in real mode: Off and Down only; a stored Up is not used.
+    Access::setSourceKind(d.eng, "soundcard");
+    Access::setCard(d.eng, "Card A", "WASAPI", Fmt::RealMono);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.modes"), std::string("0,2"));
+    CHECK_EQ(fact(s, "fact.converter.upIgnored"), std::string("0"));
+    const std::string keyA = fact(s, "fact.converter.radioKey");
+    CHECK_EQ(keyA, Access::keyNow(d.eng));
+    Access::storeConverter(d.eng, keyA, cascade::core::ConverterSetting{cascade::core::ConverterMode::Up, 125.0e6, false});
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.upIgnored"), std::string("1"));
+    // The same card in I/Q mode: no converter at all, so nothing to ignore.
+    Access::setCard(d.eng, "Card A", "WASAPI", Fmt::IqStereo);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.converter.modes"), std::string());
+    CHECK_EQ(fact(s, "fact.converter.upIgnored"), std::string("0"));
+
+    // A SECOND CARD has the same (empty) deviceArgs_ as the first: nothing else
+    // moves, and the lists must still be rebuilt for it.
+    Access::setCard(d.eng, "Card A", "WASAPI", Fmt::RealMono);
+    d.eng.controlPass();
+    const uint64_t seqA = s.state().listSeq;
+    CHECK_EQ(fact(s, "fact.converter.upIgnored"), std::string("1"));
+    Access::setCard(d.eng, "Card B", "WASAPI", Fmt::RealMono);
+    d.eng.controlPass();
+    CHECK(s.state().listSeq != seqA);
+    const std::string keyB = fact(s, "fact.converter.radioKey");
+    CHECK(keyB != keyA);
+    CHECK_EQ(keyB, Access::keyNow(d.eng));
+    CHECK_EQ(fact(s, "fact.converter.upIgnored"), std::string("0"));  // card B has none stored
+    // The same name through another host API is another card too.
+    const uint64_t seqB = s.state().listSeq;
+    Access::setCard(d.eng, "Card B", "MME", Fmt::RealMono);
+    d.eng.controlPass();
+    CHECK(s.state().listSeq != seqB);
+    CHECK(fact(s, "fact.converter.radioKey") != keyB);
+    Access::setSourceKind(d.eng, "siggen");
+    d.eng.controlPass();
+    std::printf("Z4: alias \"\"/notCarried/carried, modes 0,1,2 / 0,2 / none, upIgnored, a second card moved listSeq\n");
+}
+
+// Z5 - N8 and N9: the bias tee's test stand-in, published by the engine, and
+// the radio an ON may be asked about.
+void testBiasStandIn() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    const auto on = [&] { return (s.state().flags & FOXAPI_RX_BIAS_TEE_ON) != 0u; };
+    const auto setOn = [&](int v, const char* radio = nullptr) {
+        return pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, v, radio));
+    };
+    // No stand-in, no radio: no key.
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string());
+    CHECK(!on());
+
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.biasStandIn=accept")).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    const uint64_t listSeq = s.state().listSeq;
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("1"));
+    CHECK_EQ(fact(s, "fact.biasTee.mayRemember"), std::string("1"));  // a serial-named stand-in
+    const std::string standKey = fact(s, "fact.biasTee.radioKey");
+    CHECK(standKey.find("stand-in") != std::string::npos);
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string("stand-in radio (FOXSDR_FORCE_BIAS_KEY)"));
+    CHECK(!on());  // it starts off
+
+    // Switched through the command, read back through the state's flag.
+    const uint64_t deviceSeq = s.state().deviceSeq;
+    CHECK_EQ(setOn(1).status(), FOXAPI_OK);
+    CHECK(on());
+    CHECK(s.state().deviceSeq > deviceSeq);
+    CHECK_EQ(setOn(0).status(), FOXAPI_OK);
+    CHECK(!on());
+
+    // N9: an ON that names another radio is refused, and switches nothing.
+    const testing::Outcome wrong = setOn(1, "hackrf|serial=somebodyelse");
+    CHECK_EQ(wrong.status(), FOXAPI_NOT_FOUND);
+    CHECK_EQ(std::string(wrong.result.message), std::string("the radio changed"));
+    CHECK((wrong.result.flags & FOXAPI_RESULT_REFUSED) != 0u);
+    CHECK(!on());
+    // The radio it was asked about: switched. (No text: not checked at all, as before.)
+    CHECK_EQ(setOn(1, standKey.c_str()).status(), FOXAPI_OK);
+    CHECK(on());
+    CHECK_EQ(setOn(0).status(), FOXAPI_OK);
+    CHECK_EQ(setOn(1).status(), FOXAPI_OK);
+    CHECK(on());
+    CHECK_EQ(setOn(0).status(), FOXAPI_OK);
+
+    // The stand-in that refuses: the command is applied, the lamp stays dark and
+    // the refusal is where every Source refusal is shown.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.biasStandIn=refuse")).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("1"));
+    CHECK_EQ(setOn(1).status(), FOXAPI_OK);
+    CHECK(!on());
+    CHECK(fact(s, "fact.status.sourceError").find("stand-in bias tee") != std::string::npos);
+
+    // Taken away: no key again.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.biasStandIn=none")).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string());
+    CHECK(!on());
+    std::printf("Z5: stand-in key reachable/off/on through SET_BIAS_TEE; a wrong radio refused \"%s\" (listSeq %llu -> %llu)\n",
+                wrong.result.message, static_cast<unsigned long long>(listSeq),
+                static_cast<unsigned long long>(s.state().listSeq));
+}
+
+// Z6 - N9 against the shipping HackRF driver on a fake wire, and the bias tee
+// facts' fingerprint gaps: a radio that dies with nothing else changing, and a
+// full memory of radios.
+void testBiasRealDriver() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK(openRadio(d.eng, s, radios83::kHackId));
+    d.eng.controlPass();
+    const auto on = [&] { return (s.state().flags & FOXAPI_RX_BIAS_TEE_ON) != 0u; };
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("1"));
+    CHECK_EQ(fact(s, "fact.biasTee.mayRemember"), std::string("1"));
+    const std::string key = fact(s, "fact.biasTee.radioKey");
+    CHECK(key.find("hackrf") != std::string::npos);
+    // The radio's own name, as the state says it.
+    CHECK(!fact(s, "fact.biasTee.radioName").empty());
+    CHECK_EQ(fact(s, "fact.biasTee.radioName"), std::string(s.state().deviceName));
+    CHECK(!on());
+
+    // FULL MEMORY: the radio's "on" would not be kept, and the dialog must say so.
+    // Nothing else changes, and the block is rebuilt for it.
+    const uint64_t seq0 = s.state().listSeq;
+    Access::fillBiasMemory(d.eng, cascade::core::kBiasTeeMemoryCap);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.mayRemember"), std::string("0"));
+    CHECK(s.state().listSeq != seq0);
+    Access::fillBiasMemory(d.eng, 0);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.mayRemember"), std::string("1"));
+
+    // N9 against the real wire: an ON for another radio reaches the driver as nothing.
+    radios83::hack()->clearControls();
+    const testing::Outcome wrong =
+        pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, 1, "airspy|serial=644866c83f1a51df"));
+    CHECK_EQ(wrong.status(), FOXAPI_NOT_FOUND);
+    CHECK(radios83::biasRequests().empty());
+    CHECK(!on());
+    // ...and for this one, it is switched: the driver is asked once and the lamp is its readback.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, 1, key.c_str())).status(), FOXAPI_OK);
+    CHECK(radios83::biasRequests() == std::vector<int>{1});
+    CHECK(on());
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_BIAS_TEE, 0.0, 0)).status(), FOXAPI_OK);
+    CHECK(!on());
+
+    // A RADIO THAT DIES with no other change: the key goes (reachable "0") and
+    // the lists are rebuilt for it. The failure is made behind the engine's
+    // back, through the driver, so no status line or setting moves with it.
+    const uint64_t seq1 = s.state().listSeq;
+    radios83::hack()->failingRequests.push_back(radios83::kAntennaEnable);
+    CHECK(Access::breakHackRf(d.eng));
+    radios83::hack()->failingRequests.clear();
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.biasTee.reachable"), std::string("0"));
+    CHECK(s.state().listSeq != seq1);
+    std::printf("Z6: HackRF: wrong radio refused with no request on the wire; a full memory and a dead radio moved listSeq\n");
+}
+
+// Z7: the converter's name is translated when the block is built, so a language
+// switch has to rebuild it.
+void testLanguageMovesNames() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::installRadios83();
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK_EQ(pumped(d.eng, s, converterCmd(1, 125.0e6, 0)).status(), FOXAPI_OK);
+    std::string other;
+    for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+        if (l.code != "en") {
+            other = l.code;
+            break;
+        }
+    }
+    CHECK(!other.empty());
+    if (other.empty()) { return; }
+    const std::string before = fact(s, "fact.converter.name");
+    const uint64_t seq0 = s.state().listSeq;
+    (void)cascade::i18n::setLanguage(other);
+    d.eng.controlPass();
+    const uint64_t seq1 = s.state().listSeq;
+    const std::string translated = fact(s, "fact.converter.name");
+    (void)cascade::i18n::setLanguage("en");
+    d.eng.controlPass();
+    std::printf("Z7: \"%s\" -> \"%s\" in %s (listSeq %llu -> %llu)\n", before.c_str(), translated.c_str(),
+                other.c_str(), static_cast<unsigned long long>(seq0), static_cast<unsigned long long>(seq1));
+    CHECK(seq1 != seq0);
+    CHECK_EQ(fact(s, "fact.converter.name"), before);
+}
+
 }  // namespace
 
 int main() {
@@ -913,5 +1589,13 @@ int main() {
     testStatusColumnRecordings();
     testListsBeforeFirstPublish();
     testNotePanel();
+    // Group Z: the Airspy and HackRF drivers on fake wires beside the mock radio.
+    testDeviceOpening();
+    testAirspyLists();
+    testConverterFacts();
+    testConverterAliasAndCards();
+    testBiasStandIn();
+    testBiasRealDriver();
+    testLanguageMovesNames();
     return check::finish("test_engine_api_03");
 }

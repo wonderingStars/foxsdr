@@ -168,6 +168,55 @@ std::string Engine::converterName(const cc::ConverterSetting& s) const {
     return out;
 }
 
+// --- WHAT THE CONVERTER ROWS READ (API 0.3 8.3, window port group 4) -------------
+// The rules the window's converterAliasNote, converterModesOffered,
+// converterUnusableNote and converterStatusLine held, moved here so the rows
+// can read them as facts. The two sentences stay in the window (translated
+// there): what is decided here is only WHICH one, or none.
+
+std::string Engine::converterAliasState() {
+    const std::string raw = converterRawKeyNow();
+    // Said until the user sets a converter here themselves.
+    if (converterNotCarried_.count(raw) != 0 && !cc::converterActive(pipeline_.converter())) {
+        return "notCarried";
+    }
+    if (converterKeyAlias_.count(raw) == 0) { return {}; }
+    if (!cc::converterActive(pipeline_.converter())) { return {}; }
+    return "carried";
+}
+
+std::string Engine::converterModesText() const {
+    // A SOUND CARD (gui::soundCardConverter): none at all in I/Q mode - the
+    // typed centre is the translation - and no up-converter in real mode.
+    std::vector<cc::ConverterMode> modes;
+    if (sourceKind_ == "soundcard") {
+        if (soundCardLive_.format == cascade::source::SoundCardFormat::IqStereo) { return {}; }
+        modes = {cc::ConverterMode::Off, cc::ConverterMode::Down};
+    } else {
+        modes = {cc::ConverterMode::Off, cc::ConverterMode::Up, cc::ConverterMode::Down};
+    }
+    // The codes FOXAPP_OP_SET_CONVERTER takes: 0 off, 1 up, 2 down.
+    std::string out;
+    for (const cc::ConverterMode m : modes) {
+        if (!out.empty()) { out += ','; }
+        out += std::to_string(static_cast<int>(m));
+    }
+    return out;
+}
+
+bool Engine::converterUpIgnored() const {
+    if (sourceKind_ != "soundcard") { return false; }
+    const cc::ConverterSetting stored = cc::converterFor(converters_, converterRadioKeyNow());
+    return cascade::gui::soundCardConverter(stored, soundCardLive_.format).upRefused;
+}
+
+double Engine::converterRadioCentreHz() {
+    // THE RADIO'S OWN READBACK, not a sum: the converter's status line exists so
+    // that what the radio reports (its lights, another program, its own display)
+    // is on the screen beside the air frequency the counter shows.
+    return pipeline_.rawSource().centerFrequencyHz();
+}
+
 std::string Engine::converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
                                          bool isPluginPreset) {
     const cc::ConverterSetting conv = pipeline_.converter();

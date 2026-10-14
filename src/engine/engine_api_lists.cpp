@@ -12,10 +12,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
 
+#include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
 #include "core/patch_plan.hpp"
 #include "core/plugin_host.hpp"
@@ -44,6 +46,12 @@ struct Fingerprint {
         const unsigned char end = 0xFF;  // so "ab","c" differs from "a","bc"
         bytes(&end, 1);
     }
+    // A C string, hashed as text() hashes its std::string (no temporary).
+    void cstr(const char* s) {
+        bytes(s, std::strlen(s));
+        const unsigned char end = 0xFF;
+        bytes(&end, 1);
+    }
     template <class T>
     void value(const T& v) {
         bytes(&v, sizeof(v));
@@ -51,6 +59,15 @@ struct Fingerprint {
 };
 
 std::string deviceId(const std::string& kind, const std::string& args) { return kind + ":" + args; }
+
+// A GAIN STAGE ITS OWN AGC IS DRIVING (API 0.3 8.3, FOXAPI_ITEM_AGC): an
+// Airspy's LNA or MIXER with its automatic gain control on. The stage is named
+// by the Airspy driver, so the rule is the panel's own (the "driven" test it
+// drew greyed sliders by).
+bool gainDrivenByAgc(const cascade::source::AirspySource* airspy, const std::string& stage) {
+    if (airspy == nullptr) { return false; }
+    return (stage == "LNA" && airspy->lnaAgc()) || (stage == "MIXER" && airspy->mixerAgc());
+}
 
 const char* nodeKindWord(cascade::core::patch::NodeKind k) {
     using K = cascade::core::patch::NodeKind;
@@ -140,6 +157,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     }
     const bool haveDevice = device_ != nullptr;
     f.value(haveDevice);
+    cascade::source::AirspySource* const airspy = asAirspyDevice();
     if (haveDevice) {
         for (double r : deviceRatesHz_) { f.value(r); }
         f.value(pipeline_.activeSource().sampleRateHz());
@@ -150,6 +168,7 @@ std::uint64_t Engine::apiListsFingerprint() {
             f.value(g.maxDb);
             f.value(g.stepDb);
             f.value(g.unit);  // the GAINS entry's unit token (0.3)
+            f.value(gainDrivenByAgc(airspy, g.name));  // FOXAPI_ITEM_AGC (0.3, 8.3)
             if (i < deviceGainsDb_.size()) { f.value(deviceGainsDb_[i]); }
         }
         for (const auto& a : deviceAntennas_) { f.text(a); }
@@ -223,6 +242,37 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(c.second.loHz);
         f.value(c.second.inverted);
     }
+    // --- the radio panels' facts (API 0.3 8.3, window port group 4) ----------------
+    // The bias tee key: a radio that dies changes nothing else (its driver
+    // refuses from then on), so the question the key asks is hashed itself; the
+    // memory's size decides mayRemember (a full memory keeps no "on"); the test
+    // stand-in and the name the dialog shows.
+    f.value(biasTeeReachable());
+    f.value(biasTeePanel_.remembered.size());
+    f.value(biasStandIn_);
+    if (device_ != nullptr) { f.cstr(device_->name()); }
+    // The converter IN FORCE (what the pipeline applies, which a sound card's
+    // format makes differ from the stored setting), what the alias note says,
+    // and the sound card the converter key is made from: two cards leave
+    // deviceArgs_ empty alike, and the second must still rebuild the lists.
+    {
+        const cascade::core::ConverterSetting live = pipeline_.converter();
+        f.value(live.mode);
+        f.value(live.loHz);
+        f.value(live.inverted);
+    }
+    for (const auto& a : converterKeyAlias_) {
+        f.text(a.first);
+        f.text(a.second);
+    }
+    for (const std::string& k : converterNotCarried_) { f.text(k); }
+    f.text(soundCardLive_.device);
+    f.text(soundCardLive_.hostApi);
+    f.value(soundCardLive_.format);
+    // The converter's name is a translated sentence, built with the block: a
+    // language switch has to rebuild it. (The radio's own centre, which moves
+    // with every retune, is NOT here: it is read live.)
+    f.text(cascade::i18n::current());
     // The serial ports the last scan found.
     f.value(serialPortsScans_);
     // The status lines.
@@ -260,10 +310,10 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(audioRecordStartS_);
     f.text(recordDir_);
     // An Airspy's own choices.
-    if (cascade::source::AirspySource* a = asAirspyDevice()) {
-        f.value(a->gainMode());
-        f.value(a->decimation());
-        f.value(a->hardwareSampleRateHz());
+    if (airspy != nullptr) {
+        f.value(airspy->gainMode());
+        f.value(airspy->decimation());
+        f.value(airspy->hardwareSampleRateHz());
     }
     return f.h;
 }
@@ -293,11 +343,12 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
     if (device_ != nullptr) {
         b->rates = deviceRatesHz_;
         b->rateHz = pipeline_.activeSource().sampleRateHz();
+        const cascade::source::AirspySource* const airspy = asAirspyDevice();
         for (std::size_t i = 0; i < deviceGainRanges_.size(); ++i) {
             const auto& g = deviceGainRanges_[i];
             b->gains.push_back({g.name, g.minDb, g.maxDb, g.stepDb,
                                 i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0,
-                                cascade::gui::gainUnitWire(g.unit)});
+                                cascade::gui::gainUnitWire(g.unit), gainDrivenByAgc(airspy, g.name)});
         }
         b->antennas = deviceAntennas_;
         b->antenna = deviceAntenna_;
@@ -440,16 +491,31 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     {
         const std::string now = converterRadioKeyNow();
         for (const auto& c : converters_) {
+            const bool active = c.first == now;
             b.converters.push_back({c.first, static_cast<int>(c.second.mode), c.second.loHz, c.second.inverted,
-                                    c.first == now});
+                                    active, active ? &converterRadioCentre_ : nullptr});
         }
         fact("converter.radioKey", now, true);
-        fact("converter.name", converterName(pipeline_.converter()));
+        const cascade::core::ConverterSetting live = pipeline_.converter();
+        fact("converter.name", converterName(live));
+        // API 0.3 8.3: the converter IN FORCE ("<mode> <LO Hz> <inverted>", the
+        // LO to the digit it round-trips by), the note the Source section may
+        // add, the modes it offers, and whether a stored Up goes unused.
+        char liveText[96];
+        std::snprintf(liveText, sizeof(liveText), "%d %.17g %d", static_cast<int>(live.mode), live.loHz,
+                      live.inverted ? 1 : 0);
+        fact("converter.live", liveText);
+        fact("converter.alias", converterAliasState());
+        fact("converter.modes", converterModesText());
+        fact("converter.upIgnored", converterUpIgnored() ? "1" : "0");
     }
-    // THE BIAS TEE's key: which radio it would be remembered for.
-    fact("biasTee.reachable", biasTeeReachable() ? "1" : "0");
+    // THE BIAS TEE's key: which radio it would be remembered for. With the test
+    // stand-in active (a bounded run's FOXSDR_FORCE_BIAS_KEY, or the test hook)
+    // the key is drawn over it, so it is reachable: the window knows nothing of it.
+    fact("biasTee.reachable", biasTeeReachable() || biasStandInActive() ? "1" : "0");
     fact("biasTee.mayRemember", biasKeyMayRememberNow() ? "1" : "0");
     fact("biasTee.radioKey", biasKeyRadioNow(), true);
+    fact("biasTee.radioName", biasKeyRadioName());
     // AN AIRSPY's gain modes and decimation factors.
     if (cascade::source::AirspySource* a = asAirspyDevice()) {
         const int mode = static_cast<int>(a->gainMode());

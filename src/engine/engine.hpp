@@ -1215,6 +1215,10 @@ private:
     // confirmation may be kept for the session.
     std::string biasKeyRadioNow() const;
     bool biasKeyMayRememberNow() const;
+    // The radio's name as the confirmation dialog says it (API 0.3 8.3,
+    // fact.biasTee.radioName): the stand-in's own words while it is active,
+    // else the open radio's name; "" with none.
+    std::string biasKeyRadioName() const;
     // THE CENSUS AND CAPTURE SEAM, like FOXSDR_FORCE_MUTE_BANNER: with
     // FOXSDR_FORCE_BIAS_KEY=accept (or =refuse) and no radio with a bias tee
     // open, the key is drawn over a STAND-IN bias tee that takes (or refuses)
@@ -1244,6 +1248,26 @@ private:
     void changeConverter(const cascade::core::ConverterSetting& s);
     // "125 MHz up-converter" and its three siblings, translated.
     std::string converterName(const cascade::core::ConverterSetting& s) const;
+    // WHAT THE CONVERTER ROWS READ OF THE ENGINE (API 0.3 8.3, window port
+    // group 4): the facts fact.converter.alias / .modes / .upIgnored, and the
+    // radio's own centre. The window's own rules, moved here.
+    //   converterAliasState: "" (nothing to say), "notCarried" (a SoapySDR
+    //     fallback opened without the native radio's converter, and none is set
+    //     here yet) or "carried" (the fallback keeps it, and one is on). Not
+    //     const: Pipeline::converter() takes the pipeline's lock.
+    //   converterModesText: the FOXAPP_OP_SET_CONVERTER modes the source takes,
+    //     comma-separated ("0,1,2"; "0,2" for a real-mode sound card; "" for an
+    //     I/Q card, which takes no converter, so the rows are not drawn).
+    //   converterUpIgnored: a stored Up for the open sound card is not used.
+    //   converterRadioCentreHz: the radio's OWN centre readback, not the air
+    //     figure (Pipeline::rawSource() is reached from the converter's file
+    //     only - tests/test_converter_call_sites.cpp). Read once a pass into
+    //     converterRadioCentre_, which the CONVERTERS list reads live.
+    std::string converterAliasState();
+    std::string converterModesText() const;
+    bool converterUpIgnored() const;
+    double converterRadioCentreHz();
+    std::atomic<double> converterRadioCentre_{0.0};
     // A tune the converter could not deliver, or the radio refused or moved,
     // stated in AIR terms. "" when no converter is on (the plain sentences in
     // engine/tune_control.hpp speak then).

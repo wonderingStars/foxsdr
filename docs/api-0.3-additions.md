@@ -71,11 +71,16 @@ published in the same block as the lists, in the same pass.
 | `fact.store.<id>.summary`, `.description`, `.homepage`, `.version` | the entry's texts | |
 | `fact.store.<id>.blocked` | why installing it would be refused now (the notice taken as acknowledged); `""` when it would not | |
 | `fact.transmit.args` | the address `TX_OPEN` is given: the one typed, else the seed the Transmit page uses | LOCAL |
-| `fact.converter.name` | the converter in front of the receiver, as the frequency readout names it | |
+| `fact.converter.name` | the converter in front of the receiver, as the frequency readout names it (translated when the block is built; a language switch rebuilds it) | |
 | `fact.converter.radioKey` | the radio its setting is remembered for | LOCAL |
-| `fact.biasTee.reachable` | `1` when the open radio's bias tee can be switched from here | |
+| `fact.converter.live` | the converter IN FORCE, the one the receiver applies: `<mode> <LO Hz> <inverted>` - mode 0 off, 1 up, 2 down; the LO written to the digit it reads back by (`%.17g`); inverted 0 or 1. `0 0 0` with none. Not the stored setting (`CONVERTERS`' ACTIVE entry): a sound card in I/Q mode has one stored and none in force (section 8.3) | |
+| `fact.converter.alias` | the note the Source section may add when the radio was opened through SoapySDR because its native driver refused it: `""` (nothing to say), `notCarried` (the native radio's converter was not carried over, and none is set here yet) or `carried` (it still applies, and one is on) | |
+| `fact.converter.modes` | the `FOXAPP_OP_SET_CONVERTER` modes the open source takes, comma-separated: `0,1,2`; `0,2` for a sound card in real mode (no up-converter); `""` for a sound card in I/Q mode, which takes no converter, so an interface draws no converter controls | |
+| `fact.converter.upIgnored` | `1` when a stored up-converter for the open sound card is not used (a real-mode sound card takes a down-converter only), else `0` | |
+| `fact.biasTee.reachable` | `1` when the open radio's bias tee can be switched from here: a radio is open, still answering, and has one - or the TEST STAND-IN is in front of the key (section 8.3) | |
 | `fact.biasTee.mayRemember` | `1` when the switch would be remembered for this radio | |
 | `fact.biasTee.radioKey` | the radio it would be remembered for | LOCAL |
+| `fact.biasTee.radioName` | the radio's name as the confirmation dialog says it: the driver's own name, or the stand-in's words while the stand-in is in front of the key; `""` with none | |
 
 ## 5. Lists (appended to 7.4)
 
@@ -88,7 +93,7 @@ says when to read again.
 | List | Entry |
 |---|---|
 | `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel` |
-| `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `ACTIVE`: the open radio's |
+| `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `value[3]`: on the entry that is `ACTIVE` only, **the radio's own centre readback in Hz, read live** (the frequency the radio was told and kept - not the air frequency `centreHz` speaks; a retune moves it without moving `listSeq`; 0 on every other entry; section 8.3); `ACTIVE`: the open radio's |
 | `GAIN_MODES` (24) | a radio with gain MODES (an Airspy: Linearity, Sensitivity, Free). `name`; `value[0]`: the mode code `FOXAPP_OP_AIRSPY_GAIN_MODE` takes; `ACTIVE`. Empty for every other radio |
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
 | `PATCH_NODES` (26) | the patch graph's nodes. `id`: node; `name`; `detail`: kind (`radio`, `channel`, `demod`, `decoder`, `display`, `sink`, `map`); `value[0..1]`: x, y; `value[2]`: Hz; `value[3]`: rate Hz; `ACTIVE`: switched on; `REFUSED`: the engine refused to run it; `FAULT`: its radio faulted or would not open |
@@ -131,10 +136,17 @@ letters one gain for the whole radio reads stage 0's. An empty `detail` (an
 engine that predates the token) is read as `dB`, which is what a gain was
 before the Airspy.
 
+A stage the radio's own automatic gain control is driving carries
+`FOXAPI_ITEM_AGC` (0.3, section 8.3): an Airspy's LNA or MIXER with its AGC
+switched on (`FOXAPP_OP_AIRSPY_AGC`). An interface greys such a slider rather
+than hiding it - the number is what the stage goes back to when the AGC is
+switched off. Switching an AGC moves `listSeq`.
+
 ### 5.3 New item flags
 
 `FOXAPI_ITEM_REFUSED`, `FAULT` (patch), `STALLED`, `FULL` (recordings),
-`FED` (decoders), `INSTALLED`, `COMPATIBLE` (catalogue).
+`FED` (decoders), `INSTALLED`, `COMPATIBLE` (catalogue), `AGC` (a gain stage its
+own AGC is driving; `GAINS`, section 5.2).
 
 ## 6. Scope taps — `read_scope` (closes 0.2 gap 5)
 
@@ -169,6 +181,7 @@ dropped when it goes).
 | `FOXAPI_RX_BIAS_TEE_PRESENT` | device | the open radio has a bias tee this engine can switch |
 | `FOXAPI_RX_BIAS_TEE_ON` | device | ...and it is on (the radio's readback) |
 | `FOXAPI_RX_PATCH_RUNNING` | (seq only) | the patch page's graph is running |
+| `FOXAPI_RX_DEVICE_OPENING` | device | a radio is being opened: the open runs on a worker and has not finished (section 8.3) |
 
 ### 8.1 The transmitter as a page draws it (appended to FoxReceiverState)
 
@@ -251,6 +264,64 @@ and the `ANTENNAS` entry that is `ACTIVE`.
 
 `FOXAPI_MIN_RECEIVER_STATE` is the whole 0.3 layout.
 
+### 8.3 The radio panels as their pages draw them
+
+The Source section's Airspy controls, the deck's bias tee key (and its
+confirmation) and the Converter rows read the engine's table only. 0.3 had most
+of what they need (`GAIN_MODES`, `DECIMATIONS`, `GAINS`, `CONVERTERS`,
+`fact.converter.name`, `fact.converter.radioKey`, `fact.biasTee.*`,
+`tunedHz`); this adds the rest. Nothing is appended to `FoxReceiverState`: one
+flag, one item flag, five facts and one list value.
+
+- **`FOXAPI_RX_DEVICE_OPENING`** (device group): a radio is being opened - the
+  open runs on a worker and has not finished. It is clear at rest, set from the
+  pass that starts an open, and clear again in the pass that installs the radio
+  (`FOXAPI_RX_DEVICE_OPEN` rises in that pass) or reports that it would not
+  open. An interface greys the controls that would land on "whichever radio
+  happened to be installed at that instant" (the converter's) while it is set;
+  the engine refuses `FOXAPP_OP_SET_CONVERTER` meanwhile (`BUSY`). It moves
+  `deviceSeq` and `seq`, and not the plugin ABI's device counters.
+- **`FOXAPI_ITEM_AGC`** on `GAINS` entries (section 5.2): a stage the radio's
+  own AGC is driving. The Airspy's LNA and MIXER stages while their AGC is on.
+  An item flag, because the state's flag word is scarce and a list entry is
+  where a stage's other facts already are; and not an entry in
+  `DEVICE_OPTIONS`, which would make the AGC a second thing to write.
+- **`CONVERTERS` `value[3]`** (section 5.1) on the `ACTIVE` entry: the radio's
+  own centre readback, read live. The Converter rows letter "radio at ..." from
+  it beside the air frequency the counter shows. It moves with every retune, so
+  it is NOT in the list fingerprint (it must not rebuild the block): the engine
+  writes it into an atomic once a pass and the list reads the atomic when it is
+  read, as a recording's byte count is read.
+- **`fact.converter.live`, `.alias`, `.modes`, `.upIgnored`** (section 4): the
+  converter in force, which note the Source section adds for a SoapySDR
+  fallback, which modes the open source offers, and whether a stored
+  up-converter goes unused on the open sound card. The sentences themselves stay
+  in the interface (it translates them); the engine says only which, or none.
+- **`fact.biasTee.radioName`** (section 4): the radio's name for the
+  confirmation dialog.
+
+**The bias tee stand-in is the engine's.** With `FOXSDR_FORCE_BIAS_KEY=accept`
+(or `refuse`) in a bounded (`--frames`) run - or, in an engine created with
+`testHooks=1`, `SETTING_SET test.biasStandIn=accept|refuse|none` - a stand-in
+bias tee stands in front of the key while no real radio with one is reachable:
+it takes (`accept`) or refuses (`refuse`, the refusal is a `sourceError` status
+line) every `FOXAPI_OP_SET_BIAS_TEE` and starts off. While it is in front,
+`fact.biasTee.reachable` is `1`, `FOXAPI_RX_BIAS_TEE_ON` is the stand-in's state,
+`fact.biasTee.radioKey` / `.mayRemember` / `.radioName` are its own, and
+`FOXAPI_RX_BIAS_TEE_PRESENT` is not set (no real radio has one). An interface
+draws the key from the fact and the flag and knows nothing of the stand-in. The
+product never has one: an interactive launch ignores the variable.
+
+**What moves `listSeq`, beyond what 8.1 and 8.2 listed.** The lists and facts
+are rebuilt only when the fingerprint of everything they carry moves, so each
+input of the facts above is in it: whether the bias tee is reachable (a radio
+that stops answering changes nothing else), the size of the bias tee memory
+(`mayRemember`), the stand-in, the open radio's name, the converter in force,
+the SoapySDR alias and not-carried keys, the sound card's device, host API and
+format (two sound cards leave the radio args empty alike), each gain stage's
+AGC flag, and the language (the converter's name is a translated sentence).
+The radio's centre is not.
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
@@ -260,6 +331,19 @@ running.
 `FOXAPI_OP_SCAN_SERIAL_PORTS` (0x0F03, SETTINGS, **LOCAL sessions only** —
 they are this machine's ports): the engine lists them on its own thread; the
 result arrives as `SERIAL_PORTS` changing.
+
+`FOXAPI_OP_SET_BIAS_TEE` (0x0307, SETTINGS) takes, in `text`, **optionally** the
+radio the sender was ASKED about (`fact.biasTee.radioKey`). A person is asked
+once per radio before power goes up the antenna cable; the answer is "yes, for
+that radio". When the text is not empty and the radio open when the command
+runs is not that one - it changed between the question and the answer, or
+between the interface last looking and its submit - the engine refuses it
+(`FOXAPI_NOT_FOUND`, result text "the radio changed") and switches nothing.
+No text, no check: every other sender (the Source panel's checkbox, a plugin,
+the web remote) is as it was. The standard window sends the key on every "on"
+the deck's key makes; the radio can change between the window's last look and
+its submit, and a yes for A must not land on B once the engine's passes run on
+their own thread.
 
 `FOXAPP_OP_NOTE_PANEL` (0x841F, VIEW, **LOCAL sessions only** — an app op,
 like every `FOXAPP_OP_*`, and a remote session's pages are not this
