@@ -655,16 +655,18 @@ void drawTrackDetailOf(const cascade::core::HostTrack& ht,
 
 // --- Recorder / Bookmarks / Scanner constants (P6) ---------------------------
 
-const char* scannerStateName(cascade::core::Scanner::State s) {
-    switch (s) {
+const char* scannerStateName(std::uint32_t state) {
+    // The state word FoxReceiverState::scannerState carries (FOXAPI_SCANNER_*, API 0.3 8.6).
+    switch (state) {
     // Drawn and nothing else (the scanner status line), so the words are
     // translated here and the caller draws the result as it stands.
-    case cascade::core::Scanner::State::Idle: return tr("Idle");
-    case cascade::core::Scanner::State::Scanning: return tr("Scanning");
-    case cascade::core::Scanner::State::Paused: return tr("Paused (signal)");
-    case cascade::core::Scanner::State::Holding: return tr("Holding");
+    case FOXAPI_SCANNER_IDLE: return tr("Idle");
+    case FOXAPI_SCANNER_SCANNING: return tr("Scanning");
+    case FOXAPI_SCANNER_PAUSED: return tr("Paused (signal)");
+    case FOXAPI_SCANNER_HOLDING: return tr("Holding");
+    default: break;
     }
-    return "?";  // unreachable; keeps /W4 return-path analysis happy
+    return "?";  // a state word a newer engine adds
 }
 
 }  // namespace
@@ -2757,10 +2759,10 @@ void AppWindow::drawUi() {
     // (stage 4, group 6) its command lands at the engine's next pass like a
     // widget's, so it reads what the engine published THIS pass.)
     engine_.drainLocalCommands();
-    // A scanner field edited while a scan runs, left mid-edit by a collapsed
-    // section or a switched bank: committed here, since the section that
-    // would have seen it deactivate is no longer drawn.
-    flushScannerDraft();
+    // (THE SCANNER'S PENDING EDIT is committed below, right after the frame's read of the
+    // state: it carries the engine's own values for the fields nobody edited, and since the
+    // window's port, group 7, those are the state's - which has to be this pass's, with every
+    // command of the frame before in it.)
     // The same for the Patch page's draft of the graph: every edit is
     // committed in the frame it is made, and this makes sure of it for a view
     // that stopped drawing part-way (a no-op when the draft holds no edit).
@@ -2839,6 +2841,11 @@ void AppWindow::drawUi() {
         spectrumArrived_ = false;
         if (!scopeMode_) { lastFrameSeenS_ = ImGui::GetTime(); }
     }
+    // A scanner field edited while a scan runs, left mid-edit by a collapsed
+    // section or a switched bank: committed here, since the section that
+    // would have seen it deactivate is no longer drawn. After the read of the
+    // state, which its command carries values from (commitScannerDraft).
+    flushScannerDraft();
     // THE KEYBOARD. ImGui has finished NewFrame, so WantTextInput and the popup stack
     // are this frame's answers rather than last frame's, and nothing has been drawn
     // yet (the pumps between draw nothing and touch neither). It stands HERE, after
@@ -3768,33 +3775,9 @@ void AppWindow::drawStatusColumn() {
     // clock, API 0.3 8.2) and its ACTIVE / STALLED / FULL flags are read at
     // read time, so a growing file moves nothing in the lists. At most two
     // reads a frame, and none until a take has ever started.
-    struct TakeNow {
-        bool active = false;
-        bool stalled = false;
-        bool full = false;
-        double bytes = 0.0;
-        double seconds = 0.0;
-    };
-    const auto takeNow = [&](int index, double kind) {
-        TakeNow t;
-        if (index < 0 || uiSession_ == nullptr) { return t; }
-        FoxListItem it{};
-        it.structSize = sizeof(it);
-        // Filled only when the entry is still there, and the one it was
-        // found as (a list that moved since is read afresh next frame).
-        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_RECORDINGS, static_cast<uint32_t>(index), &it) <= index ||
-            it.value[0] != kind) {
-            return t;
-        }
-        t.active = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
-        t.stalled = (it.flags & FOXAPI_ITEM_STALLED) != 0u;
-        t.full = (it.flags & FOXAPI_ITEM_FULL) != 0u;
-        t.bytes = it.value[1];
-        t.seconds = it.value[3];
-        return t;
-    };
-    const TakeNow iqTake = takeNow(statusTakeIq_, 1.0);
-    const TakeNow audioTake = takeNow(statusTakeAudio_, 2.0);
+    // (readTake: the one reader of a take, shared with the Recorder section - window port, group 7.)
+    const TakeNow iqTake = readTake(statusTakeIq_, 1.0);
+    const TakeNow audioTake = readTake(statusTakeAudio_, 2.0);
     const bool iqTaping = iqTake.active;
     const bool audioTaping = audioTake.active;
     if (iqTaping || audioTaping) {
@@ -15445,6 +15428,12 @@ const AppWindow::TuningListCache& AppWindow::tuningLists() {
             m.hz = it.value[0];
             m.favourite = (it.flags & FOXAPI_ITEM_FAVOURITE) != 0u;
             m.name = it.name;
+            // The rest of the row, for the Bookmarks section (window port, group 7): the id its
+            // commands name, the group (the item's detail), the mode code and the bandwidth.
+            m.id = it.id;
+            m.group = it.detail;
+            m.mode = static_cast<std::uint32_t>(it.value[1]);
+            m.bandwidthHz = it.value[2];
         }
         c.markersVersion = c.factText;
         ++c.markerCopies;
@@ -15549,6 +15538,31 @@ void AppWindow::refreshStatusLists() {
         if (it.value[0] == 1.0 && statusTakeIq_ < 0) { statusTakeIq_ = static_cast<int>(i); }
         if (it.value[0] == 2.0 && statusTakeAudio_ < 0) { statusTakeAudio_ = static_cast<int>(i); }
     }
+}
+
+// A TAKE, AS THE RECORDINGS LIST GIVES IT, READ LIVE (the status column's RECORDER card and the
+// Recorder section; window port, group 7): the entry refreshStatusLists found for the I/Q (kind 1)
+// or the audio (kind 2) recorder is read at read time, so its bytes (value[1]), its seconds (value[3],
+// the recorder's own steady clock, API 0.3 8.2) and its ACTIVE / STALLED / FULL flags are as of now,
+// and a growing file moves nothing in the lists. One read_list a call, and none until a take has
+// ever started (index -1).
+AppWindow::TakeNow AppWindow::readTake(int index, double kind) {
+    TakeNow t;
+    if (index < 0 || uiSession_ == nullptr) { return t; }
+    FoxListItem it{};
+    it.structSize = sizeof(it);
+    // Filled only when the entry is still there, and the one it was
+    // found as (a list that moved since is read afresh next frame).
+    if (engineApi_->read_list(uiSession_, FOXAPI_LIST_RECORDINGS, static_cast<uint32_t>(index), &it) <= index ||
+        it.value[0] != kind) {
+        return t;
+    }
+    t.active = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+    t.stalled = (it.flags & FOXAPI_ITEM_STALLED) != 0u;
+    t.full = (it.flags & FOXAPI_ITEM_FULL) != 0u;
+    t.bytes = it.value[1];
+    t.seconds = it.value[3];
+    return t;
 }
 
 // THE RAIL'S AND THE DISPLAY'S READS OF THE TABLE'S LISTS AND FACTS, only when
@@ -17284,7 +17298,12 @@ void AppWindow::drawBandPlanOverlay(float x0, float y0, float width, float heigh
 // --- Recorder (P6) -------------------------------------------------------------
 
 void AppWindow::drawRecorderSection() {
-    const bool taping = engine_.iqRecorder_.recording() || engine_.audioRecorder_.recording();
+    // From the window's session (window port, group 7; API 0.3 section 8.6): whether each recorder
+    // is taking is the state's flag; the take's bytes and seconds are its RECORDINGS entry, read
+    // live (readTake); the folder is a fact; the buttons go by uiSubmit.
+    const bool iqOn = (uiState_.flags & FOXAPI_RX_RECORDING_IQ) != 0u;
+    const bool audioOn = (uiState_.flags & FOXAPI_RX_RECORDING_AUDIO) != 0u;
+    const bool taping = iqOn || audioOn;
     const bool recorderOpen =
         benchSection(trId("Recorder"), false, taping ? tr("REC") : tr("OFF"),
                      taping ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
@@ -17294,7 +17313,10 @@ void AppWindow::drawRecorderSection() {
 
     // Destination, always visible so the user knows where takes land. The
     // directory is created by Recorder::start on the first record.
-    ImGui::TextDisabled("%s", engine_.recordDir_.c_str());
+    ImGui::TextDisabled("%s", uiFact("fact.recorder.dir").c_str());
+
+    // WHERE THE TWO TAKES SIT IN RECORDINGS (found when listSeq moves, the status column's reader).
+    refreshStatusLists();
 
     // IQ take: baseband at the DSP input rate through the pipeline's raw
     // tap. Toggle button: label and action swap with the recorder state.
@@ -17302,39 +17324,41 @@ void AppWindow::drawRecorderSection() {
     // install the tap AFTER the recorder accepts (the Pipeline contract), the
     // stops take it off first - the web remote's and the Record key's own path.
     namespace cmd = cascade::core::cmd;
-    if (!engine_.iqRecorder_.recording()) {
+    if (!iqOn) {
         if (ImGui::Button(trId("Record IQ"), ImVec2(-FLT_MIN, 0.0f))) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1));
         }
     } else {
         if (ImGui::Button(trId("Stop IQ"), ImVec2(-FLT_MIN, 0.0f))) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 0));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_IQ, 0));
         }
-        // Elapsed is wall time since the take started; samples/MB are the
-        // recorder's own accepted-byte counters, so they never overclaim.
-        ImGui::Text(tr("IQ %.1f s | %llu samples | %.1f MB"),
-                    ImGui::GetTime() - engine_.iqRecordStartS_,
-                    static_cast<unsigned long long>(engine_.iqRecorder_.samplesWritten()),
-                    static_cast<double>(engine_.iqRecorder_.bytesWritten()) / 1.0e6);
+        // Elapsed is the take's own length, from the recorder's steady clock (it was the
+        // difference of two frame-clock readings until group 7); samples/MB are the recorder's
+        // own accepted-byte counters, so they never overclaim.
+        const TakeNow take = readTake(statusTakeIq_, 1.0);
+        ImGui::Text(tr("IQ %.1f s | %llu samples | %.1f MB"), take.seconds,
+                    static_cast<unsigned long long>(cascade::gui::takeSamples(take.bytes, cascade::gui::kIqFrameBytes)),
+                    take.bytes / 1.0e6);
     }
 
     // Audio take: the post-chain 48 kHz output (same point audioTap uses).
-    if (!engine_.audioRecorder_.recording()) {
+    if (!audioOn) {
         // startAudioRecording, not the start/install pair that used to be here:
         // the Record key presses this same button (see applyKeyAction), and the
         // tap-after-start ordering the Pipeline contract requires is not
         // something to keep two copies of.
         if (ImGui::Button(trId("Record audio"), ImVec2(-FLT_MIN, 0.0f))) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 1));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 1));
         }
     } else {
         if (ImGui::Button(trId("Stop audio"), ImVec2(-FLT_MIN, 0.0f))) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 0));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 0));
         }
-        ImGui::Text(tr("Audio %.1f s | %llu samples | %.1f MB"),
-                    ImGui::GetTime() - engine_.audioRecordStartS_,
-                    static_cast<unsigned long long>(engine_.audioRecorder_.samplesWritten()),
-                    static_cast<double>(engine_.audioRecorder_.bytesWritten()) / 1.0e6);
+        const TakeNow take = readTake(statusTakeAudio_, 2.0);
+        ImGui::Text(tr("Audio %.1f s | %llu samples | %.1f MB"), take.seconds,
+                    static_cast<unsigned long long>(
+                        cascade::gui::takeSamples(take.bytes, cascade::gui::kAudioFrameBytes)),
+                    take.bytes / 1.0e6);
         // THE TAKE IS SILENT, and this is the only place that can say so while
         // it still matters. The mute sits above the mono downmix the recorder
         // is fed from (Pipeline::processAudioBlock), deliberately - a recording
@@ -17349,11 +17373,14 @@ void AppWindow::drawRecorderSection() {
         // above everything the mute touches, so an IQ take is unaffected and
         // saying otherwise here would send someone looking for a fault in a
         // file that is fine.
-        const std::string mutedWho = engine_.muteSubjectText();
-        if (engine_.pipeline_.audioMuted() && !mutedWho.empty()) {
+        //
+        // The pipeline's hard mute (the lamp's two causes and a keyed transmitter that is not
+        // monitored, held equal to Pipeline::audioMuted by test_tuning_surface) AND a plugin's
+        // names to say: audioMutedBy is Engine::muteSubjectText, joined.
+        if (cascade::gui::audioHardMuted(uiState_) && uiState_.audioMutedBy[0] != '\0') {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
             ImGui::TextWrapped(tr("Muted by %s - this take is silent"),
-                               mutedWho.c_str());
+                               uiState_.audioMutedBy);
             ImGui::PopStyleColor();
         }
     }
@@ -17361,8 +17388,7 @@ void AppWindow::drawRecorderSection() {
     // Recording is allowed while stopped (the file just stays empty until
     // samples flow), but say so instead of leaving frozen counters to read
     // like a bug. Toolbar Stop DURING a take finalizes it (drawToolbar).
-    if (!engine_.pipeline_.running() &&
-        (engine_.iqRecorder_.recording() || engine_.audioRecorder_.recording())) {
+    if ((uiState_.flags & FOXAPI_RX_RUNNING) == 0u && taping) {
         ImGui::TextDisabled("%s", tr("(press Play to feed the recorders)"));
     }
 
@@ -17708,18 +17734,18 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
 
 // --- Bookmarks (P6) --------------------------------------------------------------
 
+// THE VIEW (window port, group 7): the rows are the window's ONE copy of BOOKMARKS (tuningLists:
+// copied when fact.bookmarks.version moves, which is the STORE's change and not listSeq's - a decoder
+// printing a line moves that), and the group names the combo offers are derived from that copy, so they
+// cannot disagree with the rows they filter. The view is rebuilt when the copy was, or the filter, the
+// group choice or favourites-only moved; an unchanged one costs a few comparisons a frame and nothing else.
 void AppWindow::rebuildBookmarkView() {
-    // The key is everything the view depends on, so an unchanged filter over
-    // an unchanged list costs one string compare a frame and nothing else.
-    const std::vector<cascade::core::Bookmark>& list = engine_.freqMgr_.list();
-    if (bookmarkViewVersion_ != engine_.freqMgr_.version()) {
-        // Group names: sorted, unique, rebuilt only when the list changed.
-        std::vector<std::string> groups;
-        for (const cascade::core::Bookmark& b : list) {
-            if (!b.group.empty()) { groups.push_back(b.group); }
-        }
-        std::sort(groups.begin(), groups.end());
-        groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
+    const TuningListCache& c = tuningLists();
+    const std::vector<cascade::gui::BookmarkRow>& list = c.markers;
+    const bool listChanged = bookmarkViewCopies_ != c.markerCopies;
+    if (listChanged) {
+        // Group names: sorted, unique, rebuilt only when the copy was.
+        std::vector<std::string> groups = cascade::gui::bookmarkGroupNames(list);
         const std::string was =
             (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size()))
                 ? bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]
@@ -17731,49 +17757,33 @@ void AppWindow::rebuildBookmarkView() {
             if (bookmarkGroups_[g] == was) { bookmarkGroupSel_ = static_cast<int>(g) + 1; }
         }
     }
-    std::string key = std::to_string(engine_.freqMgr_.version()) + "|" + std::to_string(bookmarkGroupSel_) +
-                      "|" + (bookmarkFavOnly_ ? "f" : "-") + "|" + bookmarkFilter_;
-    if (key == bookmarkViewKey_) { return; }
-    bookmarkViewKey_ = std::move(key);
-    bookmarkViewVersion_ = engine_.freqMgr_.version();
+    if (!listChanged && bookmarkViewGroupSel_ == bookmarkGroupSel_ && bookmarkViewFavOnly_ == bookmarkFavOnly_ &&
+        bookmarkViewFilter_ == bookmarkFilter_) {
+        return;
+    }
+    bookmarkViewCopies_ = c.markerCopies;
+    bookmarkViewGroupSel_ = bookmarkGroupSel_;
+    bookmarkViewFavOnly_ = bookmarkFavOnly_;
+    bookmarkViewFilter_ = bookmarkFilter_;
 
     // Case-insensitive substring over name and group; a filter that reads as
     // a number also matches frequencies that start with it in MHz ("145.5").
-    std::string needle = bookmarkFilter_;
-    for (char& c : needle) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
     const std::string group = (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size()))
                                   ? bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]
                                   : std::string();
-    const auto contains = [](const std::string& hay, const std::string& n) {
-        if (n.empty()) { return true; }
-        const auto it = std::search(hay.begin(), hay.end(), n.begin(), n.end(), [](char a, char b) {
-            return std::tolower(static_cast<unsigned char>(a)) == b;
-        });
-        return it != hay.end();
-    };
-    bookmarkView_.clear();
-    char mhz[32];
-    for (std::size_t i = 0; i < list.size(); ++i) {
-        const cascade::core::Bookmark& b = list[i];
-        if (bookmarkFavOnly_ && !b.favourite) { continue; }
-        if (!group.empty() && b.group != group) { continue; }
-        if (!needle.empty()) {
-            std::snprintf(mhz, sizeof(mhz), "%.6f", b.freqHz / 1e6);
-            if (!contains(b.name, needle) && !contains(b.group, needle) &&
-                std::strncmp(mhz, needle.c_str(), needle.size()) != 0) {
-                continue;
-            }
-        }
-        bookmarkView_.push_back(static_cast<std::uint32_t>(i));
-    }
+    cascade::gui::bookmarkView(list, group, bookmarkFavOnly_, bookmarkViewFilter_, bookmarkView_);
 }
 
 void AppWindow::drawBookmarksSection() {
+    // From the window's session (window port, group 7): the rows are the one copy of BOOKMARKS the
+    // window keeps (see rebuildBookmarkView), the note and the red line are the engine's handed-over
+    // status lines, and every change goes by uiSubmit.
+    const std::vector<cascade::gui::BookmarkRow>& list = tuningLists().markers;
     // HOW MANY ARE SAVED, which is what this section holds and the only thing
     // about it worth reading from the rail. The lamp is lit while there is at
     // least one, so an empty list reads as empty rather than as a count the
     // user has to squint at.
-    const std::size_t bookmarkCount = engine_.freqMgr_.list().size();
+    const std::size_t bookmarkCount = list.size();
     char bookmarkChip[16];
     std::snprintf(bookmarkChip, sizeof(bookmarkChip), "%zu", bookmarkCount);
     if (bookmarkOpenByEnv_) {
@@ -17808,7 +17818,7 @@ void AppWindow::drawBookmarksSection() {
     // requested bandwidth, under this name - or, with none, the frequency.
     namespace cmd = cascade::core::cmd;
     if (ImGui::Button(trId("Add current"))) {
-        engine_.submitCommand(cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, bookmarkName_));
+        uiSubmit(cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, bookmarkName_));
     }
 
     // --- a frequency list from elsewhere (0.99.19) -------------------------
@@ -17829,7 +17839,7 @@ void AppWindow::drawBookmarksSection() {
     if (importBeside) { ImGui::SameLine(); }
     ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0');
     if (ImGui::Button(trId("Import"), ImVec2(importW, 0.0f))) {
-        engine_.submitCommand(cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, bookmarkImportPath_));
+        uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, bookmarkImportPath_));
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -17837,9 +17847,9 @@ void AppWindow::drawBookmarksSection() {
                                    "frequency column (and name, group, mode, bandwidth if it has them).\n"
                                    "Importing the same file again adds nothing twice."));
     }
-    if (!engine_.bookmarkImportNote_.empty()) {
+    if (!statusLines_.bookmarkNote.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
-        ImGui::TextWrapped("%s", engine_.bookmarkImportNote_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.bookmarkNote.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -17886,40 +17896,20 @@ void AppWindow::drawBookmarksSection() {
         ImGui::SameLine();
         // THE ONES SHOWN go out, so a search or a group picks what is shared.
         // Into the recordings folder, beside everything else FoxSDR writes,
-        // as SDR#'s own format - which any SDR# user can load as it is.
+        // as SDR#'s own format - which any SDR# user can load as it is. The
+        // ENGINE writes the file (FOXAPP_OP_BOOKMARK_EXPORT), from its store and not from
+        // this copy - the copy's names and groups are cut at the list item's size - and
+        // says where in the note above; the section sends the ids of the rows it shows.
         if (ImGui::SmallButton(trId("Export for SDR#"))) {
-            std::vector<cascade::core::Bookmark> out;
-            out.reserve(bookmarkView_.size());
+            std::string ids;
+            ids.reserve(bookmarkView_.size() * 7u);
             for (const std::uint32_t i : bookmarkView_) {
-                if (i < engine_.freqMgr_.list().size()) { out.push_back(engine_.freqMgr_.list()[i]); }
+                if (i < list.size()) {
+                    ids += std::to_string(list[i].id);
+                    ids += ' ';
+                }
             }
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(engine_.recordDir_), ec);
-            const std::time_t now = std::time(nullptr);
-            std::tm tmv{};
-#ifdef _WIN32
-            localtime_s(&tmv, &now);
-#else
-            localtime_r(&now, &tmv);
-#endif
-            char name[64];
-            std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
-            const std::filesystem::path path = std::filesystem::path(engine_.recordDir_) / name;
-            std::ofstream f(path, std::ios::binary | std::ios::trunc);
-            const std::string xml = cascade::core::exportSdrSharpXml(out);
-            f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
-            f.close();
-            const std::string shown = engine_.recordDir_ + "/" + name;
-            std::string said;
-            if (f) {
-                cascade::core::formatUtf8(said, tr("Exported %zu to %s"), out.size(),
-                              shown.c_str());
-            } else {
-                cascade::core::formatUtf8(said, tr("Could not write %s"), shown.c_str());
-            }
-            const cascade::core::cmd::QueuedCommand q =
-                cascade::core::cmd::makeText(FOXAPP_OP_SET_BOOKMARK_NOTE, said);
-            engine_.applyCommand(q.c, q.longText);
+            uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_EXPORT, ids));
         }
     }
     if (bookmarkGroupSel_ > 0 && bookmarkGroupSel_ <= static_cast<int>(bookmarkGroups_.size())) {
@@ -17928,19 +17918,18 @@ void AppWindow::drawBookmarksSection() {
             // BOOKMARK_REMOVE_GROUP removes, says how many and rebuilds the
             // view; the group FILTER going back to "every group" is this
             // panel's own view state, so it moves here.
-            engine_.submitCommand(cmd::makeText(FOXAPI_OP_BOOKMARK_REMOVE_GROUP,
-                                        bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]));
+            uiSubmit(cmd::makeText(FOXAPI_OP_BOOKMARK_REMOVE_GROUP,
+                                   bookmarkGroups_[static_cast<std::size_t>(bookmarkGroupSel_ - 1)]));
             bookmarkGroupSel_ = 0;
         }
     }
 
     // Rows: favourite star, click-to-tune, per-row delete - through a
     // clipper, so only the rows on screen are ever laid out. The delete is
-    // deferred past the loop so removeAt can never invalidate an index the
-    // same frame still iterates.
+    // deferred past the loop, as the star is, so that nothing the loop's
+    // buttons send can move an index the same frame still iterates.
     int deleteIdx = -1;
     int starIdx = -1;
-    const std::vector<cascade::core::Bookmark>& list = engine_.freqMgr_.list();
     const float delW = ImGui::GetFrameHeight();
     const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
     if (!bookmarkView_.empty() &&
@@ -17952,7 +17941,7 @@ void AppWindow::drawBookmarksSection() {
             for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
                 const int i = static_cast<int>(bookmarkView_[static_cast<std::size_t>(r)]);
                 if (i >= static_cast<int>(list.size())) { continue; }
-                const cascade::core::Bookmark& b = list[static_cast<std::size_t>(i)];
+                const cascade::gui::BookmarkRow& b = list[static_cast<std::size_t>(i)];
                 ImGui::PushID(i);
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       b.favourite ? cascade::gui::theme::vec(cascade::gui::theme::kAmber)
@@ -17962,16 +17951,16 @@ void AppWindow::drawBookmarksSection() {
                 ImGui::SameLine();
                 char label[256];
                 if (b.group.empty()) {
-                    cascade::core::formatUtf8(label, sizeof(label), "%s  %.4f MHz", b.name.c_str(), b.freqHz / 1.0e6);
+                    cascade::core::formatUtf8(label, sizeof(label), "%s  %.4f MHz", b.name.c_str(), b.hz / 1.0e6);
                 } else {
                     cascade::core::formatUtf8(label, sizeof(label), "%s  %.4f MHz  [%s]", b.name.c_str(),
-                                  b.freqHz / 1.0e6, b.group.c_str());
+                                  b.hz / 1.0e6, b.group.c_str());
                 }
                 const float rowW = ImGui::GetContentRegionAvail().x - delW - ImGui::GetStyle().ItemSpacing.x;
                 if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None, ImVec2(rowW, 0.0f))) {
                     // Click-to-tune: BOOKMARK_TUNE by the entry's id
                     // (tuneToBookmark - frequency, then mode, then bandwidth).
-                    engine_.submitCommand(cmd::makeInt(FOXAPI_OP_BOOKMARK_TUNE, static_cast<std::int64_t>(b.id)));
+                    uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_TUNE, static_cast<std::int64_t>(b.id)));
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(delW, 0.0f))) { deleteIdx = i; }
@@ -17980,21 +17969,21 @@ void AppWindow::drawBookmarksSection() {
         }
     }
     if (!bookmarkView_.empty()) { ImGui::EndChild(); }
-    // Commands by id, applied at the top of the next frame - never while the
+    // Commands by id, landing at the engine's next pass - never while the
     // clipper above still walks the list.
     if (starIdx >= 0 && starIdx < static_cast<int>(list.size())) {
-        const cascade::core::Bookmark& b = list[static_cast<std::size_t>(starIdx)];
-        engine_.submitCommand(cmd::makeInt(FOXAPI_OP_BOOKMARK_FAVOURITE, static_cast<std::int64_t>(b.id),
-                                   b.favourite ? 0 : 1));
+        const cascade::gui::BookmarkRow& b = list[static_cast<std::size_t>(starIdx)];
+        uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_FAVOURITE, static_cast<std::int64_t>(b.id),
+                              b.favourite ? 0 : 1));
     }
     if (deleteIdx >= 0 && deleteIdx < static_cast<int>(list.size())) {
-        engine_.submitCommand(cmd::makeInt(FOXAPI_OP_BOOKMARK_REMOVE,
-                                   static_cast<std::int64_t>(list[static_cast<std::size_t>(deleteIdx)].id)));
+        uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_REMOVE,
+                              static_cast<std::int64_t>(list[static_cast<std::size_t>(deleteIdx)].id)));
     }
 
-    if (!engine_.bookmarkError_.empty()) {
+    if (!statusLines_.bookmarkError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", engine_.bookmarkError_.c_str());
+        ImGui::TextWrapped("%s", statusLines_.bookmarkError.c_str());
         ImGui::PopStyleColor();
     }
 }
@@ -18084,35 +18073,42 @@ namespace {
 // --- Scanner (P6) ----------------------------------------------------------------
 
 void AppWindow::drawScannerSection() {
+    // From the window's session (window port, group 7; API 0.3 section 8.6): the scanner's flag and
+    // state word, where it is, the range a Start would scan and the four timings are the state's;
+    // every command goes by uiSubmit and lands at the engine's next pass.
+    const bool running = (uiState_.flags & FOXAPI_RX_SCANNER_ACTIVE) != 0u;
     const bool scannerOpen =
-        benchSection(trId("Scanner"), false, engine_.scanner_.active() ? tr("SCAN") : tr("IDLE"),
-                     cascade::gui::theme::kPhosphor, engine_.scanner_.active());
+        benchSection(trId("Scanner"), false, running ? tr("SCAN") : tr("IDLE"),
+                     cascade::gui::theme::kPhosphor, running);
     if (!scannerOpen) { return; }
     uiNotePanel("scanner");
 
     // THE FIELDS ARE A FORM (docs/engine-stage1.md, the view-state line): the
     // stored parameters change nothing the receiver does until a command
     // applies them - Start (SCANNER_RUN, which also carries the range) or the
-    // commit below. scannerParams() turns them into Params when a command is
-    // applied; Scanner::configure sanitizes (swap, step floor, negative
-    // times), so the raw edit values can be handed over as-is.
+    // commit below. The engine's Scanner::configure sanitizes (swap, step
+    // floor, negative times), so the raw edit values can be handed over as-is.
     //
     // While the scan is ACTIVE a commit reconfigures it, which per the
     // Scanner contract resets to the new startHz — correct for new
     // parameters, but far too jumpy to fire on every typed digit; see "WHEN
     // AN EDIT REACHES THE ENGINE" below.
-    // A LOCAL DRAFT, NOT THE ENGINE FIELDS DIRECTLY (engine/stage3b-pre
+    // A LOCAL DRAFT, NOT THE ENGINE'S FIELDS DIRECTLY (engine/stage3b-pre
     // fields-to-commands round 2): InputDouble writes its bound variable on
-    // every keystroke, so binding it to engine_.scanStartMhz_ etc. wrote the
+    // every keystroke, so binding it to the engine's scan range wrote the
     // receiver's state keystroke by keystroke. The draft absorbs that.
     //
     // THE DRAFT FOLLOWS THE ENGINE (round 3 fix): a field that is not being
     // typed in, and holds no edit still waiting for a running scan, is
-    // re-seeded from its engine field on every frame. Seeding once, in
+    // re-seeded from the engine's value on every frame. Seeding once, in
     // applyConfig, let the web remote's FOXAPP_OP_SCANNER_RANGE go unseen -
     // the panel kept showing 88-108 while Start scanned 144-146, and the
     // next desk edit wrote 88-108 back over it - and left every field at 0
-    // when the config never loaded.
+    // when the config never loaded. Since group 7 the engine's value is the
+    // state's (a command lands one pass after it was sent, and the field is
+    // re-seeded the frame after it stops being typed in, by which time it has);
+    // before the first state has been read the draft keeps its defaults,
+    // which are the engine's own (Scanner::Params).
     //
     // WHEN AN EDIT REACHES THE ENGINE. With the scanner IDLE, as it is typed:
     // the stored fields only say what the next Start will scan, so nothing
@@ -18122,10 +18118,9 @@ void AppWindow::drawScannerSection() {
     // flushScannerDraft, if the section stopped being drawn first): a
     // running scan reconfigures from the committed values and never sees a
     // half-typed one. Only the fields actually edited are committed.
-    const double engineValue[7] = {
-        engine_.scanStartMhz_, engine_.scanStopMhz_, engine_.scanStepKhz_, engine_.scanDwellMs_,
-        engine_.scanHoldMs_,   engine_.scanResumeMs_, engine_.scanListenMs_,
-    };
+    double engineValue[7];
+    cascade::gui::scannerFormValues(uiState_, engineValue);
+    const bool engineKnown = uiState_.seq != 0u;
     struct ScanField {
         const char* label;
         const char* format;
@@ -18135,12 +18130,11 @@ void AppWindow::drawScannerSection() {
         {trId("Dwell ms"), "%.0f"},  {trId("Hold ms"), "%.0f"},   {trId("Resume ms"), "%.0f"},
         {trId("Listen ms"), "%.0f"},
     };
-    const bool running = engine_.scanner_.active();
     unsigned typed = 0;      // changed this frame, scanner idle: store now
     unsigned finished = 0;   // deactivated after an edit this frame
     for (int i = 0; i < 7; ++i) {
         const unsigned bit = 1u << i;
-        if ((scanDraftPending_ & bit) == 0 &&
+        if (engineKnown && (scanDraftPending_ & bit) == 0 &&
             (scanDraftIds_[i] == 0 || ImGui::GetActiveID() != scanDraftIds_[i])) {
             scanDraft_[i] = engineValue[i];
         }
@@ -18173,14 +18167,10 @@ void AppWindow::drawScannerSection() {
     }
 
     namespace cmd = cascade::core::cmd;
-    if (!engine_.scanner_.active()) {
+    if (!running) {
         if (ImGui::Button(trId("Start scan"), ImVec2(-FLT_MIN, 0.0f))) {
-            const cascade::core::Scanner::Params p = engine_.scannerParams();
-            FoxCommand run = cmd::makeInt(FOXAPI_OP_SCANNER_RUN, 1);
-            run.num[0] = p.startHz;
-            run.num[1] = p.stopHz;
-            run.num[2] = p.stepHz;
-            engine_.submitCommand(run);
+            // The range the engine stores (the state's), as SCANNER_RUN carries it.
+            uiSubmit(cascade::gui::scannerStartCommand(uiState_));
         }
     } else {
         // STOP AND SKIP SIDE BY SIDE: skip is the operator's "next", for the
@@ -18189,37 +18179,31 @@ void AppWindow::drawScannerSection() {
         // exactly as after a reconfigure.
         const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
         if (ImGui::Button(trId("Stop scan"), ImVec2(half, 0.0f))) {
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SCANNER_RUN, 0));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_SCANNER_RUN, 0));
         }
         ImGui::SameLine();
         if (ImGui::Button(trId("Skip"), ImVec2(-FLT_MIN, 0.0f))) {
-            engine_.submitCommand(cmd::make(FOXAPI_OP_SCANNER_SKIP));
+            uiSubmit(cmd::make(FOXAPI_OP_SCANNER_SKIP));
         }
     }
 
-    // State + frequency readout. currentHz() keeps reporting the last scan
-    // frequency after a stop (Scanner contract), which reads naturally here.
-    ImGui::Text("%s | %.4f MHz", scannerStateName(engine_.scanner_.state()),
-                engine_.scanner_.currentHz() / 1.0e6);
+    // State + frequency readout. The frequency keeps reporting the last
+    // scan frequency after a stop (Scanner contract), which reads naturally here.
+    ImGui::Text("%s | %.4f MHz", scannerStateName(uiState_.scannerState), uiState_.scanCurrentHz / 1.0e6);
 }
 
 void AppWindow::commitScannerDraft(unsigned bits, bool reconfigure) {
-    namespace cmd = cascade::core::cmd;
-    const bool running = engine_.scanner_.active();
+    const bool running = (uiState_.flags & FOXAPI_RX_SCANNER_ACTIVE) != 0u;
     if ((bits & 0x78u) != 0) {
         // THE TIMING HALF FIRST, through the EXISTING FOXAPI_OP_SCANNER_CONFIG
         // (it sets all four and reconfigures a running scan on its own). The
         // four it carries are the draft's for the edited fields and the
-        // engine's own for the rest, so a field nobody touched keeps whatever
-        // the engine holds. SCANNER_RANGE's reconfigure bit (below) then
-        // re-reads scannerParams() with the fresh range too, in the same
-        // step, before any scan tick can run.
-        FoxCommand timing = cmd::make(FOXAPI_OP_SCANNER_CONFIG);
-        timing.num[0] = (bits & 0x08u) != 0 ? scanDraft_[3] : engine_.scanDwellMs_;
-        timing.num[1] = (bits & 0x10u) != 0 ? scanDraft_[4] : engine_.scanHoldMs_;
-        timing.num[2] = (bits & 0x20u) != 0 ? scanDraft_[5] : engine_.scanResumeMs_;
-        timing.num[3] = (bits & 0x40u) != 0 ? scanDraft_[6] : engine_.scanListenMs_;
-        engine_.applyCommand(timing);
+        // engine's own (the state's) for the rest, so a field nobody touched
+        // keeps whatever the engine holds. SCANNER_RANGE's reconfigure bit
+        // (below) then re-reads the engine's parameters with the fresh range
+        // too, in the same step, before any scan tick can run: the two
+        // commands reach the engine in the order they are sent.
+        uiSubmit(cascade::gui::scannerTimingCommand(bits, scanDraft_, uiState_));
     }
     // THE RANGE: only the edited fields' bits, and - running, finished
     // editing - the reconfigure bit this site always submitted. The
@@ -18228,12 +18212,7 @@ void AppWindow::commitScannerDraft(unsigned bits, bool reconfigure) {
     const std::int64_t rangeBits = static_cast<std::int64_t>(bits & 0x07u);
     const bool reconfigureRange = reconfigure && running;
     if (rangeBits != 0 || (reconfigureRange && (bits & 0x78u) == 0)) {
-        FoxCommand range = cmd::make(FOXAPP_OP_SCANNER_RANGE);
-        range.ival[0] = rangeBits | (reconfigureRange ? 8 : 0);
-        range.num[0] = scanDraft_[0] * 1.0e6;
-        range.num[1] = scanDraft_[1] * 1.0e6;
-        range.num[2] = scanDraft_[2] * 1.0e3;
-        engine_.applyCommand(range);
+        uiSubmit(cascade::gui::scannerRangeCommand(bits, reconfigureRange, scanDraft_));
     }
 }
 
@@ -19866,7 +19845,11 @@ void AppWindow::resumeWatchdog() { watchdog_.resume(); }
 
 void AppWindow::onDisplayRange(float dbMin, float dbMax) { spectrum_->setRange(dbMin, dbMax); }
 
-void AppWindow::onBookmarksChanged() { rebuildBookmarkView(); }
+// (The engine told the window its bookmarks changed so that it could rebuild its view at once. The
+// view is built over the window's copy of BOOKMARKS now, which follows the store's version on its
+// own the frame after (rebuildBookmarkView), so the call has nothing left to do - and it is made
+// from the engine's pass, which is not where the window reads its session.)
+void AppWindow::onBookmarksChanged() {}
 
 void AppWindow::onReceiverPositionApplied(double latDeg, double lonDeg) {
     // THE TYPED FIELDS FOLLOW THE APPLIED POSITION. They are the toolbar's

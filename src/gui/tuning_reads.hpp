@@ -7,7 +7,8 @@
 //   - the lamps: when the MUTE lamp is lit, and what the volume meter treats as
 //     muted (the pipeline's own audioMuted), from the state's flags and
 //     audioMutedBy
-//   - the bookmark markers as the window keeps them (BOOKMARKS' rows) and the
+//   - the bookmark rows as the window keeps them (BOOKMARKS' entries: the markers' and, since
+//     group 7, the Bookmarks section's) and the
 //     binary search for the ones in view - core::FreqManager::range's rule
 //   - what a typed frequency has to be before the table will take it
 //
@@ -72,23 +73,32 @@ struct FedDecoders {
     }
 };
 
-// One bookmark as the spectrum's markers need it: where, whether starred, and its
-// name (cut by the table at the list item's 95 bytes).
-struct MarkerRow {
+// One bookmark as the window keeps it: BOOKMARKS' entry, copied when the store's version moves
+// (fact.bookmarks.version). The spectrum's markers read where, whether starred and the name
+// (cut by the table at the list item's 95 bytes); since window port group 7 the Bookmarks
+// section reads the rest from the same copy - the id its commands name, the group (the item's
+// detail, cut at 159 bytes), the mode code and the bandwidth - so there is ONE copy of a list
+// that can hold tens of thousands, made once per change of the store.
+struct BookmarkRow {
     double hz = 0.0;
     bool favourite = false;
     std::string name;
+    std::uint64_t id = 0;
+    std::string group;
+    std::uint32_t mode = 0;  // FOXAPI_DEMOD_*; 0 for a mode no code names
+    double bandwidthHz = 0.0;
 };
+using MarkerRow = BookmarkRow;  // (the markers' name for it, group 6)
 
 // The rows [first, last) with loHz <= hz <= hiHz, of rows sorted by hz ascending (the order
 // BOOKMARKS is in, and the model's): core::FreqManager::range's rule - lower_bound on
 // "hz < lo", upper_bound on "hi < hz" - so a list of 33 000 costs what the dozen in view cost.
-inline std::pair<std::size_t, std::size_t> markerRange(const std::vector<MarkerRow>& rows, double loHz,
+inline std::pair<std::size_t, std::size_t> markerRange(const std::vector<BookmarkRow>& rows, double loHz,
                                                        double hiHz) {
     const auto lo = std::lower_bound(rows.begin(), rows.end(), loHz,
-                                     [](const MarkerRow& x, double f) { return x.hz < f; });
+                                     [](const BookmarkRow& x, double f) { return x.hz < f; });
     const auto hi = std::upper_bound(lo, rows.end(), hiHz,
-                                     [](double f, const MarkerRow& x) { return f < x.hz; });
+                                     [](double f, const BookmarkRow& x) { return f < x.hz; });
     return {static_cast<std::size_t>(lo - rows.begin()), static_cast<std::size_t>(hi - rows.begin())};
 }
 

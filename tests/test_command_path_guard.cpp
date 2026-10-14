@@ -126,13 +126,15 @@ const char* const kEngineObjects[] = {
 // finished read's status line when the form's port changes (view state).
 const char* const kReadOnly[] = {
     "audioOpen_.inFlight",
-    "audioRecorder_.bytesWritten", "audioRecorder_.recording", "audioRecorder_.samplesWritten",
+    // (RETIRED with window port group 7, their last caller gone: audioRecorder_ and iqRecorder_
+    // .recording / .bytesWritten / .samplesWritten, freqMgr_.list / .list().size / .version and
+    // scanner_.active / .currentHz / .state - the Recorder, Bookmarks and Scanner sections read the
+    // table now.)
     "audioRecorder_.sizeLimitReached", "audioRecorder_.writeFailed",
-    "iqRecorder_.bytesWritten", "iqRecorder_.recording", "iqRecorder_.samplesWritten",
     "iqRecorder_.sizeLimitReached", "iqRecorder_.writeFailed",
     "device_.deviceDead", "device_.frequencyRangeHz", "device_.name", "device_.sampleRateHz",
     "device_.lastError", "device_.gainDb", "device_.antenna", "device_.autoGain",
-    "freqMgr_.list", "freqMgr_.list().size", "freqMgr_.list().empty", "freqMgr_.version",
+    "freqMgr_.list().empty",
     "freqMgr_.range", "freqMgr_.nearestSubset", "freqMgr_.indexOfId",
     "gpsReader_.listening", "gpsReader_.status", "gpsReader_.clearResult",
     "micOpen_.inFlight", "micOpen_.result().ok",
@@ -159,7 +161,6 @@ const char* const kReadOnly[] = {
     "pluginUi_.tracks", "pluginUi_.tracks().size", "pluginUi_.tuneAllowed", "pluginUi_.settingsAllowed",
     "pluginUi_.altitudeNear", "pluginUi_.tuneRequesters().size", "pluginUi_.poll",
     "pluginRepo_.progress",
-    "scanner_.active", "scanner_.currentHz", "scanner_.state",
     "soapyView_.deadReason", "soapyView_.deviceDead",
     "transmitter_.haveSink", "transmitter_.lastAutoUnkeyReason", "transmitter_.lastError",
     "transmitter_.latched", "transmitter_.remoteHoldRemainingMs", "transmitter_.sink",
@@ -912,6 +913,9 @@ const char* const kPublishedOnly[] = {
     // The Sinks section's watchdog note (API 0.3 8.4: the STATUS_LINES key
     // audioHealth, and the fifteenth line of EngineStatusText).
     "audioHealthNote_",
+    // The Bookmarks section's note and red line (API 0.3 8.6: the STATUS_LINES keys bookmarkNote
+    // and bookmarkError, the sixteenth and seventeenth lines of EngineStatusText).
+    "bookmarkImportNote_", "bookmarkError_",
 };
 
 // THE RATCHET ON EVERY OTHER DIRECT READ (OPEN 3). The window still reads the
@@ -966,10 +970,16 @@ const char* const kPortedMembers[] = {
     "drawToolbar", "drawFrequencyReadout", "applyKeyAction", "drawCenterPanels",
     "drawBookmarkMarkers", "tuningLists", "readSpectrum", "dragVfoCentre", "dragVfoEdge",
     "commitTypedFrequency",
+    // GROUP 7, the recorder, the bookmarks and the scanner: the three sections, the bookmark view
+    // they filter (over the window's one copy of BOOKMARKS), the scanner form's commit and the
+    // flush of a pending edit, and the one reader of a recorder's take (shared with the status
+    // column's RECORDER card).
+    "drawRecorderSection", "drawBookmarksSection", "rebuildBookmarkView", "drawScannerSection",
+    "commitScannerDraft", "flushScannerDraft", "readTake",
 };
 
-constexpr int kWindowFieldsReadBudget = 126;
-constexpr int kWindowFieldReadsBudget = 587;
+constexpr int kWindowFieldsReadBudget = 111;
+constexpr int kWindowFieldReadsBudget = 539;
 
 struct Report {
     int violations = 0;

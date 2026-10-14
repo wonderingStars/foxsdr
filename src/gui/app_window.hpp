@@ -63,6 +63,7 @@ struct GLFWwindow;
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/rail_reads.hpp"
+#include "gui/section_reads.hpp"
 #include "gui/tuning_reads.hpp"
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
@@ -1511,8 +1512,13 @@ private:
     char bookmarkImportPath_[512] = "";
     std::vector<std::string> bookmarkGroups_;
     std::vector<std::uint32_t> bookmarkView_;
-    unsigned bookmarkViewVersion_ = ~0u;
-    std::string bookmarkViewKey_;
+    // What the view was built from (window port, group 7): the copy's counter (tuningCache_.markerCopies,
+    // which moves exactly when fact.bookmarks.version did), the group chosen, favourites-only and the
+    // filter text. Compared a frame at a time; nothing is built unless one moved.
+    std::uint32_t bookmarkViewCopies_ = ~0u;
+    int bookmarkViewGroupSel_ = -1;
+    bool bookmarkViewFavOnly_ = false;
+    std::string bookmarkViewFilter_;
     // A file dropped on the window, picked up by the next frame.
     std::string pendingDropPath_;
     // FOXSDR_BOOKMARK_IMPORT (bounded runs): opens VIEW > Bookmarks with the
@@ -2230,6 +2236,18 @@ private:
     std::string statusAntenna_;          // the ANTENNAS entry that is ACTIVE; "" none
     int statusTakeIq_ = -1;
     int statusTakeAudio_ = -1;
+    // A TAKE, READ LIVE (the status column's RECORDER card and the Recorder section, window port
+    // group 7): the RECORDINGS entry at `index` if it is still the recorder of `kind` (1 I/Q, 2
+    // audio) - its flags, its bytes and its seconds, as of this read. All zero for a take that
+    // never started.
+    struct TakeNow {
+        bool active = false;
+        bool stalled = false;
+        bool full = false;
+        double bytes = 0.0;
+        double seconds = 0.0;
+    };
+    TakeNow readTake(int index, double kind);
     // WHAT THE RECEIVER RAIL AND THE DISPLAY TAKE FROM THE LISTS AND FACTS
     // (window port, group 5, API 0.3 section 8.4), read when listSeq moves and
     // kept: the plans SET_BAND_PLAN takes (BAND_PLANS) and the one in force, the

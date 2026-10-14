@@ -64,6 +64,18 @@ struct AppWindowTestAccess {
     static bool active(AppWindow& a) { return a.engine_.scanner_.active(); }
     static double scanningHz(AppWindow& a) { return a.engine_.scanner_.currentHz(); }
     static void drain(AppWindow& a) { a.engine_.drainLocalCommands(); }
+    // Window port group 7: the section draws from the state the engine PUBLISHED and sends its
+    // commands on the window's engine API session. A frame of this harness therefore looks first
+    // (the engine publishes, the window reads its state, as drawUi does) and, after the draw, lets
+    // the engine's pass take what the session was handed (and the local queue, as before).
+    static void look(AppWindow& a) {
+        a.engine_.publishReceiverState();
+        a.refreshUiState();
+    }
+    static void pass(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        a.engine_.drainLocalCommands();
+    }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c); }
 };
 }  // namespace cascade::gui
@@ -84,11 +96,13 @@ void setEnv(const char* n, const std::string& v) {
 
 bool g_open = true;  // draw the section at all (false = its bank was switched away)
 
-// One frame, in drawUi's order for what this test touches: the pending-edit
-// flush near the top, then the section, then the next drain.
+// One frame, in drawUi's order for what this test touches: the state looked at,
+// the pending-edit flush (after the read of the state, since group 7), then the
+// section, then the engine's pass.
 void frame(AppWindow& a) {
     ImGuiIO& io = ImGui::GetIO();
     io.DeltaTime = 1.0f / 60.0f;
+    A::look(a);
     ImGui::NewFrame();
     A::flush(a);
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -97,7 +111,7 @@ void frame(AppWindow& a) {
     if (g_open) { A::draw(a); }
     ImGui::End();
     ImGui::Render();
-    A::drain(a);
+    A::pass(a);
 }
 
 void frames(AppWindow& a, int n) {
