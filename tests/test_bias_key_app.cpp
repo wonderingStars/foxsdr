@@ -281,24 +281,61 @@ struct AppWindowTestAccess {
     }
     static void selectGenerator(AppWindow& a) { a.engine_.selectSource(0); }
 
+    // THE WINDOW READS ITS ENGINE API SESSION (window port, group 4), so without
+    // a frame what it draws from is the last frame's. A frame's own order is run
+    // by hand, in the helpers that stand in for one: the engine publishes, the
+    // window looks (look); the window submits, the engine's pass applies and
+    // publishes, the answers are drained (pass) as pumpTransmitKey does.
+    static void look(AppWindow& a) {
+        a.engine_.publishReceiverState();
+        a.refreshUiState();
+    }
+    static void pass(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        (void)a.engine_.pumpPublish();
+        FoxCommandResult r[16];
+        for (;;) {
+            for (auto& x : r) { x.structSize = sizeof(x); }
+            if (a.engineApi_->poll_results(a.uiSession_, r, 16) < 16) { break; }
+        }
+    }
     // THE KEY, as drawToolbar draws it: shown and lit from biasKeyPanel().
-    static bool keyShown(AppWindow& a) { return a.biasKeyPanel().present; }
-    static bool keyLit(AppWindow& a) { return a.biasKeyPanel().shown; }
+    static bool keyShown(AppWindow& a) {
+        look(a);
+        return a.biasKeyPanel().present;
+    }
+    static bool keyLit(AppWindow& a) {
+        look(a);
+        return a.biasKeyPanel().shown;
+    }
     // THE CHECKBOX, as the Source panel draws it: shown and ticked from
     // biasTeePanel_ (the stand-in never reaches it).
     static bool boxShown(AppWindow& a) { return a.engine_.biasTeePanel_.present; }
     static bool boxTicked(AppWindow& a) { return a.engine_.biasTeePanel_.shown; }
     // A press of the key, and the two answers - the members the deck and the
     // dialog call.
-    // A press and an answer SUBMIT a command since engine stage 1; the frame
-    // drains it at the top of the next frame, and so does this.
+    // A press and an answer SUBMIT a command (on the window's session since
+    // group 4); the engine's next pass applies it, and so does this.
     static void press(AppWindow& a) {
+        look(a);
         a.biasKeyPressed();
-        a.engine_.drainLocalCommands();
+        pass(a);
     }
     static void answer(AppWindow& a, bool turnOn) {
+        look(a);
         a.biasKeyAnswered(turnOn);
-        a.engine_.drainLocalCommands();
+        pass(a);
+    }
+    // The same, from a window that has NOT looked since the radio changed under
+    // it: what a frame's draw sees when the engine's pass runs on its own
+    // thread and swaps the radio between the window's last read and its submit.
+    static void pressStale(AppWindow& a) {
+        a.biasKeyPressed();
+        pass(a);
+    }
+    static void answerStale(AppWindow& a, bool turnOn) {
+        a.biasKeyAnswered(turnOn);
+        pass(a);
     }
     // The dialog is asked for (queued for the top level to open).
     static bool asking(AppWindow& a) { return a.biasKeyAskQueued_ && a.biasKeyGate_.asking; }
@@ -334,8 +371,13 @@ struct AppWindowTestAccess {
         a.engine_.biasTeePanel_.remembered[key] = on;
     }
     // Whether the dialog, drawn now, would PROMISE that the radio comes back
-    // on at its next open (the restore sentence) - the member it draws from.
-    static bool promisesRestore(AppWindow& a) { return a.engine_.biasKeyMayRememberNow(); }
+    // on at its next open (the restore sentence) - the fact it draws from.
+    static bool promisesRestore(AppWindow& a) {
+        look(a);
+        return a.uiFact("fact.biasTee.mayRemember") == "1";
+    }
+    // ...and the engine's own rule for it, which the fact must agree with.
+    static bool enginePromisesRestore(AppWindow& a) { return a.engine_.biasKeyMayRememberNow(); }
     static std::size_t memorySize(AppWindow& a) { return a.engine_.biasTeePanel_.remembered.size(); }
 };
 
@@ -736,6 +778,51 @@ void testQuestionThatNoLongerApplies() {
     CHECK(biasRequests().empty());
 }
 
+// THE HAZARD GROUP 4 CLOSES (window port): the window decides from what it last
+// READ, and the engine's pass - on its own thread, once the pump moves - may
+// have swapped the radio before the command lands. A yes for A must not switch
+// B on, however fresh the submit's own view of "which radio" is. The engine
+// refuses a command that names another radio than the open one.
+void testStaleViewNeverSwitchesTheOtherRadio() {
+    std::printf("  [14] a yes (or a press) decided on a stale view of radio A switches nothing on radio B\n");
+    cascade::gui::AppWindow app;
+    CHECK(Access::selectNative(app, kHackArgs));
+    CHECK(Access::keyShown(app));
+    Access::press(app);  // asks about A, a serial-named HackRF
+    CHECK(Access::asking(app));
+    Access::clearQueued(app);
+    // B opens in the engine; the window has not looked since: its view still says A.
+    CHECK(Access::selectNative(app, kHackArgsB));
+    hack()->clearControls();
+    Access::answerStale(app, true);
+    std::printf("      stale yes: requests on the wire %zu, lamp %d\n", biasRequests().size(), Access::keyLit(app));
+    CHECK(biasRequests().empty());
+    CHECK(!Access::keyLit(app));
+    CHECK(!Access::driverBiasT(app));
+
+    // ...and the same for a press that needs no question: A was confirmed this
+    // session (a serial-named radio), B opens under the window's stale view.
+    cascade::gui::AppWindow app2;
+    CHECK(Access::selectNative(app2, kHackArgs));
+    Access::press(app2);
+    Access::clearQueued(app2);
+    Access::answer(app2, true);  // the yes for A: confirmed for the session
+    CHECK(Access::keyLit(app2));
+    Access::press(app2);  // off
+    CHECK(!Access::keyLit(app2));
+    CHECK(Access::selectNative(app2, kHackArgsB));
+    hack()->clearControls();
+    Access::pressStale(app2);  // the stale view says: A, confirmed - switch on
+    std::printf("      stale press: requests on the wire %zu, lamp %d\n", biasRequests().size(), Access::keyLit(app2));
+    CHECK(biasRequests().empty());
+    CHECK(!Access::keyLit(app2));
+    CHECK(!Access::driverBiasT(app2));
+    // Looking again, the key is B's, B is not confirmed, and the next press asks.
+    Access::press(app2);
+    CHECK(Access::asking(app2));
+    CHECK(biasRequests().empty());
+}
+
 void testPositionNamedRadioIsAlwaysAsked() {
     std::printf("  [6] a radio named by position (index=0) is asked every time\n");
     cascade::gui::AppWindow app;
@@ -776,6 +863,7 @@ int main() {
     testCheckboxSharesTheRule();
     testNoKeyOverADeadRadio();
     testDialogPromisesOnlyWhatIsKept();
+    testStaleViewNeverSwitchesTheOtherRadio();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

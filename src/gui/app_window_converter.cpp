@@ -16,6 +16,16 @@
 // setting is in force - the installed radio's own, remembered under
 // core::converterRadioKey - and lets the user change it.
 //
+// SINCE THE WINDOW'S PORT (engine-stage4.md 6.5, group 4) THESE MEMBERS DRAW
+// FROM THEIR ENGINE API SESSION ONLY. What they read is the table's: the
+// CONVERTERS list (the open radio's stored setting is the entry that is ACTIVE;
+// its value[3] is the radio's own centre, read live), and the facts
+// fact.converter.radioKey / .name / .live / .alias / .modes / .upIgnored (API
+// 0.3 section 8.3), plus FOXAPI_RX_DEVICE_OPENING and the state's tunedHz. The
+// two sentences about a SoapySDR fallback and an unusable up-converter stay
+// here, translated here; the engine says only WHICH, or none. Every change is
+// FOXAPP_OP_SET_CONVERTER through uiSubmit.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 
@@ -23,6 +33,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -54,81 +65,136 @@ constexpr double kDefaultLoHz = 125.0e6;
 
 }  // namespace
 
+// THE CONVERTER ROWS' READS OF THE TABLE, taken when listSeq has moved and kept
+// (the same rule as AppWindow::uiFact): the modes this source offers, the
+// converter in force, and the open radio's stored setting - the CONVERTERS
+// entry that is ACTIVE, and where it is (the radio's own centre is read from
+// that entry each time it is wanted: it is live, and moves with every retune).
+const AppWindow::ConverterListCache& AppWindow::converterLists() {
+    ConverterListCache& c = converterCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    // fact.converter.modes: "0,1,2", "0,2" or "" - the codes FOXAPP_OP_SET_CONVERTER takes.
+    c.offered.clear();
+    for (const char* p = uiFact("fact.converter.modes").c_str(); *p != '\0';) {
+        char* end = nullptr;
+        const long code = std::strtol(p, &end, 10);
+        if (end == p) { break; }
+        if (code >= 0 && code <= 2) { c.offered.push_back(static_cast<cc::ConverterMode>(code)); }
+        p = (*end == ',') ? end + 1 : end;
+    }
+    // fact.converter.live: "<mode> <LO Hz> <inverted>" - the converter in force.
+    c.live = cc::ConverterSetting{};
+    {
+        int mode = 0;
+        double lo = 0.0;
+        int inverted = 0;
+        if (std::sscanf(uiFact("fact.converter.live").c_str(), "%d %lf %d", &mode, &lo, &inverted) == 3 && mode >= 0 &&
+            mode <= 2) {
+            c.live.mode = static_cast<cc::ConverterMode>(mode);
+            c.live.loHz = lo;
+            c.live.inverted = inverted != 0;
+        }
+    }
+    // The open radio's stored setting: the CONVERTERS entry that is ACTIVE
+    // (none: the default one, a radio nothing was ever set for).
+    c.activeIndex = -1;
+    c.stored = cc::ConverterSetting{};
+    const int32_t entries = engineApi_->read_list(uiSession_, FOXAPI_LIST_CONVERTERS, 0, nullptr);
+    for (int32_t i = 0; i < entries; ++i) {
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_CONVERTERS, static_cast<uint32_t>(i), &it) < 0) { break; }
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) == 0u) { continue; }
+        c.activeIndex = i;
+        if (it.value[0] >= 0.0 && it.value[0] <= 2.0) {
+            c.stored.mode = static_cast<cc::ConverterMode>(static_cast<int>(it.value[0]));
+        }
+        c.stored.loHz = it.value[1];
+        c.stored.inverted = it.value[2] != 0.0;
+        break;
+    }
+    return c;
+}
+
 std::string AppWindow::converterAliasNote() {
-    const std::string raw = engine_.converterRawKeyNow();
+    const std::string& state = uiFact("fact.converter.alias");
     // Said until the user sets a converter here themselves.
-    if (engine_.converterNotCarried_.count(raw) != 0 && !cc::converterActive(engine_.pipeline_.converter())) {
+    if (state == "notCarried") {
         return tr("Opened through SoapySDR because the native driver refused this radio. The "
                   "converter set for it was not carried over: with no serial number the two "
                   "drivers cannot be shown to be the same dongle. Set one here if this radio "
                   "needs it.");
     }
-    if (engine_.converterKeyAlias_.count(raw) == 0) { return {}; }
-    if (!cc::converterActive(engine_.pipeline_.converter())) { return {}; }
-    return tr("Opened through SoapySDR because the native driver refused this radio - the "
-              "converter set for it still applies.");
+    if (state == "carried") {
+        return tr("Opened through SoapySDR because the native driver refused this radio - the "
+                  "converter set for it still applies.");
+    }
+    return {};
 }
 
 std::string AppWindow::converterStatusLine(bool shortForm) {
-    const cc::ConverterSetting conv = engine_.pipeline_.converter();
+    const ConverterListCache& c = converterLists();
+    const cc::ConverterSetting& conv = c.live;
     if (!cc::converterActive(conv)) { return {}; }
     // THE RADIO'S OWN READBACK, not a sum: this line exists so that what the
     // radio reports (its lights, another program, its own display) is on the
-    // screen beside the air frequency the counter shows. The short form names
-    // the converter by its LO alone, for a column too narrow for the full
+    // screen beside the air frequency the counter shows. It is the CONVERTERS
+    // entry's value[3], read live (it moves with every retune). The short form
+    // names the converter by its LO alone, for a column too narrow for the full
     // name (an inverting converter's is the longest).
-    const double radioHz = engine_.pipeline_.rawSource().centerFrequencyHz();
-    const std::string name =
-        shortForm ? cc::converterHzText(conv.loHz) + " LO" : engine_.converterName(conv);
+    double radioHz = 0.0;
+    if (c.activeIndex >= 0) {
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_CONVERTERS, static_cast<uint32_t>(c.activeIndex), &it) >= 0) {
+            radioHz = it.value[3];
+        }
+    }
+    const std::string name = shortForm ? cc::converterHzText(conv.loHz) + " LO" : uiFact("fact.converter.name");
     std::string out;
     cascade::core::formatUtf8(out, tr("via %s - radio at %s"), name.c_str(),
                               cc::converterHzText(radioHz).c_str());
     return out;
 }
 
-std::vector<cc::ConverterMode> AppWindow::converterModesOffered() const {
+const std::vector<cc::ConverterMode>& AppWindow::converterModesOffered() {
     // A SOUND CARD (gui::soundCardConverter): none at all in I/Q mode - the
-    // typed centre is the translation - and no up-converter in real mode.
-    if (engine_.sourceKind_ == "soundcard") {
-        if (engine_.soundCardLive_.format == cascade::source::SoundCardFormat::IqStereo) { return {}; }
-        return {cc::ConverterMode::Off, cc::ConverterMode::Down};
-    }
-    return {cc::ConverterMode::Off, cc::ConverterMode::Up, cc::ConverterMode::Down};
+    // typed centre is the translation - and no up-converter in real mode. The
+    // engine decides (fact.converter.modes); EMPTY means the rows are not drawn.
+    return converterLists().offered;
 }
 
-std::string AppWindow::converterUnusableNote() const {
-    if (engine_.sourceKind_ != "soundcard") { return {}; }
-    const cc::ConverterSetting stored = cc::converterFor(engine_.converters_, engine_.converterRadioKeyNow());
-    if (!cascade::gui::soundCardConverter(stored, engine_.soundCardLive_.format).upRefused) { return {}; }
+std::string AppWindow::converterUnusableNote() {
+    if (uiFact("fact.converter.upIgnored") != "1") { return {}; }
     return tr("A sound card takes a down-converter only: the up-converter set for this card is not used.");
 }
 
 void AppWindow::drawConverterControls() {
-    const std::vector<cc::ConverterMode> offered = converterModesOffered();
+    const std::vector<cc::ConverterMode>& offered = converterModesOffered();
     if (offered.empty()) { return; }
-    const std::string key = engine_.converterRadioKeyNow();
-    const auto stored = engine_.converters_.find(key);
-    cc::ConverterSetting mine =
-        stored == engine_.converters_.end() ? cc::ConverterSetting{} : stored->second;
+    const ConverterListCache& cache = converterLists();
+    const std::string key = uiFact("fact.converter.radioKey");
+    cc::ConverterSetting mine = cache.stored;
     // A stored mode this source cannot take reads as Off (the note below says
     // why); its LO is kept for the radio or mode that can.
     if (std::find(offered.begin(), offered.end(), mine.mode) == offered.end()) {
         mine.mode = cc::ConverterMode::Off;
     }
-    const cc::ConverterSetting live = engine_.pipeline_.converter();
-    // Every change below is APP_SET_CONVERTER, applied at the top of the next
-    // frame by changeConverter (the air frequency stays, the radio follows).
+    const cc::ConverterSetting live = cache.live;
+    // Every change below is FOXAPP_OP_SET_CONVERTER, applied by the engine's
+    // next pass by changeConverter (the air frequency stays, the radio follows).
     const auto submitConverter = [this](const cc::ConverterSetting& s) {
         FoxCommand c = cascade::core::cmd::makeInt(FOXAPP_OP_SET_CONVERTER, static_cast<std::int64_t>(s.mode),
                                                    s.inverted ? 1 : 0);
         c.num[0] = s.loHz;
-        engine_.submitCommand(c);
+        uiSubmit(c);
     };
 
     ImGui::SeparatorText(tr("Converter"));
     // Not while a radio is being opened: the setting would land on whichever
     // radio happened to be installed at that instant.
-    ImGui::BeginDisabled(engine_.deviceOpenPending_);
+    ImGui::BeginDisabled((uiState_.flags & FOXAPI_RX_DEVICE_OPENING) != 0u);
 
     // --- the mode ----------------------------------------------------------------
     std::vector<const char*> modeNames;
@@ -250,7 +316,7 @@ void AppWindow::drawConverterControls() {
             // the centre can sit below 0 Hz on the air (a 16.4 kHz station
             // with the VFO 300 kHz up), which is true and says nothing useful.
             // The status column carries the radio's own centre readback.
-            const double airHz = engine_.currentAbsoluteHz();
+            const double airHz = uiState_.tunedHz;  // = currentAbsoluteHz(), as of the last publish
             const double radioHz = cc::radioFromAir(live, airHz);
             std::string line;
             cascade::core::formatUtf8(line, tr("Listening on %s on the air - %s at the radio."),

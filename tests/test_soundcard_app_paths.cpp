@@ -371,8 +371,21 @@ struct AppWindowTestAccess {
     static std::string keyNow(AppWindow& a) { return a.engine_.converterRadioKeyNow(); }
     // The converter a patch radio with this key is given.
     static ConverterSetting forKey(AppWindow& a, const std::string& key) { return a.engine_.converterForKey(key); }
-    static std::vector<ConverterMode> offered(AppWindow& a) { return a.converterModesOffered(); }
-    static std::string unusableNote(AppWindow& a) { return a.converterUnusableNote(); }
+    // The Converter rows' reads are the window's, from its engine API session
+    // (window port, group 4): with no frame, the engine publishes and the
+    // window looks first.
+    static void look(AppWindow& a) {
+        a.engine_.publishReceiverState();
+        a.refreshUiState();
+    }
+    static std::vector<ConverterMode> offered(AppWindow& a) {
+        look(a);
+        return a.converterModesOffered();
+    }
+    static std::string unusableNote(AppWindow& a) {
+        look(a);
+        return a.converterUnusableNote();
+    }
     static double airCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
     static double radioNow(AppWindow& a) { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); }
     static double counter(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }

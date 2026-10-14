@@ -933,10 +933,19 @@ const char* const kPortedMembers[] = {
     "drawRadarSection", "drawCatSection", "drawWebSection", "drawUpdatesSection",
     "drawKeyBindingsSection", "drawDiagnosticsSection", "drawDiagnosticsOffer",
     "uiNotePanel",
+    // GROUP 4, the radio-specific panels: the Airspy controls, the deck's bias
+    // tee key (its press, its answer, its confirmation dialog), the Converter
+    // rows and the sentences they letter - and the three readers that keep
+    // what those read of the lists when listSeq moves. The one `engine_.` that
+    // stays is run()'s (kLineAllowed: the census stand-in, set once at start).
+    "drawAirspyControls", "airspyLists",
+    "biasKeyPanel", "biasKeyPressed", "biasKeyAnswered", "drawBiasKeyConfirm",
+    "converterAliasNote", "converterStatusLine", "converterModesOffered", "converterUnusableNote",
+    "drawConverterControls", "converterLists",
 };
 
-constexpr int kWindowFieldsReadBudget = 152;
-constexpr int kWindowFieldReadsBudget = 723;
+constexpr int kWindowFieldsReadBudget = 149;
+constexpr int kWindowFieldReadsBudget = 694;
 
 struct Report {
     int violations = 0;

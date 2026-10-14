@@ -312,7 +312,13 @@ struct AppWindowTestAccess {
     static void reopen(AppWindow& a) { a.engine_.reopenAfterDriverFault(); }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.engine_.changeConverter(s); }
     static void scanNativeForTest(AppWindow& a) { a.engine_.scanNative(); }
-    static std::string aliasNote(AppWindow& a) { return a.converterAliasNote(); }
+    // The note is the window's, read from its engine API session (window port,
+    // group 4): with no frame, the engine publishes and the window looks first.
+    static std::string aliasNote(AppWindow& a) {
+        a.engine_.publishReceiverState();
+        a.refreshUiState();
+        return a.converterAliasNote();
+    }
     static bool hasStored(AppWindow& a, const std::string& k) { return a.engine_.converters_.count(k) != 0; }
     static ConverterSetting stored(AppWindow& a, const std::string& k) {
         const auto it = a.engine_.converters_.find(k);

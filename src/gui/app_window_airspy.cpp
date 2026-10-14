@@ -11,12 +11,15 @@
 // then turned those into COMMANDS (FOXAPP_OP_AIRSPY_DECIMATION/GAIN_MODE/AGC,
 // queued like every other gain control here - the figure is read back on the
 // next frame the readback lands on) and moved every READ off the raw
-// cascade::source::AirspySource* engine_.asAirspyDevice() used to hand out
-// (a pointer into engine-owned, mutable object state - the one query of this
-// shape the Engine ever returned) onto the PUBLISHED state
-// (PublishedState::app's airspy* fields, receiver_snapshot.hpp) - the same
-// snapshot every other reader of the receiver answers from, and the one 3b's
-// control thread can keep publishing safely. tests/test_airspy_app.cpp is
+// cascade::source::AirspySource* engine_.asAirspyDevice() used to hand out onto
+// the PUBLISHED state.
+//
+// SINCE THE WINDOW'S PORT (engine-stage4.md 6.5, group 4) THIS FILE DRAWS FROM
+// ITS ENGINE API SESSION ONLY: the gain modes, the decimation factors and the
+// gain stages are the table's lists (GAIN_MODES, DECIMATIONS, GAINS - the
+// stage its own AGC is driving carries FOXAPI_ITEM_AGC, API 0.3 section 8.3),
+// read when listSeq moves and kept in airspyCache_, and every control is
+// AppWindow::uiSubmit with the op it always sent. tests/test_airspy_app.cpp is
 // unaffected: it drives chooseAirspyDecimation/GainMode/Agc directly (a
 // friend accessor), which still exist unchanged on Engine.
 //
@@ -49,31 +52,83 @@ void tooltipIfHovered(const char* text) {
 
 }  // namespace
 
+// THE PANEL'S READS OF THE TABLE'S LISTS, taken when listSeq has moved and kept
+// (the same rule as AppWindow::uiFact): the lists are rebuilt when anything in
+// them changes, so a frame in which nothing did costs nothing and allocates
+// nothing - the strings and vectors keep their capacity between refreshes.
+const AppWindow::AirspyListCache& AppWindow::airspyLists() {
+    AirspyListCache& c = airspyCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    FoxListItem it{};
+    // An Airspy is open exactly when it has gain MODES (no other radio has any).
+    const int32_t modes = engineApi_->read_list(uiSession_, FOXAPI_LIST_GAIN_MODES, 0, nullptr);
+    c.open = modes > 0;
+    c.choices.clear();
+    c.stages.clear();
+    c.lnaAgc = false;
+    c.mixerAgc = false;
+    if (!c.open) { return c; }
+    // The mode in force: the code AirspySource::GainMode / FOXAPP_OP_AIRSPY_GAIN_MODE take.
+    for (int32_t i = 0; i < modes; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_GAIN_MODES, static_cast<uint32_t>(i), &it) < 0) { break; }
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.gainMode = static_cast<int>(it.value[0]); }
+    }
+    // The decimation factors in the combo's order; the active one gives the
+    // factor in force and, with the rate it gives, the board's own rate
+    // (a power of two divides it exactly).
+    const int32_t decimations = engineApi_->read_list(uiSession_, FOXAPI_LIST_DECIMATIONS, 0, nullptr);
+    for (int32_t i = 0; i < decimations; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DECIMATIONS, static_cast<uint32_t>(i), &it) < 0) { break; }
+        c.choices.push_back(static_cast<unsigned>(it.value[0]));
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) {
+            c.decimation = static_cast<unsigned>(it.value[0]);
+            c.hardwareRateHz = it.value[1] * it.value[0];
+        }
+    }
+    // The stages: the name the gain command takes, the top of the slider, the
+    // radio's readback, and whether its own AGC is driving it.
+    const int32_t stages = engineApi_->read_list(uiSession_, FOXAPI_LIST_GAINS, 0, nullptr);
+    for (int32_t i = 0; i < stages; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_GAINS, static_cast<uint32_t>(i), &it) < 0) { break; }
+        AirspyListCache::Stage s;
+        s.name = it.name;
+        s.maxDb = static_cast<float>(it.value[1]);
+        s.db = static_cast<float>(it.value[3]);
+        s.agc = (it.flags & FOXAPI_ITEM_AGC) != 0u;
+        if (s.name == "LNA") { c.lnaAgc = s.agc; }
+        if (s.name == "MIXER") { c.mixerAgc = s.agc; }
+        c.stages.push_back(std::move(s));
+    }
+    return c;
+}
+
 bool AppWindow::drawAirspyControls() {
-    // THE PUBLISHED STATE, ONCE, for the whole panel - never the raw device
-    // pointer. A failed lock-free read (vanishingly rare - see
-    // receiver_snapshot.hpp) falls back to the installed block, exactly as
-    // catStatusNow() does; either way this is at most one frame old, the same
-    // bound every other gain control in this section already accepts.
-    cascade::core::PublishedState ps;
-    if (!engine_.receiverSnapshot_->read(ps)) { ps = engine_.receiverSnapshot_->readFull()->state; }
-    const cascade::core::AppStateExt& e = ps.app;
-    if (!e.airspyOpen) { return false; }
+    // THE LISTS, once, for the whole panel - from the window's engine API
+    // session, at most one frame old: the same bound every other gain control
+    // in this section already accepts.
+    const AirspyListCache& a = airspyLists();
+    if (!a.open) { return false; }
 
     // --- DECIMATION ------------------------------------------------------
-    const unsigned current = e.airspyDecimation;
+    const unsigned current = a.decimation;
     const auto decimationText = [](unsigned d) {
         return d == 1 ? std::string(tr("None")) : std::to_string(d);
     };
     ImGui::SetNextItemWidth(120.0f);
     const std::string preview = decimationText(current);
     if (ImGui::BeginCombo(labelAboveIfNeeded(trId("Decimation")), preview.c_str())) {
-        for (std::uint32_t i = 0; i < e.airspyDecimationChoiceCount; ++i) {
-            const unsigned d = e.airspyDecimationChoices[i];
+        for (const unsigned d : a.choices) {
             const bool sel = d == current;
             if (ImGui::Selectable(decimationText(d).c_str(), sel) && !sel) {
-                engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_DECIMATION,
-                                                                  static_cast<std::int64_t>(d)));
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_DECIMATION, static_cast<std::int64_t>(d)));
             }
             if (sel) { ImGui::SetItemDefaultFocus(); }
         }
@@ -83,10 +138,10 @@ bool AppWindow::drawAirspyControls() {
         tr("Divides the sample rate by a power of two before anything else sees it: a narrower "
            "span, less work for the computer, and less noise in each sample - about 3 dB for "
            "every halving. The same as decimation in Airspy's own software."));
-    if (e.airspyDecimation > 1) {
+    if (a.decimation > 1) {
         std::string line;
         cascade::core::formatUtf8(line, tr("radio at %.4g MS/s, decimated by %u"),
-                                  e.airspyHardwareSampleRateHz / 1.0e6, e.airspyDecimation);
+                                  a.hardwareRateHz / 1.0e6, a.decimation);
         ImGui::TextDisabled("%s", line.c_str());
     }
 
@@ -94,7 +149,7 @@ bool AppWindow::drawAirspyControls() {
     // One of three, in the reference application's order, and only the
     // chosen mode's controls below it.
     ImGui::TextUnformatted(tr("Gain mode"));
-    const AirspyMode mode = static_cast<AirspyMode>(e.airspyGainMode);
+    const AirspyMode mode = static_cast<AirspyMode>(a.gainMode);
     struct ModeButton {
         AirspyMode mode;
         const char* label;
@@ -115,8 +170,8 @@ bool AppWindow::drawAirspyControls() {
         if (i > 0) { ImGui::SameLine(); }
         if (ImGui::RadioButton(buttons[i].label, mode == buttons[i].mode) &&
             mode != buttons[i].mode) {
-            engine_.submitCommand(cascade::core::cmd::makeInt(
-                FOXAPP_OP_AIRSPY_GAIN_MODE, static_cast<std::int64_t>(buttons[i].mode)));
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_GAIN_MODE,
+                                                 static_cast<std::int64_t>(buttons[i].mode)));
         }
         tooltipIfHovered(buttons[i].tip);
     }
@@ -136,17 +191,13 @@ bool AppWindow::drawAirspyControls() {
     // back on the NEXT frame the readback lands on, the same as every other
     // gain slider in the Source section.
     const auto slider = [&](std::size_t i, const char* label) {
-        if (i >= engine_.deviceGainNames_.size() || i >= engine_.deviceGainsDb_.size()) { return; }
-        const float hi = i < engine_.deviceGainRanges_.size()
-                             ? static_cast<float>(engine_.deviceGainRanges_[i].maxDb)
-                             : 15.0f;
-        float db = engine_.deviceGainsDb_[i];
+        if (i >= a.stages.size()) { return; }
+        float db = a.stages[i].db;
         ImGui::PushID(static_cast<int>(i));
-        if (ImGui::SliderFloat(labelAboveIfNeeded(label), &db, 0.0f, hi,
+        if (ImGui::SliderFloat(labelAboveIfNeeded(label), &db, 0.0f, a.stages[i].maxDb,
                                gainSliderFormat(cascade::source::GainUnit::Steps))) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN,
-                                                       engine_.deviceGainNames_[i], 0, 0,
-                                                       static_cast<double>(db)));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, a.stages[i].name, 0, 0,
+                                                  static_cast<double>(db)));
         }
         ImGui::PopID();
     };
@@ -158,20 +209,18 @@ bool AppWindow::drawAirspyControls() {
     // Free: the three stages by hand, the first two each with its own AGC
     // switch, and a stage its AGC is driving greyed rather than hidden - its
     // number is what it goes back to when the AGC is switched off.
-    bool lnaAgc = e.airspyLnaAgc;
+    bool lnaAgc = a.lnaAgc;
     if (ImGui::Checkbox(trId("LNA AGC"), &lnaAgc)) {
-        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 0, lnaAgc ? 1 : 0));
+        uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 0, lnaAgc ? 1 : 0));
     }
     ImGui::SameLine();
-    bool mixerAgc = e.airspyMixerAgc;
+    bool mixerAgc = a.mixerAgc;
     if (ImGui::Checkbox(trId("Mixer AGC"), &mixerAgc)) {
-        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 1, mixerAgc ? 1 : 0));
+        uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_AIRSPY_AGC, 1, mixerAgc ? 1 : 0));
     }
-    for (std::size_t i = 0; i < engine_.deviceGainNames_.size(); ++i) {
-        const std::string& name = engine_.deviceGainNames_[i];
-        const bool driven = (name == "LNA" && e.airspyLnaAgc) || (name == "MIXER" && e.airspyMixerAgc);
-        ImGui::BeginDisabled(driven);
-        slider(i, name.c_str());
+    for (std::size_t i = 0; i < a.stages.size(); ++i) {
+        ImGui::BeginDisabled(a.stages[i].agc);
+        slider(i, a.stages[i].name.c_str());
         ImGui::EndDisabled();
     }
     return true;

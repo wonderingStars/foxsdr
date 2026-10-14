@@ -4401,7 +4401,7 @@ void AppWindow::drawToolbar() {
     // the user switched is in effect on the signal path. A press goes to
     // biasKeyPressed: off at once, on only through the confirmation dialog the
     // first time for each radio in a session (engine/bias_tee.hpp says why).
-    if (const cascade::gui::BiasTeePanel bk = biasKeyPanel(); bk.present) {
+    if (const cascade::gui::BiasTeePanel& bk = biasKeyPanel(); bk.present) {
         const cascade::gui::FreqRect area = cascade::gui::deckBiasKeyArea();
         const ImVec2 kTL(X(area.x0), Y(area.y0));
         const float kSize = S(cascade::gui::kDeckBiasKeySize);

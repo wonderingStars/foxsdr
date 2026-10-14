@@ -1336,11 +1336,37 @@ private:
     // two AGC switches, and the software decimation. Draws them and answers
     // true when the open radio is an Airspy, in which case the generic Auto
     // gain switch and gain sliders are not drawn; false and draws nothing for
-    // every other radio. The state it reads (deviceGainNames_ etc.) and the
-    // choosing (chooseAirspyDecimation/GainMode/Agc) are Engine's - receiver
-    // state like every other gain/AGC/rate mirror - called directly as a
-    // reviewed exception (kControlMayCall), the same pattern as scanSoundCards.
+    // every other radio. It draws from the window's engine API session only
+    // (window port, group 4): the gain modes, the decimation factors and the
+    // gain stages are the table's lists - GAIN_MODES, DECIMATIONS, GAINS, whose
+    // stage its own AGC is driving carries FOXAPI_ITEM_AGC (API 0.3 section
+    // 8.3) - and the choosing (chooseAirspyDecimation/GainMode/Agc) is by
+    // command (FOXAPP_OP_AIRSPY_*, FOXAPI_OP_SET_GAIN through uiSubmit): no
+    // member of the engine is called from these controls, so nothing of this
+    // panel is a reviewed exception in kControlMayCall any more.
     bool drawAirspyControls();
+    // THE PANEL'S READS OF THOSE LISTS, taken when listSeq moves (the rule of
+    // uiFact) and kept: a frame in which nothing changed reads nothing and
+    // allocates nothing. listSeq 0 is "never read".
+    struct AirspyListCache {
+        std::uint64_t listSeq = 0;
+        bool open = false;             // GAIN_MODES has entries: an Airspy is open
+        int gainMode = 2;              // the ACTIVE mode's code (AirspySource::GainMode)
+        unsigned decimation = 1;       // the ACTIVE factor
+        double hardwareRateHz = 0.0;   // that entry's rate times its factor: the board's own
+        std::vector<unsigned> choices; // the factors, in the combo's order
+        struct Stage {
+            std::string name;          // what FOXAPI_OP_SET_GAIN takes
+            float maxDb = 0.0f;        // the top of its slider
+            float db = 0.0f;           // the radio's readback
+            bool agc = false;          // FOXAPI_ITEM_AGC: its own AGC is driving it
+        };
+        std::vector<Stage> stages;
+        bool lnaAgc = false;           // the LNA / MIXER stage's AGC (Free mode's two switches)
+        bool mixerAgc = false;
+    };
+    AirspyListCache airspyCache_;
+    const AirspyListCache& airspyLists();
 
     // --- THE DECK'S BIAS TEE KEY (2026-09-25, app_window_bias_key.cpp) --------
     //
@@ -1354,9 +1380,16 @@ private:
     // level (drawBiasKeyConfirm), because the press happens inside the deck's
     // child and ImGui wants OpenPopup in the same ID stack as the modal.
     bool biasKeyAskQueued_ = false;
-    // The panel the KEY shows: biasTeePanel_, or - only while no real radio
-    // with a bias tee is open - the census/capture stand-in below.
-    cascade::gui::BiasTeePanel biasKeyPanel() const;
+    // The panel the KEY shows (window port, group 4): drawn while
+    // fact.biasTee.reachable says "1", lit from FOXAPI_RX_BIAS_TEE_ON - the
+    // engine's, whether that is a radio's readback or the census/capture
+    // stand-in's (the window knows no stand-in). Not const: it reads facts
+    // through the session's cache. The panel is the window's own member, set
+    // here and handed back by reference: a BiasTeePanel holds a map (one heap
+    // node on this standard library even when empty), and the deck draws the
+    // key every frame.
+    const cascade::gui::BiasTeePanel& biasKeyPanel();
+    cascade::gui::BiasTeePanel biasKeyView_;
     // The key was pressed / the dialog was answered (true: "Turn it on").
     void biasKeyPressed();
     void biasKeyAnswered(bool turnOn);
@@ -1386,10 +1419,26 @@ private:
     void drawConverterControls();
     // The modes the Converter combo offers for the source installed, in the
     // combo's order; EMPTY means the Converter controls are not drawn at all.
-    std::vector<cascade::core::ConverterMode> converterModesOffered() const;
+    // (fact.converter.modes, kept in converterCache_; not const, like the
+    // other members that read the session.)
+    const std::vector<cascade::core::ConverterMode>& converterModesOffered();
     // A sentence under the Converter controls about a setting that is stored
     // for this source but cannot apply to it; "" when there is none.
-    std::string converterUnusableNote() const;
+    std::string converterUnusableNote();
+    // WHAT THE CONVERTER ROWS READ OF THE LISTS AND FACTS, taken when listSeq
+    // moves and kept (the rule of uiFact): the modes offered, the converter in
+    // force (fact.converter.live), the open radio's stored setting (the
+    // CONVERTERS entry that is ACTIVE) and where that entry is - the radio's
+    // own centre is its value[3], read live when wanted. listSeq 0: never read.
+    struct ConverterListCache {
+        std::uint64_t listSeq = 0;
+        std::vector<cascade::core::ConverterMode> offered;
+        cascade::core::ConverterSetting live;
+        cascade::core::ConverterSetting stored;
+        int activeIndex = -1;
+    };
+    ConverterListCache converterCache_;
+    const ConverterListCache& converterLists();
     // The status column's line while a converter is on, "" otherwise;
     // shortForm names the converter by its LO only, for a narrow column.
     std::string converterStatusLine(bool shortForm = false);
@@ -2146,7 +2195,10 @@ private:
     // drawn every frame costs nothing between changes. "" when the engine
     // has none.
     const std::string& uiFact(const char* key);
-    std::map<std::string, std::string> uiFacts_;
+    // (std::less<>: a lookup by C string builds no temporary std::string, so
+    // a fact read every frame - the deck's bias tee key reads one - allocates
+    // nothing.)
+    std::map<std::string, std::string, std::less<>> uiFacts_;
     std::uint64_t uiFactsListSeq_ = 0;
     // WHAT THE STATUS COLUMN TAKES FROM THE LISTS (window port, group 2), read
     // when listSeq moves and kept here, the way uiFacts_ is: the RECEIVER
