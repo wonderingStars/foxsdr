@@ -366,6 +366,49 @@ an engine from a thread-local destructor. THE RULE FOR TESTS: never keep
 anything whose destructor joins a thread in a `thread_local` - on Windows
 that deadlocks at thread exit.
 
+GROUP 2, the STATUS column (drawStatusColumn, and refreshStatusLists, which
+keeps what it takes from the lists): API 0.3 section 8.2 (the status column as
+a page draws it). What moved into the table: the sink's four states
+(`audioFlags`: OPENING, EVER_OPENED, STREAM_ALIVE, PLUGIN_PLAYING), the output
+ring's fill and size and the audio rate, the plugin audio path's gap counters
+and who holds the speakers (`audioPlayingPlugin`), who mutes the audio
+(`audioMutedBy`: the decoder plugins on their presets - the user's own mute is
+`FOXAPI_RX_MUTED`), the decoder output total (`decoderLinesTotal`, which the
+window differences over its own 2 s window), the decoders "ready" with the
+receiver stopped (`decodersMatched`: not in the plan, and necessary -
+`decodersRunning` is 0 then, and the card letters "N ready"), the gain's unit
+token (GAINS `detail`: `dB` or `step`) and each take's elapsed seconds
+(RECORDINGS `value[3]`, from two steady-clock stamps in `core::Recorder`, read
+live like the bytes). The column reads `uiState_` once a frame and three
+small things from the lists when `listSeq` moves (the first gain stage, the
+antenna in use, where the I/Q and audio takes sit in RECORDINGS); the takes'
+live figures are two `read_list` calls a frame and none before a take has
+started. Ratchet: 152 fields / 761 reads -> 152 / 723 (the column's 38 reads;
+every field it read is read elsewhere, so the field count stays).
+
+What the operator sees: nothing new; a figure lands one engine pass after it
+changed (decision 2). Checked against a control of the unchanged column:
+card by card the same, in the stopped and the running states under isolation
+(not reached there: a radio's antenna and gain lines, a take under way, a
+mute, a playing plugin, a running decoder's rate - those are held by the
+tests of the table and by the column's unchanged rules).
+
+What could move a measured number: 312 bytes more copied per publish (the new
+members of FoxReceiverState, and per `read_state`); the recorder's two
+stamps (two atomic stores a take, one of them on the DSP thread when a take
+ends at the size limit); nothing on the sample path. The runner's lock, the
+one the DSP thread takes per block, is taken twice a pass whatever the
+receiver is doing (`feedSnapshot`, and `audioPathSnapshot`, which reads both
+gap counters and copies the playing name in one acquisition) - it was two
+stopped (`audioGaps`, `audioGapFrames`) and three running - so the pass takes
+it no more often; it also takes `feedSnapshot` while stopped (the "ready"
+count), when no DSP thread is taking that lock. The window's frame no longer
+asks the runner at all (it called `playingPlugin`, the two gap counters and
+`isFeeding` once per decoder module a frame). Nothing in the publish
+allocates (tests/test_engine_publish_alloc case C: a mute subject and a
+playing plugin, 0 allocations in 40 publishes); the decoder modules' keys are
+the cached ones.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
