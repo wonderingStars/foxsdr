@@ -409,6 +409,39 @@ allocates (tests/test_engine_publish_alloc case C: a mute subject and a
 playing plugin, 0 allocations in 40 publishes); the decoder modules' keys are
 the cached ones.
 
+GROUP 3, the panel notes (drawRadarSection, drawCatSection, drawWebSection,
+drawUpdatesSection, drawKeyBindingsSection, drawDiagnosticsSection,
+drawDiagnosticsOffer): seven members whose only reach into the engine was one
+call a frame while the page was open, `engine_.telemetryNotePanel("<name>")`,
+which lists the panel in the anonymous usage report (de-duplicated, capped at
+16). New op `FOXAPP_OP_NOTE_PANEL` (0x841F; `text` is the name; grant VIEW,
+which every session holds; LOCAL sessions only, as every app op is: a remote
+session's pages are not this installation's usage; an empty name is
+`BAD_ARGUMENT`; a repeat or a 17th name is an answered no-op). It is served by
+the engine's existing `telemetryNotePanel`, so the report's list is built as it
+was, and it is documented in docs/api-0.3-additions.md section 9. It has no
+merge class: the merge rules (API.md 7.2) are for the five commands that can
+only make the transmitter safer, with a fixed slot apiece, and a repeated name
+is already free. THE TRAP was the frame: the pages call it every frame, and a
+submit a frame would take a ticket a frame from the session's 256 and build a
+command a frame. `AppWindow::uiNotePanel` therefore keeps a once-per-name set
+(`uiNotedPanels_`, a sorted vector of at most 21 short strings, the window's
+21 page names): a name already sent is one `std::lower_bound` against the C
+string, with no temporary string, so no allocation and no session traffic
+(tests/test_panel_note_once.cpp measures 1000 repeats of a 17-character name:
+0 allocations on the calling thread; the first sighting: 3). All 21 call sites
+in src/gui now call it - the seven above and the fourteen in members not ported
+yet (audio filters, decoders, scope, plugin store, fitted modules, map, image,
+decoded, recorder, bookmarks, scanner, usage reporting, privacy notice, serial
+ports) - so the whole window notes its pages one way, and "telemetryNotePanel"
+left the guard's `kControlMayCall`: a direct call from any control is a
+violation again. The seven members and `uiNotePanel` join `kPortedMembers`.
+Ratchet UNCHANGED, 152 fields / 723 reads: these were calls, not reads of an
+engine field, so they were never in the count. What the operator sees: nothing;
+the note reaches the engine on its next pass instead of inside the frame, and
+the report's `panels` is the same list (tests/test_panel_note_once.cpp scenario
+E reads it back from the usage record the engine writes: `"panels":["radar","cat"]`).
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
