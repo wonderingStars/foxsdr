@@ -578,7 +578,7 @@ void testTheCommandsReachTheEngine() {
 
     // (drawSinksSection's AUDIO_DEVICE, by the PortAudio index the cache keeps, is not sent:
     // it opens this machine's sound device. It is one of the 16 commands whose text is
-    // unchanged, and tests/test_audio_open.cpp holds the engine's handling of it.)
+    // unchanged, and tests/test_apply_command.cpp holds the engine's handling of it.)
     for (const Access::Rail::Sink& s : rail.sinks) { CHECK(s.index >= 0); }
 }
 

@@ -533,6 +533,114 @@ and 3 (102.00 and 101.75 s). If it recurs: take a dump of the process while it
 is still alive (`rundll32 comsvcs.dll, MiniDump <pid> <file> full` does not end
 it) before ctest's timeout does.
 
+GROUP 5, the receiver rail and the display (drawMenuColumn's footer,
+drawRadioSection, drawStereoRdsControls, drawAudioFilterSection,
+drawSinksSection, drawDisplaySection, drawBandPlanOverlay and
+drawLanguageSection's country picker - eight members in app_window.cpp and
+app_window_language.cpp - and the two readers they share, railLists and
+readFactText): API 0.3 section 8.4, FoxReceiverState 1216 -> 1336 bytes. What
+moved into the table:
+- the RDS decoder as the Radio section draws it: `rdsFlags` (synced, PI, PS and
+  RadioText valid, TP, TA), `rdsPi`, `rdsPty`, `rdsPs[9]`, `rdsRadioText[65]`
+  and a counter of their own, `rdsSeq`, which moves `seq`; the texts are
+  compared and copied as the C strings they are, raw bytes included. `rdsGroups`
+  and `rdsErrors` are measurements and move no counter. All of it comes from the
+  RDS snapshot the pass already takes: no extra lock;
+- `FOXAPI_RX_AUTO_NOTCH_ENGAGED` (the mode group) and `autoNotchHz` (a
+  measurement, 0 unless engaged: the pipeline keeps the frequency of the last
+  tone it held);
+- the audio watchdog's note under the Sinks section's device combo: the
+  STATUS_LINES key and `fact.status.audioHealth` (level 2);
+- two reads the brief did not list, found by the survey: `FOXAPI_RX_PILOT_LOCKED`
+  (the stereo indicator draws three states, and the table had only the one that
+  needs stereo enabled AND locked, so "ST (forced mono)" and the pilot figure
+  could not be told from MONO), and `fact.bandPlan.name` (the Display section
+  captions the plan LOADED, a chain joined with " + ", where the ACTIVE entry of
+  BAND_PLANS names one plan, which would have changed the words);
+- NOT made: the brief's R6 (the set of muting plugins). The one place the
+  members read it is an emptiness test, and the set is empty exactly when the
+  joined text (`audioMutedBy`) is; MUTE_CAUSES stays with group 8.
+The pattern held, with one addition to it: the window keeps what it reads of the
+lists in ONE cache for the rail and the display (`railCache_`, `railLists()`),
+re-read when `listSeq` moves - the plans and the one in force, the audio outputs
+and the one in use, the loaded plan's name and the two status facts - and the
+loaded plan's ROWS (hundreds, walked every frame by the overlay and the footer)
+only when their number, the plan in force or its name changes, because `listSeq`
+also moves every time a decoder prints a line. The rules the members used to get
+by calling the engine are restated in src/gui/rail_reads.hpp (the narrowest band
+under a frequency, the bands a view shows, the mode key, the Language section's
+note about the band plan) and held against the model they restate, on every
+shipped plan and the merge of them all, by tests/test_rail_reads.cpp.
+
+Ratchet: 149 fields / 694 reads -> 132 / 631 (the 63 reads of the eight
+members; 17 fields leave: audioHealthNote_, audioOpen_, autoNotch_,
+bandPlanChoices_, bandPlanSelection_, bandPlan_, bandwidthIndex_, deemphIndex_,
+deviceIndex_, mutedBy_, notchEnabled_, notchFreqHz_, notchQ_, nrEnabled_,
+nrStrength_, stereoEnabled_, vfoOffsetKhz_), the budgets exactly the printed
+counts. `audioHealthNote_` joins kPublishedOnly, since the engine publishes it.
+`kControlMayCall` and `kLineAllowed` lose nothing: `currentAbsoluteHz` and
+`muteSubjectText` still have callers in unported members, and no entry names one
+of the eight. The guard goes red on a single `engine_.` read put back into
+drawRadioSection (mutant B1) and on the whole pre-port window (78 lines).
+
+What the operator sees: nothing. Drawn by the group 4 build and by this one, at
+a tuning with no band under it and at one inside a band-rich stretch of the
+world plan, the rail (SIGNAL bank, receiver view) and the band plan ribbon on
+the spectrum differ in 0 pixels at a tolerance of 24, area by area; two runs of
+the same build differ by 76 to 217 pixels at tolerance 0, the noise floor. A
+setting lands one engine pass after the click (decision 2), as before: the
+session's queue is drained at the top of the next frame, before the publish and
+before the window's read, right beside `drainLocalCommands` (read from the frame
+order in drawUi; the click itself is not measured - scripted clicks do not reach
+ImGui in this harness, so the other banks and the controls were not captured,
+and tests/test_rail_reads.cpp F and G hold them). The seventeen commands keep
+their op and argument text (16 identical, the 17th the same plan id from the
+cache instead of bandPlanChoices_). The only site that depends on WHEN a command
+lands is the Language section's note, "Display has since been set to a
+different band plan"; the window now remembers what the pick asked for
+(`bandPlanAsk_`) and the rule is one tested function. Two limits come with the
+table's field sizes: an audio output's name is cut at the list item's 95 bytes
+and `audioMutedBy` at 127.
+
+What could move a measured number: FoxReceiverState is 120 bytes larger, copied
+once per publish and once per window read; the publish compares the RDS texts
+(74 bytes); the list fingerprint, computed every pass, hashes one more string
+(`audioHealthNote_`) - all in place, no allocation (tests/
+test_engine_publish_alloc case D: 40 publishes with RDS text, an engaged
+auto-notch and a locked pilot, 0 heap allocations); the pass takes no extra lock
+and reads the two auto-notch atomics and the pilot lock once. In the window, a
+refresh costs the engine's own `get_setting` allocations, one for each of three
+facts (tests/test_rail_reads D: 100 refreshes, 300 allocations; 1000 reads of an
+unchanged state, 0), and it recurs on every pass while decoder lines flow,
+because that is when `listSeq` moves; the rows are not part of it (25 refreshes
+across 25 listSeq moves, rows copied 0 times).
+
+THE TEST-ACCESSOR TRAP held: tests/test_rail_reads.cpp runs `look`
+(`publishReceiverState(); refreshUiState()`) before a member and `pass` or
+`passStatuses` (`pumpFrameBegin(); pumpPublish()` and the session's answers)
+after. No older test needed re-plumbing: none of them called the eight members.
+Test seams for hermetic runs, testHooks=1 only: `test.rds`, `test.autoNotch`,
+`test.pilot`, `test.bandPlanDir` and `audioHealth` in `test.statusLine`
+(tests/test_engine_api_03.cpp group R); the real peer for the RDS fields is
+tests/test_engine_api_rds_real.cpp, the pipeline decoding a modulated carrier.
+
+NOT UNDERSTOOD, recorded: while test_rail_reads was being written, an early
+version of its drawing test (E: the members drawn in real frames) ended in a
+SIGSEGV in its first drawing frames. The product code was not edited
+afterwards; the test was rewritten (one frame per member, the audio filters and
+Language sections opened by the capture hooks FOXSDR_OPEN_SECTIONS and
+FOXSDR_OPEN_LANGUAGE) and has passed since, 30 of 30 runs of one pinned binary.
+Three kinds of replay against the final harness do not crash (build\g5-segv-
+exp*.log, five runs, the experiments not kept): the members drawn with the audio filters
+before the stereo controls, the filters row open and closed; the early body
+itself (Radio, Stereo, Sinks, Display, Language, Overlay in one frame, then four
+frames with the filters before the stereo controls) with every row closed; and
+that again with no fonts loaded. The cause is not established. The one
+mechanism in the code that could do it is the drawer child `benchSection`
+leaves open for the next rail primitive to end (`g_railPending`; drawMenuColumn
+ends with `benchRailFlush()`, a test frame does not): a guess, not a
+measurement. If a drawing test of the rail ever dies like this, start there.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
