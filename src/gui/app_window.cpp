@@ -2752,15 +2752,10 @@ void AppWindow::drawUi() {
     // keep-alive and the TX thread's own dead-man both release the key).
     if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }
     engine_.pumpFrameBegin();  // Engine: the snapshot retry, this drain, the API's queue
-    // THE KEYBOARD, FIRST. ImGui has just finished NewFrame, so WantTextInput
-    // and the popup stack are this frame's answers rather than last frame's,
-    // and nothing has been submitted yet - so a key that starts the receiver,
-    // changes the mode or moves the tuning is reflected by everything drawn
-    // below it in the SAME frame instead of one behind. See
-    // dispatchKeyBindings for the three states in which it performs nothing.
-    // A key SUBMITS a command like a widget does, and the second drain
-    // applies it at once - which is what keeps "the same frame".
-    dispatchKeyBindings();
+    // (THE KEYBOARD is dispatched below, right after the frame's read of the
+    // state: a key reads the value it changes, and since the window's port
+    // (stage 4, group 6) its command lands at the engine's next pass like a
+    // widget's, so it reads what the engine published THIS pass.)
     engine_.drainLocalCommands();
     // A scanner field edited while a scan runs, left mid-edit by a collapsed
     // section or a switched bank: committed here, since the section that
@@ -2833,6 +2828,27 @@ void AppWindow::drawUi() {
     // THE STATE, ONCE A FRAME, through the session (the key's flags are
     // per-session: TX_KEY_MINE, TX_LATCH_RELEASE_FIRST).
     refreshUiState();
+    // WHEN THE GUI TOOK DELIVERY of the spectrum frame readSpectrum just took, which
+    // is what the spectrum's "HEARD n s AGO" line reports. SpectrumFrame carries a
+    // sequence number and no timestamp, so the closest honest measurement available is
+    // the moment the GUI took DELIVERY of the frame - later than the DSP published it
+    // by at most one GUI frame (~16 ms at 60 Hz), and the line is printed to a tenth of
+    // a second. Named for what it measures accordingly. (Scope mode draws no
+    // spectrum, and leaves the stamp where it was.)
+    if (spectrumArrived_) {
+        spectrumArrived_ = false;
+        if (!scopeMode_) { lastFrameSeenS_ = ImGui::GetTime(); }
+    }
+    // THE KEYBOARD. ImGui has finished NewFrame, so WantTextInput and the popup stack
+    // are this frame's answers rather than last frame's, and nothing has been drawn
+    // yet (the pumps between draw nothing and touch neither). It stands HERE, after
+    // the read of the state, since window port group 6: its keys read the value they
+    // change (the mute, the volume, the run state) from the state, and a key held
+    // down repeats on consecutive frames at low frame rates, each repeat starting
+    // from what the one before it did - which the state carries only once the command
+    // has landed (at this frame's pump) and been published and read (above). See
+    // dispatchKeyBindings for the three states in which it performs nothing.
+    dispatchKeyBindings();
     publishWebAudio();
     publishWebImages();
     pumpWebTiles();
@@ -2991,24 +3007,19 @@ void AppWindow::drawUi() {
     // and drawScopeMode draws its own way back before anything else.
     if (scopeMode_) {
         // THE SPECTRUM IS STILL CONSUMED IN SCOPE MODE, even though nothing
-        // here draws it. getLatestFrame is what advances lastFrame_, and
-        // publishReceiverState copies its bins for the browser only when the
-        // sequence moves - so skipping it left the web UI serving the last
-        // spectrum captured before the mode was entered, underneath a status
-        // line that kept reporting the CURRENT frequency and mode. A picture
-        // of 88.5 MHz labelled 100.1 MHz is worse than no picture, and this
-        // mode persists across restarts, so an install left in it would have
-        // served that from its first frame. The waterfall is fed here too, or
-        // leaving the mode would show a hard gap in the history.
-        if (engine_.pipeline_.getLatestFrame(lastFrame_)) {
-            waterfall_->addLine(lastFrame_.dbBins.data(),
-                                static_cast<int>(lastFrame_.dbBins.size()), engine_.dbMin_, engine_.dbMax_);
-            // Counted here too, so the tally and the ring cannot drift apart
-            // across a spell in scope mode. drawCenterPanels restarts its
-            // averaging window rather than dividing this by the time the scope
-            // was up - see the note there.
-            ++waterfallLines_;
-        }
+        // here draws it. readSpectrum (refreshUiState, once a frame whatever is
+        // on screen) is what advances lastFrame_, and publishReceiverState
+        // copies its bins for the browser only when the sequence moves - so
+        // skipping it left the web UI serving the last spectrum captured
+        // before the mode was entered, underneath a status line that kept
+        // reporting the CURRENT frequency and mode. A picture of 88.5 MHz
+        // labelled 100.1 MHz is worse than no picture, and this mode persists
+        // across restarts, so an install left in it would have served that
+        // from its first frame. The waterfall is fed there too, or leaving the
+        // mode would show a hard gap in the history, and the tally is counted
+        // there, so the tally and the ring cannot drift apart across a spell
+        // in scope mode. drawCenterPanels restarts its averaging window rather
+        // than dividing this by the time the scope was up - see the note there.
         drawScopeMode();
     } else {
         ImGui::BeginChild("##menu_column", ImVec2(kMenuWidth, 0.0f), ImGuiChildFlags_None);
@@ -3026,15 +3037,9 @@ void AppWindow::drawUi() {
             // replaces. The rail stays: its view keys are the way back.
             //
             // THE SPECTRUM IS STILL CONSUMED, for the reason scope mode gives
-            // above: the web interface's snapshot copies lastFrame_ only when
-            // its sequence moves, and the waterfall would come back with a
-            // hole in its history.
-            if (engine_.pipeline_.getLatestFrame(lastFrame_)) {
-                waterfall_->addLine(lastFrame_.dbBins.data(),
-                                    static_cast<int>(lastFrame_.dbBins.size()), engine_.dbMin_, engine_.dbMax_);
-                ++waterfallLines_;
-                lastFrameSeenS_ = ImGui::GetTime();
-            }
+            // above (readSpectrum, once a frame): the web interface's snapshot
+            // copies lastFrame_ only when its sequence moves, and the waterfall
+            // would come back with a hole in its history.
             ImGui::BeginChild("##patchview", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             drawPatchView();
@@ -4262,10 +4267,11 @@ void AppWindow::drawToolbar() {
     dl->AddRectFilledMultiColor(barTL, barBR, deckTop, deckTop, deckBot, deckBot);
 
     // --- the transport ------------------------------------------------------
-    // The label reads the pipeline, not a local flag, so the button can never
-    // disagree with the actual thread state - drawBenchStopButton letters
-    // itself STOP or START from the same bool.
-    const bool running = engine_.pipeline_.running();
+    // The label reads the receiver's state as the engine published it (window
+    // port, group 6: this member draws from its engine API session only), not a
+    // local flag, so the button can never disagree with the actual thread state -
+    // drawBenchStopButton letters itself STOP or START from the same bool.
+    const bool running = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
     cascade::gui::census::note("deck:stop");
     cascade::gui::census::rect("deck:stop", X(74.0f) - S(46.0f), Y(85.0f) - S(46.0f),
                                X(74.0f) + S(46.0f), Y(85.0f) + S(46.0f));
@@ -4273,7 +4279,7 @@ void AppWindow::drawToolbar() {
                                           running)) {
         // RUN 0 ends any take, then joins both pipeline threads
         // (stopReceiver: the one stop every path shares); RUN 1 starts.
-        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
+        uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", running ? tr("Stop the receiver") : tr("Start the receiver"));
@@ -4294,20 +4300,22 @@ void AppWindow::drawToolbar() {
         // PluginRunner::activeCount is the number of decoder instances the
         // runner is actually giving samples to - not "loaded", and not "the
         // user has not stopped it" - and the receiver has to be running for
-        // those samples to exist at all, which is why pipeline_.running() is
-        // part of it: the runner keeps its matched instances across a stop.
+        // those samples to exist at all, which is why running is part of it:
+        // the runner keeps its matched instances across a stop. The engine
+        // makes the same test when it publishes (FOXAPI_RX_DECODER_ACTIVE:
+        // "running && activeCount > 0"), and the window reads that flag.
         //
         // It is a PROXY and the word is meant: being fed is not proof that a
         // frame was decoded, only that the samples are arriving. Nothing in
         // the plugin ABI reports a successful decode, so this is the honest
         // ceiling, and MESSAGE RATE in the status column is where the traffic
         // itself is reported.
-        const bool decoding = running && engine_.pluginRunner_.activeCount() > 0;
+        const bool decoding = (uiState_.flags & FOXAPI_RX_DECODER_ACTIVE) != 0u;
         // The lamp reports the AUDIO being muted, whoever muted it: a plugin
-        // (which is what muteSubjectText names) or the user's own Mute key. A
+        // (which is what audioMutedBy names) or the user's own Mute key. A
         // lamp that only knew about plugins would sit dark over silent
         // speakers, which is the one thing this cluster exists to prevent.
-        const bool muted = !engine_.muteSubjectText().empty() || engine_.userMuted_;
+        const bool muted = cascade::gui::masterMuteLamp(uiState_);
         struct MasterLamp {
             ImU32 colour;
             bool lit;
@@ -4317,7 +4325,7 @@ void AppWindow::drawToolbar() {
             {cascade::gui::theme::kPhosphor, running, tr("RUN")},
             {cascade::gui::theme::kPhosphor, decoding, tr("DEC")},
             {cascade::gui::theme::kAmber, muted, tr("MUTE")},
-            {cascade::gui::theme::kAlarm, engine_.pipeline_.faulted(), tr("FAIL")},
+            {cascade::gui::theme::kAlarm, (uiState_.flags & FOXAPI_RX_FAULTED) != 0u, tr("FAIL")},
         };
         // drawBenchLamp letters its caption in whatever face is bound, and the
         // UI face at its normal size runs MUTE straight into FAIL at this
@@ -4466,20 +4474,23 @@ void AppWindow::drawToolbar() {
         cascade::gui::census::note("deck:volume");
         cascade::gui::census::rect("deck:volume", cx - S(kVolumeR), Y(82.0f) - S(kVolumeR),
                                    cx + S(kVolumeR), Y(82.0f) + S(kVolumeR));
+        // (The setting as the engine published it: published as the decimal the
+        // float was set to, so the cast back is the float it was.)
+        const float volume = static_cast<float>(uiState_.volume);
         const float moved = cascade::gui::drawBrassVolumeKnob(
-            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), engine_.volume_);
+            dl, ImVec2(cx, Y(82.0f)), S(kVolumeR), volume);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", tr("Volume - drag the dial, or scroll over it"));
         }
         if (moved >= 0.0f) {
-            engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, moved));
+            uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, moved));
         }
         // THE SETTING, IN CREAM, AND DELIBERATELY NOT IN AMBER. This is where
         // the hand has put the control, not something the radio measured, and
         // the palette reserves amber for a reading. Figures, so the monospaced
         // face: the number stops shuffling sideways as the dial turns.
         char vtxt[16];
-        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(engine_.volume_));
+        std::snprintf(vtxt, sizeof(vtxt), "%.2f", static_cast<double>(volume));
         ImFont* vf = cascade::gui::fonts::reading();
         const float vpx = std::max(11.0f, cascade::gui::fonts::kReadingSize * scale *
                                               cascade::gui::theme::readingsScale());
@@ -4529,7 +4540,7 @@ void AppWindow::drawToolbar() {
         // SAMPLE RATE: full scale 10 MS/s, which covers every device this
         // application has been run against without compressing the common
         // 2 MS/s case into the first tenth of the arc.
-        const double rate = engine_.pipeline_.activeSource().sampleRateHz();
+        const double rate = uiState_.sampleRateHz;
         const bool haveRate = std::isfinite(rate) && rate > 0.0;
         char rateTxt[32];
         std::snprintf(rateTxt, sizeof(rateTxt), haveRate ? "%.3f MS/s" : "--",
@@ -4562,14 +4573,21 @@ void AppWindow::drawToolbar() {
             // something the user has already stopped hearing.
             constexpr std::size_t kWindow = 2048;
             static float window[kWindow];
-            const std::size_t got = engine_.pipeline_.scopeAudio().snapshot(window, kWindow);
+            // (The table's audio scope tap - the pipeline's scopeAudio, the same
+            // snapshot: frames copied, oldest first.)
+            const int32_t got = uiSession_ != nullptr
+                                    ? engineApi_->read_scope(uiSession_, FOXAPI_SCOPE_AUDIO, nullptr, window,
+                                                             static_cast<uint32_t>(kWindow))
+                                    : 0;
             if (got > 0) {
                 haveAudio = true;
-                tapPeak = cascade::gui::audioPeak(window, got);
+                tapPeak = cascade::gui::audioPeak(window, static_cast<std::size_t>(got));
             }
         }
-        const float audible = cascade::gui::audibleAmplitude(
-            tapPeak, engine_.volume_, engine_.pipeline_.audioMuted());
+        // The hard mute the pipeline applies to the finished audio: the lamp's two
+        // causes and a keyed transmitter that is not monitored (gui/tuning_reads.hpp).
+        const float audible = cascade::gui::audibleAmplitude(tapPeak, static_cast<float>(uiState_.volume),
+                                                             cascade::gui::audioHardMuted(uiState_));
         const float target = cascade::gui::meterFraction(audible);
         volumeNeedle_ = cascade::gui::meterBallistics(volumeNeedle_, target,
                                                       ImGui::GetIO().DeltaTime);
@@ -5420,7 +5438,20 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // above 0 Hz, not the air centre (core::minTunedAirHz): a VLF listener
     // with the VFO parked up must still be able to wheel down to 16.4 kHz.
     // That floor is STEP_TUNE's, applied where the command is.
-    const double hz = std::max(0.0, engine_.currentAbsoluteHz());
+    //
+    // (Window port, group 6: the tuned figure is the state's tunedHz - the source
+    // centre readback plus the VFO offset, which is what currentAbsoluteHz() summed.)
+    const double hz = std::max(0.0, uiState_.tunedHz);
+
+    // WHAT THE TABLE SAID OF THE LAST FREQUENCY TYPED, if it said no: the answer
+    // pumpTransmitKey took from the session a moment ago, in the engine's own
+    // words, on the same red line the entry's other complaints use. The line shows
+    // it one pass after that (the command lands at the next one) - the lag the port
+    // accepts.
+    if (!freqEntryRefusal_.empty()) {
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_SOURCE_ERROR, freqEntryRefusal_));
+        freqEntryRefusal_.clear();
+    }
 
     // THE QUICK-TUNE KEY, answered here rather than where it was pressed. The
     // editor is seeded from the TUNED figure the tubes are showing - the same
@@ -5461,16 +5492,19 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
     // decimals - the reference's own rule (Hz / 1,000,000, toFixed(4)).
     char mhz[32];
     std::snprintf(mhz, sizeof(mhz), "%.4f", std::min(hz, kMaxDisplayHz) / 1.0e6);
-    drawTunerStatusCluster(fdl, ptl, pbr, s, engine_.pipeline_.running(), mhz);
+    drawTunerStatusCluster(fdl, ptl, pbr, s, (uiState_.flags & FOXAPI_RX_RUNNING) != 0u, mhz);
     drawTunerBezel(fdl, ptl, s, layout);
     {
         // THE TUBES SHOW THE AIR FREQUENCY; the plate says when that is not
-        // what the radio itself is tuned to (see drawTunerFooter).
-        const cascade::core::ConverterSetting conv = engine_.pipeline_.converter();
+        // what the radio itself is tuned to (see drawTunerFooter). The converter
+        // in force and its name are the table's (the same cache the Converter
+        // rows read, and fact.converter.name, built by the engine's own
+        // converterName).
+        const cascade::core::ConverterSetting conv = converterLists().live;
         std::string caption;
         std::string shortCaption;
         if (cascade::core::converterActive(conv)) {
-            cascade::core::formatUtf8(caption, tr("via %s"), engine_.converterName(conv).c_str());
+            cascade::core::formatUtf8(caption, tr("via %s"), uiFact("fact.converter.name").c_str());
             shortCaption = cascade::core::converterHzText(conv.loHz) + " LO";
         }
         drawTunerFooter(fdl, ptl, pbr, s, caption.c_str(), shortCaption.c_str());
@@ -5543,7 +5577,7 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
                 // the readback, which won't move.
                 FoxCommand step = cascade::core::cmd::makeInt(FOXAPI_OP_STEP_TUNE, ticks);
                 step.num[0] = cascade::gui::digitPlaceHz(i);
-                engine_.submitCommand(step);
+                uiSubmit(step);
             }
             hoveredDigit = true;  // tooltip is drawn after the loop (see below)
             // SINGLE click opens the editor. Double-click was tried first and
@@ -5591,14 +5625,14 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
                              debugSwitchOutline, upTL, upBR)) {
             FoxCommand step = cascade::core::cmd::makeInt(FOXAPI_OP_STEP_TUNE, 1);
             step.num[0] = cascade::gui::digitPlaceHz(i);
-            engine_.submitCommand(step);
+            uiSubmit(step);
             freqLeverUp_[i] = true;
         }
         if (switchHalfButton(ImVec2(swDn.x0, swDn.y0), ImVec2(swDn.x1, swDn.y1), false, i,
                              debugSwitchOutline, dnTL, dnBR)) {
             FoxCommand step = cascade::core::cmd::makeInt(FOXAPI_OP_STEP_TUNE, -1);
             step.num[0] = cascade::gui::digitPlaceHz(i);
-            engine_.submitCommand(step);
+            uiSubmit(step);
             freqLeverUp_[i] = false;
         }
         drawToggleSwitch(fdl, ImVec2(std::min(upTL.x, dnTL.x), upTL.y),
@@ -5647,23 +5681,7 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         freqEditFocus_ = false;
 
         if (commit) {
-            double typed = 0.0;
-            if (parseFrequencyHz(freqEditBuf_, typed)) {
-                engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
-                // A COMMAND, not a direct clear (engine/stage3b-pre 2c):
-                // applied at once so the line clears on THIS frame, as the
-                // direct write did.
-                engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SET_SOURCE_ERROR));
-            } else {
-                // One sentence, one format string, so a translation can place
-                // the typed text where its own grammar wants it.
-                std::string msg;
-                cascade::core::formatUtf8(msg, tr("could not read frequency \"%s\""),
-                              freqEditBuf_);
-                const cascade::core::cmd::QueuedCommand q =
-                    cascade::core::cmd::makeText(FOXAPP_OP_SET_SOURCE_ERROR, msg);
-                engine_.applyCommand(q.c, q.longText);
-            }
+            commitTypedFrequency(freqEditBuf_);
             freqEditing_ = false;
         } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (freqEditWasActive_ && !active)) {
             freqEditing_ = false;  // cancelled: the readback never moved
@@ -7616,32 +7634,21 @@ bool AppWindow::radioNotOpenLit() const {
 }
 
 void AppWindow::drawCenterPanels() {
-    // Poll for a new spectrum frame every GUI frame. getLatestFrame compares
-    // against lastFrame_.seq, so this is one mutex lock returning false when
-    // nothing new arrived — cheap enough to run unconditionally, which also
-    // catches a frame published between the last poll and a Stop click.
+    // THE SPECTRUM FRAME IS THE WINDOW'S COPY, taken once a frame by
+    // refreshUiState (readSpectrum, window port group 6): ONE read_spectrum for all
+    // three views that draw it (scope mode, the patch view and this one), which also
+    // fed the waterfall - one line per *new* frame (not per GUI frame), because
+    // duplicate lines would fake scroll speed while the pipeline is stalled. A frame
+    // published between that read and a Stop click is the next frame's. Cheap enough
+    // to run unconditionally: a NO_CHANGE copies nothing.
     const double nowS = ImGui::GetTime();
-    if (engine_.pipeline_.getLatestFrame(lastFrame_)) {
-        // One waterfall line per *new* frame (not per GUI frame): duplicate
-        // lines would fake scroll speed while the pipeline is stalled.
-        waterfall_->addLine(lastFrame_.dbBins.data(),
-                            static_cast<int>(lastFrame_.dbBins.size()), engine_.dbMin_, engine_.dbMax_);
-        ++waterfallLines_;
-        // WHEN THIS FIGURE WAS TAKEN, which is what the spectrum's "HEARD n s
-        // AGO" line reports. SpectrumFrame carries a sequence number and no
-        // timestamp, so the closest honest measurement available is the moment
-        // the GUI took DELIVERY of the frame - later than the DSP published it
-        // by at most one GUI frame (~16 ms at 60 Hz), and the line is printed
-        // to a tenth of a second. Named for what it measures accordingly.
-        lastFrameSeenS_ = nowS;
-    }
 
     // THE WATERFALL'S SCROLL RATE, MEASURED RATHER THAN ASSUMED, AND MEASURED
     // ON THE RIGHT QUANTITY. It counts the lines actually pushed into the ring
-    // by the loop above - not the frames the DSP published, which is a much
-    // larger and completely different number: getLatestFrame hands over at most
-    // one frame per call, so at 2 MS/s with a 1024-point FFT the pipeline
-    // publishes about 1950 frames a second and this poll takes one of them per
+    // by readSpectrum - not the frames the DSP published, which is a much
+    // larger and completely different number: the window takes at most one
+    // frame per GUI frame, so at 2 MS/s with a 1024-point FFT the pipeline
+    // publishes about 1950 frames a second and the window takes one of them per
     // GUI frame. Measured from the sequence, the strip captioned a picture
     // scrolling at sixty lines a second "SCROLL 1938 line/s" and called its
     // whole visible history "0s VISIBLE".
@@ -7672,8 +7679,16 @@ void AppWindow::drawCenterPanels() {
     // and the DSP input rate every frame; setSpan preserves the user's zoom
     // window whenever it still fits the new baseband, so a small retune or a
     // rate change does not silently throw the view away.
-    const cascade::source::IqSource& src = engine_.pipeline_.activeSource();
-    scale_.setSpan(src.centerFrequencyHz(), engine_.pipeline_.inputRateHz());
+    //
+    // From the window's session (window port, group 6): the centre is the state's -
+    // the source centre readback, so the axis follows a retune with the receiver
+    // stopped and no frame arriving - and the rate is the DSP CHAIN's
+    // (fact.input.rateHz), which is the source's except after a change of the
+    // source's rate that the chain refused, and then the one the display is
+    // measured against.
+    const TuningListCache& tune = tuningLists();
+    const double centreHz = uiState_.centreHz;
+    scale_.setSpan(centreHz, tune.inputRateHz);
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
@@ -7730,10 +7745,14 @@ void AppWindow::drawCenterPanels() {
     // passband nothing on screen shows. Only the drag's CONTINUATION moves
     // here - starting one needs the item's hover state, which does not exist
     // until the panel has been submitted, and it stays below.
-    double bandCenterAbs = src.centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
+    //
+    // (From the window's session, window port group 6: the state's offset and
+    // bandwidth - or, after a drag step below, the numbers that step sent; see
+    // tuneLocal_.)
+    double bandCenterAbs = centreHz + tunedVfoOffsetHz();
     SpectrumView::VfoBand band;
-    band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * engine_.vfoBandwidthHz_);
-    band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * engine_.vfoBandwidthHz_);
+    band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * tunedBandwidthHz());
+    band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * tunedBandwidthHz());
     band.dragging = (vfoDrag_ != VfoDrag::None);
 
     const double mouseFrac =
@@ -7747,38 +7766,40 @@ void AppWindow::drawCenterPanels() {
             // edge keeps working; the offset/bandwidth clamps below are what
             // bound the actual tuning.
             const double mouseHz = scale_.xToHz(mouseFrac);
-            // APPLIED AT ONCE, through applyCommand - the one exception to the
-            // queue (docs/engine-stage1.md): the passband this frame measures
-            // PEAK IN PASSBAND over and paints is the one the drag just set,
-            // so the drag's effect has to exist before the panel is drawn.
+            // THE DRAG'S EFFECT HAS TO EXIST BEFORE THE PANEL IS DRAWN: the
+            // passband this frame measures PEAK IN PASSBAND over and paints is the
+            // one the drag just set. Since stage 1 that was a direct applyCommand,
+            // "the one exception to the queue" (docs/engine-stage1.md); since the
+            // window's port (stage 4, group 6) the command goes through the
+            // session and lands at the engine's next pass, and the window keeps
+            // the numbers it sent for the rest of THIS frame (dragVfoCentre,
+            // dragVfoEdge: tuneLocal_), worked out by the engine's own limits.
             if (vfoDrag_ == VfoDrag::Center) {
                 double wantAbs = mouseHz - vfoGrabDeltaHz_;
                 if (!io.KeyShift) {
                     // Snap the ABSOLUTE tuned frequency to the mode's raster
                     // (kModeSnapHz table above); Shift = free tuning.
-                    const double snap = kModeSnapHz[engine_.modeIndex_];
+                    const double snap = kModeSnapHz[cascade::gui::railModeIndex(uiState_.demodMode)];
                     wantAbs = std::round(wantAbs / snap) * snap;
                 }
                 // SET_VFO_OFFSET keeps the whole band inside the baseband
                 // +/- inputRate/2. (After that clamp an extreme position may
                 // sit off-raster; the raster loses to the hard
                 // band-inside-span rule.)
-                (void)engine_.applyCommand(cascade::core::cmd::makeNum(
-                    FOXAPI_OP_SET_VFO_OFFSET, wantAbs - src.centerFrequencyHz()));
+                dragVfoCentre(wantAbs);
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
             } else {
                 // Either edge adjusts the bandwidth SYMMETRICALLY about the
                 // band center (the VFO filter is symmetric by construction);
                 // clamped to [3 kHz, 90% of the channel rate] when applied.
-                (void)engine_.applyCommand(cascade::core::cmd::makeNum(
-                    FOXAPP_OP_SET_BANDWIDTH_DRAG, 2.0 * std::fabs(mouseHz - bandCenterAbs)));
+                dragVfoEdge(mouseHz, bandCenterAbs);
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
             }
             // Recompute the band from post-drag state so the overlay tracks
             // the cursor within the same frame instead of lagging one behind.
-            bandCenterAbs = src.centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
-            band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * engine_.vfoBandwidthHz_);
-            band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * engine_.vfoBandwidthHz_);
+            bandCenterAbs = centreHz + tunedVfoOffsetHz();
+            band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * tunedBandwidthHz());
+            band.x1Frac = scale_.hzToX(bandCenterAbs + 0.5 * tunedBandwidthHz());
             band.dragging = true;
         }
     }
@@ -7835,7 +7856,7 @@ void AppWindow::drawCenterPanels() {
     if (bandPlanOverlay_) {
         drawBandPlanOverlay(specPos.x, specPos.y, width, spectrumHeight);
     }
-    if (bookmarkMarkers_ && !engine_.freqMgr_.list().empty()) {
+    if (bookmarkMarkers_ && !tune.markers.empty()) {
         drawBookmarkMarkers(specPos.x, specPos.y, width, spectrumHeight);
     }
     // The plugins' own marks (host API level 1), over the bookmarks and under
@@ -7889,8 +7910,8 @@ void AppWindow::drawCenterPanels() {
             // Click anywhere off the band: jump the VFO there. Dragging the
             // band still works (handled above); this is the "just take me to
             // that signal" gesture, and it needs no grab-and-drop.
-            engine_.submitCommand(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE,
-                                                         scale_.xToHz(mouseFrac), io.KeyShift ? 0 : 1));
+            uiSubmit(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE,
+                                                    scale_.xToHz(mouseFrac), io.KeyShift ? 0 : 1));
         }
         if (ImGui::IsMouseDoubleClicked(0) && hit == SpectrumView::VfoHit::None) {
             scale_.resetView();  // double-click on empty spectrum: unzoom
@@ -7951,15 +7972,12 @@ void AppWindow::drawCenterPanels() {
     wfChrome.linesPerSecond = framesPerSecond_;
     std::string decodeLine;
     if (std::isfinite(bandCenterAbs) && bandCenterAbs > 0.0) {
-        std::string firstDecoder;
-        int runningDecoders = 0;
-        if (engine_.pipeline_.running()) {
-            for (const cascade::core::DecoderStatus& s : engine_.pluginRunner_.status()) {
-                if (s.reason != cascade::core::DecoderIdleReason::Running) { continue; }
-                if (runningDecoders == 0) { firstDecoder = s.plugin; }
-                ++runningDecoders;
-            }
-        }
+        // THE DECODERS FED, from the table's DECODERS list (a decoder is FED only with
+        // the receiver running, so a stopped receiver names none - the run state wins
+        // as it always did).
+        const std::string& firstDecoder = tune.fed.first;
+        const int runningDecoders = tune.fed.count;
+        const bool receiverRunning = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
         char freqTxt[32];
         std::snprintf(freqTxt, sizeof(freqTxt), "%.4f MHz", bandCenterAbs / 1.0e6);
         if (runningDecoders == 1) {
@@ -7970,8 +7988,8 @@ void AppWindow::drawCenterPanels() {
                           firstDecoder.c_str(), runningDecoders - 1);
         } else {
             cascade::core::formatUtf8(decodeLine, "%s %s - %s", freqTxt,
-                          kModeNames[engine_.modeIndex_],
-                          engine_.pipeline_.running() ? tr("RECEIVING") : tr("STOPPED"));
+                          kModeNames[cascade::gui::railModeIndex(uiState_.demodMode)],
+                          receiverRunning ? tr("RECEIVING") : tr("STOPPED"));
         }
     }
     wfChrome.decoding = !decodeLine.empty() ? decodeLine.c_str() : nullptr;
@@ -8006,7 +8024,7 @@ void AppWindow::drawCenterPanels() {
         if (!ImGui::IsMouseDown(0)) {
             wfPanning_ = false;
             if (!wfMoved_) {
-                engine_.submitCommand(cascade::core::cmd::makeNumInt(
+                uiSubmit(cascade::core::cmd::makeNumInt(
                     FOXAPP_OP_VFO_TO_ABSOLUTE, scale_.xToHz(mouseFrac), io.KeyShift ? 0 : 1));
             }
         } else {
@@ -15242,6 +15260,7 @@ void AppWindow::setTransmitPageOpen(bool open) {
 }
 
 void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) {
+    if (uiSubmitTap_ != nullptr) { uiSubmitTap_->push_back(q); }  // (a test's; see the header)
     if (uiSession_ == nullptr) {
         cascade::core::diagWarnf("ui: no engine API session - %s was not sent",
                                  cascade::core::cmd::opName(q.c.op));
@@ -15336,7 +15355,160 @@ void AppWindow::refreshUiState() {
     FoxReceiverState st{};
     st.structSize = sizeof(st);
     // A read that keeps overlapping a publish answers BUSY: the last good one stands.
-    if (engineApi_->read_state(uiSession_, &st) == FOXAPI_OK) { uiState_ = st; }
+    if (engineApi_->read_state(uiSession_, &st) == FOXAPI_OK) {
+        uiState_ = st;
+        // What a drag sent last frame has landed in this state (one pass): the
+        // window's own copy of it goes (tuneLocal_).
+        tuneLocal_ = TuneLocal{};
+    }
+    // ...and the spectrum, after the state: the waterfall is fed from it with the
+    // display range this very read carried.
+    readSpectrum();
+}
+
+// THE SPECTRUM, ONCE A FRAME (window port, group 6; docs/engine-stage4.md decision
+// 1): the ONE read_spectrum for every view that draws it, into lastFrame_, at the
+// engine's own bin count (the buffer is sized to it, so nothing is reduced and a frame
+// costs a copy of bins x 4 bytes and no allocation). The stream's sequence is the
+// cursor: NO_CHANGE keeps the frame and feeds nothing; a new sequence feeds the
+// waterfall ONE line, so a line is never drawn twice and a frame the window never
+// asked for (the engine published two between reads) is skipped, exactly as
+// getLatestFrame skipped it. A BUSY read (overtaken for 64 tries) leaves the last frame.
+void AppWindow::readSpectrum() {
+    std::vector<float>& bins = lastFrame_.dbBins;
+    FoxSpectrumInfo info{};
+    info.structSize = sizeof(info);
+    std::uint32_t cap = static_cast<std::uint32_t>(bins.size());
+    int32_t r = engineApi_->read_spectrum(uiSession_, lastFrame_.seq, &info, bins.data(), cap);
+    if (r == FOXAPI_OK && info.binCount > cap) {
+        // The engine has more bins than the buffer holds (the first frame: nothing copied,
+        // since there was no buffer): size it, once, and take the same frame again.
+        bins.resize(info.binCount);
+        cap = info.binCount;
+        info = FoxSpectrumInfo{};
+        info.structSize = sizeof(info);
+        r = engineApi_->read_spectrum(uiSession_, lastFrame_.seq, &info, bins.data(), cap);
+        if (r == FOXAPI_OK && info.binCount > cap) { r = FOXAPI_BUSY; }  // changed again under the read: next frame
+    }
+    if (r != FOXAPI_OK) { return; }
+    if (bins.size() != info.copied) { bins.resize(info.copied); }
+    lastFrame_.seq = info.seq;
+    if (waterfall_ != nullptr) {
+        waterfall_->addLine(bins.data(), static_cast<int>(bins.size()), static_cast<float>(uiState_.dbMin),
+                            static_cast<float>(uiState_.dbMax));
+        ++waterfallLines_;
+    }
+    spectrumArrived_ = true;
+}
+
+// THE TUNING SURFACE'S READS OF THE TABLE'S LISTS AND FACTS, only when listSeq has
+// moved (the cache is in app_window.hpp, with the argument for what is read again and
+// when): the DSP chain's input rate, the decoders being fed, and - only when the
+// bookmark store's own version moved - the markers' rows. Strings and vectors keep their
+// room, so a refresh that finds nothing bigger allocates nothing here.
+const AppWindow::TuningListCache& AppWindow::tuningLists() {
+    TuningListCache& c = tuningCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    ++c.refreshes;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    FoxListItem it{};
+
+    readFactText("fact.input.rateHz", c.factText);
+    c.inputRateHz = c.factText.empty() ? 0.0 : std::strtod(c.factText.c_str(), nullptr);
+
+    // `got <= i` is the end of a list that changed under the read (a count taken from one
+    // publish, an entry from the next): what was read stands, nothing stale is kept.
+    c.fed.clear();
+    const int32_t decoders = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_DECODERS, 0, nullptr));
+    for (int32_t i = 0; i < decoders; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DECODERS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        c.fed.add(it.flags, it.name);
+    }
+
+    // The markers' rows: when the STORE changed.
+    readFactText("fact.bookmarks.version", c.factText);
+    if (c.markersVersion.empty() || c.factText != c.markersVersion) {
+        const int32_t n = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_BOOKMARKS, 0, nullptr));
+        c.markers.resize(static_cast<std::size_t>(n));
+        for (int32_t i = 0; i < n; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_BOOKMARKS, static_cast<uint32_t>(i), &it) <= i) {
+                c.markers.resize(static_cast<std::size_t>(i));
+                break;
+            }
+            cascade::gui::MarkerRow& m = c.markers[static_cast<std::size_t>(i)];
+            m.hz = it.value[0];
+            m.favourite = (it.flags & FOXAPI_ITEM_FAVOURITE) != 0u;
+            m.name = it.name;
+        }
+        c.markersVersion = c.factText;
+        ++c.markerCopies;
+        // A publish between the version and the rows (once the pump is on another thread)
+        // would leave rows newer than the version they are filed under: ask again, and if the
+        // store moved, forget the version so the next refresh copies the rows again.
+        readFactText("fact.bookmarks.version", c.factText);
+        if (c.factText != c.markersVersion) { c.markersVersion.clear(); }
+    }
+    return c;
+}
+
+// THE VFO DRAG'S TWO STEPS (drawCenterPanels): each sends its command through the
+// session and keeps what the command will have done, for the rest of this frame, by the
+// engine's own limits - the same functions the engine applies when the command lands, so
+// the band the panel is drawn with is the band the engine will have (tests/
+// test_tuning_surface.cpp holds the two against each other at the edges).
+void AppWindow::dragVfoCentre(double wantAbsHz) {
+    // The offset that puts the tuned frequency at wantAbsHz, kept inside the span the
+    // chain runs at with the filter whole inside it (Engine::applyCommand's SET_VFO_OFFSET).
+    // Sent clamped, too: the table refuses an offset of 1e8 or more, which a pointer dragged
+    // far past the panel's edge on a wide source reaches, where the engine clamps it.
+    const double offset = vfoOffsetInsideSpan(wantAbsHz - uiState_.centreHz, tuningLists().inputRateHz,
+                                              tunedBandwidthHz());
+    tuneLocal_.offsetValid = true;
+    tuneLocal_.offsetHz = offset;
+    uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, offset));
+}
+
+void AppWindow::dragVfoEdge(double mouseHz, double bandCentreAbsHz) {
+    // Either edge: twice the distance from the band's centre, as the pointer asks - and, for
+    // the frame, as the engine will leave it: [kVfoBwMinHz, kVfoBwMaxChanFrac x the channel rate]
+    // (FOXAPP_OP_SET_BANDWIDTH_DRAG). The request is sent as asked.
+    const double asked = 2.0 * std::fabs(mouseHz - bandCentreAbsHz);
+    const double hi = kVfoBwMaxChanFrac * uiState_.channelRateHz;
+    tuneLocal_.bandwidthValid = true;
+    tuneLocal_.bandwidthHz = std::max(kVfoBwMinHz, std::min(asked, hi));
+    uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_BANDWIDTH_DRAG, asked));
+}
+
+// THE TYPED FREQUENCY, Enter pressed (drawFrequencyReadout). The entry is checked here as
+// the table will check it, and goes to the engine through the window's session (window
+// port, group 6; docs/engine-stage4.md decision 3). The red line is the engine's
+// source-error line, set by FOXAPP_OP_SET_SOURCE_ERROR (empty clears it). The old code
+// cleared it by a direct call "so the line clears on THIS frame"; but the line is drawn
+// from the status copy drawUi takes at the top of the frame, before this readout, so it
+// could only ever clear on the next one - which is when a command sent now lands.
+void AppWindow::commitTypedFrequency(const char* text) {
+    double typed = 0.0;
+    if (!parseFrequencyHz(text, typed) || !cascade::gui::typedFrequencyTunable(typed)) {
+        // A figure that cannot be read, or that the table would refuse (SET_FREQUENCY
+        // takes more than 0 Hz and at most 6 GHz): one sentence, one format string, so a
+        // translation can place the typed text where its own grammar wants it.
+        std::string msg;
+        cascade::core::formatUtf8(msg, tr("could not read frequency \"%s\""), text);
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_SOURCE_ERROR, msg));
+        return;
+    }
+    // THE OLD LINE IS CLEARED BEFORE THE TUNE IS SENT. Both reach the engine in the order
+    // they are sent, and a tune the radio then refuses posts its own error, which the clear
+    // must not take: the old code applied the clear at once and queued the tune, so it came
+    // first.
+    uiSubmit(cascade::core::cmd::make(FOXAPP_OP_SET_SOURCE_ERROR));
+    uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
 }
 
 // THE STATUS COLUMN'S LIST READS, only when listSeq has moved (the members are
@@ -15484,6 +15656,13 @@ void AppWindow::pumpTransmitKey() {
                 transmitKeyNote_ = r[i].message;
             } else if (keyOp && r[i].status == FOXAPI_OK && r[i].op == FOXAPI_OP_TX_LATCH) {
                 transmitKeyNote_.clear();
+            }
+            // THE TYPED FREQUENCY'S ANSWER (window port, group 6): the one op the readout
+            // sends whose refusal the operator is owed. The table refuses a figure outside
+            // (0, 6 GHz] and the engine can drop a tune for a radio that closed; the readout
+            // says it next frame, in the engine's words, on the entry's red line.
+            if (r[i].op == FOXAPI_OP_SET_FREQUENCY && r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {
+                freqEntryRefusal_ = r[i].message[0] != '\0' ? r[i].message : "the frequency was refused";
             }
         }
         if (got < 16) { break; }
@@ -17375,32 +17554,37 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
     // tube can never disagree.
     constexpr int kKeyTuneStepCell = 5;
 
-    // EVERY ACTION THAT CHANGES THE RECEIVER SUBMITS A COMMAND (stage 1). The
-    // key is dispatched after the drain of last frame's widget commands and
-    // before a second drain in the same frame (drawUi), so what the values
-    // below are read from is the state the receiver is in, and the command
-    // still lands before anything is drawn.
+    // EVERY ACTION THAT CHANGES THE RECEIVER SUBMITS A COMMAND (stage 1), on the
+    // window's engine API session since the window's port (stage 4, group 6): it
+    // lands at the engine's next pass, like a widget's. The values below are read
+    // from the state the engine PUBLISHED, so the key is dispatched (drawUi) right
+    // after the frame's read of it - a key held down repeats on consecutive frames at
+    // low frame rates, and a repeat must start from what the one before it did, which
+    // is in that read and was not in the one a frame earlier.
     namespace cmd = cascade::core::cmd;
     switch (action) {
-        case KeyAction::StartStop:
+        case KeyAction::StartStop: {
             // The toolbar's own stop: a take can never outlive the sample
             // flow it was taping (RUN 0 -> stopReceiver).
-            cascade::core::diagLogf("key: start/stop -> %s",
-                                    engine_.pipeline_.running() ? "stopped" : "running");
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_RUN, engine_.pipeline_.running() ? 0 : 1));
+            const bool running = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
+            cascade::core::diagLogf("key: start/stop -> %s", running ? "stopped" : "running");
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
             break;
-        case KeyAction::Mute:
-            cascade::core::diagLogf("key: mute -> %d", engine_.userMuted_ ? 0 : 1);
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MUTED, engine_.userMuted_ ? 0 : 1));
+        }
+        case KeyAction::Mute: {
+            const bool muted = (uiState_.flags & FOXAPI_RX_MUTED) != 0u;  // the user's own mute
+            cascade::core::diagLogf("key: mute -> %d", muted ? 0 : 1);
+            uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MUTED, muted ? 0 : 1));
             break;
+        }
         case KeyAction::VolumeUp:
         case KeyAction::VolumeDown: {
             // A twentieth of full scale per press: twenty presses from silence
             // to full, which is a reachable number of taps and fine enough that
             // a single one is a change rather than a jump.
             const float step = (action == KeyAction::VolumeUp) ? 0.05f : -0.05f;
-            engine_.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME,
-                                       std::clamp(engine_.volume_ + step, 0.0f, 1.0f)));
+            uiSubmit(cmd::makeNum(FOXAPI_OP_SET_VOLUME,
+                                  std::clamp(static_cast<float>(uiState_.volume) + step, 0.0f, 1.0f)));
             break;
         }
         case KeyAction::SquelchUp:
@@ -17408,22 +17592,22 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // The slider's own span is [-120, 0] dB; 2 dB a press crosses it in
             // sixty, and is about the smallest step that audibly moves the gate.
             const float step = (action == KeyAction::SquelchUp) ? 2.0f : -2.0f;
-            engine_.submitCommand(cmd::makeNum(FOXAPI_OP_SET_SQUELCH,
-                                       std::clamp(engine_.squelchDb_ + step, -120.0f, 0.0f)));
+            uiSubmit(cmd::makeNum(FOXAPI_OP_SET_SQUELCH,
+                                  std::clamp(static_cast<float>(uiState_.squelchDb) + step, -120.0f, 0.0f)));
             break;
         }
         // kModeNames order: NFM WFM AM DSB USB CW LSB RAW - FOXAPI_DEMOD_*
         // 1..8. Indices rather than a name lookup, because this switch is
         // already the mapping and a second one by string would be a second
         // place to get it wrong.
-        case KeyAction::ModeNFM: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_NFM)); break;
-        case KeyAction::ModeWFM: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_WFM)); break;
-        case KeyAction::ModeAM: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_AM)); break;
-        case KeyAction::ModeDSB: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_DSB)); break;
-        case KeyAction::ModeUSB: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB)); break;
-        case KeyAction::ModeCW: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_CW)); break;
-        case KeyAction::ModeLSB: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_LSB)); break;
-        case KeyAction::ModeRAW: engine_.submitCommand(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_RAW)); break;
+        case KeyAction::ModeNFM: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_NFM)); break;
+        case KeyAction::ModeWFM: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_WFM)); break;
+        case KeyAction::ModeAM: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_AM)); break;
+        case KeyAction::ModeDSB: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_DSB)); break;
+        case KeyAction::ModeUSB: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB)); break;
+        case KeyAction::ModeCW: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_CW)); break;
+        case KeyAction::ModeLSB: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_LSB)); break;
+        case KeyAction::ModeRAW: uiSubmit(cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_RAW)); break;
         case KeyAction::TuneStepUp:
         case KeyAction::TuneStepDown: {
             // One step on the 10 kHz digit: the counter switch's own
@@ -17432,7 +17616,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             FoxCommand step =
                 cmd::makeInt(FOXAPI_OP_STEP_TUNE, action == KeyAction::TuneStepUp ? 1 : -1);
             step.num[0] = cascade::gui::digitPlaceHz(kKeyTuneStepCell);
-            engine_.submitCommand(step);
+            uiSubmit(step);
             break;
         }
         case KeyAction::TuneSpanUp:
@@ -17449,7 +17633,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             FoxCommand step =
                 cmd::makeInt(FOXAPI_OP_STEP_TUNE, action == KeyAction::TuneSpanUp ? 1 : -1);
             step.num[0] = span;
-            engine_.submitCommand(step);
+            uiSubmit(step);
             break;
         }
         case KeyAction::QuickTune:
@@ -17480,7 +17664,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             // I/Q take stays a deliberate, mouse-only decision: it writes the
             // full baseband at the input rate and fills a disk in minutes, so
             // it is not something a mis-hit key should start.
-            engine_.submitCommand(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, engine_.audioRecorder_.recording() ? 0 : 1));
+            uiSubmit(cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, (uiState_.flags & FOXAPI_RX_RECORDING_AUDIO) != 0u ? 0 : 1));
             break;
         case KeyAction::Screenshot:
             // The self-capture the render loop performs from the framebuffer -
@@ -17820,9 +18004,13 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
     // so a list of 33 000 costs what the dozen in view cost. The user who
     // asked for this said a big list made SDR# stutter; that must not happen
     // here.
-    const auto span = engine_.freqMgr_.range(scale_.viewLowHz(), scale_.viewHighHz());
+    //
+    // From the window's session (window port, group 6): the rows are the cache's - BOOKMARKS,
+    // copied when the store changed and not on every listSeq (tuningLists) - and the search is
+    // FreqManager::range's, over them (gui/tuning_reads.hpp).
+    const std::vector<cascade::gui::MarkerRow>& list = tuningLists().markers;
+    const auto span = cascade::gui::markerRange(list, scale_.viewLowHz(), scale_.viewHighHz());
     if (span.first >= span.second) { return; }
-    const std::vector<cascade::core::Bookmark>& list = engine_.freqMgr_.list();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
     const ImU32 tick = cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.70f);
@@ -17857,9 +18045,9 @@ void AppWindow::drawBookmarkMarkers(float x0, float y0, float width, float heigh
     for (int pass = 0; pass < 2; ++pass) {
         float lastTickX = -1e9f;
         for (std::size_t i = span.first; i < span.second; i += (pass == 0 ? 1 : stride)) {
-            const cascade::core::Bookmark& b = list[i];
+            const cascade::gui::MarkerRow& b = list[i];
             if ((pass == 0) != b.favourite) { continue; }
-            const float x = x0 + static_cast<float>(scale_.hzToX(b.freqHz)) * width;
+            const float x = x0 + static_cast<float>(scale_.hzToX(b.hz)) * width;
             if (pass == 1 && x - lastTickX < 1.0f) { continue; }
             lastTickX = x;
             dl->AddLine(ImVec2(x, strip0), ImVec2(x, strip1), b.favourite ? favTick : tick,

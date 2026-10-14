@@ -63,6 +63,7 @@ struct GLFWwindow;
 #include "gui/store_first_open.hpp"
 #include "gui/rail_banks.hpp"
 #include "gui/rail_reads.hpp"
+#include "gui/tuning_reads.hpp"
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
@@ -1201,9 +1202,16 @@ private:
     std::unique_ptr<SpectrumView> spectrum_;
     std::unique_ptr<WaterfallView> waterfall_;
 
-    // Newest frame received from the pipeline. Cached here (not just handed
-    // to the views) so the spectrum keeps drawing the last data after Stop —
-    // SpectrumView::draw takes bins per call and holds no history of its own.
+    // Newest frame the window has taken from the engine's spectrum stream
+    // (read_spectrum, once a frame, in refreshUiState - window port, group 6).
+    // Cached here (not just handed to the views) so the spectrum keeps drawing
+    // the last data after Stop - SpectrumView::draw takes bins per call and holds
+    // no history of its own. `seq` is the stream's own sequence, the cursor the
+    // next read asks "anything newer?" with; `dbBins` is sized to the engine's
+    // bin count, once (a different count is the only thing that resizes it), so
+    // a frame costs a copy and no allocation. The three places that used to poll
+    // the pipeline for it (scope mode, the patch view, the centre panels) read
+    // this.
     cascade::core::SpectrumFrame lastFrame_;
 
     // --- WHAT THE TWO PANELS ARE ALLOWED TO SAY ABOUT THEMSELVES -------------
@@ -2184,6 +2192,11 @@ private:
     // a frame with the key's (pumpTransmitKey).
     void uiSubmit(const cascade::core::cmd::QueuedCommand& q);
     void uiSubmit(const FoxCommand& c) { uiSubmit(cascade::core::cmd::QueuedCommand{c, {}}); }
+    // TEST SEAM, null in every build of the application and read at exactly one place
+    // (uiSubmit): every command uiSubmit takes is appended here, in order, before it is
+    // sent. It lets a test hold the window's commands against the ones its members always
+    // sent without an engine pass applying them - a key that starts the receiver, or a tune.
+    std::vector<cascade::core::cmd::QueuedCommand>* uiSubmitTap_ = nullptr;
     // THE USAGE REPORT'S PANEL NAMES (window port, group 3): a page calls
     // this every frame it is open, and the name goes to the engine ONCE a run
     // as FOXAPP_OP_NOTE_PANEL. uiNotedPanels_ is the names already sent, kept
@@ -2263,6 +2276,73 @@ private:
     // THE LANGUAGE SECTION'S NOTE ABOUT THE BAND PLAN (gui/rail_reads.hpp): what
     // a country picked there asked the engine for, and when.
     cascade::gui::BandPlanAsk bandPlanAsk_;
+    // THE TUNING SURFACE (window port, group 6: drawToolbar, drawFrequencyReadout,
+    // applyKeyAction, drawCenterPanels and the bookmark markers' reader; API 0.3
+    // section 8.5, gui/tuning_reads.hpp).
+    //
+    // WHAT IT TAKES FROM THE LISTS AND FACTS, read when listSeq moves and kept (the
+    // rail's rule): the DSP chain's input rate (fact.input.rateHz - the spectrum's
+    // axis and the VFO's reach are measured against it, and it is not the source's),
+    // and how many decoders are being fed and the first one's name (DECODERS, for the
+    // waterfall's caption).
+    //
+    // THE BOOKMARK MARKERS are copied ONLY when the store changes: listSeq also moves
+    // every time a decoder prints a line, so it is not the store's signal - the
+    // store's own version (fact.bookmarks.version) is. A 33 000-entry list is copied
+    // once per change and not once a pass. tuningLists() is the one call a member
+    // makes; listSeq 0 is "never read".
+    struct TuningListCache {
+        std::uint64_t listSeq = 0;
+        std::uint32_t refreshes = 0;       // times everything but the rows was read again (a test reads it)
+        double inputRateHz = 0.0;          // fact.input.rateHz; 0 until read
+        cascade::gui::FedDecoders fed;     // DECODERS entries that are FED, and the first of them
+        std::vector<cascade::gui::MarkerRow> markers;  // BOOKMARKS, in its order: by frequency
+        std::string markersVersion;        // fact.bookmarks.version the rows were read at; "" never
+        std::string factText;              // the fact as just read (kept for its room)
+        std::uint32_t markerCopies = 0;    // times the rows were copied (a test reads it)
+    };
+    TuningListCache tuningCache_;
+    const TuningListCache& tuningLists();
+    // THE SPECTRUM, refreshUiState's second read: ONE read_spectrum a frame into
+    // lastFrame_, and the waterfall fed from it - one row for each NEW sequence and none
+    // for a NO_CHANGE. spectrumArrived_ says a frame was taken since drawUi last
+    // stamped lastFrameSeenS_ (ImGui is not available to refreshUiState: tests call it
+    // with no context).
+    void readSpectrum();
+    bool spectrumArrived_ = false;
+    // WHAT A COMMAND SENT THIS FRAME WILL HAVE DONE, until the state shows it: the VFO
+    // and bandwidth drags settle the band BEFORE the spectrum is drawn, because the
+    // passband the panel measures PEAK IN PASSBAND over and paints must be the one the
+    // drag just set - and a command lands at the engine's next pass. So the drag keeps
+    // the numbers it sent (clamped by the engine's own limits, which the engine will
+    // apply to the same figures) for the rest of the frame; refreshUiState drops them -
+    // one pass, by which time the state carries the command.
+    struct TuneLocal {
+        bool offsetValid = false;
+        double offsetHz = 0.0;
+        bool bandwidthValid = false;
+        double bandwidthHz = 0.0;
+    };
+    TuneLocal tuneLocal_;
+    double tunedVfoOffsetHz() const { return tuneLocal_.offsetValid ? tuneLocal_.offsetHz : uiState_.vfoOffsetHz; }
+    double tunedBandwidthHz() const { return tuneLocal_.bandwidthValid ? tuneLocal_.bandwidthHz : uiState_.bandwidthHz; }
+    // The two drag steps (drawCenterPanels): send the command and keep what it will have
+    // done. The centre drag sends FOXAPI_OP_SET_VFO_OFFSET with the offset the engine's
+    // own limit (vfoOffsetInsideSpan, over the chain's input rate and the bandwidth) allows
+    // for the absolute frequency wanted; the edge drag sends FOXAPP_OP_SET_BANDWIDTH_DRAG
+    // with the width the pointer asks for, and keeps the width the engine's bounds
+    // (kVfoBwMinHz, kVfoBwMaxChanFrac of the channel rate) will leave it.
+    void dragVfoCentre(double wantAbsHz);
+    void dragVfoEdge(double mouseHz, double bandCentreAbsHz);
+    // The frequency entry's Enter: the text parsed and checked (readable, and a figure the
+    // table takes), the old red line cleared, then the tune sent - or one sentence on the
+    // red line saying it could not be read.
+    void commitTypedFrequency(const char* text);
+    // THE TYPED FREQUENCY'S REFUSAL: the message of the last FOXAPI_OP_SET_FREQUENCY the
+    // table refused or could not apply (pumpTransmitKey drains every answer once a
+    // frame, with the key's), kept for the readout to say on the red line next frame -
+    // the window's own presentation state, with the one-pass lag that comes with it.
+    std::string freqEntryRefusal_;
     // THE TRANSMIT PAGE IS OPEN - the window's own page, so the window's own
     // flag: restored from the config it hands the engine (applyConfig), moved
     // by its own clicks, each told to the engine

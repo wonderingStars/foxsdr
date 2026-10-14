@@ -233,8 +233,9 @@ const char* const kControlMayCall[] = {
     // FOXAPP_OP_NOTE_PANEL, so a direct call is rule 1's again.)
     // the config snapshot the save compares and writes (window machinery; it accrues the usage report)
     "currentConfig",
-    // a query: the tuned frequency (not declared const: activeSource() is not)
-    "currentAbsoluteHz",
+    // (currentAbsoluteHz, "a query: the tuned frequency", was allowed here until window
+    // port group 6: its last caller in src/gui, the frequency readout, reads the
+    // state's tunedHz now, so a direct call is rule 1's again.)
     // a query: the air centre a switch would carry
     "carriedAirCentre",
     // a pure function of its argument (static)
@@ -954,10 +955,21 @@ const char* const kPortedMembers[] = {
     "drawMenuColumn", "drawRadioSection", "drawStereoRdsControls", "drawAudioFilterSection",
     "drawSinksSection", "drawDisplaySection", "drawLanguageSection", "drawBandPlanOverlay",
     "railLists", "readFactText",
+    // GROUP 6, the tuning surface: the top bar (the transport, the master lamps, the
+    // volume dial and its meters), the frequency readout, the keyboard's actions and
+    // the centre panels (spectrum, waterfall, VFO drags) with the bookmark markers
+    // they draw - and the window's own helpers: the cache of the lists and facts they
+    // read, the one read_spectrum a frame, the VFO drag's two steps and the frequency
+    // entry's commit. (The two
+    // polls of the pipeline's frame in drawUi went with the spectrum's single read;
+    // drawUi itself is a line-allowed member and stays so.)
+    "drawToolbar", "drawFrequencyReadout", "applyKeyAction", "drawCenterPanels",
+    "drawBookmarkMarkers", "tuningLists", "readSpectrum", "dragVfoCentre", "dragVfoEdge",
+    "commitTypedFrequency",
 };
 
-constexpr int kWindowFieldsReadBudget = 132;
-constexpr int kWindowFieldReadsBudget = 631;
+constexpr int kWindowFieldsReadBudget = 126;
+constexpr int kWindowFieldReadsBudget = 587;
 
 struct Report {
     int violations = 0;
