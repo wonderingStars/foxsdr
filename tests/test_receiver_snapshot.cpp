@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -348,6 +349,7 @@ void writerNeverWaits() {
 struct Seqs {
     std::uint64_t seq, tune, mode, device, audio, display, tx, list;
     std::uint64_t aSeq, aTune, aMode, aDevice, aAudio;
+    std::uint64_t rds;  // API 0.3 8.4
 };
 
 Seqs seqs(const ReceiverSnapshot& snap) {
@@ -356,7 +358,7 @@ Seqs seqs(const ReceiverSnapshot& snap) {
     CHECK(ok);
     return {s.rx.seq,       s.rx.tuneSeq,      s.rx.modeSeq,      s.rx.deviceSeq,   s.rx.audioSeq,
             s.rx.displaySeq, s.rx.txSeq,       s.rx.listSeq,      s.app.abiSeq,     s.app.abiTuneSeq,
-            s.app.abiModeSeq, s.app.abiDeviceSeq, s.app.abiAudioSeq};
+            s.app.abiModeSeq, s.app.abiDeviceSeq, s.app.abiAudioSeq, s.rx.rdsSeq};
 }
 
 // Which counters moved from `a` to `b`, as a word per counter.
@@ -378,6 +380,7 @@ std::string moved(const Seqs& a, const Seqs& b) {
     add(b.aMode != a.aMode, "abiMode");
     add(b.aDevice != a.aDevice, "abiDevice");
     add(b.aAudio != a.aAudio, "abiAudio");
+    add(b.rds != a.rds, "rds");
     return o;
 }
 
@@ -400,6 +403,7 @@ void countersMoveByGroup() {
     CHECK(a.seq == 1u && a.tune == 1u && a.mode == 1u && a.device == 1u && a.audio == 1u &&
           a.display == 1u && a.tx == 1u && a.list == 1u);
     CHECK(a.aSeq == 1u && a.aTune == 1u && a.aMode == 1u && a.aDevice == 1u && a.aAudio == 1u);
+    CHECK(a.rds == 1u);  // 0.3 8.4: the RDS group starts at 1 with the rest
     {
         PublishedState r;
         CHECK(snap.read(r));
@@ -487,6 +491,54 @@ void countersMoveByGroup() {
         // ABI's device counters do not name it: a plugin never sees it).
         {"a radio being opened", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_DEVICE_OPENING; },
          "seq device"},
+        // API 0.3 8.4, the receiver rail: the RDS decoder is its own group
+        // (rdsSeq, and seq with it); its two counters and the auto-notch's
+        // frequency are measurements; the auto-notch's lamp is a mode-group flag
+        // that the plugin ABI's mode counter does not name; the pilot lock moves
+        // seq alone (the ST lamp, which the ABI does name, is a different flag).
+        {"RDS synced", [](PublishedState& p) { p.rx.rdsFlags |= FOXAPI_RDS_SYNCED; }, "seq rds"},
+        {"RDS programme identification (code and flag)",
+         [](PublishedState& p) {
+             p.rx.rdsFlags |= FOXAPI_RDS_PI_VALID;
+             p.rx.rdsPi = 0x2C41;
+         },
+         "seq rds"},
+        {"RDS programme identification code alone", [](PublishedState& p) { p.rx.rdsPi = 0x2C42; }, "seq rds"},
+        {"RDS programme type", [](PublishedState& p) { p.rx.rdsPty = 10; }, "seq rds"},
+        {"RDS programme service name",
+         [](PublishedState& p) {
+             p.rx.rdsFlags |= FOXAPI_RDS_PS_VALID;
+             std::snprintf(p.rx.rdsPs, sizeof(p.rx.rdsPs), "%s", "CASCADE!");
+         },
+         "seq rds"},
+        {"RDS service name text alone",
+         [](PublishedState& p) { std::snprintf(p.rx.rdsPs, sizeof(p.rx.rdsPs), "%s", "CASCADE?"); }, "seq rds"},
+        {"RDS traffic programme and announcement flags",
+         [](PublishedState& p) { p.rx.rdsFlags |= FOXAPI_RDS_TP | FOXAPI_RDS_TA; }, "seq rds"},
+        {"RDS RadioText (flag and text)",
+         [](PublishedState& p) {
+             p.rx.rdsFlags |= FOXAPI_RDS_RT_VALID;
+             std::snprintf(p.rx.rdsRadioText, sizeof(p.rx.rdsRadioText), "%s", "STEREO RDS TEST ");
+         },
+         "seq rds"},
+        {"RDS RadioText as it grows (the last byte of 64)",
+         [](PublishedState& p) {
+             std::memset(p.rx.rdsRadioText, 'x', sizeof(p.rx.rdsRadioText) - 1);
+             p.rx.rdsRadioText[sizeof(p.rx.rdsRadioText) - 1] = '\0';
+         },
+         "seq rds"},
+        {"RDS RadioText changing only its last byte",
+         [](PublishedState& p) { p.rx.rdsRadioText[sizeof(p.rx.rdsRadioText) - 2] = 'y'; }, "seq rds"},
+        {"RDS groups and block errors (measurements)",
+         [](PublishedState& p) {
+             p.rx.rdsGroups = 321;
+             p.rx.rdsErrors = 12;
+         },
+         ""},
+        {"the auto-notch engaging (the mode group, not the ABI's)",
+         [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_AUTO_NOTCH_ENGAGED; }, "seq mode"},
+        {"the auto-notch's frequency (a measurement)", [](PublishedState& p) { p.rx.autoNotchHz = 1000.0; }, ""},
+        {"the pilot locking", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_PILOT_LOCKED; }, "seq"},
     };
     for (const Step& st : steps) {
         const Seqs before = seqs(snap);
@@ -500,6 +552,74 @@ void countersMoveByGroup() {
     // No counter ever goes backwards, and each moves by one per publish.
     const Seqs end = seqs(snap);
     CHECK(end.list == 1u);
+}
+
+// --- 3b. the RDS group (API 0.3 8.4) and the layout it appended ---------------------------
+
+void rdsGroupAndLayout() {
+    std::printf("[3b] the RDS group: rdsSeq follows its five members exactly, and the layout is appended\n");
+    ReceiverSnapshot snap;
+    PublishedState s{};
+    s.rx.demodMode = FOXAPI_DEMOD_WFM;
+    snap.publish(s, nullptr);
+    const Seqs first = seqs(snap);
+    CHECK(first.rds == 1u);
+    // Republishing the same RDS words moves nothing, a text rewritten byte for
+    // byte included.
+    std::snprintf(s.rx.rdsPs, sizeof(s.rx.rdsPs), "%s", "CASCADE!");
+    snap.publish(s, nullptr);
+    CHECK(seqs(snap).rds == 2u);
+    std::snprintf(s.rx.rdsPs, sizeof(s.rx.rdsPs), "%s", "CASCADE!");
+    snap.publish(s, nullptr);
+    CHECK(seqs(snap).rds == 2u);
+    // Bytes after the terminator are not the text: a stale tail left behind by a
+    // shorter string moves nothing.
+    std::memset(s.rx.rdsRadioText, 'z', sizeof(s.rx.rdsRadioText));
+    s.rx.rdsRadioText[0] = '\0';
+    snap.publish(s, nullptr);  // "" -> "" with a dirty tail
+    CHECK(seqs(snap).rds == 2u);
+    // A flag that flaps is a change each way.
+    s.rx.rdsFlags = FOXAPI_RDS_SYNCED;
+    snap.publish(s, nullptr);
+    s.rx.rdsFlags = 0;
+    snap.publish(s, nullptr);
+    CHECK(seqs(snap).rds == 4u);
+    // The counters and the notch's frequency: any number of publishes, nothing moves.
+    const Seqs before = seqs(snap);
+    for (std::uint64_t i = 1; i <= 5; ++i) {
+        s.rx.rdsGroups = i * 11;
+        s.rx.rdsErrors = i * 3;
+        s.rx.autoNotchHz = 440.0 * static_cast<double>(i);
+        snap.publish(s, nullptr);
+    }
+    CHECK(moved(before, seqs(snap)).empty());
+
+    // THE LAYOUT: appended after audioPlayingPlugin, so every earlier offset is
+    // where 0.3's first two groups put it; the eight-byte members come first so
+    // no padding is inserted; FOXAPI_MIN_RECEIVER_STATE ends at the last member.
+    CHECK(offsetof(FoxReceiverState, rdsSeq) ==
+          offsetof(FoxReceiverState, audioPlayingPlugin) + FOXAPI_MESSAGE_CHARS);
+    CHECK(offsetof(FoxReceiverState, rdsSeq) % 8u == 0u);
+    CHECK(offsetof(FoxReceiverState, rdsFlags) ==
+          offsetof(FoxReceiverState, autoNotchHz) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, rdsPs) == offsetof(FoxReceiverState, rdsPty) + sizeof(std::uint32_t));
+    CHECK(offsetof(FoxReceiverState, rdsRadioText) == offsetof(FoxReceiverState, rdsPs) + FOXAPI_RDS_PS_CHARS);
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rdsRadioText) + FOXAPI_RDS_TEXT_CHARS);
+    CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
+    CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
+    CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
+    // The six RDS bits are one word's low bits, each its own.
+    const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
+                                  FOXAPI_RDS_TP,     FOXAPI_RDS_TA,       FOXAPI_RDS_RT_VALID};
+    std::uint32_t all = 0;
+    for (const std::uint32_t b : bits) {
+        CHECK((all & b) == 0u && (b & (b - 1u)) == 0u);
+        all |= b;
+    }
+    CHECK(all == 0x3Fu);
+    std::printf("      FoxReceiverState %zu bytes (0.3 before this group: %zu), minimum accepted %zu\n",
+                sizeof(FoxReceiverState), offsetof(FoxReceiverState, rdsSeq),
+                static_cast<std::size_t>(FOXAPI_MIN_RECEIVER_STATE));
 }
 
 // --- 4. the compose mapping --------------------------------------------------------
@@ -930,6 +1050,10 @@ void walkingOneCompose() {
         {FOXAPI_RX_WEB_LISTENING, "WEB_LISTENING", ""},
         {FOXAPI_RX_TX_REMOTE_ARMED, "TX_REMOTE_ARMED", "transmitAvailable"},
         {FOXAPI_RX_TX_LATCH_RELEASE_FIRST, "TX_LATCH_RELEASE_FIRST", ""},
+        // API 0.3: the web page's own booleans for these come from the extension
+        // (autoNotchEngaged, pilotLocked), not from the flag word.
+        {FOXAPI_RX_AUTO_NOTCH_ENGAGED, "AUTO_NOTCH_ENGAGED", ""},
+        {FOXAPI_RX_PILOT_LOCKED, "PILOT_LOCKED", ""},
     };
     std::uint32_t named = 0;
     for (const FlagWant& fw : flags) { named |= fw.bit; }
@@ -1032,6 +1156,8 @@ void walkingOneSources() {
         {"biasTeeOn", &S::biasTeeOn, FOXAPI_RX_BIAS_TEE_ON},
         {"patchRunning", &S::patchRunning, FOXAPI_RX_PATCH_RUNNING},
         {"deviceOpening", &S::deviceOpening, FOXAPI_RX_DEVICE_OPENING},  // 8.3
+        {"autoNotchEngaged", &S::autoNotchEngaged, FOXAPI_RX_AUTO_NOTCH_ENGAGED},  // 8.4
+        {"pilotLocked", &S::pilotLocked, FOXAPI_RX_PILOT_LOCKED},                  // 8.4
     };
     // Every member of RxFlagSources is a bool and is walked here: the struct
     // holds nothing else, so its size counts them.
@@ -1049,7 +1175,7 @@ void walkingOneSources() {
         seen |= w.want;
     }
     // Every flag but the two per-session ones has a source.
-    CHECK(seen == (0x0FFFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: four more
+    CHECK(seen == (0x3FFFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: six more
     std::printf("      %zu sources, each to its own flag; flags covered %08x\n",
                 sizeof(srcs) / sizeof(srcs[0]), seen);
 }
@@ -1240,6 +1366,7 @@ int main() {
     snapshotNeverTears();
     writerNeverWaits();
     countersMoveByGroup();
+    rdsGroupAndLayout();
     composeMapsEveryField();
     pluginApiReadsTheSharedSnapshot();
     walkingOneCompose();

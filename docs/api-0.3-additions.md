@@ -24,7 +24,7 @@ serves only its own minor, so a 0.3 engine answers `foxsdr_engine_query(0, 2)`
 with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
 is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
 and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
-at its end (sections 8.1 and 8.2). `FoxScopeInfo` is new, with its own
+at its end (sections 8.1, 8.2 and 8.4). `FoxScopeInfo` is new, with its own
 `FOXAPI_MIN_SCOPE_INFO`. No other struct changed.
 
 ## 2. Capabilities
@@ -81,6 +81,7 @@ published in the same block as the lists, in the same pass.
 | `fact.biasTee.mayRemember` | `1` when the switch would be remembered for this radio | |
 | `fact.biasTee.radioKey` | the radio it would be remembered for | LOCAL |
 | `fact.biasTee.radioName` | the radio's name as the confirmation dialog says it: the driver's own name, or the stand-in's words while the stand-in is in front of the key; `""` with none | |
+| `fact.bandPlan.name` | the name of the band plan LOADED, as the Display section captions it: the plans of its chain joined with `" + "` ("ITU Region 1 + United Kingdom"), or every installed plan joined when none is selected. Not the `ACTIVE` `BAND_PLANS` entry's name, which is one plan's. An interface translates each part where it draws it; `""` with no plan (section 8.4) | |
 
 ## 5. Lists (appended to 7.4)
 
@@ -92,7 +93,7 @@ says when to read again.
 
 | List | Entry |
 |---|---|
-| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel` |
+| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2) |
 | `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `value[3]`: on the entry that is `ACTIVE` only, **the radio's own centre readback in Hz, read live** (the frequency the radio was told and kept - not the air frequency `centreHz` speaks; a retune moves it without moving `listSeq`; 0 on every other entry; section 8.3); `ACTIVE`: the open radio's |
 | `GAIN_MODES` (24) | a radio with gain MODES (an Airspy: Linearity, Sensitivity, Free). `name`; `value[0]`: the mode code `FOXAPP_OP_AIRSPY_GAIN_MODE` takes; `ACTIVE`. Empty for every other radio |
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
@@ -182,6 +183,8 @@ dropped when it goes).
 | `FOXAPI_RX_BIAS_TEE_ON` | device | ...and it is on (the radio's readback) |
 | `FOXAPI_RX_PATCH_RUNNING` | (seq only) | the patch page's graph is running |
 | `FOXAPI_RX_DEVICE_OPENING` | device | a radio is being opened: the open runs on a worker and has not finished (section 8.3) |
+| `FOXAPI_RX_AUTO_NOTCH_ENGAGED` | mode | the auto-notch has found a tone and is notching it; `FOXAPI_RX_AUTO_NOTCH` stays "enabled" (section 8.4) |
+| `FOXAPI_RX_PILOT_LOCKED` | (seq only) | WFM: the stereo decoder has locked the 19 kHz pilot, stereo enabled or not; `FOXAPI_RX_STEREO_ACTIVE` is enabled AND locked (section 8.4) |
 
 ### 8.1 The transmitter as a page draws it (appended to FoxReceiverState)
 
@@ -322,6 +325,86 @@ format (two sound cards leave the radio args empty alike), each gain stage's
 AGC flag, and the language (the converter's name is a translated sentence).
 The radio's centre is not.
 
+### 8.4 The receiver rail and the display as their pages draw them
+
+The Radio section (mode, VFO, bandwidth, squelch, de-emphasis, the WFM stereo
+and RDS controls, the S-meter), the audio filters, the Sinks section, the
+Display section's band plan, the band plan overlay on the spectrum, the rail's
+footer and the Language section's country picker read the engine's table only.
+0.3 had nearly all of it (`demodMode`, `bandwidthHz`, `squelchDb`,
+`deemphasis`, `vfoOffsetHz`, `tunedHz`, `signalDb`, `dbMin`, `dbMax`, the
+flags `RUNNING`, `STEREO_ENABLED`, `STEREO_ACTIVE`, `NR`, `NOTCH`, `AUTO_NOTCH`,
+`nrStrength`, `notchHz`, `notchQ`, `pilotLevel`, `audioUnderruns`, the sink's
+`audioFlags`, `audioMutedBy`, and the lists `BAND_PLAN`, `BAND_PLANS`,
+`AUDIO_DEVICES`, `STATUS_LINES`); this adds the rest. Appended after
+`audioPlayingPlugin`; **`FOXAPI_MIN_RECEIVER_STATE` moves to the end of
+`rdsRadioText`**.
+
+| Member | Group | |
+|---|---|---|
+| `rdsFlags` | `rdsSeq` | `FOXAPI_RDS_SYNCED` (the block decoder has found the 1187.5 bit/s stream: listening, no field complete yet), `FOXAPI_RDS_PI_VALID`, `FOXAPI_RDS_PS_VALID` (all four fragments of the programme service name are in), `FOXAPI_RDS_TP` (the station carries traffic information at all), `FOXAPI_RDS_TA` (an announcement is on the air now), `FOXAPI_RDS_RT_VALID` (`rdsRadioText` holds some text) |
+| `rdsPi`, `rdsPty` | `rdsSeq` | the programme identification, with `PI_VALID`; the programme type as the raw 5-bit code (RDS and RBDS name it differently, so the code is what is published) |
+| `rdsPs[9]`, `rdsRadioText[65]` | `rdsSeq` | the programme service name: 8 characters as transmitted, space padded, `""` until `PS_VALID`; RadioText, up to 64 characters, `""` until some has arrived. Bytes as the decoder recovered them, each NUL-terminated |
+| `rdsSeq` | | advances when any of the five above changed; `seq` moves with it. The five change a few times a minute, not on every pass |
+| `rdsGroups`, `rdsErrors` | measurement | complete groups decoded, and blocks that failed their checkword while synchronised, since the decoder was last reset (it is on every retune). They climb with the stream and move **no** counter |
+| `autoNotchHz` | measurement | where the auto-notch sits; `0` when it is not engaged. Moves no counter |
+
+- **`FOXAPI_RX_AUTO_NOTCH_ENGAGED`** (mode group): the auto-notch has found a
+  tone and is notching it. `FOXAPI_RX_AUTO_NOTCH` stays "enabled": the rail
+  letters "on 1000 Hz" when both are set and "searching" when only the second
+  is. It moves `modeSeq` and `seq`, and not the plugin ABI's mode counters.
+- **`FOXAPI_RX_PILOT_LOCKED`** (`seq` only): the stereo decoder has locked the
+  19 kHz pilot, stereo enabled or not. `FOXAPI_RX_STEREO_ACTIVE` is enabled AND
+  locked, so the rail's third state - "ST (forced mono)", a station with a pilot
+  while the user has forced mono - and its "pilot 0.93" figure need the lock
+  itself; `pilotLevel` is a measurement and the decoder's lock has hysteresis,
+  so it cannot stand in.
+- **`audioHealth`** in `STATUS_LINES` (level 2, warning) and
+  `fact.status.audioHealth` (section 5.1): the audio watchdog's note under the
+  Sinks section's device combo ("output device stopped and was restarted (1
+  time)", "audio device busy - still opening"). It moves `listSeq` with every
+  other status line.
+- **`fact.bandPlan.name`** (section 4): the name of the band plan LOADED. The
+  Display section captions it with the count ("ITU Region 1 + United Kingdom
+  (84 bands)"); `BAND_PLANS` names single plans, so the `ACTIVE` entry's name
+  is "United Kingdom" and not the caption. Its input, `bandPlan_.name()`, was
+  already in the list fingerprint.
+
+How the rail reads the band plan, the one list that can hold hundreds of
+entries: `BAND_PLAN` is in the order the model keeps (start ascending, widest
+first on a shared start), so walking it back to front draws a band under the
+ones nested inside it; the band under a frequency is the NARROWEST entry
+containing it (both edges inclusive, the first on a tie), and the entries a
+view shows are those with `start < high && stop > low` (strict at both edges).
+An interface that draws it every frame keeps its own copy of the rows and reads
+them again only when the plan changed - `listSeq` also moves when a decoder
+prints a line, so it is not the plan's own signal: the number of entries, the
+`ACTIVE` `BAND_PLANS` entry and `fact.bandPlan.name` are.
+
+**Names are cut at the list item's size** (`name[96]`): an audio output device
+whose name is longer than 95 bytes is listed cut on a character boundary. The
+sink's own `sinkName` (64) and the `deviceName` the rail's footer letters (64)
+are cut the same way, at their member's size.
+
+**Test hooks** (an engine created with `testHooks=1` only, as
+`SETTING_SET test.…=…`): a hermetic engine on the signal generator hears no RDS,
+has no pilot to lock and no tone for the auto-notch, and has no band plans beside
+its executable, so `test.rds=flags;pi;pty;groups;errors;ps;radioText` (flags a
+word of `S`ynced, `P`I valid, service-name valid `N`, `T`P, `A`nnouncement),
+`test.autoNotch=<Hz>` (engaged there), `searching` or `searching:<Hz>` (not
+engaged, the pipeline's frequency still reading that), `test.pilot=1|0` and
+`test.bandPlanDir=<folder>` stand in for what the DSP thread measures and where
+the plans are, and `test.statusLine=audioHealth|<text>` for the watchdog. An
+empty value hands the member back to the real source. Everything after the hook
+- the flag, the counter, the bytes, the cut - is the engine's own;
+`tests/test_engine_api_rds_real.cpp` holds the other half against a real decode.
+
+**What moves `listSeq`, beyond 8.1 to 8.3.** The audio watchdog's note
+(`audioHealth`). The plan's name, the plans there are, the selection and the
+number of entries were already in the fingerprint.
+
+`FOXAPI_MIN_RECEIVER_STATE` is the whole 0.3 layout, ending at `rdsRadioText`.
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
@@ -359,8 +442,9 @@ is never merged, because a repeat is already free.
 
 ## 10. What stays a GAP after 0.3
 
-From 0.2's list (API.md 10.7): the RDS snapshot (1), the auto-notch readout
-(2), plugin panels and instruments as data and a plugin's command-key list
+From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the
+auto-notch readout (2) (section 8.4). What stays: plugin panels and instruments
+as data and a plugin's command-key list
 (4), map tiles and track info (6), per-node patch editing as ops (7: 0.3
 reads the graph back and edits it whole through
 `FOXAPP_OP_PATCH_SET_GRAPH` with `submit_text`), the transmitter's microphone

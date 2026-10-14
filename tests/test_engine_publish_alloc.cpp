@@ -21,6 +21,10 @@
 //      write at all with no room
 //   C  the status column's texts (API 0.3 8.2): with decoders muting the audio
 //      and a plugin holding the speakers, the publish allocates nothing
+//   D  the receiver rail (API 0.3 8.4): with RDS text present (a service name
+//      and a 64-character RadioText, longer than any small string), the
+//      auto-notch engaged and the pilot locked, the publish allocates nothing
+//      and says all of it
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
@@ -104,10 +108,22 @@ struct AppWindowTestAccess {
     static void playing(cascade::engine::Engine& e, const std::string& name) {
         e.pluginRunner_.setPlayingForTest(name, 3, 400);
     }
-    static void publish(cascade::engine::Engine& e, cascade::core::PublishedState& ps) {
+    static void publish(cascade::engine::Engine& e, cascade::core::PublishedState& ps,
+                        const cascade::core::RdsSnapshot* heard = nullptr) {
         const std::string fault;
-        const cascade::core::RdsSnapshot rds;
-        e.fillPublishedState(ps, fault, rds);
+        const cascade::core::RdsSnapshot none;
+        e.fillPublishedState(ps, fault, heard != nullptr ? *heard : none);
+    }
+    // The auto-notch's readout and the pilot lock, as the hooks stand them in
+    // (test.autoNotch, test.pilot; API 0.3 8.4).
+    static void autoNotch(cascade::engine::Engine& e, bool on, bool engaged, double hz) {
+        e.testAutoNotchOn_ = on;
+        e.testAutoNotchEngaged_ = engaged;
+        e.testAutoNotchHz_ = hz;
+    }
+    static void pilot(cascade::engine::Engine& e, bool on, bool locked) {
+        e.testPilotOn_ = on;
+        e.testPilotLocked_ = locked;
     }
 };
 }  // namespace cascade::gui
@@ -118,13 +134,15 @@ namespace {
 
 constexpr int kPublishes = 40;
 
-// The heap allocations `kPublishes` publishes make on this thread.
-long allocationsOfPublishes(cascade::engine::Engine& e) {
+// The heap allocations `kPublishes` publishes make on this thread (the RDS
+// decoder's snapshot, when one is given, is the one the pass was handed: its
+// own copy is made by publishReceiverState, once, and is not this function's).
+long allocationsOfPublishes(cascade::engine::Engine& e, const cascade::core::RdsSnapshot* heard = nullptr) {
     cascade::core::PublishedState ps;
-    Access::publish(e, ps);  // warm-up: scratch the first call sizes
+    Access::publish(e, ps, heard);  // warm-up: scratch the first call sizes
     t_news = 0;
     t_counting = true;
-    for (int i = 0; i < kPublishes; ++i) { Access::publish(e, ps); }
+    for (int i = 0; i < kPublishes; ++i) { Access::publish(e, ps, heard); }
     t_counting = false;
     return t_news;
 }
@@ -235,6 +253,54 @@ int main() {
         CHECK(std::string(ps2.rx.audioMutedBy).empty());
         CHECK(std::string(ps2.rx.audioPlayingPlugin).empty());
         CHECK((ps2.rx.audioFlags & FOXAPI_AUDIO_PLUGIN_PLAYING) == 0u);
+    }
+
+    // D: the receiver rail's members (API 0.3 8.4) are copied into fixed fields,
+    // not built as strings every pass: RDS text longer than any small string, the
+    // auto-notch engaged and the pilot locked, and the publish still allocates
+    // nothing - and says all of it.
+    {
+        cascade::core::RdsSnapshot heard;
+        heard.synced = true;
+        heard.state.piValid = true;
+        heard.state.pi = 0x2C41;
+        heard.state.psValid = true;
+        heard.state.ps = "CASCADE!";
+        heard.state.radioText = std::string(64, 'r');
+        heard.state.tp = true;
+        heard.state.ta = true;
+        heard.state.pty = 10;
+        heard.state.groupsDecoded = 4321;
+        heard.state.blockErrors = 12;
+        Access::autoNotch(e, true, true, 1000.0);
+        Access::pilot(e, true, true);
+        const long rail = allocationsOfPublishes(e, &heard);
+        std::printf("D: %d publishes with RDS text, an engaged auto-notch and a locked pilot: %ld heap allocations\n",
+                    kPublishes, rail);
+        CHECK(rail == 0);
+        cascade::core::PublishedState ps3;
+        Access::publish(e, ps3, &heard);
+        CHECK(ps3.rx.rdsFlags == (FOXAPI_RDS_SYNCED | FOXAPI_RDS_PI_VALID | FOXAPI_RDS_PS_VALID | FOXAPI_RDS_TP |
+                                  FOXAPI_RDS_TA | FOXAPI_RDS_RT_VALID));
+        CHECK(ps3.rx.rdsPi == 0x2C41u && ps3.rx.rdsPty == 10u);
+        CHECK(std::string(ps3.rx.rdsPs) == "CASCADE!");
+        CHECK(std::string(ps3.rx.rdsRadioText) == std::string(64, 'r'));
+        CHECK(ps3.rx.rdsGroups == 4321u && ps3.rx.rdsErrors == 12u);
+        CHECK((ps3.rx.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) != 0u && ps3.rx.autoNotchHz == 1000.0);
+        CHECK((ps3.rx.flags & FOXAPI_RX_PILOT_LOCKED) != 0u);
+        // ...and the web page's extension carries the same readings (one read, two halves).
+        CHECK(ps3.app.autoNotchEngaged && ps3.app.autoNotchFreqHz == 1000.0 && ps3.app.pilotLocked);
+        // A text longer than the field is cut at it, never past it.
+        heard.state.radioText = std::string(90, 'q');
+        Access::publish(e, ps3, &heard);
+        CHECK(std::strlen(ps3.rx.rdsRadioText) == 64u);
+        // Handed back: quiet again.
+        Access::autoNotch(e, false, false, 0.0);
+        Access::pilot(e, false, false);
+        Access::publish(e, ps3);
+        CHECK(ps3.rx.rdsFlags == 0u && ps3.rx.rdsPs[0] == '\0' && ps3.rx.rdsRadioText[0] == '\0');
+        CHECK((ps3.rx.flags & (FOXAPI_RX_AUTO_NOTCH_ENGAGED | FOXAPI_RX_PILOT_LOCKED)) == 0u);
+        CHECK(ps3.rx.autoNotchHz == 0.0);
     }
 
     return testSummary("test_engine_publish_alloc");

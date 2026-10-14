@@ -395,6 +395,17 @@ double floatAsDecimal(float f) {
     return d;
 }
 
+// The bytes of `s` into a fixed field, cut at its size less the NUL, the rest
+// of the field zeroed. RAW BYTES, not a UTF-8 cut: the RDS decoder passes the
+// bytes at 0x80 and above through as it received them (dsp/rds.cpp,
+// sanitizeChar), and the window drew them as they came. No allocation.
+void copyFixed(char* dst, std::size_t cap, const std::string& s) {
+    if (dst == nullptr || cap == 0) { return; }
+    const std::size_t n = std::min(s.size(), cap - 1);
+    std::memcpy(dst, s.data(), n);
+    std::memset(dst + n, 0, cap - n);
+}
+
 }  // namespace
 
 void Engine::refreshDiagContext() {
@@ -3410,6 +3421,14 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // RUNNING is fed with the receiver running; stopped, nothing is fed.
     const std::uint32_t fedModules = running ? matchedModules : 0u;
 
+    // THE RECEIVER RAIL'S READOUTS (API 0.3 8.4), each read ONCE: the flag word,
+    // the members below and /api/status's extension (AppStateExt) all take
+    // these. (test.autoNotch and test.pilot stand in for the DSP thread's
+    // readout in a hermetic engine, which hears no tone and has no pilot.)
+    const bool autoNotchEngaged = testAutoNotchOn_ ? testAutoNotchEngaged_ : pipeline_.autoNotchEngaged();
+    const double autoNotchHz = testAutoNotchOn_ ? testAutoNotchHz_ : pipeline_.autoNotchFrequencyHz();
+    const bool pilotLocked = testPilotOn_ ? testPilotLocked_ : pipeline_.pilotLocked();
+
     // THE FLAGS: each condition, from its own source, into its own bit
     // (core::receiverFlags; test_snapshot_app walks them one at a time).
     cascade::core::RxFlagSources fs;
@@ -3449,6 +3468,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     fs.patchRunning = patchRunning_;
     // A radio is being opened (8.3): the converter rows are greyed meanwhile.
     fs.deviceOpening = deviceOpenPending_;
+    // The auto-notch has found a tone, and the stereo decoder has locked the pilot (8.4).
+    fs.autoNotchEngaged = autoNotchEngaged;
+    fs.pilotLocked = pilotLocked;
     // The radio's own centre, for the CONVERTERS list to read live (8.3): one
     // atomic store a pass. (Defined beside the converter's other readbacks.)
     converterRadioCentre_.store(converterRadioCentreHz(), std::memory_order_relaxed);
@@ -3485,6 +3507,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     r.notchHz = floatAsDecimal(notchFreqHz_);
     r.notchQ = floatAsDecimal(notchQ_);
     r.pilotLevel = static_cast<double>(pipeline_.pilotLevel());
+    // Where the auto-notch sits: 0 when it is not engaged (the pipeline keeps the
+    // frequency of the last tone it held).
+    r.autoNotchHz = autoNotchEngaged ? autoNotchHz : 0.0;
     r.demodMode = cascade::gui::abiDemodForModeIndex(modeIndex_);
     r.deemphasis = static_cast<std::uint32_t>(deemphIndex_);
     r.gainCount = device_ != nullptr ? static_cast<std::uint32_t>(deviceGainRanges_.size()) : 0u;
@@ -3569,9 +3594,22 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.rxPositionSet = rxSet_;
     e.rxLatDeg = rxLat_;
     e.rxLonDeg = rxLon_;
-    e.autoNotchEngaged = pipeline_.autoNotchEngaged();
-    e.autoNotchFreqHz = pipeline_.autoNotchFrequencyHz();
-    e.pilotLocked = pipeline_.pilotLocked();
+    e.autoNotchEngaged = autoNotchEngaged;
+    e.autoNotchFreqHz = autoNotchHz;
+    e.pilotLocked = pilotLocked;
+    // THE RDS DECODER (API 0.3 8.4): the snapshot the pass was handed - one read,
+    // taken once for both halves of the publish - into the state's fixed fields.
+    // The five that change a few times a minute move rdsSeq; the two counters
+    // are measurements.
+    r.rdsFlags = (rds.synced ? FOXAPI_RDS_SYNCED : 0u) | (rds.state.piValid ? FOXAPI_RDS_PI_VALID : 0u) |
+                 (rds.state.psValid ? FOXAPI_RDS_PS_VALID : 0u) | (rds.state.tp ? FOXAPI_RDS_TP : 0u) |
+                 (rds.state.ta ? FOXAPI_RDS_TA : 0u) | (!rds.state.radioText.empty() ? FOXAPI_RDS_RT_VALID : 0u);
+    r.rdsPi = rds.state.pi;
+    r.rdsPty = rds.state.pty;
+    copyFixed(r.rdsPs, sizeof(r.rdsPs), rds.state.ps);
+    copyFixed(r.rdsRadioText, sizeof(r.rdsRadioText), rds.state.radioText);
+    r.rdsGroups = rds.state.groupsDecoded;
+    r.rdsErrors = rds.state.blockErrors;
     e.rdsSynced = rds.synced;
     e.rdsPiValid = rds.state.piValid;
     e.rdsPi = rds.state.pi;
@@ -4257,7 +4295,10 @@ void Engine::removeBlockedPlugin(const std::string& fileName) {
 }
 
 void Engine::loadBandPlan() {
-    const std::string dir = cascade::core::BandPlan::defaultDir();
+    // (bandPlanDirForTest_ is the test.bandPlanDir hook's: the shipped plans
+    // sit beside cascade.exe, which no test executable is.)
+    const std::string dir =
+        bandPlanDirForTest_.empty() ? cascade::core::BandPlan::defaultDir() : bandPlanDirForTest_;
     std::error_code ec;
     // Existence is checked FIRST so the overwhelmingly common "no band plans
     // installed" case stays completely silent, per the feature's contract;
@@ -4905,7 +4946,8 @@ double Engine::publishReceiverState() {
     // both halves: the fault sentence (a string copy under the pipeline's
     // lock) and the RDS snapshot (likewise).
     const std::string faultMessage = pipeline_.faultMessage();
-    const cascade::core::RdsSnapshot rds = pipeline_.rdsSnapshot();
+    // (test.rds stands in for the decoder's snapshot in a hermetic engine.)
+    const cascade::core::RdsSnapshot rds = testRdsOn_ ? testRds_ : pipeline_.rdsSnapshot();
     cascade::core::PublishedState ps{};
     fillPublishedState(ps, faultMessage, rds);
     // The engine API's lists, handed over BEFORE the state whose listSeq
@@ -7236,6 +7278,7 @@ void Engine::publishStatusText() {
     t.presetNote = presetNote_;
     t.pluginEnforceError = pluginEnforceError_;
     t.restoreKeepLabel = restoreKeepLabel_;
+    t.audioHealth = audioHealthNote_;
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     statusText_ = std::move(t);
 }

@@ -235,6 +235,11 @@ struct RxFlagSources {
     // A radio is being opened (docs/api-0.3-additions.md 8.3): the open runs on a
     // worker and has not finished.
     bool deviceOpening = false;
+    // The receiver rail as its page draws it (docs/api-0.3-additions.md 8.4):
+    // the auto-notch has found a tone and is notching it (the mode group), and
+    // the stereo decoder has locked the 19 kHz pilot, stereo enabled or not.
+    bool autoNotchEngaged = false;
+    bool pilotLocked = false;
 };
 std::uint32_t receiverFlags(const RxFlagSources& s);
 

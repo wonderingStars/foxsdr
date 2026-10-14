@@ -14,7 +14,7 @@
 //   C  the save made at shutdown (saveConfigNow) carries the newest value,
 //      not the last frame's
 //   E  the STATUS LINES are handed over the same way (OPEN 3): every one of
-//      the fourteen reaches Engine::statusText(), and only once the engine
+//      the fifteen reaches Engine::statusText(), and only once the engine
 //      publishes - with the frame's snapshot (pumpPublish) and at the end of
 //      its frame (pumpAudio)
 //   D  the window's first snapshot (constructor) is a real one: with a saved
@@ -68,6 +68,7 @@ struct AppWindowTestAccess {
         e.presetNote_ = p + "12";
         e.pluginEnforceError_ = p + "13";
         e.restoreKeepLabel_ = p + "14";
+        e.audioHealthNote_ = p + "15";  // API 0.3 8.4: the Sinks section's note, the fifteenth line
     }
     static FoxCommandResult volume(AppWindow& a, double v) {
         return a.engine_.applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
@@ -152,12 +153,13 @@ int main() {
                    t.bandPlanError == p + "4" && t.tuneMismatchNote == p + "5" && t.transmitError == p + "6" &&
                    t.soundCardMissing == p + "7" && t.sdrPlayApiDetail == p + "8" && t.sdrPlayAdvice == p + "9" &&
                    t.recordNotice == p + "10" && t.recordError == p + "11" && t.presetNote == p + "12" &&
-                   t.pluginEnforceError == p + "13" && t.restoreKeepLabel == p + "14";
+                   t.pluginEnforceError == p + "13" && t.restoreKeepLabel == p + "14" &&
+                   t.audioHealth == p + "15";
         };
         A::setAllStatus(app, "first");
         CHECK(A::status(app).sourceError != "first1");   // not handed over yet
         A::pumpPublish(app);
-        std::printf("E: after the frame's publish, all fourteen handed over: %s\n",
+        std::printf("E: after the frame's publish, all fifteen handed over: %s\n",
                     allAre(A::status(app), "first") ? "yes" : "NO");
         CHECK(allAre(A::status(app), "first"));
         A::setAllStatus(app, "later");

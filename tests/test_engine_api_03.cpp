@@ -47,6 +47,13 @@
 //       ON may carry (N9); Z6 the same against the HackRF driver on a fake wire,
 //       and the fingerprint gaps (a radio that dies, a full memory); Z7 a
 //       language switch moving the translated converter name.
+//   R   the receiver rail and the display as their pages draw them (window
+//       port group 5, API 0.3 section 8.4), against test.* stand-ins for what
+//       the DSP thread measures: R1-R3 the RDS decoder's state (rdsFlags, the
+//       codes, the texts, rdsSeq, the two measured counters), R4 the
+//       auto-notch's lamp (a mode-group flag) and frequency (a measurement),
+//       R5 the audio watchdog's note as a status line, R7 the pilot lock,
+//       R8 the loaded band plan's name; R6 (MUTE_CAUSES) was not needed.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -55,6 +62,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1565,6 +1573,327 @@ void testLanguageMovesNames() {
     CHECK_EQ(fact(s, "fact.converter.name"), before);
 }
 
+// --- R: the receiver rail and the display as their pages draw them ---------------------
+//
+// Window port group 5, API 0.3 section 8.4. A hermetic engine on the signal
+// generator hears no RDS, has no pilot to lock and no tone for the auto-notch,
+// so the hooks stand in for what the DSP thread measures (test.rds,
+// test.autoNotch, test.pilot); everything after the hook - the flag, the
+// counter it moves, the bytes, the cut - is the engine's own.
+
+const uint32_t kRdsAll = FOXAPI_RDS_SYNCED | FOXAPI_RDS_PI_VALID | FOXAPI_RDS_PS_VALID | FOXAPI_RDS_TP |
+                         FOXAPI_RDS_TA | FOXAPI_RDS_RT_VALID;
+
+// Which of the engine API's group counters differ between two reads, as words.
+std::string countersMoved(const FoxReceiverState& a, const FoxReceiverState& b) {
+    std::string o;
+    const auto add = [&o](bool m, const char* w) {
+        if (m) { o += o.empty() ? w : std::string(" ") + w; }
+    };
+    add(b.seq != a.seq, "seq");
+    add(b.tuneSeq != a.tuneSeq, "tune");
+    add(b.modeSeq != a.modeSeq, "mode");
+    add(b.deviceSeq != a.deviceSeq, "device");
+    add(b.audioSeq != a.audioSeq, "audio");
+    add(b.displaySeq != a.displaySeq, "display");
+    add(b.txSeq != a.txSeq, "tx");
+    add(b.listSeq != a.listSeq, "list");
+    add(b.rdsSeq != a.rdsSeq, "rds");
+    return o;
+}
+
+// R1-R3: the RDS decoder's state.
+void testRdsState() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    FoxReceiverState st = settled(s);
+    // A receiver that hears no RDS: every member empty, the counter at its start.
+    CHECK_EQ(st.rdsFlags, 0u);
+    CHECK_EQ(st.rdsPi, 0u);
+    CHECK_EQ(st.rdsPty, 0u);
+    CHECK_EQ(std::string(st.rdsPs), std::string());
+    CHECK_EQ(std::string(st.rdsRadioText), std::string());
+    CHECK_EQ(st.rdsGroups, 0ull);
+    CHECK_EQ(st.rdsErrors, 0ull);
+    CHECK_EQ(st.autoNotchHz, 0.0);
+    CHECK(st.rdsSeq >= 1u);
+    const FoxReceiverState base = st;
+
+    // The decoder has everything: one pass publishes it all, and the RDS group
+    // moves ONCE (not once per member), taking seq with it and nothing else.
+    CHECK_EQ(setting(s, "test.rds=SPNTA;2C41;10;321;12;CASCADE!;STEREO RDS TEST "), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return s.state().rdsFlags != 0u; }, 2000));
+    st = settled(s);
+    CHECK_EQ(st.rdsFlags, kRdsAll);
+    CHECK_EQ(st.rdsPi, 0x2C41u);
+    CHECK_EQ(st.rdsPty, 10u);
+    CHECK_EQ(std::string(st.rdsPs), std::string("CASCADE!"));
+    CHECK_EQ(std::string(st.rdsRadioText), std::string("STEREO RDS TEST "));
+    CHECK_EQ(st.rdsGroups, 321ull);
+    CHECK_EQ(st.rdsErrors, 12ull);
+    CHECK_EQ(st.rdsSeq, base.rdsSeq + 1u);
+    CHECK_EQ(countersMoved(base, st), std::string("seq rds"));
+    std::printf("R1-R3: RDS flags 0x%x, PI %04X, PTY %u, PS \"%s\", RT \"%s\", %llu groups, %llu errors; rdsSeq %llu -> %llu\n",
+                st.rdsFlags, st.rdsPi, st.rdsPty, st.rdsPs, st.rdsRadioText,
+                static_cast<unsigned long long>(st.rdsGroups), static_cast<unsigned long long>(st.rdsErrors),
+                static_cast<unsigned long long>(base.rdsSeq), static_cast<unsigned long long>(st.rdsSeq));
+
+    // The two counters are MEASUREMENTS: they climb and move no counter at all.
+    CHECK_EQ(setting(s, "test.rds=SPNTA;2C41;10;400;20;CASCADE!;STEREO RDS TEST "), FOXAPI_OK);
+    FoxReceiverState next = s.state();
+    CHECK_EQ(next.rdsGroups, 400ull);
+    CHECK_EQ(next.rdsErrors, 20ull);
+    CHECK_EQ(countersMoved(st, next), std::string());
+
+    // Each of the five that are not measurements moves the group, alone.
+    const struct {
+        const char* what;
+        const char* hook;
+    } one[] = {
+        {"a flag (TA off)", "test.rds=SPNT;2C41;10;400;20;CASCADE!;STEREO RDS TEST "},
+        {"the PI code", "test.rds=SPNT;2C42;10;400;20;CASCADE!;STEREO RDS TEST "},
+        {"the PTY code", "test.rds=SPNT;2C42;11;400;20;CASCADE!;STEREO RDS TEST "},
+        {"the service name", "test.rds=SPNT;2C42;11;400;20;CASCADE?;STEREO RDS TEST "},
+        {"the RadioText growing", "test.rds=SPNT;2C42;11;400;20;CASCADE?;STEREO RDS TEST 2"},
+    };
+    for (const auto& o : one) {
+        const FoxReceiverState before = s.state();
+        CHECK_EQ(setting(s, o.hook), FOXAPI_OK);
+        const FoxReceiverState after = s.state();
+        std::printf("      %-28s -> [%s]\n", o.what, countersMoved(before, after).c_str());
+        CHECK_EQ(countersMoved(before, after), std::string("seq rds"));
+        CHECK_EQ(after.rdsSeq, before.rdsSeq + 1u);
+    }
+    // The same words again move nothing.
+    {
+        const FoxReceiverState before = s.state();
+        CHECK_EQ(setting(s, one[4].hook), FOXAPI_OK);
+        CHECK_EQ(countersMoved(before, s.state()), std::string());
+    }
+    // The bits are the decoder's own: TP/TA/sync/PI/PS each alone.
+    CHECK_EQ(setting(s, "test.rds=S;0;0;0;0;;"), FOXAPI_OK);
+    CHECK_EQ(s.state().rdsFlags, static_cast<uint32_t>(FOXAPI_RDS_SYNCED));
+    CHECK_EQ(setting(s, "test.rds=P;1;0;0;0;;"), FOXAPI_OK);
+    CHECK_EQ(s.state().rdsFlags, static_cast<uint32_t>(FOXAPI_RDS_PI_VALID));
+    CHECK_EQ(setting(s, "test.rds=N;0;0;0;0;ABCDEFGH;"), FOXAPI_OK);
+    CHECK_EQ(s.state().rdsFlags, static_cast<uint32_t>(FOXAPI_RDS_PS_VALID));
+    CHECK_EQ(std::string(s.state().rdsPs), std::string("ABCDEFGH"));
+    CHECK_EQ(setting(s, "test.rds=T;0;0;0;0;;"), FOXAPI_OK);
+    CHECK_EQ(s.state().rdsFlags, static_cast<uint32_t>(FOXAPI_RDS_TP));
+    CHECK_EQ(setting(s, "test.rds=A;0;0;0;0;;"), FOXAPI_OK);
+    CHECK_EQ(s.state().rdsFlags, static_cast<uint32_t>(FOXAPI_RDS_TA));
+    // RadioText sets its own bit (and only it) whatever else is heard; a ';' in it
+    // is the text's.
+    CHECK_EQ(setting(s, "test.rds=;0;0;0;0;;A;B"), FOXAPI_OK);
+    CHECK_EQ(s.state().rdsFlags, static_cast<uint32_t>(FOXAPI_RDS_RT_VALID));
+    CHECK_EQ(std::string(s.state().rdsRadioText), std::string("A;B"));
+    // 64 characters fit; more are cut at 64 (and never overrun the field).
+    const std::string text64(64, 'x');
+    CHECK_EQ(setting(s, "test.rds=;0;0;0;0;;" + text64), FOXAPI_OK);
+    CHECK_EQ(std::string(s.state().rdsRadioText), text64);
+    CHECK_EQ(setting(s, "test.rds=;0;0;0;0;;" + text64 + "yyyyyy"), FOXAPI_OK);
+    CHECK_EQ(std::string(s.state().rdsRadioText), text64);
+    CHECK_EQ(std::strlen(s.state().rdsRadioText), 64u);
+    // Programme service name: 8 characters and a NUL, cut there.
+    CHECK_EQ(setting(s, "test.rds=N;0;0;0;0;123456789;"), FOXAPI_OK);
+    CHECK_EQ(std::string(s.state().rdsPs), std::string("12345678"));
+    // Handed back to the pipeline, which hears none: all empty again.
+    const FoxReceiverState before = s.state();
+    CHECK_EQ(setting(s, "test.rds="), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.rdsFlags, 0u);
+    CHECK_EQ(std::string(st.rdsPs), std::string());
+    CHECK_EQ(std::string(st.rdsRadioText), std::string());
+    CHECK_EQ(st.rdsGroups, 0ull);
+    CHECK_EQ(st.rdsSeq, before.rdsSeq + 1u);
+}
+
+// R4: the auto-notch's readout.
+void testAutoNotchReadout() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    const FoxReceiverState base = settled(s);
+    CHECK((base.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) == 0u);
+    CHECK_EQ(base.autoNotchHz, 0.0);
+
+    // Enabled and searching: the filter's switch is on, nothing is engaged.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_AUTO_NOTCH, 0, 1)).result.status, FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.autoNotch=searching"), FOXAPI_OK);
+    FoxReceiverState st = settled(s);
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH) != 0u);
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) == 0u);
+    CHECK_EQ(st.autoNotchHz, 0.0);
+
+    // Engaged at 1000 Hz: the lamp is a MODE-group flag (modeSeq and seq, and
+    // nothing else); "enabled" stays what it was.
+    FoxReceiverState before = st;
+    CHECK_EQ(setting(s, "test.autoNotch=1000"), FOXAPI_OK);
+    st = s.state();
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) != 0u);
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH) != 0u);
+    CHECK_EQ(st.autoNotchHz, 1000.0);
+    CHECK_EQ(countersMoved(before, st), std::string("seq mode"));
+    CHECK_EQ(st.modeSeq, before.modeSeq + 1u);
+    std::printf("R4: engaged at %.0f Hz (flags 0x%08x), modeSeq %llu -> %llu\n", st.autoNotchHz, st.flags,
+                static_cast<unsigned long long>(before.modeSeq), static_cast<unsigned long long>(st.modeSeq));
+
+    // The frequency is a MEASUREMENT: it follows the tone and moves no counter.
+    before = st;
+    CHECK_EQ(setting(s, "test.autoNotch=1200"), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.autoNotchHz, 1200.0);
+    CHECK_EQ(countersMoved(before, st), std::string());
+
+    // Not engaged: 0 whatever the pipeline last remembered (the tone it lost).
+    before = st;
+    CHECK_EQ(setting(s, "test.autoNotch=searching:800"), FOXAPI_OK);
+    st = s.state();
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) == 0u);
+    CHECK_EQ(st.autoNotchHz, 0.0);
+    CHECK_EQ(countersMoved(before, st), std::string("seq mode"));
+
+    // Engaged does not need the switch to read as on: the flag is the pipeline's.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_AUTO_NOTCH, 0, 0)).result.status, FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.autoNotch=900"), FOXAPI_OK);
+    st = s.state();
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH) == 0u);
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) != 0u);
+    // Handed back to the real pipeline, which has nothing engaged.
+    CHECK_EQ(setting(s, "test.autoNotch="), FOXAPI_OK);
+    st = s.state();
+    CHECK((st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) == 0u);
+    CHECK_EQ(st.autoNotchHz, 0.0);
+}
+
+// R7: the pilot lock, which STEREO_ACTIVE is a conjunction with.
+void testPilotLock() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    const FoxReceiverState base = settled(s);
+    CHECK((base.flags & FOXAPI_RX_PILOT_LOCKED) == 0u);
+    // Locked with stereo forced off: the third state the rail letters, "ST
+    // (forced mono)" - the lock without the lamp.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_STEREO, 0, 0)).result.status, FOXAPI_OK);
+    const FoxReceiverState off = settled(s);
+    CHECK((off.flags & FOXAPI_RX_STEREO_ENABLED) == 0u);
+    CHECK_EQ(setting(s, "test.pilot=1"), FOXAPI_OK);
+    FoxReceiverState st = s.state();
+    CHECK((st.flags & FOXAPI_RX_PILOT_LOCKED) != 0u);
+    CHECK((st.flags & FOXAPI_RX_STEREO_ACTIVE) == 0u);
+    CHECK_EQ(countersMoved(off, st), std::string("seq"));
+    std::printf("R7: pilot locked with stereo forced off: flags 0x%08x (seq %llu -> %llu, no group counter)\n", st.flags,
+                static_cast<unsigned long long>(off.seq), static_cast<unsigned long long>(st.seq));
+    // Unlocked again, and the real pipeline's answer (none) when handed back.
+    CHECK_EQ(setting(s, "test.pilot=0"), FOXAPI_OK);
+    CHECK((s.state().flags & FOXAPI_RX_PILOT_LOCKED) == 0u);
+    CHECK_EQ(setting(s, "test.pilot=1"), FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.pilot="), FOXAPI_OK);
+    CHECK((s.state().flags & FOXAPI_RX_PILOT_LOCKED) == 0u);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_STEREO, 0, 1)).result.status, FOXAPI_OK);
+}
+
+// R5: the Sinks section's note is a status line.
+void testAudioHealthLine() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    FoxReceiverState st = settled(s);
+    const bool everOpened = (st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u;
+    CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 0);
+    int32_t status = 0;
+    CHECK_EQ(fact(s, "fact.status.audioHealth", &status), std::string());
+    CHECK(status >= 0);  // a known line with nothing in it, not an unknown key
+
+    const std::string note = "output device stopped and was restarted (1 time)";
+    const uint64_t seq0 = st.listSeq;
+    CHECK_EQ(setting(s, "test.statusLine=audioHealth|" + note), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_STATUS_LINES) == 1; }, 2000));
+    const FoxListItem it = item(s, FOXAPI_LIST_STATUS_LINES, 0);
+    CHECK_EQ(std::string(it.name), std::string("audioHealth"));
+    CHECK_EQ(std::string(it.detail), note);
+    CHECK_EQ(it.value[0], 2.0);  // a warning, as the Sinks section letters it
+    CHECK_EQ(fact(s, "fact.status.audioHealth"), note);
+    CHECK(s.state().listSeq != seq0);
+    std::printf("R5: audioHealth listed at level %.0f, \"%s\"\n", it.value[0], it.detail);
+
+    // Beside another line, and whole when it is longer than a list item holds.
+    const std::string longNote = std::string(200, 'n');
+    CHECK_EQ(setting(s, "test.statusLine=presetNote|tuned"), FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.statusLine=audioHealth|" + longNote), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_STATUS_LINES) == 2; }, 2000));
+    CHECK_EQ(fact(s, "fact.status.audioHealth"), longNote);
+    std::set<std::string> names;
+    for (int i = 0; i < 2; ++i) { names.insert(item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i)).name); }
+    CHECK(names == (std::set<std::string>{"presetNote", "audioHealth"}));
+    // Taken down, the line goes.
+    CHECK_EQ(setting(s, "test.statusLine=audioHealth|"), FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.statusLine=presetNote|"), FOXAPI_OK);
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_STATUS_LINES) == 0; }, 2000));
+    CHECK_EQ(fact(s, "fact.status.audioHealth"), std::string());
+
+    // The engine's own watchdog writes it: the stream dies under a healthy
+    // receiver and comes back, and says so - on a machine that has an output
+    // device to lose.
+    if (everOpened) {
+        CHECK_EQ(setting(s, "test.audioClose="), FOXAPI_OK);
+        CHECK(check::waitFor([&] { return fact(s, "fact.status.audioHealth").find("restarted") != std::string::npos; },
+                             20000));
+        std::printf("      the watchdog's own note: \"%s\"\n", fact(s, "fact.status.audioHealth").c_str());
+    }
+}
+
+// R8: the loaded band plan's name is not the active entry's.
+void testBandPlanName() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    const FoxReceiverState base = settled(s);
+    int32_t status = 0;
+    // No plans installed beside this executable: no plan, no name, a known fact.
+    CHECK_EQ(count(s, FOXAPI_LIST_BAND_PLAN), 0);
+    CHECK_EQ(fact(s, "fact.bandPlan.name", &status), std::string());
+    CHECK(status >= 0);
+    CHECK_EQ(setting(s, std::string("test.bandPlanDir=") + CASCADE_SOURCE_DIR + "/resources/bandplans"), FOXAPI_OK);
+    CHECK(count(s, FOXAPI_LIST_BAND_PLANS) > 1);
+    CHECK(s.state().listSeq != base.listSeq);
+    // The default selection is the world plan, which refines nothing: the loaded
+    // name and the ACTIVE entry's are the same words.
+    {
+        const FoxListItem act = activeItem(s, FOXAPI_LIST_BAND_PLANS);
+        CHECK_EQ(std::string(act.detail), std::string("world"));
+        CHECK_EQ(fact(s, "fact.bandPlan.name"), std::string(act.name));
+        CHECK(count(s, FOXAPI_LIST_BAND_PLAN) > 0);
+    }
+    // No selection at all (the legacy setting): every installed plan merged, the
+    // name every plan's joined, and none of them ACTIVE.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_BAND_PLAN, 0, 0, "")).result.status, FOXAPI_OK);
+    const std::string all = fact(s, "fact.bandPlan.name");
+    std::printf("R8: nothing selected: \"%s\", %d bands, none ACTIVE\n", all.c_str(), count(s, FOXAPI_LIST_BAND_PLAN));
+    CHECK(all.find(" + ") != std::string::npos);
+    CHECK_EQ(activeItem(s, FOXAPI_LIST_BAND_PLANS).flags, 0u);
+    CHECK(count(s, FOXAPI_LIST_BAND_PLAN) > 0);
+    // The UK plan refines Region 1: the loaded name is the chain, the ACTIVE
+    // entry is the one plan.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_BAND_PLAN, 0, 0, "uk")).result.status, FOXAPI_OK);
+    const std::string chain = fact(s, "fact.bandPlan.name");
+    const FoxListItem act = activeItem(s, FOXAPI_LIST_BAND_PLANS);
+    std::printf("R8: loaded \"%s\"; ACTIVE entry \"%s\" (%s); %d bands\n", chain.c_str(), act.name, act.detail,
+                count(s, FOXAPI_LIST_BAND_PLAN));
+    CHECK_EQ(chain, std::string("ITU Region 1 + United Kingdom"));
+    CHECK_EQ(std::string(act.detail), std::string("uk"));
+    CHECK(chain != std::string(act.name));
+    // The rows are in the model's order: start ascending, the widest first on a
+    // shared start - the back-to-front order a ribbon is drawn in.
+    const int32_t n = count(s, FOXAPI_LIST_BAND_PLAN);
+    CHECK(n > 10);
+    FoxListItem prev = item(s, FOXAPI_LIST_BAND_PLAN, 0);
+    for (int32_t i = 1; i < n; ++i) {
+        const FoxListItem cur = item(s, FOXAPI_LIST_BAND_PLAN, static_cast<uint32_t>(i));
+        const bool ordered = cur.value[0] > prev.value[0] || (cur.value[0] == prev.value[0] && cur.value[1] <= prev.value[1]);
+        if (!ordered) { std::printf("      row %d (%s) is out of order\n", i, cur.name); }
+        CHECK(ordered);
+        prev = cur;
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1597,5 +1926,11 @@ int main() {
     testBiasStandIn();
     testBiasRealDriver();
     testLanguageMovesNames();
+    // Group R: the receiver rail and the display (window port group 5).
+    testRdsState();
+    testAutoNotchReadout();
+    testPilotLock();
+    testAudioHealthLine();
+    testBandPlanName();
     return check::finish("test_engine_api_03");
 }

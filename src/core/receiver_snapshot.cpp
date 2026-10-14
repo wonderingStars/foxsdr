@@ -24,7 +24,8 @@ bool sameText(const char* a, const char* b, std::size_t n) { return std::strncmp
 // frame counts, the two plugin gap counters and the decoder line total: they
 // climb or swing with the stream, and a reader that wants them reads them.
 constexpr std::uint32_t kModeFlags =
-    FOXAPI_RX_STEREO_ENABLED | FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH;
+    FOXAPI_RX_STEREO_ENABLED | FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH |
+    FOXAPI_RX_AUTO_NOTCH_ENGAGED;  // 0.3 (8.4): the auto-notch's lamp
 constexpr std::uint32_t kDeviceFlags = FOXAPI_RX_RUNNING | FOXAPI_RX_DEVICE_OPEN |
                                        FOXAPI_RX_FAULTED | FOXAPI_RX_DEVICE_AGC |
                                        FOXAPI_RX_AGC_SUPPORTED | FOXAPI_RX_BIAS_TEE_PRESENT |
@@ -87,6 +88,8 @@ std::uint32_t receiverFlags(const RxFlagSources& s) {
     set(s.biasTeeOn, FOXAPI_RX_BIAS_TEE_ON);
     set(s.patchRunning, FOXAPI_RX_PATCH_RUNNING);
     set(s.deviceOpening, FOXAPI_RX_DEVICE_OPENING);
+    set(s.autoNotchEngaged, FOXAPI_RX_AUTO_NOTCH_ENGAGED);
+    set(s.pilotLocked, FOXAPI_RX_PILOT_LOCKED);
     set(s.webListening, FOXAPI_RX_WEB_LISTENING);
     return f;
 }
@@ -148,11 +151,20 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                     f.txPowerMaxDb != o.txPowerMaxDb ||
                     !sameText(f.txDeviceName, o.txDeviceName, FOXAPI_NAME_CHARS) ||
                     !sameText(f.txError, o.txError, FOXAPI_MESSAGE_CHARS);
+    // 0.3 (8.4): the RDS decoder is a group of its own - its flags, its codes and
+    // its two texts, which change a few times a minute. NOT rdsGroups, rdsErrors
+    // or autoNotchHz: measurements, which climb or follow the stream and move
+    // nothing. (The texts are compared as the C strings they are: a stale tail
+    // after the terminator is not the text.)
+    const bool rds = first || f.rdsFlags != o.rdsFlags || f.rdsPi != o.rdsPi || f.rdsPty != o.rdsPty ||
+                     !sameText(f.rdsPs, o.rdsPs, FOXAPI_RDS_PS_CHARS) ||
+                     !sameText(f.rdsRadioText, o.rdsRadioText, FOXAPI_RDS_TEXT_CHARS);
     // Every other flag (recording, scanner, decoder lamp, web listener, the
     // squelch and stereo lamps) and the decoder counts: the overall counter.
     const bool other = first || f.flags != o.flags || f.decodersRunning != o.decodersRunning ||
                        f.decodersFitted != o.decodersFitted || f.decodersMatched != o.decodersMatched;
-    f.seq = o.seq + ((tune || mode || device || audio || display || tx || other) ? 1u : 0u);
+    f.seq = o.seq + ((tune || mode || device || audio || display || tx || rds || other) ? 1u : 0u);
+    f.rdsSeq = o.rdsSeq + (rds ? 1u : 0u);
     f.tuneSeq = o.tuneSeq + (tune ? 1u : 0u);
     f.modeSeq = o.modeSeq + (mode ? 1u : 0u);
     f.deviceSeq = o.deviceSeq + (device ? 1u : 0u);

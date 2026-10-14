@@ -279,7 +279,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
                                  &recordNotice_, &recordError_, &presetNote_, &pluginEnforceError_,
-                                 &restoreKeepLabel_}) {
+                                 &restoreKeepLabel_, &audioHealthNote_}) {  // (audioHealth: API 0.3 8.4)
         f.text(*t);
     }
     // The patch page: its graph, what the plan said, its radios.
@@ -434,6 +434,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     for (const cascade::core::PlanInfo& pl : bandPlanChoices_) {
         b.bandPlans.push_back({pl.id, pl.name, pl.id == bandPlanSelection_});
     }
+    // The name of the plan LOADED, as the Display section captions it (8.4): the
+    // chain "ITU Region 1 + United Kingdom", which no single BAND_PLANS entry names.
+    fact("bandPlan.name", bandPlan_.name());
     // PRESETS: a plugin's own (asked of its code only when the plugins
     // changed - kept from the last block otherwise), and the ones saved here.
     if (apiLists_ != nullptr && apiLists_->presets && apiLists_->presetsFingerprint == apiPluginPathsHash_) {
@@ -481,6 +484,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             {"sdrPlayAdvice", &sdrPlayAdvice_, 2},    {"recordNotice", &recordNotice_, 1},
             {"recordError", &recordError_, 3},        {"presetNote", &presetNote_, 1},
             {"pluginEnforceError", &pluginEnforceError_, 3}, {"restoreKeepLabel", &restoreKeepLabel_, 1},
+            // 8.4: the audio watchdog's note under the Sinks section's device combo, a warning.
+            {"audioHealth", &audioHealthNote_, 2},
         };
         for (const Line& l : lines) {
             b.statusLines.push_back({l.key, *l.text, l.level});

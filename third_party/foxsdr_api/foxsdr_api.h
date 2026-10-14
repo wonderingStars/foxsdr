@@ -275,9 +275,13 @@ extern "C" {
 #define FOXAPI_RX_BIAS_TEE_ON      0x02000000u /* ...and it is on (the radio's readback) */
 #define FOXAPI_RX_PATCH_RUNNING    0x04000000u /* the patch page's graph is running */
 #define FOXAPI_RX_DEVICE_OPENING   0x08000000u /* a radio is being opened: the open runs on a worker and has not finished */
+#define FOXAPI_RX_AUTO_NOTCH_ENGAGED 0x10000000u /* the auto-notch has found a tone and is notching it (FOXAPI_RX_AUTO_NOTCH is "enabled"; autoNotchHz is where) */
+#define FOXAPI_RX_PILOT_LOCKED     0x20000000u /* WFM: the stereo decoder has locked the 19 kHz pilot, enabled or not (STEREO_ACTIVE is enabled AND locked) */
 
 #define FOXAPI_NAME_CHARS 64
 #define FOXAPI_MESSAGE_CHARS 128
+#define FOXAPI_RDS_PS_CHARS 9      /* 8 characters and a NUL */
+#define FOXAPI_RDS_TEXT_CHARS 65   /* 64 characters and a NUL */
 
 typedef struct FoxReceiverState {
     uint32_t structSize;
@@ -348,6 +352,19 @@ typedef struct FoxReceiverState {
     uint64_t decoderLinesTotal;        /* every decoder output line since the engine started - measured */
     char audioMutedBy[FOXAPI_MESSAGE_CHARS];       /* the plugins muting the audio, "A and B"; "" when none is */
     char audioPlayingPlugin[FOXAPI_MESSAGE_CHARS]; /* the plugin holding the speakers; "" when the receiver's own audio plays */
+    /* ---- 0.3 (docs/api-0.3-additions.md 8.4): the receiver rail as its page
+     * draws it, the RDS decoder and the auto-notch's readout. rdsFlags, rdsPi,
+     * rdsPty, rdsPs and rdsRadioText move rdsSeq (and so seq); rdsGroups,
+     * rdsErrors and autoNotchHz are MEASUREMENTS and move nothing. ---- */
+    uint64_t rdsSeq;                   /* any of rdsFlags, rdsPi, rdsPty, rdsPs, rdsRadioText changed */
+    uint64_t rdsGroups;                /* RDS groups decoded since the decoder was last reset (it is, on every retune) - measured */
+    uint64_t rdsErrors;                /* blocks that failed their checkword while synchronised, since then - measured */
+    double autoNotchHz;                /* where the auto-notch sits; 0 when it is not engaged - measured */
+    uint32_t rdsFlags;                 /* FOXAPI_RDS_* */
+    uint32_t rdsPi;                    /* programme identification, valid with FOXAPI_RDS_PI_VALID */
+    uint32_t rdsPty;                   /* programme type, the raw 5-bit code (RDS and RBDS name it differently) */
+    char rdsPs[FOXAPI_RDS_PS_CHARS];           /* programme service name: 8 characters as transmitted, space padded; "" until all four fragments are in */
+    char rdsRadioText[FOXAPI_RDS_TEXT_CHARS];  /* RadioText, up to 64 characters; "" until some has arrived */
 } FoxReceiverState;
 
 
@@ -364,10 +381,18 @@ typedef struct FoxReceiverState {
 #define FOXAPI_AUDIO_STREAM_ALIVE   0x00000004u /* the watchdog's view: the stream's callback is still being served (clear while OPENING) */
 #define FOXAPI_AUDIO_PLUGIN_PLAYING 0x00000008u /* a plugin holding CASCADE_CAP_AUDIO_OUT replaces the demodulated audio (audioPlayingPlugin names it) */
 
+/* FoxReceiverState::rdsFlags (0.3) */
+#define FOXAPI_RDS_SYNCED   0x00000001u /* the block decoder has found the 1187.5 bit/s stream: listening, with no field complete yet */
+#define FOXAPI_RDS_PI_VALID 0x00000002u /* rdsPi holds a programme identification that passed its checkword */
+#define FOXAPI_RDS_PS_VALID 0x00000004u /* all four fragments of the programme service name have arrived (rdsPs) */
+#define FOXAPI_RDS_TP       0x00000008u /* the station carries traffic information at all */
+#define FOXAPI_RDS_TA       0x00000010u /* a traffic announcement is on the air now */
+#define FOXAPI_RDS_RT_VALID 0x00000020u /* rdsRadioText holds some text */
+
 /* Every FOXAPI_MIN_* is the whole layout of the oldest accepted version
  * (rule 4), written as the end of its last member so it never moves when
  * members are appended. */
-#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, audioPlayingPlugin) + FOXAPI_MESSAGE_CHARS)
+#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, rdsRadioText) + FOXAPI_RDS_TEXT_CHARS)
 
 /* ---------------------------------------------------------------------------
  * The spectrum stream. The waterfall is NOT a separate stream: it is the

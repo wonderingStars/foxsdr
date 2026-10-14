@@ -139,6 +139,9 @@ struct EngineStatusText {
     std::string presetNote;
     std::string pluginEnforceError;
     std::string restoreKeepLabel;
+    // API 0.3 8.4: the Sinks section's watchdog note (STATUS_LINES key
+    // audioHealth).
+    std::string audioHealth;
 };
 
 class Engine {
@@ -1774,6 +1777,21 @@ private:
     // product.
     std::string testFault_;
     std::unique_ptr<cascade::source::IqSink> (*txSinkForTest_)() = nullptr;
+    // TESTS ONLY (test.rds, test.autoNotch, test.pilot; API 0.3 8.4): stand-ins
+    // for what the DSP thread measures, which a hermetic engine on the signal
+    // generator cannot produce - the RDS decoder's snapshot, the auto-notch's
+    // readout, the stereo decoder's pilot lock. Read and written on the
+    // pumping thread only. Off (the real pipeline's answer) in the product.
+    bool testRdsOn_ = false;
+    cascade::core::RdsSnapshot testRds_;
+    bool testAutoNotchOn_ = false;
+    bool testAutoNotchEngaged_ = false;
+    double testAutoNotchHz_ = 0.0;
+    bool testPilotOn_ = false;
+    bool testPilotLocked_ = false;
+    // TESTS ONLY (test.bandPlanDir): where the band plans are read from, when
+    // not the folder beside the executable.
+    std::string bandPlanDirForTest_;
     // The control thread (startControlThread).
     void controlLoop(std::chrono::milliseconds period);
     std::thread controlThread_;

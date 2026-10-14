@@ -1512,6 +1512,63 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         if (k == "presetNote") { engine_.presetNote_ = t; }
         if (k == "recordNotice") { engine_.recordNotice_ = t; }
         if (k == "transmitError") { engine_.transmitError_ = t; }
+        if (k == "audioHealth") { engine_.audioHealthNote_ = t; }
+    } else if (key == "test.rds") {
+        // Stands in for the RDS decoder's snapshot (API 0.3 8.4):
+        // "flags;pi;pty;groups;errors;ps;radioText" - flags a word of S (synced),
+        // P (PI valid), N (PS valid), T (TP) and A (TA); pi in hex; the radio text
+        // is the rest of the value, so it may hold a ';'. An empty value hands
+        // the decoder back to the real pipeline.
+        engine_.testRdsOn_ = !val.empty();
+        engine_.testRds_ = cascade::core::RdsSnapshot{};
+        if (!val.empty()) {
+            std::vector<std::string> f;
+            std::size_t a = 0;
+            for (int i = 0; i < 6; ++i) {
+                const std::size_t semi = val.find(';', a);
+                f.push_back(val.substr(a, semi == std::string::npos ? std::string::npos : semi - a));
+                if (semi == std::string::npos) {
+                    a = std::string::npos;
+                    break;
+                }
+                a = semi + 1;
+            }
+            f.resize(6);
+            cascade::core::RdsSnapshot& s = engine_.testRds_;
+            s.synced = f[0].find('S') != std::string::npos;
+            s.state.piValid = f[0].find('P') != std::string::npos;
+            s.state.psValid = f[0].find('N') != std::string::npos;
+            s.state.tp = f[0].find('T') != std::string::npos;
+            s.state.ta = f[0].find('A') != std::string::npos;
+            s.state.pi = static_cast<std::uint16_t>(std::strtoul(f[1].c_str(), nullptr, 16));
+            s.state.pty = static_cast<std::uint8_t>(std::atoi(f[2].c_str()));
+            s.state.groupsDecoded = static_cast<std::uint32_t>(std::strtoul(f[3].c_str(), nullptr, 10));
+            s.state.blockErrors = static_cast<std::uint32_t>(std::strtoul(f[4].c_str(), nullptr, 10));
+            s.state.ps = f[5];
+            s.state.radioText = a == std::string::npos ? std::string() : val.substr(a);
+        }
+    } else if (key == "test.autoNotch") {
+        // Stands in for the auto-notch's readout: a frequency in Hz (engaged
+        // there), "searching" (no tone found), "searching:800" (no tone found,
+        // while the pipeline's frequency still reads 800 - the last it had), or
+        // empty (the real pipeline).
+        const bool searching = val.rfind("searching", 0) == 0;
+        engine_.testAutoNotchOn_ = !val.empty();
+        engine_.testAutoNotchEngaged_ = !val.empty() && !searching;
+        const std::size_t colon = val.find(':');
+        engine_.testAutoNotchHz_ = searching ? (colon == std::string::npos ? 0.0 : std::atof(val.c_str() + colon + 1))
+                                             : std::atof(val.c_str());
+    } else if (key == "test.pilot") {
+        // Stands in for the stereo decoder's pilot lock: "1" locked, "0" not, or
+        // empty (the real pipeline).
+        engine_.testPilotOn_ = !val.empty();
+        engine_.testPilotLocked_ = val == "1";
+    } else if (key == "test.bandPlanDir") {
+        // The folder the band plans are read from (the shipped ones sit beside
+        // cascade.exe, which no test executable is); the plan is loaded again
+        // from it at once. Empty: the folder beside the executable.
+        engine_.bandPlanDirForTest_ = val;
+        engine_.loadBandPlan();
     } else if (key == "test.catalogue") {
         // Stands in for a fetched catalogue entry: "id|name|legal notice".
         cascade::core::PluginCatalogEntry e;
