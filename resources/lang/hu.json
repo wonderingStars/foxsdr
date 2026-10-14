@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "a telepítő nem indítható innen: %s",
   "disk refused the file - nothing more is being kept": "a lemez elutasította a fájlt - semmi több nem kerül mentésre",
   "downloading %s": "letöltés: %s",
+  "estimated": "becsült",
   "every module in the catalogue is already fitted, and none has a newer build": "a katalógus minden modulja már be van építve, és egyikhez sincs újabb build",
   "fed %.0f Hz": "táplálás: %.0f Hz",
   "fed %.0f Hz (from %.0f)": "táplálás: %.0f Hz (eredetileg %.0f)",

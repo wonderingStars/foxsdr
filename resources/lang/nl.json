@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "kon het installatieprogramma in %s niet starten",
   "disk refused the file - nothing more is being kept": "schijf weigerde het bestand - er wordt niets meer bewaard",
   "downloading %s": "%s downloaden",
+  "estimated": "geschat",
   "every module in the catalogue is already fitted, and none has a newer build": "elke module in de catalogus is al ingebouwd, en geen enkele heeft een nieuwere build",
   "fed %.0f Hz": "gevoed op %.0f Hz",
   "fed %.0f Hz (from %.0f)": "gevoed op %.0f Hz (van %.0f)",

@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "nie udało się uruchomić instalatora z %s",
   "disk refused the file - nothing more is being kept": "dysk odrzucił plik - nic więcej nie jest zapisywane",
   "downloading %s": "pobieranie %s",
+  "estimated": "szacowana",
   "every module in the catalogue is already fitted, and none has a newer build": "każdy moduł z katalogu jest już zamontowany i żaden nie ma nowszej kompilacji",
   "fed %.0f Hz": "zasilany %.0f Hz",
   "fed %.0f Hz (from %.0f)": "zasilany %.0f Hz (z %.0f)",

@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "kunne ikke starte installasjonsprogrammet på %s",
   "disk refused the file - nothing more is being kept": "disken avviste filen - ingenting mer blir lagret",
   "downloading %s": "laster ned %s",
+  "estimated": "anslått",
   "every module in the catalogue is already fitted, and none has a newer build": "alle modulene i katalogen er allerede montert, og ingen har et nyere bygg",
   "fed %.0f Hz": "matet %.0f Hz",
   "fed %.0f Hz (from %.0f)": "matet %.0f Hz (fra %.0f)",

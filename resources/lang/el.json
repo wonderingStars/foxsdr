@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "δεν ήταν δυνατή η εκκίνηση του προγράμματος εγκατάστασης στο %s",
   "disk refused the file - nothing more is being kept": "ο δίσκος απέρριψε το αρχείο - δεν διατηρείται τίποτα άλλο",
   "downloading %s": "λήψη του %s",
+  "estimated": "εκτίμηση",
   "every module in the catalogue is already fitted, and none has a newer build": "κάθε μονάδα του καταλόγου είναι ήδη τοποθετημένη και καμία δεν έχει νεότερη έκδοση",
   "fed %.0f Hz": "τροφοδοσία %.0f Hz",
   "fed %.0f Hz (from %.0f)": "τροφοδοσία %.0f Hz (από %.0f)",

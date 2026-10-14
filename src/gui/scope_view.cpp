@@ -516,7 +516,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
         rows.reserve(tracks.size());
         for (const cascade::core::HostTrack& ht : tracks) {
             if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             Row r{&ht, 0.0, 0.0};
@@ -2823,7 +2823,7 @@ void ScopeView::draw(float width, float height,
     for (const cascade::core::HostTrack& ht : tracks) {
         if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
         const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+            cascade::core::trackPresentation(ht.t);
         if (!pres.visible) { continue; }
         // FROM THE MIDDLE OF THE VIEW, which is where every ring on this face
         // is measured from. See the note where viewLat/viewLon are computed:

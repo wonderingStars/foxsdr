@@ -430,9 +430,9 @@ int main() {
         CHECK(cascade::core::visibleUnplacedTrackCount(v) == 4u);
         CHECK(cascade::core::visibleTrackCount(v) == 0u);
         using cascade::core::trackPresentation;
-        CHECK_NEAR(trackPresentation(v[0].t.ageMs, v[0].t.kind).alpha, 1.0f, 1e-6);
-        CHECK_NEAR(trackPresentation(v[1].t.ageMs, v[1].t.kind).alpha, 0.65f, 1e-3);
-        CHECK(!trackPresentation(v[3].t.ageMs, v[3].t.kind).visible);
+        CHECK_NEAR(trackPresentation(v[0].t).alpha, 1.0f, 1e-6);
+        CHECK_NEAR(trackPresentation(v[1].t).alpha, 0.65f, 1e-3);
+        CHECK(!trackPresentation(v[3].t).visible);
         // Re-acquired: the plugin hears it again and the same row is back.
         v[3].t.ageMs = 250ull;
         CHECK(cascade::core::visibleUnplacedTrackCount(v) == 5u);
@@ -1328,6 +1328,43 @@ int main() {
         CHECK(!trackPresentation(3600000ull, CASCADE_TRACK_AIRCRAFT).visible);
     }
 
+    // AN ESTIMATED AIRCRAFT POSITION (0.99.78, CASCADE_TRACK_FLAG_ESTIMATED): the
+    // source carried its last fix forward, so the host keeps it for 180 s instead
+    // of 60, fading from the same 30 s; the flag changes nothing for another kind,
+    // and the track form of the rule reads it.
+    {
+        const std::uint32_t est = CASCADE_TRACK_FLAG_ESTIMATED;
+        CHECK(trackPresentation(100000ull, CASCADE_TRACK_AIRCRAFT, est).visible);
+        // 70 s into a 150 s ramp from 1.0 down to 0.30.
+        CHECK_NEAR(trackPresentation(100000ull, CASCADE_TRACK_AIRCRAFT, est).alpha, 0.6733f, 1e-3);
+        CHECK_NEAR(trackPresentation(30000ull, CASCADE_TRACK_AIRCRAFT, est).alpha, 1.0f, 1e-6);
+        CHECK(trackPresentation(179999ull, CASCADE_TRACK_AIRCRAFT, est).visible);
+        CHECK_NEAR(trackPresentation(179999ull, CASCADE_TRACK_AIRCRAFT, est).alpha, 0.30f, 1e-3);
+        CHECK(!trackPresentation(180000ull, CASCADE_TRACK_AIRCRAFT, est).visible);
+        CHECK(!trackPresentation(100000ull, CASCADE_TRACK_AIRCRAFT).visible);
+        CHECK(!trackPresentation(100000ull, CASCADE_TRACK_AIRCRAFT, CASCADE_TRACK_FLAG_EMERGENCY).visible);
+        CHECK(trackPresentation(599999ull, CASCADE_TRACK_VESSEL, est).visible);
+        CHECK(!trackPresentation(600000ull, CASCADE_TRACK_VESSEL, est).visible);
+        std::vector<cascade::core::HostTrack> v(1);
+        std::snprintf(v[0].t.id, CASCADE_TRACK_ID_CHARS, "EST001");
+        v[0].t.kind = CASCADE_TRACK_AIRCRAFT;
+        v[0].t.ageMs = 100000ull;
+        v[0].t.flags = est;
+        CHECK(trackPresentation(v[0].t).visible);
+        CHECK(cascade::core::trackIsEstimated(v[0].t));
+        CHECK(visibleTrackCount(v) == 1u);
+        v[0].t.flags = 0u;
+        CHECK(!trackPresentation(v[0].t).visible);
+        CHECK(!cascade::core::trackIsEstimated(v[0].t));
+        CHECK(visibleTrackCount(v) == 0u);
+        // The flag on a track with no position is not an estimate of anything.
+        v[0].t.flags = est | CASCADE_TRACK_FLAG_NO_POSITION;
+        v[0].t.latDeg = std::numeric_limits<double>::quiet_NaN();
+        v[0].t.lonDeg = std::numeric_limits<double>::quiet_NaN();
+        CHECK(!cascade::core::trackIsEstimated(v[0].t));
+        CHECK(visibleTrackCount(v) == 0u);
+    }
+
     // VESSEL: AIS Class B may legitimately transmit only every 3 minutes, so
     // the aircraft rule applied to a ship would delete a ship behaving
     // normally. This case is what proves the thresholds really are per kind.
@@ -1398,8 +1435,8 @@ int main() {
         CHECK(visibleTrackCount(v) == 0u);
         v[0].t.ageMs = 250ull;  // a new message arrives
         CHECK(visibleTrackCount(v) == 1u);
-        CHECK(trackPresentation(v[0].t.ageMs, v[0].t.kind).visible);
-        CHECK_NEAR(trackPresentation(v[0].t.ageMs, v[0].t.kind).alpha, 1.0f, 1e-6);
+        CHECK(trackPresentation(v[0].t).visible);
+        CHECK_NEAR(trackPresentation(v[0].t).alpha, 1.0f, 1e-6);
     }
 
     // The count the UI shows must be the count of what it draws.

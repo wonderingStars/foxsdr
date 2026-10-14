@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "no s'ha pogut iniciar l'instal·lador a %s",
   "disk refused the file - nothing more is being kept": "el disc ha rebutjat el fitxer - no es desa res més",
   "downloading %s": "s'està baixant %s",
+  "estimated": "estimat",
   "every module in the catalogue is already fitted, and none has a newer build": "tots els mòduls del catàleg ja estan muntats, i cap no té una compilació més nova",
   "fed %.0f Hz": "alimentat a %.0f Hz",
   "fed %.0f Hz (from %.0f)": "alimentat a %.0f Hz (des de %.0f)",

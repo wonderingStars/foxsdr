@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "không khởi chạy được trình cài đặt tại %s",
   "disk refused the file - nothing more is being kept": "đĩa đã từ chối tệp - không lưu thêm gì nữa",
   "downloading %s": "đang tải %s",
+  "estimated": "ước tính",
   "every module in the catalogue is already fitted, and none has a newer build": "mọi mô-đun trong danh mục đều đã được lắp, và không mô-đun nào có bản build mới hơn",
   "fed %.0f Hz": "được cấp %.0f Hz",
   "fed %.0f Hz (from %.0f)": "được cấp %.0f Hz (từ %.0f)",

@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "asennusohjelman käynnistys epäonnistui: %s",
   "disk refused the file - nothing more is being kept": "levy hylkäsi tiedoston - mitään ei enää tallenneta",
   "downloading %s": "ladataan: %s",
+  "estimated": "arvioitu",
   "every module in the catalogue is already fitted, and none has a newer build": "jokainen luettelon moduuli on jo asennettu, eikä yhdellekään ole uudempaa versiota",
   "fed %.0f Hz": "syöte %.0f Hz",
   "fed %.0f Hz (from %.0f)": "syöte %.0f Hz (alkuperäinen %.0f)",

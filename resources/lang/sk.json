@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "nepodarilo sa spustiť inštalátor v %s",
   "disk refused the file - nothing more is being kept": "disk súbor odmietol - nič ďalšie sa neukladá",
   "downloading %s": "sťahuje sa %s",
+  "estimated": "odhad",
   "every module in the catalogue is already fitted, and none has a newer build": "každý modul v katalógu je už osadený a žiadny nemá novšiu zostavu",
   "fed %.0f Hz": "napájané %.0f Hz",
   "fed %.0f Hz (from %.0f)": "napájané %.0f Hz (z %.0f)",

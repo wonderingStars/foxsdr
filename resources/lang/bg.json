@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "инсталаторът в %s не можа да се стартира",
   "disk refused the file - nothing more is being kept": "дискът отказа файла - нищо повече не се запазва",
   "downloading %s": "изтегляне на %s",
+  "estimated": "приблизително",
   "every module in the catalogue is already fitted, and none has a newer build": "всички модули в каталога вече са монтирани и нито един няма по-нова компилация",
   "fed %.0f Hz": "получава %.0f Hz",
   "fed %.0f Hz (from %.0f)": "получава %.0f Hz (от %.0f)",

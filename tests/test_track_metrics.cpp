@@ -2268,6 +2268,10 @@ int main() {
         CHECK(unplacedRowNote(421000.0, TrackKind::Satellite, english) ==
               "421 km - no position yet");
         CHECK(unplacedRowNote(10668.0, TrackKind::Aircraft, marked) == "35000 ft - <no position yet>");
+        // THE WORD BESIDE AN ESTIMATED ROW (0.99.78), through the same translator.
+        using cascade::gui::estimatedRowNote;
+        CHECK(estimatedRowNote(english) == "estimated");
+        CHECK(estimatedRowNote(marked) == "<estimated>");
 
         // THE DETAIL BLOCK: a target with no position says so where the position
         // would be, prints no coordinates and no range or bearing (they have nothing
@@ -2307,6 +2311,19 @@ int main() {
         CHECK(text.find("pos     52.00000, 1.00000") != std::string::npos);
         CHECK(text.find("range   ") != std::string::npos);
         CHECK(text.find("no position yet") == std::string::npos);
+        CHECK(text.find("estimated from the last fix") == std::string::npos);
+        // ...and an ESTIMATED position (0.99.78) keeps its coordinates and range,
+        // and says under them what they are.
+        in.estimated = true;
+        text.clear();
+        for (const cascade::gui::TrackDetailLine& l : cascade::gui::buildTrackDetailLines(in)) {
+            text += l.text;
+            text += '\n';
+        }
+        CHECK(text.find("pos     52.00000, 1.00000\n        estimated from the last fix") !=
+              std::string::npos);
+        CHECK(text.find("range   ") != std::string::npos);
+        in.estimated = false;
 
         // A NaN POSITION NEVER REACHES THE COVERAGE MAP, whatever the caller did:
         // the accumulator refuses a sighting it cannot measure.

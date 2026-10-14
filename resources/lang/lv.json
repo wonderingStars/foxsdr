@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "nevarēja palaist instalētāju: %s",
   "disk refused the file - nothing more is being kept": "disks noraidīja failu - nekas vairs netiek saglabāts",
   "downloading %s": "lejupielādē: %s",
+  "estimated": "aptuvens",
   "every module in the catalogue is already fitted, and none has a newer build": "katrs kataloga modulis jau ir uzstādīts, un nevienam nav jaunāka būvējuma",
   "fed %.0f Hz": "saņem %.0f Hz",
   "fed %.0f Hz (from %.0f)": "saņem %.0f Hz (no %.0f)",

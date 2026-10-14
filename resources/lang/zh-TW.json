@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "無法啟動位於 %s 的安裝程式",
   "disk refused the file - nothing more is being kept": "磁碟拒絕寫入此檔案，不再保存任何內容",
   "downloading %s": "正在下載 %s",
+  "estimated": "推算",
   "every module in the catalogue is already fitted, and none has a newer build": "目錄中的每個模組都已裝入，且沒有任何較新的建置版本",
   "fed %.0f Hz": "饋入 %.0f Hz",
   "fed %.0f Hz (from %.0f)": "饋入 %.0f Hz (來源 %.0f)",

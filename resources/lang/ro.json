@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "nu s-a putut porni programul de instalare din %s",
   "disk refused the file - nothing more is being kept": "discul a refuzat fișierul - nu se mai păstrează nimic",
   "downloading %s": "se descarcă %s",
+  "estimated": "estimată",
   "every module in the catalogue is already fitted, and none has a newer build": "fiecare modul din catalog este deja montat și niciunul nu are o versiune mai nouă",
   "fed %.0f Hz": "alimentat la %.0f Hz",
   "fed %.0f Hz (from %.0f)": "alimentat la %.0f Hz (din %.0f)",

@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "не удалось запустить установщик из %s",
   "disk refused the file - nothing more is being kept": "диск отклонил файл - больше ничего не сохраняется",
   "downloading %s": "загрузка %s",
+  "estimated": "расчётная",
   "every module in the catalogue is already fitted, and none has a newer build": "все модули каталога уже установлены, и ни у одного нет новой сборки",
   "fed %.0f Hz": "на входе %.0f Hz",
   "fed %.0f Hz (from %.0f)": "на входе %.0f Hz (из %.0f)",

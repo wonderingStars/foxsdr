@@ -35,11 +35,15 @@ std::string bounded(const char* p, std::size_t cap) {
 // chain of ifs at each call site so there is exactly one place a cadence can be
 // wrong, and so an unrecognised kind lands on the forgiving default by
 // construction instead of by someone remembering to write the else branch.
-void staleLimits(std::uint32_t kind, std::uint64_t& fadeMs, std::uint64_t& dropMs) {
+void staleLimits(std::uint32_t kind, std::uint32_t flags, std::uint64_t& fadeMs,
+                 std::uint64_t& dropMs) {
     switch (kind) {
         case CASCADE_TRACK_AIRCRAFT:
             fadeMs = kTrackFadeMsAircraft;
-            dropMs = kTrackDropMsAircraft;
+            // An estimate is held longer (see the header); it fades from the same
+            // moment, because the age it carries is still the age of the fix.
+            dropMs = ((flags & CASCADE_TRACK_FLAG_ESTIMATED) != 0u) ? kTrackDropMsAircraftEstimated
+                                                                     : kTrackDropMsAircraft;
             break;
         case CASCADE_TRACK_VESSEL:
             fadeMs = kTrackFadeMsVessel;
@@ -116,10 +120,10 @@ bool altKeyLess(const std::string& aPlugin, std::string_view aId,
 
 }  // namespace
 
-TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind) {
+TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind, std::uint32_t flags) {
     std::uint64_t fadeMs = 0;
     std::uint64_t dropMs = 0;
-    staleLimits(kind, fadeMs, dropMs);
+    staleLimits(kind, flags, fadeMs, dropMs);
 
     TrackPresentation p;
     if (ageMs >= dropMs) {
@@ -165,7 +169,7 @@ TrackPresentation pathPresentation(const HostPath& path,
         // The OWNER'S kind decides, not the path's: the age being judged is
         // the owner's, and judging it against a cadence the owner does not
         // report at would be the same mistake one global threshold was.
-        return trackPresentation(ht.t.ageMs, ht.t.kind);
+        return trackPresentation(ht.t);
     }
     // Unowned: see the header. Not everything a source draws is a target.
     return TrackPresentation{};
@@ -177,7 +181,7 @@ std::size_t visibleTrackCount(const std::vector<HostTrack>& tracks) {
         // A target with no position is not on the map, so it is not counted
         // here; visibleUnplacedTrackCount counts it (see the header).
         if (!trackHasPosition(ht.t)) { continue; }
-        if (trackPresentation(ht.t.ageMs, ht.t.kind).visible) { ++n; }
+        if (trackPresentation(ht.t).visible) { ++n; }
     }
     return n;
 }
@@ -186,7 +190,7 @@ std::size_t visibleUnplacedTrackCount(const std::vector<HostTrack>& tracks) {
     std::size_t n = 0;
     for (const HostTrack& ht : tracks) {
         if (trackHasPosition(ht.t)) { continue; }
-        if (trackPresentation(ht.t.ageMs, ht.t.kind).visible) { ++n; }
+        if (trackPresentation(ht.t).visible) { ++n; }
     }
     return n;
 }

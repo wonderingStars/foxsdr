@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "yükleyici başlatılamadı: %s",
   "disk refused the file - nothing more is being kept": "disk dosyayı reddetti - artık hiçbir şey tutulmuyor",
   "downloading %s": "%s indiriliyor",
+  "estimated": "tahmini",
   "every module in the catalogue is already fitted, and none has a newer build": "katalogdaki her modül zaten takılı ve hiçbirinin daha yeni bir derlemesi yok",
   "fed %.0f Hz": "beslenen %.0f Hz",
   "fed %.0f Hz (from %.0f)": "beslenen %.0f Hz (kaynak %.0f)",

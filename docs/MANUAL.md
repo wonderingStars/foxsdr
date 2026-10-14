@@ -200,7 +200,12 @@ are still moving. What is in the current build:
   drawn on the map, and it is not in the list while **On screen only** is
   ticked; it moves up into the list proper, and onto the map, when its position
   arrives. This needs ADS-B plugin 1.9.0 or newer; older plugins list only the
-  aircraft they can place.
+  aircraft they can place. An aircraft at the edge of range is heard in bursts
+  tens of seconds apart; between them (from 0.99.78 with ADS-B plugin 1.9.1 or
+  newer) it stays on the map where its last course and speed would have taken
+  it, drawn with a thin ring and listed with the word "estimated" beside its
+  id, fading from 30 s after its last fix and leaving the map at 180 s instead
+  of 60 s. The age shown is always the age of the last real fix.
   Give it your antenna's position once and it also builds a **coverage map**:
   the furthest anything has been heard in each direction, drawn over the map,
   which is the cheapest antenna diagnostic there is. Decoder plugins produce

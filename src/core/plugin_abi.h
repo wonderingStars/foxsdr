@@ -674,6 +674,11 @@ typedef struct CascadeIqDecoderApi {
 #define CASCADE_TRACK_FLAG_SELECTED 0x00000002u
 /* latDeg/lonDeg are NaN; the source hears this target but cannot place it yet; a host lists it and must not draw it (FoxSDR 0.99.75). */
 #define CASCADE_TRACK_FLAG_NO_POSITION 0x00000004u
+/* latDeg/lonDeg are an ESTIMATE: the last fix carried forward along the last known course at the last
+ * known speed; ageMs still says how old that last fix is. A host that set
+ * CASCADE_STATE_HOLDS_ESTIMATED_TRACKS keeps such a track for 180 s and draws and lists it as an estimate
+ * (FoxSDR 0.99.78). */
+#define CASCADE_TRACK_FLAG_ESTIMATED 0x00000008u
 
 /*
  * WHAT KIND OF AIRCRAFT, carried in five bits of `flags` rather than in a
@@ -1550,6 +1555,9 @@ typedef struct CascadeAudioProcessorApi {
 /* The host draws a panel row that carries CASCADE_ROW_FLAG_KEY as a key and delivers its press
  * (hosts from 0.99.77). Set in every CascadeReceiverState the host fills, with no grant. */
 #define CASCADE_STATE_ROW_KEYS 0x00010000u
+/* the host understands CASCADE_TRACK_FLAG_ESTIMATED and keeps such a track up to 180 s after its last fix;
+ * a plugin may publish estimated positions only when it sees this bit (hosts from 0.99.78). */
+#define CASCADE_STATE_HOLDS_ESTIMATED_TRACKS 0x00020000u
 
 #define CASCADE_DEVICE_NAME_CHARS 64
 #define CASCADE_LOCATOR_CHARS 8 /* 6-char Maidenhead grid + NUL + 1 spare */

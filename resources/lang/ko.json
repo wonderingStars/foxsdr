@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "%s에서 설치 프로그램을 시작할 수 없습니다",
   "disk refused the file - nothing more is being kept": "디스크가 파일을 거부했습니다 - 더 이상 저장하지 않습니다",
   "downloading %s": "%s 다운로드 중",
+  "estimated": "추정",
   "every module in the catalogue is already fitted, and none has a newer build": "카탈로그의 모든 모듈이 이미 장착되어 있고, 새 빌드가 있는 것도 없습니다",
   "fed %.0f Hz": "공급 %.0f Hz",
   "fed %.0f Hz (from %.0f)": "공급 %.0f Hz (원래 %.0f)",

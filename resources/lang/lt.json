@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "nepavyko paleisti diegimo programos: %s",
   "disk refused the file - nothing more is being kept": "diskas atmetė failą - daugiau niekas nesaugoma",
   "downloading %s": "atsisiunčiama %s",
+  "estimated": "apytikslė",
   "every module in the catalogue is already fitted, and none has a newer build": "kiekvienas katalogo modulis jau įdėtas, ir nė vienam nėra naujesnio leidimo",
   "fed %.0f Hz": "gauna %.0f Hz",
   "fed %.0f Hz (from %.0f)": "gauna %.0f Hz (iš %.0f)",

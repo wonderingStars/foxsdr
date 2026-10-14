@@ -109,6 +109,15 @@ inline bool trackHasPosition(const CascadeTrack& t) {
 // Times in milliseconds, to match CascadeTrack::ageMs.
 constexpr std::uint64_t kTrackFadeMsAircraft = 30ull * 1000ull;
 constexpr std::uint64_t kTrackDropMsAircraft = 60ull * 1000ull;
+// AN ESTIMATED AIRCRAFT POSITION (0.99.78, CASCADE_TRACK_FLAG_ESTIMATED) is the
+// source's last fix carried forward along the aircraft's last course, published
+// so that an aircraft at the fringe, heard in bursts tens of seconds apart, does
+// not blink off the map between them (a 31,000 ft airliner at 42 nm did, on
+// 2026-10-13). It fades from the same 30 s - the age is still the fix's - and is
+// dropped at 180 s, which is where Flightradar24 and tar1090 give up on a
+// carried-forward position too. The flag is the source's to set; the host never
+// invents it, and for every other kind it changes nothing.
+constexpr std::uint64_t kTrackDropMsAircraftEstimated = 180ull * 1000ull;
 constexpr std::uint64_t kTrackFadeMsVessel = 5ull * 60ull * 1000ull;
 constexpr std::uint64_t kTrackDropMsVessel = 10ull * 60ull * 1000ull;
 constexpr std::uint64_t kTrackFadeMsStation = 30ull * 60ull * 1000ull;
@@ -131,7 +140,21 @@ struct TrackPresentation {
     bool visible = true;
     float alpha = 1.0f;  // 1.0 fresh, ramping to kTrackMinAlpha, then invisible
 };
-TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind);
+// `flags` are the track's CASCADE_TRACK_FLAG_* bits: an aircraft carrying
+// CASCADE_TRACK_FLAG_ESTIMATED is dropped at kTrackDropMsAircraftEstimated.
+TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind,
+                                    std::uint32_t flags = 0u);
+// The same rule from the track itself - age, kind AND flags - which is the form
+// every caller that draws, lists or counts a track uses, so none can forget the
+// flags.
+inline TrackPresentation trackPresentation(const CascadeTrack& t) {
+    return trackPresentation(t.ageMs, t.kind, t.flags);
+}
+// Whether a track's position is an estimate (0.99.78): the flag, on a track that
+// has a position at all.
+inline bool trackIsEstimated(const CascadeTrack& t) {
+    return (t.flags & CASCADE_TRACK_FLAG_ESTIMATED) != 0u && trackHasPosition(t);
+}
 
 // How many of `tracks` the rule says to show. The counts beside the map and
 // above the flight list must agree with what is drawn: "30 targets" over a

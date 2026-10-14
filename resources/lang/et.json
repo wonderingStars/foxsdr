@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "installerit ei õnnestunud käivitada: %s",
   "disk refused the file - nothing more is being kept": "ketas lükkas faili tagasi - rohkem ei salvestata",
   "downloading %s": "allalaadimine: %s",
+  "estimated": "hinnanguline",
   "every module in the catalogue is already fitted, and none has a newer build": "kõik kataloogi moodulid on juba paigaldatud ja ühelgi pole uuemat järku",
   "fed %.0f Hz": "sisend %.0f Hz",
   "fed %.0f Hz (from %.0f)": "sisend %.0f Hz (algne %.0f)",

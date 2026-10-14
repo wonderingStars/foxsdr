@@ -470,6 +470,9 @@ struct TrackDetailInput {
     // all, and the block says so instead of printing them. True by default, which
     // is what every caller before this field meant.
     bool hasPosition = true;
+    // true for a position the source carried forward from its last fix (0.99.78,
+    // CASCADE_TRACK_FLAG_ESTIMATED): the block then says so under the coordinates.
+    bool estimated = false;
     // NaN means the source does not know, exactly as the ABI says.
     double altM = std::numeric_limits<double>::quiet_NaN();
     double speedMps = std::numeric_limits<double>::quiet_NaN();
@@ -526,6 +529,8 @@ std::string targetCountText(std::size_t shown, std::size_t total, std::size_t un
 // altitude is not known either. Feet for everything but a satellite, which is
 // lettered in kilometres, as the detail block letters it (a station reports feet).
 std::string unplacedRowNote(double altM, TrackKind kind, const char* (*translate)(const char*));
+// The word beside a listed track whose position is an estimate (0.99.78).
+std::string estimatedRowNote(const char* (*translate)(const char*));
 
 // ============================================================================
 // Implementation. Header-only because every piece of it is a handful of lines
@@ -1222,6 +1227,12 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     if (in.hasPosition) {
         out.push_back({detail::detailPrintf("pos     %.5f, %.5f", in.latDeg, in.lonDeg), true,
                        false, false});
+        // AN ESTIMATE (0.99.78): the coordinates are where the source's last course
+        // and speed would have taken it since the fix whose age is printed below;
+        // said under them, dimmed, so nobody reads a carried-forward point as a fix.
+        if (in.estimated) {
+            out.push_back({"        estimated from the last fix", false, false, false});
+        }
     } else {
         // HEARD AND NOT PLACED (0.99.75): the coordinates are NaN and printing
         // them would put "nan, nan" in front of the user. Said in words, dimmed
@@ -1367,6 +1378,10 @@ inline std::string unplacedRowNote(double altM, TrackKind kind,
                                 ? detail::detailPrintf("%.0f km", altM / 1000.0)
                                 : detail::detailPrintf("%.0f ft", altM * detail::kMetresToFeet);
     return alt + " - " + words;
+}
+
+inline std::string estimatedRowNote(const char* (*translate)(const char*)) {
+    return translate(FOX_TR_NOOP("estimated"));
 }
 
 }  // namespace cascade::gui

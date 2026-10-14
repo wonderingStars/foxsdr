@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "не вдалося запустити інсталятор із %s",
   "disk refused the file - nothing more is being kept": "диск відхилив файл - більше нічого не зберігається",
   "downloading %s": "завантаження %s",
+  "estimated": "розрахункова",
   "every module in the catalogue is already fitted, and none has a newer build": "кожен модуль із каталогу вже вставлено, і жоден не має новішої збірки",
   "fed %.0f Hz": "отримує %.0f Hz",
   "fed %.0f Hz (from %.0f)": "отримує %.0f Hz (з %.0f)",

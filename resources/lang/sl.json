@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "namestitvenega programa v %s ni bilo mogoče zagnati",
   "disk refused the file - nothing more is being kept": "disk je datoteko zavrnil - nič več se ne shranjuje",
   "downloading %s": "prenašanje %s",
+  "estimated": "ocenjeno",
   "every module in the catalogue is already fitted, and none has a newer build": "vsak modul v katalogu je že vgrajen in noben nima novejše gradnje",
   "fed %.0f Hz": "napajano %.0f Hz",
   "fed %.0f Hz (from %.0f)": "napajano %.0f Hz (iz %.0f)",

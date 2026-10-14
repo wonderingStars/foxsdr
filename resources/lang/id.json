@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "tidak dapat menjalankan installer di %s",
   "disk refused the file - nothing more is being kept": "disk menolak file - tidak ada lagi yang disimpan",
   "downloading %s": "mengunduh %s",
+  "estimated": "perkiraan",
   "every module in the catalogue is already fitted, and none has a newer build": "setiap modul di katalog sudah terpasang, dan tidak ada yang punya build lebih baru",
   "fed %.0f Hz": "diumpan %.0f Hz",
   "fed %.0f Hz (from %.0f)": "diumpan %.0f Hz (dari %.0f)",

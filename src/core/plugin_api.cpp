@@ -595,6 +595,11 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     // only when it sees this bit. A host that did not set it would be telling the ADS-B
     // plugin to go on hiding every aircraft it has heard and not yet placed.
     flags |= CASCADE_STATE_LISTS_UNPLACED_TRACKS;
+    // AND THE ESTIMATES (0.99.78): a track flagged CASCADE_TRACK_FLAG_ESTIMATED is kept for
+    // kTrackDropMsAircraftEstimated (180 s) instead of 60 s and drawn and listed as an estimate
+    // (trackPresentation, the map's marker ring, estimatedRowNote), so an ADS-B plugin may carry a
+    // fringe aircraft between its bursts instead of letting it blink off the map.
+    flags |= CASCADE_STATE_HOLDS_ESTIMATED_TRACKS;
     // LIKEWISE (0.99.77): the host draws a panel row that carries CASCADE_ROW_FLAG_KEY as a key
     // and delivers its press through poll_command (drawRowTable, PluginApiCore::pressCommand), and
     // a plugin shows "press to choose" wording, and registers the commands only its row keys need,

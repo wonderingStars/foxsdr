@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "impossible de lancer le programme d'installation dans %s",
   "disk refused the file - nothing more is being kept": "le disque a refusé le fichier - plus rien n'est conservé",
   "downloading %s": "téléchargement de %s",
+  "estimated": "estimée",
   "every module in the catalogue is already fitted, and none has a newer build": "tous les modules du catalogue sont déjà montés, et aucun n'a de version plus récente",
   "fed %.0f Hz": "alimenté à %.0f Hz",
   "fed %.0f Hz (from %.0f)": "alimenté à %.0f Hz (depuis %.0f)",

@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "%s のインストーラーを起動できませんでした",
   "disk refused the file - nothing more is being kept": "ディスクがファイルを拒否しました - これ以上保存しません",
   "downloading %s": "%s をダウンロード中",
+  "estimated": "推定",
   "every module in the catalogue is already fitted, and none has a newer build": "カタログ内のすべてのモジュールが装着済みで、新しいビルドはありません",
   "fed %.0f Hz": "供給 %.0f Hz",
   "fed %.0f Hz (from %.0f)": "供給 %.0f Hz (元 %.0f)",

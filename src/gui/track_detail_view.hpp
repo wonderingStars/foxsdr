@@ -81,6 +81,7 @@ inline TrackDetailInput makeTrackDetailInput(const cascade::core::HostTrack& ht,
     // in words rather than printing NaN coordinates and a range to nowhere. The
     // registry lookup below needs no position and is unchanged.
     in.hasPosition = cascade::core::trackHasPosition(ht.t);
+    in.estimated = cascade::core::trackIsEstimated(ht.t);
     in.altM = ht.t.altM;
     in.speedMps = ht.t.speedMps;
     in.courseDeg = ht.t.courseDeg;

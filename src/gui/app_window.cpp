@@ -20485,7 +20485,7 @@ void AppWindow::drawPluginWindows() {
     // an aircraft it last heard an hour ago.
     if (rxSet_) {
         for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             // By kind: a satellite's predicted position is not a reception,
@@ -21849,7 +21849,7 @@ void AppWindow::drawTrackList(MapPage& page,
         // (`tracks` never holds a target heard without a position - those are
         // `heard`, below - so this is the list defending itself, as the count does.)
         if (!cascade::core::trackHasPosition(ht.t)) { continue; }
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
+        if (!cascade::core::trackPresentation(ht.t).visible) { continue; }
         // The map's edges, when asked for. The selected or followed target is
         // NOT exempt: the list shows what the map shows, and a followed target
         // is centred on the map anyway.
@@ -21999,7 +21999,7 @@ void AppWindow::drawTrackList(MapPage& page,
     for (const TrackRow& r : rows) {
         const cascade::core::HostTrack& ht = tracks[r.source];
         const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+            cascade::core::trackPresentation(ht.t);
         ImGui::TableNextRow();
         ImGui::PushID(static_cast<int>(r.source));
         // Going quiet is visible in the list as well as on the map, and by the
@@ -22060,6 +22060,13 @@ void AppWindow::drawTrackList(MapPage& page,
 
         ImGui::TableNextColumn();
         ImGui::TextDisabled("%s", r.id.c_str());
+        // A CARRIED-FORWARD POSITION SAYS SO (0.99.78): the word beside the id, in the
+        // same dim face, for a track whose source flagged its position an estimate -
+        // the map draws the same track with a ring (MapView::draw).
+        if (cascade::core::trackIsEstimated(ht.t)) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", cascade::gui::estimatedRowNote(tr).c_str());
+        }
 
         // --- the details button ----------------------------------------------
         // Everything the six deleted columns said, on demand, in a window that
@@ -22098,7 +22105,7 @@ void AppWindow::drawTrackList(MapPage& page,
         for (std::size_t i = 0; i < heard.size(); ++i) {
             const cascade::core::HostTrack& ht = heard[i];
             const cascade::core::TrackPresentation pres =
-                cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+                cascade::core::trackPresentation(ht.t);
             if (!pres.visible) { continue; }
             // The id and label are third-party fixed arrays: bounded, not trusted to
             // be terminated.
@@ -22207,7 +22214,7 @@ const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& i
     // staleness rule still shows count: a dropped target must read as "no
     // longer being heard", not as its last stale values.
     for (const cascade::core::HostTrack& ht : pluginUi_.tracks()) {
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+        if (!cascade::core::trackPresentation(ht.t).visible) {
             continue;
         }
         if (id == ht.t.id) { return &ht; }
@@ -22217,7 +22224,7 @@ const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& i
     // the registry lookup works for them as for any other. Placed ones first, so an
     // id both lists hold (a target that has just got its fix) answers as placed.
     for (const cascade::core::HostTrack& ht : pluginUi_.unplacedTracks()) {
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+        if (!cascade::core::trackPresentation(ht.t).visible) {
             continue;
         }
         if (id == ht.t.id) { return &ht; }
@@ -29258,7 +29265,7 @@ void AppWindow::publishWebSnapshot() {
         // stops appearing in the snapshot; ageMs is still published for the
         // ones that remain, so the web page is free to fade them on its own
         // terms - that presentation is the web UI's decision, not this one's.
-        if (!cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { continue; }
+        if (!cascade::core::trackPresentation(t.t).visible) { continue; }
         cascade::net::RadioStatus::Track w;
         w.id = t.t.id;
         w.label = t.t.label;

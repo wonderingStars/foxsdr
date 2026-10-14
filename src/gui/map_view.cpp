@@ -674,7 +674,7 @@ std::size_t listedTrackCount(const MapView& view,
     for (const cascade::core::HostTrack& ht : tracks) {
         // Not a placed row, and never on screen (see the header).
         if (!cascade::core::trackHasPosition(ht.t)) { continue; }
-        if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) { continue; }
+        if (!cascade::core::trackPresentation(ht.t).visible) { continue; }
         if (onScreenOnly && !view.isOnScreen(ht.t.latDeg, ht.t.lonDeg)) { continue; }
         ++n;
     }
@@ -729,7 +729,7 @@ void MapView::draw(float width, float height,
             // A target heard without a position is not plotted, so it is not
             // fitted to (0.99.75): a NaN here would make the centre NaN.
             if (!cascade::core::trackHasPosition(ht.t)) { continue; }
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             any = true;
@@ -790,7 +790,7 @@ void MapView::draw(float width, float height,
     if (!followId_.empty()) {
         for (const auto& ht : tracks) {
             if (followId_ == ht.t.id) {
-                if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                if (!cascade::core::trackPresentation(ht.t).visible) {
                     break;
                 }
                 // Nothing to follow to while it has no position (0.99.75): the map
@@ -1718,7 +1718,7 @@ void MapView::draw(float width, float height,
         // permanently dimmed, and an aircraft heard once an hour ago was drawn
         // at full confidence forever because nothing ever removed it.
         const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+            cascade::core::trackPresentation(ht.t);
         if (!pres.visible) { continue; }
         // NEVER DRAWN WITHOUT A POSITION (0.99.75). The application keeps a target
         // heard and not placed out of this vector altogether; this is the map
@@ -1755,6 +1755,14 @@ void MapView::draw(float width, float height,
         if ((ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
             dl->AddCircle(s, isAircraft ? aircraftMarkerRadius(iconPx) + 3.0f : 16.0f,
                           fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0, 2.0f);  // theme-exempt: emergency squawk hue (meaning)
+        }
+        // AN ESTIMATE IS DRAWN AS ONE (0.99.78): a thin ring in the marker's own
+        // colour around a position the source carried forward from its last fix,
+        // so a reader can tell "last heard here, probably about here now" from a
+        // fix. The list row says "estimated" beside the id for the same track.
+        if (cascade::core::trackIsEstimated(ht.t)) {
+            dl->AddCircle(s, isAircraft ? aircraftMarkerRadius(iconPx) + 2.0f : 14.0f, col, 0,
+                          1.0f);
         }
 
         if (isAircraft) {
@@ -3022,7 +3030,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         bool allOrbital = true;
         for (std::size_t i = 0; i < tracks.size(); ++i) {
             const cascade::core::HostTrack& ht = tracks[i];
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             TrackRow r;
@@ -3055,7 +3063,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         const cascade::core::HostTrack* sel = nullptr;
         for (const auto& ht : tracks) {
             if (!selectedId_.empty() && selectedId_ == ht.t.id &&
-                cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                cascade::core::trackPresentation(ht.t).visible) {
                 sel = &ht;
                 break;
             }
@@ -3211,7 +3219,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 const TrackRow& r = rows[i];
                 const cascade::core::HostTrack& ht = tracks[r.source];
                 const cascade::core::TrackPresentation pres =
-                    cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+                    cascade::core::trackPresentation(ht.t);
                 const ImVec2 at = ImGui::GetCursorScreenPos();
                 ImGui::PushID(static_cast<int>(i));
                 const bool clicked = ImGui::InvisibleButton("##row", ImVec2(tableW, rowH));

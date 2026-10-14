@@ -1815,6 +1815,7 @@
   "could not start the installer at %s": "无法启动位于 %s 的安装程序",
   "disk refused the file - nothing more is being kept": "磁盘拒绝了该文件——不再保存更多内容",
   "downloading %s": "正在下载 %s",
+  "estimated": "推算",
   "every module in the catalogue is already fitted, and none has a newer build": "目录中的所有模块都已装入，且都没有更新的构建",
   "fed %.0f Hz": "馈入 %.0f Hz",
   "fed %.0f Hz (from %.0f)": "馈入 %.0f Hz (来自 %.0f)",
