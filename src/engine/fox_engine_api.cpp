@@ -1520,6 +1520,8 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         if (k == "recordNotice") { engine_.recordNotice_ = t; }
         if (k == "transmitError") { engine_.transmitError_ = t; }
         if (k == "audioHealth") { engine_.audioHealthNote_ = t; }
+        if (k == "bookmarkNote") { engine_.bookmarkImportNote_ = t; }
+        if (k == "bookmarkError") { engine_.bookmarkError_ = t; }
     } else if (key == "test.rds") {
         // Stands in for the RDS decoder's snapshot (API 0.3 8.4):
         // "flags;pi;pty;groups;errors;ps;radioText" - flags a word of S (synced),

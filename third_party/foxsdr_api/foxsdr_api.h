@@ -365,6 +365,21 @@ typedef struct FoxReceiverState {
     uint32_t rdsPty;                   /* programme type, the raw 5-bit code (RDS and RBDS name it differently) */
     char rdsPs[FOXAPI_RDS_PS_CHARS];           /* programme service name: 8 characters as transmitted, space padded; "" until all four fragments are in */
     char rdsRadioText[FOXAPI_RDS_TEXT_CHARS];  /* RadioText, up to 64 characters; "" until some has arrived */
+    /* ---- 0.3 (docs/api-0.3-additions.md 8.6): the scanner as its section draws it.
+     * The seven settings (the range and the four timings) move scanSeq, and seq with it;
+     * scannerState and scanCurrentHz are live state and move seq alone. The timings are
+     * whole milliseconds: rounded to the nearest, 0 for a negative or NaN, saturating
+     * at 4294967295. ---- */
+    uint64_t scanSeq;                  /* any of scanStartHz, scanStopHz, scanStepHz, scanDwellMs, scanHoldMs, scanResumeMs, scanListenMs changed */
+    double scanCurrentHz;              /* the scanner's frequency: where it is, or where the last scan stopped */
+    double scanStartHz;                /* the range a Start would scan, as stored */
+    double scanStopHz;
+    double scanStepHz;
+    uint32_t scannerState;             /* FOXAPI_SCANNER_* */
+    uint32_t scanDwellMs;              /* time on each step with the squelch closed */
+    uint32_t scanHoldMs;               /* how long a quiet signal is waited on before moving on */
+    uint32_t scanResumeMs;             /* the grace after the hold before the next step */
+    uint32_t scanListenMs;             /* the longest stay on one signal; 0 = until it goes quiet */
 } FoxReceiverState;
 
 
@@ -381,6 +396,12 @@ typedef struct FoxReceiverState {
 #define FOXAPI_AUDIO_STREAM_ALIVE   0x00000004u /* the watchdog's view: the stream's callback is still being served (clear while OPENING) */
 #define FOXAPI_AUDIO_PLUGIN_PLAYING 0x00000008u /* a plugin holding CASCADE_CAP_AUDIO_OUT replaces the demodulated audio (audioPlayingPlugin names it) */
 
+/* FoxReceiverState::scannerState (0.3, 8.6) */
+#define FOXAPI_SCANNER_IDLE     0u /* not scanning (scanCurrentHz is where the last scan stopped) */
+#define FOXAPI_SCANNER_SCANNING 1u /* stepping along the range, one point each dwell */
+#define FOXAPI_SCANNER_PAUSED   2u /* a signal was found: held on it, listening */
+#define FOXAPI_SCANNER_HOLDING  3u /* the signal went quiet: waiting for it to come back before moving on */
+
 /* FoxReceiverState::rdsFlags (0.3) */
 #define FOXAPI_RDS_SYNCED   0x00000001u /* the block decoder has found the 1187.5 bit/s stream: listening, with no field complete yet */
 #define FOXAPI_RDS_PI_VALID 0x00000002u /* rdsPi holds a programme identification that passed its checkword */
@@ -392,7 +413,7 @@ typedef struct FoxReceiverState {
 /* Every FOXAPI_MIN_* is the whole layout of the oldest accepted version
  * (rule 4), written as the end of its last member so it never moves when
  * members are appended. */
-#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, rdsRadioText) + FOXAPI_RDS_TEXT_CHARS)
+#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, scanListenMs) + sizeof(uint32_t))
 
 /* ---------------------------------------------------------------------------
  * The spectrum stream. The waterfall is NOT a separate stream: it is the

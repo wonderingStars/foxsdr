@@ -142,6 +142,10 @@ struct EngineStatusText {
     // API 0.3 8.4: the Sinks section's watchdog note (STATUS_LINES key
     // audioHealth).
     std::string audioHealth;
+    // API 0.3 8.6: the Bookmarks section's note (what the last import, export or group
+    // removal did: bookmarkImportNote_) and its red line (bookmarkError_).
+    std::string bookmarkNote;
+    std::string bookmarkError;
 };
 
 class Engine {
@@ -684,6 +688,10 @@ private:
     void flushBookmarkSave(bool force);
     // Imports an SDR# frequencies.xml or a CSV into the bookmarks.
     void importBookmarkFile(const std::string& path);
+    // Writes the bookmarks whose ids the text names, whole and in the store's order, as SDR#'s
+    // frequencies.xml under the record folder (FOXAPP_OP_BOOKMARK_EXPORT); sets the note.
+    // FOXAPI_OK, BAD_ARGUMENT (no id named), NOT_FOUND (none of them exists) or FAILED (the file).
+    std::int32_t exportBookmarks(const std::string& idsText);
 
     // Opens a radio of `kind` ("soapy" or one of the eight native driver keys)
     // by its args on

@@ -159,12 +159,23 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     const bool rds = first || f.rdsFlags != o.rdsFlags || f.rdsPi != o.rdsPi || f.rdsPty != o.rdsPty ||
                      !sameText(f.rdsPs, o.rdsPs, FOXAPI_RDS_PS_CHARS) ||
                      !sameText(f.rdsRadioText, o.rdsRadioText, FOXAPI_RDS_TEXT_CHARS);
+    // 0.3 (8.6): the scanner's seven settings - the range it scans and the four timings -
+    // are a group of their own (the form re-reads them when they change).
+    const bool scan = first || f.scanStartHz != o.scanStartHz || f.scanStopHz != o.scanStopHz ||
+                      f.scanStepHz != o.scanStepHz || f.scanDwellMs != o.scanDwellMs ||
+                      f.scanHoldMs != o.scanHoldMs || f.scanResumeMs != o.scanResumeMs ||
+                      f.scanListenMs != o.scanListenMs;
     // Every other flag (recording, scanner, decoder lamp, web listener, the
     // squelch and stereo lamps) and the decoder counts: the overall counter.
+    // So are the scanner's state word and its frequency (0.3, 8.6): live state, which moves
+    // seq as the scanner's flag does and no group of its own - a scan steps on every dwell, and
+    // the receiver's tuning moves tuneSeq with it.
     const bool other = first || f.flags != o.flags || f.decodersRunning != o.decodersRunning ||
-                       f.decodersFitted != o.decodersFitted || f.decodersMatched != o.decodersMatched;
-    f.seq = o.seq + ((tune || mode || device || audio || display || tx || rds || other) ? 1u : 0u);
+                       f.decodersFitted != o.decodersFitted || f.decodersMatched != o.decodersMatched ||
+                       f.scannerState != o.scannerState || f.scanCurrentHz != o.scanCurrentHz;
+    f.seq = o.seq + ((tune || mode || device || audio || display || tx || rds || scan || other) ? 1u : 0u);
     f.rdsSeq = o.rdsSeq + (rds ? 1u : 0u);
+    f.scanSeq = o.scanSeq + (scan ? 1u : 0u);
     f.tuneSeq = o.tuneSeq + (tune ? 1u : 0u);
     f.modeSeq = o.modeSeq + (mode ? 1u : 0u);
     f.deviceSeq = o.deviceSeq + (device ? 1u : 0u);

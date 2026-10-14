@@ -69,6 +69,8 @@ struct AppWindowTestAccess {
         e.pluginEnforceError_ = p + "13";
         e.restoreKeepLabel_ = p + "14";
         e.audioHealthNote_ = p + "15";  // API 0.3 8.4: the Sinks section's note, the fifteenth line
+        e.bookmarkImportNote_ = p + "16";  // API 0.3 8.6: the Bookmarks section's note and red line,
+        e.bookmarkError_ = p + "17";       // the sixteenth and the seventeenth
     }
     static FoxCommandResult volume(AppWindow& a, double v) {
         return a.engine_.applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
@@ -154,12 +156,12 @@ int main() {
                    t.soundCardMissing == p + "7" && t.sdrPlayApiDetail == p + "8" && t.sdrPlayAdvice == p + "9" &&
                    t.recordNotice == p + "10" && t.recordError == p + "11" && t.presetNote == p + "12" &&
                    t.pluginEnforceError == p + "13" && t.restoreKeepLabel == p + "14" &&
-                   t.audioHealth == p + "15";
+                   t.audioHealth == p + "15" && t.bookmarkNote == p + "16" && t.bookmarkError == p + "17";
         };
         A::setAllStatus(app, "first");
         CHECK(A::status(app).sourceError != "first1");   // not handed over yet
         A::pumpPublish(app);
-        std::printf("E: after the frame's publish, all fifteen handed over: %s\n",
+        std::printf("E: after the frame's publish, all seventeen handed over: %s\n",
                     allAre(A::status(app), "first") ? "yes" : "NO");
         CHECK(allAre(A::status(app), "first"));
         A::setAllStatus(app, "later");

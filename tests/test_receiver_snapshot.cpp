@@ -350,6 +350,7 @@ struct Seqs {
     std::uint64_t seq, tune, mode, device, audio, display, tx, list;
     std::uint64_t aSeq, aTune, aMode, aDevice, aAudio;
     std::uint64_t rds;  // API 0.3 8.4
+    std::uint64_t scan;  // API 0.3 8.6
 };
 
 Seqs seqs(const ReceiverSnapshot& snap) {
@@ -358,7 +359,7 @@ Seqs seqs(const ReceiverSnapshot& snap) {
     CHECK(ok);
     return {s.rx.seq,       s.rx.tuneSeq,      s.rx.modeSeq,      s.rx.deviceSeq,   s.rx.audioSeq,
             s.rx.displaySeq, s.rx.txSeq,       s.rx.listSeq,      s.app.abiSeq,     s.app.abiTuneSeq,
-            s.app.abiModeSeq, s.app.abiDeviceSeq, s.app.abiAudioSeq, s.rx.rdsSeq};
+            s.app.abiModeSeq, s.app.abiDeviceSeq, s.app.abiAudioSeq, s.rx.rdsSeq, s.rx.scanSeq};
 }
 
 // Which counters moved from `a` to `b`, as a word per counter.
@@ -381,6 +382,7 @@ std::string moved(const Seqs& a, const Seqs& b) {
     add(b.aDevice != a.aDevice, "abiDevice");
     add(b.aAudio != a.aAudio, "abiAudio");
     add(b.rds != a.rds, "rds");
+    add(b.scan != a.scan, "scan");
     return o;
 }
 
@@ -404,6 +406,7 @@ void countersMoveByGroup() {
           a.display == 1u && a.tx == 1u && a.list == 1u);
     CHECK(a.aSeq == 1u && a.aTune == 1u && a.aMode == 1u && a.aDevice == 1u && a.aAudio == 1u);
     CHECK(a.rds == 1u);  // 0.3 8.4: the RDS group starts at 1 with the rest
+    CHECK(a.scan == 1u);  // 0.3 8.6: so does the scanner's
     {
         PublishedState r;
         CHECK(snap.read(r));
@@ -539,6 +542,22 @@ void countersMoveByGroup() {
          [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_AUTO_NOTCH_ENGAGED; }, "seq mode"},
         {"the auto-notch's frequency (a measurement)", [](PublishedState& p) { p.rx.autoNotchHz = 1000.0; }, ""},
         {"the pilot locking", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_PILOT_LOCKED; }, "seq"},
+        // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
+        // seq with it); the scanner's state word and its frequency are live state that moves seq
+        // alone (the scanner flag, which the state already had, is the same).
+        {"the scan range: start", [](PublishedState& p) { p.rx.scanStartHz = 144.0e6; }, "seq scan"},
+        {"the scan range: stop", [](PublishedState& p) { p.rx.scanStopHz = 146.0e6; }, "seq scan"},
+        {"the scan range: step", [](PublishedState& p) { p.rx.scanStepHz = 12.5e3; }, "seq scan"},
+        {"the scan timing: dwell", [](PublishedState& p) { p.rx.scanDwellMs = 40; }, "seq scan"},
+        {"the scan timing: hold", [](PublishedState& p) { p.rx.scanHoldMs = 1500; }, "seq scan"},
+        {"the scan timing: resume", [](PublishedState& p) { p.rx.scanResumeMs = 300; }, "seq scan"},
+        {"the scan timing: listen", [](PublishedState& p) { p.rx.scanListenMs = 20000; }, "seq scan"},
+        {"the scanner stepping (its frequency is live state)",
+         [](PublishedState& p) { p.rx.scanCurrentHz = 144.0125e6; }, "seq"},
+        {"the scanner finding a signal (its state word)",
+         [](PublishedState& p) { p.rx.scannerState = FOXAPI_SCANNER_PAUSED; }, "seq"},
+        {"the scanner's flag (the state already had it)",
+         [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_SCANNER_ACTIVE; }, "seq"},
     };
     for (const Step& st : steps) {
         const Seqs before = seqs(snap);
@@ -604,7 +623,9 @@ void rdsGroupAndLayout() {
           offsetof(FoxReceiverState, autoNotchHz) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, rdsPs) == offsetof(FoxReceiverState, rdsPty) + sizeof(std::uint32_t));
     CHECK(offsetof(FoxReceiverState, rdsRadioText) == offsetof(FoxReceiverState, rdsPs) + FOXAPI_RDS_PS_CHARS);
-    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rdsRadioText) + FOXAPI_RDS_TEXT_CHARS);
+    // (0.3 8.6 appended after RadioText: the minimum accepted moved to the end of scanListenMs,
+    // checked in scanGroupAndLayout below.)
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, scanListenMs) + sizeof(std::uint32_t));
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
     CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
@@ -620,6 +641,69 @@ void rdsGroupAndLayout() {
     std::printf("      FoxReceiverState %zu bytes (0.3 before this group: %zu), minimum accepted %zu\n",
                 sizeof(FoxReceiverState), offsetof(FoxReceiverState, rdsSeq),
                 static_cast<std::size_t>(FOXAPI_MIN_RECEIVER_STATE));
+}
+
+// --- 3c. the scanner group (API 0.3 8.6) and the layout it appended -------------------------
+
+void scanGroupAndLayout() {
+    std::printf("[3c] the scanner group: scanSeq follows its seven settings exactly, and the layout is appended\n");
+    ReceiverSnapshot snap;
+    PublishedState s{};
+    snap.publish(s, nullptr);
+    CHECK(seqs(snap).scan == 1u);
+    // The same settings again move nothing, however many times they are published.
+    for (int i = 0; i < 4; ++i) { snap.publish(s, nullptr); }
+    CHECK(seqs(snap).scan == 1u);
+    // All seven change in one publish: ONE move, not seven.
+    s.rx.scanStartHz = 144.0e6;
+    s.rx.scanStopHz = 146.0e6;
+    s.rx.scanStepHz = 12.5e3;
+    s.rx.scanDwellMs = 40;
+    s.rx.scanHoldMs = 1500;
+    s.rx.scanResumeMs = 300;
+    s.rx.scanListenMs = 20000;
+    snap.publish(s, nullptr);
+    CHECK(seqs(snap).scan == 2u);
+    // The scanner stepping across its range, and through its states: any number of publishes,
+    // seq moves each time a value is new and scanSeq never.
+    const Seqs before = seqs(snap);
+    for (int i = 1; i <= 6; ++i) {
+        s.rx.scanCurrentHz = 144.0e6 + 12.5e3 * i;
+        s.rx.scannerState = static_cast<std::uint32_t>(i % 4);
+        snap.publish(s, nullptr);
+    }
+    const Seqs after = seqs(snap);
+    CHECK(after.scan == before.scan);
+    CHECK(after.seq == before.seq + 6u);
+    CHECK(after.tune == before.tune && after.mode == before.mode && after.device == before.device &&
+          after.audio == before.audio && after.display == before.display && after.tx == before.tx &&
+          after.rds == before.rds && after.list == before.list);
+
+    // THE LAYOUT: appended after RadioText, the 8-byte members first (at most the
+    // struct's padding ahead of the first), the doubles together, then the five words;
+    // FOXAPI_MIN_RECEIVER_STATE ends at the last of them.
+    const std::size_t afterText = offsetof(FoxReceiverState, rdsRadioText) + FOXAPI_RDS_TEXT_CHARS;
+    CHECK(offsetof(FoxReceiverState, scanSeq) >= afterText && offsetof(FoxReceiverState, scanSeq) < afterText + 8u);
+    CHECK(offsetof(FoxReceiverState, scanSeq) % 8u == 0u);
+    CHECK(offsetof(FoxReceiverState, scanCurrentHz) == offsetof(FoxReceiverState, scanSeq) + sizeof(std::uint64_t));
+    CHECK(offsetof(FoxReceiverState, scanStartHz) == offsetof(FoxReceiverState, scanCurrentHz) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, scanStopHz) == offsetof(FoxReceiverState, scanStartHz) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, scanStepHz) == offsetof(FoxReceiverState, scanStopHz) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, scannerState) == offsetof(FoxReceiverState, scanStepHz) + sizeof(double));
+    CHECK(offsetof(FoxReceiverState, scanDwellMs) == offsetof(FoxReceiverState, scannerState) + 4u);
+    CHECK(offsetof(FoxReceiverState, scanHoldMs) == offsetof(FoxReceiverState, scanDwellMs) + 4u);
+    CHECK(offsetof(FoxReceiverState, scanResumeMs) == offsetof(FoxReceiverState, scanHoldMs) + 4u);
+    CHECK(offsetof(FoxReceiverState, scanListenMs) == offsetof(FoxReceiverState, scanResumeMs) + 4u);
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, scanListenMs) + 4u);
+    CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
+    CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
+    // The state words are 0..3, each its own.
+    CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
+          FOXAPI_SCANNER_HOLDING == 3u);
+    CHECK(FOXAPI_SCANNER_IDLE == cascade::core::kScannerIdle && FOXAPI_SCANNER_SCANNING == cascade::core::kScannerScanning &&
+          FOXAPI_SCANNER_PAUSED == cascade::core::kScannerPaused && FOXAPI_SCANNER_HOLDING == cascade::core::kScannerHolding);
+    std::printf("      FoxReceiverState %zu bytes (before the scanner's members: %zu), minimum accepted %zu\n",
+                sizeof(FoxReceiverState), afterText, static_cast<std::size_t>(FOXAPI_MIN_RECEIVER_STATE));
 }
 
 // --- 4. the compose mapping --------------------------------------------------------
@@ -1367,6 +1451,7 @@ int main() {
     writerNeverWaits();
     countersMoveByGroup();
     rdsGroupAndLayout();
+    scanGroupAndLayout();
     composeMapsEveryField();
     pluginApiReadsTheSharedSnapshot();
     walkingOneCompose();

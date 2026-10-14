@@ -283,7 +283,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
                                  &recordNotice_, &recordError_, &presetNote_, &pluginEnforceError_,
-                                 &restoreKeepLabel_, &audioHealthNote_}) {  // (audioHealth: API 0.3 8.4)
+                                 &restoreKeepLabel_, &audioHealthNote_,  // (audioHealth: API 0.3 8.4)
+                                 &bookmarkImportNote_, &bookmarkError_}) {  // (the Bookmarks section's: 8.6)
         f.text(*t);
     }
     // The patch page: its graph, what the plan said, its radios.
@@ -490,6 +491,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             {"pluginEnforceError", &pluginEnforceError_, 3}, {"restoreKeepLabel", &restoreKeepLabel_, 1},
             // 8.4: the audio watchdog's note under the Sinks section's device combo, a warning.
             {"audioHealth", &audioHealthNote_, 2},
+            // 8.6: the Bookmarks section's note (what an import, an export or a group removal did)
+            // and its red line (the bookmark file could not be read or saved).
+            {"bookmarkNote", &bookmarkImportNote_, 1},
+            {"bookmarkError", &bookmarkError_, 3},
         };
         for (const Line& l : lines) {
             b.statusLines.push_back({l.key, *l.text, l.level});

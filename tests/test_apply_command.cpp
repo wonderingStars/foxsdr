@@ -450,6 +450,7 @@ struct AppWindowTestAccess {
         return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
     static const std::string& importNote(AppWindow& a) { return a.engine_.bookmarkImportNote_; }
+    static const std::string& recordDir(AppWindow& a) { return a.engine_.recordDir_; }
     // The engine/stage3b-pre 2c status-line commands.
     static void setGpsRefusal(AppWindow& a, const std::string& s) { a.engine_.gpsRefusal_ = s; }
     static const std::string& gpsRefusal(AppWindow& a) { return a.engine_.gpsRefusal_; }
@@ -1449,6 +1450,32 @@ void bookmarkOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, csv.string()))));
         CHECK(A::bookmarks(a).size() == before + 2u);
         CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, "")), FOXAPI_BAD_ARGUMENT));
+    }
+
+    covering(FOXAPP_OP_BOOKMARK_EXPORT);
+    {
+        // The ids named, in any order, are written whole to a file under the record folder (the
+        // engine picks the name), and the note says where. Nothing named, or nothing found, is
+        // refused and writes nothing.
+        const std::uint64_t idA = A::addBookmark(a, "Export A", 140.1e6, "NFM", 12500.0, "Out");
+        const std::uint64_t idB = A::addBookmark(a, "Export B", 140.2e6, "ZZ-FUTURE", 777.0, "Out");
+        (void)A::addBookmark(a, "Export C", 140.3e6, "AM", 9000.0, "Out");
+        const std::filesystem::path dir(A::recordDir(a));
+        const auto count = [&] {
+            std::size_t n = 0;
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+                n += e.path().filename().string().rfind("foxsdr-frequencies-", 0) == 0 ? 1u : 0u;
+            }
+            return n;
+        };
+        const std::size_t files0 = count();
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_EXPORT, std::to_string(idB) + " " + std::to_string(idA)))));
+        CHECK(count() == files0 + 1u);
+        CHECK(A::importNote(a).rfind("Exported 2 to ", 0) == 0);
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_EXPORT, "424242424")), FOXAPI_NOT_FOUND));
+        CHECK(count() == files0 + 1u);
     }
 }
 

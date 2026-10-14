@@ -60,15 +60,28 @@
 //       fact.input.rateHz is the DSP chain's input rate, not the source's, and
 //       moves listSeq; Q3 the test seam that puts a known spectrum frame in the
 //       ring (ApiHost::publishSpectrumForTest), read back through read_spectrum.
+//   W   the scanner as its section draws it (window port group 7, API 0.3 section
+//       8.6): W1 the idle scanner and its defaults, W2 the seven settings as a
+//       group of their own (scanSeq), W3 the timings as whole milliseconds, W4 the
+//       state word and the frequency through all four states, moving seq alone.
+//   J   the Bookmarks section's note and red line as status lines (and facts, and
+//       the window's own copy), including the real writer of the note.
+//   O   FOXAPP_OP_BOOKMARK_EXPORT: the ids it takes, the file it writes whole under the
+//       record folder, the note, what it refuses, and its cost on a long list.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -77,6 +90,9 @@
 #include "check.hpp"
 #include "core/app_commands.hpp"
 #include "core/freq_converter.hpp"
+#include "core/freq_import.hpp"
+#include "core/freq_manager.hpp"
+#include "core/scanner.hpp"
 #include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
 #include "core/patch_graph.hpp"
@@ -158,6 +174,13 @@ struct AppWindowTestAccess {
     // one rate and the source on another.
     static bool setChainRate(cascade::engine::Engine& e, double hz) { return e.pipeline_.setInputRateHz(hz); }
     static double chainRate(cascade::engine::Engine& e) { return e.pipeline_.inputRateHz(); }
+    // Group W: the squelch the scanner compares the pipeline's power with; a hermetic engine
+    // hears nothing (-200 dB), so a threshold below that stands in for a signal. Group O/J: the
+    // bookmark store, the record folder and the note the engine keeps.
+    static void setSquelch(cascade::engine::Engine& e, float db) { e.squelchDb_ = db; }
+    static cascade::core::FreqManager& store(cascade::engine::Engine& e) { return e.freqMgr_; }
+    static void setRecordDir(cascade::engine::Engine& e, const std::string& dir) { e.recordDir_ = dir; }
+    static const std::string& note(cascade::engine::Engine& e) { return e.bookmarkImportNote_; }
 };
 }  // namespace cascade::gui
 
@@ -1610,6 +1633,7 @@ std::string countersMoved(const FoxReceiverState& a, const FoxReceiverState& b) 
     add(b.txSeq != a.txSeq, "tx");
     add(b.listSeq != a.listSeq, "list");
     add(b.rdsSeq != a.rdsSeq, "rds");
+    add(b.scanSeq != a.scanSeq, "scan");
     return o;
 }
 
@@ -2060,6 +2084,511 @@ void testSpectrumSeam() {
     CHECK_EQ(info.seq, 3ull);
 }
 
+
+// --- W: the scanner as its section draws it (window port group 7, API 0.3 section 8.6) ------
+//
+// The Scanner section letters its state and frequency and re-seeds its seven form fields from
+// the engine. Driven from the test thread (controlPass), so what is read is not a race with a
+// control thread. A hermetic engine hears no signal (the pipeline reads -200 dB while stopped),
+// so the squelch is moved through the friend instead: the scanner stops on a signal when the
+// pipeline's power is above the squelch.
+
+FoxCommand scanConfigCmd(double dwell, double hold, double resume, double listen) {
+    FoxCommand c = testing::cmd(FOXAPI_OP_SCANNER_CONFIG, dwell);
+    c.num[1] = hold;
+    c.num[2] = resume;
+    c.num[3] = listen;
+    return c;
+}
+
+FoxCommand scanRangeCmd(long long mask, double startHz, double stopHz, double stepHz) {
+    FoxCommand c = testing::cmd(FOXAPP_OP_SCANNER_RANGE, startHz, mask);
+    c.num[1] = stopHz;
+    c.num[2] = stepHz;
+    return c;
+}
+
+FoxCommand scanRunCmd(long long on, double startHz, double stopHz, double stepHz) {
+    FoxCommand c = testing::cmd(FOXAPI_OP_SCANNER_RUN, startHz, on);
+    c.num[1] = stopHz;
+    c.num[2] = stepHz;
+    return c;
+}
+
+// W1: what a scanner nobody has touched says.
+void testScannerDefaults() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    const FoxReceiverState st = s.state();
+    const cascade::core::Scanner::Params def;
+    std::printf("W1: idle scanner: state %u, %.0f..%.0f Hz step %.0f, dwell %u hold %u resume %u listen %u, at %.0f Hz, scanSeq %llu\n",
+                st.scannerState, st.scanStartHz, st.scanStopHz, st.scanStepHz, st.scanDwellMs, st.scanHoldMs,
+                st.scanResumeMs, st.scanListenMs, st.scanCurrentHz, static_cast<unsigned long long>(st.scanSeq));
+    CHECK_EQ(st.scannerState, FOXAPI_SCANNER_IDLE);
+    CHECK((st.flags & FOXAPI_RX_SCANNER_ACTIVE) == 0u);
+    CHECK_EQ(st.scanStartHz, def.startHz);
+    CHECK_EQ(st.scanStopHz, def.stopHz);
+    CHECK_EQ(st.scanStepHz, def.stepHz);
+    CHECK_EQ(static_cast<double>(st.scanDwellMs), def.dwellMs);
+    CHECK_EQ(static_cast<double>(st.scanHoldMs), def.holdMs);
+    CHECK_EQ(static_cast<double>(st.scanResumeMs), def.resumeMs);
+    CHECK_EQ(static_cast<double>(st.scanListenMs), def.listenMs);
+    CHECK_EQ(st.scanCurrentHz, cascade::core::Scanner{}.currentHz());
+    CHECK(st.scanSeq >= 1u);
+    // Passes with nothing to say leave the group where it was.
+    for (int i = 0; i < 5; ++i) { d.eng.controlPass(); }
+    CHECK_EQ(countersMoved(st, s.state()), std::string());
+}
+
+// W2: the seven settings are their own group - one move for a command that changes any of
+// them, none for one that changes nothing - and they read back as the engine stores them.
+void testScannerSettings() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+
+    FoxReceiverState before = s.state();
+    CHECK_EQ(pumped(d.eng, s, scanConfigCmd(10, 20, 30, 40)).status(), FOXAPI_OK);
+    FoxReceiverState after = s.state();
+    CHECK_EQ(after.scanDwellMs, 10u);
+    CHECK_EQ(after.scanHoldMs, 20u);
+    CHECK_EQ(after.scanResumeMs, 30u);
+    CHECK_EQ(after.scanListenMs, 40u);
+    CHECK_EQ(countersMoved(before, after), std::string("seq scan"));
+    CHECK_EQ(after.scanSeq, before.scanSeq + 1u);
+    // The same command again changes nothing, so nothing moves.
+    before = after;
+    CHECK_EQ(pumped(d.eng, s, scanConfigCmd(10, 20, 30, 40)).status(), FOXAPI_OK);
+    after = s.state();
+    CHECK_EQ(countersMoved(before, after), std::string());
+
+    // Each timing alone moves the group once.
+    const double timings[4][4] = {{11, 20, 30, 40}, {11, 21, 30, 40}, {11, 21, 31, 40}, {11, 21, 31, 41}};
+    for (const auto& t : timings) {
+        before = s.state();
+        CHECK_EQ(pumped(d.eng, s, scanConfigCmd(t[0], t[1], t[2], t[3])).status(), FOXAPI_OK);
+        after = s.state();
+        CHECK_EQ(countersMoved(before, after), std::string("seq scan"));
+        CHECK_EQ(after.scanSeq, before.scanSeq + 1u);
+    }
+
+    // The range, by its mask: only the fields named change, as the form commits them.
+    before = s.state();
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(7, 144.0e6, 146.0e6, 12.5e3)).status(), FOXAPI_OK);
+    after = s.state();
+    CHECK_EQ(after.scanStartHz, 144.0e6);
+    CHECK_EQ(after.scanStopHz, 146.0e6);
+    CHECK_EQ(after.scanStepHz, 12.5e3);
+    CHECK_EQ(countersMoved(before, after), std::string("seq scan"));
+    before = after;
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(1, 99.0e6, 1.0, 1.0)).status(), FOXAPI_OK);  // start only
+    after = s.state();
+    CHECK_EQ(after.scanStartHz, 99.0e6);
+    CHECK_EQ(after.scanStopHz, 146.0e6);
+    CHECK_EQ(after.scanStepHz, 12.5e3);
+    CHECK_EQ(after.scanSeq, before.scanSeq + 1u);
+    before = after;
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(2, 1.0, 147.0e6, 1.0)).status(), FOXAPI_OK);  // stop only
+    CHECK_EQ(s.state().scanStopHz, 147.0e6);
+    CHECK_EQ(s.state().scanStartHz, 99.0e6);
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(4, 1.0, 1.0, 25.0e3)).status(), FOXAPI_OK);  // step only
+    CHECK_EQ(s.state().scanStepHz, 25.0e3);
+    CHECK_EQ(s.state().scanStopHz, 147.0e6);
+    // Not in the mask: nothing changes, nothing moves.
+    before = s.state();
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(0, 1.0, 2.0, 3.0)).status(), FOXAPI_OK);
+    CHECK_EQ(countersMoved(before, s.state()), std::string());
+
+    // The range is published as the engine stores it (megahertz and kilohertz in the engine's
+    // own fields, times the same factor out), so a value that is not exact in megahertz reads back
+    // as the engine's product and not as the number that was sent.
+    const double sent = 144.39e6;
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(1, sent, 1.0, 1.0)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().scanStartHz, (sent / 1.0e6) * 1.0e6);
+    // ...and a reversed range is published as stored (Scanner::configure swaps it when it runs).
+    CHECK_EQ(pumped(d.eng, s, scanRangeCmd(3, 146.0e6, 144.0e6, 1.0)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().scanStartHz, 146.0e6);
+    CHECK_EQ(s.state().scanStopHz, 144.0e6);
+}
+
+// W3: the timings are whole milliseconds - rounded to the nearest, 0 for a negative,
+// saturating at the top of a uint32.
+void testScannerTimingsAreWholeMilliseconds() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    CHECK_EQ(pumped(d.eng, s, scanConfigCmd(12.4, 12.5, -5.0, 0.4)).status(), FOXAPI_OK);
+    FoxReceiverState st = s.state();
+    std::printf("W3: 12.4 -> %u, 12.5 -> %u, -5 -> %u, 0.4 -> %u\n", st.scanDwellMs, st.scanHoldMs, st.scanResumeMs,
+                st.scanListenMs);
+    CHECK_EQ(st.scanDwellMs, 12u);
+    CHECK_EQ(st.scanHoldMs, 13u);
+    CHECK_EQ(st.scanResumeMs, 0u);
+    CHECK_EQ(st.scanListenMs, 0u);
+    CHECK_EQ(pumped(d.eng, s, scanConfigCmd(4294967295.0, 4294967295.4, 1.0e12, 9.0e18)).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.scanDwellMs, 4294967295u);
+    CHECK_EQ(st.scanHoldMs, 4294967295u);
+    CHECK_EQ(st.scanResumeMs, 4294967295u);
+    CHECK_EQ(st.scanListenMs, 4294967295u);
+    // A value that is not finite never gets this far: the table refuses the command.
+    FoxCommand nan = scanConfigCmd(1.0, 1.0, 1.0, 1.0);
+    nan.num[2] = std::numeric_limits<double>::quiet_NaN();
+    CHECK_EQ(pumped(d.eng, s, nan).status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(s.state().scanResumeMs, 4294967295u);
+}
+
+// W4: the scanner's state word and frequency follow the machine, through all four states, and
+// move seq alone (the settings group stays where it was).
+void testScannerStates() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    // No dwell, a long hold: every pass is a step, and a quiet spell is waited on.
+    CHECK_EQ(pumped(d.eng, s, scanConfigCmd(0, 60000, 0, 0)).status(), FOXAPI_OK);
+
+    FoxReceiverState before = s.state();
+    CHECK_EQ(pumped(d.eng, s, scanRunCmd(1, 144.0e6, 144.05e6, 12.5e3)).status(), FOXAPI_OK);
+    FoxReceiverState st = s.state();
+    std::printf("W4: after RUN 1: state %u, at %.0f Hz, counters moved [%s]\n", st.scannerState, st.scanCurrentHz,
+                countersMoved(before, st).c_str());
+    CHECK_EQ(st.scannerState, FOXAPI_SCANNER_SCANNING);
+    CHECK((st.flags & FOXAPI_RX_SCANNER_ACTIVE) != 0u);
+    CHECK_EQ(st.scanCurrentHz, 144.0e6);  // the first tune
+    CHECK_EQ(st.scanStartHz, 144.0e6);    // RUN carries the range, and it is kept
+    CHECK_EQ(st.scanStopHz, 144.05e6);
+    CHECK_EQ(st.scanStepHz, 12.5e3);
+    CHECK(countersMoved(before, st).find("scan") != std::string::npos);
+
+    // Stepping: the frequency walks the lattice and moves seq each time it changes, and never the
+    // settings group. (The receiver's own tuning moves with it: that is the tune group's.)
+    const std::uint64_t scan0 = st.scanSeq;
+    std::set<double> seen;
+    for (int i = 0; i < 12; ++i) {
+        const FoxReceiverState prev = s.state();
+        d.eng.controlPass();
+        st = s.state();
+        CHECK_EQ(st.scanSeq, scan0);
+        CHECK_EQ(st.scannerState, FOXAPI_SCANNER_SCANNING);
+        if (st.scanCurrentHz != prev.scanCurrentHz) { CHECK(st.seq != prev.seq); }
+        const double k = (st.scanCurrentHz - 144.0e6) / 12.5e3;
+        CHECK(k >= 0.0 && k <= 4.0 && k == static_cast<double>(static_cast<int>(k)));
+        seen.insert(st.scanCurrentHz);
+    }
+    std::printf("W4: 12 passes stepped across %zu of the 5 frequencies of the range\n", seen.size());
+    CHECK(seen.size() >= 4u);
+
+    // A signal is found: Paused, held on that frequency.
+    Access::setSquelch(d.eng, -1000.0f);
+    d.eng.controlPass();
+    FoxReceiverState paused = s.state();
+    CHECK_EQ(paused.scannerState, FOXAPI_SCANNER_PAUSED);
+    CHECK((paused.flags & FOXAPI_RX_SCANNER_ACTIVE) != 0u);
+    d.eng.controlPass();
+    d.eng.controlPass();
+    CHECK_EQ(s.state().scannerState, FOXAPI_SCANNER_PAUSED);
+    CHECK_EQ(s.state().scanCurrentHz, paused.scanCurrentHz);
+    CHECK_EQ(countersMoved(paused, s.state()), std::string());  // nothing moves while it listens
+
+    // It goes quiet: Holding, waiting for the station to come back.
+    Access::setSquelch(d.eng, 20.0f);
+    d.eng.controlPass();
+    FoxReceiverState holding = s.state();
+    CHECK_EQ(holding.scannerState, FOXAPI_SCANNER_HOLDING);
+    CHECK_EQ(holding.scanCurrentHz, paused.scanCurrentHz);
+    // The state word moved seq. (The squelch the test moved is published in the same pass, which is the
+    // mode group's: what must NOT move is the scanner's settings, and the tuning.)
+    {
+        const std::string moved = countersMoved(paused, holding);
+        CHECK(moved.find("seq") != std::string::npos);
+        CHECK(moved.find("scan") == std::string::npos);
+        CHECK(moved.find("tune") == std::string::npos);
+    }
+    CHECK_EQ(holding.scanSeq, scan0);
+
+    // The operator's "next": back to Scanning, a step on.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCANNER_SKIP)).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.scannerState, FOXAPI_SCANNER_SCANNING);
+    CHECK(st.scanCurrentHz != holding.scanCurrentHz);
+
+    // Stopped: Idle, the flag clear, the frequency where the scan left it.
+    const double last = st.scanCurrentHz;
+    CHECK_EQ(pumped(d.eng, s, scanRunCmd(0, 0.0, 0.0, 0.0)).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.scannerState, FOXAPI_SCANNER_IDLE);
+    CHECK((st.flags & FOXAPI_RX_SCANNER_ACTIVE) == 0u);
+    CHECK_EQ(st.scanCurrentHz, last);
+    // ...and the flag and the word agree in every state seen above (the flag is the word not Idle).
+    d.eng.controlPass();
+    CHECK_EQ(s.state().scanCurrentHz, last);
+}
+
+// --- J: the bookmark section's two lines (API 0.3 8.6, S2) ----------------------------------
+
+void testBookmarkStatusLines() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 0);
+    // The note: information; the error: red. Set as the hook stands in for whatever writes them.
+    const std::string note = std::string("Removed 3 from \"") + std::string(200, 'g') + "\"";
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, ("test.statusLine=bookmarkNote|" + note).c_str())).status(),
+             FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 1);
+    FoxListItem it = item(s, FOXAPI_LIST_STATUS_LINES, 0);
+    CHECK_EQ(std::string(it.name), std::string("bookmarkNote"));
+    CHECK_EQ(it.value[0], 1.0);
+    CHECK_EQ(fact(s, "fact.status.bookmarkNote"), note);  // whole in the fact (the item cuts at 159)
+    CHECK(std::string(it.detail).size() == sizeof(it.detail) - 1);
+    CHECK_EQ(fact(s, "fact.status.bookmarkError"), std::string());
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=bookmarkError|bookmarks.json: disk full")).status(),
+             FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 2);
+    std::set<std::string> names;
+    double errorLevel = 0.0;
+    for (int32_t i = 0; i < 2; ++i) {
+        const FoxListItem x = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+        names.insert(x.name);
+        if (std::string(x.name) == "bookmarkError") { errorLevel = x.value[0]; }
+    }
+    CHECK(names == (std::set<std::string>{"bookmarkNote", "bookmarkError"}));
+    CHECK_EQ(errorLevel, 3.0);
+    CHECK_EQ(fact(s, "fact.status.bookmarkError"), std::string("bookmarks.json: disk full"));
+    // The window's own copy of the lines (Engine::statusText) carries both.
+    const cascade::engine::Engine::StatusText text = d.eng.statusText();
+    CHECK_EQ(text.bookmarkNote, note);
+    CHECK_EQ(text.bookmarkError, std::string("bookmarks.json: disk full"));
+    // Cleared, they go from the list.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=bookmarkNote|")).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=bookmarkError|")).status(), FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 0);
+    CHECK_EQ(d.eng.statusText().bookmarkNote, std::string());
+
+    // The real writer: a group removed says how many (the note the section lettered from the
+    // engine's own field), and the line follows it on the pass that wrote it.
+    for (int i = 0; i < 3; ++i) {
+        cascade::core::Bookmark b;
+        b.name = "g" + std::to_string(i);
+        b.freqHz = 100.0e6 + 1.0e6 * i;
+        b.group = "Airband";
+        Access::store(d.eng).add(b);
+    }
+    d.eng.controlPass();
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_BOOKMARK_REMOVE_GROUP, 0, 0, "Airband")).status(), FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 1);
+    CHECK_EQ(fact(s, "fact.status.bookmarkNote"), std::string("Removed 3 from \"Airband\""));
+    CHECK_EQ(d.eng.statusText().bookmarkNote, std::string("Removed 3 from \"Airband\""));
+}
+
+// --- O: FOXAPP_OP_BOOKMARK_EXPORT (API 0.3 8.6, S3) -----------------------------------------
+
+testing::Outcome pumpedText(cascade::engine::Engine& eng, testing::Session& s, FoxCommand c, const std::string& text) {
+    testing::Outcome o;
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = api()->submit_text(s.raw(), &c, text.data(), static_cast<uint32_t>(text.size()), &sr);
+    o.submitStatus = n < 0 ? n : sr.status;
+    if (o.submitStatus != FOXAPI_OK) { return o; }
+    for (int pass = 0; pass < 20 && !o.landed; ++pass) {
+        eng.controlPass();
+        FoxCommandResult r[16];
+        for (auto& x : r) { x.structSize = sizeof(x); }
+        const int32_t got = api()->poll_results(s.raw(), r, 16);
+        for (int32_t i = 0; i < got; ++i) {
+            if (r[i].ticket == sr.ticket) {
+                o.landed = true;
+                o.result = r[i];
+            }
+        }
+    }
+    return o;
+}
+
+std::vector<std::filesystem::path> exportedFiles(const std::string& dir) {
+    std::vector<std::filesystem::path> out;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.rfind("foxsdr-frequencies-", 0) == 0 && e.path().extension() == ".xml") { out.push_back(e.path()); }
+    }
+    return out;
+}
+
+std::string slurp(const std::filesystem::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+void testBookmarkExport() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE,
+                            FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(remote.ok());
+    d.eng.controlPass();
+    const std::string dir = fact(s, "fact.recorder.dir");
+    CHECK(!dir.empty());
+    for (const auto& f : exportedFiles(dir)) { std::filesystem::remove(f); }
+
+    // A list with what the table's BOOKMARKS item would cut or change: a name of 200 bytes (the
+    // item holds 95), a group of 180 (it holds 159), a mode no table code names.
+    struct Want {
+        const char* tag;
+        cascade::core::Bookmark b;
+    };
+    std::vector<Want> all;
+    const auto mk = [&](const char* tag, const std::string& name, double hz, const char* mode, double bw,
+                        const std::string& group, bool fav) {
+        cascade::core::Bookmark b;
+        b.name = name;
+        b.freqHz = hz;
+        b.mode = mode;
+        b.bandwidthHz = bw;
+        b.group = group;
+        b.favourite = fav;
+        all.push_back({tag, b});
+    };
+    mk("plain", "Radio 3", 100.3e6, "WFM", 150000.0, "", true);
+    mk("longname", std::string(200, 'n'), 118.1e6, "AM", 10000.0, "Tower", false);
+    mk("longgroup", "Ground", 121.9e6, "AM", 8333.0, std::string(180, 'g'), false);
+    mk("futuremode", "Odd", 145.5e6, "ZZ-FUTURE", 12345.0, "Misc", true);
+    mk("left out", "Not exported", 162.4e6, "NFM", 12500.0, "WX", false);
+    mk("accents", "Caf\xC3\xA9 <1> & \"two\"", 433.92e6, "NFM", 12500.0, "Caf\xC3\xA9", false);
+    std::map<std::string, std::uint64_t> ids;
+    for (Want& w : all) {
+        const int at = Access::store(d.eng).add(w.b);
+        ids[w.tag] = Access::store(d.eng).list()[static_cast<std::size_t>(at)].id;
+    }
+    d.eng.controlPass();
+
+    // The ids of five of them in no order but their own (the store's order is by frequency).
+    const std::string idsText = std::to_string(ids["futuremode"]) + " " + std::to_string(ids["plain"]) + "  " +
+                                std::to_string(ids["accents"]) + "\n" + std::to_string(ids["longgroup"]) + "," +
+                                std::to_string(ids["longname"]) + " " + std::to_string(ids["plain"]);  // one twice
+    const testing::Outcome o = pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText);
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    const std::vector<std::filesystem::path> files = exportedFiles(dir);
+    CHECK_EQ(files.size(), 1u);
+    if (files.size() != 1u) { return; }
+    const std::string xml = slurp(files[0]);
+    const cascade::core::ImportResult back = cascade::core::importFrequencyList(xml);
+    CHECK_EQ(back.items.size(), 5u);
+    // In the store's order (by frequency), each whole.
+    const char* order[] = {"plain", "longname", "longgroup", "futuremode", "accents"};
+    for (std::size_t i = 0; i < 5 && i < back.items.size(); ++i) {
+        const cascade::core::Bookmark* want = nullptr;
+        for (const Want& w : all) {
+            if (std::string(w.tag) == order[i]) { want = &w.b; }
+        }
+        const cascade::core::Bookmark& got = back.items[i];
+        if (want == nullptr) { continue; }
+        CHECK_EQ(got.name, want->name);
+        CHECK_EQ(got.group, want->group);
+        CHECK_EQ(got.mode, want->mode);
+        CHECK_EQ(got.freqHz, want->freqHz);
+        CHECK_EQ(got.bandwidthHz, want->bandwidthHz);
+        CHECK_EQ(got.favourite, want->favourite);
+    }
+    // The file is exactly what exportSdrSharpXml writes for those five, in that order.
+    std::vector<cascade::core::Bookmark> expect;
+    for (const char* tag : order) {
+        for (const Want& w : all) {
+            if (std::string(w.tag) == tag) { expect.push_back(w.b); }
+        }
+    }
+    CHECK_EQ(xml, cascade::core::exportSdrSharpXml(expect));
+    // The name of the file, and the note that says where it went.
+    const std::string fileName = files[0].filename().string();
+    CHECK(fileName.size() == std::string("foxsdr-frequencies-YYYYMMDD-HHMMSS.xml").size());
+    CHECK_EQ(fact(s, "fact.status.bookmarkNote"), "Exported 5 to " + dir + "/" + fileName);
+    CHECK_EQ(Access::note(d.eng), "Exported 5 to " + dir + "/" + fileName);
+    std::printf("O1: five of six bookmarks written whole to %s\n", fileName.c_str());
+
+    // What it will not do. Nothing named, nothing found, a stranger: nothing is written, and each says why.
+    for (const auto& f : exportedFiles(dir)) { std::filesystem::remove(f); }
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), "").status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), "no ids here at all").status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), "999999 999998 0").status(), FOXAPI_NOT_FOUND);
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), "99999999999999999999999 18446744073709551616").status(),
+             FOXAPI_NOT_FOUND);
+    CHECK_EQ(exportedFiles(dir).size(), 0u);
+    // A REMOTE session may not (an app op: this machine's folder).
+    CHECK_EQ(pumpedText(d.eng, remote, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText).status(), FOXAPI_DENIED);
+    CHECK_EQ(exportedFiles(dir).size(), 0u);
+    // One real id among strangers still exports that one.
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT),
+                        "7777777 " + std::to_string(ids["plain"]) + " 8888888").status(),
+             FOXAPI_OK);
+    CHECK_EQ(exportedFiles(dir).size(), 1u);
+    CHECK(fact(s, "fact.status.bookmarkNote").rfind("Exported 1 to ", 0) == 0);
+
+    // A folder that cannot be made: the note says so, the command is FAILED, and nothing was written.
+    const std::filesystem::path blocker = std::filesystem::path(dir).parent_path() / "export_blocker.txt";
+    {
+        std::ofstream(blocker) << "a file where a folder would go";
+    }
+    Access::setRecordDir(d.eng, (blocker / "sub").string());
+    CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), std::to_string(ids["plain"])).status(), FOXAPI_FAILED);
+    CHECK(fact(s, "fact.status.bookmarkNote").rfind("Could not write ", 0) == 0);
+    Access::setRecordDir(d.eng, dir);
+    std::filesystem::remove(blocker);
+}
+
+// O2: a list of a hundred thousand exports in one pass over the store, not one search per id (a search per
+// id measured 831 ms at 40 000 entries against 37 ms for the pass; at 100 000 it is some five seconds against
+// about a tenth of one, which the ceiling below tells apart on a loaded machine too).
+void testBookmarkExportCost() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    const std::string dir = fact(s, "fact.recorder.dir");
+    for (const auto& f : exportedFiles(dir)) { std::filesystem::remove(f); }
+    std::vector<cascade::core::Bookmark> many;
+    many.reserve(100000);
+    for (int i = 0; i < 100000; ++i) {
+        cascade::core::Bookmark b;
+        b.name = "ch" + std::to_string(i);
+        b.freqHz = 30.0e6 + 1000.0 * i;
+        b.group = "G" + std::to_string(i % 50);
+        many.push_back(std::move(b));
+    }
+    CHECK_EQ(Access::store(d.eng).addMany(std::move(many)), 100000u);
+    d.eng.controlPass();
+    std::string idsText;
+    for (const cascade::core::Bookmark& b : Access::store(d.eng).list()) {
+        idsText += std::to_string(b.id);
+        idsText += ' ';
+    }
+    CHECK(idsText.size() < FOXAPI_MAX_LONG_TEXT);
+    const auto t0 = std::chrono::steady_clock::now();
+    const testing::Outcome o = pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    std::printf("O2: 100 000 ids (%zu bytes) exported in %.0f ms\n", idsText.size(), ms);
+    CHECK(ms < 2500.0);
+    const std::vector<std::filesystem::path> files = exportedFiles(dir);
+    CHECK_EQ(files.size(), 1u);
+    if (files.size() == 1u) {
+        CHECK(slurp(files[0]) == cascade::core::exportSdrSharpXml(Access::store(d.eng).list()));
+        std::filesystem::remove(files[0]);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -2102,5 +2631,13 @@ int main() {
     testBookmarksVersionFact();
     testInputRateFact();
     testSpectrumSeam();
+    // Group 7: the recorder, bookmarks and scanner.
+    testScannerDefaults();
+    testScannerSettings();
+    testScannerTimingsAreWholeMilliseconds();
+    testScannerStates();
+    testBookmarkStatusLines();
+    testBookmarkExport();
+    testBookmarkExportCost();
     return check::finish("test_engine_api_03");
 }

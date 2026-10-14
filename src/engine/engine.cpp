@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -393,6 +394,15 @@ double floatAsDecimal(float f) {
     double d = static_cast<double>(f);
     if (t.ec == std::errc()) { (void)std::from_chars(buf, t.ptr, d); }
     return d;
+}
+
+// A scanner timing as the state publishes it (API 0.3 8.6): whole milliseconds, rounded to the
+// nearest (a half goes up), 0 for a negative or NaN - which Scanner::configure floors the same
+// way - and saturating at the top of a uint32.
+std::uint32_t wholeMilliseconds(double ms) {
+    if (!(ms >= 0.0)) { return 0u; }
+    if (ms >= 4294967295.0) { return 0xFFFFFFFFu; }
+    return static_cast<std::uint32_t>(std::floor(ms + 0.5));
 }
 
 // The bytes of `s` into a fixed field, cut at its size less the NUL, the rest
@@ -3670,6 +3680,24 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.scanStartHz = scanStartMhz_ * 1.0e6;
     e.scanStopHz = scanStopMhz_ * 1.0e6;
     e.scanStepHz = scanStepKhz_ * 1.0e3;
+    // THE SCANNER AS ITS SECTION DRAWS IT (API 0.3, docs/api-0.3-additions.md 8.6): the state
+    // word, where it is, the range a Start would scan (as stored, in Hz) and the four timings
+    // (whole milliseconds). The settings move scanSeq; the state word and the frequency move
+    // seq alone. Plain numbers: nothing allocates.
+    static_assert(cascade::core::kScannerIdle == FOXAPI_SCANNER_IDLE &&
+                      cascade::core::kScannerScanning == FOXAPI_SCANNER_SCANNING &&
+                      cascade::core::kScannerPaused == FOXAPI_SCANNER_PAUSED &&
+                      cascade::core::kScannerHolding == FOXAPI_SCANNER_HOLDING,
+                  "the state words are the scanner's, as /api/status names them");
+    r.scannerState = e.scannerState;
+    r.scanCurrentHz = scanner_.currentHz();
+    r.scanStartHz = e.scanStartHz;
+    r.scanStopHz = e.scanStopHz;
+    r.scanStepHz = e.scanStepHz;
+    r.scanDwellMs = wholeMilliseconds(scanDwellMs_);
+    r.scanHoldMs = wholeMilliseconds(scanHoldMs_);
+    r.scanResumeMs = wholeMilliseconds(scanResumeMs_);
+    r.scanListenMs = wholeMilliseconds(scanListenMs_);
     e.catalogueBusy = catalogPending_ || installPending_;
     const EngineHost::BasemapFacts& basemap = facts.basemap;
     e.basemapActive = basemap.active;
@@ -4687,6 +4715,65 @@ void Engine::importBookmarkFile(const std::string& path) {
     cascade::core::diagLogf("bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
                             r.format.c_str(), found, added, r.skipped, r.shifted, ms);
     if (added > 0) { saveBookmarks(); }
+}
+
+// FOXAPP_OP_BOOKMARK_EXPORT (API 0.3 8.6): the bookmarks whose ids `idsText` names - decimal
+// numbers, anything else between them - written whole, IN THE STORE'S ORDER (the order they
+// are shown in), as SDR#'s frequencies.xml to a file under the record folder, which the engine
+// names (the sender names no path). The note says where, or that it could not. Written from the
+// store and not from the BOOKMARKS list because that list cuts a name at 95 bytes and a group at
+// 159, and carries the mode as a code (a mode no code names reads 0): a file made from it would
+// shorten and rewrite what the user shares.
+std::int32_t Engine::exportBookmarks(const std::string& idsText) {
+    std::unordered_set<std::uint64_t> wanted;
+    std::size_t named = 0;  // digit runs seen: zero means nothing was asked for
+    for (std::size_t i = 0; i < idsText.size();) {
+        if (idsText[i] < '0' || idsText[i] > '9') {
+            ++i;
+            continue;
+        }
+        std::uint64_t v = 0;
+        bool overflow = false;
+        for (; i < idsText.size() && idsText[i] >= '0' && idsText[i] <= '9'; ++i) {
+            const std::uint64_t digit = static_cast<std::uint64_t>(idsText[i] - '0');
+            if (v > (UINT64_MAX - digit) / 10u) {
+                overflow = true;
+            } else {
+                v = v * 10u + digit;
+            }
+        }
+        ++named;
+        if (!overflow && v != 0u) { wanted.insert(v); }  // 0 is "not in a list"
+    }
+    if (named == 0) { return FOXAPI_BAD_ARGUMENT; }
+    std::vector<cascade::core::Bookmark> out;
+    for (const cascade::core::Bookmark& b : freqMgr_.list()) {
+        if (wanted.count(b.id) != 0) { out.push_back(b); }
+    }
+    if (out.empty()) { return FOXAPI_NOT_FOUND; }
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(recordDir_), ec);
+    const std::time_t now = std::time(nullptr);
+    std::tm tmv{};
+#ifdef _WIN32
+    localtime_s(&tmv, &now);
+#else
+    localtime_r(&now, &tmv);
+#endif
+    char name[64];
+    std::strftime(name, sizeof(name), "foxsdr-frequencies-%Y%m%d-%H%M%S.xml", &tmv);
+    const std::filesystem::path path = std::filesystem::path(recordDir_) / name;
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    const std::string xml = cascade::core::exportSdrSharpXml(out);
+    f.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+    f.close();
+    const std::string shown = recordDir_ + "/" + name;
+    if (f) {
+        bookmarkImportNote_ = cascade::core::formatText(tr("Exported %zu to %s"), out.size(), shown.c_str());
+        return FOXAPI_OK;
+    }
+    bookmarkImportNote_ = cascade::core::formatText(tr("Could not write %s"), shown.c_str());
+    return FOXAPI_FAILED;
 }
 
 void Engine::saveBookmarks() {
@@ -5786,6 +5873,15 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no file named"); }
             importBookmarkFile(text);
             return res;
+        case FOXAPP_OP_BOOKMARK_EXPORT: {
+            // The ids of the bookmarks the section shows, by the long-text channel. The engine
+            // writes the file (see exportBookmarks); the note says where it went.
+            const std::int32_t st = exportBookmarks(text);
+            if (st == FOXAPI_BAD_ARGUMENT) { return refuse(st, "no bookmark ids named"); }
+            if (st == FOXAPI_NOT_FOUND) { return refuse(st, "none of those bookmarks exists"); }
+            if (st == FOXAPI_FAILED) { return refuse(st, "the file could not be written"); }
+            return res;
+        }
 
         // --- the scanner -------------------------------------------------------------------
         case FOXAPI_OP_SCANNER_RUN:
@@ -7279,6 +7375,8 @@ void Engine::publishStatusText() {
     t.pluginEnforceError = pluginEnforceError_;
     t.restoreKeepLabel = restoreKeepLabel_;
     t.audioHealth = audioHealthNote_;
+    t.bookmarkNote = bookmarkImportNote_;
+    t.bookmarkError = bookmarkError_;
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     statusText_ = std::move(t);
 }

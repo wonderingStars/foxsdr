@@ -25,6 +25,10 @@
 //      and a 64-character RadioText, longer than any small string), the
 //      auto-notch engaged and the pilot locked, the publish allocates nothing
 //      and says all of it
+//   E  the scanner (API 0.3 8.6): running, with its range and timings set, the
+//      publish allocates nothing and says state, frequency, range and timings;
+//      stepping across the range, paused on a signal and stopped again, the
+//      same
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
@@ -124,6 +128,34 @@ struct AppWindowTestAccess {
     static void pilot(cascade::engine::Engine& e, bool on, bool locked) {
         e.testPilotOn_ = on;
         e.testPilotLocked_ = locked;
+    }
+    // The scanner (API 0.3 8.6), driven as the engine's own commands and pass do: the timings and
+    // the range set, a scan started or stopped, and one tick of its frame (the first tune, a
+    // step, a pause) with the squelch at a threshold below (open) or above (closed) the -200 dB
+    // a stopped pipeline reads.
+    static void scanConfig(cascade::engine::Engine& e, double dwell, double hold, double resume, double listen) {
+        FoxCommand c{};
+        c.structSize = sizeof(c);
+        c.op = FOXAPI_OP_SCANNER_CONFIG;
+        c.num[0] = dwell;
+        c.num[1] = hold;
+        c.num[2] = resume;
+        c.num[3] = listen;
+        (void)e.applyCommand(c);
+    }
+    static void scanRun(cascade::engine::Engine& e, bool on, double startHz, double stopHz, double stepHz) {
+        FoxCommand c{};
+        c.structSize = sizeof(c);
+        c.op = FOXAPI_OP_SCANNER_RUN;
+        c.ival[0] = on ? 1 : 0;
+        c.num[0] = startHz;
+        c.num[1] = stopHz;
+        c.num[2] = stepHz;
+        (void)e.applyCommand(c);
+    }
+    static void scanTick(cascade::engine::Engine& e, float squelchDb) {
+        e.squelchDb_ = squelchDb;
+        e.scannerFrame();
     }
 };
 }  // namespace cascade::gui
@@ -301,6 +333,45 @@ int main() {
         CHECK(ps3.rx.rdsFlags == 0u && ps3.rx.rdsPs[0] == '\0' && ps3.rx.rdsRadioText[0] == '\0');
         CHECK((ps3.rx.flags & (FOXAPI_RX_AUTO_NOTCH_ENGAGED | FOXAPI_RX_PILOT_LOCKED)) == 0u);
         CHECK(ps3.rx.autoNotchHz == 0.0);
+    }
+
+    // E: the scanner's members (API 0.3 8.6) are plain numbers copied into the state, so a scan
+    // running, stepping, listening and stopping publishes without allocating - and says what it is
+    // doing.
+    {
+        Access::scanConfig(e, 0, 700, 80, 9000);
+        Access::scanRun(e, true, 144.0e6, 144.1e6, 12.5e3);
+        Access::scanTick(e, 20.0f);  // the first tune, with the squelch closed
+        const long scanning = allocationsOfPublishes(e);
+        std::printf("E: %d publishes with a scan running: %ld heap allocations\n", kPublishes, scanning);
+        CHECK(scanning == 0);
+        cascade::core::PublishedState ps4;
+        Access::publish(e, ps4);
+        CHECK(ps4.rx.scannerState == FOXAPI_SCANNER_SCANNING);
+        CHECK((ps4.rx.flags & FOXAPI_RX_SCANNER_ACTIVE) != 0u);
+        CHECK(ps4.rx.scanCurrentHz == 144.0e6);
+        CHECK(ps4.rx.scanStartHz == 144.0e6 && ps4.rx.scanStopHz == 144.1e6 && ps4.rx.scanStepHz == 12.5e3);
+        CHECK(ps4.rx.scanDwellMs == 0u && ps4.rx.scanHoldMs == 700u && ps4.rx.scanResumeMs == 80u &&
+              ps4.rx.scanListenMs == 9000u);
+        // The same through a step, a pause on a signal and a hold, each published and counted.
+        Access::scanTick(e, 20.0f);  // a step
+        CHECK(allocationsOfPublishes(e) == 0);
+        Access::publish(e, ps4);
+        CHECK(ps4.rx.scanCurrentHz == 144.0125e6);
+        Access::scanTick(e, -1000.0f);  // a signal: paused
+        CHECK(allocationsOfPublishes(e) == 0);
+        Access::publish(e, ps4);
+        CHECK(ps4.rx.scannerState == FOXAPI_SCANNER_PAUSED);
+        Access::scanTick(e, 20.0f);  // gone quiet: holding
+        CHECK(allocationsOfPublishes(e) == 0);
+        Access::publish(e, ps4);
+        CHECK(ps4.rx.scannerState == FOXAPI_SCANNER_HOLDING);
+        // Stopped: idle, the frequency where it was left.
+        Access::scanRun(e, false, 0.0, 0.0, 0.0);
+        Access::publish(e, ps4);
+        CHECK(ps4.rx.scannerState == FOXAPI_SCANNER_IDLE);
+        CHECK((ps4.rx.flags & FOXAPI_RX_SCANNER_ACTIVE) == 0u);
+        CHECK(ps4.rx.scanCurrentHz == 144.0125e6);
     }
 
     return testSummary("test_engine_publish_alloc");

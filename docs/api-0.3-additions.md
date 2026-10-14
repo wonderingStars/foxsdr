@@ -24,7 +24,7 @@ serves only its own minor, so a 0.3 engine answers `foxsdr_engine_query(0, 2)`
 with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
 is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
 and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
-at its end (sections 8.1, 8.2 and 8.4). `FoxScopeInfo` is new, with its own
+at its end (sections 8.1, 8.2, 8.4 and 8.6). `FoxScopeInfo` is new, with its own
 `FOXAPI_MIN_SCOPE_INFO`. No other struct changed.
 
 ## 2. Capabilities
@@ -95,7 +95,7 @@ says when to read again.
 
 | List | Entry |
 |---|---|
-| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2) |
+| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3) |
 | `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `value[3]`: on the entry that is `ACTIVE` only, **the radio's own centre readback in Hz, read live** (the frequency the radio was told and kept - not the air frequency `centreHz` speaks; a retune moves it without moving `listSeq`; 0 on every other entry; section 8.3); `ACTIVE`: the open radio's |
 | `GAIN_MODES` (24) | a radio with gain MODES (an Airspy: Linearity, Sensitivity, Free). `name`; `value[0]`: the mode code `FOXAPP_OP_AIRSPY_GAIN_MODE` takes; `ACTIVE`. Empty for every other radio |
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
@@ -480,6 +480,64 @@ nothing in the product calls it), so a hermetic engine that runs no pipeline -
 a window test must not open a sound device - can hand an interface a spectrum
 whose every bin is known.
 
+### 8.6 The recorder, the bookmarks and the scanner as their sections draw them
+
+The Recorder, Bookmarks and Scanner sections read the engine's table only. 0.3 had
+most of it: the state's flags (`FOXAPI_RX_RECORDING_IQ`, `FOXAPI_RX_RECORDING_AUDIO`,
+`FOXAPI_RX_SCANNER_ACTIVE`, `FOXAPI_RX_RUNNING`), `audioMutedBy`, the `RECORDINGS` list
+and `fact.recorder.dir`, the `BOOKMARKS` list with `fact.bookmarks.version`, and every
+command the sections send. This adds the scanner's readout, two status lines and one op.
+Appended after `rdsRadioText`; **`FOXAPI_MIN_RECEIVER_STATE` moves to the end of
+`scanListenMs`** (`FoxReceiverState` is 64 bytes larger).
+
+**The scanner** (S1):
+
+| Member | Group | |
+|---|---|---|
+| `scanSeq` | | advances when any of the seven settings below changed; `seq` moves with it |
+| `scanStartHz`, `scanStopHz`, `scanStepHz` | `scanSeq` | the range a Start would scan, **as stored** and in Hz: what `FOXAPP_OP_SCANNER_RANGE` and `FOXAPI_OP_SCANNER_RUN` wrote, times the same factor the engine reads them back with (a value that is not exact in megahertz reads back as the engine's product). A reversed range is published reversed; `Scanner::configure` swaps it when the scan runs |
+| `scanDwellMs`, `scanHoldMs`, `scanResumeMs`, `scanListenMs` | `scanSeq` | the four timings of `FOXAPI_OP_SCANNER_CONFIG`, in **whole milliseconds**: rounded to the nearest (a half goes up), 0 for a negative (the scanner floors a negative at 0 as well), saturating at 4294967295. The engine keeps what it was sent; this is how it is published |
+| `scannerState` | `seq` only | `FOXAPI_SCANNER_IDLE` 0 (not scanning), `FOXAPI_SCANNER_SCANNING` 1 (stepping one point each dwell), `FOXAPI_SCANNER_PAUSED` 2 (a signal was found: held on it, listening), `FOXAPI_SCANNER_HOLDING` 3 (the signal went quiet: waiting `scanHoldMs` for it to come back). The same words `/api/status` names (`idle`, `scanning`, `paused`, `holding`). `FOXAPI_RX_SCANNER_ACTIVE` is set exactly when this is not `IDLE` |
+| `scanCurrentHz` | `seq` only | where the scanner is: the lattice point it last emitted. After a stop it keeps reporting where the scan stopped |
+
+Which counter each moves: the **settings** are a group of their own, since a form that
+shows them re-reads them when they change and at no other time; they move `scanSeq` and
+`seq`. `scannerState` and `scanCurrentHz` are live state: a scan steps at every dwell, so
+they move `seq` and no group counter, as the scanner's flag does; the receiver's tuning
+moves `tuneSeq` (and `txSeq`, where the transmitter follows the dial) with the scan, as
+for any retune. A scan running does not move `scanSeq`. Nothing allocates: plain numbers
+in the state.
+
+A command through the table lands at the engine's next pass, and the state shows it after
+that pass's publish. A form that edits the range or a timing and then reads the state back
+sees its own edit one pass later.
+
+**The Bookmarks section's two lines** (S2): `bookmarkNote` (level 1, information) and
+`bookmarkError` (level 3, error), in `STATUS_LINES` (section 5.1), as `fact.status.bookmarkNote`
+and `fact.status.bookmarkError` (whole), and in the engine's handed-over copy of the lines.
+`bookmarkNote` is what the last import, export or group removal did ("Exported 12 to
+C:/.../foxsdr-frequencies-20261014-091500.xml", "Removed 3 from \"Airband\"", "Could not
+import: ..."); `bookmarkError` is the bookmark file's own problem (it could not be read, or
+could not be saved). Both move `listSeq` with every other status line.
+
+**The bookmark copy and its groups** (S4). `BOOKMARKS` is copied when `fact.bookmarks.version`
+moves and not when `listSeq` does (section 8.5); the rows carry what the section needs (`id`;
+`name`; `detail`, the group, cut at 159 bytes; `value[0]` Hz; `value[1]` the mode code;
+`value[2]` the bandwidth; `FAVOURITE`). The group names the section offers are **derived from
+that copy** - the sorted, distinct non-empty `detail` strings - so they cannot disagree with the
+rows they filter. `BOOKMARK_GROUPS` (21) is served as it was (sorted by name, with counts), built
+from the published block on each call, which is O(bookmarks) per entry read; an interface that
+wants the groups of a long list does not read it.
+
+**`FOXAPP_OP_BOOKMARK_EXPORT`** (S3, section 9): writes bookmarks as SDR# frequencies.xml.
+
+**The recorder.** The section reads the two takes from `RECORDINGS` (kind 1 and 2): the
+bytes (`value[1]`) and the seconds (`value[3]`) are read live; the samples it letters are the
+bytes over the bytes a frame takes (an I/Q frame is eight bytes: two 32-bit floats; an audio
+frame is two: one 16-bit sample), which is what the recorder counts a frame as. "Muted by ..."
+under an audio take is `audioMutedBy` while the audio is hard-muted (the user's mute or a
+plugin's, or a keyed transmitter that is not monitored: section 8.5).
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
@@ -515,16 +573,34 @@ session is `DENIED` and adds nothing. The window sends each name once a run
 frame, every frame the page was open. Not a "safer" command (API.md 7.2): it
 is never merged, because a repeat is already free.
 
+`FOXAPP_OP_BOOKMARK_EXPORT` (0x8603, SETTINGS, **LOCAL sessions only** - it writes a file on
+this machine): the long text (`submit_text`; the ids of a long list do not fit `text[]`) is the
+ids of the bookmarks to export, as the `id` of their `BOOKMARKS` entries, in decimal, with
+anything that is not a digit between them. The engine writes those bookmarks - **whole**, from
+its store, in the store's own order (by frequency, the order they are listed in), not in the
+order the ids were sent and once each however often an id is repeated - as SDR#'s
+frequencies.xml to `foxsdr-frequencies-<YYYYMMDD>-<HHMMSS>.xml` in the record folder
+(`fact.recorder.dir`), creating the folder, and sets the `bookmarkNote` line to "Exported <n> to
+<folder>/<file>". The sender names no path and no filter: the ids are the selection (an
+interface that lists a filtered view sends the ids of what it shows). Why the engine writes it
+and the interface does not: a `BOOKMARKS` entry cuts a name at 95 bytes and a group at 159 and
+carries the mode as a code, so a file made from the list would shorten names and groups and
+rewrite a mode no code names. No digits in the text is `BAD_ARGUMENT`; ids none of which is a
+bookmark (an id of 0 or one too large for 64 bits names nothing) is `NOT_FOUND`; a file that
+could not be written is `FAILED` (the note says "Could not write <path>"). Nothing is written
+in the first two. A REMOTE session is `DENIED`. The text is at most `FOXAPI_MAX_LONG_TEXT` (1
+MiB): about 130 000 ids of seven digits.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the
-auto-notch readout (2) (section 8.4). What stays: plugin panels and instruments
+auto-notch readout (2) (section 8.4), and bookmarks export and scanner progress (11) (section
+8.6). What stays: plugin panels and instruments
 as data and a plugin's command-key list
 (4), map tiles and track info (6), per-node patch editing as ops (7: 0.3
 reads the graph back and edits it whole through
 `FOXAPP_OP_PATCH_SET_GRAPH` with `submit_text`), the transmitter's microphone
-list and meters (8), device-scan diagnostics (9), bookmarks export and
-scanner progress (11), diagnostics (12), updates (13), zoomed spectrum (14),
+list and meters (8), device-scan diagnostics (9), diagnostics (12), updates (13), zoomed spectrum (14),
 multi-VFO (15), a settings catalogue (16). The AUDIO stream, the settings
 store and the decoders' text and image EVENTS are still not served by this
 engine (their capability bits are clear).
