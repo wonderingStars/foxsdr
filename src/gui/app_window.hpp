@@ -65,6 +65,7 @@ struct GLFWwindow;
 #include "gui/rail_reads.hpp"
 #include "gui/section_reads.hpp"
 #include "gui/tuning_reads.hpp"
+#include "gui/decoder_reads.hpp"
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
@@ -903,7 +904,7 @@ private:
     // frame. See the definition for what the row promises.
     void drawGpsPositionControl();
 
-    void drawPluginPresets(const cascade::core::LoadedPlugin& p);
+    void drawPluginPresets(const cascade::gui::PluginRow& p);
     // The window half of a preset press: the plugin's map page, picture,
     // panels and instruments, or Decoder output for a text decoder.
     void openPluginWindowsFor(const cascade::core::LoadedPlugin& p) override;
@@ -926,14 +927,15 @@ private:
     //
     // Looks up `displayName` (a HostTrack/HostImage/HostPanel/HostInstrument
     // /MapPage plugin tag — the same identity pluginKeyForDisplayName
-    // resolves) in muteStates_, which is the ONE cache of a plugin's
-    // validated presets that already exists and is already rebuilt on every
-    // plugin-set change (see rebuildMuteStates) — never a fresh count()/get()
-    // walk, which is what the header comment above rebuildMuteStates refuses
-    // to let the frame path do. Null when no cached entry answers to that
-    // name (an unloaded plugin, or one with no presets at all — see the
-    // caller, which treats null the same as "nothing to draw").
-    const cascade::core::MutePlugin* muteStateForDisplayName(const std::string& displayName) const;
+    // resolves) among the LOADED plugins of the window's plugin cache
+    // (pluginLists), which holds each one's validated presets as the table
+    // lists them (PRESETS, USER_PRESETS) - never a fresh count()/get() walk
+    // of the plugin's own code. Since window port group 8 the answer is a
+    // row of that cache and not the engine's muteStates_. Null when no loaded
+    // plugin answers to that name (see the caller, which treats null the same
+    // as "nothing to draw"); a loaded plugin with no presets answers with a
+    // row whose presets are empty.
+    const cascade::gui::PluginRow* muteStateForDisplayName(const std::string& displayName);
     // THE BAR FOR ONE WINDOW: a map page, an image window, a panel or an
     // instrument window, each of which owns exactly one plugin and knows its
     // own display name. Draws nothing and costs no vertical space when that
@@ -967,7 +969,7 @@ private:
     // What the banner names, or "" when there is no banner to draw. The test
     // seam FOXSDR_FORCE_MUTE_BANNER=<name> draws it naming <name> whatever
     // the audio is doing, so the theme census can place and measure it.
-    std::string muteBannerSubject() const;
+    std::string muteBannerSubject();
     // Draws the banner where layoutMuteBanner put it (bar-relative, from the
     // bar's top-left `barTL`): the words - whole, or shortened with the full
     // sentence in a tooltip - and the "Stop plugin" key, always whole.
@@ -2321,6 +2323,65 @@ private:
     };
     TuningListCache tuningCache_;
     const TuningListCache& tuningLists();
+    // THE DECODERS, THE PRESETS, THE MARKS, THE MUTE CLUSTER AND THE GRANTS (window port
+    // group 8: drawDecodersSection, drawDecoderStatusRows, drawPluginPresets, drawPresetKeys,
+    // drawDecoderPresetBars, drawPluginMarkers, drawPluginTuneControls, drawMutePopup,
+    // muteBannerSubject, drawMuteBanner and the lookup of a plugin's presets; API 0.3 section
+    // 8.7, gui/decoder_reads.hpp). What they read of the table is kept here and read again ONLY
+    // when listSeq moves (and, since D3, a decoder line does not move it): PLUGINS merged with
+    // its DECODERS, PRESETS and USER_PRESETS entries into one row a plugin
+    // (cascade::gui::PluginRow), MARKERS (as the plugin ABI's CascadeMarker rows
+    // pluginMarkerGeometry takes), MUTE_CAUSES, STALE_GRANTS, and the three facts
+    // (fact.mute.subject, fact.mute.keptRunning, fact.plugin.lastDenied) into strings that keep
+    // their room - so a refresh that finds nothing bigger allocates only the table's own
+    // get_setting text. pluginLists() is the one call a member makes; listSeq 0 is "never read".
+    struct PluginListCache {
+        std::uint64_t listSeq = 0;
+        std::uint32_t refreshes = 0;       // times the lists were read again (a test reads it)
+        std::vector<cascade::gui::PluginRow> plugins;
+        cascade::gui::ModuleCensus decoderCensus;  // gui::kDecoderCaps over the rows (module_census.hpp's rule)
+        std::vector<CascadeMarker> markers;
+        std::vector<cascade::gui::StaleGrantRow> staleGrants;
+        std::vector<cascade::gui::MuteCauseRow> muteCauses;
+        bool muteKeptRunning = false;      // fact.mute.keptRunning
+        std::string muteSubject;           // fact.mute.subject
+        std::string lastDenied;            // fact.plugin.lastDenied
+        std::string factText;              // the fact as just read (kept for its room)
+    };
+    PluginListCache pluginCache_;
+    const PluginListCache& pluginLists();
+    // THE DECODER OUTPUT (the Decoder output window and the rail's line count): the window's copy of
+    // DECODER_LINES. The ring is read ONLY when the state's decoderLinesTotal has moved (a decoder
+    // line moves nothing else, D3), and only the entries whose id is above the highest it holds are
+    // copied - never the ring again. Clear empties the copy and the ids at or below the highest it
+    // held are never taken again. Bounded at kDecoderLogMax, the newest kept, as the engine's tail was.
+    struct DecoderLineRow {
+        std::uint64_t id = 0;              // the line's number
+        std::string plugin;                // cut at the list item's 95 bytes
+        std::string text;                  // cut at its 159
+    };
+    struct DecoderLineCache {
+        std::deque<DecoderLineRow> lines;
+        std::uint64_t seenTotal = 0;       // decoderLinesTotal the ring was last read at
+        std::uint64_t lastId = 0;          // the highest id copied (or cleared)
+        std::uint32_t reads = 0;           // times the ring was read (a test reads it)
+        std::uint64_t copied = 0;          // lines copied, in all (a test reads it)
+        std::vector<DecoderLineRow> fresh; // scratch for one read, newest first
+    };
+    DecoderLineCache decoderLineCache_;
+    const DecoderLineCache& decoderLines();
+    void clearDecoderLines();
+    // THE TUNE-AWAY QUESTION (API 0.3 8.7, FOXAPI_EVENT_MUTE_TUNE_AWAY): the session subscribes to the
+    // event; pumpTransmitKey drains the session's events once a frame (pumpUiEvents) and, on one,
+    // askAboutMutedPlugins captures the names and the module keys from MUTE_CAUSES - the dialog is about
+    // THOSE plugins, however the lists move on - and asks drawMutePopup to open. The dialog closes when
+    // fact.mute.keptRunning reads 0 again (the engine's own withdrawal) or the operator answers.
+    void pumpUiEvents();
+    void askAboutMutedPlugins();
+    bool mutePopupOpen_ = false;           // the question is up (or about to be)
+    bool mutePopupOpenRequest_ = false;    // ImGui::OpenPopup is due on the next drawMutePopup
+    std::vector<std::string> mutePopupNames_;
+    std::vector<std::string> mutePopupKeys_;
     // THE SPECTRUM, refreshUiState's second read: ONE read_spectrum a frame into
     // lastFrame_, and the waterfall fed from it - one row for each NEW sequence and none
     // for a NO_CHANGE. spectrumArrived_ says a frame was taken since drawUi last

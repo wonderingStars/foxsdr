@@ -54,38 +54,44 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
     return false;
 }
 
+void countModule(ModuleCensus& c, const std::string& named, bool loaded, std::uint32_t capabilities, bool provides,
+                 bool stopped, std::uint32_t capMask) {
+    if (!loaded) {
+        // THE CAPABILITY WORD, not the table, on a record that did not
+        // load: every borrowed pointer is nulled on the way out and the
+        // bits are what survive.
+        if ((capabilities & capMask) != 0u) {
+            ++c.refused;
+            if (c.refusedName.empty()) { c.refusedName = named; }
+        } else if (capabilities == 0u) {
+            ++c.unread;
+        }
+        return;
+    }
+    if (!provides) { return; }
+    if (stopped) {
+        ++c.stopped;
+        if (c.stoppedName.empty()) { c.stoppedName = named; }
+        return;
+    }
+    ++c.live;
+}
+
 ModuleCensus censusModules(const std::vector<LoadedPlugin>& plugins, std::uint32_t capMask,
                            const ModuleStoppedFn& isStopped) {
     ModuleCensus c;
     for (const LoadedPlugin& p : plugins) {
         const std::string file = cascade::core::pluginKey(p);
         const std::string named = p.name.empty() ? file : p.name;
-        if (!p.loaded) {
-            // THE CAPABILITY WORD, not the table, on a record that did not
-            // load: every borrowed pointer is nulled on the way out and the
-            // bits are what survive.
-            if ((p.capabilities & capMask) != 0u) {
-                ++c.refused;
-                if (c.refusedName.empty()) { c.refusedName = named; }
-            } else if (p.capabilities == 0u) {
-                ++c.unread;
-            }
-            continue;
-        }
-        if (!moduleProvides(p, capMask)) { continue; }
         // A NULL PREDICATE IS NOT "NOTHING IS STOPPED". A caller with no stop
         // set to consult would otherwise have every stopped module counted as
         // live, which is the same class of wrong answer as the one this file
         // exists to remove; it is a programming error, and the empty function
         // is the only value it can take, so treat it as "cannot say" and
         // count nothing rather than counting it live.
-        if (!isStopped) { continue; }
-        if (isStopped(file)) {
-            ++c.stopped;
-            if (c.stoppedName.empty()) { c.stoppedName = named; }
-            continue;
-        }
-        ++c.live;
+        const bool provides = p.loaded && moduleProvides(p, capMask) && static_cast<bool>(isStopped);
+        const bool stopped = provides && isStopped(file);
+        countModule(c, named, p.loaded, p.capabilities, provides, stopped, capMask);
     }
     return c;
 }

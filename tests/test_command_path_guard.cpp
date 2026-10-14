@@ -146,7 +146,9 @@ const char* const kReadOnly[] = {
     "pipeline_.converter", "pipeline_.demodMode", "pipeline_.faultMessage", "pipeline_.faulted",
     "pipeline_.getLatestFrame", "pipeline_.inputRateHz", "pipeline_.pilotLevel", "pipeline_.pilotLocked",
     "pipeline_.rdsSnapshot", "pipeline_.running", "pipeline_.signalPowerDb", "pipeline_.stereoActive",
-    "pipeline_.vfoOffsetHz", "pipeline_.rawSource().centerFrequencyHz", "pipeline_.audioSamplesProduced",
+    // (RETIRED with window port group 8, its last caller gone: pipeline_.vfoOffsetHz - the preset keys read the
+    // state's vfoOffsetHz - and pluginUi_.lastDeniedPlugin - the Receiver control rows read fact.plugin.lastDenied.)
+    "pipeline_.rawSource().centerFrequencyHz", "pipeline_.audioSamplesProduced",
     "pipeline_.audioTap",
     "pipeline_.scopeAudio().capacity", "pipeline_.scopeAudio().snapshot", "pipeline_.scopeAudio().written",
     "pipeline_.scopeIq().capacity", "pipeline_.scopeIq().snapshot", "pipeline_.scopeIq().written",
@@ -157,7 +159,7 @@ const char* const kReadOnly[] = {
     "pluginRunner_.status", "pluginRunner_.iqFramesFed", "pluginRunner_.pollImages",
     "pluginUi_.api().commands", "pluginUi_.api().settingsRequesters", "pluginUi_.instruments",
     "pluginUi_.panels", "pluginUi_.panels().size", "pluginUi_.paths", "pluginUi_.paths().size",
-    "pluginUi_.lastDeniedPlugin", "pluginUi_.trackPluginNames", "pluginUi_.trackPluginNames().empty",
+    "pluginUi_.trackPluginNames", "pluginUi_.trackPluginNames().empty",
     "pluginUi_.tracks", "pluginUi_.tracks().size", "pluginUi_.tuneAllowed", "pluginUi_.settingsAllowed",
     "pluginUi_.altitudeNear", "pluginUi_.tuneRequesters().size", "pluginUi_.poll",
     "pluginRepo_.progress",
@@ -976,10 +978,22 @@ const char* const kPortedMembers[] = {
     // column's RECORDER card).
     "drawRecorderSection", "drawBookmarksSection", "rebuildBookmarkView", "drawScannerSection",
     "commitScannerDraft", "flushScannerDraft", "readTake",
+    // GROUP 8, the decoders, the presets, the marks, the plugin-mute cluster and the tune grants: the Decoders
+    // section and the rows it draws (the decoder status rows, the plugin presets and the preset keys), the Decoder
+    // output window with the preset bars above its log, the marks on the spectrum, the Receiver control rows, the
+    // tune-away dialog, the banner's subject and its key, and the lookup of a plugin's presets - with the
+    // window's own helpers: the cache of the plugin lists, the copy of the decoder lines and its Clear, the
+    // session's event drain, the dialog's capture, and the one preset bar (a plugin's own window) that calls
+    // the lookup. The engine's mutePopupQueued_, muteKeptRunning_, mutePopup_, mutedByKeys_, pluginMarkers_ and
+    // decoderLinesTotal_ are no longer read by the window at all.
+    "drawDecodersSection", "drawDecoderStatusRows", "drawDecoderWindow", "drawPluginPresets", "drawPresetKeys",
+    "drawDecoderPresetBars", "drawPluginTuneControls", "drawPluginMarkers", "drawMutePopup", "muteBannerSubject",
+    "drawMuteBanner", "muteStateForDisplayName", "drawPluginPresetBar",
+    "pluginLists", "decoderLines", "clearDecoderLines", "pumpUiEvents", "askAboutMutedPlugins",
 };
 
-constexpr int kWindowFieldsReadBudget = 111;
-constexpr int kWindowFieldReadsBudget = 539;
+constexpr int kWindowFieldsReadBudget = 105;
+constexpr int kWindowFieldReadsBudget = 499;
 
 struct Report {
     int violations = 0;

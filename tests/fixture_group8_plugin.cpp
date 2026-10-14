@@ -15,12 +15,17 @@
 //   * CASCADE_CAP_HOST_CLIENT - two marks on the spectrum set when the host attaches it: a point
 //     with the host's own colour, and a dashed, spectrum-only span with a colour of its own.
 //
+// FOR THE BOUNDED VISUAL CHECK ONLY: with FOXSDR_FIXTURE_G8_LINES=<n> in its environment the decoder
+// answers its first poll with n short lines at once ("G8 decoded line 001" ...), once a process, so the
+// Decoder output window has text to draw that is the same in every run. Without it, it says nothing.
+//
 // It is not a test (the tests/ glob builds only test_*.cpp as tests) and it ships nowhere.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_abi.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 
@@ -38,7 +43,24 @@ void* iqCreate(double rateHz, double) {
 
 void iqProcess(void*, const float*, size_t) {}
 
-int32_t iqPollText(void*, char*, size_t) { return 0; }
+int32_t iqPollText(void*, char* buf, size_t cap) {
+    static int remaining = -1;  // lines still to say; read from the environment the first time
+    static int said = 0;
+    if (remaining < 0) {
+        const char* v = std::getenv("FOXSDR_FIXTURE_G8_LINES");
+        remaining = v != nullptr ? std::atoi(v) : 0;
+    }
+    if (remaining <= 0 || buf == nullptr) { return 0; }
+    size_t n = 0;
+    while (remaining > 0 && n + 24u <= cap) {
+        ++said;
+        const int wrote = std::snprintf(buf + n, cap - n, "G8 decoded line %03d\n", said);
+        if (wrote <= 0) { break; }
+        n += static_cast<size_t>(wrote);
+        --remaining;
+    }
+    return static_cast<int32_t>(n);
+}
 
 void iqDestroy(void* handle) { delete static_cast<Instance*>(handle); }
 

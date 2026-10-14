@@ -106,6 +106,15 @@ bool moduleProvides(const cascade::core::LoadedPlugin& p, std::uint32_t capMask)
 ModuleCensus censusModules(const std::vector<cascade::core::LoadedPlugin>& plugins,
                            std::uint32_t capMask, const ModuleStoppedFn& isStopped);
 
+// THE RULE, ONCE: how one module is counted. `named` is the display name (the file name when it has none);
+// `provides` is "loaded, with a table behind a bit of the mask"; `stopped` is the stop set's answer. A module
+// that did not load is counted by its capability WORD (the bits survive a refusal): refused when it declared a
+// bit of the mask, unread when the word is empty. censusModules applies this to the host's records, and a window
+// that reads the engine's table (gui/decoder_reads.hpp, window port group 8) to the table's entries, so the two
+// cannot count one module two ways.
+void countModule(ModuleCensus& c, const std::string& named, bool loaded, std::uint32_t capabilities, bool provides,
+                 bool stopped, std::uint32_t capMask);
+
 // --- the notes ---------------------------------------------------------------
 //
 // Each returns the sentence a surface prints when it is empty BECAUSE the

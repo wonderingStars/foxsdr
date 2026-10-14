@@ -8303,7 +8303,11 @@ void AppWindow::drawDecodersSection() {
     // already looking at, beside the presets that started the decoder in the
     // first place. engine/running_view.hpp holds every decision and
     // tests/test_running_view.cpp drives it.
-    const std::size_t fed = engine_.pipeline_.running() ? engine_.fedDecoderCount() : 0u;
+    // From the window's engine API session (window port, group 8): the plugins as the table lists them, and the
+    // state's count of the decoders being fed.
+    const PluginListCache& pl = pluginLists();
+    const bool receiverRunning = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
+    const std::size_t fed = receiverRunning ? uiState_.decodersRunning : 0u;
     std::string decChip;
     cascade::core::formatUtf8(decChip, tr("%zu FED"), fed);
     // VERIFICATION ONLY, the same house rule as FOXSDR_OPEN_PLUGIN_STORE: this
@@ -8325,8 +8329,7 @@ void AppWindow::drawDecodersSection() {
     // Built from the runner rather than from the loaded list: "running" here
     // means BEING FED, which is the only sense in which a decoder is costing
     // this machine anything (running_view.hpp says why).
-    const std::vector<cascade::gui::RunnableDecoder> runnable = engine_.runnableDecoders();
-    const int runningNow = cascade::gui::runningCount(runnable, engine_.pipeline_.running());
+    const int runningNow = cascade::gui::runningDecoderCount(pl.plugins, receiverRunning);
     std::string stopAllPressed;  // non-empty marks "stop every running key"
     if (cascade::gui::showStopAll(runningNow)) {
         const std::string note = cascade::gui::runningCostNote(runningNow);
@@ -8349,22 +8352,23 @@ void AppWindow::drawDecodersSection() {
     // Deferred past the loop, exactly as the old installed list deferred it:
     // setPluginMutes rebuilds the mute snapshot, which walks the very vector
     // being iterated, and applyPluginPreset rebuilds every decoder instance.
-    const std::vector<cascade::core::LoadedPlugin>& list = engine_.pluginHost_.plugins();
+    const std::vector<cascade::gui::PluginRow>& list = pl.plugins;
     int toggleMuteIdx = -1;
     bool toggleMuteTo = false;
     std::string stopKey;   // a row's STOP/START key, applied after the loop
     bool stopTo = false;
     bool anyRow = false;
     for (std::size_t i = 0; i < list.size(); ++i) {
-        const cascade::core::LoadedPlugin& p = list[i];
+        const cascade::gui::PluginRow& p = list[i];
         // A REFUSED CANDIDATE HAS NOTHING TO SET. Its reason is printed in the
         // fitted window, against the module it belongs to, and a mute
         // checkbox on a module that never loaded would imply the silence is
         // something the user chose.
         if (!p.loaded) { continue; }
-        const bool hasPresets = p.preset != nullptr && p.preset->count() > 0u;
-        const bool isDecoder =
-            p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
+        // (The presets are the VALIDATED ones the table lists: a plugin whose every preset is not a frequency has
+        // nothing to press and no row of its own unless it is a decoder.)
+        const bool hasPresets = p.ownPresets > 0u;
+        const bool isDecoder = p.decoder;
         if (!hasPresets && !isDecoder) { continue; }
         anyRow = true;
         ImGui::PushID(static_cast<int>(i));
@@ -8375,12 +8379,10 @@ void AppWindow::drawDecodersSection() {
             // Deferred like the mute below it: setPluginStopped rebuilds every
             // instance, and this loop is walking the vector it replaces.
             cascade::gui::RunnableDecoder row;
-            row.name = p.name;
-            row.key = cascade::core::pluginKey(p);
-            row.stopped = engine_.pluginIsStopped(row.key);
-            row.feeding = engine_.pluginRunner_.isFeeding(row.key);
+            row.stopped = p.stopped;
+            row.feeding = p.fed;
             if (ImGui::Button(cascade::gui::rowKeyLabel(row), ImVec2(-1.0f, 0.0f))) {
-                stopKey = row.key;
+                stopKey = p.file;
                 stopTo = cascade::gui::rowOffersStop(row);
             }
             if (ImGui::IsItemHovered()) {
@@ -8402,7 +8404,7 @@ void AppWindow::drawDecodersSection() {
             // speakers get, and SSTV's warble is how people tune it by ear, so
             // it defaults OFF. Neither default is right for everybody, which
             // is the entire reason this is a control.
-            bool mutes = engine_.pluginMutes(p);
+            bool mutes = p.mutes;
             if (ImGui::Checkbox(trId("Mute audio while running"), &mutes)) {
                 toggleMuteIdx = static_cast<int>(i);
                 toggleMuteTo = mutes;
@@ -8423,18 +8425,15 @@ void AppWindow::drawDecodersSection() {
     // the apply is not caught by a key the user never saw offered.
     namespace cmd = cascade::core::cmd;
     if (toggleMuteIdx >= 0 && static_cast<std::size_t>(toggleMuteIdx) < list.size()) {
-        engine_.submitCommand(cmd::makeText(FOXAPI_OP_PLUGIN_MUTE,
-                                    cascade::core::pluginKey(list[static_cast<std::size_t>(toggleMuteIdx)]),
-                                    toggleMuteTo ? 1 : 0));
+        uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_MUTE, list[static_cast<std::size_t>(toggleMuteIdx)].file,
+                               toggleMuteTo ? 1 : 0));
     }
     if (!stopAllPressed.empty()) {
-        std::string keys;
-        for (const std::string& key : cascade::gui::stopAllKeys(runnable, engine_.pipeline_.running())) {
-            keys += (keys.empty() ? "" : "\n") + key;
-        }
-        if (!keys.empty()) { engine_.submitCommand(cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 0)); }
+        const std::string keys =
+            cascade::gui::joinedKeys(cascade::gui::runningDecoderKeys(pl.plugins, receiverRunning));
+        if (!keys.empty()) { uiSubmit(cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 0)); }
     } else if (!stopKey.empty()) {
-        engine_.submitCommand(cmd::makeText(stopTo ? FOXAPI_OP_DECODER_STOP : FOXAPI_OP_DECODER_START, stopKey));
+        uiSubmit(cmd::makeText(stopTo ? FOXAPI_OP_DECODER_STOP : FOXAPI_OP_DECODER_START, stopKey));
     }
     if (!anyRow) {
         // WRAPPED AT THE RAIL'S EDGE, as the paragraph above it is. Drawn as
@@ -14370,25 +14369,22 @@ void AppWindow::drawTargetDetailsWindow() {
     if (!detailsOpen_) { detailsTrackId_.clear(); }
 }
 
-void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
+void AppWindow::drawPluginPresets(const cascade::gui::PluginRow& p) {
     // ONE CLICK: go where this decoder listens, in the mode it needs, and show
     // its windows. A decoder knows its own frequency and the user usually does
     // not; making them find out that ADS-B is at 1090 MHz and wants 2 MS/s of
     // raw band is the difference between a plugin that works when you click it
     // and one that appears to do nothing.
-    for (const cascade::gui::IndexedPreset& ip : engine_.validatedPresets(p)) {
-        const CascadePreset& ps = ip.preset;
-        // Bounded print: the ABI says the label is NUL-terminated, but a
-        // plugin that fills every byte must not walk the host off the end.
+    for (std::size_t k = 0; k < p.ownPresets; ++k) {
+        const cascade::core::MutePreset& ps = p.presets[k];
+        // Bounded print: the label is the plugin's own, cut by the table (and its name when it left it empty).
         char label[CASCADE_PRESET_LABEL_CHARS + 32];
-        cascade::core::formatUtf8(label, sizeof(label), "%s##preset%u",
-                      cascade::gui::presetLabel(ps.label, p.name).c_str(), ip.index);
+        cascade::core::formatUtf8(label, sizeof(label), "%s##preset%u", ps.label.c_str(), ps.index);
         // A COMMAND naming the preset's RAW index, re-read from the plugin
         // and re-validated when it is applied (PLUGIN_PRESET) - the same
         // path a preset bar and the web remote take.
         if (ImGui::Button(label, ImVec2(-1.0f, 0.0f))) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET,
-                                                       cascade::core::pluginKey(p), ip.index));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, p.file, ps.index));
         }
         if (ImGui::IsItemHovered()) {
             // WHAT THIS BUTTON WILL DO FOR THIS PLUGIN, which is not the same
@@ -14398,13 +14394,12 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
             // of its own at all, it was a promise about something that does
             // not exist. The windows are opened for real now, and the clause
             // is lettered only where the module declares one to open.
-            const bool hasWindow = p.trackSource != nullptr ||
-                                   p.imageDecoder != nullptr || p.panel != nullptr;
+            const bool hasWindow = cascade::gui::opensWindowOfItsOwn(p);
             if (hasWindow) {
                 ImGui::SetTooltip(tr("Tune to %.4f MHz, start this plugin and open its "
                                      "windows"),
                                   ps.frequencyHz / 1.0e6);
-            } else if (p.decoder != nullptr) {
+            } else if (cascade::gui::isTextDecoder(p)) {
                 // Its lines go to the shared window, and the press opens it
                 // (presetOpensDecoderOutput) - so say so.
                 ImGui::SetTooltip(tr("Tune to %.4f MHz, start this plugin and open the "
@@ -14423,17 +14418,18 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
     // channel - core/user_presets.hpp has the field report). These are the
     // frequencies the user kept instead, and they replay through the same
     // applyPluginPreset the plugin's own keys use.
-    const std::string fileKey = cascade::core::pluginKey(p);
-    const std::vector<cascade::core::UserPreset> mine = engine_.userPresetsForPlugin(p);
+    const std::string& fileKey = p.file;
+    const cascade::core::MutePreset* mine = p.presets.data() + p.ownPresets;
+    const std::size_t mineCount = p.presets.size() - p.ownPresets;
     const float forgetW = ImGui::CalcTextSize("x").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    for (std::size_t i = 0; i < mine.size(); ++i) {
+    for (std::size_t i = 0; i < mineCount; ++i) {
         char label[CASCADE_PRESET_LABEL_CHARS + 32];
         cascade::core::formatUtf8(label, sizeof(label), "%s##upreset%u", mine[i].label.c_str(),
                       static_cast<unsigned>(i));
         const float w = ImGui::GetContentRegionAvail().x - forgetW - ImGui::GetStyle().ItemSpacing.x;
         if (ImGui::Button(label, ImVec2(w > 0.0f ? w : -1.0f, 0.0f))) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_USER_PRESET_APPLY, fileKey,
-                                                       static_cast<std::int64_t>(i)));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_USER_PRESET_APPLY, fileKey,
+                                                  static_cast<std::int64_t>(i)));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(tr("Your preset: tune to %.4f MHz and start this plugin"),
@@ -14443,8 +14439,8 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
         char forget[32];
         std::snprintf(forget, sizeof(forget), "x##upforget%u", static_cast<unsigned>(i));
         if (ImGui::Button(forget)) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_USER_PRESET_FORGET_AT, fileKey,
-                                                       static_cast<std::int64_t>(i)));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_USER_PRESET_FORGET_AT, fileKey,
+                                                  static_cast<std::int64_t>(i)));
         }
         if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tr("Forget this preset")); }
     }
@@ -14453,18 +14449,16 @@ void AppWindow::drawPluginPresets(const cascade::core::LoadedPlugin& p) {
     // publishes presets of its own - a decoder with none is exactly the one
     // whose user has nowhere else to keep a channel. A command; the save
     // happens when the drain applies it (see PendingUserPresetEdit).
-    const bool isDecoder =
-        p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
+    const bool isDecoder = p.decoder;
     if (isDecoder) {
-        const double hereHz =
-            engine_.pipeline_.activeSource().centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz();
+        const double hereHz = uiState_.tunedHz;
         // The visible words from one format string, then the ## id as before.
         std::string saveShown;
         cascade::core::formatUtf8(saveShown, tr("+ Save %.4f MHz as a preset"),
                       hereHz / 1.0e6);
         const std::string save = saveShown + "##upsave";
         if (ImGui::Button(save.c_str(), ImVec2(-1.0f, 0.0f))) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_USER_PRESET_SAVE, fileKey));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_USER_PRESET_SAVE, fileKey));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(tr("Keep the frequency, mode and bandwidth you are tuned to now as "
@@ -14546,7 +14540,10 @@ cascade::net::RadioStatus AppWindow::catStatusNow() const {
 
 void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
                                   bool waterfall) {
-    if (engine_.pluginMarkers_.empty() || width <= 0.0f || height <= 0.0f) { return; }
+    // The marks as the table lists them (window port, group 8), rebuilt into the plugin ABI's CascadeMarker so
+    // the geometry is the one it always was.
+    const std::vector<CascadeMarker>& marks = pluginLists().markers;
+    if (marks.empty() || width <= 0.0f || height <= 0.0f) { return; }
     const double lo = scale_.viewLowHz();
     const double hi = scale_.viewHighHz();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -14558,9 +14555,9 @@ void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
     // print over each other.
     const float headerY = (!waterfall && spectrum_ != nullptr) ? spectrum_->headerBottom() : y0;
     const float labelY = headerY + 2.0f * (ImGui::GetTextLineHeight() + 2.0f);
-    for (const cascade::core::HostMarker& hm : engine_.pluginMarkers_) {
+    for (const CascadeMarker& hm : marks) {
         const cascade::gui::PluginMarkerDraw d =
-            cascade::gui::pluginMarkerGeometry(hm.m, lo, hi, x0, width, waterfall);
+            cascade::gui::pluginMarkerGeometry(hm, lo, hi, x0, width, waterfall);
         if (!d.visible) { continue; }
         const ImU32 line = d.colour;
         if (d.span) {
@@ -14578,9 +14575,9 @@ void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
         }
         // The label on the spectrum only: on the waterfall it would scroll
         // nowhere and sit over the picture for ever.
-        if (!waterfall && hm.m.label[0] != '\0' && d.x0 + 3.0f < x0 + width) {
+        if (!waterfall && hm.label[0] != '\0' && d.x0 + 3.0f < x0 + width) {
             dl->AddText(font, fontPx, ImVec2(d.x0 + 3.0f, labelY),
-                        cascade::gui::theme::withAlpha(line, 0.95f), hm.m.label);
+                        cascade::gui::theme::withAlpha(line, 0.95f), hm.label);
         }
     }
     dl->PopClipRect();
@@ -14595,10 +14592,9 @@ void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
 // so with ADS-B's map and POCSAG's decoder output both open there was no way
 // from either window to send the radio to the other's plugin.
 
-const cascade::core::MutePlugin* AppWindow::muteStateForDisplayName(
-    const std::string& displayName) const {
-    for (const cascade::core::MutePlugin& m : engine_.muteStates_) {
-        if (m.name == displayName) { return &m; }
+const cascade::gui::PluginRow* AppWindow::muteStateForDisplayName(const std::string& displayName) {
+    for (const cascade::gui::PluginRow& r : pluginLists().plugins) {
+        if (r.loaded && r.name == displayName) { return &r; }
     }
     return nullptr;
 }
@@ -14606,8 +14602,7 @@ const cascade::core::MutePlugin* AppWindow::muteStateForDisplayName(
 void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& pluginName,
                                const std::vector<cascade::core::MutePreset>& presets) {
     const std::vector<cascade::gui::PresetBarKey> keys = cascade::gui::presetBarKeys(
-        presets, engine_.pipeline_.activeSource().centerFrequencyHz(), engine_.pipeline_.vfoOffsetHz(),
-        engine_.pipeline_.activeSource().sampleRateHz());
+        presets, uiState_.centreHz, uiState_.vfoOffsetHz, uiState_.sampleRateHz);
     // THE WRAP IS DECIDED BEFORE THE FIRST KEY IS DRAWN, from the widths of
     // all of them and the width of the row as it stands right now - which is
     // the one moment GetContentRegionAvail() answers the question being asked
@@ -14656,12 +14651,12 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
         const bool mine = cascade::gui::isUserPresetIndex(k.index);
         if (ImGui::SmallButton(label)) {
             if (mine) {
-                engine_.submitCommand(cascade::core::cmd::makeText(
+                uiSubmit(cascade::core::cmd::makeText(
                     FOXAPP_OP_USER_PRESET_APPLY, pluginKey,
                     static_cast<std::int64_t>(k.index - cascade::gui::kUserPresetIndexBase)));
             } else {
-                engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, pluginKey,
-                                                           static_cast<std::int64_t>(k.index)));
+                uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, pluginKey,
+                                                      static_cast<std::int64_t>(k.index)));
             }
         }
         if (k.lit) { ImGui::PopStyleColor(2); }
@@ -14669,7 +14664,7 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
         // other press here. A plugin's own keys ignore it: those are not the
         // user's to remove.
         if (mine && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-            engine_.submitCommand(cascade::core::cmd::makeText(
+            uiSubmit(cascade::core::cmd::makeText(
                 FOXAPP_OP_USER_PRESET_FORGET_AT, pluginKey,
                 static_cast<std::int64_t>(k.index - cascade::gui::kUserPresetIndexBase)));
         }
@@ -14690,26 +14685,25 @@ void AppWindow::drawPresetKeys(const std::string& pluginKey, const std::string& 
     if (!keys.empty() && rows.back() == rows[keys.size() - 1]) { ImGui::SameLine(); }
     // The visible word is tr(kSaveKey) - the same one measured above.
     if (ImGui::SmallButton(trId("+ Save##pbarsave"))) {
-        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_USER_PRESET_SAVE, pluginKey));
+        uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_USER_PRESET_SAVE, pluginKey));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("Save the frequency you are tuned to now (%.4f MHz) as a preset "
                              "for %s."),
-                          (engine_.pipeline_.activeSource().centerFrequencyHz() + engine_.pipeline_.vfoOffsetHz()) /
-                              1.0e6,
+                          uiState_.tunedHz / 1.0e6,
                           pluginName.c_str());
     }
     ImGui::PopID();
 }
 
 void AppWindow::drawPluginPresetBar(const std::string& displayName) {
-    const cascade::core::MutePlugin* m = muteStateForDisplayName(displayName);
+    const cascade::gui::PluginRow* m = muteStateForDisplayName(displayName);
     // NOTHING TO DRAW, NOTHING DRAWN. A plugin with no presets costs no
     // vertical space on its own window - there is no empty bar, no
     // separator, no placeholder text, because a window that never has a
     // preset bar must not read as one that is temporarily missing its own.
     if (m == nullptr || m->presets.empty()) { return; }
-    drawPresetKeys(m->key, m->name, m->presets);
+    drawPresetKeys(m->file, m->name, m->presets);
     ImGui::Separator();
 }
 
@@ -14729,19 +14723,18 @@ void AppWindow::drawDecoderPresetBars() {
     // reason drawSatelliteMapBody's own comment gives for not drawing the
     // ordinary map bar over it).
     bool any = false;
-    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
-        if (!p.loaded || p.decoder == nullptr) { continue; }
+    for (const cascade::gui::PluginRow& p : pluginLists().plugins) {
+        if (!p.loaded || !cascade::gui::isTextDecoder(p)) { continue; }
         // A STOPPED DECODER IS SKIPPED. A preset key for a plugin the user
         // just switched off would retune the radio and start it again from
         // the one window that is supposed to just be reading its output -
         // the rail's own Start/preset buttons are already the way back in.
-        if (engine_.pluginIsStopped(cascade::core::pluginKey(p))) { continue; }
-        const cascade::core::MutePlugin* m = muteStateForDisplayName(p.name);
-        if (m == nullptr || m->presets.empty()) { continue; }
+        if (p.stopped) { continue; }
+        if (p.presets.empty()) { continue; }
         any = true;
         ImGui::TextDisabled("%s", p.name.c_str());
         ImGui::SameLine();
-        drawPresetKeys(m->key, m->name, m->presets);
+        drawPresetKeys(p.file, p.name, p.presets);
     }
     if (any) { ImGui::Separator(); }
 }
@@ -14756,10 +14749,12 @@ void AppWindow::drawMutePopup() {
     // Opened here rather than at the edge: ImGui wants OpenPopup and
     // BeginPopupModal in the same ID stack, and the edge is detected before
     // this frame's windows exist.
-    if (engine_.mutePopupQueued_) {
+    // (Window port, group 8: the question is the engine's FOXAPI_EVENT_MUTE_TUNE_AWAY, taken by pumpUiEvents;
+    // there is no queued flag to consume and clear any more. The dialog opens in the frame the event is taken -
+    // one pass after the tune-away's, which the engine decides after a pass's publish.)
+    if (mutePopupOpenRequest_) {
+        mutePopupOpenRequest_ = false;
         ImGui::OpenPopup(trId("Sound is muted##mute_popup"));
-        engine_.applyCommand(cascade::core::cmd::makeInt(
-            FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED));
     }
     // Centred on the main window, because it is asking about something the
     // user just did to the whole radio and a dialog in the corner of a
@@ -14784,11 +14779,13 @@ void AppWindow::drawMutePopup() {
     // muteSubjectText() every frame re-labelled itself mid-question when the
     // receiver moved on to a second decoder's preset - see advanceMutePopup for
     // the measurement.
-    const std::string who = cascade::engine::Engine::muteNameList(engine_.mutePopup_.names);
+    const std::string who = cascade::gui::joinMuteNames(mutePopupNames_);
     // Withdrawn while the window was open - the radio arrived on a preset, or
     // the plugins it named were stopped from somewhere else. Closing beats
     // asking a question whose answer no longer applies.
-    if (!engine_.mutePopup_.open || who.empty()) {
+    // (The engine lets the hold go exactly when it withdraws its own question: fact.mute.keptRunning reads 0.)
+    if (!mutePopupOpen_ || who.empty() || !pluginLists().muteKeptRunning) {
+        mutePopupOpen_ = false;
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return;
@@ -14801,9 +14798,8 @@ void AppWindow::drawMutePopup() {
     if (ImGui::Button(stopLabel.c_str())) {
         // EXACTLY the plugins the message named (captured when it opened),
         // stopped and their mute ended by one command.
-        std::string keys;
-        for (const std::string& k : engine_.mutePopup_.keys) { keys += (keys.empty() ? "" : "\n") + k; }
-        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 1));
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, cascade::gui::joinedKeys(mutePopupKeys_), 1));
+        mutePopupOpen_ = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -14812,13 +14808,14 @@ void AppWindow::drawMutePopup() {
         // fields move together in FOXAPP_OP_MUTE_KEEP_RUNNING's handler,
         // applied at once. The banner is what stops the kept mute being a
         // silent state.
-        engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_MUTE_KEEP_RUNNING));
+        uiSubmit(cascade::core::cmd::make(FOXAPP_OP_MUTE_KEEP_RUNNING));
+        mutePopupOpen_ = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }
 
-std::string AppWindow::muteBannerSubject() const {
+std::string AppWindow::muteBannerSubject() {
     // THE CENSUS SEAM: the banner drawn naming this, so every layout the theme
     // census runs places and measures it (tests/test_theme_census.cpp).
     static const char* const forced = [] {
@@ -14831,8 +14828,10 @@ std::string AppWindow::muteBannerSubject() const {
     // it is explained by nothing at all unless this is here, which is the
     // whole of the "silent with no reason" failure this product's idle
     // reasons already exist to prevent.
-    if (!engine_.muteKeptRunning_) { return {}; }
-    return engine_.muteSubjectText();
+    // (fact.mute.keptRunning and fact.mute.subject, read when the lists change - window port, group 8.)
+    const PluginListCache& c = pluginLists();
+    if (!c.muteKeptRunning) { return {}; }
+    return c.muteSubject;
 }
 
 void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const ImVec2& barTL,
@@ -14877,8 +14876,8 @@ void AppWindow::drawMuteBanner(const cascade::gui::MuteBannerLayout& mb, const I
     if (ImGui::SmallButton(trId("Stop plugin##mute_banner"))) {
         // The plugins the banner is displaying, as one command.
         std::string keys;
-        for (const std::string& k : engine_.mutedByKeys_) { keys += (keys.empty() ? "" : "\n") + k; }
-        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 1));
+        for (const cascade::gui::MuteCauseRow& m : pluginLists().muteCauses) { keys += (keys.empty() ? "" : "\n") + m.key; }
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_DECODER_STOP_LIST, keys, 1));
     }
     hovered = hovered || ImGui::IsItemHovered();
     const ImVec2 k0 = ImGui::GetItemRectMin();
@@ -14929,32 +14928,21 @@ void AppWindow::drawPluginTuneControls() {
     // the second is simply untrue: it sends the user to fetch a file that is
     // already on their disk, and it is a PERMISSION being described, which is
     // the worst kind of thing to be wrong about.
-    struct StaleGrant {
-        std::string file;
-        // A record for this file exists and did not load. Empty capabilities
-        // or full, the host has a reason recorded either way.
-        bool refused = false;
-    };
-    std::vector<StaleGrant> stale;
-    for (const std::string& g : engine_.pluginTuneAllowed_) {
-        bool loadedHere = false;
-        bool presentUnloaded = false;
-        for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
-            if (cascade::core::PluginUi::tuneKey(p) != g) { continue; }
-            if (p.loaded) {
-                loadedHere = true;
-                break;
-            }
-            // NOT a break: two files can share a key only if they share a
-            // name, which they cannot in one directory - but the loaded record
-            // is the one that decides, so the scan runs on rather than
-            // settling on the first match it happens to meet.
-            presentUnloaded = true;
+    // From the window's engine API session (window port, group 8): the grants no loaded module holds
+    // (STALE_GRANTS: `refused` when the file is on the disk and the host refused it), and the last refused
+    // request to tune (fact.plugin.lastDenied) against the grant flag of the module it names.
+    const PluginListCache& pl = pluginLists();
+    const std::vector<cascade::gui::StaleGrantRow>& stale = pl.staleGrants;
+    const std::string& denied = pl.lastDenied;
+    bool deniedAllowed = false;
+    for (const cascade::gui::PluginRow& r : pl.plugins) {
+        if (r.file == denied) {
+            deniedAllowed = r.tuneAllowed;
+            break;
         }
-        if (!loadedHere) { stale.push_back(StaleGrant{g, presentUnloaded}); }
     }
-    const std::string& denied = engine_.pluginUi_.lastDeniedPlugin();
-    const bool showDenied = !denied.empty() && !engine_.pluginUi_.tuneAllowed(denied);
+    for (const cascade::gui::StaleGrantRow& g : stale) { deniedAllowed = deniedAllowed || g.file == denied; }
+    const bool showDenied = !denied.empty() && !deniedAllowed;
     if (stale.empty() && !showDenied) { return; }
 
     ImGui::SeparatorText(tr("Receiver control"));
@@ -14980,10 +14968,9 @@ void AppWindow::drawPluginTuneControls() {
         "says which of the two it is."));
     for (std::size_t i = 0; i < stale.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
-        bool allowed = engine_.pluginUi_.tuneAllowed(stale[i].file);
+        bool allowed = true;  // listed because it HOLDS the grant: the box can only be unticked
         if (ImGui::Checkbox(stale[i].file.c_str(), &allowed)) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, stale[i].file, 1,
-                                                       allowed ? 1 : 0));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, stale[i].file, 1, allowed ? 1 : 0));
         }
         // WHAT THE PREDICATE ABOVE ACTUALLY PROVED, and nothing more. One of
         // these files is on the disk and one is not, and the remedy is a
@@ -15003,7 +14990,13 @@ void AppWindow::drawPluginTuneControls() {
 }
 
 void AppWindow::drawDecoderStatusRows() {
-    const std::vector<cascade::core::DecoderStatus> st = engine_.pluginRunner_.status();
+    // From the window's engine API session (window port, group 8). The runner's status list is empty exactly
+    // when no loaded plugin is running (it writes a line for every one that is: gui/decoder_reads.hpp), and it
+    // has an instance being fed exactly when the state counts a decoder module matched.
+    const PluginListCache& pl = pluginLists();
+    const DecoderLineCache& dl = decoderLines();
+    const bool statusEmpty = cascade::gui::runnerStatusEmpty(pl.plugins);
+    const bool anyActive = uiState_.decodersMatched > 0u;
 
     // THE OUTPUT WINDOW'S KEY IS DRAWN WHETHER OR NOT A DECODER IS RUNNING,
     // and this comment used to say so while the code did the opposite: the
@@ -15038,19 +15031,17 @@ void AppWindow::drawDecoderStatusRows() {
     // has a status line (the "provides no decoder this build can drive" one)
     // and no instances, and "No decoder is running" would put an idle decoder
     // on a machine that has none.
-    const cascade::gui::ModuleCensus decoders = cascade::gui::censusModules(
-        engine_.pluginHost_.plugins(), cascade::gui::kDecoderCaps,
-        [this](const std::string& key) { return engine_.pluginIsStopped(key); });
+    const cascade::gui::ModuleCensus& decoders = pl.decoderCensus;
     const bool anyDecoderFitted =
         decoders.live + decoders.stopped + decoders.refused > 0;
-    if (st.empty() || (engine_.pluginRunner_.activeCount() == 0 && !anyDecoderFitted)) {
+    if (statusEmpty || (!anyActive && !anyDecoderFitted)) {
         // WRAPPED, not TextDisabled: this rail is narrow and a user may drag it
         // narrower, and a sentence that runs off the edge says nothing at all.
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", cascade::gui::decoderAbsenceNote(decoders).c_str());
         ImGui::PopStyleColor();
-    } else if (engine_.pluginRunner_.activeCount() == 0) {
+    } else if (!anyActive) {
         // A decoder IS fitted and none is running: the runner's own reason is
         // against the module in the Fitted modules window, which is the one
         // place this product answers "why is it silent".
@@ -15061,7 +15052,7 @@ void AppWindow::drawDecoderStatusRows() {
     // function for what it used to be. Anything held is enough to earn the
     // key; so is anything running, because a decoder that has not spoken yet
     // still deserves a window to speak into.
-    if (!engine_.decoderLog_.empty() || engine_.pluginRunner_.activeCount() > 0) {
+    if (!dl.lines.empty() || anyActive) {
         if (ImGui::Button(decoderWindowOpen_ ? trId("Hide decoder output")
                                              : trId("Show decoder output"),
                           ImVec2(-1.0f, 0.0f))) {
@@ -15075,12 +15066,12 @@ void AppWindow::drawDecoderStatusRows() {
         // cumulative count pumpDecoderOutput keeps and never resets; when the
         // tail has dropped anything, the row says what the window holds rather
         // than letting its contents pass for the whole of it.
-        if (engine_.decoderLinesTotal_ > 0u) {
+        if (uiState_.decoderLinesTotal > 0u) {
             const unsigned long long total =
-                static_cast<unsigned long long>(engine_.decoderLinesTotal_);
+                static_cast<unsigned long long>(uiState_.decoderLinesTotal);
             ImGui::TextDisabled(total == 1ull ? tr("%llu line decoded") : tr("%llu lines decoded"),
                                 total);
-            if (engine_.decoderLog_.size() >= kDecoderLogMax) {
+            if (dl.lines.size() >= kDecoderLogMax) {
                 // WRAPPED, not TextDisabled, and on its own line: this rail is
                 // narrow and a sentence that runs off its edge says nothing at
                 // all.
@@ -15120,6 +15111,8 @@ void AppWindow::drawDecoderWindow() {
     }
     if (!decoderWindowOpen_) { return; }
     uiNotePanel("decoded");
+    // The window's copy of the decoder output (window port, group 8).
+    const DecoderLineCache& dl = decoderLines();
 
     placeAsSeparateWindow(9);
     if (openForCapture) {
@@ -15135,12 +15128,14 @@ void AppWindow::drawDecoderWindow() {
         ImGui::Checkbox(trId("Follow"), &decoderAutoScroll_);
         ImGui::SameLine();
         if (ImGui::SmallButton(trId("Clear##declog"))) {
-            engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
-                                                             cascade::core::cmd::FOXAPP_STATUS_DECODER_LOG));
+            // The engine empties its own tail (the web status shows it) one pass later; the window's copy goes now.
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
+                                                 cascade::core::cmd::FOXAPP_STATUS_DECODER_LOG));
+            clearDecoderLines();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled(engine_.decoderLog_.size() == 1 ? tr("%d line") : tr("%d lines"),
-                            static_cast<int>(engine_.decoderLog_.size()));
+        ImGui::TextDisabled(dl.lines.size() == 1 ? tr("%d line") : tr("%d lines"),
+                            static_cast<int>(dl.lines.size()));
 
         // "IF I'M WATCHING ADS-B I CAN CLICK A BUTTON ON POCSAG" - the one
         // case a per-window preset bar cannot reach, because a text decoder
@@ -15150,10 +15145,10 @@ void AppWindow::drawDecoderWindow() {
 
         ImGui::BeginChild("##decoderlog", ImVec2(0.0f, 0.0f), true,
                           ImGuiWindowFlags_HorizontalScrollbar);
-    if (engine_.decoderLog_.empty()) {
+    if (dl.lines.empty()) {
         ImGui::TextDisabled("%s", tr("Listening..."));
     }
-    for (const cascade::core::DecodedLine& l : engine_.decoderLog_) {
+    for (const DecoderLineRow& l : dl.lines) {
         // The plugin name is dimmed and the text is not: with two decoders
         // running the tag is how you tell them apart, but the message is what
         // you are reading.
@@ -15323,6 +15318,11 @@ void AppWindow::openUiSession() {
         uiSession_ = nullptr;
         cascade::core::diagWarnf("ui: no engine API session - the transmit key is unavailable");
     }
+    // The one event the window asks to be told (API 0.3 8.7): the receiver tuned off the presets of plugins
+    // that are still muting the audio. pumpUiEvents drains it once a frame.
+    if (uiSession_ != nullptr) {
+        (void)engineApi_->subscribe(uiSession_, FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY));
+    }
     uiState_.structSize = sizeof(uiState_);
 }
 
@@ -15347,6 +15347,10 @@ void AppWindow::refreshUiState() {
     // ...and the spectrum, after the state: the waterfall is fed from it with the
     // display range this very read carried.
     readSpectrum();
+    // ...and the decoder output, when its total has moved (window port, group 8): the lines the Decoder output
+    // window and the rail's count draw from, whether or not either is open - the engine kept its tail whether
+    // or not they were.
+    (void)decoderLines();
 }
 
 // THE SPECTRUM, ONCE A FRAME (window port, group 6; docs/engine-stage4.md decision
@@ -15642,6 +15646,212 @@ const AppWindow::RailListCache& AppWindow::railLists() {
     return c;
 }
 
+// THE PLUGINS, THE PRESETS, THE MARKS, THE MUTE CAUSES AND THE GRANTS the Decoders section, the preset bars, the
+// marks on the spectrum, the banner, the dialog and the Receiver-control rows draw from (window port, group 8;
+// the cache is in app_window.hpp, with the argument for what is read and when). Read when listSeq has moved -
+// not when a decoder prints a line, which moves nothing since D3: PLUGINS first (one row a plugin, in the host's
+// order), then DECODERS, PRESETS and USER_PRESETS folded into the rows they belong to, MARKERS, MUTE_CAUSES,
+// STALE_GRANTS and the three facts. The host runs ONE loaded plugin per display name (resolveDuplicatePlugins),
+// so a DECODERS or PRESETS entry, which names its plugin by that name, finds its row; the operator's own
+// presets are filed under core::userPresetKey of the module file. `got <= i` is the end of a list that changed
+// under the read: what was read stands. Strings and vectors keep their room.
+const AppWindow::PluginListCache& AppWindow::pluginLists() {
+    PluginListCache& c = pluginCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    ++c.refreshes;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    const auto size = [this](uint32_t list) {
+        return std::max<int32_t>(0, engineApi_->read_list(uiSession_, list, 0, nullptr));
+    };
+    FoxListItem it{};
+
+    const int32_t plugins = size(FOXAPI_LIST_PLUGINS);
+    c.plugins.resize(static_cast<std::size_t>(plugins));
+    std::size_t rows = 0;
+    for (int32_t i = 0; i < plugins; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        cascade::gui::PluginRow& r = c.plugins[rows++];
+        r.name = it.name;
+        if (r.file != it.detail) {  // (a row that stays the same file keeps its key: no string is built)
+            r.file = it.detail;
+            r.userKey = cascade::core::userPresetKey(r.file);
+        }
+        r.caps = static_cast<std::uint32_t>(it.value[0]);
+        r.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        r.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
+        r.tuneAllowed = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
+        r.settingsAllowed = (it.flags & FOXAPI_ITEM_SETTINGS_ALLOWED) != 0u;
+        r.decoder = false;
+        r.fed = false;
+        r.mutes = false;
+        r.idle.clear();
+        r.presets.clear();
+        r.ownPresets = 0;
+    }
+    c.plugins.resize(rows);
+
+    const int32_t decoders = size(FOXAPI_LIST_DECODERS);
+    for (int32_t i = 0; i < decoders; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DECODERS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        for (cascade::gui::PluginRow& r : c.plugins) {
+            if (!r.loaded || r.decoder || r.name != it.name) { continue; }
+            r.decoder = true;
+            r.fed = (it.flags & FOXAPI_ITEM_FED) != 0u;
+            r.mutes = (it.flags & FOXAPI_ITEM_MUTES) != 0u;
+            r.idle = it.detail;
+            break;
+        }
+    }
+
+    const int32_t presets = size(FOXAPI_LIST_PRESETS);
+    for (int32_t i = 0; i < presets; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PRESETS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        for (cascade::gui::PluginRow& r : c.plugins) {
+            if (!r.loaded || r.name != it.detail) { continue; }
+            r.presets.push_back(cascade::gui::ownPresetOf(it.value[0], it.value[2],
+                                                          (it.flags & FOXAPI_ITEM_DEVICE_CENTRE) != 0u,
+                                                          static_cast<std::uint32_t>(it.id), it.name, r.name));
+            break;
+        }
+    }
+    for (cascade::gui::PluginRow& r : c.plugins) { r.ownPresets = r.presets.size(); }
+    const int32_t saved = size(FOXAPI_LIST_USER_PRESETS);
+    for (int32_t i = 0; i < saved; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_USER_PRESETS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        for (cascade::gui::PluginRow& r : c.plugins) {
+            if (!r.loaded || r.userKey != it.detail) { continue; }
+            r.presets.push_back(cascade::gui::savedPresetOf(it.value[0], it.value[2], r.presets.size() - r.ownPresets,
+                                                            it.name));
+            break;
+        }
+    }
+
+    const int32_t marks = size(FOXAPI_LIST_MARKERS);
+    c.markers.clear();
+    for (int32_t i = 0; i < marks; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_MARKERS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        c.markers.push_back(cascade::gui::markerOf(it.id, it.name, it.value[0], it.value[1],
+                                                   static_cast<std::uint32_t>(it.value[2]),
+                                                   (it.flags & FOXAPI_ITEM_SPAN) != 0u,
+                                                   (it.flags & FOXAPI_ITEM_DASHED) != 0u,
+                                                   (it.flags & FOXAPI_ITEM_SPECTRUM_ONLY) != 0u));
+    }
+
+    const int32_t causes = size(FOXAPI_LIST_MUTE_CAUSES);
+    c.muteCauses.resize(static_cast<std::size_t>(causes));
+    std::size_t held = 0;
+    for (int32_t i = 0; i < causes; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_MUTE_CAUSES, static_cast<uint32_t>(i), &it) <= i) { break; }
+        c.muteCauses[held].name = it.name;
+        c.muteCauses[held].key = it.detail;
+        ++held;
+    }
+    c.muteCauses.resize(held);
+
+    const int32_t stale = size(FOXAPI_LIST_STALE_GRANTS);
+    c.staleGrants.resize(static_cast<std::size_t>(stale));
+    std::size_t grants = 0;
+    for (int32_t i = 0; i < stale; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STALE_GRANTS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        c.staleGrants[grants].file = it.name;
+        c.staleGrants[grants].refused = (it.flags & FOXAPI_ITEM_REFUSED) != 0u;
+        ++grants;
+    }
+    c.staleGrants.resize(grants);
+
+    readFactText("fact.mute.subject", c.muteSubject);
+    readFactText("fact.mute.keptRunning", c.factText);
+    c.muteKeptRunning = c.factText == "1";
+    readFactText("fact.plugin.lastDenied", c.lastDenied);
+    c.decoderCensus = cascade::gui::censusOf(c.plugins, cascade::gui::kDecoderCaps);
+    return c;
+}
+
+// THE DECODER OUTPUT (the cache is in app_window.hpp): the ring is read when the state's decoderLinesTotal has
+// moved, from the newest entry back to the highest id the window holds - the ids are the line numbers, strictly
+// increasing, so that is exactly the lines that are new, read once each - and appended oldest first. An entry
+// whose id does not fall below the one read before it means the ring moved under the read (the engine's pass on
+// its own thread): what was read stands, and the rest is taken next time.
+const AppWindow::DecoderLineCache& AppWindow::decoderLines() {
+    DecoderLineCache& c = decoderLineCache_;
+    if (uiSession_ == nullptr || c.seenTotal == uiState_.decoderLinesTotal) { return c; }
+    c.seenTotal = uiState_.decoderLinesTotal;
+    ++c.reads;
+    const int32_t n = engineApi_->read_list(uiSession_, FOXAPI_LIST_DECODER_LINES, 0, nullptr);
+    if (n <= 0) { return c; }
+    c.fresh.clear();
+    FoxListItem it{};
+    std::uint64_t below = ~std::uint64_t{0};
+    for (int32_t i = n - 1; i >= 0; --i) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(i), &it) <= i) { continue; }
+        if (it.id <= c.lastId || it.id >= below) { break; }
+        below = it.id;
+        DecoderLineRow row;
+        row.id = it.id;
+        row.plugin = it.name;
+        row.text = it.detail;
+        c.fresh.push_back(std::move(row));
+    }
+    if (c.fresh.empty()) { return c; }
+    c.lastId = c.fresh.front().id;
+    for (auto at = c.fresh.rbegin(); at != c.fresh.rend(); ++at) {
+        c.lines.push_back(std::move(*at));
+        ++c.copied;
+    }
+    c.fresh.clear();
+    while (c.lines.size() > kDecoderLogMax) { c.lines.pop_front(); }
+    return c;
+}
+
+// The Decoder output window's Clear: the window's copy goes at once, and the ids it has held never come back (the
+// engine empties its own tail one pass later, by the command the window sends beside this).
+void AppWindow::clearDecoderLines() { decoderLineCache_.lines.clear(); }
+
+// THE SESSION'S EVENTS, once a frame (after the key's answers): the receiver tuned off the presets of plugins
+// that are still muting the audio - the engine holds the mute and asks (API 0.3 8.7).
+void AppWindow::pumpUiEvents() {
+    if (uiSession_ == nullptr) { return; }
+    FoxEvent ev[8];
+    for (;;) {
+        for (auto& x : ev) { x.structSize = sizeof(x); }
+        const int32_t got = engineApi_->poll_events(uiSession_, ev, 8);
+        for (int32_t i = 0; i < got; ++i) {
+            if (ev[i].kind == FOXAPI_EVENT_MUTE_TUNE_AWAY) { askAboutMutedPlugins(); }
+        }
+        if (got < 8) { break; }
+    }
+}
+
+// The dialog is about the plugins MUTE_CAUSES names NOW, the frame the event is taken (the publish that raised it
+// already showed the held mute): their names and module keys are copied and the dialog is about THEM, however the
+// lists move on. Nothing is asked when the hold has gone since (the receiver was back on a preset, or the plugins
+// were stopped, in the pass between): a question whose answer no longer applies is not worth asking.
+void AppWindow::askAboutMutedPlugins() {
+    const PluginListCache& c = pluginLists();
+    if (!c.muteKeptRunning || c.muteCauses.empty()) { return; }
+    mutePopupNames_.clear();
+    mutePopupKeys_.clear();
+    for (const cascade::gui::MuteCauseRow& m : c.muteCauses) {
+        mutePopupNames_.push_back(m.name);
+        mutePopupKeys_.push_back(m.key);
+    }
+    mutePopupOpen_ = true;
+    mutePopupOpenRequest_ = true;
+}
+
 // THE KEY, ONCE A FRAME (see the members in app_window.hpp): this frame's
 // presses as commands on the window's session, in ONE submit, and the
 // answers drained. No allocation: a fixed batch, a fixed result buffer.
@@ -15681,6 +15891,7 @@ void AppWindow::pumpTransmitKey() {
         }
         if (got < 16) { break; }
     }
+    pumpUiEvents();
 }
 
 void AppWindow::drawTransmitPage() {
