@@ -3,19 +3,19 @@
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.78.exe`:**
-`TBD`
+`1973cb97a28d75a3dcab52f5d2ae8df3e5e26659383b6e85b8f6059fdddc75e2`
 
 **SHA-256 of `FoxSDR-0.99.78-x86_64.AppImage`:**
-`TBD`
+`1b5c36c0994b360a1cd392751ea1fc805def416f0c44e1cb0642d40906cfbe51`
 
 **SHA-256 of `foxsdr-0.99.78-linux-x64.tar.gz`:**
-`TBD`
+`d68e51c1d2d2e59491b74d8a44d795c0d41ef7408b2a903361c4c9c2f7ecc575`
 
 **SHA-256 of `FoxSDR-0.99.78-aarch64.AppImage`:**
-`TBD`
+`f285026ac9a01b6a3a7ddaebdef12b77f758ebd7f866d62ed00bbd069bac5d2a`
 
 **SHA-256 of `foxsdr-0.99.78-linux-arm64.tar.gz`:**
-`TBD`
+`c463a0e722a37cd36bd86a2e281f9f910bec9736083563cbc7a613ec36bfc8fd`
 
 ## Features and fixes, 2026-10-14
 
