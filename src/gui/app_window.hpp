@@ -2200,7 +2200,25 @@ private:
     // the AIRBAND section's Import) every row joins that group whatever the file wrote and
     // the rows the monitor plays (AM, NFM) are ticked; the default leaves the rows as the
     // file has them.
+    //
+    // A BARE FILE NAME (no folder part) that does not open where the process runs is looked
+    // for in the recordings folder, where Export writes (0.99.80) - on the worker, with the
+    // path as given tried first.
     void importBookmarkFile(const std::string& path, const cascade::core::ImportInto& into = {});
+    // THE "Import a frequency list" WINDOW (0.99.80): a modal with a drop zone and a Browse
+    // key, opened by the Import key of either section pressed with its box empty, and by any
+    // import that comes back with no rows (`reason` is then the failure sentence, drawn first;
+    // empty otherwise). `into` is where the rows go: the preset of the AIRBAND section's key
+    // (group set), or the plain list. A file dropped on the window while it is open goes to
+    // `into`; it closes itself when an import it waits for comes back with rows, and stays
+    // open (with the new reason) when it comes back with none. Only sets state: the modal
+    // is drawn, and opened, at the root level of the frame by drawImportDialog().
+    void openImportDialog(const cascade::core::ImportInto& into, const std::string& reason);
+    void drawImportDialog();
+    // The frame loop's handling of a file dropped on the window (pendingDropPath_, recorded
+    // by the GLFW callback): imported into the open "Import a frequency list" window's
+    // target, else as the file says. A method of its own so a test drives the real routing.
+    void consumePendingDrop();
     // The filtered, cached view the Bookmarks list draws from.
     void rebuildBookmarkView();
     // Bookmarks inside the visible span, as marks on the spectrum.
@@ -3549,6 +3567,15 @@ private:
     cascade::gui::BackgroundSaver markerSaver_{"markers", &cascade::core::FreqMarkers::writeFile};
     // A file dropped on the window, picked up by the next frame.
     std::string pendingDropPath_;
+    // THE "Import a frequency list" WINDOW (0.99.80, openImportDialog). Open = the window
+    // is up or about to be (it also decides where a dropped file goes); Queued = the next
+    // drawImportDialog() must call OpenPopup (the same deferral as mutePopupQueued_: the
+    // key that asks is drawn before the root level exists). Reason = the failure sentence
+    // of the import that opened it, "" when the person opened it with an empty box.
+    bool importDialogOpen_ = false;
+    bool importDialogQueued_ = false;
+    cascade::core::ImportInto importDialogInto_;
+    std::string importDialogReason_;
     // FOXSDR_BOOKMARK_IMPORT (bounded runs): opens TOOLS > Bookmarks with the
     // path in the import box, for a scripted press of Import.
     bool bookmarkImportByEnv_ = false;
@@ -5264,6 +5291,11 @@ private:
     // "chooses" without a dialog; "" is a cancel; unset (nullopt) is the real
     // dialog. See AppWindow::pickFile.
     std::optional<std::string> filePickSeam_;
+    // Whether this run can show a file dialog (the seam above or the system's), decided
+    // ONCE in run() and read by the "Import a frequency list" window each frame: asking
+    // filePickAvailable() per frame would look along PATH for zenity or kdialog on Linux.
+    // False for a window that never ran (a test's), where no Browse key is drawn either.
+    bool filePickOffered_ = false;
 
     // --- The user's own presets (0.99.4) ---------------------------------------
     // AppConfig::userPresets, for every plugin (see core/user_presets.hpp for

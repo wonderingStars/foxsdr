@@ -8,7 +8,7 @@ decoder plugins from an in-app catalogue. Most radios are driven by FoxSDR's
 own drivers, so nothing else has to be installed. The whole interface can be
 served to a browser on your own network.
 
-The current release is **0.99.79** (October 2026), in open beta. Free for
+The current release is **0.99.80** (October 2026), in open beta. Free for
 noncommercial use; see [License](#license). Website:
 [foxsdr.com](https://foxsdr.com).
 
@@ -68,6 +68,8 @@ it was verified: [docs/HARDWARE.md](docs/HARDWARE.md).
 - **Bookmarks and scanning:** tens of thousands of bookmarks, SDR# and CSV
   import, a scanner, and an Airband monitor that plays every control frequency
   of an airport at once.
+  Import with an empty box opens a drop zone
+  and Browse window; a bare filename is also looked for in the recordings folder.
 - **Patch view:** build a receiver by hand on a canvas. Up to five radios,
   channels, demodulators, speakers, files, decoders and a map, all running
   together.

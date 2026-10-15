@@ -70,7 +70,8 @@ ImportResult importCsv(std::string_view text);
 // SDR#'s format, everything else is tried as CSV.
 ImportResult importFrequencyList(std::string_view text);
 
-// Reads a file and imports it. A file that cannot be read sets error.
+// Reads a file named by its UTF-8 path and imports it (0.99.80).
+// A file that cannot be read sets error.
 ImportResult importFrequencyFile(const std::string& path);
 
 // SDR#'s frequencies.xml for `list`, so a list built here can go back.

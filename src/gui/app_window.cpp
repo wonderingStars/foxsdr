@@ -1906,6 +1906,7 @@ int AppWindow::run(int frames) {
     // to open (the system's on Windows; zenity or kdialog on Linux) - or the test
     // seam above to stand in for one.
     if (filePickSeam_.has_value() || cascade::core::filePickAvailable()) {
+        filePickOffered_ = true;  // the "Import a frequency list" window's Browse key, too (0.99.80)
         pluginSettingsForms_.pick = [this](const cascade::core::FilePickRequest& rq,
                                            std::string& path) { return pickFile(rq, path); };
     }
@@ -3988,11 +3989,7 @@ void AppWindow::drawUi() {
     // published, so it already carries this frame's changes. Before
     // updateAudioMute below, which applies a plugin's set_muted.
     applyPluginApi();
-    if (!pendingDropPath_.empty()) {
-        const std::string dropped = std::move(pendingDropPath_);
-        pendingDropPath_.clear();
-        importBookmarkFile(dropped);
-    }
+    consumePendingDrop();
     {
         cascade::core::FrameScopeGuard savesScope(cascade::core::FrameScope::Saves);
         flushBookmarkSave(false);
@@ -4337,6 +4334,8 @@ void AppWindow::drawUi() {
     // would sit under the panels it is meant to block.
     frameScope.to(cascade::core::FrameScope::Dialogs);
     drawMutePopup();
+    // The "Import a frequency list" window (0.99.80), beside it for the same reason.
+    drawImportDialog();
     // The deck's bias tee question, at the top level for the same reason.
     drawBiasKeyConfirm();
 
@@ -27809,11 +27808,23 @@ void AppWindow::drawBookmarksSection() {
     cascade::gui::inputTextWithFittedHint(
         "##bm_import", tr("SDR# frequencies.xml or .csv - or drop it on the window"),
         bookmarkImportPath_, sizeof(bookmarkImportPath_));
+    cascade::gui::census::rect("bookmarks:importpath", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     if (importBeside) { ImGui::SameLine(); }
     // Disabled while a read is out (it is on a worker, 0.99.65): the file the user
-    // typed is being read, and a second press would only be remembered.
-    ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0' || bookmarkImportPending());
-    if (ImGui::Button(trId("Import"), ImVec2(importW, 0.0f))) { importBookmarkFile(bookmarkImportPath_); }
+    // typed is being read, and a second press would only be remembered. NOT disabled
+    // by an empty box any more (0.99.80): pressed empty, it opens the "Import a
+    // frequency list" window, with its drop zone and Browse key.
+    ImGui::BeginDisabled(bookmarkImportPending());
+    if (ImGui::Button(trId("Import"), ImVec2(importW, 0.0f))) {
+        if (bookmarkImportPath_[0] == '\0') {
+            openImportDialog(cascade::core::ImportInto{}, std::string());
+        } else {
+            importBookmarkFile(bookmarkImportPath_);
+        }
+    }
+    cascade::gui::census::rect("bookmarks:import", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("%s", tr("Adds every entry of an SDR# frequencies.xml, or of a CSV with a\n"

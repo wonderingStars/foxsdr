@@ -69,7 +69,9 @@ struct RecordingScan {
 };
 
 // A frequency list read: what the file held, or why it could not be read. The path is
-// as it was typed less any quotes, so the failure line can leave it out of the log.
+// as it was typed less any quotes, so the failure line can leave it out of the log - or,
+// for a bare file name looked for in the recordings folder (0.99.80), the path LAST TRIED
+// there, which is the one the reason names.
 struct ImportOutcome {
     cascade::core::ImportResult result;
     std::string path;
@@ -98,6 +100,10 @@ struct DiskWorkState {
     // is what was asked for, not what the preset field says by the time the file is read.
     cascade::core::ImportInto importInto;
     cascade::core::ImportInto importAgainInto;
+    // The path the read now out was asked for, kept on the window's thread for the same
+    // reason (0.99.80): a read that threw comes back with no path, and the sentence that says
+    // the file "could not be read" must still name it.
+    std::string importPath;
     DiskJob<ShotOutcome> shotWrite{"screenshot save"};
     DiskJob<RecordingScan> recordingScan{"recordings list"};
     // A listing asked for while one was out is run when it comes back.

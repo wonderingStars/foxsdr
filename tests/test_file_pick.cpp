@@ -1,8 +1,10 @@
 // core/file_pick.hpp - the file dialog behind a PATH settings field's BROWSE key (0.99.74).
 //
 //   [A] placeholderNamesProgram: the one hint a PATH field carries.
-//   [B] pickStartFolder: the dialog opens beside the current value, only if that folder is there.
-//   [C] openFileFilters: the file-type list, Programs first only for a ".exe" hint.
+//   [B] pickStartFolder: the dialog opens beside the current value, only if that folder is there;
+//       pickStartPath (0.99.80): what the IMPORT window's Browse key hands it for the box's text.
+//   [C] openFileFilters: the file-type list, Programs first only for a ".exe" hint, and the
+//       frequency-list filter the IMPORT window's Browse key asks for (0.99.80).
 //   [D] pickerCommand: the argv a Linux helper is run with - one element per argument, never a
 //       shell command line.
 //   [E] WINDOWS: THE REAL DIALOG. pickFile() is called for real, with an invisible window as its
@@ -114,6 +116,28 @@ void testStartFolder() {
     // A bare name has no folder; an empty value has none either.
     CHECK(pickStartFolder("nrsc5.exe").empty());
     CHECK(pickStartFolder("").empty());
+
+    // 0.99.80, the IMPORT window's Browse key: pickStartPath says what startFrom is for the box's text.
+    // A name that is NOT in the recordings folder (nothing has been exported yet, or a typo) still opens
+    // the dialog IN that folder, because pickStartFolder takes the parent of a path and does not ask
+    // whether the file is there.
+    using cascade::core::pickStartPath;
+    const std::string rec = utf8(root);  // the recordings folder: it exists, and has no frequencies.xml in it
+    const std::string joined = rec + "/frequencies.xml";
+    CHECK(pickStartPath("", rec, "frequencies.xml") == joined);                  // an empty box: the default name
+    CHECK(pickStartFolder(pickStartPath("", rec, "frequencies.xml")) == rec);    // ...opens in the folder, file or none
+    CHECK(pickStartPath("list.csv", rec, "frequencies.xml") == rec + "/list.csv");  // a bare name: in the folder
+    CHECK(pickStartFolder(pickStartPath("typo.csv", rec, "frequencies.xml")) == rec);
+    CHECK(pickStartPath("\"list.csv\"", rec, "frequencies.xml") == rec + "/list.csv");  // Explorer's quotes
+    CHECK(pickStartPath("sub/list.csv", rec, "frequencies.xml") == "sub/list.csv");     // a folder part: as typed
+    const std::string fullPath = utf8(root / "list.csv");  // native absolute path on either platform
+    CHECK(pickStartPath(fullPath, rec, "frequencies.xml") == fullPath);
+    CHECK(pickStartPath("\"" + fullPath + "\"", rec, "frequencies.xml") == fullPath);
+    CHECK(pickStartPath("list.csv", rec + "/", "frequencies.xml") == rec + "/list.csv");  // no doubled slash
+    CHECK(pickStartPath("", "", "frequencies.xml").empty());                      // no path and no folder: none
+    CHECK(pickStartPath("list.csv", "", "frequencies.xml") == "list.csv");          // no folder: as typed
+    // A recordings folder that is not there (a drive that is gone): the system's own start, not a guess.
+    CHECK(pickStartFolder(pickStartPath("", utf8(root / "no such folder"), "frequencies.xml")).empty());
     fs::remove_all(root, ec);
 }
 
@@ -142,6 +166,40 @@ void testFilters() {
     if (f.size() == 2u) {
         CHECK(f[0].first == "*.exe" && f[1].first == "*.*");
     }
+
+    // 0.99.80, the IMPORT window's Browse key: `lists` offers the frequency-list files first.
+    FilePickRequest l;
+    l.lists = true;
+    l.listsName = "Frequency lists (*.xml, *.csv)";
+    l.allFilesName = "All files (*.*)";
+    f = openFileFilters(l);
+    CHECK(f.size() == 2u);
+    if (f.size() == 2u) {
+        CHECK(f[0].first == "Frequency lists (*.xml, *.csv)" && f[0].second == "*.xml;*.csv");  // selected when it opens
+        CHECK(f[1].first == "All files (*.*)" && f[1].second == "*.*");
+    }
+    // `lists` off (the default): no list filter at all, whatever listsName holds.
+    l.lists = false;
+    f = openFileFilters(l);
+    CHECK(f.size() == 1u);
+    if (f.size() == 1u) { CHECK(f[0].first == "All files (*.*)" && f[0].second == "*.*"); }
+    // Both asked for: programs first, then lists, then all files.
+    FilePickRequest both = r;
+    both.programs = true;
+    both.lists = true;
+    both.listsName = "Frequency lists (*.xml, *.csv)";
+    f = openFileFilters(both);
+    CHECK(f.size() == 3u);
+    if (f.size() == 3u) {
+        CHECK(f[0].second == "*.exe" && f[1].second == "*.xml;*.csv" && f[2].second == "*.*");
+        CHECK(f[1].first == "Frequency lists (*.xml, *.csv)");
+    }
+    // A list request with no words still lists something readable: the pattern.
+    FilePickRequest nameless;
+    nameless.lists = true;
+    f = openFileFilters(nameless);
+    CHECK(f.size() == 2u);
+    if (f.size() == 2u) { CHECK(f[0].first == "*.xml;*.csv" && f[1].first == "*.*"); }
 }
 
 void testCommands() {
@@ -293,6 +351,41 @@ void testWindowsDialog() {
     HWND owner = ::CreateWindowExW(0, L"STATIC", L"file pick owner", WS_POPUP, 0, 0, 10, 10, nullptr,
                                    nullptr, ::GetModuleHandleW(nullptr), nullptr);
     CHECK(owner != nullptr);
+
+    // The import window starts with the recordings folder's mixed separators
+    // and a default filename that need not exist. Choose only the accented
+    // basename: this succeeds only if the real dialog opened in that folder.
+    // Run this before the other dialogs, so a previous successful selection
+    // cannot mask the folder requested by the import window.
+    {
+        const fs::path lists = root / "import-start";
+        std::error_code ec;
+        fs::create_directories(lists, ec);
+        CHECK(!ec);
+        const fs::path list = lists / fs::path(u8"fréquences.csv");
+        { std::ofstream(list) << "frequency,name\n121500000,Tower\n"; }
+        FilePickRequest import;
+        import.title = "FoxSDR import start-folder test";
+        import.startFrom = utf8(root) + "/import-start/missing-list.csv";
+        import.lists = true;
+        import.listsName = "Frequency lists (*.xml, *.csv)";
+        import.allFilesName = "All files (*.*)";
+        import.owner = owner;
+        Driver d;
+        d.guiThread = ::GetCurrentThreadId();
+        d.owner = owner;
+        d.choose = true;
+        d.typed = L"fr\u00e9quences.csv";
+        std::thread t(drive, &d);
+        std::string path;
+        const bool ok = cascade::core::pickFile(import, path);
+        t.join();
+        CHECK(d.seen.load());
+        CHECK(d.foundControls);
+        CHECK(ok);
+        CHECK(path == utf8(list));
+        std::printf("    import mixed-slash start: chosen=%s, expected=%s\n", path.c_str(), utf8(list).c_str());
+    }
 
     FilePickRequest rq;
     rq.title = "FoxSDR pick-file test";

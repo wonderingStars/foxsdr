@@ -566,12 +566,28 @@ void AppWindow::importBookmarkFile(const std::string& path, const cascade::core:
     // hands back what the file held; pollDiskJobs() puts it in the list.
     const auto hook = diskHookForTest_;
     disk_->importInto = into;
-    disk_->bookmarkImport.request([p, hook]() -> ImportOutcome {
+    disk_->importPath = p;
+    disk_->bookmarkImport.request([p, hook, dir = recordDir_]() -> ImportOutcome {
         const auto t0 = std::chrono::steady_clock::now();
         if (hook) { hook(); }
         ImportOutcome o;
         o.path = p;
         o.result = cascade::core::importFrequencyFile(p);
+        // A BARE FILE NAME (0.99.80): "frequencies.xml", as Export for SDR# and the AIRBAND
+        // preset's Export CSV showed it, opens relative to the process's working directory -
+        // the install folder, from the shortcuts - and not in the recordings folder those keys
+        // wrote it to (field report, SWL 20807: "import impossible: cannot open"). So a name
+        // with no folder part that does not open is looked for in the recordings folder, as
+        // Export shows paths (dir + "/" + name). Here on the worker, never on the window's
+        // thread; a relative name WITH a folder part is not retried. What was tried last is
+        // what the result and the path say, so the reason names where it looked.
+        if (!p.empty() && !dir.empty() && o.result.error.rfind("cannot open", 0) == 0 &&
+            !std::filesystem::path(std::u8string(p.begin(), p.end())).has_parent_path()) {
+            const char last = dir.back();
+            const std::string retry = dir + ((last == '/' || last == '\\') ? "" : "/") + p;
+            o.path = retry;
+            o.result = cascade::core::importFrequencyFile(retry);
+        }
         o.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
                    .count();
         return o;
@@ -599,9 +615,23 @@ void AppWindow::pollDiskJobs() {
             if (disk_->bookmarkImport.threw() && r.error.empty()) {
                 r.error = "cannot read the file";
             }
-            const std::string& p = o.path;
+            // The path the reason names: the last one tried (a bare name looked for in the
+            // recordings folder has two), or - for a worker that threw and left none - the
+            // one that was asked for.
+            const std::string p = o.path.empty() ? disk_->importPath : o.path;
             if (!r.error.empty() && r.items.empty()) {
-                noteTo = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
+                // THE REASON IN THE USER'S LANGUAGE (0.99.80): the core's three reasons are
+                // English sentences, which put an English tail on "Import impossible : ..."; the
+                // log below keeps the core's own words. Anything else passes through as it was.
+                std::string reason = r.error;
+                if (r.error.rfind("cannot open", 0) == 0) {
+                    reason = cascade::core::formatText(tr("the file \"%s\" could not be opened"), p.c_str());
+                } else if (r.error.rfind("cannot read", 0) == 0) {
+                    reason = cascade::core::formatText(tr("the file \"%s\" could not be read"), p.c_str());
+                } else if (r.error.rfind("no line had a usable frequency", 0) == 0) {
+                    reason = tr("no line of the file had a usable frequency");
+                }
+                noteTo = cascade::core::formatText(tr("Could not import: %s"), reason.c_str());
                 // The file's KIND, never its name or path: "never the name or path of
                 // a file you opened" (PRIVACY.md), and a frequency list's name is
                 // usually what is on it.
@@ -611,10 +641,19 @@ void AppWindow::pollDiskJobs() {
                      at = why.find(p, at)) {
                     why.replace(at, p.size(), "(the file)");
                 }
-                cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s",
-                                         std::filesystem::path(p).extension().string().c_str(),
-                                         why.c_str());
+                const auto extension = std::filesystem::path(std::u8string(p.begin(), p.end())).extension().u8string();
+                const std::string kind(extension.begin(), extension.end());
+                cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s", kind.c_str(), why.c_str());
+                // THE "Import a frequency list" WINDOW opens on any import that came back with
+                // no rows - typed, dropped or chosen, from either section (0.99.80) - with the
+                // sentence above and the target of the import that failed; already open, it
+                // takes the new sentence. The section's note says it too, as it always did.
+                openImportDialog(into, noteTo);
             } else {
+                // An import the window was waiting for came back WITH rows: it has done its job.
+                importDialogOpen_ = false;
+                importDialogQueued_ = false;
+                importDialogReason_.clear();
                 const auto t0 = std::chrono::steady_clock::now();
                 const std::size_t found = r.items.size();
                 // THE PRESET'S NAME AND TICK, put on every row HERE, on the window's thread,

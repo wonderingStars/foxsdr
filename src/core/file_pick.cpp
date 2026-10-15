@@ -59,12 +59,31 @@ std::string pickStartFolder(const std::string& value) {
     }
 }
 
+std::string pickStartPath(const std::string& typed, const std::string& folder,
+                          const std::string& fallbackName) {
+    std::string t = typed;
+    if (t.size() >= 2 && t.front() == '"' && t.back() == '"') { t = t.substr(1, t.size() - 2); }
+    bool hasFolderPart = false;
+    if (!t.empty()) {
+        try {
+            hasFolderPart = fs::path(std::u8string(t.begin(), t.end())).has_parent_path();
+        } catch (...) {
+            hasFolderPart = true;  // a name this cannot spell: leave it to the dialog as it stands
+        }
+    }
+    if (hasFolderPart) { return t; }
+    if (folder.empty()) { return t; }
+    const char last = folder.back();
+    return folder + ((last == '/' || last == '\\') ? "" : "/") + (t.empty() ? fallbackName : t);
+}
+
 std::vector<std::pair<std::string, std::string>> openFileFilters(const FilePickRequest& r) {
     std::vector<std::pair<std::string, std::string>> out;
     const auto named = [](const std::string& name, const char* pattern) {
         return std::make_pair(name.empty() ? std::string(pattern) : name, std::string(pattern));
     };
     if (r.programs) { out.push_back(named(r.programsName, "*.exe")); }
+    if (r.lists) { out.push_back(named(r.listsName, "*.xml;*.csv")); }
     out.push_back(named(r.allFilesName, "*.*"));
     return out;
 }
@@ -131,7 +150,10 @@ bool filePickAvailable() { return true; }
 bool pickFile(const FilePickRequest& request, std::string& path) {
     path.clear();
     const std::wstring title = widen(request.title);
-    const std::wstring folder = widen(pickStartFolder(request.startFrom));
+    // The recordings folder combines USERPROFILE with forward-slash suffixes.
+    // GetOpenFileName ignored that mixed-slash initial directory (0.99.80,
+    // reproduced by the native import-start test). Give it native separators.
+    const std::wstring folder = fs::path(widen(pickStartFolder(request.startFrom))).make_preferred().native();
     std::vector<wchar_t> filter = filterBuffer(request);
     // A value is at most CASCADE_SETTING_VALUE_BYTES (4096) bytes, so 32 K wide
     // characters hold anything the dialog can hand back; MAX_PATH would cut a

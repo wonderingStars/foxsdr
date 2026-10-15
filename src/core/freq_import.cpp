@@ -420,7 +420,10 @@ ImportResult importFrequencyFile(const std::string& path) {
     // Through readTextFile (core/file_read.hpp, 0.99.65): a FOLDER dropped on the window, or a read
     // that fails, is answered in words and never thrown.
     std::string text;
-    switch (readTextFile(path, text)) {
+    // The picker, GLFW drop callback and ImGui fields provide UTF-8 (0.99.80).
+    // A narrow filesystem path uses Windows' ANSI code page and opens a
+    // different filename when the chosen name has accents or other scripts.
+    switch (readTextFile(std::filesystem::path(std::u8string(path.begin(), path.end())), text)) {
         case ReadResult::Ok:
             break;
         case ReadResult::IsDirectory:

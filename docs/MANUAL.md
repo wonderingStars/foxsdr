@@ -749,9 +749,16 @@ bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
 
 - **Import** an SDR# `frequencies.xml`, or a CSV saved from Excel: type or
   paste its path and press Import, or drop the file anywhere on the window.
-  SDR#'s Name, GroupName, Frequency, DetectorType, FilterBandwidth and
-  IsFavourite come across; the file does not have to be perfectly formed (a
-  hand-merged list with one entry per line reads fine). A CSV can have its
+  Press Import with the box empty and a window opens with a drop zone and a
+  **Browse...** key that opens the system's file dialog (where there is one);
+  it opens by itself too when a file could not be imported, saying why, and it
+  closes when a file is read. A bare file name, with no folder in it, is looked
+  for in the recordings folder - where Export for SDR# writes - when the
+  process's working folder does not have it. Windows import also accepts
+  filenames with accents or other Unicode characters. SDR#'s Name, GroupName,
+  Frequency, DetectorType, FilterBandwidth and IsFavourite come across; the
+  file does not have to be perfectly formed (a hand-merged list with one entry
+  per line reads fine). A CSV can have its
   columns in any order under a header naming them - frequency, name, group,
   mode, bandwidth, favourite - or no header at all (frequency, name, group,
   mode, bandwidth); frequencies are Hz, or MHz when the header says so or the
@@ -799,8 +806,12 @@ bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
 - **Presets:** a preset is a named group of the frequency list. Type or paste
   the path of a CSV or an SDR# frequencies.xml and press **Import** to read
   the file into the preset, its AM and NFM rows ticked whatever the file said
-  (a WFM, SSB or CW row is kept unticked: the monitor does not play it), and
-  **Export CSV** writes the preset to the recordings folder as
+  (a WFM, SSB or CW row is kept unticked: the monitor does not play it). With
+  the box empty, Import opens a window with a drop zone and a **Browse...**
+  key; a file dropped or chosen there joins the preset, and the window also
+  opens, saying why, when a file could not be imported. A bare file name is
+  looked for in the recordings folder, where Export CSV writes. **Export CSV**
+  writes the preset to the recordings folder as
   `foxsdr-<name>-<time>.csv` - the file Import reads back, ticks included -
   while **Remove preset** takes its rows out of the list. Add and Import show
   the preset they filled unless LISTEN is playing, and Remove preset stops

@@ -299,8 +299,13 @@ void AppWindow::airbandShowGroup(const std::string& group) {
 // THE PRESET'S IMPORT KEY: the file at the typed path, read on a worker, its rows
 // into the preset - in its group, the AM and NFM ones ticked, whatever the file
 // said (pollDiskJobs puts them there, and says what it did in this section).
+// With the box EMPTY (0.99.80) it opens the "Import a frequency list" window for this
+// preset instead: a drop zone and a Browse key, whose chosen file joins the preset.
 void AppWindow::airbandImportPreset() {
-    if (airbandImportPath_[0] == '\0') { return; }
+    if (airbandImportPath_[0] == '\0') {
+        openImportDialog(cc::ImportInto{airbandPresetName(), true}, std::string());
+        return;
+    }
     airbandPresetNote_.clear();
     airbandPresetFolderKey_ = false;
     importBookmarkFile(airbandImportPath_, cc::ImportInto{airbandPresetName(), true});
@@ -967,8 +972,10 @@ void AppWindow::drawAirbandSection() {
 
     // THE PRESET'S FILE KEYS (0.99.66): the path of a file to read into it and
     // Import beside it, then Export CSV and Remove preset. The path is typed or
-    // pasted - FoxSDR has no file dialog - like the Bookmarks section's, and a
-    // file dropped on the window still goes in as the file says.
+    // pasted, like the Bookmarks section's; Import pressed with the box empty opens
+    // the "Import a frequency list" window (0.99.80: a drop zone and a Browse key,
+    // for this preset), and a file dropped on the window with no such window open
+    // still goes in as the file says.
     {
         const float importW = std::max(82.0f, cascade::gui::buttonWidth(trId("Import##airband_import")));
         const bool importBeside = cascade::gui::fitsBeside(90.0f, spacing, importW, ImGui::GetContentRegionAvail().x);
@@ -979,8 +986,9 @@ void AppWindow::drawAirbandSection() {
                      ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
         if (importBeside) { ImGui::SameLine(); }
         // Disabled while a read is out (the Bookmarks section's rule): the file named
-        // is being read, and a second press would only be remembered.
-        ImGui::BeginDisabled(airbandImportPath_[0] == '\0' || bookmarkImportPending());
+        // is being read, and a second press would only be remembered. An empty box
+        // does not disable it: pressed empty, it opens the Import window.
+        ImGui::BeginDisabled(bookmarkImportPending());
         if (ImGui::Button(trId("Import##airband_import"), ImVec2(importBeside ? importW : -FLT_MIN, 0.0f))) {
             airbandImportPreset();
         }

@@ -360,6 +360,13 @@ foreach(src ${CASCADE_TESTS})
         # FOXSDR_FILE_PICK seam, and reads the chosen path back from the config the run leaves.
         add_dependencies(${name} settings_ui_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:settings_ui_fixture>")
+    elseif(name STREQUAL "test_import_dialog_app")
+        # Runs the real cascade.exe (built first) with TOOLS > Bookmarks open and a name in its
+        # import box (FOXSDR_BOOKMARK_IMPORT), presses Import and the window's keys with the input
+        # script, and reads the window's parts from the UI census, whether it is still up from the
+        # screenshot's window list, and the rows from the bookmarks file the run leaves (0.99.80).
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_soapy_enum_proc" AND TARGET soapy_fault_fixture)
         # Hands the fault fixture's directory to the real enumeration child;
         # cascade.exe is built first because that block runs it.
@@ -494,6 +501,13 @@ set_tests_properties(test_plugin_dup_app PROPERTIES TIMEOUT 600)
 # the cancelled press and a relaunch), 33 to 46 frames each. The Linux runners are half this
 # desktop's speed, so it is given a bound well past the loop's two minutes.
 set_tests_properties(test_plugin_pathpick_app PROPERTIES TIMEOUT 300)
+# The Import-window test starts the real application sixteen times (a layout run, the failure and the
+# empty box with a control each, Browse chosen with a control, cancelled, Escape, the Cancel key, a
+# bare name with a control, and the AIRBAND section's layout, empty box and Browse), 23 to 90 frames
+# each and a screenshot in most: 33 s for the first thirteen on this desktop and 111 s for all sixteen
+# (the AIRBAND runs are the slow ones). The Linux runners are half this desktop's speed, so it is given
+# the generous bound its siblings are.
+set_tests_properties(test_import_dialog_app PROPERTIES TIMEOUT 600)
 # The display-menu test starts the real application twenty-three times (the menu on the waterfall and the
 # spectrum, Manual with its sliders, the ten-decibel rule, Reset, a restart, a 0.99.75 config, a patch
 # Spectrum part, and nine runs that hold the frame loop with `sleep` steps for the 4-second tip, 4 to

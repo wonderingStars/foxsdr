@@ -29,6 +29,12 @@
 //     (Before the fix: worst frame gap 2514 ms and a hang report for the import,
 //     2503 ms and a hang report for the recording; after, about 25 ms and none.)
 //
+//   * (0.99.80) the Import key's "Import a frequency list" window and a bare file name: a name with
+//     no folder part is looked for in the recordings folder on the import's worker, the core's
+//     reasons are said through tr(), any import that returns no rows opens the window, and a file
+//     dropped while it is open goes to its target (checkABareNameIsLookedFor... to
+//     checkTheReasonIsSaidInWords).
+//
 // Found by the 0.99.64 audit of what the 0.99.63 Record fix left on the GUI thread
 // (docs/DIAGNOSTICS.md, "The window does no disk work").
 //
@@ -89,6 +95,7 @@
 #include <imgui_internal.h>
 
 #include "core/airband_data.hpp"
+#include "core/file_read.hpp"
 #include "core/freq_import.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/host_image.hpp"
@@ -140,6 +147,20 @@ struct AppWindowTestAccess {
     // The Import button and a file dropped on the window both end here.
     static void importFile(AppWindow& a, const std::string& path) { a.importBookmarkFile(path); }
     static bool importPending(AppWindow& a) { return a.bookmarkImportPending(); }
+
+    // THE "Import a frequency list" WINDOW (0.99.80): its state, the two ways it is opened, and the
+    // frame loop's handling of a dropped file (the real routine, not a copy of it).
+    static bool dialogOpen(AppWindow& a) { return a.importDialogOpen_; }
+    static bool dialogQueued(AppWindow& a) { return a.importDialogQueued_; }
+    static std::string dialogReason(AppWindow& a) { return a.importDialogReason_; }
+    static cascade::core::ImportInto dialogInto(AppWindow& a) { return a.importDialogInto_; }
+    static void openDialog(AppWindow& a, const cascade::core::ImportInto& into, const std::string& reason) {
+        a.openImportDialog(into, reason);
+    }
+    static void dropFile(AppWindow& a, const std::string& path) {
+        a.pendingDropPath_ = path;
+        a.consumePendingDrop();
+    }
 
     // THE AIRBAND SECTION'S PRESETS (0.99.66). Import into a group, the notes it and
     // the export say in that section, and the keys' own members.
@@ -843,6 +864,271 @@ void checkAnImportIntoAPresetForcesTheGroupAndTheTick() {
         CHECK(kept != nullptr && left != nullptr);
         if (kept != nullptr && left != nullptr) { CHECK(kept->scan && !left->scan); }
     }
+}
+
+// --- THE "Import a frequency list" WINDOW AND A BARE FILE NAME (0.99.80) -----------------
+//
+// Field report, SWL 20807 (French interface): "When I type the name of the file to load, it shows an
+// error (import impossible: cannot open)". Export for SDR# and the AIRBAND preset's Export CSV write
+// into the recordings folder and show the name; typed back, a bare name was opened relative to the
+// process's working directory and was never there. Four things are held here: the bare name is looked
+// for in the recordings folder (on the worker), the reason is said in the user's language, any import
+// that comes back with no rows opens the window, and a file dropped while it is open goes where it
+// says. The key presses and the drawn window are ImGui output: tests/test_import_dialog_app.cpp.
+
+// `n` rows of NFM, starting at `firstMhz`, written into `dir` under `name`.
+void writeCsvIn(const fs::path& dir, const std::string& name, int n, double firstMhz) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    std::ofstream f(dir / fs::path(std::u8string(name.begin(), name.end())), std::ios::binary);
+    f << "frequency,name,mode\n";
+    for (int i = 0; i < n; ++i) {
+        f << static_cast<long long>((firstMhz + 1.1 * i) * 1.0e6) << ",Bare " << name << " " << i << ",NFM\n";
+    }
+}
+
+void waitImport(AppWindow& app) {
+    CHECK(pumpApp(app, 5000.0, [&] { return !Access::importPending(app); }));
+}
+
+// A BARE NAME is looked for where Export wrote it: the recordings folder.
+void checkABareNameIsLookedForInTheRecordingsFolder() {
+    AppWindow app;
+    const fs::path rec = g_scratch / "bare-rec";
+    Access::setRecordDir(app, rec.string());
+    writeCsvIn(rec, "bare-list.csv", 3, 110.0);
+    CHECK(!fs::exists("bare-list.csv"));  // not beside the process: only the recordings folder has it
+    Access::importFile(app, "bare-list.csv");
+    waitImport(app);
+    CHECK(Access::bookmarks(app).size() == 3u);
+    CHECK(Access::exportNote(app) == "CSV: 3 entries read, 3 added");
+    CHECK(!Access::dialogOpen(app));  // rows came back: no window
+    // The same through the quotes Explorer's "Copy as path" puts on a name, and for a second name.
+    writeCsvIn(rec, "bare-two.csv", 2, 130.0);
+    Access::importFile(app, "\"bare-two.csv\"");
+    waitImport(app);
+    CHECK(Access::bookmarks(app).size() == 5u);
+}
+
+// The picker and text input provide UTF-8, including for a bare filename retry
+// and its error. A profile/recordings directory may have non-ANSI characters too.
+void checkABareUtf8NameInAUtf8RecordingsFolder() {
+    AppWindow app;
+    const fs::path rec = g_scratch / fs::path(u8"enregistrements-頻率");
+    const auto rec8 = rec.u8string();
+    const std::string recName(rec8.begin(), rec8.end());
+    Access::setRecordDir(app, recName);
+    const std::u8string name8 = u8"fréquences-頻率.csv";
+    const std::string name(name8.begin(), name8.end());
+    writeCsvIn(rec, name, 3, 110.0);
+    CHECK(!fs::exists(fs::path(name8)));
+    Access::importFile(app, name);
+    waitImport(app);
+    CHECK(Access::bookmarks(app).size() == 3u);
+    CHECK(Access::exportNote(app) == "CSV: 3 entries read, 3 added");
+    CHECK(!Access::dialogOpen(app));
+    const std::string missing = "missing-" + name;
+    Access::importFile(app, missing);
+    waitImport(app);
+    CHECK(Access::exportNote(app) ==
+          "Could not import: the file \"" + recName + "/" + missing + "\" could not be opened");
+    CHECK(Access::dialogOpen(app));
+}
+
+// ...but only a name with NO FOLDER PART: "sub/name.csv" is a path, opened as it stands.
+void checkANameWithAFolderPartIsNotRetried() {
+    AppWindow app;
+    const fs::path rec = g_scratch / "bare-sub-rec";
+    Access::setRecordDir(app, rec.string());
+    writeCsvIn(rec / "sub", "inside.csv", 3, 110.0);
+    Access::importFile(app, "sub/inside.csv");
+    waitImport(app);
+    CHECK(Access::bookmarks(app).empty());
+    CHECK(Access::exportNote(app) == "Could not import: the file \"sub/inside.csv\" could not be opened");
+    CHECK(Access::dialogOpen(app));  // it did not open: the window offers the other ways in
+    // A bare name that is in neither place names where it LOOKED LAST: the recordings folder.
+    AppWindow lost;
+    Access::setRecordDir(lost, rec.string());
+    Access::importFile(lost, "nowhere.csv");
+    waitImport(lost);
+    CHECK(Access::exportNote(lost) ==
+          "Could not import: the file \"" + rec.string() + "/nowhere.csv\" could not be opened");
+    CHECK(Access::bookmarks(lost).empty());
+}
+
+// A FAILED IMPORT OPENS THE WINDOW, with the sentence and the target of the import that failed;
+// one that comes back with rows closes it, and a window that was never asked for stays shut.
+void checkAFailedImportOpensTheWindow() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "dialog-fail").string());
+    CHECK(!Access::dialogOpen(app) && !Access::dialogQueued(app));
+    // A good import first: no window.
+    Access::importFile(app, writeCsv("dialog-ok", 2, 100.0));
+    waitImport(app);
+    CHECK(Access::bookmarks(app).size() == 2u);
+    CHECK(!Access::dialogOpen(app) && !Access::dialogQueued(app));
+    // A file that is not there: the window, with the sentence the section's note holds.
+    const std::string missing = (g_scratch / "dialog-missing.csv").string();
+    Access::importFile(app, missing);
+    waitImport(app);
+    const std::string sentence = "Could not import: the file \"" + missing + "\" could not be opened";
+    CHECK(Access::exportNote(app) == sentence);
+    CHECK(Access::dialogOpen(app) && Access::dialogQueued(app));
+    CHECK(Access::dialogReason(app) == sentence);
+    CHECK(Access::dialogInto(app).group.empty());
+    // Still open, a second failure takes the new sentence...
+    const std::string missing2 = (g_scratch / "dialog-missing-two.csv").string();
+    Access::importFile(app, missing2);
+    waitImport(app);
+    CHECK(Access::dialogOpen(app));
+    CHECK(Access::dialogReason(app) ==
+          "Could not import: the file \"" + missing2 + "\" could not be opened");
+    // ...and an import that comes back with rows closes it and forgets the sentence.
+    Access::importFile(app, writeCsv("dialog-ok-two", 3, 120.0));
+    waitImport(app);
+    CHECK(Access::bookmarks(app).size() == 5u);
+    CHECK(!Access::dialogOpen(app) && !Access::dialogQueued(app));
+    CHECK(Access::dialogReason(app).empty());
+
+    // A preset's import that fails opens it FOR THAT PRESET.
+    AppWindow preset;
+    Access::setRecordDir(preset, (g_scratch / "dialog-fail-preset").string());
+    Access::importInto(preset, missing, "Harbour", true);
+    waitImport(preset);
+    CHECK(Access::dialogOpen(preset));
+    CHECK(Access::dialogInto(preset).group == "Harbour" && Access::dialogInto(preset).tick);
+    CHECK(Access::dialogReason(preset) == Access::presetNote(preset));
+    CHECK(Access::exportNote(preset).empty());  // said in the AIRBAND section, as before
+}
+
+// The Import key pressed with its box empty opens the window (the press itself is ImGui's); the
+// state it leaves is the one a failure leaves, minus the sentence.
+void checkTheWindowOpenedByHandHasNoSentence() {
+    AppWindow app;
+    CHECK(!Access::dialogOpen(app));
+    Access::openDialog(app, cascade::core::ImportInto{}, "");
+    CHECK(Access::dialogOpen(app) && Access::dialogQueued(app));
+    CHECK(Access::dialogReason(app).empty());
+    CHECK(Access::dialogInto(app).group.empty());
+    Access::openDialog(app, cascade::core::ImportInto{"Marine", true}, "");
+    CHECK(Access::dialogInto(app).group == "Marine" && Access::dialogInto(app).tick);
+}
+
+// A WORKER THAT THREW comes back with no path at all (a default result): the sentence that says the
+// file "could not be read" still names the file that was asked for, and the window opens for it.
+void checkAThrowingImportWorkerStillNamesTheFile() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "dialog-throw").string());
+    const std::string csv = writeCsv("dialog-throw", 2, 100.0);
+    Access::setHook(app, [] { throw std::runtime_error("the disk threw"); });
+    Access::importFile(app, csv);
+    waitImport(app);
+    CHECK(Access::exportNote(app) == "Could not import: the file \"" + csv + "\" could not be read");
+    CHECK(Access::dialogOpen(app));
+    CHECK(Access::bookmarks(app).empty());
+}
+
+// The AIRBAND preset's Import key with its box EMPTY (airbandImportPreset, which returned) opens the
+// window for THAT preset - the name in the field, or "Manual" when it is empty - and reads nothing.
+void checkAnEmptyPresetImportOpensTheWindowForThePreset() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "dialog-preset-empty").string());
+    Access::importPreset(app, "  Marine ", "");
+    CHECK(!Access::importPending(app));  // nothing was asked of the disk
+    CHECK(Access::dialogOpen(app) && Access::dialogQueued(app));
+    CHECK(Access::dialogInto(app).group == "Marine" && Access::dialogInto(app).tick);
+    CHECK(Access::dialogReason(app).empty());
+    CHECK(Access::presetNote(app).empty() && Access::exportNote(app).empty());
+    Access::importPreset(app, "", "");
+    CHECK(Access::dialogInto(app).group == "Manual" && Access::dialogInto(app).tick);
+    CHECK(Access::bookmarks(app).empty());
+    // With a path typed it still reads, and does not open the window.
+    AppWindow typed;
+    Access::setRecordDir(typed, (g_scratch / "dialog-preset-typed").string());
+    Access::importPreset(typed, "Marine", writeCsv("dialog-preset-typed", 2, 150.0));
+    waitImport(typed);
+    CHECK(Access::bookmarks(typed).size() == 2u);
+    CHECK(!Access::dialogOpen(typed));
+}
+
+// A FILE DROPPED WHILE THE WINDOW IS OPEN goes to the window's target (a preset's rows join the
+// preset, ticked where the monitor plays them); with no window it goes as the file says.
+void checkADropFollowsTheWindowsTarget() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "dialog-drop").string());
+    Access::openDialog(app, cascade::core::ImportInto{"Harbour", true}, "");
+    Access::dropFile(app, writeMixedCsv("dialog-drop-mixed"));
+    waitImport(app);
+    const std::vector<cascade::core::Bookmark> list = Access::bookmarks(app);
+    CHECK(list.size() == 4u);
+    for (const cascade::core::Bookmark& b : list) {
+        CHECK(b.group == "Harbour");
+        CHECK(b.scan == (b.mode == "AM" || b.mode == "NFM"));
+    }
+    CHECK(!Access::dialogOpen(app));  // it had rows: the window closed itself
+    // The same drop with no window open: the file's own groups, nothing ticked.
+    AppWindow plain;
+    Access::setRecordDir(plain, (g_scratch / "dialog-drop-plain").string());
+    Access::dropFile(plain, writeMixedCsv("dialog-drop-mixed"));
+    waitImport(plain);
+    const std::vector<cascade::core::Bookmark> plainList = Access::bookmarks(plain);
+    const cascade::core::Bookmark* radio = rowNamed(plainList, "Broadcast");
+    CHECK(radio != nullptr);
+    if (radio != nullptr) { CHECK(radio->group == "Radio" && !radio->scan); }
+    // A drop that fails while the window is open keeps it open, for the same target.
+    AppWindow failing;
+    Access::setRecordDir(failing, (g_scratch / "dialog-drop-fail").string());
+    Access::openDialog(failing, cascade::core::ImportInto{"Harbour", true}, "");
+    Access::dropFile(failing, (g_scratch / "dialog-drop-missing.csv").string());
+    waitImport(failing);
+    CHECK(Access::dialogOpen(failing) && Access::dialogInto(failing).group == "Harbour");
+    CHECK(!Access::dialogReason(failing).empty());
+}
+
+// THE REASON IN THE USER'S LANGUAGE: the core's three English reasons are mapped to sentences that
+// go through tr(); any other reason passes through as it was.
+bool faultOnFaultList(const std::string& path) {
+    return path.size() >= 14 && path.compare(path.size() - 14, 14, "fault-list.csv") == 0;
+}
+
+void checkTheReasonIsSaidInWords() {
+    AppWindow app;
+    Access::setRecordDir(app, (g_scratch / "dialog-reason").string());
+    const std::string kind = "Could not import: ";
+    // cannot open: a folder squatting on the path (also a missing file, above).
+    const fs::path dirAsFile = g_scratch / "reason-is-a-folder.csv";
+    std::error_code ec;
+    fs::create_directories(dirAsFile, ec);
+    Access::importFile(app, dirAsFile.string());
+    waitImport(app);
+    CHECK(Access::exportNote(app) == kind + "the file \"" + dirAsFile.string() + "\" could not be opened");
+    // cannot read: the read-fault seam makes a file that opens fail part way.
+    const fs::path faulty = g_scratch / "reason-fault-list.csv";
+    {
+        std::ofstream f(faulty, std::ios::binary);
+        f << "frequency,name\n100000000,x\n";
+    }
+    cascade::core::setReadFaultHookForTest(&faultOnFaultList);
+    Access::importFile(app, faulty.string());
+    waitImport(app);
+    cascade::core::setReadFaultHookForTest(nullptr);
+    CHECK(Access::exportNote(app) == kind + "the file \"" + faulty.string() + "\" could not be read");
+    // no line had a usable frequency: a header that names the column and rows that hold no number.
+    {
+        std::ofstream f(g_scratch / "reason-unusable.csv", std::ios::binary);
+        f << "frequency_mhz,name\nabc,one\ndef,two\n";
+    }
+    Access::importFile(app, (g_scratch / "reason-unusable.csv").string());
+    waitImport(app);
+    CHECK(Access::exportNote(app) == kind + "no line of the file had a usable frequency");
+    // Any other reason is the core's own words, unchanged.
+    {
+        std::ofstream f(g_scratch / "reason-empty.csv", std::ios::binary);
+    }
+    Access::importFile(app, (g_scratch / "reason-empty.csv").string());
+    waitImport(app);
+    CHECK(Access::exportNote(app) == kind + "the file is empty");
+    CHECK(Access::bookmarks(app).empty());
 }
 
 // AN IMPORT ASKED FOR WHILE ONE IS OUT KEEPS ITS OWN PRESET: remembered with the group it
@@ -1668,6 +1954,15 @@ int main() {
     checkASecondImportIsRemembered();
     checkAnImportSaysWhatItSaid();
     checkAnImportIntoAPresetForcesTheGroupAndTheTick();
+    checkABareNameIsLookedForInTheRecordingsFolder();
+    checkABareUtf8NameInAUtf8RecordingsFolder();
+    checkANameWithAFolderPartIsNotRetried();
+    checkAFailedImportOpensTheWindow();
+    checkTheWindowOpenedByHandHasNoSentence();
+    checkAThrowingImportWorkerStillNamesTheFile();
+    checkAnEmptyPresetImportOpensTheWindowForThePreset();
+    checkADropFollowsTheWindowsTarget();
+    checkTheReasonIsSaidInWords();
     checkASecondPresetImportKeepsItsOwnGroup();
     checkThePresetNameAndTheImportKey();
     checkAnExportOfAPresetWritesOnlyThatGroup();

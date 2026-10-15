@@ -13,6 +13,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -738,6 +740,34 @@ int main() {
         CHECK(gEntry.find("\"favourite\"") != std::string::npos);
         std::remove(path.c_str());
         std::remove(dir.c_str());
+    }
+
+    // The Windows picker hands the importer UTF-8. Both a French filename
+    // and one outside the active ANSI code page must open the file actually chosen.
+    {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() /
+            ("foxsdr-import-utf8-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        CHECK(!ec);
+        for (const std::u8string name : {std::u8string(u8"fréquences.csv"), std::u8string(u8"頻率.csv")}) {
+            const fs::path path = dir / fs::path(name);
+            {
+                std::ofstream file(path, std::ios::binary);
+                CHECK(file.good());
+                file << "frequency,name,mode\n121500000,Unicode import,AM\n";
+            }
+            CHECK(fs::exists(path));
+            const std::u8string u8path = path.u8string();
+            const std::string utf8(u8path.begin(), u8path.end());
+            const ImportResult result = cascade::core::importFrequencyFile(utf8);
+            std::printf("  UTF-8 filename import: %zu rows; error=%s\n", result.items.size(), result.error.c_str());
+            CHECK(result.error.empty());
+            CHECK(result.items.size() == 1u);
+            if (result.items.size() == 1u) { CHECK(result.items[0].freqHz == 121500000.0); }
+        }
+        fs::remove_all(dir, ec);
     }
 
     return testSummary("test_freq_import");

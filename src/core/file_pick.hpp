@@ -44,6 +44,10 @@ struct FilePickRequest {
                                // wherever the system would have opened it
     bool programs = false;     // offer "Programs" (*.exe) first, "All files" second
     std::string programsName;  // "Programs (*.exe)" - the filter's words
+    bool lists = false;        // offer "Frequency lists" (*.xml;*.csv) first (0.99.80,
+                               // the IMPORT window's Browse key); with `programs` too,
+                               // programs come first, then lists, then all files
+    std::string listsName;     // "Frequency lists (*.xml, *.csv)" - the filter's words
     std::string allFilesName;  // "All files (*.*)"
     void* owner = nullptr;     // the application window's native handle (an HWND
                                // on Windows) so the dialog is modal to it; may be
@@ -63,10 +67,20 @@ bool placeholderNamesProgram(const std::string& placeholder);
 // caller's watchdog pause, never per frame.
 std::string pickStartFolder(const std::string& value);
 
+// The path to hand FilePickRequest::startFrom for a box whose text is `typed` (0.99.80, the
+// IMPORT window's Browse key): what was typed when it names a folder (one pair of quotes, as
+// Explorer's "Copy as path" puts them, is taken off); a BARE name - or nothing - is taken to be in
+// `folder`, where the program looks for such a name (the recordings folder), the empty box as
+// `fallbackName`. So pickStartFolder() of the answer is `folder` even when no such file is there
+// yet. Path arithmetic only: no disk is touched. "" when there is neither a path nor a folder.
+std::string pickStartPath(const std::string& typed, const std::string& folder,
+                          const std::string& fallbackName);
+
 // The (name, pattern) pairs the dialog's file-type list is built from, in the
 // order shown: the first is what is selected when it opens. A request with
-// `programs` set lists {programsName, "*.exe"} then {allFilesName, "*.*"};
-// otherwise only {allFilesName, "*.*"}. An empty name falls back to its pattern
+// `programs` set lists {programsName, "*.exe"} first; one with `lists` set lists
+// {listsName, "*.xml;*.csv"} next (after the programs, if both are set); the
+// last is always {allFilesName, "*.*"}. An empty name falls back to its pattern
 // so the list is never blank. (Windows turns these into the dialog's
 // double-NUL-terminated filter string; the pairs are kept apart so a test can
 // read them.)
