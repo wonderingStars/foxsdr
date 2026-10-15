@@ -79,6 +79,9 @@ struct AppWindowTestAccess {
     }
     static void setPluginMute(AppWindow& a, const std::vector<std::string>& names) {
         a.mutedBy_ = names;
+        // Diagnostics report effective suppression, rather than a stored
+        // subject while a decoded programme plays over the quiet carrier.
+        a.pipeline_.setDemodAudioMuted(!names.empty());
     }
     static void setPpmOn(AppWindow& a, bool on) { a.ppmCorrectionOn_ = on; }
     // The context the ONCE-A-SECOND REFRESH renders - the one a crash report

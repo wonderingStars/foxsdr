@@ -3155,7 +3155,7 @@ cascade::core::DiagContext AppWindow::currentDiagContext(std::size_t* loadedOut)
     // The sound path: the same facts the Sinks panel's chip and the rail's
     // volume, mute and squelch controls show, none of them a frequency.
     ctx.audio = soundPathFacts(pipeline_.audio(), audioOpen_.inFlight(), audioRecoveries_, volume_,
-                               userMuted_, !mutedBy_.empty(),
+                               userMuted_, !muteSubjectText().empty(),
                                transmitter_.transmitting() && !transmitMonitor_, squelchDb_,
                                pipeline_.squelchOpen(), pipeline_.signalPowerDb());
     std::size_t loaded = 0;
@@ -8218,7 +8218,7 @@ void AppWindow::drawSinksSection() {
         // there - with no explanation - is exactly the dead end the 0.58.0
         // audio investigation started from. Wrapped, because the menu column
         // is narrow and a plugin name is the plugin's to choose.
-        if (!mutedBy_.empty()) {
+        if (!muteSubjectText().empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
             ImGui::TextWrapped(tr("Muted by %s"), muteSubjectText().c_str());
             ImGui::PopStyleColor();
@@ -21244,10 +21244,37 @@ void AppWindow::drawPluginWindows() {
                 const float sy = avail.y / static_cast<float>(im.height);
                 const float s = (sx < sy ? sx : sy);
                 if (imageTex_[i] != 0u && s > 0.0f) {
+                    const ImVec2 pictureMin = ImGui::GetCursorScreenPos();
+                    const ImVec2 pictureSize(static_cast<float>(im.width) * s,
+                                             static_cast<float>(im.height) * s);
                     ImGui::Image(static_cast<ImTextureID>(
                                      static_cast<std::uintptr_t>(imageTex_[i])),
-                                 ImVec2(static_cast<float>(im.width) * s,
-                                        static_cast<float>(im.height) * s));
+                                 pictureSize);
+                    if (cascade::gui::census::enabled()) {
+                        cascade::gui::census::rect("image:picture:" + im.plugin,
+                            pictureMin.x, pictureMin.y, pictureMin.x + pictureSize.x,
+                            pictureMin.y + pictureSize.y);
+                    }
+                    if (im.interactive) {
+                        // Own the gesture with an ImGui item: a press elsewhere or
+                        // a release outside this image must never select a programme.
+                        ImGui::SetCursorScreenPos(pictureMin);
+                        ImGui::PushID(im.plugin.c_str());
+                        if (ImGui::InvisibleButton("##image-input", pictureSize)) {
+                            const ImVec2 mouse = ImGui::GetIO().MousePos;
+                            const float x = (mouse.x - pictureMin.x) / s;
+                            const float y = (mouse.y - pictureMin.y) / s;
+                            if (x >= 0 && y >= 0 && x < static_cast<float>(im.width) &&
+                                y < static_cast<float>(im.height)) {
+                                pluginRunner_.imagePress(im.plugin,
+                                    static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        }
+                        ImGui::PopID();
+                    }
                 }
             }
             // ONLY IN THE WINDOW THAT SAVED IT. A note about a file written
@@ -23953,6 +23980,7 @@ std::string AppWindow::muteNameList(const std::vector<std::string>& names) {
 }
 
 std::string AppWindow::muteSubjectText() const {
+    if (!pipeline_.pluginAudioMuted()) { return {}; }
     return muteNameList(mutedBy_);
 }
 
@@ -24023,7 +24051,8 @@ void AppWindow::updateAudioMute() {
     // tuning every frame, so a user mute stored in the same place would be
     // wiped the moment a decoder's preset decided anything, and the Mute key
     // would appear to stop working. The two mutes are separate facts about the
-    // same audio; the pipeline is told their OR.
+    // same audio. A data decoder suppresses only the demodulated carrier;
+    // its own decoded programme must remain audible through that suppression.
     // AND THE THIRD FACT ABOUT THIS AUDIO: whether the radio is transmitting.
     // A receiver left unmuted on the frequency it is transmitting on is a
     // howl, and on a full-duplex board like the Pluto the receiver really is
@@ -24036,7 +24065,8 @@ void AppWindow::updateAudioMute() {
     // each other: it is recomputed from the KEY every frame, and folding it
     // into either of the others would wipe whichever one it was folded into.
     const bool txMute = transmitter_.transmitting() && !transmitMonitor_;
-    pipeline_.setAudioMuted(muted || userMuted_ || txMute);
+    pipeline_.setDemodAudioMuted(muted);
+    pipeline_.setAudioMuted(userMuted_ || txMute);
 }
 
 void AppWindow::stopMutingPlugins(const std::vector<std::string>& keys) {

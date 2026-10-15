@@ -2417,5 +2417,38 @@ int main() {
     testRenamedPluginOldCopyIsAnotherCopy();
     testScanRemovesNothingFromDisk();
     testRealPluginDirs();
+    // Optional image input is validated independently of the frozen decoder table.
+    {
+        CascadeImageDecoderApi image{};
+        image.structSize = sizeof(image);
+        image.inputKind = CASCADE_INPUT_AUDIO;
+        image.create = &stubIqCreate;
+        image.process = &stubIqProcess;
+        image.poll_image = [](void*, CascadeImage*) -> int32_t { return 0; };
+        image.release_image = [](void*, const CascadeImage*) {};
+        image.poll_text = &stubIqPoll;
+        image.destroy = &stubIqDestroy;
+        CascadeImageInputApi input{sizeof(CascadeImageInputApi), [](uint32_t, uint32_t) {}};
+        CascadeCapabilityEntry entries[] = {
+            {CASCADE_CAP_IMAGE_DECODER, sizeof(image), &image},
+            {CASCADE_CAP_IMAGE_INPUT, sizeof(input), &input},
+        };
+        auto d = descFor(CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_IMAGE_INPUT, nullptr, nullptr, &image);
+        d.capabilityCount = 2;
+        d.capabilityTables = entries;
+        CHECK(cascade_plugin_image_input(&d) == &input);
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::None);
+        input.press = nullptr;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::MissingImageInputFunction);
+        input.press = [](uint32_t, uint32_t) {};
+        input.structSize = 4;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::ImageInputStructSizeMismatch);
+        input.structSize = sizeof(input);
+        entries[1].table = nullptr;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::MissingImageInputApi);
+        entries[1].table = &input;
+        d.capabilities = CASCADE_CAP_IMAGE_INPUT;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::ImageInputNeedsDecoder);
+    }
     return testSummary("test_plugin_host");
 }

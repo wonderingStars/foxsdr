@@ -88,6 +88,7 @@ std::vector<Getter> auditedGetters(Pipeline& p) {
         // one of them a mutex would reopen the same hole.
         {"signalPowerDb", [&p] { (void)p.signalPowerDb(); }},
         {"audioMuted", [&p] { (void)p.audioMuted(); }},
+        {"pluginAudioMuted", [&p] { (void)p.pluginAudioMuted(); }},
         {"pilotLocked", [&p] { (void)p.pilotLocked(); }},
         {"pilotLevel", [&p] { (void)p.pilotLevel(); }},
         {"stereoActive", [&p] { (void)p.stereoActive(); }},

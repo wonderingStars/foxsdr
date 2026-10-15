@@ -76,6 +76,14 @@ set_target_properties(tx_audio_fixture PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_txaudio/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_txaudio/$<CONFIG>")
 
+# A real I/Q decoder with decoded PCM, for the automatic demod-mute regression.
+add_library(programme_audio_fixture MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/programme_audio_plugin.cpp")
+target_include_directories(programme_audio_fixture PRIVATE "${CMAKE_SOURCE_DIR}/src/core")
+set_target_properties(programme_audio_fixture PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_programme_audio/$<CONFIG>"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_programme_audio/$<CONFIG>")
+
 # A REAL PLUGIN MODULE THAT IS A TRACK SOURCE (0.99.75), for test_unplaced_list_app: an aircraft
 # source that keeps the ADS-B plugin 1.9.0's contract - it asks the host's get_state for
 # CASCADE_STATE_LISTS_UNPLACED_TRACKS and publishes aircraft it has heard without a position
@@ -339,6 +347,9 @@ foreach(src ${CASCADE_TESTS})
         # heard without a position are listed after the placed ones and never drawn (0.99.75).
         add_dependencies(${name} track_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
+    elseif(name STREQUAL "test_programme_audio_app")
+        add_dependencies(${name} programme_audio_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:programme_audio_fixture>")
     elseif(name STREQUAL "test_row_keys_app")
         # Runs the real cascade.exe (built first) with the row-keys fixture fitted and pinned to run,
         # opens its panel from the DECODE bank's row, presses its rows with the input script and reads
@@ -487,6 +498,7 @@ set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
 # keys), 60 to 160 frames each with a half-second sleep in most: 28 s on this desktop. The same
 # bound, for the same reason, as the tests above.
 set_tests_properties(test_row_keys_app PROPERTIES TIMEOUT 600)
+set_tests_properties(test_programme_audio_app PROPERTIES TIMEOUT 120)
 # The in-use test starts the real application about twenty times (the scenarios in its header: a
 # layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
 # interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given

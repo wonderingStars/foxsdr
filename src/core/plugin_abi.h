@@ -241,7 +241,8 @@ extern "C" {
 #define CASCADE_CAP_SETTINGS_UI 0x00001000u /* host-drawn settings fields - see below */
 #define CASCADE_CAP_RECEIVER_LOCATOR 0x00002000u /* may read receiverLocator - see below */
 #define CASCADE_CAP_TX_AUDIO 0x00004000u /* host API level 2: transmit audio under an operator-armed grant - see below */
-#define CASCADE_CAP_ALL_KNOWN 0x00007FFFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_IMAGE_INPUT 0x00008000u /* optional input for a plugin's primary image */
+#define CASCADE_CAP_ALL_KNOWN 0x0000FFFFu /* OR of every bit THIS host knows */
 
 /*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
@@ -1558,6 +1559,7 @@ typedef struct CascadeAudioProcessorApi {
 /* the host understands CASCADE_TRACK_FLAG_ESTIMATED and keeps such a track up to 180 s after its last fix;
  * a plugin may publish estimated positions only when it sees this bit (hosts from 0.99.78). */
 #define CASCADE_STATE_HOLDS_ESTIMATED_TRACKS 0x00020000u
+#define CASCADE_STATE_IMAGE_INPUT 0x00040000u /* image clicks delivered in native pixels */
 
 #define CASCADE_DEVICE_NAME_CHARS 64
 #define CASCADE_LOCATOR_CHARS 8 /* 6-char Maidenhead grid + NUL + 1 spare */
@@ -2283,6 +2285,21 @@ typedef struct CascadeHostClientApi {
     void (*attach)(const CascadeHostApi *host);
 } CascadeHostClientApi;
 
+/* CASCADE_CAP_IMAGE_INPUT (FoxSDR 0.99.81). Additive: the image decoder
+ * table and ABI version do not grow. Requires CASCADE_CAP_IMAGE_DECODER.
+ * The host calls press on its GUI thread after a left press and release
+ * inside the displayed picture, in native image coordinates (top-left 0,0).
+ * Calls are serialized with the decoder lifecycle/process/poll calls.
+ * There is no handle: this table targets the plugin's primary image session.
+ * Return promptly; queue work for the decoder thread when needed. A plugin
+ * may advertise clickable image controls only when get_state reports
+ * CASCADE_STATE_IMAGE_INPUT. Older hosts ignore this optional capability.
+ */
+typedef struct CascadeImageInputApi {
+    uint32_t structSize;
+    void (*press)(uint32_t x, uint32_t y);
+} CascadeImageInputApi;
+
 typedef struct CascadeImageDecoderApi {
     /* sizeof(CascadeImageDecoderApi) as the PLUGIN compiled it. Checked
      * against the host's own sizeof; a mismatch disables THIS capability
@@ -2463,6 +2480,11 @@ static inline const CascadeImageDecoderApi *cascade_plugin_image_decoder(
     const CascadePluginDesc *desc) {
     return (const CascadeImageDecoderApi *)cascade_plugin_capability(desc,
                                                                      CASCADE_CAP_IMAGE_DECODER);
+}
+
+static inline const CascadeImageInputApi *cascade_plugin_image_input(
+    const CascadePluginDesc *desc) {
+    return (const CascadeImageInputApi *)cascade_plugin_capability(desc, CASCADE_CAP_IMAGE_INPUT);
 }
 
 static inline const CascadeTrackSourceApi *cascade_plugin_track_source(

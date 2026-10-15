@@ -382,6 +382,7 @@ void testState() {
     CHECK(s.gainCount == 2u);
     CHECK(std::strcmp(s.deviceName, "RTL-SDR Blog V4") == 0);
     CHECK((s.flags & CASCADE_STATE_RUNNING) != 0u);
+    CHECK((s.flags & CASCADE_STATE_IMAGE_INPUT) != 0u);
     CHECK((s.flags & CASCADE_STATE_DEVICE_OPEN) != 0u);
     CHECK((s.flags & CASCADE_STATE_AGC_SUPPORTED) != 0u);
     CHECK((s.flags & CASCADE_STATE_SQUELCH_OPEN) != 0u);  // -30 > -60

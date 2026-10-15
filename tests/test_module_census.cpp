@@ -73,6 +73,7 @@ namespace {
 const CascadeDecoderApi kAudioApi{};
 const CascadeIqDecoderApi kIqApi{};
 const CascadeImageDecoderApi kImageApi{};
+const CascadeImageInputApi kImageInputApi{};
 const CascadeTrackSourceApi kTrackApi{};
 const CascadeBasemapApi kBasemapApi{};
 const CascadePanelApi kPanelApi{};
@@ -218,6 +219,7 @@ int main() {
         all.audioProcessor = &kAudioProcessorApi;
         all.settingsUi = &kSettingsUiApi;
         all.txAudio = &kTxAudioApi;
+        all.imageInput = &kImageInputApi;
         for (std::uint32_t bit = 1u; bit != 0u; bit <<= 1) {
             if ((static_cast<std::uint32_t>(CASCADE_CAP_ALL_KNOWN) & bit) == 0u) { continue; }
             if (!moduleProvides(all, bit)) {

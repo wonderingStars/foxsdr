@@ -366,6 +366,7 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
             } else {
                 ImageInstance inst;
                 inst.api = lp.imageDecoder;
+                inst.input = lp.imageInput;
                 inst.handle = h;
                 inst.name = lp.name;
                 inst.key = key;
@@ -1456,6 +1457,7 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
 
     for (std::size_t i = 0; i < imageInstances_.size(); ++i) {
         ImageInstance& ii = imageInstances_[i];
+        out[i].interactive = ii.input != nullptr && !ii.failed;
         // A decoder that has failed permanently is not polled again. Its entry
         // in `out` is left exactly as it stands, because half a weather image
         // is still the last thing that decoder saw and throwing it away would
@@ -1472,6 +1474,7 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
             // had given up. No borrow is taken on a negative return, so there
             // is nothing to release here.
             ii.failed = true;
+            out[i].interactive = false;
             failLocked(ii.statusIndex, ii.name);
             continue;
         }
@@ -1492,6 +1495,8 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
             strideOk && static_cast<std::size_t>(img.width) * img.height <= kMaxImagePixels;
 
         if (sizeOk) {
+            ii.width = img.width;
+            ii.height = img.height;
             HostImage& hi = out[i];
             hi.width = img.width;
             hi.height = img.height;
@@ -1514,6 +1519,18 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
         // looking at a picture.
         ii.api->release_image(ii.handle, &img);
     }
+}
+
+bool PluginRunner::imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const ImageInstance& image : imageInstances_) {
+        if (image.name == plugin && !image.failed && image.input != nullptr &&
+            x < image.width && y < image.height) {
+            image.input->press(x, y);
+            return true;
+        }
+    }
+    return false;
 }
 
 std::vector<DecodedLine> PluginRunner::drainText() {

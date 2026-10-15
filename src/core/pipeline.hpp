@@ -445,10 +445,8 @@ public:
 
     // --- Hard mute of the audio OUTPUT ---------------------------------------
     // Replaces the finished 48 kHz audio with digital silence, at the last
-    // point before it fans out. Set by the GUI when a data decoder is running
-    // on its own frequency (see plugin_ui.hpp's mute policy); the pipeline
-    // itself has no opinion about when that is, and deliberately so - it knows
-    // nothing about plugins, presets or what the user last clicked.
+    // point before it fans out. Set by the GUI for the user's Mute key and
+    // transmit monitoring; data-decoder carrier suppression is separate below.
     //
     // WHY HERE AND NOT AT THE SINK. The sink is one of four consumers of this
     // signal: the local device, the rolling tap (which is what the web
@@ -473,6 +471,12 @@ public:
     // a mutex the audio callback could contend for.
     void setAudioMuted(bool muted);
     bool audioMuted() const;
+    // A data decoder suppresses the demodulated carrier, while a plugin's
+    // decoded programme remains audible. User and transmit mute stay above.
+    void setDemodAudioMuted(bool muted);
+    // Whether carrier suppression currently silences the finished output.
+    // Decoded plugin or patch audio can still replace the quiet carrier.
+    bool pluginAudioMuted() const;
 
     // The audio sink, exposed for GUI wiring: volume, device enumeration, and
     // re-open on device change. The device the constructor opens (when
@@ -1027,6 +1031,8 @@ private:
     // whole block, and a GUI thread that had to take it to set one bool would
     // stall behind a block of DSP for a per-frame update.
     std::atomic<bool> audioMuted_{false};
+    std::atomic<bool> demodAudioMuted_{false};
+    std::atomic<bool> programmeAudio_{false};
     std::atomic<double> autoNotchHz_{0.0};
 
     // THE PER-FRAME GETTERS' MIRRORS. See the header comment: the GUI polls

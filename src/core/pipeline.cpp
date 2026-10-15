@@ -898,6 +898,7 @@ void Pipeline::stop() {
     // earlier one holds a token this line never touches.
     quiesceSourceThreadLocked();
     if (dspThread_.joinable()) { dspThread_.join(); }
+    programmeAudio_.store(false, std::memory_order_relaxed);
 }
 
 bool Pipeline::running() const {
@@ -1125,7 +1126,17 @@ void Pipeline::setAudioMuted(bool muted) {
 }
 
 bool Pipeline::audioMuted() const {
-    return audioMuted_.load(std::memory_order_relaxed);
+    return audioMuted_.load(std::memory_order_relaxed) || pluginAudioMuted();
+}
+
+void Pipeline::setDemodAudioMuted(bool muted) {
+    demodAudioMuted_.store(muted, std::memory_order_relaxed);
+}
+
+bool Pipeline::pluginAudioMuted() const {
+    return demodAudioMuted_.load(std::memory_order_relaxed) &&
+           (!run_.load(std::memory_order_relaxed) ||
+            !programmeAudio_.load(std::memory_order_relaxed));
 }
 
 cascade::sink::AudioOut& Pipeline::audio() {
@@ -1932,6 +1943,15 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         runner->processAudioChain(outL_.data(), outR_.data(), k);
     }
 
+    // A data decoder's preset quiets the demodulated carrier only. Decoded
+    // programme audio below must survive this automatic mute; DAB otherwise
+    // silenced its own PCM merely by running on its preset. The user's mute
+    // and transmit mute still apply to the finished output below.
+    if (demodAudioMuted_.load(std::memory_order_relaxed)) {
+        std::fill(outL_.begin(), outL_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+        std::fill(outR_.begin(), outR_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+    }
+
     // --- A PLUGIN'S OWN AUDIO, WHICH REPLACES THE DEMODULATED AUDIO ---------
     //
     // A digital broadcast decoder's whole output is sound (DAB and DAB+ decode
@@ -1964,10 +1984,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Above the hard mute for the same reason everything else here is: the
     // mute lamp, the recorder, the web stream and the test tap must all
     // describe the signal that actually reaches the speakers, whoever made it.
+    bool patchAudio = false;
     {
         patchL_.resize(k);
         patchR_.resize(k);
         const bool patching = patch_.pullAudio(patchL_.data(), patchR_.data(), k);
+        patchAudio = patching;
         if (patching || patchFade_ > 0.0f) {
             const float target = patching ? 1.0f : 0.0f;
             const float step = 1.0f / static_cast<float>(kPluginFadeFrames);
@@ -1990,10 +2012,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         }
     }
 
+    bool pluginAudio = false;
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
         plugL_.resize(k);
         plugR_.resize(k);
         const bool playing = runner->pullPluginAudio(plugL_.data(), plugR_.data(), k);
+        pluginAudio = playing;
         if (playing || pluginFade_ > 0.0f) {
             const float target = playing ? 1.0f : 0.0f;
             const float step = 1.0f / static_cast<float>(kPluginFadeFrames);
@@ -2023,6 +2047,8 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         // held sample ringing as DC for ever.
         pluginFade_ = 0.0f;
     }
+
+    programmeAudio_.store(patchAudio || pluginAudio, std::memory_order_relaxed);
 
     // --- HARD MUTE, at the one point every consumer is downstream of --------
     //

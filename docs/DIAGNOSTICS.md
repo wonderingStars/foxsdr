@@ -2181,7 +2181,8 @@ list by `tests/test_diagnostics.cpp`:
   read as a healthy one.
 - `volume:` — the volume control, `N%`.
 - `audio-muted:` — `no`, or who: `you` (the Mute key), `a decoder plugin` (an I/Q
-  decoder holds the audio down while the receiver is on one of its presets),
+  decoder holds the audio down while the receiver is on one of its presets and
+  no decoded programme is playing),
   `transmit key`, or several joined with ` + `. A plugin is described and **not
   named**, because its name would say which band the receiver was tuned to.
 - `squelch:` — the threshold, the gate's own state, and, when the receiver has

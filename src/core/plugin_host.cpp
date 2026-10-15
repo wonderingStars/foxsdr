@@ -289,6 +289,8 @@ LoadedPlugin loadOne(const fs::path& p) {
                            ? static_cast<const CascadeImageDecoderApi*>(
                                  findCapabilityTable(desc, CASCADE_CAP_IMAGE_DECODER))
                            : nullptr;
+    rec.imageInput = (desc->capabilities & CASCADE_CAP_IMAGE_INPUT) != 0u
+                         ? cascade_plugin_image_input(desc) : nullptr;
     rec.trackSource = (desc->capabilities & CASCADE_CAP_TRACK_SOURCE) != 0u
                           ? static_cast<const CascadeTrackSourceApi*>(
                                 findCapabilityTable(desc, CASCADE_CAP_TRACK_SOURCE))
@@ -488,6 +490,19 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
             return PluginRejection::MissingImageDecoderFunction;
         }
         ++usable;
+    }
+
+    // Optional input for the primary image decoder's dashboard.
+    if ((desc->capabilities & CASCADE_CAP_IMAGE_INPUT) != 0u) {
+        const auto* input = cascade_plugin_image_input(desc);
+        if (input == nullptr) { return PluginRejection::MissingImageInputApi; }
+        if (input->structSize != sizeof(CascadeImageInputApi)) {
+            return PluginRejection::ImageInputStructSizeMismatch;
+        }
+        if (input->press == nullptr) { return PluginRejection::MissingImageInputFunction; }
+        if ((desc->capabilities & CASCADE_CAP_IMAGE_DECODER) == 0u) {
+            return PluginRejection::ImageInputNeedsDecoder;
+        }
     }
 
     // A source of things to draw on the map. No rate to check: it is not fed
@@ -793,6 +808,14 @@ const char* pluginRejectionMessage(PluginRejection r) {
                    "built for a newer version of FoxSDR";
         case PluginRejection::MissingImageDecoderApi:
             return "declares CASCADE_CAP_IMAGE_DECODER but supplies no image decoder table";
+        case PluginRejection::MissingImageInputApi:
+            return "declares CASCADE_CAP_IMAGE_INPUT but supplies no image input table";
+        case PluginRejection::ImageInputStructSizeMismatch:
+            return "image input table size does not match this host";
+        case PluginRejection::MissingImageInputFunction:
+            return "image input table has no press callback";
+        case PluginRejection::ImageInputNeedsDecoder:
+            return "image input requires an image decoder";
         case PluginRejection::ImageDecoderStructSizeMismatch:
             return "image decoder table size does not match this host's";
         case PluginRejection::ImageDecoderBadInputKind:
@@ -1267,6 +1290,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.decoder = nullptr;
         r.iqDecoder = nullptr;
         r.imageDecoder = nullptr;
+        r.imageInput = nullptr;
         r.trackSource = nullptr;
         r.panel = nullptr;
         r.instrument = nullptr;

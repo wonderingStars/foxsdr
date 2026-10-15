@@ -168,6 +168,10 @@ enum class PluginRejection {
     TxAudioReservedNotZero,  // flags is reserved and must be 0
     MissingTxAudioFunction,  // pull or active NULL
     TxAudioNeedsDecoder,     // declared with no decoder capability to ride on
+    MissingImageInputApi,
+    ImageInputStructSizeMismatch,
+    MissingImageInputFunction,
+    ImageInputNeedsDecoder,
 };
 
 // The whole compatibility decision, as a pure function of the descriptor, so
@@ -221,6 +225,7 @@ struct LoadedPlugin {
     const CascadeDecoderApi* decoder = nullptr;      // CASCADE_CAP_DECODER
     const CascadeIqDecoderApi* iqDecoder = nullptr;  // CASCADE_CAP_IQ_DECODER
     const CascadeImageDecoderApi* imageDecoder = nullptr;  // CASCADE_CAP_IMAGE_DECODER
+    const CascadeImageInputApi* imageInput = nullptr;      // CASCADE_CAP_IMAGE_INPUT
     const CascadeTrackSourceApi* trackSource = nullptr;    // CASCADE_CAP_TRACK_SOURCE
     const CascadePanelApi* panel = nullptr;                // CASCADE_CAP_PANEL
     const CascadeInstrumentApi* instrument = nullptr;      // CASCADE_CAP_INSTRUMENT

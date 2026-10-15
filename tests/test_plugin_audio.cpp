@@ -677,6 +677,19 @@ void testPipelineTakeover() {
     CHECK(playAt3k < 0.02);
     CHECK(runner.playingPlugin() == "Fake DAB");
 
+    // The preset's automatic data mute must suppress the carrier rather than
+    // the decoded programme. This reproduces DAB's default I/Q mute while its
+    // PCM is already flowing through the real pipeline.
+    p.setDemodAudioMuted(true);
+    const std::uint64_t dataMuteMark = p.audioSamplesProduced();
+    CHECK(waitFor([&] { return p.audioSamplesProduced() - dataMuteMark >= 2u * kWin; }, 30000));
+    CHECK(p.audioTapStereo(left.data(), right.data(), kWin) == kWin);
+    const double dataMuteAt1k = toneAmplitude(left.data(), kWin, 1000.0, kSinkRateHz);
+    std::printf("data mute while a plugin plays: amplitude at 1 kHz=%.4f\n", dataMuteAt1k);
+    CHECK(dataMuteAt1k > 0.45);
+    CHECK(dataMuteAt1k < 0.55);
+    CHECK(!p.audioMuted());
+
     // (d) The mute is the user's, and it applies to a plugin exactly as it
     // applies to the receiver. A plugin that could play over a muted receiver
     // would be a plugin that took the mute lamp away from the user.
@@ -691,6 +704,28 @@ void testPipelineTakeover() {
     std::printf("muted while a plugin plays: %zu non-zero of %zu\n", nonZero, kWin);
     CHECK(nonZero == 0u);
     p.setAudioMuted(false);
+
+    // With the final user mute released, the programme returns even while
+    // automatic carrier suppression is still enabled.
+    const std::uint64_t unmuteMark = p.audioSamplesProduced();
+    CHECK(waitFor([&] { return p.audioSamplesProduced() - unmuteMark >= 2u * kWin; }, 30000));
+    CHECK(p.audioTapStereo(left.data(), right.data(), kWin) == kWin);
+    CHECK(toneAmplitude(left.data(), kWin, 1000.0, kSinkRateHz) > 0.45);
+
+    // A decoder that loses its audio must leave the carrier quiet. Stopping
+    // the data mute afterwards restores the receiver, as before.
+    g_a.wantsSpeakers = 0;
+    const std::uint64_t noProgrammeMark = p.audioSamplesProduced();
+    CHECK(waitFor([&] { return p.audioSamplesProduced() - noProgrammeMark >= 3u * kWin; }, 30000));
+    CHECK(p.audioTapStereo(left.data(), right.data(), kWin) == kWin);
+    std::size_t dataNonZero = 0;
+    for (std::size_t i = 0; i < kWin; ++i) {
+        if (left[i] != 0.0f || right[i] != 0.0f) { ++dataNonZero; }
+    }
+    std::printf("data mute without a programme: %zu non-zero of %zu\n", dataNonZero, kWin);
+    CHECK(dataNonZero == 0u);
+    CHECK(p.audioMuted());
+    p.setDemodAudioMuted(false);
 
     // (e) Handing them back brings the demodulated audio with it.
     g_a.wantsSpeakers = 0;

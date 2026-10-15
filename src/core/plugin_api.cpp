@@ -606,6 +606,7 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     // only when it sees this bit. A host that did not set it would be telling the IBOC plugin to
     // go on offering HD1 to HD8 as text.
     flags |= CASCADE_STATE_ROW_KEYS;
+    flags |= CASCADE_STATE_IMAGE_INPUT;
     s.flags = flags;
     s.seq = p.seq;
     s.tuneSeq = p.tuneSeq;

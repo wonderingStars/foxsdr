@@ -597,13 +597,16 @@ are the ones left clear, and deliberately: that audio is the very thing they
 are decoding, SSTV's warble and RTTY's diddle are how people tune them by ear,
 and silencing them would take away a diagnostic. While a plugin with the box
 ticked is running **and** the receiver is on one of that plugin's presets, the
-audio output is silenced — the speakers, the browser's audio stream and an
-**audio recording** alike, since all three are
-fed from the same point, so a WAV taken while a decoder is muting contains
-digital silence and the Recorder panel says so while the take runs. (An I/Q
+receiver's demodulated audio is silenced. A decoded programme supplied by a
+plugin or patch radio replaces that suppressed carrier and remains audible,
+including DAB and IBOC audio. User mute and transmit mute still silence the
+complete output. The speakers, browser audio stream and **audio recording**
+receive the same final sound, so a WAV contains silence while a decoder is
+muting and no decoded programme is playing; the Recorder panel says so. (An I/Q
 recording is untouched: it is taken before any of this.) The volume setting is
 not touched, the decoders keep receiving samples throughout, and **Sinks** says
-"Muted by *plugin*" so the silence is never unexplained. Your choice per plugin
+"Muted by *plugin*" when no decoded programme is playing, so the silence is
+never unexplained. Your choice per plugin
 is remembered between sessions.
 
 "Running" here means actually decoding, not merely loaded. A plugin you have

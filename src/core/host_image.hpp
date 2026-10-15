@@ -33,6 +33,7 @@ struct HostImage {
     std::uint32_t height = 0;
     std::uint32_t format = 0;   // CASCADE_IMAGE_GRAY8 / RGB24
     bool complete = false;      // false while still being received
+    bool interactive = false;   // live image input capability; failed pictures are inert
     std::uint64_t sequence = 0;
     std::vector<std::uint8_t> pixels;  // tightly packed, no row padding
     std::uint64_t revision = 0;        // bumped whenever pixels change

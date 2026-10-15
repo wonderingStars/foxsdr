@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/plugin_api.hpp"
@@ -1692,5 +1693,42 @@ int main() {
         CHECK(at(shown, 1).width == 0u);
     }
 
+    // A picture click reaches only its live producer, at valid native pixels.
+    {
+        resetImg();
+        static std::vector<std::pair<uint32_t, uint32_t>> presses;
+        presses.clear();
+        const CascadeImageInputApi input{sizeof(CascadeImageInputApi), [](uint32_t x, uint32_t y) {
+            presses.emplace_back(x, y);
+        }};
+        const auto api = makeImgApi(CASCADE_INPUT_AUDIO, 0.0, false);
+        auto plugin = makeImgPlugin("Clickable", &api);
+        plugin.path = "C:/plugins/clickable-1.0.0.dll";
+        plugin.imageInput = &input;
+        PluginRunner runner;
+        runner.rebuild({plugin}, 48000, kIqRate, kCentre);
+        CHECK(!runner.imagePress("Clickable", 0, 0)); // no picture yet
+        std::vector<cascade::core::HostImage> shown;
+        offerGray2x2(2, 7);
+        runner.pollImages(shown);
+        CHECK(runner.imagePress("Clickable", 1, 1));
+        CHECK((presses == std::vector<std::pair<uint32_t, uint32_t>>{{1, 1}}));
+        CHECK(!runner.imagePress("Other", 1, 1));
+        CHECK(!runner.imagePress("Clickable", 2, 1));
+        CHECK(!runner.imagePress("Clickable", 1, 2));
+        g_img.offer = -1;
+        runner.pollImages(shown);
+        CHECK(!runner.imagePress("Clickable", 0, 0)); // retained failed picture is inert
+        runner.stopPlugin("clickable-1.0.0.dll");
+        CHECK(!runner.imagePress("Clickable", 0, 0));
+        CHECK(presses.size() == 1);
+        runner.startPlugin(plugin);
+        CHECK(!runner.imagePress("Clickable", 0, 0)); // restarted session has no picture
+        plugin.imageInput = nullptr;
+        runner.rebuild({plugin}, 48000, kIqRate, kCentre);
+        offerGray2x2(2, 8);
+        runner.pollImages(shown);
+        CHECK(!runner.imagePress("Clickable", 0, 0)); // old modules remain read-only
+    }
     return testSummary("test_plugin_runner");
 }

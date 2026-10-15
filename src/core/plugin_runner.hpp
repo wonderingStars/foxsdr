@@ -399,6 +399,10 @@ public:
     // and only a plugin with no entry yet starts empty.
     void pollImages(std::vector<HostImage>& out);
 
+    // GUI thread. Delivers native-pixel input only to a live image instance
+    // with a valid picture; serialized with its lifecycle and DSP callbacks.
+    bool imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y);
+
     // GUI thread. What each loaded decoder is doing, or why it is not.
     std::vector<DecoderStatus> status() const;
 
@@ -465,6 +469,9 @@ private:
     // carry which one it asked for.
     struct ImageInstance {
         const CascadeImageDecoderApi* api = nullptr;
+        const CascadeImageInputApi* input = nullptr;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
         void* handle = nullptr;
         std::string name;
         std::string key;  // as Instance::key
