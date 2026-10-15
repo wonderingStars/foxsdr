@@ -2,6 +2,12 @@
 
 Release date: 2026-10-15.
 
+**IBOC dashboard programme rows respond to clicks.** With IBOC Radio 0.1.2, clicking the HD label, selection-arrow area or programme name selects and saves that programme. Both FoxSDR 0.99.81 and IBOC Radio 0.1.2 are required. The entire programme row works when the dashboard is scaled, and invalid clicks and drags do not select a programme.
+
+**DAB decoder muting preserves decoded sound.** Automatic decoder muting now suppresses the receiver's demodulated carrier before decoded programme audio takes over. The user's Mute control and transmit mute still silence the finished output. Saved automatic-mute settings and overrides retain their meaning.
+
+---
+
 **SHA-256 of `foxsdr-setup-0.99.81.exe`:**
 `TBD`
 
