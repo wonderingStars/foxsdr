@@ -93,7 +93,10 @@ void testAbiSurface() {
     static_assert(CASCADE_CAP_TX_AUDIO == 0x00004000u, "the bit is part of the contract");
     static_assert((CASCADE_CAP_ALL_KNOWN & CASCADE_CAP_TX_AUDIO) != 0u,
                   "CASCADE_CAP_ALL_KNOWN must carry the transmit-audio bit");
-    static_assert(CASCADE_CAP_ALL_KNOWN == 0x00007FFFu, "the exact line from the ABI text");
+    static_assert(CASCADE_CAP_IMAGE_INPUT == 0x00008000u, "the image-input bit is part of the contract");
+    static_assert((CASCADE_CAP_ALL_KNOWN & CASCADE_CAP_IMAGE_INPUT) != 0u,
+                  "CASCADE_CAP_ALL_KNOWN must carry the image-input bit");
+    static_assert(CASCADE_CAP_ALL_KNOWN == 0x0000FFFFu, "the exact line from the ABI text");
     static_assert(CASCADE_STATE_TX_GRANTED == 0x00001000u, "state flag values are the contract");
     static_assert(CASCADE_STATE_TX_ARMED == 0x00002000u, "state flag values are the contract");
     static_assert(CASCADE_STATE_TRANSMITTING == 0x00004000u, "state flag values are the contract");
