@@ -1,7 +1,19 @@
 // app_window_soundcard.cpp - the Source section's SOUND CARD row. AppWindow
-// members, kept out of app_window.cpp because they are one subject: listing
-// the inputs, opening one on a worker, installing it, bringing it back at
-// startup, and tuning a source that has no tuner.
+// members, kept out of app_window.cpp because they are one subject: the
+// panel under the combo (the Device, Format, Channel, Swap I/Q, Centre and
+// Sample rate controls, the Open key and "Receives X to Y.").
+//
+// IT DRAWS FROM THE WINDOW'S ENGINE API SESSION ONLY (window port group 11,
+// API 0.3 section 8.10): the inputs, the rates the form's card offers and the
+// form itself are the table's SOUND_CARDS, SOUND_CARD_RATES and
+// SOUND_CARD_FORM (read when listSeq moves, AppWindow::sourceLists), where the
+// listing stands is the state's sourceFlags word, and what a control changes
+// goes by uiSubmit: FOXAPP_OP_SOUND_CARD_PICK for a card chosen from the list,
+// FOXAPP_OP_SOUND_CARD_FORM carrying ONE field (its mask names it) for each of
+// the others, SOUNDCARD_IQ_CENTRE after every centre committed, and
+// SELECT_SOURCE "soundcard:open" for Open. Listing the inputs, opening one on
+// a worker, installing it and bringing it back at startup are the engine's
+// (engine_soundcard.cpp).
 //
 // The source itself - the conversion, the name-and-host-API rule, the
 // liveness watch - is source/soundcard_source.hpp; the rules a test can reach
@@ -10,18 +22,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
-#include <thread>
 
 #include <imgui.h>
 
-#include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
-#include "engine/audio_open.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
@@ -29,44 +37,35 @@
 namespace cascade::gui {
 using cascade::i18n::tr;
 using cascade::i18n::trId;
-using cascade::source::SoundCardDevice;
 using cascade::source::SoundCardFormat;
-using cascade::source::SoundCardRate;
 using cascade::source::SoundCardSettings;
 
 namespace {
 
-// THE WHOLE FORM, IN ONE COMMAND (engine/stage3b-pre fields-to-commands round
-// 2, docs/engine-stage3.md OPEN item 1): every widget below used to write
-// engine_.soundCard_ in place; each now takes a COPY of the current form,
-// changes its one field, and applies the copy back through this - at once
-// (applyCommand, not submitCommand), so nothing else drawn later in the same
-// frame (the rate list, the "Receives..." preview, all of which still read
-// engine_.soundCard_ directly) ever sees a stale value.
-void submitSoundCardForm(cascade::engine::Engine& engine, const SoundCardSettings& s) {
-    const cascade::core::cmd::QueuedCommand q = cascade::gui::soundCardFormCommand(s);
-    engine.applyCommand(q.c, q.longText);
+std::string rateLabel(double hz, bool exclusive) {
+    const std::string text = soundCardHzText(hz);
+    if (!exclusive) { return text; }
+    std::string out;
+    cascade::core::formatUtf8(out, tr("%s (exclusive)"), text.c_str());
+    return out;
 }
 
-std::string rateLabel(const SoundCardRate& r) {
-    const std::string hz = soundCardHzText(r.hz);
-    if (!r.exclusive) { return hz; }
-    std::string out;
-    cascade::core::formatUtf8(out, tr("%s (exclusive)"), hz.c_str());
-    return out;
+// ONE FIELD OF THE FORM, in one command (API 0.3 8.10): the mask names the field the command carries, and every
+// other field keeps the engine's own value - so a control that changed one thing cannot write back a stale copy of
+// another that a pass changed since the window last read it (a worker's open result replaces the whole form).
+cascade::core::cmd::QueuedCommand oneField(const SoundCardSettings& s, std::int64_t field) {
+    return cascade::gui::soundCardFormCommand(s, field);
 }
 
 }  // namespace
 
-std::string AppWindow::soundCardReceivesText() const {
+std::string AppWindow::soundCardReceivesText() {
     // THE AIR, as the counter reads it: through the converter kept for the
-    // SECTION's card, by the section's format (an I/Q card takes none).
-    const cascade::core::ConverterSetting stored = cascade::core::converterFor(
-        engine_.converters_,
-        engine_.resolveConverterKey(cascade::gui::soundCardConverterKey(engine_.soundCard_.device, engine_.soundCard_.hostApi)));
-    const cascade::gui::SoundCardAirSpan span = cascade::gui::soundCardAirSpan(engine_.soundCard_, stored);
-    const std::string lo = soundCardHzText(span.loHz);
-    const std::string hi = soundCardHzText(span.hiHz);
+    // SECTION's card, by the section's format (an I/Q card takes none) - the
+    // two figures the engine worked out (fact.soundcard.span).
+    const SourceListCache& c = sourceLists();
+    const std::string lo = soundCardHzText(c.spanLoHz);
+    const std::string hi = soundCardHzText(c.spanHiHz);
     std::string line;
     cascade::core::formatUtf8(line, tr("Receives %s to %s."), lo.c_str(), hi.c_str());
     return line;
@@ -74,64 +73,50 @@ std::string AppWindow::soundCardReceivesText() const {
 
 void AppWindow::drawSoundCardControls() {
     // The list is asked for the first time the row is shown, never at
-    // startup for a user who does not use a sound card.
-    // A COMMAND (engine/stage3b-pre, docs/engine-stage3.md OPEN 2), applied
-    // at once as the direct call was; the engine decides whether a list is
-    // actually taken (not listed, not listing, no card opening).
-    if (!engine_.soundCardListed_) {
-        (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED));
-    }
+    // startup for a user who does not use a sound card: the engine's pass
+    // lists the inputs while the combo's row is the sound card and nothing
+    // is listed, being listed or opening (it was a command from this frame,
+    // every frame until the list arrived).
+    const SourceListCache& c = sourceLists();
+    const SourceListCache::Form& form = c.form;
+    const std::uint32_t src = uiState_.sourceFlags;
+    const bool cardOpening = (src & FOXAPI_SRC_CARD_OPENING) != 0u;
+    const bool cardScanning = (src & FOXAPI_SRC_CARD_SCANNING) != 0u;
+    const bool cardListed = (src & FOXAPI_SRC_CARD_LISTED) != 0u;
 
-    const std::string label = engine_.soundCard_.device.empty()
-                                  ? std::string()
-                                  : engine_.soundCard_.device + " (" + engine_.soundCard_.hostApi + ")";
-    if (engine_.soundCardOpenPending_) {
+    const std::string& label = c.cardLabel;
+    if (cardOpening) {
         std::string line;
         cascade::core::formatUtf8(line, tr("Opening %s..."), label.c_str());
         ImGui::TextColored(cascade::gui::theme::warning(), "%s", line.c_str());
-    } else if (engine_.soundCardScanPending_) {
+    } else if (cardScanning) {
         ImGui::TextColored(cascade::gui::theme::warning(), "%s", tr("Scanning for devices..."));
     }
-    if (engine_.soundCardListed_ && engine_.soundCardDevices_.empty()) {
+    if (cardListed && c.cards.empty()) {
         ImGui::TextColored(cascade::gui::theme::warning(), "%s", tr("No sound card inputs found."));
     }
 
-    const bool busy = engine_.soundCardOpenPending_ || engine_.soundCardScanPending_ || engine_.deviceOpenPending_;
+    const bool busy = cardOpening || cardScanning || (uiState_.flags & FOXAPI_RX_DEVICE_OPENING) != 0u;
     ImGui::BeginDisabled(busy);
 
     // THE INPUT. Named by device and host API; a saved card that is not in
     // the list keeps its name in the preview (the missing line below says why).
-    const int at = cascade::source::matchSoundCard(engine_.soundCardDevices_, engine_.soundCard_.device, engine_.soundCard_.hostApi,
-                                                   engine_.soundCard_.pickedFromList)
-                       .at;
+    // `at` is the entry the form's card is (SOUND_CARDS' ACTIVE), matched the way the open matches it.
+    const int at = c.cardAt;
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo(labelAboveIfNeeded(trId("Device##soundcard_device")),
                           label.empty() ? "-" : label.c_str())) {
-        for (std::size_t i = 0; i < engine_.soundCardDevices_.size(); ++i) {
-            const SoundCardDevice& d = engine_.soundCardDevices_[i];
+        for (std::size_t i = 0; i < c.cards.size(); ++i) {
+            const SourceListCache::Card& d = c.cards[i];
             ImGui::PushID(static_cast<int>(i));
             const bool sel = static_cast<int>(i) == at;
-            if (ImGui::Selectable(cascade::source::soundCardDeviceLabel(d).c_str(), sel) && !sel) {
-                SoundCardSettings form = engine_.soundCard_;
-                form.device = d.name;
-                form.hostApi = d.hostApi;
-                // Chosen from THIS list: it names exactly this entry, even
-                // when an identical card sits beside it (matchSoundCard).
-                form.pickedFromList = true;
-                engine_.applyCommand(cascade::core::cmd::makeInt(
-                    FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_SOUND_CARD_MISSING));
-                // Keep the rate if the new card offers it; otherwise its own.
-                const auto rates = cascade::source::soundCardRatesFor(d, form.format);
-                const bool offered = std::any_of(rates.begin(), rates.end(), [&](const SoundCardRate& r) {
-                    return r.hz == form.cardRateHz;
-                });
-                if (!offered && !rates.empty()) {
-                    form.cardRateHz = rates.back().hz;
-                    for (const SoundCardRate& r : rates) {
-                        if (r.hz == d.defaultRateHz) { form.cardRateHz = r.hz; }
-                    }
-                }
-                submitSoundCardForm(engine_, form);
+            // A click on the row the form's card already is does NOTHING, as it never did: the pick marks the card
+            // as chosen from the list, and the engine applies it whenever it is sent.
+            if (ImGui::Selectable(d.name.c_str(), sel) && !sel) {
+                // The engine puts the card into the form (chosen from THIS list: it names exactly this entry, even
+                // when an identical card sits beside it), clears the "not connected" line and keeps the rate if the
+                // new card offers it in the form's format, else its own default, else its highest.
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SOUND_CARD_PICK, static_cast<std::int64_t>(d.id)));
             }
             if (sel) { ImGui::SetItemDefaultFocus(); }
             ImGui::PopID();
@@ -139,90 +124,95 @@ void AppWindow::drawSoundCardControls() {
         ImGui::EndCombo();
     }
 
-    // THE FORMAT, and what goes with it.
+    // THE FORMAT, and what goes with it. A click here shows the OLD dependent controls for one more pass (the
+    // Channel combo where Swap I/Q and Centre should appear, the rate list and the "Receives" line): the form is
+    // the engine's, and what a click sends lands at its next pass.
     const char* formats[] = {tr("Real (mono)"), tr("I/Q (stereo)")};
-    int fmt = engine_.soundCard_.format == SoundCardFormat::IqStereo ? 1 : 0;
+    int fmt = form.iqStereo ? 1 : 0;
     ImGui::SetNextItemWidth(160.0f);
     if (ImGui::Combo(labelAboveIfNeeded(trId("Format##soundcard_format"), 160.0f), &fmt, formats, 2)) {
-        SoundCardSettings form = engine_.soundCard_;
-        form.format = fmt == 1 ? SoundCardFormat::IqStereo : SoundCardFormat::RealMono;
-        submitSoundCardForm(engine_, form);
+        SoundCardSettings s;
+        s.format = fmt == 1 ? SoundCardFormat::IqStereo : SoundCardFormat::RealMono;
+        uiSubmit(oneField(s, FOXAPP_SOUND_CARD_FIELD_FORMAT));
     }
-    if (engine_.soundCard_.format == SoundCardFormat::RealMono) {
+    if (!form.iqStereo) {
         const char* channels[] = {tr("Left"), tr("Right")};
-        int ch = engine_.soundCard_.channel == 1 ? 1 : 0;
+        int ch = form.channel == 1 ? 1 : 0;
         ImGui::SetNextItemWidth(160.0f);
         if (ImGui::Combo(labelAboveIfNeeded(trId("Channel##soundcard_channel"), 160.0f), &ch, channels, 2)) {
-            SoundCardSettings form = engine_.soundCard_;
-            form.channel = ch;
-            submitSoundCardForm(engine_, form);
+            SoundCardSettings s;
+            s.channel = ch;
+            uiSubmit(oneField(s, FOXAPP_SOUND_CARD_FIELD_CHANNEL));
         }
     } else {
-        bool swapIq = engine_.soundCard_.swapIq;
+        bool swapIq = form.swapIq;
         if (ImGui::Checkbox(trId("Swap I/Q##soundcard_swap"), &swapIq)) {
-            SoundCardSettings form = engine_.soundCard_;
-            form.swapIq = swapIq;
-            submitSoundCardForm(engine_, form);
+            SoundCardSettings s;
+            s.swapIq = swapIq;
+            uiSubmit(oneField(s, FOXAPP_SOUND_CARD_FIELD_SWAP_IQ));
         }
-        soundCardCentreMhz_ = engine_.soundCard_.iqCentreHz / 1.0e6;
+        // THE CENTRE IS A DRAFT: the box shows the figure typed until the engine's form carries it (the fact is
+        // read a pass after the Return that sent it), or two seconds have gone by and the engine's is the truth.
+        // It was re-seeded from the engine's field on every frame.
+        if (soundCardCentrePending_ &&
+            (form.centreHz == soundCardCentreSentHz_ || ImGui::GetTime() - soundCardCentreEditedAt_ > 2.0)) {
+            soundCardCentrePending_ = false;
+        }
+        if (!soundCardCentrePending_) { soundCardCentreMhz_ = form.centreHz / 1.0e6; }
         ImGui::SetNextItemWidth(160.0f);
         if (ImGui::InputDouble(labelAboveIfNeeded(trId("Centre (MHz)##soundcard_centre"), 160.0f),
                                &soundCardCentreMhz_, 0.0, 0.0, "%.6f",
                                ImGuiInputTextFlags_EnterReturnsTrue) &&
             std::isfinite(soundCardCentreMhz_)) {
             const double iqCentreHz = soundCardCentreMhz_ * 1.0e6;
+            soundCardCentrePending_ = true;
+            soundCardCentreSentHz_ = iqCentreHz;
+            soundCardCentreEditedAt_ = ImGui::GetTime();
             // THE FORM ALWAYS TAKES IT (the record of where the external
             // receiver is tuned, kept for the next Open either way).
-            SoundCardSettings form = engine_.soundCard_;
-            form.iqCentreHz = iqCentreHz;
-            submitSoundCardForm(engine_, form);
+            SoundCardSettings s;
+            s.iqCentreHz = iqCentreHz;
+            uiSubmit(oneField(s, FOXAPP_SOUND_CARD_FIELD_CENTRE));
             // A card that is already running IN I/Q MODE ALSO takes it at
             // once: the whole receiver follows it live. A card running in
-            // real mode keeps only the form update above, for the next Open
-            // (see soundCardCentreAppliesLive) - APP_SOUNDCARD_IQ_CENTRE
-            // decides, when it is applied.
-            if (cascade::gui::soundCardCentreAppliesLive(engine_.sourceKind_ == "soundcard", engine_.soundCardOpenPending_,
-                                                         engine_.soundCardLive_.format)) {
-                engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, iqCentreHz));
-            }
+            // real mode keeps only the form update above, for the next Open:
+            // the engine answers NO_CHANGE when no I/Q card is running, so
+            // this is sent after every centre committed and the window does
+            // not consult the live card (the two commands reach the engine in
+            // the order they are sent).
+            uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, iqCentreHz));
         }
     }
 
-    // THE RATE: what this card offers for this format.
-    std::vector<SoundCardRate> rates;
-    if (at >= 0) {
-        rates = cascade::source::soundCardRatesFor(engine_.soundCardDevices_[static_cast<std::size_t>(at)],
-                                                   engine_.soundCard_.format);
-    }
-    std::string ratePreview = soundCardHzText(engine_.soundCard_.cardRateHz);
-    for (const SoundCardRate& r : rates) {
-        if (r.hz == engine_.soundCard_.cardRateHz) { ratePreview = rateLabel(r); }
+    // THE RATE: what this card offers for this format (SOUND_CARD_RATES; empty when the form's card is not listed).
+    std::string ratePreview = soundCardHzText(form.rateHz);
+    for (const SourceListCache::CardRate& r : c.cardRates) {
+        if (r.active) { ratePreview = rateLabel(r.hz, r.exclusive); }
     }
     ImGui::SetNextItemWidth(160.0f);
     if (ImGui::BeginCombo(labelAboveIfNeeded(trId("Sample rate##soundcard_rate"), 160.0f),
                           ratePreview.c_str())) {
-        for (const SoundCardRate& r : rates) {
-            const bool sel = r.hz == engine_.soundCard_.cardRateHz;
-            if (ImGui::Selectable(rateLabel(r).c_str(), sel)) {
-                SoundCardSettings form = engine_.soundCard_;
-                form.cardRateHz = r.hz;
-                submitSoundCardForm(engine_, form);
+        for (const SourceListCache::CardRate& r : c.cardRates) {
+            if (ImGui::Selectable(rateLabel(r.hz, r.exclusive).c_str(), r.active)) {
+                SoundCardSettings s;
+                s.cardRateHz = r.hz;
+                uiSubmit(oneField(s, FOXAPP_SOUND_CARD_FIELD_RATE));
             }
             if (r.exclusive && ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", tr("Exclusive mode: FoxSDR has the card to itself while it "
                                            "runs, at a rate its own hardware runs at."));
             }
-            if (sel) { ImGui::SetItemDefaultFocus(); }
+            if (r.active) { ImGui::SetItemDefaultFocus(); }
         }
         ImGui::EndCombo();
     }
 
-    const bool canOpen = !engine_.soundCard_.device.empty() || at >= 0;
+    const bool canOpen = !form.device.empty() || at >= 0;
     ImGui::BeginDisabled(!canOpen);
     if (ImGui::Button(trId("Open##soundcard_open"))) {
-        // SELECT_SOURCE "soundcard:open": opens the card THIS FORM describes
+        // SELECT_SOURCE "soundcard:open": opens the card THE ENGINE'S FORM describes
         // (its settings are not in the id yet - docs/engine-stage1.md, OPEN).
-        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"));
+        uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "soundcard:open"));
     }
     ImGui::EndDisabled();
     ImGui::EndDisabled();

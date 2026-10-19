@@ -144,6 +144,14 @@ inline bool radioNotOpenLamp(const RememberedSource& keep, bool hasDevice,
            !soundCardOpenPending;
 }
 
+// THE SAME RULE OVER WHAT THE WINDOW'S ENGINE API SESSION SAYS (window port group 11, API 0.3 8.10): the kept
+// source's kind (fact.source.keep: "" none), a radio being open (FOXAPI_RX_DEVICE_OPEN), the generator being the
+// source in use (DEVICES entry 0 is ACTIVE) and a sound card being opened (FOXAPI_SRC_CARD_OPENING).
+inline bool radioNotOpenLampFromSession(const std::string& keepKind, bool hasDevice, bool generatorInUse,
+                                        bool soundCardOpenPending) {
+    return !keepKind.empty() && keepKind != "file" && !hasDevice && generatorInUse && !soundCardOpenPending;
+}
+
 inline int refindSourceRow(const std::vector<SourceRowKey>& before, int sel,
                            const std::vector<SourceRowKey>& after, int fixedRows) {
     if (sel >= 0 && sel < fixedRows) { return sel; }

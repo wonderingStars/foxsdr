@@ -132,18 +132,22 @@ const char* const kReadOnly[] = {
     // table now.)
     "audioRecorder_.sizeLimitReached", "audioRecorder_.writeFailed",
     "iqRecorder_.sizeLimitReached", "iqRecorder_.writeFailed",
-    "device_.deviceDead", "device_.frequencyRangeHz", "device_.name", "device_.sampleRateHz",
+    // (RETIRED with window port group 11, their last caller gone: device_.sampleRateHz - the Source section letters
+    // "actual %.4g MS/s" from the state's sampleRateHz - and pipeline_.activeSource().name, pipeline_.faultMessage
+    // and pipeline_.faulted - its header reads the state's deviceName and the FAULTED flag, its fault line the
+    // STATUS_LINES key deviceFault.)
+    "device_.deviceDead", "device_.frequencyRangeHz", "device_.name",
     "device_.lastError", "device_.gainDb", "device_.antenna", "device_.autoGain",
     "freqMgr_.list().empty",
     "freqMgr_.range", "freqMgr_.nearestSubset", "freqMgr_.indexOfId",
     "gpsReader_.listening", "gpsReader_.status", "gpsReader_.clearResult",
     "micOpen_.inFlight", "micOpen_.result().ok",
-    "pipeline_.activeSource().centerFrequencyHz", "pipeline_.activeSource().name",
+    "pipeline_.activeSource().centerFrequencyHz",
     "pipeline_.activeSource().sampleRateHz", "pipeline_.activeSource().faulted",
     "pipeline_.activeSourceName", "pipeline_.audio().everOpened", "pipeline_.audio().openedDeviceName",
     "pipeline_.audio().streamAlive", "pipeline_.audio().underruns", "pipeline_.audioMuted",
     "pipeline_.autoNotchEngaged", "pipeline_.autoNotchFrequencyHz", "pipeline_.channelRateHz",
-    "pipeline_.converter", "pipeline_.demodMode", "pipeline_.faultMessage", "pipeline_.faulted",
+    "pipeline_.converter", "pipeline_.demodMode",
     "pipeline_.getLatestFrame", "pipeline_.inputRateHz", "pipeline_.pilotLevel", "pipeline_.pilotLocked",
     "pipeline_.rdsSnapshot", "pipeline_.running", "pipeline_.signalPowerDb", "pipeline_.stereoActive",
     // (RETIRED with window port group 8, its last caller gone: pipeline_.vfoOffsetHz - the preset keys read the
@@ -1010,10 +1014,18 @@ const char* const kPortedMembers[] = {
     // its ten fields of the store's state are no longer read by the window at all (the two bounded-run
     // diagnostics keep catalog_ and pluginBlocked_).
     "drawPluginStoreSection", "drawPluginsSection", "drawBlockedPluginRows", "drawPluginStoreWindow", "storeLists",
+    // GROUP 11, the Source section and the sound card panel: the section (its combo, the scan keys and notes, the
+    // dongles that cannot be opened, the IQ file, Pluto and sound card panels, the open radio's rate, antenna, gain
+    // and option controls), the lamp on its header, the sound card panel and its "Receives" sentence - and the cache
+    // of the table they draw from. The window's own edit buffers (the IQ path, the Pluto address and the sound card's
+    // centre, with their drafts) and the combo's edge latch stay the window's; the engine's thirty-four fields of
+    // the section's state are no longer read by the window at all (sourceIdForRow left the window: the bounded run's
+    // seam asks the engine's own).
+    "drawSourceSection", "radioNotOpenLit", "drawSoundCardControls", "soundCardReceivesText", "sourceLists",
 };
 
-constexpr int kWindowFieldsReadBudget = 94;
-constexpr int kWindowFieldReadsBudget = 441;
+constexpr int kWindowFieldsReadBudget = 60;
+constexpr int kWindowFieldReadsBudget = 313;
 
 struct Report {
     int violations = 0;
@@ -1204,7 +1216,7 @@ int main(int argc, char** argv) {
                 r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
-    CHECK(r.submitsInDraw >= 30);  // (a sanity floor, not a ratchet: it is the count itself - 38 until group 10 ported the store's eight)
+    CHECK(r.submitsInDraw >= 13);  // (a sanity floor, not a ratchet: it is the count itself - 30 until group 11 ported the Source section's seventeen)
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);

@@ -308,8 +308,24 @@ struct AppWindowTestAccess {
     static std::string keepKind(AppWindow& a) { return a.engine_.restoreKeep_.kind; }
     static std::string keepLabel(AppWindow& a) { return a.engine_.restoreKeepLabel_; }
     static double rateNow(AppWindow& a) { return a.engine_.pipeline_.activeSource().sampleRateHz(); }
+    // THE SOURCE SECTION AND THE SOUND CARD READ THE WINDOW'S ENGINE API SESSION (window port group 11, API 0.3 8.10):
+    // the "Receives X to Y." line is fact.soundcard.span, the lamp is fact.source.keep with the open flags, so a call
+    // is preceded by the frame's LOOK, in drawUi's order - the pass takes the session's queue and publishes the
+    // lists and facts (the engine's own pumpWorkers is what collects a card's listing and open, as here), the window
+    // copies the status lines and reads its state. The assertions are unchanged: they only see what a frame sees.
+    static void lookFull(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        a.engine_.pumpInputs();
+        a.engine_.pumpPlugins();
+        (void)a.engine_.pumpPublish();
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
+    }
     // The "Receives X to Y." line under the Source section's controls.
-    static std::string receives(AppWindow& a) { return a.soundCardReceivesText(); }
+    static std::string receives(AppWindow& a) {
+        lookFull(a);
+        return a.soundCardReceivesText();
+    }
     // THE PATCH PAGE takes the receiver's card when the patch starts (one
     // reconcile, as the first frame of a running patch), and hands it back
     // on STOP. The page's first-frame scan is not under test.
@@ -343,7 +359,10 @@ struct AppWindowTestAccess {
     static void pick(AppWindow& a, int row) { a.engine_.selectSource(row); }
 
     // The lamp.
-    static bool lamp(AppWindow& a) { return a.radioNotOpenLit(); }
+    static bool lamp(AppWindow& a) {
+        lookFull(a);
+        return a.radioNotOpenLit();
+    }
 
     // The installed card, read by the test thread (the receiver is stopped).
     static bool cardDead(AppWindow& a) {

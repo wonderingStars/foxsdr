@@ -917,9 +917,6 @@ private:
     // exist. Draws nothing when there is neither a refusal nor a stale grant.
     void drawPluginTuneControls();
 
-    // The SELECT_SOURCE id of a row of the Source list (the inverse of
-    // selectSourceById for every row a click can name).
-    std::string sourceIdForRow(int row) const;
     // The plugins' spectrum and waterfall marks, over the panel at (x0, y0).
     void drawPluginMarkers(float x0, float y0, float width, float height, bool waterfall);
 
@@ -1199,8 +1196,10 @@ private:
     void pollConfigWriter();
 
     // The Source section's lamp for a saved source the generator is standing
-    // in for (0.99.36): lit while one is remembered and not open.
-    bool radioNotOpenLit() const;
+    // in for (0.99.36): lit while one is remembered and not open. From the
+    // window's engine API session (window port group 11): fact.source.keep,
+    // the open flags, the generator's DEVICES entry and FOXAPI_SRC_CARD_OPENING.
+    bool radioNotOpenLit();
 
     std::unique_ptr<SpectrumView> spectrum_;
     std::unique_ptr<WaterfallView> waterfall_;
@@ -1290,12 +1289,124 @@ private:
     // I/Q centre as typed, in MHz (the box's own unit).
     double soundCardCentreMhz_ = 0.0;
 
-    // The Source section's controls for the row.
+    // The Source section's controls for the row. From the window's engine API
+    // session only (window port group 11, API 0.3 section 8.10): the cards,
+    // their rates and the form are the table's SOUND_CARDS, SOUND_CARD_RATES
+    // and SOUND_CARD_FORM, the listing's state is the sourceFlags word, and
+    // what a control changes goes by FOXAPP_OP_SOUND_CARD_PICK / _FORM (with
+    // its field mask) / SOUNDCARD_IQ_CENTRE and SELECT_SOURCE through uiSubmit.
     void drawSoundCardControls();
     // "Receives X to Y." under the Source section's controls, from the
     // settings shown: the AIR range, through the converter stored for the
-    // section's card (gui::soundCardAirSpan).
-    std::string soundCardReceivesText() const;
+    // section's card - fact.soundcard.span, which the engine computes with
+    // gui::soundCardAirSpan.
+    std::string soundCardReceivesText();
+
+    // --- THE SOURCE SECTION AND THE SOUND CARD (window port group 11, API 0.3 section 8.10) ------
+    //
+    // WHAT THEY TAKE FROM THE LISTS AND FACTS, read when listSeq moves and kept (the rule of
+    // uiFact): the combo's rows (DEVICES: an entry's index is its row) with the caption each
+    // is lettered with - "(native)" composed HERE, in the language in force, so a language
+    // switch (which the engine's fingerprint hashes) rebuilds it - the combo's own row and the
+    // kept source's kind (fact.source.*), the open radio's rates, antennas, gains and options,
+    // the dongles that cannot be opened, where the SoapySDR runtime looked, the sound card
+    // inputs, their rates and the form, and the sentences' inputs. The per-frame flags (the
+    // scan's states, a card opening) are NOT here: they are sourceFlags of uiState_. A frame
+    // in which nothing moved reads and allocates nothing; strings and vectors keep their
+    // room. listSeq 0 is "never read".
+    struct SourceListCache {
+        std::uint64_t listSeq = 0;
+        std::uint32_t refreshes = 0;         // times everything was read again (a test reads it)
+        struct Row {
+            std::string name;                // DEVICES name (cut at 95 bytes): the radio's own label
+            std::string caption;             // what the combo letters: "<name> (native)", the Pluto's own, a Soapy label
+            std::uint64_t id = 0;            // the entry's id: what fact.source.id.<n> is keyed by
+            bool soapy = false;              // the id begins "soapy:"
+            bool pluto = false;              // the id begins "pluto:"
+        };
+        std::vector<Row> rows;               // DEVICES, in the combo's order
+        bool anySoapyRow = false;            // some entry is a SoapySDR row (its id begins "soapy:")
+        bool generatorActive = false;        // entry 0 is ACTIVE: the source in use is the generator
+        int row = -1;                        // fact.source.row: the combo's own row, -1 none
+        std::string keepKind;                // fact.source.keep
+        std::string opening;                 // fact.source.opening
+        std::string scanGate;                // fact.source.scanGate
+        std::string scanSkip;                // fact.source.scanSkip
+        std::string faultedDrivers;          // fact.source.faultedDrivers
+        std::string plutoUri;                // fact.source.plutoUri
+        struct Rate {
+            double hz = 0.0;                 // what SET_SAMPLE_RATE takes
+            std::string label;               // the Rate combo's caption
+        };
+        std::vector<Rate> rates;
+        std::vector<std::string> antennas;
+        std::string antenna;                 // the ANTENNAS entry that is ACTIVE; "" none
+        struct Gain {
+            std::string name;                // what SET_GAIN takes
+            float lo = 0.0f, hi = 0.0f;      // the slider's span (the list's min and max)
+            float db = 0.0f;                 // the radio's readback
+            cascade::source::GainUnit unit = cascade::source::GainUnit::Decibels;
+        };
+        std::vector<Gain> gains;
+        // DEVICE_OPTIONS: present = listed, on = ACTIVE.
+        bool rfNotchPresent = false, rfNotch = false;
+        bool dabNotchPresent = false, dabNotch = false;
+        bool hdrPresent = false, hdr = false;
+        bool adcPresent = false, dither = false, randomiser = false;
+        struct Unbound {
+            std::string name;                // the bus description; "" when it reports none
+            std::string family;              // "rtl", "rx888" or ""
+        };
+        std::vector<Unbound> unbound;
+        struct Evidence {
+            int kind = 0;                    // 1 a vendor install, 2 a search path, 3 a module
+            std::string name;
+            std::string detail;
+        };
+        std::vector<Evidence> evidence;
+        int modulesLoaded = 0;               // entries of kind 3
+        // The sound card.
+        struct Card {
+            std::string name;                // "device (host API)"
+            std::uint64_t id = 0;            // what FOXAPP_OP_SOUND_CARD_PICK takes
+            bool active = false;             // the entry the form's card is
+        };
+        std::vector<Card> cards;
+        int cardAt = -1;                     // the ACTIVE card's index; -1 none
+        struct CardRate {
+            double hz = 0.0;
+            bool exclusive = false;
+            bool active = false;             // the form's rate
+        };
+        std::vector<CardRate> cardRates;
+        struct Form {
+            std::string device;              // fact.soundcard.device, whole
+            std::string hostApi;             // fact.soundcard.hostApi, whole
+            double rateHz = 0.0;
+            double centreHz = 0.0;
+            int channel = 0;                 // 0 left, 1 right
+            bool iqStereo = false;
+            bool swapIq = false;
+            bool picked = false;
+        };
+        Form form;
+        std::string cardLabel;               // "device (host API)", "" with no device named
+        double spanLoHz = 0.0;               // fact.soundcard.span: what the form's card receives on the air
+        double spanHiHz = 0.0;
+        std::string factText;                // the fact as just read (kept for its room)
+    };
+    SourceListCache sourceCache_;
+    const SourceListCache& sourceLists();
+    // A DRAFT FOR EACH BOX THAT IS TYPED IN (the scanner form's shape, window port group 7): what an edit sent
+    // is not in the table until the engine's next pass, so the box keeps its own text until the engine has
+    // caught up with it (the fact equals the draft) or a moment has passed (the engine took something else).
+    // The Pluto box sends every edit as it is typed (FOXAPP_OP_SET_PLUTO_URI), so config.json keeps an address
+    // that was never opened; the sound card's centre box sends it when Return is pressed.
+    bool plutoUriPending_ = false;
+    double plutoUriEditedAt_ = 0.0;           // ImGui::GetTime() of the last edit
+    bool soundCardCentrePending_ = false;
+    double soundCardCentreSentHz_ = 0.0;      // the centre the last commit sent
+    double soundCardCentreEditedAt_ = 0.0;
 
     char iqPath_[512] = "";     // InputText buffer for the IQ file path
     // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands round 2): the

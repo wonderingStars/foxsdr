@@ -1377,9 +1377,11 @@ int AppWindow::run(int frames) {
                         if (cascade::core::patch::makeDeviceKey(engine_.nativeDevices_[i].driver,
                                                                 engine_.nativeDevices_[i].args) == want) {
                             // The row's own command, as a click would send it.
+                            // (the engine's own spelling of the row's id, a const query: the table's
+                            // fact.source.id.<n> is the same function)
                             engine_.submitCommand(cascade::core::cmd::makeText(
                                 FOXAPI_OP_SELECT_SOURCE,
-                                sourceIdForRow(kNativeRowBase + static_cast<int>(i))));
+                                engine_.sourceIdForRow(kNativeRowBase + static_cast<int>(i))));
                             break;
                         }
                     }
@@ -6845,17 +6847,24 @@ void AppWindow::drawUpdateBanner() {
 }
 
 void AppWindow::drawSourceSection() {
+    // THE SECTION DRAWS FROM THE WINDOW'S ENGINE API SESSION ONLY (window port, group 11; API 0.3 section 8.10): the
+    // state's flags and its sourceFlags word, once a frame; the lists and facts through sourceLists(), read when
+    // listSeq moves; the sentences from the published status copy; and what a control changes goes by uiSubmit.
+    // Nothing here names the engine. The cache is read FIRST, before anything below decides from it.
+    const SourceListCache& c = sourceLists();
+    const std::uint32_t flags = uiState_.flags;
+    const std::uint32_t src = uiState_.sourceFlags;
     // The device in use, shortened to what fits: "SoapySDR: B200" is the
     // full name and "B200" is the part that identifies it.
     // Translated when it is the built-in generator, and shortened by
     // CHARACTERS: a byte cut would split an accented letter in half.
     // The built-in generator's chip is its own short key, never cut
     // (app_window.hpp, sourceChipText).
-    const std::string sourceChip = cascade::gui::sourceChipText(engine_.pipeline_.activeSource().name());
+    const std::string sourceChip = cascade::gui::sourceChipText(uiState_.deviceName);
     // Rust and lit while the pipeline is faulted, phosphor and lit while it
     // runs: the colour says which state and the lamp says there is one, which
     // is the rule the whole rail keeps.
-    const bool sourceFaulted = engine_.pipeline_.faulted();
+    const bool sourceFaulted = (flags & FOXAPI_RX_FAULTED) != 0u;
     // A RADIO THE GENERATOR IS STANDING IN FOR lights the lamp too (0.99.36):
     // the section may be folded, and its chip then reads only "generator" -
     // true, and silent about the radio that did not open. The reason is in
@@ -6865,7 +6874,7 @@ void AppWindow::drawSourceSection() {
         benchSection(trId("Source"), true, sourceChip.c_str(),
                      (sourceFaulted || radioNotOpen) ? cascade::gui::theme::kAlarm
                                                      : cascade::gui::theme::kPhosphor,
-                     sourceFaulted || radioNotOpen || engine_.pipeline_.running());
+                     sourceFaulted || radioNotOpen || (flags & FOXAPI_RX_RUNNING) != 0u);
     if (!sourceOpen) { return; }
 
     // Row label for a combo index; -1 (active device dropped by a Refresh)
@@ -6875,19 +6884,15 @@ void AppWindow::drawSourceSection() {
     // file, and Soapy's rows follow them. Not a cosmetic ordering: with both
     // present the native driver is the one this product can be held
     // responsible for, and the list is read top-down.
-    const auto rowLabel = [this](int idx) -> const char* {
+    // (An entry's index in DEVICES IS its row; the cache keeps each radio's caption, "(native)" composed.)
+    const auto rowLabel = [this, &c](int idx) -> const char* {
         if (idx == 0) { return tr("Signal generator"); }
         if (idx == 1) { return tr("IQ file"); }
         if (idx == kSoundCardRow) { return tr("Sound card"); }
-        const int n = idx - kNativeRowBase;
-        if (n >= 0 && n < static_cast<int>(engine_.nativeRowLabels_.size())) {
-            return engine_.nativeRowLabels_[static_cast<std::size_t>(n)].c_str();
+        if (idx >= kNativeRowBase && idx < static_cast<int>(c.rows.size())) {
+            return c.rows[static_cast<std::size_t>(idx)].caption.c_str();
         }
-        const int d = idx - engine_.soapyRowBase();
-        if (d >= 0 && d < static_cast<int>(engine_.soapyDevices_.size())) {
-            return engine_.soapyDevices_[static_cast<std::size_t>(d)].label.c_str();
-        }
-        return tr(engine_.pipeline_.activeSourceName());
+        return tr(uiState_.deviceName);
     };
 
     // While discovery or an open is in flight the controls are disabled and
@@ -6896,8 +6901,11 @@ void AppWindow::drawSourceSection() {
     // A worker thread died on a driver exception — almost always the device
     // being unplugged mid-stream. Say so plainly: the spectrum has frozen and
     // without this the app just looks hung.
-    if (engine_.pipeline_.faulted()) {
-        const std::string faultMessage = engine_.pipeline_.faultMessage();
+    // THE WHOLE SENTENCE (STATUS_LINES deviceFault), never the state's faultMessage, which is cut at 127 bytes:
+    // the zombie-source sentence is 134, and on the cut copy the "restart FoxSDR" that ends it is gone, so the
+    // generic advice below would be added under a sentence that says the opposite.
+    if (sourceFaulted) {
+        const std::string& faultMessage = statusLines_.deviceFault;
         ImGui::TextColored(kErrorRed, tr("Device stopped: %s"), faultMessage.c_str());
         // NOT UNDER A DRIVER THAT HAS ALREADY SAID WHAT TO DO (0.99.36). The
         // SDRplay lost-session sentences end "then restart FoxSDR", because
@@ -6909,12 +6917,12 @@ void AppWindow::drawSourceSection() {
         }
     }
 
-    const bool soapyBusy = engine_.soapyScanPending_ || engine_.deviceOpenPending_;
+    const bool deviceOpening = (flags & FOXAPI_RX_DEVICE_OPENING) != 0u;
+    const bool soapyBusy = (src & FOXAPI_SRC_SCAN_PENDING) != 0u || deviceOpening;
     if (soapyBusy) {
         std::string busyLine;
-        if (engine_.deviceOpenPending_) {
-            cascade::core::formatUtf8(busyLine, tr("Opening %s..."),
-                          engine_.deviceBusyLabel_.c_str());
+        if (deviceOpening) {
+            cascade::core::formatUtf8(busyLine, tr("Opening %s..."), c.opening.c_str());
         } else {
             busyLine = tr("Scanning for devices...");
         }
@@ -6923,20 +6931,16 @@ void AppWindow::drawSourceSection() {
     // A DRIVER THAT CRASHED THE DEVICE SCAN IS NAMED HERE, once, for the rest
     // of the session (0.99.33): it is no longer asked on a rescan, so any
     // radio of its kind will not appear, and the list would otherwise just be
-    // shorter with nothing to say why. See source::sessionFaultedDrivers.
-    {
-        const auto faulted = cascade::source::sessionFaultedDrivers();
-        if (!faulted.empty()) {
-            std::string names;
-            for (const auto& f : faulted) { names += (names.empty() ? "" : ", ") + f.driver; }
-            std::string note;
-            cascade::core::formatUtf8(
-                note, tr("Not scanned again this session: %s (it crashed the device scan)"),
-                names.c_str());
-            ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-            ImGui::TextWrapped("%s", note.c_str());
-            ImGui::PopStyleColor();
-        }
+    // shorter with nothing to say why. fact.source.faultedDrivers is the
+    // engine's list of them (the child that died is the engine's).
+    if (!c.faultedDrivers.empty()) {
+        std::string note;
+        cascade::core::formatUtf8(
+            note, tr("Not scanned again this session: %s (it crashed the device scan)"),
+            c.faultedDrivers.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", note.c_str());
+        ImGui::PopStyleColor();
     }
     ImGui::BeginDisabled(soapyBusy);
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -6950,9 +6954,8 @@ void AppWindow::drawSourceSection() {
     // Not while a sound card is opening either: the card is the one being
     // brought back, and "(saved, not open)" would be the lamp's false alarm
     // in words (gui::radioNotOpenLamp).
-    const bool keepPreview = engine_.restoreKeep_.valid() && engine_.device_ == nullptr &&
-                             engine_.sourceKind_ == "siggen" && !statusLines_.restoreKeepLabel.empty() &&
-                             !engine_.soundCardOpenPending_;
+    const bool keepPreview = !c.keepKind.empty() && (flags & FOXAPI_RX_DEVICE_OPEN) == 0u && c.generatorActive &&
+                             !statusLines_.restoreKeepLabel.empty() && (src & FOXAPI_SRC_CARD_OPENING) == 0u;
     // "(not open)" in the preview itself, because the combo is the one place
     // a user looks to find out what the receiver is on, and the name alone
     // there would claim the radio was running.
@@ -6964,7 +6967,7 @@ void AppWindow::drawSourceSection() {
         keepPreviewLabel = keepBuf;
     }
     const bool comboOpen = ImGui::BeginCombo(
-        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(engine_.sourceSel_));
+        "##source_select", keepPreview ? keepPreviewLabel.c_str() : rowLabel(c.row));
     if (comboOpen) {
         // ON THE FRAME IT OPENS, not on every frame it stays open: opening
         // the dropdown IS the user asking to see devices, and the combo asks
@@ -6978,15 +6981,15 @@ void AppWindow::drawSourceSection() {
         // scanNative), so it is also the only one of the two that is allowed
         // to run while a radio is streaming.
         //
-        // APPLIED AT ONCE through applyCommand, not queued: the rows drawn
-        // just below are the list this scan refreshes, and the native half
-        // (synchronous) has always been in them on the frame the list opens.
-        // A scan that had to leave the open radios' drivers out is redone
-        // whole at the first chance with nothing open (2026-09-23).
+        // A SUBMIT, SO THE FIRST FRAME OF AN OPEN COMBO DRAWS THE ROWS THE LAST WALK FOUND (it was applied at
+        // once, with the fresh rows drawn two statements later): the scan runs in the engine's next pass and the
+        // rows the pass found show the frame after. A click on a row that has gone is matched by content, not
+        // by index, so it answers "no scanned device matches" and opens nothing else. A scan that had to leave
+        // the open radios' drivers out is redone whole at the first chance with nothing open (2026-09-23).
         if (!sourceComboWasOpen_) {
-            (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN));
+            uiSubmit(cascade::core::cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN));
         }
-        const int rowCount = engine_.soapyRowBase() + static_cast<int>(engine_.soapyDevices_.size());
+        const int rowCount = static_cast<int>(c.rows.size());
         for (int i = 0; i < rowCount; ++i) {
             // PushID: two identical devices (same model, no serial in the
             // label) must still be distinct rows.
@@ -6995,14 +6998,19 @@ void AppWindow::drawSourceSection() {
             // rather than while its page is open since 0.99.18): a device row
             // here would open a radio a patch node may already hold. Shown,
             // greyed, and saying why.
-            const bool patchHasRadios = engine_.patchRunning_ && i >= kNativeRowBase;
+            const bool patchHasRadios = (flags & FOXAPI_RX_PATCH_RUNNING) != 0u && i >= kNativeRowBase;
             ImGui::BeginDisabled(patchHasRadios);
-            // SELECT_SOURCE with the row's id, matched back to the row
-            // against the lists when it is applied.
-            if (ImGui::Selectable(rowLabel(i), i == engine_.sourceSel_)) {
-                const std::string id = sourceIdForRow(i);
+            // SELECT_SOURCE with the row's id, whole: from fact.source.id.<entry id>, read now and not kept
+            // (the entry's detail is cut at 159 bytes, and a Soapy or Pluto id can be longer). Matched back to
+            // the row against the engine's lists when it is applied.
+            if (ImGui::Selectable(rowLabel(i), i == c.row)) {
+                char key[48];
+                std::snprintf(key, sizeof(key), "fact.source.id.%llu",
+                              static_cast<unsigned long long>(c.rows[static_cast<std::size_t>(i)].id));
+                std::string id;
+                readFactText(key, id);
                 if (!id.empty()) {
-                    engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, id));
+                    uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, id));
                 }
             }
             ImGui::EndDisabled();
@@ -7027,25 +7035,22 @@ void AppWindow::drawSourceSection() {
     // enumeration reads SetupAPI properties and opens nothing at all
     // (usb_device.hpp rule 1), so it can always run, and a user who has just
     // plugged a second dongle in must be able to make it appear.
-    const bool scanGated = engine_.soapyScanGated();
-    if (!scanGated) {  // the next radio gets its own line
-        engine_.applyCommand(cascade::core::cmd::makeInt(
-            FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED));
-    }
+    // (The one log line "scan deferred while X is open" is written once for each radio: the engine's pass lets
+    // its latch go when the gate opens, which this frame used to ask for by a command a frame.)
+    const bool scanGated = (src & FOXAPI_SRC_SCAN_GATED) != 0u;
     if (ImGui::Button(trId("Refresh"))) {
         // The SoapySDR half defers itself, and says so once, while a radio is
         // open.
-        engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
+        uiSubmit(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
     }
     // LOOK FOR NETWORK USRPs (2026-09-25), off by default: UHD is only asked
     // when a USRP could be here (gui::soapyDriversWithNoHardware), and a USRP
     // on the network is on no USB bus. Ticking it rescans at once, so the
     // radio it is for appears without a second click.
     ImGui::SameLine();
-    bool lookForNetworkUsrps = engine_.lookForNetworkUsrps_;
+    bool lookForNetworkUsrps = (src & FOXAPI_SRC_NETWORK_USRPS) != 0u;
     if (ImGui::Checkbox(trId("Look for network USRPs"), &lookForNetworkUsrps)) {
-        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPP_OP_SET_NETWORK_USRP_SCAN,
-                                                  lookForNetworkUsrps ? 1 : 0));
+        uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SET_NETWORK_USRP_SCAN, lookForNetworkUsrps ? 1 : 0));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", tr("Ask UHD for USRPs on the network (N200, X310, N310 and the "
@@ -7055,32 +7060,36 @@ void AppWindow::drawSourceSection() {
     // SAID WHEN THE LAST SCAN LEFT UHD OUT, so a network USRP that is not in
     // the list is not missing silently (gui::networkUsrpHint). Not while the
     // box is ticked: the rescan that tick starts is about to answer it.
-    if (const char* hint = cascade::gui::networkUsrpHint(engine_.soapyAbsentDrivers_);
-        hint != nullptr && !lookForNetworkUsrps) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", tr(hint));
-        ImGui::PopStyleColor();
+    // (FOXAPI_SRC_UHD_LEFT_OUT is the scan's own "uhd" among the drivers it found no hardware for, which is the
+    // only thing networkUsrpHint asks of that list.)
+    {
+        static const std::vector<std::string> kUhdLeftOut{"uhd"};
+        const char* hint = (src & FOXAPI_SRC_UHD_LEFT_OUT) != 0u ? cascade::gui::networkUsrpHint(kUhdLeftOut) : nullptr;
+        if (hint != nullptr && !lookForNetworkUsrps) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", tr(hint));
+            ImGui::PopStyleColor();
+        }
     }
     if (scanGated) {
         // WHAT THE SCAN DOES BESIDE AN OPEN RADIO (2026-09-23): usually it
         // still runs, leaving out only the open radios' own drivers; it is
         // deferred only when it cannot vouch for one (device_scan_plan.hpp).
-        const cascade::gui::SoapyScanPlan plan = engine_.soapyScanPlan();
+        // fact.source.scanSkip is the drivers left out ("" = the whole scan is deferred), fact.source.scanGate the
+        // name the sentences quote.
         std::string why;
-        if (plan.mode == cascade::gui::SoapyScanMode::SkipSome) {
-            std::string names;
-            for (const std::string& d : plan.skipDrivers) { names += (names.empty() ? "" : ", ") + d; }
+        if (!c.scanSkip.empty()) {
             cascade::core::formatUtf8(why,
                           tr("While %s is open, Refresh looks for every other "
                              "kind of radio but leaves out the %s driver - its probe would "
                              "reset the open radio. Close it to look for more of that kind."),
-                          engine_.soapyScanGateDevice().c_str(), names.c_str());
+                          c.scanGate.c_str(), c.scanSkip.c_str());
         } else {
             cascade::core::formatUtf8(why,
                           tr("Refreshed the native radios. The SoapySDR scan is deferred while "
                              "%s is open - the vendor probe opens and resets every dongle it "
                              "finds. Close the radio to look for other SoapySDR devices."),
-                          engine_.soapyScanGateDevice().c_str());
+                          c.scanGate.c_str());
         }
         if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", why.c_str()); }
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -7095,8 +7104,8 @@ void AppWindow::drawSourceSection() {
     // only one of them has been through Zadig: "no radio hardware found"
     // would never appear for them, and the missing one would be missing
     // silently. See enumerateUnbound.
-    for (const cascade::usb::UsbDeviceInfo& u : engine_.nativeUnbound_) {
-        const std::string what = u.description.empty() ? std::string(tr("A USB radio")) : u.description;
+    for (const SourceListCache::Unbound& u : c.unbound) {
+        const std::string what = u.name.empty() ? std::string(tr("A USB radio")) : u.name;
         // WHICH ENTRY TO PICK IN ZADIG IS NOT THE SAME FOR EVERY RADIO, and
         // saying "Bulk-In, Interface (Interface 0)" to an Airspy owner would
         // be an instruction for a device they are not looking at. An RTL2832U
@@ -7104,11 +7113,9 @@ void AppWindow::drawSourceSection() {
         // is named that way; a HackRF and both Airspys present as a single
         // device under their own name. So the sentence names the entry that
         // exists, and the only case where it can be specific is the one where
-        // the specific name is known.
-        bool isRtl = false;
-        for (const cascade::usb::UsbId& id : cascade::source::rtlSdrUsbIds()) {
-            if (u.vid == id.vid && u.pid == id.pid) { isRtl = true; }
-        }
+        // the specific name is known. (The engine tells the families apart:
+        // UNBOUND_RADIOS' detail is "rtl", "rx888" or "".)
+        const bool isRtl = u.family == "rtl";
         // ...AND THE RX888 NEEDS A THIRD SENTENCE, because it is the only
         // radio FoxSDR opens that has to go through Zadig TWICE. It has two
         // USB identities - 04B4:00F3 is the bare Cypress bootloader it comes
@@ -7118,10 +7125,7 @@ void AppWindow::drawSourceSection() {
         // leave them with a device that opens, takes the firmware, and then
         // vanishes; the driver's own error for that state names the second
         // id, and this is the sentence that stops them reaching it.
-        bool isRx888 = false;
-        for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
-            if (u.vid == id.vid && u.pid == id.pid) { isRx888 = true; }
-        }
+        const bool isRx888 = u.family == "rx888";
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         if (isRtl) {
             ImGui::TextWrapped(
@@ -7167,7 +7171,7 @@ void AppWindow::drawSourceSection() {
     // gets, and one that drops "3.x" or "sdrplay.com" sends them nowhere.
     // Both cases arrive here - no API at all, and an API too old to drive an
     // RSP - and the second of them could not reach this line until 0.94.1.
-    if (!engine_.sdrPlayRowsFound_ && !statusLines_.sdrPlayAdvice.empty()) {
+    if ((src & FOXAPI_SRC_SDRPLAY_ROWS) == 0u && !statusLines_.sdrPlayAdvice.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", statusLines_.sdrPlayAdvice.c_str());
         ImGui::PopStyleColor();
@@ -7195,18 +7199,21 @@ void AppWindow::drawSourceSection() {
     //
     // Shown only after a scan has actually completed and found nothing, so it
     // never flashes up during the first enumeration.
-    if (engine_.soapyScanned_ && !engine_.soapyScanPartial_ && !soapyBusy && engine_.soapyDevices_.empty()) {
+    if ((src & FOXAPI_SRC_SCANNED) != 0u && (src & FOXAPI_SRC_SCAN_PARTIAL) == 0u && !soapyBusy &&
+        !c.anySoapyRow) {
         ImGui::Separator();
         ImGui::TextColored(cascade::gui::theme::warning(), tr("No radio hardware found"));
         ImGui::TextWrapped(
             tr("FoxSDR reaches radios through SoapySDR vendor modules, which are a separate "
             "install. The signal generator and IQ file playback need no hardware."));
 
-        const std::vector<std::string> modules = cascade::source::SoapySource::loadedModules();
-        const std::vector<cascade::source::VendorRoot> vendors =
-            cascade::source::SoapySource::vendorInstalls();
+        // WHAT THE RUNTIME REPORTED is the engine's evidence (SCAN_EVIDENCE), taken once when the scan landed
+        // having found nothing - never asked of the SoapySDR library from here, once a frame.
+        const int modules = c.modulesLoaded;
+        int vendors = 0;
+        for (const SourceListCache::Evidence& e : c.evidence) { vendors += e.kind == 1 ? 1 : 0; }
 
-        if (modules.empty()) {
+        if (modules == 0) {
             // The common case, and the one worth being loudest about.
             ImGui::TextWrapped(
                 tr("No vendor modules are loaded. Install PothosSDR "
@@ -7214,10 +7221,10 @@ void AppWindow::drawSourceSection() {
                 "(github.com/ryanvolz/radioconda), then press Refresh. Neither needs FoxSDR "
                 "to be reinstalled."));
         } else {
-            ImGui::TextWrapped(modules.size() == 1u
+            ImGui::TextWrapped(modules == 1
                                    ? tr("%d vendor module is loaded, but none reported a device.")
                                    : tr("%d vendor modules are loaded, but none reported a device."),
-                               static_cast<int>(modules.size()));
+                               modules);
         }
 
         // THE RTL-SDR CASE, called out by name. It is the most common first
@@ -7236,18 +7243,21 @@ void AppWindow::drawSourceSection() {
         // them does, and "where did it look" is the first question worth
         // asking - it is the question that found the bug this text exists for.
         if (ImGui::TreeNode(trId("Where FoxSDR looked"))) {
-            if (!vendors.empty()) {
-                for (const cascade::source::VendorRoot& v : vendors) {
-                    ImGui::TextWrapped(tr("found %s at %s"), v.name.c_str(), v.root.c_str());
+            if (vendors > 0) {
+                for (const SourceListCache::Evidence& e : c.evidence) {
+                    if (e.kind != 1) { continue; }
+                    ImGui::TextWrapped(tr("found %s at %s"), e.name.c_str(), e.detail.c_str());
                 }
             } else {
                 ImGui::TextDisabled(tr("no vendor SDR installation detected"));
             }
-            for (const std::string& p : cascade::source::SoapySource::moduleSearchPaths()) {
-                ImGui::TextWrapped(tr("search: %s"), p.c_str());
+            for (const SourceListCache::Evidence& e : c.evidence) {
+                if (e.kind != 2) { continue; }
+                ImGui::TextWrapped(tr("search: %s"), e.detail.c_str());
             }
-            for (const std::string& m : modules) {
-                ImGui::TextWrapped(tr("module: %s"), m.c_str());
+            for (const SourceListCache::Evidence& e : c.evidence) {
+                if (e.kind != 3) { continue; }
+                ImGui::TextWrapped(tr("module: %s"), e.detail.c_str());
             }
             ImGui::TreePop();
         }
@@ -7258,7 +7268,7 @@ void AppWindow::drawSourceSection() {
     // keeps its current source until Open succeeds: a failed open constructs
     // and destroys a throwaway IqFileSource without ever touching the
     // pipeline, so there is nothing to roll back.
-    if (engine_.sourceSel_ == 1) {
+    if (c.row == 1) {
         ImGui::SetNextItemWidth(-60.0f);
         ImGui::InputText("##iq_path", iqPath_, sizeof(iqPath_));
         ImGui::SameLine();
@@ -7266,15 +7276,14 @@ void AppWindow::drawSourceSection() {
             // SELECT_SOURCE "file:<path>" (openIqFile): the pipeline keeps
             // what it has unless the file opens. A path past 255 bytes rides
             // in the command's long text.
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE,
-                                                       std::string("file:") + iqPath_));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, std::string("file:") + iqPath_));
         }
     }
 
     // The sound card's controls, shown while the combo sits on its row. The
     // same shape as the IQ file above: the switch happens on a successful
     // Open (app_window_soundcard.cpp), never on selection.
-    if (engine_.sourceSel_ == kSoundCardRow) { drawSoundCardControls(); }
+    if (c.row == kSoundCardRow) { drawSoundCardControls(); }
 
     // THE PLUTO'S ADDRESS, shown while the combo sits on its row, and the
     // only source in this panel whose location the user has to type.
@@ -7286,72 +7295,85 @@ void AppWindow::drawSourceSection() {
     // traffic, no timeout and no wait - and an Open that fails leaves
     // whatever is installed running, with the driver's own sentence in the
     // red line below.
-    if (engine_.sourceSel_ >= kNativeRowBase && engine_.sourceSel_ < engine_.soapyRowBase()) {
-        const std::size_t plutoRow = static_cast<std::size_t>(engine_.sourceSel_ - kNativeRowBase);
-        if (plutoRow < engine_.nativeDevices_.size() &&
-            engine_.nativeDevices_[plutoRow].driver == kPlutoDriverKey) {
-            // Disabled while an open is already resolving, for the reason
-            // selectSource refuses a row switch mid-open: a second request
-            // would strand the first one's device for a stale-drop teardown.
-            ImGui::BeginDisabled(engine_.deviceOpenPending_);
-            ImGui::SetNextItemWidth(-60.0f);
-            // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands rounds
-            // 2-3): typing here never writes the engine field in place. Each
-            // edit is committed as typed (FOXAPP_OP_SET_PLUTO_URI), so an
-            // address typed and never opened is still the one config.json
-            // keeps; while the box is not being typed in it re-seeds from
-            // plutoUri_, so an open-pluto from elsewhere shows here too.
-            if (ImGui::GetActiveID() != ImGui::GetID("##pluto_uri")) {
-                cascade::core::formatUtf8(plutoUriDraft_, sizeof(plutoUriDraft_), "%s", engine_.plutoUri_);
-            }
-            if (ImGui::InputText("##pluto_uri", plutoUriDraft_, sizeof(plutoUriDraft_))) {
-                const cascade::core::cmd::QueuedCommand q =
-                    cascade::core::cmd::makeText(FOXAPP_OP_SET_PLUTO_URI, plutoUriDraft_);
-                engine_.applyCommand(q.c, q.longText);
-            }
-            ImGui::SameLine();
-            const bool openPluto = ImGui::Button(trId("Open"));
-            ImGui::EndDisabled();
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped(
-                tr("A Pluto on its USB cable answers at ip:192.168.2.1. ip:pluto.local works if "
-                "this machine has an mDNS responder, and any address or host name can be "
-                "typed. Nothing is contacted until you press Open."));
-            ImGui::PopStyleColor();
-            // The typed address, as the open's args (openPlutoAt).
-            if (openPluto) {
-                engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE,
-                                                           std::string("open-pluto:uri=") + plutoUriDraft_));
-            }
+    if (c.row >= kNativeRowBase && c.row < static_cast<int>(c.rows.size()) &&
+        c.rows[static_cast<std::size_t>(c.row)].pluto) {
+        // Disabled while an open is already resolving, for the reason
+        // selectSource refuses a row switch mid-open: a second request
+        // would strand the first one's device for a stale-drop teardown.
+        ImGui::BeginDisabled(deviceOpening);
+        ImGui::SetNextItemWidth(-60.0f);
+        // A LOCAL DRAFT (engine/stage3b-pre fields-to-commands rounds
+        // 2-3): typing here never writes the engine field in place. Each
+        // edit is committed as typed (FOXAPP_OP_SET_PLUTO_URI), so an
+        // address typed and never opened is still the one config.json
+        // keeps; while the box is not being typed in it re-seeds from the
+        // engine's address (fact.source.plutoUri), so an open-pluto from
+        // elsewhere shows here too. AN EDIT LANDS AT THE ENGINE'S NEXT PASS, so the box keeps what was
+        // typed (plutoUriPending_) until the engine's address is the draft - or two seconds have passed, and the
+        // engine's is the truth - and a click elsewhere on the frame an edit is still queued does not put the
+        // previous address back for a pass. The draft is also what Open sends, so that key is never stale.
+        const bool plutoBoxActive = ImGui::GetActiveID() == ImGui::GetID("##pluto_uri");
+        if (plutoUriPending_ &&
+            (c.plutoUri == plutoUriDraft_ || (!plutoBoxActive && ImGui::GetTime() - plutoUriEditedAt_ > 2.0))) {
+            plutoUriPending_ = false;
+        }
+        if (!plutoBoxActive && !plutoUriPending_) {
+            cascade::core::formatUtf8(plutoUriDraft_, sizeof(plutoUriDraft_), "%s", c.plutoUri.c_str());
+        }
+        if (ImGui::InputText("##pluto_uri", plutoUriDraft_, sizeof(plutoUriDraft_))) {
+            plutoUriPending_ = true;
+            plutoUriEditedAt_ = ImGui::GetTime();
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_PLUTO_URI, plutoUriDraft_));
+        }
+        ImGui::SameLine();
+        const bool openPluto = ImGui::Button(trId("Open"));
+        ImGui::EndDisabled();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            tr("A Pluto on its USB cable answers at ip:192.168.2.1. ip:pluto.local works if "
+            "this machine has an mDNS responder, and any address or host name can be "
+            "typed. Nothing is contacted until you press Open."));
+        ImGui::PopStyleColor();
+        // The typed address, as the open's args (openPlutoAt).
+        if (openPluto) {
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE,
+                                                  std::string("open-pluto:uri=") + plutoUriDraft_));
         }
     }
 
     // Device panel, shown while a RADIO of any kind is INSTALLED in the
-    // pipeline (device_ tracks setSource, not the combo row, so the panel
+    // pipeline (FOXAPI_RX_DEVICE_OPEN tracks setSource, not the combo row, so the panel
     // stays correct while e.g. the combo previews "IQ file" pre-Open). Every
     // control below goes through DeviceSource, so a native RTL-SDR and one
     // reached through a vendor module are the same panel.
-    if (engine_.device_ != nullptr) {
+    if ((flags & FOXAPI_RX_DEVICE_OPEN) != 0u) {
         // THE RATE MENU IS THE RADIO'S OWN LIST. It was a fixed 1/2/4/8 MS/s
         // combo for every device on every driver - two rows an RTL-SDR cannot
         // do at all, and without 2.4 MS/s, which is the rate ADS-B needs.
+        // (The row that is current is the one NEAREST the state's rate: a radio that coerces a rate is on
+        // the row it landed on.)
+        int rateIndex = 0;
+        for (int i = 1; i < static_cast<int>(c.rates.size()); ++i) {
+            if (std::fabs(c.rates[static_cast<std::size_t>(i)].hz - uiState_.sampleRateHz) <
+                std::fabs(c.rates[static_cast<std::size_t>(rateIndex)].hz - uiState_.sampleRateHz)) {
+                rateIndex = i;
+            }
+        }
         ImGui::SetNextItemWidth(120.0f);
         const char* ratePreview =
-            (engine_.deviceRateIndex_ >= 0 &&
-             engine_.deviceRateIndex_ < static_cast<int>(engine_.deviceRateLabels_.size()))
-                ? engine_.deviceRateLabels_[static_cast<std::size_t>(engine_.deviceRateIndex_)].c_str()
+            (rateIndex >= 0 && rateIndex < static_cast<int>(c.rates.size()))
+                ? c.rates[static_cast<std::size_t>(rateIndex)].label.c_str()
                 : "";
         if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Rate")), ratePreview)) {
-            for (std::size_t i = 0; i < engine_.deviceRateLabels_.size(); ++i) {
-                const bool sel = (static_cast<int>(i) == engine_.deviceRateIndex_);
-                if (ImGui::Selectable(engine_.deviceRateLabels_[i].c_str(), sel) && !sel) {
+            for (std::size_t i = 0; i < c.rates.size(); ++i) {
+                const bool sel = (static_cast<int>(i) == rateIndex);
+                if (ImGui::Selectable(c.rates[i].label.c_str(), sel) && !sel) {
                     // SET_SAMPLE_RATE: a COERCED rate returns true and says
                     // why through lastError() (an RX888 in VHF mode, a Pluto
                     // above its maximum) - the reason goes on the line, the
                     // combo points at the READBACK, and the DSP chain and the
                     // frequency axis follow the hardware, not the request.
-                    engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SAMPLE_RATE,
-                                                              engine_.deviceRatesHz_[i]));
+                    uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_SAMPLE_RATE, c.rates[i].hz));
                 }
                 if (sel) { ImGui::SetItemDefaultFocus(); }
             }
@@ -7362,8 +7384,7 @@ void AppWindow::drawSourceSection() {
         // Beside the combo when it fits the rail, on its own line when a
         // translation makes the pair too wide (gui/text_fit.hpp).
         std::string actualRate;
-        cascade::core::formatUtf8(actualRate, tr("actual %.4g MS/s"),
-                                  engine_.device_->sampleRateHz() / 1.0e6);
+        cascade::core::formatUtf8(actualRate, tr("actual %.4g MS/s"), uiState_.sampleRateHz / 1.0e6);
         cascade::gui::sameLineIfFits(ImGui::CalcTextSize(actualRate.c_str()).x);
         ImGui::TextUnformatted(actualRate.c_str());
 
@@ -7373,27 +7394,26 @@ void AppWindow::drawSourceSection() {
         // while hearing essentially nothing. Measured on a B200 at 1090 MHz,
         // the difference between the two ports was 16 dB of signal-to-noise
         // and the difference between decoding aircraft and decoding none.
-        if (engine_.deviceAntennas_.size() > 1) {
-            if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Antenna")),
-                                  engine_.deviceAntenna_.c_str())) {
-                for (const std::string& a : engine_.deviceAntennas_) {
-                    const bool sel = (a == engine_.deviceAntenna_);
+        if (c.antennas.size() > 1) {
+            if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Antenna")), c.antenna.c_str())) {
+                for (const std::string& a : c.antennas) {
+                    const bool sel = (a == c.antenna);
                     if (ImGui::Selectable(a.c_str(), sel) && !sel) {
                         // SET_ANTENNA reads BACK rather than assuming the
                         // request took: a driver may coerce, and the panel
                         // must show the port actually in use. (The debounced
                         // save notices via configsEqual, which compares
                         // soapyAntenna.)
-                        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_ANTENNA, a));
+                        uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SET_ANTENNA, a));
                     }
                     if (sel) { ImGui::SetItemDefaultFocus(); }
                 }
                 ImGui::EndCombo();
             }
-        } else if (!engine_.deviceAntenna_.empty()) {
+        } else if (!c.antenna.empty()) {
             // One port, nothing to choose - but still shown, because "which
             // antenna am I on" should never be a question the UI cannot answer.
-            ImGui::Text(tr("Antenna: %s"), engine_.deviceAntenna_.c_str());
+            ImGui::Text(tr("Antenna: %s"), c.antenna.c_str());
         }
 
         // AN AIRSPY DRAWS ITS OWN (app_window_airspy.cpp): one gain mode at a
@@ -7403,12 +7423,12 @@ void AppWindow::drawSourceSection() {
         const bool airspyPanel = drawAirspyControls();
         // A COPY of the switch; SET_DEVICE_AGC changes the radio's mode and
         // the panel's figure only when the device accepts it.
-        bool agc = engine_.deviceAgc_;
+        bool agc = (flags & FOXAPI_RX_DEVICE_AGC) != 0u;
         if (airspyPanel) {
             // drawn above
-        } else if (engine_.deviceAgcSupported_) {
+        } else if ((flags & FOXAPI_RX_AGC_SUPPORTED) != 0u) {
             if (ImGui::Checkbox(trId("Auto gain"), &agc)) {
-                engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEVICE_AGC, agc ? 1 : 0));
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_DEVICE_AGC, agc ? 1 : 0));
             }
         } else {
             ImGui::TextDisabled(tr("Auto gain: not supported"));
@@ -7425,13 +7445,13 @@ void AppWindow::drawSourceSection() {
         // from this panel and nothing ever said so. kSoapyGainMinDb/MaxDb
         // remain the fallback for a driver that reports no range at all.
         ImGui::BeginDisabled(agc);
-        for (std::size_t i = 0; !airspyPanel && i < engine_.deviceGainNames_.size(); ++i) {
+        for (std::size_t i = 0; !airspyPanel && i < c.gains.size(); ++i) {
+            const SourceListCache::Gain& g = c.gains[i];
             float loDb = kSoapyGainMinDb;
             float hiDb = kSoapyGainMaxDb;
-            if (i < engine_.deviceGainRanges_.size() &&
-                engine_.deviceGainRanges_[i].maxDb > engine_.deviceGainRanges_[i].minDb) {
-                loDb = static_cast<float>(engine_.deviceGainRanges_[i].minDb);
-                hiDb = static_cast<float>(engine_.deviceGainRanges_[i].maxDb);
+            if (g.hi > g.lo) {
+                loDb = g.lo;
+                hiDb = g.hi;
             }
             ImGui::PushID(static_cast<int>(i));
             // AND EACH SLIDER IS LETTERED IN ITS OWN UNIT. An Airspy's five
@@ -7447,12 +7467,11 @@ void AppWindow::drawSourceSection() {
             // same lie the antenna combo was fixed for. It makes the slider
             // feel notched, because the hardware is notched. A COPY is edited
             // here, so the figure the slider shows is always the radio's.
-            float gainDb = engine_.deviceGainsDb_[i];
-            if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(engine_.deviceGainNames_[i].c_str()),
-                                   &gainDb, loDb, hiDb,
-                                   cascade::gui::gainSliderFormat(engine_.gainUnitAt(i)))) {
-                engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, engine_.deviceGainNames_[i],
-                                                           0, 0, static_cast<double>(gainDb)));
+            float gainDb = g.db;
+            if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(g.name.c_str()), &gainDb, loDb, hiDb,
+                                   cascade::gui::gainSliderFormat(g.unit))) {
+                uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, g.name, 0, 0,
+                                                      static_cast<double>(gainDb)));
             }
             ImGui::PopID();
         }
@@ -7473,10 +7492,10 @@ void AppWindow::drawSourceSection() {
         //
         // The deck's BIAS TEE key shows the same `shown` and switches through
         // the same switchBiasTee, so the box and the key always agree.
-        if (engine_.biasTeePanel_.present) {
-            bool box = engine_.biasTeePanel_.shown;
+        if ((flags & FOXAPI_RX_BIAS_TEE_PRESENT) != 0u) {
+            bool box = (flags & FOXAPI_RX_BIAS_TEE_ON) != 0u;
             if (ImGui::Checkbox(trId("Bias tee"), &box)) {
-                engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, box ? 1 : 0));
+                uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_BIAS_TEE, box ? 1 : 0));
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -7499,10 +7518,10 @@ void AppWindow::drawSourceSection() {
         // where it was.
         // Each is SET_DEVICE_OPTION, named, on a COPY of the switch.
         namespace cmd = cascade::core::cmd;
-        if (engine_.deviceRfNotchPresent_) {
-            bool on = engine_.deviceRfNotch_;
+        if (c.rfNotchPresent) {
+            bool on = c.rfNotch;
             if (ImGui::Checkbox(trId("FM notch"), &on)) {
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "rf_notch", on ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "rf_notch", on ? 1 : 0));
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -7510,19 +7529,19 @@ void AppWindow::drawSourceSection() {
                     "strong local FM transmitter is desensitising everything else."));
             }
         }
-        if (engine_.deviceDabNotchPresent_) {
-            bool on = engine_.deviceDabNotch_;
+        if (c.dabNotchPresent) {
+            bool on = c.dabNotch;
             if (ImGui::Checkbox(trId("DAB notch"), &on)) {
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "dab_notch", on ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "dab_notch", on ? 1 : 0));
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(tr("The RSP's own DAB band III notch filter."));
             }
         }
-        if (engine_.deviceHdrPresent_) {
-            bool on = engine_.deviceHdr_;
+        if (c.hdrPresent) {
+            bool on = c.hdr;
             if (ImGui::Checkbox(trId("HDR mode"), &on)) {
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "hdr", on ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "hdr", on ? 1 : 0));
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -7535,20 +7554,19 @@ void AppWindow::drawSourceSection() {
         // rather than what reaches it, and both are visible in the spectrum
         // the moment they move, which is why neither is persisted (see
         // app_window.hpp).
-        if (engine_.deviceAdcSwitchesPresent_) {
-            bool dither = engine_.deviceDither_;
+        if (c.adcPresent) {
+            bool dither = c.dither;
             if (ImGui::Checkbox(trId("ADC dither"), &dither)) {
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "dither", dither ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "dither", dither ? 1 : 0));
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
                     tr("Adds a small noise signal inside the converter so its spurious tones "
                     "stop landing on exact frequencies. Costs a little noise floor."));
             }
-            bool randomiser = engine_.deviceRandomiser_;
+            bool randomiser = c.randomiser;
             if (ImGui::Checkbox(trId("ADC randomiser"), &randomiser)) {
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "randomiser",
-                                            randomiser ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_SET_DEVICE_OPTION, "randomiser", randomiser ? 1 : 0));
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -7581,8 +7599,8 @@ void AppWindow::drawSourceSection() {
         // the same terms (gui::rememberedSourceAfterFailedOpen), so the one
         // thing that changes is the noun: telling someone their missing .wav
         // is "the saved radio" would read as a different fault entirely.
-        const bool keepFile = engine_.restoreKeep_.kind == "file";
-        const bool keepCard = engine_.restoreKeep_.kind == "soundcard";
+        const bool keepFile = c.keepKind == "file";
+        const bool keepCard = c.keepKind == "soundcard";
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped(
             keepFile
@@ -7613,9 +7631,234 @@ void AppWindow::drawSourceSection() {
     }
 }
 
-bool AppWindow::radioNotOpenLit() const {
-    return cascade::gui::radioNotOpenLamp(engine_.restoreKeep_, engine_.device_ != nullptr, engine_.sourceKind_,
-                                          engine_.soundCardOpenPending_);
+bool AppWindow::radioNotOpenLit() {
+    const SourceListCache& c = sourceLists();
+    return cascade::gui::radioNotOpenLampFromSession(c.keepKind, (uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u,
+                                                     c.generatorActive,
+                                                     (uiState_.sourceFlags & FOXAPI_SRC_CARD_OPENING) != 0u);
+}
+
+// THE SOURCE SECTION'S AND THE SOUND CARD'S READS OF THE TABLE'S LISTS AND FACTS, only when listSeq has moved (the
+// cache is in app_window.hpp, with the argument for what is read and when; API 0.3 section 8.10). DEVICES first -
+// an entry's index is its row in the combo - then the facts the section's sentences are made of, the open radio's
+// lists, the dongles that cannot be opened, the runtime's evidence and the sound card. `got <= i` is the end of a
+// list that changed under the read (a count taken from one publish, an entry from the next): what was read stands,
+// nothing stale is kept. Strings and vectors keep their room, so a refresh that finds nothing bigger allocates
+// only the table's own get_setting text.
+const AppWindow::SourceListCache& AppWindow::sourceLists() {
+    SourceListCache& c = sourceCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    ++c.refreshes;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    const auto size = [this](uint32_t list) {
+        return std::max<int32_t>(0, engineApi_->read_list(uiSession_, list, 0, nullptr));
+    };
+    const auto asDouble = [](const std::string& s, double fallback) {
+        return s.empty() ? fallback : std::strtod(s.c_str(), nullptr);
+    };
+    FoxListItem it{};
+
+    // The combo's rows.
+    const int32_t rows = size(FOXAPI_LIST_DEVICES);
+    c.rows.resize(static_cast<std::size_t>(rows));
+    c.generatorActive = false;
+    c.anySoapyRow = false;
+    for (int32_t i = 0; i < rows; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DEVICES, static_cast<uint32_t>(i), &it) <= i) {
+            c.rows.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        SourceListCache::Row& r = c.rows[static_cast<std::size_t>(i)];
+        r.name = it.name;
+        r.id = it.id;
+        // The kind of a row is the part of its id before the first ':' (the id is cut at 159 bytes; the kind is
+        // in the first ones).
+        r.soapy = std::strncmp(it.detail, "soapy:", 6) == 0;
+        r.pluto = std::strncmp(it.detail, "pluto:", 6) == 0;
+        c.anySoapyRow = c.anySoapyRow || r.soapy;
+        if (i == 0 && (it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.generatorActive = true; }
+        // THE CAPTION THE COMBO LETTERS: a native radio is "<name> (native)" - not decoration: with a Soapy row
+        // for the same dongle two lines below it, the user has to be able to see which one they are picking.
+        // The Pluto's row is exempt (an address, not a radio that was found) and its label is translated; a
+        // Soapy row is its own label; the three fixed rows are lettered by the combo itself.
+        if (i < kNativeRowBase) {
+            r.caption.clear();
+        } else if (r.soapy) {
+            r.caption = r.name;
+        } else if (r.pluto) {
+            r.caption = tr(r.name.c_str());  // FOX_TR_NOOP where the engine sets it
+        } else {
+            cascade::core::formatUtf8(r.caption, tr("%s (native)"), r.name.c_str());
+        }
+    }
+
+    // The facts.
+    readFactText("fact.source.row", c.factText);
+    c.row = static_cast<int>(asDouble(c.factText, -1.0));
+    readFactText("fact.source.keep", c.keepKind);
+    readFactText("fact.source.opening", c.opening);
+    readFactText("fact.source.scanGate", c.scanGate);
+    readFactText("fact.source.scanSkip", c.scanSkip);
+    readFactText("fact.source.faultedDrivers", c.faultedDrivers);
+    readFactText("fact.source.plutoUri", c.plutoUri);
+
+    // The open radio's lists (all empty with none open).
+    const int32_t rates = size(FOXAPI_LIST_SAMPLE_RATES);
+    c.rates.resize(static_cast<std::size_t>(rates));
+    for (int32_t i = 0; i < rates; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SAMPLE_RATES, static_cast<uint32_t>(i), &it) <= i) {
+            c.rates.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        c.rates[static_cast<std::size_t>(i)].hz = it.value[0];
+        c.rates[static_cast<std::size_t>(i)].label = it.detail;
+    }
+    const int32_t antennas = size(FOXAPI_LIST_ANTENNAS);
+    c.antennas.resize(static_cast<std::size_t>(antennas));
+    c.antenna.clear();
+    for (int32_t i = 0; i < antennas; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_ANTENNAS, static_cast<uint32_t>(i), &it) <= i) {
+            c.antennas.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        c.antennas[static_cast<std::size_t>(i)] = it.name;
+        if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.antenna = it.name; }
+    }
+    const int32_t gains = size(FOXAPI_LIST_GAINS);
+    c.gains.resize(static_cast<std::size_t>(gains));
+    for (int32_t i = 0; i < gains; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_GAINS, static_cast<uint32_t>(i), &it) <= i) {
+            c.gains.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        SourceListCache::Gain& g = c.gains[static_cast<std::size_t>(i)];
+        g.name = it.name;
+        g.lo = static_cast<float>(it.value[0]);
+        g.hi = static_cast<float>(it.value[1]);
+        g.db = static_cast<float>(it.value[3]);
+        g.unit = cascade::gui::gainUnitFromWire(it.detail);
+    }
+    c.rfNotchPresent = c.rfNotch = c.dabNotchPresent = c.dabNotch = c.hdrPresent = c.hdr = false;
+    c.adcPresent = c.dither = c.randomiser = false;
+    const int32_t options = size(FOXAPI_LIST_DEVICE_OPTIONS);
+    for (int32_t i = 0; i < options; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_DEVICE_OPTIONS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        const bool on = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        if (std::strcmp(it.name, "rf_notch") == 0) {
+            c.rfNotchPresent = true;
+            c.rfNotch = on;
+        } else if (std::strcmp(it.name, "dab_notch") == 0) {
+            c.dabNotchPresent = true;
+            c.dabNotch = on;
+        } else if (std::strcmp(it.name, "hdr") == 0) {
+            c.hdrPresent = true;
+            c.hdr = on;
+        } else if (std::strcmp(it.name, "dither") == 0) {
+            c.adcPresent = true;
+            c.dither = on;
+        } else if (std::strcmp(it.name, "randomiser") == 0) {
+            c.adcPresent = true;
+            c.randomiser = on;
+        }
+    }
+
+    // The dongles that cannot be opened, and where the runtime looked.
+    const int32_t unbound = size(FOXAPI_LIST_UNBOUND_RADIOS);
+    c.unbound.resize(static_cast<std::size_t>(unbound));
+    for (int32_t i = 0; i < unbound; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_UNBOUND_RADIOS, static_cast<uint32_t>(i), &it) <= i) {
+            c.unbound.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        c.unbound[static_cast<std::size_t>(i)].name = it.name;
+        c.unbound[static_cast<std::size_t>(i)].family = it.detail;
+    }
+    const int32_t evidence = size(FOXAPI_LIST_SCAN_EVIDENCE);
+    c.evidence.resize(static_cast<std::size_t>(evidence));
+    c.modulesLoaded = 0;
+    for (int32_t i = 0; i < evidence; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SCAN_EVIDENCE, static_cast<uint32_t>(i), &it) <= i) {
+            c.evidence.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        SourceListCache::Evidence& e = c.evidence[static_cast<std::size_t>(i)];
+        e.kind = static_cast<int>(it.value[0]);
+        e.name = it.name;
+        e.detail = it.detail;
+        c.modulesLoaded += e.kind == 3 ? 1 : 0;
+    }
+
+    // The sound card: the inputs, the rates the form's card offers, the form, and the sentence's two figures.
+    const int32_t cards = size(FOXAPI_LIST_SOUND_CARDS);
+    c.cards.resize(static_cast<std::size_t>(cards));
+    c.cardAt = -1;
+    for (int32_t i = 0; i < cards; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SOUND_CARDS, static_cast<uint32_t>(i), &it) <= i) {
+            c.cards.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        SourceListCache::Card& k = c.cards[static_cast<std::size_t>(i)];
+        k.name = it.name;
+        k.id = it.id;
+        k.active = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        if (k.active) { c.cardAt = static_cast<int>(i); }
+    }
+    const int32_t cardRates = size(FOXAPI_LIST_SOUND_CARD_RATES);
+    c.cardRates.resize(static_cast<std::size_t>(cardRates));
+    for (int32_t i = 0; i < cardRates; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SOUND_CARD_RATES, static_cast<uint32_t>(i), &it) <= i) {
+            c.cardRates.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        SourceListCache::CardRate& r = c.cardRates[static_cast<std::size_t>(i)];
+        r.hz = it.value[0];
+        r.exclusive = (it.flags & FOXAPI_ITEM_EXCLUSIVE) != 0u;
+        r.active = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+    }
+    SourceListCache::Form& f = c.form;
+    // (a form no listing has read yet is the defaults of an empty one; the strings keep their room)
+    f.rateHz = 0.0;
+    f.centreHz = 0.0;
+    f.channel = 0;
+    f.iqStereo = f.swapIq = f.picked = false;
+    entry(it);
+    if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SOUND_CARD_FORM, 0, &it) >= 1) {
+        f.rateHz = it.value[0];
+        f.centreHz = it.value[1];
+        f.channel = static_cast<int>(it.value[2]);
+        f.iqStereo = (it.flags & FOXAPI_ITEM_IQ_STEREO) != 0u;
+        f.swapIq = (it.flags & FOXAPI_ITEM_SWAP_IQ) != 0u;
+        f.picked = (it.flags & FOXAPI_ITEM_PICKED) != 0u;
+    }
+    readFactText("fact.soundcard.device", f.device);
+    readFactText("fact.soundcard.hostApi", f.hostApi);
+    c.cardLabel.clear();
+    if (!f.device.empty()) {
+        c.cardLabel += f.device;
+        c.cardLabel += " (";
+        c.cardLabel += f.hostApi;
+        c.cardLabel += ")";
+    }
+    readFactText("fact.soundcard.span", c.factText);
+    {
+        char* end = nullptr;
+        c.spanLoHz = std::strtod(c.factText.c_str(), &end);
+        c.spanHiHz = (end != nullptr && end != c.factText.c_str()) ? std::strtod(end, nullptr) : c.spanLoHz;
+    }
+    return c;
 }
 
 void AppWindow::drawCenterPanels() {
@@ -17769,22 +18012,6 @@ void AppWindow::drawRecorderSection() {
 // Each is the body a widget, or a branch of applyControlRequest, used to hold
 // inline - moved, not rewritten - so the desktop and the remote paths now
 // share one copy.
-
-std::string AppWindow::sourceIdForRow(int row) const {
-    if (row == 0) { return "siggen"; }
-    if (row == 1) { return "row:iqfile"; }
-    if (row == kSoundCardRow) { return "row:soundcard"; }
-    const int n = row - kNativeRowBase;
-    if (n >= 0 && n < static_cast<int>(engine_.nativeDevices_.size()) && row < engine_.soapyRowBase()) {
-        const cascade::source::NativeDeviceInfo& d = engine_.nativeDevices_[static_cast<std::size_t>(n)];
-        return d.driver + ":" + d.args;
-    }
-    const int s = row - engine_.soapyRowBase();
-    if (s >= 0 && s < static_cast<int>(engine_.soapyDevices_.size())) {
-        return "soapy:" + engine_.soapyDevices_[static_cast<std::size_t>(s)].args;
-    }
-    return {};
-}
 
 // --- The keyboard ------------------------------------------------------------
 //
