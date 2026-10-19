@@ -143,6 +143,19 @@ static std::string instrumentWindowId(const cascade::core::HostInstrument& in) {
     return instrumentWindowIdFor(in.plugin, in.title);
 }
 
+// Whether a SHOWN fax instrument belongs to `plugin` - the one question that
+// decides whether its picture must be kept uploaded while the picture window
+// is closed, so the recorder's paper can print it (instrument_fax.cpp).
+bool AppWindow::faxInstrumentWantsChart(const std::string& plugin) {
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        if (in.kind == CASCADE_INSTRUMENT_FAX && in.plugin == plugin &&
+            pluginWindows_.shown(instrumentWindowId(in))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // THE IDENTITIES OF A PLUGIN'S OTHER TWO KINDS OF WINDOW, built from what the MODULE DECLARES
 // (its display name and its static panel / instrument tables) and not from an instance
 // (0.99.73): a plugin that is dormant has no instance, and its windows must still be listed on the
@@ -15892,6 +15905,31 @@ void AppWindow::attachBasemapAndTrackInfo() {
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+// Uploads image slot i's pixels into its GL texture when the plugin says they
+// changed. Shared by the picture window and the fax recorder's paper: uploaded
+// only when the plugin's revision moved - a slow-scan frame updates a few
+// times a second at most, and re-uploading a megapixel texture every frame to
+// show the same picture would cost more than the decoding does. The caller
+// has already checked the image has pixels (width and height non-zero).
+void AppWindow::ensureImageTexture(std::size_t i, const cascade::core::HostImage& im) {
+    if (i >= imageTex_.size() || i >= imageTexRev_.size()) { return; }
+    if (imageTexRev_[i] == im.revision) { return; }
+    if (imageTex_[i] == 0u) { glGenTextures(1, &imageTex_[i]); }
+    glBindTexture(GL_TEXTURE_2D, imageTex_[i]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Rows are tightly packed by PluginUi, which is NOT the 4-byte default
+    // OpenGL assumes; without this a greyscale image whose width is not a
+    // multiple of four shears.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const GLenum fmt = (im.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), static_cast<GLsizei>(im.width),
+                 static_cast<GLsizei>(im.height), 0, fmt, GL_UNSIGNED_BYTE, im.pixels.data());
+    imageTexRev_[i] = im.revision;
+}
+
 void AppWindow::separateWindowAnchor(int slot, float& x, float& y) {
     // See the note at the Map window for why overhanging the edge is what
     // produces a separate operating system window.
@@ -21446,6 +21484,15 @@ void AppWindow::drawPluginWindows() {
         // across launches). Opened before a picture exists it says it is
         // waiting, which is the truth and what the user asked to see.
         const std::string id = im.plugin + " image###image_" + im.plugin;
+        // THE RECORDER PRINTS THE CHART (field report 932444a354dee32f): a
+        // shown fax instrument of the SAME plugin wants this picture's texture
+        // even while the picture window is closed, so the upload serves either
+        // consumer. With neither on screen nothing is uploaded, exactly as
+        // before - a decoder nobody is watching still costs no texture.
+        const bool chartWanted = faxInstrumentWantsChart(im.plugin);
+        if ((pluginWindows_.shown(id) || chartWanted) && im.width != 0 && im.height != 0) {
+            ensureImageTexture(i, im);
+        }
         if (!pluginWindows_.shown(id)) { continue; }
         telemetryNotePanel("image");
         // A page that opens INSIDE THE MAIN WINDOW, where the press that asked
@@ -21477,29 +21524,8 @@ void AppWindow::drawPluginWindows() {
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("%s", tr("Waiting for the first image..."));
             } else {
-                // Uploaded only when the plugin says the pixels changed. A
-                // slow-scan frame updates a few times a second at most, and
-                // re-uploading a megapixel texture every frame to show the
-                // same picture would cost more than the decoding does.
-                if (imageTexRev_[i] != im.revision) {
-                    if (imageTex_[i] == 0u) { glGenTextures(1, &imageTex_[i]); }
-                    glBindTexture(GL_TEXTURE_2D, imageTex_[i]);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    // Rows are tightly packed by PluginUi, which is NOT the
-                    // 4-byte default OpenGL assumes; without this a greyscale
-                    // image whose width is not a multiple of four shears.
-                    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                    const GLenum fmt =
-                        (im.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
-                    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt),
-                                 static_cast<GLsizei>(im.width),
-                                 static_cast<GLsizei>(im.height), 0, fmt, GL_UNSIGNED_BYTE,
-                                 im.pixels.data());
-                    imageTexRev_[i] = im.revision;
-                }
+                // The texture was ensured above, for this window and the
+                // recorder's paper alike (ensureImageTexture).
 
                 // Two whole lines rather than a state word dropped into one.
                 ImGui::Text(im.complete ? tr("%ux%u  complete  frame %llu")
@@ -21650,6 +21676,26 @@ void AppWindow::drawPluginWindows() {
             cascade::gui::InstrumentCue cue;
             cue.unread = in.have && (now - seen.atSec) < kInstrumentNewHoldSec;
             cue.nowSec = now;
+            // THE CHART ON THE PAPER (field report 932444a354dee32f): a fax
+            // face is handed the texture of its OWN plugin's decoded picture,
+            // when there is one and its upload is current (ensureImageTexture
+            // ran earlier this frame, image windows are drawn first). The
+            // revision check means a half-swapped slot after a rescan hands
+            // the face nothing rather than another plugin's picture.
+            if (in.kind == CASCADE_INSTRUMENT_FAX) {
+                for (std::size_t ci = 0;
+                     ci < pluginImages_.size() && ci < imageTex_.size() && ci < imageTexRev_.size();
+                     ++ci) {
+                    const cascade::core::HostImage& chart = pluginImages_[ci];
+                    if (chart.plugin == in.plugin && chart.width != 0 && chart.height != 0 &&
+                        imageTex_[ci] != 0u && imageTexRev_[ci] == chart.revision) {
+                        cue.chartTex = static_cast<ImTextureID>(
+                            static_cast<std::uintptr_t>(imageTex_[ci]));
+                        cue.chartComplete = chart.complete;
+                        break;
+                    }
+                }
+            }
 
             const bool hasMemory = !in.headings.empty();
             const ImVec2 tl = ImGui::GetCursorScreenPos();

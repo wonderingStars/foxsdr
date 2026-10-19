@@ -477,7 +477,10 @@ slot instead, so nothing sent is ever hidden. Each instrument has a row under
 DECODE like a panel's, whose chip reads **NEW** while something has arrived
 that the window has not shown — the closed pager still says it has a message
 — and the optional memory beneath the face (a pager's stored messages, a
-meter roster, a burst log) is the plugin's own row feed. Instrument windows
+meter roster, a burst log) is the plugin's own row feed. The fax machine's
+paper prints the chart itself as it is received — the machine and its picture
+in one window — while the plugin's picture window stays the full-size reading
+copy. Instrument windows
 are desktop-only for now; the browser interface does not carry them yet.
 Developers: `FOXSDR_DEMO_INSTRUMENT=pager` (or any kind name, or `all`) opens
 demonstration instruments fed with sample state, so a face can be worked on
