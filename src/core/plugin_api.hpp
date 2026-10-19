@@ -243,6 +243,14 @@ public:
     bool settingsGranted(const std::string& key) const;
     // Module keys that have asked for a SETTINGS-grant function.
     std::vector<std::string> settingsRequesters() const;
+    // ALLOCATION-FREE GENERATIONS of the two answers above that build a vector per call, for a reader that asks
+    // every pass whether to ask again (the engine's list fingerprint, API 0.3 8.8). Each is a counter that
+    // moves exactly when its answer can have: settingsRequestersSeq() when a module asks for a SETTINGS-grant
+    // function for the FIRST time (the flag is sticky); commandsSeq() when any module's command keys change -
+    // one added, one relabelled, one removed, or a module's keys dropped because it was stopped or detached.
+    // Atomic loads, any thread.
+    std::uint64_t settingsRequestersSeq() const { return askersSeq_.load(std::memory_order_acquire); }
+    std::uint64_t commandsSeq() const { return commandsSeq_.load(std::memory_order_acquire); }
 
     // The receiver snapshot the reads answer from. Published by its owner (the
     // application, once a frame), never by this class. Never null; the same
@@ -360,6 +368,10 @@ private:
     std::size_t logCount_ = 0;
     std::uint64_t logDropped_ = 0;
     std::uint64_t markersSeq_ = 1;
+    // See settingsRequestersSeq() / commandsSeq(): written under mutex_ (commands) or by the plugin's own
+    // thread after its flag is set (askers), read lock-free.
+    std::atomic<std::uint64_t> askersSeq_{0};
+    std::atomic<std::uint64_t> commandsSeq_{0};
 
     mutable std::mutex settingsMutex_;
     PluginSettingsMap settings_;

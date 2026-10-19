@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -200,6 +201,34 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(p.capabilities);
         f.value(listHolds(pluginSettingsAllowed_, apiPluginKeys_[i]));
         f.value(pluginMutesFor(p, apiPluginKeys_[i]));
+        // API 0.3 8.8, what the fitted-modules window draws a module from: the descriptor's strings and the
+        // refusal (which only a rescan changes, and are hashed beside the scan count so a refused file replaced
+        // by another refused file cannot keep a stale reason), and the module's newest WARN/ERROR - by level and
+        // text, so the same warning said again every pass is no change. In place, from the cached keys.
+        f.text(p.version);
+        f.text(p.author);
+        f.text(p.licence);
+        f.text(p.error);
+        const auto notice = pluginNotices_.find(apiPluginKeys_[i]);
+        if (notice != pluginNotices_.end()) {
+            f.value(notice->second.level);
+            f.text(notice->second.text);
+        } else {
+            f.value(std::uint32_t{0});
+        }
+    }
+    f.value(pluginScans_);  // the files' sizes, and everything else a rescan can change, as one value
+    f.text(pluginDir_);
+    // Which modules have asked for a setting, whose command keys changed, and whether any module's idle sentence
+    // moved: counters the plugin API and the runner keep, so none of the three builds a vector or copies a row.
+    f.value(pluginUi_.api().settingsRequestersSeq());
+    f.value(pluginUi_.api().commandsSeq());
+    f.value(pluginRunner_.statusGeneration());
+    // The install records' verdict on each file (integrity: not the file that was installed).
+    for (const cascade::core::InstalledPlugin& r : pluginInventory_.plugins) {
+        f.text(r.file);
+        f.text(r.id);
+        f.value(r.digestMismatch);
     }
     // ...the tune grants held for any module - PLUGINS' TUNE_ALLOWED is a plugin's key in this list, and
     // STALE_GRANTS lists the ones no loaded module holds - the last refused request to tune
@@ -213,11 +242,12 @@ std::uint64_t Engine::apiListsFingerprint() {
     // Which decoders are FED: the keys the pass's publish already took from
     // the runner in ONE acquisition of its lock (the lock its DSP thread
     // takes per block) - never asked again here.
-    const bool running = pipeline_.running();
-    f.value(running);
-    if (running) {
-        for (const std::string& k : feedingKeysScratch_) { f.text(k); }
-    }
+    //
+    // HASHED WHETHER OR NOT THE RECEIVER RUNS (API 0.3 8.8): PLUGINS' MATCHED is the runner's answer for any kind
+    // of plugin and is read with the receiver stopped. The pass takes the snapshot while stopped as well
+    // (fillPublishedState), so this adds no acquisition of the lock.
+    f.value(pipeline_.running());
+    for (const std::string& k : feedingKeysScratch_) { f.text(k); }
     // --- API 0.3's, and the 0.2 lists step 1 left out ----------------------
     // The store.
     f.value(catalog_.size());
@@ -304,7 +334,8 @@ std::uint64_t Engine::apiListsFingerprint() {
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
                                  &recordNotice_, &recordError_, &presetNote_, &pluginEnforceError_,
                                  &restoreKeepLabel_, &audioHealthNote_,  // (audioHealth: API 0.3 8.4)
-                                 &bookmarkImportNote_, &bookmarkError_}) {  // (the Bookmarks section's: 8.6)
+                                 &bookmarkImportNote_, &bookmarkError_,  // (the Bookmarks section's: 8.6)
+                                 &installReport_, &installError_}) {  // (the plugin install/remove outcome: 8.8)
         f.text(*t);
     }
     // The patch page: its graph, what the plan said, its radios.
@@ -382,6 +413,8 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         const auto& a = devices_[static_cast<std::size_t>(i)];
         b->audioDevices.push_back({a.name, a.index, i == deviceIndex_});
     }
+    // API 0.3 8.8: who has asked to change a setting (one vector for the whole block, asked once).
+    const std::vector<std::string> settingsAskers = pluginUi_.api().settingsRequesters();
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         ApiListBlock::Plugin w;
         w.name = p.name;
@@ -398,6 +431,20 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         w.tuneAllowed = listHolds(pluginTuneAllowed_, w.key);
         w.settingsAllowed = listHolds(pluginSettingsAllowed_, w.key);
         w.mutes = w.decoder && pluginMutesFor(p, w.key);
+        // API 0.3 8.8. The size is a stat, taken here because the block is rebuilt when a rescan (or anything
+        // else in the fingerprint) moved and never per pass; 0 is "not measured". MATCHED is the runner's own
+        // isFeeding answer for every kind of plugin, taken from the snapshot the pass already holds (the
+        // receiver running or not).
+        {
+            std::error_code ec;
+            const std::uintmax_t bytes = std::filesystem::file_size(std::filesystem::path(p.path), ec);
+            if (!ec) { w.sizeBytes = static_cast<std::uint64_t>(bytes); }
+        }
+        if (const auto n = pluginNotices_.find(w.key); n != pluginNotices_.end()) { w.noticeLevel = n->second.level; }
+        w.matched = !w.key.empty() &&
+                    std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), w.key) != feedingKeysScratch_.end();
+        w.askedSettings = !w.key.empty() && std::find(settingsAskers.begin(), settingsAskers.end(), w.key) != settingsAskers.end();
+        w.digestMismatch = !cascade::core::PluginRepo::changedSinceInstallNote(pluginInventory_.plugins, w.key).empty();
         b->plugins.push_back(std::move(w));
     }
     buildApiLists03(*b);
@@ -411,9 +458,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     auto fact = [&b](const std::string& key, std::string value, bool localOnly = false) {
         b.facts[key] = ApiListBlock::Fact{std::move(value), localOnly};
     };
+    // The runner's rows, copied once for the block: DECODERS' idle word and the fitted modules' idle sentence.
+    const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
     // DECODERS: every decoder plugin, running or not, and why not.
     {
-        const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
         for (const ApiListBlock::Plugin& p : b.plugins) {
             if (!p.decoder) { continue; }
             ApiListBlock::Decoder d;
@@ -430,6 +478,44 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             }
             if (!p.loaded) { d.status = p.status; }
             b.decoders.push_back(std::move(d));
+        }
+    }
+    // THE FITTED MODULES (API 0.3 8.8): the plugins folder, and for every record the host holds the whole texts a
+    // list item would cut (the file's path, the descriptor's strings, the refusal, the runner's idle sentence,
+    // the module's newest notice, the integrity note) - each present for every record, "" when there is none, so
+    // "known and empty" is told from NOT_FOUND - and the command keys of the loaded ones. The facts are keyed by
+    // the module file name (PLUGINS' detail): the table's reader takes the leaf from the right.
+    fact("plugin.dir", pluginDir_, true);
+    {
+        const auto& records = pluginHost_.plugins();
+        for (std::size_t i = 0; i < b.plugins.size() && i < records.size(); ++i) {
+            const ApiListBlock::Plugin& w = b.plugins[i];
+            if (w.key.empty()) { continue; }
+            const cascade::core::LoadedPlugin& p = records[i];
+            const std::string k = "plugin." + w.key + ".";
+            fact(k + "path", p.path, true);
+            fact(k + "version", p.version);
+            fact(k + "author", p.author);
+            fact(k + "licence", p.licence);
+            fact(k + "error", p.error);
+            // The runner's own sentence for the FIRST row of this module that is not Running, quoted whole.
+            std::string idle;
+            for (const cascade::core::DecoderStatus& st : status) {
+                if (st.key == w.key && st.reason != cascade::core::DecoderIdleReason::Running) {
+                    idle = st.detail;
+                    break;
+                }
+            }
+            fact(k + "idle", std::move(idle));
+            const auto notice = pluginNotices_.find(w.key);
+            fact(k + "notice", notice != pluginNotices_.end() ? notice->second.text : std::string());
+            fact(k + "integrity",
+                 cascade::core::PluginRepo::changedSinceInstallNote(pluginInventory_.plugins, w.key));
+            if (w.loaded) {
+                for (const cascade::core::HostCommand& hc : pluginUi_.api().commands(w.key)) {
+                    b.pluginCommands.push_back({hc.id, hc.label, w.key});
+                }
+            }
         }
     }
     // THE STORE: the catalogue, what is refused, what would update - and the
@@ -546,6 +632,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             // and its red line (the bookmark file could not be read or saved).
             {"bookmarkNote", &bookmarkImportNote_, 1},
             {"bookmarkError", &bookmarkError_, 3},
+            // 8.8: what the last plugin install or removal did, and why the last one failed (the store window
+            // and the fitted-modules window show the same pair).
+            {"installReport", &installReport_, 1},
+            {"installError", &installError_, 3},
         };
         for (const Line& l : lines) {
             b.statusLines.push_back({l.key, *l.text, l.level});

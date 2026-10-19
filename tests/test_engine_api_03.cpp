@@ -75,10 +75,18 @@
 //       scratch folder; M3 PRESETS' device-centre flag and raw ids and MARKERS' kind and flags;
 //       M4 (D3) a decoder line moves decoderLinesTotal and not listSeq, and a track-info line is
 //       counted.
+//   H   the fitted-modules window (window port group 9, API 0.3 section 8.8), against three real
+//       modules and a file the host refuses in a scratch folder: H0 a plugin's log lines are counted
+//       into decoderLinesTotal (the bug found beside this window); H1 the per-file facts and
+//       fact.plugin.dir (whole, "" and NOT_FOUND, DENIED to a REMOTE session); H2 PLUGINS value[1]
+//       (the file's size, measured at a rebuild) and value[2] (the notice level), and a repeated
+//       warning moving nothing; H3 the flags MATCHED, ASKED_SETTINGS and DIGEST_MISMATCH and the idle
+//       sentence; H4 PLUGIN_COMMANDS; H5 installReport and installError as status lines.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -103,6 +111,7 @@
 #include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
 #include "core/patch_graph.hpp"
+#include "core/plugin_repo.hpp"
 #include "engine/bias_tee.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
@@ -194,6 +203,12 @@ struct AppWindowTestAccess {
     static std::int32_t askToTune(cascade::engine::Engine& e, const std::string& key) {
         return e.pluginUi_.tuneRequestFromPlugin(key, 100.0e6);
     }
+    // Group 9: the host's side of the plugin API, which a plugin's own calls reach through the host
+    // bridge's trampolines (log, add_command, a request that needs the settings grant...). The test makes
+    // the same calls on the loaded module's client, from the test thread.
+    static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return e.pluginUi_.api(); }
+    // The install records the engine holds, as the last rescan read them (a rescan replaces them).
+    static cascade::core::PluginInventory& inventory(cascade::engine::Engine& e) { return e.pluginInventory_; }
 };
 }  // namespace cascade::gui
 
@@ -368,7 +383,7 @@ void testEveryListIsServed() {
     testing::Engine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_STALE_GRANTS; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_PLUGIN_COMMANDS; ++l) {
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -1003,7 +1018,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_STALE_GRANTS; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_PLUGIN_COMMANDS; ++l) {
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -2810,18 +2825,29 @@ void testMuteCauses() {
 }
 
 // The scratch plugin folder of group M: the two fixture modules, and a third file that is not one.
+//
+// Group 9 asks for more (`nine`): the third fixture, tests/fixture_group9_plugin.cpp (an audio processor with two
+// command keys), and with `dotted` a second copy of it under a file name with dots in it, which the host turns
+// off as the duplicate of a plugin it already runs.
 struct PluginWorld {
     std::filesystem::path dir;
     static std::string hook;
-    PluginWorld() {
+    explicit PluginWorld(bool nine = false, bool dotted = false) {
         const char* base = std::getenv("LOCALAPPDATA");
-        dir = std::filesystem::path(base != nullptr ? base : ".") / "plugins_group8";
+        dir = std::filesystem::path(base != nullptr ? base : ".") / (nine ? "plugins_group9" : "plugins_group8");
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
         std::filesystem::create_directories(dir, ec);
-        for (const char* src : {FIXTURE_STAGE1_PLUGIN, FIXTURE_GROUP8_PLUGIN}) {
+        std::vector<const char*> fixtures{FIXTURE_STAGE1_PLUGIN, FIXTURE_GROUP8_PLUGIN};
+        if (nine) { fixtures.push_back(FIXTURE_GROUP9_PLUGIN); }
+        for (const char* src : fixtures) {
             const std::filesystem::path p(src);
             std::filesystem::copy_file(p, dir / p.filename(), std::filesystem::copy_options::overwrite_existing, ec);
+            CHECK(!ec);
+        }
+        if (dotted) {
+            std::filesystem::copy_file(FIXTURE_GROUP9_PLUGIN, dir / "group.nine.v2.dll",
+                                       std::filesystem::copy_options::overwrite_existing, ec);
             CHECK(!ec);
         }
         std::ofstream junk(dir / "zz_refused.dll", std::ios::binary);
@@ -3090,6 +3116,585 @@ void testDecoderLinesLeaveListSeqAlone() {
     std::printf("M4: 1,060 decoder lines moved decoderLinesTotal and not listSeq; track-info lines are counted\n");
 }
 
+// --- H: the fitted-modules window (window port group 9, API 0.3 section 8.8) -------------------------
+//
+// Each case drives the engine from THIS thread, as group M does, against the scratch plugin folder.
+// What a plugin does through the host bridge (log a line, add or remove a command key, ask for the
+// settings grant) the test does on the loaded module's own client, through PluginApiCore - the very
+// object the bridge's trampolines call.
+
+// H0 (F7): a plugin's log() lines are decoder output lines - they reach decoderLinesTotal (one a line
+// actually pushed: a text with several lines is several, an empty part is none) and DECODER_LINES at the
+// matching ids. Before this change applyPluginApi pushed them into the log without counting them, so an
+// interface that reads new lines only when the total moves never saw them, and the ring - which takes
+// "the last (total - seen) entries" - took the wrong slice once an uncounted line sat among counted ones.
+void testPluginLogLinesAreCounted() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    PluginWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    const std::string stage1 = PluginWorld::fileOf(FIXTURE_STAGE1_PLUGIN);
+    cascade::core::PluginApiCore& core = Access::core(d.eng);
+    cascade::core::PluginApiClient& client = core.client(stage1, "Stage One Fixture");
+    CHECK(client.live.load());
+
+    const auto lastLine = [&](int back = 0) {
+        const int32_t n = count(s, FOXAPI_LIST_DECODER_LINES);
+        return item(s, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(n - 1 - back));
+    };
+    const uint64_t base = s.state().decoderLinesTotal;
+    const int32_t baseCount = count(s, FOXAPI_LIST_DECODER_LINES);
+
+    // One INFO line: the total climbs by one and the list serves it at that id.
+    CHECK_EQ(core.log(client, CASCADE_LOG_INFO, "hello from the plugin"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().decoderLinesTotal, base + 1u);
+    CHECK_EQ(count(s, FOXAPI_LIST_DECODER_LINES), baseCount + 1);
+    CHECK_EQ(lastLine().id, base + 1u);
+    CHECK_EQ(std::string(lastLine().name), std::string("Stage One Fixture"));
+    CHECK_EQ(std::string(lastLine().detail), std::string("hello from the plugin"));
+
+    // A WARN and an ERROR are lines too (they are also the plate's notice).
+    CHECK_EQ(core.log(client, CASCADE_LOG_WARN, "a warning"), CASCADE_API_OK);
+    CHECK_EQ(core.log(client, CASCADE_LOG_ERROR, "an error"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().decoderLinesTotal, base + 3u);
+    CHECK_EQ(lastLine().id, base + 3u);
+    CHECK_EQ(std::string(lastLine().detail), std::string("an error"));
+    CHECK_EQ(lastLine(1).id, base + 2u);
+    CHECK_EQ(std::string(lastLine(1).detail), std::string("a warning"));
+
+    // ONE log() CALL, SEVERAL LINES: split at the newlines, a trailing CR dropped, an empty part dropped.
+    CHECK_EQ(core.log(client, CASCADE_LOG_INFO, "one\r\n\ntwo\n\nthree\n"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().decoderLinesTotal, base + 6u);  // three lines, not five
+    CHECK_EQ(lastLine(2).id, base + 4u);
+    CHECK_EQ(std::string(lastLine(2).detail), std::string("one"));
+    CHECK_EQ(std::string(lastLine(1).detail), std::string("two"));
+    CHECK_EQ(lastLine().id, base + 6u);
+    CHECK_EQ(std::string(lastLine().detail), std::string("three"));
+
+    // A text of nothing but separators pushes no line, and counts none.
+    CHECK_EQ(core.log(client, CASCADE_LOG_INFO, "\r\n\n"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().decoderLinesTotal, base + 6u);
+
+    // Counted and uncounted writers side by side keep the ring's numbering whole: a plugin's line between
+    // two test-hook lines (the runner's own go through the same count) is at its own id, not a neighbour's.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=POCSAG|before")).status(),
+             FOXAPI_OK);
+    CHECK_EQ(core.log(client, CASCADE_LOG_INFO, "between"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.decoderLine=POCSAG|after")).status(),
+             FOXAPI_OK);
+    const uint64_t total = s.state().decoderLinesTotal;
+    CHECK_EQ(total, base + 9u);
+    CHECK_EQ(lastLine().id, total);
+    CHECK_EQ(std::string(lastLine().detail), std::string("after"));
+    CHECK_EQ(lastLine(1).id, total - 1u);
+    CHECK_EQ(std::string(lastLine(1).detail), std::string("between"));
+    CHECK_EQ(lastLine(2).id, total - 2u);
+    CHECK_EQ(std::string(lastLine(2).detail), std::string("before"));
+    std::printf("H0: a plugin's log lines are counted into decoderLinesTotal, one for each line pushed\n");
+}
+
+// The PLUGINS entry whose module file name (its detail) is `file`: a zeroed item when there is none.
+FoxListItem pluginByFile(testing::Session& s, const std::string& file) {
+    const int32_t n = count(s, FOXAPI_LIST_PLUGINS);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i));
+        if (file == it.detail) { return it; }
+    }
+    return FoxListItem{};
+}
+
+// `fact.plugin.<file>.<leaf>`, read by `who`; the status (a length, or FOXAPI_NOT_FOUND / FOXAPI_DENIED) in *st.
+std::string moduleFact(testing::Session& who, const std::string& file, const char* leaf, int32_t* st = nullptr) {
+    return fact(who, ("fact.plugin." + file + "." + leaf).c_str(), st);
+}
+
+// The three fixtures' module file names (and the dotted copy of the third, when the world has one).
+struct Nine {
+    std::string g8 = PluginWorld::fileOf(FIXTURE_GROUP8_PLUGIN);
+    std::string g9 = PluginWorld::fileOf(FIXTURE_GROUP9_PLUGIN);
+    std::string s1 = PluginWorld::fileOf(FIXTURE_STAGE1_PLUGIN);
+    std::string dotted = "group.nine.v2.dll";
+    std::string refused = "zz_refused.dll";
+};
+
+// H1: the per-file facts - whole texts, the LOCAL ones denied to a REMOTE session, "" for a known file with
+// nothing to say, NOT_FOUND for a file or a leaf that is not there - and the plugins folder.
+void testFittedModuleFacts() {
+    PluginWorld world(true, true);
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(remote.ok());
+    passes(d.eng, 3);
+    const Nine n;
+    int32_t st = 0;
+
+    // The folder: LOCAL (it is a path on the engine's machine).
+    CHECK_EQ(fact(s, "fact.plugin.dir", &st), world.dir.string());
+    CHECK(st > 0);
+    CHECK_EQ(fact(remote, "fact.plugin.dir", &st), std::string());
+    CHECK_EQ(st, FOXAPI_DENIED);
+
+    // Five records, in the host's order (by file name).
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 5);
+
+    // A loaded module: the descriptor's own strings, no refusal, nothing idle, no notice, no integrity note,
+    // and the path it was loaded from.
+    CHECK_EQ(moduleFact(s, n.g9, "version"), std::string("9.1.0"));
+    CHECK_EQ(moduleFact(s, n.g9, "author"), std::string("FoxSDR tests (group nine)"));
+    CHECK_EQ(moduleFact(s, n.g9, "licence"), std::string("MIT"));
+    CHECK_EQ(moduleFact(s, n.g8, "version"), std::string("1.0.0"));
+    CHECK_EQ(moduleFact(s, n.g8, "author"), std::string("FoxSDR tests"));
+    std::error_code ec;
+    CHECK(std::filesystem::equivalent(std::filesystem::path(moduleFact(s, n.g9, "path")), world.dir / n.g9, ec));
+    for (const char* leaf : {"error", "idle", "notice", "integrity"}) {
+        const std::string v = moduleFact(s, n.g9, leaf, &st);
+        CHECK_EQ(v, std::string());  // known, and nothing to say: "" and not NOT_FOUND
+        CHECK_EQ(st, 0);
+    }
+
+    // A file the host refused before it read a descriptor: no identity, a reason, a path.
+    for (const char* leaf : {"version", "author", "licence", "idle", "notice", "integrity"}) {
+        CHECK_EQ(moduleFact(s, n.refused, leaf, &st), std::string());
+        CHECK_EQ(st, 0);
+    }
+    const std::string why = moduleFact(s, n.refused, "error", &st);
+    CHECK(st > 0 && !why.empty());
+    CHECK(std::filesystem::equivalent(std::filesystem::path(moduleFact(s, n.refused, "path")), world.dir / n.refused, ec));
+    // ...and the reason is the host's own, as the PLUGINS list's own entry for it says (the entry is not ACTIVE).
+    CHECK((pluginByFile(s, n.refused).flags & FOXAPI_ITEM_ACTIVE) == 0u);
+
+    // A module whose file name has dots in it, turned off by the host as the second copy of one plugin: its
+    // identity is known and it carries a reason. The key is the file name whole.
+    CHECK_EQ(moduleFact(s, n.dotted, "version"), std::string("9.1.0"));
+    const std::string dup = moduleFact(s, n.dotted, "error", &st);
+    CHECK(st > 0 && !dup.empty());
+    CHECK(dup.find(n.g9) != std::string::npos);  // it names the file that was kept instead
+    CHECK((pluginByFile(s, n.dotted).flags & FOXAPI_ITEM_ACTIVE) == 0u);
+    CHECK(std::filesystem::equivalent(std::filesystem::path(moduleFact(s, n.dotted, "path")), world.dir / n.dotted, ec));
+    CHECK_EQ(moduleFact(s, n.g9, "error"), std::string());  // the copy that was kept has none
+
+    // The LOCAL one answers DENIED to a REMOTE session, and the rest of the texts do not.
+    CHECK_EQ(moduleFact(remote, n.g9, "path", &st), std::string());
+    CHECK_EQ(st, FOXAPI_DENIED);
+    CHECK_EQ(moduleFact(remote, n.refused, "path", &st), std::string());
+    CHECK_EQ(st, FOXAPI_DENIED);
+    CHECK_EQ(moduleFact(remote, n.g9, "version", &st), std::string("9.1.0"));
+    CHECK_EQ(moduleFact(remote, n.refused, "error", &st), why);
+    CHECK_EQ(moduleFact(remote, n.g9, "idle", &st), std::string());
+    CHECK_EQ(st, 0);
+
+    // NOT_FOUND: a file nobody holds, a leaf that is not one, the key with no leaf, the folder's key with a
+    // leaf, and a file named for a leaf.
+    CHECK_EQ(moduleFact(s, "no-such-module.dll", "version", &st), std::string());
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    CHECK_EQ(moduleFact(s, n.g9, "colour", &st), std::string());
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    CHECK_EQ(fact(s, ("fact.plugin." + n.g9).c_str(), &st), std::string());
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    CHECK_EQ(fact(s, "fact.plugin.dir.path", &st), std::string());
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    CHECK_EQ(moduleFact(remote, "no-such-module.dll", "path", &st), std::string());
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);  // not found is not hidden behind denied
+
+    // A rescan that takes a file away takes its facts: the record is gone, so NOT_FOUND again.
+    std::filesystem::remove(world.dir / n.dotted, ec);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 4);
+    CHECK_EQ(moduleFact(s, n.dotted, "version", &st), std::string());
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    CHECK_EQ(moduleFact(s, n.g9, "version"), std::string("9.1.0"));
+    std::printf("H1: fact.plugin.dir and the eight per-file facts: whole, \"\" known-and-empty, NOT_FOUND, DENIED to a REMOTE session\n");
+}
+
+// H2: PLUGINS value[1] (the file's size, measured when the block is built and not every pass) and value[2] (the
+// newest WARN/ERROR's level, whole text in fact.plugin.<file>.notice); a plugin that says the same warning again
+// moves nothing.
+void testFittedSizeAndNotice() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    PluginWorld world(true);
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    const Nine n;
+    cascade::core::PluginApiCore& core = Access::core(d.eng);
+    cascade::core::PluginApiClient& c9 = core.client(n.g9, "Group Nine Fixture");
+    CHECK(c9.live.load());
+
+    // SIZE: the file's bytes, for every record (loaded or not).
+    for (const std::string& f : {n.g8, n.g9, n.s1, n.refused}) {
+        const FoxListItem it = pluginByFile(s, f);
+        CHECK_EQ(std::string(it.detail), f);
+        CHECK_EQ(it.value[1], static_cast<double>(std::filesystem::file_size(world.dir / f)));
+        CHECK(it.value[1] > 0.0);
+    }
+    CHECK_EQ(pluginByFile(s, n.refused).value[1], 33.0);  // "this is not a portable executable"
+    // Measured when the block is built, not every pass: the file grows behind the engine's back and nothing
+    // says so until something rebuilds the block (a rescan does).
+    const uint64_t seq0 = s.state().listSeq;
+    {
+        std::ofstream more(world.dir / n.refused, std::ios::binary | std::ios::app);
+        more << " and now it is longer";
+    }
+    passes(d.eng, 10);
+    CHECK_EQ(s.state().listSeq, seq0);
+    CHECK_EQ(pluginByFile(s, n.refused).value[1], 33.0);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(pluginByFile(s, n.refused).value[1], static_cast<double>(std::filesystem::file_size(world.dir / n.refused)));
+    CHECK(pluginByFile(s, n.refused).value[1] > 33.0);
+    CHECK(s.state().listSeq != seq0);  // the rescan is in the fingerprint
+
+    // NOTICE: none, then a warning of a length no list item holds, then an error.
+    passes(d.eng, 3);
+    const uint64_t quiet = s.state().listSeq;
+    for (const std::string& f : {n.g8, n.g9, n.s1, n.refused}) {
+        CHECK_EQ(pluginByFile(s, f).value[2], 0.0);
+        CHECK_EQ(moduleFact(s, f, "notice"), std::string());
+    }
+    const std::string warn(400, 'w');
+    CHECK_EQ(core.log(c9, CASCADE_LOG_WARN, warn.c_str()), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(pluginByFile(s, n.g9).value[2], static_cast<double>(CASCADE_LOG_WARN));
+    CHECK_EQ(moduleFact(s, n.g9, "notice"), warn);  // whole: the item's detail would cut at 159
+    CHECK_EQ(pluginByFile(s, n.g8).value[2], 0.0);  // another module's plate is unmoved
+    const uint64_t warned = s.state().listSeq;
+    CHECK(warned != quiet);
+
+    // THE SAME WARNING AGAIN, every pass, is no change: nothing moves listSeq, so a window that re-reads
+    // when it moves does not re-read for a plugin that repeats itself. (Group 8's D3 would have come back.)
+    for (int i = 0; i < 50; ++i) {
+        CHECK_EQ(core.log(c9, CASCADE_LOG_WARN, warn.c_str()), CASCADE_API_OK);
+        d.eng.controlPass();
+    }
+    CHECK_EQ(s.state().listSeq, warned);
+    CHECK_EQ(pluginByFile(s, n.g9).value[2], static_cast<double>(CASCADE_LOG_WARN));
+    // An INFO line is a decoder line and not a notice: it changes neither the level nor the text.
+    const uint64_t linesBefore = s.state().decoderLinesTotal;
+    CHECK_EQ(core.log(c9, CASCADE_LOG_INFO, "just so you know"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().decoderLinesTotal, linesBefore + 1u);
+    CHECK_EQ(s.state().listSeq, warned);
+    CHECK_EQ(moduleFact(s, n.g9, "notice"), warn);
+    // Other text at the same level, and then another level with the same text, each move it.
+    CHECK_EQ(core.log(c9, CASCADE_LOG_WARN, "a different warning"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    const uint64_t other = s.state().listSeq;
+    CHECK(other != warned);
+    CHECK_EQ(moduleFact(s, n.g9, "notice"), std::string("a different warning"));
+    CHECK_EQ(core.log(c9, CASCADE_LOG_ERROR, "a different warning"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK(s.state().listSeq != other);
+    CHECK_EQ(pluginByFile(s, n.g9).value[2], static_cast<double>(CASCADE_LOG_ERROR));
+    CHECK_EQ(moduleFact(s, n.g9, "notice"), std::string("a different warning"));
+    // The longest text a plugin can send (512 bytes) is served whole.
+    const std::string longest(512, 'e');
+    CHECK_EQ(core.log(c9, CASCADE_LOG_ERROR, longest.c_str()), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(moduleFact(s, n.g9, "notice").size(), static_cast<std::size_t>(CASCADE_LOG_TEXT_BYTES) - 1u);
+    std::printf("H2: PLUGINS value[1] is the file's size (measured at a rebuild), value[2] the notice level; a repeated warning moves nothing\n");
+}
+
+// H3: the three flags. MATCHED (the runner feeds it or would, any kind of plugin, the receiver stopped),
+// ASKED_SETTINGS (set when a plugin first asks, and then sticky) and DIGEST_MISMATCH (the install record says the
+// file is not the one installed) - and the idle sentence the runner gives a module that is not fed.
+void testFittedFlags() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    PluginWorld world(true);
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    const Nine n;
+    const auto has = [&](const std::string& f, uint32_t bit) { return (pluginByFile(s, f).flags & bit) != 0u; };
+
+    // MATCHED, with the receiver STOPPED: the decoders and the audio processor (which has no DECODERS entry),
+    // and not the refused file. DECODERS' FED is false for all of them (it is MATCHED and the receiver running).
+    CHECK((s.state().flags & FOXAPI_RX_RUNNING) == 0u);
+    CHECK(has(n.g8, FOXAPI_ITEM_MATCHED) && has(n.g9, FOXAPI_ITEM_MATCHED) && has(n.s1, FOXAPI_ITEM_MATCHED));
+    CHECK(!has(n.refused, FOXAPI_ITEM_MATCHED));
+    CHECK_EQ(count(s, FOXAPI_LIST_DECODERS), 2);  // the audio processor is not a decoder
+    CHECK_EQ(entryNamed(s, FOXAPI_LIST_DECODERS, "Group Eight Fixture").flags & FOXAPI_ITEM_FED, 0u);
+    CHECK_EQ(entryNamed(s, FOXAPI_LIST_DECODERS, "Stage One Fixture").flags & FOXAPI_ITEM_FED, 0u);
+    CHECK_EQ(s.state().decodersMatched, 2u);
+    // None of the three flags is on a record that has not earned it.
+    for (const std::string& f : {n.g8, n.g9, n.s1, n.refused}) {
+        CHECK(!has(f, FOXAPI_ITEM_ASKED_SETTINGS));
+        CHECK(!has(f, FOXAPI_ITEM_DIGEST_MISMATCH));
+    }
+
+    // Stopped, a plugin is fed nothing: not matched. Started again, it is.
+    uint64_t seq = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_STOP, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_STOPPED) && !has(n.g9, FOXAPI_ITEM_MATCHED));
+    CHECK(has(n.g8, FOXAPI_ITEM_MATCHED));
+    CHECK(s.state().listSeq != seq);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_START, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(!has(n.g9, FOXAPI_ITEM_STOPPED) && has(n.g9, FOXAPI_ITEM_MATCHED));
+
+    // IDLE: a processor that cannot start is not matched, and the runner's own sentence is the fact, whole.
+    engine_api_test::setEnv("FOXSDR_FIXTURE_G9_NO_CREATE", "1");
+    seq = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK(!has(n.g9, FOXAPI_ITEM_MATCHED));
+    CHECK(has(n.g9, FOXAPI_ITEM_ACTIVE));  // loaded all the same
+    const std::string idle = moduleFact(s, n.g9, "idle");
+    CHECK(idle.find("failed to start its audio processor") != std::string::npos);
+    CHECK_EQ(idle, std::string("\"Group Nine Fixture\" failed to start its audio processor (its create() returned "
+                               "nothing), so the audio is not being processed."));  // the runner's own words
+    CHECK_EQ(moduleFact(s, n.g8, "idle"), std::string());
+    CHECK(has(n.g8, FOXAPI_ITEM_MATCHED));
+    CHECK(s.state().listSeq != seq);
+    engine_api_test::setEnv("FOXSDR_FIXTURE_G9_NO_CREATE", "");
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK(has(n.g9, FOXAPI_ITEM_MATCHED));
+    CHECK_EQ(moduleFact(s, n.g9, "idle"), std::string());
+
+    // ASKED_SETTINGS: a plugin's first request for something only the settings grant allows (here a mode
+    // change, answered DENIED) sets it - on that module only - and a repeat moves nothing.
+    cascade::core::PluginApiCore& core = Access::core(d.eng);
+    cascade::core::PluginApiClient& c9 = core.client(n.g9, "Group Nine Fixture");
+    cascade::core::PluginControl ask;
+    ask.kind = cascade::core::PluginControl::Kind::Mode;
+    ask.mode = CASCADE_DEMOD_NFM;
+    seq = s.state().listSeq;
+    CHECK_EQ(core.requestControl(c9, ask), CASCADE_API_DENIED);
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_ASKED_SETTINGS));
+    CHECK(!has(n.g8, FOXAPI_ITEM_ASKED_SETTINGS) && !has(n.s1, FOXAPI_ITEM_ASKED_SETTINGS));
+    CHECK(!has(n.g9, FOXAPI_ITEM_SETTINGS_ALLOWED));  // asking is not holding the grant
+    CHECK(s.state().listSeq != seq);
+    seq = s.state().listSeq;
+    for (int i = 0; i < 5; ++i) {
+        CHECK_EQ(core.requestControl(c9, ask), CASCADE_API_DENIED);
+        d.eng.controlPass();
+    }
+    CHECK_EQ(s.state().listSeq, seq);
+    // A request that needs the TUNE grant is not a request for a setting.
+    cascade::core::PluginControl tune;
+    tune.kind = cascade::core::PluginControl::Kind::Frequency;
+    tune.value = 100.0e6;
+    cascade::core::PluginApiClient& c8 = core.client(n.g8, "Group Eight Fixture");
+    CHECK_EQ(core.requestControl(c8, tune), CASCADE_API_DENIED);
+    passes(d.eng, 2);
+    CHECK(!has(n.g8, FOXAPI_ITEM_ASKED_SETTINGS));
+    // It stays: through a stop and a start, a grant and its revocation, and a rescan (the flag is "this module
+    // has asked at least once" for as long as the engine lives).
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_STOP, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_ASKED_SETTINGS));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_START, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, grantCmd(n.g9, 2, 1)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_ASKED_SETTINGS) && has(n.g9, FOXAPI_ITEM_SETTINGS_ALLOWED));
+    CHECK_EQ(pumped(d.eng, s, grantCmd(n.g9, 2, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK(has(n.g9, FOXAPI_ITEM_ASKED_SETTINGS) && !has(n.g9, FOXAPI_ITEM_SETTINGS_ALLOWED));
+
+    // DIGEST_MISMATCH: the engine's inventory (the install records, re-hashed at every rescan) says the file on
+    // disk is not the one that was installed. Doctored here, as no manifest is in a scratch folder.
+    cascade::core::InstalledPlugin rec;
+    rec.id = "group-nine-fixture";
+    rec.name = "Group Nine Fixture";
+    rec.file = n.g9;
+    rec.digestMismatch = true;
+    Access::inventory(d.eng).plugins.push_back(rec);
+    seq = s.state().listSeq;
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_DIGEST_MISMATCH));
+    CHECK(!has(n.g8, FOXAPI_ITEM_DIGEST_MISMATCH) && !has(n.s1, FOXAPI_ITEM_DIGEST_MISMATCH));
+    CHECK(s.state().listSeq != seq);
+    const std::string note = moduleFact(s, n.g9, "integrity");
+    CHECK_EQ(note, cascade::core::PluginRepo::changedSinceInstallNote(Access::inventory(d.eng).plugins, n.g9));
+    CHECK(note.find("is not the file that was installed") != std::string::npos);
+    CHECK(note.find(n.g9) != std::string::npos && note.find("group-nine-fixture") != std::string::npos);
+    CHECK_EQ(moduleFact(s, n.g8, "integrity"), std::string());
+    // The record names the file in any case (the host's own comparison ignores it), and a record that is fine says nothing.
+    std::string upper = n.g9;
+    for (char& ch : upper) { ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch))); }
+    Access::inventory(d.eng).plugins.back().file = upper;
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_DIGEST_MISMATCH));
+    Access::inventory(d.eng).plugins.back().digestMismatch = false;
+    seq = s.state().listSeq;
+    passes(d.eng, 2);
+    CHECK(!has(n.g9, FOXAPI_ITEM_DIGEST_MISMATCH));
+    CHECK_EQ(moduleFact(s, n.g9, "integrity"), std::string());
+    CHECK(s.state().listSeq != seq);
+    // A rescan re-reads the install records from the folder (none, here) and the doctored finding goes with them.
+    Access::inventory(d.eng).plugins.back().digestMismatch = true;
+    passes(d.eng, 2);
+    CHECK(has(n.g9, FOXAPI_ITEM_DIGEST_MISMATCH));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK(!has(n.g9, FOXAPI_ITEM_DIGEST_MISMATCH));
+    std::printf("H3: MATCHED with the receiver stopped (an audio processor too), ASKED_SETTINGS sticky, DIGEST_MISMATCH from the install records, idle sentences whole\n");
+}
+
+// H4: PLUGIN_COMMANDS - one entry for each command key of each loaded module, in host order and then in the order
+// the module added them - and what moves listSeq.
+void testFittedCommands() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    PluginWorld world(true);
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    passes(d.eng, 3);
+    const Nine n;
+    const auto entry = [](testing::Session& who, int32_t i) { return item(who, FOXAPI_LIST_PLUGIN_COMMANDS, static_cast<uint32_t>(i)); };
+
+    // The two fixtures that add keys: the group-9 module's two (host order puts it before the stage-1 module's one).
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 3);
+    CHECK_EQ(entry(s, 0).id, 1u);
+    CHECK_EQ(std::string(entry(s, 0).name), std::string("RESET"));
+    CHECK_EQ(std::string(entry(s, 0).detail), n.g9);
+    CHECK_EQ(entry(s, 1).id, 2u);
+    CHECK_EQ(std::string(entry(s, 1).name), std::string("CALIBRATE"));
+    CHECK_EQ(std::string(entry(s, 1).detail), n.g9);
+    CHECK_EQ(entry(s, 2).id, 7u);
+    CHECK_EQ(std::string(entry(s, 2).name), std::string("PING"));
+    CHECK_EQ(std::string(entry(s, 2).detail), n.s1);
+    CHECK_EQ(count(remote, FOXAPI_LIST_PLUGIN_COMMANDS), 3);  // a key is not a path on this machine: not LOCAL-only
+    CHECK_EQ(std::string(entry(remote, 0).name), std::string("RESET"));
+
+    // A key a module lists is one FOXAPI_OP_PLUGIN_COMMAND takes (file name as its text, the id in ival[0]).
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_COMMAND, 0, 2, n.g9.c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_COMMAND, 0, 99, n.g9.c_str())).status(), FOXAPI_NOT_FOUND);
+
+    // A module adds a key, relabels it, says it again, removes it: each real change moves listSeq, the same
+    // thing said again does not.
+    cascade::core::PluginApiCore& core = Access::core(d.eng);
+    cascade::core::PluginApiClient& c9 = core.client(n.g9, "Group Nine Fixture");
+    uint64_t seq = s.state().listSeq;
+    CHECK_EQ(core.addCommand(c9, 3u, "EXTRA"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 4);
+    CHECK_EQ(entry(s, 2).id, 3u);  // after the module's own, before the next module's
+    CHECK_EQ(std::string(entry(s, 2).name), std::string("EXTRA"));
+    CHECK_EQ(std::string(entry(s, 3).detail), n.s1);
+    CHECK(s.state().listSeq != seq);
+    seq = s.state().listSeq;
+    CHECK_EQ(core.addCommand(c9, 3u, "EXTRA"), CASCADE_API_OK);  // said again
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().listSeq, seq);
+    CHECK_EQ(core.addCommand(c9, 3u, "RELABELLED"), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(std::string(entry(s, 2).name), std::string("RELABELLED"));
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 4);
+    CHECK(s.state().listSeq != seq);
+    seq = s.state().listSeq;
+    for (int i = 0; i < 20; ++i) { d.eng.controlPass(); }  // settled: nothing moves
+    CHECK_EQ(s.state().listSeq, seq);
+    CHECK_EQ(core.removeCommand(c9, 3u), CASCADE_API_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 3);
+    CHECK(s.state().listSeq != seq);
+    seq = s.state().listSeq;
+    CHECK_EQ(core.removeCommand(c9, 3u), CASCADE_API_NOT_FOUND);  // nothing to remove: no change
+    passes(d.eng, 2);
+    CHECK_EQ(s.state().listSeq, seq);
+
+    // A stopped module's keys leave the screen at once; started again, the module adds them again.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_STOP, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 1);
+    CHECK_EQ(std::string(entry(s, 0).detail), n.s1);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_DECODER_START, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 3);
+    CHECK_EQ(std::string(entry(s, 0).name), std::string("RESET"));
+    // ...and so does a rescan that unloads them and brings them back.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PLUGIN_RESCAN)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 3);
+    // A removed module (its file deleted, then a rescan) has no keys: the list is by module.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_REMOVE, 0, 0, n.g9.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGIN_COMMANDS), 1);
+    std::printf("H4: PLUGIN_COMMANDS lists each loaded module's keys in order; add, relabel and remove move listSeq, a repeat does not\n");
+}
+
+// H5: the install outcome as two status lines - the hook, the engine's own writers (a failed and a successful
+// remove) and the window's copy of the lines.
+void testInstallStatusLines() {
+    PluginWorld world(true);
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    const Nine n;
+    int32_t st = 0;
+    const auto levelOf = [&](const char* key) {
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_STATUS_LINES); ++i) {
+            const FoxListItem x = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+            if (std::string(x.name) == key) { return x.value[0]; }
+        }
+        return -1.0;
+    };
+    CHECK_EQ(levelOf("installReport"), -1.0);
+    CHECK_EQ(levelOf("installError"), -1.0);
+    CHECK_EQ(fact(s, "fact.status.installReport", &st), std::string());  // served, and empty
+    CHECK_EQ(st, 0);
+    CHECK_EQ(fact(s, "fact.status.installError", &st), std::string());
+    CHECK_EQ(st, 0);
+
+    // The hook stands in for whatever writes them: the report is information, the error red, both whole.
+    const std::string report = "Installed " + std::string(190, 'r') + ".dll";
+    const uint64_t seq = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, ("test.statusLine=installReport|" + report).c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("installReport"), 1.0);
+    CHECK_EQ(fact(s, "fact.status.installReport"), report);
+    CHECK(s.state().listSeq != seq);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=installError|the sha256 did not match")).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("installError"), 3.0);
+    CHECK_EQ(fact(s, "fact.status.installError"), std::string("the sha256 did not match"));
+    const cascade::engine::Engine::StatusText text = d.eng.statusText();
+    CHECK_EQ(text.installReport, report);
+    CHECK_EQ(text.installError, std::string("the sha256 did not match"));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=installReport|")).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=installError|")).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("installReport"), -1.0);
+    CHECK_EQ(levelOf("installError"), -1.0);
+    CHECK_EQ(d.eng.statusText().installError, std::string());
+
+    // The engine's own writer, a remove that fails: red, verbatim, and no green line beside it.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_REMOVE, 0, 0, "no-such-plugin.dll")).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    const std::string err = fact(s, "fact.status.installError");
+    CHECK(err.find("is not an installed plugin file") != std::string::npos);
+    CHECK(err.find("no-such-plugin.dll") != std::string::npos);
+    CHECK_EQ(levelOf("installError"), 3.0);
+    CHECK_EQ(levelOf("installReport"), -1.0);
+    CHECK_EQ(d.eng.statusText().installError, err);
+    // ...and one that works: green, and the red of the attempt before it is gone (a remove clears both first).
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 4);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_REMOVE, 0, 0, n.refused.c_str())).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(fact(s, "fact.status.installReport"), "Removed " + n.refused);
+    CHECK_EQ(levelOf("installReport"), 1.0);
+    CHECK_EQ(levelOf("installError"), -1.0);
+    CHECK_EQ(fact(s, "fact.status.installError"), std::string());
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 3);  // the record went with the file
+    CHECK_EQ(d.eng.statusText().installReport, "Removed " + n.refused);
+    std::printf("H5: installReport (level 1) and installError (level 3) are status lines, facts and part of the window's copy\n");
+}
+
 }  // namespace
 
 int main() {
@@ -3145,5 +3750,12 @@ int main() {
     testPluginLists();
     testPresetsAndMarks();
     testDecoderLinesLeaveListSeqAlone();
+    // Group 9: the fitted-modules window.
+    testPluginLogLinesAreCounted();
+    testFittedModuleFacts();
+    testFittedSizeAndNotice();
+    testFittedFlags();
+    testFittedCommands();
+    testInstallStatusLines();
     return check::finish("test_engine_api_03");
 }

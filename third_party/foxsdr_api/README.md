@@ -10,7 +10,7 @@ table has no read for, in a new vendored header version"). Every 0.3 change
 is APPENDED, per the header's own rule 4, and each is documented in
 `docs/api-0.3-additions.md` in API.md's style, to be merged upstream; until
 that commit exists, this file and that document are the 0.3 contract.
-SHA-256 of the 0.3 header: `10af25259b4606d5dc6da43c75d31474ddd300279ebf117364a5e73dd99853db`.
+SHA-256 of the 0.3 header: `303048c8a6e4c16131be9eb32151c95f28aa70890cc58903fd24f40b8c0678ee`.
 
 Licence: MIT, in the header's own licence block.
 

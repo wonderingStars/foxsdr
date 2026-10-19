@@ -146,6 +146,11 @@ struct EngineStatusText {
     // removal did: bookmarkImportNote_) and its red line (bookmarkError_).
     std::string bookmarkNote;
     std::string bookmarkError;
+    // API 0.3 8.8: what the last install or removal of a plugin did (installReport_, green: STATUS_LINES key
+    // installReport, level 1) and why the last one failed (installError_, red, verbatim: installError, level 3).
+    // The store window and the fitted-modules window show the same pair.
+    std::string installReport;
+    std::string installError;
 };
 
 class Engine {
@@ -2383,6 +2388,10 @@ private:
     std::vector<std::string> apiPluginKeys_;
     std::uint64_t apiPluginPathsHash_ = 0;
     void refreshApiPluginKeys();
+    // How many times rescanPlugins has run: everything the host reads from the modules' files (a descriptor's
+    // strings, a refusal, the file's size) can only have changed across one, so it is hashed into the list
+    // fingerprint as one value (API 0.3 8.8).
+    std::uint64_t pluginScans_ = 0;
     // FOXAPI_OP_SCAN_SERIAL_PORTS (API 0.3): the ports the last scan found.
     std::vector<std::string> serialPorts_;
     std::uint64_t serialPortsScans_ = 0;

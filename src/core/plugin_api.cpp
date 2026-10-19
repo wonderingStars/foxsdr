@@ -208,6 +208,7 @@ void PluginApiCore::clearClientLocked(std::size_t index) {
         st.markers.clear();
         ++markersSeq_;
     }
+    if (st.commandCount != 0) { commandsSeq_.fetch_add(1, std::memory_order_release); }
     st.commandCount = 0;
     st.pressHead = 0;
     st.pressCount = 0;
@@ -558,7 +559,10 @@ std::int32_t PluginApiCore::requestControl(PluginApiClient& c, const PluginContr
     if (tune) {
         c.askedTune.store(true, std::memory_order_release);
     } else {
-        c.askedSettings.store(true, std::memory_order_release);
+        // The first ask moves the generation the engine hashes (settingsRequestersSeq); a repeat is no change.
+        if (!c.askedSettings.exchange(true, std::memory_order_acq_rel)) {
+            askersSeq_.fetch_add(1, std::memory_order_release);
+        }
     }
     const std::uint32_t need = tune ? CASCADE_STATE_TUNE_GRANTED : CASCADE_STATE_SETTINGS_GRANTED;
     if ((grants & need) == 0u) { return CASCADE_API_DENIED; }
@@ -843,12 +847,17 @@ std::int32_t PluginApiCore::addCommand(const PluginApiClient& c, std::uint32_t i
     ClientState& st = state_[c.index];
     for (std::size_t i = 0; i < st.commandCount; ++i) {
         if (st.commands[i].id == id) {
-            st.commands[i] = slot;
+            // The same key said again is no change; a new label is one (commandsSeq).
+            if (std::strncmp(st.commands[i].label, slot.label, sizeof(slot.label)) != 0) {
+                st.commands[i] = slot;
+                commandsSeq_.fetch_add(1, std::memory_order_release);
+            }
             return CASCADE_API_OK;
         }
     }
     if (st.commandCount >= CASCADE_MAX_COMMANDS_PER_PLUGIN) { return CASCADE_API_LIMIT; }
     st.commands[st.commandCount++] = slot;
+    commandsSeq_.fetch_add(1, std::memory_order_release);
     return CASCADE_API_OK;
 }
 
@@ -867,6 +876,7 @@ std::int32_t PluginApiCore::removeCommand(const PluginApiClient& c, std::uint32_
             st.commands[k - 1] = st.commands[k];
         }
         --st.commandCount;
+        commandsSeq_.fetch_add(1, std::memory_order_release);
         // A press of a command that no longer exists is not delivered.
         std::array<std::uint32_t, kPressQueue> keep{};
         std::size_t kept = 0;

@@ -180,8 +180,25 @@ struct ApiListBlock {
         bool tuneAllowed = false;
         bool settingsAllowed = false;
         bool mutes = false;
+        // API 0.3 8.8, what the fitted-modules window draws a module from: the file's size in bytes (stat-ed
+        // when the block is built, 0 when it could not be), the newest WARN/ERROR the module logged (0 none,
+        // else CASCADE_LOG_WARN / _ERROR), whether the runner is feeding it or would with the receiver running
+        // (any kind of plugin), whether it has asked to change a receiver setting, and whether its file is not
+        // the one installed.
+        std::uint64_t sizeBytes = 0;
+        std::uint32_t noticeLevel = 0;
+        bool matched = false;
+        bool askedSettings = false;
+        bool digestMismatch = false;
     };
     std::vector<Plugin> plugins;
+    // API 0.3 8.8: the command keys the loaded modules have added (PLUGIN_COMMANDS), module by module in host
+    // order and each module's in the order it added them.
+    struct PluginCommand {
+        std::uint32_t id = 0;
+        std::string label, file;
+    };
+    std::vector<PluginCommand> pluginCommands;
 
     // ---- API 0.2's lists step 1 left out, and API 0.3's (docs/api-0.3-additions.md)
     struct Decoder {

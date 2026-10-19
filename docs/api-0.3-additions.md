@@ -87,6 +87,13 @@ published in the same block as the lists, in the same pass.
 | `fact.mute.subject` | the plugins muting the audio, "A", "A and B", "A, B and C", **whole** (`audioMutedBy` is the same text cut at 127 bytes); `""` when none is (section 8.7) | |
 | `fact.mute.keptRunning` | `1` while the mute is held after a tune-away and the operator has not answered the question, else `0` (section 8.7) | |
 | `fact.plugin.lastDenied` | the module file name of the last plugin whose request to tune the receiver was refused; `""` none, and again after a rescan (section 8.7) | |
+| `fact.plugin.dir` | the folder the engine loads plugins from (section 8.8) | LOCAL |
+| `fact.plugin.<file>.path` | the absolute path a module file was loaded (or refused) from; `<file>` is the module file name, as `PLUGINS` names it (section 8.8) | LOCAL |
+| `fact.plugin.<file>.version`, `.author`, `.licence` | the descriptor's strings, `""` for a file refused before a descriptor was read (section 8.8) | |
+| `fact.plugin.<file>.error` | why the host refused the file, whole; `""` when it loaded (section 8.8) | |
+| `fact.plugin.<file>.idle` | the runner's own sentence for why a module is not being fed, whole; `""` when it is (section 8.8) | |
+| `fact.plugin.<file>.notice` | the module's newest WARN or ERROR, whole (up to 512 bytes; its level is `PLUGINS` `value[2]`) (section 8.8) | |
+| `fact.plugin.<file>.integrity` | the host's sentence when the file is not the one installed (`FOXAPI_ITEM_DIGEST_MISMATCH`); else `""` (section 8.8) | |
 
 ## 5. Lists (appended to 7.4)
 
@@ -98,7 +105,7 @@ says when to read again.
 
 | List | Entry |
 |---|---|
-| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3) |
+| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3), `installReport` (8.8: what the last plugin install or removal did, level 1), `installError` (8.8: why the last one failed, level 3) |
 | `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `value[3]`: on the entry that is `ACTIVE` only, **the radio's own centre readback in Hz, read live** (the frequency the radio was told and kept - not the air frequency `centreHz` speaks; a retune moves it without moving `listSeq`; 0 on every other entry; section 8.3); `ACTIVE`: the open radio's |
 | `GAIN_MODES` (24) | a radio with gain MODES (an Airspy: Linearity, Sensitivity, Free). `name`; `value[0]`: the mode code `FOXAPP_OP_AIRSPY_GAIN_MODE` takes; `ACTIVE`. Empty for every other radio |
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
@@ -114,6 +121,7 @@ says when to read again.
 | `PATCH_RADIOS` (35) | the patch's radios. `id`: node; `name`: device; `detail`: why it faulted or did not open; `value[0]`: rate Hz; `ACTIVE` open; `FAULT` |
 | `MUTE_CAUSES` (36) | the plugins muting the receiver's audio now (8.7). `name`: the plugin; `detail`: its module file name; `value[0]`: `1` when the mute is held after a tune-away; `ACTIVE` on every entry. Empty when nothing mutes |
 | `STALE_GRANTS` (37) | the tune grants no loaded module holds (8.7). `name`: the module file name; `REFUSED` when the host holds a record of that file that did not load. In the order the grants were given |
+| `PLUGIN_COMMANDS` (38) | the command keys the loaded modules have added (8.8). `id`: the command id (`FOXAPI_OP_PLUGIN_COMMAND`'s `ival[0]`); `name`: the key's label (at most 32 characters, the module's own text); `detail`: the module file name. Module by module in the order of `PLUGINS`, each module's keys in the order it added them (at most 8 a module) |
 
 ### 5.2 0.2 lists now served
 
@@ -130,7 +138,8 @@ ones the open radio has), `SERIAL_PORTS` (`name`; filled by
 through the map page's plugin APIs, which are not served yet.
 
 In 0.3 (8.7) `PLUGINS` carries `value[0]`, the plugin's capability word, and `STOPPED`, `TUNE_ALLOWED`
-and `SETTINGS_ALLOWED`; `DECODERS` carries `MUTES`; `PRESETS` carries `DEVICE_CENTRE`; `MARKERS` carries
+and `SETTINGS_ALLOWED`, and (8.8) `value[1]`, the module file's size in bytes, `value[2]`, its notice level, and
+`MATCHED`, `ASKED_SETTINGS` and `DIGEST_MISMATCH`; `DECODERS` carries `MUTES`; `PRESETS` carries `DEVICE_CENTRE`; `MARKERS` carries
 `value[2]`, the colour, and `SPAN`, `DASHED` and `SPECTRUM_ONLY`.
 
 `GAINS` (0.2: `name`; `value[0..3]`: min, max, step, current) gains one word
@@ -166,6 +175,11 @@ Section 8.7 adds eight, each on the list named: `FOXAPI_ITEM_MUTES` 0x400 (`DECO
 (`PLUGINS`: a loaded plugin the user stopped), `DEVICE_CENTRE` 0x4000 (`PRESETS`: moves the
 radio's centre, not the VFO), `SPAN` 0x8000, `DASHED` 0x10000 and `SPECTRUM_ONLY` 0x20000
 (`MARKERS`: a shaded band, drawn dashed, kept off the waterfall).
+
+Section 8.8 adds three, all on `PLUGINS`: `FOXAPI_ITEM_MATCHED` 0x40000 (the runner feeds the module, or
+would with the receiver running; any kind of plugin), `ASKED_SETTINGS` 0x80000 (the module has asked for
+something only the settings grant allows) and `DIGEST_MISMATCH` 0x100000 (the file is not the one that was
+installed).
 
 ## 6. Scope taps — `read_scope` (closes 0.2 gap 5)
 
@@ -628,7 +642,8 @@ cache on `listSeq` read every list it keeps again, once a line. A line is a meas
 ring of 500, and an interface that falls more than 500 behind has lost the older ones). A
 line is cut to the item's 159 bytes. The lines the track-info plugin writes ("Aircraft info":
 why it cannot reach its registry) are counted like every other; they were not before, and so
-never reached the backlog.
+never reached the backlog. (Nor were a plugin's own `log()` lines, found beside the fitted-modules
+window: 8.8.)
 
 **Timing.** A command through the table lands at the engine's next pass and the lists show it
 after that pass's publish: the mute setting, a stop or start, a grant, a preset's effect on
@@ -638,6 +653,129 @@ draws the engine's value from then on. `PLUGINS`, `DECODERS`, `PRESETS`, `USER_P
 `MARKERS`, `MUTE_CAUSES` and `STALE_GRANTS` move `listSeq` when they change. Nothing here
 allocates in the pass: the module keys are the cached ones, the mute cluster's names are hashed
 in place, and the block is rebuilt only when the fingerprint moves.
+
+### 8.8 The fitted-modules window as it draws it
+
+The Fitted modules window (the rail's FITTED MODULES key; one plate for each plugin file the host
+holds, with its state, its keys and everything the module and the host have to say about it) reads
+the engine's table only. 0.3 had most of it: the state's `FOXAPI_RX_RUNNING`, `PLUGINS` (the display
+name, the module file name in `detail`, the capability word in `value[0]`, `ACTIVE` loaded, and the flags
+`STOPPED`, `TUNE_ALLOWED`, `SETTINGS_ALLOWED`: 8.7), and every command the window sends
+(`FOXAPI_OP_DECODER_START` / `_STOP`, `FOXAPI_OP_PLUGIN_RESCAN`, `FOXAPI_OP_STORE_REMOVE` (ADMIN, like the
+rest of the store's), `FOXAPI_OP_PLUGIN_GRANT` with `ival[0]` 1 and 2, `FOXAPI_OP_PLUGIN_COMMAND`: all
+named by the module file name). This adds what it lacked. **No member of `FoxReceiverState` is added, no
+op, and no struct changes.**
+
+**Why most of it is a fact and not a column.** The window quotes the host and the modules, it does not
+paraphrase them: a module's own words (its author, its licence, its warning of up to 512 bytes), the
+host's refusal of a file, the runner's sentence about why a module is not being fed, the install
+record's finding about a file. A list item's `detail` cuts at 159 bytes, so each is a **fact** in the
+sense of section 4: the whole text, `""` when there is nothing to say, and the module file name in the
+key. What is a number or a state is a column or a flag on `PLUGINS`, where the window already reads
+every module's row.
+
+**The per-file facts.** `<file>` is the module file name exactly as `PLUGINS` names it in `detail`
+(the key the grants, the stop set and the command keys are filed under). Every key below is present
+for every record the host holds, loaded or not, so "known and empty" (`""`, length 0) is told apart from
+a file nobody holds (`NOT_FOUND`).
+
+| Key | Value | |
+|---|---|---|
+| `fact.plugin.dir` | the folder the engine loads plugins from | LOCAL |
+| `fact.plugin.<file>.path` | the absolute path the module was loaded (or refused) from | LOCAL |
+| `fact.plugin.<file>.version`, `.author`, `.licence` | the descriptor's own strings, copied only once the host accepted a descriptor: `""` for a file refused before that (the window must not draw a maker, a version and "no licence declared" for a module nobody opened). A duplicate the host turned off after reading it keeps them | |
+| `fact.plugin.<file>.error` | the host's reason for refusing the file, verbatim; `""` when it loaded. For a duplicate it names the file that was kept instead | |
+| `fact.plugin.<file>.idle` | the runner's own sentence for the FIRST of the module's status rows that is not running ("... failed to start its audio processor ...", the rate it needs against the rate it is given, "... is not being fed"), whole and unedited; `""` for a module that is fed, stopped (a stopped plugin has no rows) or has none. Any kind of plugin: a decoder, an I/Q or image decoder, an audio processor | |
+| `fact.plugin.<file>.notice` | the newest WARN or ERROR the module logged (at most 512 bytes: `CASCADE_LOG_TEXT_BYTES`), whole; its level is `PLUGINS` `value[2]`. Kept for the session | |
+| `fact.plugin.<file>.integrity` | when `FOXAPI_ITEM_DIGEST_MISMATCH` is set, the host's sentence ("... is not the file that was installed for ...: its bytes no longer match the sha256 recorded when it was installed ..."), about 220 bytes of English; else `""`. The HOST's finding, drawn apart from `.notice` so a module cannot overwrite it by logging | |
+
+A module file name can have dots in it (`group.nine.v2.dll`), and no leaf does, so **an interface that
+is handed a key parses the leaf from the RIGHT**: the leaf is what follows the last dot, the file is
+everything between `fact.plugin.` and it. (An interface that builds the key from a `PLUGINS` entry does
+not parse at all, which is what the window does, once for each facts refresh.) The keys do not collide
+with `fact.plugin.lastDenied` and `fact.plugin.dir`, which have no leaf and are not files: `NOT_FOUND`
+is the answer for `fact.plugin.dir.path`, for a key with no leaf, and for a leaf this list does not
+have. A REMOTE session reads every one of these but the two LOCAL paths (`DENIED`); a file nobody holds
+is `NOT_FOUND` to it too, not `DENIED`.
+
+**`PLUGINS` gains**, for every record (as 8.7's did):
+
+| | |
+|---|---|
+| `value[1]` | the module file's **size in bytes**, measured by the **engine** when the list block is built (the path is the engine machine's, so the interface never stats it); `0` when it could not be measured. It is a stat each time the block is rebuilt (a rescan, and anything else that moves `listSeq`) and never a stat a pass: a file that grows behind the engine's back says so at the next rebuild. The plate draws `0` as "not measured", never as an empty file |
+| `value[2]` | the level of the module's newest WARN or ERROR: `0` none, `2` warning (`CASCADE_LOG_WARN`), `3` error (`CASCADE_LOG_ERROR`); the text is `fact.plugin.<file>.notice`. An INFO line is a decoder-output line and not a notice |
+| `FOXAPI_ITEM_MATCHED` 0x40000 | the runner holds an instance for the module **and it is matched to the rate the chain delivers**: `PluginRunner::isFeeding`, the engine's answer to "is it being fed, or would it be with the receiver running". **Whether or not the receiver runs, and for ANY kind of plugin** - an in-chain audio processor has no `DECODERS` entry to say so. `DECODERS`' `FED` is this and the receiver running, for a decoder; an interface letters FED from `MATCHED` and `FOXAPI_RX_RUNNING`, and "matched, start the receiver" from `MATCHED` alone. A stopped module is not matched (it has no instance); one that could not start or wants another rate is not, and `.idle` says why |
+| `FOXAPI_ITEM_ASKED_SETTINGS` 0x80000 | the module has asked, at least once, for something only the settings grant allows (a mode, a bandwidth, the squelch, the rate, a gain, the AGC, running or stopping the receiver, the volume, the mute): the window offers its REVOKE / GRANT RADIO SETTINGS key only to a module that has. Recorded even when the request was refused, and **sticky for as long as the engine lives** - a stop, a grant and its revocation and a rescan do not clear it. A request that needs the TUNE grant is not a request for a setting, and a stopped module is refused before it is recorded as asking |
+| `FOXAPI_ITEM_DIGEST_MISMATCH` 0x100000 | the engine's install record for the file says its bytes are no longer the ones verified at install (`InstalledPlugin::digestMismatch`, set when a rescan re-hashes the folder). The record is matched by file name, ignoring case; a module fitted by hand has no record and is never flagged. The sentence is `.integrity` |
+
+**`PLUGIN_COMMANDS` (38)** is the command keys the loaded modules have added (`CascadeHostApi::add_command`;
+at most 8 a module, labels of at most 32 characters). One entry for each key, module by module in the
+order of `PLUGINS` and each module's keys in the order it added them. `id`: the command id, which is what
+`FOXAPI_OP_PLUGIN_COMMAND` takes in `ival[0]`; `name`: the key's label, the module's own text, drawn as
+given; `detail`: the module file name, the `text` of the same op (and what an interface groups the keys by).
+A press is a command that lands at the next pass and is queued for the module's own `poll_command`; nothing of
+the module runs in the engine's pass, and an id the module no longer lists is `NOT_FOUND` ("no such command
+key"). A module's keys go when it is stopped (at once, not at the next rebuild) or unloaded, and a module that
+is started or reloaded adds them again as it attaches. Not LOCAL-only: a key is not a path on this machine.
+
+**The install outcome.** `installReport` (level 1, information) and `installError` (level 3, error) join
+`STATUS_LINES` (section 5.1), as `fact.status.installReport` and `fact.status.installError` (whole) and in
+the engine's handed-over copy of the lines, as group 7's `bookmarkNote` did. `installReport` is what the
+last install or removal of a plugin did ("Removed zz_refused.dll"); `installError` is why the last one
+failed, verbatim ("... is not an installed plugin file"). Neither clears the other except as the engine
+does: an install or a remove clears both before it starts, and a failed one sets only the error. The store
+window reads the same pair, so the fitted-modules window draws them only in a frame in which the store did
+not.
+
+**How the window reads it** (what step B of the port holds the engine to):
+
+| The window draws | From |
+|---|---|
+| the folder | `fact.plugin.dir` |
+| the receiver's state | `FOXAPI_RX_RUNNING` |
+| a module's file, display name, capability word, loaded | `PLUGINS` `detail`, `name`, `value[0]`, `ACTIVE`. A file refused before a descriptor was read has `value[0]` 0 and `name` equal to `detail`: no name read |
+| a module's host-client key (`tuneCapable`) | `value[0]` has `CASCADE_CAP_HOST_CLIENT`, for a loaded module (the host refuses a module that declares the bit with no usable table) |
+| stopped, tune grant, settings grant | `STOPPED`, `TUNE_ALLOWED`, `SETTINGS_ALLOWED` |
+| fed, and "matched, start the receiver" | `MATCHED` with `FOXAPI_RX_RUNNING` |
+| why it is not fed | `.idle` |
+| whether to offer the settings grant | `ASKED_SETTINGS` |
+| its command keys | the `PLUGIN_COMMANDS` entries whose `detail` is the file |
+| its warning | `value[2]` and `.notice` |
+| its integrity finding | `DIGEST_MISMATCH` and `.integrity` |
+| its size | `value[1]` |
+| its path, version, author, licence, refusal | the five facts |
+| the green and red lines under the strip | `fact.status.installReport` / `installError` (or the lines list) |
+
+**A correction beside this window (F7).** A plugin's own `log()` lines (INFO, WARN and ERROR) are decoder-output
+lines, one for each line of the text (a text with several lines is several; an empty part is none). They went
+to the backlog without being counted in `decoderLinesTotal`, so an interface that reads the backlog when the
+total moves (8.7, D3) never saw them, and the ring - which takes "the lines the count says are new" - numbered
+and sliced the lines around them wrongly. They are counted now, one for each line pushed.
+
+**Timing.** A command through the table lands at the engine's next pass and the lists show it after that
+pass's publish: a stop or start (the row's state, `MATCHED`, `value[2]`'s plate and the keys of the module),
+a rescan (the whole list is replaced: an interface keys what it remembers about a module, such as a Remove
+that is armed, on the file name and not on a position), a grant, a removal. A removal is the one that gives
+two things at once: the record leaves `PLUGINS` and `installReport` or `installError` is set **in the same
+publish**, so an interface that reads the lines from the engine's handed-over copy shows the sentence the
+frame the row goes, and not one frame later. A press of a command key has no visible effect of its own.
+
+**What moves `listSeq`, beyond 8.1 to 8.7.** Everything new is in the list fingerprint: a module's
+size, descriptor strings and refusal (they change only across a rescan, which is hashed itself, and are
+hashed as well, so a refused file replaced by another refused file keeps no stale reason), the plugins
+folder, a module's newest notice **by level and text** (the same warning said again moves nothing, so a
+module that repeats one every pass does not make an interface re-read every list: group 8's D3 would
+otherwise return here; a different text, or the same text at another level, does), `MATCHED` for every
+kind of plugin (the runner's matched keys are now hashed whether or not the receiver runs, where 8.7 hashed
+them only while it did), the generation of the runner's status rows (so a module's idle sentence that
+changes with the same matched set is no longer stale, and nor is `DECODERS`' `detail`), the first time a
+module asks for a setting, the install records' verdicts (a doctored record counts), a change of any module's
+command keys (one added, relabelled or removed; the same key said again is no change), and the two status
+lines. A decoder line is still not one. **Nothing here allocates in a pass:** the module keys are the
+cached ones, the notices are hashed by level and text in place, and the plugin API and the runner each
+keep one counter for the two answers that would otherwise build a vector or copy every row per call
+(`PluginApiCore::settingsRequestersSeq`, `commandsSeq`, `PluginRunner::statusGeneration`); the block, its
+facts and the files' sizes are built only when the fingerprint moves.
 
 ## 9. Events and ops
 
@@ -701,10 +839,9 @@ MiB): about 130 000 ids of seven digits.
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the
-auto-notch readout (2) (section 8.4), and bookmarks export and scanner progress (11) (section
-8.6). What stays: plugin panels and instruments
-as data and a plugin's command-key list
-(4), map tiles and track info (6), per-node patch editing as ops (7: 0.3
+auto-notch readout (2) (section 8.4), bookmarks export and scanner progress (11) (section
+8.6), and a plugin's command-key list (4, in part) (section 8.8). What stays: plugin panels and
+instruments as data (4), map tiles and track info (6), per-node patch editing as ops (7: 0.3
 reads the graph back and edits it whole through
 `FOXAPP_OP_PATCH_SET_GRAPH` with `submit_text`), the transmitter's microphone
 list and meters (8), device-scan diagnostics (9), diagnostics (12), updates (13), zoomed spectrum (14),

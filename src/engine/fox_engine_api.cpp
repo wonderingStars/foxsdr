@@ -1529,6 +1529,8 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         if (k == "audioHealth") { engine_.audioHealthNote_ = t; }
         if (k == "bookmarkNote") { engine_.bookmarkImportNote_ = t; }
         if (k == "bookmarkError") { engine_.bookmarkError_ = t; }
+        if (k == "installReport") { engine_.installReport_ = t; }
+        if (k == "installError") { engine_.installError_ = t; }
     } else if (key == "test.rds") {
         // Stands in for the RDS decoder's snapshot (API 0.3 8.4):
         // "flags;pi;pty;groups;errors;ps;radioText" - flags a word of S (synced),
@@ -2016,10 +2018,16 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 // 0.3 (8.7): the capability word as the plugin declared it (a refused file's is empty or, for a
                 // duplicate, kept), and the three states a window draws a plugin's row from.
                 it.value[0] = static_cast<double>(p.capabilities);
+                // 0.3 (8.8): the module file's size (measured by the engine) and its newest notice's level.
+                it.value[1] = static_cast<double>(p.sizeBytes);
+                it.value[2] = static_cast<double>(p.noticeLevel);
                 if (p.loaded) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                 if (p.stopped) { it.flags |= FOXAPI_ITEM_STOPPED; }
                 if (p.tuneAllowed) { it.flags |= FOXAPI_ITEM_TUNE_ALLOWED; }
                 if (p.settingsAllowed) { it.flags |= FOXAPI_ITEM_SETTINGS_ALLOWED; }
+                if (p.matched) { it.flags |= FOXAPI_ITEM_MATCHED; }
+                if (p.askedSettings) { it.flags |= FOXAPI_ITEM_ASKED_SETTINGS; }
+                if (p.digestMismatch) { it.flags |= FOXAPI_ITEM_DIGEST_MISMATCH; }
             }
             break;
         // ---- the 0.2 lists step 1 left out ----------------------------------
@@ -2281,6 +2289,15 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.id = index + 1u;
                 copyText(it.name, g.file.c_str());
                 if (g.refused) { it.flags |= FOXAPI_ITEM_REFUSED; }
+            }
+            break;
+        // ---- API 0.3 8.8: the fitted modules --------------------------------------------------------------
+        case FOXAPI_LIST_PLUGIN_COMMANDS:
+            if (want(b->pluginCommands.size())) {
+                const auto& c = b->pluginCommands[index];
+                it.id = c.id;  // what FOXAPI_OP_PLUGIN_COMMAND takes in ival[0], with the file name as its text
+                copyText(it.name, c.label.c_str());
+                copyText(it.detail, c.file.c_str());
             }
             break;
         default:

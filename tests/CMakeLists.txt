@@ -112,6 +112,20 @@ foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_m
             FIXTURE_GROUP8_PLUGIN="$<TARGET_FILE:fixture_group8_plugin>")
     endif()
 endforeach()
+# THE GROUP-9 FIXTURE (window port group 9, API 0.3 section 8.8): a third real module that is NOT a
+# decoder - an in-chain audio processor with two command keys and a descriptor of its own (a version,
+# an author, a licence) - for the tests of the fitted-modules window's reads (test_engine_api_03 group
+# H, test_engine_publish_alloc case F3) and of the window that draws them (test_fitted_modules_window, which
+# also loads the two fixtures above). Copied into a plugin directory of the test's own.
+add_library(fixture_group9_plugin SHARED fixture_group9_plugin.cpp)
+target_include_directories(fixture_group9_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc)
+    if(TARGET ${_t})
+        add_dependencies(${_t} fixture_group9_plugin)
+        target_compile_definitions(${_t} PRIVATE
+            FIXTURE_GROUP9_PLUGIN="$<TARGET_FILE:fixture_group9_plugin>")
+    endif()
+endforeach()
 # test_snapshot_app loads three decoders at once (engine stage 2): the same
 # fixture built under three descriptor names, since the host runs one plugin
 # per name.

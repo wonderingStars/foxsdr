@@ -2277,6 +2277,7 @@ void Engine::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     WaitWatchdogPause holdWatchdog(*this);
+    ++pluginScans_;  // (API 0.3 8.8: hashed into the lists' fingerprint, so a rescan rebuilds the block)
 
     // The plugin windows the user has OPEN ride through the rescan: their
     // identities are the plugin's name and its window's title, so a plugin
@@ -3765,11 +3766,23 @@ void Engine::applyPluginApi() {
                 cascade::core::DecodedLine d;
                 d.plugin = l.name;
                 d.text = std::move(part);
+                // COUNTED, one for each line actually pushed (an empty part is none): the engine API's
+                // DECODER_LINES ring takes "the lines the count says are new", and an interface reads them
+                // only when decoderLinesTotal moves (API 0.3 8.7, D3). An uncounted line was invisible to
+                // both, and skewed the ring's slice and numbering once it sat among counted ones.
+                ++decoderLinesTotal_;
                 decoderLog_.push_back(std::move(d));
             }
             from = to + 1;
         }
-        if (l.level >= CASCADE_LOG_WARN) { pluginNotices_[l.key] = PluginNotice{l.level, l.text}; }
+        if (l.level >= CASCADE_LOG_WARN) {
+            // The notice is part of the lists' fingerprint (API 0.3 8.8, hashed by level and text), so a plugin
+            // that says the same warning every pass must change nothing: an equal replace is not written.
+            const auto it = pluginNotices_.find(l.key);
+            if (it == pluginNotices_.end() || it->second.level != l.level || it->second.text != l.text) {
+                pluginNotices_[l.key] = PluginNotice{l.level, l.text};
+            }
+        }
     }
 
     // --- 3. What plugins stored ------------------------------------------------
@@ -7388,6 +7401,8 @@ void Engine::publishStatusText() {
     t.audioHealth = audioHealthNote_;
     t.bookmarkNote = bookmarkImportNote_;
     t.bookmarkError = bookmarkError_;
+    t.installReport = installReport_;
+    t.installError = installError_;
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     statusText_ = std::move(t);
 }

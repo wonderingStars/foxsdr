@@ -36,10 +36,16 @@
 //      cluster adds to it (a name, a module key, the latch); and with two real
 //      plugins loaded (the PLUGINS flags, the grants, the mute setting hashed
 //      for each every pass) the same holds
+//   F3 the fitted modules (API 0.3 8.8): with three real modules and a refused file loaded, a notice from
+//      one, a request for the settings grant from another, command keys, an install record that says a file
+//      is not the one installed - every pass's fingerprint, an unchanged pass and the publish allocate
+//      nothing; each of those moves the fingerprint, a plugin that repeats a warning does not, and the
+//      block's rebuild is counted
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
 #include <cstdio>
+#include <fstream>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -49,6 +55,7 @@
 #include <filesystem>
 #include <string>
 
+#include "core/plugin_repo.hpp"
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_test_env.hpp"
@@ -180,6 +187,18 @@ struct AppWindowTestAccess {
     static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
     static void apply(cascade::engine::Engine& e, const FoxCommand& c) { (void)e.applyCommand(c); }
     static std::uint64_t publishLists(cascade::engine::Engine& e) { return e.publishApiLists(); }
+    // The fitted-modules window's inputs (API 0.3 8.8): the plugin API's host side (what a module's own calls
+    // reach through the bridge), the install records, and the drain of what the modules said.
+    static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return e.pluginUi_.api(); }
+    static cascade::core::PluginInventory& inventory(cascade::engine::Engine& e) { return e.pluginInventory_; }
+    static void applyPluginApi(cascade::engine::Engine& e) { e.applyPluginApi(); }
+    // The runner's matched keys, as the pass's publish leaves them, and a rebuild of the runner and the plugin
+    // UI over the same modules (what a source change does).
+    static std::vector<std::string>& feedingKeys(cascade::engine::Engine& e) { return e.feedingKeysScratch_; }
+    static void refreshRunner(cascade::engine::Engine& e) { e.refreshPluginRunner(); }
+    // A rescan, as the fingerprint counts it (the files' sizes and everything else a rescan changes are hashed
+    // through this one value; a real rescan also rewrites the runner's rows, so only this isolates it).
+    static void countScan(cascade::engine::Engine& e) { ++e.pluginScans_; }
 };
 }  // namespace cascade::gui
 
@@ -514,6 +533,160 @@ int main() {
             std::printf("F2: %d fingerprints with grants, a mute override and a stop in force: %ld heap allocations\n",
                         kPublishes, t_news);
             CHECK(t_news == 0);
+        }
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    // F3: the fitted modules' reads (API 0.3 8.8). Three real modules - the stage-1 decoder, the group-8 I/Q
+    // decoder and the group-9 audio processor with two command keys - and a file the host refuses; one module
+    // has a notice, another has asked for the settings grant, an install record disowns a third file. Every
+    // pass hashes all of that in place (the cached keys, the plugin API's generations, the runner's) and builds
+    // no block until something moved.
+    {
+        const char* base = std::getenv("LOCALAPPDATA");
+        const std::filesystem::path dir = std::filesystem::path(base != nullptr ? base : ".") / "plugins_alloc9";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        for (const char* src : {FIXTURE_STAGE1_PLUGIN, FIXTURE_GROUP8_PLUGIN, FIXTURE_GROUP9_PLUGIN}) {
+            const std::filesystem::path p(src);
+            std::filesystem::copy_file(p, dir / p.filename(), std::filesystem::copy_options::overwrite_existing, ec);
+            CHECK(!ec);
+        }
+        {
+            std::ofstream junk(dir / "zz_refused.dll", std::ios::binary);
+            junk << "this is not a portable executable";
+        }
+        g_pluginDir = dir.string();
+        Access::setPluginDir(&pluginDirHook);
+        {
+            cascade::engine::Engine e3;
+            e3.initialise();
+            Access::setPluginDir(nullptr);
+            const std::string key1 = std::filesystem::path(FIXTURE_STAGE1_PLUGIN).filename().string();
+            const std::string key8 = std::filesystem::path(FIXTURE_GROUP8_PLUGIN).filename().string();
+            const std::string key9 = std::filesystem::path(FIXTURE_GROUP9_PLUGIN).filename().string();
+            cascade::core::PluginApiCore& core = Access::core(e3);
+            cascade::core::PluginApiClient& c9 = core.client(key9, "Group Nine Fixture");
+            cascade::core::PluginApiClient& c8 = core.client(key8, "Group Eight Fixture");
+            CHECK(c9.live.load() && c8.live.load());
+
+            // THE NOTICE: a warning longer than any small string, taken in by the pass that drains the plugin log.
+            const std::string warning(300, 'w');
+            CHECK(core.log(c9, CASCADE_LOG_WARN, warning.c_str()) == CASCADE_API_OK);
+            Access::applyPluginApi(e3);
+            // A request for the settings grant (answered DENIED: asking is what is recorded).
+            cascade::core::PluginControl ask;
+            ask.kind = cascade::core::PluginControl::Kind::Mode;
+            ask.mode = CASCADE_DEMOD_NFM;
+            CHECK(core.requestControl(c8, ask) == CASCADE_API_DENIED);
+            // An install record that disowns the group-9 file.
+            cascade::core::InstalledPlugin rec;
+            rec.id = "group-nine-fixture";
+            rec.file = key9;
+            rec.digestMismatch = true;
+            Access::inventory(e3).plugins.push_back(rec);
+
+            const std::uint64_t settled = Access::fingerprint(e3);  // (warm-up: the cached keys, the scratch lists)
+            (void)Access::publishLists(e3);                         // the block is built here, once, and may allocate
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e3); }
+            t_counting = false;
+            std::printf("F3: %d fingerprints with three modules, a notice, a settings ask, command keys and an integrity finding: %ld heap allocations\n",
+                        kPublishes, t_news);
+            CHECK(t_news == 0);
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e3); }
+            t_counting = false;
+            std::printf("F3: %d passes whose lists did not change: %ld heap allocations\n", kPublishes, t_news);
+            CHECK(t_news == 0);
+            CHECK(Access::fingerprint(e3) == settled);
+            // ...and the whole publish, which takes the runner's snapshot (MATCHED) whether or not the receiver runs.
+            cascade::core::PublishedState ps;
+            Access::publish(e3, ps);  // (warm-up)
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { Access::publish(e3, ps); }
+            t_counting = false;
+            std::printf("F3: %d publishes with the same: %ld heap allocations\n", kPublishes, t_news);
+            CHECK(t_news == 0);
+            // (The first publish took the runner's snapshot - the feeding keys, hashed whether or not the receiver
+            // runs - so the settled fingerprint is the one after it.)
+            const std::uint64_t quiet = Access::fingerprint(e3);
+            CHECK(quiet != settled);
+            (void)Access::publishLists(e3);
+            CHECK(Access::fingerprint(e3) == quiet);
+
+            // A PLUGIN THAT SAYS THE SAME WARNING AGAIN moves nothing: group 8's D3 (a list moved by what a
+            // plugin prints) does not come back through the notice.
+            for (int i = 0; i < 25; ++i) {
+                CHECK(core.log(c9, CASCADE_LOG_WARN, warning.c_str()) == CASCADE_API_OK);
+                Access::applyPluginApi(e3);
+                CHECK(Access::fingerprint(e3) == quiet);
+            }
+            // Said again - a command key as it already is - or an INFO line: still nothing.
+            CHECK(core.addCommand(c9, 1u, "RESET") == CASCADE_API_OK);
+            CHECK(core.log(c9, CASCADE_LOG_INFO, "just a line") == CASCADE_API_OK);
+            Access::applyPluginApi(e3);
+            CHECK(Access::fingerprint(e3) == quiet);
+
+            // THE MATCHED KEYS are hashed with the receiver STOPPED (PLUGINS' MATCHED is read then): this engine
+            // has never run, and a key the runner says it would feed still moves the fingerprint.
+            {
+                std::vector<std::string>& fk = Access::feedingKeys(e3);
+                fk.push_back("another-module.dll");
+                CHECK(Access::fingerprint(e3) != quiet);
+                fk.pop_back();
+                CHECK(Access::fingerprint(e3) == quiet);
+            }
+
+            // EACH OF THE THINGS HASHED MOVES IT - and each rebuild of the block is counted (bounded, and it
+            // happens once for the change, not once a pass).
+            const auto movedBy = [&](const char* what, auto change) {
+                const std::uint64_t before = Access::fingerprint(e3);
+                change();
+                const std::uint64_t after = Access::fingerprint(e3);
+                CHECK(after != before);
+                t_news = 0;
+                t_counting = true;
+                (void)Access::publishLists(e3);  // the rebuild
+                t_counting = false;
+                const long rebuild = t_news;
+                t_news = 0;
+                t_counting = true;
+                for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e3); }
+                t_counting = false;
+                std::printf("F3: %-44s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n",
+                            what, rebuild, kPublishes, t_news);
+                CHECK(rebuild > 0 && rebuild < 2000);  // counted, and bounded: some strings and vectors, not a flood
+                CHECK(t_news == 0);
+            };
+            movedBy("another text at the same level", [&] {
+                (void)core.log(c9, CASCADE_LOG_WARN, "another warning");
+                Access::applyPluginApi(e3);
+            });
+            movedBy("the same text as an error", [&] {
+                (void)core.log(c9, CASCADE_LOG_ERROR, "another warning");
+                Access::applyPluginApi(e3);
+            });
+            movedBy("a command key added", [&] { (void)core.addCommand(c9, 3u, "EXTRA"); });
+            movedBy("a command key relabelled", [&] { (void)core.addCommand(c9, 3u, "RELABELLED"); });
+            movedBy("a command key removed", [&] { (void)core.removeCommand(c9, 3u); });
+            movedBy("a first request for the settings grant", [&] { (void)core.requestControl(c9, ask); });
+            movedBy("an install record cleared", [&] { Access::inventory(e3).plugins.back().digestMismatch = false; });
+            // The runner's rows written again (a source change rebuilds them): its generation is hashed, so a
+            // module's idle sentence that changes while the matched set does not cannot go stale.
+            movedBy("the runner's status rows written again", [&] { Access::refreshRunner(e3); });
+            movedBy("a rescan, counted alone", [&] { Access::countScan(e3); });
+            movedBy("a rescan", [&] {
+                FoxCommand rescan{};
+                rescan.structSize = sizeof(rescan);
+                rescan.op = FOXAPI_OP_PLUGIN_RESCAN;
+                Access::apply(e3, rescan);
+            });
+            (void)key1;
         }
         std::filesystem::remove_all(dir, ec);
     }

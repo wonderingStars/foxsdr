@@ -38,6 +38,7 @@
 #define CASCADE_CORE_PLUGIN_RUNNER_HPP
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -330,6 +331,11 @@ public:
     // nothing. Keys come out in status order, unique, never empty.
     void feedSnapshot(std::size_t& active, std::vector<std::string>& feedingKeys) const;
 
+    // A counter that moves whenever the status rows do (a rebuild, a clear, an instance that failed): so a
+    // reader that wants "did any module's idle sentence change?" every pass - the engine's list fingerprint,
+    // API 0.3 8.8 - asks one atomic and not status(), which copies every row with its strings. Any thread.
+    std::uint64_t statusGeneration() const { return statusGen_.load(std::memory_order_acquire); }
+
     // How many samples have actually been handed to decoders since the last
     // rebuild. Diagnostic, but the important one: "the decoder produced
     // nothing" has two completely different causes - it was never fed, or it
@@ -558,6 +564,8 @@ private:
     std::uint64_t audioGapFramesReported_ = 0;
     std::chrono::steady_clock::time_point audioDigestAt_{};
     std::vector<DecoderStatus> status_;
+    // statusGeneration(): bumped under mutex_ wherever status_ is written.
+    std::atomic<std::uint64_t> statusGen_{0};
     double audioRateHz_ = 0.0;
     double iqRateHz_ = 0.0;
     double centreHz_ = 0.0;

@@ -737,7 +737,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_ANTENNAS      6u
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
 #define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text; 0.3 (8.7): MUTES */
-#define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name; 0.3 (8.7): value[0]: the capability word (CASCADE_CAP_* of the plugin ABI); ACTIVE loaded; STOPPED, TUNE_ALLOWED, SETTINGS_ALLOWED */
+#define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name; 0.3 (8.7): value[0]: the capability word (CASCADE_CAP_* of the plugin ABI); ACTIVE loaded; STOPPED, TUNE_ALLOWED, SETTINGS_ALLOWED; (8.8): value[1]: the module file's size in bytes, value[2]: its notice level (0 none, 2 warning, 3 error); MATCHED, ASKED_SETTINGS, DIGEST_MISMATCH */
 #define FOXAPI_LIST_CATALOGUE     10u /* the store's entries */
 #define FOXAPI_LIST_AUDIO_DEVICES 11u
 #define FOXAPI_LIST_TX_DEVICES    12u
@@ -767,6 +767,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_PATCH_RADIOS  35u /* id: node; name: device; detail: error; value[0]: rate Hz; ACTIVE open, FAULT */
 #define FOXAPI_LIST_MUTE_CAUSES   36u /* 0.3 (8.7): the plugins muting the receiver's audio now. name: plugin; detail: its module file name; value[0]: 1 when the mute is held after a tune-away; ACTIVE */
 #define FOXAPI_LIST_STALE_GRANTS  37u /* 0.3 (8.7): the tune grants no loaded module holds. name: the module file name; REFUSED when the host holds a record of that file that did not load */
+#define FOXAPI_LIST_PLUGIN_COMMANDS 38u /* 0.3 (8.8): the command keys the loaded modules have added. id: the command id (FOXAPI_OP_PLUGIN_COMMAND's ival[0]); name: the key's label; detail: the module file name */
 
 #define FOXAPI_ITEM_ACTIVE    0x00000001u /* the selected / running / current entry */
 #define FOXAPI_ITEM_FAVOURITE 0x00000002u /* a bookmark marked as a favourite */
@@ -787,6 +788,9 @@ typedef struct FoxEvent {
 #define FOXAPI_ITEM_SPAN       0x00008000u /* a mark that is a shaded band from value[0] to value[0] + value[1], not a line (MARKERS, 8.7) */
 #define FOXAPI_ITEM_DASHED     0x00010000u /* a mark drawn dashed (MARKERS, 8.7) */
 #define FOXAPI_ITEM_SPECTRUM_ONLY 0x00020000u /* a mark that is not drawn on the waterfall (MARKERS, 8.7) */
+#define FOXAPI_ITEM_MATCHED    0x00040000u /* a plugin the runner is feeding, or would feed with the receiver running: matched to the rate the chain delivers, whatever its kind (PLUGINS, 8.8) */
+#define FOXAPI_ITEM_ASKED_SETTINGS 0x00080000u /* a plugin that has asked to change a receiver setting, which only the settings grant allows (PLUGINS, 8.8) */
+#define FOXAPI_ITEM_DIGEST_MISMATCH 0x00100000u /* a plugin file that is not the one installed: its bytes no longer match the sha256 recorded at install (PLUGINS, 8.8) */
 
 typedef struct FoxListItem {
     uint32_t structSize;

@@ -391,6 +391,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
             status_[i].key = key;
         }
     }
+    statusGen_.fetch_add(1, std::memory_order_release);
 }
 
 bool PluginRunner::isFeeding(const std::string& pluginKey) const {
@@ -540,6 +541,7 @@ void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
     audioImageCount_ = 0;
     iqImageCount_ = 0;
     status_.clear();
+    statusGen_.fetch_add(1, std::memory_order_release);
     audioFed_ = 0;
     iqFed_ = 0;
 
@@ -969,6 +971,7 @@ void PluginRunner::failLocked(std::size_t statusIndex, const std::string& name) 
     if (statusIndex < status_.size()) {
         status_[statusIndex].reason = DecoderIdleReason::PollFailed;
         status_[statusIndex].detail = sentence;
+        statusGen_.fetch_add(1, std::memory_order_release);
     }
 
     // AND SAID OUT LOUD, ONCE, in the decoder log - the same place the
