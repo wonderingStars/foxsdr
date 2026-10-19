@@ -113,7 +113,7 @@
 // EXISTING FOXAPI_OP_SCANNER_CONFIG (num[0..3], which already
 // reconfigures-if-running on its own - found only after a from-scratch
 // FOXAPP_OP_SCANNER_TIMING briefly duplicated it byte for byte).
-#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device '\x1F' hostApi; ival[0]: 1 IqStereo | 2 channel right | 4 swapIq | 8 pickedFromList; num[0]: cardRateHz; num[1]: iqCentreHz (gui::soundCardFormCommand / soundCardFormFromCommand, engine/soundcard_panel.hpp) */
+#define FOXAPP_OP_SOUND_CARD_FORM        0x8412u /* text: device '\x1F' hostApi; ival[0]: 1 IqStereo | 2 channel right | 4 swapIq | 8 pickedFromList; num[0]: cardRateHz; num[1]: iqCentreHz; ival[1]: the FIELD MASK, FOXAPP_SOUND_CARD_FIELD_* (0 = the whole form) (gui::soundCardFormCommand / soundCardFormFromCommand, engine/soundcard_panel.hpp) */
 #define FOXAPP_OP_PATCH_LOOK_FOR_RADIOS  0x8413u /* no args: "Look for radios" pressed in the patch radio inspector */
 // "Stop and resume sound" needs no new op: FOXAPP_OP_DECODER_STOP_LIST
 // already covers it, unchanged - the mute lifts on its own once the engine's
@@ -181,6 +181,23 @@
 // merged - a repeat is answered by the engine's own de-dupe, and the window
 // sends each name once a run (AppWindow::uiNotePanel).
 #define FOXAPP_OP_NOTE_PANEL             0x841Fu /* text: the panel's name, as the usage report lists it ("radar", "map") */
+// A SOUND CARD CHOSEN FROM THE LIST (engine stage 4, window port group 11, API 0.3 8.10): the Source section's
+// Device combo sends the entry it was clicked on, and the ENGINE does what the combo's own handler did - the card's
+// name and host API into the form (marked as chosen from the list), the "not connected" line cleared, and the rate
+// kept if the new card offers it in the form's format, else its default, else its highest. ival[0]: the
+// SOUND_CARDS entry's id (index + 1); NOT_FOUND for none, and before the cards are listed. Grant SETTINGS, LOCAL
+// sessions only (every app op is).
+#define FOXAPP_OP_SOUND_CARD_PICK        0x8420u /* ival[0]: the SOUND_CARDS entry's id */
+// FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
+// ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
+#define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */
+#define FOXAPP_SOUND_CARD_FIELD_FORMAT   2  /* ival[0] bit 1 */
+#define FOXAPP_SOUND_CARD_FIELD_CHANNEL  4  /* ival[0] bit 2 */
+#define FOXAPP_SOUND_CARD_FIELD_SWAP_IQ  8  /* ival[0] bit 4 */
+#define FOXAPP_SOUND_CARD_FIELD_PICKED   16 /* ival[0] bit 8 */
+#define FOXAPP_SOUND_CARD_FIELD_RATE     32 /* num[0] */
+#define FOXAPP_SOUND_CARD_FIELD_CENTRE   64 /* num[1] */
+#define FOXAPP_SOUND_CARD_FIELDS_ALL     127
 // FOXAPP_OP_PATCH_SET_GRAPH's ival[0]: set when the graph is a NEW DOCUMENT
 // (the config's patch, a patch file) rather than an edit of the graph the
 // engine already has. The Engine counts these (Engine::patchGraphEpoch_), so a

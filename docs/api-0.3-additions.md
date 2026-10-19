@@ -24,7 +24,7 @@ serves only its own minor, so a 0.3 engine answers `foxsdr_engine_query(0, 2)`
 with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
 is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
 and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
-at its end (sections 8.1, 8.2, 8.4 and 8.6). `FoxScopeInfo` is new, with its own
+at its end (sections 8.1, 8.2, 8.4, 8.6 and 8.10). `FoxScopeInfo` is new, with its own
 `FOXAPI_MIN_SCOPE_INFO`. No other struct changed.
 
 ## 2. Capabilities
@@ -97,6 +97,15 @@ published in the same block as the lists, in the same pass.
 | `fact.plugin.<file>.idle` | the runner's own sentence for why a module is not being fed, whole; `""` when it is (section 8.8) | |
 | `fact.plugin.<file>.notice` | the module's newest WARN or ERROR, whole (up to 512 bytes; its level is `PLUGINS` `value[2]`) (section 8.8) | |
 | `fact.plugin.<file>.integrity` | the host's sentence when the file is not the one installed (`FOXAPI_ITEM_DIGEST_MISMATCH`); else `""` (section 8.8) | |
+| `fact.source.row` | the Source combo's selected row as a decimal, `-1` for none: 0 the generator, 1 the IQ file, 2 the sound card, 3 and on the radios (the index of the `DEVICES` entry; section 8.10) | |
+| `fact.source.keep` | the kind of the source the config is still naming while the generator stands in for it: `""`, `file`, `soundcard`, `soapy` or a native driver's key (section 8.10) | |
+| `fact.source.opening` | the name of the radio being opened, `""` when none is (section 8.10) | |
+| `fact.source.scanGate`, `fact.source.scanSkip` | with `FOXAPI_SRC_SCAN_GATED`: the name the deferral sentences quote, and the drivers a scan beside the open radios leaves out (`""`: the whole SoapySDR scan is deferred) (section 8.10) | |
+| `fact.source.faultedDrivers` | the drivers whose scan child died this session, joined `", "`; `""` none (section 8.10) | |
+| `fact.source.plutoUri` | the address in the Pluto box (section 8.10) | LOCAL |
+| `fact.source.id.<n>` | the whole `SELECT_SOURCE` id of the `DEVICES` entry whose `id` is `n`: `detail` cuts it at 159 bytes, this does not (section 8.10) | |
+| `fact.soundcard.device`, `fact.soundcard.hostApi` | the sound card form's card, whole (section 8.10) | LOCAL |
+| `fact.soundcard.span` | `<lo Hz> <hi Hz>` (`%.17g`): what the form's card would receive on the air, through the converter kept for it (section 8.10) | |
 
 ## 5. Lists (appended to 7.4)
 
@@ -108,7 +117,7 @@ says when to read again.
 
 | List | Entry |
 |---|---|
-| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3), `installReport` (8.8: what the last plugin install or removal did, level 1), `installError` (8.8: why the last one failed, level 3), `catalogStatus` (8.9: "N plugins in the catalogue", set by every fetch that landed, level 1), `addAllSummary` (8.9: what the last ADD ALL run did, level 1, or 3 when any module in it failed) |
+| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3), `installReport` (8.8: what the last plugin install or removal did, level 1), `installError` (8.8: why the last one failed, level 3), `catalogStatus` (8.9: "N plugins in the catalogue", set by every fetch that landed, level 1), `addAllSummary` (8.9: what the last ADD ALL run did, level 1, or 3 when any module in it failed), `deviceFault` (8.10: the radio's fault sentence WHOLE, level 3: the state's `faultMessage` is the same text cut at 127 bytes) |
 | `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `value[3]`: on the entry that is `ACTIVE` only, **the radio's own centre readback in Hz, read live** (the frequency the radio was told and kept - not the air frequency `centreHz` speaks; a retune moves it without moving `listSeq`; 0 on every other entry; section 8.3); `ACTIVE`: the open radio's |
 | `GAIN_MODES` (24) | a radio with gain MODES (an Airspy: Linearity, Sensitivity, Free). `name`; `value[0]`: the mode code `FOXAPP_OP_AIRSPY_GAIN_MODE` takes; `ACTIVE`. Empty for every other radio |
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
@@ -126,6 +135,11 @@ says when to read again.
 | `STALE_GRANTS` (37) | the tune grants no loaded module holds (8.7). `name`: the module file name; `REFUSED` when the host holds a record of that file that did not load. In the order the grants were given |
 | `PLUGIN_COMMANDS` (38) | the command keys the loaded modules have added (8.8). `id`: the command id (`FOXAPI_OP_PLUGIN_COMMAND`'s `ival[0]`); `name`: the key's label (at most 32 characters, the module's own text); `detail`: the module file name. Module by module in the order of `PLUGINS`, each module's keys in the order it added them (at most 8 a module) |
 | `STORE_ACTIVITY` (39) | what the plugin store is doing now (8.9): at most two entries, told apart by `id`, none when nothing is going on. `id` 1: a catalogue fetch or a download is in flight (`name`: the module's name, `""` for the catalogue; `value[0]`: the progress 0..1, **read live**; `value[1]`: 1 fetching the catalogue, 2 downloading); `id` 2: an ADD ALL run is active (`name`: the module moving now; `value[0]`: its position, `value[1]`: how many in the run). `ACTIVE` on both |
+| `UNBOUND_RADIOS` (40) | USB radios that are plugged in and that nothing can open (no WinUSB driver bound; 8.10). `name`: the bus description, `""` when none; `detail`: the family, `rtl`, `rx888` or `""`; `value[0]`, `value[1]`: vendor id, product id |
+| `SCAN_EVIDENCE` (41) | **LOCAL sessions only (`DENIED` to a REMOTE one)**: where the SoapySDR runtime looked, taken by the engine when a whole scan lands having found nothing (8.10). `value[0]`: 1 a vendor install (`name`: its vendor, `detail`: its root), 2 a module search path, 3 a module loaded (`detail`) |
+| `SOUND_CARDS` (42) | the sound card inputs as the last listing found them (8.10). `id`: index + 1; `name`: `device (host API)`; `detail`: the host API; `ACTIVE`: the entry the form's card is |
+| `SOUND_CARD_RATES` (43) | the rates the form's card offers in the form's format (8.10). `value[0]`: Hz of the card; `EXCLUSIVE`; `ACTIVE`: the form's rate |
+| `SOUND_CARD_FORM` (44) | ONE entry, the sound card form (8.10). `name`: the device, `detail`: its host API (both `""` to a REMOTE session); `value[0]`: rate Hz, `[1]`: I/Q centre Hz, `[2]`: channel (0 left, 1 right); `IQ_STEREO`, `SWAP_IQ`, `PICKED` |
 
 ### 5.2 0.2 lists now served
 
@@ -141,6 +155,8 @@ service; `value[0..2]`: start, stop, colour), `PRESETS` and `USER_PRESETS`
 ones the open radio has), `SERIAL_PORTS` (`name`; filled by
 `SCAN_SERIAL_PORTS`). `TRACKS` stays **GAP** (`UNSUPPORTED`): map tracks come
 through the map page's plugin APIs, which are not served yet.
+
+`DEVICES` (0.2: the generator and the scanned radios; `name`: label, `detail`: the id `SELECT_SOURCE` takes, `ACTIVE`: the source in use) is **completed** in 0.3 (8.10): the IQ file and the sound card are entries 2 and 3, so an entry's index is its row in the Source combo and every radio's entry moved down two places; the whole id is `fact.source.id.<n>` where `detail` has cut it. `SAMPLE_RATES` (0.2: `value[0]`, Hz) carries the rate's caption in `detail` (8.10).
 
 In 0.3 (8.7) `PLUGINS` carries `value[0]`, the plugin's capability word, and `STOPPED`, `TUNE_ALLOWED`
 and `SETTINGS_ALLOWED`, and (8.8) `value[1]`, the module file's size in bytes, `value[2]`, its notice level, and
@@ -189,6 +205,8 @@ installed).
 Section 8.9 adds one, on `CATALOGUE`: `FOXAPI_ITEM_BUILD_HERE` 0x200000 (the catalogue publishes a build for
 this machine's os and architecture). This is the next free bit of the **item** flags; the `0x00200000` of
 `FOXAPI_RX_WEB_LISTENING` is a bit of the state's flag word, a different namespace.
+
+Section 8.10 adds four: `FOXAPI_ITEM_EXCLUSIVE` 0x400000 (`SOUND_CARD_RATES`: a rate only WASAPI exclusive mode reaches), and on `SOUND_CARD_FORM` `FOXAPI_ITEM_IQ_STEREO` 0x800000, `SWAP_IQ` 0x1000000 and `PICKED` 0x2000000.
 
 ## 6. Scope taps — `read_scope` (closes 0.2 gap 5)
 
@@ -942,6 +960,188 @@ sentence is rebuilt on a language switch (the language was already hashed). **No
 fingerprint is hashed in place from members the engine keeps, and the block, the facts, the composed sentences and the
 update plans are built only when it moves; the live progress is an atomic read.
 
+### 8.10 The Source section and the sound card as their pages draw them
+
+The Source section (its combo of radios, the Refresh key and "Look for network USRPs", the IQ file, sound card and
+Pluto panels, the notes about dongles that cannot be opened and radios that cannot be found, and the open radio's
+rate, antenna, gain and option controls) and the sound card panel under it read the engine's table only. 0.3 had the
+radio half already (`SAMPLE_RATES`, `GAINS`, `ANTENNAS`, `DEVICE_OPTIONS`, `CONVERTERS`, `GAIN_MODES`,
+`DECIMATIONS`, the flags of 8.3, `STATUS_LINES` `sourceError`, `restoreKeepLabel`, `soundCardMissing`,
+`sdrPlayAdvice`, `sdrPlayApiDetail`, `tuneMismatchNote`) and every command the section sends. It had almost nothing
+of the half this section is mostly about: the combo's selection and two of its three fixed rows, whole row ids, every
+state of the scan and the sentences' inputs, the dongles that cannot be opened, the SDRplay and UHD notes, where the
+runtime looked, and the whole of the sound card panel. This adds that. **One member is appended to
+`FoxReceiverState`** (`sourceFlags`, below; `FOXAPI_MIN_RECEIVER_STATE` moves to its end), five lists, eleven facts,
+one status line, one column, one op and one field of an op.
+
+**The word - `sourceFlags`** (a `uint32_t` after `scanListenMs`; the device group, so it moves `deviceSeq` and `seq`,
+and not the plugin ABI's device counters). Each bit is one condition, read from the member that owns it:
+
+| Bit | Set while |
+|---|---|
+| `FOXAPI_SRC_SCAN_PENDING` 0x1 | a SoapySDR device scan is running on its worker (the combo and Refresh are greyed; the scan is a child process the engine starts and collects) |
+| `FOXAPI_SRC_SCANNED` 0x2 | a scan has been started this session. A scan that was **deferred** (a radio is open, see `SCAN_GATED`) does not set it, so the section knows the first scan is still owed |
+| `FOXAPI_SRC_SCAN_PARTIAL` 0x4 | the last scan was one beside an open radio, which left that radio's driver out; a whole one is still owed (the combo's next opening, `FOXAPP_OP_SCAN_DEVICES_ON_OPEN`, runs it once nothing gates it) |
+| `FOXAPI_SRC_SCAN_GATED` 0x8 | a radio is open, opening, held by the patch, or one this session could not release: a SoapySDR scan is deferred, or leaves that radio's driver out. `fact.source.scanGate` and `.scanSkip` say which, and for whom |
+| `FOXAPI_SRC_NETWORK_USRPS` 0x10 | "Look for network USRPs" is on (`FOXAPP_OP_SET_NETWORK_USRP_SCAN`, which rescans when it goes on) |
+| `FOXAPI_SRC_UHD_LEFT_OUT` 0x20 | the last scan that landed left UHD out because nothing could be a USRP (none on the USB bus, none named by a saved setting, and the box above off): the section says "Network USRPs are not searched" |
+| `FOXAPI_SRC_SDRPLAY_ROWS` 0x40 | the last native walk found an SDRplay API row. The note about the SDRplay API (`STATUS_LINES` `sdrPlayAdvice`, with where it looked in `sdrPlayApiDetail`) is for the case where this is clear and `sdrPlayAdvice` has text |
+| `FOXAPI_SRC_CARD_LISTED` 0x80 | the sound card inputs have been listed; `SOUND_CARDS` is that list, and may be empty ("No sound card inputs found") |
+| `FOXAPI_SRC_CARD_SCANNING` 0x100 | the inputs are being listed on a worker |
+| `FOXAPI_SRC_CARD_OPENING` 0x200 | a sound card is being opened on a worker. With `FOXAPI_RX_DEVICE_OPENING` (a radio being opened) it greys the card's controls; it is also what keeps the "saved radio not open" lamp dark while a restored card opens |
+
+**`DEVICES`, completed.** The entries are now, in the Source combo's order: the signal generator (`detail` `siggen`),
+**the IQ file** (name `IQ file`, `detail` `row:iqfile`; `ACTIVE` when the source in use is a recording), **the sound
+card** (name `Sound card`, `detail` `row:soundcard`; `ACTIVE` when it is the source in use), then the native rows, then
+the SoapySDR rows. **An entry's index is its row in the combo** (the numbering `fact.source.row` speaks: 0 the
+generator, 1 the IQ file, 2 the sound card, 3 and on the radios), and its `id` is that plus one. 0.2 listed only the
+generator and the scanned radios: the two fixed rows are new, and every radio's entry moved down two places (a
+0.2 interface found its radio by the `detail`, which did not change). A native row's name is the driver's label; the
+combo draws it with " (native)" after it, in its own words, **except the Pluto's** (an address, not a radio that was
+found; the kind of a row is the part of its id before the first `:`). A row is a SoapySDR row when its id begins
+`soapy:`.
+
+**A row's id is read from a fact, whole.** `detail` holds 159 bytes and the id a row sends is not that short: a SoapySDR
+row's is `soapy:` and the whole kwargs string a vendor module reported (a network USRP's can run long), the Pluto's is `pluto:uri=` and an address of up to 191 bytes. A cut id matches no
+scanned device, and `FOXAPI_OP_SELECT_SOURCE` answers `NOT_FOUND` ("no scanned device matches that id"); **`SELECT_SOURCE`'s "an id from
+`DEVICES`, verbatim" therefore means from `fact.source.id.<n>`, never from a `detail` that may have been cut.**
+`fact.source.id.<n>` is the whole id of the entry whose `id` is `n` (1 to the entry count; `NOT_FOUND` past it). It is
+the id the combo itself sends, from one spelling in the engine (`Engine::sourceIdForRow`). An interface reads it when
+a row is clicked and does not keep a copy. The Pluto's id is built when the native walk ran, from the address the
+box held then (`pluto:uri=<address>`), so its `ACTIVE` compares an old address with the open one and is false after an
+Open at a changed address: **an interface draws the Pluto's selection from `fact.source.row`, which follows the
+family alone**, and does not use that entry's `ACTIVE`.
+
+**The facts.**
+
+| Key | Value | |
+|---|---|---|
+| `fact.source.row` | the Source combo's own selected row as a decimal: `-1` none (a rescan dropped the radio's row, or a restore failed: the combo then shows the live source's name), `0` the generator, `1` the IQ file, `2` the sound card, `3` and on the radios in `DEVICES` order. Not `DEVICES`' `ACTIVE`, which is the source **in use**: they differ whenever the combo sits on the IQ file, the sound card or the Pluto before Open. Which panel shows under the combo is decided by this row | |
+| `fact.source.keep` | the kind of the radio, sound card or file the config is still naming while the generator stands in for it (a restore that could not open it, a card released for a re-Open, a card handed back by the patch): `""` when none, else `file`, `soundcard`, `soapy` or the native driver's key. The lamp on the section's header is lit when it is not `""` and not `file`, no radio is open, the source in use is the generator and `FOXAPI_SRC_CARD_OPENING` is clear. (`STATUS_LINES` `restoreKeepLabel` is the combo's caption for it, and is empty for a card kept at a startup restore) | |
+| `fact.source.opening` | the name of the radio being opened, as the "Opening ..." line says it (the row's label, "... (native)" for a SoapySDR row opened through its native driver, "ADALM-Pluto at <address>"); `""` when no radio is opening (`FOXAPI_RX_DEVICE_OPENING`) | |
+| `fact.source.scanGate` | with `FOXAPI_SRC_SCAN_GATED`, the name the two deferral sentences quote: the open radio's model (never its serial), the label of the one opening, `the patch radio '<name>'`, `a patch radio`, or `a radio this session could not release`; `""` otherwise. English, quoted whole in the interface's own sentence | |
+| `fact.source.scanSkip` | with the scan gated, the drivers a scan beside the open radios leaves out, joined `", "`; **`""` means the whole SoapySDR scan is deferred** and a non-empty text means Refresh still runs and leaves exactly these out. `""` with nothing gating it | |
+| `fact.source.faultedDrivers` | the drivers whose scan child died earlier this session (they are not asked again), lower case, joined `", "`; `""` when none. Taken when a scan lands | |
+| `fact.source.plutoUri` | the address in the Pluto box, as the engine holds it (`FOXAPP_OP_SET_PLUTO_URI` stores each edit; 191 bytes at most) | LOCAL |
+| `fact.source.id.<n>` | the whole `SELECT_SOURCE` id of `DEVICES` entry `n` (above) | |
+
+**The radio's fault, whole - `STATUS_LINES` key `deviceFault`** (level 3; and `fact.status.deviceFault`). The state's
+`faultMessage` is the same sentence cut at 127 bytes, and the one the section must not draw cut is 134 bytes: the
+zombie-source sentence ("source thread: the radio's driver is holding an abandoned thread and this source cannot
+restart; pick another source or restart FoxSDR"). The section adds "Reconnect it and pick the source again, or switch
+to the signal generator" under every fault **except** one whose sentence contains `restart FoxSDR`, and in the cut copy
+that ending is gone, so the line would be added under a sentence that says the opposite. **An interface draws the fault
+from this line and the flag `FOXAPI_RX_FAULTED`, never from `faultMessage`** (which stays the quick, cut copy for
+those that want only a word). The line is the pipeline's sentence while it is faulted, or the test stand-in's.
+
+**`SAMPLE_RATES` `detail`** is the rate's caption as the Rate combo letters it ("2.400 MS/s"; an Airspy's rates are
+captioned by its decimation). The row that is current is the one **nearest** `sampleRateHz` of the state (a radio that
+coerces a rate to one it supports is on that row, and `SAMPLE_RATES`' own `ACTIVE`, an exact match, is then on none).
+`value[0]` is the Hz `FOXAPI_OP_SET_SAMPLE_RATE` takes.
+
+**`UNBOUND_RADIOS` (40)** - the USB radios that are plugged in and that nothing can open, because no WinUSB driver is
+bound (the DVB-T television driver, or none). One entry each: `name` the bus description (`""` when it reports none:
+the section then says "A USB radio"), `detail` the family that decides the instruction, `rtl` (an RTL2832U, a
+composite device whose SDR half is interface 0), `rx888` (two identities, each to be bound) or `""` (any other), and
+`value[0]`, `value[1]` the vendor and product ids. The three sentences stay in the interface; with the family the
+interface carries no table of ids. Rebuilt by every native walk.
+
+**`SCAN_EVIDENCE` (41)** - where the SoapySDR runtime looked, for the "No radio hardware found" tree: `value[0]` 1 a
+vendor install (`name` its vendor, `detail` its root), 2 a module search path (`detail`), 3 a module loaded (`detail`),
+in that order. **LOCAL sessions only: a REMOTE session's read is `DENIED`** (the entries are paths on the engine's
+machine). `detail` cuts at 159 bytes; it is evidence for a person. **The engine takes it once, when a whole scan lands
+having found nothing** (not by the interface every frame: each of the three asks is a call into the SoapySDR library,
+the first loads it and edits the process's environment and DLL search order), and it is empty at every other
+time, including after a scan that found a radio and after one that left a driver out. The count of entries with
+`value[0]` 3 is "N vendor modules are loaded". A hermetic engine (one whose scan is stood in for) reads none of it.
+
+**The sound card.**
+
+| List | Entry |
+|---|---|
+| `SOUND_CARDS` (42) | the inputs as the last listing found them, in the backend's order. `id`: index + 1 (what `FOXAPP_OP_SOUND_CARD_PICK` takes); `name`: `device (host API)` as the combo letters it; `detail`: the host API; `ACTIVE`: the entry the form's card is, matched the way the open matches it (an entry chosen from the list names exactly that entry even beside an identical card; a name read from a saved setting is matched by the card's identity, which on Linux ignores the ALSA card number). A form with no device named means the system's default input, which is the entry the backend flags as the default. None is `ACTIVE` when the form's card is not listed (a saved card that is unplugged: the combo keeps its name in the preview, and `soundCardMissing` says why). Empty until `FOXAPI_SRC_CARD_LISTED` |
+| `SOUND_CARD_RATES` (43) | the rates that entry offers in the form's format (real needs an even rate of at least 16 kHz; I/Q needs two channels), ascending, in Hz of the card: `value[0]`; `FOXAPI_ITEM_EXCLUSIVE` 0x400000 for a rate only WASAPI exclusive mode reaches ("(exclusive)" and the tooltip); `ACTIVE`: the form's rate. Empty when no entry is `ACTIVE`; the Rate combo then shows the form's own figure |
+| `SOUND_CARD_FORM` (44) | ONE entry (`id` 1), the form the Open key opens: `name` the device and `detail` its host API (**`""` to a REMOTE session**, whole in the two LOCAL facts below), `value[0]` the card's rate Hz, `value[1]` the I/Q centre Hz, `value[2]` the channel (0 left, 1 right), and the flags `FOXAPI_ITEM_IQ_STEREO` 0x800000 (I/Q, else real), `FOXAPI_ITEM_SWAP_IQ` 0x1000000 and `FOXAPI_ITEM_PICKED` 0x2000000 (chosen from `SOUND_CARDS`) |
+
+| Key | Value | |
+|---|---|---|
+| `fact.soundcard.device`, `fact.soundcard.hostApi` | the form's card, whole | LOCAL |
+| `fact.soundcard.span` | `<lo Hz> <hi Hz>`, each written to the digit it reads back by (`%.17g`): what the form's card would receive on the air through the converter kept for it (none for I/Q; a down-converter for real), the two figures of "Receives ... to ...". Never negative; an inverting converter swaps the edges | |
+
+**`FOXAPP_OP_SOUND_CARD_PICK` (0x8420, SETTINGS, LOCAL sessions only; `ival[0]`: a `SOUND_CARDS` entry's `id`)** is
+what a click on a row of the Device combo does. The engine puts that card's name and host API into the form, marks it as
+chosen from the list, clears the `soundCardMissing` line, and **keeps the form's rate when the new card offers it in the
+form's format, else the card's own default, else the highest it offers** - the rule the window held in its draw. `NOT_FOUND`
+(and nothing changes) for an id with no entry and before the cards are listed. The pick of the card already `ACTIVE` is
+applied all the same (it marks the card as chosen from the list); an interface that wants a click on the current row to do
+nothing does not send it.
+
+**`FOXAPP_OP_SOUND_CARD_FORM` gains a field mask in `ival[1]`.** 0 (and 127) is the whole form, as before. Otherwise a set
+bit names a field the command carries, and every other field keeps the engine's own value: 1 the device and host API (the
+text), 2 the format (`ival[0]` bit 1), 4 the channel (bit 2), 8 swap I/Q (bit 4), 16 chosen from the list (bit 8), 32
+the rate (`num[0]`), 64 the centre (`num[1]`). A control that changed one thing sends one field, so it cannot write
+back a stale copy of another that a pass changed since the interface last read it (a worker's open result replaces the whole
+form). A bit past 64, or a negative mask, is `OUT_OF_RANGE` and changes nothing. The form is the engine's: the Open key
+(`SELECT_SOURCE` `soundcard:open`) opens the card the engine's form describes, not a copy an interface holds.
+
+**What the engine now does on its own** (each used to be a command an interface sent every frame, and none is any
+longer needed - the commands stay valid):
+- *The deferral's one log line.* "Device scan deferred while X is open" is written once for each radio; the latch that
+  keeps it from being written sixty times a second is let go **by the engine's pass the moment the gate opens**
+  (`FOXAPP_OP_CLEAR_STATUS` with `FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED` did it from the window's frame whenever the
+  section was drawn).
+- *Listing the sound cards.* While the combo's row is the sound card (`fact.source.row` `2`) and the cards are not listed,
+  not being listed and no card is opening, **the pass starts the listing** (`FOXAPP_OP_SOUND_CARDS_WANTED` did it from the
+  window every frame until the list arrived). Unlike then it happens whether or not the section is on screen.
+- *The sound card's centre.* `FOXAPP_OP_SOUNDCARD_IQ_CENTRE` answers `NO_CHANGE` ("no I/Q sound card is running") when
+  the source in use is not a sound card in I/Q mode, so an interface sends it after every centre it commits and does not
+  consult the live card first.
+- *The scan the combo's first open asks for* is still `FOXAPP_OP_SCAN_DEVICES_ON_OPEN` (the native walk, always, runs inline
+  in the pass that applies it; the SoapySDR scan if it has never run, or a partial one is owed).
+
+**What moves `listSeq`, beyond 8.1 to 8.9.** Everything new is in the list fingerprint, and the flag word moves `seq` and
+`deviceSeq` itself: the combo's row, the kept source's kind, the radio being opened and its label, the open radio's model, the scan's
+four states and **the gate as the answer it is** (the patch's radios still opening, and the process-wide count of open
+SoapySDR radios, move it with nothing else changing), the network box and the UHD note, the SDRplay row flag, the Pluto's
+address, the unbound dongles (id, product and description), the drivers that faulted, the evidence (as one counter, bumped when a
+landed scan changed it; its rows are paths and are not hashed one by one), the whole fault sentence, the rates' captions, the
+sound card's listing state, its form and every input it listed (name, host API, default rate, each rate and whether it is exclusive).
+The block, the facts, the families of the unbound dongles, the matching of the form's card and the converter lookup behind
+`fact.soundcard.span` are built only when it moves. **Nothing allocates in a settled pass.**
+
+**How the window reads it** (what step B of the port holds the engine to):
+
+| The window draws | From |
+|---|---|
+| the header's chip, lamp and lit state | `deviceName`; `FOXAPI_RX_FAULTED`, `FOXAPI_RX_RUNNING`; the lamp: `fact.source.keep`, `FOXAPI_RX_DEVICE_OPEN`, the `ACTIVE` entry of `DEVICES` being the generator, `FOXAPI_SRC_CARD_OPENING` |
+| "Device stopped: ..." and its advice | `FOXAPI_RX_FAULTED` and `STATUS_LINES` `deviceFault` (whole) |
+| "Opening ..." / "Scanning for devices..." and the greyed combo | `FOXAPI_RX_DEVICE_OPENING` with `fact.source.opening`; `FOXAPI_SRC_SCAN_PENDING` |
+| the combo's preview and rows | `fact.source.row`; `DEVICES` entry by entry (the row's index is its entry's); `restoreKeepLabel` with `fact.source.keep` for the saved-not-open preview; `FOXAPI_RX_PATCH_RUNNING` greys the rows |
+| a click on a row | `FOXAPI_OP_SELECT_SOURCE` with `fact.source.id.<entry id>` |
+| the scan deferral sentences and the Refresh tooltip | `FOXAPI_SRC_SCAN_GATED`, `fact.source.scanGate`, `fact.source.scanSkip` |
+| "Look for network USRPs" and the line under it | `FOXAPI_SRC_NETWORK_USRPS`, `FOXAPI_SRC_UHD_LEFT_OUT` |
+| the note of drivers not scanned again | `fact.source.faultedDrivers` |
+| one sentence for each dongle that cannot be opened | `UNBOUND_RADIOS` |
+| the SDRplay note | `STATUS_LINES` `sdrPlayAdvice` and `sdrPlayApiDetail` while `FOXAPI_SRC_SDRPLAY_ROWS` is clear |
+| "No radio hardware found" and the tree | `FOXAPI_SRC_SCANNED`, not `FOXAPI_SRC_SCAN_PARTIAL`, not `FOXAPI_SRC_SCAN_PENDING`, and no entry in `DEVICES` that is a SoapySDR row (id begins `soapy:`); `SCAN_EVIDENCE` |
+| which panel shows under the combo (IQ file / sound card / Pluto) | `fact.source.row`; the Pluto's row is the entry whose id begins `pluto:` |
+| the Pluto box | `fact.source.plutoUri` for the draft; `FOXAPP_OP_SET_PLUTO_URI` per edit; Open: `SELECT_SOURCE` `open-pluto:uri=<draft>` |
+| the radio panel's Rate, Antenna, Auto gain, gain sliders, bias tee, options | `SAMPLE_RATES` (`detail`, nearest to `sampleRateHz`), `ANTENNAS`, `FOXAPI_RX_DEVICE_AGC` and `FOXAPI_RX_AGC_SUPPORTED`, `GAINS`, `FOXAPI_RX_BIAS_TEE_*`, `DEVICE_OPTIONS` (8.3, unchanged) |
+| the sound card panel | `FOXAPI_SRC_CARD_*`; `SOUND_CARDS`, `SOUND_CARD_RATES`, `SOUND_CARD_FORM`; `fact.soundcard.*`; `soundCardMissing`; the commands above |
+
+**Timing.** Every command lands at the engine's next pass, and the lists, facts and flag word show it after that pass's
+publish; a worker's result is collected by the pass after the one that started it. So an interface that sends a form change and
+draws in the same frame draws the old form for one pass (the window's old "apply at once" is no longer something an
+interface can ask for), and the Pluto box deactivating while its last edit is still queued reads the previous address back
+for one pass: an interface keeps its own draft for the box and sends it with Open, as the window does for the scanner's
+fields.
+
+**What a test may stand in for.** In an engine of the application's own build (`Engine::testHooks_`, not the table):
+`nativeScanDetail` stands in for the whole native walk - the radios, the unbound dongles, the SDRplay advice and detail
+and the API-row flag, so those sentences are reachable with no USB walk and no SDRplay install - and `scanDiagnostics`
+for the three SoapySDR diagnostics and the faulted-driver list. With the scan stood in for (`soapyScan`) and no
+diagnostics hook, the engine reads none of the four: a hermetic engine never calls into the runtime.
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
@@ -1001,6 +1201,10 @@ could not be written is `FAILED` (the note says "Could not write <path>"). Nothi
 in the first two. A REMOTE session is `DENIED`. The text is at most `FOXAPI_MAX_LONG_TEXT` (1
 MiB): about 130 000 ids of seven digits.
 
+`FOXAPP_OP_SOUND_CARD_PICK` (0x8420, SETTINGS, **LOCAL sessions only**): `ival[0]` is a `SOUND_CARDS` entry's `id`; the
+engine puts that card in the sound card form (and keeps, or re-chooses, the rate), see 8.10. `FOXAPP_OP_SOUND_CARD_FORM`
+takes a field mask in `ival[1]` (8.10); 0 is the whole form, as it always was.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the
@@ -1009,7 +1213,7 @@ auto-notch readout (2) (section 8.4), bookmarks export and scanner progress (11)
 instruments as data (4), map tiles and track info (6), per-node patch editing as ops (7: 0.3
 reads the graph back and edits it whole through
 `FOXAPP_OP_PATCH_SET_GRAPH` with `submit_text`), the transmitter's microphone
-list and meters (8), device-scan diagnostics (9), diagnostics (12), updates (13), zoomed spectrum (14),
+list and meters (8), device-scan diagnostics (9: served in 0.3 for the SoapySDR runtime's own account, `SCAN_EVIDENCE`, section 8.10), diagnostics (12), updates (13), zoomed spectrum (14),
 multi-VFO (15), a settings catalogue (16). The AUDIO stream, the settings
 store and the decoders' text and image EVENTS are still not served by this
 engine (their capability bits are clear).

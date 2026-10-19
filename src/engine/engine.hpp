@@ -158,6 +158,10 @@ struct EngineStatusText {
     std::string catalogStatus;
     std::string addAllSummary;
     bool addAllFailed = false;
+    // API 0.3 8.10: the radio's fault sentence WHOLE (STATUS_LINES key deviceFault, level 3): the pipeline's, or the
+    // test stand-in's. FoxReceiverState::faultMessage is the same text cut at 127 bytes, and the zombie-source
+    // sentence is 134 - a drawing that looks for the end of it ("restart FoxSDR") must read this, not that.
+    std::string deviceFault;
 };
 
 class Engine {
@@ -196,6 +200,28 @@ private:
     // nested struct used by an inline static member of the enclosing class
     // ("required before the end of its enclosing class"). testHooks_ below is
     // value-initialised, which makes both pointers null all the same.
+    //
+    // WHAT scanNative's HOOKED WALK RETURNS (testHooks_.nativeScanDetail): the rows, and the rest of what the real
+    // walk leaves behind - the dongles present but not bound to WinUSB, the SDRplay API's advice and where it
+    // looked, and whether an API row was found - so the Source section's sentences about them are reachable with
+    // no USB walk and no SDRplay install (API 0.3 8.10).
+    struct NativeScanResult {
+        std::vector<cascade::source::NativeDeviceInfo> devices;
+        std::vector<cascade::usb::UsbDeviceInfo> unbound;
+        std::string sdrPlayAdvice;
+        std::string sdrPlayApiDetail;
+        bool sdrPlayRowsFound = false;
+    };
+    // WHAT THE SOAPYSDR RUNTIME SAYS ABOUT ITSELF, and what this process knows of earlier scans
+    // (testHooks_.scanDiagnostics): the modules loaded, the vendor installs and the module search paths, and the
+    // drivers whose scan child died this session. The real answers cross into SoapySDR.dll (the first call edits
+    // the process's environment and DLL search order), so a test must never reach them.
+    struct ScanDiagnostics {
+        std::vector<std::string> modules;
+        std::vector<std::string> searchPaths;
+        std::vector<cascade::source::VendorRoot> vendors;
+        std::vector<std::string> faultedDrivers;
+    };
     struct TestHooks {
         // Replaces makeDeviceSource's construction when set: the "radio" a
         // worker or the restore opens is the test's own recording fake.
@@ -203,6 +229,14 @@ private:
         // Replaces scanNative's USB walk when set: the list it returns IS the
         // native device list, so no test ever enumerates the desk's radios.
         std::vector<cascade::source::NativeDeviceInfo> (*nativeScan)();
+        // The same stand-in with the whole of a walk's result (API 0.3 8.10); wins over nativeScan when both are
+        // set. Called with `out` empty; whatever it leaves there is the walk's answer (the Pluto row is added to
+        // it, as a real walk adds it, unless the hook listed one).
+        void (*nativeScanDetail)(NativeScanResult& out);
+        // Stands in for the four diagnostics a scan that found nothing reads (API 0.3 8.10). Set together with
+        // soapyScan or alone; with soapyScan set and this null the engine reads NONE of them (a hermetic engine
+        // never calls into the runtime).
+        ScanDiagnostics (*scanDiagnostics)();
         // Replaces PortAudio for the Source section's SOUND CARD when set:
         // the list scanSoundCards asks for and every backend an open makes
         // (tests/test_soundcard_app_paths.cpp), so no test lists or opens
@@ -741,6 +775,11 @@ private:
     int soapyRowBase() const {
         return kNativeRowBase + static_cast<int>(nativeDevices_.size());
     }
+    // THE ID A COMBO ROW SENDS (FOXAPI_OP_SELECT_SOURCE's text), WHOLE: "siggen"; "row:iqfile"; "row:soundcard";
+    // "<driver>:<args>" for a native row; "soapy:<args>" for a SoapySDR row; "" for a row there is not. One
+    // spelling for the combo, the bounded-run seam and the table's DEVICES list and fact.source.id.<n>
+    // (API 0.3 8.10) - the list item's detail cuts it at 159 bytes, this does not.
+    std::string sourceIdForRow(int row) const;
 
     // The label of the native row whose args are `args`, or the args
     // themselves when no row matches (a device that has since been
@@ -858,11 +897,30 @@ private:
     // gui::networkUsrpHint draws from under the Source list.
     std::shared_ptr<std::vector<std::string>> soapyScanAbsent_;
     std::vector<std::string> soapyAbsentDrivers_;
+    // API 0.3 8.10, what the Source section says when a SoapySDR scan has landed (the section used to ask the
+    // runtime for these every frame it showed the "No radio hardware found" block; each was a call into
+    // SoapySDR.dll). faultedDrivers_ is the drivers whose scan child died this session, taken at every landing;
+    // scanEvidence_ is the runtime's own account of where it looked, taken only when a whole scan landed with
+    // nothing found, and cleared when one finds something. scanEvidenceSeq_ moves with every write of either, and
+    // is what the list fingerprint hashes (the texts are not hashed one by one).
+    std::vector<std::string> faultedDrivers_;
+    ScanDiagnostics scanEvidence_;
+    std::uint64_t scanEvidenceSeq_ = 0;
+    // Takes the diagnostics a landed scan reads (the hook's, the runtime's, or - with soapyScan hooked and no
+    // scanDiagnostics - none), `empty` being whether the scan found nothing in a whole bus.
+    void takeScanDiagnostics(bool wholeAndEmpty);
+    // The source's own housekeeping, once a pass at the head of pumpWorkers (API 0.3 8.10): what the window used to
+    // send as commands from its frame, every frame, because the draw was where it knew the section was showing.
+    void pumpSourceHousekeeping();
+    // The fault sentence the list block carries, WHOLE (the pipeline's, or the test stand-in's): the state's
+    // faultMessage cuts it at 127 bytes. Kept so the per-pass fingerprint hashes it without a copy.
+    std::string apiFaultText_;
     // A deferral has been logged for the radio currently open. The combo's
     // lazy scan asks on every frame the dropdown is open, so without this the
     // one diag line would be written sixty times a second; cleared the moment
-    // the gate opens again (drawSourceSection), so the next radio gets its
-    // own line.
+    // the gate opens again (Engine::pumpSourceHousekeeping, at the head of the
+    // pass: the Source section used to ask for it by a command every frame),
+    // so the next radio gets its own line.
     bool soapyScanDeferredLogged_ = false;
     // THE SCAN BESIDE AN OPEN RADIO (2026-09-23; engine/device_scan_plan.hpp).
     // soapyScanSkip_ is the drivers the scan in flight left out - the open
@@ -2392,6 +2450,7 @@ private:
     std::uint64_t apiListsFingerprint();
     std::shared_ptr<const ApiListBlock> buildApiLists(std::uint64_t fingerprint);
     void buildApiLists03(ApiListBlock& b);
+    void buildApiListsSource(ApiListBlock& b);
     std::string transmitArgsSeed() const;
     std::shared_ptr<const ApiListBlock> apiLists_;  // the pumping thread's newest
     unsigned apiListsBookmarkVersion_ = 0;

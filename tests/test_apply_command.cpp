@@ -1198,6 +1198,85 @@ void sourceOps(AppWindow& a) {
                 CHECK(got.cardRateHz == want.cardRateHz);
                 CHECK(got.iqCentreHz == want.iqCentreHz);
             }
+
+            // THE FIELD MASK (API 0.3 8.10): a command that carries only the rate leaves every other field as the
+            // engine holds it, even though the rest of the command (the text, the bits, the centre) says otherwise.
+            {
+                cascade::source::SoundCardSettings base;
+                base.device = "Held Card";
+                base.hostApi = "Held API";
+                base.format = cascade::source::SoundCardFormat::IqStereo;
+                base.channel = 1;
+                base.swapIq = true;
+                base.pickedFromList = true;
+                base.cardRateHz = 48000.0;
+                base.iqCentreHz = 3.0e6;
+                CHECK(ok(A::apply(a, cascade::gui::soundCardFormCommand(base))));
+                cascade::source::SoundCardSettings stale;  // everything else wrong
+                stale.cardRateHz = 192000.0;
+                const cascade::core::cmd::QueuedCommand onlyRate =
+                    cascade::gui::soundCardFormCommand(stale, FOXAPP_SOUND_CARD_FIELD_RATE);
+                CHECK(ok(A::apply(a, onlyRate)));
+                const cascade::source::SoundCardSettings kept = A::soundCardForm(a);
+                CHECK(kept.cardRateHz == 192000.0);
+                CHECK(kept.device == "Held Card" && kept.hostApi == "Held API");
+                CHECK(kept.format == cascade::source::SoundCardFormat::IqStereo && kept.channel == 1 && kept.swapIq &&
+                      kept.pickedFromList && kept.iqCentreHz == 3.0e6);
+                // Every bit of the mask on its own touches its field and no other.
+                const std::int64_t fields[] = {FOXAPP_SOUND_CARD_FIELD_DEVICE,  FOXAPP_SOUND_CARD_FIELD_FORMAT,
+                                               FOXAPP_SOUND_CARD_FIELD_CHANNEL, FOXAPP_SOUND_CARD_FIELD_SWAP_IQ,
+                                               FOXAPP_SOUND_CARD_FIELD_PICKED,  FOXAPP_SOUND_CARD_FIELD_RATE,
+                                               FOXAPP_SOUND_CARD_FIELD_CENTRE};
+                for (const std::int64_t field : fields) {
+                    CHECK(ok(A::apply(a, cascade::gui::soundCardFormCommand(base))));
+                    cascade::source::SoundCardSettings other;  // every field different from `base`
+                    other.device = "Other";
+                    other.hostApi = "Api";
+                    other.format = cascade::source::SoundCardFormat::RealMono;
+                    other.channel = 0;
+                    other.swapIq = false;
+                    other.pickedFromList = false;
+                    other.cardRateHz = 96000.0;
+                    other.iqCentreHz = 9.0e6;
+                    CHECK(ok(A::apply(a, cascade::gui::soundCardFormCommand(other, field))));
+                    const cascade::source::SoundCardSettings got = A::soundCardForm(a);
+                    CHECK((got.device == "Other") == ((field & FOXAPP_SOUND_CARD_FIELD_DEVICE) != 0));
+                    CHECK((got.hostApi == "Api") == ((field & FOXAPP_SOUND_CARD_FIELD_DEVICE) != 0));
+                    CHECK((got.format == cascade::source::SoundCardFormat::RealMono) ==
+                          ((field & FOXAPP_SOUND_CARD_FIELD_FORMAT) != 0));
+                    CHECK((got.channel == 0) == ((field & FOXAPP_SOUND_CARD_FIELD_CHANNEL) != 0));
+                    CHECK((!got.swapIq) == ((field & FOXAPP_SOUND_CARD_FIELD_SWAP_IQ) != 0));
+                    CHECK((!got.pickedFromList) == ((field & FOXAPP_SOUND_CARD_FIELD_PICKED) != 0));
+                    CHECK((got.cardRateHz == 96000.0) == ((field & FOXAPP_SOUND_CARD_FIELD_RATE) != 0));
+                    CHECK((got.iqCentreHz == 9.0e6) == ((field & FOXAPP_SOUND_CARD_FIELD_CENTRE) != 0));
+                }
+                // A mask with a bit that names no field, or a negative one, is refused and changes nothing.
+                CHECK(ok(A::apply(a, cascade::gui::soundCardFormCommand(base))));
+                CHECK(refused(A::apply(a, cascade::gui::soundCardFormCommand(stale, 128)), FOXAPI_OUT_OF_RANGE));
+                CHECK(refused(A::apply(a, cascade::gui::soundCardFormCommand(stale, -1)), FOXAPI_OUT_OF_RANGE));
+                CHECK(A::soundCardForm(a).cardRateHz == 48000.0);
+            }
+
+            covering(FOXAPP_OP_SOUND_CARD_PICK);
+            {
+                // The list the engine took when the row was chosen: one card, "Fake Card (Fake API)", 48 kHz.
+                // A form on another card at a rate the new card does not offer comes back on the card's own.
+                cascade::source::SoundCardSettings before;
+                before.device = "Somewhere Else";
+                before.hostApi = "Other API";
+                before.cardRateHz = 44100.0;
+                CHECK(ok(A::apply(a, cascade::gui::soundCardFormCommand(before))));
+                FoxCommand pick = cmd::make(FOXAPP_OP_SOUND_CARD_PICK);
+                pick.ival[0] = 1;
+                CHECK(ok(A::apply(a, pick)));
+                const cascade::source::SoundCardSettings p = A::soundCardForm(a);
+                CHECK(p.device == "Fake Card" && p.hostApi == "Fake API" && p.pickedFromList);
+                CHECK(p.cardRateHz == 48000.0);
+                pick.ival[0] = 0;
+                CHECK(refused(A::apply(a, pick), FOXAPI_NOT_FOUND));
+                pick.ival[0] = 2;
+                CHECK(refused(A::apply(a, pick), FOXAPI_NOT_FOUND));
+            }
         }
 
         // Back to a radio for the device ops below.

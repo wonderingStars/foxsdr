@@ -131,6 +131,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                         f.gainCount != o.gainCount ||
                         !sameText(f.deviceName, o.deviceName, FOXAPI_NAME_CHARS) ||
                         !sameText(f.faultMessage, o.faultMessage, FOXAPI_MESSAGE_CHARS) ||
+                        // 0.3 (8.10): the Source section's conditions (the scan's states, the sound card's)
+                        f.sourceFlags != o.sourceFlags ||
                         gainsMoved;
     const bool audio = first || f.volume != o.volume || changed(f.flags, o.flags, kAudioFlags) ||
                        !sameText(f.sinkName, o.sinkName, FOXAPI_NAME_CHARS) ||

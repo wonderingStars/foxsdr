@@ -23,10 +23,15 @@
 #include "core/patch_plan.hpp"
 #include "core/plugin_host.hpp"
 #include "core/serial_port.hpp"
+#include "engine/device_scan_plan.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/receiver_tables.hpp"
+#include "engine/soundcard_panel.hpp"
 #include "source/airspy_source.hpp"
+#include "source/rtlsdr_source.hpp"
+#include "source/rx888_source.hpp"
+#include "source/soundcard_source.hpp"
 
 namespace cascade::engine {
 
@@ -58,8 +63,6 @@ struct Fingerprint {
         bytes(&v, sizeof(v));
     }
 };
-
-std::string deviceId(const std::string& kind, const std::string& args) { return kind + ":" + args; }
 
 // Does a durable list of module file names (the grants the config holds) name `key`? An empty key never matches,
 // the rule PluginUi::tuneAllowed and PluginStopSet follow.
@@ -406,6 +409,63 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(airspy->decimation());
         f.value(airspy->hardwareSampleRateHz());
     }
+    // --- API 0.3 8.10, the Source section and the sound card as their pages draw them ----------------------------
+    // Every input of the facts, lists and flags below that the rows above do not already hash. In place: nothing here
+    // allocates (the sound card list and the unbound dongles are small, and are hashed by what they carry).
+    //  - the combo's own row, and what the section says about the radio being kept / being opened
+    f.value(sourceSel_);
+    f.text(restoreKeep_.kind);
+    f.value(deviceOpenPending_);
+    f.text(deviceBusyLabel_);
+    f.text(deviceModel_);
+    //  - the scan's state, and the inputs of the gate (soapyScanGated) and of the plan behind scanSkip that nothing
+    //    above hashes: the process-wide count of open SoapySDR radios (an abandoned one keeps the scan gated for the
+    //    rest of the session with no radio installed) and the patch radios still opening. The gate's ANSWER is not
+    //    hashed: it is a function of these and of members hashed above.
+    f.value(soapyScanPending_);
+    f.value(soapyScanned_);
+    f.value(soapyScanPartial_);
+    f.value(cascade::source::SoapySource::openDeviceCount());
+    for (const auto& p : patchRadioPending_) { f.value(p.first); }
+    f.value(lookForNetworkUsrps_);
+    for (const std::string& d : soapyAbsentDrivers_) { f.text(d); }
+    f.value(sdrPlayRowsFound_);
+    //  - the Pluto's address, the dongles that cannot be opened, what the last scans said about drivers and the
+    //    runtime (the evidence as one counter: its rows are paths)
+    f.cstr(plutoUri_);
+    for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
+        f.value(u.vid);
+        f.value(u.pid);
+        f.text(u.description);
+    }
+    for (const std::string& d : faultedDrivers_) { f.text(d); }
+    f.value(scanEvidenceSeq_);
+    //  - the radio's fault sentence WHOLE (STATUS_LINES deviceFault) and the rates' captions
+    f.text(apiFaultText_);
+    if (haveDevice) {
+        for (const std::string& l : deviceRateLabels_) { f.text(l); }
+    }
+    //  - the sound card: where the listing stands, the form, and the inputs it listed
+    f.value(soundCardListed_);
+    f.value(soundCardScanPending_);
+    f.value(soundCardOpenPending_);
+    f.text(soundCard_.device);
+    f.text(soundCard_.hostApi);
+    f.value(soundCard_.format);
+    f.value(soundCard_.channel);
+    f.value(soundCard_.swapIq);
+    f.value(soundCard_.iqCentreHz);
+    f.value(soundCard_.cardRateHz);
+    f.value(soundCard_.pickedFromList);
+    for (const cascade::source::SoundCardDevice& d : soundCardDevices_) {
+        f.text(d.name);
+        f.text(d.hostApi);
+        f.value(d.defaultRateHz);
+        for (const cascade::source::SoundCardRate& r : d.rates) {
+            f.value(r.hz);
+            f.value(r.exclusive);
+        }
+    }
     return f.h;
 }
 
@@ -424,15 +484,26 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
     // The Source list, in the desktop combo's order: the generator, the
     // native rows, the SoapySDR rows (the ids SELECT_SOURCE takes -
     // Engine::selectSourceById matches them against these same lists).
-    b->devices.push_back({"Signal generator", "siggen", sourceKind_ == "siggen"});
-    for (const auto& d : nativeDevices_) {
-        b->devices.push_back({d.label, deviceId(d.driver, d.args), sourceKind_ == d.driver && deviceArgs_ == d.args});
+    // API 0.3 8.10: the combo's two fixed rows are entries too (an entry's index is its row in the combo), and every id
+    // is the one spelling sourceIdForRow gives the combo.
+    b->devices.push_back({"Signal generator", sourceIdForRow(0), sourceKind_ == "siggen"});
+    b->devices.push_back({"IQ file", sourceIdForRow(1), sourceKind_ == "file"});
+    b->devices.push_back({"Sound card", sourceIdForRow(kSoundCardRow), sourceKind_ == "soundcard"});
+    for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
+        const auto& d = nativeDevices_[i];
+        b->devices.push_back({d.label, sourceIdForRow(kNativeRowBase + static_cast<int>(i)),
+                              sourceKind_ == d.driver && deviceArgs_ == d.args});
     }
-    for (const auto& d : soapyDevices_) {
-        b->devices.push_back({d.label, deviceId("soapy", d.args), sourceKind_ == "soapy" && deviceArgs_ == d.args});
+    for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
+        const auto& d = soapyDevices_[i];
+        b->devices.push_back({d.label, sourceIdForRow(soapyRowBase() + static_cast<int>(i)),
+                              sourceKind_ == "soapy" && deviceArgs_ == d.args});
     }
     if (device_ != nullptr) {
         b->rates = deviceRatesHz_;
+        for (std::size_t i = 0; i < deviceRatesHz_.size(); ++i) {
+            b->rateLabels.push_back(i < deviceRateLabels_.size() ? deviceRateLabels_[i] : cascade::gui::rateLabel(deviceRatesHz_[i]));
+        }
         b->rateHz = pipeline_.activeSource().sampleRateHz();
         const cascade::source::AirspySource* const airspy = asAirspyDevice();
         for (std::size_t i = 0; i < deviceGainRanges_.size(); ++i) {
@@ -715,6 +786,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         }
     }
     b.serialPorts = serialPorts_;
+    buildApiListsSource(b);
     // THE STATUS LINES, every one (the list shows the ones with text).
     {
         struct Line {
@@ -744,6 +816,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             // one starts) and what the last ADD ALL run did (red when it had failures).
             {"catalogStatus", &catalogStatus_, 1},
             {"addAllSummary", &addAllSummary_, addAllFailed_ ? 3 : 1},
+            // 8.10: the radio's fault sentence WHOLE (FoxReceiverState::faultMessage cuts it at 127 bytes, and the
+            // zombie-source sentence is 134): the pipeline's, or the test stand-in's.
+            {"deviceFault", &apiFaultText_, 3},
         };
         for (const Line& l : lines) {
             b.statusLines.push_back({l.key, *l.text, l.level});
@@ -877,6 +952,100 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         r.kind = 3;
         r.rateHz = ri.rateHz;
         b.recordings.push_back(std::move(r));
+    }
+}
+
+// THE SOURCE SECTION AND THE SOUND CARD (API 0.3 8.10): everything the section draws that the lists above do not
+// carry, built with the block and only when the fingerprint moved - the facts (whole texts and ids), the dongles that
+// cannot be opened, the runtime's evidence, and the sound card's inputs, rates and form.
+void Engine::buildApiListsSource(ApiListBlock& b) {
+    const auto fact = [&b](const std::string& key, std::string value, bool localOnly = false) {
+        b.facts[key] = ApiListBlock::Fact{std::move(value), localOnly};
+    };
+    const auto joined = [](const std::vector<std::string>& v) {
+        std::string out;
+        for (const std::string& x : v) { out += (out.empty() ? "" : ", ") + x; }
+        return out;
+    };
+    // The combo's own row, the kind of radio kept for the config, the radio being opened.
+    fact("source.row", std::to_string(sourceSel_));
+    fact("source.keep", restoreKeep_.kind);
+    fact("source.opening", deviceOpenPending_ ? deviceBusyLabel_ : std::string());
+    // The scan beside an open radio: the name the two deferral sentences quote, and the drivers a scan leaves out
+    // ("" with the whole SoapySDR scan deferred, and with nothing gating it).
+    {
+        const bool gated = soapyScanGated();
+        std::string gate;
+        std::string skip;
+        if (gated) {
+            gate = soapyScanGateDevice();
+            const cascade::gui::SoapyScanPlan plan = soapyScanPlan();
+            if (plan.mode == cascade::gui::SoapyScanMode::SkipSome) { skip = joined(plan.skipDrivers); }
+        }
+        fact("source.scanGate", std::move(gate));
+        fact("source.scanSkip", std::move(skip));
+    }
+    fact("source.faultedDrivers", joined(faultedDrivers_));
+    fact("source.plutoUri", plutoUri_, true);
+    // Every DEVICES entry's whole id, keyed by the entry's own id (index + 1): the item's detail cuts at 159 bytes
+    // and the Pluto's, with its address, can run past it.
+    for (std::size_t i = 0; i < b.devices.size(); ++i) { fact("source.id." + std::to_string(i + 1), b.devices[i].id); }
+    // UNBOUND_RADIOS: the family is the one the Source section's sentence is worded by.
+    for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
+        ApiListBlock::UnboundRadio r;
+        r.description = u.description;
+        r.vid = u.vid;
+        r.pid = u.pid;
+        for (const cascade::usb::UsbId& id : cascade::source::rtlSdrUsbIds()) {
+            if (u.vid == id.vid && u.pid == id.pid) { r.family = "rtl"; }
+        }
+        for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
+            if (u.vid == id.vid && u.pid == id.pid) { r.family = "rx888"; }
+        }
+        b.unbound.push_back(std::move(r));
+    }
+    // SCAN_EVIDENCE: vendor installs, search paths, modules - the order the section's tree draws them in.
+    for (const cascade::source::VendorRoot& v : scanEvidence_.vendors) { b.evidence.push_back({1, v.name, v.root}); }
+    for (const std::string& p : scanEvidence_.searchPaths) { b.evidence.push_back({2, std::string(), p}); }
+    for (const std::string& m : scanEvidence_.modules) { b.evidence.push_back({3, std::string(), m}); }
+    // THE SOUND CARD. The inputs as the last listing found them (ACTIVE: the entry the form's card is, by the same
+    // matching the open uses), the rates that entry offers in the form's format, and the form itself - whole texts
+    // in the LOCAL facts, the figures and flags in the list entry.
+    const int at = cascade::source::matchSoundCard(soundCardDevices_, soundCard_.device, soundCard_.hostApi,
+                                                   soundCard_.pickedFromList)
+                       .at;
+    for (std::size_t i = 0; i < soundCardDevices_.size(); ++i) {
+        const cascade::source::SoundCardDevice& d = soundCardDevices_[i];
+        b.soundCards.push_back({cascade::source::soundCardDeviceLabel(d), d.hostApi, static_cast<int>(i) == at});
+    }
+    if (at >= 0) {
+        for (const cascade::source::SoundCardRate& r :
+             cascade::source::soundCardRatesFor(soundCardDevices_[static_cast<std::size_t>(at)], soundCard_.format)) {
+            b.soundCardRates.push_back({r.hz, r.exclusive, r.hz == soundCard_.cardRateHz});
+        }
+    }
+    {
+        ApiListBlock::SoundCardForm& f = b.soundCardForm;
+        f.device = soundCard_.device;
+        f.hostApi = soundCard_.hostApi;
+        f.rateHz = soundCard_.cardRateHz;
+        f.centreHz = soundCard_.iqCentreHz;
+        f.channel = soundCard_.channel == 1 ? 1 : 0;
+        f.iqStereo = soundCard_.format == cascade::source::SoundCardFormat::IqStereo;
+        f.swapIq = soundCard_.swapIq;
+        f.picked = soundCard_.pickedFromList;
+    }
+    fact("soundcard.device", soundCard_.device, true);
+    fact("soundcard.hostApi", soundCard_.hostApi, true);
+    // What the FORM's card would receive on the air - through the converter kept for that card (an I/Q card takes
+    // none), "<lo Hz> <hi Hz>" to the digit each reads back by - the "Receives ... to ..." line's two figures.
+    {
+        const cascade::core::ConverterSetting stored = cascade::core::converterFor(
+            converters_, resolveConverterKey(cascade::gui::soundCardConverterKey(soundCard_.device, soundCard_.hostApi)));
+        const cascade::gui::SoundCardAirSpan span = cascade::gui::soundCardAirSpan(soundCard_, stored);
+        char text[80];
+        std::snprintf(text, sizeof(text), "%.17g %.17g", span.loHz, span.hiHz);
+        fact("soundcard.span", text);
     }
 }
 

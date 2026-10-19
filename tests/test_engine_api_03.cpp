@@ -91,6 +91,17 @@
 //       live progress (which moves no list); I3 the ADD ALL run's position, total and name, published after
 //       every pass, and its red summary; I4 catalogStatus and addAllSummary as lines, and the language moving the
 //       retired row's sentence; I5 the catalogue counter the fingerprint hashes, at every write of the catalogue.
+//   G11 the Source section and the sound card (window port group 11, API 0.3 section 8.10), against the walk, the
+//       SoapySDR scan, the runtime's diagnostics and a sound card backend that are g11::world()'s (no USB walk, no
+//       SoapySDR call, no PortAudio), and group Z's fake radios: G11-1 DEVICES' fixed rows, whole ids from
+//       fact.source.id.<n> where detail cuts (a cut id refused, the fact's opening the radio), fact.source.row;
+//       G11-2 sourceFlags, ten bits both ways; G11-3 the facts and their edges (LOCAL, NOT_FOUND, known and empty),
+//       and that a hermetic scan reads no runtime diagnostics; G11-4 STATUS_LINES deviceFault whole where the state's
+//       faultMessage cuts the 134-byte zombie sentence; G11-5 SAMPLE_RATES' captions; G11-6 UNBOUND_RADIOS and the
+//       SDRplay note; G11-7 SCAN_EVIDENCE (LOCAL, taken once per empty whole landing); G11-8 the sound card's lists,
+//       facts, FOXAPP_OP_SOUND_CARD_PICK's rate rule, the form's field mask, the converter behind the span, the open
+//       and the keep; G11-9 the two per-frame commands the window used to send are the engine's own pass; G11-10
+//       listSeq exactness: 38 inputs, each moving it once alone.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -134,12 +145,126 @@
 #include "hackrf_fake_usb.hpp"
 #include "source/airspy_source.hpp"
 #include "source/hackrf_source.hpp"
+#include "engine/airspy_panel.hpp"
+#include "engine/receiver_tables.hpp"
+#include "source/rtlsdr_source.hpp"
+#include "source/rx888_source.hpp"
 
 namespace radios83 {
 std::unique_ptr<cascade::source::DeviceSource> make(const std::string& kind);
 std::vector<cascade::source::NativeDeviceInfo> scan();
+extern std::atomic<bool> g_gateOpen;
 }  // namespace radios83
 
+// <<G11 WORLD BEGIN
+// --- group 11's world: what the Source section's hooks hand the engine ------------------------------------
+//
+// The native walk (rows, dongles that cannot be opened, the SDRplay advice), the SoapySDR scan (its rows, held on a
+// gate when a test wants the scan in flight), the SoapySDR runtime's diagnostics (a counter says how often they were
+// asked), and a sound card backend (its listing and its open each behind a gate, a counter for each). Nothing on the
+// desk is enumerated, probed or opened: the real calls into SoapySDR are never made.
+namespace g11 {
+
+struct World {
+    std::vector<cascade::source::NativeDeviceInfo> natives;
+    std::vector<cascade::usb::UsbDeviceInfo> unbound;
+    std::string sdrAdvice, sdrDetail;
+    bool sdrRows = false;
+    std::vector<cascade::source::SoapyDeviceInfo> soapy;
+    std::atomic<bool> soapyGate{true};
+    std::atomic<int> soapyCalls{0};
+    std::vector<std::string> modules, searchPaths, faulted;
+    std::vector<cascade::source::VendorRoot> vendors;
+    std::atomic<int> diagCalls{0};
+    std::vector<cascade::source::SoundCardDevice> cards;
+    std::atomic<bool> listGate{true}, openGate{true};
+    std::atomic<int> listCalls{0}, openCalls{0};
+};
+
+inline World& world() {
+    static World w;
+    return w;
+}
+
+// The long texts of the ids: the Pluto's address (an address box takes 191 bytes) and a SoapySDR row's kwargs.
+inline std::string plutoUriLong() { return "ip:" + std::string(186, 'p'); }  // 189 bytes
+inline std::string soapyLongArgs() { return "driver=uhd,addr=192.168.10.2,type=" + std::string(262, 'x'); }
+
+inline void waitOn(const std::atomic<bool>& gate) {
+    for (int i = 0; i < 10000 && !gate.load(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+}
+
+class Card final : public cascade::source::SoundCardBackend {
+public:
+    std::vector<cascade::source::SoundCardDevice> listDevices() override {
+        ++world().listCalls;
+        waitOn(world().listGate);
+        return world().cards;
+    }
+    bool open(const cascade::source::SoundCardDevice&, int, double, bool, PushFn, void*, std::string&) override {
+        ++world().openCalls;
+        waitOn(world().openGate);
+        open_ = true;
+        return true;
+    }
+    void close() override { open_ = false; }
+    bool alive() override { return open_.load(); }
+
+private:
+    std::atomic<bool> open_{false};
+};
+
+inline void reset() {
+    World& w = world();
+    w.natives = {{engine_api_test::kFakeRadioDriver, "Mock RTL-SDR (serial 00000001)", engine_api_test::kFakeRadioArgs},
+                 {"airspy", "Airspy R2", std::string("serial=") + "644866c83f1a51df"},
+                 {"hackrf", "HackRF One", "serial=0000000000000000457863c8"},
+                 {"pluto", "ADALM-Pluto (network)", "uri=ip:192.168.2.1"}};
+    w.unbound.clear();
+    w.sdrAdvice.clear();
+    w.sdrDetail.clear();
+    w.sdrRows = false;
+    w.soapy = {{"Fake Soapy A", "driver=fake,serial=A"}, {"Long Soapy", soapyLongArgs()}};
+    w.soapyGate = true;
+    w.soapyCalls = 0;
+    w.modules.clear();
+    w.searchPaths.clear();
+    w.faulted.clear();
+    w.vendors.clear();
+    w.diagCalls = 0;
+    cascade::source::SoundCardDevice a;
+    a.index = 0;
+    a.name = "Fake In A";
+    a.hostApi = "Fake API";
+    a.maxInputChannels = 2;
+    a.defaultRateHz = 48000.0;
+    a.isDefault = true;
+    a.rates = {{44100.0, false}, {48000.0, false}, {96000.0, true}};
+    cascade::source::SoundCardDevice b;
+    b.index = 1;
+    b.name = "Fake In B";
+    b.hostApi = "Fake API";
+    b.maxInputChannels = 2;
+    b.defaultRateHz = 192000.0;
+    b.rates = {{96000.0, false}, {192000.0, false}};
+    // A card whose default is not one of its rates: a pick that must re-choose lands on its highest.
+    cascade::source::SoundCardDevice c;
+    c.index = 2;
+    c.name = "Fake In C";
+    c.hostApi = "Fake API";
+    c.maxInputChannels = 2;
+    c.defaultRateHz = 50000.0;
+    c.rates = {{32000.0, false}, {64000.0, false}};
+    w.cards = {a, b, c};
+    w.listGate = true;
+    w.openGate = true;
+    w.listCalls = 0;
+    w.openCalls = 0;
+}
+
+}  // namespace g11
+
+// G11 WORLD END>>
 namespace cascade::gui {
 struct AppWindowTestAccess {
     static void installFakeRadio() {
@@ -244,6 +369,101 @@ struct AppWindowTestAccess {
     static void setProgress(cascade::engine::Engine& e, float p) { e.pluginRepo_.setProgressForTest(p); }
     // The counter the list fingerprint hashes for everything a catalogue entry carries.
     static std::uint64_t catalogSeq(cascade::engine::Engine& e) { return e.catalogSeq_; }
+// <<G11 ACCESS BEGIN
+    // ---- Group 11 (the Source section and the sound card): the hooks, and the inputs of the table, each reachable
+    // alone. The walk, the SoapySDR scan, the runtime's diagnostics and the sound card backend are g11::world()'s.
+    static void g11Walk(cascade::engine::Engine::NativeScanResult& out) {
+        const g11::World& w = g11::world();
+        out.devices = w.natives;
+        out.unbound = w.unbound;
+        out.sdrPlayAdvice = w.sdrAdvice;
+        out.sdrPlayApiDetail = w.sdrDetail;
+        out.sdrPlayRowsFound = w.sdrRows;
+    }
+    static std::vector<cascade::source::SoapyDeviceInfo> g11Soapy() {
+        g11::World& w = g11::world();
+        ++w.soapyCalls;
+        g11::waitOn(w.soapyGate);
+        return w.soapy;
+    }
+    static cascade::engine::Engine::ScanDiagnostics g11Diagnostics() {
+        g11::World& w = g11::world();
+        ++w.diagCalls;
+        cascade::engine::Engine::ScanDiagnostics d;
+        d.modules = w.modules;
+        d.searchPaths = w.searchPaths;
+        d.vendors = w.vendors;
+        d.faultedDrivers = w.faulted;
+        return d;
+    }
+    static std::shared_ptr<cascade::source::SoundCardBackend> g11Card() { return std::make_shared<g11::Card>(); }
+    // The hooks of group 11: the Airspy, the HackRF and the mock radio on their fake wires (group Z's), the walk, the
+    // scan, the diagnostics and the card backend above. `diagnostics` false leaves the runtime's diagnostics unhooked
+    // (the engine must then read none of them: the scan is stood in for).
+    static void install11(bool diagnostics = true) {
+        g11::reset();
+        radios83::g_gateOpen = true;
+        cascade::engine::Engine::testHooks_.makeDevice = &radios83::make;
+        cascade::engine::Engine::testHooks_.nativeScan = nullptr;
+        cascade::engine::Engine::testHooks_.nativeScanDetail = &g11Walk;
+        cascade::engine::Engine::testHooks_.soapyScan = &g11Soapy;
+        cascade::engine::Engine::testHooks_.scanDiagnostics = diagnostics ? &g11Diagnostics : nullptr;
+        cascade::engine::Engine::testHooks_.soundCardBackend = &g11Card;
+    }
+    static void uninstall11() {
+        g11::reset();
+        radios83::g_gateOpen = true;
+        cascade::engine::Engine::testHooks_.nativeScanDetail = nullptr;
+        cascade::engine::Engine::testHooks_.scanDiagnostics = nullptr;
+        cascade::engine::Engine::testHooks_.soundCardBackend = nullptr;
+        installFakeRadio();
+    }
+    static std::uint64_t fingerprint(cascade::engine::Engine& e) { return e.apiListsFingerprint(); }
+    static std::uint64_t publishLists(cascade::engine::Engine& e) { return e.publishApiLists(); }
+    static std::string idForRow(cascade::engine::Engine& e, int row) { return e.sourceIdForRow(row); }
+    // The inputs, poked one at a time (the table must follow each: they are in the fingerprint).
+    static int& sourceSel(cascade::engine::Engine& e) { return e.sourceSel_; }
+    static std::string& keepKind(cascade::engine::Engine& e) { return e.restoreKeep_.kind; }
+    static bool& scanned(cascade::engine::Engine& e) { return e.soapyScanned_; }
+    static bool& scanPending(cascade::engine::Engine& e) { return e.soapyScanPending_; }
+    static bool& scanPartial(cascade::engine::Engine& e) { return e.soapyScanPartial_; }
+    static bool& deferredLogged(cascade::engine::Engine& e) { return e.soapyScanDeferredLogged_; }
+    static bool& networkUsrps(cascade::engine::Engine& e) { return e.lookForNetworkUsrps_; }
+    static std::vector<std::string>& absent(cascade::engine::Engine& e) { return e.soapyAbsentDrivers_; }
+    static bool& sdrRowsFound(cascade::engine::Engine& e) { return e.sdrPlayRowsFound_; }
+    static std::vector<cascade::usb::UsbDeviceInfo>& unbound(cascade::engine::Engine& e) { return e.nativeUnbound_; }
+    static std::vector<std::string>& faulted(cascade::engine::Engine& e) { return e.faultedDrivers_; }
+    static std::uint64_t& evidenceSeq(cascade::engine::Engine& e) { return e.scanEvidenceSeq_; }
+    static std::string& busyLabel(cascade::engine::Engine& e) { return e.deviceBusyLabel_; }
+    static bool& openPending(cascade::engine::Engine& e) { return e.deviceOpenPending_; }
+    static std::string& deviceModel(cascade::engine::Engine& e) { return e.deviceModel_; }
+    static std::string& faultText(cascade::engine::Engine& e) { return e.apiFaultText_; }
+    static char* plutoBuffer(cascade::engine::Engine& e) { return e.plutoUri_; }
+    static std::vector<std::string>& rateLabels(cascade::engine::Engine& e) { return e.deviceRateLabels_; }
+    static bool& cardListed(cascade::engine::Engine& e) { return e.soundCardListed_; }
+    static bool& cardScanning(cascade::engine::Engine& e) { return e.soundCardScanPending_; }
+    static bool& cardOpening(cascade::engine::Engine& e) { return e.soundCardOpenPending_; }
+    static cascade::source::SoundCardSettings& form(cascade::engine::Engine& e) { return e.soundCard_; }
+    static std::vector<cascade::source::SoundCardDevice>& cards(cascade::engine::Engine& e) { return e.soundCardDevices_; }
+    static const cascade::source::SoundCardSettings& liveCard(cascade::engine::Engine& e) { return e.soundCardLive_; }
+    static const std::string& sourceKind(cascade::engine::Engine& e) { return e.sourceKind_; }
+    static bool gated(cascade::engine::Engine& e) { return e.soapyScanGated(); }
+    static std::string gateDevice(cascade::engine::Engine& e) { return e.soapyScanGateDevice(); }
+    static std::map<std::string, cascade::core::ConverterSetting>& converters(cascade::engine::Engine& e) { return e.converters_; }
+    static std::string& cardMissing(cascade::engine::Engine& e) { return e.soundCardMissing_; }
+    // A patch radio's open that is still on its worker: a promise this test keeps (never satisfied, never destroyed
+    // while the engine can look at it), so the future is valid and not ready, as a real open in flight is.
+    static void pendPatchRadio(cascade::engine::Engine& e, bool on) {
+        static std::promise<cascade::engine::Engine::PatchRadioOpen> keep;
+        if (on) {
+            keep = std::promise<cascade::engine::Engine::PatchRadioOpen>();
+            e.patchRadioPending_[99] = keep.get_future();
+        } else {
+            e.patchRadioPending_.clear();
+        }
+    }
+    static void scanNative(cascade::engine::Engine& e) { e.scanNative(); }
+// G11 ACCESS END>>
 };
 }  // namespace cascade::gui
 
@@ -418,7 +638,7 @@ void testEveryListIsServed() {
     testing::Engine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_STORE_ACTIVITY; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_SOUND_CARD_FORM; ++l) {
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -969,7 +1189,7 @@ void testStatusColumnGains() {
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     CHECK_EQ(count(s, FOXAPI_LIST_GAINS), 0);  // no radio, no stages
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SCAN_DEVICES)).result.status, FOXAPI_OK);
-    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_DEVICES) == 2; }, 3000));
+    CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_DEVICES) == 4; }, 3000));
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, engine_api_test::kFakeRadioId)).result.status, FOXAPI_OK);
     CHECK(check::waitFor([&] { return (s.state().flags & FOXAPI_RX_DEVICE_OPEN) != 0u; }, 3000));
     CHECK(check::waitFor([&] { return count(s, FOXAPI_LIST_GAINS) == 1; }, 2000));
@@ -1053,7 +1273,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_STORE_ACTIVITY; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_SOUND_CARD_FORM; ++l) {
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -1193,7 +1413,7 @@ bool passUntil(cascade::engine::Engine& eng, F done, int timeoutMs = 4000) {
 // Scans, selects `id` and passes until the radio is open.
 bool openRadio(cascade::engine::Engine& eng, testing::Session& s, const std::string& id) {
     if (pumped(eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status() != FOXAPI_OK) { return false; }
-    if (!passUntil(eng, [&] { return count(s, FOXAPI_LIST_DEVICES) == 4; })) { return false; }
+    if (!passUntil(eng, [&] { return count(s, FOXAPI_LIST_DEVICES) == 6; })) { return false; }
     if (pumped(eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, id.c_str())).status() != FOXAPI_OK) {
         return false;
     }
@@ -1231,7 +1451,7 @@ void testDeviceOpening() {
     testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
     CHECK(s.ok());
     CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
-    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_DEVICES) == 4; }));
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_DEVICES) == 6; }));
     FoxReceiverState rest = s.state();
     CHECK((rest.flags & FOXAPI_RX_DEVICE_OPENING) == 0u);  // nothing opening at rest
 
@@ -4456,6 +4676,1177 @@ void testStoreLinesAndLanguage() {
 
 }  // namespace
 
+// <<G11 TESTS BEGIN
+// ===================================================================================================================
+// GROUP 11: the Source section and the sound card as their pages draw them (window port group 11, API 0.3 section
+// 8.10). Hermetic: every walk, scan, diagnostic and sound card is g11::world()'s; the radios are group Z's fakes. The
+// passes are driven from the test thread (Direct): no control thread, no race with what the friend pokes.
+// ===================================================================================================================
+
+namespace g11 {
+
+using Access = cascade::gui::AppWindowTestAccess;
+
+uint32_t flags(testing::Session& s) { return s.state().sourceFlags; }
+bool has(testing::Session& s, uint32_t bit) { return (flags(s) & bit) != 0u; }
+// A bit of the state's own flag word (FOXAPI_RX_*), not the source's.
+bool rxHas(testing::Session& s, uint32_t bit) { return (s.state().flags & bit) != 0u; }
+
+// The level of a STATUS_LINES entry, -1 when the line has no text.
+double lineLevel(testing::Session& s, const char* key) {
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_STATUS_LINES); ++i) {
+        const FoxListItem x = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+        if (std::string(x.name) == key) { return x.value[0]; }
+    }
+    return -1.0;
+}
+
+// The DEVICES entry whose id is `id` (1-based), and the whole id the fact serves for it.
+std::string idFact(testing::Session& s, uint32_t id, int32_t* st = nullptr) {
+    return fact(s, ("fact.source.id." + std::to_string(id)).c_str(), st);
+}
+
+// Applies one command and says whether it landed OK (a command with a long text goes through submit_text).
+bool cmdLandsOk(Direct& d, testing::Session& s, const FoxCommand& c) { return pumped(d.eng, s, c).status() == FOXAPI_OK; }
+bool cmdLandsOk(Direct& d, testing::Session& s, const cascade::core::cmd::QueuedCommand& q) {
+    if (q.longText.empty()) { return cmdLandsOk(d, s, q.c); }
+    return pumpedText(d.eng, s, q.c, q.longText).status() == FOXAPI_OK;
+}
+
+// A fresh local session and a REMOTE one on `d`.
+struct Sessions {
+    testing::Session local;
+    testing::Session remote;
+    explicit Sessions(Direct& d)
+        : local(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants),
+          remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_SETTINGS, "s3cret") {}
+};
+
+// Scans (native walk inline, SoapySDR on its worker) and passes until the worker's result is in.
+bool scanAll(Direct& d, testing::Session& s) {
+    if (pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status() != FOXAPI_OK) { return false; }
+    return passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); });
+}
+
+}  // namespace g11
+
+// G11-1: DEVICES completed - the IQ file and the sound card are entries, an entry's index is its combo row, ids are
+// whole in the fact where detail cuts them (a Pluto's with its address, a SoapySDR row's kwargs), and a cut id picks
+// nothing while the fact's picks the radio. fact.source.row follows every kind of row, and ACTIVE is the source in use.
+void testSourceRowsAndWholeIds() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        testing::Session& remote = ss.remote;
+        CHECK(s.ok());
+        CHECK(remote.ok());
+        passes(d.eng, 3);
+
+        // BEFORE ANY SCAN: the generator and the two fixed rows, in the combo's order, and nothing else.
+        CHECK_EQ(count(s, FOXAPI_LIST_DEVICES), 3);
+        const char* const names[3] = {"Signal generator", "IQ file", "Sound card"};
+        const char* const ids[3] = {"siggen", "row:iqfile", "row:soundcard"};
+        for (uint32_t i = 0; i < 3; ++i) {
+            const FoxListItem e = item(s, FOXAPI_LIST_DEVICES, i);
+            CHECK_EQ(std::string(e.name), std::string(names[i]));
+            CHECK_EQ(std::string(e.detail), std::string(ids[i]));
+            CHECK_EQ(e.id, static_cast<uint64_t>(i + 1u));
+            CHECK_EQ((e.flags & FOXAPI_ITEM_ACTIVE) != 0u, i == 0u);  // the generator is the source in use
+            CHECK_EQ(g11::idFact(s, i + 1u), std::string(ids[i]));
+            CHECK_EQ(g11::idFact(remote, i + 1u), std::string(ids[i]));  // an id names no path: not LOCAL
+        }
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("0"));
+        // The id past the last entry, id 0 and a key that is not a number are NOT_FOUND.
+        int32_t st = 0;
+        g11::idFact(s, 4u, &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);
+        g11::idFact(s, 0u, &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);
+        fact(s, "fact.source.id.", &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);
+        fact(s, "fact.source.id.x", &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);
+        fact(s, "fact.source", &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);
+
+        // THE ADDRESS IN THE PLUTO BOX, 189 bytes: the row built at the next walk carries it, and the id is past a
+        // list item's 159 bytes. (The hooked walk lists the row it is told to: the same args a real walk builds.)
+        const std::string uri = g11::plutoUriLong();
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_PLUTO_URI, uri)).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.plutoUri"), uri);
+        g11::world().natives[3].args = "uri=" + uri;
+        CHECK(g11::scanAll(d, s));
+        // ...so DEVICES is: generator, IQ file, sound card, four native rows (the Pluto's last), two SoapySDR rows.
+        CHECK_EQ(count(s, FOXAPI_LIST_DEVICES), 9);
+        for (uint32_t i = 3; i < 9; ++i) {
+            const FoxListItem e = item(s, FOXAPI_LIST_DEVICES, i);
+            CHECK_EQ(e.id, static_cast<uint64_t>(i + 1u));
+            CHECK_EQ(g11::idFact(s, i + 1u).compare(0, std::strlen(e.detail), e.detail), 0);  // detail is the id, maybe cut
+        }
+        CHECK_EQ(std::string(item(s, FOXAPI_LIST_DEVICES, 3).detail), std::string(engine_api_test::kFakeRadioId));
+        CHECK_EQ(std::string(item(s, FOXAPI_LIST_DEVICES, 4).name), std::string("Airspy R2"));
+        CHECK_EQ(std::string(item(s, FOXAPI_LIST_DEVICES, 6).name), std::string("ADALM-Pluto (network)"));
+        const std::string plutoId = "pluto:uri=" + uri;
+        CHECK(plutoId.size() > 159u);  // the point: detail cannot hold it
+        CHECK_EQ(g11::idFact(s, 7u, &st), plutoId);
+        CHECK_EQ(st, static_cast<int32_t>(plutoId.size()));  // get_setting says the whole length
+        CHECK_EQ(std::strlen(item(s, FOXAPI_LIST_DEVICES, 6).detail), 159u);  // cut
+        const std::string soapyId = "soapy:" + g11::soapyLongArgs();
+        CHECK(soapyId.size() > 159u);
+        CHECK_EQ(g11::idFact(s, 9u), soapyId);
+        CHECK_EQ(std::strlen(item(s, FOXAPI_LIST_DEVICES, 8).detail), 159u);
+        CHECK_EQ(std::string(item(s, FOXAPI_LIST_DEVICES, 6).detail), plutoId.substr(0, 159));
+        // The engine's own spelling is the fact's: Engine::sourceIdForRow(row) is entry row + 1's id, for every row,
+        // and "" for a row there is not.
+        for (int row = 0; row < 9; ++row) {
+            CHECK_EQ(Access::idForRow(d.eng, row), g11::idFact(s, static_cast<uint32_t>(row + 1)));
+        }
+        CHECK_EQ(Access::idForRow(d.eng, 9), std::string());
+        CHECK_EQ(Access::idForRow(d.eng, -1), std::string());
+        CHECK_EQ(Access::idForRow(d.eng, 100), std::string());
+
+        // A CUT ID PICKS NOTHING; THE FACT'S PICKS THE RADIO. (The old contract: "an id from DEVICES, verbatim".)
+        const std::string cut = item(s, FOXAPI_LIST_DEVICES, 8).detail;
+        CHECK_EQ(cut.size(), 159u);
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, cut)).status(), FOXAPI_NOT_FOUND);
+        CHECK(!g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN));
+        {
+            // (FoxCommand::text holds 255 bytes: the whole 280-byte id goes through submit_text.)
+            FoxCommand c = testing::cmd(FOXAPI_OP_SELECT_SOURCE);
+            const testing::Outcome o = [&] {
+                testing::Outcome out;
+                FoxSubmitResult sr{};
+                sr.structSize = sizeof(sr);
+                const int32_t n = api()->submit_text(s.raw(), &c, soapyId.data(), static_cast<uint32_t>(soapyId.size()), &sr);
+                out.submitStatus = n < 0 ? n : sr.status;
+                for (int pass = 0; pass < 20 && out.submitStatus == FOXAPI_OK && !out.landed; ++pass) {
+                    d.eng.controlPass();
+                    FoxCommandResult r[4];
+                    for (auto& x : r) { x.structSize = sizeof(x); }
+                    const int32_t got = api()->poll_results(s.raw(), r, 4);
+                    for (int32_t i = 0; i < got; ++i) {
+                        if (r[i].ticket == sr.ticket) {
+                            out.landed = true;
+                            out.result = r[i];
+                        }
+                    }
+                }
+                return out;
+            }();
+            CHECK_EQ(o.status(), FOXAPI_OK);
+        }
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        // ACTIVE is the source in use: the SoapySDR row, and only it. fact.source.row is that row's index.
+        int at = -1;
+        const FoxListItem active = activeItem(s, FOXAPI_LIST_DEVICES, &at);
+        CHECK_EQ(at, 8);
+        CHECK_EQ(active.id, 9u);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("8"));
+
+        // EVERY KIND OF ROW MOVES fact.source.row, the IQ file and the sound card (which open nothing) and the Pluto
+        // (which selects and does not connect) included - and ACTIVE stays on the radio in use through them.
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:iqfile")).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("1"));
+        CHECK_EQ(fact(remote, "fact.source.row"), std::string("1"));
+        CHECK_EQ(activeItem(s, FOXAPI_LIST_DEVICES, &at).id, 9u);  // the radio is still the source in use
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:soundcard")).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("2"));
+        // The Pluto row selects and does not connect: the row is its own, the radio in use stays.
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, g11::idFact(s, 7u))).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("6"));  // the Pluto's entry is 7: its row is 6
+        CHECK_EQ(activeItem(s, FOXAPI_LIST_DEVICES, &at).id, 9u);
+        // The generator: back to row 0, the generator ACTIVE, nothing else.
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "siggen")).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("0"));
+        CHECK(!g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN));
+        CHECK_EQ(activeItem(s, FOXAPI_LIST_DEVICES, &at).id, 1u);
+        // A row that is none (what a rescan that dropped the open radio's row, or a failed restore, leaves).
+        Access::sourceSel(d.eng) = -1;
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("-1"));
+    }
+    Access::uninstall11();
+    std::printf("G11-1: DEVICES with the IQ file and the sound card, whole ids (a 199-byte Pluto, a 280-byte SoapySDR row) read from the fact, a cut id refused and the fact's id opening the radio, fact.source.row through every row\n");
+}
+
+// G11-2: sourceFlags, each of the ten bits driven both ways. The scan's three states and the gate by the engine's own
+// behaviour (a scan held in flight, a deferral beside a radio that is opening, a scan beside the one that is open, the
+// whole one that is owed after it), the sound card's three by a backend held on its gates; the two the engine never
+// takes back by itself (the card list, UHD) are put back by the friend.
+void testSourceFlags() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    g11::World& w = g11::world();
+    {
+        // --- THE WHOLE SCAN, held in flight: PENDING and SCANNED up, PARTIAL and GATED never.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        passes(d.eng, 3);
+        CHECK_EQ(g11::flags(s), 0u);  // nothing at rest
+        const FoxReceiverState rest = s.state();
+        w.soapyGate = false;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_SCAN_DEVICES_ON_OPEN)).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_SCAN_PENDING));
+        CHECK(g11::has(s, FOXAPI_SRC_SCANNED));
+        CHECK(!g11::has(s, FOXAPI_SRC_SCAN_PARTIAL));
+        CHECK(!g11::has(s, FOXAPI_SRC_SCAN_GATED));
+        const FoxReceiverState held = s.state();
+        CHECK(held.deviceSeq > rest.deviceSeq);  // the device group moves, and seq with it
+        CHECK(held.seq > rest.seq);
+        w.soapyGate = true;
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK(g11::has(s, FOXAPI_SRC_SCANNED));  // a scan has been started: it stays
+        CHECK_EQ(w.soapyCalls.load(), 1);
+
+        // --- THE ENGINE'S OWN SDRPLAY ROW FLAG, both ways, through the walk.
+        CHECK(!g11::has(s, FOXAPI_SRC_SDRPLAY_ROWS));
+        w.sdrRows = true;
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        CHECK(g11::has(s, FOXAPI_SRC_SDRPLAY_ROWS));
+        w.sdrRows = false;
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        CHECK(!g11::has(s, FOXAPI_SRC_SDRPLAY_ROWS));
+
+        // --- "LOOK FOR NETWORK USRPs", both ways (ticking it rescans SoapySDR).
+        CHECK(!g11::has(s, FOXAPI_SRC_NETWORK_USRPS));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_SET_NETWORK_USRP_SCAN, 0, 1)).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_NETWORK_USRPS));
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK_EQ(w.soapyCalls.load(), 2);  // the tick rescanned
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_SET_NETWORK_USRP_SCAN, 0, 0)).status(), FOXAPI_OK);
+        CHECK(!g11::has(s, FOXAPI_SRC_NETWORK_USRPS));
+        CHECK_EQ(w.soapyCalls.load(), 2);  // unticking does not
+
+        // --- UHD LEFT OUT, both ways: the scan's own list of drivers it did not ask (a hermetic scan has none, so the
+        // friend writes it, as the worker does), and any name but uhd does not set it.
+        CHECK(!g11::has(s, FOXAPI_SRC_UHD_LEFT_OUT));
+        Access::absent(d.eng) = {"rtlsdr"};
+        passes(d.eng, 2);
+        CHECK(!g11::has(s, FOXAPI_SRC_UHD_LEFT_OUT));
+        Access::absent(d.eng) = {"uhd"};
+        passes(d.eng, 2);
+        CHECK(g11::has(s, FOXAPI_SRC_UHD_LEFT_OUT));
+        Access::absent(d.eng).clear();
+        passes(d.eng, 2);
+        CHECK(!g11::has(s, FOXAPI_SRC_UHD_LEFT_OUT));
+    }
+    {
+        // --- A RADIO OPENING: GATED, and the scan it defers leaves SCANNED as it was (still owed); one log line.
+        w.soapyCalls = 0;
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        const std::string airspy = g11::idFact(s, 5u);
+        CHECK_EQ(airspy.compare(0, 7, "airspy:"), 0);
+        radios83::g_gateOpen = false;
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, airspy)).status(), FOXAPI_OK);
+        CHECK(g11::rxHas(s, FOXAPI_RX_DEVICE_OPENING));
+        CHECK(g11::has(s, FOXAPI_SRC_SCAN_GATED));
+        CHECK_EQ(fact(s, "fact.source.opening"), std::string("Airspy R2"));
+        CHECK_EQ(fact(s, "fact.source.scanGate"), std::string("Airspy R2"));
+        CHECK_EQ(fact(s, "fact.source.scanSkip"), std::string());  // still opening: the whole SoapySDR scan is deferred
+        CHECK(!Access::deferredLogged(d.eng));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+        CHECK_EQ(w.soapyCalls.load(), 0);  // deferred: the worker never ran
+        CHECK(!g11::has(s, FOXAPI_SRC_SCANNED));
+        CHECK(!g11::has(s, FOXAPI_SRC_SCAN_PENDING));
+        CHECK(!g11::has(s, FOXAPI_SRC_SCAN_PARTIAL));
+        CHECK(Access::deferredLogged(d.eng));  // the one line was said, for this radio
+        // ...the radio is up: still gated (a radio is open), the facts name its model, and the scan runs beside it,
+        // leaving its driver out: SCANNED and PARTIAL, and the engine lets the log latch go only when the gate opens.
+        radios83::g_gateOpen = true;
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        CHECK(!g11::rxHas(s, FOXAPI_RX_DEVICE_OPENING));
+        CHECK(g11::has(s, FOXAPI_SRC_SCAN_GATED));
+        CHECK_EQ(fact(s, "fact.source.opening"), std::string());
+        CHECK(!fact(s, "fact.source.scanGate").empty());
+        CHECK_EQ(fact(s, "fact.source.scanGate"), Access::gateDevice(d.eng));
+        CHECK_EQ(fact(s, "fact.source.scanSkip"), std::string("airspy"));  // Refresh still runs, without airspy
+        passes(d.eng, 5);
+        CHECK(Access::deferredLogged(d.eng));  // gated all the while: the latch holds
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_SCANNED));
+        CHECK(g11::has(s, FOXAPI_SRC_SCAN_PARTIAL));
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK(g11::has(s, FOXAPI_SRC_SCAN_PARTIAL));  // it was a partial one: a whole scan is still owed
+        CHECK_EQ(w.soapyCalls.load(), 1);
+        // The radio closed: the gate opens, the engine's pass lets the latch go (NO command says so), and the next
+        // look at the combo owes - and runs - the whole scan.
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "siggen")).status(), FOXAPI_OK);
+        passes(d.eng, 1);
+        CHECK(!g11::has(s, FOXAPI_SRC_SCAN_GATED));
+        CHECK(!Access::deferredLogged(d.eng));
+        CHECK_EQ(fact(s, "fact.source.scanGate"), std::string());
+        CHECK_EQ(fact(s, "fact.source.scanSkip"), std::string());
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_SCAN_DEVICES_ON_OPEN)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK(!g11::has(s, FOXAPI_SRC_SCAN_PARTIAL));
+        CHECK(g11::has(s, FOXAPI_SRC_SCANNED));
+        CHECK_EQ(w.soapyCalls.load(), 2);
+    }
+    {
+        // --- THE SOUND CARD: SCANNING while the list is taken, LISTED when it lands, OPENING while the open runs.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        passes(d.eng, 2);
+        CHECK(!g11::has(s, FOXAPI_SRC_CARD_LISTED) && !g11::has(s, FOXAPI_SRC_CARD_SCANNING) &&
+              !g11::has(s, FOXAPI_SRC_CARD_OPENING));
+        w.listGate = false;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:soundcard")).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_SCANNING));
+        CHECK(!g11::has(s, FOXAPI_SRC_CARD_LISTED));
+        w.listGate = true;
+        CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
+        CHECK(!g11::has(s, FOXAPI_SRC_CARD_SCANNING));
+        // The engine never un-lists: the friend does, and the flag follows.
+        Access::cardListed(d.eng) = false;
+        passes(d.eng, 2);
+        CHECK(!g11::has(s, FOXAPI_SRC_CARD_LISTED));
+        Access::cardListed(d.eng) = true;
+        passes(d.eng, 2);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_LISTED));
+        // OPENING: the open of the form's card held on its gate, then let go.
+        w.openGate = false;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "soundcard:open")).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_OPENING));
+        CHECK(!g11::rxHas(s, FOXAPI_RX_DEVICE_OPENING));  // not the radio's flag
+        w.openGate = true;
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_CARD_OPENING); }));
+        CHECK_EQ(Access::sourceKind(d.eng), std::string("soundcard"));
+    }
+    Access::uninstall11();
+    std::printf("G11-2: sourceFlags, ten bits both ways; the deferral leaves SCANNED clear, a scan beside the radio is PARTIAL, the engine lets the log latch go and owes the whole scan\n");
+}
+
+// G11-3: the facts of the section, every edge: known and empty at rest, whole texts, LOCAL, NOT_FOUND.
+void testSourceFacts() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        testing::Session& remote = ss.remote;
+        passes(d.eng, 3);
+        int32_t st = 0;
+        // AT REST every text fact is known and empty (length 0, not NOT_FOUND); the row is the generator's.
+        for (const char* key : {"fact.source.keep", "fact.source.opening", "fact.source.scanGate", "fact.source.scanSkip",
+                                "fact.source.faultedDrivers", "fact.soundcard.device", "fact.soundcard.hostApi"}) {
+            CHECK_EQ(fact(s, key, &st), std::string());
+            CHECK_EQ(st, 0);
+        }
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("0"));
+        CHECK_EQ(fact(s, "fact.source.plutoUri"), std::string("ip:192.168.2.1"));  // the box's default
+        // LOCAL: the Pluto's address and the sound card's device and host API are DENIED to a REMOTE session; every
+        // other fact of the section is readable (it names no path).
+        for (const char* key : {"fact.source.plutoUri", "fact.soundcard.device", "fact.soundcard.hostApi"}) {
+            CHECK_EQ(fact(remote, key, &st), std::string());
+            CHECK_EQ(st, FOXAPI_DENIED);
+        }
+        for (const char* key : {"fact.source.row", "fact.source.keep", "fact.source.opening", "fact.source.scanGate",
+                                "fact.source.scanSkip", "fact.source.faultedDrivers", "fact.soundcard.span"}) {
+            fact(remote, key, &st);
+            CHECK(st >= 0);
+        }
+        // Facts are read-only: no SETTING_SET takes one.
+        CHECK(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "fact.source.row=5")).status() != FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("0"));
+        // Keys of the family that are not facts.
+        for (const char* key : {"fact.source.nothing", "fact.source.id", "fact.soundcard", "fact.soundcard.rate",
+                                "fact.source.row.x", "fact.source."}) {
+            fact(s, key, &st);
+            CHECK_EQ(st, FOXAPI_NOT_FOUND);
+        }
+
+        // THE KIND KEPT FOR THE CONFIG: any text the engine holds, "" again when it lets go; both sessions read it.
+        for (const char* kind : {"soundcard", "file", "soapy", "airspy"}) {
+            Access::keepKind(d.eng) = kind;
+            passes(d.eng, 2);
+            CHECK_EQ(fact(s, "fact.source.keep"), std::string(kind));
+            CHECK_EQ(fact(remote, "fact.source.keep"), std::string(kind));
+        }
+        Access::keepKind(d.eng).clear();
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, "fact.source.keep"), std::string());
+
+        // THE PLUTO'S ADDRESS: stored as typed, at most the box's 191 bytes, and a repeat of it moves no list.
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_PLUTO_URI, "ip:10.0.0.7")).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.plutoUri"), std::string("ip:10.0.0.7"));
+        const uint64_t seq = s.state().listSeq;
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_PLUTO_URI, "ip:10.0.0.7")).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK_EQ(s.state().listSeq, seq);
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_PLUTO_URI, std::string(250, 'q'))).status(), FOXAPI_OK);
+        CHECK_EQ(fact(s, "fact.source.plutoUri", &st), std::string(191, 'q'));
+        CHECK_EQ(st, 191);
+
+        // THE DRIVERS WHOSE SCAN CHILD DIED, taken when a scan lands: joined, whole, cleared by a landing without
+        // them. The hook stands in for the process's session list (nothing here ever kills a child).
+        g11::world().faulted = {"uhd", "sdrplay"};
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(fact(s, "fact.source.faultedDrivers"), std::string("uhd, sdrplay"));
+        CHECK_EQ(fact(remote, "fact.source.faultedDrivers"), std::string("uhd, sdrplay"));
+        g11::world().faulted.clear();
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK_EQ(fact(s, "fact.source.faultedDrivers"), std::string());
+    }
+    {
+        // WITH THE SCAN STOOD IN FOR AND NO DIAGNOSTICS HOOK, the engine reads none of the four: no faulted drivers, no
+        // evidence, and the process's environment untouched (the real calls' first act is editing SOAPY_SDR_PLUGIN_PATH).
+        Access::install11(false);
+        const char* before = std::getenv("SOAPY_SDR_PLUGIN_PATH");
+        const std::string was = before != nullptr ? before : "";
+        const bool had = before != nullptr;
+        g11::world().faulted = {"uhd"};
+        g11::world().modules = {"never read"};
+        g11::world().soapy.clear();  // nothing found: the landing the real diagnostics would be read at
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(fact(s, "fact.source.faultedDrivers"), std::string());
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 0);
+        CHECK_EQ(g11::world().diagCalls.load(), 0);
+        const char* after = std::getenv("SOAPY_SDR_PLUGIN_PATH");
+        CHECK_EQ(after != nullptr, had);
+        CHECK_EQ(std::string(after != nullptr ? after : ""), was);
+    }
+    Access::uninstall11();
+    std::printf("G11-3: fact.source.{row,keep,opening,scanGate,scanSkip,faultedDrivers,plutoUri}: known and empty at rest, whole, LOCAL where a path or an address, NOT_FOUND edges; a hermetic scan reads no runtime diagnostics\n");
+}
+
+// G11-4: the radio's fault sentence whole. The zombie-source sentence (pipeline.cpp, "source thread: ...") is 134 bytes;
+// the state's faultMessage holds 127 of them and so loses the words that tell an interface not to add its generic advice.
+void testDeviceFaultWhole() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        testing::Session& remote = ss.remote;
+        passes(d.eng, 3);
+        int32_t st = 0;
+        CHECK_EQ(g11::lineLevel(s, "deviceFault"), -1.0);  // no text: not listed
+        CHECK_EQ(fact(s, "fact.status.deviceFault", &st), std::string());
+        CHECK_EQ(st, 0);  // a known line, empty
+        CHECK_EQ(d.eng.statusText().deviceFault, std::string());
+        const std::string zombie =
+            "source thread: the radio's driver is holding an abandoned thread and this source cannot restart; "
+            "pick another source or restart FoxSDR";
+        CHECK_EQ(zombie.size(), 134u);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, ("test.fault=" + zombie).c_str())).status(), FOXAPI_OK);
+        const FoxReceiverState state = s.state();
+        CHECK((state.flags & FOXAPI_RX_FAULTED) != 0u);
+        // THE STATE'S FIELD CUTS IT, at 127 bytes, before its last words...
+        CHECK_EQ(std::strlen(state.faultMessage), 127u);
+        CHECK_EQ(zombie.compare(0, 127, state.faultMessage), 0);
+        CHECK(std::string(state.faultMessage).find("restart FoxSDR") == std::string::npos);
+        // ...so an interface that searched it for them would add "Reconnect it and pick the source again" under a
+        // sentence that says the opposite (the bug the whole line exists to close):
+        CHECK(cascade::gui::reconnectAdviceApplies(state.faultMessage));
+        // THE LINE DOES NOT: whole in the list item (134 < 159), in the fact and in the engine's handed-over copy.
+        CHECK_EQ(g11::lineLevel(s, "deviceFault"), 3.0);
+        const FoxListItem line = entryNamed(s, FOXAPI_LIST_STATUS_LINES, "deviceFault");
+        CHECK_EQ(std::string(line.detail), zombie);
+        CHECK_EQ(fact(s, "fact.status.deviceFault", &st), zombie);
+        CHECK_EQ(st, 134);
+        CHECK_EQ(fact(remote, "fact.status.deviceFault"), zombie);  // a sentence, not a path
+        CHECK_EQ(d.eng.statusText().deviceFault, zombie);
+        CHECK(!cascade::gui::reconnectAdviceApplies(fact(s, "fact.status.deviceFault")));
+        CHECK(!cascade::gui::reconnectAdviceApplies(d.eng.statusText().deviceFault));
+        // A sentence past a list item as well (a driver's own what(), of any length): detail cuts at 159 bytes, the
+        // fact is whole - over submit_text, since text[] holds 255.
+        const std::string longFault = "device stopped: " + std::string(400, 'z') + " - then it said: restart FoxSDR";
+        CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET), "test.fault=" + longFault).result.status, FOXAPI_OK);
+        const FoxListItem cutLine = entryNamed(s, FOXAPI_LIST_STATUS_LINES, "deviceFault");
+        CHECK_EQ(std::strlen(cutLine.detail), 159u);
+        CHECK_EQ(fact(s, "fact.status.deviceFault"), longFault);
+        CHECK_EQ(d.eng.statusText().deviceFault, longFault);
+        CHECK_EQ(std::strlen(s.state().faultMessage), 127u);
+        // The same sentence said again moves no list; it going moves the line.
+        const uint64_t seq = s.state().listSeq;
+        CHECK_EQ(pumpedText(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET), "test.fault=" + longFault).result.status, FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK_EQ(s.state().listSeq, seq);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.fault=")).status(), FOXAPI_OK);
+        CHECK_EQ(g11::lineLevel(s, "deviceFault"), -1.0);
+        CHECK_EQ(fact(s, "fact.status.deviceFault"), std::string());
+        CHECK_EQ(d.eng.statusText().deviceFault, std::string());
+        CHECK((s.state().flags & FOXAPI_RX_FAULTED) == 0u);
+    }
+    Access::uninstall11();
+    std::printf("G11-4: deviceFault: the 134-byte zombie sentence whole in the line, the fact and the handed-over copy, cut at 127 in the state (and the generic advice then wrongly applies)\n");
+}
+
+// G11-5: SAMPLE_RATES' detail is the caption the Rate combo letters; the nearest row is derived from sampleRateHz.
+void testSampleRateCaptions() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(count(s, FOXAPI_LIST_SAMPLE_RATES), 0);  // no radio: no rates
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, engine_api_test::kFakeRadioId)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        const int32_t n = count(s, FOXAPI_LIST_SAMPLE_RATES);
+        CHECK_EQ(n, 6);
+        const char* const captions[6] = {"0.250 MS/s", "1.024 MS/s", "1.400 MS/s", "2.048 MS/s", "2.400 MS/s", "3.200 MS/s"};
+        for (int32_t i = 0; i < n; ++i) {
+            const FoxListItem r = item(s, FOXAPI_LIST_SAMPLE_RATES, static_cast<uint32_t>(i));
+            CHECK_EQ(std::string(r.detail), std::string(captions[i]));
+            CHECK_EQ(std::string(r.detail), cascade::gui::rateLabel(r.value[0]));
+        }
+        // THE NEAREST ROW from the state's rate. The radio coerces a rate it does not offer, and what it lands on is
+        // what the combo ticks: SET_SAMPLE_RATE 2.5 MS/s lands on 2.4 (the fake's nearest).
+        const auto nearestRow = [&] {
+            const double hz = s.state().sampleRateHz;
+            int best = -1;
+            double bestDistance = 1.0e30;
+            for (int32_t i = 0; i < count(s, FOXAPI_LIST_SAMPLE_RATES); ++i) {
+                const double dist = std::fabs(item(s, FOXAPI_LIST_SAMPLE_RATES, static_cast<uint32_t>(i)).value[0] - hz);
+                if (dist < bestDistance) {
+                    bestDistance = dist;
+                    best = i;
+                }
+            }
+            return best;
+        };
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_SAMPLE_RATE, 2.5e6)).status(), FOXAPI_OK);
+        CHECK_EQ(s.state().sampleRateHz, 2.4e6);
+        CHECK_EQ(nearestRow(), 4);
+        CHECK_EQ(std::string(item(s, FOXAPI_LIST_SAMPLE_RATES, static_cast<uint32_t>(nearestRow())).detail), std::string("2.400 MS/s"));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_SAMPLE_RATE, 250000.0)).status(), FOXAPI_OK);
+        CHECK_EQ(nearestRow(), 0);
+    }
+    {
+        // AN AIRSPY's rates are captioned by its decimation, not as plain rates: the label the engine built.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, g11::idFact(s, 5u))).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        const int32_t n = count(s, FOXAPI_LIST_SAMPLE_RATES);
+        CHECK(n >= 2);
+        for (int32_t i = 0; i < n; ++i) {
+            const FoxListItem r = item(s, FOXAPI_LIST_SAMPLE_RATES, static_cast<uint32_t>(i));
+            CHECK_EQ(std::string(r.detail), cascade::gui::airspyRateLabel(r.value[0]));
+        }
+        // The captions follow the rates: a deep decimation brings the rates under 1 MS/s, which an Airspy's captions
+        // letter in kS/s and the plain ones round into MS/s - so the block is rebuilt with other texts.
+        const uint64_t seq = s.state().listSeq;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPP_OP_AIRSPY_DECIMATION, 0, 32)).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK(s.state().listSeq != seq);
+        bool differs = false;
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_SAMPLE_RATES); ++i) {
+            const FoxListItem r = item(s, FOXAPI_LIST_SAMPLE_RATES, static_cast<uint32_t>(i));
+            CHECK_EQ(std::string(r.detail), cascade::gui::airspyRateLabel(r.value[0]));
+            differs = differs || std::string(r.detail) != cascade::gui::rateLabel(r.value[0]);
+        }
+        CHECK(differs);  // the Airspy's captions are not the plain ones
+    }
+    Access::uninstall11();
+    std::printf("G11-5: SAMPLE_RATES detail is the combo's caption (plain and an Airspy's), the nearest row follows sampleRateHz\n");
+}
+
+// G11-6: UNBOUND_RADIOS and the SDRplay note, through the walk's hook (no USB walk, no SDRplay install).
+void testUnboundRadiosAndSdrPlayNote() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        testing::Session& remote = ss.remote;
+        passes(d.eng, 3);
+        CHECK_EQ(count(s, FOXAPI_LIST_UNBOUND_RADIOS), 0);
+        CHECK_EQ(count(remote, FOXAPI_LIST_UNBOUND_RADIOS), 0);
+        const cascade::usb::UsbId rtl = cascade::source::rtlSdrUsbIds().front();
+        const cascade::usb::UsbId rx = cascade::source::rx888UsbIds().front();
+        const auto dev = [](std::uint16_t vid, std::uint16_t pid, const char* description) {
+            cascade::usb::UsbDeviceInfo u;
+            u.vid = vid;
+            u.pid = pid;
+            u.path = "\\\\?\\usb#fake";
+            u.serial = "SECRETSERIAL";
+            u.description = description;
+            return u;
+        };
+        g11::world().unbound = {dev(rtl.vid, rtl.pid, "Bulk-In, Interface"), dev(rx.vid, rx.pid, ""),
+                                dev(0x1D50, 0x6089, "HackRF One")};
+        g11::world().sdrAdvice = "No SDRplay API found: install version 3.x from sdrplay.com.";
+        g11::world().sdrDetail = "looked in C:/Fake/sdrplay_api.dll";
+        const uint64_t seq0 = s.state().listSeq;
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        CHECK(s.state().listSeq != seq0);
+        CHECK_EQ(count(s, FOXAPI_LIST_UNBOUND_RADIOS), 3);
+        const FoxListItem a = item(s, FOXAPI_LIST_UNBOUND_RADIOS, 0);
+        const FoxListItem b = item(s, FOXAPI_LIST_UNBOUND_RADIOS, 1);
+        const FoxListItem c = item(s, FOXAPI_LIST_UNBOUND_RADIOS, 2);
+        CHECK_EQ(std::string(a.name), std::string("Bulk-In, Interface"));
+        CHECK_EQ(std::string(a.detail), std::string("rtl"));
+        CHECK_EQ(a.value[0], static_cast<double>(rtl.vid));
+        CHECK_EQ(a.value[1], static_cast<double>(rtl.pid));
+        CHECK_EQ(std::string(b.name), std::string());  // no description: the interface says "A USB radio"
+        CHECK_EQ(std::string(b.detail), std::string("rx888"));
+        CHECK_EQ(b.value[0], static_cast<double>(rx.vid));
+        CHECK_EQ(b.value[1], static_cast<double>(rx.pid));
+        CHECK_EQ(std::string(c.name), std::string("HackRF One"));
+        CHECK_EQ(std::string(c.detail), std::string());  // any other radio
+        CHECK_EQ(c.value[0], static_cast<double>(0x1D50));
+        CHECK_EQ(c.value[1], static_cast<double>(0x6089));
+        // Not paths: a REMOTE session reads the same, and no serial or bus path is in any field of any entry.
+        CHECK_EQ(count(remote, FOXAPI_LIST_UNBOUND_RADIOS), 3);
+        CHECK_EQ(std::string(item(remote, FOXAPI_LIST_UNBOUND_RADIOS, 0).name), std::string("Bulk-In, Interface"));
+        for (uint32_t i = 0; i < 3; ++i) {
+            const FoxListItem x = item(s, FOXAPI_LIST_UNBOUND_RADIOS, i);
+            CHECK(std::string(x.name).find("SECRET") == std::string::npos && std::string(x.detail).find("usb#") == std::string::npos);
+        }
+        // THE SDRPLAY NOTE: two status lines (warnings) with the driver's own words, and the row flag clear.
+        CHECK_EQ(g11::lineLevel(s, "sdrPlayAdvice"), 2.0);
+        CHECK_EQ(g11::lineLevel(s, "sdrPlayApiDetail"), 2.0);
+        CHECK_EQ(fact(s, "fact.status.sdrPlayAdvice"), g11::world().sdrAdvice);
+        CHECK_EQ(fact(s, "fact.status.sdrPlayApiDetail"), g11::world().sdrDetail);
+        CHECK_EQ(d.eng.statusText().sdrPlayAdvice, g11::world().sdrAdvice);
+        CHECK_EQ(d.eng.statusText().sdrPlayApiDetail, g11::world().sdrDetail);
+        CHECK(!g11::has(s, FOXAPI_SRC_SDRPLAY_ROWS));
+        // The same walk again changes nothing at all (listSeq exact), and a walk that finds an API row sets the flag and
+        // - the advice being the driver's to give or not - the lines follow the hook.
+        const uint64_t seq1 = s.state().listSeq;
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        passes(d.eng, 2);
+        CHECK_EQ(s.state().listSeq, seq1);
+        g11::world().sdrRows = true;
+        g11::world().sdrAdvice.clear();
+        g11::world().sdrDetail.clear();
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        CHECK(g11::has(s, FOXAPI_SRC_SDRPLAY_ROWS));
+        CHECK_EQ(g11::lineLevel(s, "sdrPlayAdvice"), -1.0);
+        CHECK(s.state().listSeq != seq1);
+        // A dongle bound at last: the next walk's list is shorter, and the entry goes.
+        g11::world().unbound.erase(g11::world().unbound.begin());
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        CHECK_EQ(count(s, FOXAPI_LIST_UNBOUND_RADIOS), 2);
+        CHECK_EQ(std::string(item(s, FOXAPI_LIST_UNBOUND_RADIOS, 0).detail), std::string("rx888"));
+        g11::world().unbound.clear();
+        Access::scanNative(d.eng);  // the native walk alone (the engine's own call, as the window's run() makes it)
+        passes(d.eng, 2);
+        CHECK_EQ(count(s, FOXAPI_LIST_UNBOUND_RADIOS), 0);
+    }
+    Access::uninstall11();
+    std::printf("G11-6: UNBOUND_RADIOS (families rtl/rx888/other, ids, no description, no path or serial) and the SDRplay note through the walk's hook; a repeated walk moves nothing\n");
+}
+
+// G11-7: SCAN_EVIDENCE - taken once when a whole scan lands empty, LOCAL, cleared by anything else, and moving nothing
+// when a landing says the same thing again.
+void testScanEvidence() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        testing::Session& remote = ss.remote;
+        g11::World& w = g11::world();
+        passes(d.eng, 3);
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 0);
+        CHECK_EQ(count(remote, FOXAPI_LIST_SCAN_EVIDENCE), FOXAPI_DENIED);
+        // A scan that finds a radio takes no evidence (the diagnostics are asked of the hook at every landing for the
+        // faulted drivers, and the evidence is the empty landing's alone).
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(w.diagCalls.load(), 1);
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 0);
+        // NOTHING FOUND: the evidence, in the order the section's tree draws it, kinds 1, 2 and 3.
+        w.soapy.clear();
+        w.vendors = {{"PothosSDR", "C:/Fake/PothosSDR", "C:/Fake/PothosSDR/lib/SoapySDR/modules0.8", "C:/Fake/PothosSDR/bin"},
+                     {"radioconda", "C:/Fake/radioconda", "", ""}};
+        w.searchPaths = {"C:/Fake/modules-a", "C:/Fake/modules-b", "C:/Fake/" + std::string(200, 's')};
+        w.modules = {"C:/Fake/modules-a/rtlsdrSupport.dll"};
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(w.diagCalls.load(), 2);
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 6);
+        const FoxListItem v0 = item(s, FOXAPI_LIST_SCAN_EVIDENCE, 0);
+        const FoxListItem v1 = item(s, FOXAPI_LIST_SCAN_EVIDENCE, 1);
+        const FoxListItem p0 = item(s, FOXAPI_LIST_SCAN_EVIDENCE, 2);
+        const FoxListItem p2 = item(s, FOXAPI_LIST_SCAN_EVIDENCE, 4);
+        const FoxListItem m0 = item(s, FOXAPI_LIST_SCAN_EVIDENCE, 5);
+        CHECK_EQ(v0.value[0], 1.0);
+        CHECK_EQ(std::string(v0.name), std::string("PothosSDR"));
+        CHECK_EQ(std::string(v0.detail), std::string("C:/Fake/PothosSDR"));
+        CHECK_EQ(std::string(v1.name), std::string("radioconda"));
+        CHECK_EQ(p0.value[0], 2.0);
+        CHECK_EQ(std::string(p0.name), std::string());
+        CHECK_EQ(std::string(p0.detail), std::string("C:/Fake/modules-a"));
+        CHECK_EQ(p2.value[0], 2.0);
+        CHECK_EQ(std::strlen(p2.detail), 159u);  // evidence for a person: cut at the item's size
+        CHECK_EQ(m0.value[0], 3.0);
+        CHECK_EQ(std::string(m0.detail), std::string("C:/Fake/modules-a/rtlsdrSupport.dll"));
+        for (uint32_t i = 0; i < 6; ++i) { CHECK_EQ(item(s, FOXAPI_LIST_SCAN_EVIDENCE, i).id, static_cast<uint64_t>(i + 1u)); }
+        // LOCAL: paths and installs of the engine's machine. A REMOTE session is DENIED the count and the entry.
+        CHECK_EQ(count(remote, FOXAPI_LIST_SCAN_EVIDENCE), FOXAPI_DENIED);
+        FoxListItem none{};
+        none.structSize = sizeof(none);
+        CHECK_EQ(api()->read_list(remote.raw(), FOXAPI_LIST_SCAN_EVIDENCE, 0, &none), FOXAPI_DENIED);
+        CHECK_EQ(std::string(none.detail), std::string());
+        // THE SAME EVIDENCE AGAIN moves nothing: the counter the fingerprint hashes stays, and a different answer moves it.
+        const uint64_t evidence = Access::evidenceSeq(d.eng);
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(w.diagCalls.load(), 3);  // asked again at the landing...
+        CHECK_EQ(Access::evidenceSeq(d.eng), evidence);  // ...and said the same
+        w.modules.push_back("C:/Fake/modules-a/hackrfSupport.dll");
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(Access::evidenceSeq(d.eng), evidence + 1u);
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 7);
+        // A scan that FINDS something clears it; so does one beside an open radio (it left drivers out on purpose).
+        w.soapy = {{"Fake Soapy A", "driver=fake,serial=A"}};
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 0);
+        w.soapy.clear();
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 7);
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, engine_api_test::kFakeRadioId)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK(g11::has(s, FOXAPI_SRC_SCAN_PARTIAL));
+        CHECK_EQ(count(s, FOXAPI_LIST_SCAN_EVIDENCE), 0);
+    }
+    Access::uninstall11();
+    std::printf("G11-7: SCAN_EVIDENCE: kinds 1-3 in order, taken once per empty whole landing, LOCAL (DENIED to REMOTE), unchanged by the same answer, cleared by a find and by a partial scan\n");
+}
+
+// G11-8: the sound card as its panel draws it - the lists, the facts, FOXAPP_OP_SOUND_CARD_PICK (the rate rule), the
+// form's field mask, the converter behind the span, the open and the lamp - against a backend held on its gates.
+void testSoundCardPanel() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    g11::World& w = g11::world();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        testing::Session& remote = ss.remote;
+        passes(d.eng, 3);
+        int32_t st = 0;
+        // BEFORE THE CARDS ARE LISTED: no inputs, no rates, a form of the defaults (real mono, 48 kHz, nothing chosen),
+        // a span of 0 to 24 kHz, and a pick has nothing to pick from.
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARDS), 0);
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARD_RATES), 0);
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARD_FORM), 1);
+        {
+            const FoxListItem f = item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0);
+            CHECK_EQ(f.id, 1u);
+            CHECK_EQ(std::string(f.name), std::string());
+            CHECK_EQ(std::string(f.detail), std::string());
+            CHECK_EQ(f.value[0], 48000.0);
+            CHECK_EQ(f.value[1], 0.0);
+            CHECK_EQ(f.value[2], 0.0);
+            CHECK_EQ(f.flags & (FOXAPI_ITEM_IQ_STEREO | FOXAPI_ITEM_SWAP_IQ | FOXAPI_ITEM_PICKED), 0u);
+        }
+        CHECK_EQ(fact(s, "fact.soundcard.span", &st), std::string("0 24000"));
+        CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 1)).status(), FOXAPI_NOT_FOUND);
+        CHECK_EQ(Access::form(d.eng).device, std::string());
+        // The centre op, with no card running: NO_CHANGE, so the window can send it every time (and drop its gate).
+        CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, 0, 7.1e6)).status(), FOXAPI_NO_CHANGE);
+
+        // THE LISTING (the row chosen: the engine takes the list on its worker), the three inputs in the backend's order,
+        // each "device (host API)" with the host API in detail. An empty device in the form means the system's default
+        // input, which is the entry flagged isDefault.
+        w.listGate = false;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:soundcard")).status(), FOXAPI_OK);
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARDS), 0);  // in flight: still nothing
+        w.listGate = true;
+        CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
+        CHECK_EQ(w.listCalls.load(), 1);
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARDS), 3);
+        const char* const labels[3] = {"Fake In A (Fake API)", "Fake In B (Fake API)", "Fake In C (Fake API)"};
+        for (uint32_t i = 0; i < 3; ++i) {
+            const FoxListItem c = item(s, FOXAPI_LIST_SOUND_CARDS, i);
+            CHECK_EQ(c.id, static_cast<uint64_t>(i + 1u));
+            CHECK_EQ(std::string(c.name), std::string(labels[i]));
+            CHECK_EQ(std::string(c.detail), std::string("Fake API"));
+            CHECK_EQ((c.flags & FOXAPI_ITEM_ACTIVE) != 0u, i == 0u);  // no device named: the default input
+        }
+        CHECK_EQ(count(remote, FOXAPI_LIST_SOUND_CARDS), 3);  // a card's name is not a path: listed to a REMOTE session
+
+        // A PICK: card B, whose rates do not include the form's 48 kHz, so it lands on B's own default (192 kHz).
+        CHECK_EQ(g11::cmdLandsOk(d, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 2)), true);
+        CHECK_EQ(Access::form(d.eng).device, std::string("Fake In B"));
+        CHECK_EQ(Access::form(d.eng).hostApi, std::string("Fake API"));
+        CHECK(Access::form(d.eng).pickedFromList);
+        CHECK_EQ(Access::form(d.eng).cardRateHz, 192000.0);
+        for (uint32_t i = 0; i < 3; ++i) {
+            CHECK_EQ((item(s, FOXAPI_LIST_SOUND_CARDS, i).flags & FOXAPI_ITEM_ACTIVE) != 0u, i == 1u);
+        }
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARD_RATES), 2);
+        CHECK_EQ(item(s, FOXAPI_LIST_SOUND_CARD_RATES, 0).value[0], 96000.0);
+        CHECK_EQ(item(s, FOXAPI_LIST_SOUND_CARD_RATES, 1).value[0], 192000.0);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 0).flags & FOXAPI_ITEM_ACTIVE) == 0u);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 1).flags & FOXAPI_ITEM_ACTIVE) != 0u);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 0).flags & FOXAPI_ITEM_EXCLUSIVE) == 0u);
+        {
+            const FoxListItem f = item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0);
+            CHECK_EQ(std::string(f.name), std::string("Fake In B"));  // a LOCAL session reads the card whole...
+            CHECK_EQ(std::string(f.detail), std::string("Fake API"));
+            CHECK_EQ(f.value[0], 192000.0);
+            CHECK((f.flags & FOXAPI_ITEM_PICKED) != 0u);
+            const FoxListItem fr = item(remote, FOXAPI_LIST_SOUND_CARD_FORM, 0);
+            CHECK_EQ(std::string(fr.name), std::string());  // ...a REMOTE one reads the figures and flags, not the card
+            CHECK_EQ(std::string(fr.detail), std::string());
+            CHECK_EQ(fr.value[0], 192000.0);
+            CHECK((fr.flags & FOXAPI_ITEM_PICKED) != 0u);
+        }
+        CHECK_EQ(fact(s, "fact.soundcard.device"), std::string("Fake In B"));
+        CHECK_EQ(fact(s, "fact.soundcard.hostApi"), std::string("Fake API"));
+        CHECK_EQ(fact(remote, "fact.soundcard.device", &st), std::string());
+        CHECK_EQ(st, FOXAPI_DENIED);
+        CHECK_EQ(fact(remote, "fact.soundcard.hostApi", &st), std::string());
+        CHECK_EQ(st, FOXAPI_DENIED);
+        CHECK_EQ(fact(s, "fact.soundcard.span"), std::string("0 96000"));  // real mode: 0 to rate/2
+        CHECK_EQ(fact(remote, "fact.soundcard.span"), std::string("0 96000"));
+        // Card A: B's 192 kHz is not A's; A's default is 48 kHz. And A's 96 kHz is EXCLUSIVE.
+        CHECK_EQ(g11::cmdLandsOk(d, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 1)), true);
+        CHECK_EQ(Access::form(d.eng).cardRateHz, 48000.0);
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARD_RATES), 3);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 2).flags & FOXAPI_ITEM_EXCLUSIVE) != 0u);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 0).flags & FOXAPI_ITEM_EXCLUSIVE) == 0u);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 1).flags & FOXAPI_ITEM_ACTIVE) != 0u);  // 48 kHz
+        // The rate is KEPT when the new card offers it: 96 kHz set by the form's own field, then A picked again.
+        CHECK_EQ(g11::cmdLandsOk(d, s, cascade::gui::soundCardFormCommand(
+                                      [] { cascade::source::SoundCardSettings x; x.cardRateHz = 96000.0; return x; }(),
+                                      FOXAPP_SOUND_CARD_FIELD_RATE)),
+                 true);
+        CHECK_EQ(g11::cmdLandsOk(d, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 1)), true);
+        CHECK_EQ(Access::form(d.eng).cardRateHz, 96000.0);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_RATES, 2).flags & FOXAPI_ITEM_ACTIVE) != 0u);
+        // ...and the highest is the fallback when neither the rate nor the card's default is on offer (card C).
+        CHECK_EQ(g11::cmdLandsOk(d, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 3)), true);
+        CHECK_EQ(Access::form(d.eng).cardRateHz, 64000.0);
+        // A PICK clears the "not connected" line.
+        Access::cardMissing(d.eng) = "Fake In Z (Fake API) is not connected.";
+        passes(d.eng, 2);
+        CHECK_EQ(g11::lineLevel(s, "soundCardMissing"), 2.0);
+        CHECK_EQ(g11::cmdLandsOk(d, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 1)), true);
+        CHECK_EQ(g11::lineLevel(s, "soundCardMissing"), -1.0);
+        // An id with no entry changes nothing; a REMOTE session may not pick.
+        const cascade::source::SoundCardSettings held = Access::form(d.eng);
+        for (long long bad : {0LL, 4LL, -1LL, 1000LL}) {
+            CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, bad)).status(), FOXAPI_NOT_FOUND);
+        }
+        CHECK_EQ(pumped(d.eng, remote, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 2)).status(), FOXAPI_DENIED);
+        CHECK(Access::form(d.eng).device == held.device && Access::form(d.eng).cardRateHz == held.cardRateHz);
+
+        // THE FORM'S FIELD MASK, through the table: a command carrying the centre alone leaves the card, the rate and
+        // the format as the engine holds them; the format alone leaves the rest; the I/Q span follows the centre.
+        cascade::source::SoundCardSettings stale;  // every other field wrong
+        stale.device = "Stale";
+        stale.cardRateHz = 8000.0;
+        stale.iqCentreHz = 7.1e6;
+        CHECK_EQ(g11::cmdLandsOk(d, s, cascade::gui::soundCardFormCommand(stale, FOXAPP_SOUND_CARD_FIELD_CENTRE)), true);
+        CHECK_EQ(Access::form(d.eng).device, std::string("Fake In A"));
+        CHECK_EQ(Access::form(d.eng).cardRateHz, 48000.0);  // (A's default, which the last pick chose over C's 64 kHz)
+        CHECK_EQ(Access::form(d.eng).iqCentreHz, 7.1e6);
+        CHECK_EQ(item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0).value[1], 7.1e6);
+        CHECK_EQ(fact(s, "fact.soundcard.span"), std::string("0 24000"));  // real mode: the centre is not the span's
+        cascade::source::SoundCardSettings iq;
+        iq.format = cascade::source::SoundCardFormat::IqStereo;
+        CHECK_EQ(g11::cmdLandsOk(d, s, cascade::gui::soundCardFormCommand(iq, FOXAPP_SOUND_CARD_FIELD_FORMAT)), true);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0).flags & FOXAPI_ITEM_IQ_STEREO) != 0u);
+        CHECK_EQ(item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0).value[0], 48000.0);
+        CHECK_EQ(fact(s, "fact.soundcard.span"), std::string("7076000 7124000"));  // the centre +/- 24 kHz
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARD_RATES), 3);  // A takes the same rates in I/Q (two channels)
+        cascade::source::SoundCardSettings swap;
+        swap.swapIq = true;
+        swap.channel = 1;
+        CHECK_EQ(g11::cmdLandsOk(d, s, cascade::gui::soundCardFormCommand(swap, FOXAPP_SOUND_CARD_FIELD_SWAP_IQ)), true);
+        CHECK((item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0).flags & FOXAPI_ITEM_SWAP_IQ) != 0u);
+        CHECK_EQ(item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0).value[2], 0.0);  // the channel was not carried
+        CHECK_EQ(g11::cmdLandsOk(d, s, cascade::gui::soundCardFormCommand(swap, FOXAPP_SOUND_CARD_FIELD_CHANNEL)), true);
+        CHECK_EQ(item(s, FOXAPI_LIST_SOUND_CARD_FORM, 0).value[2], 1.0);
+
+        // THE CONVERTER BEHIND THE SPAN: a card in I/Q mode takes none (the centre is already the air), a real card takes
+        // a down-converter (air = radio + LO), and a stored up-converter is not used for it.
+        const std::string key = cascade::gui::soundCardConverterKey("Fake In A", "Fake API");
+        cascade::core::ConverterSetting down;
+        down.mode = cascade::core::ConverterMode::Down;
+        down.loHz = 100.0e6;
+        Access::converters(d.eng)[key] = down;
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, "fact.soundcard.span"), std::string("7076000 7124000"));  // I/Q: unchanged
+        cascade::source::SoundCardSettings real;  // format real: bit 1 clear
+        CHECK_EQ(g11::cmdLandsOk(d, s, cascade::gui::soundCardFormCommand(real, FOXAPP_SOUND_CARD_FIELD_FORMAT)), true);
+        CHECK_EQ(fact(s, "fact.soundcard.span"), std::string("100000000 100024000"));  // air = radio + LO, 0 to 24 kHz
+        cascade::core::ConverterSetting up;
+        up.mode = cascade::core::ConverterMode::Up;
+        up.loHz = 100.0e6;
+        Access::converters(d.eng)[key] = up;
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, "fact.soundcard.span"), std::string("0 24000"));  // an Up is not used by a real card
+        Access::converters(d.eng).erase(key);
+        passes(d.eng, 2);
+    }
+    {
+        // THE OPEN, and the lamp's inputs while it runs: the form's card opens on its worker (CARD_OPENING, no radio's
+        // flag), then it IS the source in use (DEVICES' sound card entry ACTIVE, the combo's row 2); opening it AGAIN
+        // releases the running card first and keeps it for the config - fact.source.keep says "soundcard", the source in
+        // use is the generator and OPENING is set, which is exactly the lamp's "do not light" state - and it comes back.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:soundcard")).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
+        CHECK_EQ(g11::cmdLandsOk(d, s, appCmd(FOXAPP_OP_SOUND_CARD_PICK, 1)), true);
+        CHECK_EQ(fact(s, "fact.source.keep"), std::string());
+        w.openGate = false;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "soundcard:open")).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_OPENING));
+        CHECK(check::waitFor([&] { return w.openCalls.load() == 1; }, 2000));  // the worker is inside the backend's open
+        w.openGate = true;
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_CARD_OPENING); }));
+        CHECK_EQ(Access::sourceKind(d.eng), std::string("soundcard"));
+        int at = -1;
+        CHECK_EQ(activeItem(s, FOXAPI_LIST_DEVICES, &at).id, 3u);  // the sound card's entry
+        CHECK_EQ(at, 2);
+        CHECK_EQ(fact(s, "fact.source.row"), std::string("2"));
+        CHECK_EQ(Access::liveCard(d.eng).device, std::string("Fake In A"));
+        CHECK_EQ(fact(s, "fact.soundcard.device"), std::string("Fake In A"));
+        // The centre op: this card runs in REAL mode, so a typed centre is kept for the next Open and not sent live.
+        CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_SOUNDCARD_IQ_CENTRE, 0, 7.1e6)).status(), FOXAPI_NO_CHANGE);
+        // OPEN AGAIN with the card running.
+        w.openGate = false;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "soundcard:open")).status(), FOXAPI_OK);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_OPENING));
+        CHECK_EQ(fact(s, "fact.source.keep"), std::string("soundcard"));
+        CHECK(!g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN));
+        CHECK_EQ(Access::sourceKind(d.eng), std::string("siggen"));
+        CHECK_EQ(activeItem(s, FOXAPI_LIST_DEVICES, &at).id, 1u);  // the generator stands in
+        w.openGate = true;
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_CARD_OPENING); }));
+        CHECK_EQ(Access::sourceKind(d.eng), std::string("soundcard"));
+        CHECK_EQ(fact(s, "fact.source.keep"), std::string());
+        CHECK_EQ(w.openCalls.load(), 2);  // one open each time (the release is not an open)
+    }
+    Access::uninstall11();
+    std::printf("G11-8: SOUND_CARDS, SOUND_CARD_RATES and SOUND_CARD_FORM (LOCAL name), fact.soundcard.*, the pick's rate rule (kept / default / highest), the form's mask, the converter behind the span, the open and the keep\n");
+}
+
+// G11-9: what the window used to send every frame is the engine's own pass now: no command in these tests says it.
+void testPerFrameMovesAreThePasss() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    g11::World& w = g11::world();
+    {
+        // THE SOUND CARDS ARE LISTED BECAUSE THE ROW IS SELECTED - nobody sent SOUND_CARDS_WANTED, and the combo's own
+        // handler was not run (the row is set as a restored config sets it): the pass lists them, once.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        passes(d.eng, 5);
+        CHECK_EQ(w.listCalls.load(), 0);  // the row is the generator: never asked for
+        Access::sourceSel(d.eng) = 2;
+        w.listGate = false;
+        passes(d.eng, 3);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_SCANNING));
+        CHECK(check::waitFor([&] { return w.listCalls.load() == 1; }, 2000));  // the worker is inside the backend's listing
+        passes(d.eng, 20);  // in flight: not asked again by every pass
+        CHECK_EQ(w.listCalls.load(), 1);
+        w.listGate = true;
+        CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
+        passes(d.eng, 20);  // listed: not at all
+        CHECK_EQ(w.listCalls.load(), 1);
+        CHECK_EQ(count(s, FOXAPI_LIST_SOUND_CARDS), 3);
+        // The same engine on another row: a listed list is not asked for either, and no row but 2 asks.
+        Access::sourceSel(d.eng) = 0;
+        Access::cardListed(d.eng) = false;
+        Access::cards(d.eng).clear();
+        passes(d.eng, 10);
+        CHECK_EQ(w.listCalls.load(), 1);
+    }
+    {
+        // ...and not while a card is opening.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        passes(d.eng, 2);
+        Access::cardOpening(d.eng) = true;  // an open in flight (no worker: the pass leaves it alone)
+        Access::sourceSel(d.eng) = 2;
+        passes(d.eng, 10);
+        CHECK_EQ(w.listCalls.load(), 1);  // unchanged from the first engine's single listing
+        Access::cardOpening(d.eng) = false;
+        passes(d.eng, 3);
+        CHECK(check::waitFor([&] { return w.listCalls.load() == 2; }, 2000));  // the opening is over: the wish is carried out
+        CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
+    }
+    {
+        // THE DEFERRAL'S LOG LATCH: set (as a deferral sets it) with nothing gating the scan, the pass lets it go.
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        passes(d.eng, 2);
+        CHECK(!Access::gated(d.eng));
+        Access::deferredLogged(d.eng) = true;
+        passes(d.eng, 1);
+        CHECK(!Access::deferredLogged(d.eng));
+        // With the gate shut it holds: a radio open, as many passes as you like.
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, engine_api_test::kFakeRadioId)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        CHECK(Access::gated(d.eng));
+        Access::deferredLogged(d.eng) = true;
+        passes(d.eng, 10);
+        CHECK(Access::deferredLogged(d.eng));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "siggen")).status(), FOXAPI_OK);
+        passes(d.eng, 1);
+        CHECK(!Access::deferredLogged(d.eng));
+    }
+    Access::uninstall11();
+    std::printf("G11-9: the sound card list is taken by the pass while row 2 is selected (once, never in flight or opening), the deferral's log latch is let go by the pass when the gate opens\n");
+}
+
+// G11-10: listSeq EXACTNESS. Every input the section's lists, facts and flags are built from moves the fingerprint, and
+// so listSeq, when it changes and nothing else does - the friend writes each member alone, on an engine with a radio
+// open and the sound cards listed (so nothing else that a probe touches moves with it) - once for the change, never for
+// the same value said again, and once more when it is put back. A member that is not hashed leaves its probe red.
+void testSourceListSeqExactness() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Access::install11();
+    {
+        Direct d;
+        g11::Sessions ss(d);
+        testing::Session& s = ss.local;
+        CHECK(g11::scanAll(d, s));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:soundcard")).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
+        CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPI_OP_SELECT_SOURCE, engine_api_test::kFakeRadioId)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return g11::rxHas(s, FOXAPI_RX_DEVICE_OPEN); }));
+        passes(d.eng, 5);
+        cascade::engine::Engine& e = d.eng;
+        Access::sourceSel(e) = 0;  // not the sound card's row: an un-listed card list would be asked for by the pass
+        passes(e, 3);
+        int probes = 0;
+        const std::string model0 = Access::deviceModel(e);
+        const std::string label0 = Access::rateLabels(e)[0];
+        CHECK(Access::scanned(e));  // the scan above started one
+        const auto probe = [&](const char* what, auto change, auto revert) {
+            passes(e, 3);
+            const uint64_t seq0 = s.state().listSeq;
+            const uint64_t fp0 = Access::fingerprint(e);
+            change();
+            CHECK(Access::fingerprint(e) != fp0);  // the member is in the fingerprint
+            passes(e, 1);
+            const uint64_t seq1 = s.state().listSeq;
+            bool exact = seq1 == seq0 + 1u;  // once for the change
+            passes(e, 3);
+            exact = exact && s.state().listSeq == seq1;  // ...and not once a pass
+            change();                                    // the same value said again moves nothing
+            passes(e, 2);
+            exact = exact && s.state().listSeq == seq1;
+            revert();
+            passes(e, 1);
+            exact = exact && s.state().listSeq == seq1 + 1u;  // and once more when it is put back
+            if (!exact) {
+                std::printf("  G11-10: %s: listSeq %llu, %llu after the change, %llu settled\n", what,
+                            static_cast<unsigned long long>(seq0), static_cast<unsigned long long>(seq1),
+                            static_cast<unsigned long long>(s.state().listSeq));
+            }
+            CHECK(exact);
+            passes(e, 2);
+            ++probes;
+        };
+        probe("the combo's row", [&] { Access::sourceSel(e) = 4; }, [&] { Access::sourceSel(e) = 0; });
+        probe("the kind kept for the config", [&] { Access::keepKind(e) = "soundcard"; }, [&] { Access::keepKind(e).clear(); });
+        probe("a radio being opened (flag, with the gate shut already)", [&] { Access::openPending(e) = true; },
+              [&] { Access::openPending(e) = false; });
+        probe("the label of the radio being opened", [&] { Access::busyLabel(e) = "Opening label"; },
+              [&] { Access::busyLabel(e).clear(); });
+        probe("the open radio's model", [&] { Access::deviceModel(e) = "Another model"; },
+              [&] { Access::deviceModel(e) = model0; });
+        probe("a scan in flight", [&] { Access::scanPending(e) = true; }, [&] { Access::scanPending(e) = false; });
+        probe("a scan started", [&] { Access::scanned(e) = false; }, [&] { Access::scanned(e) = true; });
+        probe("a partial scan", [&] { Access::scanPartial(e) = true; }, [&] { Access::scanPartial(e) = false; });
+        probe("a patch radio still opening", [&] { Access::pendPatchRadio(e, true); }, [&] { Access::pendPatchRadio(e, false); });
+        probe("look for network USRPs", [&] { Access::networkUsrps(e) = true; }, [&] { Access::networkUsrps(e) = false; });
+        probe("a driver left out of the last scan", [&] { Access::absent(e) = {"uhd"}; }, [&] { Access::absent(e).clear(); });
+        probe("a different driver left out", [&] { Access::absent(e) = {"rtlsdr"}; }, [&] { Access::absent(e).clear(); });
+        probe("an SDRplay row found", [&] { Access::sdrRowsFound(e) = true; }, [&] { Access::sdrRowsFound(e) = false; });
+        probe("the Pluto's address", [&] { std::snprintf(Access::plutoBuffer(e), 192, "%s", "ip:10.1.1.1"); },
+              [&] { std::snprintf(Access::plutoBuffer(e), 192, "%s", "ip:192.168.2.1"); });
+        const auto unboundDongle = [] {
+            cascade::usb::UsbDeviceInfo u;
+            u.vid = 0x0BDA;
+            u.pid = 0x2838;
+            u.description = "A dongle";
+            return u;
+        };
+        probe("a dongle that cannot be opened", [&] { Access::unbound(e) = {unboundDongle()}; }, [&] { Access::unbound(e).clear(); });
+        Access::unbound(e) = {unboundDongle()};
+        passes(e, 3);
+        probe("that dongle's vendor id", [&] { Access::unbound(e)[0].vid = 0x1D50; }, [&] { Access::unbound(e)[0].vid = 0x0BDA; });
+        probe("that dongle's product id", [&] { Access::unbound(e)[0].pid = 0x6089; }, [&] { Access::unbound(e)[0].pid = 0x2838; });
+        probe("that dongle's description", [&] { Access::unbound(e)[0].description = "Renamed"; },
+              [&] { Access::unbound(e)[0].description = "A dongle"; });
+        Access::unbound(e).clear();
+        passes(e, 3);
+        probe("a driver that crashed the scan", [&] { Access::faulted(e) = {"uhd"}; }, [&] { Access::faulted(e).clear(); });
+        const uint64_t evidence0 = Access::evidenceSeq(e);
+        probe("the runtime's evidence", [&] { Access::evidenceSeq(e) = evidence0 + 7u; }, [&] { Access::evidenceSeq(e) = evidence0; });
+        // (The fault sentence is rewritten by every pass from the pipeline, so it is probed on the fingerprint itself,
+        // without a pass between the write and the read; G11-4 holds the real path through test.fault.)
+        {
+            const uint64_t before = Access::fingerprint(e);
+            Access::faultText(e) = "the radio stopped";
+            const uint64_t withText = Access::fingerprint(e);
+            CHECK(withText != before);
+            Access::faultText(e) = "the radio stopped";
+            CHECK_EQ(Access::fingerprint(e), withText);
+            Access::faultText(e).clear();
+            CHECK_EQ(Access::fingerprint(e), before);
+            ++probes;
+        }
+        probe("a rate's caption", [&] { Access::rateLabels(e)[0] = "a different caption"; },
+              [&] { Access::rateLabels(e)[0] = label0; });
+        probe("the card list taken", [&] { Access::cardListed(e) = false; }, [&] { Access::cardListed(e) = true; });
+        probe("the card list in flight", [&] { Access::cardScanning(e) = true; }, [&] { Access::cardScanning(e) = false; });
+        probe("a card opening", [&] { Access::cardOpening(e) = true; }, [&] { Access::cardOpening(e) = false; });
+        probe("the form's device", [&] { Access::form(e).device = "Fake In B"; }, [&] { Access::form(e).device.clear(); });
+        probe("the form's host API", [&] { Access::form(e).hostApi = "Other API"; }, [&] { Access::form(e).hostApi.clear(); });
+        probe("the form's format", [&] { Access::form(e).format = cascade::source::SoundCardFormat::IqStereo; },
+              [&] { Access::form(e).format = cascade::source::SoundCardFormat::RealMono; });
+        probe("the form's channel", [&] { Access::form(e).channel = 1; }, [&] { Access::form(e).channel = 0; });
+        probe("the form's swap", [&] { Access::form(e).swapIq = true; }, [&] { Access::form(e).swapIq = false; });
+        probe("the form's centre", [&] { Access::form(e).iqCentreHz = 7.1e6; }, [&] { Access::form(e).iqCentreHz = 0.0; });
+        probe("the form's rate", [&] { Access::form(e).cardRateHz = 96000.0; }, [&] { Access::form(e).cardRateHz = 48000.0; });
+        probe("the form's pick flag", [&] { Access::form(e).pickedFromList = true; }, [&] { Access::form(e).pickedFromList = false; });
+        probe("an input's name", [&] { Access::cards(e)[0].name = "Renamed in"; }, [&] { Access::cards(e)[0].name = "Fake In A"; });
+        probe("an input's host API", [&] { Access::cards(e)[0].hostApi = "Other API"; }, [&] { Access::cards(e)[0].hostApi = "Fake API"; });
+        probe("an input's default rate", [&] { Access::cards(e)[0].defaultRateHz = 44100.0; },
+              [&] { Access::cards(e)[0].defaultRateHz = 48000.0; });
+        probe("one of an input's rates", [&] { Access::cards(e)[0].rates[0].hz = 22050.0; }, [&] { Access::cards(e)[0].rates[0].hz = 44100.0; });
+        probe("a rate's exclusive flag", [&] { Access::cards(e)[0].rates[0].exclusive = true; },
+              [&] { Access::cards(e)[0].rates[0].exclusive = false; });
+        std::printf("G11-10: %d inputs of the Source section, each moving listSeq once alone and nothing the second time\n", probes);
+    }
+    Access::uninstall11();
+}
+// G11 TESTS END>>
 int main() {
     engine_api_test::hermetic("api03");
     cascade::gui::AppWindowTestAccess::installFakeRadio();
@@ -4522,5 +5913,18 @@ int main() {
     testStoreAddAllRun();
     testStoreCatalogueCounter();
     testStoreLinesAndLanguage();
+// <<G11 MAIN BEGIN
+    // Group 11: the Source section and the sound card.
+    testSourceRowsAndWholeIds();
+    testSourceFlags();
+    testSourceFacts();
+    testDeviceFaultWhole();
+    testSampleRateCaptions();
+    testUnboundRadiosAndSdrPlayNote();
+    testScanEvidence();
+    testSoundCardPanel();
+    testPerFrameMovesAreThePasss();
+    testSourceListSeqExactness();
+// G11 MAIN END>>
     return check::finish("test_engine_api_03");
 }

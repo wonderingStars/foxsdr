@@ -623,9 +623,9 @@ void rdsGroupAndLayout() {
           offsetof(FoxReceiverState, autoNotchHz) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, rdsPs) == offsetof(FoxReceiverState, rdsPty) + sizeof(std::uint32_t));
     CHECK(offsetof(FoxReceiverState, rdsRadioText) == offsetof(FoxReceiverState, rdsPs) + FOXAPI_RDS_PS_CHARS);
-    // (0.3 8.6 appended after RadioText: the minimum accepted moved to the end of scanListenMs,
-    // checked in scanGroupAndLayout below.)
-    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, scanListenMs) + sizeof(std::uint32_t));
+    // (0.3 8.6 appended after RadioText and 8.10 after that: the minimum accepted moved to the end of
+    // scanListenMs, and then of sourceFlags - checked in scanGroupAndLayout and sourceFlagsGroup below.)
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, sourceFlags) + sizeof(std::uint32_t));
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
     CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
@@ -694,7 +694,9 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, scanHoldMs) == offsetof(FoxReceiverState, scanDwellMs) + 4u);
     CHECK(offsetof(FoxReceiverState, scanResumeMs) == offsetof(FoxReceiverState, scanHoldMs) + 4u);
     CHECK(offsetof(FoxReceiverState, scanListenMs) == offsetof(FoxReceiverState, scanResumeMs) + 4u);
-    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, scanListenMs) + 4u);
+    // 0.3 8.10 appended one word after the scanner's last (sourceFlags): the minimum ends there.
+    CHECK(offsetof(FoxReceiverState, sourceFlags) == offsetof(FoxReceiverState, scanListenMs) + 4u);
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, sourceFlags) + 4u);
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
     CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
     // The state words are 0..3, each its own.
@@ -704,6 +706,45 @@ void scanGroupAndLayout() {
           FOXAPI_SCANNER_PAUSED == cascade::core::kScannerPaused && FOXAPI_SCANNER_HOLDING == cascade::core::kScannerHolding);
     std::printf("      FoxReceiverState %zu bytes (before the scanner's members: %zu), minimum accepted %zu\n",
                 sizeof(FoxReceiverState), afterText, static_cast<std::size_t>(FOXAPI_MIN_RECEIVER_STATE));
+}
+
+// --- 3d. the Source section's flag word (API 0.3 8.10) -------------------------------------
+
+void sourceFlagsGroup() {
+    std::printf("[3d] sourceFlags: each of the ten bits moves deviceSeq and seq, and nothing else, and no repeat moves anything\n");
+    const std::uint32_t bits[] = {FOXAPI_SRC_SCAN_PENDING,  FOXAPI_SRC_SCANNED,      FOXAPI_SRC_SCAN_PARTIAL,
+                                  FOXAPI_SRC_SCAN_GATED,    FOXAPI_SRC_NETWORK_USRPS, FOXAPI_SRC_UHD_LEFT_OUT,
+                                  FOXAPI_SRC_SDRPLAY_ROWS,  FOXAPI_SRC_CARD_LISTED,  FOXAPI_SRC_CARD_SCANNING,
+                                  FOXAPI_SRC_CARD_OPENING};
+    std::uint32_t all = 0;
+    for (const std::uint32_t b : bits) {
+        CHECK(b != 0u && (b & (b - 1u)) == 0u);  // one bit each
+        CHECK((all & b) == 0u);                  // none twice
+        all |= b;
+    }
+    CHECK(all == 0x3FFu);
+    ReceiverSnapshot snap;
+    PublishedState s{};
+    snap.publish(s, nullptr);
+    for (const std::uint32_t b : bits) {
+        const Seqs before = seqs(snap);
+        s.rx.sourceFlags |= b;
+        snap.publish(s, nullptr);
+        const Seqs on = seqs(snap);
+        CHECK(on.device == before.device + 1u);
+        CHECK(on.seq == before.seq + 1u);
+        // Not the plugin ABI's device group, and no other engine group.
+        CHECK(on.aDevice == before.aDevice && on.aSeq == before.aSeq);
+        CHECK(on.tune == before.tune && on.mode == before.mode && on.audio == before.audio &&
+              on.display == before.display && on.tx == before.tx && on.rds == before.rds && on.scan == before.scan &&
+              on.list == before.list);
+        // The same word again is no change; the bit clearing is one.
+        snap.publish(s, nullptr);
+        CHECK(seqs(snap).device == on.device && seqs(snap).seq == on.seq);
+        s.rx.sourceFlags &= ~b;
+        snap.publish(s, nullptr);
+        CHECK(seqs(snap).device == on.device + 1u && seqs(snap).seq == on.seq + 1u);
+    }
 }
 
 // --- 4. the compose mapping --------------------------------------------------------
@@ -1452,6 +1493,7 @@ int main() {
     countersMoveByGroup();
     rdsGroupAndLayout();
     scanGroupAndLayout();
+    sourceFlagsGroup();
     composeMapsEveryField();
     pluginApiReadsTheSharedSnapshot();
     walkingOneCompose();

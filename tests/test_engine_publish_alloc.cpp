@@ -47,6 +47,11 @@
 //      moves nothing); each input the store adds moves the fingerprint ALONE (the catalogue's counter, the index,
 //      the busy name with the flag held, the run's five fields, a retired row's id and sentence, the two status
 //      lines) and the block's rebuild is counted, once for the change
+//   F5 the Source section and the sound card (API 0.3 8.10): with six sound card inputs of eight rates, a form, three
+//      dongles that cannot be opened, two faulted drivers, the runtime's evidence, a 189-byte Pluto address and a
+//      134-byte fault sentence, every pass's fingerprint, an unchanged pass and the publish (with the section's flag
+//      word) allocate nothing, and so do 1000 rounds of reading each new list and fact; each input moves the
+//      fingerprint ALONE and the block's rebuild is counted, once for the change
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
@@ -241,6 +246,25 @@ struct AppWindowTestAccess {
     static std::string& catalogStatus(cascade::engine::Engine& e) { return e.catalogStatus_; }
     // ... and the rows the policy retires.
     static std::vector<cascade::core::BlockedPlugin>& blocked(cascade::engine::Engine& e) { return e.pluginBlocked_; }
+// <<F5 ACCESS BEGIN
+    // The Source section's inputs (API 0.3 8.10), each reachable alone.
+    static std::vector<cascade::usb::UsbDeviceInfo>& unbound(cascade::engine::Engine& e) { return e.nativeUnbound_; }
+    static std::vector<std::string>& faulted(cascade::engine::Engine& e) { return e.faultedDrivers_; }
+    static auto& evidence(cascade::engine::Engine& e) { return e.scanEvidence_; }
+    static std::uint64_t& evidenceSeq(cascade::engine::Engine& e) { return e.scanEvidenceSeq_; }
+    static char* plutoBuffer(cascade::engine::Engine& e) { return e.plutoUri_; }
+    static std::vector<cascade::source::SoundCardDevice>& cards(cascade::engine::Engine& e) { return e.soundCardDevices_; }
+    static cascade::source::SoundCardSettings& form(cascade::engine::Engine& e) { return e.soundCard_; }
+    static bool& cardListed(cascade::engine::Engine& e) { return e.soundCardListed_; }
+    static std::vector<std::string>& absent(cascade::engine::Engine& e) { return e.soapyAbsentDrivers_; }
+    static std::string& keepKind(cascade::engine::Engine& e) { return e.restoreKeep_.kind; }
+    static std::string& busyLabel(cascade::engine::Engine& e) { return e.deviceBusyLabel_; }
+    static std::string& faultText(cascade::engine::Engine& e) { return e.apiFaultText_; }
+    static int& sourceSel(cascade::engine::Engine& e) { return e.sourceSel_; }
+    static bool& sdrRows(cascade::engine::Engine& e) { return e.sdrPlayRowsFound_; }
+    static bool& networkUsrps(cascade::engine::Engine& e) { return e.lookForNetworkUsrps_; }
+    static bool& scanned(cascade::engine::Engine& e) { return e.soapyScanned_; }
+// F5 ACCESS END>>
 };
 }  // namespace cascade::gui
 
@@ -930,5 +954,181 @@ int main() {
         table->close_session(session);
     }
 
+// <<F5 CASE BEGIN
+
+    // F5: the Source section and the sound card (API 0.3 8.10). Six sound card inputs of eight rates each, a form, three
+    // dongles that cannot be opened, two faulted drivers, the runtime's evidence (a list of paths, as one counter), a
+    // 189-byte Pluto address, the kind kept for the config, a label and a 134-byte fault sentence: every pass's
+    // fingerprint, an unchanged pass and the publish (with the section's flag word) allocate nothing, and 1000 reads of
+    // each new list and fact allocate nothing; each input moves the fingerprint ALONE, the block's rebuild is counted
+    // (bounded, once for the change), and a change said again moves nothing.
+    {
+        cascade::engine::Engine e5;
+        e5.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e5.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        for (int i = 0; i < 6; ++i) {
+            cascade::source::SoundCardDevice c;
+            c.index = i;
+            c.name = "Fake input number " + std::to_string(i) + std::string(40, 'n');
+            c.hostApi = "Fake host API";
+            c.maxInputChannels = 2;
+            c.defaultRateHz = 48000.0;
+            for (int r = 0; r < 8; ++r) { c.rates.push_back({8000.0 * static_cast<double>(r + 2), r == 7}); }
+            Access::cards(e5).push_back(c);
+        }
+        Access::cardListed(e5) = true;
+        Access::form(e5).device = Access::cards(e5)[2].name;
+        Access::form(e5).hostApi = "Fake host API";
+        Access::form(e5).cardRateHz = 48000.0;
+        Access::form(e5).format = cascade::source::SoundCardFormat::IqStereo;
+        Access::form(e5).iqCentreHz = 7.1e6;
+        Access::form(e5).pickedFromList = true;
+        for (int i = 0; i < 3; ++i) {
+            cascade::usb::UsbDeviceInfo u;
+            u.vid = static_cast<std::uint16_t>(0x0BDA + i);
+            u.pid = static_cast<std::uint16_t>(0x2838 + i);
+            u.description = "A USB radio that cannot be opened, number " + std::to_string(i);
+            Access::unbound(e5).push_back(u);
+        }
+        Access::faulted(e5) = {"uhd", "sdrplay"};
+        for (int i = 0; i < 12; ++i) { Access::evidence(e5).modules.push_back("C:/Fake/modules/module" + std::to_string(i) + ".dll"); }
+        Access::evidence(e5).searchPaths = {"C:/Fake/a", "C:/Fake/b"};
+        ++Access::evidenceSeq(e5);
+        std::snprintf(Access::plutoBuffer(e5), 192, "ip:%s", std::string(186, 'p').c_str());
+        Access::keepKind(e5) = "soundcard";
+        Access::busyLabel(e5) = "ADALM-Pluto at ip:192.168.2.1";
+        Access::faultText(e5) =
+            "source thread: the radio's driver is holding an abandoned thread and this source cannot restart; "
+            "pick another source or restart FoxSDR";
+        Access::absent(e5) = {"uhd"};
+        Access::sdrRows(e5) = true;
+        Access::scanned(e5) = true;
+
+        const std::uint64_t settled = Access::fingerprint(e5);  // (warm-up)
+        (void)Access::publishLists(e5);                         // the block is built here, once, and may allocate
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e5); }
+        t_counting = false;
+        std::printf("F5: %d fingerprints with 6 sound card inputs, a form, 3 dongles, 2 faulted drivers, evidence and a fault sentence: %ld heap allocations\n",
+                    kPublishes, t_news);
+        CHECK(t_news == 0);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e5); }
+        t_counting = false;
+        std::printf("F5: %d passes whose lists did not change: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        CHECK(Access::fingerprint(e5) == settled);
+        cascade::core::PublishedState ps;
+        Access::publish(e5, ps);  // (warm-up)
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { Access::publish(e5, ps); }
+        t_counting = false;
+        std::printf("F5: %d publishes with the same (flag word %#x): %ld heap allocations\n", kPublishes, ps.rx.sourceFlags, t_news);
+        CHECK(t_news == 0);
+        // The flag word says what the engine holds: the scan started, the UHD note, the SDRplay row, the card list taken.
+        CHECK((ps.rx.sourceFlags & FOXAPI_SRC_SCANNED) != 0u);
+        CHECK((ps.rx.sourceFlags & FOXAPI_SRC_UHD_LEFT_OUT) != 0u);
+        CHECK((ps.rx.sourceFlags & FOXAPI_SRC_SDRPLAY_ROWS) != 0u);
+        CHECK((ps.rx.sourceFlags & FOXAPI_SRC_CARD_LISTED) != 0u);
+        CHECK((ps.rx.sourceFlags & (FOXAPI_SRC_SCAN_PENDING | FOXAPI_SRC_CARD_SCANNING | FOXAPI_SRC_CARD_OPENING)) == 0u);
+        const std::uint64_t quiet = Access::fingerprint(e5);
+        (void)Access::publishLists(e5);
+        CHECK(Access::fingerprint(e5) == quiet);
+
+        // 1000 rounds of reading each new list's first entry allocate nothing: an interface reads them in its frame. (A
+        // fact's read copies its text into the std::string get_setting builds it in, on the READER's thread and not in
+        // a pass: that is the table's own design for every fact and is not asserted here.)
+        {
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            CHECK(table->read_list(session, FOXAPI_LIST_SOUND_CARDS, 0, &it) == 6);
+            CHECK(table->read_list(session, FOXAPI_LIST_SOUND_CARD_RATES, 0, &it) == 8);
+            CHECK(table->read_list(session, FOXAPI_LIST_UNBOUND_RADIOS, 0, &it) == 3);
+            CHECK(table->read_list(session, FOXAPI_LIST_SCAN_EVIDENCE, 0, &it) == 14);
+            CHECK(table->read_list(session, FOXAPI_LIST_SOUND_CARD_FORM, 0, &it) == 1);
+            CHECK(table->read_list(session, FOXAPI_LIST_DEVICES, 0, &it) == 3);
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                for (const std::uint32_t list : {FOXAPI_LIST_SOUND_CARDS, FOXAPI_LIST_SOUND_CARD_RATES, FOXAPI_LIST_UNBOUND_RADIOS,
+                                                 FOXAPI_LIST_SCAN_EVIDENCE, FOXAPI_LIST_SOUND_CARD_FORM, FOXAPI_LIST_DEVICES}) {
+                    (void)table->read_list(session, list, 0, &it);
+                }
+            }
+            t_counting = false;
+            std::printf("F5: 1000 rounds of 6 list reads: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);
+            CHECK(Access::fingerprint(e5) == quiet);  // reads move nothing
+        }
+
+        // EACH INPUT MOVES THE FINGERPRINT ALONE, and the rebuild is counted (bounded: 6 cards x 8 rates and a few dozen
+        // facts, not a flood), once for the change; settled again after each.
+        const auto movedBy = [&](const char* what, auto change) {
+            const std::uint64_t before = Access::fingerprint(e5);
+            change();
+            const std::uint64_t after = Access::fingerprint(e5);
+            CHECK(after != before);
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e5);  // the rebuild
+            t_counting = false;
+            const long rebuild = t_news;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e5); }
+            t_counting = false;
+            std::printf("F5: %-46s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n", what,
+                        rebuild, kPublishes, t_news);
+            CHECK(rebuild > 0 && rebuild < 4000);
+            CHECK(t_news == 0);
+        };
+        movedBy("the combo's row", [&] { Access::sourceSel(e5) = 3; });
+        movedBy("the kind kept for the config", [&] { Access::keepKind(e5) = "file"; });
+        movedBy("the label of the radio being opened", [&] { Access::busyLabel(e5) = "Airspy R2"; });
+        movedBy("the Pluto's address", [&] { std::snprintf(Access::plutoBuffer(e5), 192, "%s", "ip:10.0.0.9"); });
+        movedBy("a dongle's product id", [&] { Access::unbound(e5)[1].pid = 0x6089; });
+        movedBy("a dongle's description", [&] { Access::unbound(e5)[2].description = "Renamed"; });
+        movedBy("a faulted driver", [&] { Access::faulted(e5).push_back("miri"); });
+        movedBy("the runtime's evidence (its counter)", [&] { ++Access::evidenceSeq(e5); });
+        movedBy("the whole fault sentence", [&] { Access::faultText(e5) += " (and then it stopped)"; });
+        movedBy("a driver left out of the scan", [&] { Access::absent(e5).clear(); });
+        movedBy("an SDRplay row", [&] { Access::sdrRows(e5) = false; });
+        movedBy("look for network USRPs", [&] { Access::networkUsrps(e5) = true; });
+        movedBy("the card list taken", [&] { Access::cardListed(e5) = false; });
+        movedBy("the form's rate", [&] { Access::form(e5).cardRateHz = 96000.0; });
+        movedBy("the form's centre", [&] { Access::form(e5).iqCentreHz = 7.2e6; });
+        movedBy("the form's format", [&] { Access::form(e5).format = cascade::source::SoundCardFormat::RealMono; });
+        movedBy("an input's rate", [&] { Access::cards(e5)[2].rates[3].hz = 33333.0; });
+        movedBy("an input's exclusive flag", [&] { Access::cards(e5)[2].rates[3].exclusive = true; });
+        movedBy("an input's name", [&] { Access::cards(e5)[5].name += "x"; });
+        // A repeat of what is already so moves nothing.
+        {
+            const std::uint64_t now = Access::fingerprint(e5);
+            Access::keepKind(e5) = "file";
+            Access::busyLabel(e5) = "Airspy R2";
+            Access::form(e5).cardRateHz = 96000.0;
+            Access::sourceSel(e5) = 3;
+            for (int i = 0; i < 25; ++i) { (void)Access::publishLists(e5); }
+            CHECK(Access::fingerprint(e5) == now);
+            std::printf("F5: the same kind, label, rate and row said again 25 times: the fingerprint is equal\n");
+        }
+        table->close_session(session);
+    }
+
+// F5 CASE END>>
     return testSummary("test_engine_publish_alloc");
 }

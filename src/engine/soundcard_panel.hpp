@@ -240,14 +240,17 @@ inline FixedCentreTune tuneWithFixedCentre(double requestedCentreHz, double vfoO
 // can round-trip one through the other. text "device<0x1F>hostApi"; ival[0]
 // a bitmask (1 IqStereo, 2 channel right, 4 swapIq, 8 pickedFromList);
 // num[0] cardRateHz, num[1] iqCentreHz.
-inline cascade::core::cmd::QueuedCommand soundCardFormCommand(const cascade::source::SoundCardSettings& s) {
+// `fieldMask` (API 0.3 8.10, ival[1]) names the FOXAPP_SOUND_CARD_FIELD_* the command carries; the default, 0, is the
+// whole form.
+inline cascade::core::cmd::QueuedCommand soundCardFormCommand(const cascade::source::SoundCardSettings& s,
+                                                              std::int64_t fieldMask = 0) {
     std::int64_t mask = 0;
     if (s.format == cascade::source::SoundCardFormat::IqStereo) { mask |= 1; }
     if (s.channel == 1) { mask |= 2; }
     if (s.swapIq) { mask |= 4; }
     if (s.pickedFromList) { mask |= 8; }
     cascade::core::cmd::QueuedCommand q =
-        cascade::core::cmd::makeText(FOXAPP_OP_SOUND_CARD_FORM, s.device + '\x1F' + s.hostApi, mask);
+        cascade::core::cmd::makeText(FOXAPP_OP_SOUND_CARD_FORM, s.device + '\x1F' + s.hostApi, mask, fieldMask);
     q.c.num[0] = s.cardRateHz;
     q.c.num[1] = s.iqCentreHz;
     return q;

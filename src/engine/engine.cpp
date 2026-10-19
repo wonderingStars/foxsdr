@@ -860,6 +860,10 @@ void Engine::pollSourceAsync() {
         soapyAbsentDrivers_ =
             soapyScanAbsent_ ? *soapyScanAbsent_ : std::vector<std::string>();
         soapyScanAbsent_.reset();
+        // THE DIAGNOSTICS THE SOURCE SECTION SAYS A LANDED SCAN WITH, taken here, once, and not asked of the
+        // runtime by every frame that draws them (API 0.3 8.10). Only a WHOLE scan that found nothing is
+        // evidence of "no radio hardware"; a scan beside an open radio left drivers out on purpose.
+        takeScanDiagnostics(!soapyScanPartial_ && soapyDevices_.empty());
         if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and
@@ -1703,6 +1707,25 @@ void Engine::scanNative() {
     // that appears or vanishes moves every row after it. Keyed now, found
     // again at the end.
     const std::vector<cascade::gui::SourceRowKey> rowsBefore = sourceRowKeys();
+    if (testHooks_.nativeScanDetail != nullptr) {
+        // The test's whole walk (API 0.3 8.10): the rows AND what a real walk leaves beside them - the unbound
+        // dongles, the SDRplay API's advice and where it looked, whether an API row was found - so the sentences
+        // the Source section builds from them are reachable with no USB walk and no SDRplay install. No Pluto row
+        // is added: the test lists one when it wants one.
+        NativeScanResult walk;
+        testHooks_.nativeScanDetail(walk);
+        nativeDevices_ = std::move(walk.devices);
+        nativeRowLabels_.clear();
+        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+            nativeRowLabels_.push_back(d.label);
+        }
+        nativeUnbound_ = std::move(walk.unbound);
+        sdrPlayAdvice_ = std::move(walk.sdrPlayAdvice);
+        sdrPlayApiDetail_ = std::move(walk.sdrPlayApiDetail);
+        sdrPlayRowsFound_ = walk.sdrPlayRowsFound;
+        followSourceRowAfterRescan(rowsBefore);
+        return;
+    }
     if (testHooks_.nativeScan != nullptr) {
         // The test's list stands in for the USB walk (see testHooks_): no
         // enumeration of any kind runs, and nothing is reported unbound. The
@@ -1901,6 +1924,63 @@ void Engine::scanNative() {
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
 
     followSourceRowAfterRescan(rowsBefore);
+}
+
+std::string Engine::sourceIdForRow(int row) const {
+    if (row == 0) { return "siggen"; }
+    if (row == 1) { return "row:iqfile"; }
+    if (row == kSoundCardRow) { return "row:soundcard"; }
+    const int n = row - kNativeRowBase;
+    if (n >= 0 && n < static_cast<int>(nativeDevices_.size()) && row < soapyRowBase()) {
+        const cascade::source::NativeDeviceInfo& d = nativeDevices_[static_cast<std::size_t>(n)];
+        return d.driver + ":" + d.args;
+    }
+    const int sIdx = row - soapyRowBase();
+    if (sIdx >= 0 && sIdx < static_cast<int>(soapyDevices_.size())) {
+        return "soapy:" + soapyDevices_[static_cast<std::size_t>(sIdx)].args;
+    }
+    return {};
+}
+
+void Engine::takeScanDiagnostics(bool wholeAndEmpty) {
+    ScanDiagnostics d;
+    bool asked = false;
+    if (testHooks_.scanDiagnostics != nullptr) {
+        d = testHooks_.scanDiagnostics();
+        asked = true;
+    } else if (testHooks_.soapyScan == nullptr) {
+        // The real answers. Not with soapyScan hooked: that hook means "no SoapySDR in this process", and the
+        // first of these calls loads the runtime and edits the process's environment.
+        for (const cascade::source::FaultedDriver& f : cascade::source::sessionFaultedDrivers()) {
+            d.faultedDrivers.push_back(f.driver);
+        }
+        if (wholeAndEmpty) {
+            d.modules = cascade::source::SoapySource::loadedModules();
+            d.vendors = cascade::source::SoapySource::vendorInstalls();
+            d.searchPaths = cascade::source::SoapySource::moduleSearchPaths();
+        }
+        asked = true;
+    }
+    faultedDrivers_ = asked ? std::move(d.faultedDrivers) : std::vector<std::string>();
+    ScanDiagnostics next;
+    if (asked && wholeAndEmpty) {
+        next.modules = std::move(d.modules);
+        next.searchPaths = std::move(d.searchPaths);
+        next.vendors = std::move(d.vendors);
+    }
+    const auto sameVendors = [](const std::vector<cascade::source::VendorRoot>& a,
+                                const std::vector<cascade::source::VendorRoot>& b) {
+        if (a.size() != b.size()) { return false; }
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (a[i].name != b[i].name || a[i].root != b[i].root) { return false; }
+        }
+        return true;
+    };
+    if (next.modules != scanEvidence_.modules || next.searchPaths != scanEvidence_.searchPaths ||
+        !sameVendors(next.vendors, scanEvidence_.vendors)) {
+        scanEvidence_ = std::move(next);
+        ++scanEvidenceSeq_;
+    }
 }
 
 void Engine::followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore) {
@@ -3707,6 +3787,19 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     r.scanHoldMs = wholeMilliseconds(scanHoldMs_);
     r.scanResumeMs = wholeMilliseconds(scanResumeMs_);
     r.scanListenMs = wholeMilliseconds(scanListenMs_);
+    // THE SOURCE SECTION AS IT IS DRAWN (API 0.3 8.10): one word of conditions, each from its own member. Plain
+    // reads of what the pass holds, and the scan gate's question; nothing allocates.
+    r.sourceFlags = 0;
+    if (soapyScanPending_) { r.sourceFlags |= FOXAPI_SRC_SCAN_PENDING; }
+    if (soapyScanned_) { r.sourceFlags |= FOXAPI_SRC_SCANNED; }
+    if (soapyScanPartial_) { r.sourceFlags |= FOXAPI_SRC_SCAN_PARTIAL; }
+    if (soapyScanGated()) { r.sourceFlags |= FOXAPI_SRC_SCAN_GATED; }
+    if (lookForNetworkUsrps_) { r.sourceFlags |= FOXAPI_SRC_NETWORK_USRPS; }
+    if (cascade::gui::networkUsrpHint(soapyAbsentDrivers_) != nullptr) { r.sourceFlags |= FOXAPI_SRC_UHD_LEFT_OUT; }
+    if (sdrPlayRowsFound_) { r.sourceFlags |= FOXAPI_SRC_SDRPLAY_ROWS; }
+    if (soundCardListed_) { r.sourceFlags |= FOXAPI_SRC_CARD_LISTED; }
+    if (soundCardScanPending_) { r.sourceFlags |= FOXAPI_SRC_CARD_SCANNING; }
+    if (soundCardOpenPending_) { r.sourceFlags |= FOXAPI_SRC_CARD_OPENING; }
     e.catalogueBusy = catalogPending_ || installPending_;
     const EngineHost::BasemapFacts& basemap = facts.basemap;
     e.basemapActive = basemap.active;
@@ -5069,6 +5162,9 @@ double Engine::publishReceiverState() {
     const cascade::core::RdsSnapshot rds = testRdsOn_ ? testRds_ : pipeline_.rdsSnapshot();
     cascade::core::PublishedState ps{};
     fillPublishedState(ps, faultMessage, rds);
+    // The fault sentence the list block carries whole (API 0.3 8.10): the one the state's faultMessage cut. Assigned
+    // into a string that keeps its room, so a settled pass allocates nothing.
+    apiFaultText_ = testFault_.empty() ? faultMessage : testFault_;
     // The engine API's lists, handed over BEFORE the state whose listSeq
     // says they changed.
     ps.app.listsFingerprint = publishApiLists();
@@ -5841,7 +5937,58 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // (1 = IqStereo, 2 = channel right, 4 = swapIq, 8 = pickedFromList);
             // num[0] cardRateHz, num[1] iqCentreHz; text "device<0x1F>hostApi" -
             // decoded by the same header that encodes it (soundcard_panel.hpp).
-            soundCard_ = cascade::gui::soundCardFormFromCommand(c, text);
+            const cascade::source::SoundCardSettings form = cascade::gui::soundCardFormFromCommand(c, text);
+            // THE FIELD MASK (API 0.3 8.10, ival[1]): 0 is the whole form, as before. A set bit names a field the
+            // command CARRIES; the others keep the engine's own value - so a control that changed one field cannot
+            // write back a stale copy of another a pass changed since it last looked (a worker's open result
+            // sets the whole form).
+            const std::int64_t mask = c.ival[1];
+            if (mask < 0 || mask > FOXAPP_SOUND_CARD_FIELDS_ALL) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such sound card form field");
+            }
+            if (mask == 0 || mask == FOXAPP_SOUND_CARD_FIELDS_ALL) {
+                soundCard_ = form;
+                return res;
+            }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_DEVICE) != 0) {
+                soundCard_.device = form.device;
+                soundCard_.hostApi = form.hostApi;
+            }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_FORMAT) != 0) { soundCard_.format = form.format; }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_CHANNEL) != 0) { soundCard_.channel = form.channel; }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_SWAP_IQ) != 0) { soundCard_.swapIq = form.swapIq; }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_PICKED) != 0) { soundCard_.pickedFromList = form.pickedFromList; }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_RATE) != 0) { soundCard_.cardRateHz = form.cardRateHz; }
+            if ((mask & FOXAPP_SOUND_CARD_FIELD_CENTRE) != 0) { soundCard_.iqCentreHz = form.iqCentreHz; }
+            return res;
+        }
+        case FOXAPP_OP_SOUND_CARD_PICK: {
+            // A CARD CHOSEN FROM THE LIST (API 0.3 8.10; the Source section's Device combo): ival[0] is the
+            // SOUND_CARDS entry's id, index + 1. What the pick handler in the window did, now the engine's: the
+            // card's name and host API go in and are marked as chosen from this list (so they name exactly this
+            // entry, even beside an identical card), the "not connected" line is cleared, and the rate is kept when
+            // the new card offers it in the form's format - otherwise the card's own default, otherwise the
+            // highest it has.
+            if (!soundCardListed_) { return refuse(FOXAPI_NOT_FOUND, "the sound cards have not been listed"); }
+            if (c.ival[0] < 1 || c.ival[0] > static_cast<std::int64_t>(soundCardDevices_.size())) {
+                return refuse(FOXAPI_NOT_FOUND, "no such sound card entry");
+            }
+            const cascade::source::SoundCardDevice& d = soundCardDevices_[static_cast<std::size_t>(c.ival[0] - 1)];
+            soundCardMissing_.clear();
+            soundCard_.device = d.name;
+            soundCard_.hostApi = d.hostApi;
+            soundCard_.pickedFromList = true;
+            const std::vector<cascade::source::SoundCardRate> rates =
+                cascade::source::soundCardRatesFor(d, soundCard_.format);
+            const bool offered = std::any_of(rates.begin(), rates.end(), [&](const cascade::source::SoundCardRate& r) {
+                return r.hz == soundCard_.cardRateHz;
+            });
+            if (!offered && !rates.empty()) {
+                soundCard_.cardRateHz = rates.back().hz;
+                for (const cascade::source::SoundCardRate& r : rates) {
+                    if (r.hz == d.defaultRateHz) { soundCard_.cardRateHz = r.hz; }
+                }
+            }
             return res;
         }
 
@@ -7351,7 +7498,23 @@ void Engine::shutdown() {
     shutdownRelease();
 }
 
+void Engine::pumpSourceHousekeeping() {
+    // THE DEFERRAL'S ONE LOG LINE IS PER RADIO: it is written once while a scan is refused for the radio open, and
+    // the next radio gets its own, so the latch is let go the moment the gate opens. The window used to send
+    // FOXAPP_OP_CLEAR_STATUS (SOAPY_SCAN_DEFERRED_LOGGED) every frame the Source section was drawn with the gate
+    // open (API 0.3 8.10); a pass knows the gate without anyone drawing anything.
+    if (soapyScanDeferredLogged_ && !soapyScanGated()) { soapyScanDeferredLogged_ = false; }
+    // THE SOUND CARD ROW IS SELECTED, SO THE CARDS ARE LISTED: once, on the worker, never while a list is being
+    // taken or a card is opening, and not at all once they are listed - the test FOXAPP_OP_SOUND_CARDS_WANTED
+    // applies. The window sent that every frame until the list arrived. (Unlike then it happens whether or not
+    // the section is on screen: the selection is the engine's, and so is the wish.)
+    if (sourceSel_ == kSoundCardRow && !soundCardListed_ && !soundCardScanPending_ && !soundCardOpenPending_) {
+        scanSoundCards();
+    }
+}
+
 void Engine::pumpWorkers() {
+    pumpSourceHousekeeping();
     pollSourceAsync();
     // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
     pollSoundCard();
@@ -7414,6 +7577,8 @@ void Engine::publishStatusText() {
     t.catalogStatus = catalogStatus_;
     t.addAllSummary = addAllSummary_;
     t.addAllFailed = addAllFailed_;
+    // 8.10: the fault sentence whole (the pipeline's only while it is faulted - a healthy pass takes no lock).
+    t.deviceFault = !testFault_.empty() ? testFault_ : (pipeline_.faulted() ? pipeline_.faultMessage() : std::string());
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     statusText_ = std::move(t);
 }

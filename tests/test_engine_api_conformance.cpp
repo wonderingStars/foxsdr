@@ -865,18 +865,19 @@ void testSourcesAndLists() {
     CHECK_EQ(a->read_list(s.raw(), FOXAPI_LIST_MODES, 1, &it), 8);
     CHECK_EQ(std::string(it.name), std::string("WFM"));
     CHECK_EQ(a->read_list(s.raw(), 999u, 0, &it), FOXAPI_UNSUPPORTED);
-    // Before a scan only the generator is listed, and a radio cannot be picked.
-    CHECK_EQ(a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 0, nullptr), 1);
+    // Before a scan only the generator and the two fixed rows (the IQ file and the sound card: 0.3, 8.10 lists them
+    // where 0.2 left them to the interface) are listed, and a radio cannot be picked.
+    CHECK_EQ(a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 0, nullptr), 3);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, engine_api_test::kFakeRadioId)).result.status,
              FOXAPI_NOT_FOUND);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SCAN_DEVICES)).result.status, FOXAPI_OK);
     // PORT: the scan runs on a worker (the native walk, here the fake's), so
     // the list grows when it lands - listSeq says when.
-    CHECK(check::waitFor([&] { return a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 0, nullptr) == 2; }, 3000));
-    CHECK_EQ(a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 0, nullptr), 2);
+    CHECK(check::waitFor([&] { return a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 0, nullptr) == 4; }, 3000));
+    CHECK_EQ(a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 0, nullptr), 4);
     FoxListItem dev{};
     dev.structSize = sizeof(dev);
-    a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 1, &dev);
+    a->read_list(s.raw(), FOXAPI_LIST_DEVICES, 3, &dev);  // the radio follows the generator and the two fixed rows
     CHECK_EQ(std::string(dev.detail), std::string(engine_api_test::kFakeRadioId));
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, engine_api_test::kFakeRadioId)).result.status,
              FOXAPI_OK);

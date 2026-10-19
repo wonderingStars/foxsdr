@@ -1949,6 +1949,8 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
         case FOXAPI_LIST_SAMPLE_RATES:
             if (want(b->rates.size())) {
                 it.value[0] = b->rates[index];
+                // 0.3 (8.10): the caption the Rate combo letters the row with ("2.400 MS/s").
+                if (index < b->rateLabels.size()) { copyText(it.detail, b->rateLabels[index].c_str()); }
                 if (it.value[0] == b->rateHz) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;
@@ -2323,6 +2325,64 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
             }
             break;
         }
+        // ---- API 0.3 8.10: the Source section and the sound card ----------------------------------------------------
+        case FOXAPI_LIST_UNBOUND_RADIOS:
+            if (want(b->unbound.size())) {
+                const auto& u = b->unbound[index];
+                it.id = index + 1u;
+                copyText(it.name, u.description.c_str());
+                copyText(it.detail, u.family.c_str());
+                it.value[0] = static_cast<double>(u.vid);
+                it.value[1] = static_cast<double>(u.pid);
+            }
+            break;
+        case FOXAPI_LIST_SCAN_EVIDENCE:
+            // Paths on this machine, and where its vendor installs are: LOCAL sessions only.
+            if (!local) { return FOXAPI_DENIED; }
+            if (want(b->evidence.size())) {
+                const auto& e = b->evidence[index];
+                it.id = index + 1u;
+                copyText(it.name, e.name.c_str());
+                copyText(it.detail, e.detail.c_str());
+                it.value[0] = static_cast<double>(e.kind);
+            }
+            break;
+        case FOXAPI_LIST_SOUND_CARDS:
+            if (want(b->soundCards.size())) {
+                const auto& c = b->soundCards[index];
+                it.id = index + 1u;
+                copyText(it.name, c.name.c_str());
+                copyText(it.detail, c.hostApi.c_str());
+                if (c.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_SOUND_CARD_RATES:
+            if (want(b->soundCardRates.size())) {
+                const auto& r = b->soundCardRates[index];
+                it.id = index + 1u;
+                it.value[0] = r.hz;
+                if (r.exclusive) { it.flags |= FOXAPI_ITEM_EXCLUSIVE; }
+                if (r.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        case FOXAPI_LIST_SOUND_CARD_FORM:
+            if (want(1)) {
+                const auto& f = b->soundCardForm;
+                it.id = 1;
+                // The card's name is the machine's own setting (fact.soundcard.device is LOCAL): not shown to a
+                // REMOTE session.
+                if (local) {
+                    copyText(it.name, f.device.c_str());
+                    copyText(it.detail, f.hostApi.c_str());
+                }
+                it.value[0] = f.rateHz;
+                it.value[1] = f.centreHz;
+                it.value[2] = static_cast<double>(f.channel);
+                if (f.iqStereo) { it.flags |= FOXAPI_ITEM_IQ_STEREO; }
+                if (f.swapIq) { it.flags |= FOXAPI_ITEM_SWAP_IQ; }
+                if (f.picked) { it.flags |= FOXAPI_ITEM_PICKED; }
+            }
+            break;
         // ---- API 0.3 8.8: the fitted modules --------------------------------------------------------------
         case FOXAPI_LIST_PLUGIN_COMMANDS:
             if (want(b->pluginCommands.size())) {

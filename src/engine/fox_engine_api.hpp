@@ -144,6 +144,8 @@ struct ApiListBlock {
     };
     std::vector<Device> devices;
     std::vector<double> rates;
+    // API 0.3 8.10: each rate's caption (SAMPLE_RATES' detail), index-aligned with `rates`.
+    std::vector<std::string> rateLabels;
     double rateHz = 0.0;             // in force
     struct Gain {
         std::string name;
@@ -352,6 +354,38 @@ struct ApiListBlock {
         const void* recorder = nullptr;  // const cascade::core::Recorder*
     };
     std::vector<Recording> recordings;
+    // ---- API 0.3 8.10: the Source section and the sound card as their pages draw them
+    // UNBOUND_RADIOS: USB radios that are plugged in and cannot be opened. `family`: "rtl", "rx888" or "".
+    struct UnboundRadio {
+        std::string description, family;
+        std::uint32_t vid = 0, pid = 0;
+    };
+    std::vector<UnboundRadio> unbound;
+    // SCAN_EVIDENCE (LOCAL sessions only): kind 1 a vendor install (name, detail: its root), 2 a module search path,
+    // 3 a module loaded (detail).
+    struct EvidenceRow {
+        int kind = 0;
+        std::string name, detail;
+    };
+    std::vector<EvidenceRow> evidence;
+    // SOUND_CARDS, SOUND_CARD_RATES and SOUND_CARD_FORM.
+    struct SoundCard {
+        std::string name, hostApi;
+        bool active = false;
+    };
+    std::vector<SoundCard> soundCards;
+    struct SoundCardRate {
+        double hz = 0.0;
+        bool exclusive = false, active = false;
+    };
+    std::vector<SoundCardRate> soundCardRates;
+    struct SoundCardForm {
+        std::string device, hostApi;
+        double rateHz = 0.0, centreHz = 0.0;
+        int channel = 0;
+        bool iqStereo = false, swapIq = false, picked = false;
+    };
+    SoundCardForm soundCardForm;
     // THE FACTS get_setting serves under "fact." - whole texts, and the
     // things a list item's detail[] would cut. `localOnly` ones name paths
     // or radios on this machine and are DENIED to a REMOTE session.

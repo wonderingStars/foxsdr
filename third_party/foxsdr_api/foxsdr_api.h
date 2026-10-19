@@ -380,6 +380,9 @@ typedef struct FoxReceiverState {
     uint32_t scanHoldMs;               /* how long a quiet signal is waited on before moving on */
     uint32_t scanResumeMs;             /* the grace after the hold before the next step */
     uint32_t scanListenMs;             /* the longest stay on one signal; 0 = until it goes quiet */
+    /* ---- 0.3 (docs/api-0.3-additions.md 8.10): the Source section as it is
+     * drawn. One flag word, in the device group (deviceSeq, and seq with it). ---- */
+    uint32_t sourceFlags;              /* FOXAPI_SRC_* */
 } FoxReceiverState;
 
 
@@ -395,6 +398,18 @@ typedef struct FoxReceiverState {
 #define FOXAPI_AUDIO_EVER_OPENED    0x00000002u /* an open of the output device has succeeded since the engine started */
 #define FOXAPI_AUDIO_STREAM_ALIVE   0x00000004u /* the watchdog's view: the stream's callback is still being served (clear while OPENING) */
 #define FOXAPI_AUDIO_PLUGIN_PLAYING 0x00000008u /* a plugin holding CASCADE_CAP_AUDIO_OUT replaces the demodulated audio (audioPlayingPlugin names it) */
+
+/* FoxReceiverState::sourceFlags (0.3, 8.10) */
+#define FOXAPI_SRC_SCAN_PENDING   0x00000001u /* a SoapySDR device scan is running on its worker */
+#define FOXAPI_SRC_SCANNED        0x00000002u /* a SoapySDR scan has been started this session (a deferred one does not count) */
+#define FOXAPI_SRC_SCAN_PARTIAL   0x00000004u /* the last scan left the open radios' drivers out; a whole one is still owed */
+#define FOXAPI_SRC_SCAN_GATED     0x00000008u /* a radio is open, opening or held by the patch, so a SoapySDR scan is deferred or leaves that radio's driver out (fact.source.scanGate and .scanSkip say which) */
+#define FOXAPI_SRC_NETWORK_USRPS  0x00000010u /* "Look for network USRPs" is on */
+#define FOXAPI_SRC_UHD_LEFT_OUT   0x00000020u /* the last scan that landed left UHD out (nothing could be a USRP) */
+#define FOXAPI_SRC_SDRPLAY_ROWS   0x00000040u /* the last native scan found an SDRplay API row */
+#define FOXAPI_SRC_CARD_LISTED    0x00000080u /* the sound card inputs have been listed (SOUND_CARDS is that list, which may be empty) */
+#define FOXAPI_SRC_CARD_SCANNING  0x00000100u /* the sound card inputs are being listed on a worker */
+#define FOXAPI_SRC_CARD_OPENING   0x00000200u /* a sound card is being opened on a worker */
 
 /* FoxReceiverState::scannerState (0.3, 8.6) */
 #define FOXAPI_SCANNER_IDLE     0u /* not scanning (scanCurrentHz is where the last scan stopped) */
@@ -413,7 +428,7 @@ typedef struct FoxReceiverState {
 /* Every FOXAPI_MIN_* is the whole layout of the oldest accepted version
  * (rule 4), written as the end of its last member so it never moves when
  * members are appended. */
-#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, scanListenMs) + sizeof(uint32_t))
+#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, sourceFlags) + sizeof(uint32_t))
 
 /* ---------------------------------------------------------------------------
  * The spectrum stream. The waterfall is NOT a separate stream: it is the
@@ -731,8 +746,8 @@ typedef struct FoxEvent {
  * ------------------------------------------------------------------------- */
 #define FOXAPI_LIST_MODES         1u  /* value[0]: FOXAPI_DEMOD_*, value[1]: default bandwidth Hz */
 #define FOXAPI_LIST_BANDWIDTHS    2u  /* value[0]: Hz (the stepped choices) */
-#define FOXAPI_LIST_DEVICES       3u  /* name: label; detail: id to pass to SELECT_SOURCE */
-#define FOXAPI_LIST_SAMPLE_RATES  4u  /* value[0]: Hz */
+#define FOXAPI_LIST_DEVICES       3u  /* name: label; detail: id to pass to SELECT_SOURCE (cut at 159 bytes: 0.3 (8.10) fact.source.id.<id> is the whole id); 0.3 (8.10): entries 1-3 are the generator, the IQ file and the sound card, then come the native and SoapySDR rows, so an entry's index is its row in the Source combo */
+#define FOXAPI_LIST_SAMPLE_RATES  4u  /* value[0]: Hz; 0.3 (8.10): detail: the rate's caption ("2.400 MS/s") */
 #define FOXAPI_LIST_GAINS         5u  /* name; detail: the unit token ("dB" or "step", 0.3); value[0..3]: min, max, step, current; FOXAPI_ITEM_AGC (0.3) */
 #define FOXAPI_LIST_ANTENNAS      6u
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
@@ -751,7 +766,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_USER_PRESETS  20u
 #define FOXAPI_LIST_BOOKMARK_GROUPS 21u /* name: group; value[0]: bookmarks in it */
 /* 0.3 (docs/api-0.3-additions.md) */
-#define FOXAPI_LIST_STATUS_LINES  22u /* name: key; detail: text (whole: "fact.status.<key>"); value[0]: level 1 info 2 warn 3 error */
+#define FOXAPI_LIST_STATUS_LINES  22u /* name: key; detail: text (whole: "fact.status.<key>"); value[0]: level 1 info 2 warn 3 error; 0.3 (8.10): key deviceFault is the whole fault sentence the state's faultMessage cuts at 127 bytes */
 #define FOXAPI_LIST_CONVERTERS    23u /* detail: radio key; value[0]: 0 off 1 up 2 down, [1]: LO Hz, [2]: 1 inverted; ACTIVE: the open radio's, whose value[3] is the radio's own centre readback in Hz, read live (0.3) */
 #define FOXAPI_LIST_GAIN_MODES    24u /* name; value[0]: mode code (the op that takes it names it); ACTIVE */
 #define FOXAPI_LIST_DECIMATIONS   25u /* value[0]: factor, value[1]: resulting rate Hz; ACTIVE */
@@ -769,6 +784,12 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_STALE_GRANTS  37u /* 0.3 (8.7): the tune grants no loaded module holds. name: the module file name; REFUSED when the host holds a record of that file that did not load */
 #define FOXAPI_LIST_PLUGIN_COMMANDS 38u /* 0.3 (8.8): the command keys the loaded modules have added. id: the command id (FOXAPI_OP_PLUGIN_COMMAND's ival[0]); name: the key's label; detail: the module file name */
 #define FOXAPI_LIST_STORE_ACTIVITY 39u /* 0.3 (8.9): what the plugin store is doing now, at most two entries told apart by id. id 1: a catalogue fetch or a download is in flight (name: the module's name, "" for the catalogue; value[0]: the progress 0..1, read live; value[1]: 1 fetching the catalogue, 2 downloading); id 2: an ADD ALL run is active (name: the module moving now; value[0]: its position, 1-based; value[1]: the total); ACTIVE on both */
+
+#define FOXAPI_LIST_UNBOUND_RADIOS 40u /* 0.3 (8.10): USB radios that are plugged in and cannot be opened (no WinUSB driver bound). name: the bus description ("" when it reports none); detail: the family, "rtl", "rx888" or "" for any other; value[0], value[1]: vendor id, product id */
+#define FOXAPI_LIST_SCAN_EVIDENCE 41u /* 0.3 (8.10), LOCAL sessions only (DENIED to REMOTE): where the SoapySDR runtime looked, taken when a scan landed that found nothing. value[0]: 1 a vendor install (name: its vendor, detail: its root), 2 a module search path (detail), 3 a module loaded (detail) */
+#define FOXAPI_LIST_SOUND_CARDS   42u /* 0.3 (8.10): the sound card inputs as the last listing found them. id: index + 1 (what FOXAPP_OP_SOUND_CARD_PICK takes); name: "device (host API)"; detail: the host API; ACTIVE: the entry the form's card is */
+#define FOXAPI_LIST_SOUND_CARD_RATES 43u /* 0.3 (8.10): the rates the form's card offers in the form's format. value[0]: Hz of the card; EXCLUSIVE; ACTIVE: the form's rate. Empty when the card is not listed */
+#define FOXAPI_LIST_SOUND_CARD_FORM 44u /* 0.3 (8.10): ONE entry, the sound card form as the engine holds it. name: the device and detail: its host API (both "" to a REMOTE session; whole in fact.soundcard.device and .hostApi); value[0]: the card's rate Hz, [1]: the I/Q centre Hz, [2]: the channel (0 left, 1 right); IQ_STEREO, SWAP_IQ, PICKED */
 
 #define FOXAPI_ITEM_ACTIVE    0x00000001u /* the selected / running / current entry */
 #define FOXAPI_ITEM_FAVOURITE 0x00000002u /* a bookmark marked as a favourite */
@@ -793,6 +814,10 @@ typedef struct FoxEvent {
 #define FOXAPI_ITEM_ASKED_SETTINGS 0x00080000u /* a plugin that has asked to change a receiver setting, which only the settings grant allows (PLUGINS, 8.8) */
 #define FOXAPI_ITEM_DIGEST_MISMATCH 0x00100000u /* a plugin file that is not the one installed: its bytes no longer match the sha256 recorded at install (PLUGINS, 8.8) */
 #define FOXAPI_ITEM_BUILD_HERE 0x00200000u /* a catalogue entry that publishes a build for this machine's os and architecture (CATALOGUE, 8.9); "installable here" is COMPATIBLE and BUILD_HERE */
+#define FOXAPI_ITEM_EXCLUSIVE  0x00400000u /* a sound card rate the card accepts only in WASAPI exclusive mode (SOUND_CARD_RATES, 8.10) */
+#define FOXAPI_ITEM_IQ_STEREO  0x00800000u /* the sound card form is set to I/Q (stereo) and not real (mono) (SOUND_CARD_FORM, 8.10) */
+#define FOXAPI_ITEM_SWAP_IQ    0x01000000u /* the sound card form swaps I and Q (SOUND_CARD_FORM, 8.10) */
+#define FOXAPI_ITEM_PICKED     0x02000000u /* the sound card form's device was chosen from SOUND_CARDS, so it names exactly that entry (SOUND_CARD_FORM, 8.10) */
 
 typedef struct FoxListItem {
     uint32_t structSize;
