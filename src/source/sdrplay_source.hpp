@@ -393,6 +393,14 @@ SdrPlayAfterRestart sdrPlayAfterServiceRestart(bool serviceRunning, bool session
 // NEVER clears sessionLost.
 SdrPlayAfterRestart sdrPlayApplyServiceRestart(const sdrplay_abi::Api& api, bool serviceRunning);
 
+// WHAT THE LAST SESSION HANDSHAKE LEARNED OF THE API'S VERSION, or 0 when none
+// has - which is also the answer when the session mutex is taken. NEVER WAITS:
+// an abandoned enumeration worker may be parked inside sdrplay_api_Open holding
+// that mutex for good, and this is called by AppWindow::scanNative on the GUI
+// thread (the 0.99.81 patch-view freeze, a plain lock here). 0 is "never
+// asked" to sdrPlaySourceAdvice, which then says nothing about the version.
+float sdrPlayApiVersion(const sdrplay_abi::Api& api);
+
 // True while the hold-off above is still running, i.e. the last enumeration
 // abandoned a wedged service and the next ones are skipping it.
 bool sdrPlayEnumerationHeldOff();

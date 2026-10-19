@@ -575,9 +575,38 @@ void markSessionLost(const abi::Api& api, const char* why) {
     }
 }
 
+// THE SESSION MUTEX IS HELD ACROSS VENDOR CALLS THAT TAKE NO TIMEOUT
+// (sessionAcquire across sdrplay_api_Open, sessionRelease across
+// sdrplay_api_Close), and an enumeration worker that kEnumerateWait abandons
+// is parked inside one of them with the mutex STILL HELD - for good, if the
+// service never answers. So no thread that must stay responsive - the GUI's
+// scan, every setter - may BLOCK on it. This is the one way to ask for it:
+// try, wait at most `bound` for a holder that is merely slow, and hand back an
+// unlocked lock when there is none, which the caller answers from somewhere
+// else (a hold-off, an atomic, "not known"). The 0.99.81 freeze was a plain
+// lock_guard here; see tests/test_sdrplay_source.cpp section 12e.
+std::unique_lock<std::mutex> tryLockSession(const abi::Api& api, std::chrono::milliseconds bound) {
+    std::unique_lock<std::mutex> lk(api.sessionMutex, std::try_to_lock);
+    const auto deadline = std::chrono::steady_clock::now() + bound;
+    while (!lk.owns_lock() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        (void) lk.try_lock();
+    }
+    return lk;
+}
+
+// How long a scan gives a session holder that is not known to be wedged before
+// it answers "busy" instead: an ordinary Open answers in milliseconds, so this
+// is generous for a healthy service and still a short GUI stall for a sick one.
+inline constexpr std::chrono::milliseconds kSessionPeekWait{250};
+
+// FROM THE LATCH, NOT THE MUTEX. markSessionLost sets sessionLostFlag before it
+// takes the mutex to set `sessionLost`, and nothing else ever sets either, so
+// the flag is the field's superset the instant it matters. This is asked by
+// every control on the GUI thread (refuseIfVendorUnreachableLocked) and by
+// every scan, so it must never queue behind a worker parked in Open.
 bool sessionIsLost(const abi::Api& api) {
-    std::lock_guard<std::mutex> lk(api.sessionMutex);
-    return api.sessionLost;
+    return api.sessionLostFlag.load(std::memory_order_acquire);
 }
 
 }  // namespace
@@ -993,6 +1022,14 @@ SdrPlayAfterRestart sdrPlayApplyServiceRestart(const abi::Api& api, bool service
     return what;
 }
 
+float sdrPlayApiVersion(const abi::Api& api) {
+    // NO WAIT AT ALL: this is read by AppWindow::scanNative on the GUI thread
+    // to compose the panel's advice, and the answer it gives when the mutex is
+    // taken - 0, "never asked" - is one that advice already handles.
+    std::unique_lock<std::mutex> lk = tryLockSession(api, std::chrono::milliseconds(0));
+    return lk.owns_lock() ? api.version : 0.0f;
+}
+
 std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
     // A LOST SESSION BEFORE ANYTHING, and no worker either: nothing is going
     // to be asked, so there is nothing to bound. The 0.99.27 crash was this
@@ -1005,8 +1042,34 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
     // ...AND A CONTROL STILL WAITING FOR ITS ANSWER (0.99.50): a worker of
     // ours is inside the service, so a scan now would queue behind it on the
     // GUI thread. Held, without a vendor call, until the answer or the grace.
+    //
+    // ASKED WITHOUT BLOCKING (the 0.99.81 patch-view freeze). The mutex that guards the count is
+    // also held by whoever is inside sdrplay_api_Open, and the worker this
+    // function abandons is exactly that: a scan after it used to queue here,
+    // on the GUI thread, behind a thread nobody will ever wake. So a holder
+    // that is merely slow gets kSessionPeekWait; one that is KNOWN to be the
+    // abandoned worker (the trouble record is atomic, for this reason) gets
+    // none, and the hold-off answers in its place. No new worker either way:
+    // it would only queue behind the first, one leaked thread per scan.
+    const auto now = std::chrono::steady_clock::now();
     {
-        std::lock_guard<std::mutex> lk(api.sessionMutex);
+        const bool wedged = sdrPlayServiceTrouble(api) == SdrPlayServiceTrouble::EnumerationHung;
+        std::unique_lock<std::mutex> lk =
+            tryLockSession(api, wedged ? std::chrono::milliseconds(0) : kSessionPeekWait);
+        if (!lk.owns_lock()) {
+            if (wedged) {
+                // The hold-off has run out but the worker is still in Open:
+                // put it back, so the scans after the first minute are as
+                // free as the ones before it instead of each paying a probe.
+                if (!enumerationHeldOffAt(now)) { armEnumerationHoldOff(now); }
+                setEnumerationSkip(sdrPlayServiceHungSentence());
+            } else {
+                // Someone else's vendor call is still in progress; not an
+                // answer, and not a failure - the next scan asks again.
+                setEnumerationSkip(sdrPlayControlPendingSentence());
+            }
+            return {};
+        }
         if (api.controlsInFlight > 0) {
             setEnumerationSkip(sdrPlayControlPendingSentence());
             return {};
@@ -1017,7 +1080,6 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
     // wedged a moment ago is still wedged, and the source combo scans every
     // time it opens - so without this, each of those would spend another
     // kEnumerateWait of GUI thread and abandon another worker inside it.
-    const auto now = std::chrono::steady_clock::now();
     if (enumerationHeldOffAt(now)) {
         // The sentence is re-asserted rather than left standing, because a
         // Soapy scan or another driver's enumeration may have written over it

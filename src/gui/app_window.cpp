@@ -11717,11 +11717,7 @@ void AppWindow::scanNative() {
     // prefers that and falls back to the load result, which is what this
     // used to do on its own.
     const cascade::source::sdrplay_abi::Api& sdrApi = cascade::source::processSdrPlayApi();
-    float sdrVersion = 0.0f;
-    {
-        std::lock_guard<std::mutex> lk(sdrApi.sessionMutex);
-        sdrVersion = sdrApi.version;
-    }
+    const float sdrVersion = cascade::source::sdrPlayApiVersion(sdrApi);
     sdrPlayAdvice_ = cascade::source::sdrPlaySourceAdvice(
         sdrPlayOrphaned, sdrPlayRowsFound_, sdrApi.resolved, sdrVersion,
         cascade::source::sdrPlayLastEnumerationSkip());

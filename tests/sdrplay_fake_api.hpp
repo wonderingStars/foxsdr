@@ -158,6 +158,18 @@ public:
     std::atomic<bool> insideGetDevices{false};
     std::atomic<bool> leftGetDevices{false};
 
+    // THE SAME WEDGE, ONE CALL EARLIER: sdrplay_api_Open. This is the one that
+    // matters for the session mutex, because the driver takes that mutex
+    // BEFORE Open and holds it through the call (sessionAcquire) - so a worker
+    // parked here is a worker holding the lock every other thread needs to read
+    // the session's state. The 0.99.81 patch-view freeze (AppWindow::scanNative
+    // on the GUI thread, in std::mutex::lock) is exactly this. Polled, like the
+    // hangs above, so the abandoned worker can leave when the test releases it.
+    std::atomic<bool> hangInOpen{false};
+    std::atomic<bool> releaseOpenHang{false};
+    std::atomic<bool> insideOpen{false};
+    std::atomic<bool> leftOpen{false};
+
     // THE SAME SERVICE, WEDGED WITH THE RADIO ALREADY OPEN. GetDevices is
     // what a SCAN goes into; sdrplay_api_Update is what every LIVE CONTROL
     // goes into - retune, LNA state, IF gain, AGC, set point, antenna, bias
@@ -621,6 +633,13 @@ private:
         if (f == nullptr) { return abi::Fail; }
         f->note("Open");
         ++f->openCount;
+        if (f->hangInOpen.load()) {
+            f->insideOpen.store(true);
+            while (!f->releaseOpenHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftOpen.store(true);
+        }
         return f->openResult;
     }
 

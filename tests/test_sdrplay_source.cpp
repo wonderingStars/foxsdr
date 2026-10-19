@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
@@ -3486,6 +3487,157 @@ void testAWedgedEnumerationIsAbandonedAndThenHeldOff() {
     cascade::source::sdrPlayClearEnumerationHoldOffForTest();
 }
 
+// --- 12e. an ABANDONED enumeration must not keep the GUI's lock ---------------
+//
+// THE 0.99.81 PATCH-VIEW FREEZE (Windows 10 26200; RSPdx + RSP1A + Airspy on
+// the bus, the SDRplay service not answering). The log reads "SDRplay
+// enumeration abandoned" and then nothing: the GUI thread sat in
+// std::mutex::lock called directly from AppWindow::scanNative, and the user
+// killed the process 27 s later.
+//
+// WHICH MUTEX. sessionAcquire takes the table's sessionMutex and holds it
+// ACROSS sdrplay_api_Open - a vendor call with no timeout and no
+// cancellation. The enumeration worker that kEnumerateWait abandons is parked
+// inside that Open, so it keeps the mutex for good. scanNative then read
+// `version` under the same mutex to compose the panel's advice, and the GUI
+// thread queued behind a thread nobody will ever wake. enumerateSdrPlayWith
+// itself asked the same mutex (sessionIsLost, the controls-in-flight check)
+// before it looked at the hold-off, so the NEXT scan hung in the same place.
+//
+// The tests below wedge Open itself (FakeSdrPlayApi::hangInOpen), abandon the
+// worker inside it, and then ask every question the GUI thread asks the table,
+// each on a probe thread with a bound: a call that blocks fails its CHECK
+// rather than the test run.
+
+namespace {
+
+// Runs `fn` on a thread and says whether it came back inside `bound`. A call
+// that does not is left running - detached, owning only what it captured by
+// value - which is the only way to test "does not block forever" without the
+// test blocking forever with it.
+template <class F>
+bool returnsWithin(std::chrono::milliseconds bound, F fn) {
+    auto done = std::make_shared<std::promise<void>>();
+    std::future<void> fut = done->get_future();
+    std::thread([fn, done]() mutable {
+        fn();
+        done->set_value();
+    }).detach();
+    return fut.wait_for(bound) == std::future_status::ready;
+}
+
+}  // namespace
+
+void testAScanWaitsOutAHealthyOpenThatIsMerelySlow() {
+    // The other half of the rule, so the bound below cannot be satisfied by
+    // never waiting at all: another thread is inside Open for a moment (a
+    // radio being opened from a patch worker) and the scan must wait for it
+    // and list the radio, exactly as it did when it queued on the mutex.
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    fake.hangInOpen.store(true);
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+
+    SdrPlaySource src;
+    std::thread opener([&]() { (void) openOn(src, fake); });
+    for (int i = 0; i < 400 && !fake.insideOpen.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake.insideOpen.load());
+    std::thread releaser([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        fake.releaseOpenHang.store(true);
+    });
+    const std::vector<cascade::source::NativeDeviceInfo> devs =
+        cascade::source::enumerateSdrPlayWith(fake.table);
+    releaser.join();
+    opener.join();
+    CHECK(devs.size() == 1);
+    CHECK(cascade::source::sdrPlayLastEnumerationSkip().empty());
+    src.closeDevice();
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+}
+
+void testAnAbandonedOpenNeverBlocksTheGuiThreadOnTheSessionMutex() {
+    // On the heap and never destroyed, like every test that leaves a worker
+    // inside its fake: the driver has given up on ever hearing from it.
+    FakeSdrPlayApi* fake = cascade::core::leakOnPurpose(new FakeSdrPlayApi());
+    fake->addDevice("1811003EFB", abi::kRsp1A);
+    fake->hangInOpen.store(true);
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+
+    // The scan that gets abandoned - bounded by kEnumerateWait, as before.
+    CHECK(cascade::source::enumerateSdrPlayWith(fake->table).empty());
+    CHECK(fake->insideOpen.load());
+    CHECK(cascade::source::sdrPlayServiceTrouble(fake->table) ==
+          cascade::source::SdrPlayServiceTrouble::EnumerationHung);
+    CHECK(fake->openCount == 1);
+
+    // 1. THE READ scanNative COMPOSES ITS ADVICE FROM. Not known while the
+    //    session cannot be asked: 0 is "never asked", which the advice
+    //    already treats as nothing to say.
+    {
+        auto version = std::make_shared<std::atomic<float>>(-1.0f);
+        const bool back = returnsWithin(std::chrono::milliseconds(1000), [fake, version]() {
+            version->store(cascade::source::sdrPlayApiVersion(fake->table));
+        });
+        CHECK(back);
+        if (back) { CHECK(version->load() == 0.0f); }
+    }
+
+    // 2. THE NEXT SCAN, hold-off running: answered from the hold-off, with the
+    //    service sentence, and without a vendor call or a new worker.
+    {
+        auto listed = std::make_shared<std::atomic<int>>(-1);
+        const bool back = returnsWithin(std::chrono::milliseconds(1000), [fake, listed]() {
+            listed->store(
+                static_cast<int>(cascade::source::enumerateSdrPlayWith(fake->table).size()));
+        });
+        CHECK(back);
+        if (back) { CHECK(listed->load() == 0); }
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+              std::string(cascade::source::sdrPlayServiceHungSentence()));
+        CHECK(fake->openCount == 1);
+    }
+
+    // 3. THE SCAN AFTER THE HOLD-OFF HAS EXPIRED, with the worker still parked
+    //    in Open: it must not start another worker to queue behind the first
+    //    (a thread leaked and three seconds of GUI per scan), and must put
+    //    the hold-off back so the next one is free as well.
+    {
+        cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+        auto listed = std::make_shared<std::atomic<int>>(-1);
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool back = returnsWithin(std::chrono::milliseconds(2000), [fake, listed]() {
+            listed->store(
+                static_cast<int>(cascade::source::enumerateSdrPlayWith(fake->table).size()));
+        });
+        CHECK(back);
+        if (back) { CHECK(listed->load() == 0); }
+        CHECK(msSince(t0) < 1500);
+        CHECK(cascade::source::sdrPlayLastEnumerationSkip() ==
+              std::string(cascade::source::sdrPlayServiceHungSentence()));
+        CHECK(cascade::source::sdrPlayEnumerationHeldOff());
+        CHECK(fake->openCount == 1);
+    }
+
+    // The service comes back: the parked Open returns, the worker finishes
+    // its scan and lets the session go, and the next scan lists the radio.
+    fake->releaseOpenHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftOpen.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftOpen.load());
+    bool recovered = false;
+    for (int i = 0; i < 100 && !recovered; ++i) {
+        cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+        recovered = cascade::source::enumerateSdrPlayWith(fake->table).size() == 1;
+        if (!recovered) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    }
+    CHECK(recovered);
+    cascade::source::sdrPlayClearEnumerationHoldOffForTest();
+}
+
 void testAHealthyEnumerationIsStillSynchronousAndClearsTheSentence() {
     // The bound must not have changed the ordinary path: a service that
     // answers is enumerated on the spot and leaves nothing on the panel.
@@ -3819,6 +3971,8 @@ int main() {
     // releases it again, and nothing that follows should have to reason about
     // a thread this one left running.
     testAWedgedEnumerationIsAbandonedAndThenHeldOff();
+    testAScanWaitsOutAHealthyOpenThatIsMerelySlow();
+    testAnAbandonedOpenNeverBlocksTheGuiThreadOnTheSessionMutex();
     testAbiLayoutIsPinnedToTheVersionsWeChecked();
     return testSummary("test_sdrplay_source");
 }
