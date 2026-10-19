@@ -829,7 +829,14 @@ public:
     int32_t readScope(ApiSession* s, uint32_t tap, FoxScopeInfo* info, float* out, uint32_t cap) {
         if (info != nullptr && info->structSize < FOXAPI_MIN_SCOPE_INFO) { return FOXAPI_BAD_ARGUMENT; }
         if (out == nullptr && cap != 0) { return FOXAPI_BAD_ARGUMENT; }
-        if ((s->flags & FOXAPI_SESSION_REMOTE) != 0u) { cap = std::min(cap, FOXAPI_SCOPE_REMOTE_FRAMES); }
+        const bool remote = (s->flags & FOXAPI_SESSION_REMOTE) != 0u;
+        if (remote) { cap = std::min(cap, FOXAPI_SCOPE_REMOTE_FRAMES); }
+        // 0.3 (8.11): the most one call can return - the ring's size, held to the remote limit for a
+        // REMOTE session - so a client can size its request without having to guess the ring.
+        const auto capacityOf = [remote](std::size_t ring) {
+            const std::size_t most = remote ? std::min<std::size_t>(ring, FOXAPI_SCOPE_REMOTE_FRAMES) : ring;
+            return static_cast<std::uint32_t>(std::min<std::size_t>(most, 0xFFFFFFFFu));
+        };
         cascade::core::PublishedState ps;
         const bool have = engine_.receiverSnapshot_->read(ps);
         FoxScopeInfo local{};
@@ -842,12 +849,14 @@ public:
                 local.channels = 1;
                 local.rateHz = cascade::core::Pipeline::kAudioRateHz;
                 local.written = pl.scopeAudio().written();
+                local.capacityFrames = capacityOf(pl.scopeAudio().capacity());
                 got = cap == 0 ? 0 : pl.scopeAudio().snapshot(out, cap);
                 break;
             case FOXAPI_SCOPE_MPX:
                 local.channels = 1;
                 local.rateHz = have ? ps.rx.channelRateHz : 0.0;
                 local.written = pl.scopeMpx().written();
+                local.capacityFrames = capacityOf(pl.scopeMpx().capacity());
                 got = cap == 0 ? 0 : pl.scopeMpx().snapshot(out, cap);
                 break;
             case FOXAPI_SCOPE_IQ:
@@ -856,6 +865,7 @@ public:
                 local.channels = 2;
                 local.rateHz = have ? ps.rx.channelRateHz : 0.0;
                 local.written = pl.scopeIq().written();
+                local.capacityFrames = capacityOf(pl.scopeIq().capacity());
                 got = cap == 0 ? 0 : pl.scopeIq().snapshot(reinterpret_cast<std::complex<float>*>(out), cap);
                 break;
             default:

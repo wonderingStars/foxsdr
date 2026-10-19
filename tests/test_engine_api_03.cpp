@@ -102,6 +102,10 @@
 //       facts, FOXAPP_OP_SOUND_CARD_PICK's rate rule, the form's field mask, the converter behind the span, the open
 //       and the keep; G11-9 the two per-frame commands the window used to send are the engine's own pass; G11-10
 //       listSeq exactness: 38 inputs, each moving it once alone.
+//   G12 the radar scope and the demod scope (window port group 12, API 0.3 section 8.11): G12-1 the receiver's
+//       position in the state (FOXAPI_RX_POSITION_SET and rxLatDeg/rxLonDeg: set by SET_POSITION or restored from the
+//       configuration into the first publish, refused ranges, repeats, moving seq alone); G12-2 FoxScopeInfo's
+//       capacityFrames per tap, for a LOCAL and a REMOTE session, the most a call returns, and the info-edges.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -5847,6 +5851,223 @@ void testSourceListSeqExactness() {
     Access::uninstall11();
 }
 // G11 TESTS END>>
+// <<G12 TESTS BEGIN
+// G12: the radar scope and the demod scope as they draw (window port group 12, API 0.3 section 8.11): the receiver's
+// position in the state (the flag and the two coordinates) and the scope tap's capacity.
+
+FoxCommand setPositionCmd(double lat, double lon) {
+    FoxCommand c{};
+    c.structSize = sizeof(c);
+    c.op = FOXAPI_OP_SET_POSITION;
+    c.num[0] = lat;
+    c.num[1] = lon;
+    return c;
+}
+
+// G12-1: the position as the state says it. Nothing set: the flag clear and both coordinates 0. SET_POSITION: the flag
+// up and the pair as sent, one pass later, moving seq and no other counter; each coordinate its own (a pair swapped
+// goes red); a refusal changes nothing; the same position again moves nothing; a position restored from the
+// configuration is in the FIRST published state.
+void testPositionState() {
+    CHECK_EQ(FOXAPI_RX_POSITION_SET, 0x40000000u);
+    CHECK_EQ(offsetof(FoxReceiverState, rxLonDeg), offsetof(FoxReceiverState, rxLatDeg) + sizeof(double));
+    CHECK_EQ(FOXAPI_MIN_RECEIVER_STATE, offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
+    {
+        Direct d;
+        testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(s.ok());
+        d.eng.controlPass();
+        const FoxReceiverState none = s.state();
+        CHECK((none.flags & FOXAPI_RX_POSITION_SET) == 0u);
+        CHECK_EQ(none.rxLatDeg, 0.0);
+        CHECK_EQ(none.rxLonDeg, 0.0);
+        // Passes with nothing to say move nothing.
+        for (int i = 0; i < 4; ++i) { d.eng.controlPass(); }
+        CHECK_EQ(countersMoved(none, s.state()), std::string());
+
+        // A position: the flag and the pair, one pass after the command, in seq alone.
+        const double lat = 51.5074, lon = -0.1278;  // not equal, not symmetrical: a swap shows
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(lat, lon)).status(), FOXAPI_OK);
+        const FoxReceiverState set = s.state();
+        std::printf("G12-1: SET_POSITION %.4f %.4f -> flag %d, state %.4f %.4f, moved [%s]\n", lat, lon,
+                    (set.flags & FOXAPI_RX_POSITION_SET) != 0u ? 1 : 0, set.rxLatDeg, set.rxLonDeg,
+                    countersMoved(none, set).c_str());
+        CHECK((set.flags & FOXAPI_RX_POSITION_SET) != 0u);
+        CHECK_EQ(set.rxLatDeg, lat);
+        CHECK_EQ(set.rxLonDeg, lon);
+        CHECK_EQ(countersMoved(none, set), std::string("seq"));
+        CHECK_EQ(set.seq, none.seq + 1u);
+        // Only the flag moved among the flags: every other bit is as it was.
+        CHECK_EQ(set.flags & ~FOXAPI_RX_POSITION_SET, none.flags & ~FOXAPI_RX_POSITION_SET);
+
+        // The same position again: nothing moves (the answer may be OK or NO_CHANGE; the state is the test).
+        (void)pumped(d.eng, s, setPositionCmd(lat, lon));
+        for (int i = 0; i < 3; ++i) { d.eng.controlPass(); }
+        CHECK_EQ(countersMoved(set, s.state()), std::string());
+
+        // REFUSED, never clamped: off the globe either way, and the pair 0,0 the rule also refuses. State untouched.
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(91.0, 10.0)).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(10.0, 181.0)).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(0.0, 0.0)).status(), FOXAPI_OUT_OF_RANGE);
+        const FoxReceiverState refused = s.state();
+        CHECK_EQ(countersMoved(set, refused), std::string());
+        CHECK_EQ(refused.rxLatDeg, lat);
+        CHECK_EQ(refused.rxLonDeg, lon);
+        CHECK((refused.flags & FOXAPI_RX_POSITION_SET) != 0u);
+
+        // A second position replaces the first: both coordinates, one seq step, the flag stays.
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(-33.8688, 151.2093)).status(), FOXAPI_OK);
+        const FoxReceiverState second = s.state();
+        CHECK_EQ(second.rxLatDeg, -33.8688);
+        CHECK_EQ(second.rxLonDeg, 151.2093);
+        CHECK((second.flags & FOXAPI_RX_POSITION_SET) != 0u);
+        CHECK_EQ(countersMoved(set, second), std::string("seq"));
+        // A change of the longitude alone, and of the latitude alone, are each a move.
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(-33.8688, 150.0)).status(), FOXAPI_OK);
+        CHECK_EQ(countersMoved(second, s.state()), std::string("seq"));
+        CHECK_EQ(s.state().rxLonDeg, 150.0);
+        const FoxReceiverState lonOnly = s.state();
+        CHECK_EQ(pumped(d.eng, s, setPositionCmd(-30.0, 150.0)).status(), FOXAPI_OK);
+        CHECK_EQ(countersMoved(lonOnly, s.state()), std::string("seq"));
+        CHECK_EQ(s.state().rxLatDeg, -30.0);
+        // The facts the position rode in on are unmoved: the lists' counter is the lists', not the position's.
+        CHECK_EQ(s.state().listSeq, none.listSeq);
+        // A position in the western and southern hemispheres keeps its signs (not an absolute value).
+        CHECK(s.state().rxLatDeg < 0.0);
+    }
+    {
+        // A position restored from the saved configuration is in the first published state (the radar scope's
+        // first frame must already see it; test_patch_map_credit holds the real application).
+        cascade::engine::Engine eng;
+        eng.configureApi(kHooks);
+        eng.initialise();
+        cascade::core::AppConfig cfg;
+        cfg.rxPositionSet = true;
+        cfg.rxLatDeg = 48.8566;
+        cfg.rxLonDeg = 2.3522;
+        eng.applyConfig(cfg);
+        testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(s.ok());
+        eng.controlPass();
+        const FoxReceiverState st = s.state();
+        CHECK((st.flags & FOXAPI_RX_POSITION_SET) != 0u);
+        CHECK_EQ(st.rxLatDeg, 48.8566);
+        CHECK_EQ(st.rxLonDeg, 2.3522);
+        std::printf("G12-1: a position restored from the configuration, first publish: flag %d, %.4f %.4f\n",
+                    (st.flags & FOXAPI_RX_POSITION_SET) != 0u ? 1 : 0, st.rxLatDeg, st.rxLonDeg);
+    }
+    {
+        // A configuration that says no position, with coordinates left in it: the flag is clear and the pair is 0
+        // (the pair means nothing without the flag, and is never published as a place).
+        cascade::engine::Engine eng;
+        eng.configureApi(kHooks);
+        eng.initialise();
+        cascade::core::AppConfig cfg;
+        cfg.rxPositionSet = false;
+        cfg.rxLatDeg = 12.0;
+        cfg.rxLonDeg = 34.0;
+        eng.applyConfig(cfg);
+        testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        eng.controlPass();
+        const FoxReceiverState st = s.state();
+        CHECK((st.flags & FOXAPI_RX_POSITION_SET) == 0u);
+        CHECK_EQ(st.rxLatDeg, 0.0);
+        CHECK_EQ(st.rxLonDeg, 0.0);
+    }
+}
+
+// G12-2: the scope tap's capacity. Per tap, read by an info-only call (capFrames 0), for a LOCAL and a REMOTE session;
+// the most a call returns is the capacity (a request past it is cut to it, the ring is full); the unknown tap, the
+// short info and the unset structSize leave the info and the answer as the table says; the info's tail is not
+// overwritten past the version's own end.
+void testScopeCapacity() {
+    // The layout: the reserved word became the capacity in place, nothing moved.
+    CHECK_EQ(offsetof(FoxScopeInfo, capacityFrames), 12u);
+    CHECK_EQ(offsetof(FoxScopeInfo, rateHz), 16u);
+    CHECK_EQ(sizeof(FoxScopeInfo), 32u);
+    CHECK(FOXAPI_MIN_SCOPE_INFO == sizeof(FoxScopeInfo));
+    CHECK(offsetof(FoxScopeInfo, capacityFrames) + sizeof(uint32_t) <= FOXAPI_MIN_SCOPE_INFO);
+
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    Remote r(e);
+    const FoxEngineApi* a = api();
+    struct Tap {
+        uint32_t tap;
+        const char* name;
+        uint32_t ring;
+    };
+    const Tap taps[] = {{FOXAPI_SCOPE_AUDIO, "audio", 65536u}, {FOXAPI_SCOPE_IQ, "I/Q", 262144u}, {FOXAPI_SCOPE_MPX, "multiplex", 65536u}};
+    for (const Tap& t : taps) {
+        // The receiver need not be running: the capacity is the ring's, constant for the engine's life.
+        for (const bool remote : {false, true}) {
+            FoxScopeInfo info{};
+            info.structSize = sizeof(info);
+            info.capacityFrames = 0xDEADBEEFu;  // a sentinel the call must overwrite
+            const int32_t n = a->read_scope(remote ? r.raw() : s.raw(), t.tap, &info, nullptr, 0);
+            const uint32_t want = remote ? std::min<uint32_t>(t.ring, FOXAPI_SCOPE_REMOTE_FRAMES) : t.ring;
+            std::printf("G12-2: %-9s %-6s info-only read -> %d, capacityFrames %u (wanted %u)\n", t.name,
+                        remote ? "REMOTE" : "LOCAL", n, info.capacityFrames, want);
+            CHECK_EQ(n, 0);
+            CHECK_EQ(info.capacityFrames, want);
+            CHECK_EQ(info.tap, t.tap);
+        }
+        // A REMOTE session reads min(ring, 4096): the constant, whatever the ring.
+        CHECK_EQ(std::min<uint32_t>(t.ring, FOXAPI_SCOPE_REMOTE_FRAMES), FOXAPI_SCOPE_REMOTE_FRAMES);
+    }
+    // The capacity is not what ONE call returns for an empty ring: nothing has been written and the answer is 0.
+    // Running the receiver fills the audio ring; a request past the capacity is cut to it (LOCAL: the ring; REMOTE:
+    // 4096). The audio ring holds 1.37 s, so this waits for it to be full.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_RUN, 0, 1)).result.status, FOXAPI_OK);
+    std::vector<float> buf(2 * 262144 + 16);
+    FoxScopeInfo info{};
+    info.structSize = sizeof(info);
+    CHECK(check::waitFor(
+        [&] { return a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, &info, buf.data(), 70000) == 65536; }, 20000));
+    CHECK_EQ(info.capacityFrames, 65536u);
+    CHECK(info.written >= 65536u);
+    const int32_t local = a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, &info, buf.data(), info.capacityFrames + 1000u);
+    CHECK_EQ(local, static_cast<int32_t>(info.capacityFrames));  // the most a call can return IS capacityFrames
+    FoxScopeInfo rinfo{};
+    rinfo.structSize = sizeof(rinfo);
+    const int32_t remote = a->read_scope(r.raw(), FOXAPI_SCOPE_AUDIO, &rinfo, buf.data(), 70000);
+    CHECK_EQ(remote, static_cast<int32_t>(rinfo.capacityFrames));
+    CHECK_EQ(rinfo.capacityFrames, FOXAPI_SCOPE_REMOTE_FRAMES);
+    // The capacity is the same read to read (it does not move with the ring's fill).
+    CHECK_EQ(a->read_scope(s.raw(), FOXAPI_SCOPE_IQ, &info, nullptr, 0), 0);
+    CHECK_EQ(info.capacityFrames, 262144u);
+    CHECK_EQ(info.channels, 2u);
+    s.run(cmd(FOXAPI_OP_RUN, 0, 0));
+
+    // THE EDGES. An unknown tap is a negative answer and the info is not written (a client that reads it anyway sees
+    // its own sentinel, not a capacity).
+    FoxScopeInfo unknown{};
+    unknown.structSize = sizeof(unknown);
+    unknown.capacityFrames = 0xDEADBEEFu;
+    CHECK_EQ(a->read_scope(s.raw(), 99u, &unknown, buf.data(), 16), FOXAPI_UNSUPPORTED);
+    CHECK(FOXAPI_UNSUPPORTED < 0);
+    CHECK_EQ(unknown.capacityFrames, 0xDEADBEEFu);
+    // A short structSize (or none) is BAD_ARGUMENT, a negative answer, and the info is not written.
+    for (const uint32_t bad : {0u, 8u, static_cast<uint32_t>(FOXAPI_MIN_SCOPE_INFO) - 1u}) {
+        FoxScopeInfo shortInfo{};
+        shortInfo.structSize = bad;
+        shortInfo.capacityFrames = 0xDEADBEEFu;
+        const int32_t n = a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, &shortInfo, buf.data(), 16);
+        CHECK_EQ(n, FOXAPI_BAD_ARGUMENT);
+        CHECK(n < 0);
+        CHECK_EQ(shortInfo.capacityFrames, 0xDEADBEEFu);
+    }
+    // No buffer with a count is BAD_ARGUMENT; no buffer and no count is the info-only call.
+    CHECK_EQ(a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, nullptr, nullptr, 16), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, nullptr, nullptr, 0), 0);
+    // A structSize of exactly the minimum is served in full, capacity included.
+    FoxScopeInfo exact{};
+    exact.structSize = static_cast<uint32_t>(FOXAPI_MIN_SCOPE_INFO);
+    CHECK_EQ(a->read_scope(s.raw(), FOXAPI_SCOPE_MPX, &exact, nullptr, 0), 0);
+    CHECK_EQ(exact.capacityFrames, 65536u);
+    std::printf("G12-2: the capacity per tap and session, the cut at the ring, the edges: done\n");
+}
+// G12 TESTS END>>
 int main() {
     engine_api_test::hermetic("api03");
     cascade::gui::AppWindowTestAccess::installFakeRadio();
@@ -5926,5 +6147,8 @@ int main() {
     testPerFrameMovesAreThePasss();
     testSourceListSeqExactness();
 // G11 MAIN END>>
+    // Group 12: the radar scope and the demod scope.
+    testPositionState();
+    testScopeCapacity();
     return check::finish("test_engine_api_03");
 }

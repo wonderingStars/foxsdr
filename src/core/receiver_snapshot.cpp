@@ -90,6 +90,7 @@ std::uint32_t receiverFlags(const RxFlagSources& s) {
     set(s.deviceOpening, FOXAPI_RX_DEVICE_OPENING);
     set(s.autoNotchEngaged, FOXAPI_RX_AUTO_NOTCH_ENGAGED);
     set(s.pilotLocked, FOXAPI_RX_PILOT_LOCKED);
+    set(s.positionSet, FOXAPI_RX_POSITION_SET);
     set(s.webListening, FOXAPI_RX_WEB_LISTENING);
     return f;
 }
@@ -172,9 +173,12 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
     // So are the scanner's state word and its frequency (0.3, 8.6): live state, which moves
     // seq as the scanner's flag does and no group of its own - a scan steps on every dwell, and
     // the receiver's tuning moves tuneSeq with it.
+    // The receiver's position (0.3, 8.11) is the same kind of thing: a flag (POSITION_SET, in f.flags)
+    // and two coordinates, moving seq and no group of its own.
     const bool other = first || f.flags != o.flags || f.decodersRunning != o.decodersRunning ||
                        f.decodersFitted != o.decodersFitted || f.decodersMatched != o.decodersMatched ||
-                       f.scannerState != o.scannerState || f.scanCurrentHz != o.scanCurrentHz;
+                       f.scannerState != o.scannerState || f.scanCurrentHz != o.scanCurrentHz ||
+                       f.rxLatDeg != o.rxLatDeg || f.rxLonDeg != o.rxLonDeg;
     f.seq = o.seq + ((tune || mode || device || audio || display || tx || rds || scan || other) ? 1u : 0u);
     f.rdsSeq = o.rdsSeq + (rds ? 1u : 0u);
     f.scanSeq = o.scanSeq + (scan ? 1u : 0u);

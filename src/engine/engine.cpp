@@ -3576,6 +3576,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // Handed over by the front end (OPEN 4), not asked of it while publishing.
     const FrontEndFacts facts = frontEndFacts();
     fs.webListening = facts.webListening;
+    fs.positionSet = rxSet_;
 
     r.centreHz = src.centerFrequencyHz();
     r.vfoOffsetHz = pipeline_.vfoOffsetHz();
@@ -3693,6 +3694,10 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     e.rxPositionSet = rxSet_;
     e.rxLatDeg = rxLat_;
     e.rxLonDeg = rxLon_;
+    // THE RADAR SCOPE'S POSITION (API 0.3 8.11): the same three values, in the state; the
+    // coordinates are 0 with no position (they are valid with FOXAPI_RX_POSITION_SET).
+    r.rxLatDeg = rxSet_ ? rxLat_ : 0.0;
+    r.rxLonDeg = rxSet_ ? rxLon_ : 0.0;
     e.autoNotchEngaged = autoNotchEngaged;
     e.autoNotchFreqHz = autoNotchHz;
     e.pilotLocked = pilotLocked;

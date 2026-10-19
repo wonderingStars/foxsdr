@@ -196,7 +196,7 @@ extern "C" {
 #define FOXAPI_CAP_EVENTS        (1ull << 20) /* subscribe / poll_events */
 #define FOXAPI_CAP_BAND_PLAN     (1ull << 21) /* band-plan list and selection */
 #define FOXAPI_CAP_TRACKS        (1ull << 22) /* map tracks from track-source plugins */
-#define FOXAPI_CAP_SCOPE         (1ull << 23) /* demod-scope taps (reduced) */
+#define FOXAPI_CAP_SCOPE         (1ull << 23) /* demod-scope taps (read_scope; a REMOTE session is held to FOXAPI_SCOPE_REMOTE_FRAMES a read) */
 #define FOXAPI_CAP_POSITION      (1ull << 24) /* receiver position, GPS port */
 #define FOXAPI_CAP_IMAGES        (1ull << 25) /* read_image: decoded pictures */
 /* 0.3 */
@@ -277,6 +277,7 @@ extern "C" {
 #define FOXAPI_RX_DEVICE_OPENING   0x08000000u /* a radio is being opened: the open runs on a worker and has not finished */
 #define FOXAPI_RX_AUTO_NOTCH_ENGAGED 0x10000000u /* the auto-notch has found a tone and is notching it (FOXAPI_RX_AUTO_NOTCH is "enabled"; autoNotchHz is where) */
 #define FOXAPI_RX_PILOT_LOCKED     0x20000000u /* WFM: the stereo decoder has locked the 19 kHz pilot, enabled or not (STEREO_ACTIVE is enabled AND locked) */
+#define FOXAPI_RX_POSITION_SET     0x40000000u /* the receiver's position is known (rxLatDeg and rxLonDeg are valid; 8.11) */
 
 #define FOXAPI_NAME_CHARS 64
 #define FOXAPI_MESSAGE_CHARS 128
@@ -383,6 +384,12 @@ typedef struct FoxReceiverState {
     /* ---- 0.3 (docs/api-0.3-additions.md 8.10): the Source section as it is
      * drawn. One flag word, in the device group (deviceSeq, and seq with it). ---- */
     uint32_t sourceFlags;              /* FOXAPI_SRC_* */
+    /* ---- 0.3 (docs/api-0.3-additions.md 8.11): where the receiver is, for the
+     * radar scope. Valid with FOXAPI_RX_POSITION_SET; 0 otherwise. They move
+     * seq and nothing else (the position is set by FOXAPI_OP_SET_POSITION or
+     * restored from the saved configuration). ---- */
+    double rxLatDeg;                   /* the receiver's latitude, degrees north */
+    double rxLonDeg;                   /* the receiver's longitude, degrees east */
 } FoxReceiverState;
 
 
@@ -428,7 +435,7 @@ typedef struct FoxReceiverState {
 /* Every FOXAPI_MIN_* is the whole layout of the oldest accepted version
  * (rule 4), written as the end of its last member so it never moves when
  * members are appended. */
-#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, sourceFlags) + sizeof(uint32_t))
+#define FOXAPI_MIN_RECEIVER_STATE (offsetof(FoxReceiverState, rxLonDeg) + sizeof(double))
 
 /* ---------------------------------------------------------------------------
  * The spectrum stream. The waterfall is NOT a separate stream: it is the
@@ -874,7 +881,7 @@ typedef struct FoxScopeInfo {
     uint32_t structSize;
     uint32_t tap;               /* FOXAPI_SCOPE_* */
     uint32_t channels;          /* 1, or 2 for I/Q */
-    uint32_t reserved0;
+    uint32_t capacityFrames;    /* 0.3 (8.11): the most frames a read_scope on THIS session can return for this tap - the ring's size (65536 audio, 262144 I/Q, 65536 multiplex) for a LOCAL session, min(ring, FOXAPI_SCOPE_REMOTE_FRAMES) for a REMOTE one; 0 from an engine that predates it */
     double rateHz;              /* the tap's sample rate */
     uint64_t written;           /* frames the tap has taken in total: one that stops moving is stalled */
 } FoxScopeInfo;

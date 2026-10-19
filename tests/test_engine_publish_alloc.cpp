@@ -52,6 +52,10 @@
 //      134-byte fault sentence, every pass's fingerprint, an unchanged pass and the publish (with the section's flag
 //      word) allocate nothing, and so do 1000 rounds of reading each new list and fact; each input moves the
 //      fingerprint ALONE and the block's rebuild is counted, once for the change
+//   F6 the radar scope and the demod scope (API 0.3 8.11): the receiver's position in the state and the scope tap's
+//      capacity add nothing to the pass: with a position set the publish allocates nothing, says the position (and
+//      says none, 0 and 0, when it is cleared), moves no list fingerprint, and 1000 rounds of read_state and of the
+//      three taps' info-only read_scope (LOCAL) allocate nothing
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
@@ -265,6 +269,12 @@ struct AppWindowTestAccess {
     static bool& networkUsrps(cascade::engine::Engine& e) { return e.lookForNetworkUsrps_; }
     static bool& scanned(cascade::engine::Engine& e) { return e.soapyScanned_; }
 // F5 ACCESS END>>
+    // The radar scope's position (API 0.3 8.11): set or cleared, as SET_POSITION and the configuration leave it.
+    static void position(cascade::engine::Engine& e, bool set, double lat, double lon) {
+        e.rxSet_ = set;
+        e.rxLat_ = lat;
+        e.rxLon_ = lon;
+    }
 };
 }  // namespace cascade::gui
 
@@ -1130,5 +1140,69 @@ int main() {
     }
 
 // F5 CASE END>>
+// <<F6 CASE BEGIN
+
+    // F6: the radar scope and the demod scope (API 0.3 8.11). The receiver's position in the state and the scope tap's
+    // capacity add nothing to the pass: with a position set the publish allocates nothing (as it did with none), it says
+    // the position, and 1000 rounds of read_state and of the three taps' info-only read_scope (a LOCAL
+    // session) allocate nothing. The position moves no list fingerprint.
+    {
+        cascade::engine::Engine e6;
+        e6.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* local = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e6.apiHandle(), &sp, &local) == FOXAPI_OK);
+        }
+        const long none = allocationsOfPublishes(e6);
+        const std::uint64_t listsBefore = Access::fingerprint(e6);
+        Access::position(e6, true, 51.5074, -0.1278);
+        const long placed = allocationsOfPublishes(e6);
+        std::printf("F6: %d publishes with no position: %ld heap allocations, with one: %ld\n", kPublishes, none, placed);
+        CHECK(none == 0);
+        CHECK(placed == 0);
+        CHECK(Access::fingerprint(e6) == listsBefore);  // the position is the state's, not the lists'
+        cascade::core::PublishedState ps;
+        Access::publish(e6, ps);
+        CHECK((ps.rx.flags & FOXAPI_RX_POSITION_SET) != 0u);
+        CHECK(ps.rx.rxLatDeg == 51.5074);
+        CHECK(ps.rx.rxLonDeg == -0.1278);
+        Access::position(e6, false, 51.5074, -0.1278);  // cleared: the pair is not published as a place
+        Access::publish(e6, ps);
+        CHECK((ps.rx.flags & FOXAPI_RX_POSITION_SET) == 0u);
+        CHECK(ps.rx.rxLatDeg == 0.0 && ps.rx.rxLonDeg == 0.0);
+        Access::position(e6, true, 51.5074, -0.1278);
+        e6.controlPass();  // (the pass publishes for the readers below)
+
+        FoxReceiverState st{};
+        st.structSize = sizeof(st);
+        FoxScopeInfo info{};
+        info.structSize = sizeof(info);
+        CHECK(table->read_state(local, &st) == FOXAPI_OK);  // (warm-up)
+        CHECK((st.flags & FOXAPI_RX_POSITION_SET) != 0u && st.rxLatDeg == 51.5074 && st.rxLonDeg == -0.1278);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < 1000; ++i) {
+            (void)table->read_state(local, &st);
+            for (const std::uint32_t tap : {FOXAPI_SCOPE_AUDIO, FOXAPI_SCOPE_IQ, FOXAPI_SCOPE_MPX}) {
+                (void)table->read_scope(local, tap, &info, nullptr, 0);
+            }
+        }
+        t_counting = false;
+        std::printf("F6: 1000 rounds of read_state and three info-only read_scope calls: %ld heap allocations (capacity %u)\n",
+                    t_news, info.capacityFrames);
+        CHECK(t_news == 0);
+        CHECK(info.capacityFrames == 65536u);  // the last call was the multiplex tap's
+        table->close_session(local);
+    }
+
+// F6 CASE END>>
     return testSummary("test_engine_publish_alloc");
 }

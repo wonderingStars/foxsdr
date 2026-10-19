@@ -542,6 +542,11 @@ void countersMoveByGroup() {
          [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_AUTO_NOTCH_ENGAGED; }, "seq mode"},
         {"the auto-notch's frequency (a measurement)", [](PublishedState& p) { p.rx.autoNotchHz = 1000.0; }, ""},
         {"the pilot locking", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_PILOT_LOCKED; }, "seq"},
+        // API 0.3 8.11, the radar scope's position: a flag and two coordinates, seq alone.
+        {"the receiver's position becoming known (the flag)",
+         [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_POSITION_SET; }, "seq"},
+        {"the receiver's latitude", [](PublishedState& p) { p.rx.rxLatDeg = 51.5; }, "seq"},
+        {"the receiver's longitude", [](PublishedState& p) { p.rx.rxLonDeg = -0.12; }, "seq"},
         // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
         // seq with it); the scanner's state word and its frequency are live state that moves seq
         // alone (the scanner flag, which the state already had, is the same).
@@ -623,9 +628,10 @@ void rdsGroupAndLayout() {
           offsetof(FoxReceiverState, autoNotchHz) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, rdsPs) == offsetof(FoxReceiverState, rdsPty) + sizeof(std::uint32_t));
     CHECK(offsetof(FoxReceiverState, rdsRadioText) == offsetof(FoxReceiverState, rdsPs) + FOXAPI_RDS_PS_CHARS);
-    // (0.3 8.6 appended after RadioText and 8.10 after that: the minimum accepted moved to the end of
-    // scanListenMs, and then of sourceFlags - checked in scanGroupAndLayout and sourceFlagsGroup below.)
-    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, sourceFlags) + sizeof(std::uint32_t));
+    // (0.3 8.6 appended after RadioText, 8.10 after that and 8.11 after that: the minimum accepted moved
+    // to the end of scanListenMs, then of sourceFlags, then of rxLonDeg - checked in scanGroupAndLayout,
+    // sourceFlagsGroup and positionGroup below.)
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
     CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
@@ -694,9 +700,10 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, scanHoldMs) == offsetof(FoxReceiverState, scanDwellMs) + 4u);
     CHECK(offsetof(FoxReceiverState, scanResumeMs) == offsetof(FoxReceiverState, scanHoldMs) + 4u);
     CHECK(offsetof(FoxReceiverState, scanListenMs) == offsetof(FoxReceiverState, scanResumeMs) + 4u);
-    // 0.3 8.10 appended one word after the scanner's last (sourceFlags): the minimum ends there.
+    // 0.3 8.10 appended one word after the scanner's last (sourceFlags), and 8.11 the two coordinates
+    // after that (positionGroup checks them): the minimum ends at the last of those.
     CHECK(offsetof(FoxReceiverState, sourceFlags) == offsetof(FoxReceiverState, scanListenMs) + 4u);
-    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, sourceFlags) + 4u);
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
     CHECK(FOXAPI_MIN_RECEIVER_STATE <= sizeof(FoxReceiverState));
     CHECK(sizeof(FoxReceiverState) - FOXAPI_MIN_RECEIVER_STATE < 8u);  // only the struct's own tail padding
     // The state words are 0..3, each its own.
@@ -745,6 +752,47 @@ void sourceFlagsGroup() {
         snap.publish(s, nullptr);
         CHECK(seqs(snap).device == on.device + 1u && seqs(snap).seq == on.seq + 1u);
     }
+}
+
+// --- 3e. the radar scope's position (API 0.3 8.11) ----------------------------------------
+
+void positionGroup() {
+    std::printf("[3e] the receiver's position: the flag and the two coordinates move seq and nothing else\n");
+    // The layout: two eight-byte members appended right after sourceFlags (its four bytes of tail
+    // padding go before them, so rxLatDeg is 8-aligned), the minimum ends at the second.
+    CHECK(offsetof(FoxReceiverState, rxLatDeg) % 8u == 0u);
+    CHECK(offsetof(FoxReceiverState, rxLatDeg) >= offsetof(FoxReceiverState, sourceFlags) + 4u);
+    CHECK(offsetof(FoxReceiverState, rxLatDeg) < offsetof(FoxReceiverState, sourceFlags) + 8u);
+    CHECK(offsetof(FoxReceiverState, rxLonDeg) == offsetof(FoxReceiverState, rxLatDeg) + sizeof(double));
+    CHECK(FOXAPI_MIN_RECEIVER_STATE == offsetof(FoxReceiverState, rxLonDeg) + sizeof(double));
+    CHECK(sizeof(FoxReceiverState) == FOXAPI_MIN_RECEIVER_STATE);
+    // The flag is the next free bit of the word: one bit, and no other condition's.
+    CHECK(FOXAPI_RX_POSITION_SET == 0x40000000u);
+    CHECK((FOXAPI_RX_POSITION_SET & (FOXAPI_RX_POSITION_SET - 1u)) == 0u);
+    CHECK((FOXAPI_RX_POSITION_SET & FOXAPI_RX_PILOT_LOCKED) == 0u);
+    // Each of the three moves seq and no group; the same value again moves nothing.
+    ReceiverSnapshot snap;
+    PublishedState s{};
+    snap.publish(s, nullptr);
+    const auto one = [&](const char* what, auto change, auto undo) {
+        const Seqs before = seqs(snap);
+        change(s);
+        snap.publish(s, nullptr);
+        const Seqs on = seqs(snap);
+        const std::string m = moved(before, on);
+        if (m != "seq") { std::printf("      %s: moved [%s], wanted [seq]\n", what, m.c_str()); }
+        CHECK(m == "seq");
+        CHECK(on.seq == before.seq + 1u);
+        snap.publish(s, nullptr);
+        CHECK(moved(on, seqs(snap)).empty());
+        undo(s);
+        snap.publish(s, nullptr);
+        CHECK(moved(on, seqs(snap)) == "seq");
+    };
+    one("flag", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_POSITION_SET; },
+        [](PublishedState& p) { p.rx.flags &= ~FOXAPI_RX_POSITION_SET; });
+    one("latitude", [](PublishedState& p) { p.rx.rxLatDeg = 51.5; }, [](PublishedState& p) { p.rx.rxLatDeg = 0.0; });
+    one("longitude", [](PublishedState& p) { p.rx.rxLonDeg = -0.12; }, [](PublishedState& p) { p.rx.rxLonDeg = 0.0; });
 }
 
 // --- 4. the compose mapping --------------------------------------------------------
@@ -1179,6 +1227,8 @@ void walkingOneCompose() {
         // (autoNotchEngaged, pilotLocked), not from the flag word.
         {FOXAPI_RX_AUTO_NOTCH_ENGAGED, "AUTO_NOTCH_ENGAGED", ""},
         {FOXAPI_RX_PILOT_LOCKED, "PILOT_LOCKED", ""},
+        // 0.3 8.11: the web page's rxPositionSet comes from the extension too.
+        {FOXAPI_RX_POSITION_SET, "POSITION_SET", ""},
     };
     std::uint32_t named = 0;
     for (const FlagWant& fw : flags) { named |= fw.bit; }
@@ -1283,6 +1333,7 @@ void walkingOneSources() {
         {"deviceOpening", &S::deviceOpening, FOXAPI_RX_DEVICE_OPENING},  // 8.3
         {"autoNotchEngaged", &S::autoNotchEngaged, FOXAPI_RX_AUTO_NOTCH_ENGAGED},  // 8.4
         {"pilotLocked", &S::pilotLocked, FOXAPI_RX_PILOT_LOCKED},                  // 8.4
+        {"positionSet", &S::positionSet, FOXAPI_RX_POSITION_SET},                  // 8.11
     };
     // Every member of RxFlagSources is a bool and is walked here: the struct
     // holds nothing else, so its size counts them.
@@ -1300,7 +1351,7 @@ void walkingOneSources() {
         seen |= w.want;
     }
     // Every flag but the two per-session ones has a source.
-    CHECK(seen == (0x3FFFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: six more
+    CHECK(seen == (0x7FFFFFFFu & ~(FOXAPI_RX_TX_KEY_MINE | FOXAPI_RX_TX_LATCH_RELEASE_FIRST)));  // 0.3: seven more
     std::printf("      %zu sources, each to its own flag; flags covered %08x\n",
                 sizeof(srcs) / sizeof(srcs[0]), seen);
 }
@@ -1494,6 +1545,7 @@ int main() {
     rdsGroupAndLayout();
     scanGroupAndLayout();
     sourceFlagsGroup();
+    positionGroup();
     composeMapsEveryField();
     pluginApiReadsTheSharedSnapshot();
     walkingOneCompose();

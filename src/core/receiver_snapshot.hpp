@@ -240,6 +240,9 @@ struct RxFlagSources {
     // the stereo decoder has locked the 19 kHz pilot, stereo enabled or not.
     bool autoNotchEngaged = false;
     bool pilotLocked = false;
+    // The radar scope as it draws (docs/api-0.3-additions.md 8.11): the receiver's position is
+    // known (FoxReceiverState::rxLatDeg and rxLonDeg are valid). Moves seq alone.
+    bool positionSet = false;
 };
 std::uint32_t receiverFlags(const RxFlagSources& s);
 

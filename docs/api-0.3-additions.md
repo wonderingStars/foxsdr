@@ -24,8 +24,8 @@ serves only its own minor, so a 0.3 engine answers `foxsdr_engine_query(0, 2)`
 with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
 is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
 and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
-at its end (sections 8.1, 8.2, 8.4, 8.6 and 8.10). `FoxScopeInfo` is new, with its own
-`FOXAPI_MIN_SCOPE_INFO`. No other struct changed.
+at its end (sections 8.1, 8.2, 8.4, 8.6, 8.10 and 8.11). `FoxScopeInfo` is new, with its own
+`FOXAPI_MIN_SCOPE_INFO` (its one reserved word became `capacityFrames` in section 8.11). No other struct changed.
 
 ## 2. Capabilities
 
@@ -217,12 +217,21 @@ asks again next frame. Taps: `FOXAPI_SCOPE_AUDIO` (the finished audio, mono,
 48 kHz), `FOXAPI_SCOPE_IQ` (the channel's I/Q, two floats a frame, at the
 channel rate), `FOXAPI_SCOPE_MPX` (the WFM multiplex, only while WFM runs).
 `info` (may be NULL; shorter than `FOXAPI_MIN_SCOPE_INFO` is BAD_ARGUMENT)
-carries `channels`, `rateHz` and `written` — frames the tap has taken in
-total, so a reader tells a silent tap from a stalled one. A REMOTE session is
-given at most `FOXAPI_SCOPE_REMOTE_FRAMES` (4096) frames: "reduced", as
-`FOXAPI_CAP_SCOPE` always said. An unknown tap is `UNSUPPORTED`. The read
-never waits: the tap is a lock-free single-producer ring the DSP thread
-pushes and any thread may snapshot.
+carries `channels`, `rateHz`, `written` — frames the tap has taken in
+total, so a reader tells a silent tap from a stalled one - and `capacityFrames`
+(section 8.11): the most frames a call on THIS session can return for the tap.
+A LOCAL session is given whatever the ring holds (65536 frames of audio,
+262144 of I/Q, 65536 of multiplex; the call is bounded by the ring and the
+caller's `capFrames`, nothing else). A REMOTE session is given at most
+`FOXAPI_SCOPE_REMOTE_FRAMES` (4096) frames: "reduced", as `FOXAPI_CAP_SCOPE`
+always said (and `capacityFrames` says so: `min(ring, 4096)`). The return value
+is an `int32_t` that is NEGATIVE on error (`DETACHED`, `BAD_ARGUMENT`,
+`UNSUPPORTED`): a client must test it before it uses it as a count. `info`'s
+`structSize` must be set, or the whole call is `BAD_ARGUMENT`. An unknown tap
+is `UNSUPPORTED`. The read never waits: the tap is a lock-free
+single-producer ring the DSP thread pushes and any thread may snapshot; the
+frames and `written` are read AT THE CALL, not taken from the published state,
+so a waveform is never a publish old.
 
 ## 7. A patch radio's spectrum — `read_node_spectrum`
 
@@ -244,6 +253,7 @@ dropped when it goes).
 | `FOXAPI_RX_DEVICE_OPENING` | device | a radio is being opened: the open runs on a worker and has not finished (section 8.3) |
 | `FOXAPI_RX_AUTO_NOTCH_ENGAGED` | mode | the auto-notch has found a tone and is notching it; `FOXAPI_RX_AUTO_NOTCH` stays "enabled" (section 8.4) |
 | `FOXAPI_RX_PILOT_LOCKED` | (seq only) | WFM: the stereo decoder has locked the 19 kHz pilot, stereo enabled or not; `FOXAPI_RX_STEREO_ACTIVE` is enabled AND locked (section 8.4) |
+| `FOXAPI_RX_POSITION_SET` 0x40000000 | (seq only) | the receiver's position is known: `rxLatDeg` and `rxLonDeg` are valid (section 8.11). The next free bit; `0x80000000` is the one left |
 
 ### 8.1 The transmitter as a page draws it (appended to FoxReceiverState)
 
@@ -1141,6 +1151,61 @@ fields.
 and the API-row flag, so those sentences are reachable with no USB walk and no SDRplay install - and `scanDiagnostics`
 for the three SoapySDR diagnostics and the faulted-driver list. With the scan stood in for (`soapyScan`) and no
 diagnostics hook, the engine reads none of the four: a hermetic engine never calls into the runtime.
+
+### 8.11 The radar scope and the demod scope as they draw
+
+The radar scope (the aircraft plan-position indicator that replaces the window, with its range stepper, its gauges, its
+GAIN knob and its POWER key) and the demod scope page (the audio, spectrum, vector and multiplex traces) read the table
+only. 0.3 had almost all of it: `FOXAPI_RX_RUNNING`, `FOXAPI_RX_DEVICE_OPEN`, `FOXAPI_RX_DEVICE_AGC`, `signalDb`,
+`channelRateHz`, `demodMode` and `audioPlayingPlugin` in the state, the first gain stage in `GAINS`, the module census in
+`PLUGINS`, the samples through `read_scope`, and every command (`FOXAPP_OP_SET_GAIN_NO_READBACK`, `FOXAPI_OP_RUN`). It
+lacked two small things. **No op, list, fact or status line is added.**
+
+**8.11.1 The receiver's position.** `FoxReceiverState` gains at its END two `double`s, `rxLatDeg` and `rxLonDeg`
+(degrees north and east), and the state flag `FOXAPI_RX_POSITION_SET` 0x40000000 (the next free bit of `flags`). The
+coordinates are valid when the flag is set and are 0 otherwise (a position that was never set, or was cleared, is never
+published as 0 N 0 E with the flag up: the flag is the truth, and the numbers are a pair that means nothing without it).
+They are what `FOXAPI_OP_SET_POSITION` writes (refused when out of range, unchanged) and what the saved configuration
+restores: a position restored at start-up is in the FIRST published state, so the first frame of an interface that
+draws from it already sees it. They move `seq` and no other counter (the flag word moves `seq` as every flag outside a
+group does; a change of either coordinate moves `seq`; the plugin ABI's own five counters do not move). The coordinates
+are NOT in the lists' fingerprint: nothing a list serves depends on them, and a position change must not rebuild the
+block. `FOXAPI_MIN_RECEIVER_STATE` moves to the end of `rxLonDeg` (this is a 0.3 append, as 8.10's `sourceFlags` was).
+The state's tail gains 16 bytes (4 of padding before the first `double`) and a publish copies them.
+
+**8.11.2 The scope tap's capacity.** `FoxScopeInfo::reserved0` becomes `uint32_t capacityFrames` (same offset, same
+size: `FOXAPI_MIN_SCOPE_INFO` is unchanged, so every client's `info` already covers it, and an engine that predates it
+leaves 0 there, which a client reads as "unknown, ask for what you need and take what comes"). It is the MOST FRAMES A
+`read_scope` ON THIS SESSION CAN RETURN for this tap: for a LOCAL session the ring's size, 65536 for `FOXAPI_SCOPE_AUDIO`,
+262144 for `FOXAPI_SCOPE_IQ` and 65536 for `FOXAPI_SCOPE_MPX`; for a REMOTE session `min(ring, FOXAPI_SCOPE_REMOTE_FRAMES)`,
+that is 4096 for all three, so a client's clamp works on both. It is constant for the life of the engine, read from the
+ring (`ScopeTap::capacity()`), and is filled in whether or not `capFrames` is 0 (an info-only call per tap is enough).
+What it is for: a scope's sweep is ten divisions of its time base (`FoxScopeInfo::rateHz` frames a second), and the
+longest base, 50 ms a division, asks for more frames than the I/Q ring holds whenever the channel rate is above about
+524 kHz (a trigger that hunts for an edge asks for twice a sweep, from about 262 kHz). A client that does not know the
+ring sees fewer frames than it asked for and cannot tell "the ring is the limit" from "the tap has not got that many yet";
+`capacityFrames` is the clamp: `want = min(wanted, capacityFrames)`.
+
+**What the radar scope and the demod scope read, from where:**
+
+| Datum | From |
+|---|---|
+| the receiver has a position (the honest empty state "the scope needs the receiver's position"), the range and bearing of an aircraft from it | `FOXAPI_RX_POSITION_SET`, `rxLatDeg`, `rxLonDeg` |
+| the SIG gauge and the POWER lamp | `signalDb`, `FOXAPI_RX_RUNNING` |
+| the GAIN knob: whether a radio is open and lists a stage, its travel, the lit tick, the figure and its unit, the stage name sent, the "AUTO" note | `FOXAPI_RX_DEVICE_OPEN`, `gainCount`, `FOXAPI_RX_DEVICE_AGC`, `GAINS` entry 0 (`value[0]`, `value[1]`, `value[3]`, `name`, `detail`) |
+| the POWER key | `FOXAPI_OP_RUN` |
+| the knob | `FOXAPP_OP_SET_GAIN_NO_READBACK` (text: the stage name, `num[0]`: dB), SETTINGS |
+| "the scope will be empty" (no loaded module is a track source) | `PLUGINS`: `value[0]` capability word, `ACTIVE` loaded, `STOPPED` |
+| the aircraft, their count, the selected altitude and range | the HOST PROCESS (the plugin windows' track poll, called from the interface's frame at frame rate by the plugin ABI): not served, as `TRACKS` always was not (section 10) |
+| the demod scope's waveform, spectrum and vector, and the liveness of each trace | `read_scope` AT THE CALL: the samples and `written` |
+| the time axis (the I/Q rate), the WFM key, whose sound the trace is | `FoxScopeInfo::rateHz` or `channelRateHz`, `demodMode == FOXAPI_DEMOD_WFM`, `audioPlayingPlugin` |
+
+**Timing.** The tap's frames and `written` are read at the call and are never a publish old. Everything else is the
+published state: one engine pass old at most, so a rate or a mode change is labelled a pass late (the liveness rule of an
+interface is far slower than a pass), and a gain command's new figure arrives after the pass that applied it. An
+interface whose control computes its next value from the readback (a knob that adds a step) must hold its own copy of the
+value until the readback catches up, or two steps sent before the pass publishes would both be added to the old figure
+and one would be lost.
 
 ## 9. Events and ops
 
