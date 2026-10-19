@@ -201,9 +201,15 @@ std::string shiftWheel(int f, float n) {
 std::string ctrlWheel(int f, float n) {
     return std::to_string(f) + " ctrlwheel " + std::to_string(n) + "\n";
 }
-// A click: down on frame f, up on f + 2 (the helper the other app tests use).
-std::string click(int f) {
-    return std::to_string(f) + " down\n" + std::to_string(f + 2) + " up\n";
+// A DOUBLE-CLICK: the button goes down and up in consecutive frames, twice, so the second press
+// follows the first by TWO FRAMES (as tests/test_plugin_inuse_app.cpp's does) and not four. ImGui's
+// double-click window is 0.30 s of the wall clock, not of frames, and a bounded run's frames are
+// about a millisecond on a fast desk and tens of milliseconds under a software-rendered virtual
+// display: with the presses four frames apart the second one arrived after the window had closed
+// on both Linux CI jobs (0.99.82) and the unzoom never happened, while Windows passed.
+std::string dblclick(int f) {
+    return std::to_string(f) + " down\n" + std::to_string(f + 1) + " up\n" +
+           std::to_string(f + 2) + " down\n" + std::to_string(f + 3) + " up\n";
 }
 std::string step(const char* what, int f) { return std::to_string(f) + " " + what + "\n"; }
 
@@ -402,7 +408,7 @@ int main() {
         // point, so the tuned offset is within half a notch of where the pixel is.
         const double frac = (sx - sp.x0) / (sp.x1 - sp.x0);
         const double offsetAtPixel = (frac - 0.5) * kRateHz;
-        const Census dbl = once({"double", 300000.0, at(20, sx, sy) + click(24) + click(28), 60});
+        const Census dbl = once({"double", 300000.0, at(20, sx, sy) + dblclick(24), 60});
         std::printf("    double-click at 20%%: offset %.0f Hz (pixel is %.0f Hz)\n",
                     dbl.saved.vfoOffsetHz, offsetAtPixel);
         CHECK(dbl.ok);
@@ -420,7 +426,7 @@ int main() {
         const View before = viewOf(zoomOnly);
         const double wfFrac = (wx - wf.x0) / (wf.x1 - wf.x0);
         const double clickedKhz = before.lowKhz + wfFrac * before.spanKhz();
-        const Census zdbl = once({"double-zoomed", 300000.0, zoomIn + click(34) + click(38), 70});
+        const Census zdbl = once({"double-zoomed", 300000.0, zoomIn + dblclick(34), 70});
         const View v = viewOf(zdbl);
         std::printf("    double-click on the zoomed waterfall: signal clicked at %+.1f kHz; span %.1f kHz, "
                     "offset %.0f Hz\n",
