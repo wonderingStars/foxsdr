@@ -11501,7 +11501,11 @@ void AppWindow::drawScopeModeControl() {
     // entirely, so a position could be read from a GPS only on an install
     // that had never had one, and a tester who had typed a rough position
     // could never replace it with the receiver's (see drawGpsPositionControl).
-    if (!engine_.rxSet_) {
+    //
+    // FROM THE WINDOW'S SESSION (window port group 12): the position is the state's, and the module census behind
+    // the "scope will be empty" line is the PLUGINS list's rows, read first when listSeq has moved.
+    const PluginListCache& modules = pluginLists();
+    if (!receiverPositionKnown()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", tr("The scope needs the receiver's position first."));
         ImGui::PopStyleColor();
@@ -11547,10 +11551,15 @@ void AppWindow::drawScopeModeControl() {
     // one whose tracker the host refused; this line used to read "no aircraft
     // source installed" in all three, which is a lie in two of them and sends
     // the user to buy what they already own. See gui/module_census.hpp.
-    if (engine_.pluginUi_.trackPluginNames().empty()) {
-        const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
-            engine_.pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
-            [this](const std::string& key) { return engine_.pluginIsStopped(key); });
+    //
+    // THE CENSUS IS THE TABLE'S: PLUGINS' capability word, loaded and stopped flags, counted by the rule the host's
+    // own records are (gui::censusOf, as the decoders' surfaces do). "No live track source" is `live == 0`, which
+    // is the old "trackPluginNames() is empty" except for a module that loads and whose create() returns nothing
+    // (the host built no instance for it and the old line spoke of one that was not there) and for the one pass
+    // after a rescan before the host has rebuilt its instances.
+    const cascade::gui::ModuleCensus census =
+        cascade::gui::censusOf(modules.plugins, CASCADE_CAP_TRACK_SOURCE);
+    if (census.live == 0) {
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         // WRAPPED, not TextDisabled: this rail is narrow and a user may drag it
@@ -11567,8 +11576,14 @@ void AppWindow::drawScopeModeControl() {
     }
 }
 
+const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return engine_.pluginUi_.tracks(); }
+
 void AppWindow::drawScopeMode() {
     uiNotePanel("scope");
+    // THE GAINS ARE READ FIRST, when listSeq has moved, before anything below decides from them (the rule of the
+    // caches): the knob's stage is the first GAINS entry, and its readback is what GAINS' value[3] says.
+    const SourceListCache& radio = sourceLists();
+    scopeKnob_.drawn = false;  // (set again by the frame that draws the cabinet's knob)
 
     // --- the bar, drawn FIRST and unconditionally ---------------------------
     // The way out comes before anything that can run out of room. Everything
@@ -11650,7 +11665,7 @@ void AppWindow::drawScopeMode() {
     // value - it is a real place in the Gulf of Guinea, and a scope centred
     // there would draw a plausible-looking picture in which every range and
     // bearing was wrong by the distance from there to the antenna.
-    if (!engine_.rxSet_) {
+    if (!receiverPositionKnown()) {
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextUnformatted(tr("The scope needs the receiver's position."));
@@ -11677,7 +11692,7 @@ void AppWindow::drawScopeMode() {
     // config) since the last time this ran, so it is pushed in every frame
     // rather than only on the button - the same rule the trail switches follow,
     // and what makes a change on any surface reach every other one immediately.
-    scope_.setReceiver(engine_.rxLat_, engine_.rxLon_);
+    scope_.setReceiver(uiState_.rxLatDeg, uiState_.rxLonDeg);
     // The range likewise travels in both directions: the bar's buttons write
     // scopeRangeNm_, the wheel over the face writes the view's own copy, and
     // the read-back below is what carries the wheel's change into the config.
@@ -11722,7 +11737,7 @@ void AppWindow::drawScopeMode() {
     if (!roomForFace) {
         scope_.setAircraftIconPx(aircraftIconPx_);
         scope_.setTrailWidthPx(mapTrailWidthPx_);
-        scope_.draw(avail.x, avail.y, engine_.pluginUi_.tracks(), &basemap_, &trackInfo_);
+        scope_.draw(avail.x, avail.y, hostTracks(), &basemap_, &trackInfo_);
         scopeRangeNm_ = scope_.rangeNm();
         return;
     }
@@ -11861,8 +11876,8 @@ void AppWindow::drawScopeMode() {
     // Outboard gauges. Both are fed by a real measurement and say which; the
     // left one has a reading only when the pipeline is running, and draws its
     // scale with no bar when it does not.
-    const bool running = engine_.pipeline_.running();
-    const double sigDb = engine_.pipeline_.signalPowerDb();
+    const bool running = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
+    const double sigDb = uiState_.signalDb;
     const bool haveSig = running && std::isfinite(sigDb);
     // -100..0 dBFS across the scale, which is the range the rest of this
     // application's meters already work in.
@@ -11887,8 +11902,9 @@ void AppWindow::drawScopeMode() {
     // tell which question from looking at it. The count of what is being heard,
     // and how high the traffic is, live on the HOME screen where they can be
     // labelled.
+    const std::vector<cascade::core::HostTrack>& tracks = hostTracks();
     std::size_t aircraft = 0;
-    for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& ht : tracks) {
         if (ht.t.kind == CASCADE_TRACK_AIRCRAFT) { ++aircraft; }
     }
 
@@ -11896,7 +11912,7 @@ void AppWindow::drawScopeMode() {
     bool haveAlt = false;
     const std::string& selId = scope_.selectedId();
     if (!selId.empty()) {
-        for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
+        for (const cascade::core::HostTrack& ht : tracks) {
             if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
             if (selId != ht.t.id) { continue; }
             if (std::isfinite(ht.t.altM)) {
@@ -11930,8 +11946,7 @@ void AppWindow::drawScopeMode() {
     ImGui::SetCursorScreenPos(ImVec2(innerL, instTop));
     scope_.setAircraftIconPx(aircraftIconPx_);
     scope_.setTrailWidthPx(mapTrailWidthPx_);
-    scope_.draw(innerR - innerL, instBot - instTop, engine_.pluginUi_.tracks(), &basemap_,
-                &trackInfo_);
+    scope_.draw(innerR - innerL, instBot - instTop, tracks, &basemap_, &trackInfo_);
 
     // --- the plinth ---------------------------------------------------------
     // THREE EQUAL BAYS, which is what the reference has and what the previous
@@ -12024,12 +12039,12 @@ void AppWindow::drawScopeMode() {
             int drumNm = scopeRangeNm_;
             const char* drumCap = tr("SET RANGE NM");
             const std::string& selId = scope_.selectedId();
-            if (!selId.empty() && engine_.rxSet_) {
-                for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
+            if (!selId.empty() && receiverPositionKnown()) {
+                for (const cascade::core::HostTrack& ht : tracks) {
                     if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
                     if (selId != ht.t.id) { continue; }
                     const cascade::gui::ScopePolar p = cascade::gui::scopeRelative(
-                        engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg);
+                        uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg);
                     if (std::isfinite(p.rangeNm)) {
                         drumNm = static_cast<int>(p.rangeNm + 0.5);
                         drumCap = tr("TGT RANGE NM");
@@ -12075,8 +12090,14 @@ void AppWindow::drawScopeMode() {
         // Neither is a knob that turns and does nothing.
         const float knobR = std::max(20.0f, 30.0f * scale);
         const ImVec2 knobC((kTL.x + kBR.x) * 0.5f, plinthMid + 8.0f * scale);
-        const bool haveGain = engine_.device_ != nullptr && !engine_.deviceGainNames_.empty();
-        const bool gainLive = haveGain && !engine_.deviceAgc_;
+        // FROM THE SESSION: a radio is open and lists a stage (the state's DEVICE_OPEN and GAINS' first entry, read
+        // above), and the radio's own AGC (the state's DEVICE_AGC) is what kills the knob. The stage's name, travel,
+        // unit and readback are the first GAINS entry's.
+        const bool deviceOpen = (uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u;
+        const bool agcOn = (uiState_.flags & FOXAPI_RX_DEVICE_AGC) != 0u;
+        const bool haveGain = deviceOpen && !radio.gains.empty();
+        const bool gainLive = haveGain && !agcOn;
+        const SourceListCache::Gain* const stage = haveGain ? &radio.gains[0] : nullptr;
 
         // WHAT THE KNOB'S TRAVEL ACTUALLY IS. The deck lettered every radio's
         // gain knob 0..60 dB, which is the number the Source sliders used to
@@ -12086,49 +12107,56 @@ void AppWindow::drawScopeMode() {
         // range for the FIRST stage - which is the one this knob drives - is
         // the travel now, with the old constants as the fallback for a driver
         // that reports no range.
-        float knobLoDb = kSoapyGainMinDb;
-        float knobHiDb = kSoapyGainMaxDb;
-        if (!engine_.deviceGainRanges_.empty() &&
-            engine_.deviceGainRanges_[0].maxDb > engine_.deviceGainRanges_[0].minDb) {
-            knobLoDb = static_cast<float>(engine_.deviceGainRanges_[0].minDb);
-            knobHiDb = static_cast<float>(engine_.deviceGainRanges_[0].maxDb);
+        const cascade::gui::ScopeKnobTravel travel = cascade::gui::scopeKnobTravel(
+            stage != nullptr ? stage->lo : 0.0f, stage != nullptr ? stage->hi : 0.0f, kSoapyGainMinDb,
+            kSoapyGainMaxDb);
+        const float knobLoDb = travel.loDb;
+        const float knobHiDb = travel.hiDb;
+        // THE FIGURE IT SHOWS AND TAKES ITS NEXT DETENT FROM: the readback, or the figure the last detent sent while
+        // the engine has not yet shown it (gui/scope_gain.hpp: a detent before the pass has published must add to
+        // the last one, not to the figure the pass has not yet replaced). The stage's name is part of the key, so a
+        // radio that is swapped for another does not inherit a figure.
+        const double nowS = ImGui::GetTime();
+        float gainDb = 0.0f;
+        if (stage != nullptr) {
+            gainDb = cascade::gui::scopeGainShown(scopeGainLocal_, stage->name, stage->db, nowS);
+        }
+        if (scopeGainLocal_.valid &&
+            (stage == nullptr ||
+             !cascade::gui::scopeGainLocalStands(scopeGainLocal_, stage->name, stage->db, nowS))) {
+            scopeGainLocal_.valid = false;
         }
         // The scale, in whole units of whatever the first stage is measured
         // in - decibels on every radio but the Airspy R2/Mini, whose five are
         // register steps - across the device's own travel.
         {
-            int ticks[5];
-            for (int i = 0; i < 5; ++i) {
-                ticks[i] = static_cast<int>(knobLoDb + (knobHiDb - knobLoDb) *
-                                                           static_cast<float>(i) / 4.0f);
-            }
-            int sel = -1;
-            if (gainLive) {
-                const float span = knobHiDb - knobLoDb;
-                if (span > 0.0f) {
-                    sel = static_cast<int>((engine_.deviceGainsDb_[0] - knobLoDb) / span * 4.0f + 0.5f);
-                    sel = std::clamp(sel, 0, 4);
-                }
-            }
-            cascade::gui::drawScopeKnobTicks(dl, knobC, knobR, ticks, 5, sel);
+            cascade::gui::scopeKnobTicks(knobLoDb, knobHiDb, scopeKnob_.ticks);
+            scopeKnob_.lit = cascade::gui::scopeKnobLitTick(gainDb, knobLoDb, knobHiDb, gainLive);
+            cascade::gui::drawScopeKnobTicks(dl, knobC, knobR, scopeKnob_.ticks,
+                                             cascade::gui::kScopeKnobTickCount, scopeKnob_.lit);
         }
 
         std::string gainTxt;
         if (!haveGain) {
             gainTxt = tr("N/A");
-        } else if (engine_.deviceAgc_) {
+        } else if (agcOn) {
             gainTxt = tr("AUTO");
         } else {
             // In the first stage's OWN unit: the knob over an Airspy reads
             // "7", the step it is on, not "7 dB" of nothing.
-            gainTxt = cascade::gui::formatGainValue(
-                              static_cast<double>(engine_.deviceGainsDb_[0]), engine_.firstGainUnit());
+            gainTxt = cascade::gui::formatGainValue(static_cast<double>(gainDb), stage->unit);
         }
         // Where the gain sits on its own travel, so the pointer shows it.
-        float gainFrac = 0.5f;
-        if (haveGain && knobHiDb > knobLoDb) {
-            gainFrac = (engine_.deviceGainsDb_[0] - knobLoDb) / (knobHiDb - knobLoDb);
-        }
+        const float gainFrac = cascade::gui::scopeKnobFraction(haveGain, gainDb, knobLoDb, knobHiDb);
+        // What the face is about to letter, kept for a test to read (the draw list holds no text a log can see).
+        scopeKnob_.drawn = true;
+        scopeKnob_.haveGain = haveGain;
+        scopeKnob_.live = gainLive;
+        scopeKnob_.loDb = knobLoDb;
+        scopeKnob_.hiDb = knobHiDb;
+        scopeKnob_.shownDb = gainDb;
+        scopeKnob_.fraction = gainFrac;
+        scopeKnob_.readout = gainTxt;
         const int gainSteps = cascade::gui::drawScopeKnob(dl, knobC, knobR, tr("GAIN"),
                                                           gainTxt.c_str(), gainLive, gainFrac);
         if (gainSteps != 0 && gainLive) {
@@ -12137,21 +12165,25 @@ void AppWindow::drawScopeMode() {
             // in one comfortable sweep. On a stage measured in steps it is two
             // steps a detent - the same arithmetic, in that stage's own unit,
             // which crosses an Airspy's 0..14 LNA in seven.
-            float db = engine_.deviceGainsDb_[0] + static_cast<float>(gainSteps) * 2.0f;
-            db = std::clamp(db, knobLoDb, knobHiDb);
-            if (db != engine_.deviceGainsDb_[0]) {
+            const float db = cascade::gui::scopeKnobNextDb(gainDb, gainSteps, knobLoDb, knobHiDb);
+            if (db != gainDb) {
                 // The knob keeps the figure it asked for, no readback - its
                 // own rule since it was drawn (APP_SET_GAIN_NO_READBACK).
-                engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK,
-                                                           engine_.deviceGainNames_[0], 0, 0,
-                                                           static_cast<double>(db)));
+                uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK, stage->name, 0, 0,
+                                                      static_cast<double>(db)));
+                // ...and the figure it asked for is the base of the next detent until the readback shows it.
+                scopeGainLocal_.valid = true;
+                scopeGainLocal_.stage = stage->name;
+                scopeGainLocal_.db = db;
+                scopeGainLocal_.sentAtS = nowS;
             }
         }
         // Which stage moved, or why nothing will.
         {
-            const char* note = !haveGain   ? tr("no device")
-                               : engine_.deviceAgc_ ? tr("auto gain is on")
-                                           : engine_.deviceGainNames_[0].c_str();
+            const char* note = !haveGain ? tr("no device")
+                               : agcOn   ? tr("auto gain is on")
+                                         : stage->name.c_str();
+            scopeKnob_.note = note;
             const ImVec2 nsz = ImGui::CalcTextSize(note);
             // BELOW THE READOUT, and measured off the same radius the readout
             // is, or the two land on each other - "30 dB" and "PGA" were
@@ -12177,7 +12209,7 @@ void AppWindow::drawScopeMode() {
         if (cascade::gui::drawScopePowerButton(dl, c, lampR, running)) {
             // The same RUN as the dome, recordings included: this used to be
             // a bare pipeline_.stop() that left a take open.
-            engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, running ? 0 : 1));
         }
         const char* lbl = tr("POWER");
         const ImVec2 lsz = ImGui::CalcTextSize(lbl);
@@ -17205,10 +17237,10 @@ static constexpr std::size_t kScopeFftSize = 2048;
 static constexpr std::size_t kScopeMpxFftSize = 8192;
 
 // Is there a multiplex to look at? Exactly one mode produces one, and this
-// is the only place that fact is written down in the interface.
-bool AppWindow::pipelineIsWfm() const {
-    return engine_.pipeline_.demodMode() == cascade::dsp::DemodMode::WFM;
-}
+// is the only place that fact is written down in the interface. (From the
+// session's state - window port group 12 - so it is the mode the last publish
+// carried: after a switch the fifth key appears or goes a pass late.)
+bool AppWindow::pipelineIsWfm() const { return uiState_.demodMode == FOXAPI_DEMOD_WFM; }
 
 // The saved position against today's mode. The SETTING is not rewritten - a
 // user who left the scope on the multiplex and tuned to an AM station is shown
@@ -17220,35 +17252,67 @@ cascade::gui::ScopeSignal AppWindow::scopeSignalNow() const {
         cascade::gui::scopeSignalFromIndex(demodScope_.signal), pipelineIsWfm());
 }
 
+// THE SCOPE'S TAPS ARE THE TABLE'S read_scope (window port group 12, API 0.3 section 8.11), read AT THE CALL: the
+// frames and each tap's `written` counter are the ring's own, never a publish old, and nothing here takes a lock the
+// DSP thread takes. What each call returns is an int32_t that is NEGATIVE on an error, and it is never allowed to
+// become a size_t before it has been tested.
 void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
     const cascade::gui::ScopeSignal sig = scopeSignalNow();
     const bool baseband = cascade::gui::scopeSignalIsBaseband(sig);
     const bool mpx = (sig == cascade::gui::ScopeSignal::Mpx);
 
-    feed.audioRateHz = cascade::core::Pipeline::kAudioRateHz;
-    feed.iqRateHz = engine_.pipeline_.channelRateHz();
+    // THE THREE TAPS' INFO, every frame whichever signal is selected: an info-only read (no buffer, no frames) of
+    // each - the tap's rate and its `written` counter (the liveness records below are fed from all three, as they
+    // always were), and for the two a sweep is taken from, the most a call returns (capacityFrames: the clamp the
+    // old code took from the ring itself). The structSize must be set, or the call is BAD_ARGUMENT.
+    FoxScopeInfo infoAudio{};
+    FoxScopeInfo infoIq{};
+    FoxScopeInfo infoMpx{};
+    const auto tapInfo = [this](std::uint32_t tap, FoxScopeInfo& info) {
+        info = FoxScopeInfo{};
+        info.structSize = sizeof(info);
+        return uiSession_ != nullptr ? engineApi_->read_scope(uiSession_, tap, &info, nullptr, 0)
+                                     : static_cast<std::int32_t>(FOXAPI_DETACHED);
+    };
+    const std::int32_t readAudio = tapInfo(FOXAPI_SCOPE_AUDIO, infoAudio);
+    const std::int32_t readIq = tapInfo(FOXAPI_SCOPE_IQ, infoIq);
+    const std::int32_t readMpx = tapInfo(FOXAPI_SCOPE_MPX, infoMpx);
+
+    // The audio tap's rate is the finished audio's (a constant of the pipeline, served as the tap's rateHz); the
+    // I/Q and multiplex taps' is the channel's, as the newest publish has it. A read that gave up (or an engine
+    // that does not say) leaves 0, and the state's own figure stands in: an unguarded 0 would make a sweep of 0
+    // samples and blank the face for a frame.
+    feed.audioRateHz = infoAudio.rateHz > 0.0 ? infoAudio.rateHz : uiState_.audioRateHz;
+    feed.iqRateHz = infoIq.rateHz > 0.0 ? infoIq.rateHz : uiState_.channelRateHz;
 
     // WHOSE SOUND IS IN THE TAP. Empty unless a plugin has taken the speakers
     // through CASCADE_CAP_AUDIO_OUT - the tap sits BELOW that handover (see
     // Pipeline::scopeAudio), so when one has, the trace really is the plugin's
-    // audio and the face says so on the glass.
-    scopeAudioFrom_ = engine_.pluginRunner_.playingPlugin();
+    // audio and the face says so on the glass. The state's own text, which the
+    // pass took under the one acquisition of the runner's lock it makes: the
+    // frame no longer asks the runner (the lock the DSP thread takes per block)
+    // or copies a name out of it.
+    scopeAudioFrom_ = uiState_.audioPlayingPlugin;
     feed.audioFrom = scopeAudioFrom_.empty() ? nullptr : scopeAudioFrom_.c_str();
 
     // LIVE MEANS "SAMPLES ARRIVED SINCE THE LAST FRAME", measured on the tap
     // this signal actually reads. A stopped receiver leaves the counter still
     // and the face draws the graticule and says so, rather than drawing a flat
-    // line at zero volts - which would be a measurement nobody made.
+    // line at zero volts - which would be a measurement nobody made. A tap
+    // whose read failed is a counter that did not move.
     const double nowS = ImGui::GetTime();
-    const bool audioLive =
-        cascade::gui::scopeTapLive(scopeAudioLive_, engine_.pipeline_.scopeAudio().written(), nowS);
-    const bool iqLive =
-        cascade::gui::scopeTapLive(scopeIqLive_, engine_.pipeline_.scopeIq().written(), nowS);
-    const bool mpxLive =
-        cascade::gui::scopeTapLive(scopeMpxLive_, engine_.pipeline_.scopeMpx().written(), nowS);
+    const bool audioLive = cascade::gui::scopeTapLive(
+        scopeAudioLive_, readAudio >= 0 ? infoAudio.written : scopeAudioLive_.lastSeen, nowS);
+    const bool iqLive = cascade::gui::scopeTapLive(
+        scopeIqLive_, readIq >= 0 ? infoIq.written : scopeIqLive_.lastSeen, nowS);
+    const bool mpxLive = cascade::gui::scopeTapLive(
+        scopeMpxLive_, readMpx >= 0 ? infoMpx.written : scopeMpxLive_.lastSeen, nowS);
     scopeLive_ = baseband ? iqLive : (mpx ? mpxLive : audioLive);
     feed.live = scopeLive_;
     if (!scopeLive_) { return; }
+
+    // What a data read gave, as a count: a negative answer is an error and no frames.
+    const auto framesOf = [](std::int32_t n) { return n > 0 ? static_cast<std::size_t>(n) : std::size_t{0}; };
 
     if (sig == cascade::gui::ScopeSignal::Spectrum || mpx) {
         // ONE TRANSFORM, TWO SIGNALS. The audio position looks at the finished
@@ -17279,9 +17343,11 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
             scopeFftWindow_ = cascade::dsp::makeWindow(cascade::dsp::WindowType::Hann, fftSize);
         }
         scopeAudioBuf_.resize(fftSize);
-        const std::size_t got =
-            mpx ? engine_.pipeline_.scopeMpx().snapshot(scopeAudioBuf_.data(), fftSize)
-                : engine_.pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), fftSize);
+        const std::size_t got = framesOf(uiSession_ != nullptr
+                                             ? engineApi_->read_scope(uiSession_, mpx ? FOXAPI_SCOPE_MPX : FOXAPI_SCOPE_AUDIO,
+                                                                      nullptr, scopeAudioBuf_.data(),
+                                                                      static_cast<std::uint32_t>(fftSize))
+                                             : 0);
         if (got < fftSize) { return; }
         scopeFftIn_.resize(fftSize);
         scopeFftOut_.resize(fftSize);
@@ -17326,11 +17392,13 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
     // ROOM FOR THE TRIGGER TO HUNT IN. One whole sweep of search, capped by
     // what the tap actually holds: a request longer than the ring would come
     // back short and the sweep would be drawn from whatever fitted, which is a
-    // time base that quietly stops meaning what the readout says.
-    const std::size_t cap =
-        baseband ? engine_.pipeline_.scopeIq().capacity() : engine_.pipeline_.scopeAudio().capacity();
+    // time base that quietly stops meaning what the readout says. What the tap
+    // holds is the table's capacityFrames (65536 audio frames, 262144 of I/Q on
+    // a LOCAL session, which this window's is); 0 - an engine that does not say
+    // - leaves the request as it is.
+    const std::size_t cap = static_cast<std::size_t>(baseband ? infoIq.capacityFrames : infoAudio.capacityFrames);
     std::size_t want = sweep * 2;
-    if (want > cap) { want = cap; }
+    if (cap != 0 && want > cap) { want = cap; }
     if (sweep > want) { sweep = want; }
     const std::size_t search = want - sweep;
     const float hyst = cascade::gui::scopeHysteresis(demodScope_.gainIndex);
@@ -17338,7 +17406,11 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
 
     if (!baseband) {
         scopeAudioBuf_.resize(want);
-        const std::size_t got = engine_.pipeline_.scopeAudio().snapshot(scopeAudioBuf_.data(), want);
+        const std::size_t got = framesOf(uiSession_ != nullptr
+                                             ? engineApi_->read_scope(uiSession_, FOXAPI_SCOPE_AUDIO, nullptr,
+                                                                      scopeAudioBuf_.data(),
+                                                                      static_cast<std::uint32_t>(want))
+                                             : 0);
         if (got < sweep) { return; }
         std::size_t start = got - sweep;  // free-running: the newest sweep
         if (search > 0) {
@@ -17351,8 +17423,14 @@ void AppWindow::gatherDemodScope(cascade::gui::DemodScopeFeed& feed) {
         return;
     }
 
+    // (The I/Q tap's frames are two floats each - an I and a Q - and `want` is a count of FRAMES: the buffer holds
+    // `want` complex values, which is the two floats a frame the table copies.)
     scopeIqBuf_.resize(want);
-    const std::size_t got = engine_.pipeline_.scopeIq().snapshot(scopeIqBuf_.data(), want);
+    const std::size_t got = framesOf(uiSession_ != nullptr
+                                         ? engineApi_->read_scope(uiSession_, FOXAPI_SCOPE_IQ, nullptr,
+                                                                  reinterpret_cast<float*>(scopeIqBuf_.data()),
+                                                                  static_cast<std::uint32_t>(want))
+                                         : 0);
     if (got < sweep) { return; }
     // Split into two parallel arrays: every reduction below wants a stride of
     // one, and the face is explicit that it allocates nothing of its own.

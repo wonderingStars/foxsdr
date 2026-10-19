@@ -146,10 +146,16 @@ const char* const kReadOnly[] = {
     "pipeline_.activeSource().sampleRateHz", "pipeline_.activeSource().faulted",
     "pipeline_.activeSourceName", "pipeline_.audio().everOpened", "pipeline_.audio().openedDeviceName",
     "pipeline_.audio().streamAlive", "pipeline_.audio().underruns", "pipeline_.audioMuted",
-    "pipeline_.autoNotchEngaged", "pipeline_.autoNotchFrequencyHz", "pipeline_.channelRateHz",
-    "pipeline_.converter", "pipeline_.demodMode",
+    "pipeline_.autoNotchEngaged", "pipeline_.autoNotchFrequencyHz",
+    "pipeline_.converter",
     "pipeline_.getLatestFrame", "pipeline_.inputRateHz", "pipeline_.pilotLevel", "pipeline_.pilotLocked",
-    "pipeline_.rdsSnapshot", "pipeline_.running", "pipeline_.signalPowerDb", "pipeline_.stereoActive",
+    "pipeline_.rdsSnapshot", "pipeline_.running", "pipeline_.stereoActive",
+    // (RETIRED with window port group 12, their last caller gone: pipeline_.signalPowerDb, channelRateHz and
+    // demodMode - the radar scope's SIG gauge reads the state's signalDb, the demod scope the state's
+    // channelRateHz (or the I/Q tap's rateHz) and demodMode - the nine pipeline_.scopeAudio / scopeIq / scopeMpx
+    // .capacity / .snapshot / .written entries - the demod scope reads the table's read_scope, whose info carries
+    // written, rateHz and capacityFrames - and pluginRunner_.playingPlugin and
+    // pluginUi_.trackPluginNames().empty - the scope reads the state's audioPlayingPlugin and the PLUGINS census.)
     // (RETIRED with window port group 8, its last caller gone: pipeline_.vfoOffsetHz - the preset keys read the
     // state's vfoOffsetHz - and pluginUi_.lastDeniedPlugin - the Receiver control rows read fact.plugin.lastDenied.)
     // (RETIRED with window port group 9, their last caller gone: pluginRunner_.isFeeding, pluginUi_.api().commands,
@@ -157,16 +163,13 @@ const char* const kReadOnly[] = {
     // MATCHED, ASKED_SETTINGS and SETTINGS_ALLOWED flags of PLUGINS and the PLUGIN_COMMANDS list.)
     "pipeline_.rawSource().centerFrequencyHz", "pipeline_.audioSamplesProduced",
     "pipeline_.audioTap",
-    "pipeline_.scopeAudio().capacity", "pipeline_.scopeAudio().snapshot", "pipeline_.scopeAudio().written",
-    "pipeline_.scopeIq().capacity", "pipeline_.scopeIq().snapshot", "pipeline_.scopeIq().written",
-    "pipeline_.scopeMpx().capacity", "pipeline_.scopeMpx().snapshot", "pipeline_.scopeMpx().written",
     "pluginHost_.plugins", "pluginHost_.loadedCount",
     "pluginRunner_.activeCount", "pluginRunner_.audioFramesFed", "pluginRunner_.audioGapFrames",
-    "pluginRunner_.audioGaps", "pluginRunner_.playingPlugin",
+    "pluginRunner_.audioGaps",
     "pluginRunner_.status", "pluginRunner_.iqFramesFed", "pluginRunner_.pollImages",
     "pluginUi_.instruments",
     "pluginUi_.panels", "pluginUi_.panels().size", "pluginUi_.paths", "pluginUi_.paths().size",
-    "pluginUi_.trackPluginNames", "pluginUi_.trackPluginNames().empty",
+    "pluginUi_.trackPluginNames",
     "pluginUi_.tracks", "pluginUi_.tracks().size",
     "pluginUi_.altitudeNear", "pluginUi_.tuneRequesters().size", "pluginUi_.poll",
     // (RETIRED with window port group 10, their last caller gone: pluginRepo_.progress - the store window's bar
@@ -1022,10 +1025,20 @@ const char* const kPortedMembers[] = {
     // the section's state are no longer read by the window at all (sourceIdForRow left the window: the bounded run's
     // seam asks the engine's own).
     "drawSourceSection", "radioNotOpenLit", "drawSoundCardControls", "soundCardReceivesText", "sourceLists",
+    // GROUP 12, the two scopes. The RADAR scope's bar, face, gauges, GAIN knob and POWER key (drawScopeMode), the
+    // rail's switch with its position block and its census line (drawScopeModeControl): from the state, the GAINS
+    // and PLUGINS caches and uiSubmit, the aircraft apart - they are the HOST PROCESS's (the plugin windows' own
+    // poll fills them from the frame), reached through the one accessor hostTracks(), which is NOT listed: it names
+    // engine_.pluginUi_ and is the radar scope's only reach into the engine. The DEMOD scope's gather
+    // (gatherDemodScope: the three taps through read_scope, the rate, the WFM gate and whose sound from the state),
+    // the WFM question and the page, the page's rail key and the signal the page is on - the last three had no
+    // engine read before and are listed so that none can grow one.
+    "drawScopeMode", "drawScopeModeControl", "gatherDemodScope", "pipelineIsWfm", "scopeSignalNow",
+    "drawDemodScopePage", "drawDemodScopeSection",
 };
 
-constexpr int kWindowFieldsReadBudget = 60;
-constexpr int kWindowFieldReadsBudget = 313;
+constexpr int kWindowFieldsReadBudget = 56;
+constexpr int kWindowFieldReadsBudget = 269;
 
 struct Report {
     int violations = 0;
@@ -1216,7 +1229,7 @@ int main(int argc, char** argv) {
                 r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
-    CHECK(r.submitsInDraw >= 13);  // (a sanity floor, not a ratchet: it is the count itself - 30 until group 11 ported the Source section's seventeen)
+    CHECK(r.submitsInDraw >= 11);  // (a sanity floor, not a ratchet: it is the count itself - 30 until group 11 ported the Source section's seventeen, 13 until group 12 ported the radar scope's two)
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);

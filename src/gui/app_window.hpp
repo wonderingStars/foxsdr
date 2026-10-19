@@ -66,6 +66,7 @@ struct GLFWwindow;
 #include "gui/section_reads.hpp"
 #include "gui/tuning_reads.hpp"
 #include "gui/decoder_reads.hpp"
+#include "gui/scope_gain.hpp"
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
@@ -877,7 +878,22 @@ private:
     // anything that can fail to have room. A mode with no exit is the
     // map-page latch again in a larger form: there, every reopen affordance
     // lived inside the window the user had just closed.
+    //
+    // FROM THE WINDOW'S ENGINE API SESSION ONLY (window port group 12, API 0.3 section 8.11), the aircraft apart:
+    // the receiver's position (the state's FOXAPI_RX_POSITION_SET, rxLatDeg and rxLonDeg), the SIG gauge and the
+    // POWER lamp (signalDb and FOXAPI_RX_RUNNING), the GAIN knob (the first GAINS entry through sourceLists(), the
+    // device-open and AGC flags, scopeGainLocal_ for the figure it has sent and the engine has not yet shown), the
+    // module census behind "the scope will be empty" (pluginLists()), and POWER and the knob's detents as
+    // FOXAPI_OP_RUN and FOXAPP_OP_SET_GAIN_NO_READBACK through uiSubmit. The aircraft are the HOST PROCESS's:
+    // the plugin windows' own poll fills them from the frame, as the plugin ABI says (hostTracks()).
     void drawScopeMode();
+    // The track source's output, the one thing the radar scope reads of the host process: what the loaded
+    // track-source modules published the last time drawPluginWindows polled them, in this frame. NOT ported and
+    // not meant to be (plugin_abi.h: a track source is polled from the GUI thread at frame rate), and the one
+    // place the radar scope names the engine: the guard counts it as a read and does not list it.
+    const std::vector<cascade::core::HostTrack>& hostTracks();
+    // Does the receiver have a position? The state's FOXAPI_RX_POSITION_SET (rxLatDeg and rxLonDeg are valid with it).
+    bool receiverPositionKnown() const { return (uiState_.flags & FOXAPI_RX_POSITION_SET) != 0u; }
     // The switch that turns it on, in the rail's "Turn on and off plugins"
     // section (its widget id is still ###decoders).
     void drawRadarSection();
@@ -2277,6 +2293,11 @@ private:
     // than a local because the face is handed a const char* into it and the
     // string has to outlive the call.
     std::string scopeAudioFrom_;
+    // The radar scope's gain knob: the figure its last detent sent and the engine's readback has not yet shown
+    // (gui/scope_gain.hpp: the next detent computes from it, so two detents before a pass publishes are two).
+    cascade::gui::ScopeGainLocal scopeGainLocal_;
+    // ...and what the knob last lettered (gui/scope_gain.hpp: ScopeKnobView), which a test reads.
+    cascade::gui::ScopeKnobView scopeKnob_;
 
     bool transmitPttHeld_ = false; // this frame's key request, rebuilt each frame
     bool transmitPageLive_ = false;  // page drawn with its controls THIS frame (not rolled up)

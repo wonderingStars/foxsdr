@@ -662,6 +662,9 @@ public:
     }
     void clearReceiver() { hasRx_ = false; }
     bool hasReceiver() const { return hasRx_; }
+    // Where the scope believes the antenna is (a test reads them: the window pushes the state's position in).
+    double receiverLatDeg() const { return rxLat_; }
+    double receiverLonDeg() const { return rxLon_; }
 
     // The scale, always a ladder value: setRangeNm snaps, so no path into this
     // class can install a range the renderer has no rings for.
