@@ -578,6 +578,14 @@ int _glfwInitWayland(void)
         _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_display_get_fd");
     _glfw.wl.client.display_prepare_read = (PFN_wl_display_prepare_read)
         _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_display_prepare_read");
+    _glfw.wl.client.display_create_queue = (PFN_wl_display_create_queue)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_display_create_queue");
+    _glfw.wl.client.display_prepare_read_queue = (PFN_wl_display_prepare_read_queue)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_display_prepare_read_queue");
+    _glfw.wl.client.display_dispatch_queue_pending = (PFN_wl_display_dispatch_queue_pending)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_display_dispatch_queue_pending");
+    _glfw.wl.client.event_queue_destroy = (PFN_wl_event_queue_destroy)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_event_queue_destroy");
     _glfw.wl.client.proxy_marshal = (PFN_wl_proxy_marshal)
         _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_proxy_marshal");
     _glfw.wl.client.proxy_add_listener = (PFN_wl_proxy_add_listener)
@@ -600,6 +608,12 @@ int _glfwInitWayland(void)
         _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_proxy_get_version");
     _glfw.wl.client.proxy_marshal_flags = (PFN_wl_proxy_marshal_flags)
         _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_proxy_marshal_flags");
+    _glfw.wl.client.proxy_create_wrapper = (PFN_wl_proxy_create_wrapper)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_proxy_create_wrapper");
+    _glfw.wl.client.proxy_wrapper_destroy = (PFN_wl_proxy_wrapper_destroy)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_proxy_wrapper_destroy");
+    _glfw.wl.client.proxy_set_queue = (PFN_wl_proxy_set_queue)
+        _glfwPlatformGetModuleSymbol(_glfw.wl.client.handle, "wl_proxy_set_queue");
 
     if (!_glfw.wl.client.display_flush ||
         !_glfw.wl.client.display_cancel_read ||
@@ -609,6 +623,10 @@ int _glfwInitWayland(void)
         !_glfw.wl.client.display_roundtrip ||
         !_glfw.wl.client.display_get_fd ||
         !_glfw.wl.client.display_prepare_read ||
+        !_glfw.wl.client.display_create_queue ||
+        !_glfw.wl.client.display_prepare_read_queue ||
+        !_glfw.wl.client.display_dispatch_queue_pending ||
+        !_glfw.wl.client.event_queue_destroy ||
         !_glfw.wl.client.proxy_marshal ||
         !_glfw.wl.client.proxy_add_listener ||
         !_glfw.wl.client.proxy_destroy ||
@@ -617,7 +635,10 @@ int _glfwInitWayland(void)
         !_glfw.wl.client.proxy_get_user_data ||
         !_glfw.wl.client.proxy_set_user_data ||
         !_glfw.wl.client.proxy_get_tag ||
-        !_glfw.wl.client.proxy_set_tag)
+        !_glfw.wl.client.proxy_set_tag ||
+        !_glfw.wl.client.proxy_create_wrapper ||
+        !_glfw.wl.client.proxy_wrapper_destroy ||
+        !_glfw.wl.client.proxy_set_queue)
     {
         _glfwInputError(GLFW_PLATFORM_ERROR,
                         "Wayland: Failed to load libwayland-client entry point");

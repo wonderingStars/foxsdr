@@ -291,6 +291,10 @@ void writeContextBlock(const Emit& e) {
     int len = 0;
     const char* block = diagContextRaw(len);
     e.raw(block, static_cast<std::size_t>(len));
+    // The window's last-known state and its age, rendered with no allocation and no
+    // formatting call (core/diag_report.hpp): the same line a freeze report carries.
+    char stateLine[192];
+    e.raw(stateLine, renderWindowStateLine(stateLine, sizeof(stateLine)));
 }
 
 void writeModules(const Emit& e) {

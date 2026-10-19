@@ -4923,3 +4923,62 @@ unwind and byte-identically to `crash_handler.cpp`'s, and
 `tests/test_diag_hang.cpp` asserts it against a report from a real stall. Since
 every fault this product has actually shipped was a hang rather than a crash,
 this was the readable half missing from the half that matters most.
+
+### A freeze or crash report carries the window's last-known state
+
+Field report 6A586D4DAD464BB8 (0.99.73, a Raspberry Pi 5, Linux
+6.18.50+rpt-rpi-2712, the signal generator, WFM): the GUI thread sat in the buffer
+swap for 142 s, 257 s and 70 s inside a 1255 s session and recovered each time
+(`frame: 142056 ms, 142054 ms in present`, then `gui thread recovered after a
+stall`). The system frames are unsymbolised, so the report could not say whether
+the graphics driver stalled or the window system had stopped scheduling a window
+nobody could see. **That is a hypothesis, not a finding.** What the report now
+carries is the fact that separates them:
+
+```
+window-state: visible, not minimised, focused, updated 142 s before this report
+window-system: wayland
+```
+
+- **Where.** In the context section, after the context block (`--- context ---`
+  to `--- modules ---`), in hang, stall *and* crash reports (`hang_watchdog.cpp`
+  both writers, `crash_handler.cpp`, `crash_handler_posix.cpp`). Not in the header,
+  so `hangReportFieldNames()` and `crashReportFieldNames()` are unchanged, and not
+  in the Copy diagnostics bundle (a bundle is not a stall). The context block itself
+  is rendered on the healthy path and cannot hold an *age*, which is the point of the
+  line, so the writers append it at report time.
+- **Who publishes.** The frame loop, once a frame, right after the event pump
+  (`AppWindow::run`): `publishWindowState(visible, iconified, focused)` from
+  `GLFW_VISIBLE`, `GLFW_ICONIFIED`, `GLFW_FOCUSED`. It is the only place the
+  attributes are read for this and the GUI thread the only reader; the watchdog
+  thread and the fault handlers read one `std::atomic<uint64_t>` that holds the
+  three flags and the monotonic millisecond they were published at, and call no
+  GLFW function. `setWindowSystem` publishes the platform GLFW chose once, at
+  start-up, because the log line that names it is the first line of the log and
+  rolls out of the 256-line ring in a long session.
+- **How to read it.** `updated N s before this report` is how long the frame loop
+  has been silent. A state that stopped updating exactly when the stall began is
+  expected (the thread is in the swap); what matters is what it said last. `hidden`
+  or `minimised` while in `present` is the window system not showing the window.
+  `unknown (the frame loop has not published one)` is a stall before the first frame.
+- **Recorded, never acted on.** Nothing suppresses or skips a report on this state,
+  and no decision in the watchdog reads it: a hide event delivered while the thread
+  was already blocked in the swap has not been seen by anyone, so the state can be
+  stale in exactly the case it is wanted for. (The existing `PresentGrace` pause for a
+  minimised window is a separate, older mechanism and is unchanged.)
+- **Limit on Wayland.** GLFW 3.4 cannot see occlusion there: `GLFW_ICONIFIED` is
+  always false (`_glfwWindowIconifiedWayland` returns false, xdg-shell has no query),
+  `GLFW_VISIBLE` is true from `glfwShowWindow` for the whole session, and only
+  `GLFW_FOCUSED` (keyboard focus) varies. On Wayland a hidden window can therefore read
+  `visible, not minimised, not focused`; `not focused` plus `window-system: wayland` plus
+  a long `present` is the signature to look for, not `hidden`. The swap itself is a
+  separate matter: the vendored GLFW is 3.4, whose Wayland EGL swap leaves the wait for
+  the compositor's frame callback to the EGL driver with no timeout; upstream GLFW 3.5.1
+  has a fix (commit `fdd14e65b1`, "Wayland: Fix EGL buffer swap blocking indefinitely")
+  that this tree does not.
+
+`tests/test_diag_window_state.cpp` pins the wording against an explicit clock and
+drives the real watchdog thread through a stall (visible, hidden, never published);
+`tests/test_crash_capture.cpp` asserts the line in reports written by real faults;
+`tests/test_diag_hang.cpp`'s real-application block asserts the line from the real
+frame loop (that block starts `cascade.exe`, which shows a window).

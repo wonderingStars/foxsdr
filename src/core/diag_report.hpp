@@ -256,6 +256,62 @@ std::string diagContextBlock();
 const char* diagContextRaw(int& lenOut);
 
 // ---------------------------------------------------------------------------
+// The window's state, as the GUI thread last saw it
+// ---------------------------------------------------------------------------
+//
+// WHY. Field report 6A586D4DAD464BB8 (0.99.73, a Raspberry Pi 5): the GUI thread
+// sat in the buffer swap for 142 s, 257 s and 70 s, and recovered each time.
+// "In present for minutes" has two very different readings - the graphics driver
+// stalled, or the window system simply stopped scheduling a window nobody could
+// see (occluded, minimised, another workspace, the display asleep; on Wayland a
+// compositor sends a hidden window no frame callbacks, and a swap paced by them
+// blocks until it is shown again) - and nothing in the report could tell them
+// apart. This is the missing fact.
+//
+// THE GUI THREAD PUBLISHES, the report writers read. GLFW is not thread-safe and
+// is never called from anywhere but the GUI thread: the frame loop reads the
+// window's attributes and hands over three booleans, and everything on the
+// reading side is one atomic load. The flags and the monotonic time they were
+// published at live in ONE 64-bit atomic, so a reader never pairs one frame's
+// flags with another frame's time.
+//
+// RECORDED, NEVER ACTED ON. Nothing suppresses or skips a report on this state:
+// it is as old as the last frame that ran, and a hide event the window system
+// delivered while the thread was already blocked in the swap has not been seen
+// by anyone. A state that stopped updating exactly when the stall began is itself
+// the signal, which is why its age is part of the line.
+//
+// Called from the frame loop, once per frame; one atomic store.
+void publishWindowState(bool visible, bool iconified, bool focused);
+
+// Which window system GLFW chose ("wayland", "x11", "win32", ...), published once
+// at start-up by the GUI thread. `name` must have static storage duration (a string
+// literal): the pointer is kept, not copied.
+void setWindowSystem(const char* name);
+
+// The report line: "window-state: visible, not minimised, focused, updated 142 s
+// before this report\n"; or "window-state: unknown (the frame loop has not
+// published one)\n" before the first frame. When setWindowSystem has been called a
+// second line, "window-system: wayland\n", follows it: a freeze that sat in the swap
+// means one thing on Wayland (the compositor sends no frame callbacks to a window it
+// is not showing) and another elsewhere, and the log line that names the platform is
+// the FIRST line of the log - gone from the 256-line ring a long session carries.
+// Written into `out` (at most `cap`
+// bytes including the NUL; truncated, never overrun) and its length returned.
+// ASYNC-SIGNAL-SAFE: no allocation, no snprintf, no lock - the crash handlers
+// call it from a fault filter and the hang writer from its own thread, through
+// the one function, so every report spells it the same way.
+std::size_t renderWindowStateLine(char* out, std::size_t cap);
+
+// The same, against an explicit clock reading (windowStateClockMs() units), so a
+// test can pin the wording for an age without waiting for it.
+std::size_t renderWindowStateLineAt(char* out, std::size_t cap, std::int64_t nowMs);
+std::int64_t windowStateClockMs();
+
+// Forgets the published state. Tests only: the state is process-wide.
+void resetWindowStateForTest();
+
+// ---------------------------------------------------------------------------
 // Grouping
 // ---------------------------------------------------------------------------
 //

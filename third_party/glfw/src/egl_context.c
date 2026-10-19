@@ -250,6 +250,12 @@ static void makeContextCurrentEGL(_GLFWwindow* window)
                             getEGLErrorString(eglGetError()));
             return;
         }
+
+#if defined(_GLFW_WAYLAND)
+        // NOTE: Disable EGL vsync so we can substitute our own that includes a timeout
+        if (_glfw.platform.platformID == GLFW_PLATFORM_WAYLAND)
+            eglSwapInterval(_glfw.egl.display, 0);
+#endif // _GLFW_WAYLAND
     }
     else
     {
@@ -283,6 +289,15 @@ static void swapBuffersEGL(_GLFWwindow* window)
         // NOTE: Swapping buffers on a hidden window on Wayland makes it visible
         if (!window->wl.visible)
             return;
+
+        // NOTE: We wait for a frame manually so we can add a timeout,
+        //       as the EGL implementation will wait indefinitely
+        if (window->wl.egl.interval > 0)
+        {
+            window->context.Flush();
+            if (!_glfwWaitForEGLFrameWayland(window))
+                return;
+        }
     }
 #endif
 
@@ -291,6 +306,16 @@ static void swapBuffersEGL(_GLFWwindow* window)
 
 static void swapIntervalEGL(int interval)
 {
+#if defined(_GLFW_WAYLAND)
+    if (_glfw.platform.platformID == GLFW_PLATFORM_WAYLAND)
+    {
+        _GLFWwindow* window = _glfwPlatformGetTls(&_glfw.contextSlot);
+        assert(window != NULL);
+        window->wl.egl.interval = interval;
+        return;
+    }
+#endif
+
     eglSwapInterval(_glfw.egl.display, interval);
 }
 

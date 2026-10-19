@@ -197,6 +197,10 @@ int faultChild(int kind, const std::string& dir, bool enabled) {
     ctx.sdrModel = "uhd b200";
     ctx.plugins.push_back("ADS-B 1.1.0");
     setDiagContext(ctx);
+    // What the frame loop publishes each frame (core/diag_report.hpp): a crash report
+    // carries the window's last-known state beside the context, as a freeze report does.
+    publishWindowState(false, true, false);
+    setWindowSystem("wayland");
     refreshModuleTable();
 
     CrashHandlerConfig cfg;
@@ -286,6 +290,17 @@ void checkReportContent(const CaughtReport& r, const char* what) {
     CHECK(r.text.find("plugin: ADS-B 1.1.0") != std::string::npos);
     CHECK(r.text.find("mode: WFM") != std::string::npos);
     CHECK(r.text.find("sdr-model: uhd b200") != std::string::npos);
+    // The window's last-known state, rendered on the fault path with no allocation, in the
+    // context section: hidden, minimised, unfocused, as the child published it.
+    {
+        const std::size_t ws =
+            r.text.find("\nwindow-state: hidden, minimised, not focused, updated ");
+        CHECK(ws != std::string::npos);
+        CHECK(ws > r.text.find("--- context ---"));
+        CHECK(ws < r.text.find("--- modules ---"));
+        CHECK(r.text.find(" s before this report\nwindow-system: wayland\n", ws) !=
+              std::string::npos);
+    }
 
     // The ring, flushed WITH the report, and the LAST lines of it: the state
     // leading up to a fault is usually what identifies it.

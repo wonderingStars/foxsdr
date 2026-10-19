@@ -2108,6 +2108,18 @@ static const struct xdg_activation_token_v1_listener xdgActivationListener =
     xdgActivationHandleDone
 };
 
+static void callbackHandleFrame(void* userData, struct wl_callback* callback, uint32_t data)
+{
+    _GLFWwindow* window = userData;
+    wl_callback_destroy(callback);
+    window->wl.egl.callback = NULL;
+}
+
+static const struct wl_callback_listener frameCallbackListener =
+{
+    callbackHandleFrame
+};
+
 void _glfwAddSeatListenerWayland(struct wl_seat* seat)
 {
     wl_seat_add_listener(seat, &seatListener, NULL);
@@ -2118,6 +2130,42 @@ void _glfwAddDataDeviceListenerWayland(struct wl_data_device* device)
     wl_data_device_add_listener(device, &dataDeviceListener, NULL);
 }
 
+GLFWbool _glfwWaitForEGLFrameWayland(_GLFWwindow* window)
+{
+    double timeout = 0.02;
+
+    while (window->wl.egl.callback)
+    {
+        if (wl_display_prepare_read_queue(_glfw.wl.display, window->wl.egl.queue) != 0)
+        {
+            wl_display_dispatch_queue_pending(_glfw.wl.display, window->wl.egl.queue);
+            continue;
+        }
+
+        if (!flushDisplay())
+        {
+            wl_display_cancel_read(_glfw.wl.display);
+            return GLFW_FALSE;
+        }
+
+        struct pollfd fd = { wl_display_get_fd(_glfw.wl.display), POLLIN };
+
+        if (!_glfwPollPOSIX(&fd, 1, &timeout))
+        {
+            wl_display_cancel_read(_glfw.wl.display);
+            return GLFW_FALSE;
+        }
+
+        wl_display_read_events(_glfw.wl.display);
+        wl_display_dispatch_queue_pending(_glfw.wl.display, window->wl.egl.queue);
+    }
+
+    window->wl.egl.callback = wl_surface_frame(window->wl.egl.wrapper);
+    wl_callback_add_listener(window->wl.egl.callback, &frameCallbackListener, window);
+
+    // If the window is hidden when the wait is over then don't swap
+    return window->wl.visible;
+}
 
 //////////////////////////////////////////////////////////////////////////
 //////                       GLFW platform API                      //////
@@ -2145,6 +2193,27 @@ GLFWbool _glfwCreateWindowWayland(_GLFWwindow* window,
                                 "Wayland: Failed to create EGL window");
                 return GLFW_FALSE;
             }
+
+            window->wl.egl.queue = wl_display_create_queue(_glfw.wl.display);
+            if (!window->wl.egl.queue)
+            {
+                _glfwInputError(GLFW_PLATFORM_ERROR,
+                                "Wayland: Failed to create EGL frame queue");
+                return GLFW_FALSE;
+            }
+
+            window->wl.egl.wrapper = wl_proxy_create_wrapper(window->wl.surface);
+            if (!window->wl.egl.wrapper)
+            {
+                _glfwInputError(GLFW_PLATFORM_ERROR,
+                                "Wayland: Failed to create surface wrapper");
+                return GLFW_FALSE;
+            }
+
+            wl_proxy_set_queue((struct wl_proxy*) window->wl.egl.wrapper,
+                               window->wl.egl.queue);
+
+            window->wl.egl.interval = 1;
 
             if (!_glfwInitEGL())
                 return GLFW_FALSE;
@@ -2205,6 +2274,15 @@ void _glfwDestroyWindowWayland(_GLFWwindow* window)
 
     if (window->wl.fallback.buffer)
         wl_buffer_destroy(window->wl.fallback.buffer);
+
+    if (window->wl.egl.callback)
+        wl_callback_destroy(window->wl.egl.callback);
+
+    if (window->wl.egl.wrapper)
+        wl_proxy_wrapper_destroy(window->wl.egl.wrapper);
+
+    if (window->wl.egl.queue)
+        wl_event_queue_destroy(window->wl.egl.queue);
 
     if (window->wl.egl.window)
         wl_egl_window_destroy(window->wl.egl.window);

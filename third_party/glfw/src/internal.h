@@ -107,6 +107,7 @@ typedef void (APIENTRY * PFNGLCLEARPROC)(GLbitfield);
 typedef const GLubyte* (APIENTRY * PFNGLGETSTRINGPROC)(GLenum);
 typedef void (APIENTRY * PFNGLGETINTEGERVPROC)(GLenum,GLint*);
 typedef const GLubyte* (APIENTRY * PFNGLGETSTRINGIPROC)(GLenum,GLuint);
+typedef void (APIENTRY * PFNGLFLUSHPROC)(void);
 
 #define EGL_SUCCESS 0x3000
 #define EGL_NOT_INITIALIZED 0x3001
@@ -490,6 +491,7 @@ struct _GLFWcontext
     PFNGLGETSTRINGIPROC  GetStringi;
     PFNGLGETINTEGERVPROC GetIntegerv;
     PFNGLGETSTRINGPROC   GetString;
+    PFNGLFLUSHPROC       Flush;
 
     void (*makeCurrent)(_GLFWwindow*);
     void (*swapBuffers)(_GLFWwindow*);

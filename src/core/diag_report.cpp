@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -776,6 +777,102 @@ const char* diagContextRaw(int& lenOut) {
     lenOut = g_contextLen.load(std::memory_order_acquire);
     if (lenOut < 0) { lenOut = 0; }
     return g_context;
+}
+
+namespace {
+
+// ONE atomic: bit 0 "something was published", bits 1-3 the three flags, bits 4-63
+// the monotonic millisecond clock at the time. Zero is "never published". A single
+// word is what makes the flags and their age one consistent reading.
+constexpr std::uint64_t kWinPublished = 1u << 0;
+constexpr std::uint64_t kWinVisible = 1u << 1;
+constexpr std::uint64_t kWinIconified = 1u << 2;
+constexpr std::uint64_t kWinFocused = 1u << 3;
+constexpr unsigned kWinClockShift = 4;
+std::atomic<std::uint64_t> g_windowState{0};
+// A string literal supplied by the GUI thread (setWindowSystem); never freed.
+std::atomic<const char*> g_windowSystem{nullptr};
+
+// Bounded appenders for the signal-safe renderer: strings and unsigned decimals,
+// truncating rather than overrunning. No snprintf (a locale lock is a lock).
+void putStr(char* out, std::size_t cap, std::size_t& at, const char* s) {
+    for (std::size_t i = 0; s[i] != '\0' && at + 1 < cap; ++i) { out[at++] = s[i]; }
+}
+
+void putDec(char* out, std::size_t cap, std::size_t& at, std::uint64_t v) {
+    char tmp[24];
+    int n = 0;
+    do {
+        tmp[n++] = static_cast<char>('0' + (v % 10u));
+        v /= 10u;
+    } while (v != 0 && n < static_cast<int>(sizeof(tmp)));
+    while (n > 0 && at + 1 < cap) { out[at++] = tmp[--n]; }
+}
+
+}  // namespace
+
+std::int64_t windowStateClockMs() {
+    // steady_clock is QueryPerformanceCounter / clock_gettime(CLOCK_MONOTONIC):
+    // neither allocates or locks, which is what lets a fault filter call this.
+    return static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+void publishWindowState(bool visible, bool iconified, bool focused) {
+    std::uint64_t v = kWinPublished;
+    if (visible) { v |= kWinVisible; }
+    if (iconified) { v |= kWinIconified; }
+    if (focused) { v |= kWinFocused; }
+    v |= static_cast<std::uint64_t>(windowStateClockMs()) << kWinClockShift;
+    g_windowState.store(v, std::memory_order_release);
+}
+
+void setWindowSystem(const char* name) { g_windowSystem.store(name, std::memory_order_release); }
+
+void resetWindowStateForTest() {
+    g_windowState.store(0, std::memory_order_release);
+    g_windowSystem.store(nullptr, std::memory_order_release);
+}
+
+std::size_t renderWindowStateLineAt(char* out, std::size_t cap, std::int64_t nowMs) {
+    if (out == nullptr || cap == 0) { return 0; }
+    std::size_t at = 0;
+    putStr(out, cap, at, "window-state: ");
+    const std::uint64_t v = g_windowState.load(std::memory_order_acquire);
+    if ((v & kWinPublished) == 0) {
+        putStr(out, cap, at, "unknown (the frame loop has not published one)\n");
+    } else {
+        putStr(out, cap, at, (v & kWinVisible) != 0 ? "visible" : "hidden");
+        putStr(out, cap, at, (v & kWinIconified) != 0 ? ", minimised" : ", not minimised");
+        putStr(out, cap, at, (v & kWinFocused) != 0 ? ", focused" : ", not focused");
+        const std::int64_t then = static_cast<std::int64_t>(v >> kWinClockShift);
+        const std::int64_t ageMs = nowMs > then ? nowMs - then : 0;
+        putStr(out, cap, at, ", updated ");
+        putDec(out, cap, at, static_cast<std::uint64_t>(ageMs / 1000));
+        putStr(out, cap, at, " s before this report\n");
+    }
+    // Which window system the frame is presented through, when the GUI thread said.
+    // Only plain lower-case letters and digits are copied, at most sixteen: a pointer
+    // to anything else cannot put text in a report.
+    if (const char* sys = g_windowSystem.load(std::memory_order_acquire)) {
+        putStr(out, cap, at, "window-system: ");
+        int kept = 0;
+        for (; sys[kept] != '\0' && kept < 16; ++kept) {
+            const char c = sys[kept];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) { break; }
+            if (at + 1 < cap) { out[at++] = c; }
+        }
+        if (kept == 0) { putStr(out, cap, at, "unknown"); }
+        putStr(out, cap, at, "\n");
+    }
+    out[at] = '\0';
+    return at;
+}
+
+std::size_t renderWindowStateLine(char* out, std::size_t cap) {
+    return renderWindowStateLineAt(out, cap, windowStateClockMs());
 }
 
 void crashSignatureRaw(unsigned long code, const char* moduleName, std::uintptr_t offset,

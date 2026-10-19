@@ -1495,6 +1495,10 @@ int AppWindow::run(int frames) {
     }
     cascade::core::diagLogf("window: GLFW initialised; platform chosen: %s",
                             cascade::gui::windowplatform::platformName(glfwGetPlatform()));
+    // The same word, for the report writers (a literal: the pointer is kept). The log line
+    // above is the first of the session and rolls out of the 256-line ring; a freeze in the
+    // swap reads differently on Wayland, so the report carries it beside `window-state`.
+    cascade::core::setWindowSystem(cascade::gui::windowplatform::platformName(glfwGetPlatform()));
 
     const std::string title =
         std::string(cascade::appName()) + " " + cascade::versionString();
@@ -2170,9 +2174,18 @@ int AppWindow::run(int frames) {
             // is false while the window is still being built (it is created
             // hidden on purpose, see above) and true for the whole session
             // afterwards; GLFW_ICONIFIED is the minimise.
-            const bool hidden = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0 ||
-                                glfwGetWindowAttrib(window, GLFW_VISIBLE) == 0 ||
-                                frameSituations.hiddenAt(rendered);
+            const bool iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0;
+            const bool visible = glfwGetWindowAttrib(window, GLFW_VISIBLE) != 0;
+            // THE WINDOW'S STATE, HANDED TO THE REPORT WRITERS (core/diag_report.hpp). This
+            // is the only place the attributes are read for that purpose, and the GUI thread
+            // the only one that reads them: GLFW is not thread-safe, so the hang watchdog
+            // and the fault handlers see three booleans and a time, never the window. A
+            // freeze report then says whether the frame that stopped was one nobody could
+            // see (field report 6A586D4DAD464BB8: minutes inside the swap, then recovered).
+            // Recorded, never acted on: it is exactly as old as this frame.
+            cascade::core::publishWindowState(visible, iconified,
+                                              glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0);
+            const bool hidden = iconified || !visible || frameSituations.hiddenAt(rendered);
             presentGrace.update(glfwGetTime(), displayChanged, hidden);
             // THE FRAMES THIS APPLICATION IS NOT EXPECTED TO PRESENT ARE NOT
             // SLOW FRAMES: the window is not being shown, or a display change is

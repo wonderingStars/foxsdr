@@ -1,6 +1,6 @@
 # FoxSDR patches to the vendored GLFW
 
-GLFW is vendored at tag 3.4 (`third_party/THIRD_PARTY.md`) with the one change
+GLFW is vendored at tag 3.4 (`third_party/THIRD_PARTY.md`) with the two changes
 listed here. It is fenced in the source by `FOXSDR PATCH` comments naming it,
 so `grep -rn "FOXSDR PATCH" third_party/glfw/src` finds every changed line.
 Anything not fenced is upstream 3.4, byte for byte (apart from line endings,
@@ -92,3 +92,64 @@ desktop), and it runs on every platform. It goes red against plain 3.4.
    fence checks are the only lines that would then have to go).
 3. Otherwise re-apply the two hunks from this file's description, in the same
    places, and run `test_glfw_wayland_terminate`.
+
+## wayland-swap-timeout - a hidden Wayland window must not block in eglSwapBuffers
+
+**Files:** `src/egl_context.c` (makeContextCurrentEGL, swapBuffersEGL,
+swapIntervalEGL), `src/wl_window.c` (the manual frame-callback wait,
+`_glfwWaitForEGLFrameWayland`), `src/wl_init.c` (seven new libwayland symbols:
+`wl_display_create_queue`, `wl_display_prepare_read_queue`,
+`wl_display_dispatch_queue_pending`, `wl_event_queue_destroy`,
+`wl_proxy_create_wrapper`, `wl_proxy_wrapper_destroy`, `wl_proxy_set_queue`),
+`src/wl_platform.h` (their typedefs, the `wl.egl` state and the wait's
+declaration), and - compiled on every platform - `src/context.c` and
+`src/internal.h` (a `glFlush` entry point beside GetString/GetIntegerv) and a
+documentation paragraph in `include/GLFW/glfw3.h`. All behaviour change is
+inside `#if defined(_GLFW_WAYLAND)` plus a runtime
+`platformID == GLFW_PLATFORM_WAYLAND` check; Windows, macOS and X11 run the
+3.4 code path unchanged (the only all-platform change is that `glFlush` is
+looked up alongside the other entry points, and `glFlush` is OpenGL 1.0).
+
+**This is upstream's fix, not ours.** glfw/glfw commits
+`fdd14e65b1` (2026-03-06, "Wayland: Fix EGL buffer swap blocking
+indefinitely") and its follow-up `50b0a135a5` (2026-03-13, fixing a deadlock
+the first commit introduced). Both are ancestors of GLFW 3.5.1 (tagged
+2026-07-31), so a vendor upgrade to 3.5.1 or later drops this entire entry.
+Applied with `git apply` from the upstream patches; every source hunk applied
+with context offsets only, and the CONTRIBUTORS/README changelog hunks were
+deliberately excluded.
+
+**Why.** Hang signature `6A586D4DAD464BB8` (five reports by 2026-10-19: FoxSDR
+0.99.73 on a Raspberry Pi 5 and 0.99.81 on Kali x64, both Wayland-era
+desktops): the GUI thread sat 52-257 s inside the buffer swap ("the frame was
+in present"), then recovered, repeatedly - 37% of one 1255 s session. In GLFW
+3.4 on Wayland, with a nonzero swap interval, `eglSwapBuffers` waits inside
+the EGL driver for the compositor's frame callback, and a compositor sends no
+frame callbacks to a window it is not showing (minimised, on another
+workspace, display asleep), so the wait is unbounded. Upstream's words for it:
+EGL "would wait indefinitely for a frame callback on a suspended window,
+causing applications that call eglSwapBuffers to halt" (fixes upstream #2582,
+#2640, #2719, #2723, #2800, #2827).
+
+**What it changes.** On Wayland only: EGL's own vsync is disabled
+(`eglSwapInterval(0)`), the application's requested interval is kept in
+`window->wl.egl.interval`, and `swapBuffersEGL` waits for the frame callback
+itself - on a private event queue, with a 20 ms timeout. On timeout, or for a
+hidden window, the swap is skipped and the frame loop keeps running (about
+50 Hz while the compositor withholds callbacks) instead of blocking for
+minutes. Visible windows pace off the frame callback exactly as before.
+
+**Not verified here.** Applied on a Windows machine: the Wayland sources are
+not compiled off Linux (`src/CMakeLists.txt` adds `wl_*.c` only under
+`GLFW_BUILD_WAYLAND`), so the Wayland half is UNCOMPILED until Linux CI runs.
+What CI must confirm: the Wayland build compiles, the seven new symbols
+resolve against libwayland-client at runtime, and X11 behaviour is unchanged.
+The all-platform half (context.c, internal.h, egl_context.c) was rebuilt and
+the diagnostics tests re-run green on Windows the day it was applied. The
+field stall itself was not reproduced; the match is upstream's issue
+descriptions, which name the same symptom, mechanism and recovery.
+
+**Expected report-level effect.** Builds carrying this patch should stop
+producing `6A586D4DAD464BB8`-shaped freeze reports from hidden Wayland
+windows; the new `window-state:`/`window-system:` context lines (added in the
+same change set) identify any stall that remains.

@@ -736,6 +736,17 @@ none of them adds a field, and all are governed by the same switch in
 | `threads` | `9` | How many stacks follow. |
 | `frame-scope` | `rail` | Since 0.99.64. Which part of drawing the window was under way when it stopped, as one word from a fixed list of nineteen: `events`, `frame-start`, `pre-draw`, `plugin-panels`, `toolbar`, `rail`, `spectrum`, `patch`, `status`, `dialogs`, `polls`, `saves`, `render`, `present`, `recorder`, `plugins-reload`, `startup`, `user-wait`, `other`. It names a part of the program, never a plugin, a file, a radio or a frequency. |
 
+Both kinds of report also end their application-context lines with two more, after
+the plugin list, so a stall in drawing the window can be told from one in the window
+system: `window-state: visible, not minimised, focused, updated 142 s before this
+report` and `window-system: wayland`. The first is three yes/no facts about FoxSDR's
+own window (shown or hidden, minimised, has keyboard focus) as the program last saw
+them, and how many whole seconds ago that was; the second is which window system the
+program is running under, one of `wayland`, `x11`, `win32`, `cocoa`, `null` or
+`unknown`. Nothing about what is on screen, where the window is, which other programs
+are running, or what you are listening to. They are not part of what a report sends:
+the upload reads only the fields listed under it.
+
 After that header both add the call stacks — every thread for a freeze, the
 faulting one for a crash — and the list of loaded modules with their build
 identifiers. Those are addresses inside program code and identifiers of

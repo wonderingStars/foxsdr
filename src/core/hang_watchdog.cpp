@@ -1092,6 +1092,17 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
     out << "--- context ---\n";
     out << diagContextBlock();
+    // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
+    // hidden, minimised, focused, and how long ago the frame loop last said so.
+    // "In present for minutes" is the window system not scheduling a window nobody
+    // can see, or a driver that stalled, and this line is what tells them apart.
+    // Read from atomics the GUI thread published - nothing here calls GLFW - and
+    // RECORDED ONLY: no decision in this file reads it (see publishWindowState).
+    {
+        char stateLine[192];
+        const std::size_t n = renderWindowStateLine(stateLine, sizeof(stateLine));
+        out.write(stateLine, static_cast<std::streamsize>(n));
+    }
 
     // THE MODULE TABLE, and it was missing - which made every freeze report
     // this product writes permanently unreadable.
@@ -1270,6 +1281,17 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
     out << "--- context ---\n";
     out << diagContextBlock();
+    // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
+    // hidden, minimised, focused, and how long ago the frame loop last said so.
+    // "In present for minutes" is the window system not scheduling a window nobody
+    // can see, or a driver that stalled, and this line is what tells them apart.
+    // Read from atomics the GUI thread published - nothing here calls GLFW - and
+    // RECORDED ONLY: no decision in this file reads it (see publishWindowState).
+    {
+        char stateLine[192];
+        const std::size_t n = renderWindowStateLine(stateLine, sizeof(stateLine));
+        out.write(stateLine, static_cast<std::streamsize>(n));
+    }
 
     // Same layout as crash_handler_posix.cpp and the Windows writer above, so
     // one parser (crash_upload.cpp's parseReportText) reads all three.

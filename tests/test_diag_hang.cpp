@@ -595,6 +595,15 @@ int main() {
         CHECK(sample.find("mode: ") != std::string::npos);
         CHECK(sample.find("source: ") != std::string::npos);
         CHECK(sample.find("commit: ") != std::string::npos);
+        // ...and so did the window's state, published by the REAL frame loop: this run
+        // rendered 60 frames before it wedged, so the line names a state rather than
+        // `unknown`, and its age is the wedge (tests/test_diag_window_state.cpp holds the
+        // wording against a watchdog on its own).
+        {
+            const std::size_t ws = sample.find("\nwindow-state: ");
+            CHECK(ws != std::string::npos);
+            CHECK(sample.compare(ws + 1, 20, "window-state: unknow") != 0);
+        }
 
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }
