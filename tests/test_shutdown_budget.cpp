@@ -671,6 +671,13 @@ const KnownWait kKnownWaits[] = {
      "SdrPlaySource::read()'s wait for the service's callback to fill the ring, spent on the "
      "pipeline's source thread, which the teardown already waits for through kSourceJoinWait's "
      "3000 ms - never on the GUI teardown thread"},
+    {"src/source/sdrplay_source.cpp", "kSessionPeekWait", 0,
+     "the bounded peek enumerateSdrPlayWith grants a session-mutex holder that is merely slow "
+     "(a healthy Open mid-flight) before giving the scan up with the control-pending sentence - "
+     "a 1 ms try_lock poll, never a blocking lock, added when the 0.99.81 scanNative freeze "
+     "showed a wedged vendor Open parking that mutex for good. Spent only on the enumeration "
+     "path (a scan from the GUI or its worker); nothing on the teardown path enumerates, so the "
+     "shutdown never spends it"},
     {"src/source/sdrplay_source.hpp", "kControlWait", 0,
      "how long a live control waits for sdrplay_api_Update ITSELF before ABANDONING the worker "
      "it ran the call on (the 0.96.2 hang report, bounded in 0.96.3). Spent on the GUI thread by "
