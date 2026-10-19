@@ -41,9 +41,16 @@
 //      is not the one installed - every pass's fingerprint, an unchanged pass and the publish allocate
 //      nothing; each of those moves the fingerprint, a plugin that repeats a warning does not, and the
 //      block's rebuild is counted
+//   F4 the plugin store (API 0.3 8.9): with a catalogue of 24 entries (descriptions of 528 to 3 KB), a retired row,
+//      a transfer in flight and an ADD ALL run, every pass's fingerprint, an unchanged pass and the publish allocate
+//      nothing, and so do 1000 reads of STORE_ACTIVITY while the transfer's progress moves (it is read live, and
+//      moves nothing); each input the store adds moves the fingerprint ALONE (the catalogue's counter, the index,
+//      the busy name with the flag held, the run's five fields, a retired row's id and sentence, the two status
+//      lines) and the block's rebuild is counted, once for the change
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
+#include <future>
 #include <cstdio>
 #include <fstream>
 #include <cstdlib>
@@ -199,6 +206,41 @@ struct AppWindowTestAccess {
     // A rescan, as the fingerprint counts it (the files' sizes and everything else a rescan changes are hashed
     // through this one value; a real rescan also rewrites the runner's rows, so only this isolates it).
     static void countScan(cascade::engine::Engine& e) { ++e.pluginScans_; }
+    // The plugin store's inputs (API 0.3 8.9), each reachable alone. A catalogue as a fetch's worker leaves it, landed
+    // by the engine's own poll (which also rescans the plugins, as a real landing does) ...
+    static void landCatalogue(cascade::engine::Engine& e, std::vector<cascade::core::PluginCatalogEntry> entries) {
+        std::promise<cascade::engine::Engine::CatalogFetchResult> p;
+        cascade::engine::Engine::CatalogFetchResult r;
+        r.ok = true;
+        r.entries = std::move(entries);
+        p.set_value(std::move(r));
+        e.catalogFuture_ = p.get_future();
+        e.catalogPending_ = true;
+        e.pollPluginAsync();
+    }
+    // ... the catalogue replaced in place with only its counter bumped (no rescan, no pending flag: nothing else
+    // that a landing moves), ...
+    static void replaceCatalogue(cascade::engine::Engine& e, std::vector<cascade::core::PluginCatalogEntry> entries) {
+        e.catalog_ = std::move(entries);
+        ++e.catalogSeq_;
+    }
+    // ... a download in flight: the install slot holds a promise this test keeps, ...
+    static void beginTransfer(cascade::engine::Engine& e, const std::string& name) {
+        static std::promise<cascade::engine::Engine::PluginInstallResult> keep;
+        keep = std::promise<cascade::engine::Engine::PluginInstallResult>();
+        e.installFuture_ = keep.get_future();
+        e.installBusyName_ = name;
+        e.installPending_ = true;
+    }
+    static std::string& busyName(cascade::engine::Engine& e) { return e.installBusyName_; }
+    static void setProgress(cascade::engine::Engine& e, float p) { e.pluginRepo_.setProgressForTest(p); }
+    // ... the ADD ALL run, its summary and the catalogue's status line, ...
+    static auto& addAllRun(cascade::engine::Engine& e) { return e.addAllRun_; }
+    static bool& addAllFailed(cascade::engine::Engine& e) { return e.addAllFailed_; }
+    static std::string& addAllSummary(cascade::engine::Engine& e) { return e.addAllSummary_; }
+    static std::string& catalogStatus(cascade::engine::Engine& e) { return e.catalogStatus_; }
+    // ... and the rows the policy retires.
+    static std::vector<cascade::core::BlockedPlugin>& blocked(cascade::engine::Engine& e) { return e.pluginBlocked_; }
 };
 }  // namespace cascade::gui
 
@@ -689,6 +731,203 @@ int main() {
             (void)key1;
         }
         std::filesystem::remove_all(dir, ec);
+    }
+
+    // F4: the plugin store's reads (API 0.3 8.9). A catalogue of 24 entries with descriptions of 528 to about 3000
+    // bytes, a legal notice on every other one and two builds each; one retired row; a download in flight beside an
+    // ADD ALL run. The catalogue's texts are never hashed one by one (a counter stands for them), the busy NAME is
+    // (an ADD ALL run goes from one download to the next with the flag never clear), the progress is read live.
+    {
+        const auto makeCatalogue = [](char letter) {
+            std::vector<cascade::core::PluginCatalogEntry> v;
+            for (int i = 0; i < 24; ++i) {
+                cascade::core::PluginCatalogEntry e;
+                e.id = "plugin-" + std::to_string(i);
+                e.name = "Plugin number " + std::to_string(i);
+                e.version = "1.0." + std::to_string(i);
+                e.author = std::string(30, letter);  // the only thing that differs between two catalogues
+                e.licence = "MIT";
+                e.summary = "A decoder.";
+                e.description = std::string(static_cast<std::size_t>(528 + i * 107), 'd');
+                e.homepage = "https://example.org/" + std::to_string(i);
+                if (i % 2 == 0) { e.legalNotice = std::string(static_cast<std::size_t>(200 + i), 'L'); }
+                e.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
+                e.compatible = true;
+                e.minSupportedVersion = i % 3 == 0 ? "0.5.0" : "";
+                cascade::core::PluginPlatform here;
+                here.os = cascade::core::PluginRepo::hostOs();
+                here.arch = cascade::core::PluginRepo::hostArch();
+                here.file = "plugin_" + std::to_string(i) + ".dll";
+                here.url = "https://example.org/x";
+                here.sha256 = std::string(64, 'a');
+                here.sizeBytes = 1000u + static_cast<unsigned>(i);
+                e.platforms.push_back(here);
+                cascade::core::PluginPlatform other;
+                other.os = "plan9";
+                other.arch = "mips";
+                other.file = "plugin_" + std::to_string(i) + ".so";
+                other.url = "https://example.org/y";
+                other.sha256 = std::string(64, 'b');
+                e.platforms.push_back(other);
+                v.push_back(std::move(e));
+            }
+            return v;
+        };
+
+        cascade::engine::Engine e4;
+        e4.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e4.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        // The catalogue lands the way a fetch's result does, a retired row is on the books, a download is in flight
+        // and an ADD ALL run is on its second module.
+        Access::landCatalogue(e4, makeCatalogue('a'));
+        {
+            cascade::core::BlockedPlugin b;
+            b.installed.file = "retired.dll";
+            b.installed.id = "retired-id";
+            b.installed.name = "Retired Plugin";
+            b.installed.version = "1.0.0";
+            b.message = "Retired Plugin 1.0.0 is out of date and has been disabled.";
+            Access::blocked(e4).push_back(b);
+        }
+        Access::beginTransfer(e4, "Plugin number 1");
+        Access::addAllRun(e4).active = true;
+        Access::addAllRun(e4).total = 5;
+        Access::addAllRun(e4).next = 2;
+        Access::addAllRun(e4).currentName = "Plugin number 1";
+
+        const std::uint64_t settled = Access::fingerprint(e4);  // (warm-up: the cached keys, the scratch lists)
+        (void)Access::publishLists(e4);                         // the block is built here, once, and may allocate
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e4); }
+        t_counting = false;
+        std::printf("F4: %d fingerprints with 24 catalogue entries, a retired row, a transfer and an ADD ALL run: %ld heap allocations\n",
+                    kPublishes, t_news);
+        CHECK(t_news == 0);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e4); }
+        t_counting = false;
+        std::printf("F4: %d passes whose lists did not change: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        CHECK(Access::fingerprint(e4) == settled);
+        cascade::core::PublishedState ps;
+        Access::publish(e4, ps);  // (warm-up)
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { Access::publish(e4, ps); }
+        t_counting = false;
+        std::printf("F4: %d publishes with the same: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        const std::uint64_t quiet = Access::fingerprint(e4);
+        (void)Access::publishLists(e4);
+        CHECK(Access::fingerprint(e4) == quiet);
+
+        // THE LIVE PROGRESS: 1000 reads of STORE_ACTIVITY while the figure moves allocate nothing, read what the repo
+        // holds each time, and move neither the fingerprint nor the block (no rebuild: the publish after them is not one).
+        {
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            CHECK(table->read_list(session, FOXAPI_LIST_STORE_ACTIVITY, 0, &it) == 2);  // the transfer and the run
+            bool exact = true;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                const float p = static_cast<float>(i) / 1000.0f;
+                Access::setProgress(e4, p);
+                (void)table->read_list(session, FOXAPI_LIST_STORE_ACTIVITY, 0, &it);
+                exact = exact && it.value[0] == static_cast<double>(p) && it.id == 1u;
+                (void)table->read_list(session, FOXAPI_LIST_STORE_ACTIVITY, 1, &it);
+                exact = exact && it.id == 2u && it.value[0] == 2.0 && it.value[1] == 5.0;
+            }
+            t_counting = false;
+            std::printf("F4: 1000 reads of STORE_ACTIVITY (2 entries each) with the progress moving: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);
+            CHECK(exact);
+            CHECK(Access::fingerprint(e4) == quiet);  // the progress is not hashed
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e4);
+            t_counting = false;
+            CHECK(t_news == 0);  // ...and no block was built for it
+        }
+
+        // EACH INPUT THE STORE ADDS MOVES THE FINGERPRINT ALONE - and the rebuild of the block is counted (bounded, and
+        // once for the change, not once a pass). Settled again after each.
+        const auto movedBy = [&](const char* what, auto change) {
+            const std::uint64_t before = Access::fingerprint(e4);
+            change();
+            const std::uint64_t after = Access::fingerprint(e4);
+            CHECK(after != before);
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e4);  // the rebuild
+            t_counting = false;
+            const long rebuild = t_news;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e4); }
+            t_counting = false;
+            std::printf("F4: %-52s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n",
+                        what, rebuild, kPublishes, t_news);
+            CHECK(rebuild > 0 && rebuild < 8000);  // counted, and bounded: 24 entries' facts, strings and vectors, not a flood
+            CHECK(t_news == 0);
+        };
+        movedBy("the catalogue replaced (its counter alone)", [&] { Access::replaceCatalogue(e4, makeCatalogue('b')); });
+        movedBy("the catalogue replaced again (same shape)", [&] { Access::replaceCatalogue(e4, makeCatalogue('c')); });
+        movedBy("the index the store reads", [&] {
+            FoxCommand url{};
+            url.structSize = sizeof(url);
+            url.op = FOXAPP_OP_SET_CATALOGUE_URL;
+            std::snprintf(url.text, sizeof(url.text), "%s", "https://example.org/index.json");
+            Access::apply(e4, url);
+        });
+        movedBy("the busy name (the flag held: ADD ALL's next module)", [&] { Access::busyName(e4) = "Plugin number 2"; });
+        movedBy("the run's position", [&] { ++Access::addAllRun(e4).next; });
+        movedBy("the run's total", [&] { ++Access::addAllRun(e4).total; });
+        movedBy("the run's current name", [&] { Access::addAllRun(e4).currentName = "Plugin number 2"; });
+        movedBy("the run ending (active cleared)", [&] { Access::addAllRun(e4).active = false; });
+        movedBy("the run starting again (active set)", [&] { Access::addAllRun(e4).active = true; });
+        movedBy("the summary's level (failed set, the text kept)", [&] { Access::addAllFailed(e4) = true; });
+        movedBy("the ADD ALL summary's text", [&] { Access::addAllSummary(e4) = "2 installed, 1 failed."; });
+        movedBy("the catalogue status line's text", [&] { Access::catalogStatus(e4) = "0 plugins in the catalogue"; });
+        movedBy("a retired row's id", [&] { Access::blocked(e4)[0].installed.id = "retired-id-2"; });
+        movedBy("a retired row's sentence", [&] {
+            Access::blocked(e4)[0].message = "Retired Plugin 1.0.0 is out of date and has been disabled. Version 2.0.0 is available.";
+        });
+        movedBy("a second retired row", [&] {
+            cascade::core::BlockedPlugin b;
+            b.installed.file = "retired2.dll";
+            b.installed.id = "retired-two";
+            b.message = "Another.";
+            Access::blocked(e4).push_back(b);
+        });
+        // A repeat of what is already so moves nothing: the same text, the same index, the same name.
+        {
+            const std::uint64_t now = Access::fingerprint(e4);
+            Access::catalogStatus(e4) = "0 plugins in the catalogue";
+            Access::addAllSummary(e4) = "2 installed, 1 failed.";
+            Access::busyName(e4) = "Plugin number 2";
+            FoxCommand url{};
+            url.structSize = sizeof(url);
+            url.op = FOXAPP_OP_SET_CATALOGUE_URL;
+            std::snprintf(url.text, sizeof(url.text), "%s", "https://example.org/index.json");
+            for (int i = 0; i < 25; ++i) { Access::apply(e4, url); }
+            CHECK(Access::fingerprint(e4) == now);
+            std::printf("F4: the same lines, name and index said again 25 times: the fingerprint is equal\n");
+        }
+        table->close_session(session);
     }
 
     return testSummary("test_engine_publish_alloc");

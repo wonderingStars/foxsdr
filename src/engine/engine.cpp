@@ -2494,6 +2494,7 @@ void Engine::startCatalogFetch() {
     // installs from last time — the same all-or-nothing stance fetchIndex
     // takes with its own entries().
     catalog_.clear();
+    ++catalogSeq_;
     // AND THE SELECTION AND THE CONSENT GO WITH IT. The store window clamps
     // its own selection every frame and clears its tick whenever the selection
     // moves, but the tick is consent for ONE plugin and a fetch that replaces
@@ -2501,6 +2502,9 @@ void Engine::startCatalogFetch() {
     // module - so it is cleared here, at the moment the ground moves, rather
     // than left to a rule that is about a different event. The ADD ALL tick
     // goes too: it was given against the notices the old catalogue listed.
+    // (The standard window does not take this call any more: it sees the fetch
+    // in STORE_ACTIVITY - entry 1, value[1] 1 - or the catalogue it replaced,
+    // and clears its own ticks on its own thread. See AppWindow::storeLists.)
     host_->onCatalogueFetchStarting();
     catalogError_.clear();
     catalogStatus_.clear();
@@ -2600,6 +2604,7 @@ void Engine::pollPluginAsync() {
         catalogPending_ = false;
         if (r.ok) {
             catalog_ = std::move(r.entries);
+            ++catalogSeq_;
             std::string statusBuf;
             cascade::core::formatUtf8(statusBuf,
                           catalog_.size() == 1u ? tr("%zu plugin in the catalogue")
@@ -2620,6 +2625,7 @@ void Engine::pollPluginAsync() {
             if (!r.policyError.empty()) { catalogError_ = r.policyError; }
         } else {
             catalog_.clear();
+            ++catalogSeq_;
             catalogError_ = r.error;
         }
         // PUBLISHED BEFORE THE HOST IS TOLD: the host reads the status lines
@@ -2838,7 +2844,9 @@ void Engine::pumpAddAll() {
     addAllRun_.active = false;
     addAllRun_.currentName.clear();
     // THE TICK WAS FOR THIS RUN. It named the notices this run would take, and
-    // the run has taken them; the next press is a new decision.
+    // the run has taken them; the next press is a new decision. (The standard
+    // window sees the run's entry leave STORE_ACTIVITY, or the summary arrive,
+    // and clears the tick itself: AppWindow::storeLists.)
     host_->onAddAllFinished();
 }
 
@@ -7403,6 +7411,9 @@ void Engine::publishStatusText() {
     t.bookmarkError = bookmarkError_;
     t.installReport = installReport_;
     t.installError = installError_;
+    t.catalogStatus = catalogStatus_;
+    t.addAllSummary = addAllSummary_;
+    t.addAllFailed = addAllFailed_;
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     statusText_ = std::move(t);
 }

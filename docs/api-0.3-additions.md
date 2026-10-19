@@ -70,6 +70,9 @@ published in the same block as the lists, in the same pass.
 | `fact.store.<id>.legal` | a catalogue entry's legal notice, whole | |
 | `fact.store.<id>.summary`, `.description`, `.homepage`, `.version` | the entry's texts | |
 | `fact.store.<id>.blocked` | why installing it would be refused now (the notice taken as acknowledged); `""` when it would not | |
+| `fact.store.<id>.author`, `.licence`, `.platforms`, `.floor`, `.file`, `.updateReason` | the entry's maker and licence, the builds it publishes (`windows/x64, linux/x64`), its retirement floor, the file name this machine's build installs under (the join to `PLUGINS`' `detail`), and the update plan's reason; `""` for none of them (section 8.9) | |
+| `fact.store.url` | the catalogue index the store reads: a URL, or a path on this machine (section 8.9) | LOCAL |
+| `fact.blocked.<file>.id`, `.message` | for a retired plugin (`STORE_BLOCKED`'s `name` is `<file>`): the catalogue id the update is matched on, and the whole sentence composed in the language in force (section 8.9) | |
 | `fact.transmit.args` | the address `TX_OPEN` is given: the one typed, else the seed the Transmit page uses | LOCAL |
 | `fact.converter.name` | the converter in front of the receiver, as the frequency readout names it (translated when the block is built; a language switch rebuilds it) | |
 | `fact.converter.radioKey` | the radio its setting is remembered for | LOCAL |
@@ -105,7 +108,7 @@ says when to read again.
 
 | List | Entry |
 |---|---|
-| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3), `installReport` (8.8: what the last plugin install or removal did, level 1), `installError` (8.8: why the last one failed, level 3) |
+| `STATUS_LINES` (22) | the status lines that have text now. `name`: the line's key; `detail`: its text (whole: `fact.status.<key>`); `value[0]`: level 1 information, 2 warning, 3 error. The keys: `sourceError`, `gpsRefusal`, `catalogError`, `bandPlanError`, `tuneMismatchNote`, `transmitError`, `soundCardMissing`, `sdrPlayApiDetail`, `sdrPlayAdvice`, `recordNotice`, `recordError`, `presetNote`, `pluginEnforceError`, `restoreKeepLabel`, `audioHealth` (8.4: the audio watchdog's note, level 2), `bookmarkNote` (8.6: what the last bookmark import, export or group removal did, level 1), `bookmarkError` (8.6: the bookmark file could not be read or saved, level 3), `installReport` (8.8: what the last plugin install or removal did, level 1), `installError` (8.8: why the last one failed, level 3), `catalogStatus` (8.9: "N plugins in the catalogue", set by every fetch that landed, level 1), `addAllSummary` (8.9: what the last ADD ALL run did, level 1, or 3 when any module in it failed) |
 | `CONVERTERS` (23) | every radio's remembered up/down-converter. `detail`: the radio key (LOCAL sessions only, else empty); `value[0]`: 0 off, 1 up, 2 down; `value[1]`: LO Hz; `value[2]`: 1 inverted; `value[3]`: on the entry that is `ACTIVE` only, **the radio's own centre readback in Hz, read live** (the frequency the radio was told and kept - not the air frequency `centreHz` speaks; a retune moves it without moving `listSeq`; 0 on every other entry; section 8.3); `ACTIVE`: the open radio's |
 | `GAIN_MODES` (24) | a radio with gain MODES (an Airspy: Linearity, Sensitivity, Free). `name`; `value[0]`: the mode code `FOXAPP_OP_AIRSPY_GAIN_MODE` takes; `ACTIVE`. Empty for every other radio |
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
@@ -122,12 +125,14 @@ says when to read again.
 | `MUTE_CAUSES` (36) | the plugins muting the receiver's audio now (8.7). `name`: the plugin; `detail`: its module file name; `value[0]`: `1` when the mute is held after a tune-away; `ACTIVE` on every entry. Empty when nothing mutes |
 | `STALE_GRANTS` (37) | the tune grants no loaded module holds (8.7). `name`: the module file name; `REFUSED` when the host holds a record of that file that did not load. In the order the grants were given |
 | `PLUGIN_COMMANDS` (38) | the command keys the loaded modules have added (8.8). `id`: the command id (`FOXAPI_OP_PLUGIN_COMMAND`'s `ival[0]`); `name`: the key's label (at most 32 characters, the module's own text); `detail`: the module file name. Module by module in the order of `PLUGINS`, each module's keys in the order it added them (at most 8 a module) |
+| `STORE_ACTIVITY` (39) | what the plugin store is doing now (8.9): at most two entries, told apart by `id`, none when nothing is going on. `id` 1: a catalogue fetch or a download is in flight (`name`: the module's name, `""` for the catalogue; `value[0]`: the progress 0..1, **read live**; `value[1]`: 1 fetching the catalogue, 2 downloading); `id` 2: an ADD ALL run is active (`name`: the module moving now; `value[0]`: its position, `value[1]`: how many in the run). `ACTIVE` on both |
 
 ### 5.2 0.2 lists now served
 
 `DECODERS` (`name`; `detail`: why idle, "" running; `ACTIVE` running;
 `FED` fed signal now), `CATALOGUE` (`name`; `detail`: id; `INSTALLED`,
-`COMPATIBLE`), `TX_DEVICES` (one entry: `detail` is the address `TX_OPEN`
+`COMPATIBLE`; 0.3 (8.9): `value[0]` the ABI version the entry's build declares,
+`value[1]` the size of the build for this machine, `BUILD_HERE`), `TX_DEVICES` (one entry: `detail` is the address `TX_OPEN`
 will be given; `ACTIVE` open), `MARKERS` (`id`; `name`: label; `detail`:
 plugin; `value[0..2]`: Hz, width, colour), `BAND_PLAN` (`name`; `detail`:
 service; `value[0..2]`: start, stop, colour), `PRESETS` and `USER_PRESETS`
@@ -180,6 +185,10 @@ Section 8.8 adds three, all on `PLUGINS`: `FOXAPI_ITEM_MATCHED` 0x40000 (the run
 would with the receiver running; any kind of plugin), `ASKED_SETTINGS` 0x80000 (the module has asked for
 something only the settings grant allows) and `DIGEST_MISMATCH` 0x100000 (the file is not the one that was
 installed).
+
+Section 8.9 adds one, on `CATALOGUE`: `FOXAPI_ITEM_BUILD_HERE` 0x200000 (the catalogue publishes a build for
+this machine's os and architecture). This is the next free bit of the **item** flags; the `0x00200000` of
+`FOXAPI_RX_WEB_LISTENING` is a bit of the state's flag word, a different namespace.
 
 ## 6. Scope taps — `read_scope` (closes 0.2 gap 5)
 
@@ -776,6 +785,162 @@ cached ones, the notices are hashed by level and text in place, and the plugin A
 keep one counter for the two answers that would otherwise build a vector or copy every row per call
 (`PluginApiCore::settingsRequestersSeq`, `commandsSeq`, `PluginRunner::statusGeneration`); the block, its
 facts and the files' sizes are built only when the fingerprint moves.
+
+### 8.9 The plugin store as its pages draw it
+
+The Plugin store window (the rail's STORE key, its chip and its row of retired modules; one plate for each
+catalogue entry, its install key, ADD ALL, UPDATE, and the line that says what it is doing) reads the engine's
+table only. 0.3 had most of it: `CATALOGUE` (the display name in `name`, the catalogue id in `detail`, `INSTALLED`,
+`COMPATIBLE`), `fact.store.<id>.{legal, summary, description, homepage, version, blocked}`, `STORE_BLOCKED` and
+`STORE_UPDATES`, `PLUGINS` and the facts of 8.8 for the host's side of a module that is fitted,
+`STATUS_LINES` `catalogError`, `pluginEnforceError`, `installReport` and `installError`, and every command the
+window sends (`FOXAPI_OP_STORE_FETCH`, `_INSTALL`, `_CANCEL`, `FOXAPP_OP_SET_CATALOGUE_URL`, `_STORE_UPDATE`,
+`_STORE_REMOVE_BLOCKED`, `_STORE_ADD_ALL`: all ADMIN, the four app ops LOCAL only). This adds what it lacked.
+**No member of `FoxReceiverState` is added, no op, and no struct changes.**
+
+**Downloading and the queue are the engine's.** The catalogue fetch, each download and ADD ALL's queue run in the
+engine, on workers it starts and polls (a result lands at the pass after the one that started it, see Timing);
+the table only reports them. Nothing in this section moves to the interface, and the interface has nothing to
+poll but the lists.
+
+**A catalogue entry's columns.** `CATALOGUE` gains, for every entry:
+
+| | |
+|---|---|
+| `value[0]` | the ABI version the entry's build declares (`abiVersion` of the index; 0 when the index says none). `COMPATIBLE` stays "equals this engine's"; the number is for a plate that letters "built for 3, this is 4". The engine's own number is not a member of any table: an interface takes it from `plugin_abi.h` (`CASCADE_PLUGIN_ABI_VERSION`) in the build it is compiled with, as the window does |
+| `value[1]` | the size in bytes of the build for THIS machine's os and architecture, as the index states it (advisory: the download is capped and hashed whatever it says); **`0`: the index did not state one, or there is no build for this machine.** A plate draws `0` as "not told", never as an empty file |
+| `FOXAPI_ITEM_BUILD_HERE` 0x200000 | the index publishes a build for this machine's os and architecture. An entry is installable here when it is `COMPATIBLE` **and** `BUILD_HERE`; `fact.store.<id>.blocked` names whichever gate is shut, and also the ones these two flags do not say (a transfer in flight, no licence declared, already installed) |
+
+`name` is cut at the item's 95 bytes, where the old window drew a display name whole (whether any real entry's name reaches the
+cut was not checked; the code's own example is 37 characters). The id in `detail` is a short machine key and is not cut in practice.
+
+**The per-entry facts.** One set for each `CATALOGUE` entry, keyed by the id exactly as `detail` has it, every key
+present for every entry (`""` when there is nothing: "known and empty" is told from `NOT_FOUND` for an id nobody
+listed), in the sense of section 4 - the texts a list item would cut, or a state that is not a number:
+
+| Key | Value |
+|---|---|
+| `fact.store.<id>.author`, `.licence` | the entry's texts, whole: free text the plate prints as given. `.licence` is `""` for an entry that declares none, which is also why `.blocked` reads "the catalogue entry declares no licence" |
+| `fact.store.<id>.platforms` | the builds the index publishes, in the index's order, joined as the plate letters them: `windows/x64, linux/x64` (a finished string, nothing to parse); `""` for an entry announced before its first build |
+| `fact.store.<id>.floor` | the retirement floor (`minSupportedVersion`): an installed copy older than this is not loaded. `""` is the normal case, **no floor**, and must never be read as "retire everything" |
+| `fact.store.<id>.file` | the file name the build for this machine installs under: the catalogue's own spelling put through the loader's name rule (`PluginRepo::sanitiseFileName`), exactly what "is it installed" compares. **The join to `PLUGINS`:** compare it with a `PLUGINS` entry's `detail` ignoring ASCII case (the engine's own rule). A match is the host's record of the module (its `ACTIVE`, `STOPPED`, `TUNE_ALLOWED`, `value[0]`'s `CASCADE_CAP_HOST_CLIENT`, and `fact.plugin.<file>.error`); **no match on an entry that is `INSTALLED` is a retired module, which the host holds no record of** (it was renamed out of the scan), and is not an error. `""` with no build for this machine or a name the rule refuses |
+| `fact.store.<id>.updateReason` | the update plan's reason, one English sentence (the window draws it as given); `""` when no update is planned. The entry has a plan exactly when its id is a `STORE_UPDATES` `name`, and that entry's `detail` is "from -> to" |
+
+`fact.store.url` is the catalogue index the store reads: an `https://` URL, or a path to a local `index.json` (an
+address with no `://` is read from disk, which is how the store is exercised offline). It is **LOCAL**: a path
+names the engine's machine, and a REMOTE session's read is `DENIED`. It reads the default `https://` address until a config or
+`FOXAPP_OP_SET_CATALOGUE_URL` sets another, and `""` once it has been cleared. It has no leaf of an
+id, so it cannot collide with a `fact.store.<id>.<leaf>` (an id "url" has keys `fact.store.url.legal` and the
+rest). It is the value `FOXAPP_OP_SET_CATALOGUE_URL` stored, read back one pass after the command.
+
+How a plate reads the gate. `fact.store.<id>.blocked` is `pluginInstallBlockedReason(i, true)`: the reason an
+install would be refused now **with the legal notice taken as acknowledged**, `""` when it would not be. The gates
+run in the order busy, ABI, platform, licence, already installed, and the acknowledgement last, so the reason for the
+state of one row's tick follows from it: with the notice acknowledged it is `.blocked`; without, it is the same
+unless `.blocked` is `""` and `.legal` is not, and then it is "the legal notice must be acknowledged first" (an
+English sentence, translated where it is drawn, like every one of these: `trStoredReason`). The tick belongs to one
+row, the window's selection, and is the window's own state; it travels as `ival[0]` of `FOXAPI_OP_STORE_INSTALL` and
+`FOXAPP_OP_STORE_ADD_ALL`, and the engine re-tests the gate when the command applies.
+
+**The retired modules.** `STORE_BLOCKED` lists the installed plugins the store's policy refuses to load (`name` is the
+file). Their facts are keyed by the **file**, not under `fact.store.<id>`: a retired module may be listed with no
+catalogue fetched at all.
+
+| Key | Value |
+|---|---|
+| `fact.blocked.<file>.id` | the catalogue id the module was installed under: the `name` of its `STORE_UPDATES` entry when the catalogue has an update for it, and the `text` of `FOXAPP_OP_STORE_UPDATE`. `""` for a module whose install record names none |
+| `fact.blocked.<file>.message` | the sentence the row draws, **whole**, in the language in force: what the module is, why it is disabled and what to do about it (update it, or ask its author, as the case is; about 200 bytes) |
+
+Why a fact and not `STORE_BLOCKED`'s `detail`: that item cuts at 159 bytes, and the sentence is composed when the
+block is built, **not** when the plugins were loaded (which is before any language is chosen, and is what `detail`
+still carries, in English): the fingerprint hashes the language, so a language switch rebuilds the block and with it
+every `.message`, as `fact.converter.name` is rebuilt. Both keys exist exactly for the files `STORE_BLOCKED` lists (`.id`
+is `""` for a row whose install record names none); any other file is `NOT_FOUND`. A file name with dots in it is keyed
+whole, so an interface that is handed a key parses the leaf from the right, as 8.8 says for `fact.plugin.<file>`.
+
+**What the store is doing - `STORE_ACTIVITY` (39).** One list for the busy lamp, the progress bar and the ADD ALL line,
+**at most two entries, told apart by `id`**, and none when nothing is happening. The first entry's `id` is 1, the
+second's is 2; with only ADD ALL going, the one entry is the list's first and still has `id` 2.
+
+| `id` | Present while | `name` | `value[0]` | `value[1]` | |
+|---|---|---|---|---|---|
+| 1 | a catalogue fetch or a download is in flight (the old "busy": one transfer at a time, the repo has one progress and one cancel) | the module's display name for a download; `""` for the catalogue | **the progress, 0 to 1, read live** | `1` fetching the catalogue, `2` downloading a module (an update included) | `ACTIVE` |
+| 2 | an ADD ALL run is active | the module moving now (`""` before the first one starts) | the run's position, 1-based, clamped to the total: the number "installing 4 of 23" shows | the total: how many modules the run will take | `ACTIVE` |
+
+The windows' sentences stay the interface's: "fetching the catalogue" (kind 1), "downloading <name>" (kind 2) and
+"installing <position> of <total>: <name>" (entry 2; the window letters "starting" for an empty name). The two entries are
+independent: entry 2 is "the run is going" and entry 1 is "a transfer is moving". Entry 2 stands alone in the publish of the
+pass that applied ADD ALL, before the first module has started (name `""`, position 1); from then until the run ends entry 1
+is present in every publish, because the next module is started in the same pump that finds the last finished, so no block
+shows the gap between two modules.
+
+**The position is the module in flight, 1-based.** The engine's queue steps its index past a module as it starts it, and the
+position is that index (clamped to 1 .. the total): the first module is "1 of 23", the last "23 of 23", each number once. The
+old window lettered `min(next + 1, total)` of that index, which reads one too many - the first module as "2 of 23" and the last
+two both as "23 of 23" - and the table does not carry the mistake (found by reading the position after every pass of a real run,
+which printed `Bad One@2 Bad Two@3 Bad Three@3` before it was corrected). A window ported to this list draws the true number.
+
+**The progress is the one thing the list reads live.** `value[0]` of entry 1 is the transfer's own progress figure, a
+relaxed atomic the download worker writes every chunk, read when the list is read, as `RECORDINGS`' `value[1]` is. It
+moves with no list change and moves **neither the block nor `listSeq`**. `0` while the server has not sent a length
+(a figure that lies is worse than one that waits); a catalogue fetch moves it too, and a fetch of a local `index.json`
+does not touch it, so it keeps what the last transfer left (`1` after one that finished): an interface that draws
+it for a kind-1 entry draws what the old window drew. It is read without allocating, from any thread.
+
+**Two status lines** join `STATUS_LINES` (5.1), as `fact.status.catalogStatus` and `fact.status.addAllSummary` (whole) and
+in the engine's handed-over copy of the lines (`catalogStatus` and `addAllSummary`, and `addAllFailed`, the source of the second
+one's level: the copy is what the standard window draws its lines from): `catalogStatus` (level 1) is "N plugins in
+the catalogue" ("1 plugin in the catalogue"), set by every fetch that landed **including one that listed nothing**
+("0 plugins in the catalogue") and cleared when a fetch starts; it is what separates "asked, and the index lists nothing"
+from "nobody has asked" (an empty `CATALOGUE` with neither this line, a `catalogError` nor entry 1 is the second).
+`addAllSummary` (level 1; **level 3 when any module in the run failed**) is what the last ADD ALL run did: "23 installed, 0
+failed", or that and then each failure's name and the reason it gave; it stays until the next run starts and is empty
+before the first.
+
+**How the window reads it** (what step B of the port holds the engine to):
+
+| The window draws | From |
+|---|---|
+| the rail's chip: IDLE, N UPD, BUSY | `CATALOGUE`'s count (IDLE when `CATALOGUE` has no rows, the rule the window has always kept: a status line or a fetch does not change it), `STORE_UPDATES`' count, `STORE_ACTIVITY`'s entry 1 (BUSY, which outranks the other two) |
+| the "CATALOGUE SOURCE" line | `fact.store.url`, `catalogStatus`, the `catalogError` line |
+| a row and its plate: name, version, maker, licence, the blurb, summary, homepage, legal notice, the floor | `CATALOGUE` `name`; `fact.store.<id>.version`, `.author`, `.licence`, `.description` (else `.summary`), `.summary`, `.homepage`, `.legal`, `.floor` |
+| the ABI line, the builds, the size | `CATALOGUE` `value[0]` and `COMPATIBLE`; `.platforms`; `value[1]` (`0`: not told) and `BUILD_HERE` |
+| FIT enabled, and why not | `COMPATIBLE` and `BUILD_HERE` (installable here); `.blocked` and `.legal`, and the row's tick (see above) |
+| fitted, loaded, running, refused, the grants | `INSTALLED`; the `PLUGINS` entry whose `detail` is `.file` (`ACTIVE`, `STOPPED`, `TUNE_ALLOWED`, `value[0]`) and `fact.plugin.<file>.error` |
+| UPDATE, and its reason | the id in `STORE_UPDATES`; `.updateReason`, `.version` (the version it goes to) |
+| the retired rows | `STORE_BLOCKED` (the file); `fact.blocked.<file>.message`; the Update key from the `STORE_UPDATES` entry whose `name` is `fact.blocked.<file>.id`; Remove is `FOXAPP_OP_STORE_REMOVE_BLOCKED` with the file |
+| busy lamp, the bar, "downloading <name>" / "fetching the catalogue" | `STORE_ACTIVITY` entry 1 |
+| "installing 4 of 23: <name>" | `STORE_ACTIVITY` entry 2 |
+| the green and red result lines | `installReport` / `installError` (8.8) |
+| the ADD ALL summary, red or not | `addAllSummary` and its level |
+
+**Timing.** A command through the table lands at the engine's next pass and the lists show it after that pass's publish.
+A transfer is applied by the pass that polls it, which is **after** that pass's publish: `STORE_FETCH` is applied at the
+top of a pass, so entry 1 (kind 1) appears, `CATALOGUE` empties and `catalogStatus`, `catalogError`, `installReport` and
+`installError` clear, **all in that pass's publish**; the fetch's result is applied by the pass that finds it ready, and
+**the pass after it** publishes the rows, `catalogStatus` (or `catalogError`) and entry 1 gone, in one block. A download
+and an ADD ALL step land the same way. The engine's handed-over copy of the lines is published at the end of the pass that
+applied the result, so a window that reads its lines from the copy and its rows from the table can show a result line one
+pass before the row it belongs to: the table's own lines (`STATUS_LINES`, `fact.status.*`) are in the same block as the
+rows and cannot differ from them. ADD ALL moves from one download to the next **inside one pump** (the pass that finds a
+download finished starts the next in the same call), so no publish shows a gap between two modules: entry 1 stays
+present, its `name` changes, entry 2's `value[0]` advances. An interface that must notice "a catalogue was replaced" (the window clears the legal notice ticks it holds when one is: a
+tick is consent for a notice that was listed, not for another) finds entry 1 with `value[1]` 1 in some block, **or**, when it did not
+read the block in between (a fetch of a local file can start and land within two of its reads), finds the catalogue itself
+different from the one it holds; `CATALOGUE` is emptied when a fetch starts, so the old rows never stand under a new fetch.
+The index (`fact.store.url`) is one pass behind its command. A fetch that fails leaves `CATALOGUE` empty (a catalogue that
+could not be verified does not keep offering last time's installs) and writes `catalogError`.
+
+**What moves `listSeq`, beyond 8.1 to 8.8.** Everything new but the progress is in the list fingerprint: the catalogue
+(one counter, bumped wherever the engine replaces, clears or adds to it, so a refetch that returns the same ids, versions
+and notice lengths with other texts moves it, and the entries' texts are never hashed one by one; on every real path a
+fetch's own busy flag and the rescan a landing runs move the fingerprint as well, and the counter is what makes it exact), the index, the busy name
+(**the name, not only that something is busy**: the flag does not change between two modules of an ADD ALL run), the run
+(`active`, position, total, current name, and whether it failed), the retired rows' ids and sentences, and the two status
+lines. **The progress moves nothing**, the transfer's start, end and each module's turn do. A retired module's
+sentence is rebuilt on a language switch (the language was already hashed). **Nothing here allocates in a pass:** the
+fingerprint is hashed in place from members the engine keeps, and the block, the facts, the composed sentences and the
+update plans are built only when it moves; the live progress is an atomic read.
 
 ## 9. Events and ops
 

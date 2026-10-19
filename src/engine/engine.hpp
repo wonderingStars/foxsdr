@@ -151,6 +151,13 @@ struct EngineStatusText {
     // The store window and the fitted-modules window show the same pair.
     std::string installReport;
     std::string installError;
+    // API 0.3 8.9, what the plugin store window draws beside them: the catalogue status line ("N plugins in the
+    // catalogue", catalogStatus_; STATUS_LINES key catalogStatus, level 1) and what the last ADD ALL run did
+    // (addAllSummary_; key addAllSummary, level 1, or 3 when the run had failures: addAllFailed_, which is the
+    // level's own source and is handed over with it).
+    std::string catalogStatus;
+    std::string addAllSummary;
+    bool addAllFailed = false;
 };
 
 class Engine {
@@ -2181,6 +2188,11 @@ private:
     void removeBlockedPlugin(const std::string& fileName);
     std::string pluginCatalogueUrl_;  // committed value (persisted)
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
+    // How many times catalog_ has been replaced, cleared or pushed to (a fetch starting, a fetch landing or
+    // failing, the test hook's entry): the list fingerprint hashes this one value for everything a catalogue entry
+    // carries (API 0.3 8.9: author, licence, platforms, floor, size, the long texts), where hashing each entry's
+    // texts every pass would cost far more than the lists are worth. Bumped at every write of catalog_.
+    std::uint64_t catalogSeq_ = 0;
     std::string catalogError_;   // red: fetch/parse failure, verbatim
     std::string catalogStatus_;  // neutral: "N plugins in the catalogue"
 

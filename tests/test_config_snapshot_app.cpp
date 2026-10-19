@@ -73,6 +73,8 @@ struct AppWindowTestAccess {
         e.bookmarkError_ = p + "17";       // the sixteenth and the seventeenth
         e.installReport_ = p + "18";       // API 0.3 8.8: the plugin install/remove outcome, the
         e.installError_ = p + "19";        // eighteenth and the nineteenth
+        e.catalogStatus_ = p + "20";       // API 0.3 8.9: the plugin store's catalogue status line and its
+        e.addAllSummary_ = p + "21";       // ADD ALL summary, the twentieth and the twenty-first
     }
     static FoxCommandResult volume(AppWindow& a, double v) {
         return a.engine_.applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
@@ -159,12 +161,13 @@ int main() {
                    t.recordNotice == p + "10" && t.recordError == p + "11" && t.presetNote == p + "12" &&
                    t.pluginEnforceError == p + "13" && t.restoreKeepLabel == p + "14" &&
                    t.audioHealth == p + "15" && t.bookmarkNote == p + "16" && t.bookmarkError == p + "17" &&
-                   t.installReport == p + "18" && t.installError == p + "19";
+                   t.installReport == p + "18" && t.installError == p + "19" && t.catalogStatus == p + "20" &&
+                   t.addAllSummary == p + "21";
         };
         A::setAllStatus(app, "first");
         CHECK(A::status(app).sourceError != "first1");   // not handed over yet
         A::pumpPublish(app);
-        std::printf("E: after the frame's publish, all nineteen handed over: %s\n",
+        std::printf("E: after the frame's publish, all twenty-one handed over: %s\n",
                     allAre(A::status(app), "first") ? "yes" : "NO");
         CHECK(allAre(A::status(app), "first"));
         A::setAllStatus(app, "later");

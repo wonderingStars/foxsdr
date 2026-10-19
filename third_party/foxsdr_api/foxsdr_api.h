@@ -738,7 +738,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_BOOKMARKS     7u  /* sorted by frequency; id; name; detail: group ("" = none); value[0]: Hz, [1]: mode, [2]: bandwidth Hz; FOXAPI_ITEM_FAVOURITE */
 #define FOXAPI_LIST_DECODERS      8u  /* id; name; flags: running/fed; detail: status text; 0.3 (8.7): MUTES */
 #define FOXAPI_LIST_PLUGINS       9u  /* installed plugins; detail: file name; 0.3 (8.7): value[0]: the capability word (CASCADE_CAP_* of the plugin ABI); ACTIVE loaded; STOPPED, TUNE_ALLOWED, SETTINGS_ALLOWED; (8.8): value[1]: the module file's size in bytes, value[2]: its notice level (0 none, 2 warning, 3 error); MATCHED, ASKED_SETTINGS, DIGEST_MISMATCH */
-#define FOXAPI_LIST_CATALOGUE     10u /* the store's entries */
+#define FOXAPI_LIST_CATALOGUE     10u /* the store's entries; detail: the catalogue id; 0.3 (8.9): value[0]: the ABI version the entry's build declares, value[1]: the size in bytes of the build for this machine (0 = not stated or no build); INSTALLED, COMPATIBLE, BUILD_HERE */
 #define FOXAPI_LIST_AUDIO_DEVICES 11u
 #define FOXAPI_LIST_TX_DEVICES    12u
 /*      13u retired in 0.2 (FREQ_LISTS): imported lists are bookmark groups */
@@ -768,6 +768,7 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_MUTE_CAUSES   36u /* 0.3 (8.7): the plugins muting the receiver's audio now. name: plugin; detail: its module file name; value[0]: 1 when the mute is held after a tune-away; ACTIVE */
 #define FOXAPI_LIST_STALE_GRANTS  37u /* 0.3 (8.7): the tune grants no loaded module holds. name: the module file name; REFUSED when the host holds a record of that file that did not load */
 #define FOXAPI_LIST_PLUGIN_COMMANDS 38u /* 0.3 (8.8): the command keys the loaded modules have added. id: the command id (FOXAPI_OP_PLUGIN_COMMAND's ival[0]); name: the key's label; detail: the module file name */
+#define FOXAPI_LIST_STORE_ACTIVITY 39u /* 0.3 (8.9): what the plugin store is doing now, at most two entries told apart by id. id 1: a catalogue fetch or a download is in flight (name: the module's name, "" for the catalogue; value[0]: the progress 0..1, read live; value[1]: 1 fetching the catalogue, 2 downloading); id 2: an ADD ALL run is active (name: the module moving now; value[0]: its position, 1-based; value[1]: the total); ACTIVE on both */
 
 #define FOXAPI_ITEM_ACTIVE    0x00000001u /* the selected / running / current entry */
 #define FOXAPI_ITEM_FAVOURITE 0x00000002u /* a bookmark marked as a favourite */
@@ -791,6 +792,7 @@ typedef struct FoxEvent {
 #define FOXAPI_ITEM_MATCHED    0x00040000u /* a plugin the runner is feeding, or would feed with the receiver running: matched to the rate the chain delivers, whatever its kind (PLUGINS, 8.8) */
 #define FOXAPI_ITEM_ASKED_SETTINGS 0x00080000u /* a plugin that has asked to change a receiver setting, which only the settings grant allows (PLUGINS, 8.8) */
 #define FOXAPI_ITEM_DIGEST_MISMATCH 0x00100000u /* a plugin file that is not the one installed: its bytes no longer match the sha256 recorded at install (PLUGINS, 8.8) */
+#define FOXAPI_ITEM_BUILD_HERE 0x00200000u /* a catalogue entry that publishes a build for this machine's os and architecture (CATALOGUE, 8.9); "installable here" is COMPATIBLE and BUILD_HERE */
 
 typedef struct FoxListItem {
     uint32_t structSize;

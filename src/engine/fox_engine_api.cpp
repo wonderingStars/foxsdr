@@ -1531,6 +1531,9 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         if (k == "bookmarkError") { engine_.bookmarkError_ = t; }
         if (k == "installReport") { engine_.installReport_ = t; }
         if (k == "installError") { engine_.installError_ = t; }
+        if (k == "catalogStatus") { engine_.catalogStatus_ = t; }
+        if (k == "addAllSummary") { engine_.addAllSummary_ = t; }
+        if (k == "addAllFailed") { engine_.addAllFailed_ = t == "1"; }  // (the level of addAllSummary: 3 when set)
     } else if (key == "test.rds") {
         // Stands in for the RDS decoder's snapshot (API 0.3 8.4):
         // "flags;pi;pty;groups;errors;ps;radioText" - flags a word of S (synced),
@@ -1597,6 +1600,7 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         e.legalNotice = b == std::string::npos ? std::string() : val.substr(b + 1);
         e.version = "1.0.0";
         engine_.catalog_.push_back(std::move(e));
+        ++engine_.catalogSeq_;
     } else if (key == "test.bookmark") {
         // Stands in for an import: "name|hz|mode|bw|group", mode a
         // FOXAPI_DEMOD_* - a grouped bookmark, as an imported list makes.
@@ -2048,8 +2052,13 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.id = index + 1u;
                 copyText(it.name, e.name.c_str());
                 copyText(it.detail, e.id.c_str());
+                // 0.3 (8.9): the ABI the entry's build declares, the size of the build for this machine as the
+                // catalogue states it (0: not stated), and whether a build for this machine exists at all.
+                it.value[0] = static_cast<double>(e.abiVersion);
+                it.value[1] = static_cast<double>(e.sizeBytes);
                 if (e.installed) { it.flags |= FOXAPI_ITEM_INSTALLED; }
                 if (e.compatible) { it.flags |= FOXAPI_ITEM_COMPATIBLE; }
+                if (e.buildHere) { it.flags |= FOXAPI_ITEM_BUILD_HERE; }
             }
             break;
         case FOXAPI_LIST_TX_DEVICES:
@@ -2291,6 +2300,29 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 if (g.refused) { it.flags |= FOXAPI_ITEM_REFUSED; }
             }
             break;
+        // ---- API 0.3 8.9: the plugin store ---------------------------------------------------------------
+        case FOXAPI_LIST_STORE_ACTIVITY: {
+            // At most two entries, told apart by id: 1 a transfer in flight, 2 an ADD ALL run. With only the run
+            // going, it is the first entry and still has id 2.
+            const ApiListBlock::StoreActivity& a = b->storeActivity;
+            if (want((a.transfer ? 1u : 0u) + (a.addAll ? 1u : 0u))) {
+                const bool run = !a.transfer || index == 1u;
+                it.flags |= FOXAPI_ITEM_ACTIVE;
+                if (!run) {
+                    it.id = 1;
+                    copyText(it.name, a.transferName.c_str());
+                    // LIVE: the repo's own atomic (no rebuild per tick, and nothing allocated), as a recording's bytes.
+                    it.value[0] = a.repo != nullptr ? static_cast<double>(a.repo->progress()) : 0.0;
+                    it.value[1] = static_cast<double>(a.transferKind);
+                } else {
+                    it.id = 2;
+                    copyText(it.name, a.addAllName.c_str());
+                    it.value[0] = static_cast<double>(a.addAllPosition);
+                    it.value[1] = static_cast<double>(a.addAllTotal);
+                }
+            }
+            break;
+        }
         // ---- API 0.3 8.8: the fitted modules --------------------------------------------------------------
         case FOXAPI_LIST_PLUGIN_COMMANDS:
             if (want(b->pluginCommands.size())) {

@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "core/freq_manager.hpp"
+#include "core/plugin_repo.hpp"
 #include "core/plugin_runner.hpp"
 #include "foxsdr_api.h"
 
@@ -213,8 +214,29 @@ struct ApiListBlock {
     struct StoreEntry {
         std::string id, name;
         bool installed = false, compatible = false;
+        // API 0.3 8.9: the ABI version the entry's build declares, the size of the build for THIS machine as the
+        // catalogue states it (0: not stated, or no build), and whether the catalogue publishes a build for this
+        // machine's os and architecture at all.
+        std::uint32_t abiVersion = 0;
+        std::uint64_t sizeBytes = 0;
+        bool buildHere = false;
     };
     std::vector<StoreEntry> store;
+    // API 0.3 8.9, STORE_ACTIVITY: what the store is doing now, as the pass saw it. Entry 1 is a transfer in
+    // flight (a catalogue fetch or a download), entry 2 an ADD ALL run. The progress of the transfer is NOT here:
+    // it changes every few hundred milliseconds without anything else moving, so the list reads it from `repo`
+    // when it is read (an atomic; the engine owns the repo and outlives the block's readers), as a recording's
+    // bytes are read from its recorder.
+    struct StoreActivity {
+        bool transfer = false;
+        int transferKind = 0;  // 1 fetching the catalogue, 2 downloading a module
+        std::string transferName;
+        const cascade::core::PluginRepo* repo = nullptr;  // for the live progress
+        bool addAll = false;
+        std::uint64_t addAllPosition = 0, addAllTotal = 0;
+        std::string addAllName;
+    };
+    StoreActivity storeActivity;
     std::vector<std::pair<std::string, std::string>> storeBlocked;  // file, why
     std::vector<std::pair<std::string, std::string>> storeUpdates;  // id, "from -> to"
     std::string txArgs;              // the address TX_OPEN is given

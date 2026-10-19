@@ -676,6 +676,9 @@ public:
     // 0..1 for the transfer in flight. Stays at 0 when the server sends no
     // Content-Length (progress that lies is worse than progress that waits).
     float progress() const { return progress_.load(std::memory_order_relaxed); }
+    // TESTS ONLY - nothing in the product calls it: what a transfer's worker would have stored, so a test can
+    // watch the live read of progress() (the plugin store's STORE_ACTIVITY, API 0.3 8.9) without a network.
+    void setProgressForTest(float p) { progress_.store(p, std::memory_order_relaxed); }
 
     // Asks the transfer in flight to stop; the install then fails cleanly with
     // "cancelled" and removes its temp file. Safe to call from another thread.

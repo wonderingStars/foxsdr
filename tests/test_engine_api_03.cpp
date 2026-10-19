@@ -82,6 +82,15 @@
 //       (the file's size, measured at a rebuild) and value[2] (the notice level), and a repeated
 //       warning moving nothing; H3 the flags MATCHED, ASKED_SETTINGS and DIGEST_MISMATCH and the idle
 //       sentence; H4 PLUGIN_COMMANDS; H5 installReport and installError as status lines.
+//   I   the plugin store (window port group 10, API 0.3 section 8.9), against a REAL fetch of a local index.json
+//       over the group-9 plugin folder (a retired module with an update plan, an updatable fitted one, and five
+//       entries for the columns), with the transfers' workers stood in for by a promise the test keeps and ADD
+//       ALL run for real over entries the install refuses before the network: I1 CATALOGUE's value[0], value[1]
+//       and BUILD_HERE, the six per-entry facts, fact.store.url (LOCAL), the retired row's id and whole sentence,
+//       every NOT_FOUND / "" / DENIED edge and a failed refetch; I2 STORE_ACTIVITY's transfer entry and the
+//       live progress (which moves no list); I3 the ADD ALL run's position, total and name, published after
+//       every pass, and its red summary; I4 catalogStatus and addAllSummary as lines, and the language moving the
+//       retired row's sentence; I5 the catalogue counter the fingerprint hashes, at every write of the catalogue.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -91,6 +100,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <map>
 #include <memory>
@@ -115,6 +125,7 @@
 #include "engine/bias_tee.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/plugin_store_reasons.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "engine_api_test_env.hpp"
@@ -209,6 +220,30 @@ struct AppWindowTestAccess {
     static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return e.pluginUi_.api(); }
     // The install records the engine holds, as the last rescan read them (a rescan replaces them).
     static cascade::core::PluginInventory& inventory(cascade::engine::Engine& e) { return e.pluginInventory_; }
+    // Group 10 (the plugin store): a transfer as its worker would leave it. The engine's install slot holds a
+    // promise the test keeps, so a download is in flight (installPending_, the busy name) until the test says it
+    // is over, with a result the pump applies exactly as it applies a real worker's. Nothing touches the network.
+    static std::promise<cascade::engine::Engine::PluginInstallResult>& installPromise() {
+        static std::promise<cascade::engine::Engine::PluginInstallResult> p;
+        return p;
+    }
+    static void beginTransfer(cascade::engine::Engine& e, const std::string& name) {
+        installPromise() = std::promise<cascade::engine::Engine::PluginInstallResult>();
+        e.installFuture_ = installPromise().get_future();
+        e.installBusyName_ = name;
+        e.installPending_ = true;
+    }
+    static void endTransfer(bool ok, const std::string& name, const std::string& error) {
+        cascade::engine::Engine::PluginInstallResult r;
+        r.ok = ok;
+        r.name = name;
+        r.error = error;
+        installPromise().set_value(std::move(r));
+    }
+    // What the download worker would have stored in the repo's progress atomic.
+    static void setProgress(cascade::engine::Engine& e, float p) { e.pluginRepo_.setProgressForTest(p); }
+    // The counter the list fingerprint hashes for everything a catalogue entry carries.
+    static std::uint64_t catalogSeq(cascade::engine::Engine& e) { return e.catalogSeq_; }
 };
 }  // namespace cascade::gui
 
@@ -383,7 +418,7 @@ void testEveryListIsServed() {
     testing::Engine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_PLUGIN_COMMANDS; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_STORE_ACTIVITY; ++l) {
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -1018,7 +1053,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_PLUGIN_COMMANDS; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_STORE_ACTIVITY; ++l) {
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -3695,6 +3730,730 @@ void testInstallStatusLines() {
     std::printf("H5: installReport (level 1) and installError (level 3) are status lines, facts and part of the window's copy\n");
 }
 
+
+// --- I: the plugin store (window port group 10, API 0.3 section 8.9) ------------------------------------------
+//
+// The catalogue is a REAL fetch of a local index.json (an address with no "://" is read from disk, which is how the
+// store is exercised offline), over the scratch plugin folder of group 9: its stage-1 module is installed under an
+// old version and the index sets a floor above it (a retired module, with an update plan), its group-9 module is
+// installed and updatable (a host record to join by file name), and five more entries cover the columns - a build
+// with a size and a second platform, a legal notice, no build for this machine, another ABI, no licence. A transfer
+// is a promise the test keeps in the engine's own install slot (nothing here touches the network); ADD ALL runs for
+// real over entries whose file names the loader's rule refuses, which the install refuses before any network.
+
+struct IdxPlatform {
+    std::string os, arch, file, sha;
+    unsigned long long size = 0;
+};
+struct IdxEntry {
+    std::string id, name, version, author, licence, summary, description, homepage, legal, floor;
+    unsigned abi = CASCADE_PLUGIN_ABI_VERSION;
+    std::vector<IdxPlatform> platforms;
+};
+
+std::string hex64(char c) { return std::string(64, c); }
+
+// The index document. The texts are plain ASCII with no quotes, so no escaping is needed.
+std::string indexJson(const std::vector<IdxEntry>& v) {
+    std::string j = "{\"schemaVersion\":1,\"plugins\":[";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        const IdxEntry& e = v[i];
+        j += i == 0 ? "{" : ",{";
+        j += "\"id\":\"" + e.id + "\",\"name\":\"" + e.name + "\",\"version\":\"" + e.version + "\"";
+        j += ",\"author\":\"" + e.author + "\",\"licence\":\"" + e.licence + "\",\"summary\":\"" + e.summary + "\"";
+        j += ",\"description\":\"" + e.description + "\",\"homepage\":\"" + e.homepage + "\"";
+        j += ",\"legalNotice\":\"" + e.legal + "\",\"minSupportedVersion\":\"" + e.floor + "\"";
+        j += ",\"abiVersion\":" + std::to_string(e.abi) + ",\"platforms\":[";
+        for (std::size_t k = 0; k < e.platforms.size(); ++k) {
+            const IdxPlatform& p = e.platforms[k];
+            j += k == 0 ? "{" : ",{";
+            j += "\"os\":\"" + p.os + "\",\"arch\":\"" + p.arch + "\",\"file\":\"" + p.file + "\"";
+            j += ",\"url\":\"https://example.invalid/" + p.file + "\",\"sha256\":\"" + p.sha + "\"";
+            if (p.size != 0) { j += ",\"sizeBytes\":" + std::to_string(p.size); }
+            j += "}";
+        }
+        j += "]}";
+    }
+    return j + "]}";
+}
+
+IdxPlatform hostBuild(const std::string& file, char shaChar, unsigned long long size) {
+    return IdxPlatform{cascade::core::PluginRepo::hostOs(), cascade::core::PluginRepo::hostArch(), file, hex64(shaChar), size};
+}
+
+void writeText(const std::filesystem::path& p, const std::string& text) {
+    std::ofstream f(p, std::ios::binary);
+    f << text;
+}
+
+std::string lowerAscii(std::string s) {
+    for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    return s;
+}
+
+// The catalogue entry (CATALOGUE) whose id, in detail, is `id`: a zeroed item when there is none.
+FoxListItem catalogueEntry(testing::Session& s, const std::string& id) {
+    const int32_t n = count(s, FOXAPI_LIST_CATALOGUE);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_CATALOGUE, static_cast<uint32_t>(i));
+        if (id == it.detail) { return it; }
+    }
+    return FoxListItem{};
+}
+
+std::string storeFact(testing::Session& who, const std::string& id, const char* leaf, int32_t* st = nullptr) {
+    return fact(who, ("fact.store." + id + "." + leaf).c_str(), st);
+}
+std::string blockedFact(testing::Session& who, const std::string& file, const char* leaf, int32_t* st = nullptr) {
+    return fact(who, ("fact.blocked." + file + "." + leaf).c_str(), st);
+}
+
+// The first language that is not English (Z7's rule).
+std::string otherLanguage() {
+    for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+        if (l.code != "en") { return l.code; }
+    }
+    return std::string();
+}
+
+// The scratch world of group I: the group-9 plugin folder, a manifest that records two of its modules, and the
+// index documents. Built BEFORE the engine, which reads the manifest when it first scans the folder.
+struct StoreWorld {
+    PluginWorld world{true};
+    Nine n;
+    std::filesystem::path index, indexRun;
+    std::string stageId = "stage-one-fixture", nineId = "group-nine-fixture";
+    std::string stageName =
+        "Stage One Fixture Plugin With A Deliberately Long Display Name So The Retirement Sentence Passes The Cut";
+    std::string hostPair = std::string(cascade::core::PluginRepo::hostOs()) + "/" + cascade::core::PluginRepo::hostArch();
+
+    std::string digest(const std::string& file) const {
+        std::string hex, err;
+        CHECK(cascade::core::PluginRepo::sha256File((world.dir / file).string(), hex, err));
+        return hex;
+    }
+    StoreWorld() {
+        // The install records: the stage-1 module at 1.0.0 and the group-9 one at 9.0.0, each with the digest of
+        // the file that is really there (an honest record: no integrity finding to confuse the facts).
+        for (int which = 0; which < 2; ++which) {
+            cascade::core::PluginCatalogEntry rec;
+            rec.id = which == 0 ? stageId : nineId;
+            rec.name = which == 0 ? stageName : "Group Nine Fixture";
+            rec.version = which == 0 ? "1.0.0" : "9.0.0";
+            rec.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
+            cascade::core::PluginPlatform p;
+            p.os = cascade::core::PluginRepo::hostOs();
+            p.arch = cascade::core::PluginRepo::hostArch();
+            p.file = which == 0 ? n.s1 : n.g9;
+            p.url = "https://example.invalid/x";
+            p.sha256 = digest(p.file);
+            rec.platforms.push_back(p);
+            std::string err;
+            CHECK(cascade::core::PluginRepo::recordInstall(world.dir.string(), rec, err));
+        }
+        std::vector<IdxEntry> v;
+        {
+            IdxEntry e;  // a plain entry: two builds, the one for this machine with a size
+            e.id = "alpha-good";
+            e.name = "Alpha Decoder";
+            e.version = "1.0.0";
+            e.author = "Alpha Labs Ltd";
+            e.licence = "MIT";
+            e.summary = "Decodes alpha.";
+            e.description = std::string(400, 'd');
+            e.homepage = "https://example.org/alpha";
+            e.platforms = {hostBuild("alpha_good.dll", 'a', 12345), IdxPlatform{"plan9", "mips", "alpha_plan9.so", hex64('b'), 99}};
+            v.push_back(e);
+        }
+        {
+            IdxEntry e;  // a legal notice longer than a list item, a floor, a dotted id, no stated size, no author
+            e.id = "beta.legal";
+            e.name = "Beta Decoder";
+            e.version = "0.9.1";
+            e.licence = "GPL-3.0-or-later";
+            e.legal = std::string(300, 'L');
+            e.floor = "0.9.0";
+            e.platforms = {hostBuild("beta_legal.dll", 'c', 0)};
+            v.push_back(e);
+        }
+        {
+            IdxEntry e;  // announced before its first build: no platforms at all
+            e.id = "gamma-nobuild";
+            e.name = "Gamma Decoder";
+            e.version = "0.1.0";
+            e.licence = "MIT";
+            v.push_back(e);
+        }
+        {
+            IdxEntry e;  // another ABI
+            e.id = "delta-abi";
+            e.name = "Delta Decoder";
+            e.version = "3.0.0";
+            e.licence = "MIT";
+            e.abi = CASCADE_PLUGIN_ABI_VERSION + 1u;
+            e.platforms = {hostBuild("delta_abi.dll", 'd', 777)};
+            v.push_back(e);
+        }
+        {
+            IdxEntry e;  // no licence declared
+            e.id = "epsilon-nolicence";
+            e.name = "Epsilon Decoder";
+            e.version = "1.1.0";
+            e.platforms = {hostBuild("epsilon.dll", 'e', 4096)};
+            v.push_back(e);
+        }
+        {
+            IdxEntry e;  // installed at 1.0.0 below its own floor: RETIRED, and an update is planned
+            e.id = stageId;
+            e.name = stageName;
+            e.version = "2.0.0";
+            e.author = "FoxSDR tests";
+            e.licence = "MIT";
+            e.floor = "2.0.0";
+            e.platforms = {hostBuild(n.s1, 'f', 0)};
+            v.push_back(e);
+        }
+        {
+            IdxEntry e;  // installed at 9.0.0, loaded: a host record to join, and an update is planned
+            e.id = nineId;
+            e.name = "Group Nine Fixture";
+            e.version = "9.2.0";
+            e.author = "FoxSDR tests (group nine)";
+            e.licence = "MIT";
+            e.platforms = {hostBuild(n.g9, '7', 2048)};
+            v.push_back(e);
+        }
+        index = world.dir.parent_path() / "store_index_group10.json";
+        writeText(index, indexJson(v));
+        // The ADD ALL run: three entries whose file names the loader's rule refuses (a separator), so every install
+        // is refused by install() before it reaches the network, in a handful of passes.
+        std::vector<IdxEntry> run;
+        for (const char* word : {"One", "Two", "Three"}) {
+            IdxEntry e;
+            e.id = std::string("bad-") + word;
+            e.name = std::string("Bad ") + word;
+            e.version = "1.0.0";
+            e.licence = "MIT";
+            e.platforms = {hostBuild(std::string("sub/") + word + ".dll", '8', 100)};
+            run.push_back(e);
+        }
+        indexRun = world.dir.parent_path() / "store_index_group10_run.json";
+        writeText(indexRun, indexJson(run));
+    }
+    ~StoreWorld() {
+        std::error_code ec;
+        std::filesystem::remove(index, ec);
+        std::filesystem::remove(indexRun, ec);
+    }
+};
+
+FoxCommand textCmd(uint32_t op, const std::string& text, long long i0 = 0) { return testing::cmd(op, 0, i0, text.c_str()); }
+
+// Points the store at `path`, fetches, and passes until `entries` entries are listed (the rescan the landing runs is
+// published in the same block). Returns whether they were.
+bool fetchCatalogue(cascade::engine::Engine& eng, testing::Session& s, const std::filesystem::path& path, int entries) {
+    if (pumped(eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, path.string())).status() != FOXAPI_OK) { return false; }
+    if (pumped(eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status() != FOXAPI_OK) { return false; }
+    return passUntil(eng, [&] { return count(s, FOXAPI_LIST_CATALOGUE) == entries && count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; });
+}
+
+// I1: before anything was fetched, and the fetch itself - what the table says when nobody has asked, while the
+// fetch is in flight, and when it has landed with a retired module and an update plan in it.
+void testStoreBeforeAndFetch() {
+    StoreWorld w;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(remote.ok());
+    passes(d.eng, 3);
+    int32_t st = 0;
+    const auto levelOf = [&](testing::Session& who, const char* key) {
+        for (int32_t i = 0; i < count(who, FOXAPI_LIST_STATUS_LINES); ++i) {
+            const FoxListItem x = item(who, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+            if (std::string(x.name) == key) { return x.value[0]; }
+        }
+        return -1.0;
+    };
+
+    // NOBODY HAS ASKED: no entries, nothing going on, no status line, and every fact absent or empty.
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_BLOCKED), 0);
+    CHECK_EQ(levelOf(s, "catalogStatus"), -1.0);
+    CHECK_EQ(levelOf(s, "addAllSummary"), -1.0);
+    CHECK_EQ(fact(s, "fact.status.catalogStatus", &st), std::string());  // served, and empty
+    CHECK_EQ(st, 0);
+    CHECK_EQ(fact(s, "fact.status.addAllSummary", &st), std::string());
+    CHECK_EQ(st, 0);
+    storeFact(s, w.stageId, "author", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);  // an id nobody listed
+    blockedFact(s, w.n.s1, "id", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);  // a file nobody retired
+    const std::string url0 = fact(s, "fact.store.url", &st);
+    CHECK(st >= 0);  // known, whatever it holds
+    CHECK_EQ(fact(remote, "fact.store.url", &st), std::string());
+    CHECK_EQ(st, FOXAPI_DENIED);  // a path or an address on the engine's machine: LOCAL
+
+    // THE INDEX THE STORE READS: a command lands at the next pass and moves listSeq, and the same index again
+    // moves nothing.
+    const uint64_t seqA = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, w.index.string())).status(), FOXAPI_OK);
+    CHECK_EQ(fact(s, "fact.store.url"), w.index.string());
+    CHECK(s.state().listSeq != seqA);
+    CHECK(w.index.string() != url0);
+    const uint64_t seqB = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, w.index.string())).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(s.state().listSeq, seqB);
+    CHECK_EQ(fact(remote, "fact.store.url", &st), std::string());
+    CHECK_EQ(st, FOXAPI_DENIED);
+
+    // THE FETCH IN FLIGHT: the pass that applies it publishes entry 1 (kind 1: the catalogue, no name) and an empty
+    // catalogue, and the progress is whatever the repo holds (0 at rest).
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 1);
+    {
+        const FoxListItem a = item(s, FOXAPI_LIST_STORE_ACTIVITY, 0);
+        CHECK_EQ(a.id, 1u);
+        CHECK_EQ(std::string(a.name), std::string());
+        CHECK_EQ(a.value[1], 1.0);
+        CHECK_EQ(a.value[0], 0.0);
+        CHECK((a.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    }
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
+    CHECK_EQ(count(remote, FOXAPI_LIST_STORE_ACTIVITY), 1);  // not LOCAL-only: a lamp is not a path
+
+    // ...and its landing: the rows, the status line, the retired module and the plans in ONE block, entry 1 gone.
+    const bool landed = passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_CATALOGUE) == 7; });
+    if (!landed) { std::printf("  I1: the fetch did not land: catalogError \"%s\"\n", fact(s, "fact.status.catalogError").c_str()); }
+    CHECK(landed);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    CHECK_EQ(levelOf(s, "catalogStatus"), 1.0);
+    CHECK_EQ(fact(s, "fact.status.catalogStatus"), std::string("7 plugins in the catalogue"));
+    CHECK_EQ(d.eng.statusText().catalogStatus, std::string("7 plugins in the catalogue"));
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_BLOCKED), 1);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_UPDATES), 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 3);  // the retired module was renamed out of the scan
+    CHECK_EQ(levelOf(s, "addAllSummary"), -1.0);
+
+    // CATALOGUE's columns and the flag.
+    const unsigned abi = CASCADE_PLUGIN_ABI_VERSION;
+    const FoxListItem alpha = catalogueEntry(s, "alpha-good");
+    const FoxListItem beta = catalogueEntry(s, "beta.legal");
+    const FoxListItem gamma = catalogueEntry(s, "gamma-nobuild");
+    const FoxListItem delta = catalogueEntry(s, "delta-abi");
+    const FoxListItem epsilon = catalogueEntry(s, "epsilon-nolicence");
+    const FoxListItem stage = catalogueEntry(s, w.stageId);
+    const FoxListItem nine = catalogueEntry(s, w.nineId);
+    const uint32_t cf = FOXAPI_ITEM_COMPATIBLE | FOXAPI_ITEM_BUILD_HERE | FOXAPI_ITEM_INSTALLED;
+    CHECK_EQ(std::string(alpha.name), std::string("Alpha Decoder"));
+    CHECK_EQ(alpha.value[0], static_cast<double>(abi));
+    CHECK_EQ(alpha.value[1], 12345.0);  // the build for THIS machine, not the other platform's
+    CHECK_EQ(alpha.flags & cf, FOXAPI_ITEM_COMPATIBLE | FOXAPI_ITEM_BUILD_HERE);
+    CHECK_EQ(beta.value[1], 0.0);  // not stated: a plate says "not told"
+    CHECK_EQ(beta.flags & cf, FOXAPI_ITEM_COMPATIBLE | FOXAPI_ITEM_BUILD_HERE);
+    CHECK_EQ(gamma.value[0], static_cast<double>(abi));
+    CHECK_EQ(gamma.value[1], 0.0);  // no build: no size
+    CHECK_EQ(gamma.flags & cf, FOXAPI_ITEM_COMPATIBLE);  // the right ABI, and nothing to install
+    CHECK_EQ(delta.value[0], static_cast<double>(abi + 1u));
+    CHECK_EQ(delta.value[1], 777.0);
+    CHECK_EQ(delta.flags & cf, FOXAPI_ITEM_BUILD_HERE);  // a build, and the wrong ABI
+    CHECK_EQ(epsilon.value[1], 4096.0);
+    CHECK_EQ(epsilon.flags & cf, FOXAPI_ITEM_COMPATIBLE | FOXAPI_ITEM_BUILD_HERE);
+    CHECK_EQ(stage.flags & cf, cf);  // installed (by the manifest: the host has no record of a retired module)
+    CHECK_EQ(nine.flags & cf, cf);
+    CHECK_EQ(nine.value[1], 2048.0);
+    CHECK(FOXAPI_ITEM_BUILD_HERE != FOXAPI_ITEM_DIGEST_MISMATCH && (FOXAPI_ITEM_BUILD_HERE & 0x000FFFFFu) == 0u);
+
+    // THE PER-ENTRY FACTS: whole, "" when there is none (known and empty), for every entry.
+    CHECK_EQ(storeFact(s, "alpha-good", "author"), std::string("Alpha Labs Ltd"));
+    CHECK_EQ(storeFact(s, "alpha-good", "licence"), std::string("MIT"));
+    CHECK_EQ(storeFact(s, "alpha-good", "platforms"), w.hostPair + ", plan9/mips");  // the index's order
+    CHECK_EQ(storeFact(s, "alpha-good", "floor", &st), std::string());  // no floor: "" and not NOT_FOUND
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "alpha-good", "file"), std::string("alpha_good.dll"));
+    CHECK_EQ(storeFact(s, "alpha-good", "updateReason", &st), std::string());  // no plan
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "alpha-good", "description"), std::string(400, 'd'));
+    CHECK_EQ(storeFact(s, "alpha-good", "blocked"), std::string());
+    CHECK_EQ(storeFact(s, "beta.legal", "author", &st), std::string());  // an entry with no maker
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "beta.legal", "licence"), std::string("GPL-3.0-or-later"));
+    CHECK_EQ(storeFact(s, "beta.legal", "floor"), std::string("0.9.0"));
+    CHECK_EQ(storeFact(s, "beta.legal", "platforms"), w.hostPair);
+    CHECK_EQ(storeFact(s, "beta.legal", "file"), std::string("beta_legal.dll"));
+    CHECK_EQ(storeFact(s, "beta.legal", "legal"), std::string(300, 'L'));
+    CHECK_EQ(storeFact(s, "beta.legal", "blocked"), std::string());  // the notice taken as acknowledged
+    CHECK_EQ(storeFact(s, "gamma-nobuild", "platforms", &st), std::string());  // no build at all
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "gamma-nobuild", "file", &st), std::string());
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "gamma-nobuild", "blocked"), cascade::gui::pluginNoBuildReason(w.hostPair));
+    CHECK_EQ(storeFact(s, "delta-abi", "blocked"), cascade::gui::pluginAbiMismatchReason(abi + 1u, abi));
+    CHECK_EQ(storeFact(s, "delta-abi", "file"), std::string("delta_abi.dll"));
+    CHECK_EQ(storeFact(s, "epsilon-nolicence", "licence", &st), std::string());  // declares none
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "epsilon-nolicence", "blocked"), std::string("the catalogue entry declares no licence"));
+    // Installed, and updatable: the reason is the plan's own sentence; and the file joins to PLUGINS.
+    CHECK_EQ(storeFact(s, w.nineId, "updateReason"), std::string("version 9.2.0 replaces the installed 9.0.0"));
+    CHECK_EQ(storeFact(s, w.stageId, "updateReason"), std::string("version 2.0.0 replaces the installed 1.0.0"));
+    CHECK_EQ(storeFact(s, w.stageId, "floor"), std::string("2.0.0"));
+    CHECK_EQ(storeFact(s, w.nineId, "blocked"), std::string("already installed"));
+    CHECK_EQ(storeFact(s, w.stageId, "blocked"), std::string("already installed"));
+    CHECK_EQ(storeFact(s, w.nineId, "file"), w.n.g9);
+    CHECK_EQ(storeFact(s, w.stageId, "file"), w.n.s1);
+    {
+        // THE JOIN: the entry's file against PLUGINS' detail, ignoring ASCII case. A fitted module has a record...
+        const std::string want = lowerAscii(storeFact(s, w.nineId, "file"));
+        bool found = false;
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_PLUGINS); ++i) {
+            const FoxListItem p = item(s, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i));
+            if (lowerAscii(p.detail) == want) {
+                found = true;
+                CHECK((p.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+            }
+        }
+        CHECK(found);
+        // ...a retired one is INSTALLED and has none.
+        const std::string gone = lowerAscii(storeFact(s, w.stageId, "file"));
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_PLUGINS); ++i) {
+            CHECK(lowerAscii(item(s, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i)).detail) != gone);
+        }
+    }
+    // The entries with no update have no plan, and STORE_UPDATES agrees with the facts exactly.
+    for (const char* id : {"alpha-good", "beta.legal", "gamma-nobuild", "delta-abi", "epsilon-nolicence"}) {
+        CHECK_EQ(storeFact(s, id, "updateReason"), std::string());
+    }
+    {
+        std::set<std::string> planned;
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_STORE_UPDATES); ++i) {
+            planned.insert(item(s, FOXAPI_LIST_STORE_UPDATES, static_cast<uint32_t>(i)).name);
+        }
+        CHECK(planned == (std::set<std::string>{w.stageId, w.nineId}));
+    }
+    // NOT_FOUND: a leaf no entry has, an id nobody listed, the key with no leaf, an id's key with a leaf of another
+    // kind; a REMOTE session reads every one of these (none is a path) and gets NOT_FOUND where the engine has none.
+    storeFact(s, "alpha-good", "colour", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    storeFact(s, "no-such-entry", "file", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    storeFact(remote, "no-such-entry", "licence", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    fact(s, "fact.store.alpha-good", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    CHECK_EQ(storeFact(remote, "alpha-good", "author"), std::string("Alpha Labs Ltd"));
+    CHECK_EQ(storeFact(remote, "alpha-good", "file"), std::string("alpha_good.dll"));
+    CHECK_EQ(storeFact(remote, w.stageId, "updateReason"), std::string("version 2.0.0 replaces the installed 1.0.0"));
+    CHECK_EQ(fact(remote, "fact.store.url", &st), std::string());
+    CHECK_EQ(st, FOXAPI_DENIED);
+    CHECK_EQ(fact(s, "fact.store.url"), w.index.string());
+
+    // THE RETIRED MODULE (fact.blocked.<file>.*): keyed by the file, the id the update is matched on, and the
+    // sentence WHOLE (STORE_BLOCKED's detail cuts at 159 bytes).
+    const FoxListItem row = item(s, FOXAPI_LIST_STORE_BLOCKED, 0);
+    CHECK_EQ(std::string(row.name), w.n.s1);
+    CHECK_EQ(blockedFact(s, w.n.s1, "id"), w.stageId);
+    const std::string message = blockedFact(s, w.n.s1, "message", &st);
+    CHECK(st > 159);  // whole: more than a list item holds
+    CHECK(message.find("out of date and has been disabled") != std::string::npos);
+    CHECK(message.find(w.stageName) != std::string::npos);
+    CHECK(message.find("Version 2.0.0 is available - update it to use it again.") != std::string::npos);
+    CHECK(std::strlen(row.detail) <= 159u);
+    CHECK_EQ(message.compare(0, std::strlen(row.detail), row.detail), 0);  // the detail is the same sentence, cut
+    CHECK_EQ(blockedFact(remote, w.n.s1, "message"), message);  // a sentence is not a path
+    CHECK_EQ(blockedFact(remote, w.n.s1, "id"), w.stageId);
+    blockedFact(s, w.n.g9, "id", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);  // a module that is fitted and fine is not a retired row
+    blockedFact(s, w.n.s1, "colour", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    fact(s, ("fact.blocked." + w.n.s1).c_str(), &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    // The row's update is the one STORE_UPDATES plans for that id.
+    {
+        bool found = false;
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_STORE_UPDATES); ++i) {
+            const FoxListItem u = item(s, FOXAPI_LIST_STORE_UPDATES, static_cast<uint32_t>(i));
+            if (w.stageId == u.name) {
+                found = true;
+                CHECK_EQ(std::string(u.detail), std::string("1.0.0 -> 2.0.0"));
+            }
+        }
+        CHECK(found);
+    }
+
+    // A REFETCH that fails (a path that is not there) empties the catalogue and clears the status line.
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, (w.index.string() + ".missing"))).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; }));
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
+    CHECK_EQ(levelOf(s, "catalogStatus"), -1.0);
+    CHECK_EQ(levelOf(s, "catalogError"), 3.0);
+    storeFact(s, "alpha-good", "author", &st);
+    CHECK_EQ(st, FOXAPI_NOT_FOUND);  // the entry's facts went with it
+    std::printf("I1: CATALOGUE's value[0], value[1] and BUILD_HERE, the six per-entry facts, fact.store.url (LOCAL), the retired row's id and whole sentence, the two edges and a failed refetch\n");
+}
+
+// I2: STORE_ACTIVITY with a transfer in flight, and the live progress: the entry, its name and kind, a progress
+// that moves with no list moving, and the entry leaving with the result.
+void testStoreActivityAndProgress() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    StoreWorld w;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(remote.ok());
+    CHECK(fetchCatalogue(d.eng, s, w.index, 7));
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    CHECK_EQ(storeFact(s, "alpha-good", "blocked"), std::string());
+    const auto levelOf = [&](const char* key) {
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_STATUS_LINES); ++i) {
+            const FoxListItem x = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+            if (std::string(x.name) == key) { return x.value[0]; }
+        }
+        return -1.0;
+    };
+
+    // A DOWNLOAD begins (the worker's slot is a promise the test keeps), at a quarter.
+    const uint64_t seq0 = s.state().listSeq;
+    Access::beginTransfer(d.eng, "Alpha Decoder");
+    Access::setProgress(d.eng, 0.25f);
+    passes(d.eng, 1);
+    const uint64_t seq1 = s.state().listSeq;
+    CHECK(seq1 != seq0);  // the transfer starting moves the lists
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 1);
+    {
+        const FoxListItem a = item(s, FOXAPI_LIST_STORE_ACTIVITY, 0);
+        CHECK_EQ(a.id, 1u);
+        CHECK_EQ(std::string(a.name), std::string("Alpha Decoder"));
+        CHECK_EQ(a.value[1], 2.0);  // downloading
+        CHECK_EQ(a.value[0], 0.25);
+        CHECK((a.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    }
+    CHECK_EQ(count(remote, FOXAPI_LIST_STORE_ACTIVITY), 1);
+    CHECK_EQ(storeFact(s, "alpha-good", "blocked"), std::string("a transfer is already in progress"));
+
+    // THE PROGRESS IS READ LIVE: a figure the worker stores shows at the next read, with no pass between and no
+    // list moving; many passes of a moving figure leave listSeq where it was.
+    Access::setProgress(d.eng, 0.5f);
+    CHECK_EQ(item(s, FOXAPI_LIST_STORE_ACTIVITY, 0).value[0], 0.5);
+    Access::setProgress(d.eng, 1.0f);
+    CHECK_EQ(item(s, FOXAPI_LIST_STORE_ACTIVITY, 0).value[0], 1.0);
+    for (int i = 0; i < 20; ++i) {
+        Access::setProgress(d.eng, 0.01f * static_cast<float>(i));
+        passes(d.eng, 1);
+        CHECK_EQ(s.state().listSeq, seq1);
+        CHECK_EQ(item(s, FOXAPI_LIST_STORE_ACTIVITY, 0).value[0], static_cast<double>(0.01f * static_cast<float>(i)));
+    }
+
+    // ...and the result: the worker is done, the next pass finds it, the pass after publishes the entry gone and the
+    // reason in the red line (the table's own line is in the same block).
+    Access::endTransfer(false, "Alpha Decoder", "the sha256 did not match");
+    passes(d.eng, 1);
+    passes(d.eng, 1);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    CHECK_EQ(fact(s, "fact.status.installError"), std::string("the sha256 did not match"));
+    CHECK_EQ(levelOf("installError"), 3.0);
+    CHECK_EQ(storeFact(s, "alpha-good", "blocked"), std::string());  // idle again: the gate follows
+    CHECK(s.state().listSeq != seq1);
+
+    // A CATALOGUE FETCH is kind 1 with no name; the same progress figure is read.
+    Access::beginTransfer(d.eng, "Alpha Decoder");
+    passes(d.eng, 1);
+    Access::endTransfer(false, "Alpha Decoder", "x");
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    std::printf("I2: STORE_ACTIVITY entry 1 (name, kind), the live progress moving nothing, and the entry leaving with the result\n");
+}
+
+// I3: ADD ALL for real over three entries the loader's name rule refuses - every install fails before the network -
+// reading STORE_ACTIVITY after every pass: entry 2's position is the module in flight (1-based), the total is
+// fixed, entry 1 carries the same name, and the run ends with a red summary and nothing listed.
+void testStoreAddAllRun() {
+    StoreWorld w;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK(fetchCatalogue(d.eng, s, w.indexRun, 3));
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    const auto levelOf = [&](const char* key) {
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_STATUS_LINES); ++i) {
+            const FoxListItem x = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+            if (std::string(x.name) == key) { return x.value[0]; }
+        }
+        return -1.0;
+    };
+    // The plan is the catalogue's order.
+    const std::vector<std::string> order = {"Bad One", "Bad Two", "Bad Three"};
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_STORE_ADD_ALL, std::string(), 0)).status(), FOXAPI_OK);
+    // The pass that applied it: the run is going, nothing has started (the pump runs after the publish).
+    std::set<std::string> seen;
+    std::vector<std::string> trace;
+    bool sawFirstUnnamed = false;
+    for (int i = 0; i < 400; ++i) {
+        const int32_t n = count(s, FOXAPI_LIST_STORE_ACTIVITY);
+        if (n == 0) { break; }
+        const FoxListItem run = item(s, FOXAPI_LIST_STORE_ACTIVITY, static_cast<uint32_t>(n - 1));
+        CHECK_EQ(run.id, 2u);
+        CHECK_EQ(run.value[1], 3.0);  // the total
+        CHECK((run.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+        const std::string name = run.name;
+        if (name.empty()) {
+            CHECK_EQ(run.value[0], 1.0);  // "starting": position 1 of 3
+            sawFirstUnnamed = true;
+        } else {
+            const auto at = std::find(order.begin(), order.end(), name);
+            CHECK(at != order.end());
+            if (at != order.end()) {
+                // THE POSITION IS THE MODULE IN FLIGHT, 1-BASED: the first module is 1 of 3, and the last one is 3.
+                CHECK_EQ(run.value[0], static_cast<double>(at - order.begin() + 1));
+            }
+            seen.insert(name);
+        }
+        if (n == 2) {  // a transfer is in flight beside it: the same module, downloading
+            const FoxListItem t = item(s, FOXAPI_LIST_STORE_ACTIVITY, 0);
+            CHECK_EQ(t.id, 1u);
+            CHECK_EQ(std::string(t.name), name);
+            CHECK_EQ(t.value[1], 2.0);
+        }
+        trace.push_back(name + "@" + std::to_string(static_cast<int>(run.value[0])));
+        d.eng.controlPass();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::string joined;
+    for (const std::string& t : trace) { joined += (joined.empty() ? "" : " ") + t; }
+    std::printf("I3: the run as published: %s\n", joined.c_str());
+    CHECK(sawFirstUnnamed);
+    CHECK(seen.size() == 3);  // every module was seen in flight (each is published once at least)
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_STORE_ACTIVITY), 0);
+    // The summary: red (level 3) because modules failed, whole, in the table and in the window's copy.
+    const std::string summary = fact(s, "fact.status.addAllSummary");
+    CHECK(summary.rfind("0 installed, 3 failed.", 0) == 0);
+    CHECK(summary.find("Bad One") != std::string::npos && summary.find("Bad Three") != std::string::npos);
+    CHECK_EQ(levelOf("addAllSummary"), 3.0);
+    CHECK_EQ(d.eng.statusText().addAllSummary, summary);
+    CHECK(d.eng.statusText().addAllFailed);
+    // A line the hook sets is information (level 1) unless the failed flag is set, and clears with its text.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=addAllFailed|0")).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("addAllSummary"), 1.0);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=addAllFailed|1")).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("addAllSummary"), 3.0);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=addAllSummary|")).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("addAllSummary"), -1.0);
+    CHECK_EQ(fact(s, "fact.status.addAllSummary"), std::string());
+    // An entry whose file name the loader's rule refuses has no installable file: "" (known and empty), though
+    // it has a build for this machine.
+    int32_t st = 0;
+    CHECK_EQ(storeFact(s, "bad-One", "file", &st), std::string());
+    CHECK_EQ(st, 0);
+    CHECK_EQ(storeFact(s, "bad-One", "platforms"), w.hostPair);
+    CHECK((catalogueEntry(s, "bad-One").flags & FOXAPI_ITEM_BUILD_HERE) != 0u);
+}
+
+// I5: the counter the fingerprint hashes for the catalogue's content moves at every write of it: the hook's entry, a
+// fetch starting (which empties it), a fetch landing, and a fetch failing (which empties it again). Each is
+// redundant with another input on the paths a real fetch takes (its busy flag, the rescan a landing runs), so
+// the counter is held directly: it is what makes the fingerprint exact, and a bump that is lost is invisible
+// everywhere else.
+void testStoreCatalogueCounter() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    StoreWorld w;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 2);
+    const uint64_t c0 = Access::catalogSeq(d.eng);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.catalogue=hook.id|Hook entry|")).status(), FOXAPI_OK);
+    CHECK_EQ(Access::catalogSeq(d.eng), c0 + 1u);  // the hook's entry
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 1);
+    CHECK_EQ(storeFact(s, "hook.id", "version"), std::string("1.0.0"));
+    // The hook's entry carries no licence, no build and no ABI: every new column and fact is served for it too.
+    const FoxListItem hook = catalogueEntry(s, "hook.id");
+    CHECK_EQ(hook.value[0], 0.0);
+    CHECK_EQ(hook.value[1], 0.0);
+    CHECK_EQ(hook.flags & FOXAPI_ITEM_BUILD_HERE, 0u);
+    int32_t st = 0;
+    for (const char* leaf : {"author", "licence", "platforms", "floor", "file", "updateReason"}) {
+        CHECK_EQ(storeFact(s, "hook.id", leaf, &st), std::string());
+        CHECK_EQ(st, 0);
+    }
+    const uint64_t c1 = Access::catalogSeq(d.eng);
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, w.index.string())).status(), FOXAPI_OK);
+    CHECK_EQ(Access::catalogSeq(d.eng), c1);  // the index is not the catalogue
+    // A fetch: it empties the catalogue when it starts and replaces it when it lands (two writes, whichever pass
+    // each falls in).
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_CATALOGUE) == 7; }));
+    CHECK_EQ(Access::catalogSeq(d.eng), c1 + 2u);
+    // ...and one that fails: emptied when it starts, emptied again when it fails.
+    CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, (w.index.string() + ".missing"))).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; }));
+    passes(d.eng, 2);
+    CHECK_EQ(Access::catalogSeq(d.eng), c1 + 4u);
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
+    std::printf("I5: catalogSeq_ moves at the hook's entry, a fetch starting, landing and failing, and with the index alone it does not\n");
+}
+
+// I4: the two status lines through the hook (the writers are the engine's own: I1 and I3), and the language: a
+// retired module's sentence is composed when the block is built, so a switch rebuilds it - while STORE_BLOCKED's
+// detail, the sentence as stored, stays English.
+void testStoreLinesAndLanguage() {
+    StoreWorld w;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    CHECK(fetchCatalogue(d.eng, s, w.index, 7));
+    passes(d.eng, 3);
+    const auto levelOf = [&](const char* key) {
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_STATUS_LINES); ++i) {
+            const FoxListItem x = item(s, FOXAPI_LIST_STATUS_LINES, static_cast<uint32_t>(i));
+            if (std::string(x.name) == key) { return x.value[0]; }
+        }
+        return -1.0;
+    };
+    // catalogStatus: a hook line is information, whole, in the table's lines, as a fact and in the window's copy.
+    const std::string long1 = "0 plugins in the catalogue " + std::string(190, 'c');  // (the hook's text is one command: 255)
+    const uint64_t seq = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, ("test.statusLine=catalogStatus|" + long1).c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("catalogStatus"), 1.0);
+    CHECK_EQ(fact(s, "fact.status.catalogStatus"), long1);
+    CHECK_EQ(d.eng.statusText().catalogStatus, long1);
+    CHECK(s.state().listSeq != seq);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SETTING_SET, 0, 0, "test.statusLine=catalogStatus|")).status(), FOXAPI_OK);
+    CHECK_EQ(levelOf("catalogStatus"), -1.0);
+    CHECK_EQ(d.eng.statusText().catalogStatus, std::string());
+
+    // THE LANGUAGE.
+    const std::string english = blockedFact(s, w.n.s1, "message");
+    const std::string detailEnglish = item(s, FOXAPI_LIST_STORE_BLOCKED, 0).detail;
+    CHECK(!english.empty());
+    const std::string other = otherLanguage();
+    CHECK(!other.empty());
+    if (other.empty()) { return; }
+    const uint64_t seq0 = s.state().listSeq;
+    (void)cascade::i18n::setLanguage(other);
+    d.eng.controlPass();
+    const uint64_t seq1 = s.state().listSeq;
+    const std::string translated = blockedFact(s, w.n.s1, "message");
+    const std::string detailOther = item(s, FOXAPI_LIST_STORE_BLOCKED, 0).detail;
+    (void)cascade::i18n::setLanguage("en");
+    d.eng.controlPass();
+    const std::string back = blockedFact(s, w.n.s1, "message");
+    std::printf("I4: in %s the retired row's sentence is \"%.60s...\" (listSeq %llu -> %llu)\n", other.c_str(), translated.c_str(),
+                static_cast<unsigned long long>(seq0), static_cast<unsigned long long>(seq1));
+    CHECK(seq1 != seq0);              // the language is hashed: the block is rebuilt
+    CHECK(translated != english);     // ...and the sentence with it, composed in the language in force
+    CHECK_EQ(detailOther, detailEnglish);  // while the stored sentence in the list is English as it was
+    CHECK_EQ(back, english);
+    CHECK(translated.find(w.stageName) != std::string::npos);  // the plugin's own name is not translated
+}
+
 }  // namespace
 
 int main() {
@@ -3757,5 +4516,11 @@ int main() {
     testFittedFlags();
     testFittedCommands();
     testInstallStatusLines();
+    // Group 10: the plugin store.
+    testStoreBeforeAndFetch();
+    testStoreActivityAndProgress();
+    testStoreAddAllRun();
+    testStoreCatalogueCounter();
+    testStoreLinesAndLanguage();
     return check::finish("test_engine_api_03");
 }

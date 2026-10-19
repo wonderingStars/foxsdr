@@ -76,6 +76,18 @@ bool gainDrivenByAgc(const cascade::source::AirspySource* airspy, const std::str
     return (stage == "LNA" && airspy->lnaAgc()) || (stage == "MIXER" && airspy->mixerAgc());
 }
 
+// The file name a catalogue entry's build for THIS machine installs under: the sanitised name, exactly what
+// Engine::catalogEntryInstalled and installedPluginRecord compare against the host's records. "" with no build for
+// this os and architecture, or a name the loader's own rule refuses (API 0.3 8.9, fact.store.<id>.file).
+std::string catalogueFileName(const cascade::core::PluginCatalogEntry& e) {
+    const cascade::core::PluginPlatform* p = e.thisPlatform();
+    if (p == nullptr) { return std::string(); }
+    std::string want;
+    std::string err;
+    if (!cascade::core::PluginRepo::sanitiseFileName(p->file, want, err)) { return std::string(); }
+    return want;
+}
+
 const char* nodeKindWord(cascade::core::patch::NodeKind k) {
     using K = cascade::core::patch::NodeKind;
     switch (k) {
@@ -257,9 +269,31 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(e.legalNotice.size());
     }
     f.value(pluginBlocked_.size());
-    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) { f.text(b.installed.file); }
+    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+        f.text(b.installed.file);
+        // API 0.3 8.9, fact.blocked.<file>.id and .message: the catalogue id, and the sentence as stored (which
+        // the block recomposes in the language in force). A rescan changes both and is hashed itself; they are
+        // hashed as well so a row that kept its file name cannot keep a stale id or sentence.
+        f.text(b.installed.id);
+        f.text(b.message);
+    }
     f.value(catalogPending_);
     f.value(installPending_);
+    // API 0.3 8.9, the store as its window draws it. EVERYTHING A CATALOGUE ENTRY CARRIES is one counter
+    // (catalogSeq_, bumped wherever catalog_ is written; hashing the texts of two dozen entries of up to 3 KB
+    // each, every pass, would cost more than the rest of this function), the index the store reads (a path or a
+    // URL: nothing else says it changed), and the transfer: the busy NAME is hashed and not only the pending flag,
+    // because an ADD ALL run goes from one download to the next inside ONE pump (pollPluginAsync clears
+    // installPending_ and pumpAddAll sets it again before the pass publishes), so the flag is the same at both
+    // publishes and only the name and the run's position tell them apart.
+    f.value(catalogSeq_);
+    f.text(pluginCatalogueUrl_);
+    f.text(installBusyName_);
+    f.value(addAllRun_.active);
+    f.value(addAllRun_.next);
+    f.value(addAllRun_.total);
+    f.text(addAllRun_.currentName);
+    f.value(addAllFailed_);  // the level of the addAllSummary line
     // The transmitter's address and whether it is open.
     f.text(transmitArgs_);
     f.text(sourceKind_);
@@ -335,7 +369,8 @@ std::uint64_t Engine::apiListsFingerprint() {
                                  &recordNotice_, &recordError_, &presetNote_, &pluginEnforceError_,
                                  &restoreKeepLabel_, &audioHealthNote_,  // (audioHealth: API 0.3 8.4)
                                  &bookmarkImportNote_, &bookmarkError_,  // (the Bookmarks section's: 8.6)
-                                 &installReport_, &installError_}) {  // (the plugin install/remove outcome: 8.8)
+                                 &installReport_, &installError_,  // (the plugin install/remove outcome: 8.8)
+                                 &catalogStatus_, &addAllSummary_}) {  // (the store window's two more: 8.9)
         f.text(*t);
     }
     // The patch page: its graph, what the plan said, its radios.
@@ -520,21 +555,90 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     }
     // THE STORE: the catalogue, what is refused, what would update - and the
     // long texts an entry carries, as facts.
+    // The update plans, once for the whole block (planUpdates walks the catalogue against the install records):
+    // STORE_UPDATES, and each entry's updateReason below.
+    const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
     for (const cascade::core::PluginCatalogEntry& e : catalog_) {
-        b.store.push_back({e.id, e.name, catalogEntryInstalled(e), e.compatible});
+        const cascade::core::PluginPlatform* const here = e.thisPlatform();
+        ApiListBlock::StoreEntry se;
+        se.id = e.id;
+        se.name = e.name;
+        se.installed = catalogEntryInstalled(e);
+        se.compatible = e.compatible;
+        // API 0.3 8.9: the entry's ABI, the size of the build for this machine (0: not stated or no build) and
+        // whether there is one.
+        se.abiVersion = e.abiVersion;
+        se.sizeBytes = here != nullptr ? here->sizeBytes : 0u;
+        se.buildHere = here != nullptr;
+        b.store.push_back(std::move(se));
         const std::string k = "store." + e.id + ".";
         fact(k + "legal", e.legalNotice);
         fact(k + "summary", e.summary);
         fact(k + "description", e.description);
         fact(k + "homepage", e.homepage);
         fact(k + "version", e.version);
+        // API 0.3 8.9: the rest of what the store's plate letters, every key for every entry ("" when there is
+        // none). The builds are joined as the window letters them, "windows/x64, linux/x64"; the file is the name
+        // this machine's build installs under, which joins the entry to PLUGINS' detail; the reason is the update
+        // plan's own sentence, in English.
+        fact(k + "author", e.author);
+        fact(k + "licence", e.licence);
+        std::string platforms;
+        for (const cascade::core::PluginPlatform& pf : e.platforms) {
+            if (!platforms.empty()) { platforms += ", "; }
+            platforms += pf.os + "/" + pf.arch;
+        }
+        fact(k + "platforms", std::move(platforms));
+        fact(k + "floor", e.minSupportedVersion);
+        fact(k + "file", catalogueFileName(e));
+        std::string reason;
+        for (const cascade::core::PluginUpdate& u : updates) {
+            if (u.id == e.id) {
+                reason = u.reason;
+                break;
+            }
+        }
+        fact(k + "updateReason", std::move(reason));
     }
+    // The index the store reads: a URL, or a path on this machine (the header of the store window says a local
+    // index.json is how it is exercised offline), so LOCAL. No id has a leaf-less key, so it cannot collide.
+    fact("store.url", pluginCatalogueUrl_, true);
     for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
         fact("store." + catalog_[static_cast<std::size_t>(i)].id + ".blocked", pluginInstallBlockedReason(i, true));
     }
-    for (const cascade::core::BlockedPlugin& x : pluginBlocked_) { b.storeBlocked.emplace_back(x.installed.file, x.message); }
-    for (const cascade::core::PluginUpdate& u : plannedPluginUpdates()) {
+    for (const cascade::core::BlockedPlugin& x : pluginBlocked_) {
+        b.storeBlocked.emplace_back(x.installed.file, x.message);
+        // API 0.3 8.9: what STORE_BLOCKED's detail cannot say. The id the Update plan is matched on, and the
+        // sentence WHOLE and composed NOW, in the language in force: x.message was composed when the plugins were
+        // loaded, before any language was chosen, and detail cuts it at 159 bytes. The fingerprint hashes the
+        // language, so a switch rebuilds the block and with it this sentence (as fact.converter.name).
+        const std::string kb = "blocked." + x.installed.file + ".";
+        fact(kb + "id", x.installed.id);
+        fact(kb + "message", cascade::core::PluginRepo::pluginBlockMessage(x.installed, x.policy));
+    }
+    for (const cascade::core::PluginUpdate& u : updates) {
         b.storeUpdates.emplace_back(u.id, u.fromVersion + " -> " + u.toVersion);
+    }
+    // API 0.3 8.9, STORE_ACTIVITY: the transfer in flight and the ADD ALL run. What is read live (the progress)
+    // is not here: the block keeps the repo.
+    {
+        ApiListBlock::StoreActivity& a = b.storeActivity;
+        a.repo = &pluginRepo_;
+        if (catalogPending_ || installPending_) {
+            a.transfer = true;
+            a.transferKind = installPending_ ? 2 : 1;
+            if (installPending_) { a.transferName = installBusyName_; }
+        }
+        if (addAllRun_.active) {
+            a.addAll = true;
+            a.addAllTotal = addAllRun_.total;
+            // THE MODULE IN FLIGHT, 1-based. `next` is the index of the NEXT id to start and pumpAddAll has already
+            // stepped it past the one it just started, so while module k downloads next == k: that is the position.
+            // (The window used to letter min(next + 1, total), which reads k + 1: the first module as "2 of 23",
+            // and the last two both as "23 of 23". Before the first starts, next is 0 and the name is empty: 1.)
+            a.addAllPosition = std::clamp<std::uint64_t>(static_cast<std::uint64_t>(addAllRun_.next), 1u, addAllRun_.total);
+            a.addAllName = addAllRun_.currentName;
+        }
     }
     // THE TRANSMITTER's one "device": the address TX_OPEN is given.
     // Until the page has seeded (or somebody typed) one, the seed it would use.
@@ -636,6 +740,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             // and the fitted-modules window show the same pair).
             {"installReport", &installReport_, 1},
             {"installError", &installError_, 3},
+            // 8.9: the catalogue status line ("N plugins in the catalogue", set by a fetch that landed, cleared when
+            // one starts) and what the last ADD ALL run did (red when it had failures).
+            {"catalogStatus", &catalogStatus_, 1},
+            {"addAllSummary", &addAllSummary_, addAllFailed_ ? 3 : 1},
         };
         for (const Line& l : lines) {
             b.statusLines.push_back({l.key, *l.text, l.level});
