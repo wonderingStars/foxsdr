@@ -2053,6 +2053,315 @@ THE TRAPS, for the next group (step B's own list is long and every item cost tim
     decimation or a converter; the 95-byte label cut against live labels; and the one surviving mutant
     (`SoapySource::openDeviceCount()`, no hermetic seam).
 
+GROUP 12, the two scopes (drawScopeMode and drawScopeModeControl, the radar; gatherDemodScope and pipelineIsWfm, the demod
+page's feed; with drawDemodScopePage, drawDemodScopeSection and scopeSignalNow held at zero reads; the window gained
+`scopeGainLocal_`, `scopeKnob_`, `hostTracks()` and gui/scope_gain.hpp): API 0.3 section 8.11, one pair of members appended
+to the state with one flag, one field of the scope info, no op, no list, no fact, no status line. The window's own survey,
+written before the first edit, found 45 counted field reads in FOUR members (30 in `drawScopeMode`, 11 in `gatherDemodScope`,
+3 in `drawScopeModeControl`, 1 in `pipelineIsWfm`), 2 `submitCommand` lines and no `applyCommand` and no same-frame site at
+all, and where the brief and the code disagreed: (1) THERE ARE TWO SCOPES, not one. `drawScopeMode` and
+`drawScopeModeControl` are the RADAR scope, the aircraft plan-position indicator that replaces the whole window (range
+stepper, SIG and ALT gauges, GAIN knob, POWER key, no waveform); the demod page's oscilloscope is `gatherDemodScope`,
+`drawDemodScopePage` (0 reads) and `drawDemodScopeSection` (the rail key, 0 reads), and `pipelineIsWfm` carried one read the
+brief had not listed. The halves share a name and nothing else (the radar is 33 reads and the two commands, the demod page
+12 and none); (2) by the guard's rule the counts are 30, 11, 3 and 1, where the brief had about 28, 10 and 4 (the fourth of
+`drawScopeModeControl` is a method call, `pluginIsStopped`); (3) "FOXAPI_CAP_SCOPE is reduced, a gap" was stale, not a gap:
+`read_scope` has been served since step 2 and "reduced" is a REMOTE-session limit only (4096 frames), the window's LOCAL
+session gets whatever the ring holds; the header comment still said "(reduced)"; (4) `read_scope` did not need "channels,
+trigger state, the control's settings": channels are served, the trigger is window arithmetic over the samples, the
+control's settings are the window's own persisted view state, and the DSP thread only PUSHES to the rings, so the window is
+already a lock-free READER of them; the one real gap is the ring's CAPACITY; (5) the four gain fields group 11 had left in
+the count (`deviceAgc_`, `deviceGainNames_`, `deviceGainRanges_`, `deviceGainsDb_`, 16 reads) are read by nothing but the
+radar's knob, so they leave with this group; (6) the radar half cannot become session-only, and the reason is not the
+engine's: its 6 track reads are HOST-PROCESS (below), and its 6 position reads were a genuine small gap (the position was in
+the published block for `/api/status` but not in the table); (7) three members the two halves share with other groups are NOT this
+group's and were left alone, so nobody ports them by accident: `drawReceiverPositionOffers`, `drawRxPositionEntry` and
+`drawGpsPositionControl` (also drawn on the map pages; the last has three same-frame `applyCommand` sites). Step A put the
+table's side in place, step B the window's.
+
+What moved into the table (step A; docs/api-0.3-additions.md section 8.11, with a per-datum table of what each scope draws
+and from where):
+- 8.11.1, THE RECEIVER'S POSITION. `FoxReceiverState` gains at its END two doubles, `rxLatDeg` and `rxLonDeg`, and the flag
+  `FOXAPI_RX_POSITION_SET` 0x40000000 (the next free bit of `flags`, verified free; 0x80000000 is still free). The pair is
+  published as 0.0 unless the flag is set, even with leftover coordinates in the configuration (a position that was never
+  set or was cleared is never published as 0 N 0 E with the flag up: the flag is the truth). The position restored from the
+  saved configuration is in the FIRST published state (a real-app test, test_patch_map_credit, opens the radar scope with a
+  config position and requires the `scope:area` census item, so the first frame must already see it), and
+  `FOXAPI_OP_SET_POSITION` is unchanged (refused out of range). `FOXAPI_MIN_RECEIVER_STATE` moves to the end of `rxLonDeg`;
+  the struct grows 16 bytes (4 of them padding before the first double). They move `seq` and no other counter: the flag
+  word through `RxFlagSources::positionSet`, the coordinates through the snapshot's "other" comparison;
+- 8.11.2, THE SCOPE TAP'S CAPACITY. `FoxScopeInfo::reserved0` becomes `uint32_t capacityFrames` (same offset and size,
+  `FOXAPI_MIN_SCOPE_INFO` unchanged, an engine that predates it leaves 0, which a client reads as "ask for what you need and
+  take what comes"): the most frames a `read_scope` on THIS session can return for the tap, 65536 audio, 262144 I/Q and 65536
+  multiplex on a LOCAL session and `min(ring, 4096)` on a REMOTE one, filled even when `capFrames` is 0 so one info-only call
+  per tap is enough. What it is for: the sweep is ten divisions of the time base and the longest base, 50 ms, asks for more
+  frames than the I/Q ring holds above about 524 kHz of channel rate (a trigger that hunts asks for twice a sweep, from about
+  262 kHz); without it a window sees `got < want` and cannot tell "the ring is the limit" from "not that many yet". The same
+  could be inferred from `written`; the survey recommended against leaning on a counter read before the snapshot;
+- THE SECTION 6 CORRECTIONS, made in the same change: a NEGATIVE return of `read_scope` is an error (`DETACHED`,
+  `BAD_ARGUMENT`, `UNSUPPORTED`) and a client must test it before it uses it as a count; `info.structSize` is MANDATORY (a
+  short or zero one fails the whole call as `BAD_ARGUMENT`, a dead scope with no message); and "(reduced)" is retired from
+  `FOXAPI_CAP_SCOPE`'s comment (it now says what the limit is: a REMOTE session is held to `FOXAPI_SCOPE_REMOTE_FRAMES` a
+  read). The vendored header's SHA-256, now 4a6faf8a4ac3d84b33fa41bc15d9ffa6620fb20752a8077a2fe5397b9cff4c3c, is updated in
+  third_party/foxsdr_api/README.md and THIRD_PARTY.md;
+- THE SNAPSHOT-GROUP DECISION: the position is in the state's CHANGE DETECTION (a change moves `seq`) and NOT in the lists'
+  fingerprint. Nothing a list serves depends on it and a position change must not rebuild the block; the test holds both
+  halves (F6 below: a position does not move the fingerprint). The decision was confirmed at review.
+
+Where step A kept to the survey and where it did not: the flag went in `flags` and not in a new word beside `sourceFlags` (the
+survey had offered either; group 11 spent a word because that one was nearly full, and a bit remained here); nothing else
+diverged. TIMING, which the section documents: the tap's frames and `written` are read AT THE CALL and are never a publish
+old; everything else is one pass old at most, and "an interface whose control computes its next value from the readback (a
+knob that adds a step) must hold its own copy of the value until the readback catches up" (the lost detent, below).
+
+THE TESTS and the break-it checks of step A: group G12 of tests/test_engine_api_03.cpp (G12-1: the position state, the
+refused ranges, repeats, a config-restored first publish, a stale config pair; G12-2: the capacity per tap and session, the
+cut at the ring, an unknown tap, a short and a zero `structSize`, a null buffer), 2809 checks, 0 failed (it was 2714);
+tests/test_receiver_snapshot.cpp (a `positionGroup` case, the layout asserts, the walking-one flag test), 768 checks;
+tests/test_engine_publish_alloc.cpp case F6: 40 publishes with no position and 40 with one allocate 0, 1000 rounds of
+`read_state` and three info-only `read_scope` calls allocate 0, and a position does not move the list fingerprint; 315
+checks (it was 301). Nine mutants, each applied alone and each red, restored after: the flag never set, the flag at the wrong
+bit, latitude and longitude swapped, the coordinates published without the flag gate, latitude not compared, longitude not
+compared, the REMOTE capacity not reduced, the I/Q capacity taken from the audio ring, the multiplex capacity 0. Full suite
+after step A: 254/254.
+
+The pattern held, with these additions to it (step B):
+- THE SPLIT OF THE TWO SCOPES. The radar reads the position and the flags from `uiState_` (RUNNING, DEVICE_OPEN, DEVICE_AGC,
+  `signalDb`), the knob from the FIRST `GAINS` entry through the existing `sourceLists()` (no new cache reader), the
+  "scope will be empty" census from `pluginLists().plugins` (`censusOf(..., CASCADE_CAP_TRACK_SOURCE)`, group 8's way), and
+  sends POWER and the detents through `uiSubmit`; `FOXAPI_OP_RUN` stays TEXTUALLY inside `drawScopeMode`, because
+  tests/test_stop_ends_recordings.cpp:1095 greps for it there and a helper would turn it red. The demod page's feed reads
+  `read_scope` at the call: THREE info-only calls a frame (cap 0) for the three taps' liveness, the rates and the
+  capacity, then the data of the selected signal; the liveness records are updated every frame whichever signal is shown,
+  as before. `pipelineIsWfm` is `uiState_.demodMode == FOXAPI_DEMOD_WFM`; whose sound the trace is comes from the state's
+  `audioPlayingPlugin`; the audio rate is the tap's, the I/Q rate the I/Q tap's with the state's `channelRateHz` as the
+  fallback when the seqlock read gave up (an unguarded 0 would blank a frame). The sweep is clamped to `capacityFrames`
+  exactly as it was clamped to the ring. A failing read draws nothing and a negative count is never a length (the mutant
+  that read the count as a length died by 0xC0000005 in the test);
+- `hostTracks()`, THE ONE REMAINING ENGINE NAME. One accessor wrapping `engine_.pluginUi_.tracks()`; it is NOT in
+  `kPortedMembers` (it must name `engine_`), and the guard counts it as one read. TRACKS stays HOST-PROCESS, as the plan
+  says (the plugin windows "belong to the host process, not to an interface", section 3, lines 76-78 of this file, and the
+  step 5 plan, lines 302-309; and section 10 of the additions keeps `TRACKS` a GAP): the plugin ABI has a track
+  source polled "from the GUI thread at frame
+  rate" (core/plugin_abi.h:763-766), the poll is `drawPluginWindows`' `pluginUi_.poll()` which runs BEFORE the scope in the same
+  frame, and `ScopeView::draw` takes `core::HostTrack`, `basemap_` and `trackInfo_`, all host-side types. A `TRACKS` list
+  could not carry what the view reads (id, label, position, altitude, course, speed, age, kind, flags) in a `FoxListItem`
+  without a second list or a new read. What stays cross-thread, not made worse, for step 5: the engine's own status build
+  reads `pluginUi_.tracks()` (engine.cpp:5289) on whichever thread publishes, and once the pump moves that is group 9's F6
+  class; the accessor concentrates the window's side of it in one place;
+- THE LOST-DETENT FIX, `scopeGainLocal_` (gui/scope_gain.hpp: stage name, the dB sent, when). A detent sends the stage's
+  readback plus two units, clamped; the old knob read the readback live, and a command applied at the top of the next
+  frame, so the next frame already held the new figure; from the session the readback arrives a pass after the pass that
+  applied it, and two detents in two frames before then would both add to the old figure, so one is LOST. The next detent
+  computes from the kept figure, which is released when the readback equals the figure sent, when the stage changes (a
+  different first stage is another radio), or after 0.5 s. IT DELIBERATELY DIFFERS FROM `tuneLocal_`'s RULE, which is dropped
+  when the next state is read: that is right while the window's frame IS the pass and loses a detent the day the pass runs
+  on its own thread, and this one must survive the pump move. A single detent is identical to today. The radio's own AGC
+  reads "AUTO", lights no tick and sends nothing. The knob's rules are pure functions (travel, the five ticks, the lit tick,
+  the pointer's fraction, the detent arithmetic, the local copy's rules) so they are tested without GL;
+- THE CABINET'S BADGE: the cabinet's badge texture is uploaded lazily (a GL call and no context in a test), so a hermetic
+  frame reaches the knob only by handing the window a texture id it never uploads; the bare scope draws below 900 pixels
+  wide and has no knob;
+- THE PER-FRAME COST THAT LEFT: the demod page used to lock the plugin runner's mutex every frame (the lock the DSP thread
+  takes per block) and build a `std::string` for `playingPlugin()`; the draw no longer touches `pluginRunner_` (by the
+  guard, by a source check in the new test and by the state-fed name; the old cost was NOT measured, code reading only).
+
+Ratchet: 60 fields / 313 reads -> 56 / 269, printed by the guard as `the window reads 56 engine fields directly, 269 times
+(budget 56 fields, 269 reads)`; the survey predicted exactly that by renaming the four members' reads in a scratch copy of
+src (44 reads leave, the one in `hostTracks()` stays) and step B printed it. The four fields that left the count are
+`deviceAgc_`, `deviceGainNames_`, `deviceGainRanges_` and `deviceGainsDb_`. `kPortedMembers` gains `drawScopeMode`,
+`drawScopeModeControl`, `gatherDemodScope` and `pipelineIsWfm`, and the three with no engine reads so they can never grow
+one: `scopeSignalNow`, `drawDemodScopePage` and `drawDemodScopeSection`. The floor `submitsInDraw >= 13` is `>= 11` (the two
+radar commands are `uiSubmit` calls now; the floor is the scan seeing the real files, not a ratchet). `kReadOnly` retired
+fourteen entries whose last caller is gone (grep-confirmed): `pipeline_.signalPowerDb`, `pipeline_.channelRateHz`,
+`pipeline_.demodMode`, the nine `pipeline_.scopeAudio()`, `scopeIq()` and `scopeMpx()` `.capacity`, `.snapshot` and
+`.written` entries, `pluginRunner_.playingPlugin` and `pluginUi_.trackPluginNames().empty`; `pipeline_.running`,
+`pluginUi_.tracks`, `pluginUi_.trackPluginNames` and `pluginHost_.plugins` stay (other readers). `kControlMayCall`,
+`kEngineObjects`, `kLineAllowed`, `kHostHooks` and `kPublishedOnly` did not move. The guard goes red on a single `engine_.`
+read put back: with one read put back into `drawScopeMode` on a scratch copy the printout is `FAIL: AppWindow::drawScopeMode
+is PORTED ... reaches the engine directly at app_window.cpp:11879`, with 270 reads against the budget of 269 and 2 checks
+failed; the real tree runs clean:
+
+    255 controls judged, 11 submitCommand calls in draw members, 656 window-machinery lines, 46 allowed engine lines in drawing members, 0 violations
+    the window reads 56 engine fields directly, 269 times (budget 56 fields, 269 reads)
+    test_command_path_guard: 198 checks, 0 failed
+
+(it was 191; the 255 controls judged, one more than before, include `hostTracks()`, which passes as a judged control, as
+the survey's mutant predicted).
+
+tests/test_scope_gain.cpp (new, globbed; 54 checks, 0 failed): the knob's travel and fallback, the five ticks, the lit tick,
+the pointer's fraction, the detent arithmetic and both clamps, and the local copy's rules. tests/test_scope_window.cpp (new,
+378 checks, 0 failed, about 10 s, three stable runs): A, the demod feed (the old gather restated over frozen taps and held
+equal, 15 signal and time-base pairs bitwise identical; liveness from all three taps, a frozen ring stale after 0.25 s; the
+WFM gate with its one pass of lag and the saved setting never rewritten; whose sound from the state; the clamp to capacity
+through a wrapped table (a 700 kHz channel cut to 262144, because the real channel rate is capped below 300 kHz and the
+clamp is unreachable in this tree otherwise); zero capacity and zero rate fallbacks; failing reads draw nothing; live real
+frames); B, the radar's empty state and position (the one pass of lag, latitude and longitude told right, the bare scope at
+700x600, the rail's block); C, the knob and POWER against the fake radio (30 dB on a TUNER stage: lit tick 2, fraction
+0.5988, travel 0 to 49.6; the wheel's detents clamped at both ends; THE LOST DETENT: 29.7 to 31.7 and 33.7 then 35.7 and the
+radio reaches the sum; a readback that never matches releases after the hold; the radio's AGC reads AUTO, lights nothing and
+sends nothing; POWER sends RUN 1 and 0; a source swap drops the copy); D, the source check (no `engine_.`, `pipeline_.` or
+`pluginRunner_.` in the members, `FOXAPI_OP_RUN` in `drawScopeMode`). Nineteen window mutants, each applied alone and each
+red (the one that read a count as a length is red by a crash, 0xC0000005), restored after. Full suite, `ctest -C
+Release -j 8`: the step B run was 256/256 (the 254 plus the two new tests); the last full run, the
+one in the worktree's ctest-after-g12.log, is 255/256 with test_main_view the lone failure in the parallel mix and 6 of 6
+solo passes, the documented flake (test_command_path_guard, test_scope_gain, test_scope_window, test_stop_ends_recordings and
+test_patch_map_credit passed in it, and test_patch_map_credit is the real-app regression for "the first frame sees the
+position").
+
+Measured, this desktop, Release: a settled demod frame allocates 0 (60 frames for each of the five signals, the trace live
+in 70 of 70, a 68-byte playing-plugin name); a radar cabinet frame with a radio and a position allocates 0 (60 settled
+frames); 1000 rounds of `read_state` and three info-only `read_scope` calls allocate 0 (F6). `read_scope` on an empty tap
+costs about 89 ns a call (the survey's measure through test_tuning_surface, the call overhead: a seqlock read and the guard
+wrapper), so the three info-only calls are about 0.27 us a frame by arithmetic, which was NOT measured as a whole in situ.
+
+THE SIX THINGS THE OPERATOR CAN SEE DIFFER, by the code and the tests (the survey's and step B's); the capture below holds
+the ones it says it holds:
+1. The position, the POWER lamp, ON LINE and STANDBY, the signal gauge, and the demod page's rate, mode and WFM key trail the
+   command by one engine pass (about 16 ms once the pass has its own thread); the radar's empty state can show one frame
+   longer after a position is set; the waveform itself has no lag (it is read at the call). Today the pass still runs at the
+   head of the window's frame, so no picture shows it: the POWER bracket below is identical frame by frame.
+2. After a detent the knob shows the figure it SENT for up to 0.5 s if the radio never reads back exactly that figure (today:
+   the readback the next frame); identical with the fake radio, which reads back what it was sent.
+3. A double POWER click inside one pass can send two RUN commands (the engine's safer-merge coalesces a stop; a start is not
+   merged).
+4. The playing-plugin label is cut at 127 bytes and the gain stage name sent at 95 (no real name is that long).
+5. "The scope will be empty" now depends on the PLUGINS census rather than the plugin UI's track-source list: the two differ
+   for a module whose `create()` returns nothing (PluginUi then has no instance) and for one pass after a rescan.
+6. The time-axis rate comes from the info-only read made just before the samples, not from the same call.
+
+What the operator sees, in a picture. Drawn by the build before this group (the tree at 2c8f96e: groups 1 to 11, no group
+12, in its own worktree, g12-control) and by this one: the application's own framebuffer capture in bounded runs, four runs
+of each build in each of TWELVE states (96 runs), the window 1502x1405 as the capture measures it (1500x1380 requested),
+FOXSDR_SINGLE_VIEWPORT=1, one scratch copy of each exe with the same resources beside it, the built-in signal generator as
+the source, no radio visible to the process (SOAPY_SDR_PLUGIN_PATH removed from its environment), each run on its own
+seeded copy of the config (CASCADE_CONFIG_TEST; telemetry and the update check off, volume 0, the receiver position 51.47 N
+0.45 W in the radar states) and bounded by `--frames` (build\g12-vis-final.txt is the table; runone12.py, campaign12.py,
+compare12.py, bracket12.py and the input scripts s_<state>.txt are in the session's scratch, under g12-vis). No state scans.
+The receiver starts STOPPED, so the running states press the master START (demod) or the radar's POWER key (radar) once from
+the input script (inside the process; no OS-level input) at frames 38 to 42 (the `_NS` states press POWER first and then two
+more clicks, the last released at frame 78), and the capture is at frame 120, or 130 for the `_NS` states, at least 52
+frames after the last click, so no capture holds a click's frame. The radar scope is opened by
+FOXSDR_OPEN_RADAR_SCOPE (bounded runs only) and the
+demod page by FOXSDR_OPEN_DEMOD_SCOPE. The states: RADAR_OFF (the receiver stopped: STANDBY, the SIG gauge empty, "0 PLOTTED",
+the TRACKS drum 000, the knob dead at "N/A no device", the position in the corner "51.5N 000.5W"); RADAR_ON (POWER pressed:
+ON LINE, the lamp lit, the SIG gauge lit to -30); RADAR_NOPOS (no position: "The scope needs the receiver's position." and
+the three offers); RADAR_OFF_NS and RADAR_ON_NS (the same two with the info panel's SYS tab open, which prints the position
+readout "ANTENNA 51.470 -0.450", and the sweep switched OFF by one click on its row: see below for why); and seven demod
+pages on the generator in WFM unless named, DEMOD_AUDIO, DEMOD_SPEC, DEMOD_IQ, DEMOD_VEC, DEMOD_MPX (the fifth key), DEMOD_AM
+(the gate closed: four keys) and DEMOD_STOP (the receiver stopped: "NO SAMPLES - RECEIVER STOPPED"), the mode and signal from
+the seeded config. Areas, tiling the capture exactly (2 110 310 pixels; the named areas are asserted disjoint and each
+state's last row is the remainder, the whole capture minus the named areas): in the radar states 11 named areas (the
+frame's ring, the top deck, the scope bar, the SIG column, the PPI disc, the info panel, the ALT column, the FOX plate,
+the GAIN plate in two pieces, the dial and its readout, and the POWER plate with its lamp and label) and a remainder
+of 233 844 pixels (the cabinet's frame and the gaps between
+the plates); in RADAR_NOPOS 5 and a remainder of 1 458 608 (the empty page); in the demod states 15 (the ring, the top
+deck, the rail, the rail's foot, the patch page round the scope window, the scope window's title bar, signal keys, TIME,
+GAIN and DISPLAY rows, the tube's trace area, and the tube's label strip in four pieces: the title at the left, the centre
+time-axis label, the right gain label and the gaps) and a remainder of 62 208 (the window's frame and bezel).
+
+THE RESULT, in two parts, because two of the areas are alive. EVERYTHING THAT IS NOT LIVE: at tolerance 24, 0 pixels differ
+in every named area and in the remainder of every state, between the two builds (16 control-against-port pairs a state)
+AND between two runs of one build (6 control-against-control and 6 port-against-port pairs). At tolerance 0 the result is the
+same: 0 in every such area, every pair, and 0 in the whole capture minus the live areas. That includes the radar's whole
+cabinet (the SIG gauge, the POWER lamp and its ON LINE or STANDBY word, the knob's dial and its readout, the plate and its
+FOX badge, which is a REAL GL upload in this run, the TRACKS and SET RANGE drums, the info panel with its position
+readout), the empty state, and the demod page's chrome: the signal keys (five under WFM, four under AM, so the gate is
+held), the TIME and GAIN rows with their time-base and auto-gain text, the DISPLAY row, the tube's title, its centre
+time-axis label ("10 ms/DIV", "0 - 20.0 kHz", "0 - 100.0 kHz" by signal), its gain label and the gaps, all at 0 in every
+pair of every state, so none of the axis labels jitters between the eight runs of one build and nothing was set aside. THE
+LIVE AREAS, measured and NOT part of the 0-pixel claim, because their content is not a function of the build: (a) the demod
+tube's trace area, 227 976 pixels (the graticule with the live trace over it; the graticule alone is static, and the area
+cannot be split from the trace), where the pictures depend on the live samples: DEMOD_AUDIO cvp24 max 1 029, cvp0 0 to
+1 484, control-against-control 1 385, port-against-port 1 484, noise at tolerance 24 (934, 1 029); DEMOD_IQ cvp24 29, cvp0
+0 to 29, cvc0 21, pvp0 28, noise24 (21, 28); DEMOD_VEC cvp24 0, cvp0 0 to 7, cvc0 7, pvp0 7, noise24 (0, 0); DEMOD_AM cvp24
+4 001, cvp0 0 to 4 884, cvc0 4 884, pvp0 4 884, noise24 (4 001, 4 001); and DEMOD_SPEC, DEMOD_MPX and DEMOD_STOP 0 in every
+pair, one MD5 across all eight captures of each. The control-against-port counts are inside the noise bound of one build
+(DEMOD_IQ's 29 is one pixel over the largest within-build count, 28, from 16 pairs against 6), and the evidence that the
+port draws the same waveforms the control does is stronger than a count: the pictures REPEAT, byte for byte, ACROSS the
+builds (the captures of DEMOD_AUDIO are 3 distinct files in 8 and 2 of the 3 are drawn by both builds, DEMOD_IQ 5 files and
+2 shared, DEMOD_VEC 4 and 3 shared, DEMOD_AM 3 and 2 shared). The generator is quiet: in the spectrum and multiplex tubes
+no trace is drawn in either build (only the graticule, the labels and the multiplex legends Mono L+R, Pilot, Stereo L-R,
+RDS and SCA), so those two paths through the samples are NOT held by a picture; the feed is held by test_scope_window A,
+which restates the old gather over frozen taps and holds every signal bitwise equal. (b) The radar's PPI disc, 678 976
+pixels, IN THE TWO STATES WITH THE SWEEP ON: the sweep wedge is driven by the wall clock (scope_view.cpp:2481, `ImGui::GetTime()
+/ 4.2`), so its position in the capture is where the clock happens to be: RADAR_ON cvp24 886, cvp0 1 739 to 42 264, cvc0 36
+244, pvp0 33 005, noise24 (748, 674); RADAR_OFF cvp24 644, cvp0 1 265 to 31 701, cvc0 24 983, pvp0 10 985, noise24 (504,
+213); every one of the 8 captures of each state is a different file. A limit stated and not a hole: the two `_NS`
+states exist for it, the same gestures with the sweep off, and there the PPI disc is 0 in every pair and the eight
+captures of each state are ONE file (ca79eb0f... for ON, 40316aa7... for OFF), so the disc's rings, ticks, corner labels
+(including the position "51.5N 000.5W"), the receiver mark and the scan lines are held at 0 against the control. The stderr
+of the two builds is identical in all 48 control-and-port pairs, the stdout identical once the teardown time and the worst
+frame gap are masked, and the config each run saved on exit identical in all 48 (the telemetry install id, a per-run random
+id, apart). Because that is a table of zeros, the comparator's own checks that it can see: control RADAR_ON against control
+RADAR_OFF reports 4 960 pixels (5 750 at tolerance 0) in the top deck (START and STOP, the volume meter), 38 901 (40 938) in
+the SIG column, 5 634 (10 333) in the POWER plate and 569 (28 180) in the PPI disc (the sweep), and 0 in the info panel
+and the other plates; control DEMOD_AUDIO
+against control DEMOD_SPEC reports 3 772 (4 200) in the keys row, 1 920 (2 250) in TIME, 1 642 (1 996) in GAIN and 1 296
+(1 530), 481 (569) and 355 (441) in the three label pieces, and 0 in the DISPLAY row; control WFM against control AM reports
+72 199 (94 124) in the rail and 2 100 (2 100) in the keys row (the fifth key gone); and a +30 and a +10 poke on single pixels
+are counted as 1 pixel at tolerance 24 and 2 at tolerance 0. THE THIRD-DIFFERENCE RULE found nothing to investigate: no
+pixel outside the live areas differs in any pair. THE ONE LAG THE PICTURE COULD HOLD, tried: the POWER key shot frame by
+frame (the sweep off, the pointer on the key from frame 70, the button down at 74 and up at 78, frames 72 to 86; control
+and port, two runs each). The picture changes at frame 75 (the key pressed) and settles from frame 80, and in every frame
+the control's run and the port's run of the same number are the SAME FILE: 0 pixels differ in all 13 frames. Run 1 and run 2
+differ from each other in frames 76 to 79 (38 256 pixels at 76, 105 at 77 and 78, 3 253 at 79, in the top deck's meters and
+the SIG column settling after the start; run 1 is the same file in both builds and so is run 2), so this is a lag the
+pass does not show today
+(it still runs at the head of the frame), and difference 1 is held by test_scope_window B and C and by the code, not by a
+picture. What the capture does NOT draw, and so does not hold: a radio's knob (the generator lists no gain stage, so the
+dial is the dead "N/A, no device" figure at its fallback travel 0 to 60 and the live knob, a detent, the lit tick, "AUTO"
+and the stage's own unit are held by test_scope_window C only: no radio is visible to the process), any aircraft (the ALT
+gauge, the TRACKS drums above 000, the plotted count, the selected altitude and the range drum: no track-source module is
+fitted, `hostTracks()` is held by code reading), the rail's "scope will be empty" block (the rail's RADAR section is not in
+frame), a position being set (difference 1's empty-state frame), a WFM-gate click, a detent mid-hold, the capacity clamp
+(unreachable in this tree), the playing-plugin label (no plugin is playing), and any time base other than the 10 ms/DIV
+default. The real config (%APPDATA%\foxsdr\config.json, 5 076 bytes, written at 14:52:27 UTC by another session, sha256
+BA532E6C...A353C) was identical before the first launch and after the last (size, modification time and hash), and none of the
+scratch values (the seeded position) is in it.
+
+What could move a measured number: the three info-only `read_scope` calls a frame (about 89 ns each, arithmetic, not
+measured in situ); the demod page no longer takes the runner's lock or builds a string (unmeasured before the port, code
+reading only); the I/Q copy of up to 262144 complex frames (2 MB) a frame at 50 ms/DIV on a wide channel is a cost that
+exists today and is unchanged; `capacityFrames` is one 32-bit store in each `read_scope` and the state publish copies 16
+bytes more and compares two doubles, so a position that CHANGES moves `seq` and re-publishes the state (a GPS receiver
+feeding fixes does so at the fix rate; by design and not measured), and does not rebuild any list; the knob's local copy is
+a string compare per frame while it stands, at most 0.5 s.
+
+THE TRAPS, for the next group.
+1. The generator starts STOPPED in a bounded run: a capture of a live scope presses the master START (100,112 in a 1500x1380
+   window) or the radar's POWER key (1225,1236) from the input script, and captures at least 50 frames later.
+2. The radar's sweep is wall-clock driven: a capture of the PPI with the sweep on is never deterministic. Switch it off through
+   the SYS tab (the tab at 1290,297, the SWEEP row at 1170,400) before the capture, the scope's own options and no seam.
+3. A frozen demod trace cannot be captured by stopping the receiver: `written` stops, the liveness rule (0.25 s) calls the
+   tube stale and it says NO SAMPLES. The generator's spectrum and multiplex are blank at the default settings; a test that
+   wants a trace drives a tone.
+4. Both scopes' open flags are cleared at start-up (`startupState`): nothing in a config opens them. FOXSDR_OPEN_RADAR_SCOPE is
+   bounded runs only; FOXSDR_OPEN_DEMOD_SCOPE is not.
+5. `read_scope` returns an `int32_t` that can be negative: `size_t got = read_scope(...)` turns -1 into an overrun in
+   `got - sweep` (the mutant that did exactly that is the one that died by crash). `info.structSize` must be set or the whole
+   call fails. The I/Q `out` is a `float*` with `cap` in FRAMES and no out-size argument: size `scopeIqBuf_` for `want` frames
+   first.
+6. tests/test_stop_ends_recordings.cpp:1095 is a SOURCE-TEXT test that requires `drawScopeMode` itself to name
+   `FOXAPI_OP_RUN`: the POWER press cannot move into a helper member.
+7. The radar's cabinet uploads its badge on first use (a GL call and no context in a test): hand the window a texture id it
+   never uploads and take it back before the window goes; under 900 pixels wide the scope draws bare and the knob and POWER
+   are not there.
+8. No hermetic frame can put a track in `pluginUi_` (it is filled only by `poll()` from a loaded track-source module, and
+   neither fixture plugin is one): the aircraft count, the selected altitude and the range drum need a third fixture
+   module to be covered.
+9. Not touched, pre-existing: `scopeLive_` is set only while the demod page is drawn and read by the rail key's lamp, so it
+   keeps its last value with the page closed; `roomForFace`'s first condition (`scale >= 0.42f`) is always true after the
+   clamp two lines above it; when the I/Q sweep is longer than the ring the sweep is shortened to the ring while the
+   time-base readout still names the selected ms/DIV.
+10. A test frame is LOOK, DRAW, then `pumpWorkers` and `pumpAudio` (group 10's trap), and a ported member reads the window's
+    cache and session, so a call into it after an engine mutation needs the LOOK first. The window files and this one are
+    CRLF and Git Bash `sed -i` strips the CR (groups 10 and 11's trap, again).
+11. UNVERIFIED, carried forward: no real radio, SoapySDR or sound hardware was driven; the live aircraft path (count,
+    altitude, range drum) is held by code; the capacity clamp's real effect is unreachable in this tree and proven only
+    through a wrapped table; the lag of difference 1 as a picture (it does not exist until the pump moves); the cost of the
+    deleted runner lock.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
