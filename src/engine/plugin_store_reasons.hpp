@@ -13,6 +13,8 @@
 
 #include <string>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP
+
 namespace cascade::gui {
 
 // --- a reason kept in English, drawn in the language in force -----------------
@@ -40,6 +42,15 @@ std::string pluginNoBuildReason(const std::string& platform);  // "windows/x64"
 // host passes on verbatim (PluginRepo's sha256 and I/O errors), the text is
 // byte for byte what it was.
 std::string trStoredReason(const std::string& english);
+
+// THE ACKNOWLEDGEMENT GATE'S SENTENCE, ONE LITERAL FOR BOTH SIDES. The engine's install gate
+// (Engine::pluginInstallBlockedReason) answers it last, when an entry that carries a legal notice is asked about
+// without the notice taken as acknowledged; the store window (window port group 10) makes the same sentence for a
+// row whose table fact (`fact.store.<id>.blocked`, asked WITH the notice acknowledged) is empty and whose notice
+// the tick has not covered - the tick belongs to one row and is the window's own, so the table cannot say it.
+// Marked FOX_TR_NOOP where it is defined and drawn through trStoredReason like every other reason, so its
+// translation is the catalogue entry the literal has always had.
+inline constexpr const char* kLegalNoticeFirstReason = FOX_TR_NOOP("the legal notice must be acknowledged first");
 
 }  // namespace cascade::gui
 

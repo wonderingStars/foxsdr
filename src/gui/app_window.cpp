@@ -684,7 +684,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       pluginStoreView_(std::make_unique<PluginStoreView>()),
       pluginStoreDeck_(std::make_unique<PluginStoreDeck>()),
       fittedDeck_(std::make_unique<FittedModulesDeck>()),
-      fittedCache_(std::make_unique<FittedListCache>()) {
+      fittedCache_(std::make_unique<FittedListCache>()),
+      storeCache_(std::make_unique<StoreListCache>()) {
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
     // THE RECEIVER'S START-UP (engine stage 3a): the recording folder, the
@@ -8202,14 +8203,17 @@ void AppWindow::drawPluginStoreSection() {
     // the launch that shipped this change.
     //
     // WHAT THE STORE CAN HONESTLY SAY FROM THE RAIL, and what it must not.
-    // catalog_ is empty until the user asks for a catalogue, so "0 updates"
+    // The catalogue is empty until the user asks for one, so "0 updates"
     // before that would be the clean-zero this product has been bitten by:
     // "nothing to update" and "we have not looked" are different statements.
     // IDLE is the second one.
-    const bool haveCatalog = !engine_.catalog_.empty();
-    const std::size_t pendingUpdates =
-        haveCatalog ? engine_.plannedPluginUpdates().size() : 0u;
-    const bool storeBusy = engine_.catalogPending_ || engine_.installPending_;
+    //
+    // From the window's engine API session (window port, group 10): CATALOGUE's count, STORE_UPDATES' count and
+    // STORE_ACTIVITY's first entry - read when listSeq moves, not walked every frame the rail is visible.
+    const cascade::gui::StoreListCache& store = storeLists(false);
+    const bool haveCatalog = store.haveCatalogue;
+    const std::size_t pendingUpdates = haveCatalog ? store.updates : 0u;
+    const bool storeBusy = store.transfer;
     std::string storeChip;
     if (storeBusy) {
         // A TRANSFER IS THE MOST IMPORTANT THING THIS ROW CAN SAY, and it
@@ -8252,9 +8256,9 @@ void AppWindow::drawPluginStoreSection() {
     cascade::gui::inputTextWithFittedHint("##catalogue_url", tr("catalogue index.json URL"),
                              pluginUrlBuf_, sizeof(pluginUrlBuf_));
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-        const cascade::core::cmd::QueuedCommand q =
-            cascade::core::cmd::makeText(FOXAPP_OP_SET_CATALOGUE_URL, pluginUrlBuf_);
-        engine_.applyCommand(q.c, q.longText);
+        // A command on the window's session like every other (window port, group 10): the engine commits it at
+        // its next pass, one pass after the field deactivated where it used to be the same frame.
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_CATALOGUE_URL, pluginUrlBuf_));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("An https:// catalogue, or a path to a local index.json.\n"
@@ -8464,8 +8468,11 @@ void AppWindow::drawPluginsSection() {
     // the launch that ships this change - and so does the disabled count in
     // the visible half of the label, which is the news a user who never opens
     // the window still has to learn.
-    const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
-        engine_.pluginInventory_.plugins, engine_.pluginInventory_.policies);
+    //
+    // From the window's engine API session (window port, group 10): STORE_BLOCKED's count (the retired modules),
+    // the state's decoder counts and PLUGINS' records the host did not load.
+    const cascade::gui::StoreListCache& store = storeLists(false);
+    const std::size_t blocked = store.blocked.size();
     std::string header;
     if (blocked == 0u) {
         header = trId("Plugins###plugins");
@@ -8484,8 +8491,9 @@ void AppWindow::drawPluginsSection() {
     // basemap and a track-info provider - neither of which is ever fed a
     // signal - permanently in the bottom half of a chip whose top half counts
     // decoders being fed, so a healthy receiver reported 1/3.
-    const std::size_t decoders = engine_.loadedDecoderCount();
-    const std::size_t fedPlugins = engine_.pipeline_.running() ? engine_.fedDecoderCount() : 0u;
+    const bool receiverRunning = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
+    const std::size_t decoders = uiState_.decodersFitted;
+    const std::size_t fedPlugins = receiverRunning ? uiState_.decodersRunning : 0u;
     char pluginChip[16];
     std::snprintf(pluginChip, sizeof(pluginChip), "%zu/%zu", fedPlugins, decoders);
     // The lamp is decoding, and only that. A blocked module is already
@@ -8506,11 +8514,8 @@ void AppWindow::drawPluginsSection() {
     // same idle decoder described twice, in two places, by two pieces of code.
     // What this row owes a user who has not opened the window is the fact that
     // there is something in it to read.
-    int refused = 0;
-    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
-        if (!p.loaded) { ++refused; }
-    }
-    const bool notFed = engine_.pipeline_.running() && decoders > fedPlugins;
+    const int refused = static_cast<int>(store.refused);
+    const bool notFed = receiverRunning && decoders > fedPlugins;
     if (refused > 0 || notFed) {
         ImGui::PushStyleColor(ImGuiCol_Text,
                               refused > 0 ? kErrorRed : cascade::gui::theme::warning());
@@ -8539,29 +8544,32 @@ void AppWindow::drawBlockedPluginRows() {
         ImGui::TextWrapped("%s", statusLines_.pluginEnforceError.c_str());
         ImGui::PopStyleColor();
     }
-    if (engine_.pluginBlocked_.empty()) { return; }
+    // From the window's engine API session (window port, group 10): STORE_BLOCKED's rows, each with the two
+    // facts it needs (the catalogue id it was installed under and the sentence, whole), and whether STORE_UPDATES
+    // has a plan for that id.
+    const cascade::gui::StoreListCache& store = storeLists(false);
+    if (store.blocked.empty()) {
+        blockedRemoveConfirmFile_.clear();
+        return;
+    }
 
     ImGui::SeparatorText(tr("Disabled"));
-    const std::vector<cascade::core::PluginUpdate> updates = engine_.plannedPluginUpdates();
-    const bool busy = engine_.catalogPending_ || engine_.installPending_;
+    const bool busy = store.transfer;
     std::string removeBlockedFile;
-    for (std::size_t i = 0; i < engine_.pluginBlocked_.size(); ++i) {
-        const cascade::core::BlockedPlugin& b = engine_.pluginBlocked_[i];
+    bool confirmStillThere = false;
+    for (std::size_t i = 0; i < store.blocked.size(); ++i) {
+        const cascade::gui::StoreBlockedRow& b = store.blocked[i];
         ImGui::PushID(static_cast<int>(1000 + i));
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        // VERBATIM. pluginBlockMessage() is user copy, not a log line: it
-        // already names the plugin, the version installed, what is required
-        // and what to do, and it deliberately says different things for a
-        // version floor and an ABI break. Re-wording it here would give the
-        // product two answers to the same question.
+        // VERBATIM. The engine composes this sentence (PluginRepo::pluginBlockMessage) when the block is built: it
+        // is user copy, not a log line, and it already names the plugin, the version installed, what is required
+        // and what to do, and it deliberately says different things for a version floor and an ABI break.
+        // Re-wording it here would give the product two answers to the same question.
         //
-        // COMPOSED HERE, NOT READ FROM b.message. The record is built when the
-        // plugins load, which is before the first frame puts the chosen
-        // language into force, so its stored sentence is always English. The
-        // same function on the same record, called now, answers in the
-        // language the rest of the bench is lettered in.
-        ImGui::TextWrapped(
-            "%s", cascade::core::PluginRepo::pluginBlockMessage(b.installed, b.policy).c_str());
+        // IN THE LANGUAGE IN FORCE, as it was when the window composed it itself: the record is built when the
+        // plugins load, before the first frame puts the chosen language into force, so it is the table's FACT that
+        // carries the sentence (a language switch rebuilds the block and with it every one).
+        ImGui::TextWrapped("%s", b.message.c_str());
         ImGui::PopStyleColor();
 
         // Update is offered for EVERY blocked reason for which a plan exists,
@@ -8576,14 +8584,10 @@ void AppWindow::drawBlockedPluginRows() {
         // wrong ABI" as update-worthy (see its `have->abiVersion` branch), and
         // suppressing the button here was hiding the remedy that existed.
         {
-            const cascade::core::PluginUpdate* plan = nullptr;
-            for (const cascade::core::PluginUpdate& u : updates) {
-                if (u.id == b.installed.id) { plan = &u; break; }
-            }
-            if (plan != nullptr) {
+            if (b.hasPlan) {
                 ImGui::BeginDisabled(busy);
                 if (ImGui::Button(trId("Update"))) {
-                    engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_STORE_UPDATE, plan->id));
+                    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_STORE_UPDATE, b.id));
                 }
                 ImGui::EndDisabled();
             } else {
@@ -8609,45 +8613,39 @@ void AppWindow::drawBlockedPluginRows() {
         // would arrive for every installed plugin at once on the next ABI bump.
         //
         // Same two-step confirmation as the installed list, and a separate
-        // index because the two lists are drawn in the same frame and one
-        // shared "which row is confirming" would arm a row in both.
-        if (blockedRemoveConfirmIdx_ == static_cast<int>(i)) {
-            ImGui::TextWrapped(tr("Delete %s?"), b.installed.file.c_str());
+        // one because the two lists are drawn in the same frame and one
+        // shared "which row is confirming" would arm a row in both. It is
+        // keyed on the FILE, as the fitted window's is: a rescan can drop or
+        // reorder rows between the two presses, and a position would arm the
+        // Delete of another module.
+        if (!blockedRemoveConfirmFile_.empty() && blockedRemoveConfirmFile_ == b.file) {
+            confirmStillThere = true;
+            ImGui::TextWrapped(tr("Delete %s?"), b.file.c_str());
             if (ImGui::Button(trId("Confirm delete"))) {
-                removeBlockedFile = b.installed.file;
-                blockedRemoveConfirmIdx_ = -1;
+                removeBlockedFile = b.file;
+                blockedRemoveConfirmFile_.clear();
             }
             ImGui::SameLine();
-            if (ImGui::Button(trId("Cancel##rmblocked"))) { blockedRemoveConfirmIdx_ = -1; }
+            if (ImGui::Button(trId("Cancel##rmblocked"))) { blockedRemoveConfirmFile_.clear(); }
         } else if (ImGui::SmallButton(trId("Remove"))) {
-            blockedRemoveConfirmIdx_ = static_cast<int>(i);
+            blockedRemoveConfirmFile_ = b.file;
+            confirmStillThere = true;
         }
         ImGui::Separator();
         ImGui::PopID();
     }
-    // Deferred past the loop for the same reason as the installed list:
-    // removeBlockedPlugin() rescans, which rebuilds the very vector being
-    // walked here.
+    // A confirmation for a file that is no longer listed (removed, or updated into loading) is not carried to a
+    // later module of the same name by accident.
+    if (!confirmStillThere) { blockedRemoveConfirmFile_.clear(); }
+    // Deferred past the loop for the same reason as the installed list: the removal rescans, which rebuilds the
+    // very rows being walked here (and since the port it is a command, applied at the engine's next pass).
     if (!removeBlockedFile.empty()) {
-        engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_STORE_REMOVE_BLOCKED, removeBlockedFile));
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_STORE_REMOVE_BLOCKED, removeBlockedFile));
     }
 }
 
-// ---------------------------------------------------------------------------
-// ADD ALL PLUGINS - one queue, and the single install path underneath it
-// ---------------------------------------------------------------------------
-
-std::string AppWindow::addAllProgressLine() const {
-    if (!engine_.addAllRun_.active) { return {}; }
-    std::string buf;
-    // "installing 4 of 23: GOES Weather Satellites (HRIT / LRIT)" - the
-    // position AND the name, because a bar with no name cannot tell a user
-    // which module is the slow one.
-    cascade::core::formatUtf8(buf, tr("installing %zu of %zu: %s"),
-                  std::min(engine_.addAllRun_.next + 1u, engine_.addAllRun_.total), engine_.addAllRun_.total,
-                  engine_.addAllRun_.currentName.empty() ? tr("starting") : engine_.addAllRun_.currentName.c_str());
-    return buf;
-}
+// (The ADD ALL queue is the engine's - Engine::startAddAll and pumpAddAll; the window letters its line from
+// STORE_ACTIVITY: AppWindow::storeLists.)
 
 // GL_CLAMP_TO_EDGE is OpenGL 1.2; the headers Windows ships stop at 1.1, and
 // this build targets 1.1 deliberately. The token is defined rather than
@@ -12020,140 +12018,6 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
     placeFeatureWindow(slot, wantW, wantH);
 }
 
-void AppWindow::buildPluginStoreModel(PluginStoreModel& model) {
-    // EVERY FIGURE ON THAT PANEL IS TRACED BACK TO SOMETHING MEASURED HERE.
-    // Lifted out of drawPluginStoreWindow unchanged when ADD ALL needed the
-    // same model to plan against: one transcription of a catalogue row into a
-    // StoreModule, so the key and the rows cannot disagree about what is
-    // fitted and what is blocked.
-    model.sourceUrl = engine_.pluginCatalogueUrl_;
-    // NOT "the catalogue is empty". Nothing here contacts the origin until
-    // the user asks, so before that every count would be a claim about
-    // something nobody has looked at; the window's banner says IDLE
-    // instead of printing a clean zero.
-    model.haveCatalogue = !engine_.catalog_.empty();
-    model.sourceStatus = engine_.catalogStatus_;
-    model.sourceError = statusLines_.catalogError;
-    model.busy = engine_.catalogPending_ || engine_.installPending_;
-    model.progress = engine_.pluginRepo_.progress();
-    if (engine_.installPending_) {
-        // One format string, so a translation can put the name where it goes.
-        std::string busyBuf;
-        cascade::core::formatUtf8(busyBuf, tr("downloading %s"), engine_.installBusyName_.c_str());
-        model.busyLabel = busyBuf;
-    } else {
-        model.busyLabel = engine_.catalogPending_ ? std::string(tr("fetching the catalogue"))
-                                          : std::string();
-    }
-    model.resultReport = engine_.installReport_;
-    model.resultError = engine_.installError_;
-    // THE ADD ALL RUN, from the queue that is actually driving it rather than
-    // from `busy`, which cannot tell a bulk run from a single FIT.
-    model.addAllRunning = engine_.addAllRun_.active;
-    model.addAllProgress = addAllProgressLine();
-    model.addAllSummary = engine_.addAllSummary_;
-    model.addAllFailed = engine_.addAllFailed_;
-
-    // The update plans, once for the whole list rather than once per row:
-    // planUpdates walks the catalogue against the manifest, and asking it
-    // per module would be that walk squared for no new information.
-    const std::vector<cascade::core::PluginUpdate> updates = engine_.plannedPluginUpdates();
-
-    model.modules.reserve(engine_.catalog_.size());
-    for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
-        const cascade::core::PluginCatalogEntry& e =
-            engine_.catalog_[static_cast<std::size_t>(i)];
-        cascade::gui::StoreModule sm;
-        sm.id = e.id;
-        sm.plate.name = e.name;
-        sm.plate.version = e.version;
-        sm.plate.maker = e.author;
-        sm.plate.licence = e.licence;
-        sm.plate.blurb = e.description.empty() ? e.summary : e.description;
-        // THE SHORT ONE, KEPT APART. The row draws this and the data plate
-        // draws the description above; see ModulePlate::summary for the list
-        // of one that made the distinction necessary.
-        sm.plate.summary = e.summary;
-        sm.plate.homepage = e.homepage;
-        sm.plate.legalNotice = e.legalNotice;
-        // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the
-        // comparison are stated so the plate can letter the mismatch
-        // rather than the verdict.
-        sm.plate.haveAbi = true;
-        sm.plate.abiVersion = e.abiVersion;
-        sm.plate.hostAbiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
-        sm.plate.retirementFloor = e.minSupportedVersion;
-        // "windows/x64, linux/x64" - the builds the catalogue publishes.
-        for (const cascade::core::PluginPlatform& pf : e.platforms) {
-            if (!sm.plate.platforms.empty()) { sm.plate.platforms += ", "; }
-            sm.plate.platforms += pf.os + "/" + pf.arch;
-        }
-        const cascade::core::PluginPlatform* plat = e.thisPlatform();
-        if (plat != nullptr && plat->sizeBytes > 0u) {
-            // ADVISORY, AND ONLY WHEN STATED. A catalogue that publishes
-            // no size gets haveSizeBytes false and the plate says it was
-            // never told - never a clean zero, which is the opposite
-            // claim.
-            sm.plate.haveSizeBytes = true;
-            sm.plate.sizeBytes = plat->sizeBytes;
-        }
-        // IS THERE A BUILD THIS MACHINE COULD RUN. A stable fact about the
-        // entry - the exact-ABI test the loader uses, and an os/arch build
-        // existing - deliberately not blockedReason, which also carries
-        // transient states such as a transfer already in flight.
-        sm.installableHere = e.compatible && plat != nullptr;
-        // FITTED, by the SAME test the desktop has always used: the
-        // sanitised file name against the host's records AND the manifest,
-        // so a retired module still counts as fitted.
-        sm.plate.fitted = engine_.catalogEntryInstalled(e);
-        // ...and if it is fitted, what the host actually made of it. This
-        // is the only place the catalogue row and the loaded record meet,
-        // and it is what lets the store's plate report loaded/running/
-        // refused instead of guessing from "the file is there".
-        if (const cascade::core::LoadedPlugin* lp = engine_.installedPluginRecord(e)) {
-            sm.plate.fileName =
-                std::filesystem::path(lp->path).filename().string();
-            sm.plate.loaded = lp->loaded;
-            sm.plate.refusalReason = lp->error;
-            sm.plate.haveCapabilities = lp->loaded;
-            sm.plate.capabilities = lp->capabilities;
-            const std::string key = cascade::core::pluginKey(*lp);
-            sm.plate.running = lp->loaded && !engine_.pluginIsStopped(key);
-            if (lp->hostClient != nullptr) {
-                sm.plate.haveTuneGrant = true;
-                sm.plate.tuneGranted =
-                    engine_.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
-            }
-        }
-        // WHY FIT MAY NOT BE PRESSED, from the SAME predicate the key
-        // itself is tested against when the press is applied - so the
-        // sentence under the key and the key can never disagree.
-        //
-        // THE TICK BELONGS TO ONE MODULE, and the predicate is told so.
-        // deck.legalAck is the acknowledgement for the SELECTED row and
-        // for no other; passing it to every row would let a tick given to
-        // the plugin the user just read about unblock the FIT key on a
-        // different plugin's row, which is consent nobody gave. Every
-        // other row is asked as unacknowledged, so a module with a notice
-        // stays blocked until it is the one on the plate.
-        const bool acked =
-            (i == pluginStoreDeck_->selected) && pluginStoreDeck_->legalAck;
-        sm.blockedReason = engine_.pluginInstallBlockedReason(i, acked);
-        // ...AND THE SAME QUESTION ASKED AS IF THE NOTICE WERE ACKNOWLEDGED,
-        // which is what lets ADD ALL count the modules one tick would add and
-        // name them, instead of passing over seven of twenty-four in silence.
-        // Identical to the line above for every module with no notice.
-        sm.blockedReasonIfAcknowledged = engine_.pluginInstallBlockedReason(i, true);
-        for (const cascade::core::PluginUpdate& u : updates) {
-            if (u.id != e.id) { continue; }
-            sm.updateToVersion = u.toVersion;
-            sm.updateReason = u.reason;
-            break;
-        }
-        model.modules.push_back(std::move(sm));
-    }
-}
-
 void AppWindow::drawPluginStoreWindow() {
     // RESET FIRST, AND UNCONDITIONALLY. The fitted window reads this flag to
     // decide whether IT has to print the install/remove outcome, and a store
@@ -12172,13 +12036,20 @@ void AppWindow::drawPluginStoreWindow() {
         openedForCapture = true;
         pluginBrowseOpen_ = true;
     }
+    // THE CONSENTS ARE WATCHED EVERY FRAME, the window open or shut (window port, group 10): the rail tier of the
+    // table's cache notices a fetch that began and an ADD ALL run that ended - where the engine used to call into
+    // the window from ITS thread for both, to clear the deck's ticks - and clears them here, on the window's own.
+    (void)storeLists(false);
     if (!pluginBrowseOpen_) { return; }
     uiNotePanel("plugin store");
+    // THE CACHE IS READ BEFORE ANYTHING ASKS IT A QUESTION. storeShouldCheckOnOpen settles on its first call, so
+    // asked of a cache that has never been read ("no catalogue") it would send a FETCH that the engine executes by
+    // CLEARING a catalogue another path - the web remote's, a bounded run's hook - had already loaded.
+    cascade::gui::StoreListCache& store = storeLists(true);
     // THE FIRST OPEN READS THE CATALOGUE (0.99.16, gui/store_first_open.hpp):
     // once per session, never at startup, never retried on its own.
-    if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, !engine_.catalog_.empty(),
-                                             engine_.catalogPending_ || engine_.installPending_)) {
-        engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_STORE_FETCH));
+    if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, store.haveCatalogue, store.transfer)) {
+        uiSubmit(cascade::core::cmd::make(FOXAPI_OP_STORE_FETCH));
     }
 
     // A REAL OPERATING SYSTEM WINDOW, by the same two devices the map pages
@@ -12234,9 +12105,8 @@ void AppWindow::drawPluginStoreWindow() {
     // back to off, and that is the only state either of them reads.
     if (!open) { pluginBrowseOpen_ = false; }
     if (drawn) {
-        // --- what the window is told, from where it is measured -------------
-        cascade::gui::PluginStoreModel model;
-        buildPluginStoreModel(model);
+        // --- what the window is told: the table's, kept when listSeq moves ------
+        const cascade::gui::PluginStoreModel& model = store.model;
 
         // --- the cabinet, and the plate as content --------------------------
         // Whether PluginStoreView::draw actually ran; see the request block
@@ -12318,8 +12188,8 @@ void AppWindow::drawPluginStoreWindow() {
             return;
         }
         namespace cmd = cascade::core::cmd;
-        if (pluginStoreView_->checkNowRequested()) { engine_.submitCommand(cmd::make(FOXAPI_OP_STORE_FETCH)); }
-        if (pluginStoreView_->cancelRequested()) { engine_.submitCommand(cmd::make(FOXAPI_OP_STORE_CANCEL)); }
+        if (pluginStoreView_->checkNowRequested()) { uiSubmit(cmd::make(FOXAPI_OP_STORE_FETCH)); }
+        if (pluginStoreView_->cancelRequested()) { uiSubmit(cmd::make(FOXAPI_OP_STORE_CANCEL)); }
         // THE BULK KEY, and it re-plans from live state rather than from the
         // plan it was drawn against - see startAddAll. The acknowledgement is
         // the deck's own ADD ALL tick, which is not the per-module one.
@@ -12332,11 +12202,10 @@ void AppWindow::drawPluginStoreWindow() {
                 (pluginStoreDeck_->legalAck && sel >= 0 && sel < static_cast<int>(model.modules.size()))
                     ? model.modules[static_cast<std::size_t>(sel)].id
                     : std::string();
-            engine_.submitCommand(
-                cmd::makeText(FOXAPP_OP_STORE_ADD_ALL, acknowledged, pluginStoreDeck_->addAllAck ? 1 : 0));
+            uiSubmit(cmd::makeText(FOXAPP_OP_STORE_ADD_ALL, acknowledged, pluginStoreDeck_->addAllAck ? 1 : 0));
         }
         const int fitIdx = pluginStoreView_->fitRequested();
-        if (fitIdx >= 0 && fitIdx < static_cast<int>(engine_.catalog_.size())) {
+        if (fitIdx >= 0 && fitIdx < static_cast<int>(model.modules.size())) {
             // STORE_INSTALL RE-TESTS, never trusts: the view only offers the
             // key where the reason was empty, but the predicate covers a
             // transfer in flight and an acknowledgement that may have been
@@ -12346,15 +12215,15 @@ void AppWindow::drawPluginStoreWindow() {
             // SELECTED module and to no other, so a fit asked for on any other
             // row is asked for unacknowledged.
             const bool ack = fitIdx == pluginStoreDeck_->selected && pluginStoreDeck_->legalAck;
-            engine_.submitCommand(cmd::makeText(FOXAPI_OP_STORE_INSTALL,
-                                        engine_.catalog_[static_cast<std::size_t>(fitIdx)].id, ack ? 1 : 0));
+            uiSubmit(cmd::makeText(FOXAPI_OP_STORE_INSTALL, model.modules[static_cast<std::size_t>(fitIdx)].id,
+                                   ack ? 1 : 0));
         }
         const int updIdx = pluginStoreView_->updateRequested();
-        if (updIdx >= 0 && updIdx < static_cast<int>(engine_.catalog_.size())) {
-            // The plan is looked up again when it is applied (APP_STORE_UPDATE):
-            // planUpdates' entries point INTO catalog_, and the frame that
-            // built the model is not the frame that acts on it.
-            engine_.submitCommand(cmd::makeText(FOXAPP_OP_STORE_UPDATE, engine_.catalog_[static_cast<std::size_t>(updIdx)].id));
+        if (updIdx >= 0 && updIdx < static_cast<int>(model.modules.size())) {
+            // The plan is looked up again when it is applied (APP_STORE_UPDATE) - by the id, which names the
+            // module the user clicked: a catalogue replaced between the draw and the apply answers "no catalogue
+            // entry with that id", where an index could have named another.
+            uiSubmit(cmd::makeText(FOXAPP_OP_STORE_UPDATE, model.modules[static_cast<std::size_t>(updIdx)].id));
         }
     }
     endPage();
@@ -15805,6 +15674,255 @@ cascade::gui::FittedListCache& AppWindow::fittedLists() {
         }
     }
     readFactText("fact.plugin.dir", c.model.directory);
+    return c;
+}
+
+// THE PLUGIN STORE'S TABLE (window port, group 10; API 0.3 section 8.9; the cache is gui/plugin_store_view.hpp's
+// StoreListCache). Two tiers, both read when listSeq moves, and a third thing read live.
+//
+// THE RAIL TIER (every call): CATALOGUE's count (is there a catalogue - the old `!catalog_.empty()`),
+// STORE_UPDATES (the plans' ids and their count), STORE_ACTIVITY (entry 1, a fetch or a download in flight; entry 2,
+// the ADD ALL run), STORE_BLOCKED with the two facts of each retired row, and PLUGINS' records (the host's, joined to
+// the catalogue by file name below, and the count it did not load). The rail's chip, the retired rows and the plugins
+// key draw from it whether the window is open or not.
+//
+// THE CONSENTS ARE CLEARED HERE, on the window's own thread. A tick the user gave is consent for a notice that was
+// listed: the engine used to reach into the deck from ITS thread (EngineHost::onCatalogueFetchStarting,
+// onAddAllFinished) at the two moments it must go, and the window now WATCHES the table for them: STORE_ACTIVITY's
+// first entry with value[1] 1 (a catalogue fetch began) clears all of it; entry 2 present and then gone (the run
+// ended) clears the ADD ALL tick, as does a new addAllSummary line; and the full tier, which can see the catalogue
+// itself, clears all of it when the catalogue it reads is not the one it read last (a fetch of a local index.json can
+// start and land between two reads, so no transfer entry is ever seen - the rows are the evidence then).
+//
+// THE FULL TIER (`full`: only from the window's draw, only while it is drawn): one StoreRow a CATALOGUE entry - its
+// columns, twelve facts (fact.store.<id>.*) and the PLUGINS record whose detail is the entry's `.file` (ASCII case
+// ignored: the engine's own rule), with that module's `fact.plugin.<file>.error` - through fillStoreModule. Strings
+// and vectors keep their room, so a refresh that finds nothing bigger allocates only what the table's get_setting
+// does. `got <= i` is the end of a list that changed under the read: what was read stands.
+//
+// EVERY CALL, whatever moved: the ADD ALL summary's edge, and for a full call the three things that are not the
+// lists' - the status lines the engine handed over (statusLines_: the catalogue's line and error, the install
+// report and error, the ADD ALL summary and its level), the rows' blockedReason (it depends on the deck's selection
+// and tick, which move between refreshes) and the transfer's PROGRESS, which moves with no list moving and is read
+// live (STORE_ACTIVITY's first entry, only while one is present).
+cascade::gui::StoreListCache& AppWindow::storeLists(bool full) {
+    cascade::gui::StoreListCache& c = *storeCache_;
+    cascade::gui::PluginStoreDeck& deck = *pluginStoreDeck_;
+    if (uiSession_ == nullptr) { return c; }
+    // THE RUN'S RESULT LINE ARRIVING is the run having ended, however briefly the run itself was on the table.
+    if (statusLines_.addAllSummary != c.lastAddAllSummary) {
+        c.lastAddAllSummary = statusLines_.addAllSummary;
+        if (!c.lastAddAllSummary.empty()) { deck.addAllAck = false; }
+    }
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    const auto size = [this](uint32_t list) {
+        return std::max<int32_t>(0, engineApi_->read_list(uiSession_, list, 0, nullptr));
+    };
+    FoxListItem it{};
+    const auto isPlanned = [&c](const std::string& id) {
+        if (id.empty()) { return false; }
+        for (const std::string& p : c.planIds) {
+            if (p == id) { return true; }
+        }
+        return false;
+    };
+
+    if (c.railSeq != uiState_.listSeq) {
+        c.railSeq = uiState_.listSeq;
+        ++c.railRefreshes;
+        c.haveCatalogue = size(FOXAPI_LIST_CATALOGUE) > 0;
+        c.model.haveCatalogue = c.haveCatalogue;
+
+        const int32_t plans = size(FOXAPI_LIST_STORE_UPDATES);
+        c.updates = static_cast<std::size_t>(plans);
+        c.planIds.resize(c.updates);
+        std::size_t planned = 0;
+        for (int32_t i = 0; i < plans; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_UPDATES, static_cast<uint32_t>(i), &it) <= i) { break; }
+            c.planIds[planned++] = it.name;
+        }
+        c.planIds.resize(planned);
+
+        // What the store is doing: at most two entries, told apart by id.
+        c.transfer = false;
+        c.transferKind = 0;
+        c.transferName.clear();
+        c.addAll = false;
+        c.addAllPosition = 0;
+        c.addAllTotal = 0;
+        c.addAllName.clear();
+        const int32_t doing = size(FOXAPI_LIST_STORE_ACTIVITY);
+        for (int32_t i = 0; i < doing; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_ACTIVITY, static_cast<uint32_t>(i), &it) <= i) { break; }
+            if (it.id == 1u) {
+                c.transfer = true;
+                c.transferKind = static_cast<int>(it.value[1]);
+                c.transferName = it.name;
+            } else if (it.id == 2u) {
+                c.addAll = true;
+                c.addAllPosition = static_cast<std::uint64_t>(it.value[0] > 0.0 ? it.value[0] : 0.0);
+                c.addAllTotal = static_cast<std::uint64_t>(it.value[1] > 0.0 ? it.value[1] : 0.0);
+                c.addAllName = it.name;
+            }
+        }
+        // A catalogue fetch began: whatever was ticked was for the catalogue that is going. A run ended: the tick
+        // was for that run, which took the notices it covered.
+        if (c.transfer && c.transferKind == 1) { cascade::gui::forgetCatalogueConsent(deck); }
+        if (c.addAllWasRunning && !c.addAll) { deck.addAllAck = false; }
+        c.addAllWasRunning = c.addAll;
+        // The model's lamp, label and ADD ALL line (their words are the window's own, in the language in force: a
+        // switch moves listSeq, so they are made again here).
+        c.model.busy = c.transfer;
+        c.model.busyLabel = c.transfer ? cascade::gui::storeBusyLabel(c.transferKind, c.transferName) : std::string();
+        c.model.addAllRunning = c.addAll;
+        c.model.addAllProgress =
+            c.addAll ? cascade::gui::storeAddAllLine(c.addAllPosition, c.addAllTotal, c.addAllName) : std::string();
+
+        // The host's records (PLUGINS), and how many it did not load.
+        const int32_t plugins = size(FOXAPI_LIST_PLUGINS);
+        c.hosts.resize(static_cast<std::size_t>(plugins));
+        std::size_t held = 0;
+        c.refused = 0;
+        for (int32_t i = 0; i < plugins; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
+            cascade::gui::StoreListCache::Host& h = c.hosts[held++];
+            h.file = it.detail;
+            h.caps = static_cast<std::uint32_t>(it.value[0] > 0.0 ? it.value[0] : 0.0);
+            h.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+            h.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
+            h.tune = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
+            if (!h.loaded) { ++c.refused; }
+        }
+        c.hosts.resize(held);
+
+        // The retired modules, with the two facts of each (keyed by the FILE: a module may be retired with no
+        // catalogue fetched at all).
+        const int32_t retired = size(FOXAPI_LIST_STORE_BLOCKED);
+        c.blocked.resize(static_cast<std::size_t>(retired));
+        std::size_t rows = 0;
+        for (int32_t i = 0; i < retired; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_BLOCKED, static_cast<uint32_t>(i), &it) <= i) { break; }
+            cascade::gui::StoreBlockedRow& b = c.blocked[rows++];
+            b.file = it.name;
+            c.key.assign("fact.blocked.");
+            c.key += b.file;
+            c.key += ".id";
+            readFactText(c.key.c_str(), b.id);
+            c.key.assign("fact.blocked.");
+            c.key += b.file;
+            c.key += ".message";
+            readFactText(c.key.c_str(), b.message);
+            b.hasPlan = isPlanned(b.id);
+        }
+        c.blocked.resize(rows);
+    }
+
+    if (!full) { return c; }
+
+    if (c.fullSeq != uiState_.listSeq) {
+        c.fullSeq = uiState_.listSeq;
+        ++c.refreshes;
+        readFactText("fact.store.url", c.model.sourceUrl);
+        cascade::gui::StoreRow& r = c.row;
+        const auto fact = [&](const char* leaf, std::string& out) {
+            c.key.assign("fact.store.");
+            c.key += r.id;
+            c.key += '.';
+            c.key += leaf;
+            readFactText(c.key.c_str(), out);
+        };
+        const int32_t entries = size(FOXAPI_LIST_CATALOGUE);
+        c.model.modules.resize(static_cast<std::size_t>(entries));
+        std::size_t rows = 0;
+        std::uint64_t hash = 1469598103934665603ull;
+        for (int32_t i = 0; i < entries; ++i) {
+            entry(it);
+            if (engineApi_->read_list(uiSession_, FOXAPI_LIST_CATALOGUE, static_cast<uint32_t>(i), &it) <= i) { break; }
+            r.id = it.detail;
+            r.name = it.name;
+            r.abi = static_cast<std::uint32_t>(it.value[0] > 0.0 ? it.value[0] : 0.0);
+            r.sizeBytes = static_cast<std::uint64_t>(it.value[1] > 0.0 ? it.value[1] : 0.0);
+            r.installed = (it.flags & FOXAPI_ITEM_INSTALLED) != 0u;
+            r.compatible = (it.flags & FOXAPI_ITEM_COMPATIBLE) != 0u;
+            r.buildHere = (it.flags & FOXAPI_ITEM_BUILD_HERE) != 0u;
+            fact("version", r.version);
+            fact("author", r.author);
+            fact("licence", r.licence);
+            fact("description", r.description);
+            fact("summary", r.summary);
+            fact("homepage", r.homepage);
+            fact("legal", r.legal);
+            fact("floor", r.floor);
+            fact("platforms", r.platforms);
+            fact("file", r.file);
+            fact("blocked", r.blocked);
+            fact("updateReason", r.updateReason);
+            r.hasPlan = isPlanned(r.id);
+            // THE JOIN to the host's record: the file this machine's build installs under against a PLUGINS
+            // record's file name, ASCII case ignored. No match on an installed entry is a retired module.
+            r.haveHost = false;
+            r.hostFile.clear();
+            r.hostLoaded = false;
+            r.hostStopped = false;
+            r.hostTune = false;
+            r.hostCaps = 0;
+            r.hostError.clear();
+            if (!r.file.empty()) {
+                for (const cascade::gui::StoreListCache::Host& h : c.hosts) {
+                    if (!equalsFileNameAscii(h.file, r.file)) { continue; }
+                    r.haveHost = true;
+                    r.hostFile = h.file;
+                    r.hostLoaded = h.loaded;
+                    r.hostStopped = h.stopped;
+                    r.hostTune = h.tune;
+                    r.hostCaps = h.caps;
+                    c.key.assign("fact.plugin.");
+                    c.key += h.file;
+                    c.key += ".error";
+                    readFactText(c.key.c_str(), r.hostError);
+                    break;
+                }
+            }
+            hash = cascade::gui::foldStoreRow(hash, r);
+            cascade::gui::fillStoreModule(c.model.modules[rows++], r);
+        }
+        c.model.modules.resize(rows);
+        // A DIFFERENT CATALOGUE from the one last read: the ticks were consent for the old one's notices.
+        if (c.haveCatalogueHash && hash != c.catalogueHash) { cascade::gui::forgetCatalogueConsent(deck); }
+        c.haveCatalogueHash = true;
+        c.catalogueHash = hash;
+    }
+
+    // What is not the lists', every frame (a string given what its room holds allocates nothing).
+    cascade::gui::PluginStoreModel& m = c.model;
+    m.sourceStatus = statusLines_.catalogStatus;
+    m.sourceError = statusLines_.catalogError;
+    m.resultReport = statusLines_.installReport;
+    m.resultError = statusLines_.installError;
+    m.addAllSummary = statusLines_.addAllSummary;
+    m.addAllFailed = statusLines_.addAllFailed;
+    // THE TICK BELONGS TO ONE MODULE, the selected row, and the reason each row gives is asked of it that way: every
+    // other row is asked as unacknowledged, so a module with a notice stays blocked until it is the one on the
+    // plate (a tick given to the plugin the user just read about must not unblock another's FIT key).
+    for (std::size_t i = 0; i < m.modules.size(); ++i) {
+        cascade::gui::setStoreBlockedReason(m.modules[i], deck.legalAck && static_cast<int>(i) == deck.selected);
+    }
+    // THE PROGRESS, LIVE: the transfer's own figure, which moves with no list moving. 0 while the server has not
+    // sent a length; drawn only while something is busy.
+    m.progress = 0.0f;
+    if (c.transfer) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_STORE_ACTIVITY, 0, &it) > 0 && it.id == 1u) {
+            m.progress = static_cast<float>(it.value[0]);
+        }
+    }
     return c;
 }
 
@@ -20128,16 +20246,8 @@ void AppWindow::onPatchPicture(cascade::core::patch::NodeId node, cascade::core:
 
 void AppWindow::onGpsFixApplied() { gpsRowReveal_ = true; }
 
-void AppWindow::onCatalogueFetchStarting() {
-    if (pluginStoreDeck_) { cascade::gui::forgetCatalogueConsent(*pluginStoreDeck_); }
-}
-
 void AppWindow::onCatalogueResult() {
     if (!pluginTestHook_.empty()) { reportPluginTestResult(); }
-}
-
-void AppWindow::onAddAllFinished() {
-    if (pluginStoreDeck_) { pluginStoreDeck_->addAllAck = false; }
 }
 
 void AppWindow::beforePluginRescan() { syncMapPagesToSaved(); }

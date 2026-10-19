@@ -2483,7 +2483,7 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between
     // a compatible, licensed, not-yet-installed plugin and the download.
     if (!e.legalNotice.empty() && !acknowledged) {
-        return FOX_TR_NOOP("the legal notice must be acknowledged first");
+        return cascade::gui::kLegalNoticeFirstReason;
     }
     return {};
 }

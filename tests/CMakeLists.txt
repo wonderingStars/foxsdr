@@ -104,7 +104,7 @@ target_compile_definitions(test_apply_command PRIVATE
 # copies them into a plugin directory of its own (Engine::testHooks_.pluginDir).
 add_library(fixture_group8_plugin SHARED fixture_group8_plugin.cpp)
 target_include_directories(fixture_group8_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_mute_grants test_fitted_modules_window)
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_mute_grants test_fitted_modules_window test_plugin_store_window)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_stage1_plugin fixture_group8_plugin)
         target_compile_definitions(${_t} PRIVATE
@@ -119,7 +119,7 @@ endforeach()
 # also loads the two fixtures above). Copied into a plugin directory of the test's own.
 add_library(fixture_group9_plugin SHARED fixture_group9_plugin.cpp)
 target_include_directories(fixture_group9_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_fitted_modules_window)
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_fitted_modules_window test_plugin_store_window)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_group9_plugin)
         target_compile_definitions(${_t} PRIVATE

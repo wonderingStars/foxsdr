@@ -55,6 +55,7 @@
 #ifndef CASCADE_GUI_PLUGIN_STORE_VIEW_HPP
 #define CASCADE_GUI_PLUGIN_STORE_VIEW_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -346,11 +347,11 @@ struct StoreModule {
 struct PluginStoreModel {
     std::vector<StoreModule> modules;
 
-    // AppWindow::pluginCatalogueUrl_ - where the catalogue was read from. An
+    // The engine's pluginCatalogueUrl_ (the table's fact.store.url) - where the catalogue was read from. An
     // https:// index, or a path to a local index.json.
     std::string sourceUrl;
 
-    // ARE THERE ROWS? This is AppWindow::catalog_ being non-empty and nothing
+    // ARE THERE ROWS? This is the engine's catalogue (the table's CATALOGUE) being non-empty and nothing
     // more, so it answers "is there a catalogue to show" and CANNOT answer
     // "has one ever been read" - a fetch that succeeded and returned an index
     // listing no plugins leaves it false, exactly like a fetch nobody ever
@@ -361,11 +362,11 @@ struct PluginStoreModel {
     // below, which it derives from this and the two strings that follow.
     bool haveCatalogue = false;
 
-    // AppWindow::catalogStatus_ / catalogError_, verbatim. A fetch failure is
+    // The engine's catalogStatus_ / catalogError_ (the status lines it hands over), verbatim. A fetch failure is
     // the user's evidence and is never paraphrased.
     //
     // THEY ARE ALSO THE EVIDENCE THAT A FETCH HAPPENED AT ALL, which is what
-    // separates the three states the window draws. AppWindow clears BOTH when
+    // separates the three states the window draws. The engine clears BOTH when
     // it starts a fetch, sets `sourceStatus` on every success ("N plugins in
     // the catalogue") and `sourceError` on every failure, so the pair always
     // describes the LAST completed attempt and nothing older:
@@ -384,14 +385,14 @@ struct PluginStoreModel {
     std::string sourceError;
 
     // A fetch or a download is in flight (catalogPending_ || installPending_),
-    // with PluginRepo::progress() and the name of what is moving. progress
+    // with the transfer's progress (STORE_ACTIVITY's entry 1, read live) and the name of what is moving. progress
     // stays at 0 when the server sends no Content-Length, and the bar then
     // simply does not move rather than inventing a figure.
     bool busy = false;
     float progress = 0.0f;
     std::string busyLabel;
 
-    // AppWindow::installReport_ / installError_, verbatim. A sha256 mismatch
+    // The engine's installReport_ / installError_ (the status lines it hands over), verbatim. A sha256 mismatch
     // names both digests and must be shown exactly as PluginRepo wrote it.
     std::string resultReport;
     std::string resultError;
@@ -552,9 +553,123 @@ struct PluginStoreDeck {
 // a different module; the single-module tick, because it was consent for the
 // module that index used to name; and the ADD ALL tick, because it was given
 // against the notices the OLD catalogue listed - a new or reworded notice in
-// the next one has been read by nobody. Called by AppWindow::startCatalogFetch
+// the next one has been read by nobody. Called by AppWindow::storeLists, when the table shows a fetch begun or the
+// catalogue it reads is not the one it read last (it was the engine's call from its own thread until window port group 10);
 // at the moment the ground moves.
 void forgetCatalogueConsent(PluginStoreDeck& deck);
+
+// ===========================================================================
+// WHAT THE WINDOW KEEPS OF THE ENGINE'S TABLE (window port, group 10; API 0.3 section 8.9)
+// ===========================================================================
+//
+// The store window draws from its engine API session only (AppWindow::storeLists reads it). Two tiers, because
+// the rail's row and the retired modules under it are drawn whether the window is open or not, and the model is
+// worth building only while it is on screen:
+//
+//   THE RAIL TIER, when listSeq has moved: the counts the chip needs (CATALOGUE, STORE_UPDATES, PLUGINS' refused
+//   records), STORE_ACTIVITY (a transfer in flight, the ADD ALL run), and the retired rows with their two facts.
+//   THE FULL TIER, when listSeq has moved and the window is drawn: one StoreRow a catalogue entry (CATALOGUE's
+//   columns, twelve facts, the host's record joined on `.file`), written into the model.
+//
+// What moves with no listSeq is read live, once a frame, by the window: the transfer's progress.
+
+// One catalogue entry as the table gives it, before it is a StoreModule.
+struct StoreRow {
+    // CATALOGUE: the display name, the id (detail), the ABI the entry's build declares (value[0]), the size of
+    // this machine's build (value[1]; 0: not stated or no build) and the three flags.
+    std::string id;
+    std::string name;
+    std::uint32_t abi = 0;
+    std::uint64_t sizeBytes = 0;
+    bool installed = false;
+    bool compatible = false;
+    bool buildHere = false;
+    // fact.store.<id>.*, whole ("" when there is none).
+    std::string version, author, licence, description, summary, homepage, legal, floor, platforms, file, blocked,
+        updateReason;
+    // The entry's id is a STORE_UPDATES name: an update is planned (`version` is what it goes to).
+    bool hasPlan = false;
+    // The PLUGINS record whose file name is `file` (ASCII case ignored), when the host holds one. An entry that is
+    // installed and has none is a retired module: the host never saw it.
+    bool haveHost = false;
+    std::string hostFile;
+    bool hostLoaded = false;
+    bool hostStopped = false;
+    bool hostTune = false;
+    std::uint32_t hostCaps = 0;
+    std::string hostError;  // fact.plugin.<file>.error
+};
+
+// A StoreModule from a row, written into an existing one so its strings keep their room. `blockedReason` is NOT
+// set here: it depends on the deck (setStoreBlockedReason, every frame); `blockedReasonIfAcknowledged` is the
+// table's `.blocked`.
+void fillStoreModule(StoreModule& sm, const StoreRow& r);
+
+// WHY FIT MAY NOT BE PRESSED, for a row, with the notice acknowledged or not. The table's `.blocked` is the
+// engine's gate asked WITH the notice taken as acknowledged; the engine's gates run busy, ABI, platform, licence,
+// already installed and the acknowledgement LAST, so asked without it the answer is the same unless it is empty and
+// the entry carries a notice - then it is kLegalNoticeFirstReason. (A string given what its room holds allocates
+// nothing: it is called for every row every frame.)
+void setStoreBlockedReason(StoreModule& sm, bool acknowledged);
+
+// "downloading <name>" (kind 2) or "fetching the catalogue" (kind 1), in the language in force; "" for neither.
+std::string storeBusyLabel(int kind, const std::string& name);
+// "installing 4 of 23: <name>" ("starting" while the name is empty), in the language in force.
+std::string storeAddAllLine(std::uint64_t position, std::uint64_t total, const std::string& name);
+
+// What a catalogue is, folded into a running hash: its rows' own texts and columns, and nothing that moves
+// without the catalogue being replaced (not INSTALLED, not the gate, not the plan). The window clears the
+// consents given against a catalogue when the one it holds is a different one (see AppWindow::storeLists).
+std::uint64_t foldStoreRow(std::uint64_t hash, const StoreRow& r);
+
+// A retired module's row on the rail: the file, the sentence (whole, composed by the engine when the block is
+// built, in the language in force), the catalogue id the module was installed under and whether an update is
+// planned for that id.
+struct StoreBlockedRow {
+    std::string file;
+    std::string message;
+    std::string id;
+    bool hasPlan = false;
+};
+
+// What the window keeps (AppWindow::storeLists). `refreshes` and `railRefreshes` are read by a test.
+struct StoreListCache {
+    // --- the rail tier -------------------------------------------------------------------------------
+    std::uint64_t railSeq = 0;  // listSeq it was read at; 0: never
+    std::uint32_t railRefreshes = 0;
+    bool haveCatalogue = false;  // CATALOGUE is not empty (the old `!catalog_.empty()`)
+    std::size_t updates = 0;     // STORE_UPDATES
+    bool transfer = false;       // STORE_ACTIVITY's entry 1: a fetch or a download is in flight
+    int transferKind = 0;       // 1 the catalogue, 2 a download
+    std::string transferName;
+    bool addAll = false;  // its entry 2: an ADD ALL run is going
+    std::uint64_t addAllPosition = 0;
+    std::uint64_t addAllTotal = 0;
+    std::string addAllName;
+    std::size_t refused = 0;  // PLUGINS records the host did not load
+    std::vector<StoreBlockedRow> blocked;
+    std::vector<std::string> planIds;  // STORE_UPDATES' names
+    // The edges the consents are cleared on.
+    bool addAllWasRunning = false;
+    std::string lastAddAllSummary;
+    // --- the full tier -------------------------------------------------------------------------------
+    std::uint64_t fullSeq = 0;
+    std::uint32_t refreshes = 0;
+    bool haveCatalogueHash = false;
+    std::uint64_t catalogueHash = 0;
+    PluginStoreModel model;
+    // --- scratch: one row, a key, the host's records -------------------------------------------------
+    StoreRow row;
+    std::string key;
+    struct Host {
+        std::string file;
+        std::uint32_t caps = 0;
+        bool loaded = false;
+        bool stopped = false;
+        bool tune = false;
+    };
+    std::vector<Host> hosts;
+};
 
 // ===========================================================================
 // ADD ALL - the whole decision, in one pure function

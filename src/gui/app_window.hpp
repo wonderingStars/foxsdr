@@ -171,6 +171,7 @@ struct PluginStoreDeck;
 struct PluginStoreModel;
 struct FittedModulesDeck;
 struct FittedListCache;
+struct StoreListCache;
 
 // --- THE FUNCTION SELECT RAIL'S ROW GEOMETRY ---------------------------------
 //
@@ -625,9 +626,7 @@ private:
     void onPatchGraphChanged() override;
     void onPatchPicture(cascade::core::patch::NodeId node, cascade::core::HostImage&& img) override;
     void onGpsFixApplied() override;
-    void onCatalogueFetchStarting() override;
     void onCatalogueResult() override;
-    void onAddAllFinished() override;
     void beforePluginRescan() override;
     void onPluginsUnloading() override;
     void attachBasemap(const CascadeBasemapApi* api) override;
@@ -2572,14 +2571,9 @@ private:
     // The store's one automatic catalogue read per session (gui/store_first_open.hpp).
     cascade::gui::StoreFirstOpen storeFirstOpen_;
 
-    // ONE PLACE BUILDS THE STORE'S MODEL, and it has to be one place now that
-    // something other than the draw needs it: startAddAll re-plans from live
-    // state, and a second transcription of catalogue row into StoreModule
-    // would be a second set of rules about what "fitted" and "blocked" mean.
-    void buildPluginStoreModel(PluginStoreModel& model);
-    // What the store window is told about the run in flight. Empty when none
-    // is.
-    std::string addAllProgressLine() const;
+    // THE STORE'S MODEL IS THE TABLE'S (window port, group 10): it is built from the window's engine API session
+    // when listSeq moves (storeLists, below) and nowhere else - what ADD ALL plans against is the engine's own
+    // catalogue (Engine::startAddAll), not a model the window builds.
 
     // IS THE PLUGIN STORE WINDOW OPEN. Still AppConfig::pluginBrowserOpen,
     // which is exactly what that field has always meant - "the plugin browser
@@ -2646,6 +2640,15 @@ private:
     // lives behind imgui.h.
     std::unique_ptr<FittedListCache> fittedCache_;
     FittedListCache& fittedLists();
+    // WHAT THE PLUGIN STORE TAKES FROM THE TABLE (window port, group 10; API 0.3 section 8.9,
+    // gui/plugin_store_view.hpp): two tiers, both read when listSeq moves. The RAIL tier - the store key's chip, the
+    // retired rows under it, the plugins key's refused count, and the edges the deck's consents are cleared on
+    // (a fetch began, an ADD ALL run ended) - is read by every member that draws on the rail and by the window
+    // every frame, open or shut; the FULL tier, the model, only while the window is drawn (`full`). What moves
+    // with no listSeq - the transfer's progress - is read once a frame by a full call, and the status lines come
+    // from statusLines_. Called from the window's own draw only.
+    std::unique_ptr<StoreListCache> storeCache_;
+    StoreListCache& storeLists(bool full);
     char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
     // --- measurement (tools/measure_engine.ps1) ------------------------------
     // All three null in every ordinary run; each is created only by its debug
@@ -2707,10 +2710,11 @@ private:
     std::future<bool> updateDownloadFuture_;
 
     // The REMOVE confirmation for an installed module is the fitted window's
-    // (FittedModulesDeck::confirmRemove, keyed on the module file name because
-    // a rescan reorders the list). Only the disabled list still keeps an index
-    // here, and it is drawn from the rail.
-    int blockedRemoveConfirmIdx_ = -1;  // disabled-list row awaiting confirmation
+    // (FittedModulesDeck::confirmRemove); the disabled list's is here, drawn
+    // from the rail. BOTH ARE KEYED ON THE MODULE FILE NAME, not a position:
+    // every fetch, install and removal rescans, and a position would arm the
+    // Delete of whichever module the rescan put there (window port, group 10).
+    std::string blockedRemoveConfirmFile_;  // disabled-list row awaiting confirmation ("": none)
 
     // --- Bounded-run test hook (P9) --------------------------------------------
     // CASCADE_PLUGIN_TEST=<url-or-path>, honored ONLY by run(frames >= 0),
@@ -2726,7 +2730,8 @@ private:
     // frame the fetch resolved on — which is what proves the window kept
     // rendering while the transfer was in flight.
     int frameCounter_ = 0;
-    // Prints that summary from the LIVE member state (catalog_ /
+    // A HOST-HOOK DIAGNOSTIC, not a draw member: called by the ENGINE from inside its poll (onCatalogueResult), reading
+    // its live catalogue on purpose, with no frame and no session in between. Prints that summary from the LIVE member state (catalog_ /
     // catalogError_), not from the future's payload, so what it reports is
     // exactly what the UI is about to draw.
     void reportPluginTestResult();

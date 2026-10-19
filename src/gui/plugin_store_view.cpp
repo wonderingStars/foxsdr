@@ -1287,6 +1287,120 @@ void forgetCatalogueConsent(PluginStoreDeck& deck) {
 }
 
 // ===========================================================================
+// WHAT THE WINDOW KEEPS OF THE ENGINE'S TABLE (window port, group 10)
+// ===========================================================================
+
+void fillStoreModule(StoreModule& sm, const StoreRow& r) {
+    sm.id = r.id;
+    ModulePlate& p = sm.plate;
+    p.haveDescriptor = true;
+    p.name = r.name;
+    p.version = r.version;
+    p.maker = r.author;
+    p.licence = r.licence;
+    p.blurb = r.description.empty() ? r.summary : r.description;
+    // THE SHORT ONE, KEPT APART (ModulePlate::summary).
+    p.summary = r.summary;
+    p.homepage = r.homepage;
+    p.legalNotice = r.legal;
+    // THE ABI IS KNOWN FOR A CATALOGUE ROW, and both halves of the comparison are stated so the plate can letter
+    // the mismatch rather than the verdict. The host's half is this build's own number (it is not in the table).
+    p.haveAbi = true;
+    p.abiVersion = r.abi;
+    p.hostAbiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+    p.retirementFloor = r.floor;
+    p.platforms = r.platforms;
+    // ADVISORY, AND ONLY WHEN STATED: 0 is "the index did not say", never an empty file.
+    p.haveSizeBytes = r.sizeBytes > 0u;
+    p.sizeBytes = r.sizeBytes;
+    // IS THERE A BUILD THIS MACHINE COULD RUN: the exact-ABI test and an os/arch build existing.
+    sm.installableHere = r.compatible && r.buildHere;
+    p.fitted = r.installed;
+    // The host's record, when it has one (a retired module has none).
+    p.fileName.clear();
+    p.loaded = false;
+    p.refusalReason.clear();
+    p.haveCapabilities = false;
+    p.capabilities = 0;
+    p.running = false;
+    p.haveTuneGrant = false;
+    p.tuneGranted = false;
+    if (r.haveHost) {
+        p.fileName = r.hostFile;
+        p.loaded = r.hostLoaded;
+        p.refusalReason = r.hostError;
+        p.haveCapabilities = r.hostLoaded;
+        p.capabilities = r.hostCaps;
+        p.running = r.hostLoaded && !r.hostStopped;
+        // The host client is what a tune grant is for: a LOADED module that declares the bit holds one.
+        if (r.hostLoaded && (r.hostCaps & CASCADE_CAP_HOST_CLIENT) != 0u) {
+            p.haveTuneGrant = true;
+            p.tuneGranted = r.hostTune;
+        }
+    }
+    sm.blockedReasonIfAcknowledged = r.blocked;
+    if (r.hasPlan) {
+        sm.updateToVersion = r.version;
+        sm.updateReason = r.updateReason;
+    } else {
+        sm.updateToVersion.clear();
+        sm.updateReason.clear();
+    }
+}
+
+void setStoreBlockedReason(StoreModule& sm, bool acknowledged) {
+    if (acknowledged || !sm.blockedReasonIfAcknowledged.empty() || sm.plate.legalNotice.empty()) {
+        sm.blockedReason = sm.blockedReasonIfAcknowledged;
+    } else {
+        sm.blockedReason = kLegalNoticeFirstReason;
+    }
+}
+
+std::string storeBusyLabel(int kind, const std::string& name) {
+    if (kind == 2) {
+        // One format string, so a translation can put the name where it goes.
+        return cascade::core::formatText(tr("downloading %s"), name.c_str());
+    }
+    return kind == 1 ? std::string(tr("fetching the catalogue")) : std::string();
+}
+
+std::string storeAddAllLine(std::uint64_t position, std::uint64_t total, const std::string& name) {
+    // "installing 4 of 23: GOES Weather Satellites (HRIT / LRIT)" - the position AND the name, because a bar with
+    // no name cannot tell a user which module is the slow one.
+    return cascade::core::formatText(tr("installing %zu of %zu: %s"), static_cast<std::size_t>(position),
+                                     static_cast<std::size_t>(total), name.empty() ? tr("starting") : name.c_str());
+}
+
+namespace {
+inline std::uint64_t foldBytes(std::uint64_t h, const void* data, std::size_t n) {
+    const unsigned char* b = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < n; ++i) { h = (h ^ b[i]) * 1099511628211ull; }
+    return h;
+}
+inline std::uint64_t foldText(std::uint64_t h, const std::string& s) {
+    h = foldBytes(h, s.data(), s.size());
+    return (h ^ 0xffu) * 1099511628211ull;  // (a separator: "ab","c" is not "a","bc")
+}
+}  // namespace
+
+std::uint64_t foldStoreRow(std::uint64_t h, const StoreRow& r) {
+    h = foldText(h, r.id);
+    h = foldText(h, r.name);
+    h = foldText(h, r.version);
+    h = foldText(h, r.author);
+    h = foldText(h, r.licence);
+    h = foldText(h, r.description);
+    h = foldText(h, r.summary);
+    h = foldText(h, r.homepage);
+    h = foldText(h, r.legal);
+    h = foldText(h, r.floor);
+    h = foldText(h, r.platforms);
+    h = foldBytes(h, &r.abi, sizeof(r.abi));
+    h = foldBytes(h, &r.sizeBytes, sizeof(r.sizeBytes));
+    return h;
+}
+
+// ===========================================================================
 // ADD ALL - what it picks, and what the key says
 // ===========================================================================
 
@@ -2494,7 +2608,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
                     !deck.legalAck) {
                     // The predicate's own English words, translated with the
                     // rest where the sentence is drawn below.
-                    blocked = FOX_TR_NOOP("the legal notice must be acknowledged first");
+                    blocked = kLegalNoticeFirstReason;
                 }
                 if (!sm.plate.fitted) {
                     if (drawDeckKey(pdl, kTL, ImVec2(kTL.x + pw - 6.0f, kTL.y + kPlateKeyH),

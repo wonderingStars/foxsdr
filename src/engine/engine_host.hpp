@@ -80,10 +80,15 @@ public:
     virtual void onPatchPicture(cascade::core::patch::NodeId node, cascade::core::HostImage&& img);
     // A GPS fix was applied: the rail's position fold reveals itself.
     virtual void onGpsFixApplied();
-    // The store: a catalogue fetch starts (the store window forgets the
-    // consent ticks it held for the old catalogue); a fetch or install
-    // result was collected (the bounded-run test hook reports); an ADD ALL
-    // run finished (its tick was for that run).
+    // The store: a catalogue fetch starts; a fetch or install result was
+    // collected (the bounded-run test hook reports); an ADD ALL run finished.
+    // THE STANDARD WINDOW IMPLEMENTS ONLY onCatalogueResult (window port,
+    // group 10): the first and the last were its way of clearing the consent
+    // ticks it holds - for the old catalogue, for the run - from the ENGINE's
+    // thread, into state the window reads and writes in its own frame. It now
+    // watches the table for both (STORE_ACTIVITY, the catalogue itself) and
+    // clears them on its own thread, so no code in src/gui overrides either;
+    // they stay for a front end that wants to be told.
     virtual void onCatalogueFetchStarting();
     virtual void onCatalogueResult();
     virtual void onAddAllFinished();

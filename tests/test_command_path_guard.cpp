@@ -163,9 +163,11 @@ const char* const kReadOnly[] = {
     "pluginUi_.instruments",
     "pluginUi_.panels", "pluginUi_.panels().size", "pluginUi_.paths", "pluginUi_.paths().size",
     "pluginUi_.trackPluginNames", "pluginUi_.trackPluginNames().empty",
-    "pluginUi_.tracks", "pluginUi_.tracks().size", "pluginUi_.tuneAllowed",
+    "pluginUi_.tracks", "pluginUi_.tracks().size",
     "pluginUi_.altitudeNear", "pluginUi_.tuneRequesters().size", "pluginUi_.poll",
-    "pluginRepo_.progress",
+    // (RETIRED with window port group 10, their last caller gone: pluginRepo_.progress - the store window's bar
+    // reads the transfer's STORE_ACTIVITY entry, live - and pluginUi_.tuneAllowed - the store's plate reads the
+    // TUNE_ALLOWED flag of the PLUGINS record joined to the entry.)
     "soapyView_.deadReason", "soapyView_.deviceDead",
     "transmitter_.haveSink", "transmitter_.lastAutoUnkeyReason", "transmitter_.lastError",
     "transmitter_.latched", "transmitter_.remoteHoldRemainingMs", "transmitter_.sink",
@@ -217,8 +219,8 @@ const char* const kHostHooks[] = {
     "pauseWatchdog",      "resumeWatchdog",      "onDisplayRange",
     "onBookmarksChanged", "openPluginWindowsFor", "onReceiverPositionApplied",
     "onConverterChanged", "onPatchGraphChanged", "onPatchPicture",
-    "onGpsFixApplied",    "onCatalogueFetchStarting", "onCatalogueResult",
-    "onAddAllFinished",   "beforePluginRescan", // planAddAll: the Engine's since OPEN 5
+    "onGpsFixApplied",    "onCatalogueResult",  // (onCatalogueFetchStarting and onAddAllFinished left with
+    "beforePluginRescan",                       //  window port group 10: the window watches the table instead)
     "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
     "showDemonstrationInstrument", "drainTrackInfoText", "patchPageOpen",
     // webListening, tunerDisplayStyle, basemapFacts: no longer hooks
@@ -921,6 +923,10 @@ const char* const kPublishedOnly[] = {
     // The Bookmarks section's note and red line (API 0.3 8.6: the STATUS_LINES keys bookmarkNote
     // and bookmarkError, the sixteenth and seventeenth lines of EngineStatusText).
     "bookmarkImportNote_", "bookmarkError_",
+    // The plugin store's lines (API 0.3 8.8 and 8.9: STATUS_LINES installReport, installError, catalogStatus and
+    // addAllSummary, with addAllFailed its level): the report and the error of an install or a removal, the
+    // catalogue's "N plugins" line, and what the last ADD ALL run did - all of them EngineStatusText's.
+    "installReport_", "installError_", "catalogStatus_", "addAllSummary_", "addAllFailed_",
 };
 
 // THE RATCHET ON EVERY OTHER DIRECT READ (OPEN 3). The window still reads the
@@ -997,10 +1003,17 @@ const char* const kPortedMembers[] = {
     // table it draws from. The window's own rectangle, its open flag and its deck stay the window's. The engine's
     // pluginNotices_ is no longer read by the window at all.
     "drawFittedModulesWindow", "fittedLists",
+    // GROUP 10, the plugin store: the rail's key with its chip and the catalogue URL field, the plugins key beside
+    // it, the retired rows under them, the store window itself (its model, its nine commands) - and the cache of
+    // the table they draw from, which also watches it for the two moments the deck's consents must go. The
+    // window's own deck, its open flag and the first-open latch stay the window's; the engine's pluginRepo_ and
+    // its ten fields of the store's state are no longer read by the window at all (the two bounded-run
+    // diagnostics keep catalog_ and pluginBlocked_).
+    "drawPluginStoreSection", "drawPluginsSection", "drawBlockedPluginRows", "drawPluginStoreWindow", "storeLists",
 };
 
-constexpr int kWindowFieldsReadBudget = 104;
-constexpr int kWindowFieldReadsBudget = 485;
+constexpr int kWindowFieldsReadBudget = 94;
+constexpr int kWindowFieldReadsBudget = 441;
 
 struct Report {
     int violations = 0;
@@ -1191,7 +1204,7 @@ int main(int argc, char** argv) {
                 r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
-    CHECK(r.submitsInDraw >= 38);  // (a sanity floor, not a ratchet: it is the count itself - 40 until group 9 ported the window's seven)
+    CHECK(r.submitsInDraw >= 30);  // (a sanity floor, not a ratchet: it is the count itself - 38 until group 10 ported the store's eight)
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);
