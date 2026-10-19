@@ -61,7 +61,9 @@ bool modeFromName(const std::string& name, DemodMode& out);
 //        detector's multiply is by 1, leaving Re{x}.
 //   USB/LSB  Weaver-style selection: mix the wanted sideband to straddle DC
 //        with an Nco BFO, low-pass with a real-tap FIR (symmetric passband),
-//        mix back, take the real part.
+//        mix back, take the real part. The opposite sideband is down >= 50 dB
+//        at every audio frequency; the price is that the wanted sideband's own
+//        audio below about 300 Hz is attenuated, as in any SSB filter.
 //   CW   USB with the input pre-shifted so a carrier on the VFO beats at
 //        700 Hz.
 //   RAW  Re{x} passthrough, for diagnostics.
@@ -106,8 +108,11 @@ public:
     // The WIDTH OF THE WANTED SIDEBAND for USB, LSB and CW, in Hz: the audio
     // passband runs from the carrier out to about this far (-6 dB at 1.2 x, the
     // design the 3 kHz default has always had, scaled in proportion). Default
-    // 3000 - a Demodulator nobody calls this on is bit-for-bit what it was.
-    // The other modes ignore it.
+    // 3000.
+    // The other modes ignore it. The carrier-side edge is -6 dB at 300 Hz for
+    // B of 3 kHz and up (B/10 below that); demod.cpp says why the opposite
+    // sideband cannot be stopped near the carrier without giving up the audio
+    // there.
     //
     // Clamped into [1 kHz, 0.3 x the channel rate]; a non-finite value means
     // the default. Redesigns the sideband filter and the two BFOs, so it
@@ -144,6 +149,7 @@ private:
     Nco shiftDown_;
     Nco shiftUp_;
     double ssbBandwidthHz_ = 3000.0;  // B; see setSsbBandwidthHz
+    double ssbBfoHz_ = 0.0;           // f0, the two mixes' frequency (ssbShape)
     FirDecimator ssbFilter_;
     std::vector<std::complex<float>> work_;      // down-mixed block
     std::vector<std::complex<float>> filtered_;  // filter output (n+1 capacity)
