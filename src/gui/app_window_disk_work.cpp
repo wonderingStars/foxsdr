@@ -547,9 +547,10 @@ void AppWindow::shotFlush() {
 }
 
 void AppWindow::importBookmarkFile(const std::string& path, const cascade::core::ImportInto& into) {
-    std::string p = path;
-    // A path pasted from Explorer's "Copy as path" arrives quoted.
-    if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
+    // What was typed, pasted or dropped, as a path (cleanImportPath, 0.99.82): the quotes
+    // Explorer's "Copy as path" puts round it, the Enter or the space a paste leaves after it,
+    // a file:// address.
+    const std::string p = cascade::core::cleanImportPath(path);
     // ONE READ AT A TIME, and a list dropped on the window while one is out is not
     // lost: it is remembered (the last one asked for) and read when the first is
     // back (pollDiskJobs). It is remembered with the preset it was asked for
@@ -572,22 +573,15 @@ void AppWindow::importBookmarkFile(const std::string& path, const cascade::core:
         if (hook) { hook(); }
         ImportOutcome o;
         o.path = p;
-        o.result = cascade::core::importFrequencyFile(p);
-        // A BARE FILE NAME (0.99.80): "frequencies.xml", as Export for SDR# and the AIRBAND
-        // preset's Export CSV showed it, opens relative to the process's working directory -
-        // the install folder, from the shortcuts - and not in the recordings folder those keys
-        // wrote it to (field report, SWL 20807: "import impossible: cannot open"). So a name
-        // with no folder part that does not open is looked for in the recordings folder, as
-        // Export shows paths (dir + "/" + name). Here on the worker, never on the window's
-        // thread; a relative name WITH a folder part is not retried. What was tried last is
-        // what the result and the path say, so the reason names where it looked.
-        if (!p.empty() && !dir.empty() && o.result.error.rfind("cannot open", 0) == 0 &&
-            !std::filesystem::path(std::u8string(p.begin(), p.end())).has_parent_path()) {
-            const char last = dir.back();
-            const std::string retry = dir + ((last == '/' || last == '\\') ? "" : "/") + p;
-            o.path = retry;
-            o.result = cascade::core::importFrequencyFile(retry);
-        }
+        // A RELATIVE PATH (0.99.80 for a bare name, 0.99.82 for any): "frequencies.xml", as
+        // Export for SDR# and the AIRBAND preset's Export CSV showed it, opens relative to the
+        // process's working directory - the install folder, from the shortcuts - and not in the
+        // recordings folder those keys wrote it to (field report, SWL 20807: "import impossible:
+        // cannot open"). So a relative path that does not open there - "lists/marine.csv" as well
+        // as a bare name - is looked for in the recordings folder, as Export shows paths (dir +
+        // "/" + name). Here on the worker, never on the window's thread. What was tried last is
+        // what the result and the path say, so the reason names, in full, where it looked.
+        o.result = cascade::core::importFrequencyFileIn(p, dir, o.path);
         o.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
                    .count();
         return o;

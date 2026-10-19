@@ -74,6 +74,31 @@ ImportResult importFrequencyList(std::string_view text);
 // A file that cannot be read sets error.
 ImportResult importFrequencyFile(const std::string& path);
 
+// WHAT A PERSON TYPES, PASTES OR DROPS AS A PATH (0.99.82; field report 7c93e85ca4f35c9a, where the
+// Import box answered a typed name with "cannot open"). Returns the UTF-8 path the text means:
+//   * white space around it is dropped - the Enter that ended a pasted line, the space after a
+//     name, the CR LF of a text/uri-list - and so are any pairs of matching double or single
+//     quotes around it (Explorer's "Copy as path", a terminal's drag-and-drop);
+//   * a file:// address (a file manager's copied path, a drop that arrived as a URI) becomes the
+//     path it names, its %XX escapes decoded as UTF-8 bytes. file:///home/a%20b/c.csv is
+//     /home/a b/c.csv; on Windows file:///C:/x/y.csv is C:/x/y.csv and file://server/share/y.csv
+//     is //server/share/y.csv. "localhost" is the same machine as no host. Only an address is
+//     decoded: a plain name with a % in it is left as it is.
+// Anything else is returned as written, so a path that needed no cleaning is unchanged, and
+// cleaning a cleaned path changes nothing more.
+std::string cleanImportPath(std::string_view typed);
+
+// The file `typed` names, imported, WITH the places an Import box looks (0.99.82). The text is
+// cleaned (cleanImportPath); a path with a root (a drive, a UNC share, a leading slash) is opened
+// as it stands; any other - "frequencies.xml", "lists/marine.csv" - is opened relative to the
+// process's working directory first, as it always was, and when that does not open, relative to
+// `recordingsDir` (where Export writes, so an exported name can be typed back; 0.99.80 did this for
+// a bare name only). `tried` is the full path of the LAST place looked - a relative path with
+// no recordings folder to fall back on is made absolute first, so the "cannot open" the result
+// carries names a place the person can go and look at, not the fragment they typed.
+ImportResult importFrequencyFileIn(const std::string& typed, const std::string& recordingsDir,
+                                   std::string& tried);
+
 // SDR#'s frequencies.xml for `list`, so a list built here can go back.
 std::string exportSdrSharpXml(const std::vector<Bookmark>& list);
 

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -439,6 +440,108 @@ ImportResult importFrequencyFile(const std::string& path) {
         }
     }
     return importFrequencyList(text);
+}
+
+namespace {
+
+bool isPathSpace(const char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+std::string_view trimPathSpace(std::string_view s) {
+    while (!s.empty() && isPathSpace(s.front())) { s.remove_prefix(1); }
+    while (!s.empty() && isPathSpace(s.back())) { s.remove_suffix(1); }
+    return s;
+}
+
+int hexDigit(const char c) {
+    if (c >= '0' && c <= '9') { return c - '0'; }
+    if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+    if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+    return -1;
+}
+
+// `prefix` is lower case.
+bool startsWithNoCase(std::string_view s, std::string_view prefix) {
+    if (s.size() < prefix.size()) { return false; }
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i]) { return false; }
+    }
+    return true;
+}
+
+// The path a file:// address names, or `address` itself when it names none we can open (no path
+// part, or an escape that decodes to a NUL byte).
+std::string pathOfFileUri(std::string_view address) {
+    const std::string_view rest = address.substr(7);  // after "file://"
+    const std::size_t slash = rest.find('/');
+    if (slash == std::string_view::npos) { return std::string(address); }
+    const std::string_view host = rest.substr(0, slash);
+    std::string path;
+    path.reserve(rest.size());
+    for (std::size_t i = slash; i < rest.size(); ++i) {
+        if (rest[i] == '%' && i + 2 < rest.size() && hexDigit(rest[i + 1]) >= 0 &&
+            hexDigit(rest[i + 2]) >= 0) {
+            const char decoded = static_cast<char>(hexDigit(rest[i + 1]) * 16 + hexDigit(rest[i + 2]));
+            if (decoded == '\0') { return std::string(address); }
+            path.push_back(decoded);
+            i += 2;
+        } else {
+            path.push_back(rest[i]);
+        }
+    }
+    const bool thisMachine = host.empty() || (host.size() == 9 && startsWithNoCase(host, "localhost"));
+#if defined(_WIN32)
+    // file:///C:/x/y.csv: the slash before the drive letter is the address's, not the path's.
+    if (thisMachine && path.size() >= 3 && path[0] == '/' &&
+        std::isalpha(static_cast<unsigned char>(path[1])) != 0 && path[2] == ':' &&
+        (path.size() == 3 || path[3] == '/' || path[3] == '\\')) {
+        path.erase(0, 1);
+    }
+#endif
+    // Another machine's share: //host/share/..., which Windows opens as a UNC path.
+    if (!thisMachine) { path.insert(0, "//" + std::string(host)); }
+    return path;
+}
+
+}  // namespace
+
+std::string cleanImportPath(std::string_view typed) {
+    std::string_view s = trimPathSpace(typed);
+    // A pair of quotes around the whole path, however many were pasted.
+    while (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.back() == s.front()) {
+        s = trimPathSpace(s.substr(1, s.size() - 2));
+    }
+    if (startsWithNoCase(s, "file://")) { return pathOfFileUri(s); }
+    return std::string(s);
+}
+
+ImportResult importFrequencyFileIn(const std::string& typed, const std::string& recordingsDir,
+                                   std::string& tried) {
+    namespace fs = std::filesystem;
+    const std::string p = cleanImportPath(typed);
+    const fs::path given{std::u8string(p.begin(), p.end())};
+    // "Relative" is a path with no root of any kind: "C:foo" and "\foo" belong to a drive or to a
+    // root and are opened as they stand.
+    const bool relative = !p.empty() && !given.has_root_path();
+    tried = p;
+    if (relative) {
+        std::error_code ec;
+        const fs::path whole = fs::absolute(given, ec).lexically_normal();
+        if (!ec && !whole.empty()) {
+            const std::u8string w = whole.u8string();
+            tried.assign(w.begin(), w.end());
+        }
+    }
+    ImportResult r = importFrequencyFile(tried);
+    // Where Export writes (0.99.80 for a bare name, now for any relative path): tried second, so a
+    // file that is there in the working directory is still the one a person meant.
+    if (relative && !recordingsDir.empty() && r.error.rfind("cannot open", 0) == 0) {
+        const char last = recordingsDir.back();
+        tried = recordingsDir + ((last == '/' || last == '\\') ? "" : "/") + p;
+        r = importFrequencyFile(tried);
+    }
+    return r;
 }
 
 std::string exportSdrSharpXml(const std::vector<Bookmark>& list) {

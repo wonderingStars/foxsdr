@@ -65,6 +65,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <complex>
 #include <cstdint>
@@ -935,16 +936,23 @@ void checkABareUtf8NameInAUtf8RecordingsFolder() {
     CHECK(Access::dialogOpen(app));
 }
 
-// ...but only a name with NO FOLDER PART: "sub/name.csv" is a path, opened as it stands.
-void checkANameWithAFolderPartIsNotRetried() {
+// ...and, since 0.99.82, a name WITH a folder part too: "sub/name.csv" is opened relative to the
+// working directory first and, when it is not there, relative to the recordings folder (0.99.80 left
+// it to the working directory alone; the shapes are in checkTheShapesAnImportPathArrivesIn).
+void checkANameWithAFolderPartIsRetriedInTheRecordingsFolder() {
     AppWindow app;
     const fs::path rec = g_scratch / "bare-sub-rec";
     Access::setRecordDir(app, rec.string());
     writeCsvIn(rec / "sub", "inside.csv", 3, 110.0);
     Access::importFile(app, "sub/inside.csv");
     waitImport(app);
-    CHECK(Access::bookmarks(app).empty());
-    CHECK(Access::exportNote(app) == "Could not import: the file \"sub/inside.csv\" could not be opened");
+    CHECK(Access::bookmarks(app).size() == 3u);
+    CHECK(!Access::dialogOpen(app));  // rows came back: no window
+    // One that is in neither place says where it looked last, in full.
+    Access::importFile(app, "sub/not-there.csv");
+    waitImport(app);
+    CHECK(Access::exportNote(app) ==
+          "Could not import: the file \"" + rec.string() + "/sub/not-there.csv\" could not be opened");
     CHECK(Access::dialogOpen(app));  // it did not open: the window offers the other ways in
     // A bare name that is in neither place names where it LOOKED LAST: the recordings folder.
     AppWindow lost;
@@ -954,6 +962,166 @@ void checkANameWithAFolderPartIsNotRetried() {
     CHECK(Access::exportNote(lost) ==
           "Could not import: the file \"" + rec.string() + "/nowhere.csv\" could not be opened");
     CHECK(Access::bookmarks(lost).empty());
+}
+
+// --- THE SHAPES AN IMPORT PATH ARRIVES IN (field report 7c93e85ca4f35c9a, 2026-10-19) -----------
+//
+// 0.99.80 answered the report's bare file name. What else reaches importBookmarkFile is whatever a
+// person pastes or a desktop hands over: a path with the Enter that ended the line, or a space, or
+// single quotes (a terminal's drag-and-drop), or double quotes and a space; a file:// address (a
+// file manager's copied path, a text/uri-list line) with its percent-encoding; a name with a folder
+// part (lists/marine.csv), which 0.99.80 left to the process's working directory alone. Each shape
+// is a file that exists and a string that names it: the rows must come in, and a path that does not
+// open must say the whole path it tried.
+
+std::string percentEncodeUri(const std::string& s) {
+    static const char* const hex = "0123456789ABCDEF";
+    std::string out;
+    for (const char c : s) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (std::isalnum(u) != 0 || c == '-' || c == '.' || c == '_' || c == '~' || c == '/' || c == ':') {
+            out.push_back(c);
+        } else {
+            out.push_back('%');
+            out.push_back(hex[u >> 4]);
+            out.push_back(hex[u & 15]);
+        }
+    }
+    return out;
+}
+
+// The file:// address of `p`, as a file manager writes it (an absolute path, percent-encoded UTF-8).
+std::string fileUriOf(const fs::path& p) {
+    const std::u8string u8 = fs::absolute(p).generic_u8string();
+    const std::string s(u8.begin(), u8.end());
+    return "file://" + std::string(!s.empty() && s[0] == '/' ? "" : "/") + percentEncodeUri(s);
+}
+
+std::string utf8Of(const fs::path& p) {
+    const std::u8string u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
+std::string utf8Of(const std::u8string& u8) { return std::string(u8.begin(), u8.end()); }
+
+// One typed string, and the number of NEW rows the import must bring in.
+void checkShape(AppWindow& app, const char* label, const std::string& typed, std::size_t wantRows) {
+    const std::size_t before = Access::bookmarks(app).size();
+    Access::importFile(app, typed);
+    waitImport(app);
+    const std::size_t got = Access::bookmarks(app).size() - before;
+    std::printf("  shape %-46s -> %zu new row(s), wanted %zu%s\n", label, got, wantRows,
+                got == wantRows ? "" : "   <== FAILED");
+    if (got != wantRows) { std::printf("    the app said: %s\n", Access::exportNote(app).c_str()); }
+    CHECK(got == wantRows);
+}
+
+void checkTheShapesAnImportPathArrivesIn() {
+    AppWindow app;
+    const fs::path rec = g_scratch / "shape-rec";
+    const std::string recDir = utf8Of(rec);
+    Access::setRecordDir(app, recDir);
+    double mhz = 100.0;
+    const auto next = [&mhz] { return mhz += 7.0; };
+
+    // A full path, with the ends of a pasted line.
+    writeCsvIn(rec, "pasted-b.csv", 3, next());
+    checkShape(app, "full path + LF", utf8Of(rec / "pasted-b.csv") + "\n", 3);
+    writeCsvIn(rec, "pasted-c.csv", 3, next());
+    checkShape(app, "full path + CRLF", utf8Of(rec / "pasted-c.csv") + "\r\n", 3);
+    writeCsvIn(rec, "pasted-d.csv", 3, next());
+    checkShape(app, "full path with spaces around", "  " + utf8Of(rec / "pasted-d.csv") + "  ", 3);
+    writeCsvIn(rec, "pasted-e.csv", 3, next());
+    checkShape(app, "full path in single quotes", "'" + utf8Of(rec / "pasted-e.csv") + "'", 3);
+    writeCsvIn(rec, "pasted-f.csv", 3, next());
+    checkShape(app, "full path in double quotes + a space", "\"" + utf8Of(rec / "pasted-f.csv") + "\" ", 3);
+
+    // The bare name Alain typed, with what a paste or a stray key adds.
+    writeCsvIn(rec, "bare-g.csv", 3, next());
+    checkShape(app, "bare name + LF", "bare-g.csv\n", 3);
+    writeCsvIn(rec, "bare-h.csv", 3, next());
+    checkShape(app, "bare name in single quotes", "'bare-h.csv'", 3);
+    writeCsvIn(rec, "bare-i.csv", 3, next());
+    checkShape(app, "bare name + a space", "bare-i.csv ", 3);
+    // A percent sign in a plain name is a percent sign: only a file:// address is decoded.
+    writeCsvIn(rec, "100% done.csv", 3, next());
+    checkShape(app, "bare name with a percent sign", "100% done.csv", 3);
+    writeCsvIn(rec, "a%20b.csv", 3, next());
+    checkShape(app, "bare name that looks percent-encoded", "a%20b.csv", 3);
+
+    // file:// addresses.
+    writeCsvIn(rec, "uri-j.csv", 3, next());
+    checkShape(app, "file:// address", fileUriOf(rec / "uri-j.csv"), 3);
+    writeCsvIn(rec, "uri k.csv", 3, next());
+    checkShape(app, "file:// address with %20", fileUriOf(rec / "uri k.csv"), 3);
+    const std::u8string uniDir8 = u8"listes-頻率";
+    const std::u8string uniName8 = u8"fréquences m.csv";
+    writeCsvIn(rec / fs::path(uniDir8), utf8Of(uniName8), 3, next());
+    checkShape(app, "file:// address, accents/CJK, %20, CRLF",
+               fileUriOf(rec / fs::path(uniDir8) / fs::path(uniName8)) + "\r\n", 3);
+    writeCsvIn(rec, "uri-n.csv", 3, next());
+    checkShape(app, "file://localhost/ address", "file://localhost" + fileUriOf(rec / "uri-n.csv").substr(7), 3);
+
+    // A name with a folder part: the working directory first (0.99.80, unchanged), then the
+    // recordings folder, where Export writes.
+    writeCsvIn(rec / "lists", "marine.csv", 3, next());
+    checkShape(app, "lists/marine.csv (in the recordings folder)", "lists/marine.csv", 3);
+    writeCsvIn(rec / "lists", "air.csv", 3, next());
+    checkShape(app, "./lists/air.csv (in the recordings folder)", "./lists/air.csv", 3);
+#if defined(_WIN32)
+    writeCsvIn(rec / "lists", "rail.csv", 3, next());
+    checkShape(app, "lists\\rail.csv (in the recordings folder)", "lists\\rail.csv", 3);
+#endif
+    const std::u8string uniName2 = u8"fréquences-o.csv";
+    writeCsvIn(rec / fs::path(uniDir8), utf8Of(uniName2), 3, next());
+    checkShape(app, "relative Unicode folder + Unicode name", utf8Of(uniDir8) + "/" + utf8Of(uniName2), 3);
+
+    // The working directory still comes first.
+    {
+        const fs::path here = g_scratch / "shape-cwd";
+        std::error_code ec;
+        const fs::path was = fs::current_path(ec);
+        writeCsvIn(here / "lists", "both.csv", 2, next());
+        writeCsvIn(rec / "lists", "both.csv", 3, next());
+        fs::current_path(here, ec);
+        checkShape(app, "lists/both.csv (in both: the working directory's)", "lists/both.csv", 2);
+        fs::current_path(was, ec);
+    }
+
+    // A UTF-8 byte order mark and CRLF line ends, as Excel's "CSV UTF-8" writes them.
+    {
+        std::ofstream f(rec / "excel.csv", std::ios::binary);
+        f << "\xEF\xBB\xBF"
+             "frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked\r\n"
+          << "145.500000,Excel one,,NFM,12500,0,0\r\n146.500000,Excel two,,NFM,12500,0,0\r\n";
+    }
+    checkShape(app, "UTF-8 BOM + CRLF CSV, by bare name", "excel.csv", 2);
+    {
+        std::ofstream f(rec / "bom.xml", std::ios::binary);
+        f << "\xEF\xBB\xBF<?xml version=\"1.0\"?>\r\n<ArrayOfMemoryEntry>\r\n<MemoryEntry><Name>Bom X</Name>"
+             "<Frequency>155500000</Frequency><DetectorType>NFM</DetectorType></MemoryEntry>\r\n"
+             "</ArrayOfMemoryEntry>\r\n";
+    }
+    checkShape(app, "UTF-8 BOM XML, by bare name", "bom.xml", 1);
+
+    // A path that does not open names the WHOLE path tried: in the recordings folder, for a name
+    // with a folder part (the last place looked)...
+    AppWindow lost;
+    Access::setRecordDir(lost, recDir);
+    Access::importFile(lost, "lists/nowhere.csv");
+    waitImport(lost);
+    CHECK(Access::exportNote(lost) ==
+          "Could not import: the file \"" + recDir + "/lists/nowhere.csv\" could not be opened");
+    // ...and, with no recordings folder to look in, the working directory's path in full, not
+    // the fragment that was typed.
+    AppWindow bare;
+    Access::setRecordDir(bare, "");
+    Access::importFile(bare, "lists/nowhere.csv");
+    waitImport(bare);
+    const std::string note = Access::exportNote(bare);
+    CHECK(note == "Could not import: the file \"" + utf8Of(fs::current_path() / "lists" / "nowhere.csv") +
+                      "\" could not be opened");
+    std::printf("  a relative path with no recordings folder said: %s\n", note.c_str());
 }
 
 // A FAILED IMPORT OPENS THE WINDOW, with the sentence and the target of the import that failed;
@@ -1956,7 +2124,8 @@ int main() {
     checkAnImportIntoAPresetForcesTheGroupAndTheTick();
     checkABareNameIsLookedForInTheRecordingsFolder();
     checkABareUtf8NameInAUtf8RecordingsFolder();
-    checkANameWithAFolderPartIsNotRetried();
+    checkANameWithAFolderPartIsRetriedInTheRecordingsFolder();
+    checkTheShapesAnImportPathArrivesIn();
     checkAFailedImportOpensTheWindow();
     checkTheWindowOpenedByHandHasNoSentence();
     checkAThrowingImportWorkerStillNamesTheFile();

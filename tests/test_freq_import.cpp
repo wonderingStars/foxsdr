@@ -770,5 +770,139 @@ int main() {
         fs::remove_all(dir, ec);
     }
 
+    // WHAT A PERSON TYPES, PASTES OR DROPS AS A PATH (0.99.82; field report 7c93e85ca4f35c9a): the
+    // Enter or space after a pasted name, quotes of either kind, and a file:// address.
+    {
+        using cascade::core::cleanImportPath;
+        CHECK(cleanImportPath("frequencies.xml") == "frequencies.xml");
+        CHECK(cleanImportPath("") == "");
+        CHECK(cleanImportPath("   \r\n\t ") == "");
+        CHECK(cleanImportPath("frequencies.xml\n") == "frequencies.xml");
+        CHECK(cleanImportPath("frequencies.xml\r\n") == "frequencies.xml");
+        CHECK(cleanImportPath("  frequencies.xml  ") == "frequencies.xml");
+        CHECK(cleanImportPath("my lists/a b.csv") == "my lists/a b.csv");  // inner spaces are the name's
+        CHECK(cleanImportPath("\"C:\\lists\\a b.csv\"") == "C:\\lists\\a b.csv");
+        CHECK(cleanImportPath("'/home/me/a b.csv'") == "/home/me/a b.csv");
+        CHECK(cleanImportPath("\"/home/me/a.csv\" \n") == "/home/me/a.csv");
+        CHECK(cleanImportPath(" '\"/home/me/a.csv\"' ") == "/home/me/a.csv");   // pairs, nested
+        CHECK(cleanImportPath("\"/home/me/a.csv'") == "\"/home/me/a.csv'");    // not a pair: as written
+        CHECK(cleanImportPath("\"") == "\"");
+        CHECK(cleanImportPath("''") == "");
+        CHECK(cleanImportPath("100% done.csv") == "100% done.csv");              // only an address is decoded
+        CHECK(cleanImportPath("a%20b.csv") == "a%20b.csv");
+        // file:// addresses.
+        CHECK(cleanImportPath("file:///home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file:///home/me/a%20b.csv\r\n") == "/home/me/a b.csv");
+        CHECK(cleanImportPath("FILE:///home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file://localhost/home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file://LocalHost/home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("<file:///x>") == "<file:///x>");                  // not ours to unwrap
+        CHECK(cleanImportPath("'file:///home/me/a.csv'") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file:///home/me/fr%C3%A9quences-%E9%A0%BB%E7%8E%87.csv") ==
+              "/home/me/fr\xC3\xA9quences-\xE9\xA0\xBB\xE7\x8E\x87.csv");        // UTF-8 bytes
+        CHECK(cleanImportPath("file:///home/me/100%25.csv") == "/home/me/100%.csv");
+        CHECK(cleanImportPath("file:///home/me/50%.csv") == "/home/me/50%.csv");  // a stray % stays
+        CHECK(cleanImportPath("file:///home/me/%zz.csv") == "/home/me/%zz.csv");
+        CHECK(cleanImportPath("file:///home/me/a.csv%2") == "/home/me/a.csv%2");  // cut escape at the end
+        CHECK(cleanImportPath("file:///home/me/a%41.csv") == "/home/me/aA.csv");
+        CHECK(cleanImportPath("file:///home/me/a%00b.csv") == "file:///home/me/a%00b.csv");  // no NUL
+        CHECK(cleanImportPath("file://nopath") == "file://nopath");
+        CHECK(cleanImportPath("file://server/share/a%20b.csv") == "//server/share/a b.csv");
+#if defined(_WIN32)
+        CHECK(cleanImportPath("file:///C:/Users/me/a%20b.csv") == "C:/Users/me/a b.csv");
+        CHECK(cleanImportPath("file://localhost/c:/a.csv") == "c:/a.csv");
+        CHECK(cleanImportPath("file:///C:") == "C:");
+#endif
+        // Cleaning what is already clean changes nothing more.
+        for (const char* once : {"frequencies.xml\n", "'/a b/c.csv' ", "file:///home/me/a%20b.csv",
+                                 "\"\"x\"\"", "file://server/share/a.csv", "file:///home/me/100%25.csv"}) {
+            CHECK(cleanImportPath(cleanImportPath(once)) == cleanImportPath(once));
+        }
+    }
+
+    // importFrequencyFileIn: the working directory first, then the recordings folder, and the whole
+    // path of the last place looked when neither opens.
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() /
+            ("foxsdr-import-in-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const fs::path here = root / "cwd";
+        const fs::path rec = root / "rec";
+        std::error_code ec;
+        fs::create_directories(here / "lists", ec);
+        fs::create_directories(rec / "lists", ec);
+        const auto write = [](const fs::path& p, int rows, double firstMhz) {
+            std::ofstream f(p, std::ios::binary);
+            f << "frequency,name,mode\n";
+            for (int i = 0; i < rows; ++i) {
+                f << static_cast<long long>((firstMhz + i) * 1.0e6) << ",Row " << i << ",NFM\n";
+            }
+        };
+        write(rec / "export.csv", 3, 110.0);
+        write(rec / "lists" / "marine.csv", 4, 156.0);
+        write(here / "lists" / "both.csv", 2, 120.0);
+        write(rec / "lists" / "both.csv", 5, 130.0);
+        const std::string recDir = rec.generic_string();
+        const fs::path was = fs::current_path(ec);
+        fs::current_path(here, ec);
+        CHECK(!ec);
+
+        std::string tried;
+        // A bare name that is only in the recordings folder; a quoted one with an Enter after it.
+        ImportResult r = cascade::core::importFrequencyFileIn("export.csv", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 3u);
+        CHECK(tried == recDir + "/export.csv");
+        r = cascade::core::importFrequencyFileIn("'export.csv'\n", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 3u);
+        // A name with a folder part: the recordings folder has it, the working directory does not.
+        r = cascade::core::importFrequencyFileIn("lists/marine.csv", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 4u);
+        CHECK(tried == recDir + "/lists/marine.csv");
+        // ...and when both have it, the working directory's wins (as it always did).
+        r = cascade::core::importFrequencyFileIn("lists/both.csv", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 2u);
+        CHECK(fs::equivalent(fs::path(std::u8string(tried.begin(), tried.end())), here / "lists" / "both.csv"));
+        // A trailing separator on the recordings folder is not doubled.
+        r = cascade::core::importFrequencyFileIn("export.csv", recDir + "/", tried);
+        CHECK(r.error.empty() && tried == recDir + "/export.csv");
+        // An absolute path is opened as it stands and never looked for in the recordings folder.
+        r = cascade::core::importFrequencyFileIn("\"" + (rec / "export.csv").string() + "\"", "", tried);
+        CHECK(r.error.empty() && r.items.size() == 3u);
+        r = cascade::core::importFrequencyFileIn((rec / "nope.csv").string(), recDir, tried);
+        CHECK(r.error.rfind("cannot open", 0) == 0);
+        CHECK(tried == (rec / "nope.csv").string());
+        // A file:// address.
+        {
+            std::string s = (rec / "export.csv").generic_string();
+            if (!s.empty() && s[0] != '/') { s.insert(0, "/"); }
+            r = cascade::core::importFrequencyFileIn("file://" + s + "\r\n", "", tried);
+            CHECK(r.error.empty() && r.items.size() == 3u);
+        }
+        // Nowhere: the last place looked, in full - the recordings folder's, or the working
+        // directory's with its whole path when there is no recordings folder.
+        r = cascade::core::importFrequencyFileIn("lists/nope.csv", recDir, tried);
+        CHECK(r.error == "cannot open \"" + recDir + "/lists/nope.csv\"");
+        CHECK(tried == recDir + "/lists/nope.csv");
+        r = cascade::core::importFrequencyFileIn("lists/nope.csv", "", tried);
+        {
+            const fs::path whole = fs::path(std::u8string(tried.begin(), tried.end()));
+            CHECK(whole.is_absolute());
+            CHECK(whole.filename() == fs::path("nope.csv"));
+            CHECK(fs::equivalent(whole.parent_path(), here / "lists"));
+            CHECK(r.error == "cannot open \"" + tried + "\"");
+        }
+        r = cascade::core::importFrequencyFileIn("./lists/../nope.csv", "", tried);
+        CHECK(tried.find("..") == std::string::npos && tried.find("./") == std::string::npos);
+        // A folder is not a list: cannot open, and it names the folder.
+        r = cascade::core::importFrequencyFileIn("lists", "", tried);
+        CHECK(r.error.rfind("cannot open", 0) == 0);
+        // An empty path is not a place to look.
+        r = cascade::core::importFrequencyFileIn("  \n", recDir, tried);
+        CHECK(r.error == "cannot open \"\"" && tried.empty());
+
+        fs::current_path(was, ec);
+        fs::remove_all(root, ec);
+    }
+
     return testSummary("test_freq_import");
 }
