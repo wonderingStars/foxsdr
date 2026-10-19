@@ -3577,11 +3577,36 @@ the table):
 | `0xC0000374` | `heap corruption` | `ntstatus.h`: `STATUS_HEAP_CORRUPTION` ("A heap has been corrupted.") |
 | `0xC00000FD` | `stack overflow` | `ntstatus.h`: `STATUS_STACK_OVERFLOW` |
 | `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C."). Since 0.99.67 the program answers Ctrl+C, Ctrl+Break and a closing console with its own close (`core/console_close.hpp`), so this code now means the shutdown did not finish inside the 5000 ms the system allows a closing console (HandlerRoutine's Timeouts table) |
-| `1` | `ended by another process (exit code 1, as taskkill /F does)` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager |
+| `1` | `exit code 1 (as taskkill /F leaves it, or the application ended itself)`; with the application's own record (below), `the application ended itself: the window could not be created - see the window: lines in the log` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager. **1 is not proof of a kill**: `AppWindow::run` returns 1 itself when `glfwInit` or `glfwCreateWindow` fails, so the exit code alone cannot tell the two apart and the words no longer say it can (0.99.73's two reports of signature `85FF854AA2C772F9` read "ended by another process" for a window that could not be created) |
 | `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
 | `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
 | `0x5058....` (since 0.99.78, Linux) | `exit code N (the process ended itself)`, `killed by signal N (SIGSEGV)`, ... | not an operating-system value: the application's own record of how it ended, tagged so that no Windows code reads as one - see *Platforms* below |
 | anything else | `unknown exit code` | - |
+
+**A window that could not be created is not a kill.** `AppWindow::run` returns 1 itself when
+`glfwInit` or `glfwCreateWindow` fails (it logs the `window:` lines first, which are flushed on every
+platform, Windows included), and on Windows 1 is also the code `taskkill /F` leaves. Before the
+application said anything the sentinel could not tell them apart and called both "ended by another
+process". Now the application sets `kFlagWindowFailed` in the breadcrumb page (`breadcrumb::noteWindowFailed`,
+one relaxed store) on both failure returns, and the watcher believes the page over the bare code when the
+phase is *creating the window* and the code is the one a `return 1` makes (Windows 1; Linux exit status 1;
+no status at all): the reason then reads `sentinel: ended before the first frame - the application ended
+itself: the window could not be created - see the window: lines in the log; phase creating the window;
+silent N s`, the signature tag gains `:window-failed` (a group of its own), and the previous-session
+classification is `died` (the program failed to start), not `killed`. Without the record - an older build,
+or a real `taskkill /F` - the code is worded as what it is, ambiguous: `exit code 1 (as taskkill /F leaves
+it, or the application ended itself)`, with the signature it always had (the signature hashes class + code +
+phase, never the reason's words, so the reword moved no existing group). A flag and not the exit record
+(`noteExit`) on purpose: on Linux an `on_exit` hook rewrites that word with the bare status as the process
+ends. The person is told too: on both failure returns `AppWindow::run` writes the same plain English text to
+stderr and, on Windows in a real session, shows a `MessageBoxA` (OK, error icon, no owner) saying no working
+OpenGL driver was found, naming the usual causes (no graphics driver installed, a remote desktop session
+without GPU support) and the log path as Settings > Diagnostics shows it (`window: error dialog shown` is
+logged first, flushed, so the log says it was up). A bounded `--frames` run never shows it and logs
+`window: error dialog suppressed for a flagged run` instead; the other tool modes (`--version`, `--selftest`,
+a bench) return before `run` and never reach it. `FOXSDR_TEST_WINDOW_FAIL=1` (honoured only with `--frames`) makes `glfwCreateWindow` fail for real on a
+machine whose window can be made, so `tests/test_window_failed_app.cpp` runs the whole chain - the real
+application, the real watcher, the real report - without showing a window.
 
 ### What Windows gives a process when the session ends, and what the sentinel does about it
 
@@ -3991,7 +4016,7 @@ A session ended before the evidence was read has left `crashes` and `unknown` mo
 the four classes always add up to the unclean exits counted since 0.99.69. They are not
 back-filled: `crashes` minus their sum is how many came before. One line goes to the log when
 the class is known (`previous session ended: killed (ended from outside while the window was
-drawing: ended by another process (exit code 1, as taskkill /F does))`), built only from the
+drawing: exit code 1 (as taskkill /F leaves it, or the application ended itself))`), built only from the
 sentinel's own closed vocabulary. With Diagnostics off nothing is read, the sentinel did not run,
 and every unclean exit is `unknown`. Held by `tests/test_exit_cause.cpp` (the rule, against real
 sentinel reports) and `tests/test_exit_cause_app.cpp` (the real application, staged and killed).

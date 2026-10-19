@@ -1430,6 +1430,27 @@ void monitorWorkareaForWindow(GLFWwindow* window, int& areaX, int& areaY, int& a
 }
 }  // namespace
 
+namespace {
+// THE WINDOW COULD NOT BE CREATED: tell the person (gui/window_platform.hpp, failureMessage). The
+// text goes to stderr everywhere (where the `cascade: ... failed` message already went) and, on
+// Windows in a real session, into a message box with no owner window - there is no window to own
+// it. A bounded --frames run only logs that the box was skipped, so a test never waits on a click.
+// The log lines are flushed one by one, so the one before the box is on disk while it is open.
+void tellUserWindowFailed(const char* what, int frames) {
+    namespace wp = cascade::gui::windowplatform;
+    const std::string text = wp::failureMessage(cascade::core::DiagLog::instance().filePath());
+    std::fprintf(stderr, "cascade: %s\n%s\n", what, text.c_str());
+    if (!wp::errorDialogAllowed(frames)) {
+        cascade::core::diagLogf("window: error dialog suppressed for a flagged run");
+        return;
+    }
+#if defined(_WIN32)
+    cascade::core::diagLogf("window: error dialog shown");
+    ::MessageBoxA(nullptr, text.c_str(), "FoxSDR", MB_OK | MB_ICONERROR);
+#endif
+}
+}  // namespace
+
 int AppWindow::run(int frames) {
     // WHERE THE SENTINEL SEES THIS PROCESS (core/breadcrumb.hpp): the phases are
     // stages this function really has, set at the line that begins each of them.
@@ -1463,9 +1484,13 @@ int AppWindow::run(int frames) {
         }
     }
     if (!glfwInit()) {
-        std::fprintf(stderr, "cascade: glfwInit failed\n");
         cascade::core::diagWarnf(
             "window: glfwInit failed; the GLFW error line before this, if there is one, says why");
+        // TELLS THE SENTINEL THIS ENDING IS OUR OWN (core/breadcrumb.hpp, kFlagWindowFailed): an
+        // exit code 1 on Windows is also what `taskkill /F` leaves, and the report must not call
+        // this one a kill (field signature 85FF854AA2C772F9).
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("glfwInit failed", frames);
         return 1;
     }
     cascade::core::diagLogf("window: GLFW initialised; platform chosen: %s",
@@ -1482,13 +1507,23 @@ int AppWindow::run(int frames) {
     // until a resize made the layers agree again. Nothing sees this window
     // until the style it will keep is the style it has.
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    // FOXSDR_TEST_WINDOW_FAIL=1 (a test seam, honoured only in a bounded --frames run like every
+    // seam in this file): asks for an OpenGL version no driver has, so that glfwCreateWindow
+    // fails for real - the same call, the same GLFW error, the same return below - on a machine
+    // whose window can be made. The request is refused before a window exists, so nothing is ever
+    // shown, which is what lets a test run the whole failure path on a desktop.
+    if (frames >= 0) {
+        const char* forceFail = std::getenv("FOXSDR_TEST_WINDOW_FAIL");
+        if (forceFail != nullptr && forceFail[0] == '1') { glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99); }
+    }
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     mainWindow_ = window;
     if (window == nullptr) {
-        std::fprintf(stderr, "cascade: glfwCreateWindow failed\n");
         cascade::core::diagWarnf(
             "window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why");
+        cascade::core::breadcrumb::noteWindowFailed();  // see the glfwInit failure above
+        tellUserWindowFailed("glfwCreateWindow failed", frames);
         glfwTerminate();
         return 1;
     }

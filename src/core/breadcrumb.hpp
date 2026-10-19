@@ -101,6 +101,13 @@ enum Flag : std::uint32_t {
     // The user has switched Diagnostics off. The watcher is also told to go away,
     // but "off means off" does not rest on that one message arriving.
     kFlagReportsOff = 1u << 1,
+    // The application could not create its window (glfwInit or glfwCreateWindow failed) and is
+    // ending ITSELF, with exit code 1. Set by AppWindow::run on that path, on every platform: the
+    // watcher reads the exit code from the operating system on Windows, and an application that
+    // returns 1 looks exactly like one that was ended by `taskkill /F`, which also leaves 1
+    // (field signature 85FF854AA2C772F9). A flag and not the exit record (noteExit), which is
+    // written by an exit() hook on Linux and would replace it with a bare "exit status 1".
+    kFlagWindowFailed = 1u << 2,
 };
 
 // HOW THE PROCESS ENDED, as far as the process could write it down itself (0.99.78,
@@ -245,6 +252,9 @@ inline void setFlag(Flag f, bool on) noexcept {
 
 inline void noteSessionEnding() noexcept { setFlag(kFlagSessionEnding, true); }
 
+// The window could not be created and the application is about to return 1 (see kFlagWindowFailed).
+inline void noteWindowFailed() noexcept { setFlag(kFlagWindowFailed, true); }
+
 // WRITES DOWN HOW THIS PROCESS IS ENDING (0.99.78, Linux), the last thing it does: from an
 // exit() hook with the status, from the handler of a fatal signal with the number. One
 // relaxed store of one word into a page that already exists - no allocation, no lock, no
@@ -324,7 +334,7 @@ inline Snapshot read(const Block* b) noexcept {
     s.phase = (p <= kLastPhase) ? static_cast<Phase>(p) : Phase::Unset;
     s.activity = detail::at(m.activity).load(std::memory_order_relaxed) & kAllActivity;
     s.flags = detail::at(m.flags).load(std::memory_order_relaxed) &
-              (kFlagSessionEnding | kFlagReportsOff);
+              (kFlagSessionEnding | kFlagReportsOff | kFlagWindowFailed);
     s.frameScope = detail::at(m.frameScope).load(std::memory_order_relaxed);
     // The exit record is believed only when it is one: a status is 0..255, a signal 1..64,
     // and anything else - a corrupt page, a layout this build does not know - is "nothing".

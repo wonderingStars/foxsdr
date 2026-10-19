@@ -209,6 +209,36 @@ inline std::string glfwErrorLine(int code, const char* description) {
     return detail::cap("window: GLFW error " + std::to_string(code) + ": " + text);
 }
 
+// ---------------------------------------------------------------------------
+// WHEN THE WINDOW CANNOT BE CREATED, the person is told (field signature 85FF854AA2C772F9)
+// ---------------------------------------------------------------------------
+// The field cause was "WGL: The driver does not appear to support OpenGL" (GLFW error 65542) and
+// then glfwCreateWindow returning NULL: the program ended with no window and no word to the person,
+// who saw it vanish. On Windows a message box says why and where the log is; on Linux the same text
+// goes to stderr, where the existing `cascade: ... failed` message already went. English only, like
+// the sentinel's report text: it is shown before there is a window, a font or a language.
+
+// Only a real session may put up a dialog. A bounded `--frames` run is a test or a script, and
+// nothing may block it waiting for a click; the other tool modes (--version, --selftest, a bench)
+// return before AppWindow::run and never get here.
+inline bool errorDialogAllowed(int frames) { return frames < 0; }
+
+// The log path is DiagLog::filePath(), as Settings > Diagnostics shows it ("Log: <path>"); empty
+// when the file is off.
+inline std::string failureMessage(const std::string& logPath) {
+    std::string s =
+        "FoxSDR could not create its window because no working OpenGL driver was found.\n\n"
+        "Common causes: no graphics driver is installed on this computer, or this is a remote desktop "
+        "session without GPU support. Installing or updating the graphics driver usually fixes it.\n\n";
+    if (logPath.empty()) {
+        s += "Diagnostics are switched off, so no log was written. Switch them on in Settings > Diagnostics "
+             "and start FoxSDR again to record one.";
+    } else {
+        s += "What happened was written to this log, which you can send to the developer:\n" + logPath;
+    }
+    return s;
+}
+
 }  // namespace cascade::gui::windowplatform
 
 #endif  // CASCADE_GUI_WINDOW_PLATFORM_HPP

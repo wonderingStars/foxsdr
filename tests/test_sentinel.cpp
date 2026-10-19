@@ -315,6 +315,8 @@ int main() {
         CHECK(rt(static_cast<int>(FrameScope::Events)) == 0 && rt(static_cast<int>(FrameScope::UserWait)) == 17 &&
               rt(static_cast<int>(FrameScope::Other)) == 18 && rt(kFrameScopeCount) == 19);
         CHECK(rt<std::uint32_t>(breadcrumb::kFlagSessionEnding) == 1u && rt<std::uint32_t>(breadcrumb::kFlagReportsOff) == 2u);
+        // The window-creation flag takes the next bit, so the two older flags keep theirs.
+        CHECK(rt<std::uint32_t>(breadcrumb::kFlagWindowFailed) == 4u);
     }
 
     // =======================================================================
@@ -410,6 +412,14 @@ int main() {
         CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagReportsOff) != 0);
         breadcrumb::setFlag(breadcrumb::kFlagReportsOff, false);
         CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagReportsOff) == 0);
+        // The window could not be created: one relaxed store, read back, and the other flags untouched.
+        CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagWindowFailed) == 0);
+        breadcrumb::noteWindowFailed();
+        CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagWindowFailed) != 0);
+        CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagSessionEnding) != 0);  // still there from above
+        CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagReportsOff) == 0);
+        breadcrumb::setFlag(breadcrumb::kFlagWindowFailed, false);
+        CHECK((breadcrumb::read(&blk).flags & breadcrumb::kFlagWindowFailed) == 0);
 
         // NO ROOM FOR TEXT: after every writer has run, the reserved bytes are
         // still zero, and a reader reads nothing but the ten numbers above. (Since 0.99.78 the
@@ -434,7 +444,7 @@ int main() {
         blk.flags = 0xFFFFFFFFu;
         const breadcrumb::Snapshot junk = breadcrumb::read(&blk);
         CHECK(junk.activity == breadcrumb::kAllActivity);
-        CHECK(junk.flags == (breadcrumb::kFlagSessionEnding | breadcrumb::kFlagReportsOff));
+        CHECK(junk.flags == (breadcrumb::kFlagSessionEnding | breadcrumb::kFlagReportsOff | breadcrumb::kFlagWindowFailed));
         // A frame scope outside the list is carried as the number it is and NAMED
         // as nothing: the name comes from a table, bounds-checked, never the page.
         blk.frameScope = 0xFFFFFFFFu;
@@ -550,8 +560,11 @@ int main() {
             CHECK(sentinelReasonIsLocalOnly(v.reason));
             CHECK(v.signatureTag == "sentinel:outside:running");
         }
+        // Exit code 1 is what taskkill /F leaves AND what the application returns when it gives up,
+        // so the words say both and do not claim a kill (field signature 85FF854AA2C772F9).
         CHECK(contains(decideSentinel(facts(crumb(Phase::Running, 500, 120), 1)).reason,
-                       "ended by another process (exit code 1, as taskkill /F does)"));
+                       " - exit code 1 (as taskkill /F leaves it, or the application ended itself); phase running"));
+        CHECK(!contains(decideSentinel(facts(crumb(Phase::Running, 500, 120), 1)).reason, "ended by another process"));
         CHECK(contains(decideSentinel(facts(crumb(Phase::Running, 500, 120), 0xFFFFFFFFul)).reason,
                        "exit code -1, as Stop-Process and Process.Kill do"));
         CHECK(contains(decideSentinel(facts(crumb(Phase::Running, 500, 120), 0x40010004ul)).reason,
@@ -773,6 +786,128 @@ int main() {
     }
 
     // =======================================================================
+    // 4b. A WINDOW THAT COULD NOT BE CREATED IS NOT A KILL (field signature 85FF854AA2C772F9)
+    //
+    // Two 0.99.73 reports on Windows 10 read "ended before the first frame - ended by another
+    // process (exit code 1, as taskkill /F does); phase creating the window; silent 1 s". Nothing
+    // had ended the process: AppWindow::run returns 1 itself when glfwInit or glfwCreateWindow
+    // fails, and 1 is also what taskkill /F leaves. The application now says so in the page
+    // (kFlagWindowFailed), and the sentinel believes the page over the bare code.
+    // =======================================================================
+    {
+        const breadcrumb::Snapshot creating = crumb(Phase::CreatingWindow, 0, 1000);
+        breadcrumb::Snapshot told = creating;
+        told.flags |= breadcrumb::kFlagWindowFailed;
+        const std::string kWhy = std::string(kSentinelReasonStartup) + " - " + kSentinelWindowFailedWords;
+
+        // WITH THE RECORD: Windows' exit code 1, said plainly, in a group of its own.
+        {
+            const SentinelVerdict v = decideSentinel(facts(told, 1));
+            CHECK(v.cls == SentinelClass::Startup && v.upload());
+            CHECK(v.reason == kWhy + "; phase creating the window; silent 1 s");
+            CHECK(contains(v.reason, kSentinelWindowFailedLead));
+            CHECK(contains(v.reason, "the application ended itself: the window could not be created"));
+            CHECK(contains(v.reason, "see the window: lines in the log"));
+            CHECK(!contains(v.reason, "another process") && !contains(v.reason, "taskkill"));
+            CHECK(v.codeKnown && v.code == 1ul);
+            CHECK(v.signatureTag == "sentinel:startup:creating-window:window-failed");
+            CHECK(!sentinelWantsOsCrashRecord(v));  // no Application Error event for a `return 1`
+            // The words are short enough for the site, with the longest silence there is.
+            CHECK(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 4000000000ull, 0, breadcrumb::kFlagWindowFailed), 1))
+                      .reason.size() <= 200);
+        }
+        // WITHOUT IT: the same exit code is ambiguous and says so. The group is the one it always
+        // was, so reports already filed under 85FF854AA2C772F9 keep their group.
+        {
+            const SentinelVerdict v = decideSentinel(facts(creating, 1));
+            CHECK(v.cls == SentinelClass::Startup && v.upload());
+            CHECK(v.reason == std::string(kSentinelReasonStartup) +
+                                  " - exit code 1 (as taskkill /F leaves it, or the application ended itself); "
+                                  "phase creating the window; silent 1 s");
+            CHECK(!contains(v.reason, "ended by another process"));
+            CHECK(v.signatureTag == "sentinel:startup:creating-window");
+            CHECK(sentinelSignature(v, nullptr) == "85FF854AA2C772F9");
+            // ...and the record moves it to a signature of its own, never onto another group.
+            const SentinelVerdict w = decideSentinel(facts(told, 1));
+            CHECK(sentinelSignature(w, nullptr) != sentinelSignature(v, nullptr));
+            CHECK(sentinelSignature(w, nullptr) != sentinelSignature(decideSentinel(facts(creating, 0xC0000409ul)), nullptr));
+        }
+        // THE RECORD IS BELIEVED ONLY FOR THE ENDING IT EXPLAINS: a fault while the window system was
+        // being torn down, or a kill -1, is what its code says.
+        for (const unsigned long code : {0xC0000005ul, 0xC0000409ul, 0xFFFFFFFFul, 0xC000013Aul, 3ul}) {
+            const SentinelVerdict v = decideSentinel(facts(told, code));
+            CHECK(!contains(v.reason, "the window could not be created"));
+            CHECK(v.signatureTag == "sentinel:startup:creating-window");
+        }
+        // No exit status at all (Linux, nothing recorded): the application's own word is all there is.
+        {
+            const SentinelVerdict v = decideSentinel(facts(told, 0, false));
+            CHECK(v.cls == SentinelClass::Startup);
+            CHECK(contains(v.reason, kSentinelWindowFailedWords));
+            CHECK(!v.codeKnown);
+            CHECK(v.signatureTag == "sentinel:startup:creating-window:window-failed");
+        }
+        // Linux, where the exit record carries a tagged status: exit(1) is what `return 1` makes, any
+        // other status or a signal is not.
+        {
+            const unsigned long exit1 = sentinelPosixExitCode(breadcrumb::ExitHow::Exited, 1);
+            CHECK(contains(decideSentinel(facts(told, exit1)).reason, kSentinelWindowFailedWords));
+            CHECK(!contains(decideSentinel(facts(creating, exit1)).reason, kSentinelWindowFailedWords));
+            CHECK(contains(decideSentinel(facts(creating, exit1)).reason, "exit code 1 (the process ended itself)"));
+            for (const unsigned long other : {sentinelPosixExitCode(breadcrumb::ExitHow::Exited, 3),
+                                              sentinelPosixExitCode(breadcrumb::ExitHow::Exited, 0),
+                                              sentinelPosixExitCode(breadcrumb::ExitHow::Signalled, 11),
+                                              sentinelPosixExitCode(breadcrumb::ExitHow::Signalled, 15)}) {
+                CHECK(!contains(decideSentinel(facts(told, other)).reason, kSentinelWindowFailedWords));
+            }
+        }
+        // The function the decision asks, on its own.
+        CHECK(sentinelWindowFailed(told, true, 1));
+        CHECK(sentinelWindowFailed(told, false, 0));
+        CHECK(!sentinelWindowFailed(creating, true, 1));
+        CHECK(!sentinelWindowFailed(creating, false, 0));
+        CHECK(!sentinelWindowFailed(told, true, 0));
+        CHECK(!sentinelWindowFailed(told, true, 0xC0000005ul));
+        // The flag means something only in the phase that sets it (and the reason stays inside 200 characters).
+        for (const Phase other : {Phase::Starting, Phase::BuildingApp, Phase::AwaitingFirstFrame, Phase::Running,
+                                  Phase::ShutdownBegun, Phase::Finished}) {
+            breadcrumb::Snapshot elsewhere = told;
+            elsewhere.phase = other;
+            CHECK(!sentinelWindowFailed(elsewhere, true, 1));
+        }
+        {
+            breadcrumb::Snapshot unreadable = told;
+            unreadable.valid = false;  // a page that could not be read is not evidence of anything
+            CHECK(!sentinelWindowFailed(unreadable, true, 1));
+        }
+        // Diagnostics off still means off, and a closing session is still a closing session.
+        CHECK(!decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 1000, 0,
+                                          breadcrumb::kFlagWindowFailed | breadcrumb::kFlagReportsOff), 1)).write());
+        CHECK(decideSentinel(facts(crumb(Phase::CreatingWindow, 0, 1000, 0,
+                                         breadcrumb::kFlagWindowFailed | breadcrumb::kFlagSessionEnding), 1)).cls ==
+              SentinelClass::Session);
+        // An in-process report of this death still wins: one report per death.
+        {
+            SentinelFacts ff = facts(told, 1);
+            ff.crashReportExists = true;
+            CHECK(!decideSentinel(ff).write());
+        }
+        // The report text carries the words and a signature line that matches the decision.
+        {
+            SentinelReportInfo ri;
+            ri.version = "0.99.81";
+            ri.commit = "abc123";
+            ri.os = "Windows 10 19045";
+            ri.arch = "x64";
+            const SentinelVerdict v = decideSentinel(facts(told, 1));
+            const std::string text = renderSentinelReport(v, ri);
+            CHECK(contains(text, "\nreason: " + kWhy + "; phase creating the window; silent 1 s\n"));
+            CHECK(contains(text, "\ncode: 0x00000001\n"));
+            CHECK(contains(text, "\nsignature: " + sentinelSignature(v, nullptr) + "\n"));
+        }
+    }
+
+    // =======================================================================
     // 5. EVERY REASON IS FROM A CLOSED VOCABULARY and fits the site
     // =======================================================================
     {
@@ -784,7 +919,7 @@ int main() {
             for (const std::uint32_t activity : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}) {
                 for (const unsigned long code : codes) {
                     for (const std::uint64_t silent : {0ull, 6000ull, 40000ull, 4000000000ull}) {
-                        for (const std::uint32_t flags : {0u, 1u}) {
+                        for (const std::uint32_t flags : {0u, 1u, 4u}) {
                             for (const bool known : {true, false}) {
                               // Every scope the timer has, none, and two numbers it has not.
                               for (std::uint32_t scope = 0; scope <= static_cast<std::uint32_t>(kFrameScopeCount) + 2u; ++scope) {
@@ -2267,7 +2402,9 @@ int main() {
         CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 4)) == "killed by signal 4 (SIGILL)");
         CHECK(sentinelExitWords(true, px(ExitHow::Signalled, 34)) == "killed by signal 34");  // no name here
         // Windows' words are what they were, for the codes they were measured for.
-        CHECK(sentinelExitWords(true, 1) == "ended by another process (exit code 1, as taskkill /F does)");
+        CHECK(sentinelExitWords(true, 1) == "exit code 1 (as taskkill /F leaves it, or the application ended itself)");
+        CHECK(sentinelExitWords(true, 1, false, true) == kSentinelWindowFailedWords);
+        CHECK(sentinelExitWords(true, 0xFFFFFFFFul).find("ended by another process (exit code -1") == 0);  // unchanged
         CHECK(sentinelExitWords(true, 0xC0000005ul) == "access violation");
         // When NOTHING answered: the old words, and now which sources were tried.
         CHECK(sentinelExitWords(false, 0) == "exit status not available on this platform");

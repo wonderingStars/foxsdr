@@ -212,6 +212,27 @@ int main() {
     }
 
     // =======================================================================
+    // 4b. The message a person is shown when the window cannot be created
+    // =======================================================================
+    {
+        // Only a real session may block on a dialog: --frames (0 or more) never does.
+        CHECK(errorDialogAllowed(-1));
+        CHECK(!errorDialogAllowed(0) && !errorDialogAllowed(3) && !errorDialogAllowed(1000000));
+
+        const std::string logPath = "C:\\Users\\a\\AppData\\Local\\FoxSDR\\logs\\foxsdr.log";
+        const std::string withLog = failureMessage(logPath);
+        CHECK(contains(withLog, "FoxSDR could not create its window because no working OpenGL driver was found."));
+        CHECK(contains(withLog, "no graphics driver is installed"));
+        CHECK(contains(withLog, "remote desktop session without GPU support"));
+        CHECK(contains(withLog, "\n" + logPath));
+        const std::string off = failureMessage(std::string());
+        CHECK(contains(off, "no log was written") && contains(off, "Settings > Diagnostics"));
+        CHECK(!contains(off, "foxsdr.log"));
+        // plain ASCII, so it reads the same in a message box of any code page
+        for (const char ch : withLog + off) { CHECK(ch == '\n' || (ch >= 0x20 && ch < 0x7F)); }
+    }
+
+    // =======================================================================
     // 5. The line for the request: said in every case, and ignored values said to be ignored
     // =======================================================================
     {

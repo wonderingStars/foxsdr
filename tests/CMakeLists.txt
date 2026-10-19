@@ -290,6 +290,12 @@ foreach(src ${CASCADE_TESTS})
         # DISPLAY that is not in them, and FOXSDR_WINDOW_PLATFORM ignored when it names no platform.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_window_failed_app")
+        # Runs the real cascade.exe (built first) with its window refused on purpose
+        # (FOXSDR_TEST_WINDOW_FAIL) and the sentinel on, and reads the report the watcher writes
+        # for it (field signature 85FF854AA2C772F9). No window is ever shown.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_plugin_rescan_skip")
         # Copies the two probe modules into a plugins folder of its own and
         # drives the real AppWindow's rescan against it; built first.

@@ -27,7 +27,12 @@
 //            Process, an installer - or STATUS_CONTROL_C_EXIT, which since 0.99.67
 //            means the shutdown a closing console started did not finish in the time
 //            the system allows), or `startup` with a code that is not a crash code
-//            (an ending before the first frame by taskkill is a kill, not a death).
+//            (an ending before the first frame by taskkill is a kill, not a death). A `startup`
+//            report that says the application ended itself because its window could not be
+//            created (sentinel.hpp, kSentinelWindowFailedWords) is not a kill whatever its exit
+//            code, and counts as `died`: exit code 1 is what taskkill /F leaves AND what that
+//            ending returns, so only the application's own record tells them apart. A bare 1
+//            with no such record stays `killed`, in words that no longer claim it was.
 //            Failing those, a display-stall report (`kind: stall`) with nothing after
 //            it: the display driver was waiting and the person ended the window.
 //   ended    THE OPERATING SYSTEM CLOSED THE SESSION: the sentinel's `session`

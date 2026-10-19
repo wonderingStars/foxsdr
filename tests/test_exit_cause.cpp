@@ -200,6 +200,28 @@ void testRuleRows() {
     CHECK(classify(listing({crashReport(kSentStartup, "0xC0000005", 1500)})).cls == ExitClass::Died);
     CHECK(classify(listing({crashReport(kSentStartup, "0xE06D7363", 1500)})).cls == ExitClass::Died);
     CHECK(classify(listing({crashReport(kSentStartup, "0x00000001", 1500)})).cls == ExitClass::Killed);
+    // Exit code 1 is also what the application returns when its window cannot be created (field
+    // signature 85FF854AA2C772F9): the sentinel's reason says so when the application recorded it,
+    // and that is a failure of the program, not a kill. A bare 1 stays killed, in words that no
+    // longer claim another process ended it.
+    {
+        const ExitVerdict failed = classify(listing({crashReport(
+            kSentStartup + " - " + kSentinelWindowFailedWords + "; phase creating the window; silent 1 s", "0x00000001", 1500)}));
+        CHECK(failed.cls == ExitClass::Died);
+        CHECK(contains(failed.detail, "the window could not be created"));
+        CHECK(!contains(failed.detail, "taskkill") && !contains(failed.detail, "another process"));
+        const ExitVerdict bare = classify(listing({crashReport(kSentStartup, "0x00000001", 1500)}));
+        CHECK(bare.cls == ExitClass::Killed);
+        CHECK(contains(bare.detail, "or the application ended itself"));
+        CHECK(!contains(bare.detail, "another process"));
+        // The listing keeps 120 characters of a reason: the lead of the words is inside them, the whole
+        // of the words is not, and the lead is the start of the words.
+        CHECK(std::string(kSentinelWindowFailedWords).rfind(kSentinelWindowFailedLead, 0) == 0);
+        CHECK((kSentStartup + " - " + kSentinelWindowFailedLead).size() <= 120);
+        CHECK((kSentStartup + " - " + kSentinelWindowFailedWords).size() > 120);
+        // the log line the application writes for it
+        CHECK(contains(previousExitLogLine(failed), "previous session ended: died (ended before the first frame: the application ended itself"));
+    }
     CHECK(classify(listing({crashReport(kSentStartup, "0xFFFFFFFF", 1500)})).cls == ExitClass::Killed);
     CHECK(classify(listing({crashReport(kSentStartup, "0xC000013A", 1500)})).cls == ExitClass::Killed);
     CHECK(classify(listing({crashReport(kSentStartup, "", 1500)})).cls == ExitClass::Unknown);  // Linux: no code
@@ -395,6 +417,8 @@ void testRealSentinelReports() {
          SentinelClass::Startup, ExitClass::Died},
         {"ended before the first frame, taskkill", 1ul, {Phase::BuildingApp, 10, 0, 0},
          SentinelClass::Startup, ExitClass::Killed},
+        {"ended before the first frame, window could not be created", 1ul,
+         {Phase::CreatingWindow, 10, breadcrumb::kFlagWindowFailed, 0}, SentinelClass::Startup, ExitClass::Died},
         {"the session was closing", 1ul, {Phase::Running, 10, breadcrumb::kFlagSessionEnding, 600},
          SentinelClass::Session, ExitClass::Ended},
     };

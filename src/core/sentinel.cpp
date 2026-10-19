@@ -249,7 +249,23 @@ bool isCrashLikeExitCode(unsigned long code) {
     return nibble == 0x8ul || nibble == 0xCul || nibble == 0xEul;
 }
 
-std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried) {
+bool sentinelWindowFailed(const breadcrumb::Snapshot& crumb, bool exitKnown, unsigned long code) {
+    if (!crumb.valid || (crumb.flags & breadcrumb::kFlagWindowFailed) == 0) { return false; }
+    // Only where the application sets it: AppWindow::run, in the phase it is creating the window in.
+    // (It also keeps the reason inside the 200 characters the site keeps, which these words fill.)
+    if (crumb.phase != breadcrumb::Phase::CreatingWindow) { return false; }
+    // No exit status to contradict it: the application's own word is all there is.
+    if (!exitKnown) { return true; }
+    // `return 1` from AppWindow::run is exit code 1 on Windows, and exit status 1 on Linux, where
+    // the exit record carries it tagged.
+    breadcrumb::ExitHow how = breadcrumb::ExitHow::None;
+    std::uint32_t value = 0;
+    if (sentinelPosixExitFromCode(code, how, value)) { return how == breadcrumb::ExitHow::Exited && value == 1u; }
+    return code == 1ul;
+}
+
+std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried, bool windowFailed) {
+    if (windowFailed) { return kSentinelWindowFailedWords; }
     if (!exitKnown) {
         // Linux (0.99.78): the process's own record was read and held nothing, and the
         // watcher is not its parent, so those are the two sources there are; the words say so.
@@ -274,13 +290,19 @@ std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecor
     // Stop-Process and .NET's Process.Kill() give -1 (docs/DIAGNOSTICS.md, "The
     // sentinel"). 0xC0000409 is what __fastfail raises (Microsoft's __fastfail
     // page) and so what abort() and a failed stack-cookie check end in.
+    //
+    // 1 IS NOT PROOF OF A KILL. It is what a kill leaves, and it is also what the application
+    // returns itself when it gives up (a window that cannot be created: field signature
+    // 85FF854AA2C772F9, which two reports called "ended by another process" while nothing had
+    // ended it). The exit code alone cannot tell the two apart, so the words say both; the
+    // application's own record (kFlagWindowFailed, sentinelWindowFailed) is what tells.
     switch (code) {
         case 0xC0000005ul: return "access violation";
         case 0xC0000409ul: return "fast-fail (abort or failed integrity check)";
         case 0xC0000374ul: return "heap corruption";
         case 0xC00000FDul: return "stack overflow";
         case 0xC000013Aul: return "Ctrl+C or a console close (STATUS_CONTROL_C_EXIT)";
-        case 0x00000001ul: return "ended by another process (exit code 1, as taskkill /F does)";
+        case 0x00000001ul: return "exit code 1 (as taskkill /F leaves it, or the application ended itself)";
         case 0xFFFFFFFFul:
             return "ended by another process (exit code -1, as Stop-Process and Process.Kill do)";
         case 0x00000000ul: return "exit code 0 before the shutdown had finished";
@@ -352,8 +374,12 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
     }
 
     v.cls = c;
+    // THE APPLICATION SAID IT COULD NOT CREATE ITS WINDOW (kFlagWindowFailed) and the code is the
+    // one its `return 1` makes: the report says so, and the group is its own, apart from an exit
+    // code 1 that nothing explains (a kill, or an ending the application did not record).
+    const bool windowFailed = sentinelWindowFailed(b, f.exitKnown, f.exitCode);
     std::string reason = sentinelClassReason(c);
-    reason += " - " + sentinelExitWords(f.exitKnown, f.exitCode, f.exitRecordTried);
+    reason += " - " + sentinelExitWords(f.exitKnown, f.exitCode, f.exitRecordTried, windowFailed);
     reason += std::string("; phase ") + v.phase.words;
     // WHICH PART OF THE FRAME, from the frame timer's closed list of names
     // (core/frame_timing.hpp): the nearest thing to a stack this report can have.
@@ -366,6 +392,7 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
     // Two freezes in different parts of the frame are different bugs, and so are
     // two crashes: the scope is part of what groups them.
     if (scope != nullptr) { v.signatureTag += std::string(":") + scope; }
+    if (windowFailed) { v.signatureTag += ":window-failed"; }
     return v;
 }
 

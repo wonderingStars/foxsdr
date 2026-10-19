@@ -71,8 +71,16 @@ ExitVerdict fromEndingReport(const ReportSummary& r) {
         v.cls = ExitClass::Died;
         v.detail = "the window had stopped drawing when it ended";
     } else if (startsWith(r.reason, kSentinelReasonStartup)) {
-        // "Before the first frame" says WHEN, not by what: the exit code does.
-        if (haveCode && isCrashLikeExitCode(code)) {
+        // "Before the first frame" says WHEN, not by what: the exit code does - or, for the one
+        // code that is ambiguous (1: what taskkill /F leaves and what the application returns when
+        // it gives up), the application's own record, which the sentinel put in the reason.
+        // (Found by the lead of the words: the listing keeps 120 characters of a reason.)
+        if (r.reason.find(kSentinelWindowFailedLead) != std::string::npos) {
+            // The application ENDED ITSELF because it could not make its window: not a kill, and
+            // a failure of the program to start, which is what `died` counts.
+            v.cls = ExitClass::Died;
+            v.detail = "ended before the first frame: the application ended itself, the window could not be created";
+        } else if (haveCode && isCrashLikeExitCode(code)) {
             v.cls = ExitClass::Died;
             v.detail = "ended before the first frame" + codeWords(r);
         } else if (haveCode) {

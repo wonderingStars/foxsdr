@@ -308,7 +308,7 @@ int main() {
     };
     const Row rows[] = {
         {"ended from outside (taskkill)", 1ul, {Phase::Running, 10, 0, 600},
-         "previous session ended: killed (ended from outside while the window was drawing: ended by another process",
+         "previous session ended: killed (ended from outside while the window was drawing: exit code 1 (as taskkill /F leaves it",
          ExitClass::Killed},
         {"a closed console window", 0xC000013Aul, {Phase::Running, 10, 0, 600},
          "previous session ended: killed (ended from outside while the window was drawing: Ctrl+C or a console close",

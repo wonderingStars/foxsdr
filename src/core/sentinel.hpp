@@ -133,7 +133,31 @@ bool isCrashLikeExitCode(unsigned long code);
 // `exitRecordTried` (Linux, 0.99.78): with `exitKnown` false, says that the process's own
 // exit record WAS asked for and held nothing, so the words name what was tried; false (the
 // default) is the Windows case of a failed GetExitCodeProcess and keeps the old words.
-std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried = false);
+//
+// `windowFailed` (see sentinelWindowFailed): the application said, in the page, that it could not
+// create its window and ended itself. The words are then kSentinelWindowFailedWords, whatever the
+// code. Without it, exit code 1 is worded as what it is: AMBIGUOUS. `taskkill /F` leaves 1, and so
+// does an application that returns 1 itself (field signature 85FF854AA2C772F9 was a window that
+// could not be created, reported as a kill for two releases), so the words name both.
+std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried = false,
+                              bool windowFailed = false);
+
+// What a report says when the application recorded that its window could not be created
+// (breadcrumb::kFlagWindowFailed) and the exit code is the one that goes with returning 1.
+inline constexpr const char* kSentinelWindowFailedWords =
+    "the application ended itself: the window could not be created - see the window: lines in the log";
+// The part of those words that identifies them to a reader of the report listing
+// (core/exit_cause.cpp), which keeps only the first 120 characters of a reason
+// (core/diag_history.cpp): after the start-up sentence and " - " the whole words no longer fit,
+// this lead does (tests/test_exit_cause.cpp holds both).
+inline constexpr const char* kSentinelWindowFailedLead = "the application ended itself: the window could not be created";
+
+// Did the application end ITSELF because its window could not be created? True when the page
+// carries kFlagWindowFailed in the phase that sets it (creating the window) AND the ending is the
+// one `return 1` makes: Windows exit code 1, a tagged POSIX `exit(1)`, or no exit status at all
+// (the flag is then the only evidence there is). Any other code - a fault while the window system
+// was being torn down, say - is what it says.
+bool sentinelWindowFailed(const breadcrumb::Snapshot& crumb, bool exitKnown, unsigned long code);
 
 // ---------------------------------------------------------------------------
 // HOW A POSIX PROCESS ENDED, carried through the platform-neutral `code` (0.99.78).

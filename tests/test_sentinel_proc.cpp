@@ -264,6 +264,18 @@ int standIn(int argc, char** argv) {
         sleepMs(50);
         std::exit(3);
     }
+    if (scenario == "window-failed" || scenario == "exit1-unrecorded") {
+        // The field report's ending on Windows (85FF854AA2C772F9): the window could not be created
+        // and the application returned 1 itself. "window-failed" records it in the page exactly as
+        // AppWindow::run does; "exit1-unrecorded" is the same ending with nothing recorded, which is
+        // also what an application ended by `taskkill /F` looks like to the watcher.
+        breadcrumb::setPhase(Phase::CreatingWindow);
+        if (scenario == "window-failed") { breadcrumb::noteWindowFailed(); }
+        diagLogf("stand-in: window could not be created");
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::exit(1);
+    }
     if (scenario == "exit1-startup") {  // Linux: the field report's ending - a failed glfwInit returns 1
         breadcrumb::setPhase(Phase::CreatingWindow);
         diagLogf("stand-in: window being created");
@@ -657,7 +669,10 @@ int main(int argc, char** argv) {
             CHECK(d.parsedOk);
             std::printf("outside: %s\n", d.parsed.reason.c_str());
             CHECK(d.parsed.reason.rfind(kSentinelReasonOutside, 0) == 0);
-            CHECK(contains(d.parsed.reason, "exit code 1, as taskkill /F does"));
+            // Exit code 1 is what taskkill /F leaves, and also what an application that gives up
+            // returns: the words say both and do not claim another process (signature 85FF854AA2C772F9).
+            CHECK(contains(d.parsed.reason, "exit code 1 (as taskkill /F leaves it, or the application ended itself)"));
+            CHECK(!contains(d.parsed.reason, "ended by another process"));
             CHECK(contains(d.parsed.reason, "; phase running; silent "));
             CHECK(d.parsed.code == "0x00000001");
             CHECK(sentinelReasonIsLocalOnly(d.parsed.reason));
@@ -912,6 +927,49 @@ int main(int argc, char** argv) {
             CHECK(contains(d.parsed.reason, "; phase creating the window;"));
             CHECK(!sentinelReasonIsLocalOnly(d.parsed.reason));
             CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // THE WINDOW COULD NOT BE CREATED and the application returned 1 itself, recording it: the
+        // report says the application ended itself and does not say another process did.
+        const fs::path dir = scratch("window-failed");
+        const Death d = liveAndDie(dir, "window-failed", 0);
+        CHECK(d.appExit == 1);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("window-failed: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            CHECK(contains(d.parsed.reason, "the application ended itself: the window could not be created"));
+            CHECK(contains(d.parsed.reason, "see the window: lines in the log"));
+            CHECK(contains(d.parsed.reason, "; phase creating the window;"));
+            CHECK(!contains(d.parsed.reason, "another process") && !contains(d.parsed.reason, "taskkill"));
+            CHECK(d.parsed.code == "0x00000001");
+            CHECK(!sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(contains(d.text, "stand-in: window could not be created"));
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // THE SAME ENDING WITH NOTHING RECORDED (the 0.99.73 reports): exit code 1 alone is
+        // ambiguous, and the report says so instead of asserting a kill. It keeps the group the
+        // field reports were filed under.
+        const fs::path dir = scratch("exit1-unrecorded");
+        const Death d = liveAndDie(dir, "exit1-unrecorded", 0);
+        CHECK(d.appExit == 1);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("exit1-unrecorded: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            CHECK(contains(d.parsed.reason, "exit code 1 (as taskkill /F leaves it, or the application ended itself)"));
+            CHECK(!contains(d.parsed.reason, "another process"));
+            CHECK(!contains(d.parsed.reason, "the window could not be created"));
+            CHECK(d.parsed.signature == "85FF854AA2C772F9");
         }
         std::error_code ec;
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
