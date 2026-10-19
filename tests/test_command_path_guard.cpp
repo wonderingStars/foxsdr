@@ -148,6 +148,9 @@ const char* const kReadOnly[] = {
     "pipeline_.rdsSnapshot", "pipeline_.running", "pipeline_.signalPowerDb", "pipeline_.stereoActive",
     // (RETIRED with window port group 8, its last caller gone: pipeline_.vfoOffsetHz - the preset keys read the
     // state's vfoOffsetHz - and pluginUi_.lastDeniedPlugin - the Receiver control rows read fact.plugin.lastDenied.)
+    // (RETIRED with window port group 9, their last caller gone: pluginRunner_.isFeeding, pluginUi_.api().commands,
+    // pluginUi_.api().settingsRequesters and pluginUi_.settingsAllowed - the fitted-modules window reads the
+    // MATCHED, ASKED_SETTINGS and SETTINGS_ALLOWED flags of PLUGINS and the PLUGIN_COMMANDS list.)
     "pipeline_.rawSource().centerFrequencyHz", "pipeline_.audioSamplesProduced",
     "pipeline_.audioTap",
     "pipeline_.scopeAudio().capacity", "pipeline_.scopeAudio().snapshot", "pipeline_.scopeAudio().written",
@@ -155,12 +158,12 @@ const char* const kReadOnly[] = {
     "pipeline_.scopeMpx().capacity", "pipeline_.scopeMpx().snapshot", "pipeline_.scopeMpx().written",
     "pluginHost_.plugins", "pluginHost_.loadedCount",
     "pluginRunner_.activeCount", "pluginRunner_.audioFramesFed", "pluginRunner_.audioGapFrames",
-    "pluginRunner_.audioGaps", "pluginRunner_.isFeeding", "pluginRunner_.playingPlugin",
+    "pluginRunner_.audioGaps", "pluginRunner_.playingPlugin",
     "pluginRunner_.status", "pluginRunner_.iqFramesFed", "pluginRunner_.pollImages",
-    "pluginUi_.api().commands", "pluginUi_.api().settingsRequesters", "pluginUi_.instruments",
+    "pluginUi_.instruments",
     "pluginUi_.panels", "pluginUi_.panels().size", "pluginUi_.paths", "pluginUi_.paths().size",
     "pluginUi_.trackPluginNames", "pluginUi_.trackPluginNames().empty",
-    "pluginUi_.tracks", "pluginUi_.tracks().size", "pluginUi_.tuneAllowed", "pluginUi_.settingsAllowed",
+    "pluginUi_.tracks", "pluginUi_.tracks().size", "pluginUi_.tuneAllowed",
     "pluginUi_.altitudeNear", "pluginUi_.tuneRequesters().size", "pluginUi_.poll",
     "pluginRepo_.progress",
     "soapyView_.deadReason", "soapyView_.deviceDead",
@@ -990,10 +993,14 @@ const char* const kPortedMembers[] = {
     "drawDecoderPresetBars", "drawPluginTuneControls", "drawPluginMarkers", "drawMutePopup", "muteBannerSubject",
     "drawMuteBanner", "muteStateForDisplayName", "drawPluginPresetBar",
     "pluginLists", "decoderLines", "clearDecoderLines", "pumpUiEvents", "askAboutMutedPlugins",
+    // GROUP 9, the fitted-modules window: the whole window (its model, its seven commands) and the cache of the
+    // table it draws from. The window's own rectangle, its open flag and its deck stay the window's. The engine's
+    // pluginNotices_ is no longer read by the window at all.
+    "drawFittedModulesWindow", "fittedLists",
 };
 
-constexpr int kWindowFieldsReadBudget = 105;
-constexpr int kWindowFieldReadsBudget = 499;
+constexpr int kWindowFieldsReadBudget = 104;
+constexpr int kWindowFieldReadsBudget = 485;
 
 struct Report {
     int violations = 0;
@@ -1184,7 +1191,7 @@ int main(int argc, char** argv) {
                 r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
-    CHECK(r.submitsInDraw >= 40);
+    CHECK(r.submitsInDraw >= 38);  // (a sanity floor, not a ratchet: it is the count itself - 40 until group 9 ported the window's seven)
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);

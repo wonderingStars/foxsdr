@@ -170,6 +170,7 @@ class PluginStoreView;
 struct PluginStoreDeck;
 struct PluginStoreModel;
 struct FittedModulesDeck;
+struct FittedListCache;
 
 // --- THE FUNCTION SELECT RAIL'S ROW GEOMETRY ---------------------------------
 //
@@ -2638,6 +2639,13 @@ private:
     std::unique_ptr<PluginStoreView> pluginStoreView_;
     std::unique_ptr<PluginStoreDeck> pluginStoreDeck_;
     std::unique_ptr<FittedModulesDeck> fittedDeck_;
+    // WHAT THE FITTED MODULES WINDOW TAKES FROM THE TABLE (window port, group 9; API 0.3 section 8.8,
+    // gui/plugins_view.hpp): its whole model - one record a plugin file, from PLUGINS, its facts and
+    // PLUGIN_COMMANDS - built when listSeq moves and kept, and only while the window is drawn
+    // (fittedLists() is called from nowhere else). A pointer for the reason the decks are: the type
+    // lives behind imgui.h.
+    std::unique_ptr<FittedListCache> fittedCache_;
+    FittedListCache& fittedLists();
     char pluginUrlBuf_[512] = "";    // edit buffer for the catalogue URL
     // --- measurement (tools/measure_engine.ps1) ------------------------------
     // All three null in every ordinary run; each is created only by its debug

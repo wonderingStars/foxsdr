@@ -236,6 +236,38 @@ FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped
     return m;
 }
 
+void fillFittedModule(FittedModule& m, const FittedRow& r) {
+    m.file = r.file;
+    m.path = r.path;
+    // A caps word of 0 is "no descriptor read" (the host validates a descriptor, which refuses a zero word,
+    // before it copies a name): the table's `name` is the file's own then, and the window has no name.
+    if (r.caps != 0u) { m.name = r.name; } else { m.name.clear(); }
+    m.version = r.version;
+    m.author = r.author;
+    m.licence = r.licence;
+    m.capabilities = r.caps;
+    m.loaded = r.loaded;
+    m.error = r.error;
+    m.stopped = r.stopped;
+    m.fed = r.matched;
+    m.idleDetail = r.idle;
+    m.tuneCapable = r.loaded && (r.caps & CASCADE_CAP_HOST_CLIENT) != 0u;
+    m.tuneAllowed = r.tuneAllowed;
+    m.settingsCapable = r.askedSettings;
+    m.settingsAllowed = r.settingsAllowed;
+    m.commands.clear();
+    m.noticeLevel = r.noticeLevel;
+    m.notice = r.notice;
+    m.integrityNote = r.integrity;
+    m.sizeBytes = r.sizeBytes;
+}
+
+FittedModule makeFittedModuleFromRow(const FittedRow& r) {
+    FittedModule m;
+    fillFittedModule(m, r);
+    return m;
+}
+
 // ============================================================================
 // The bench vocabulary this window adds.
 //

@@ -683,7 +683,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
       // rescan replaces the catalogue underneath it.
       pluginStoreView_(std::make_unique<PluginStoreView>()),
       pluginStoreDeck_(std::make_unique<PluginStoreDeck>()),
-      fittedDeck_(std::make_unique<FittedModulesDeck>()) {
+      fittedDeck_(std::make_unique<FittedModulesDeck>()),
+      fittedCache_(std::make_unique<FittedListCache>()) {
     configPath_ = std::move(configPath);
     configAnnounce_ = announceConfig;
     // THE RECEIVER'S START-UP (engine stage 3a): the recording folder, the
@@ -12408,64 +12409,10 @@ void AppWindow::drawFittedModulesWindow() {
     }
     if (drawn) {
         // --- what the window is told ----------------------------------------
-        cascade::gui::FittedModulesModel model;
-        model.directory = engine_.pluginDir_;
-        // GATES FED FOR EVERY MODULE AT ONCE, which is why it is stated on the
-        // panel rather than left to be inferred from four idle rows.
-        model.receiverRunning = engine_.pipeline_.running();
-        const std::vector<cascade::core::DecoderStatus> status = engine_.pluginRunner_.status();
-        const std::vector<cascade::core::LoadedPlugin>& list = engine_.pluginHost_.plugins();
-        const std::vector<std::string> settingsAskers = engine_.pluginUi_.api().settingsRequesters();
-        model.modules.reserve(list.size());
-        for (const cascade::core::LoadedPlugin& p : list) {
-            const std::string file = cascade::core::pluginKey(p);
-            // THE RUNNER'S OWN SENTENCE, quoted rather than rewritten, and
-            // matched by KEY rather than by display name - two installed
-            // modules may legitimately print the same name.
-            std::string idleDetail;
-            for (const cascade::core::DecoderStatus& s : status) {
-                if (s.key != file) { continue; }
-                if (s.reason == cascade::core::DecoderIdleReason::Running) { continue; }
-                idleDetail = s.detail;
-                break;
-            }
-            cascade::gui::FittedModule m = cascade::gui::makeFittedModule(
-                p, engine_.pluginIsStopped(file), engine_.pluginRunner_.isFeeding(file),
-                std::move(idleDetail),
-                engine_.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
-            // Host API level 1: the settings grant (offered only to a module
-            // that has asked), its command keys and its newest warning.
-            m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) !=
-                                settingsAskers.end();
-            m.settingsAllowed = engine_.pluginUi_.settingsAllowed(file);
-            for (const cascade::core::HostCommand& hc : engine_.pluginUi_.api().commands(file)) {
-                m.commands.push_back(cascade::gui::FittedModule::Command{hc.id, hc.label});
-            }
-            if (const auto nit = engine_.pluginNotices_.find(file); nit != engine_.pluginNotices_.end()) {
-                m.noticeLevel = nit->second.level;
-                m.notice = nit->second.text;
-            }
-            // The re-hash's finding, keyed on the FILE (pluginKey), which is
-            // what the install record names.
-            m.integrityNote = cascade::core::PluginRepo::changedSinceInstallNote(
-                engine_.pluginInventory_.plugins, file);
-            // THE ONLY SIZE THERE IS. No descriptor carries one, so it can
-            // only come from stat-ing the file; a failure leaves it at 0,
-            // which the shared plate reads as "not measured" and never draws
-            // as a clean zero.
-            std::error_code sizeEc;
-            const std::uintmax_t bytes = std::filesystem::file_size(p.path, sizeEc);
-            if (!sizeEc) { m.sizeBytes = static_cast<std::uint64_t>(bytes); }
-            model.modules.push_back(std::move(m));
-        }
-        // ONLY WHEN THE STORE DID NOT PRINT IT. installReport_/installError_
-        // are written by an install AND by a remove, so both windows can hold
-        // the same sentence; printing it in both reads as two separate
-        // outcomes, and printing it in neither loses a failed remove entirely.
-        if (!pluginBrowserDrawnThisFrame_) {
-            model.report = engine_.installReport_;
-            model.error = engine_.installError_;
-        }
+        // FROM THE TABLE ONLY (window port, group 9; API 0.3 section 8.8): the model is the cache's, built
+        // when listSeq moves, so a frame in which nothing changed builds nothing (fittedLists also sets the
+        // receiver's run state and the install sentence, which are not the lists').
+        const cascade::gui::FittedModulesModel& model = fittedLists().model;
 
         // --- the cabinet ----------------------------------------------------
         // NO TITLE PLATE HERE: drawFittedModulesPanel draws its own FITTED
@@ -12504,39 +12451,36 @@ void AppWindow::drawFittedModulesWindow() {
         }
 
         // --- what the frame's keys asked for --------------------------------
-        // APPLIED AFTER THE PANEL, never inside it: every one of these
-        // rebuilds the plugin set - rescan unloads and re-loads every module,
-        // a stop or a start rebuilds every instance, a remove deletes a file
-        // and rescans - and the vector the panel was drawn from is the vector
-        // they replace.
-        // Every one that changes the engine is a COMMAND (the plugin ops),
-        // applied at the top of the next frame - which is also the answer to
-        // the list-being-walked problem above.
+        // APPLIED AFTER THE PANEL, never inside it, and as COMMANDS on the window's session
+        // (uiSubmit): every one of these rebuilds the plugin set - rescan unloads and re-loads every
+        // module, a stop or a start rebuilds every instance, a remove deletes a file and rescans - and
+        // the engine does it in its next pass, so the model the panel was drawn from is the model it
+        // replaces only at the next refresh of the cache, never mid-frame.
         namespace cmd = cascade::core::cmd;
         switch (act.kind) {
             case cascade::gui::FittedModulesAction::Kind::Rescan:
-                engine_.submitCommand(cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
+                uiSubmit(cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
                 break;
             case cascade::gui::FittedModulesAction::Kind::Start:
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_DECODER_START, act.file));
+                uiSubmit(cmd::makeText(FOXAPI_OP_DECODER_START, act.file));
                 break;
             case cascade::gui::FittedModulesAction::Kind::Stop:
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_DECODER_STOP, act.file));
+                uiSubmit(cmd::makeText(FOXAPI_OP_DECODER_STOP, act.file));
                 break;
             case cascade::gui::FittedModulesAction::Kind::Remove:
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_STORE_REMOVE, act.file));
+                uiSubmit(cmd::makeText(FOXAPI_OP_STORE_REMOVE, act.file));
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetTune:
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 1, act.flag ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 1, act.flag ? 1 : 0));
                 break;
             case cascade::gui::FittedModulesAction::Kind::SetSettings:
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 2, act.flag ? 1 : 0));
+                uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_GRANT, act.file, 2, act.flag ? 1 : 0));
                 break;
             case cascade::gui::FittedModulesAction::Kind::Command:
                 // Queued for the plugin to take with poll_command; nothing of
                 // the plugin's runs here, on the GUI thread's frame.
-                engine_.submitCommand(cmd::makeText(FOXAPI_OP_PLUGIN_COMMAND, act.file,
-                                            static_cast<std::int64_t>(act.commandId)));
+                uiSubmit(cmd::makeText(FOXAPI_OP_PLUGIN_COMMAND, act.file,
+                                       static_cast<std::int64_t>(act.commandId)));
                 break;
             case cascade::gui::FittedModulesAction::Kind::ResetWindows:
                 // Safe from inside this page's own body: beginPage has already
@@ -15775,6 +15719,92 @@ const AppWindow::PluginListCache& AppWindow::pluginLists() {
     c.muteKeptRunning = c.factText == "1";
     readFactText("fact.plugin.lastDenied", c.lastDenied);
     c.decoderCensus = cascade::gui::censusOf(c.plugins, cascade::gui::kDecoderCaps);
+    return c;
+}
+
+// THE FITTED MODULES WINDOW'S MODEL (window port, group 9; API 0.3 section 8.8, the cache is in app_window.hpp and
+// gui/plugins_view.hpp). Read when listSeq has moved and only from the window's own draw: PLUGINS first - one
+// record a plugin file the host holds, loaded or not, in the host's order - and for each the eight whole texts of
+// fact.plugin.<file>.* (path, version, author, licence, error, idle, notice, integrity), then PLUGIN_COMMANDS
+// filed under the module they name, then fact.plugin.dir. The rows go through the same builder a test holds
+// equal to the one that reads a host's own records (makeFittedModuleFromRow). Strings and vectors keep their
+// room, so a refresh that finds nothing bigger allocates only what the table's get_setting does (about eight
+// of those a module). `got <= i` is the end of a list that changed under the read: what was read stands.
+cascade::gui::FittedListCache& AppWindow::fittedLists() {
+    cascade::gui::FittedListCache& c = *fittedCache_;
+    // WHAT IS NOT THE LISTS', set every call (a frame): the receiver's run state - it gates FED for every
+    // module at once, which is why the panel states it rather than leaving it to be inferred from four idle
+    // rows - and the install sentence, which depends on whether the store window drew this frame. ONLY WHEN
+    // THE STORE DID NOT PRINT IT: the install report and error are written by an install AND by a remove, so
+    // both windows can hold the same sentence; printing it in both reads as two separate outcomes, and in
+    // neither loses a failed remove entirely. They are the status lines the engine handed over after this
+    // frame's commands (statusLines_), so a remove's sentence and the row it removed arrive in the same frame.
+    // (A string assigned something no longer than its room allocates nothing.)
+    c.model.receiverRunning = (uiState_.flags & FOXAPI_RX_RUNNING) != 0u;
+    if (!pluginBrowserDrawnThisFrame_) {
+        c.model.report = statusLines_.installReport;
+        c.model.error = statusLines_.installError;
+    } else {
+        c.model.report.clear();
+        c.model.error.clear();
+    }
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    ++c.refreshes;
+    const auto entry = [](FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+    };
+    FoxListItem it{};
+    cascade::gui::FittedRow& r = c.row;
+    const auto fact = [&](const char* leaf, std::string& out) {
+        c.key.assign("fact.plugin.");
+        c.key += r.file;
+        c.key += '.';
+        c.key += leaf;
+        readFactText(c.key.c_str(), out);
+    };
+
+    const int32_t plugins = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, 0, nullptr));
+    c.model.modules.resize(static_cast<std::size_t>(plugins));
+    std::size_t rows = 0;
+    for (int32_t i = 0; i < plugins; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGINS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        r.file = it.detail;
+        r.name = it.name;
+        r.caps = static_cast<std::uint32_t>(it.value[0]);
+        r.sizeBytes = static_cast<std::uint64_t>(it.value[1] > 0 ? it.value[1] : 0);
+        r.noticeLevel = static_cast<std::uint32_t>(it.value[2] > 0 ? it.value[2] : 0);
+        r.loaded = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        r.stopped = (it.flags & FOXAPI_ITEM_STOPPED) != 0u;
+        r.tuneAllowed = (it.flags & FOXAPI_ITEM_TUNE_ALLOWED) != 0u;
+        r.settingsAllowed = (it.flags & FOXAPI_ITEM_SETTINGS_ALLOWED) != 0u;
+        r.matched = (it.flags & FOXAPI_ITEM_MATCHED) != 0u;
+        r.askedSettings = (it.flags & FOXAPI_ITEM_ASKED_SETTINGS) != 0u;
+        fact("path", r.path);
+        fact("version", r.version);
+        fact("author", r.author);
+        fact("licence", r.licence);
+        fact("error", r.error);
+        fact("idle", r.idle);
+        fact("notice", r.notice);
+        fact("integrity", r.integrity);
+        cascade::gui::fillFittedModule(c.model.modules[rows++], r);
+    }
+    c.model.modules.resize(rows);
+
+    const int32_t keys = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGIN_COMMANDS, 0, nullptr));
+    for (int32_t i = 0; i < keys; ++i) {
+        entry(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PLUGIN_COMMANDS, static_cast<uint32_t>(i), &it) <= i) { break; }
+        for (cascade::gui::FittedModule& m : c.model.modules) {
+            if (m.file != it.detail) { continue; }
+            m.commands.push_back(cascade::gui::FittedModule::Command{static_cast<std::uint32_t>(it.id), it.name});
+            break;
+        }
+    }
+    readFactText("fact.plugin.dir", c.model.directory);
     return c;
 }
 

@@ -199,7 +199,8 @@ struct FittedModule {
 // AFTER reading it, and that one is refused with its identity perfectly known.
 ModulePlate makeModulePlate(const FittedModule& m);
 
-// What the window is told, once per frame.
+// What the window is told: the window's cache of the engine's table (FittedListCache, below), built when
+// listSeq moves, with the receiver's run state and the install sentence set on it every frame.
 struct FittedModulesModel {
     std::vector<FittedModule> modules;  // PluginHost::plugins() order
     std::string directory;              // PluginHost::directory()
@@ -234,21 +235,22 @@ struct FittedModulesDeck {
 };
 
 // What the frame's clicks asked for. The window itself changes nothing: it
-// owns no host, no runner and no config, and every action here is one the
-// application already has a method for.
+// owns no host, no runner and no config. AppWindow::drawFittedModulesWindow sends each
+// action as a command on its engine API session (window port, group 9): the op
+// named beside it below, which the engine applies at its next pass.
 struct FittedModulesAction {
     enum class Kind {
         None,
-        Rescan,    // AppWindow::rescanPlugins()
-        Start,     // AppWindow::setPluginStopped(file, false)
-        Stop,      // AppWindow::setPluginStopped(file, true)
-        Remove,    // AppWindow::removeInstalledPlugin(file)
-        SetTune,   // AppWindow::setPluginTuneAllowed(file, flag)
-        // Host API level 1: AppWindow::setPluginSettingsAllowed(file, flag),
-        // and a press of one of the module's own command keys (id).
+        Rescan,    // FOXAPI_OP_PLUGIN_RESCAN
+        Start,     // FOXAPI_OP_DECODER_START (the file)
+        Stop,      // FOXAPI_OP_DECODER_STOP (the file)
+        Remove,    // FOXAPI_OP_STORE_REMOVE (the file)
+        SetTune,   // FOXAPI_OP_PLUGIN_GRANT, slot 1 (the file, the flag)
+        // Host API level 1: FOXAPI_OP_PLUGIN_GRANT, slot 2 (the file, the flag),
+        // and a press of one of the module's own command keys: FOXAPI_OP_PLUGIN_COMMAND (the file, the id).
         SetSettings,
         Command,
-        // AppWindow::resetPageWindows(). THE WAY BACK FROM A WINDOW DRAGGED
+        // AppWindow::resetPageWindows() (the window's own: no command). THE WAY BACK FROM A WINDOW DRAGGED
         // TOO SMALL TO USE. A page's resize grip is invisible by design, so a
         // decoder window pulled down to its rail leaves almost nothing to take
         // hold of - reported by a beta tester who could not get the ACARS
@@ -308,6 +310,50 @@ FittedCounts countStates(const std::vector<FittedModule>& modules, bool receiver
 // file; a size nobody looked up must never be drawn as a clean zero.
 FittedModule makeFittedModule(const cascade::core::LoadedPlugin& p, bool stopped, bool fed,
                               std::string idleDetail, bool tuneAllowed);
+
+// --- the window's own copy of the engine's table (window port, group 9) -------
+//
+// What ONE module is, as the engine's table says it: its PLUGINS entry (the display name, the file in
+// `detail`, the capability word, the file's size, the level of its newest notice, and the flags) and its
+// per-file facts (API 0.3 section 8.8: whole texts, "" when there is none). The window reads these when
+// listSeq moves and nowhere else; makeFittedModule's inputs - a LoadedPlugin, the stop set, the runner,
+// the grants - are the engine's own, and a window that reads only the table has none of them.
+struct FittedRow {
+    std::string file;      // PLUGINS `detail`: the module file name (the key everything is filed under)
+    std::string name;      // PLUGINS `name`: the display name, or the file name when no descriptor was read
+    std::uint32_t caps = 0;           // value[0]: the capability word as declared (0 = no descriptor read)
+    std::uint64_t sizeBytes = 0;      // value[1]: the file's size, measured by the engine; 0 = not measured
+    std::uint32_t noticeLevel = 0;    // value[2]: 0 none, 2 warning, 3 error
+    bool loaded = false;              // ACTIVE
+    bool stopped = false;             // STOPPED
+    bool tuneAllowed = false;         // TUNE_ALLOWED
+    bool settingsAllowed = false;     // SETTINGS_ALLOWED
+    bool matched = false;             // MATCHED: the runner would feed it, the receiver running or not
+    bool askedSettings = false;       // ASKED_SETTINGS
+    std::string path, version, author, licence, error, idle, notice, integrity;  // fact.plugin.<file>.*
+};
+
+// A module from its row. Everything FittedModule names a source for is taken from the row's one answer for
+// it, and the host-client key (`tuneCapable`) from the capability word of a LOADED module - the host refuses
+// a module that declares the bit with no usable table, and the key is offered only to a loaded one. A file
+// refused before a descriptor was read has a caps word of 0 and a `name` the table filled with the file's
+// own name: `m.name` is empty then, so makeModulePlate's "no descriptor read" test is unchanged. The command
+// keys are NOT in the row (the table has them as a list of their own): m.commands is left empty.
+FittedModule makeFittedModuleFromRow(const FittedRow& r);
+// The same, written into an existing record so its strings keep their room (the cache's rebuild).
+void fillFittedModule(FittedModule& m, const FittedRow& r);
+
+// What the window keeps of the table (AppWindow::fittedLists): the whole model, built when listSeq moves and
+// kept, so a frame in which nothing changed builds nothing - the receiver's run state, and the install
+// report and error, are set on it once a frame (they are not the lists' and the last one depends on whether
+// the store window drew). `refreshes` is read by a test.
+struct FittedListCache {
+    std::uint64_t listSeq = 0;         // 0: never read
+    std::uint32_t refreshes = 0;
+    FittedModulesModel model;
+    FittedRow row;                     // scratch: one module's row, its strings keeping their room
+    std::string key;                   // scratch: a fact's key
+};
 
 // --- the window --------------------------------------------------------------
 
