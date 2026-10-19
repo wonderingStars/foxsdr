@@ -8,14 +8,16 @@ decoder plugins from an in-app catalogue. Most radios are driven by FoxSDR's
 own drivers, so nothing else has to be installed. The whole interface can be
 served to a browser on your own network.
 
-The current release is **0.99.81** (October 2026), in open beta. Free for
+The current release is **0.99.82** (October 2026), in open beta. Free for
 noncommercial use; see [License](#license). Website:
 [foxsdr.com](https://foxsdr.com).
 
-Version **0.99.81** adds image clicks for interactive plugin dashboards,
-including IBOC Radio's HD programme rows with its updated plugin. It also keeps
-automatic decoder muting from silencing decoded DAB audio. User mute still
-silences the complete audio output.
+Version **0.99.82** is a repair release from the month's field reports: the
+window no longer freezes on a retune, preset, or radio scan while the signal
+path or a vendor service is busy; a hidden Wayland window no longer blocks in
+the buffer swap; LSB and USB genuinely reject the opposite sideband; a machine
+without a working OpenGL driver is told so instead of the process vanishing;
+and Shift + wheel slides the tuned band along the spectrum.
 
 ![The FoxSDR receiver at 1090 MHz beside the ADS-B map: the FUNCTION SELECT rail, spectrum and waterfall, the status column, and eight aircraft plotted over the north of England.](docs/screenshots/receiver-and-adsb-map.png)
 
