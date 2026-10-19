@@ -595,11 +595,6 @@ std::unique_lock<std::mutex> tryLockSession(const abi::Api& api, std::chrono::mi
     return lk;
 }
 
-// How long a scan gives a session holder that is not known to be wedged before
-// it answers "busy" instead: an ordinary Open answers in milliseconds, so this
-// is generous for a healthy service and still a short GUI stall for a sick one.
-inline constexpr std::chrono::milliseconds kSessionPeekWait{250};
-
 // FROM THE LATCH, NOT THE MUTEX. markSessionLost sets sessionLostFlag before it
 // takes the mutex to set `sessionLost`, and nothing else ever sets either, so
 // the flag is the field's superset the instant it matters. This is asked by
@@ -1055,7 +1050,8 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
     {
         const bool wedged = sdrPlayServiceTrouble(api) == SdrPlayServiceTrouble::EnumerationHung;
         std::unique_lock<std::mutex> lk =
-            tryLockSession(api, wedged ? std::chrono::milliseconds(0) : kSessionPeekWait);
+            tryLockSession(api, wedged ? std::chrono::milliseconds(0)
+                                       : SdrPlaySource::kSessionPeekWait);
         if (!lk.owns_lock()) {
             if (wedged) {
                 // The hold-off has run out but the worker is still in Open:

@@ -671,7 +671,7 @@ const KnownWait kKnownWaits[] = {
      "SdrPlaySource::read()'s wait for the service's callback to fill the ring, spent on the "
      "pipeline's source thread, which the teardown already waits for through kSourceJoinWait's "
      "3000 ms - never on the GUI teardown thread"},
-    {"src/source/sdrplay_source.cpp", "kSessionPeekWait", 0,
+    {"src/source/sdrplay_source.hpp", "kSessionPeekWait", 0,
      "the bounded peek enumerateSdrPlayWith grants a session-mutex holder that is merely slow "
      "(a healthy Open mid-flight) before giving the scan up with the control-pending sentence - "
      "a 1 ms try_lock poll, never a blocking lock, added when the 0.99.81 scanNative freeze "

@@ -503,6 +503,16 @@ public:
     // zero. Spent on the PIPELINE's source thread, never the GUI's.
     static constexpr std::chrono::milliseconds kReadWait{20};
 
+    // How long a scan gives a session-mutex holder that is not known to be
+    // wedged before it answers "busy" instead: an ordinary Open answers in
+    // milliseconds, so this is generous for a healthy service and still a
+    // short stall for a sick one. Spent only on the enumeration path - no
+    // teardown call enumerates - and never as a blocking lock: the peek is a
+    // try_lock poll (tryLockSession in sdrplay_source.cpp), added when the
+    // 0.99.81 scanNative freeze showed a wedged vendor Open parking the
+    // session mutex for good.
+    static constexpr std::chrono::milliseconds kSessionPeekWait{250};
+
     // HOW LONG A LIVE CONTROL WAITS FOR sdrplay_api_Update ITSELF.
     //
     // WHY THIS HAD TO EXIST (a third hang report, the same RSP1A, this one on
