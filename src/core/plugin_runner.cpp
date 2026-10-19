@@ -152,6 +152,9 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
     audioRateHz_ = audioRateHz;
     iqRateHz_ = iqRateHz;
     centreHz_ = centreHz;
+    // The caller read this centre from the source just now, so it is newer than any
+    // retune() that was waiting for the lock.
+    pendingCentre_.store(false, std::memory_order_relaxed);
     pollBuf_.resize(kPollBufBytes);
     // A NEW EPOCH BEFORE ANY create(), so a decoder that reads the stream
     // clock from inside its create() sees the stream it is about to be fed.
@@ -210,6 +213,9 @@ bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
     }
     if (pollBuf_.size() < kPollBufBytes) { pollBuf_.resize(kPollBufBytes); }
     chainBuf_.reserve(2u * kChainReserveFrames);
+    // A tune that arrived while the lock was busy is the receiver's real centre:
+    // the instance must be created against it, not against the one before.
+    applyPendingCentreLocked();
     // The create() calls run with the lock held, as rebuild()'s do (see there).
     buildPluginLocked(lp);
     return true;
@@ -514,6 +520,12 @@ bool PluginRunner::isFeeding(const std::string& pluginKey) const {
 void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
     if (interleaved == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
+    // A RETUNE THAT FOUND THE LOCK BUSY lands here, between two blocks and before
+    // this one's samples are handed out, so a decoder never sees half a block at
+    // each centre. Before the early return below: the centre has to move even when
+    // nothing is running, or the next instance would be created against the old one.
+    // One atomic load when there is nothing to do.
+    if (pendingCentre_.load(std::memory_order_acquire)) { applyPendingCentreLocked(); }
     // Counted whether or not anything takes these samples: the clock times
     // the STREAM, and every instance created this epoch is handed every block
     // from here on, so the count is also what each of them has received.
@@ -538,7 +550,27 @@ void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
 }
 
 void PluginRunner::retune(double centreHz) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // TRY, never wait: see the declaration. A destroy()-time re-entry arrives here
+    // with the lock dropped and takes whichever branch the DSP thread leaves it.
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        pendingCentreHz_.store(centreHz, std::memory_order_relaxed);
+        pendingCentre_.store(true, std::memory_order_release);
+        return;
+    }
+    // The lock is ours, so the DSP thread is not between its flag test and its apply:
+    // a centre left pending by an EARLIER call is older than this one and must never
+    // be applied after it.
+    pendingCentre_.store(false, std::memory_order_relaxed);
+    retuneLocked(centreHz);
+}
+
+void PluginRunner::applyPendingCentreLocked() {
+    if (!pendingCentre_.exchange(false, std::memory_order_acq_rel)) { return; }
+    retuneLocked(pendingCentreHz_.load(std::memory_order_relaxed));
+}
+
+void PluginRunner::retuneLocked(double centreHz) {
     if (centreHz == centreHz_) { return; }
     centreHz_ = centreHz;
     for (IqInstance& i : iqInstances_) {

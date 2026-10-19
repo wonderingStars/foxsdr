@@ -42,6 +42,7 @@
 #define CASCADE_CORE_PLUGIN_RUNNER_HPP
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -241,8 +242,27 @@ public:
     // wants 2 MHz of it).
     void processIq(const float* interleaved, std::size_t frames);
 
-    // DSP or control thread. The receiver moved; effective from the next
-    // process call. Cheap and safe to call when nothing has changed.
+    // The receiver moved; effective from the next process call. Cheap and safe to
+    // call when nothing has changed.
+    //
+    // NEVER WAITS FOR THE RUNNER'S LOCK. The DSP thread holds it across every I/Q
+    // decoder's process(), and with thirty decoders on a machine that cannot keep up
+    // it is inside nearly all of the time; std::mutex is not fair, so a caller that
+    // waited could lose the race for seconds (the GUI thread did, in
+    // Pipeline::resetRds, on the very next line of AppWindow::applyRetuneNow). So:
+    // retune() TRIES the lock. Got it: apply now, exactly as before. Did not: leave
+    // the centre in pendingCentreHz_ (the newest call overwrites the older, so the
+    // last tune wins) and return; the DSP thread applies it under the lock at the top
+    // of its next processIq() - which is where the ABI says retune() is called from
+    // (the DSP thread, serialised with process(), plugin_abi.h) - and
+    // startPlugin() applies it before it creates, so no instance is ever created
+    // against a centre older than the last tune.
+    //
+    // What does NOT change: the lock is still non-recursive and a plugin must still
+    // not call the host's tune service from inside create() or process() (that
+    // re-enters this lock on the thread that owns it, as it always did). Calls from
+    // destroy() are fine and unaffected: destroyInstances() drops the lock before it
+    // runs them.
     void retune(double centreHz);
 
     // ----- The stream clock (host API level 1, CascadeStreamInfo) -----------
@@ -685,6 +705,16 @@ private:
     double audioRateHz_ = 0.0;
     double iqRateHz_ = 0.0;
     double centreHz_ = 0.0;
+    // A retune() that found mutex_ busy. Value first, then the flag (release); the
+    // DSP thread exchanges the flag under mutex_ and then reads the value, so it
+    // sees the newest centre or a newer one, never an older one than it was told.
+    // Cleared by every path that sets centreHz_ itself (a direct retune, rebuild).
+    std::atomic<double> pendingCentreHz_{0.0};
+    std::atomic<bool> pendingCentre_{false};
+    // Lock held. Moves the centre and tells the I/Q instances. The body of retune().
+    void retuneLocked(double centreHz);
+    // Lock held. Applies a centre retune() left behind, if there is one.
+    void applyPendingCentreLocked();
     std::size_t audioFed_ = 0;
     std::size_t iqFed_ = 0;
 

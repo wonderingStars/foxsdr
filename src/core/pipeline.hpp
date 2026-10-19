@@ -63,8 +63,8 @@
 // Threading model (per PLAN.md): DSP blocks stay plain objects; the threads
 // and the ring live only here. The GUI never blocks on DSP — it polls
 // getLatestFrame(), which hands over at most one frame copy under a mutex.
-// Audio-chain parameter setters serialize against the DSP thread under one
-// internal mutex and take effect at the next block.
+// Audio-chain parameter setters take effect at the next block. They do NOT wait
+// for the DSP thread: see "SETTERS POST, THEY DO NOT WAIT" below.
 //
 // AND THE PARAMETER GETTERS TAKE NO LOCK AT ALL, which is not an optimisation.
 //
@@ -94,6 +94,36 @@
 // they still serialize against the DSP thread and still take effect at the next
 // block. What changes is only that READING a parameter can no longer wait for
 // one.
+//
+// SETTERS POST, THEY DO NOT WAIT. A setter cannot read an atomic: it has to
+// change the chain, and the chain is guarded by the very mutex above. Field
+// reports "hang ntdll.dll @ cascade::core::Pipeline::resetRds" (a retune from the
+// toolbar readout) and "... Pipeline::setDeemphasisUs" (a plugin preset that woke
+// ~28 decoders at once), both 0.99.81, are the GUI thread parked over five
+// seconds in a mutex wait inside a setter: processAudioBlock() holds audioMutex_
+// across every I/Q decoder plugin's process(), so with thirty decoders on a
+// machine that cannot keep up the DSP thread is inside the lock nearly all of the
+// time, and std::mutex is not fair - the DSP thread's next lock() beats the
+// waiting GUI thread's again and again.
+//
+// So a setter builds a small command (the value is captured BY VALUE), appends it
+// to cmdQueue_ under cmdMutex_ - a lock held for a vector push or swap, never for
+// DSP work - and only then TRIES audioMutex_ without waiting. If it gets it (no
+// block in flight) it applies the queue itself, in order, exactly as the old
+// blocking setter did. If it does not, the DSP thread applies the queue at the top
+// of its next block, under the lock it already holds. Either way the call returns
+// in microseconds, the change reaches the chain between two blocks (never inside
+// one: no torn parameter set), and commands apply in the order they were posted.
+//
+// What a caller can still observe: a getter read straight after a setter returns
+// the value just set for every parameter whose mirror is verbatim (offset, mode,
+// de-emphasis, the on/off switches - stored with the post). The few that the live
+// object CLAMPS (noise-reduction strength, the notch's frequency and Q) show the
+// previous value until the command has run, at most one block later when the DSP
+// thread is running; that is the same "what is actually in use" the getter has
+// always meant. NOT posted, because their contract is that the call has FINISHED
+// when it returns: the recorder pointers (a caller destroys the recorder next) and
+// the rate switch (it joins the DSP thread by design).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -336,9 +366,10 @@ public:
     double softwarePpm();
 
     // --- Audio chain control (P3) -------------------------------------------
-    // All of these are callable from any thread while the pipeline runs: they
-    // serialize against the DSP thread's per-block processing under one
-    // internal mutex and take effect at the next audio block (~0.5 ms).
+    // All of these are callable from any thread while the pipeline runs. They
+    // never wait for the DSP thread: the change is queued and applied between two
+    // audio blocks (~0.5 ms later on a machine that keeps up) - see "SETTERS POST,
+    // THEY DO NOT WAIT" at the top of this file.
 
     // Selects the demodulator (default WFM). Also resets the AGC: a mode
     // switch changes the audio level regime, and carrying the old gain over
@@ -510,7 +541,7 @@ public:
     // sink (see audio_ below) and touches nothing else of this object.
     //
     // WHAT IT DELIBERATELY LEAVES OUT is the channel mirror. audioChannels_ is
-    // read by the DSP thread under audioMutex_ and belongs to this object, not
+    // read by the DSP thread once per block and belongs to this object, not
     // to the worker, so the caller republishes it with publishAudioChannels()
     // on the frame it collects the result. The cost of that deferral is at
     // most one audio block pushed in the previous layout during a device
@@ -521,7 +552,8 @@ public:
     // Mirrors the sink's current channel layout for the DSP thread. Called
     // from the GUI thread when an asynchronous open completes; `ok` false
     // means the open failed and the layout falls back to mono, exactly as the
-    // synchronous path does.
+    // synchronous path does. One atomic store - no lock, so it cannot queue the
+    // frame that collects the open behind a DSP block.
     void publishAudioChannels(bool ok);
 
     // --- Runtime input-rate follow (rate-follow) ------------------------------
@@ -631,6 +663,12 @@ public:
     // a sleep it guessed at. Never called by the application.
     enum class LockForTest { Audio, Control };
     void holdLockForTest(LockForTest which, int holdMs, std::atomic<bool>* acquired);
+    // True while a posted setter change has not yet run (see "SETTERS POST, THEY DO
+    // NOT WAIT"). A test that held the lock and posted through it waits for this to
+    // fall before it reads the chain's own, clamped figures back.
+    bool commandsPendingForTest() const {
+        return cmdPending_.load(std::memory_order_acquire);
+    }
     // Total audio samples produced by the chain, counted BEFORE
     // AudioOut::write so the count advances with or without a device.
     std::uint64_t audioSamplesProduced() const;
@@ -825,6 +863,23 @@ private:
     // it at the one line that commits the new rate.
     void publishParamMirrorsLocked();
 
+    // --- Setters post, they do not wait (see the header comment) -------------
+    // A change to the audio chain: runs under audioMutex_, on whichever thread
+    // holds it, against the LIVE objects at that moment - so it captures values,
+    // never pointers into the chain (the chain can be rebuilt between the post
+    // and the run).
+    using Command = std::function<void()>;
+    // Queues `apply`, runs `mirrorNow` (optional: stores the VERBATIM mirror
+    // values so a getter read right after the setter returns sees the new value),
+    // then applies the whole queue itself if audioMutex_ is free, and otherwise
+    // leaves it to the DSP thread's next block. Never waits for audioMutex_.
+    void post(Command apply, Command mirrorNow = {});
+    // Caller holds audioMutex_. Runs everything queued, in order, until the queue
+    // is empty, then publishes the mirrors from the live objects - under
+    // cmdMutex_ and only on an empty queue, so a later post's verbatim mirror
+    // cannot be overwritten by an older value from the live chain.
+    void drainCommandsLocked();
+
     Config cfg_;
     // Built-in generator source: always alive (a member, not a unique_ptr)
     // so setSource(nullptr) can restore it without allocation or failure.
@@ -871,6 +926,18 @@ private:
     // setters/getters above. One mutex, never held together with frameMutex_
     // or controlMutex_ on the DSP thread, so no ordering to get wrong.
     mutable std::mutex audioMutex_;
+    // THE SETTERS' QUEUE. cmdMutex_ guards cmdQueue_ and nothing else, and is held
+    // only for a push, a swap or a mirror store - never across a DSP block and
+    // never while waiting for another lock. LOCK ORDER: controlMutex_ ->
+    // audioMutex_ -> cmdMutex_ (the DSP thread's drain), and a setter takes
+    // cmdMutex_ and then only TRIES audioMutex_ (never waits), so the reverse
+    // direction cannot deadlock. cmdScratch_ is the drain's working vector, kept
+    // so the DSP thread swaps buffers instead of allocating; guarded by
+    // audioMutex_.
+    std::mutex cmdMutex_;
+    std::vector<Command> cmdQueue_;
+    std::vector<Command> cmdScratch_;
+    std::atomic<bool> cmdPending_{false};
     // Rate-dependent chain parameters, all guarded by audioMutex_ alongside
     // the blocks they configure. vfoDecim_ is the CURRENT decimation (the
     // header constant it replaced assumed a fixed 2 MS/s input). The two
@@ -940,9 +1007,11 @@ private:
 
     std::shared_ptr<cascade::sink::AudioOut> audio_;  // device opened only
                                                       // when cfg_.audioEnabled
-    // Channel layout the sink was last opened with (1 or 2), mirrored under
-    // audioMutex_ so the DSP thread never races a GUI device switch.
-    int audioChannels_ = 1;
+    // Channel layout the sink was last opened with (1 or 2), mirrored for the DSP
+    // thread so it never races a GUI device switch. Atomic rather than under
+    // audioMutex_: the GUI publishes it on the frame an async open completes, and
+    // a lock there queued that frame behind a DSP block.
+    std::atomic<int> audioChannels_{1};
     // FM discriminator scale: rad/sample -> ~0.5 full scale at +/-75 kHz
     // deviation (see pipeline.cpp for the derivation).
     float fmScale_ = 1.0f;

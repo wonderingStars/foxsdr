@@ -371,6 +371,45 @@ void Pipeline::publishParamMirrorsLocked() {
     }
 }
 
+void Pipeline::post(Command apply, Command mirrorNow) {
+    {
+        std::lock_guard<std::mutex> ql(cmdMutex_);
+        // Under cmdMutex_, so the order of two posts' mirrors is the order of their
+        // commands, and drainCommandsLocked() cannot publish between this store and
+        // the push below.
+        if (mirrorNow) { mirrorNow(); }
+        cmdQueue_.push_back(std::move(apply));
+        cmdPending_.store(true, std::memory_order_release);
+    }
+    // TRY, never wait: this is the whole point (see the header comment). Failing
+    // means a DSP block - or another control thread - is inside the lock, and the
+    // block that follows it applies the queue. A command can be left behind only
+    // when the lock holder was past its last look at the queue, which is another
+    // thread's setter finishing; it is applied by the next block, the next setter
+    // or start(), whichever comes first.
+    std::unique_lock<std::mutex> al(audioMutex_, std::try_to_lock);
+    if (al.owns_lock()) { drainCommandsLocked(); }
+}
+
+void Pipeline::drainCommandsLocked() {
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> ql(cmdMutex_);
+            if (cmdQueue_.empty()) {
+                cmdPending_.store(false, std::memory_order_relaxed);
+                // Every posted change has run, so the live objects ARE the latest
+                // value of everything: the one moment their clamped/derived figures
+                // are the right ones to publish.
+                publishParamMirrorsLocked();
+                return;
+            }
+            cmdScratch_.swap(cmdQueue_);
+        }
+        for (Command& c : cmdScratch_) { c(); }
+        cmdScratch_.clear();  // keeps the capacity for the next swap
+    }
+}
+
 void Pipeline::holdLockForTest(LockForTest which, int holdMs, std::atomic<bool>* acquired) {
     // THE ONE PLACE THIS FILE DELIBERATELY BLOCKS. See the declaration: it
     // exists so a test can hold the mutex the DSP thread holds across a block
@@ -476,8 +515,7 @@ std::function<bool(int)> Pipeline::audioOpener() {
 }
 
 void Pipeline::publishAudioChannels(bool ok) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    audioChannels_ = ok ? audio_->channels() : 1;
+    audioChannels_.store(ok ? audio_->channels() : 1, std::memory_order_relaxed);
 }
 
 Pipeline::~Pipeline() {
@@ -753,6 +791,10 @@ void Pipeline::start() {
     // (mode, offset, bandwidth, threshold) survives the restart.
     {
         std::lock_guard<std::mutex> alk(audioMutex_);
+        // Changes posted while a block (or another control call) held the lock and
+        // no DSP thread has run since: apply them before the fresh-acquisition
+        // reset below so the stream starts on the settings the user last chose.
+        drainCommandsLocked();
         vfo_.reset();
         demod_.reset();
         agc_.reset();
@@ -913,17 +955,20 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
 }
 
 void Pipeline::setDeemphasisUs(double us) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    deemphasisUs_ = us;
-    // BOTH owners, every time. The STEREO decoder owns WFM de-emphasis, for
-    // both stereo and mono output (header: "WFM DE-EMPHASIS OWNERSHIP"), and
-    // in WFM the helper below keeps demod_ flat so the composite reaching RDS
-    // keeps its 57 kHz subcarrier. In every other mode StereoFm is not in the
-    // audio path at all, so this line alone was the whole of the setter and
-    // NFM never de-emphasised: the missing half is the helper.
-    stereo_->setDeemphasisUs(us);
-    applyDemodDeemphasisLocked();
-    publishParamMirrorsLocked();
+    post(
+        [this, us] {
+            deemphasisUs_ = us;
+            // BOTH owners, every time. The STEREO decoder owns WFM de-emphasis,
+            // for both stereo and mono output (header: "WFM DE-EMPHASIS
+            // OWNERSHIP"), and in WFM the helper below keeps demod_ flat so the
+            // composite reaching RDS keeps its 57 kHz subcarrier. In every other
+            // mode StereoFm is not in the audio path at all, so this line alone
+            // was the whole of the setter and NFM never de-emphasised: the
+            // missing half is the helper.
+            stereo_->setDeemphasisUs(us);
+            applyDemodDeemphasisLocked();
+        },
+        [this, us] { mirrorDeemphasisUs_.store(us, std::memory_order_relaxed); });
 }
 
 double Pipeline::deemphasisUs() const {
@@ -931,35 +976,40 @@ double Pipeline::deemphasisUs() const {
 }
 
 void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    if (demod_.mode() == m) { return; }  // idempotent: no gratuitous reset
-    demod_.setMode(m);  // resets the demod's internal state (its contract)
-    // The new mode decides who de-emphasises: off in WFM (StereoFm's job, see
-    // the header), the user's constant everywhere else. Re-applied here rather
-    // than assumed, because setMode does not preserve the setting — and
-    // because leaving it at the bare "off" this line used to be is exactly
-    // what made the De-emph control inert on every mode but WFM.
-    applyDemodDeemphasisLocked();
-    // ...and it decides what the bandwidth MEANS: the whole symmetric channel
-    // in AM, the width of one sideband in USB/LSB/CW. A caller that sets the
-    // mode and never the bandwidth (a browser, a plugin) must not be left with
-    // the previous mode's channel filter.
-    applyChannelBandwidthLocked();
-    agc_.reset();       // new level regime: relearn the gain from neutral
-    // Leaving WFM abandons the composite the decoders were tracking, and
-    // coming back to it is a fresh acquisition either way.
-    resetDecodersLocked();
-    publishParamMirrorsLocked();
+    post(
+        [this, m] {
+            if (demod_.mode() == m) { return; }  // idempotent: no gratuitous reset
+            demod_.setMode(m);  // resets the demod's internal state (its contract)
+            // The new mode decides who de-emphasises: off in WFM (StereoFm's job,
+            // see the header), the user's constant everywhere else. Re-applied
+            // here rather than assumed, because setMode does not preserve the
+            // setting — and because leaving it at the bare "off" this line used
+            // to be is exactly what made the De-emph control inert on every mode
+            // but WFM.
+            applyDemodDeemphasisLocked();
+            // ...and it decides what the bandwidth MEANS: the whole symmetric
+            // channel in AM, the width of one sideband in USB/LSB/CW. A caller
+            // that sets the mode and never the bandwidth (a browser, a plugin)
+            // must not be left with the previous mode's channel filter.
+            applyChannelBandwidthLocked();
+            agc_.reset();  // new level regime: relearn the gain from neutral
+            // Leaving WFM abandons the composite the decoders were tracking, and
+            // coming back to it is a fresh acquisition either way.
+            resetDecodersLocked();
+        },
+        [this, m] { mirrorDemodMode_.store(static_cast<int>(m), std::memory_order_relaxed); });
 }
 
 void Pipeline::setStereoEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    stereoEnabled_ = on;
-    // Through StereoFm's own ramped gate, so the toggle fades between mono
-    // and stereo instead of stepping — a step in the difference channel is an
-    // audible click in both speakers.
-    stereo_->setForceMono(!on);
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            stereoEnabled_ = on;
+            // Through StereoFm's own ramped gate, so the toggle fades between mono
+            // and stereo instead of stepping — a step in the difference channel is
+            // an audible click in both speakers.
+            stereo_->setForceMono(!on);
+        },
+        [this, on] { mirrorStereoEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::stereoEnabled() const {
@@ -984,15 +1034,21 @@ RdsSnapshot Pipeline::rdsSnapshot() const {
 }
 
 void Pipeline::resetRds() {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    resetDecodersLocked();
+    // Posted like every other setter: this one is called on every hardware retune
+    // (AppWindow::applyRetuneNow), so it is the call a user's hand on the
+    // frequency readout reaches most. The decoded content it clears is the
+    // previous station's; it goes between two blocks instead of mid-block, and
+    // rdsSnapshot() shows the old name for at most one block longer.
+    post([this] { resetDecodersLocked(); });
 }
 
 void Pipeline::setNoiseReductionEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    nrL_->setEnabled(on);
-    nrR_->setEnabled(on);
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            nrL_->setEnabled(on);
+            nrR_->setEnabled(on);
+        },
+        [this, on] { mirrorNrEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::noiseReductionEnabled() const {
@@ -1000,10 +1056,12 @@ bool Pipeline::noiseReductionEnabled() const {
 }
 
 void Pipeline::setNoiseReductionStrength(float s01) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    nrL_->setStrength(s01);
-    nrR_->setStrength(s01);
-    publishParamMirrorsLocked();
+    // No verbatim mirror: the block clamps the request, and the getter reports
+    // what is in use (published when the command has run).
+    post([this, s01] {
+        nrL_->setStrength(s01);
+        nrR_->setStrength(s01);
+    });
 }
 
 float Pipeline::noiseReductionStrength() const {
@@ -1011,16 +1069,18 @@ float Pipeline::noiseReductionStrength() const {
 }
 
 void Pipeline::setNotchEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    // Clear the biquad memory on the way in: a notch re-enabled with the
-    // charge it held when it was switched off thumps.
-    if (on && !notchL_->isEnabled()) {
-        notchL_->reset();
-        notchR_->reset();
-    }
-    notchL_->setEnabled(on);
-    notchR_->setEnabled(on);
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            // Clear the biquad memory on the way in: a notch re-enabled with the
+            // charge it held when it was switched off thumps.
+            if (on && !notchL_->isEnabled()) {
+                notchL_->reset();
+                notchR_->reset();
+            }
+            notchL_->setEnabled(on);
+            notchR_->setEnabled(on);
+        },
+        [this, on] { mirrorNotchEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::notchEnabled() const {
@@ -1028,10 +1088,10 @@ bool Pipeline::notchEnabled() const {
 }
 
 void Pipeline::setNotchFrequencyHz(double hz) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    notchL_->setFrequencyHz(hz);
-    notchR_->setFrequencyHz(hz);
-    publishParamMirrorsLocked();
+    post([this, hz] {
+        notchL_->setFrequencyHz(hz);
+        notchR_->setFrequencyHz(hz);
+    });
 }
 
 double Pipeline::notchFrequencyHz() const {
@@ -1039,12 +1099,12 @@ double Pipeline::notchFrequencyHz() const {
 }
 
 void Pipeline::setNotchQ(double q) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    notchL_->setQ(q);
-    notchR_->setQ(q);
-    autoNotchL_->setQ(q);
-    autoNotchR_->setQ(q);
-    publishParamMirrorsLocked();
+    post([this, q] {
+        notchL_->setQ(q);
+        notchR_->setQ(q);
+        autoNotchL_->setQ(q);
+        autoNotchR_->setQ(q);
+    });
 }
 
 double Pipeline::notchQ() const {
@@ -1052,17 +1112,19 @@ double Pipeline::notchQ() const {
 }
 
 void Pipeline::setAutoNotchEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    if (on && !autoNotchL_->isEnabled()) {
-        autoNotchL_->reset();
-        autoNotchR_->reset();
-    }
-    autoNotchL_->setEnabled(on);
-    autoNotchR_->setEnabled(on);
-    if (!on) {
-        autoNotchEngaged_.store(false, std::memory_order_relaxed);
-    }
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            if (on && !autoNotchL_->isEnabled()) {
+                autoNotchL_->reset();
+                autoNotchR_->reset();
+            }
+            autoNotchL_->setEnabled(on);
+            autoNotchR_->setEnabled(on);
+            if (!on) {
+                autoNotchEngaged_.store(false, std::memory_order_relaxed);
+            }
+        },
+        [this, on] { mirrorAutoNotchEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::autoNotchEnabled() const {
@@ -1083,14 +1145,19 @@ cascade::dsp::DemodMode Pipeline::demodMode() const {
 }
 
 void Pipeline::setVfoOffsetHz(double offsetHz) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
-    vfo_.setOffsetHz(offsetHz);
-    // A retune is a different station: the RDS content and the pilot lock
-    // that belonged to the old one must not survive it. (The SOURCE centre
-    // moving is invisible from here — that caller has to call resetRds().)
-    resetDecodersLocked();
-    publishParamMirrorsLocked();
+    // The verbatim mirror matters most here: the tuned frequency the GUI shows and
+    // tunes from is the source centre plus this offset, read straight after the
+    // setter returns (AppWindow::tuneAbsoluteHz and the slider both do).
+    post(
+        [this, offsetHz] {
+            if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            vfo_.setOffsetHz(offsetHz);
+            // A retune is a different station: the RDS content and the pilot lock
+            // that belonged to the old one must not survive it. (The SOURCE centre
+            // moving is invisible from here — that caller has to call resetRds().)
+            resetDecodersLocked();
+        },
+        [this, offsetHz] { mirrorVfoOffsetHz_.store(offsetHz, std::memory_order_relaxed); });
 }
 
 double Pipeline::vfoOffsetHz() const {
@@ -1098,19 +1165,24 @@ double Pipeline::vfoOffsetHz() const {
 }
 
 void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    // The raw request is remembered separately from the Vfo's clamped value
-    // so a later rate switch can re-apply the caller's intent, re-clamped for
-    // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
-    vfoBandwidthHz_ = bandwidthHz;
-    applyChannelBandwidthLocked();
-    publishParamMirrorsLocked();
+    // The filter redesign this runs is the heaviest thing any setter does; it now
+    // happens on the DSP thread between two blocks instead of on the GUI thread
+    // with the DSP thread parked behind it, which is the same stall moved off the
+    // frame.
+    post([this, bandwidthHz] {
+        // The raw request is remembered separately from the Vfo's clamped value
+        // so a later rate switch can re-apply the caller's intent, re-clamped for
+        // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
+        vfoBandwidthHz_ = bandwidthHz;
+        applyChannelBandwidthLocked();
+    });
 }
 
 void Pipeline::setSquelchDb(float thresholdDb) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    squelchDb_ = thresholdDb;  // remembered for rate-switch rebuilds
-    squelch_.setThresholdDb(thresholdDb);
+    post([this, thresholdDb] {
+        squelchDb_ = thresholdDb;  // remembered for rate-switch rebuilds
+        squelch_.setThresholdDb(thresholdDb);
+    });
 }
 
 float Pipeline::signalPowerDb() const {
@@ -1229,6 +1301,9 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // same acquisition order start() uses, and the DSP thread never takes
         // controlMutex_, so the ordering cannot deadlock.
         std::lock_guard<std::mutex> alk(audioMutex_);
+        // The rebuild below preserves the tuning, mode and bandwidth it reads from
+        // the live objects, so anything still queued is applied first.
+        drainCommandsLocked();
 
         // Preserve caller-visible tuning across the rebuild.
         const double offset = vfo_.offsetHz();
@@ -1697,6 +1772,10 @@ void Pipeline::dspThreadBody() {
 void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     std::lock_guard<std::mutex> lk(audioMutex_);
 
+    // THE SETTERS' QUEUE, between two blocks and nowhere else: a parameter set
+    // never lands halfway through one. One atomic load when nothing was posted.
+    if (cmdPending_.load(std::memory_order_acquire)) { drainCommandsLocked(); }
+
     // IQ recorder tap (P6): the drained block RAW, before any channel
     // processing — "record baseband at the input rate" is exactly the ring's
     // samples. Every sample the DSP thread consumes passes through here, so
@@ -2159,7 +2238,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // this copy very slightly (sink/drift_matcher.hpp has the tester report
     // and the bench measurement), so a lead lost to a hiccup is rebuilt
     // instead of staying lost until the ring runs dry.
-    const std::size_t chan = audioChannels_ == 2 ? 2 : 1;
+    const std::size_t chan = audioChannels_.load(std::memory_order_relaxed) == 2 ? 2 : 1;
     // The target is the SINK's (its lead plus 40 ms), read here on every block:
     // the lead is raised from the window's thread while this one runs, and a
     // matcher still steering to 160 ms would bleed a deeper lead back down.
