@@ -1090,6 +1090,248 @@ events, so a replay of a command's answer reads through the window's own look an
 and a sweep for widgets skips the title bar (a spot with y under 26), where the window's collapse
 arrow swallows the click and folds it.
 
+GROUP 9, the fitted-modules window (drawFittedModulesWindow, with `fittedLists`, the helper the window
+gained - one member in app_window.cpp): API 0.3 section 8.8, FoxReceiverState unchanged at 1400
+bytes. This is the window the rail's FITTED MODULES key opens: one plate for each plugin file the host
+holds, with its state, its keys, and everything the module and the host have to say about it. The brief
+placed the member's end at about line 12626; it ends at 12551 (the lines after it are the plugin
+panels' table drawer and a legend helper, which read no engine field). The window's own survey,
+written before the first edit, found 14 counted field reads of 9 distinct fields, one method call
+(`pluginIsStopped`, which the guard does not count) and seven `submitCommand` calls, plus one read the
+guard cannot see: a `std::filesystem::file_size` of every module file, every frame the window was open.
+Every one of the seven commands was an op the window already sent (the plugin rescan, the decoder
+start and stop, the store's remove, the plugin grant with `ival[0]` 1 and 2, and the plugin command),
+so no op is added. Step A put the table's side in place, step B the window's.
+
+What moved into the table (step A; docs/api-0.3-additions.md section 8.8, and nothing in
+FoxReceiverState, no op and no struct changed):
+- the per-file FACTS: `fact.plugin.dir` and `fact.plugin.<file>.path` (both LOCAL: a remote session
+  is DENIED the two paths and nothing else), and `.version`, `.author`, `.licence`, `.error`, `.idle`,
+  `.notice` and `.integrity`. They are facts and not columns because the window quotes the module and
+  the host and does not paraphrase them, and a list item's `detail` cuts at 159 bytes where a module's
+  warning is 512 and the install record's finding about 220. Every key is present for every record
+  the host holds, so a known file with nothing to say answers `""` (length 0) and a file nobody holds
+  answers NOT_FOUND; the engine has no key-parsing code (they are plain map entries,
+  `plugin.<file>.<leaf>`), and "parse the leaf from the right", for a file name with dots in it, is
+  advice in 8.8 to an interface that is handed a key;
+- PLUGINS `value[1]` (the file's size in bytes, measured by the ENGINE when the block is built, 0 when
+  the stat failed) and `value[2]` (the level of the module's newest WARN or ERROR: 0, 2 or 3), and
+  three item flags: MATCHED 0x40000 (the runner's `isFeeding` answer, for any kind of plugin and
+  whether or not the receiver runs: DECODERS' FED is MATCHED plus running), ASKED_SETTINGS 0x80000
+  (the module has asked, at least once, for something only the settings grant allows) and
+  DIGEST_MISMATCH 0x100000 (the install record says the file's bytes are no longer the ones verified
+  at install). The vendored header gains FOXAPI_LIST_PLUGIN_COMMANDS 38 and the flags, and its
+  SHA-256 in third_party/foxsdr_api/README.md and THIRD_PARTY.md is updated;
+- PLUGIN_COMMANDS (38), the command keys the loaded modules have added: id = the command id, name =
+  the label, detail = the module file, in PLUGINS order and each module's keys in the order added;
+  not LOCAL-only;
+- the install outcome as two STATUS_LINES keys, `installReport` (level 1) and `installError` (level
+  3), with `fact.status.*`, the fingerprint and the engine's handed-over copy of the lines (the test
+  hook's `test.statusLine` takes both keys; test_config_snapshot_app's hand-over now covers 19 lines,
+  nothing weakened). A removal puts the new sentence and the removed row into the same publish.
+THE FINGERPRINT, and what it costs. Everything new is in the list fingerprint, hashed in place from
+the cached module keys: a module's notice by level and text (found by `pluginNotices_.find(key)`),
+size, descriptor strings and refusal, the plugins folder, MATCHED for every kind of plugin, the
+install records (file, id, digest verdict), a scan count (`Engine::pluginScans_`, one a rescan), and
+three counters: `PluginRunner::statusGeneration()`, bumped wherever the runner's status rows are
+written, and `PluginApiCore::commandsSeq()` and `settingsRequestersSeq()` (commands added, relabelled
+or removed, not the same key said again; a module's first ask for a setting). Two atomics and no
+accessor that builds a vector or copies every row per call. The block, the facts and the one `file_size` stat a record are built only when
+the fingerprint moves. Measured (tests/test_engine_publish_alloc case F3, three real modules and a
+refused file, a notice, a settings ask and command keys): 40 fingerprints, 40 unchanged `publishLists`
+passes and 40 full publishes each allocate 0; a change rebuilds the block once at 307 to 316
+allocations (147 after a rescan) and 40 settled passes after it allocate 0; 25 repeated identical
+WARNs leave the fingerprint equal. `pluginNotices_` is now written only when the level or the text
+differs from what is stored, which changes no result (the fingerprint hashes both) but spares the
+churn.
+
+A BUG FOUND ON THE WAY, the second of the kind (F7): a plugin's own `log()` lines were not counted in
+`decoderLinesTotal`. Group 8 found the same of the track-info provider's lines and counted those; this
+is a second writer of the same log, in `Engine::applyPluginApi`. The DECODER_LINES ring takes "the
+lines the count says are new", and the window reads it only when the total moves, so a plugin's INFO,
+WARN or ERROR line never reached the Decoder output window that draws from the ring, and the ring
+numbered and sliced the lines around it wrongly. RED, test H0 in tests/test_engine_api_03.cpp, before
+the fix: `test_engine_api_03: 1409 checks passed, 20 failed`, the first `FAIL ...test_engine_api_03.cpp:3131:
+s.state().decoderLinesTotal == base + 1u  (0 vs 1)`, with DECODER_LINES showing 0 entries where 1 was
+expected. Fix: `++decoderLinesTotal_` for each line actually pushed (a log with several lines counts
+several, an empty part counts none). GREEN: 1429 checks, 0 failed.
+
+THE TESTS and the break-it checks of step A. tests/fixture_group9_plugin.cpp is new (registered for
+test_engine_api_03 and test_engine_publish_alloc; an audio-processor-only module with two command keys
+and a version, an author and a licence of its own; FOXSDR_FIXTURE_G9_NO_CREATE makes its `create()`
+fail so the runner has an idle sentence to say), and group H of test_engine_api_03 (H0 to H5) holds the
+facts, the flags, the commands, the two lines and the timing; the two "every list is served" loops now
+run to PLUGIN_COMMANDS and PluginWorld gained optional parameters for the third fixture and for a copy
+under a dotted name. Thirteen mutants, each red: the notice text, the notice level, the runner's
+generation, the commands generation, the askers generation, the install records and the scan count
+each left out of the fingerprint; matched keys hashed only while the receiver runs; the path fact not
+LOCAL; MATCHED gated by the receiver running; the size not stat-ed; a relabel and a first ask not
+bumping their counters. One of them - the scan count left out - was NOT killed at first, because a
+rescan always rewrites the runner's rows and something else moves the fingerprint with it; a test now
+bumps `pluginScans_` alone and fails that mutant. Not isolated by a mutant: the descriptor strings and
+the error, which are hashed beside the scan count and change only across a rescan, so they are
+redundant with it by construction. The suite ran 251/251 on the first and on the last run of step A;
+test_engine_api_transmit failed once in a parallel run on its timing assertions (`plain < 150`,
+`longest < 100`, `keyed(a)`) and passed three of three solo, at the 100 s its baseline takes, and in
+the rerun of the whole suite.
+
+Where step A DIVERGED from the survey, and the section says so: (1) ASKED_SETTINGS never clears. The
+survey wrote "sticky until the next rescan"; the code (`PluginApiClient::askedSettings`) only ever
+stores true and the clients live as long as the core, so the flag survives a stop, a grant and its
+revocation, and a rescan too. Documented in 8.8, held by a test. (2) The idle fact takes the FIRST
+non-Running row of the module, as the window does; DECODERS' detail still takes the LAST, as it did.
+(3) Matched keys are hashed whether or not the receiver runs (before, only while it did). There is no
+second runner lock for it: the pass already takes `feedSnapshot` while stopped. (4) More inputs went
+into the fingerprint than the survey listed: the runner's status generation and the scan count stand
+where it had counted on allocation-free accessors over the runner's rows, and the folder, the
+descriptor strings and the refusal, and the install records' file, id and verdict are hashed as well. (5) A side benefit: DECODERS' detail can no longer go stale when
+an idle sentence changes while the matched set stays the same.
+
+The pattern held, with these additions to it (step B):
+- THE FITTED CACHE, `fittedLists()` (gui/plugins_view.hpp: `FittedRow`, `fillFittedModule`,
+  `makeFittedModuleFromRow`, `FittedListCache`): PLUGINS, eight facts for each module (read with
+  `readFactText` inside the refresh, as `pluginLists` does, and not through `uiFact`) and
+  PLUGIN_COMMANDS, read again ONLY when listSeq moves, into the model the panel draws. The receiver's
+  run state (`FOXAPI_RX_RUNNING` from `uiState_`) and the install sentence are set on every call, not
+  on the refresh, because neither is a list's. The old `makeFittedModule` is KEPT and
+  tests/test_plugins_view.cpp is untouched and passes: test A of the new test builds the model both
+  ways, from the table and the way the window built it from the engine, in eight states over four
+  modules (32 comparisons), and requires them equal field for field. The window's open flag, its
+  rectangle and its deck stay the window's own;
+- the green and red lines come from the `statusLines_` copy, drawn only in a frame in which the store
+  window drew nothing (the rule stays at the top of drawPluginWindows: store first, then this one);
+- all seven commands go through `uiSubmit`, so the Remove's two presses arm on the file name (an armed
+  Remove survives a Rescan) and the grant, the Stop and Start keys and a plugin's own keys land at the
+  engine's next pass, like every ported control's.
+
+Ratchet: 105 fields / 499 reads -> 104 / 485 (the 14 counted reads of the member; the survey predicted
+it before the first edit and the guard prints `the window reads 104 engine fields directly, 485 times
+(budget 104 fields, 485 reads)`), the budgets exactly the printed counts. One field left: `pluginNotices_`.
+Eight of the nine the member read stay because unported members read them (`pipeline_`, `pluginRunner_`,
+`pluginHost_`, `pluginUi_`, `pluginDir_`, `pluginInventory_`, `installReport_`, `installError_`);
+`installReport_` and `installError_` also stay in the count because the plugin store's model
+(`buildPluginStoreModel`, group 10) still reads them, and the entry in `kPublishedOnly` says so.
+drawFittedModulesWindow and fittedLists join `kPortedMembers`. The floor `submitsInDraw >= 40`, which
+the survey flagged because a ported window sends its commands through `uiSubmit` and the guard counts
+`submitCommand` calls, is now `>= 38`, the printed `38 submitCommand calls in draw members`. Four
+`kReadOnly` entries lost their last caller (grep found none left in src/gui) and are retired:
+`pluginRunner_.isFeeding`, `pluginUi_.api().commands`, `pluginUi_.api().settingsRequesters` and
+`pluginUi_.settingsAllowed`; `pluginRunner_.status`, `pluginHost_.plugins` and `pluginUi_.tuneAllowed`
+still have callers and stay. The guard goes red on a single `engine_.` read put back into the ported
+member (mutant G1, `const std::string mutantDir = engine_.pluginDir_;` in a scratch copy of src:
+"AppWindow::drawFittedModulesWindow is PORTED (draws from its engine API session only) but reaches the
+engine directly at app_window.cpp:12416", and 104 fields / 486 reads against the budget of 485); the
+real tree runs clean.
+
+tests/test_fitted_modules_window.cpp (new; loads the stage-1, group 8 and group 9 fixtures; 915
+checks, 0 failed, about 15 s, driving the real AppWindow): A, the model equal to the old window's in
+eight states; B, the modules, the size, the descriptor, the command keys, MATCHED with the receiver
+stopped (the plate says "starting the receiver is all this needs"), a refused file, and the install
+sentence suppressed when the store drew it; C, the cache and the allocation measurements (below); D,
+every widget swept and clicked for a loaded module's plate and a refused file's, with exactly Rescan,
+the Stop keys, the module's grants and its command keys sent and Remove arming once; E, Stop, Start,
+both grants, a command key, Rescan and Remove (two presses) driven through clicks, each showing nothing
+in the click's frame and the engine's value the frame after the pass, and Remove removing the row and
+showing "Removed zz_second_refused.dll" in the same frame. Two mutants on the cache: refreshing on every
+call fails 5 checks in C, and dropping the install report fails the Remove check in E (the real file
+restored and rebuilt after each). The full suite: `ctest -C Release -j 8`, 252/252 in 202 s (251 and
+the new one), no flake that time.
+
+Measured, this desktop, Release (C of the new test): 1000 reads of an unchanged state allocate 0, also
+with an install sentence showing; the old window's model, built the old way every frame, took 64
+allocations a frame and a stat of each file. A rebuild (four files, eight facts each, and the keys list)
+takes 42 allocations the first time and 40 on average over 100 refreshes, once for each listSeq move
+however often it is asked; how many of them are inside the table's `get_setting` was not separated.
+1000 decoder lines, one a pass, leave listSeq and the cache's refresh count unchanged (group 8's D3 holds
+here). A chatty plugin saying the same warning 1000 passes running moves listSeq by 1 and rebuilds once;
+one that says a DIFFERENT warning every pass rebuilds 1000 times, at about 0.078 ms a pass including the
+engine's pass and publish (step A's design allows it, and says so). With the window shut, 50 list moves
+cause 0 rebuilds, and opening it causes 1.
+
+What the operator sees. From step B: everything drawn as before, with the one-pass lag every ported
+control has; a file's size is measured by the engine when the list rebuilds and no longer stat-ed every
+frame, so a file that grows behind the engine's back shows the new size at the next listSeq move; a
+module that repeats the same warning moves nothing and a different text does; the display name now
+arrives through the list item, which cuts at 95 bytes where the old window drew it whole (whether any
+real descriptor name is that long was not checked); `stopped` now means "loaded and stopped", where the
+old value could be true for a refused file, and the window reads it only after `loaded`, so nothing
+visible differs. From step A, by the code and not by the capture (the fixtures log nothing): a plugin's
+own log lines reach the Decoder output window again, which draws from the ring since group 8. From the
+capture, below: nothing else, in the four states and the frames looked at. Drawn by the build before
+this group and by this one - the application's own framebuffer capture in bounded runs, four runs of
+each build in each of four states, the window 1502x1405 as the capture measures it (1500x1380
+requested), FOXSDR_SINGLE_VIEWPORT=1, the two fixture modules of stages 1 and 8 fitted under
+`aa_stage_one.dll` and `bb_group_eight.dll` in a plugins folder beside a scratch copy of each exe (the
+same folder for both builds, because the window prints the path), the receiver stopped, no radio
+visible to the process (SOAPY_SDR_PLUGIN_PATH removed from its environment), each run on its own copy
+of the config (CASCADE_CONFIG_TEST) and bounded by `--frames` (build\g9-vis-final.txt is the table,
+runone.py, campaign9.py and compare9.py in the session's scratch, under g9-vis). The states: the window
+open with both modules fitted and the first plate selected (the receiver-stopped notice, two rows, the
+stage-one module's plate); the same with the stage-one module in `pluginsStopped` ("STOPPED BY YOU",
+a START key where there was a STOP key, "fitted, stopped"); a refused file (an invalid
+`zz_refused.dll` beside the two) with its row pressed through FOXSDR_INPUT_SCRIPT, so the plate reads
+"nothing was read out of this file", why it is not running and the REMOVE MODULE key; and the install
+sentence (the same, with Remove pressed twice: the file goes, the row goes, the green line "Removed
+zz_refused.dll" shows under the folder and everything below it moves down 30 pixels). The window's open flag is
+cleared at start-up by `startupState` (nothing in a config opens it, as the member's own comment says),
+so the capture opens it with the member's own seam, FOXSDR_OPEN_FITTED_MODULES, which both builds have,
+and seeds only the rectangle (fittedModulesX, Y, Width, Height = 20, 40, 1060, 1300). Areas: 16 for
+the open and the stopped state, 20 for the refused one and 17 for the install sentence, then the whole
+fitted window (1 378 000 pixels) and the main window outside it (732 310): the title bar, the
+FITTED MODULES plate, the header with its two keys and the five counts, the receiver-stopped notice,
+the folder line, the sentence, the five filter keys, each module's row, the empty well under them, the
+detail column's cards (identity, what it reaches, what it is doing and, for the refused file, why it
+is not running and the Remove key with its hint), the scroll strip, and the cabinet's three rails.
+At tolerance 24, 0 pixels differ in every area of every state, between the two builds (16
+control-against-port pairs a state) AND between two runs of one build (6 control-against-control and 6
+port-against-port pairs). At tolerance 0 the result is the same: 0 pixels in every area, every pair, and
+0 in the whole window beyond the named areas, so there is no noise to bound at these frames. The
+gesture's outcome was the same in all eight runs of each of the two states that press anything (the
+refused plate up; the file removed, with the sentence showing), so no run was set aside. Because that
+is a table of zeros, three checks that it is not a comparator that cannot see: it reports 5 862 pixels
+at tolerance 24 (20 176 at tolerance 0) in "what it is doing" for the open state against the stopped
+state of one build, and counts a +30 and a +10 poke on single pixels as 1 pixel at tolerance 24 and 2
+at tolerance 0; the framebuffer differs from frame to frame inside a build (frame 77 of the install
+state, where the row goes, differs from frame 76 by 176 628 pixels at tolerance 24); and, in
+two more runs of each build with a shot at each of 16 frames - the window's first frames (1, 2, 3, 4, 5,
+6, 8 and 12) and the ones around the second press of Remove (75, 76, 77, 78, 79, 80, 82 and 86) - every
+frame is pixel for pixel the same in the two builds at both tolerances (four control-against-port
+pairings, and one pairing of each build against itself, for each frame; the table is appended to
+build\g9-vis-final.txt). So the one-pass lag is
+not visible at the granularity of a frame in these two sequences: the removed row and the green
+sentence land together, at frame 77, in both builds. What the capture does NOT draw: a FED row or a
+"takes no signal" one (the receiver is stopped, which is the state the member's text most needs to be
+right about), a module's own command keys, its warning or its integrity line, and the two grants'
+keys toggled (the fixtures declare no commands and log nothing); the model for those is held by
+test_fitted_modules_window A and D and E, not by a picture.
+
+What could move a measured number: the engine's pass hashes more per module (above: the notice, the
+runner's generation, the scan count, the commands and settings counters, the install records, the
+folder and the descriptors), all in place and held at 0 allocations by test_engine_publish_alloc F3;
+the block is rebuilt, with a stat of each file, whenever that fingerprint moves, 307 to 316 allocations
+and 147 after a rescan; matched keys are now hashed while the receiver is stopped, where they were hashed
+only while it ran; the table serves one more list (PLUGIN_COMMANDS) and two more status strings (the
+18th and 19th line of the handed-over copy); the window's cache costs about 40
+allocations a refresh and none a frame, where the old model cost 64 a frame and a stat of each file;
+a module that says a different warning every pass makes the window rebuild every pass (0.078 ms); the
+plugins' log lines now count in `decoderLinesTotal`, so a reader of it sees them, as group 8 recorded
+for the aircraft-info lines; and `pluginScans_` makes every rescan rebuild the block, as it already
+rewrote the runner's rows.
+
+THE TEST-ACCESSOR TRAP was minded, as in group 8: every frame of the new test looks first
+(`pumpFrameBegin`, `pumpInputs`, `pumpPlugins`, `pumpPublish`, the status text copy, `refreshUiState`),
+draws, and lets the next look apply the session's commands, and `pumpTransmitKey` is not run so the
+answers stay readable on the session. Six more things a test of this group must mind. The page chrome's
+RESET WINDOW SIZES key sits inside the face and moves the window 25 pixels when a sweep clicks it, so the
+sweep restores the rectangle before each click and after the last. ImGui needs two frames after the
+pointer moves before a click lands (the capture's script places the pointer at least four frames before
+it presses, for the same reason). At 1060x720 the plate falls below the visible area, so the test opens the window at
+1560x1900 on a 1600x2000 display, and the capture at 1060x1300 in a 1502x1405 window. A pressed key
+keeps focus, which changes the picture, so picture checks compare only pictures drawn after the same
+clicks, with the state moved by commands no click sends. The window draws with `AddText`, so ImGui's log
+buffer cannot capture its text: the tests check the model and the pure sentence functions, and real
+draws and clicks. And a capture that opens the window through the config finds it shut: see above.
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
