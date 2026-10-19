@@ -30,7 +30,12 @@
 //     /sys/bus/usb/devices/*/{idVendor,idProduct,serial,product,manufacturer,
 //     bcdDevice,busnum,devnum} - plain text files sysfs already has, no
 //     /dev/bus/usb node is opened and no ioctl is sent to produce the list.
-//  2. THE CALLER OWNS THE THREADS. Nothing here spawns anything. A bulk read
+//  2. THE CALLER OWNS THE THREADS. Nothing here spawns anything - with ONE
+//     exception, the sysfs listing: an attribute read has no timeout and
+//     blocks for as long as the device is mid-reset or its driver is wedged
+//     (hang signature 40ABD0BB073D899C, a frozen GUI thread), so the walk
+//     reads on a worker that the caller waits on with a bound and abandons.
+//     See readSysfsUsbNodes() and bounded_walk.hpp. A bulk read
 //     is one URB submitted with USBDEVFS_SUBMITURB and reaped with
 //     USBDEVFS_REAPURBNDELAY on whichever thread calls readBulk(); a control
 //     transfer is the single synchronous ioctl USBDEVFS_CONTROL, which the
@@ -67,6 +72,8 @@
 #include "usb/usb_device.hpp"
 #include "usb/usbfs_device.hpp"
 
+#include "core/diag_log.hpp"
+
 #if !defined(__linux__)
 #error "usbfs_device.cpp is Linux-only; CMakeLists.txt must not compile it elsewhere"
 #endif
@@ -77,6 +84,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 
 #include <dirent.h>
@@ -150,7 +158,8 @@ namespace {
 
 // One text file under a sysfs node, trimmed, or empty if it does not exist -
 // which is the ordinary case for `serial` on most of these dongles, not an
-// error.
+// error. NO BOUND OF ITS OWN - fopen/fread on a wedged device block for good -
+// so it is only ever reached through readSysfsNode, on the bounded walk's worker.
 std::string readSysfsAttr(const std::string& dir, const char* name) {
     const std::string path = dir + "/" + name;
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -182,41 +191,89 @@ bool parseUnsigned(const std::string& s, unsigned& out) {
 
 }  // namespace
 
-std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir) {
-    std::vector<SysfsUsbNode> out;
+namespace {
+
+// One node's attributes, read with no bound of its own: ONLY ever called on
+// the bounded walk's worker (see readSysfsUsbNodes). `path` is the node's
+// directory; its last component is the node's name.
+SysfsUsbNode readSysfsNode(const std::string& path) {
+    SysfsUsbNode node;
+    const std::size_t slash = path.rfind('/');
+    node.name = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    std::uint16_t vid = 0;
+    std::uint16_t pid = 0;
+    node.hasIds = parseHex16(readSysfsAttr(path, "idVendor"), vid) &&
+                  parseHex16(readSysfsAttr(path, "idProduct"), pid);
+    node.vid = vid;
+    node.pid = pid;
+    node.serial = readSysfsAttr(path, "serial");
+    node.product = readSysfsAttr(path, "product");
+    node.manufacturer = readSysfsAttr(path, "manufacturer");
+    std::uint16_t bcd = 0;
+    if (parseHex16(readSysfsAttr(path, "bcdDevice"), bcd)) { node.bcdDevice = bcd; }
+    unsigned busnum = 0;
+    unsigned devnum = 0;
+    node.hasBusDev = parseUnsigned(readSysfsAttr(path, "busnum"), busnum) &&
+                     parseUnsigned(readSysfsAttr(path, "devnum"), devnum);
+    node.busnum = busnum;
+    node.devnum = devnum;
+    return node;
+}
+
+// Nodes whose attribute read is still blocked on an abandoned worker, for the
+// life of the process. Leaked on purpose: an abandoned worker can outlive
+// static destruction, and it must find this alive when its read returns.
+std::shared_ptr<WedgeRegistry> wedgedNodes() {
+    static const std::shared_ptr<WedgeRegistry>* const registry =
+        new std::shared_ptr<WedgeRegistry>(std::make_shared<WedgeRegistry>());
+    return *registry;
+}
+
+}  // namespace
+
+std::size_t sysfsWedgedNodeCount() { return wedgedNodes()->size(); }
+
+std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir,
+                                            const WalkBudget& budget) {
     DIR* dir = ::opendir(sysfsDevicesDir.c_str());
     // A MISSING DIRECTORY IS AN EMPTY BUS, NOT AN ERROR: a container or a VM
     // with no USB subsystem exposed (this build machine, measured) has no
     // /sys/bus/usb/devices at all, and "no radio hardware found" is the
     // right answer for that, not a crash.
-    if (dir == nullptr) { return out; }
+    if (dir == nullptr) { return std::vector<SysfsUsbNode>(); }
+    std::vector<std::string> paths;
     for (struct dirent* e = ::readdir(dir); e != nullptr; e = ::readdir(dir)) {
         const std::string name = e->d_name;
         if (name == "." || name == "..") { continue; }
-        const std::string path = sysfsDevicesDir + "/" + name;
-        SysfsUsbNode node;
-        node.name = name;
-        std::uint16_t vid = 0;
-        std::uint16_t pid = 0;
-        node.hasIds = parseHex16(readSysfsAttr(path, "idVendor"), vid) &&
-                      parseHex16(readSysfsAttr(path, "idProduct"), pid);
-        node.vid = vid;
-        node.pid = pid;
-        node.serial = readSysfsAttr(path, "serial");
-        node.product = readSysfsAttr(path, "product");
-        node.manufacturer = readSysfsAttr(path, "manufacturer");
-        std::uint16_t bcd = 0;
-        if (parseHex16(readSysfsAttr(path, "bcdDevice"), bcd)) { node.bcdDevice = bcd; }
-        unsigned busnum = 0;
-        unsigned devnum = 0;
-        node.hasBusDev = parseUnsigned(readSysfsAttr(path, "busnum"), busnum) &&
-                         parseUnsigned(readSysfsAttr(path, "devnum"), devnum);
-        node.busnum = busnum;
-        node.devnum = devnum;
-        out.push_back(std::move(node));
+        paths.push_back(sysfsDevicesDir + "/" + name);
     }
     ::closedir(dir);
-    return out;
+
+    // THE ATTRIBUTE READS ARE NEVER MADE ON THE CALLING THREAD. A sysfs read
+    // goes into the USB core and blocks, uninterruptibly, while the device is
+    // mid-reset or its driver is wedged; this runs on the GUI thread (see
+    // AppWindow::scanNative), where five seconds of that is a hang report
+    // (signature 40ABD0BB073D899C). The walk waits on a worker for at most
+    // `budget`, abandons what is stuck, and skips that node - and every later
+    // walk skips it too until the stuck read returns - so a wedged device
+    // costs one stall and a leaked thread, and the other radios still list.
+    // The directory listing above stays inline: it reads names from the
+    // kernel's directory cache and touches no device.
+    BoundedWalkResult<SysfsUsbNode> walk = boundedWalk<SysfsUsbNode>(
+        paths, [](const std::string& path) { return readSysfsNode(path); }, wedgedNodes(),
+        budget);
+    for (const std::string& path : walk.wedged) {
+        core::diagLogf(
+            "usb: reading %s did not return within %lld ms - that device is left out of "
+            "the list until the read does",
+            path.c_str(), static_cast<long long>(budget.stall.count()));
+    }
+    if (!walk.complete && walk.wedged.empty()) {
+        core::diagLogf("usb: listing %s stopped at its %lld ms limit - some devices may be "
+                       "missing from this scan",
+                       sysfsDevicesDir.c_str(), static_cast<long long>(budget.total.count()));
+    }
+    return std::move(walk.results);
 }
 
 std::vector<UsbDeviceInfo> sysfsUsbNodesToDevices(const std::vector<SysfsUsbNode>& nodes,

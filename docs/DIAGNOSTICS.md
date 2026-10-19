@@ -120,6 +120,21 @@ describe code this product can be held responsible for.
   abandoned and the radio is condemned` - a warning, and the native
   counterpart of SoapySource's abandonment. The remedy is the same one and is
   told to the user in the same words: restart FoxSDR to use this radio again.
+- `usb: reading /sys/bus/usb/devices/<node> did not return within 300 ms - that
+  device is left out of the list until the read does` - a warning, Linux only.
+  Listing the native radios reads a few text files per USB node under
+  `/sys/bus/usb/devices`, and the kernel can block such a read for as long as
+  the device is mid-reset or its driver is wedged; there is no timeout and no way
+  to interrupt it. Before this the read ran on the GUI thread and the hang
+  watchdog filed a report whose stack bottomed out in `readSysfsAttr`
+  (signature `40ABD0BB073D899C`, opening the patch view). Now the reads run on a
+  worker that the scan waits on for 300 ms per stalled node and 1 s in all; a
+  node that does not answer is left out of the list, the worker is abandoned
+  (a thread and a descriptor are leaked until the read returns, perhaps never),
+  and the radios around it still list. Written once per stuck node, not per
+  scan: later scans skip the node silently until the abandoned read returns,
+  when it reappears on its own. `usb: listing ... stopped at its 1000 ms limit`
+  is the same bound reached by slow nodes rather than one stuck one.
 - `source: auto gain remembered on but the radio refused it` - a warning,
   written at an open (0.99.73) when the Auto gain box was ticked the last time
   this radio was used (`autoGainByRadio` in `config.json`, per radio, under the

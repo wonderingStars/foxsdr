@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -457,6 +458,103 @@ int main() {
             makeDir(empty);
             CHECK(cascade::usb::presentUsbIdsFrom(empty, ids));
             CHECK(ids.empty());
+
+            const std::string cleanup = "rm -rf '" + root + "'";
+            CHECK(std::system(cleanup.c_str()) == 0);
+        }
+    }
+
+    // --- 7. A SYSFS ATTRIBUTE THAT NEVER ANSWERS cannot hold the walk -----
+    //
+    // Hang signature 40ABD0BB073D899C: the GUI thread sat in fopen/fread of a
+    // /sys/bus/usb/devices/<node>/<attribute> for more than five seconds. A
+    // FIFO with no writer is the same shape on any filesystem: open() for
+    // reading blocks until someone opens the other end, with no timeout and
+    // no way to interrupt it.
+    {
+        char tmpl[] = "/tmp/foxsdr_usbfs_wedge_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        CHECK(dir != nullptr);
+        if (dir != nullptr) {
+            const std::string root = dir;
+            for (const char* node : {"1-1", "1-2", "1-3"}) {
+                makeDir(root + "/" + node);
+                writeFile(root + "/" + node + "/idVendor", "0bda\n");
+                writeFile(root + "/" + node + "/idProduct", "2838\n");
+                writeFile(root + "/" + node + "/busnum", "1\n");
+            }
+            writeFile(root + "/1-1/devnum", "5\n");
+            writeFile(root + "/1-3/devnum", "7\n");
+            // The wedged node: its `serial` is the FIFO, the attribute the
+            // field report was blocked in.
+            writeFile(root + "/1-2/devnum", "6\n");
+            const std::string fifo = root + "/1-2/serial";
+            CHECK(::mkfifo(fifo.c_str(), 0600) == 0);
+
+            cascade::usb::WalkBudget budget;
+            budget.stall = std::chrono::milliseconds(150);
+            budget.total = std::chrono::milliseconds(1500);
+            CHECK(cascade::usb::sysfsWedgedNodeCount() == 0u);
+
+            const auto t0 = std::chrono::steady_clock::now();
+            const std::vector<SysfsUsbNode> first = cascade::usb::readSysfsUsbNodes(root, budget);
+            const double firstMs =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                    .count();
+            std::printf("walk with one never-answering attribute: %zu nodes after %.1f ms\n",
+                        first.size(), firstMs);
+            // Returned inside the budget - one stall, not the hang - with the
+            // wedged node left out and its neighbours, wherever readdir put
+            // them, still listed.
+            CHECK(firstMs < 1400.0);
+            CHECK(first.size() == 2u);
+            bool has11 = false;
+            bool has12 = false;
+            bool has13 = false;
+            for (const SysfsUsbNode& n : first) {
+                has11 = has11 || n.name == "1-1";
+                has12 = has12 || n.name == "1-2";
+                has13 = has13 || n.name == "1-3";
+            }
+            CHECK(has11 && !has12 && has13);
+            CHECK(cascade::usb::sysfsWedgedNodeCount() == 1u);
+
+            // The next walk does not wait on it again, and does not start a
+            // second thread to block on the same file.
+            const auto t1 = std::chrono::steady_clock::now();
+            cascade::usb::WalkBudget patient = budget;
+            patient.stall = std::chrono::milliseconds(600);  // "under it" is not a busy machine's doing
+            const std::vector<SysfsUsbNode> second = cascade::usb::readSysfsUsbNodes(root, patient);
+            const double secondMs =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1)
+                    .count();
+            std::printf("second walk, node already quarantined: %zu nodes after %.1f ms\n",
+                        second.size(), secondMs);
+            CHECK(second.size() == 2u);
+            CHECK(secondMs < 450.0);  // well under one stall: nothing waited on the FIFO
+            CHECK(cascade::usb::sysfsWedgedNodeCount() == 1u);
+
+            // And the decision on top of it is unaffected: the two healthy
+            // radios list, in path order.
+            const std::vector<UsbDeviceInfo> devs =
+                cascade::usb::sysfsUsbNodesToDevices(second, {{0x0bda, 0x2838}});
+            CHECK(devs.size() == 2u);
+            if (devs.size() == 2u) {
+                CHECK(devs[0].path == "/dev/bus/usb/001/005");
+                CHECK(devs[1].path == "/dev/bus/usb/001/007");
+            }
+
+            // The device recovers: a writer opens the FIFO, the abandoned
+            // read returns, and the node is back on the next walk with
+            // nobody having asked for a retry.
+            const int wfd = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
+            CHECK(wfd >= 0);
+            if (wfd >= 0) { ::close(wfd); }
+            for (int i = 0; i < 300 && cascade::usb::sysfsWedgedNodeCount() != 0u; ++i) {
+                ::usleep(10 * 1000);
+            }
+            CHECK(cascade::usb::sysfsWedgedNodeCount() == 0u);
+            CHECK(cascade::usb::readSysfsUsbNodes(root, budget).size() == 3u);
 
             const std::string cleanup = "rm -rf '" + root + "'";
             CHECK(std::system(cleanup.c_str()) == 0);

@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "usb/bounded_walk.hpp"
 #include "usb/usb_device.hpp"
 
 namespace cascade::usb {
@@ -53,7 +54,19 @@ struct SysfsUsbNode {
 // like any other entry - hasIds/hasBusDev simply come back false for one,
 // since neither file exists in an interface directory - and the decision
 // function is what tells them apart from a real device.
-std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir);
+//
+// BOUNDED: the attribute reads run on a worker the caller waits on for at most
+// `budget` (bounded_walk.hpp), because a sysfs read can block for as long as a
+// device is mid-reset. A node whose read does not return is left out of the
+// result, logged once, and skipped by later walks until its read comes back;
+// the result is otherwise exactly what an inline walk returns, in the same
+// order. tests/test_usb_usbfs.cpp drives this against a FIFO that never answers.
+std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir,
+                                            const WalkBudget& budget = WalkBudget{});
+
+// How many nodes are currently quarantined because an abandoned worker is
+// still inside a read of one. Zero on a healthy machine; for tests and diagnostics.
+std::size_t sysfsWedgedNodeCount();
 
 // The decision: keep nodes whose VID/PID is in `ids` and which carry a
 // bus/dev pair (an interface child never does), build the /dev/bus/usb path
