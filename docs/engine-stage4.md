@@ -1656,6 +1656,403 @@ renamed one. An input script's path is read from the run's own folder, so it mus
 step A, Git Bash `sed -i` strips the CR from the CRLF files in this tree: every edited file was restored to
 CRLF (the vendored header is LF, as in the repo).
 
+GROUP 11, the Source section and the sound card panel (drawSourceSection, radioNotOpenLit,
+drawSoundCardControls and soundCardReceivesText, with `sourceLists`, the cache the window gained; the window's own
+`sourceIdForRow` is deleted): API 0.3 section 8.10, one member appended to the state, five lists, eleven facts, one
+status line, one column, one op and one field of an op. This is the rail's SOURCE row with its chip and lamp, the
+combo of radios (the generator, the IQ file, the sound card, the native rows, the SoapySDR rows) with its Refresh
+key and "Look for network USRPs", the scan's sentences (scanning, deferred beside an open radio, drivers not scanned
+again, the dongles nothing can open, the SDRplay API, "No radio hardware found" and its tree of evidence), the IQ
+file, Pluto and sound card panels, the fault card and the saved-source preview, and the open radio's rate, antenna,
+gain and option controls. The window's own survey, written before the first edit, found 128 counted field reads in
+FIVE members (79 in `drawSourceSection`, 4 in `radioNotOpenLit`, 4 in `sourceIdForRow`, 37 in `drawSoundCardControls`
+and 4 in `soundCardReceivesText`), 46 distinct fields of which 34 have no other reader, 15 `submitCommand` lines and
+11 same-frame `applyCommand` sites (the most of any group; groups 9 and 10 had none and one), and where the brief and
+the code disagreed: (1) the subject is bigger than the three names, because `drawSourceSection` calls
+`drawSoundCardControls` (its only caller) which calls `soundCardReceivesText`, and together they read 41 times, more
+than half of the section's own 79; (2) the brief's "about 94" was a crude count that also took method calls, the
+guard's rule (a field the Engine declares, `engine_.` at a non-identifier boundary) gives the numbers above;
+(3) `sourceIdForRow` is not exclusive to the section: `AppWindow::run`'s `FOXSDR_SOURCE_DEVICE` bounded-run seam
+calls it, next to three direct `engine_.nativeDevices_` reads and a line-allowed `scanNative()`; (4) the serial ports
+are not in this section (`drawSerialPortsSection` is in SYSTEM) and the device options are; (5) there is no deck or
+view type to fill (the only window-side state is `iqPath_`, `plutoUriDraft_`, `sourceComboWasOpen_` and
+`soundCardCentreMhz_`, which stay); (6) "much of this already has table coverage" is true of the radio half and
+false of the half the section is mostly about; (7) the scanning IS the engine's work already (`scanNative` runs
+inline on whichever thread applies the command, the SoapySDR scan is a `std::async` worker whose body is the child
+process of the 0.63.0 enumeration, collected by `pollSourceAsync` in `pumpWorkers`), the window only triggers it and
+reads the rows; (8) the section reached the engine's machine through calls that are not `engine_.` reads and so sit
+in no ratchet (`source::sessionFaultedDrivers()` every frame, `SoapySource::loadedModules()`, `vendorInstalls()` and
+`moduleSearchPaths()` every frame while the "No radio hardware found" block showed, the two USB id tables, and
+`submitSoundCardForm(Engine&, ...)`, a free function in a window file that took the Engine by reference); (9) two
+commands were sent EVERY FRAME, not on an edge (group 3's trap): `applyCommand(CLEAR_STATUS,
+SOAPY_SCAN_DEFERRED_LOGGED)` whenever the scan gate was open and `applyCommand(SOUND_CARDS_WANTED)` until the cards
+were listed; a port by `uiSubmit` would have taken a ticket a frame. Step A put the table's side in place, step B the
+window's.
+
+What moved into the table (step A; docs/api-0.3-additions.md section 8.10, with a per-datum table of what the window
+draws and from where):
+- THE STATE gains `sourceFlags`, a `uint32_t` appended after `scanListenMs` and in the device group (it moves
+  `deviceSeq` and `seq`); `FOXAPI_MIN_RECEIVER_STATE` ends at it. Ten bits, in order: `FOXAPI_SRC_SCAN_PENDING`,
+  `SCANNED`, `SCAN_PARTIAL`, `SCAN_GATED`, `NETWORK_USRPS`, `UHD_LEFT_OUT`, `SDRPLAY_ROWS`, `CARD_LISTED`,
+  `CARD_SCANNING` and `CARD_OPENING`. (The state's existing flag word is nearly full: a new word was cheaper than
+  moving it. Cost: four bytes a publish; the bits are reads of fields the pass already holds plus
+  `soapyScanGated()`, which reads `anyDeviceOpen()`, an atomic, and the patch radios.) Wiring: the snapshot's
+  device group left it out at first, red in test_receiver_snapshot and then green (the layout asserts now end at it,
+  and a new `sourceFlagsGroup` case holds it in the group);
+- `DEVICES` is COMPLETED, which the survey had said it would not be: the entries are now the generator, the IQ file
+  (`row:iqfile`), the sound card (`row:soundcard`), the native rows and the SoapySDR rows, so an entry's index is its
+  row in the combo and its `id` is that plus one, and every radio's entry moved down two places. The alternative, a
+  strict append at the end, was rejected to keep index equal to combo row (`fact.source.row` speaks the combo's
+  numbering on purpose: a port that indexed the combo into `DEVICES` by position would have been wrong by two). The
+  0.2 conformance counts moved (1 to 3 and 2 to 4, the radio at index 3; api_03's 2 to 4 and 4 to 6) and 8.10
+  says so. The window composes "(native)" itself from the id's kind, in its own words (same msgid), and not for the
+  Pluto's row, which is an address;
+- THE WHOLE-ID FACTS, closing a cut the API had had since 0.2: `FOXAPI_OP_SELECT_SOURCE` says "an id from DEVICES,
+  verbatim", and `detail` cuts at 159 bytes, where a SoapySDR row's id is `soapy:` and the whole kwargs string a
+  vendor module reported and the Pluto's is `pluto:uri=` and an address of up to 191 bytes. A cut id matches no
+  scanned device, so the radio could not be opened (`NOT_FOUND`, "no scanned device matches that id"), for the
+  window and for every other client, the web page included. `fact.source.id.<n>` is the whole id of the entry whose
+  `id` is `n` (it exists for every entry; `NOT_FOUND` past the last), from one spelling in the engine
+  (`Engine::sourceIdForRow(int) const`, new, which the bounded-run seam now calls; the window's copy is deleted).
+  Proved with a 199-byte Pluto id and a 280-byte Soapy id: the cut detail is refused by SELECT_SOURCE and the fact's
+  id opens the radio. The Pluto row's selection is drawn from `fact.source.row`, which follows the family alone,
+  and not from the entry's `ACTIVE` (its id is built at scan time from the address the box held then);
+- THE FACTS: `fact.source.row`, `.keep`, `.opening`, `.scanGate`, `.scanSkip`, `.faultedDrivers` and `.plutoUri`
+  (LOCAL), `fact.source.id.<n>`, and `fact.soundcard.device`, `.hostApi` (LOCAL) and `.span` (`"<lo> <hi>"`, `%.17g`,
+  what the form's card would receive through the converter kept for it). Eleven in all;
+- THE FAULT, WHOLE: the `deviceFault` STATUS_LINES key (level 3, the whole sentence; also `fact.status.deviceFault`
+  and `EngineStatusText::deviceFault`). It closes a cut and a hazard the survey found by arithmetic and step A proved:
+  the state's `faultMessage` holds 127 bytes of the 134-byte zombie-source sentence ("source thread: the radio's
+  driver is holding an abandoned thread and this source cannot restart; pick another source or restart FoxSDR"),
+  and the window's `reconnectAdviceApplies` looks for "restart FoxSDR" at its END, so on the cut copy the generic
+  "Reconnect it and pick the source again" advice would have been wrongly ADDED under a sentence that says the
+  opposite. RED/GREEN as a fact about the cut copy: G11-4 asserts it is true on the cut copy and false on the whole
+  line, the whole fact and the whole copy, and that a 400-byte fault is cut in `detail` and whole in the fact. The
+  old window read the whole `faultMessage` directly, so this is a HAZARD the port would have introduced and the
+  line avoids, not a fix of old behaviour (difference 9);
+- THE LISTS: `UNBOUND_RADIOS` (40: `name` the bus description, `detail` the family `rtl`, `rx888` or `""`,
+  `value[0..1]` vid and pid, rebuilt by every native walk, so the window's two USB id tables are deleted);
+  `SCAN_EVIDENCE` (41, LOCAL and DENIED to a REMOTE session: `value[0]` 1 a vendor install, 2 a search path, 3 a
+  module loaded); `SOUND_CARDS` (42: `id` index + 1, `ACTIVE` the entry the form's card matches the way the open
+  matches it); `SOUND_CARD_RATES` (43: `value[0]` Hz, `FOXAPI_ITEM_EXCLUSIVE` 0x400000); `SOUND_CARD_FORM` (44, ONE
+  entry: `value[0..2]` rate, centre, channel; the flags `FOXAPI_ITEM_IQ_STEREO` 0x800000, `SWAP_IQ` 0x1000000 and
+  `PICKED` 0x2000000; `name` and `detail` empty to a REMOTE session); and the column `SAMPLE_RATES.detail` = the
+  rate's caption (an Airspy's own label where it applies). `SCAN_EVIDENCE` is taken ONCE, when a whole scan lands
+  having found nothing, and kept as a member hashed by a counter: each of the three asks is a call into the
+  SoapySDR library, the first of which loads it and edits the process's environment and DLL search order, so it must
+  not run on every block rebuild. It clears at a find or a partial scan, and an identical landing moves nothing. The
+  faulted-driver list is refreshed at every landing;
+- THE OP and THE MASK: `FOXAPP_OP_SOUND_CARD_PICK` 0x8420 (SETTINGS, LOCAL; `ival[0]` a SOUND_CARDS id): the engine puts
+  the card in the form, marks it picked, clears `soundCardMissing`, and keeps the rate if the card offers it, else its
+  default, else its highest (the rule the window held in its draw); `NOT_FOUND` for no entry and before the cards are
+  listed. `FOXAPP_OP_SOUND_CARD_FORM` takes a field mask in `ival[1]`: 1 device, 2 format, 4 channel, 8 swap, 16
+  picked, 32 rate, 64 centre; 0 and 127 are the whole form; above 127 or negative is `OUT_OF_RANGE`;
+  `soundCardFormCommand(s, fieldMask)` builds it. The mask is the N9 shape from group 4: a control that changed one
+  thing sends one field, so it cannot write back a stale copy of a field a pass changed since (a worker's open
+  result replaces the whole form). `FOXAPP_OP_SOUNDCARD_IQ_CENTRE` already answered `NO_CHANGE` with no I/Q card
+  running (now tested and documented), so the window sends it after every committed centre and its gate and its
+  three reads are deleted. `FOXAPP_OP_SCAN_NATIVE_ONLY` is in no `kOps` entry and answers UNSUPPORTED through the
+  table (pre-existing);
+- THE ENGINE'S OWN PASS, `pumpSourceHousekeeping()` at the head of `pumpWorkers`: it clears
+  `soapyScanDeferredLogged_` when the gate opens and lists the cards while `sourceSel_` is the sound card row and
+  nothing is listed, scanning or opening. Both used to be commands the window sent every frame; the commands stay
+  valid. Difference from today: the cards are listed with the section folded too (difference 6);
+- TEST HOOKS: `testHooks_.nativeScanDetail(NativeScanResult&)` (the rows, the unbound dongles, the SDRplay advice, the
+  detail and the row flag: the old `nativeScan` hook returned early and never reached the unbound list and the
+  SDRplay assignments, so those sentences were unreachable in a hermetic test) and `scanDiagnostics()` (the three
+  SoapySDR diagnostics and the faulted drivers). With `soapyScan` hooked and no `scanDiagnostics`, the engine reads
+  none of the four real calls; the hermetic guard mutant for that went red only after a test fix (scan an empty list,
+  so the diagnostics are actually asked).
+The vendored header gained the state member, ten bits, five list ids, the four item flags and the op, and its
+SHA-256, now 88db25170c1dc5f18fe94b3fb0ba71736621bfa9497b0caaad093f8a0a549512, is updated in
+third_party/foxsdr_api/README.md and THIRD_PARTY.md.
+
+Where step A DIVERGED from the survey: (1) `DEVICES` rows 1 and 2 are added at the FRONT (above); (2)
+`fact.source.id.<n>` is keyed by the entry's id (index + 1), not by "row n"; (3) `SCAN_EVIDENCE` is taken once on an
+empty landing and not on every block rebuild; (4) the faulted-driver list is refreshed at every landing; (5)
+`SOUND_CARDS` names are visible to a REMOTE session (a card's name is a label, as a radio's is), and only the form's
+name and detail and the two facts are LOCAL; an empty form device means the system's default input, and that entry
+is `ACTIVE`; (6) `FOXAPP_OP_SCAN_NATIVE_ONLY` stays out of `kOps`; (7) the cards are listed by the pass with the
+section folded.
+
+THE FINGERPRINT, and the allocation numbers. The block, the facts, the composed sentences and the families of the
+unbound dongles are built only when the list fingerprint moves (`buildApiListsSource`), and the fingerprint now
+hashes: the combo's row, the kept source's kind, the open-pending flag, the busy label and the device model, the scan's
+pending, scanned and partial states, `SoapySource::openDeviceCount()` and the patch radios still opening (the gate as
+the answer it is: those two move it with nothing else changing), the network-USRP flag and the absent-driver names,
+the SDRplay row flag, the Pluto buffer, the unbound dongles (vid, pid, description), the faulted drivers, the evidence
+counter, the whole fault text, the rate captions, and the sound card's listing state, every form field and every
+listed input (name, host API, default rate, each rate and its exclusive flag). The gate's ANSWER is deliberately not
+hashed (a function of hashed inputs). Measured (tests/test_engine_publish_alloc case F5, a world with the section's
+whole data): 40 fingerprints allocate 0, 40 unchanged `publishLists` passes 0, 40 full publishes 0, 1000 rounds of
+six list reads 0; a change rebuilds once at about 240 allocations and the 40 settled passes after it allocate 0; all
+19 probed inputs move the fingerprint ALONE; the same value said 25 times moves nothing. The facts allocate on the
+READER's thread, by the table's existing design.
+
+THE MUTANTS of step A, each applied alone, each restored after: 39 un-hash mutations (each input above taken out of
+the fingerprint) and 38 that do the wrong thing (the latch clear; the cards-wanted line; the in-flight guard; each of
+the four PICK rules and the picked flag; the fault line pointing at the cut field; the fault level; the
+`EngineStatusText::deviceFault` copy; `apiFaultText_` cut at 127; the IQ-file DEVICES row and its id; the sound card's
+`ACTIVE` in both lists; the whole-id facts cut at 159; `plutoUri` and `soundcard.device` not LOCAL; SCAN_EVIDENCE not
+DENIED; the form's name shown to a REMOTE session; evidence taken on a non-empty landing and on a partial one; the
+faulted-driver refresh; each of four flag bits; the `scanSkip` and `scanGate` facts; the unbound family token; the
+rate captions; the span converter; the mask ignored, its rate bit dropped and its range check; `sourceFlags` out of
+the device group; the hermetic guard). All 38 behaviour mutants are red (counting each PICK rule and each flag bit). Of the
+39 un-hash mutants, 38 are red in the G11-10 probes, and the 19 inputs F5 probes are red there as well; ONE
+SURVIVES AND IS DOCUMENTED: un-hashing `SoapySource::openDeviceCount()`, a
+private static atomic with no seam, which cannot be moved from a hermetic test. The wiring in the fingerprint reads
+correctly and the other half of the gate's input (the patch's radios) is killed; the process-wide count is not.
+Tests: tests/test_engine_api_03.cpp G11-1 to G11-10 (2714 checks, 0 failed; it was 2094), test_engine_publish_alloc
+301 (it was 223), test_apply_command 1175 (the PICK and the field mask; its "one case per known op" rule required the
+new op's), test_receiver_snapshot 724, test_engine_api_conformance 377, test_soundcard_app_paths 276.
+
+The pattern held, with these additions to it (step B):
+- THE SOURCE CACHE, `sourceLists()` (gui/app_window.hpp: `SourceListCache`), read only when `listSeq` moves, as
+  `railLists`, `fittedLists` and `storeLists` are: the combo's rows (the captions with "(native)" composed here, in
+  the language in force: the fingerprint hashes the language, so a switch rebuilds the cache), `fact.source.row`,
+  `keep`, `opening`, `scanGate`, `scanSkip`, `faultedDrivers`, the unbound dongles, the evidence, the radio panel's
+  rates (with their captions), antennas, gains and options, and the sound card's lists, form and facts. The cache is
+  read FIRST in `drawSourceSection` and in `radioNotOpenLit` and `soundCardReceivesText`, before anything below
+  decides from it (group 10's rule). Cheap per-frame state (`sourceFlags`, the flags, `deviceName`, `sampleRateHz`) is
+  read straight from `uiState_`. A click's whole id is read once, from `fact.source.id.<n>`, and not cached;
+- THE DRAFT-PATTERN BOXES (group 7's scanner draft, `commitScannerDraft` and `flushScannerDraft`): the Pluto box
+  holds `plutoUriPending_` and `plutoUriEditedAt_` and is re-seeded from `fact.source.plutoUri` only when no edit is
+  in flight (each keystroke still sends `SET_PLUTO_URI`; the draft is released when the fact equals it or after 2 s
+  without an edit; Open sends the draft, so it is never stale); the sound card's centre box holds
+  `soundCardCentrePending_`, `soundCardCentreSentHz_` and `soundCardCentreEditedAt_`, keeps what was typed until the
+  engine's centre equals it or 2 s pass, and commits on Return (`EnterReturnsTrue`), NOT on deactivation: the step B
+  brief said deactivation, which would be a behaviour change;
+- THE DELETE LIST, executed: the per-frame `applyCommand(CLEAR_STATUS, SOAPY_SCAN_DEFERRED_LOGGED)` and its local
+  `scanGated`; the per-frame `applyCommand(SOUND_CARDS_WANTED)`; `soundCardCentreAppliesLive` and its three reads; the
+  pick handler's rate rule, its `CLEAR_STATUS` and `soundCardRatesFor`; `submitSoundCardForm` and the free function
+  that took the Engine; the window's `sourceIdForRow`; the three per-frame SoapySDR crossings and
+  `sessionFaultedDrivers()`; the `rtlSdrUsbIds()` and `rx888UsbIds()` tables in the draw. Stays the window's:
+  `iqPath_`, `plutoUriDraft_`, `sourceComboWasOpen_`, `soundCardCentreMhz_` (as the display value) and the "(native)"
+  composition. The combo's scan on open is a `uiSubmit` on the open EDGE, sent once. `radioNotOpenLit` keeps its
+  name (a test calls it) and is a function of the cache through the new pure
+  `radioNotOpenLampFromSession(keepKind, hasDevice, generatorInUse, cardOpening)` in engine/source_fallback.hpp (the
+  old overload stays for test_source_fallback);
+- THE ACTIVE-CARD-ROW GATE, kept. Today's code gated the sound card combo's current row
+  (`ImGui::Selectable(..., sel) && !sel`), so a click on the card already in use did nothing, and the engine
+  applies SOUND_CARD_PICK for the active row all the same (it marks the card picked). The window keeps the gate: no
+  PICK is sent for the active row, and a mutant dropping the gate goes red (3 failures).
+
+Ratchet: 94 fields / 441 reads -> 60 / 313, the 34 fields and 128 reads the survey counted, printed by the guard as
+`the window reads 60 engine fields directly, 313 times (budget 60 fields, 313 reads)`; the survey predicted it by
+renaming the five members' reads in a scratch copy of src before the first edit (M3: 60 / 313, floor 13) and step B
+printed exactly that. `kPortedMembers` gains `drawSourceSection`, `radioNotOpenLit`, `drawSoundCardControls`,
+`soundCardReceivesText` and `sourceLists` (`sourceIdForRow` was never listed: it is a deletion). The 34 fields that
+left the count are `biasTeePanel_`, `converters_`, `deviceAdcSwitchesPresent_`, `deviceAgcSupported_`,
+`deviceAntenna_`, `deviceAntennas_`, `deviceBusyLabel_`, `deviceDabNotchPresent_`, `deviceDabNotch_`,
+`deviceDither_`, `deviceHdrPresent_`, `deviceHdr_`, `deviceRandomiser_`, `deviceRateIndex_`, `deviceRateLabels_`,
+`deviceRatesHz_`, `deviceRfNotchPresent_`, `deviceRfNotch_`, `lookForNetworkUsrps_`, `nativeRowLabels_`,
+`nativeUnbound_`, `plutoUri_`, `restoreKeep_`, `sdrPlayRowsFound_`, `soapyAbsentDrivers_`, `soapyDevices_`,
+`soapyScanPartial_`, `soapyScanned_`, `soundCardDevices_`, `soundCardListed_`, `soundCardLive_`,
+`soundCardScanPending_`, `soundCard_` and `sourceSel_`. What STAYS in the count, by name and reader: `nativeDevices_`
+(three reads in `run`'s bounded-run seam, which is why the figure is 60 / 313 and not M4's 59 / 310: the
+`sourceIdForRow` call there became a const Engine method call, not a counted read, but the three direct reads
+remain), `deviceOpenPending_`, `soapyScanPending_` and `soundCardOpenPending_` (the patch page's inspector and
+`drawPatchView`), `deviceAgc_`, `deviceGainNames_`, `deviceGainRanges_` and `deviceGainsDb_` (`drawScopeMode`),
+`sourceKind_`, `device_`, `patchRunning_` and `pipeline_` (the patch page, the scope, `reportPluginStatus`,
+`copyDiagnosticsBundle`); those are later groups'. The floor `submitsInDraw >= 30` is `>= 13`, the printed `13
+submitCommand calls in draw members` (30 until group 11 ported the Source section's seventeen; the floor is the scan
+seeing the real files, not a ratchet). `kReadOnly` retired `device_.sampleRateHz`, `pipeline_.activeSource().name`,
+`pipeline_.faultMessage` and `pipeline_.faulted`, their last callers gone (grep-confirmed; `pipeline_.activeSource()
+.faulted` was already caller-less and unlisted). `kControlMayCall`, `kEngineObjects`, `kLineAllowed` and `kHostHooks`
+did not move. The guard goes red on a single `engine_.` read put back: with `engine_.restoreKeep_.valid()` read back
+into `drawSourceSection` on a scratch copy the printout is `FAIL: AppWindow::drawSourceSection is PORTED ... reaches
+the engine directly at app_window.cpp:6854`, with 61 fields / 314 reads against the budget and 191 checks, 3 failed;
+the real tree runs clean: `254 controls judged, 13 submitCommand calls in draw members, ... 0 violations`, 191
+checks, 0 failed.
+
+tests/test_source_section_window.cpp (new, globbed: the configure picks it up; 569 checks, 0 failed, about 2 s, four
+runs): the real AppWindow over hooked engines, with the text of a frame captured through `ImGui::LogToBuffer()`.
+A, the rows, the "(native)" captions, the scan sent once on the open edge only, and a selection by whole id; B, the
+scan states; C, the evidence, the unbound dongles and the SDRplay note; D, the fault card, the lamp and the preview;
+E, the radio panel; F, the IQ file and Pluto panels; G, the sound card; H, a sweep of every control in each state,
+each sending exactly its expected command set (generator, Pluto, radio open, sound card real and I/Q, fault, IQ file,
+a radio with every switch, a card opening, no card); I, a click landing at the engine's NEXT pass (nothing in the
+click's frame, the value the frame after); J, the cache. The whole-id test sends a 296-byte Soapy id and a 199-byte
+Pluto id whole and a cut id answers NOT_FOUND. Zero crossings: the diagnostics hook counts 1 over 400 frames after the
+scan and 2 after a second one, an unhooked engine reads none, and the draw names no `SoapySource` and no
+`sessionFaultedDrivers`. The sound card: the rate rule keep, default, highest and NOT_FOUND; the form mask (a stale
+window copy cannot overwrite the engine's rate); the centre draft sends mask 64 and then `SOUNDCARD_IQ_CENTRE`
+(`NO_CHANGE`); a card opening greys the controls and keeps the lamp dark. D1: the state copy is cut at 127 of the 134
+bytes (and `reconnectAdviceApplies` is true on it), the drawn sentence comes whole from `statusLines_.deviceFault`,
+and the advice is absent. Seventeen behaviour mutants, each applied alone and each red (the step B report said 16 and
+listed 17; the results file holds 17): the cache refreshed on every call (9 failures), the active-row gate removed
+(3), the field mask dropped (23), the advice read from the cut copy (2), the id cut at 159 (8), the Pluto draft not
+held (5), the centre draft not held (6), the evidence module count dropped (3), `SOUND_CARDS_WANTED` every frame
+(53), the scan on every open frame (36), the UHD hint ignoring its flag (1), the patch greying fixed rows (3), the gain
+unit ignored (2), the rate row always first (1), the any-SoapySDR-row flag dropped (74), "(native)" dropped (7) and
+the lamp ignoring a card opening (1). tests/test_soundcard_app_paths.cpp gained its LOOK (the frame's look before each
+call into the window) and no assertion was touched: 276 checks, as before. Full suite, `ctest -C Release -j 8`:
+254/254 (the first complete run, 220 s). test_theme_census failed once under load in step A's first run and once in
+step B's last run, the second time as a crash inside `NahimicOSD.dll` (an audio-overlay DLL injected into the test
+process by this desktop's audio software, 0xC0000005) while its other layouts passed; it passed solo three times each
+time (46 to 49 s) and in the reruns. test_main_view and test_engine_api_transmit, the known flakes, did not flake.
+
+Measured, this desktop, Release: 1000 settled `sourceLists` reads allocate 0 and refresh 0 times; the first, cold
+read allocates 16; a rebuild allocates at most 5 and refreshes exactly once for each `listSeq` move; 20 DRAWN section
+frames allocate 100, 5 a frame, the draw's own strings (a combo caption, the chip). The engine's side is step A's
+F5 above. The old window did, every frame the section was open, a mutex-and-vector copy for `sessionFaultedDrivers()`
+and a `soapyScanPlan()` vector while gated, and with the sound card row selected three strings and a converter
+lookup, a `matchSoundCard` candidates vector and a `soundCardRatesFor` vector; while the "No radio hardware found"
+block showed, three guarded calls into SoapySDR (`loadedModules`, `vendorInstalls`, `moduleSearchPaths`). None of it
+was measured before the port, so there is no before-number, only the figure that the new draw does none of it.
+
+THE THIRTEEN THINGS THE OPERATOR CAN SEE DIFFER, by the code and the tests (the survey's, step B's and one resolved
+here); the capture below holds only the ones it says it holds:
+1. One pass of lag on every command (rate, antenna, Auto gain, gain slider, bias tee, the RSP and RX888 switches,
+   the network box, Refresh, a combo row, a card pick and each form field): the command is applied at the top of the
+   next frame and drawn in it, where the old `applyCommand` was applied at once.
+2. THE COMBO'S OPENING: `SCAN_DEVICES_ON_OPEN` is a `uiSubmit` on the open edge (sent once; the control's was an
+   `applyCommand` on the same edge, behind the same `sourceComboWasOpen_` latch, that ran the native walk inline, so
+   the rows drawn two statements later were the fresh walk). The first frame of an open combo draws the last walk's rows, then the fresh ones: visible only when a
+   dongle was plugged or pulled since the last open. A click in that frame is matched by content, so a vanished row
+   answers NOT_FOUND ("no scanned device matches") and opens nothing else.
+3. A FORMAT CLICK on the sound card shows the dependent controls (the Channel combo where Swap and Centre should
+   appear, the old rate list, the "Receives" line and the Open key's `canOpen`) as the old ones for one pass; the
+   old file's own comment said every widget applied the whole form at once so nothing drawn later in the frame saw a
+   stale value. Pinned by test G4 and HELD BY A PICTURE (below).
+4. THE SOUND CARD CENTRE BOX keeps what was typed until the engine's centre equals it or 2 s pass (it was re-seeded
+   from the engine every frame, with a one-frame flicker after Return). The commit trigger is Return, not
+   deactivation.
+5. THE PLUTO BOX: each keystroke still sends `SET_PLUTO_URI`; the draft is held while an edit is in flight and
+   released when the fact equals the draft or after 2 s of inactivity; Open sends the draft.
+6. THE CARDS ARE LISTED BY THE ENGINE'S PASS: zero `SOUND_CARDS_WANTED` over 120 frames, the backend asked once; they
+   list with the section folded too (the old window listed them only while it drew the panel).
+7. The per-frame `CLEAR_STATUS(SOAPY_SCAN_DEFERRED_LOGGED)` is gone; the engine's pass clears the latch.
+8. "WHERE FOXSDR LOOKED" is the engine's evidence, taken once when a whole scan lands empty: a vendor module that
+   appears while the block is up shows after the NEXT scan (the old window asked three times a frame), and the
+   faulted-drivers note is `fact.source.faultedDrivers`, refreshed at each landing.
+9. THE FAULT CARD: the text and the advice are as before (the whole sentence, and no reconnect advice under "restart
+   FoxSDR"). It is not a difference of behaviour but is listed because the cut copy would have made it one (above).
+10. A SoapySDR row's label is cut at 95 bytes (the list's `name`); the old combo drew it whole. Live labels were not
+    read.
+11. THE ANTENNA combo's preview and the one-port line come from the ANTENNAS entry that is `ACTIVE`; a readback
+    antenna that is not in the list (none `ACTIVE`) used to be drawn and now is not (the boundary the status column
+    already accepted).
+12. "actual X MS/s" reads the state's `sampleRateHz` instead of `device_->sampleRateHz()`: the same object's rate,
+    UNVERIFIED under an Airspy decimation or a converter.
+13. THE ROW CAPTIONS: "(native)" is composed in the window at the cache refresh, in the language in force (the same
+    msgid; "(nativ)" in German, test J4); the Pluto's caption is `tr()` of its label as before.
+
+What the operator sees, in a picture. Drawn by the build before this group (the tree at da630fd: groups 1 to 10, no
+group 11, in its own worktree, g11-control) and by this one: the application's own framebuffer capture in bounded
+runs, four runs of each build in each of TEN states, the window 1502x1405 as the capture measures it (1500x1380
+requested), FOXSDR_SINGLE_VIEWPORT=1, the SOURCE section opened by the seam FOXSDR_OPEN_SECTIONS, one scratch copy of
+each exe with the same resources beside it, no radio visible to the process (SOAPY_SDR_PLUGIN_PATH removed from its
+environment), each run on its own seeded copy of the config (CASCADE_CONFIG_TEST) and bounded by `--frames`
+(build\g11-vis-final.txt is the table; runone11.py, campaign11.py, compare11.py, mkfix.py and the input scripts
+s_<state>.txt are in the session's scratch, under g11-vis). THE STATES ARE ALL CHOSEN NOT TO SCAN, and the source
+combo is never opened in a captured frame: the engine's start-up restore puts the source in the state, and
+the input script (inside the process; no OS-level input) does the rest. GEN, the startup default: the generator in
+the combo, the Refresh key and the network box; FILE, an I/Q file restored from the seeded config (a generated 2 s,
+48 kHz stereo WAV): the IQ file row with its path box and Open key; KEEP, the config naming a recording that is not
+there: the combo's "(saved, not open)" preview, the red "cannot open file" line with the whole path, the amber
+sentence that the generator is standing in, the lamp dark (the rule for a file); CARD, a sound card restore of a card that does not exist
+(an invented name, so no audio device is ever opened): the lamp lit, the Device combo, the real-format form (Format, Channel,
+Sample rate), the Open key, "Receives 0 kHz to 24 kHz.", the "is not connected" sentence and the saved-card sentence;
+CARDIQ, the same with an I/Q form, Swap ticked and a 7.1 MHz centre: the Swap box, the Centre box and "Receives
+7.0760 MHz to 7.1240 MHz."; and five gestures: PICK (the card form's Device combo opened, not the source combo, and
+the one listed input, a headset microphone, picked: the form takes it, the not-connected sentence is
+cleared, the rate stays at 48 kHz); FMT (the Format combo and "I/Q (stereo)" clicked: Swap and Centre appear);
+SWAP (the Swap box unticked); CARDOPEN (the Open key pressed for the missing card, its open failing on the worker)
+and CENTRE (the Centre box selected, 3.5 typed, Return: the span becomes "Receives 3.4760 MHz to 3.5240 MHz."), the
+last taken 50 frames after the commit. Areas: the capture is tiled exactly (162 areas over the ten states, the named
+areas covering every one of its 2 110 310 pixels, so there is no unnamed remainder): the top deck, the rail's head,
+the rail cut into horizontal bands named for what the Source section draws there in that state (the header row, the
+combo, Refresh and the network box, the path row, the Device combo, Format, Channel or Swap, Rate or Centre, the Open
+key, the Receives line, the sentences, the Converter block, and "the Radio section and the rest of the rail"), the
+rail's foot, the patch page and the frame's ring; 10 areas in GEN, 11 in FILE, 12 in KEEP, 17 to 19 in the
+sound card states. At tolerance 24, 0 pixels differ in every area of every state, between the two builds (16
+control-against-port pairs a state) AND between two runs of one build (6 control-against-control and 6
+port-against-port pairs). At tolerance 0 the result is the same: 0 in every area, every pair and the whole capture,
+so there is no noise to bound. It is stronger than that: the eight captures of each state (four of each build) have
+ONE MD5 between them, so they are the same file, ten states, ten MD5s; the stderr is identical in the two builds in
+every run and the stdout differs only in the teardown time and the worst frame gap; and the scratch config each run
+saved on exit is identical between the builds in all 40 pairs, the telemetry install id apart (a random id each
+launch, in the scratch copy only). The sound card list this desk offers did not vary: the PICK state lists the one
+input in all eight runs. Because that is a table of zeros, four checks that it is not a comparator that cannot see:
+control CARD against control CARDIQ reports 545 pixels (757 at tolerance 0) in the Format row, 2 120 (4 358) in
+Channel, 1 623 (1 954) in Rate, 2 461 (4 526) in Open, 10 710 (13 984) in the sentence, 11 649 (20 124) in the
+saved-card sentence, and 0 above the Format row; control CARD against control PICK reports 3 019 (3 909) in the
+Device combo and 10 126 (17 950) in the not-connected sentence's band; control GEN against control FILE reports 614
+(836) in the combo and 4 315 (10 864) in the path row; and a +30 and a +10 poke on single pixels are counted as 1
+pixel at tolerance 24 and 2 at tolerance 0. THE ONE DIFFERENCE THE PICTURE CAN HOLD, held: difference 3, the Format
+click, shot frame by frame (control and port, two runs each, frames 50 to 58, the click down at frame 48 and up at
+52). Frames 50 and 51 are identical in the two builds. At frame 52 the control has already drawn the I/Q layout
+under the open popup and the port has not: 134 176 pixels differ, rows 551 to 1312 (the Centre box's place, and
+everything under it shifted by one row of controls). At frame 53 the port has the I/Q layout and the rail's scroll
+thumb one frame behind: 249 pixels differ at x 392 to 400, rows 1220 to 1248, and in that strip port frame 53 equals
+control frame 52 and port frame 54 equals control frame 53 with 0 differing pixels, so it is the same one-pass delay
+and not a third difference (the thumb follows the content height a frame later in ImGui). From frame 54 on the two
+builds are the same file again (MD5 8915a3ce...). The same bracket on PICK and on SWAP shows no frame that differs
+at all (the combo's and the checkbox's own state is drawn in the click's frame from a local copy in both builds).
+THE THIRD-DIFFERENCE RULE therefore found nothing to investigate: every pixel that differs is difference 3.
+What the capture does NOT draw, and so does not hold: any radio row (no radio is visible to the process): the radio
+panel's rate, antenna, Auto gain, gain, bias tee and option controls (differences 1, 11, 12), the combo opened
+(difference 2), the "(native)" captions (13), a Soapy row's 95-byte cut (10), the Pluto row and its box (5), the fault
+card (9), the busy "Opening ..." and "Scanning for devices..." lines, the scan-deferral sentences, and every state
+that follows a scan: the unbound-dongle sentences, the SDRplay note, "No radio hardware found" and the evidence
+(8). THE SCAN STATES WERE TRIED AND SET ASIDE, under the house rule: one run of the port build with the Refresh key
+pressed (frames 310 and then 1310 of a bounded run, no control run) showed that the scan never landed in 12.7 s (the
+section still read "Scanning for devices..." at frame 1300), the run's stderr carried libusb's enumeration of this
+desk's USB bus and a UHD X300 network-discovery error (the in-process SoapySDR fallback is probing the machine and
+the network), the capture changed between frames 600, 800, 1000 and 1300 (three different files in five), and the
+section was drawing the desk's own real, unbound RTL dongle and the missing SDRplay API. That is timing- and
+hardware-dependent, so it was not campaigned and nothing in it is claimed; those sentences, the evidence tree and
+difference 8 are held by test_source_section_window B, C and the F5 and G11 cases only. Difference 6 is held by a
+counter, not a picture. The real config (%APPDATA%\foxsdr\config.json, 5 076 bytes, written at 14:52:27 UTC by
+another session, sha256 BA532E6C...A353C) was identical before the first launch and after the last (size,
+modification time and hash), and none of the scratch values (the card's invented name, the recording's path) is in it.
+
+What could move a measured number: the engine's block rebuild (step A's F5, about 240 allocations) whenever the
+fingerprint moves, and the fingerprint now follows the sound card's whole list and every rate, so a card plugged or
+pulled rebuilds it once; the evidence's three SoapySDR calls run once per empty landing, on the control pass, and
+the first of them loads the library and edits the process's environment and DLL search order (not measured: no
+SoapySDR runtime of this desk was driven by a test); `scanNative` (a SetupAPI walk, an SDRplay service query and an
+unbound-device walk) still runs inline in whichever pass applies the scan, and when the pump moves to the engine's
+control thread it sits inside a pass (not timed; the survey said the same); `pumpSourceHousekeeping` runs at the head
+of every `pumpWorkers` and lists the cards even with the section folded, so a desk with a slow PortAudio backend now
+pays the listing once at the row's selection and not on first sight; `sourceFlags` adds four bytes to every publish
+and `soapyScanGated()` is evaluated each pass; and a window rebuild of the cache is at most 5 allocations once for
+each `listSeq` move, which moves with every input above and with a decoder's FED toggle.
+
+THE TRAPS, for the next group (step B's own list is long and every item cost time; step A's are with it).
+1. A test that sets `sourceSel_` to 2 directly now STARTS A REAL CARD LISTING (the engine's pass lists the cards while
+   the row is the sound card): it must install `testHooks_.soundCardBackend`, or it enumerates this desk's PortAudio.
+   `sourceSel_` is hashed now, so setting it directly also moves `listSeq`.
+2. A test frame is LOOK, DRAW, then `pumpWorkers` and `pumpAudio` (group 10's trap), and a call into a ported member
+   that follows an engine mutation needs the LOOK first (`pumpFrameBegin`, `pumpInputs`, `pumpPlugins`, `pumpPublish`,
+   `statusLines_ = engine_.statusText()`, `refreshUiState`) because the member now reads the window's cache: the nine
+   lamp calls and five "Receives" checks in test_soundcard_app_paths gained one.
+3. The rail's section header is a `benchSection` row: a click on it folds the section into a drawer child that only
+   the rail's flush ends ("Must call EndChild()" errors in a test window). A sweep starts below it (y >= 38 here).
+4. `ImGui::LogToBuffer()` after `Begin` captures every widget's text, popups included (checkboxes as `[ ]` and `[x]`,
+   combos as `{ ... }`); its default depth auto-opens tree nodes, which is how "Where FoxSDR looked" is asserted.
+   Disabled widgets still show as hovered ids in a sweep, so grey is tested by what a click sends.
+5. `nativeScanDetail` adds no Pluto row (the test lists it); hooked row labels are bare; the Pluto id comes from the
+   hook's arguments. `Engine::testHooks_` is private: a test sets it through its friend accessor.
+6. A `makeDevice` hook that waits on a gate holds the open on its worker: a real DEVICE_OPENING state whose scan
+   gate is the deferral sentence.
+7. `%.4g` is "actual 2.4 MS/s", not 2.400. A frame's look applies the PREVIOUS click's command, so "nothing in the
+   click's frame, the value the frame after" is the right assertion. The 2 s draft timeouts are tested with ImGui's
+   frame time (1/60 s a frame), not wall time (UNVERIFIED against a real 2 s).
+8. The engine's fingerprint hashes the language, so a language switch rebuilds the cache and re-composes "(native)".
+9. The shell tool collapses `\\` in heredocs: write C++ containing `\n` through the file tools. Git Bash `sed -i`
+   strips the CR from the CRLF files in this tree (group 10's trap, again): the window files and this one are CRLF.
+10. A capture that wants to be deterministic must not scan, and the source can be put in a state without opening the
+    combo: the config's `sourceKind` and `iqFilePath` or `soundCard` restore it at start-up (a card that does not exist
+    fails on its worker without opening any device, and the rest of the panel is the same). The sound card form's
+    combos are not the source combo: opening them scans nothing. Any state past a Refresh press is hardware- and
+    timing-dependent on this desk (above).
+11. UNVERIFIED, carried forward: no real SoapySDR, USB or sound hardware was driven (every test is hooked); the real,
+    non-hooked `takeScanDiagnostics` path into SoapySDR beyond one mutant run; the "actual" rate under an Airspy
+    decimation or a converter; the 95-byte label cut against live labels; and the one surviving mutant
+    (`SoapySource::openDeviceCount()`, no hermetic seam).
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
