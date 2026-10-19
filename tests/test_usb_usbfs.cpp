@@ -545,16 +545,48 @@ int main() {
             }
 
             // The device recovers: a writer opens the FIFO, the abandoned
-            // read returns, and the node is back on the next walk with
-            // nobody having asked for a retry.
-            const int wfd = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
+            // read returns, and the quarantine lifts with nobody having asked
+            // for a retry. The writer's open() is retried until it succeeds
+            // (ENXIO means the abandoned worker has not reached its open()
+            // yet), and every wait polls a deadline rather than sleeping a
+            // guess, so a slow runner only makes this slower, not wrong.
+            const auto recoverBy = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+            int wfd = -1;
+            while (wfd < 0 && std::chrono::steady_clock::now() < recoverBy) {
+                wfd = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
+                if (wfd < 0) { ::usleep(5 * 1000); }
+            }
+            if (wfd < 0) { std::printf("phase 4 (recover): no reader ever opened the FIFO\n"); }
             CHECK(wfd >= 0);
             if (wfd >= 0) { ::close(wfd); }
-            for (int i = 0; i < 300 && cascade::usb::sysfsWedgedNodeCount() != 0u; ++i) {
-                ::usleep(10 * 1000);
+            while (cascade::usb::sysfsWedgedNodeCount() != 0u &&
+                   std::chrono::steady_clock::now() < recoverBy) {
+                ::usleep(5 * 1000);
+            }
+            if (cascade::usb::sysfsWedgedNodeCount() != 0u) {
+                std::printf("phase 4 (recover): quarantine did not lift after the read returned\n");
             }
             CHECK(cascade::usb::sysfsWedgedNodeCount() == 0u);
-            CHECK(cascade::usb::readSysfsUsbNodes(root, budget).size() == 3u);
+
+            // A FIFO blocks again on EVERY open() with no writer, so the
+            // device that "recovered" has to stop being one: the node's
+            // attribute becomes the plain file a healthy device has. Without
+            // this the walk below would wedge on the same FIFO a second time
+            // and, correctly, list two nodes.
+            CHECK(::unlink(fifo.c_str()) == 0);
+            writeFile(fifo, "00000002\n");
+            const std::vector<SysfsUsbNode> recovered = cascade::usb::readSysfsUsbNodes(root, budget);
+            if (recovered.size() != 3u) {
+                std::printf("phase 5 (after recovery): walk listed %zu nodes, wanted 3\n",
+                            recovered.size());
+            }
+            CHECK(recovered.size() == 3u);
+            bool serialSeen = false;
+            for (const SysfsUsbNode& n : recovered) {
+                serialSeen = serialSeen || (n.name == "1-2" && n.serial == "00000002");
+            }
+            CHECK(serialSeen);
+            CHECK(cascade::usb::sysfsWedgedNodeCount() == 0u);
 
             const std::string cleanup = "rm -rf '" + root + "'";
             CHECK(std::system(cleanup.c_str()) == 0);
