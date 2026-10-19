@@ -1332,6 +1332,330 @@ clicks, with the state moved by commands no click sends. The window draws with `
 buffer cannot capture its text: the tests check the model and the pure sentence functions, and real
 draws and clicks. And a capture that opens the window through the config finds it shut: see above.
 
+GROUP 10, the plugin store (drawPluginStoreSection, drawPluginsSection, drawBlockedPluginRows and
+drawPluginStoreWindow, with `storeLists`, the cache the window gained; `buildPluginStoreModel` and
+`addAllProgressLine` are deleted): API 0.3 section 8.9, no op added. This is the rail's store key with its
+chip and catalogue URL field, the retired ("Disabled") rows hung under it, the rail's PLUGINS key, and the
+store window the key opens: the catalogue, each module's data plate, the updates, the show and sort wells,
+ADD ALL and the install outcome. The window's own survey, written before the first edit, found 44 counted
+field reads of 10 distinct fields, 12 method calls the guard does not count, 8 `submitCommand` calls and one
+`applyCommand`, in SIX members: the four the brief named and the two helpers that belong to them alone
+(`drawBlockedPluginRows`, 11 reads between the two helpers, and `addAllProgressLine`; leaving them behind
+would have kept a quarter of the reads). Where the brief and the code disagreed: (1) `reportPluginStatus` is
+not a frame member: it runs once, from `run()`'s teardown, only in a bounded `--frames` run, and
+`reportPluginTestResult` is a host hook the ENGINE calls from inside `pollPluginAsync` and reads the live
+`catalog_` by design; both are test machinery, stay on `engine_.` and out of `kPortedMembers`, and that is
+the whole reason `catalog_` and `pluginBlocked_` stay in the count (porting them would have been 93 / 438 and
+86 / 405, measured by renaming the reads in a scratch copy of src); (2) `drawPluginsSection` is not a store
+member, it is the fitted window's rail row, and it needed no new API. All nine commands the window sends
+(the catalogue URL commit, Update and Remove on a retired row, FETCH from the first open and from CHECK NOW, CANCEL, ADD ALL, FIT
+and Update on a row) were ops already and go through `uiSubmit`. One same-frame site existed, the URL commit,
+which was applied at once with `applyCommand` and is a submit now (difference 3 below). Step A put the
+table's side in place, step B the window's.
+
+What moved into the table (step A; docs/api-0.3-additions.md section 8.9, with a per-datum table of what the
+window draws and from where):
+- CATALOGUE gains `value[0]` (the entry's ABI version) and `value[1]` (the size of the build for THIS host,
+  0 for "not stated" or "no build"), and the item flag BUILD_HERE 0x00200000 (the next free ITEM bit; the
+  0x00200000 at foxsdr_api.h:266 is FOXAPI_RX_WEB_LISTENING, another namespace). "Installable here" is
+  COMPATIBLE and BUILD_HERE;
+- six facts an entry, `fact.store.<id>.{author, licence, platforms, floor, file, updateReason}`, beside the
+  six that were there, so twelve in all. Every key exists for every entry and is "" when empty; an unknown id
+  or leaf is NOT_FOUND. `platforms` is "windows/x64, plan9/mips" in the index's order, `file` the sanitised
+  name the engine itself joins to PLUGINS on (ASCII case ignored; an INSTALLED entry with no PLUGINS row is a
+  retired module, which is normal), `updateReason` the plan's own English sentence ("version 9.2.0 replaces
+  the installed 9.0.0"). `fact.store.url` is LOCAL (a REMOTE session is DENIED it), and its default is the
+  real raw.githubusercontent.com address, not "";
+- the retired rows' facts, `fact.blocked.<file>.id` and `.message`, keyed by FILE and present exactly for
+  STORE_BLOCKED's files. The sentence is composed by `PluginRepo::pluginBlockMessage` when the block is
+  built, so a language switch rebuilds it (proved: listSeq moved, the sentence changed, the item's `detail`
+  stayed English) and it is whole, where a list item's `detail` cuts at 159 bytes (the test uses an
+  over-limit message and checks `detail` is a prefix of the whole sentence);
+- STORE_ACTIVITY (39), at most two entries, ACTIVE on both. Id 1 is the transfer: `name` the module, "" for
+  the catalogue fetch, `value[0]` the progress read LIVE from the repo's atomic (no allocation), `value[1]`
+  1 fetching the catalogue, 2 downloading (an update counts as 2). Id 2 is ADD ALL: `name` the module moving
+  now, `value[0]` its 1-based position, `value[1]` the total. With only the run going entry 2 is first but
+  keeps its id; it stands alone only in the publish of the pass that applied ADD ALL (name "", position 1),
+  and from then entry 1 is there in every publish until the run ends;
+- two more STATUS_LINES keys, `catalogStatus` (level 1) and `addAllSummary` (level 1, 3 when the run had
+  failures), each also as `fact.status.*`. The vendored header gains FOXAPI_LIST_STORE_ACTIVITY 39 and
+  FOXAPI_ITEM_BUILD_HERE, and its SHA-256, now 9cccb600aa5b7e5f505a7ab0b95f9cf909b2d7c39f47938a7e49390592669c3d,
+  is updated in third_party/foxsdr_api/README.md and THIRD_PARTY.md.
+TIMING, which the section documents: a fetch's start (entry 1 of kind 1 appears, CATALOGUE empties,
+`catalogStatus`, `catalogError` and the install lines clear) is published together in the pass that applied
+it; the result is published one pass after the pass that polled it; the handed-over lines copy is published
+at the end of the pass that applied the result. So a window that mixes the copy with table rows can show a
+result line one pass before its rows (difference 1), and a fetch of a local index.json can start AND land
+between two reads, so the window must not rely on ever seeing kind 1.
+
+THE FINGERPRINT, and why `catalogSeq_` is in it. The block, the facts, the composed sentences and the update
+plans (one `plannedPluginUpdates()` a block) are built only when the list fingerprint moves, and the
+fingerprint hashes no entry text: a new counter, `Engine::catalogSeq_`, is bumped at the four places
+`catalog_` is written (a fetch's start, its landing, its failure and the test hook), and the fingerprint
+hashes that, plus `pluginCatalogueUrl_`, `installBusyName_` (the NAME, not only the flag: ADD ALL moves to
+the next download inside one `pumpWorkers` call, so the busy flag never drops between two modules and the
+label would otherwise show the last one's name for as long as the next download lasts), `addAllRun_`'s
+`active`, `next`, `total` and `currentName`, `addAllFailed_`, each retired row's id and stored sentence, and
+the two new lines. The progress is the one live-read value and is not hashed. WHY IT IS THE GUARANTEE EVEN
+THOUGH IT IS REDUNDANT IN PRODUCTION: on every real path the busy flag and the landing's rescan move the
+fingerprint as well, so a catalogue could not change without it moving; `catalogSeq_` is what makes that
+exact and not a coincidence of other inputs, and the test world changes the catalogue through the counter
+alone, which is what kills its mutants. Measured (tests/test_engine_publish_alloc case F4: 24 entries with
+descriptions of 528 bytes to 3 KB, a retired row, a transfer and an ADD ALL run): 40 fingerprints, 40
+unchanged `publishLists` passes and 40 full publishes each allocate 0; 1000 iterations that read both
+STORE_ACTIVITY entries while the progress moves allocate 0 and leave the fingerprint unchanged; a change
+rebuilds once at 1193 to 1203 allocations and the 40 settled passes after it allocate 0; fifteen
+single-input changes each move the fingerprint ALONE, and the same state said again 25 times leaves it
+equal.
+
+A BUG FOUND ON THE WAY, in the survey's own formula (red, then green): the survey had the table serve
+`position = min(next + 1, total)`, which is the OLD window's formula in `addAllProgressLine`, and it is off
+by one. `pumpAddAll` steps `next` past a module as it STARTS it, so while module k downloads `next == k`;
+the old line drew the first module as "2 of N" and the last two both as "N of N". RED, test I3 in
+tests/test_engine_api_03.cpp with the survey's formula: `FAIL test_engine_api_03.cpp:4311: run.value[0]
+(2 vs 1)`, then `(3 vs 2)`, trace `@1 Bad One@2 Bad Two@3 Bad Three@3`. The fix is in the TABLE: it serves
+`clamp(next, 1, total)`. GREEN: trace `@1 Bad One@1 Bad Two@2 Bad Three@3`. The window letters the true
+number, so one visible line differs from the old one (difference 2); the test restates the old formula to
+say so.
+
+THE TESTS and the break-it checks of step A. Group I of tests/test_engine_api_03.cpp (I1 to I5) does a REAL
+fetch of a local index.json with a retired module, an updatable fitted one and five entries for the columns
+(no build, another ABI, no licence, a legal notice, a plain one), drives the transfer's workers through a
+promise, runs a REAL ADD ALL over three entries whose file names `install()` refuses before the network (so a
+run is a handful of passes), and holds every NOT_FOUND, "" and DENIED edge; F4 is above; the two "every list
+is served" loops now run to STORE_ACTIVITY; tests/test_config_snapshot_app.cpp's hand-over is 21 lines (it
+was 19), nothing weakened. Twenty-eight mutants were each applied alone and each is red, restored after:
+twelve un-hash an input (`catalogSeq_`, `pluginCatalogueUrl_`, `installBusyName_`, `addAllRun_.active`,
+`.next`, `.total` and `.currentName`, `addAllFailed_`, a retired row's id, a retired row's sentence,
+`catalogStatus_` and `addAllSummary_` out of the lines loop); ten do the wrong thing (progress hashed,
+`fact.store.url` not LOCAL, BUILD_HERE never set, the old position formula, `addAllSummary` always level 1,
+the blocked message left as stored English, `.file` not sanitised, `updateReason` always empty, the transfer
+kinds swapped, the live repo pointer dropped); six break a counter or a copy (the `catalogSeq_` bump removed
+at each of its four sites, killed by I5; `catalogStatus` not handed over; `addAllFailed` not handed over).
+The one that needed care is `catalogSeq_`'s own: on real paths something else moves the fingerprint with it,
+so only a test that changes the catalogue through the counter alone (F4 and I5) kills it. Full rebuild: zero
+errors (only the old C4244 warnings at fox_engine_api.cpp 1787 and 1790). Full suite 252/252 in 206.47 s;
+test_engine_api_03 2094 checks and 0 failed, five solo runs in a row; test_engine_publish_alloc 223 checks;
+test_config_snapshot_app 14.
+
+Where step A DIVERGED from the survey: (1) EngineStatusText gains THREE members, not two: `catalogStatus`,
+`addAllSummary` AND `addAllFailed` (a bool). The window reads its lines from that copy, and the red-versus-ink
+level of the ADD ALL summary needs a source there; the table carries the level in STORE_LINES as well.
+(2) The position is `clamp(next, 1, total)` and not `min(next + 1, total)` (above). (3) No
+`fact.store.generation` was added: the survey would have added it only if step B measured a refresh cost, and
+step B did not need it (see what could move a number). (4) `hostAbiVersion` stays the window's own
+CASCADE_PLUGIN_ABI_VERSION and is not served; section 8.9 says so. (5) The legal-acknowledgement sentence was
+still a literal at engine.cpp:2485, which step B hoisted (below).
+
+The pattern held, with these additions to it (step B):
+- THE STORE CACHE, `storeLists(bool full)` (gui/plugin_store_view.hpp: `StoreRow`, `StoreBlockedRow`,
+  `StoreListCache`, and the pure helpers `fillStoreModule`, `setStoreBlockedReason`, `storeBusyLabel`,
+  `storeAddAllLine`, `foldStoreRow`). TWO TIERS, both read only when listSeq moves. The RAIL TIER (every
+  call, window open or shut, because the rail's chip, the retired rows and the PLUGINS key draw whenever the
+  DECODE bank is up) reads CATALOGUE's count, STORE_UPDATES' ids, STORE_ACTIVITY's two entries, PLUGINS'
+  records (and how many the host did not load) and STORE_BLOCKED with the two facts of each retired row. The
+  FULL TIER (only from the window's draw, only while it is drawn) reads each CATALOGUE entry, its twelve
+  facts and the PLUGINS record whose `detail` is the entry's `.file`, with that module's
+  `fact.plugin.<file>.error`, into the `PluginStoreModel` the view draws. Three things are not the lists' and
+  are set on every call: the status lines the engine handed over (the catalogue's line and error, the install
+  report and error, the ADD ALL summary and its level), each row's `blockedReason` (it depends on the deck's
+  selection and tick, which move between refreshes, so every row other than the selected one is asked as
+  unacknowledged), and the transfer's progress, read live from STORE_ACTIVITY's first entry and only while
+  one is present. The old `buildPluginStoreModel` is NOT kept: test A of the new test restates it and holds
+  the table's model equal to it field for field, in eleven states over 63 module comparisons;
+- THE ORDER OF THE REFRESH AND THE FIRST-OPEN TEST: `drawPluginStoreWindow` reads the RAIL tier every frame
+  before the open test, then the FULL tier after it, and only then asks `storeShouldCheckOnOpen`. The
+  predicate settles on its first call, so asked of a cache that has never been read ("no catalogue") it would
+  send a FETCH that the engine executes by CLEARING a catalogue another path (the web remote's, a bounded
+  run's hook) had loaded. Test D1: a catalogue loaded by another path sends no FETCH on opening, a
+  never-asked first open sends exactly one, and removing the early rail read turns D1 red;
+- `blockedRemoveConfirmIdx_` is gone for `blockedRemoveConfirmFile_`: the retired row's Remove is armed for a
+  FILE, as the fitted window's is, and is cleared when its file leaves the list (F2, with two retired
+  modules: a rescan that moves the rows does not move the armed one);
+- the hoisted sentence: src/engine/plugin_store_reasons.hpp (`kLegalNoticeFirstReason`, the FOX_TR_NOOP
+  literal now used by both engine.cpp and the view; the translation key is unchanged), so the engine's gate and
+  the window's per-row reason say the same sentence, and a ticked-or-not row gets the same one.
+
+THE THREADING FIX, which the survey recorded and step B made. The engine called two host hooks from ITS thread,
+`onCatalogueFetchStarting` (inside the STORE_FETCH apply) and `onAddAllFinished` (inside `pumpAddAll`), and
+they cleared the deck's consent ticks (`forgetCatalogueConsent`, `addAllAck = false`) while the window reads
+and writes `selected`, `legalAck` and `addAllAck` in its frame: one thread today, a data race on a flag that
+matters (a tick that survives a catalogue change is consent nobody gave) once the pump moves to the control
+thread. The window no longer defines either hook and nothing from the engine's thread touches the deck:
+`storeLists` clears the ticks on the window's own thread from three signals. (1) STORE_ACTIVITY's first
+entry with `value[1]` 1 (a catalogue fetch began) clears all of them; (2) entry 2 present and then gone (the
+run ended), or a new `addAllSummary` line, clears the ADD ALL tick; (3) the full tier, finding that the
+catalogue it reads is not the one it read last (a hash over the rows it read), clears all of them, which covers a
+fetch that started and landed between two reads. Both hooks are caller-less in src/gui now (the engine still
+calls them and the default EngineHost methods are no-ops), and `kHostHooks` lost both names. Mutants on the
+consent paths: deleting the kind-1 clear, the content-change clear or the run-end clear each turns exactly its
+own check red (F). The plugin windows' own hazard (the host process draws `pluginUi_` while an
+install's rescan unloads and reloads every module) is group 9's F6 and is NOT touched here.
+
+Ratchet: 104 fields / 485 reads -> 94 / 441, the 44 reads the survey counted and the guard prints as `the
+window reads 94 engine fields directly, 441 times (budget 94 fields, 441 reads)`; the survey predicted the
+numbers by renaming the six members' reads in a scratch copy of src before the first edit, and they match
+exactly. `kPortedMembers` gains `drawPluginStoreSection`, `drawPluginsSection`, `drawBlockedPluginRows`,
+`drawPluginStoreWindow` and `storeLists`. TEN FIELDS left the count because nothing in src/gui reads them any
+more: `addAllFailed_`, `addAllRun_`, `addAllSummary_`, `catalogPending_`, `catalogStatus_`, `installBusyName_`,
+`installError_`, `installPending_`, `installReport_` and `pluginRepo_`. `installReport_`, `installError_`,
+`catalogStatus_`, `addAllSummary_` and `addAllFailed_` join `kPublishedOnly` (the engine hands the copy).
+`catalog_` and `pluginBlocked_` stay in the count, because the two diagnostics above read them. The floor
+`submitsInDraw >= 38` is `>= 30`, the printed `30 submitCommand calls in draw members` (the eight the store
+sent are `uiSubmit` calls now; the floor is the scan seeing the real files, not a ratchet). `kReadOnly`
+retired `pluginRepo_.progress` and `pluginUi_.tuneAllowed`, their last callers gone (grep-confirmed);
+`kHostHooks` lost `onCatalogueFetchStarting` and `onAddAllFinished`. The guard goes red on a single
+`engine_.` read put back: with `engine_.catalog_` read back into `drawPluginStoreSection` the printout is
+`FAIL: AppWindow::drawPluginStoreSection is PORTED ... reaches the engine directly at app_window.cpp:8214`,
+with 94 fields / 442 reads against the budget and 186 checks, 2 failed; the real tree runs clean, 186
+checks, 0 failed.
+
+tests/test_plugin_store_window.cpp (new, registered with the fixture loops; 3517 checks, 0 failed, about
+15 s, driving the real AppWindow over a REAL fetch of a local index.json laid over a plugin folder of its
+own): A, the model equal to the old window's (above); B, entry by entry, the ABI, the size, the builds, the
+gate's reason, the plan, the host's record, the retired row's id and whole sentence, and the rail's counts;
+C, the cache and its allocations (below); D, every widget swept and clicked in six states, with exact
+expected command sets (a ticked notice sends STORE_INSTALL with `ival[0]` 1; with a transfer in flight
+STORE_CANCEL is the only live key; D1 above); E, a click landing at the engine's NEXT pass and showing
+nothing in the click's frame and the engine's value the frame after, for CHECK NOW, FIT, CANCEL, the rail's
+Update, Remove and Confirm, and a typed URL; F, the consents (above), a REAL ADD ALL ending in a red summary
+with `addAllFailed`, the status lines and their ink flags, a retired Remove staying armed for its file, and
+the PLUGINS key's counts equal to the engine's. A mutant on the cache, refreshing on every call, fails 8
+checks, including 105 000 allocations for 1000 full reads. The full suite, `ctest -C Release -j 8`: the first
+run had two failures, test_main_view (the known flake, 3 of 3 solo reruns pass) and the new test, which
+failed in the parallel mix because its D3 swept keys while the first-open fetch was still in flight (the test
+now waits for it; 3 solo runs, 8 concurrent runs and the second full run pass); the second full run is
+253/253.
+
+Measured, this desktop, Release (C of the new test): 1000 settled FULL reads allocate 0, 1000 rail-tier reads
+0, 1000 reads with a consent tick flipping 0, and 1000 live progress moves (listSeq unmoved) 0. One rebuild
+(7 entries, twelve facts each, the host's records, a retired row) allocates 105, about 15 an entry; the old
+window's model, built every frame it was open, allocated 227 and ran `plannedPluginUpdates()` and
+`catalogEntryInstalled` over the host's records a row, and the closed window's rail still paid one
+`plannedPluginUpdates()` a frame with a catalogue loaded.
+
+THE ELEVEN THINGS THE OPERATOR CAN SEE DIFFER, by the code and the tests (the survey's, step B's, and one
+resolved here); the capture below holds none of them in frame except where it says:
+1. One pass of lag on every command, like every ported control's; a result line from the handed-over copy
+   can show one pass before its table rows (documented in 8.9's timing note).
+2. The ADD ALL position line is the true number: the new trace is `1 of 3: starting | 1 of 3: Bad One | 2 of 3:
+   Bad Two | 3 of 3: Bad Three` where the old one was `starting | 2 of 3: Bad One | 3 of 3: Bad Two | 3 of 3:
+   Bad Three` (a KNOWN visible difference, from step A's bug).
+3. The URL commit is a submit: it lands one pass later, and `fact.store.url` a pass behind that. The one
+   hazard, a URL commit and CHECK NOW in one frame (the store is drawn before the rail's field, so FETCH
+   would be submitted first and fetch the old URL), is closed by ImGui's input trickle: a click's down and up
+   are never the same frame, and the field deactivates on the down. Reasoned from third_party/imgui, not
+   reproduced.
+4. The catalogue entry's name arrives through a list item and is cut at 95 bytes, where the old window drew
+   it whole (a KNOWN visible difference, tested and not captured). The longest live name the code cites is
+   51 characters; the live catalogue was not read.
+5. A refetch of the SAME catalogue that no frame saw does not clear the consent ticks (the old window cleared
+   them at every fetch). Test F(c) pins it. A fetch the window sees clears them as before.
+6. A retired row's Remove confirmation is keyed on the file, not on an index, and is cleared if its file
+   leaves the list.
+7. The model is rebuilt when listSeq moves, not every frame: a file added to the folder by hand shows at the
+   next rescan, and `running` follows STOPPED through the pass.
+8. A retired row's sentence is the engine's composed fact, in the language in force, rebuilt on a language
+   switch; the old window composed it at draw.
+9. The progress figure is read only while a transfer is present (the bar draws only while busy, unchanged).
+10. THE RAIL CHIP'S IDLE RULE did not change, and the DOCUMENT said otherwise: section 8.9's chip row read "IDLE
+    with neither a catalogue, a status line nor a fetch", where the window has always said IDLE when there
+    are no catalogue rows (a status line or a fetch in flight does not change it; BUSY outranks the rest).
+    The window's rule is the kept one and the DOCUMENT's row was corrected, in this group, to say it.
+11. `haveTuneGrant` is derived from a loaded record's CASCADE_CAP_HOST_CLIENT bit instead of the `hostClient`
+    pointer the old model read; held equal on the fixtures.
+
+What the operator sees, in a picture. Drawn by the build before this group (the tree at 18482a7: groups 1 to
+9, no group 10, in its own worktree) and by this one - the application's own framebuffer capture in bounded
+runs, four runs of each build in each of FIVE states, the window 1502x1405 as the capture measures it
+(1500x1380 requested), FOXSDR_SINGLE_VIEWPORT=1, a plugins folder beside one scratch copy of each exe (the
+same folder for both builds), no radio visible to the process (SOAPY_SDR_PLUGIN_PATH removed from its
+environment), each run on its own copy of the config (CASCADE_CONFIG_TEST) and bounded by `--frames`
+(build\g10-vis-final.txt is the table; runone10.py, campaign10.py, compare10.py, mkindex.py and the five
+input scripts s_<state>.txt are in the session's scratch, under g10-vis). The world: the two fixture modules
+of stages 1 and 8 fitted under `aa_stage_one.dll` and `bb_group_eight.dll`, with an `installed.json` written
+for the run (the stage-one module installed at 1.0.0 with a cached policy floor of 2.0.0, so the host
+retires it and renames its file to `.disabled` at the first scan; the group-8 module installed at 8.0.0), and
+a LOCAL catalogue, seven entries in a scratch index.json (the two fixtures at 2.0.0 and 8.1.0, so two
+updates are on offer, and five entries for the columns: a plain one with a long description and
+two builds, one with a legal notice and a floor, one with no build, one for another ABI, one with no
+licence), the longest name 19 bytes so the 95-byte cut is out of frame. THE CATALOGUE URL IS IN THE SEEDED
+CONFIG (`pluginCatalogueUrl`, the index's absolute path, an address with no "://"): the first open of the
+store reads it from disk and nothing touches the network (a first open fetches, and with the default URL it
+would have gone to raw.githubusercontent.com). The store window opens with the capture
+seam FOXSDR_OPEN_PLUGIN_STORE and the rail goes to DECODE with FOXSDR_OPEN_DECODERS, both builds having
+both. The states: STORE, the window open and the catalogue read, the face scrolled down by a wheel step, the
+Beta Decoder row pressed (its data plate: ABI "3, matches this build", builds for windows/x64, "Cannot fit:
+the legal notice must be acknowledged first", the updates panel with its two keys, the show wells, the
+catalogue source line); IDLE, the rail with the store never opened (chip IDLE, "Plugins (1 disabled)", the
+retired module's sentence, "Open the plugin store with the key above to fetch the update." and the Remove
+key); CHIP, the store opened once and shut again by its own close key (chip "2 UPD" with its amber lamp, the
+retired row's Update and Remove keys); ARMED, the same with Remove pressed once ("Delete aa_stage_one.dll?"
+with Confirm delete and Cancel); and REMOVED, Remove pressed twice, the store reopened from the rail's key
+(the catalogue is loaded, so nothing is fetched and the report stays), the face and then the data plate
+scrolled to bring it into frame: the green "Removed aa_stage_one.dll", the updates list one entry shorter,
+and in all eight runs the folder left holding `bb_group_eight.dll` and `installed.json`. Areas: 17 named
+areas in each of the two store states (the main window above, beside and below the store, its title bar, the
+plate heading, the updates panel, the search, show and sort panels, the modules heading, two rows and the
+cut-off rows, the data plate's heading and body, the face's scroll strip and the window's foot), 10 in each
+rail state (the top deck, the rail's head, the store key and chip, the URL field, the Disabled block, the
+PLUGINS key, the rest of the rail, its foot, the patch page and the frame's ring; these tile the capture
+exactly), then the whole capture (2 110 310 pixels) and, in the store states, the 81 214 pixels left in no
+named area. At tolerance 24, 0 pixels differ in every area of every state, between the two builds (16
+control-against-port pairs a state) AND between two runs of one build (6 control-against-control and 6
+port-against-port pairs). At tolerance 0 the result is the same: 0 in every area, every pair, the whole
+capture and the unnamed pixels, so there is no noise to bound. It is stronger than that: the eight
+captures of each state (four of each build) have ONE MD5 between them, so they are the same file; the
+stderr and the plugins left behind are identical in the two builds in every state, and the stdout differs only
+in the teardown time and the worst frame gap. The gesture's outcome was the same in all eight runs of each
+state, so no run was set aside. Because that is a table of zeros, three checks that it is not a comparator
+that cannot see: control IDLE against control CHIP reports 476 pixels at tolerance 24 (818 at tolerance 0)
+in the store key's row, 6 202 (7 604) in the Disabled block, 8 531 (10 592) in the PLUGINS key's row and 58
+077 (81 679) in the rest of the rail, and 0 and 6 in the patch page that did not change; control STORE
+against control REMOVED reports 84 734 (122 621) in the updates panel and 51 117 (94 163) in the data plate;
+and a +30 and a +10 poke on single pixels are counted as 1 pixel at tolerance 24 and 2 at tolerance 0.
+What the capture does NOT draw, and so does not hold: a BUSY chip, a transfer and its bar, an ADD ALL run and
+its summary (the two known differences, which a deliberate capture would show), a catalogue error or status
+line, a failed install's red line, a notice ticked, an Update or FIT pressed to completion (they download;
+the tests inject a transfer so the gate refuses), a language switch, and a sequence of frames: group 9
+shot sixteen frames round its gesture to look for the one-pass lag, and this campaign did not, so that lag is
+held by test E and by the code and NOT by a picture. The real config
+(%APPDATA%\foxsdr\config.json, 5 076 bytes, written at 14:52:27 UTC by another session, sha256 BA532E6C...A353C) was
+identical before the first launch and after the last (size, modification time and hash), and none of the
+scratch values (the index's path) is in it. The model for those is held by test_plugin_store_window
+A, D, E and F and by group I of test_engine_api_03.
+
+What could move a measured number: a REBUILD of the window's model costs about 15 allocations an entry (105
+for seven; 24 entries about 400), once for each listSeq move however often it is asked, where the old
+model cost 227 every frame; the engine's block rebuild (step A) costs 1193 to 1203 allocations for 24
+entries with 528-byte to 3 KB descriptions, whenever the fingerprint moves; a decoder's FED toggling moves
+listSeq, so while the store is open each toggle rebuilds the window's model once (step A added no
+`fact.store.generation` on purpose, and measuring that rebuild is the test to run if it ever shows in a
+trace); `plannedPluginUpdates()` is now once a block and no longer once a frame while the rail is up (twice a
+frame with a retired module); the engine's pass hashes `catalogSeq_`, the URL, the busy name and the run's
+fields in place at 0 allocations (F4); the table serves one more list (STORE_ACTIVITY) and two more
+status strings (the 20th and 21st line of the handed-over copy) and its progress is one live read of an
+atomic, not hashed; and a settled read of the cache, whatever the window draws from it, is 0 allocations.
+
+THE TEST-ACCESSOR TRAP was minded, as in groups 8 and 9, and more of it bit this time. A test frame is LOOK
+(`pumpFrameBegin`, `pumpInputs`, `pumpPlugins`, `pumpPublish`, the `statusLines_ = engine_.statusText()`
+copy, `refreshUiState`), DRAW, then `pumpWorkers` and `pumpAudio`: without the last two a fetch never lands,
+and a test that calls a ported member must copy `statusLines_` first because nothing else sets it. Seven more
+things for the next group. `SETTING_SET test.statusLine` is refused on an engine without the test hooks, so a
+test sets the line fields directly. A FIT or Update sent for real would DOWNLOAD: inject a transfer so the gate
+refuses, or use entries whose file names `install()` refuses before the network. The store window must be
+1580x1980 in a test to expose the plate's keys (in the capture it opens inside the main window at 1452x980
+and the face scrolls: a wheel step with the pointer over an empty spot of the plate, then a second one over
+the data plate's own pane for what sits under its key). The first open of the store FETCHES, so a test or a
+capture that opens it with a catalogue never asked must point the URL at a local file first (in a capture, in
+the SEEDED config), and a test that sweeps keys must wait for that fetch (D3's first failure). The survey
+must drop `uiSubmitTap_` on exit: a dangling tap pointer is undefined behaviour. A retired module needs an
+`installed.json` with a cached floor in the plugins folder, and the host renames its file to `.disabled` at
+the first scan, so the file a capture's Remove names is the module's own (`aa_stage_one.dll`) and not the
+renamed one. An input script's path is read from the run's own folder, so it must be absolute. And, from
+step A, Git Bash `sed -i` strips the CR from the CRLF files in this tree: every edited file was restored to
+CRLF (the vendored header is LF, as in the repo).
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
