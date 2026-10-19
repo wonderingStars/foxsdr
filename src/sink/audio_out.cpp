@@ -63,6 +63,22 @@ cascade::core::health::SoundReason soundReasonFor(PaError err) {
 
 }  // namespace
 
+bool openRequestUsable(double sampleRateHz, int channels) {
+    // Strictly above zero and below 2^32: ALSA holds the rate in an unsigned int,
+    // and a NaN fails both comparisons so it is refused without being named.
+    constexpr double kMaxRateHz = 4294967295.0;
+    if (!(sampleRateHz > 0.0 && sampleRateHz < kMaxRateHz)) { return false; }
+    return channels == 1 || channels == 2;
+}
+
+double usableSuggestedLatency(double deviceDefaultLowLatencySec) {
+    // The negated range test also catches NaN, which compares false to both ends.
+    if (!(deviceDefaultLowLatencySec >= 0.0 && deviceDefaultLowLatencySec <= 10.0)) {
+        return 0.1;
+    }
+    return deviceDefaultLowLatencySec;
+}
+
 AudioOut::AudioOut() : ring_(kRingCapacity) {
     // Through the one shared, locked initialiser (sink/pa_init.hpp):
     // PortAudio's own count of Initialize/Terminate pairs is a plain int.
@@ -161,7 +177,10 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
 
     using cascade::core::health::SoundReason;
     if (!paOk_) { return refuse("PortAudio did not start", SoundReason::NoDevice); }
-    if (!(sampleRateHz > 0.0) || (channels != 1 && channels != 2)) {
+    // Not just "positive": see openRequestUsable. Infinity and a rate past what
+    // ALSA's unsigned int holds used to pass the old `> 0` test and go on into
+    // the host API's integer period arithmetic.
+    if (!openRequestUsable(sampleRateHz, channels)) {
         return refuse("the request itself was unusable (a rate or a channel count)",
                       SoundReason::Format);
     }
@@ -213,7 +232,10 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
     out.sampleFormat = paFloat32;
     // Low-latency hint: an SDR should respond to tuning without an audible
     // lag. PortAudio rounds this up to whatever the host API can honor.
-    out.suggestedLatency = info->defaultLowOutputLatency;
+    // A device record whose default is not a sane number (see
+    // usableSuggestedLatency) gets a conventional hint instead of a value the
+    // host API would turn into a frame count by overflow.
+    out.suggestedLatency = usableSuggestedLatency(info->defaultLowOutputLatency);
     out.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;

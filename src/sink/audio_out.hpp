@@ -52,6 +52,30 @@ struct AudioDevice {
     bool isDefault;  // true for the host API's default output device
 };
 
+// THE TWO NUMBERS A HOST API DIVIDES BY. PortAudio's ALSA backend turns the
+// sample rate and the suggested latency into a period size with integer
+// arithmetic, and a value it was never meant to see (not-a-number, infinity,
+// a rate beyond what ALSA's unsigned int holds, a negative or absurd latency)
+// reaches that arithmetic unchecked. The field's SIGFPE (0.99.81, Kali) was in
+// that function too, but its divisor was a device-reported period count, not
+// one of these two numbers - that one is guarded in the vendored library
+// (third_party/portaudio/FOXSDR-PATCHES.md, alsa-zero-periods). These are the
+// checks AudioOut::open() makes first, as free functions so a test can state
+// them without a sound card.
+//
+// openRequestUsable: false for a request no host API can honour - a rate that
+// is not a finite number in (0, 2^32), or a layout other than 1 or 2 channels.
+// open() answers false for it through its ordinary refusal path ("the request
+// itself was unusable"), never by reaching PortAudio.
+bool openRequestUsable(double sampleRateHz, int channels);
+
+// usableSuggestedLatency: the latency hint to give Pa_OpenStream. A finite
+// value in [0, 10] seconds passes through unchanged (zero is a legitimate
+// "as low as you can"); anything else - NaN, infinity, negative, or longer than
+// any buffer a sound card has - becomes 0.1 s, a conventional safe hint, rather
+// than a number that overflows the host API's frame count.
+double usableSuggestedLatency(double deviceDefaultLowLatencySec);
+
 class AudioOut {
 public:
     // Calls Pa_Initialize(). PortAudio itself refcounts paired

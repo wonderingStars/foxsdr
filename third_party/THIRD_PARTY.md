@@ -3,12 +3,14 @@
 Every library the application links is vendored here, pinned to the exact
 revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
-file has been modified**, with TWO documented exceptions: Dear ImGui carries three
+file has been modified**, with THREE documented exceptions: Dear ImGui carries three
 fenced patches, its word wrap for Chinese and Japanese, a colour table pushed
 for every popup-like window, and a cache that skips its GLFW backend's per-frame
 mouse-passthrough call when the value has not changed
 (`imgui/FOXSDR-PATCHES.md`), and GLFW carries one, a cherry-pick of an upstream
-fix to the order its Wayland backend shuts down in (`glfw/FOXSDR-PATCHES.md`).
+fix to the order its Wayland backend shuts down in (`glfw/FOXSDR-PATCHES.md`),
+and PortAudio carries one, a one-line refusal of an ALSA device that reports zero
+periods, which would otherwise be divided by (`portaudio/FOXSDR-PATCHES.md`).
 (The Noto Sans Condensed fonts are not verbatim either: they are subsetted, and
 their own section below says so.) Each subdirectory keeps its upstream license
 file.
@@ -129,7 +131,11 @@ the mark. Built via `add_subdirectory` with
 deployment simplification — same code, same version).
 
 ### PortAudio (`third_party/portaudio/`)
-Full pristine tree at the pinned commit. Built via `add_subdirectory`, static
+Full tree at the pinned commit, **plus one fenced patch** (`FOXSDR PATCH
+(alsa-zero-periods)` in `src/hostapi/alsa/pa_linux_alsa.c`, Linux only; what,
+why and how to drop it in `portaudio/FOXSDR-PATCHES.md`, held in place by
+`tests/test_portaudio_alsa_periods.cpp`); every other file is the pristine
+archive (the hash above is of that unpatched archive). Built via `add_subdirectory`, static
 (`portaudio_static` target). **Host APIs compiled on Windows: WASAPI and WMME
 only.** ASIO is OFF (requires the proprietary Steinberg SDK), DirectSound is
 OFF, WDM/KS is OFF (including `PA_USE_WDMKS_DEVICE_INFO`). Note: the vcpkg

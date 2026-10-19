@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -40,6 +41,8 @@
 
 using cascade::sink::AudioDevice;
 using cascade::sink::AudioOut;
+using cascade::sink::openRequestUsable;
+using cascade::sink::usableSuggestedLatency;
 
 namespace {
 
@@ -621,6 +624,56 @@ int main() {
         CHECK(!ao.open(-1, 48000.0, 3));    // only 1 and 2 are layouts
         CHECK(!ao.open(-1, 48000.0, 0));
         CHECK(ao.channels() == 1);          // a refused open changes nothing
+    }
+
+    // --- A request the host API's integer arithmetic must never see ----------
+    // THE FIELD REPORT: 0.99.81 on Linux took SIGFPE inside PortAudio's ALSA
+    // backend (PaAlsaStreamComponent_DetermineFramesPerBuffer) from this very
+    // open(). The division itself is in the vendored library and is guarded
+    // there (third_party/portaudio/FOXSDR-PATCHES.md, alsa-zero-periods; held by
+    // test_portaudio_alsa_periods); what is guarded HERE is the part this code
+    // owns: a rate or latency that is not a usable number is refused before
+    // Pa_OpenStream, through the same refusal path as any other unusable
+    // request, and leaves the object closed. Under the old `rate > 0` test
+    // infinity and anything from 2^32 up went on to the host API; zero,
+    // negatives and NaN were already refused and stay pinned here.
+    {
+        const double inf = std::numeric_limits<double>::infinity();
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        CHECK(!openRequestUsable(0.0, 1));
+        CHECK(!openRequestUsable(-48000.0, 1));
+        CHECK(!openRequestUsable(nan, 1));
+        CHECK(!openRequestUsable(inf, 1));
+        CHECK(!openRequestUsable(-inf, 1));
+        CHECK(!openRequestUsable(4294967295.0, 1));  // ALSA's unsigned int limit
+        CHECK(!openRequestUsable(1e300, 2));
+        CHECK(!openRequestUsable(48000.0, 0));
+        CHECK(!openRequestUsable(48000.0, 3));
+        CHECK(!openRequestUsable(48000.0, -1));
+        CHECK(openRequestUsable(8000.0, 1));          // the ends of what is real
+        CHECK(openRequestUsable(48000.0, 1));
+        CHECK(openRequestUsable(48000.0, 2));
+        CHECK(openRequestUsable(768000.0, 2));
+
+        CHECK(usableSuggestedLatency(0.0) == 0.0);    // "as low as you can" is legitimate
+        CHECK(usableSuggestedLatency(0.009) == 0.009);
+        CHECK(usableSuggestedLatency(10.0) == 10.0);
+        CHECK(usableSuggestedLatency(nan) == 0.1);
+        CHECK(usableSuggestedLatency(inf) == 0.1);
+        CHECK(usableSuggestedLatency(-0.5) == 0.1);
+        CHECK(usableSuggestedLatency(10.5) == 0.1);
+
+        // End to end through open(): refused, still closed, still the default
+        // layout, and no device is touched (the checks come first, so this
+        // holds on a machine with no sound card too).
+        AudioOut ao;
+        CHECK(!ao.open(-1, nan, 1));
+        CHECK(!ao.open(-1, inf, 1));
+        CHECK(!ao.open(-1, 4294967296.0, 2));
+        CHECK(!ao.open(-1, 1e300, 1));
+        CHECK(!ao.running());
+        CHECK(!ao.everOpened());
+        CHECK(ao.channels() == 1);
     }
 
     // --- Stereo: real two-channel open, then the callback core headless -----
