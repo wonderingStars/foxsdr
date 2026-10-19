@@ -684,3 +684,143 @@ if(CASCADE_SANITIZE_ENABLED)
         message(STATUS "sanitizer: ${t} is excluded - ${why}")
     endforeach()
 endif()
+
+# ---------------------------------------------------------------------------
+# THE REAL-TIME AUDIO MEASUREMENTS DO NOT SHARE A MACHINE. Each of these runs
+# a pipeline against a source paced by the wall clock and asserts tone levels,
+# RDS, fades or drift corrections; a DSP thread that falls behind the clock
+# drops samples and the measurement fails with nothing else wrong - the exact
+# mechanism that keeps them out of the sanitizer builds (see
+# CASCADE_SANITIZE_EXCLUDED_TESTS above). Seven siblings running beside them
+# under `ctest -j8` is the same starvation by another route: measured here,
+# test_pipeline_audio and test_tx_audio fail under -j8 and pass alone. They
+# stay in the headless pass but each takes the machine to itself.
+set(CASCADE_REALTIME_AUDIO_TESTS
+    app_selftest
+    test_channel_bandwidth
+    test_patch_audio
+    test_pipeline_audio
+    test_pipeline_audio_lead
+    test_pipeline_device_rate_audio
+    test_plugin_audio
+    test_tx_audio
+)
+foreach(t ${CASCADE_REALTIME_AUDIO_TESTS})
+    set_tests_properties(${t} PROPERTIES RUN_SERIAL TRUE)
+endforeach()
+
+# ---------------------------------------------------------------------------
+# EVERY TEST IS "gui" OR "headless", SO THE SUITE CAN RUN IN TWO PASSES:
+#
+#   ctest -L headless -j8       # the bulk of the suite, in parallel
+#   ctest -L gui                # the window-openers, serial as before
+#
+# "gui" is every test that puts a real window on the desktop: it spawns
+# cascade with --frames (a bounded AppWindow::run, which is glfwCreateWindow),
+# calls AppWindow::run itself (test_deck_knobs_app, in a child of itself), or
+# creates a GLFW window of its own (test_mouse_passthrough_cache,
+# test_viewports). Those cannot run in parallel on a desktop - they fight for
+# focus and the input script's pointer - and they are what kept the whole
+# 40-minute suite serial. Everything else never opens a window and is safe
+# under -j: that includes the tests that only CONSTRUCT an AppWindow (the
+# window is made in run(), not the constructor), test_window_failed_app
+# (every spawn sets FOXSDR_TEST_WINDOW_FAIL, so glfwCreateWindow fails by
+# design and no window is ever shown), and test_soapy_enum_proc (the real
+# enumeration child is windowless).
+#
+# The list below is maintained BY HAND and checked twice at configure time:
+# a name that is not a registered test is a hard error (a rename must update
+# this list), and a registered test that ends up with neither label - or both -
+# is a hard error too, so the partition stays total as tests are added. A new
+# test is headless by default; add it here only if it opens a window.
+set(CASCADE_GUI_TESTS
+    app_smoke
+    test_airband_app
+    test_bias_key_run
+    test_bookmark_stacking_app
+    test_clean_exit_marker
+    test_console_owner_app
+    test_crash_upload
+    test_deck_knobs_app
+    test_decoder_settings_fold_app
+    test_decoder_window_app
+    test_diag_hang
+    test_diagnostics
+    test_display_fold_app
+    test_display_menu_app
+    test_exit_cause_app
+    test_foreign_modules_app
+    test_freq_markers_app
+    test_gps_app
+    test_health_app
+    test_import_dialog_app
+    test_main_view
+    test_mouse_passthrough_cache
+    test_passband_slide_app
+    test_patch_canvas_nav
+    test_patch_info_pane
+    test_patch_map_credit
+    test_plugin_dup_app
+    test_plugin_inuse_app
+    test_plugin_pathpick_app
+    test_plugin_store_app
+    test_radio_setup_app
+    test_rail_fold_app
+    test_receiver_layout_app
+    test_row_keys_app
+    test_sentinel_app
+    test_shutdown_budget
+    test_slow_frames_app
+    test_spectrum_trace_app
+    test_stall_count
+    test_startup_state
+    test_status_fold_app
+    test_stop_ends_recordings
+    test_store_update_app
+    test_team_message_app
+    test_tester_link
+    test_tester_usage
+    test_theme_census
+    test_tx_audio_page_app
+    test_tx_audio_plate_app
+    test_unplaced_list_app
+    test_viewports
+    test_window_platform_app
+)
+
+# Label APPENDED, not set: the sanitizer and TSan passes above put their own
+# labels on some tests (sanitize-excluded, tsan, fuzz on the corpus replays)
+# and those must survive.
+get_directory_property(_cascade_registered_tests TESTS)
+foreach(t ${CASCADE_GUI_TESTS})
+    if(NOT t IN_LIST _cascade_registered_tests)
+        message(FATAL_ERROR "CASCADE_GUI_TESTS names '${t}' but no such test is "
+                "registered - renamed or removed? Update the list above.")
+    endif()
+endforeach()
+foreach(t ${_cascade_registered_tests})
+    if(t IN_LIST CASCADE_GUI_TESTS)
+        set_property(TEST ${t} APPEND PROPERTY LABELS gui)
+    else()
+        set_property(TEST ${t} APPEND PROPERTY LABELS headless)
+    endif()
+endforeach()
+
+# The partition is total, asserted: every registered test carries exactly one
+# of the two labels. This cannot fail for the loop above alone - it is the
+# guard against a later edit that sets LABELS outright (wiping gui/headless)
+# or labels a test both ways.
+foreach(t ${_cascade_registered_tests})
+    get_test_property(${t} LABELS _labels)
+    set(_n 0)
+    if("gui" IN_LIST _labels)
+        math(EXPR _n "${_n} + 1")
+    endif()
+    if("headless" IN_LIST _labels)
+        math(EXPR _n "${_n} + 1")
+    endif()
+    if(NOT _n EQUAL 1)
+        message(FATAL_ERROR "test '${t}' carries ${_n} of the labels gui/headless "
+                "(labels: '${_labels}'); every test must carry exactly one.")
+    endif()
+endforeach()

@@ -19,9 +19,13 @@
 # has not run on a runner yet.
 name: build
 
+# Push builds run on master AND on integration/release branches (integ*,
+# release/*), so the Linux artifacts for a release start building when the
+# integration branch is pushed rather than only after the final merge to
+# master. The jobs themselves are identical on every branch.
 on:
   push:
-    branches: [master]
+    branches: [master, 'integ*', 'release/*']
   pull_request:
   workflow_dispatch:
 

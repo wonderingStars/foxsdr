@@ -21,6 +21,26 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+**Running the suite in two passes.** Every test carries exactly one of the
+labels `headless` or `gui` (set and checked in `tests/CMakeLists.txt`): `gui`
+is the minority that put a real window on the desktop, which is what kept the
+whole suite serial. The bulk runs in parallel and the window-openers follow,
+serial, exactly as before:
+
+```
+ctest --test-dir build -C Release -L headless -j8 --output-on-failure
+ctest --test-dir build -C Release -L gui --output-on-failure
+```
+
+The two passes together are the whole suite — the partition's totality is
+asserted at configure time, so a test cannot fall between them. The `gui` pass
+wants the desktop to itself: its tests open windows, steal focus and drive the
+pointer through input scripts, so do not type into anything while it runs, and
+never run it `-j`. A new test is `headless` unless it is added to
+`CASCADE_GUI_TESTS` in `tests/CMakeLists.txt`. (On Linux, drop `-C Release`;
+under `xvfb-run` the `gui` pass opens its windows on the virtual display, as
+CI does for the whole suite.)
+
 **Memory-error, thread, static-analysis and fuzz testing.**
 `-DCASCADE_SANITIZE=address` builds everything (application, tests, the libraries
 inside them) under AddressSanitizer in a separate build directory,
