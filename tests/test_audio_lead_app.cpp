@@ -5,8 +5,11 @@
 // tests/test_drift_matcher.cpp the matcher that steers to it. What only the
 // application can show is the WIRING of the once-a-minute poll that closes a
 // minute: that a minute of starved callbacks reaches the sink's lead, the log,
-// the AUDIO card and Sinks rail sentence, the config and the health count - and
-// that a minute that should change nothing changes nothing.
+// the AUDIO card and Sinks rail sentence, the config and the health count; that
+// a quarter hour of played, starvation-free minutes steps a raised lead back
+// down, the remembered depth with it (0.99.83); that a depth restored at launch
+// is said rather than silent; and that a minute that should change nothing
+// changes nothing.
 //
 // THE FIELD REPORT (12CF, a Store user on 0.99.64, RSP1A at 2.048 MS/s, thirty
 // plugins): 110 to 126 starved audio callbacks every minute at a fixed 120 ms
@@ -213,6 +216,36 @@ void starve(cascade::sink::AudioOut& out, int times) {
     for (int i = 0; i < times; ++i) { starveOnce(out); }
 }
 
+// A PLAYING sink, for the quiet minutes of the step-down (0.99.83): queue the
+// current lead and let one callback cross the priming threshold. Afterwards
+// primed() is true - the minute poll's test for "it played" - and nothing has
+// starved. The ring keeps what was queued, so the minutes that follow stay
+// primed without another callback.
+void primeAndPlay(cascade::sink::AudioOut& out) {
+    const std::size_t chan = static_cast<std::size_t>(out.channels() == 2 ? 2 : 1);
+    const std::size_t lead = out.leadFrames();
+    std::vector<float> pad(lead * chan, 0.0f);
+    CHECK(out.write(pad.data(), pad.size()) == pad.size());
+    std::vector<float> dst(480 * chan);
+    CHECK(cascade::sink::AudioOut::pullBlock(&out, dst.data(), 480) == dst.size());
+    CHECK(out.primed());
+}
+
+// Ends a quiet run the way the device does: play the ring dry, so that exactly
+// one callback finds less than it asked for - one starved callback, and the
+// sink unprimed. (The first pull may also apply a pending trim from a step
+// down; that only shortens the drain.)
+void playUntilStarved(cascade::sink::AudioOut& out) {
+    const std::size_t chan = static_cast<std::size_t>(out.channels() == 2 ? 2 : 1);
+    const std::uint64_t before = out.underruns();
+    std::vector<float> dst(4800 * chan);
+    for (int guard = 0; out.underruns() == before && guard < 4000; ++guard) {
+        cascade::sink::AudioOut::pullBlock(&out, dst.data(), 4800);
+    }
+    CHECK(out.underruns() == before + 1);
+    CHECK(!out.primed());
+}
+
 const char* kRaisedTo240By3 =
     "Audio buffer raised to 240 ms: this computer fell behind 3 times in the last minute.";
 
@@ -304,7 +337,7 @@ int main() {
         CHECK(countOf(ledger->counts(), "recovered.audiolead") == 1);   // once a session
         CHECK(Access::config(app).audioBufferAutoMs == 480);            // the latest depth is the one kept
 
-        // --- 5. A QUIET MINUTE DOES NOTHING: never down ---------------------------------
+        // --- 5. A QUIET MINUTE OR TWO DOES NOTHING (the way down needs fifteen, 6b) -----
         Access::closeMinute(app);
         Access::closeMinute(app);
         CHECK(Access::leadNow(app) == 480);
@@ -324,6 +357,62 @@ int main() {
         CHECK(Access::config(app).audioBufferMs == 0);
         CHECK(Access::config(app).audioBufferAutoMs == 960);      // the ceiling is what is kept
 
+        // --- 6b. THE WAY BACK DOWN (0.99.83): a quarter hour of PLAYED quiet minutes ------
+        // An IDLE sink earns nothing: the last starve left it unprimed, and however many
+        // minutes close like that, 960 ms stays - a machine that is not playing proves
+        // nothing about whether it keeps up.
+        for (int m = 0; m < 15; ++m) { Access::closeMinute(app); }
+        CHECK(Access::leadNow(app) == 960);
+        CHECK(Access::config(app).audioBufferAutoMs == 960);
+        // Playing, fourteen quiet minutes are not enough...
+        primeAndPlay(out);
+        for (int m = 0; m < 14; ++m) { Access::closeMinute(app); }
+        CHECK(Access::leadNow(app) == 960);
+        CHECK(logLinesWith("audio: buffer lowered to") == 0);
+        // ...and the fifteenth steps down ONE rung - the remembered depth with it, the
+        // sentence and the log line saying so, and no health count (coming down is not
+        // a recovery).
+        Access::closeMinute(app);
+        CHECK(Access::leadNow(app) == 480);
+        CHECK(out.leadFrames() == 23040u);
+        CHECK(Access::config(app).audioBufferAutoMs == 480);
+        std::printf("notice: \"%s\"\n", Access::notice(app).c_str());
+        CHECK(Access::notice(app) == "Audio buffer lowered to 480 ms after 15 quiet minutes.");
+        CHECK(logLinesWith("audio: buffer lowered to 480 ms after 15 quiet minutes") == 1);
+        CHECK(countOf(ledger->counts(), "recovered.audiolead") == 1);
+        // A STARVED CALLBACK BREAKS THE RUN: ten quiet minutes, one bad one (a single
+        // starved callback - a stutter, not a raise), and the fourteen that follow are a
+        // fresh run, one minute short of a step.
+        for (int m = 0; m < 10; ++m) { Access::closeMinute(app); }
+        playUntilStarved(out);
+        Access::closeMinute(app);                                 // the bad minute: resets, nothing steps
+        CHECK(Access::leadNow(app) == 480);
+        primeAndPlay(out);
+        for (int m = 0; m < 14; ++m) { Access::closeMinute(app); }
+        CHECK(Access::leadNow(app) == 480);                       // 10 + 14 straddling a starve: no step
+        // The fifteenth of the unbroken run steps to 240, and a quarter hour later the
+        // lead is back at the 120 ms start - where there is nothing left to remember.
+        Access::closeMinute(app);
+        CHECK(Access::leadNow(app) == 240);
+        CHECK(Access::config(app).audioBufferAutoMs == 240);
+        for (int m = 0; m < 15; ++m) { Access::closeMinute(app); }
+        CHECK(Access::leadNow(app) == 120);
+        CHECK(Access::notice(app) == "Audio buffer lowered to 120 ms after 15 quiet minutes.");
+        CHECK(Access::config(app).audioBufferAutoMs == 0);        // 120 is the start: no memory
+        // The floor holds, however quiet.
+        for (int m = 0; m < 20; ++m) { Access::closeMinute(app); }
+        CHECK(Access::leadNow(app) == 120);
+        // AND A STEP DOWN THAT WAS WRONG IS CAUGHT WITHIN A MINUTE: the next bad minute
+        // raises again, exactly as it always did.
+        playUntilStarved(out);
+        Access::closeMinute(app);                                 // one starved callback: not a raise
+        CHECK(Access::leadNow(app) == 120);
+        starve(out, 3);
+        Access::closeMinute(app);
+        CHECK(Access::leadNow(app) == 240);
+        CHECK(Access::notice(app) == kRaisedTo240By3);
+        CHECK(Access::config(app).audioBufferAutoMs == 240);
+
         // --- 7. THE PERSON SETS IT: a FIXED buffer is the lead at once, never steps -----------
         Access::setBuffer(app, 240);
         CHECK(Access::leadNow(app) == 240);
@@ -331,7 +420,7 @@ int main() {
         CHECK(Access::config(app).audioBufferMs == 240);          // the config value
         // A FIXED VALUE LEAVES THE REMEMBERED DEPTH ALONE (it is kept for the file and ignored while
         // the fixed value is in force) ...
-        CHECK(Access::config(app).audioBufferAutoMs == 960);
+        CHECK(Access::config(app).audioBufferAutoMs == 240);
         CHECK(Access::notice(app).empty());                       // the notice was about automatic mode
         const int linesBefore = logLinesWith("audio: buffer raised to");
         starve(out, 30);
@@ -382,6 +471,16 @@ int main() {
                                "(patch speaker)") == 1);
             Access::closeMinute(app);                             // quiet: stays
             CHECK(speaker->lead == 240);
+            // THE SPEAKER COMES BACK DOWN TOO (0.99.83), on a quiet run of its
+            // own (a dest has no primed() to consult, so its quiet minute is
+            // just "starved nobody"): the minute above was the first, thirteen
+            // more are not enough, the fifteenth steps it down a rung.
+            for (int m = 0; m < 13; ++m) { Access::closeMinute(app); }
+            CHECK(speaker->lead == 240);
+            Access::closeMinute(app);
+            CHECK(speaker->lead == 120);
+            CHECK(logLinesWith("audio: buffer lowered to 120 ms after 15 quiet minutes "
+                               "(patch speaker)") == 1);
             // A fixed setting is the speaker's too, and a file has no buffer to move.
             Access::setBuffer(app, 480);
             CHECK(speaker->lead == 480);
@@ -436,8 +535,15 @@ int main() {
         CHECK(Access::audio(third).targetFrames() == 23040u + 1920u);
         CHECK(Access::config(third).audioBufferMs == 0);           // still AUTOMATIC: nothing was chosen
         CHECK(Access::config(third).audioBufferAutoMs == 480);     // and the memory is carried forward
-        // A restored depth is not a raise: no sentence on the card, no log line, no health count.
-        CHECK(Access::notice(third).empty());
+        // A restored depth is not a raise - no "raised" line, no health count - but since
+        // 0.99.83 it is SAID (the Milan report on 0.99.81: a silently restored 960 ms read
+        // as "the audio is a second behind for no reason"): its own sentence on the card
+        // and in the Sinks rail, and its own log line, so a report can tell a restored
+        // deep lead from a fresh 120 ms start.
+        std::printf("notice: \"%s\"\n", Access::notice(third).c_str());
+        CHECK(Access::notice(third) ==
+              "Audio buffer restored to 480 ms: the depth this computer needed when it last ran.");
+        CHECK(logLinesWith("audio: buffer restored to 480 ms") == 1);
         CHECK(logLinesWith("audio: buffer raised") == raisedLinesBefore);
         CHECK(Access::status(third).audioLeadMs == 480);
         // From there it can still deepen, and what it keeps is the new depth.
@@ -445,10 +551,14 @@ int main() {
         Access::closeMinute(third);
         CHECK(Access::leadNow(third) == 960);
         CHECK(Access::config(third).audioBufferAutoMs == 960);
-        // A restore that names a SHALLOWER depth than the session already has leaves the session alone.
+        // A restore that names a SHALLOWER depth than the session already has leaves the session
+        // alone - the lead, and the sentence, which is still about the session's own raise.
         Access::restore(third, remembered);
         CHECK(Access::leadNow(third) == 960);
         CHECK(Access::config(third).audioBufferAutoMs == 960);
+        CHECK(Access::notice(third) ==
+              "Audio buffer raised to 960 ms: this computer fell behind 3 times in the last minute.");
+        CHECK(logLinesWith("audio: buffer restored to") == 1);     // no second line either
     }
     {
         // A FIXED SETTING IGNORES IT, and keeps it for the file.
@@ -465,6 +575,7 @@ int main() {
         Access::closeMinute(fixed);
         CHECK(Access::leadNow(fixed) == 240);                      // a fixed value never steps
         CHECK(Access::config(fixed).audioBufferAutoMs == 960);     // and the memory is not overwritten
+        CHECK(Access::notice(fixed).empty());                      // nothing was restored: nothing to say
     }
     {
         // NEVER LOWER THAN 120, NEVER ABOVE 960: a value the file should not hold is not applied.
@@ -485,6 +596,7 @@ int main() {
         Access::restore(w2, floorOnly);
         CHECK(Access::leadNow(w2) == 120);                         // 120 is the start already
         CHECK(Access::config(w2).audioBufferAutoMs == 120);
+        CHECK(Access::notice(w2).empty());                         // a 120 ms start needs no sentence
     }
     {
         // CHOOSING AUTOMATIC BY HAND resets it to 120 and FORGETS the memory - the person's own choice.
@@ -496,6 +608,7 @@ int main() {
         CHECK(Access::leadNow(hand) == 480);
         Access::setBuffer(hand, 240);                              // a fixed value: remembered but ignored
         CHECK(Access::leadNow(hand) == 240);
+        CHECK(Access::notice(hand).empty());                       // the restored sentence goes with it
         CHECK(Access::config(hand).audioBufferAutoMs == 480);
         Access::setBuffer(hand, 0);                                // back to AUTOMATIC, by hand
         CHECK(Access::leadNow(hand) == 120);

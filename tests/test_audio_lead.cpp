@@ -16,6 +16,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "sink/audio_out.hpp"
 
+#include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
@@ -23,8 +24,10 @@
 #include "test_check.hpp"
 
 using cascade::sink::AudioOut;
+using cascade::sink::audioLeadAfterQuietMinutes;
 using cascade::sink::audioLeadFrames;
 using cascade::sink::audioLeadMs;
+using cascade::sink::kAudioLeadQuietMinutesToStepDown;
 using cascade::sink::kAudioLeadStarvedPerMinute;
 using cascade::sink::kAudioLeadStepsMs;
 using cascade::sink::nextAudioLead;
@@ -61,7 +64,8 @@ int main() {
         {1, 120, 0, 120, "one"},
         {0, 120, 0, 120, "none at the default"},
         {2, 240, 0, 240, "two at a raised lead"},
-        // --- NEVER DOWN: a quiet minute at a raised lead does nothing ---------------
+        // --- RAISING NEVER REVERSES: a quiet minute does nothing HERE (the way down is
+        // --- audioLeadAfterQuietMinutes, its own table below) ------------------------
         {0, 240, 0, 240, "a quiet minute at 240 stays at 240"},
         {0, 480, 0, 480, "a quiet minute at 480 stays at 480"},
         {0, 960, 0, 960, "a quiet minute at 960 stays at 960"},
@@ -105,13 +109,102 @@ int main() {
             CHECK(lead == expect[minute]);
         }
     }
-    // ...and a computer that recovers does not give the lead back.
+    // ...and a computer that recovers is not given the lead back by THIS
+    // function: the only way down is the quiet-run policy below.
     {
         int lead = 120;
         lead = nextAudioLead(10, lead, 0);   // 240
         lead = nextAudioLead(0, lead, 0);
         lead = nextAudioLead(0, lead, 0);
         CHECK(lead == 240);
+    }
+
+    // THE WAY BACK DOWN (0.99.83): audioLeadAfterQuietMinutes(quietMinutes,
+    // currentLeadMs, configuredMs). The run of played, starvation-free minutes
+    // is the caller's (AppWindow::closeAudioMinute resets it on a starved
+    // callback, an idle minute and every step); this table is what the run
+    // earns once it is handed in.
+    CHECK(kAudioLeadQuietMinutesToStepDown == 15);
+    {
+        struct DownRow {
+            int quiet;       // consecutive quiet minutes, the last just closed
+            int current;     // the lead in force, ms
+            int configured;  // the setting: 0 automatic
+            int want;        // the lead afterwards
+            const char* why;
+        };
+        const DownRow down[] = {
+            // --- a quarter hour of quiet steps DOWN one rung ------------------------------
+            {15, 960, 0, 480, "the fifteenth quiet minute is the step: 960 -> 480"},
+            {15, 480, 0, 240, "480 -> 240"},
+            {15, 240, 0, 120, "240 -> 120: all the way back to the start"},
+            {100, 960, 0, 480, "a longer run is still one rung"},
+            // --- fewer do nothing ---------------------------------------------------------
+            {14, 960, 0, 960, "one minute short of the quarter hour: nothing"},
+            {14, 240, 0, 240, "likewise at 240"},
+            {1, 480, 0, 480, "one quiet minute"},
+            {0, 960, 0, 960, "none"},
+            // --- THE FLOOR: 120 ms is the start, there is nothing below it ----------------
+            {15, 120, 0, 120, "a quiet quarter hour at the default changes nothing"},
+            {1000, 120, 0, 120, "however long"},
+            {15, 100, 0, 100, "a lead below the first rung (it cannot be set) is left as it is"},
+            // --- a lead that is not on the ladder takes the next rung below it ------------
+            {15, 300, 0, 240, "300 is between rungs: the rung below"},
+            {15, 1200, 0, 960, "above the ceiling: back to the top rung"},
+            // --- A FIXED SETTING NEVER STEPS, down included -------------------------------
+            {15, 240, 240, 240, "fixed 240 does not come down"},
+            {1000, 960, 960, 960, "fixed 960, however quiet"},
+            {15, 480, 120, 480, "a fixed setting never moves the lead on its own, downward either"},
+        };
+        for (const DownRow& r : down) {
+            const int got = audioLeadAfterQuietMinutes(r.quiet, r.current, r.configured);
+            if (got != r.want) {
+                std::printf("FAIL audioLeadAfterQuietMinutes(%d, %d, %d) = %d, wanted %d (%s)\n",
+                            r.quiet, r.current, r.configured, got, r.want, r.why);
+            }
+            CHECK(got == r.want);
+        }
+        // The two-argument form is automatic.
+        CHECK(audioLeadAfterQuietMinutes(15, 240) == 120);
+        CHECK(audioLeadAfterQuietMinutes(14, 240) == 240);
+    }
+
+    // THE SEQUENCE DOWN, as the caller lives it: from the ceiling, every minute
+    // quiet, the run starting over after each step - a rung per quarter hour,
+    // 45 minutes from 960 ms back to the 120 ms start, then it holds there.
+    {
+        int lead = 960;
+        int quiet = 0;
+        const struct { int atMinute; int lead; } landmarks[] = {{15, 480}, {30, 240}, {45, 120}, {90, 120}};
+        std::size_t next = 0;
+        for (int minute = 1; minute <= 90; ++minute) {
+            quiet = std::min(quiet + 1, kAudioLeadQuietMinutesToStepDown);
+            const int stepped = audioLeadAfterQuietMinutes(quiet, lead, 0);
+            if (stepped < lead) {
+                lead = stepped;
+                quiet = 0;
+            }
+            if (next < 4 && minute == landmarks[next].atMinute) {
+                if (lead != landmarks[next].lead) {
+                    std::printf("FAIL at quiet minute %d the lead is %d, wanted %d\n", minute, lead,
+                                landmarks[next].lead);
+                }
+                CHECK(lead == landmarks[next].lead);
+                ++next;
+            }
+        }
+        CHECK(next == 4);
+    }
+
+    // UP IS FASTER THAN DOWN, by construction: what one bad minute raises takes
+    // a quarter hour of quiet to unwind.
+    {
+        int lead = nextAudioLead(126, 120, 0);                     // the 12CF minute: 240
+        CHECK(lead == 240);
+        for (int quiet = 1; quiet < kAudioLeadQuietMinutesToStepDown; ++quiet) {
+            CHECK(audioLeadAfterQuietMinutes(quiet, lead, 0) == 240);
+        }
+        CHECK(audioLeadAfterQuietMinutes(kAudioLeadQuietMinutesToStepDown, lead, 0) == 120);
     }
 
     // The settings the config may hold: 0 and the four rungs, and nothing else.

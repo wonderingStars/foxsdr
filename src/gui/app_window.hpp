@@ -873,7 +873,9 @@ private:
     // minute, with the ring's level at that instant (the next minute's low-water
     // mark starts there). It writes the starvation digest as it always did, and
     // then decides whether this computer has fallen behind often enough for the
-    // buffer to deepen (sink::nextAudioLead): on the receiver's sink and on each
+    // buffer to deepen (sink::nextAudioLead) - or stayed quiet long enough for a
+    // raised one to ease back a rung (sink::audioLeadAfterQuietMinutes, 0.99.83)
+    // - on the receiver's sink and on each
     // patch speaker that is a sound device. Never from the audio callback - this
     // is the GUI thread, and the lead it sets is one relaxed store the callback
     // reads at its next re-prime. A seam as well: it takes no clock, so a test
@@ -887,10 +889,12 @@ private:
     void setAudioBufferMs(int ms);
     // The lead the receiver's sink is demanding now, in ms.
     int audioLeadNowMs();
-    // "Audio buffer raised to 240 ms: this computer fell behind 5 times in the
-    // last minute." - in the language in force; empty until this session has
-    // raised it. Drawn on the AUDIO card and in the Sinks rail from here, so the
-    // two cannot word it differently.
+    // What automatic mode last did, in the language in force - "Audio buffer
+    // raised to 240 ms: this computer fell behind 5 times in the last minute.",
+    // "Audio buffer restored to 480 ms: the depth this computer needed when it
+    // last ran." or "Audio buffer lowered to 240 ms after 15 quiet minutes." -
+    // and empty until it has done something. Drawn on the AUDIO card and in the
+    // Sinks rail from here, so the two cannot word it differently.
     std::string audioLeadNotice() const;
     // THE TWO SUCCESSES THE ANONYMOUS FAILURE COUNTS NEED AS A DENOMINATOR
     // (0.99.64, core/health_events.hpp), both read off state that already
@@ -2585,16 +2589,32 @@ private:
     std::uint64_t audioUnderrunsAtLogStart_ = 0;
     std::uint64_t audioPrimingAtLogStart_ = 0;
     // THE AUDIO BUFFER (0.99.73). The setting (0 automatic; see AppConfig::
-    // audioBufferMs), and what this session's automatic mode has done: the lead
-    // it last raised to and how many starved callbacks the minute that raised it
-    // saw (0 = never raised; the notice is drawn while this is non-zero).
+    // audioBufferMs), and the one thing automatic mode last did, which is what
+    // the Sinks rail and the AUDIO card say (audioLeadNotice): RAISED this
+    // session (ms, and the starved callbacks of the minute that did it),
+    // RESTORED at launch from AppConfig::audioBufferAutoMs (ms; 0.99.83 - a
+    // silent restore read as "FoxSDR is a second behind for no reason"), or
+    // LOWERED again after a quiet quarter hour (ms, and the run's minutes).
+    // kNone until automatic mode has done something.
     int audioBufferMs_ = 0;
-    int audioLeadRaisedToMs_ = 0;
-    int audioLeadRaisedStarved_ = 0;
+    enum class AudioLeadNote { kNone, kRaised, kRestored, kLowered };
+    AudioLeadNote audioLeadNote_ = AudioLeadNote::kNone;
+    int audioLeadNoteMs_ = 0;
+    int audioLeadNoteCount_ = 0;
+    // THE QUIET RUN (0.99.83): consecutive minutes the receiver's sink played
+    // through with zero starved callbacks at its current lead, saturated at
+    // sink::kAudioLeadQuietMinutesToStepDown; the map is the same run per patch
+    // speaker (pruned beside patchStarvedAtMinute_). Reset by a starved
+    // callback, an idle minute, a step either way, a restored depth and the
+    // Sinks rail's box (closeAudioMinute / setAudioBufferMs / applyConfig).
+    int audioLeadQuietMinutes_ = 0;
+    std::map<cascade::core::patch::NodeId, int> patchQuietMinutes_;
     // AppConfig::audioBufferAutoMs - the depth AUTOMATIC reached, remembered so the next launch
     // starts there (0 = it never had to). Written by closeAudioMinute when it raises the receiver
-    // sink's lead, applied by applyConfig while the setting is AUTOMATIC, forgotten when the setting
-    // is CHANGED to AUTOMATIC (setAudioBufferMs).
+    // sink's lead - and lowered by it when a quiet quarter hour steps the lead back down (0.99.83;
+    // at the 120 ms floor it is 0 again: nothing left to remember) - applied by applyConfig while
+    // the setting is AUTOMATIC, forgotten when the setting is CHANGED to AUTOMATIC
+    // (setAudioBufferMs).
     int audioBufferAutoMs_ = 0;
     // Each patch speaker's starved-callback count at the last minute that closed,
     // so a minute's worth is a difference. Pruned to the speakers that exist.

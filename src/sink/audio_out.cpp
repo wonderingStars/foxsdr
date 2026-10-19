@@ -542,8 +542,9 @@ bool validAudioBufferSetting(int ms) {
 int nextAudioLead(std::uint64_t underrunsLastMinute, int currentLeadMs, int configuredMs) {
     // A fixed setting never steps, whatever the minute was.
     if (configuredMs != 0) { return currentLeadMs; }
-    // Fewer than three is a stutter, not a computer that fell behind. And there
-    // is no way down: a quiet minute at a raised lead answers with the same lead.
+    // Fewer than three is a stutter, not a computer that fell behind. The way
+    // down is not here: one bad-enough minute raises, and only a quarter hour
+    // of quiet ones lowers (audioLeadAfterQuietMinutes below).
     if (underrunsLastMinute < static_cast<std::uint64_t>(kAudioLeadStarvedPerMinute)) {
         return currentLeadMs;
     }
@@ -553,6 +554,19 @@ int nextAudioLead(std::uint64_t underrunsLastMinute, int currentLeadMs, int conf
         if (step > currentLeadMs) { return step; }
     }
     return currentLeadMs;
+}
+
+int audioLeadAfterQuietMinutes(int quietMinutes, int currentLeadMs, int configuredMs) {
+    // A fixed setting never steps, down included.
+    if (configuredMs != 0) { return currentLeadMs; }
+    if (quietMinutes < kAudioLeadQuietMinutesToStepDown) { return currentLeadMs; }
+    // One rung down, the highest below where the lead is now. At (or below)
+    // the 120 ms start there is none, and the lead is left exactly as it is.
+    int down = currentLeadMs;
+    for (const int step : kAudioLeadStepsMs) {
+        if (step < currentLeadMs) { down = step; }
+    }
+    return down;
 }
 
 }  // namespace cascade::sink

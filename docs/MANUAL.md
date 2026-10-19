@@ -1211,14 +1211,22 @@ value in force is shown in the box ("AUTOMATIC  240 ms").
   or more, the buffer is made one step deeper (120, 240, 480, 960 ms, and never
   beyond 960), and FoxSDR says so in the **AUDIO - UNDERRUNS** card, under the
   setting ("Audio buffer raised to 240 ms: this computer fell behind 5 times in
-  the last minute.") and in the log. It keeps that depth for the rest of the
-  session and never gives it back by itself, because a computer that fell behind
-  once will fall behind again; a quiet minute changes nothing. **The depth it
-  reached is remembered**: the next launch starts AUTOMATIC at that depth (never
-  below 120 ms, never above 960) instead of paying the same bad minutes again,
-  and shows no "raised" sentence for it - nothing has just happened. Choosing
-  AUTOMATIC again, from one of the fixed values, starts from 120 ms once more and
-  forgets the remembered depth.
+  the last minute.") and in the log. **Coming back down is much slower than
+  going up** (since 0.99.83): only after fifteen minutes in a row in which sound
+  was playing and the card never once ran out does the buffer come back one
+  step ("Audio buffer lowered to 240 ms after 15 quiet minutes."), and each
+  further step needs a quiet quarter hour of its own - so one bad spell still
+  buys lasting protection, but no longer a permanent delay. Minutes in which
+  nothing is playing prove nothing and do not count. **The depth it reached is
+  remembered**: the next launch starts AUTOMATIC at that depth (never below
+  120 ms, never above 960) instead of paying the same bad minutes again, and
+  says so under the setting ("Audio buffer restored to 480 ms: the depth this
+  computer needed when it last ran.") and in the log - it is not a "raise",
+  nothing has just happened, but a launch that starts half a second behind the
+  spectrum should never be a mystery. When the buffer steps down, the
+  remembered depth steps down with it. Choosing AUTOMATIC again, from one of
+  the fixed values, starts from 120 ms once more and forgets the remembered
+  depth.
 - **A fixed value** is the buffer from the moment it is chosen and never changes
   by itself. It is remembered between sessions, and a remembered AUTOMATIC depth
   is ignored while a fixed value is in force (and kept, in case you go back).

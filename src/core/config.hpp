@@ -369,12 +369,15 @@ struct AppConfig {
     float volume = 0.5f;
     // THE AUDIO BUFFER (0.99.73, the Sinks rail): how much sound is held back
     // before it plays. 0 is AUTOMATIC - 120 ms, deepened by itself through 240,
-    // 480 and 960 ms when this computer falls behind (sink::nextAudioLead) and
-    // never brought back down by itself; 120, 240, 480 or 960 is a FIXED buffer
+    // 480 and 960 ms when this computer falls behind (sink::nextAudioLead) and,
+    // since 0.99.83, eased back one rung per quarter hour of quiet minutes
+    // (sink::audioLeadAfterQuietMinutes); 120, 240, 480 or 960 is a FIXED buffer
     // that never steps. Anything else on load becomes 0.
     int audioBufferMs = 0;
     // THE DEPTH AUTOMATIC HAD REACHED (0.99.73, a follow-up to the item above): written when a
-    // minute's starved callbacks deepened the buffer, so that the next launch starts there instead
+    // minute's starved callbacks deepened the buffer - and lowered again, since 0.99.83, when a
+    // quiet quarter hour stepped the buffer back down (at the 120 ms floor it is 0 once more) - so
+    // that the next launch starts there instead
     // of paying the same three bad minutes again on a computer that is slow every time. Read only
     // while audioBufferMs is 0 (a fixed setting ignores it), and only ever to START deeper:
     // never below the 120 ms default, never above 960. Choosing AUTOMATIC by hand, from a fixed

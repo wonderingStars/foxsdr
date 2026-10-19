@@ -394,26 +394,39 @@ int recoveryDeviceIndex(int lastRequested, const std::string& lastName,
 int clampDeviceRow(int row, const std::vector<AudioDevice>& present);
 
 // ---------------------------------------------------------------------------
-// THE POLICY THAT DEEPENS THE LEAD (0.99.73)
+// THE POLICY THAT DEEPENS THE LEAD (0.99.73) - AND EASES IT BACK (0.99.83)
 //
 // The 12CF report: a slow machine starved 110 to 126 callbacks a minute at a
 // 120 ms lead, and a bigger buffer is the one thing that can help once the
 // producer cannot be made faster. The lead steps up through 120 -> 240 -> 480
 // -> 960 ms when a MINUTE closes with kAudioLeadStarvedPerMinute or more
 // starved callbacks, and never above 960 ms (which leaves 365 ms of ring
-// headroom). A minute with fewer does nothing - in particular there is NO
-// stepping down: a machine that fell behind once will again, and a lead that
-// came down by itself would put the stutter back; the person can set it back
-// in the Sinks rail. A fixed setting (`audioBufferMs` in the config, anything
-// but 0) never steps.
+// headroom). A minute with fewer does nothing.
 //
-// Pure, so every transition is a table test (tests/test_audio_lead.cpp). It is
-// applied from the GUI thread's minute poll (AppWindow::closeAudioMinute), never
-// from the audio callback.
+// DOWN IS MUCH SLOWER THAN UP. The first rule here was "never down: a machine
+// that fell behind once will again" - and then the reached depth began to be
+// remembered across launches (audioBufferAutoMs), and the two together turned
+// one bad evening into a PERMANENT second of lag: the Milan report on 0.99.81
+// was audio a steady ~1 s behind the spectrum every day, because one overnight
+// session had ratcheted the lead to 960 ms and nothing could ever bring it
+// back. So the lead now steps DOWN one rung after
+// kAudioLeadQuietMinutesToStepDown consecutive quiet minutes - a quiet minute
+// is one the sink PLAYED through with not a single starved callback; an idle
+// sink proves nothing and its minutes count for nothing - and the remembered
+// depth steps down with it. The asymmetry is the point: a step down that turns
+// out wrong costs one bad minute and is raised again at that minute's close,
+// while a lead that never comes down costs a second of lag forever. A fixed
+// setting (`audioBufferMs` in the config, anything but 0) never steps in
+// either direction.
+//
+// Pure, so every transition is a table test (tests/test_audio_lead.cpp). Both
+// directions are applied from the GUI thread's minute poll
+// (AppWindow::closeAudioMinute), never from the audio callback.
 // ---------------------------------------------------------------------------
 
 inline constexpr int kAudioLeadStepsMs[4] = {120, 240, 480, 960};
 inline constexpr int kAudioLeadStarvedPerMinute = 3;
+inline constexpr int kAudioLeadQuietMinutesToStepDown = 15;
 
 // Milliseconds <-> frames at the sink's 48 kHz rate (Pipeline::kAudioRateHz).
 constexpr std::size_t audioLeadFrames(int ms) { return static_cast<std::size_t>(ms) * 48u; }
@@ -429,5 +442,16 @@ bool validAudioBufferSetting(int ms);
 // and the answer is `currentLeadMs`, unchanged. At the ceiling the answer is
 // `currentLeadMs` unchanged as well, whatever it is.
 int nextAudioLead(std::uint64_t underrunsLastMinute, int currentLeadMs, int configuredMs = 0);
+
+// The lead after a QUIET minute has closed: `quietMinutes` consecutive minutes
+// have now ended with zero starved callbacks while the sink was playing, the
+// lead at `currentLeadMs` throughout. One rung down once the run reaches
+// kAudioLeadQuietMinutesToStepDown; fewer, a fixed setting (`configuredMs`
+// anything but 0) or a lead with no rung below it answer `currentLeadMs`
+// unchanged. The caller owns the run: it starts over on any starved callback,
+// on an idle (unprimed) minute, on a step in either direction, on a restored
+// depth and on the Sinks rail's box - the count is "at this lead, playing",
+// never "since launch".
+int audioLeadAfterQuietMinutes(int quietMinutes, int currentLeadMs, int configuredMs = 0);
 
 }  // namespace cascade::sink

@@ -4630,14 +4630,17 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
     audioPrimingAtLogStart_ = primingNow;
     audioRingLowWaterFrames_ = ringFramesNow;  // next minute's mark starts here
 
-    // THE BUFFER THAT DEEPENS ITSELF (0.99.73). The 12CF report - 110 to 126
-    // starved callbacks every minute at a fixed 120 ms - is the case: when a
-    // minute closes with three or more, the lead steps up one rung
-    // (sink::nextAudioLead, which is also where "never down", the ceiling and "a
-    // fixed setting never steps" live). The step is one relaxed store the audio
+    // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
+    // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
+    // - is the case: when a minute closes with three or more, the lead steps up
+    // one rung (sink::nextAudioLead, which is also where the ceiling and "a
+    // fixed setting never steps" live); a quarter hour of played, starvation-free
+    // minutes steps it back down one (sink::audioLeadAfterQuietMinutes, where
+    // the asymmetry is argued). Either step is one relaxed store the audio
     // callback reads at its next re-prime; this is the window's thread and the
-    // callback is never involved. Counted once a session as `recovered.
-    // audiolead`, so the effect of the release can be measured.
+    // callback is never involved. A raise is counted once a session as
+    // `recovered.audiolead`, so the effect of the release can be measured; the
+    // way back down is not a recovery and counts nothing.
     const auto sayRaised = [](int toMs, std::uint64_t starvedCount, const char* who) {
         const int shown = static_cast<int>(std::min<std::uint64_t>(starvedCount, 1000000u));
         cascade::core::diagLogf("audio: buffer raised to %d ms after %d starved callbacks in a minute%s",
@@ -4649,8 +4652,10 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
     const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
     if (nextMs > leadMs) {
         out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
-        audioLeadRaisedToMs_ = nextMs;
-        audioLeadRaisedStarved_ = sayRaised(nextMs, starved, "");
+        audioLeadNote_ = AudioLeadNote::kRaised;
+        audioLeadNoteMs_ = nextMs;
+        audioLeadNoteCount_ = sayRaised(nextMs, starved, "");
+        audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
         // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every time,
         // and starting at 120 ms again costs the same bad minutes at every start. Only the
         // receiver's own raise is kept (the patch speakers are seeded from it when they are made),
@@ -4658,6 +4663,31 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
         // config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a raise is the
         // session's and not a choice.
         audioBufferAutoMs_ = nextMs;
+    } else {
+        // THE WAY BACK DOWN (0.99.83). A quiet minute is one the sink PLAYED
+        // through (primed at its close - an idle sink proves nothing; stopping
+        // the radio starves the last callback, which resets the run anyway) and
+        // starved nobody. A quarter hour of them in a row lowers the lead one
+        // rung, and the remembered depth with it - at the 120 ms floor there is
+        // nothing left to remember, so the memory is 0 again. Why a lead comes
+        // back down at all, against the old "a machine that fell behind once
+        // will again": sink/audio_out.hpp, the policy comment.
+        audioLeadQuietMinutes_ =
+            starved == 0 && out.primed()
+                ? std::min(audioLeadQuietMinutes_ + 1, cascade::sink::kAudioLeadQuietMinutesToStepDown)
+                : 0;
+        const int downMs = cascade::sink::audioLeadAfterQuietMinutes(audioLeadQuietMinutes_, leadMs,
+                                                                     audioBufferMs_);
+        if (downMs < leadMs) {
+            out.setLeadFrames(cascade::sink::audioLeadFrames(downMs));
+            cascade::core::diagLogf("audio: buffer lowered to %d ms after %d quiet minutes", downMs,
+                                    audioLeadQuietMinutes_);
+            audioLeadNote_ = AudioLeadNote::kLowered;
+            audioLeadNoteMs_ = downMs;
+            audioLeadNoteCount_ = audioLeadQuietMinutes_;
+            audioLeadQuietMinutes_ = 0;   // the next rung needs a quarter hour of its own
+            audioBufferAutoMs_ = downMs == 120 ? 0 : downMs;
+        }
     }
 
     // EACH PATCH SPEAKER THAT IS A SOUND DEVICE has a sink of its own, a matcher of
@@ -4678,10 +4708,33 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
         if (speakerNext > speakerMs) {
             dest->setLeadMs(speakerNext);
             (void)sayRaised(speakerNext, minute, " (patch speaker)");
+            patchQuietMinutes_[node] = 0;
+        } else {
+            // The same way back down, on the speaker's own run. A dest cannot
+            // say whether it played (no primed() crosses the AudioDest seam),
+            // so its quiet minute is only "starved nobody" - a cheaper test is
+            // acceptable here because nothing about a speaker is persisted and
+            // a wrong step costs one bad minute on that speaker alone.
+            int& quiet = patchQuietMinutes_[node];
+            quiet = minute == 0
+                        ? std::min(quiet + 1, cascade::sink::kAudioLeadQuietMinutesToStepDown)
+                        : 0;
+            const int speakerDown =
+                cascade::sink::audioLeadAfterQuietMinutes(quiet, speakerMs, audioBufferMs_);
+            if (speakerDown < speakerMs) {
+                dest->setLeadMs(speakerDown);
+                cascade::core::diagLogf(
+                    "audio: buffer lowered to %d ms after %d quiet minutes (patch speaker)",
+                    speakerDown, quiet);
+                quiet = 0;
+            }
         }
     }
     for (auto it = patchStarvedAtMinute_.begin(); it != patchStarvedAtMinute_.end();) {
         it = speakers.count(it->first) != 0 ? std::next(it) : patchStarvedAtMinute_.erase(it);
+    }
+    for (auto it = patchQuietMinutes_.begin(); it != patchQuietMinutes_.end();) {
+        it = speakers.count(it->first) != 0 ? std::next(it) : patchQuietMinutes_.erase(it);
     }
 }
 
@@ -4708,8 +4761,11 @@ void AppWindow::setAudioBufferMs(int ms) {
     }
     if (toMs != 0) {
         out.setLeadFrames(cascade::sink::audioLeadFrames(toMs));
-        audioLeadRaisedToMs_ = 0;   // the notice was about automatic mode's last step
-        audioLeadRaisedStarved_ = 0;
+        audioLeadNote_ = AudioLeadNote::kNone;   // the notice was about automatic mode's last step
+        audioLeadNoteMs_ = 0;
+        audioLeadNoteCount_ = 0;
+        audioLeadQuietMinutes_ = 0;              // a chosen lead starts a quiet run of its own
+        patchQuietMinutes_.clear();
         for (const auto& entry : patchDests_) {
             if (entry.second && entry.second->leadMs() > 0) { entry.second->setLeadMs(toMs); }
         }
@@ -4721,11 +4777,26 @@ int AppWindow::audioLeadNowMs() {
 }
 
 std::string AppWindow::audioLeadNotice() const {
-    if (audioLeadRaisedToMs_ <= 0) { return std::string(); }
     std::string s;
-    cascade::core::formatUtf8(
-        s, tr("Audio buffer raised to %d ms: this computer fell behind %d times in the last minute."),
-        audioLeadRaisedToMs_, audioLeadRaisedStarved_);
+    switch (audioLeadNote_) {
+        case AudioLeadNote::kNone:
+            break;
+        case AudioLeadNote::kRaised:
+            cascade::core::formatUtf8(
+                s,
+                tr("Audio buffer raised to %d ms: this computer fell behind %d times in the last minute."),
+                audioLeadNoteMs_, audioLeadNoteCount_);
+            break;
+        case AudioLeadNote::kRestored:
+            cascade::core::formatUtf8(
+                s, tr("Audio buffer restored to %d ms: the depth this computer needed when it last ran."),
+                audioLeadNoteMs_);
+            break;
+        case AudioLeadNote::kLowered:
+            cascade::core::formatUtf8(s, tr("Audio buffer lowered to %d ms after %d quiet minutes."),
+                                      audioLeadNoteMs_, audioLeadNoteCount_);
+            break;
+    }
     return s;
 }
 
@@ -5273,10 +5344,10 @@ void AppWindow::drawStatusColumn() {
             cascade::core::formatUtf8(l2, tr("plugin gaps %llu, %llu frames"), gaps, gapFrames);
             lines[n++] = {l2.c_str(), gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
         }
-        // THE BUFFER THAT DEEPENED ITSELF (0.99.73), said once it has: the same
-        // sentence the Sinks rail carries (audioLeadNotice). Absent, and so the
-        // card exactly as it was, until a minute has closed with the computer
-        // falling behind.
+        // WHAT AUTOMATIC MODE LAST DID to the buffer (0.99.73; raised, restored
+        // at launch or lowered again since 0.99.83), said once it has done
+        // something: the same sentence the Sinks rail carries (audioLeadNotice).
+        // Absent, and so the card exactly as it was, until then.
         const std::string leadNote = audioLeadNotice();
         if (!leadNote.empty()) { lines[n++] = {leadNote.c_str(), cascade::gui::theme::kAmber}; }
         card(tr("AUDIO - UNDERRUNS"), cascade::gui::theme::kAmber, v.c_str(), lines, n);
@@ -8222,8 +8293,9 @@ void AppWindow::drawSinksSection() {
                                audioHealthNote_.c_str());
         }
         // THE AUDIO BUFFER (0.99.73): how much sound is held back before it
-        // plays. AUTOMATIC starts at 120 ms and deepens itself when this computer
-        // falls behind (closeAudioMinute); the rest are fixed and never step. The
+        // plays. AUTOMATIC starts at 120 ms, deepens itself when this computer
+        // falls behind and eases back after a quiet quarter hour
+        // (closeAudioMinute); the rest are fixed and never step. The
         // preview carries the value in force - "AUTOMATIC  240 ms" - because that
         // is the number the person came here to find, and the notice below it
         // says when and why automatic mode moved it. Opening the list never
@@ -8261,7 +8333,8 @@ void AppWindow::drawSinksSection() {
                     tr("How much sound is held back before it plays. A larger buffer rides "
                        "out a slow computer, at the cost of a longer delay between the radio "
                        "and the speakers. AUTOMATIC starts at 120 ms and deepens itself, to "
-                       "at most 960 ms, when this computer falls behind."));
+                       "at most 960 ms, when this computer falls behind. After a quarter of "
+                       "an hour of quiet minutes it eases back one step at a time."));
             }
             const std::string leadNote = audioLeadNotice();
             if (!leadNote.empty()) {
@@ -31786,7 +31859,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // pay the same bad minutes at every launch. A fixed setting ignores it (and keeps it for the
     // file). It only ever starts DEEPER: a restore on a window whose session has already gone
     // deeper than the file says leaves that alone, as AUTOMATIC -> AUTOMATIC does above. A restored
-    // depth is not a raise, so there is no notice, no log line and no health count.
+    // depth is not a raise - no health count - but since 0.99.83 it is SAID, in the Sinks rail and
+    // the log: the Milan report on 0.99.81 was a launch that silently restored 960 ms, which reads
+    // as "the audio is a second behind the spectrum for no reason", and neither the user nor the
+    // report could tell a restored deep lead from a fresh 120 ms start.
     {
         const int remembered = cascade::sink::validAudioBufferSetting(cfg.audioBufferAutoMs)
                                    ? cfg.audioBufferAutoMs
@@ -31800,6 +31876,14 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                 for (const auto& entry : patchDests_) {
                     if (entry.second && entry.second->leadMs() > 0) { entry.second->setLeadMs(depth); }
                 }
+                cascade::core::diagLogf(
+                    "audio: buffer restored to %d ms (the depth automatic reached when it last ran)",
+                    depth);
+                audioLeadNote_ = AudioLeadNote::kRestored;
+                audioLeadNoteMs_ = depth;
+                audioLeadNoteCount_ = 0;
+                audioLeadQuietMinutes_ = 0;   // the quiet run starts over at the restored lead
+                patchQuietMinutes_.clear();
             }
             if (remembered > audioBufferAutoMs_) { audioBufferAutoMs_ = remembered; }
         } else {

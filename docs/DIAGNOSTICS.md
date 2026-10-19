@@ -2289,20 +2289,38 @@ the fill to a fixed 160 ms. A deeper lead alone would have been bled back down t
   sink's lead plus 40 ms, handed over with every observation
   (`AudioOut::targetFrames()`). A patch speaker has its own sink and its own matcher,
   so its own lead and target.
-- **The policy** (`sink::nextAudioLead`, a pure function with its own table test): when
-  a minute closes with **three or more** starved callbacks, the lead steps up one
+- **The policy up** (`sink::nextAudioLead`, a pure function with its own table test):
+  when a minute closes with **three or more** starved callbacks, the lead steps up one
   rung through 120, 240, 480, 960 ms and never above 960 ms. Fewer than three does
-  nothing, and **nothing ever steps down**: a machine that fell behind once will
-  again. A fixed setting (`audioBufferMs` in the settings file, which the Sinks rail's
-  **Audio buffer** box writes; `0` is AUTOMATIC) never steps. AUTOMATIC starts at
-  120 ms the first time; the depth it reached is remembered across launches as
-  `audioBufferAutoMs` in the settings file (0, 120, 240, 480 or 960; anything else loads
-  as 0), written when a minute's starved callbacks deepen the receiver's sink and read
-  at start-up, where an AUTOMATIC session starts at that depth - never below 120 ms or
-  above 960, only ever deeper than the session already is, and without the "raised"
-  line, sentence or health count (a restored depth is not a raise). A fixed setting
-  ignores it and keeps it; choosing AUTOMATIC from a fixed value resets the lead to
-  120 ms and forgets it.
+  nothing. A fixed setting (`audioBufferMs` in the settings file, which the Sinks rail's
+  **Audio buffer** box writes; `0` is AUTOMATIC) never steps.
+- **The policy down** (`sink::audioLeadAfterQuietMinutes`, 0.99.83, same shape, same
+  table test). The rule used to be "nothing ever steps down: a machine that fell behind
+  once will again" - and combined with the remembered depth below, that turned one bad
+  evening into a permanent second of lag (the Milan report on 0.99.81: audio a steady
+  ~1 s behind the spectrum at every launch, with no version change and no notice). Now a
+  raised AUTOMATIC lead steps **down one rung after 15 consecutive quiet minutes** - a
+  quiet minute is one the sink **played through** (primed at the minute's close; idle
+  minutes count for nothing) **with zero starved callbacks** - and the run starts over
+  after every step, so 960 ms is 45 quiet minutes from home. A single starved callback
+  resets the run. The step writes **`audio: buffer lowered to <N> ms after 15 quiet
+  minutes`** (patch speakers the same with ` (patch speaker)`; a speaker has no primed
+  flag across the AudioDest seam, so its quiet minute is just "zero starved"), says
+  "Audio buffer lowered to 240 ms after 15 quiet minutes." on the card and in the rail,
+  lowers `audioBufferAutoMs` with the lead (0 again at the 120 ms floor) and counts
+  **nothing** - coming down is not a recovery. A fixed setting never steps down either.
+- **The remembered depth.** AUTOMATIC starts at 120 ms the first time; the depth it
+  reached is remembered across launches as `audioBufferAutoMs` in the settings file (0,
+  120, 240, 480 or 960; anything else loads as 0), written when a minute's starved
+  callbacks deepen the receiver's sink (and lowered when a quiet quarter hour steps it
+  back down) and read at start-up, where an AUTOMATIC session starts at that depth -
+  never below 120 ms or above 960, only ever deeper than the session already is. A
+  restored depth is not a raise - no health count - but since 0.99.83 it is **said**:
+  **`audio: buffer restored to <N> ms (the depth automatic reached when it last ran)`**
+  in the log and "Audio buffer restored to 480 ms: the depth this computer needed when
+  it last ran." on the card and in the rail, so a report can tell a restored deep lead
+  from a fresh 120 ms start. A fixed setting ignores it and keeps it; choosing
+  AUTOMATIC from a fixed value resets the lead to 120 ms and forgets it.
 - It is applied from the window's thread (`AppWindow::closeAudioMinute`, called by the
   once-a-minute branch of `pollAudioHealth`), never from the callback, and takes
   effect at the next re-prime: a ring that is already playing is not stopped, the
@@ -2318,8 +2336,9 @@ the fill to a fixed 160 ms. A deeper lead alone would have been bled back down t
 - `/api/status` gains **`audioLeadMs`**, the lead in force in milliseconds, beside
   `audioRingMs` and `audioRingCapacityMs`.
 
-What the tests establish: `tests/test_audio_lead.cpp` every transition of the policy,
-the ceiling, the quiet minute, the fixed setting and the legal settings;
+What the tests establish: `tests/test_audio_lead.cpp` every transition of the policy in
+both directions, the ceiling and the 120 ms floor, the quiet run and its quarter-hour
+boundary, the fixed setting and the legal settings;
 `tests/test_audio_out.cpp` that the callback honours a raised lead on the first
 prime and on the re-prime after an underrun (with fills chosen to clear 120 ms and
 not the lead under test), that a playing ring is not stopped by a raise, that the
