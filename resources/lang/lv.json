@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Iestata uztvērēja pozīciju - no tās tiek mērīts katrs attālums un pelengs kartē un radara ekrānā. Tā pati vadīkla ir arī sānjoslas sadaļā Radars (kamēr pozīcijas nav), tukšajā radara ekrānā un katras kartes lapas joslā.",
   "Settings and key bindings": "Iestatījumi un taustiņu piesaiste",
   "Seychelles": "Seišelas",
+  "Shift + wheel: slide the tuned band": "Shift + ritenītis: pārbīdīt noskaņoto joslu",
   "Show decoder output": "Rādīt dekodētāja izvadi",
   "Show every node on the canvas": "Rādīt visus mezglus audeklā",
   "Show it again": "Rādīt atkal",

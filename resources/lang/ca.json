@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Defineix la posició del receptor - des de la qual es mesura cada abast i azimut del mapa i de la pantalla de radar. El mateix control apareix també a la secció Radar de la barra lateral (mentre no hi ha posició), a la pantalla de radar buida i a la barra de cada pàgina de mapa.",
   "Settings and key bindings": "Paràmetres i dreceres de teclat",
   "Seychelles": "Seychelles",
+  "Shift + wheel: slide the tuned band": "Shift + roda: moveu la banda sintonitzada",
   "Show decoder output": "Mostra la sortida descodificada",
   "Show every node on the canvas": "Mostra tots els nodes al llenç",
   "Show it again": "Torna a mostrar-lo",

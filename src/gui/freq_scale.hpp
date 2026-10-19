@@ -52,6 +52,15 @@ public:
     // View := full span. (Also the state setSpan resets to.)
     void resetView();
 
+    // Pans the view, and only as far as it must, so that [bandLowHz, bandHighHz] is inside
+    // it with marginFrac of the view span to spare at the edge it was leaving (marginFrac is
+    // clamped to [0, 0.25]). A band too wide to fit with the margin is centred instead.
+    // The view's width is never changed and it never leaves the full span, so a band at the
+    // end of the baseband is brought as near the edge as the baseband allows. Returns whether
+    // the view moved. Non-finite edges, a band that ends before it starts and an inert scale
+    // no-op.
+    bool keepInView(double bandLowHz, double bandHighHz, double marginFrac);
+
     double viewLowHz() const { return viewLow_; }
     double viewHighHz() const { return viewHigh_; }
 

@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Alıcının konumunu ayarlar - haritadaki ve radar ekranındaki her menzil ve kerterizin ölçüldüğü nokta. Aynı denetim şeridin Radar bölümünde (konum yokken), radar ekranının boş durumunda ve her harita sayfasının çubuğunda da görünür.",
   "Settings and key bindings": "Ayarlar ve tuş atamaları",
   "Seychelles": "Seyşeller",
+  "Shift + wheel: slide the tuned band": "Shift + tekerlek: ayarlı bandı kaydır",
   "Show decoder output": "Kod çözücü çıkışını göster",
   "Show every node on the canvas": "Tuvaldeki tüm düğümleri göster",
   "Show it again": "Yeniden göster",

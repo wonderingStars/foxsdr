@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Nustato imtuvo padėtį - nuo jos matuojamas kiekvienas nuotolis ir azimutas žemėlapyje ir radaro ekrane. Tas pats valdiklis taip pat yra juostos skiltyje Radaras (kol padėties nėra), tuščiame radaro ekrane ir kiekvieno žemėlapio puslapio juostoje.",
   "Settings and key bindings": "Nustatymai ir klavišų priskyrimai",
   "Seychelles": "Seišeliai",
+  "Shift + wheel: slide the tuned band": "Shift + ratukas: perstumti suderintą juostą",
   "Show decoder output": "Rodyti dekoderio išvestį",
   "Show every node on the canvas": "Rodyti visus mazgus drobėje",
   "Show it again": "Vėl rodyti",

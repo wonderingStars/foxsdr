@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Задаёт местоположение приёмника - от него отсчитываются все дальности и пеленги на карте и экране радара. Тот же элемент есть в разделе «Радар» на панели (пока позиция не задана), на пустом экране радара и на панели каждой страницы карты.",
   "Settings and key bindings": "Настройки и назначение клавиш",
   "Seychelles": "Сейшельские Острова",
+  "Shift + wheel: slide the tuned band": "Shift + колесо: сдвинуть настроенную полосу",
   "Show decoder output": "Показать вывод декодеров",
   "Show every node on the canvas": "Показать все узлы на холсте",
   "Show it again": "Показать снова",

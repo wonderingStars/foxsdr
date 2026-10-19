@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Mengatur posisi penerima - titik acuan setiap jarak dan arah di peta dan radar scope. Kontrol yang sama juga muncul di bagian Radar pada rel (selama belum ada posisi), di tampilan kosong scope, dan di bilah setiap halaman peta.",
   "Settings and key bindings": "Pengaturan dan pintasan keyboard",
   "Seychelles": "Seychelles",
+  "Shift + wheel: slide the tuned band": "Shift + roda: geser pita yang ditala",
   "Show decoder output": "Tampilkan output dekoder",
   "Show every node on the canvas": "Tampilkan semua node di kanvas",
   "Show it again": "Tampilkan lagi",

@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Määrab vastuvõtja asukoha - sellest mõõdetakse iga kaugus ja suund kaardil ja radariekraanil. Sama juhtelement on ka siini jaotises Radar (kuni asukohta pole), radariekraani tühjas olekus ja iga kaardilehe ribal.",
   "Settings and key bindings": "Sätted ja kiirklahvid",
   "Seychelles": "Seišellid",
+  "Shift + wheel: slide the tuned band": "Shift + ratas: häälestatud riba nihutamine",
   "Show decoder output": "Näita dekoodri väljundit",
   "Show every node on the canvas": "Näita lõuendil kõiki sõlmi",
   "Show it again": "Näita uuesti",

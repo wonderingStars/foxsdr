@@ -2632,6 +2632,25 @@ private:
     // inside the baseband span. Shared by click-to-tune and the drag path.
     void setVfoToAbsoluteHz(double wantAbsHz, bool snap);
 
+    // SHIFT + WHEEL over the spectrum or the waterfall (0.99.82): slides the passband along the
+    // band by `notches` steps of the mode's raster (gui/passband_slide.hpp has the arithmetic and
+    // why). Inside the span it moves the VFO, as a click does; past the end of the VFO's reach it
+    // carries the SOURCE through tuneAbsoluteHz, the retune the counter uses. Whole notches only:
+    // a touchpad's fractions are gathered until they make one. Arms the picture's follow.
+    void slidePassband(double notches);
+    // Fractions of a notch a touchpad has delivered and the last time a slide was asked for
+    // (ImGui's clock): the fraction is dropped after half a second of rest, and for a second
+    // after a slide a hardware retune the coalescer still holds is the base of the next one,
+    // because the source's readback has not moved yet and a notch counted from it would be lost.
+    double slideNotches_ = 0.0;
+    double slideAtS_ = -1.0e9;
+    double slideCentreHz_ = 0.0;   // the centre the last slide asked the source for
+    // THE PICTURE FOLLOWS THE PASSBAND until this ImGui time (set by a slide, cleared by the
+    // user's own hand on the view: a pan of the waterfall, a drag of the band, the zoom). While
+    // it runs the view is panned, no further than it must, to keep the passband in it. Never
+    // while the hand is on the band or the waterfall: the hand is the only writer then.
+    double passbandFollowUntilS_ = 0.0;
+
     int deemphIndex_ = 0;  // index into kDeemphUs; 0 = 50 us (global default)
 
     bool freqEditing_ = false;
@@ -4715,9 +4734,12 @@ private:
     // A scripted "ctrlwheel" step spans the frame it was read on plus the two
     // that follow, the way a real held Ctrl key does - see applyInputScript's
     // CtrlWheel case. -1 means nothing is pending.
+    // "shiftwheel" (0.99.82) takes the same three frames with Shift in Ctrl's
+    // place; pendingWheelMod_ is the modifier the pending step is holding.
     long pendingCtrlWheelFrame_ = -1;
     float pendingCtrlWheelY_ = 0.0f;
     bool pendingCtrlWheelSent_ = false;
+    int pendingWheelMod_ = 0;  // an ImGuiKey: ImGuiMod_Ctrl or ImGuiMod_Shift
     // THE SCRIPT IS THE ONLY POINTER AND KEYBOARD (2026-10-01): ImGui's input
     // event id from which events in the queue were NOT put there by the
     // script, and how many such events the last frame discarded (traced).

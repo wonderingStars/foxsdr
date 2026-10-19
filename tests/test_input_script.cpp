@@ -100,6 +100,18 @@ int main() {
               p.steps[1].y == -1.5f);
     }
 
+    // [4b2] SHIFT+WHEEL (0.99.82), the gesture that slides the passband on the
+    // spectrum and the waterfall: notches as given; zero or missing refused.
+    {
+        const ScriptParse p = parseInputScript(
+            "5 shiftwheel 3\n6 shiftwheel -1.5\n7 shiftwheel 0\n8 shiftwheel\n");
+        CHECK(p.bad == 2);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::ShiftWheel &&
+              p.steps[0].y == 3.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].y == -1.5f);
+    }
+
     // [4c] SLEEP holds the loop for real time (a long press is a duration):
     // 1..5000 ms; zero, past the bound, or missing is refused.
     {

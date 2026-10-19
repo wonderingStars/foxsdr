@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Beállítja a vevő helyét - ahonnan a térképen és a radarernyőn minden távolságot és irányszöget mérünk. Ugyanez a vezérlő megjelenik az oldalsáv Radar szakaszában is (amíg nincs pozíció), az üres radarernyőn és minden térképoldal sávján.",
   "Settings and key bindings": "Beállítások és billentyűparancsok",
   "Seychelles": "Seychelle-szigetek",
+  "Shift + wheel: slide the tuned band": "Shift + görgő: a hangolt sáv csúsztatása",
   "Show decoder output": "Dekóderkimenet megjelenítése",
   "Show every node on the canvas": "Minden csomópont megjelenítése a vásznon",
   "Show it again": "Újra megjelenítés",

@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Setează poziția receptorului - punctul de la care se măsoară fiecare distanță și azimut de pe hartă și de pe ecranul radar. Același control apare și în secțiunea Radar a barei (cât timp nu există o poziție), în starea goală a ecranului radar și pe bara fiecărei pagini de hartă.",
   "Settings and key bindings": "Setări și scurtături de tastatură",
   "Seychelles": "Seychelles",
+  "Shift + wheel: slide the tuned band": "Shift + rotiță: mută banda acordată",
   "Show decoder output": "Afișează ieșirea decodorului",
   "Show every node on the canvas": "Arată toate nodurile pe planșă",
   "Show it again": "Afișează-l din nou",

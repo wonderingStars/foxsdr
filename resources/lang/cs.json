@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Nastaví polohu přijímače - od ní se měří každá vzdálenost a azimut na mapě a na radarové obrazovce. Stejný ovládací prvek je také v sekci Radar na liště (dokud poloha není), v prázdném stavu radarové obrazovky a na liště každé stránky mapy.",
   "Settings and key bindings": "Nastavení a klávesové zkratky",
   "Seychelles": "Seychely",
+  "Shift + wheel: slide the tuned band": "Shift + kolečko: posun naladěného pásma",
   "Show decoder output": "Zobrazit výstup dekodéru",
   "Show every node on the canvas": "Zobrazit všechny uzly na plátně",
   "Show it again": "Znovu zobrazit",

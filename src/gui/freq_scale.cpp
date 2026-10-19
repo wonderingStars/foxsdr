@@ -142,6 +142,33 @@ void FreqScale::resetView() {
     viewHigh_ = fullHigh_;
 }
 
+bool FreqScale::keepInView(double bandLowHz, double bandHighHz, double marginFrac) {
+    if (!(rate_ > 0.0) || !std::isfinite(bandLowHz) || !std::isfinite(bandHighHz) ||
+        !std::isfinite(marginFrac) || bandHighHz < bandLowHz) {
+        return false;
+    }
+    const double span = viewHigh_ - viewLow_;
+    const double margin = std::clamp(marginFrac, 0.0, 0.25) * span;
+    double lo = viewLow_;
+    if (bandHighHz - bandLowHz + 2.0 * margin > span) {
+        // Nothing to spare either side: put the middle of the band in the middle of the view.
+        lo = 0.5 * (bandLowHz + bandHighHz) - 0.5 * span;
+    } else if (bandLowHz < viewLow_ + margin) {
+        lo = bandLowHz - margin;
+    } else if (bandHighHz > viewHigh_ - margin) {
+        lo = bandHighHz + margin - span;
+    } else {
+        return false;
+    }
+    // Inside the full span, the width kept: the same pins pan() makes.
+    if (lo + span > fullHigh_) { lo = fullHigh_ - span; }
+    if (lo < fullLow_) { lo = fullLow_; }
+    if (lo == viewLow_) { return false; }
+    viewLow_ = lo;
+    viewHigh_ = lo + span;
+    return true;
+}
+
 void FreqScale::visibleBinRange(int fftSize, double& firstBin, double& lastBin) const {
     if (fftSize <= 0) {
         firstBin = 0.0;

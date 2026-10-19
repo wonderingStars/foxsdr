@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Ορίζει τη θέση του δέκτη - από την οποία μετριέται κάθε απόσταση και αζιμούθιο στον χάρτη και στην οθόνη ραντάρ. Το ίδιο στοιχείο ελέγχου εμφανίζεται επίσης στην ενότητα Ραντάρ της στήλης πλήκτρων (όσο δεν υπάρχει θέση), στην κενή οθόνη ραντάρ και στη μπάρα κάθε σελίδας χάρτη.",
   "Settings and key bindings": "Ρυθμίσεις και αντιστοιχίσεις πλήκτρων",
   "Seychelles": "Σεϋχέλλες",
+  "Shift + wheel: slide the tuned band": "Shift + ροδέλα: μετακίνηση της συντονισμένης ζώνης",
   "Show decoder output": "Εμφάνιση εξόδου αποκωδικοποιητών",
   "Show every node on the canvas": "Εμφάνιση όλων των κόμβων στον καμβά",
   "Show it again": "Εμφάνιση ξανά",

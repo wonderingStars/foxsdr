@@ -64,6 +64,7 @@
 #include "gui/basemap_stand_in.hpp"
 #include "gui/bookmark_marker_geometry.hpp"
 #include "gui/freq_marker_layout.hpp"
+#include "gui/passband_slide.hpp"
 #include "gui/press_gesture.hpp"
 #include "gui/plugin_markers.hpp"
 #include "gui/rate_follow_status.hpp"
@@ -421,6 +422,15 @@ constexpr int kMaxTicks = 128;
 // Wheel zoom factor per notch, applied as factor^notches so fractional
 // touchpad deltas zoom proportionally. Zoom is always about the cursor.
 constexpr double kZoomPerNotch = 1.3;
+
+// THE PICTURE FOLLOWS A SLID PASSBAND (0.99.82): for this long after the last Shift + wheel the
+// view is panned to keep the passband in it, with this share
+// of the view's width to spare at the edge it was leaving, so the band is not left against the
+// frame. A second and a half outlasts the retune pacing (50 ms) and the source's readback, and
+// is short enough that a view the user arranges afterwards is never fought; the user's own pan,
+// drag or zoom ends it at once.
+constexpr double kPassbandFollowS = 1.5;
+constexpr double kPassbandFollowMargin = 0.08;
 
 // VFO band-edge grab tolerance, pixels either side of the edge line.
 constexpr float kVfoEdgeTolPx = 6.0f;
@@ -12664,7 +12674,22 @@ void AppWindow::drawCenterPanels() {
     // window whenever it still fits the new baseband, so a small retune or a
     // rate change does not silently throw the view away.
     cascade::source::IqSource& src = pipeline_.activeSource();
-    scale_.setSpan(src.centerFrequencyHz(), pipeline_.inputRateHz());
+    {
+        // WHILE A SLID PASSBAND IS BEING FOLLOWED (kPassbandFollowS), and only while the hand is
+        // not on the band or the waterfall, the view is panned no further than it must to keep the
+        // passband in it - after setSpan, so that it is the span the source now delivers that it
+        // is kept inside. The follow is an event this file armed, never a standing rule: a view
+        // left alone is left alone.
+        const double centreNow = src.centerFrequencyHz();
+        const bool followLive = ImGui::GetTime() < passbandFollowUntilS_ && !airbandListening_ &&
+                                vfoDrag_ == VfoDrag::None && !wfPanning_;
+        scale_.setSpan(centreNow, pipeline_.inputRateHz());
+        if (followLive) {
+            const double tunedNow = centreNow + pipeline_.vfoOffsetHz();
+            scale_.keepInView(tunedNow - 0.5 * vfoBandwidthHz_, tunedNow + 0.5 * vfoBandwidthHz_,
+                              kPassbandFollowMargin);
+        }
+    }
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
@@ -12696,6 +12721,16 @@ void AppWindow::drawCenterPanels() {
     double firstBin = 0.0;
     double lastBin = 0.0;
     scale_.visibleBinRange(static_cast<int>(kFftSize), firstBin, lastBin);
+
+    // THE PICTURE AS IT IS DRAWN THIS FRAME, in kHz from the source's centre: the view's two edges,
+    // where the VFO is, and how wide its band is. The census keeps the last, so a test reads
+    // whether a zoom survived a retune and whether the passband is still in the picture
+    // (tests/test_passband_slide_app).
+    cascade::gui::census::rect(
+        "rx:view:khz", static_cast<float>((scale_.viewLowHz() - src.centerFrequencyHz()) / 1000.0),
+        static_cast<float>((scale_.viewHighHz() - src.centerFrequencyHz()) / 1000.0),
+        static_cast<float>(pipeline_.vfoOffsetHz() / 1000.0),
+        static_cast<float>(vfoBandwidthHz_ / 1000.0));
 
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -12937,19 +12972,23 @@ void AppWindow::drawCenterPanels() {
             ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
             !ImGui::IsMouseDown(0)) {
             if (hit == SpectrumView::VfoHit::Center) {
-                ImGui::SetTooltip(tr("Drag to move the tuned band | drag an edge to widen it\n"
-                                  "Shift-drag: free, unsnapped | wheel: zoom | double-click: unzoom"));
+                ImGui::SetTooltip("%s\n%s",
+                                  tr("Drag to move the tuned band | drag an edge to widen it\n"
+                                     "Shift-drag: free, unsnapped | wheel: zoom | double-click: unzoom"),
+                                  tr("Shift + wheel: slide the tuned band"));
             } else if (hit == SpectrumView::VfoHit::EdgeLow ||
                        hit == SpectrumView::VfoHit::EdgeHigh) {
                 ImGui::SetTooltip(tr("Drag to widen or narrow the tuned band"));
             } else {
-                ImGui::SetTooltip("%s\n%s",
+                ImGui::SetTooltip("%s\n%s\n%s",
                                   tr("Click to tune here | wheel: zoom about the pointer\n"
                                      "double-click: unzoom | drag the shaded band to move it"),
+                                  tr("Shift + wheel: slide the tuned band"),
                                   tr("Right-click: normal, peak hold or average trace"));
             }
         }
         if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
+            passbandFollowUntilS_ = 0.0;  // the hand has the band: nothing else moves the picture
             vfoDrag_ = (hit == SpectrumView::VfoHit::Center)  ? VfoDrag::Center
                        : (hit == SpectrumView::VfoHit::EdgeLow) ? VfoDrag::EdgeLow
                                                                 : VfoDrag::EdgeHigh;
@@ -13115,6 +13154,7 @@ void AppWindow::drawCenterPanels() {
         } else {
             if (!wfMoved_ && std::fabs(io.MousePos.x - wfPressX_) > kDragSlopPx) {
                 wfMoved_ = true;
+                passbandFollowUntilS_ = 0.0;  // a pan is the hand arranging the picture
             }
             if (wfMoved_ && io.MouseDelta.x != 0.0f) {
                 scale_.pan(-static_cast<double>(io.MouseDelta.x) / width);
@@ -13126,7 +13166,15 @@ void AppWindow::drawCenterPanels() {
         wfPressT_ = ImGui::GetTime();
         wfMoved_ = false;
     }
-    if (wfHovered && ImGui::IsMouseDoubleClicked(0)) { scale_.resetView(); }
+    if (wfHovered && ImGui::IsMouseDoubleClicked(0)) {
+        scale_.resetView();
+        // THE SECOND PRESS OF A DOUBLE-CLICK IS NOT A CLICK (0.99.82). Its first press has already
+        // tuned to the signal that was clicked; the unzoom above changes what every pixel means, so
+        // letting the release tune again put the VFO on whatever the same pixel showed in the
+        // picture just put back - another signal, hundreds of kHz away on a deep zoom. Marked as
+        // moved, the press is neither a click nor, without the pointer travelling, a pan.
+        wfMoved_ = true;
+    }
     // The waterfall's gestures, said once the hand has rested - the spectrum
     // above has had its own tooltip from the start, and the marker menu is
     // found by nothing else. Not over a marker: its own tooltip wins there.
@@ -13135,8 +13183,14 @@ void AppWindow::drawCenterPanels() {
         ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
         freqMarkers_.nearest(scale_.xToHz(mouseFrac),
                              4.0 * (scale_.viewHighHz() - scale_.viewLowHz()) / width) == 0) {
-        ImGui::SetTooltip("%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
-                                   "Right-click: drop a marker here, list, copy or clear markers"));
+        if (airbandListening_) {
+            ImGui::SetTooltip("%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
+                                       "Right-click: drop a marker here, list, copy or clear markers"));
+        } else {
+            ImGui::SetTooltip("%s\n%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
+                                            "Right-click: drop a marker here, list, copy or clear markers"),
+                              tr("Shift + wheel: slide the tuned band"));
+        }
     }
     // RIGHT-CLICK: the marker menu for the frequency under the pointer. The
     // right button does nothing else on this panel, so it cannot collide with
@@ -13156,10 +13210,75 @@ void AppWindow::drawCenterPanels() {
     // Wheel over EITHER panel zooms about the cursor (1.3x per notch; the
     // zoom floor and full-span clamp live in FreqScale). Both panels share
     // the same x extent, so the spectrum-relative fraction serves both.
+    //
+    // SHIFT + WHEEL SLIDES THE PASSBAND instead (0.99.82): the tuned band moves along the band by
+    // the mode's raster per notch (slidePassband), and the picture follows it. Shift is the one
+    // modifier the wheel did not use - Ctrl + wheel is the touchpad's pinch, and zooms - and on a
+    // click it already means "off the raster", so the wheel's modifier is not a new idea. With
+    // the Airband monitor listening there is no passband to slide (vfoHidden above), so the wheel
+    // stays the zoom. While the hand holds the band or pans the waterfall the wheel does nothing
+    // at all: a gesture is in progress and has one writer.
     if ((specHovered || wfHovered) && io.MouseWheel != 0.0f) {
-        scale_.zoomAt(mouseFrac,
-                      std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
+        if (io.KeyShift && !io.KeyCtrl && !airbandListening_) {
+            if (vfoDrag_ == VfoDrag::None && !wfPanning_) {
+                slidePassband(static_cast<double>(io.MouseWheel));
+            }
+        } else {
+            passbandFollowUntilS_ = 0.0;  // a zoom is the hand arranging the picture
+            scale_.zoomAt(mouseFrac,
+                          std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
+        }
     }
+}
+
+void AppWindow::slidePassband(double notches) {
+    if (!std::isfinite(notches) || notches == 0.0) { return; }
+    const double nowS = ImGui::GetTime();
+    if (nowS - slideAtS_ > 0.5) { slideNotches_ = 0.0; }
+    slideNotches_ += notches;
+    const double whole = std::trunc(slideNotches_);
+    if (whole == 0.0) {
+        slideAtS_ = nowS;
+        return;
+    }
+    slideNotches_ -= whole;
+
+    // THE BASE IS WHAT THE LAST SLIDE ASKED FOR while the retune it caused is still held back by
+    // the pacing (retuneSourceHz): the source readback has not moved yet, and counting this notch
+    // from it would count the one before it again. Everything else counts from the readback.
+    cascade::source::IqSource& src = pipeline_.activeSource();
+    const bool held = retuneCoalescer_.hasPending() && nowS - slideAtS_ < 1.0;
+    const double centre = held ? slideCentreHz_ : src.centerFrequencyHz();
+    const double tuned = centre + pipeline_.vfoOffsetHz();
+    const double rate = pipeline_.inputRateHz();
+    const double step = kModeSnapHz[modeIndex_];
+    const cascade::core::ConverterSetting conv = pipeline_.converter();
+    cascade::gui::PassbandSlide p = cascade::gui::planPassbandSlide(
+        tuned, centre, rate, vfoBandwidthHz_, step, whole,
+        cascade::core::minTunedAirHz(conv, pipeline_.vfoOffsetHz()));
+    if (p.retuneSource) {
+        // The floor depends on the offset the passband ends up at, which is the end of its reach.
+        const double floorHz = cascade::core::minTunedAirHz(conv, p.offsetHz);
+        if (p.wantAbsHz < floorHz) {
+            p = cascade::gui::planPassbandSlide(tuned, centre, rate, vfoBandwidthHz_, step, whole,
+                                                floorHz);
+        }
+    }
+    slideAtS_ = nowS;
+    if (!p.moved) { return; }
+    if (!p.retuneSource) {
+        // Inside the span: the VFO moves, exactly as a click moves it. (Already on the raster.)
+        setVfoToAbsoluteHz(p.wantAbsHz, false);
+    } else {
+        // Past the end: the passband to the end of its reach, then the source takes up the rest
+        // through the retune the counter uses, which leaves the offset where it is.
+        pipeline_.setVfoOffsetHz(p.offsetHz);
+        vfoOffsetKhz_ = static_cast<float>(p.offsetHz / 1000.0);
+        tuneAbsoluteHz(p.wantAbsHz);
+        slideCentreHz_ = p.centreHz;
+    }
+    passbandFollowUntilS_ = nowS + kPassbandFollowS;
+    cascade::gui::census::note("rx:slide");
 }
 
 void AppWindow::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
@@ -16992,7 +17111,7 @@ void AppWindow::applyInputScript(long frame) {
             io.AddMouseWheelEvent(0.0f, pendingCtrlWheelY_);
             pendingCtrlWheelSent_ = true;
         } else if (pendingCtrlWheelSent_ && frame >= pendingCtrlWheelFrame_ + 2) {
-            io.AddKeyEvent(ImGuiMod_Ctrl, false);
+            io.AddKeyEvent(static_cast<ImGuiKey>(pendingWheelMod_), false);
             pendingCtrlWheelFrame_ = -1;
             pendingCtrlWheelSent_ = false;
         }
@@ -17082,6 +17201,16 @@ void AppWindow::applyInputScript(long frame) {
                 // Ctrl down well before the wheel tick and releases it well
                 // after, spanning many real frames - this mirrors that.
                 io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                pendingWheelMod_ = ImGuiMod_Ctrl;
+                pendingCtrlWheelFrame_ = frame;
+                pendingCtrlWheelY_ = st.y;
+                pendingCtrlWheelSent_ = false;
+                break;
+            case cascade::gui::ScriptStep::Verb::ShiftWheel:
+                // The same three frames as the pinch above, for the same
+                // reason, with Shift held instead of Ctrl.
+                io.AddKeyEvent(ImGuiMod_Shift, true);
+                pendingWheelMod_ = ImGuiMod_Shift;
                 pendingCtrlWheelFrame_ = frame;
                 pendingCtrlWheelY_ = st.y;
                 pendingCtrlWheelSent_ = false;
@@ -27681,9 +27810,11 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
         case KeyAction::ZoomIn:
             // About the CENTRE of the view, not about the pointer: the wheel
             // zooms where the hand is, and a key has no hand.
+            passbandFollowUntilS_ = 0.0;
             scale_.zoomAt(0.5, kZoomPerNotch);
             break;
         case KeyAction::ZoomOut:
+            passbandFollowUntilS_ = 0.0;
             scale_.zoomAt(0.5, 1.0 / kZoomPerNotch);
             break;
         case KeyAction::ZoomReset:

@@ -284,6 +284,13 @@ foreach(src ${CASCADE_TESTS})
         # key's MANUAL, and the tip that appears after four seconds of rest.
         add_dependencies(${name} cascade)
         add_test(NAME ${name} COMMAND ${name})
+    elseif(name STREQUAL "test_passband_slide_app")
+        # Runs the real cascade.exe (built first) on the signal generator and slides the passband with
+        # Shift + wheel on the spectrum and the waterfall, using the input script (0.99.82): the step,
+        # the carry past the end of the span, the picture following, the plain wheel's zoom, the truce
+        # with a drag, and what a double-click does.
+        add_dependencies(${name} cascade)
+        add_test(NAME ${name} COMMAND ${name})
     elseif(name STREQUAL "test_window_platform_app")
         # Runs the real cascade.exe (built first) in bounded runs and reads the diagnostics log it
         # leaves for the `window:` lines (0.99.78): their order before the first frame, the value of
@@ -538,6 +545,8 @@ set_tests_properties(test_display_menu_app PROPERTIES TIMEOUT 600)
 # half this desktop's speed and open the window slowly under a virtual display, so it is given the
 # generous bound its siblings are rather than the loop's two minutes.
 set_tests_properties(test_window_platform_app PROPERTIES TIMEOUT 600)
+# The passband-slide test starts the real application about twenty times, 40 to 90 frames each.
+set_tests_properties(test_passband_slide_app PROPERTIES TIMEOUT 600)
 # The audio-buffer test builds the real AppWindow three times (its sink opened and then closed, which
 # is a device open each) and makes a few hundred starved callbacks against it by hand. A few seconds
 # here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is

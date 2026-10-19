@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Đặt vị trí của máy thu - mốc để đo mọi cự ly và phương vị trên bản đồ và màn hình radar. Cùng điều khiển này cũng xuất hiện ở mục Radar của thanh bên (khi chưa có vị trí), ở trạng thái trống của màn hình radar, và trên thanh của mọi trang bản đồ.",
   "Settings and key bindings": "Cài đặt và phím tắt",
   "Seychelles": "Seychelles",
+  "Shift + wheel: slide the tuned band": "Shift + con lăn: dịch dải đã chỉnh tần",
   "Show decoder output": "Hiện đầu ra giải mã",
   "Show every node on the canvas": "Hiện mọi nút trên khung vẽ",
   "Show it again": "Hiện lại",

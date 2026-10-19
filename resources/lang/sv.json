@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Anger mottagarens position - det som varje avstånd och bäring på kartan och radarskärmen mäts från. Samma kontroll finns också i skenans Radar-avsnitt (så länge det inte finns någon position), i radarskärmens tomma läge och i varje kartsidas list.",
   "Settings and key bindings": "Inställningar och kortkommandon",
   "Seychelles": "Seychellerna",
+  "Shift + wheel: slide the tuned band": "Shift + hjul: flytta det inställda bandet",
   "Show decoder output": "Visa avkodarutdata",
   "Show every node on the canvas": "Visa alla noder på arbetsytan",
   "Show it again": "Visa den igen",

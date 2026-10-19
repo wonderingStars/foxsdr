@@ -852,6 +852,20 @@ The monitor uses the receiver's radio, so LISTEN switches to the RECEIVER
 view; showing the PATCH view, starting the Scanner or tuning the receiver by
 hand stops it. Clicking a row tunes the receiver to that one frequency alone.
 
+## Tuning with the mouse on the spectrum and the waterfall
+
+| Gesture | What it does |
+|---|---|
+| **Click** | Tunes to that frequency, on the mode's step (NFM 12.5 kHz, WFM 100 kHz, AM 9 kHz, the single-sideband, CW and RAW modes 1 kHz). <kbd>Shift</kbd>+click tunes to exactly that frequency. |
+| **Drag the shaded band** (spectrum) | Moves the tuned band; <kbd>Shift</kbd> drops the step. Dragging an edge of the band widens or narrows it. |
+| **Drag the waterfall** | Pans the picture when it is zoomed in. |
+| **Wheel** | Zooms about the pointer, as does <kbd>Ctrl</kbd>+wheel (a touchpad pinch). |
+| <kbd>Shift</kbd>+**wheel** | **Slides the tuned band along the band**, one step of the mode (the same step as a click) for each notch; away from you is up in frequency. It works over the spectrum and over the waterfall. Within what the radio is delivering it moves the tuned band, as a click does; past the end of that it moves the radio itself, as the counter does, and the band stays at the end of the picture, so a wheel turned for long enough walks across the whole band. A tuned band that was left off the step by a <kbd>Shift</kbd>+click goes to the next step on its first notch. |
+| **Double-click** the waterfall | Tunes to the signal that was clicked and shows the whole span again. |
+| **Right-click** | The display menu (and, on the waterfall, the markers). |
+
+While the tuned band is being slid, a zoomed-in picture follows it: if the band would leave the picture, the picture pans, no further than it has to, to keep the band in view. The picture follows for a second and a half after the last notch and stops at once when you take hold of it yourself - a drag of the band, a pan of the waterfall or a zoom. A slide is ignored while you are holding the band or panning the waterfall, and while the Airband monitor is listening (the tuned band is not drawn then, and <kbd>Shift</kbd>+wheel zooms as the wheel does).
+
 ## Markers on the waterfall
 
 A marker notes a frequency without tuning to it - something to come back to

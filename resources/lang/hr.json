@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Postavlja položaj prijamnika - od kojeg se mjere svaka udaljenost i azimut na karti i radarskom zaslonu. Ista se kontrola pojavljuje i u odjeljku Radar na traci (dok nema položaja), u praznom stanju radarskog zaslona i na traci svake stranice karte.",
   "Settings and key bindings": "Postavke i tipkovnički prečaci",
   "Seychelles": "Sejšeli",
+  "Shift + wheel: slide the tuned band": "Shift + kotačić: pomak ugođenog pojasa",
   "Show decoder output": "Prikaži izlaz dekodera",
   "Show every node on the canvas": "Prikaži sve čvorove na platnu",
   "Show it again": "Prikaži ponovno",

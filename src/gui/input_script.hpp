@@ -28,6 +28,7 @@
 //   <frame> wheel <n>         the wheel, n notches (> 0 away from the user)
 //   <frame> wheelh <n>        the horizontal wheel (> 0 scrolls left)
 //   <frame> ctrlwheel <n>     the wheel with Ctrl held (a touchpad pinch)
+//   <frame> shiftwheel <n>    the wheel with Shift held (slides the passband, 0.99.82)
 //   <frame> key <name>        tap a key: enter, delete, backspace, escape,
 //                             tab, ctrl+a
 //   <frame> text <chars...>   type the rest of the line
@@ -47,7 +48,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel, Sleep };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel, ShiftWheel, Sleep };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -124,6 +125,12 @@ inline ScriptParse parseInputScript(const std::string& text) {
             // "ctrlwheel 1": the wheel with Ctrl held - a touchpad pinch on
             // Windows arrives as exactly this (0.99.49).
             st.verb = ScriptStep::Verb::CtrlWheel;
+            ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
+        } else if (verb == "shiftwheel") {
+            // "shiftwheel 1": the wheel with Shift held - on the spectrum and
+            // the waterfall, the gesture that slides the passband along the
+            // band instead of zooming (a request from a Linux user, 2026-10-18).
+            st.verb = ScriptStep::Verb::ShiftWheel;
             ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
         } else if (verb == "sleep") {
             // Milliseconds in x; bounded so a typo cannot hang a test run.

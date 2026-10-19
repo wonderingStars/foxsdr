@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "Define a posição do receptor - a partir da qual se mede toda distância e todo azimute no mapa e na tela de radar. O mesmo controle aparece também na seção Radar da barra lateral (enquanto não há posição), na tela de radar vazia e na barra de toda página de mapa.",
   "Settings and key bindings": "Configurações e atalhos de teclado",
   "Seychelles": "Seicheles",
+  "Shift + wheel: slide the tuned band": "Shift + roda: deslize a faixa sintonizada",
   "Show decoder output": "Mostrar saída decodificada",
   "Show every node on the canvas": "Mostrar todos os nós na tela",
   "Show it again": "Mostrar de novo",

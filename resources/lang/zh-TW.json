@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "設定接收機位置，也就是地圖與雷達幕上每個距離與方位的量測起點。同樣的控制項也會出現在側欄的「雷達」區段 (尚無位置時)、雷達幕的空白狀態，以及每個地圖頁面的工具列上。",
   "Settings and key bindings": "設定與快速鍵",
   "Seychelles": "塞席爾",
+  "Shift + wheel: slide the tuned band": "Shift + 滾輪: 滑動已調諧的頻帶",
   "Show decoder output": "顯示解碼器輸出",
   "Show every node on the canvas": "顯示畫布上的所有節點",
   "Show it again": "重新顯示",

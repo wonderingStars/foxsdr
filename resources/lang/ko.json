@@ -1392,6 +1392,7 @@
   "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.": "수신기의 위치를 설정합니다 - 지도와 레이더 스코프의 모든 거리와 방위는 이 위치에서 측정합니다. 같은 컨트롤이 레일의 레이더 섹션(위치가 없는 동안), 스코프의 빈 화면, 모든 지도 페이지의 막대에도 있습니다.",
   "Settings and key bindings": "설정 및 단축키",
   "Seychelles": "세이셸",
+  "Shift + wheel: slide the tuned band": "Shift+휠: 튜닝 대역 이동",
   "Show decoder output": "디코더 출력 표시",
   "Show every node on the canvas": "캔버스의 모든 노드 표시",
   "Show it again": "다시 표시",
