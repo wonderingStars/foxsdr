@@ -45,6 +45,7 @@
 #include "core/breadcrumb.hpp"
 #include "core/console_close.hpp"
 #include "core/crash_handler.hpp"
+#include "core/band_mode.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
@@ -7821,7 +7822,36 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         if (commit) {
             double typed = 0.0;
             if (parseFrequencyHz(freqEditBuf_, typed)) {
+                // THE MODE FOLLOWS A TYPED BAND CHANGE (field report a09fe097,
+                // 0.99.78): typing a frequency in another band adopts that
+                // band's conventional mode - 3.620 MHz lands in LSB - while a
+                // typed frequency in the SAME band leaves the mode alone, so a
+                // digital setup (FT8 on 7.074 USB) survives nearby retypes.
+                // Both bands are read BEFORE the tune so `from` is the band
+                // the user is leaving, not the one just landed in. The whole
+                // rule, including the RAW hold and the no-convention services,
+                // is core/band_mode.hpp's.
+                const cascade::core::BandEntry* fromBand = bandPlan_.at(hz);
+                const cascade::core::BandEntry* toBand = bandPlan_.at(typed);
                 tuneAbsoluteHz(typed);
+                const char* follow = toBand == nullptr
+                                         ? ""
+                                         : cascade::core::conventionalModeForBand(
+                                               toBand->service, typed);
+                if (cascade::core::modeFollowsTypedBandChange(
+                        fromBand, toBand, kModeNames[modeIndex_], follow)) {
+                    for (int m = 0; m < 8; ++m) {
+                        if (std::strcmp(kModeNames[m], follow) == 0) {
+                            // setModeIndex logs the mode and bandwidth; this
+                            // line says WHY it moved. The band's NAME only,
+                            // never a frequency (core::scrubUploadLine).
+                            cascade::core::diagLogf("mode follows the band plan: %s",
+                                                    toBand->name.c_str());
+                            setModeIndex(m);
+                            break;
+                        }
+                    }
+                }
                 sourceError_.clear();
             } else {
                 // One sentence, one format string, so a translation can place

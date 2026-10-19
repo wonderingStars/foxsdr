@@ -115,7 +115,13 @@ are still moving. What is in the current build:
   to 1 Hz - each with a chrome toggle switch beneath it. Scroll a tube to step
   that digit, click one to type a frequency, or flick the switch: the upper
   half steps the digit up, the lower half down, holding either repeats, and
-  the lever stays pointing the way it was last flicked. The SAMPLE RATE and
+  the lever stays pointing the way it was last flicked. A typed frequency that
+  lands in a different band of the band plan also adopts that band's
+  conventional mode - type 3.620 and the receiver is in LSB, type 118.1 and it
+  is in AM - while typing within the band you are already in never touches the
+  mode, so a digital setup (FT8 on 7.074 USB) survives nearby retypes; wheel,
+  switch, drag and scanner steps never change the mode at all, and the Radio
+  section's mode keys always win afterwards. The SAMPLE RATE and
   FRAME TIME meters at the deck's right are on the bar at the window size the
   application first opens with, not only once it is widened (the whole deck
   is drawn about 8% smaller there, to keep them beside the three dials

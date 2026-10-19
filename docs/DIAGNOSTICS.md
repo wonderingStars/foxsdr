@@ -2634,6 +2634,16 @@ move the width without writing it (a mode change already reports its default
 width on the `mode:` line), so a missing `bandwidth:` line shows that the routes
 listed above were not used, not that the width never changed.
 
+### The band-plan mode line
+
+`mode follows the band plan: BAND` — written when a frequency typed into the
+counter lands in a different band of the band plan and adopts that band's
+conventional mode (`core/band_mode.hpp` has the whole convention and its two
+deliberate limits), immediately before the `mode:` line that change writes.
+`BAND` is the band's display name ("80 m Amateur"); the line never carries a
+frequency. A `mode:` line without this one in front of it was the user's own
+press on a mode key.
+
 The cause the line cannot show, and the repair: the channel filter's length was
 sized from the distance between the passband edge and the channel's Nyquist
 frequency, about 100 kHz at every setting, so at 2.4 MS/s a 3 kHz request got 103
