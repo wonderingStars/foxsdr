@@ -111,6 +111,12 @@ tree. This document is the design and the list of what is missing.
    compiles; tests/test_command_path_guard.cpp's ratchet reaches zero and is
    retired.
 
+AMENDED 2026-10-20 (window port group 14, part e; the record is in section 6.5): the ratchet does not reach zero by porting. It
+ends at a CLASSIFIED residue - 33 reads on 14 fields, every one in a named member of one of three classes (the shell's seams:
+run, applyConfig, the constructor; stage 5's web/CAT feeds; the eight host accessors) that the guard names, budgets class by
+class and fails on a read outside. The fence step builds the interface target without those members and then retires the
+ratchet; it does not port them.
+
 Stage 5 (web and CAT as sessions) needs 1 and 2; stage 7 (the headless
 foxsdr-engine) needs 1 and stage 5's transports to take commands from.
 Stage 6 is skipped, as asked.
@@ -306,6 +312,12 @@ and hands the interface one opaque hook ("draw the plugin windows now", on
 the GUI thread inside the interface's frame, taking no engine type and
 returning only what was drawn), so no engine member can be read through it.
 The engine's pass never waits on it.
+
+AMENDED 2026-10-20 (window port group 14, part d; the record is in section 6.5): "the interface target will not see
+core/plugin_ui.hpp" holds, but not through one opaque hook. Six gui headers include that header because the VIEWS draw its data
+(the map, the radar scope, the target details, eight instrument faces, the decoder surfaces), so the data went to its own header,
+core/plugin_ui_data.hpp (the views take that one), and what the host process still owns is an accessor layer - eight narrow
+functions on the window, each one counted read - that the fence turns into one feed interface.
 
 What could move a measured number: the fingerprint is longer (a few hundred
 bytes hashed a pass more - the store's ids, fourteen status lines, the
@@ -2787,6 +2799,484 @@ once on a same-id node right after a document load (not reproduced); the patch s
 version read: it matters only with a concurrent publish) and one fingerprint input (an open radio's centre, which no hermetic
 test can move without moving the graph) are tested by VALUE and not alone; the unproven cause of the dying audio stream and the
 undiagnosed four load flakes above; and the MECHANISM of the glyph-edge pixels (the atlas reading is a hypothesis).
+
+GROUP 14 AS A WHOLE (the last window group: the receiver's position and the map, the GPS row and the serial ports, the usage switch
+and the diagnostics bundle, the plugin windows, and the test machinery, the crash sweep and the shell's own reads). FIVE PARTS, recorded
+below in the order they were made: parts A to C (one block, API 0.3 section 8.13: ONE list, `GPS`, 48; ONE status code,
+`FOXAPP_STATUS_GPS_RESULT`, 6; FOUR facts; one test hook; two core changes), part D (no API: the plugin windows, and the data header
+split the fence needs), part E (no API, one new engine file: the two bounded-run diagnostics, the crash sweep's install id, the shell's
+last two seams, the guard's end state), and then THE PICTURES, the campaign that held the group against the control, and what the
+group leaves for the pump move and the fence. Nothing committed; the survey (scratchpad group14-survey.md), five parts, a campaign and
+this record are in the worktree. After group 14 NO MEMBER OF THE WINDOW'S FRAME PUTS A COMMAND, OR READS AN ENGINE FIELD, EXCEPT BY
+THE SESSION AND THE ACCESSORS THE GUARD NAMES: that is the end of step 4's window ports (groups 1 to 14).
+
+THE RATCHET'S WHOLE JOURNEY, as the guard printed it at the end of each part (`controls judged / submitCommand calls in draw members /
+window-machinery lines / allowed engine lines / engine fields / direct reads`): the end of group 13 `272 / 8 / 654 / 31 / 33 / 141`; 14a
+`277 / 2 / 650 / 31 / 33 / 115`; 14b `282 / 0 / 649 / 31 / 33 / 109`; 14c `282 / 0 / 649 / 29 / 29 / 96`; 14d `285 / 0 / 649 / 29 / 28 /
+77`; 14e `283 / 0 / 640 / 29 / 14 / 33`. 141 reads on 33 fields became 33 reads on 14: 108 reads and 19 fields went (4 fields in 14c,
+`recordDir_` in 14d, 14 in 14e; 14a and 14b moved reads but kept every field alive, `gpsReader_` to the last), and `submitsInDraw`, a
+floor of 8 at the start, is ZERO and held as a rule (`== 0`) from 14b. The survey predicted every figure but 14e's (33 / 115, 33 / 109,
+29 / 96, 28 / 77 exact; 18 / 39 against 14 / 33, because the two seams the shell gave up on top of the survey's three moves took four
+fields and six reads more). THE 33 THAT REMAIN ARE NOT A TARGET MISSED: they are the classified residue (19 in the shell's seams, 6 in
+stage 5's web and CAT feeds, 8 in the host accessors), each class budgeted on its own beside the total, a read in any other member a
+failure ("unclassified"), and the fence step retires them by building the interface target without those members, not by porting them.
+The suite went 256 to 262 (six new tests: test_map_window, test_gps_window, test_usage_diag_window, test_plugin_window,
+test_plugin_ui_data_split and test_plugin_status_report), the api_03 test 3 582 to 3 730 checks, the alloc test 466 to 515, the
+guard 229 (after parts a to c) to 299, and the full suite ran green at the end of parts c, d and e (259, 261 and 262 of 262, `ctest -C Release -j 8`).
+
+THE THREE DEFECTS THE GROUP FIXED, one in the product and two in the tests that hold it, each with what the diagnosis is and is not.
+(1) THE CRASH-CONTEXT OVERWRITE (14c; a defect of CONTRACT, latent as behaviour). `buildDiagnosticsBundle` called `setDiagContext
+(in.context)`, the process-global block the crash handler reads, so pressing Copy diagnostics REPLACED the crash handler's copy with
+the window's own re-derivation of it; the two were the same code, so nothing visible went wrong and no test could have said so. Proved
+red first (a foreign context was set, a bundle built from another, and the global block came back "REPLACED by the bundle's"), then
+fixed: the bundle takes the engine's rendered block (`DiagBundleInput::contextBlock`), writes nothing process-global, and the engine
+renders its own context (`Engine::pumpDiagContext`). (2) THE CRASH-UPLOAD TEST'S MARGIN (14e; a robustness repair of
+tests/test_crash_upload.cpp). Its real-binary cases run the shipped cascade.exe for a bounded number of frames and expect the sweep's
+upload to have landed at the stub server; the two older cases gave it `--frames 20` and now give it 240, and the new cases' loop (part E) carries 240: three call sites. THE DIAGNOSIS IS A READING AND NOT A REPRODUCTION: the sweep starts at the first frame's look (14e)
+and its POST is a background thread that the clean exit cancels and joins, so a run lasts only as long as its frames; this machine's
+bounded runs take 1.7 s for 130 frames, start-up included (the picture campaign's), so a frame is at most 13 ms and 20 of them at most
+a quarter of a second, for a connect, a POST and the sidecar write on a machine that may be running eight other suites. The old margin was not run to failure; the new one,
+at most about 3 s a run, is held by 209 checks (test_crash_upload solo, three runs, 0 failed, 16.6 s each). (3) THE GUARD'S BLIND SPOT (14e). The
+guard's list of the engine calls a control may make (`kReadOnly`) never checked that an entry was still USED, so a call that had left
+the code stayed a licence for it to come back: the first run of the new check found 63 of the 76 entries stale, the 47 that 14d's
+textual scan of `engine_.<entry>` had counted, 13 that the two diagnostics' move freed and three the scan had missed (it looked for the
+`.` spelling only), and a spelling-agnostic search of src/gui found none of the 63 anywhere. They are retired and the guard now fails
+on a stale entry (red on a retired entry put back). ONE MORE, IN THE GROUP'S OWN TOOLS, not a defect of the code: the first mutation run of 14e was
+INVALID (the harness called `bash` with a Windows path, rc 127, nothing rebuilt, every mutant "survived" on stale binaries) and was
+noticed only because all fifteen passed; part E records it.
+
+THE NEW FIXTURES. tests/fixture_group14_plugin.cpp is a REAL track source (a loaded module, polled through the plugin ABI): four
+aircraft at fixed places (one 120 s stale, so never shown), a trail, and, from 14d, a PANEL (a heading and two rows) and an INSTRUMENT
+(a fixed reading and one memory row); it builds a second time under another name and id prefix (`fixture_group14_plugin_b`,
+"Group Fourteen Tracks B") for the two-source cases. It is what the radar scope's aircraft (group 12) and the Patch Map part's track
+bit (group 13) lacked, and the campaign below used the SAME DLL in both builds. The group-13 picture decoder and the stage-1 text
+decoder are loaded beside it in test_plugin_window and test_plugin_status_report.
+
+WHAT THE FENCE LEDGER NOW SAYS (the survey's section G, as it stands): the ratchet ENDS at a classified residue (33 reads on 14 fields)
+and the interface target is built without three named classes (the shell members, stage 5's four, the eight host accessors, which become
+the methods of one `HostPluginFeed`); 50 `engine_.` method CALLS are outside the ratchet (part E's last bullet lists them); 18 hooks
+are in `kHostHooks`, the engine calling the window from its own thread, among them the dead `onBookmarksChanged`; 13 `kReadOnly` entries
+remain (the eight accessors' calls, `pluginHost_.plugins` and four `pipeline_` calls, the shell's and stage 5's); the interface must also
+stop writing files, reading `getenv` seams outside the shell and including the thirteen engine helper headers; and the pump move still
+owns three things this group left it (the event that replaces `openPluginWindowsFor`, the host hook that carries the catalogue report,
+and `reportPluginStatus` called after `shutdownQuiesce` while a control thread lives) beside the survey's cross-thread list. Where the plan said otherwise the plan itself was amended in place, dated 2026-10-20 (the
+ratchet's end in section 4, step 5; the interface target and `core/plugin_ui.hpp` in section 6.4), so the sections above the
+record do not contradict it.
+
+GROUP 14, PARTS A TO C (the receiver's position and the map, the GPS row and the serial ports, the usage switch and the diagnostics
+bundle; the window gained `followReceiverPosition`, `submitReceiverPosition`, `readGpsRow`, `clearGpsResult`, `serialPorts`/
+`askForSerialPorts`, the pending value of the usage checkbox, `hostAltitudeNear`/`hostPanels`/`hostInstruments` and `moduleFileForName`;
+it lost `EngineHost::onReceiverPositionApplied` and `onGpsFixApplied`, the four `enumerateSerialPorts` calls, the three
+`applyCommand(CLEAR_STATUS)` sites and the diagnostics bundle's re-derivation of the engine's context): API 0.3 section 8.13, ONE
+list (`GPS`, 48), ONE status code (`FOXAPP_STATUS_GPS_RESULT`, 6), FOUR facts (`fact.telemetry.enabled`, `fact.telemetry.installId`,
+`fact.diag.launches`, `fact.diag.crashes`), one test hook (`Engine::testHooks_.serialPorts`) and two core changes (the bundle takes the
+engine's rendered context block and writes nothing process-global; the engine renders that context itself). Part d (the plugin
+windows) is recorded below this block, and part e (the test machinery, the crash seam, the residue's classes) after it. The survey (scratchpad
+group14-survey.md) is the plan; where the code and it differ:
+- 14a needs NO API (as the survey said). The hook `onReceiverPositionApplied` is replaced by `followReceiverPosition`, run at the end
+  of `refreshUiState` (so every test's LOOK runs it): a change of the state's position moves the typed fields, every map page's and
+  every PATCH MAP PART's home (the parts were never told before: the survey's 10a, fixed by construction), the scope and the coverage.
+  THE WEDGE CLEAR IS PRESERVED: a press of "Set RX here", of either offer or a click on the map goes through `submitReceiverPosition`,
+  which notes `coverageResetPending_` for a pair the rule accepts, and the next look clears the coverage even when the pair is the one
+  in force (the state shows no change for it). A SET_POSITION from another session with the same numbers is not seen (stated).
+  The seven consumers of tracks that had no test now have one (tests/test_map_window.cpp, 143 checks, against the NEW fixture
+  tests/fixture_group14_plugin.cpp: a REAL track source, four aircraft at fixed places - one stale - and a trail). It found one
+  pre-existing trait nobody wrote down: the "middle of the traffic" offer counts every aircraft the source reports, the stale one too.
+- 14b: `GPS` is read AT THE CALL (an engine-lifetime reader behind its own mutex) and never moves `listSeq`; name and detail are blank to
+  a REMOTE session (the sentence names the port: the survey blanked only `name`). The window reads it once a look; the entry going to
+  Fixed replaces `onGpsFixApplied` (reveals the fold) AND restarts the coverage (the old hook did for every fix). The serial ports are
+  now the engine's (the op and the list existed; the engine's own comment claimed the window used them): the window asks and draws
+  a pass later, saying nothing until the answer. `submitsInDraw` is 0 and the floor is `== 0`.
+- 14c: `crashUploadStart` STAYS A DIRECT READ (two reads: it runs from `run()` before the first publish, so a fact would answer
+  NOT_FOUND and the sweep would start with an empty id; it is the shell's start-up seam, for 14e). THE CRASH-CONTEXT OVERWRITE WAS
+  REAL AS A CONTRACT AND LATENT AS A BEHAVIOUR: `buildDiagnosticsBundle` called `setDiagContext(in.context)`, so pressing Copy
+  diagnostics replaced the crash handler's copy with the window's re-derivation; today both are the same code, so nothing visible went
+  wrong. Proved RED first (tests/test_diagnostics.cpp: a foreign context stands, a bundle is built from another, the global block was
+  "REPLACED by the bundle's"), then fixed (`DiagBundleInput::contextBlock`, no `setDiagContext` in the bundle, the pure
+  `renderDiagContext`). The engine renders the context itself (`Engine::pumpDiagContext`: end of `applyConfig`, then from `pumpAudio`
+  at most once a second and only when mode, source, rate, radio, model or plugins changed - hashed, allocation-free); `run()`'s two
+  `refreshDiagContext` calls, their `kLineAllowed` entry and the `kControlMayCall` entry are gone.
+
+Ratchet, per part, printed by the guard (the survey predicted 33/115 floor 2, 33/109 floor 0, 29/96): 14a `277 controls judged, 2
+submitCommand calls in draw members, 650 window-machinery lines, 31 allowed engine lines in drawing members, 0 violations` and `the
+window reads 33 engine fields directly, 115 times`; 14b `282 controls judged, 0 submitCommand calls ... 649 ... 31` and `33 engine
+fields ... 109 times`; 14c `282 ... 0 ... 649 ... 29` and `29 engine fields ... 96 times` (device_, deviceModel_, telemetryLaunches_ and
+telemetryCrashes_ lost their last reader; the two refreshDiagContext lines left kLineAllowed: 31 to 29). The floor
+`submitsInDraw >= 8` became `>= 2` in 14a and `== 0` in 14b: at zero it is a rule, not a sanity floor. `kPortedMembers` gained 12 (14a),
+7 (14b) and 2 (14c); `kHostHooks` lost `onReceiverPositionApplied` and `onGpsFixApplied`; `kReadOnly` retired the three `gpsReader_`
+entries; `kControlMayCall` retired `refreshDiagContext`. One guard mutant, at the end: a read of `engine_.gpsReader_.listening()` put back
+into drawGpsPositionControl printed `FAIL: AppWindow::drawGpsPositionControl is PORTED ... but reaches the engine directly at
+app_window.cpp:9813` (and the rule-2 line for the same call), 2 violations, 97 reads against the budget of 96, 2 checks failed;
+restored, byte-identical, 29/96.
+
+Tests (259/259 at `ctest -C Release -j 8`, 247 s, with the three new window tests; no flake from the known set appeared; the build was
+incremental, the last full-suite run on this tree): tests/test_map_window.cpp (143 checks; A no track source, B the fixture's
+targets, page, count, path and birth, C the follow and the wedge clear, D the offers, E the register and the details, F the rail's rows
+and the auto-preset for the module FILE and the stopped module), tests/test_gps_window.cpp (160; A the key, Stop and the row while it
+listens, B a fix and the same fix again, C a failure and the edits that forget it, D the ports, E the fence's rules and an idle
+look's allocations), tests/test_usage_diag_window.cpp (71; the usage row and its pending value, the bundle, the crash context left
+alone), api_03 groups G14b (the GPS list) and G14c (the facts, the context): 3 730 checks (it was 3 582), alloc cases F10 and F11:
+515 (it was 466), apply_command 1 244 (CLEAR_STATUS 6), diagnostics 182, upload_scrub 213, guard 229. THE NEW FIXTURE, tests/
+fixture_group14_plugin.cpp, is a REAL track source (a loaded module, polled through the plugin ABI): four aircraft at fixed places
+(G14A1 51.60 -0.60 3000 m, G14A2 51.40 -0.30 6000 m, G14A3 51.50 -0.10 9000 m, and G14OLD, 120 s old and so never shown) and the trail
+"G14-trail", name "Group Fourteen Tracks"; each test copies it into a plugin folder of its own. It is what the radar scope's
+aircraft (group 12) and the Patch Map part's track bit (group 13) lacked; neither of THOSE windows' tests was extended in this part.
+Mutants (each applied alone, each red, restored after; the specs and results are in the session's scratch): 14a 19, 14b window 18 and
+engine 12, 14c window 9 and engine/core 18; ONE equivalent, E_ctx_ignores_open (the device-open flag of the context's hash never
+moves without the model, the source kind or the rate moving with it). Five survivors were closed by a test, not by changing the
+mutant: the longitude alone (14a), the Fixed edge firing once (14b), the context's one-second gate, the model alone and the end of
+applyConfig (14c).
+
+OPERATOR-VISIBLE DIFFERENCES, by the code and the tests (the part took no picture; GROUP 14, THE PICTURES, below, pictures (2), (3), (4) and (6) as far as a capture can hold them; (1), (5) and (7) are not pictured): (1) the wedge clear is PRESERVED for
+every press the window itself makes and for a GPS fix; a SET_POSITION of the same pair from another kind of session is not seen
+(nothing visible changed for the window's own operator); (2) the typed fields, the map pages' homes and the coverage follow a
+position one look after the pass that applied it (invisible today: the pass runs at the head of the frame); the Patch Map parts now
+follow a later position (they never did); (3) the GPS status line of a finished read goes a pass or two after a port or baud edit, the
+key turns to Stop a pass or two after the press, the serial-port list appears a pass after the arrow (nothing, and not "none found",
+until then); (4) the usage checkbox shows the click at once and the chip, the lamp and the install id a pass later; (5) the bundle's
+context is up to a second old (the pass renders it); (6) "no track source" and the map rows' census come from the PLUGINS rows
+(a module whose create() returns nothing, and the one pass after a rescan, differ: group 12's difference 5); (7) the rail rows send
+the auto-preset through the session, a pass later.
+
+THE TRAPS, for 14d and 14e. (1) The fix of a position is applied by `pollGpsReader`, which `run()` calls before the frame and a test's
+LOOK must call itself. (2) A test frame is LOOK then DRAW, so a click made in a draw is applied by the NEXT frame's look, and a test
+that wants to see "before the pass" draws with no look between. (3) A popup left open by one test takes the pointer from the next:
+close it (ImGui::ClosePopupToLevel, which asserts on an empty stack). (4) `benchSwitchRow` and the chips are drawn to the draw list,
+not the text log: click them by id (PushID(label) then "##switchrow") and test the state, not the letters. (5) A rail section is
+closed until pressed: FOXSDR_OPEN_SECTIONS (a fragment of the label) opens it for a test. (6) Bash heredocs collapse a backslash and an
+n into a newline, in Python as in C++ (the traps of 13a and 13b, hit three more times): write a script with the file tools. (7) A new
+tests/test_*.cpp needs ZERO_CHECK built (or any ALL_BUILD) before its single target exists. (8) The reader words its own open failure
+("<port> could not be opened: <reason>"): a fake opener's reason must not repeat it. (9) `get_setting` builds the key it looks up as a
+std::string, so a read of a fact whose key is over 15 bytes allocates once (a property of the table, counted in F11). (10) The
+"middle of the traffic" offer counts every aircraft the source reports, the stale one too (scopeTrafficCentre never asked the staleness
+rule): pre-existing, not changed. (11) `Engine::testHooks_.serialPorts` is new: a window test names the machine's ports.
+
+UNVERIFIED, carried forward. No real GPS receiver, COM port, registry walk or track-source plugin of the owner's was driven (the
+receiver is a fake wire, the ports a hook, the aircraft a fixture); the one-second staleness of the bundle's context and the
+two-second give-up of the port list are timings held by tests, not by a session on the desk; the differences above are by the code and the tests and, as far as a picture goes, by THE PICTURES below; the diagnostics context in a threaded pass (the engine's control thread
+renders it; `setDiagContext` is the one process-global and is written from nowhere else); `crashUploadStart` and `run()`'s
+FOXSDR_GPS_PORT seam still read the engine directly (14e), and so does `applyConfig`'s position seed (5 reads, redundant with the
+follow); drawPluginWindows' six position reads and the plugin windows (14d) were not touched.
+
+GROUP 14, PART D (the plugin windows: drawPluginWindows and openPluginWindowsFor; NO API, no engine change; the data header split
+the fence needs). Outcome: the two members name the engine nowhere (22 direct reads gone, 3 accessor reads added); the data the
+views draw lives in core/plugin_ui_data.hpp; the guard prints 28 engine fields / 77 reads (the survey predicted exactly that).
+- THE DATA HEADER SPLIT, a pure move (no struct, default or word changed; the blocks moved with their comments). Into
+  src/core/plugin_ui_data.hpp (it includes the standard library and core/plugin_abi.h and nothing else): HostTrack and the
+  visibility rule it is drawn by (kTrackFade/DropMs..., kTrackMinAlpha, TrackPresentation, trackPresentation, visibleTrackCount),
+  HostPath and pathPresentation, HostPanel, HostInstrument, PluginWindows (the window's record of which plugin windows are open),
+  MutePreset (one preset as the decoder surfaces read it). The three functions are still DEFINED in plugin_ui.cpp (pure; the
+  fence step may give them a file beside the header). Left in plugin_ui.hpp, which now includes the data header: PluginUi, the
+  host table a plugin calls (HostServices), the bridge counts, the mute policy (MutePlugin, TunePoint, MuteDecision,
+  MutePopupSubject, advanceMutePopup ...), and - used by no gui file - the altitude constants, anyVisibleTarget and mapSelfOpens.
+  WHO INCLUDES WHAT NOW: app_window.hpp, decoder_reads.hpp, instrument_face.hpp, map_view.hpp, scope_view.hpp and
+  track_detail_view.hpp include the DATA header; engine/engine.hpp, engine/engine_host.hpp and engine/tune_control.hpp still include
+  plugin_ui.hpp (the engine's). The five view headers that do not reach the engine compile WITHOUT plugin_ui.hpp, proved by
+  tests/test_plugin_ui_data_split.cpp (19 checks: it includes the five and the data header, then #errors if
+  CASCADE_CORE_PLUGIN_UI_HPP is defined; then it uses every moved type and the visibility rule through the data header alone, so a name
+  left behind is a compile error too). app_window.hpp (the shell) still reaches plugin_ui.hpp through engine.hpp, so the guard holds
+  the TEXT of its include (and of the other five), and that the data header includes only the standard library and the ABI. NOT
+  scanned: whether a gui .cpp of the views reaches plugin_ui.hpp by another route (none includes it by name).
+- THE ACCESSOR SET (the feed the plugin windows take of the engine; each guard-commented, none in kPortedMembers, each one counted
+  read and one judged control): hostPollPlugins() (the frame's one poll of the plugin UI), hostTracks(), hostPaths(),
+  hostTrackPluginNames(), hostPanels(), hostInstruments(), hostAltitudeNear(...) and hostPollImages(out) (the runner's picture poll,
+  under its DSP lock). Five existed (groups 12 to 14a); part d added hostPollPlugins, hostTrackPluginNames and
+  hostPollImages. The six position reads of drawPluginWindows (the coverage feed, the page's "set the RX position" hint) come from the
+  state's FOXAPI_RX_POSITION_SET / rxLatDeg / rxLonDeg like the rest of the 14a members; the recorder's folder of "Save as BMP" is
+  fact.recorder.dir read AT THE CLICK (readFactText). The eight are the method set of the one HostPluginFeed interface the fence will
+  put in their place (survey G.5); no `PluginUi&` accessor was made (it would count as one read and let a member call rebuild, clear or
+  setTuneAllowed where the guard cannot see).
+- THE HOOK. openPluginWindowsFor stays an EngineHost hook (the engine calls it from applyPluginPreset and run()'s bounded-run seam
+  calls it): its reads are the accessors', but it writes window state (mapPages_, pluginWindows_, decoderWindowOpen_), which a pass on its
+  own thread cannot do. The event that replaces the call - FOXAPI_EVENT_PRESET_APPLIED, `text` the module file name, raised once by
+  applyPluginPreset and drained by the window in pumpUiEvents (the survey's G4) - is THE PUMP MOVE'S WORK and is NOT built; a dated
+  comment on the definition and the declaration says so. It is judged machinery (kHostHooks) as before AND listed in kPortedMembers, so a
+  direct engine read can not come back into it.
+- GUARD. Printed: `285 controls judged, 0 submitCommand calls in draw members, 649 window-machinery lines, 29 allowed engine lines in
+  drawing members, 0 violations` and `the window reads 28 engine fields directly, 77 times` (from 29 / 96; recordDir_ lost its last
+  reader). Budgets 28 / 77. kPortedMembers gained drawPluginWindows and openPluginWindowsFor. kReadOnly retires NOTHING in this part
+  (grep of src/gui: every pluginUi_ and pluginRunner_.pollImages entry's last caller is now an accessor, as the survey said); kHostHooks and
+  kLineAllowed did not move. New: the include scan above (the guard went from 229 to 251 checks). 47 other kReadOnly entries have
+  no `engine_.<entry>` text in src/gui any more (a textual scan; `->` spellings not checked) - leftovers of earlier groups, a 14e or
+  fence-step cleanup, not retired here. Guard mutants, each applied alone, each red, restored byte-identical: a direct `engine_.rxSet_` in
+  drawPluginWindows (`FAIL: AppWindow::drawPluginWindows is PORTED ... reaches the engine directly at app_window.cpp:13114`, 78 reads
+  against 77); a direct `engine_.pluginUi_.trackPluginNames()` in openPluginWindowsFor (the same FAIL at 14937, 78 / 77); a ninth
+  accessor-style read in a new member (78 / 77); `#include "core/plugin_ui.hpp"` put back into map_view.hpp (the guard: `FAIL:
+  src/gui/map_view.hpp includes core/plugin_ui.hpp` and test_plugin_ui_data_split: `error C1189: #error: "a view header pulled in
+  core/plugin_ui.hpp"`); core/plugin_host.hpp included by the data header (`FAIL: core/plugin_ui_data.hpp includes ...`).
+- TESTS. tests/test_plugin_window.cpp (174 checks, 8 solo runs all green): A the feed from the real modules (what the engine's rebuild
+  leaves before a poll - the panel's and the instrument's shape, no rows, no tracks - and what one poll puts in the eight accessors);
+  B the frame polls, nothing opens by itself, the panel and the instrument draw their rows when asked; C the coverage feed from the
+  STATE's position (the stale aircraft left out: 3 bearings, best 24.5 km against a stale one at 192.7 km; the engine moved with no
+  look and the draw still measured from the state); D the page per track source and a dead page pruned; E openPluginWindowsFor for the
+  track source, the picture decoder and the text decoder; F the receiver plugins' pictures through hostPollImages (two feeds, two
+  pictures, rewritten only on a new one) and the real "Save as BMP" click, whose file lands in the folder fact.recorder.dir names; G an
+  empty plugin directory; H TWO track sources (one page each, each its own module's three shown targets of 8, a preset press that opens
+  only its own page, the second module stopped and its page pruned beside the live one). THE FIXTURE (tests/fixture_group14_plugin.cpp)
+  was EXTENDED, not replaced: it now also declares a PANEL (fixed table: a heading and two rows) and an INSTRUMENT (a fixed reading, seq
+  7, and one memory row), and builds a second time under another name and id prefix ("Group Fourteen Tracks B", G14B...) for H; the
+  stage-1 text decoder and the group-13 picture decoder are loaded beside it. test_map_window (143 checks) is unchanged but for a
+  comment its fixture made stale. Window mutants (each alone, each red, restored byte-identical; app_window.cpp compared with cmp):
+  18 - the coverage reading the engine's position (2 checks), keeping the stale aircraft (2), measuring without a position (1), no
+  poll in the frame (22 failures, then the run crashed), no picture poll (1), saving into the working directory (2), a page taking every
+  source's tracks (7) or paths (2), dead pages kept (2), only the first page made (1), the press not opening the page (2), not showing
+  the panel (6), the instrument (5) or the picture window (4), the picture decoder not counted as a window of its own (1), a page for
+  every source (3), an empty source-name list (11 failures; it had crashed before the test's indexes were guarded), a panel drawn
+  without being asked for (3). SURVIVORS (not run, equivalent by construction): the three contributors to `ownWindow` in
+  openPluginWindowsFor (the track-source names, the panel, the instrument) are each masked by the other two in every fixture module,
+  so a mutant of ONE of them is equivalent; only a module that is a text decoder with exactly one of the three would separate them.
+- SUITE. Full rebuild exit 0, 0 compiler or linker errors; `ctest -C Release -j 8` 261/261 (259 + the two new tests), 270.6 s, no
+  failure and none of the known flaky set appeared.
+- OPERATOR-VISIBLE DIFFERENCES, by the code and the tests (THE PICTURES below hold the map page's rows and the rail's plugin-window rows: 0 pixels differ): none that can be seen. The coverage
+  feed and the map pages' "set the RX position to measure coverage" hint now read the position from the state, which is the engine's
+  a pass old (the same rule as the rest of the 14a members; invisible while the pass runs at the head of the frame); the folder of
+  "Save as BMP" is the fact's value read at the click, the same string the engine's field holds.
+- TRAPS (for 14e and the fence). (1) A map or picture page draws its body in CHILD windows: a widget's id is hashed with the child's
+  window id, so a test finds a key by taking GetIDWithSeed(label, window->ID) over the page and every child. (2) A picture or
+  instrument window opens in a slot to the right of the main window, OFF a 1600 x 1000 test display: ImGui::SetWindowPos(name, ...) brings
+  it where the pointer can reach it. (3) The picture window uploads to GL only when the texture's revision differs from the picture's:
+  a test sets imageTexRev_ to the picture's revision and never touches GL. (4) The engine's rebuild MAKES the panels and instruments
+  (title, headings; no rows, `have` false); a poll fills them. (5) `far` is a macro under windows.h: no test variable of that name.
+  (6) Bash heredocs collapse a backslash and an n in Python source (again: three more times); write a patch script with the file
+  tools. (7) src/core/plugin_ui.hpp and src/gui/map_view.hpp are CRLF, app_window.hpp and the guard are LF:
+  a script must detect it. (8) A new tests/test_*.cpp needs ZERO_CHECK built before its target exists (as before).
+- LEFT FOR 14e AND THE FENCE (14e is recorded below: the test machinery and the crash sweep are done). The test machinery (reportPluginStatus 33 reads, reportPluginTestResult 3, the 36 of the survey) and
+  crashUploadStart; the eight accessors become the methods of one HostPluginFeed, with H7 (PluginUi rebuilt by the pass while the GUI
+  thread reads it) fixed behind it; the event that replaces openPluginWindowsFor (pump move); the three pure functions' definitions
+  and the shell's own include of plugin_ui.hpp; the stale kReadOnly entries above. UNVERIFIED: no real plugin of the owner's, no GL
+  texture upload of a picture, no threaded pass against these windows, and the contributors to `ownWindow` one by one.
+
+GROUP 14, PART E (the last window group's last part: the test machinery, the crash sweep and the shell's own reads; NO API, no new
+op, one new engine file). Outcome: the guard prints 14 engine fields / 33 reads (from 28 / 77; the survey predicted 18 / 39 for the
+first three moves and the two the shell gave up on top are 14 / 33); every one of the 33 is classified, in the guard, by a name:
+19 shell seams, 6 web/CAT for stage 5, 8 host accessors. `submitsInDraw` stays 0. 63 kReadOnly entries retired.
+- THE TWO BOUNDED-RUN DIAGNOSTICS ARE THE ENGINE'S. `Engine::reportPluginStatus(images)` (CASCADE_PLUGIN_STATUS: what the
+  enforcement decided, the source, the plugin UI, the runner) and `Engine::reportPluginTestResult(frame)` (CASCADE_PLUGIN_TEST: the
+  catalogue and every entry's install-gate decision) live in src/engine/engine_diagnostics.cpp, their bodies the window's moved
+  word for word (the old file's text, `engine_.` dropped, the frame and the images as parameters; compared). The survey proved nothing
+  reads reportPluginStatus's output (tests, tools, .github, docs: no consumer; the one hit is a comment in test_plugin_runner.cpp)
+  and the decision was to RELOCATE it, not delete it: a bounded run still proves the enforcement and the mapped modules. It is not
+  const (the pipeline's accessors are not) and run() calls it through one kLineAllowed entry. THE WINDOW KEEPS: the switch
+  (CASCADE_PLUGIN_STATUS, read in a bounded run only - a local of run() now; the member `pluginStatusHook_` and its declaration
+  are gone), the call (right after `shutdownQuiesce`, where it has always stood, so it reports the state the run finished in and
+  any retirement a catalogue fetch brought into force) and the one thing only it holds: the receiver plugins' PICTURES, polled by the
+  plugin windows into `pluginImages_`, handed to the engine's report, which prints them between the panels and the tracks where they
+  always printed. reportPluginTestResult is NOT removed from the window's life: the host hook `onCatalogueResult` (the engine calls
+  it from inside its poll, after publishing the status copy - the order tests/test_catalogue_error_report.cpp holds) calls the
+  engine's report with the frame counter, under the window's `pluginTestHook_`; so its output and the moment it is printed are the
+  old ones, and the test that reads it (case C of that file) is UNCHANGED and green. (The brief said the report "stays" and to
+  reclassify if the guard's classes allow it; they did not need to: the body moved, the contract did not, and the three reads of
+  `catalog_` left the ratchet with it.) The nine fields that left the window's reach for good: catalog_, decoderLog_, muteStates_,
+  pluginBlocked_, pluginDir_, pluginInventory_, pluginTuneAllowed_, pluginsStopped_ and sourceKind_.
+- BEFORE / AFTER PROOF of the status report (the shipped binary, the same four real fixture modules - the group-13 picture decoder,
+  both group-14 track sources, the stage-1 text decoder - copied into a scratch folder beside a scratch copy of cascade.exe, `--frames
+  120` with CASCADE_PLUGIN_STATUS=1 CASCADE_DECODE_TEST=1 and every endpoint a closed port): the BEFORE binary is the build of the
+  tree at the end of part d (copied before the first edit); the AFTER is this tree. Output normalised only for the scratch
+  folder's name, the three timings the run prints and the audio-frame count (a clock): SIX runs of each binary, and in every one
+  of the twelve the 38 lines other than the picture's are BYTE-IDENTICAL to the first before-run (`cmp`; the first after-run pair
+  matched all 39 lines). The picture line moves with the fixture's own clock, in both: before-runs printed `8x6 fmt=2
+  complete=0 seq=17 bytes=144` (twice), `8x6 fmt=2 complete=1 seq=15 bytes=144` (three times) and `5x3 fmt=1 complete=0 seq=22
+  bytes=15`; after-runs `8x6 fmt=2 complete=0 seq=17` (twice), `8x6 fmt=2 complete=1 seq=15` (twice) and `5x3 fmt=1 complete=0
+  seq=16 bytes=15` (twice) - the line is present, in the same place, with the same fields, from the window's buffer. The
+  catalogue report, the same way (CASCADE_PLUGIN_TEST with an http URL, which the store refuses): `plugin catalogue: FAILED frame=0 refusing a non-https
+  catalogue URL: "http://127.0.0.1:9/catalogue.json"` before and after, byte for byte. THE TEST THAT KEEPS IT SO is
+  tests/test_plugin_status_report.cpp (66 checks; A the full block against four real modules, line by line, with a synthetic picture;
+  B nothing fitted still prints its counts; C the catalogue report's failure line and an entry's line with both answers of the install
+  gate; D THE SHIPPED BINARY, copied with three modules, a plain `--frames` run prints nothing of the report and a run with the switch
+  prints it once, at the end, with the picture between panel and tracks).
+- THE CRASH SWEEP'S INSTALL ID, resolved by deferral, not by an engine-side owner. `crashUploadStart` ran from `run()` before the
+  frame loop and read `telemetryEnabled_`/`telemetryInstallId_` directly (14c: a fact answers nothing before the engine's first
+  publish, so a fact read there would have started the sweep with an EMPTY id, which the code reads as "reporting is off" - for a
+  user who had switched it on). It is a ported member now: `run()` only ARMS it (`crashUploadStartPending_`), and the frame's look
+  (drawUi, right after `refreshUiState`) calls `crashUploadStart()` until it answers true - decided: started, or nothing to start
+  (diagnostics off, no crash folder). The id and the switch are read as the facts `fact.telemetry.enabled` / `.installId`, and an
+  UNANSWERED switch is "not yet", never "off" (returns false and asks again at the next look); with no session at all (the table
+  could not be opened) it starts without an id, the privacy-safe side. The sweep therefore starts one frame into the run rather than
+  before the first frame (a `--frames 0` run, which renders nothing, starts none); the crash-upload tests' shutdown contract is
+  unchanged (it is cancelled and joined before the clean-exit save, as before). `telemetryEnabled_` lost its last reader.
+  tests/test_crash_upload.cpp gained two cases against the SHIPPED binary (the unit cases build the sweep's parameters themselves
+  and could not see this): a config with reporting ON and an id uploads with exactly that id; a config with reporting OFF and an id still on file uploads with an EMPTY one (209 checks). ALL THREE of the file's real-binary call sites that expect an upload (the two older cases, which were 20, and these two in one loop) give the shipped binary `--frames 240`: the sweep starts at the first look now and its POST is a background thread the clean exit cancels and joins, so the run's length is its margin (the diagnosis, and what it is not, is in GROUP 14 AS A WHOLE above); solo, three runs, 209 checks, 0 failed, 16.6 s each.
+- THE TWO SHELL SEAMS the 14 reports handed to this part. (1) `applyConfig`'s five reads of the engine's restored position (`rxLatInput_
+  = engine_.rxLat_` and the loop that gave every page its home) are DELETED: redundant since 14a's follow, which sees a restored
+  position as a change from "unset" at the first look after the first publish. Held by a new case, test_map_window E3: a window built
+  from a config with a position, with a map page and a Patch Map part already made, has no position anywhere until the first look and
+  the typed fields, the page's home, the Patch Map part's home and the scope right after it (157 checks). rxLat_, rxLon_ and rxSet_
+  lost their last reader. (2) `run()`'s FOXSDR_GPS_PORT seam (honoured in every run mode) no longer clears the refusal with a
+  direct `applyCommand` and starts the engine's reader itself: it sends the key's own `FOXAPI_OP_GPS` through the window's session
+  (the op clears the refusal itself when it starts), so the read starts at the engine's first pass, one frame into the run. Held by
+  tests/test_gps_app.cpp (the real application, a named pipe for a GPS: bytes on a device to a persisted position; the unserved
+  pipe, the trailing tab, the empty name; 54 checks, unchanged). `gpsReader_` lost its last reader and the `gpsReader_.start` line
+  left kLineAllowed. WHAT THE LEDGER CALLED PORTABLE IN `run()` ENDS THERE: the other 15 reads are the bounded-run seams (the
+  stand-in bias tee, the device and preset and patch seams, the catalogue hook, the measurement hook) and the start-up and teardown
+  steps (the usage heartbeat of an interactive run, the clean-exit marker); they stay, classified.
+- THE GUARD'S END STATE (tests/test_command_path_guard.cpp; its header comment now describes it, and it is the fence's specification).
+  (a) THE RESIDUE IS CLASSIFIED BY NAME: `kShellMembers` {run, applyConfig, AppWindow (the constructor)}, `kStage5Members`
+  {publishWebAudio, publishWebSpectrum, webStatusNow, catStatusNow} and `kHostAccessors` {the eight host* members}; a read of an
+  engine field in any member that is none of them and not ported FAILS ("unclassified"), each class has a read budget of its own
+  beside the total (19 / 6 / 8), the names must exist and none may also be ported, and the guard prints the residue and the field list.
+  The header comment says, per class, what it is and what the fence does with it (the shell stays in the host target and its
+  env-driven seams may become a translation unit of their own; web/CAT go with stage 5; the accessors become the methods of one
+  HostPluginFeed with PluginUi's thread ownership fixed behind it). (b) THE FLOOR stays `submitsInDraw == 0`. (c) BUDGETS 14 / 33.
+  (d) `kReadOnly` IS HELD BY THE GUARD ITSELF NOW: every entry must be matched by a call in a control (the guard records the chains
+  it accepted), so a stale entry fails; the first run found 63 of the 76 stale - the 47 the 14d report counted by a textual scan of
+  `engine_.<entry>` plus the 13 the two diagnostics' move freed and three more the scan had missed - and a spelling-agnostic search of
+  src/gui (`.` and `->`, an accessor between, no `engine_.` prefix needed) found none of the 63 anywhere, so they are retired; 13
+  remain (the eight accessors' calls, `pluginHost_.plugins` and `pipeline_.activeSource().centerFrequencyHz`/`inputRateHz`/
+  `audioSamplesProduced`/`audioTap`, the shell's and stage 5's). `kPortedMembers` gained `crashUploadStart`; `kLineAllowed` lost the
+  gps seam's line and gained `run`'s `reportPluginStatus(pluginImages_);` (29 allowed lines, as before). Printed:
+  `283 controls judged, 0 submitCommand calls in draw members, 640 window-machinery lines, 29 allowed engine lines in drawing
+  members, 0 violations`, `the window reads 14 engine fields directly, 33 times (budget 14 fields, 33 reads)`, `the residue: shell
+  seams 19 reads (budget 19), web/CAT for stage 5 6 (budget 6), host accessors 8 (budget 8), unclassified 0 members`, `the fields:
+  biasStandIn_ deviceOpenPending_ modeIndex_ nativeDevices_ patchRunning_ pipeline_ pluginCatalogueUrl_ pluginHost_ pluginRunner_
+  pluginUi_ receiverSnapshot_ telemetryCleanExit_ telemetryHeartbeat_ telemetryInstallId_`; 299 checks (it was 251).
+- MUTANTS (each applied alone to the source, the targets rebuilt, the test run, the file restored and compared byte for byte; the specs
+  and results are in the session's scratch). WINDOW (app_window.cpp), all red: no call to the engine's status report (10 failures of
+  test_plugin_status_report), the report printed whatever the switch said (3), printed without the window's pictures (2: the picture
+  line and the order after it), the catalogue hook printing nothing (test_catalogue_error_report case C, 2), the crash sweep started
+  where it used to be, before the first publish, with the readiness check (test_crash_upload, 7: the sweep never starts) and without
+  it, with the empty id that follows (1: the id), the sweep never started (7), the FOXSDR_GPS_PORT seam sending nothing
+  (test_gps_app, 11), and the position follow doing nothing (test_map_window, 37: the new case E3 among them). ENGINE
+  (engine_diagnostics.cpp), all red: the pictures dropped (6), the `plugin stopped` count line dropped (4), a failed catalogue going
+  on to print entries (1 - and test_catalogue_error_report stays GREEN under it: only the new test sees it), the gate's two answers
+  swapped (1), the panels counted as tracks (2). ONE EQUIVALENT, not run as a defect: reading the install id fact whatever the
+  switch says - the engine already words the fact `telemetryEnabled_ ? id : ""` (engine_api_lists.cpp), so the window's own
+  `enabled == "1"` test was the same program twice and was removed. GUARD (a scratch copy of src/, the real guard binary; each
+  printed, each restored): G1 a direct `engine_.rxSet_` in the ported drawTrackList (`FAIL: AppWindow::drawTrackList is PORTED ...
+  reaches the engine directly at app_window.cpp:14313`, `the window reads 15 engine fields directly, 34 times (budget 14 fields, 33
+  reads)`, 3 failed); G2 a read in a member that is none of the classes (`FAIL: AppWindow::drawTrailWidthControl reads
+  engine_.volume_ at app_window.cpp:6089 but is in none of the residue classes ... and is not ported`, `unclassified 1 members`); G3 a
+  call of a retired entry, `engine_.pluginRunner_.activeCount()` in a control (`FAIL: ... changes the receiver outside the command
+  path (engine call pluginRunner_.activeCount)`); G4 the shell grows a read (`shell seams 20 reads (budget 19)`, `FAIL ...
+  r.residueReads[0] <= kShellReadsBudget`, 34 / 33); G5 a stage-5 member grows one (`web/CAT for stage 5 7 (budget 6)`); G6, in the
+  guard's own source, a retired entry put back (`FAIL: kReadOnly entry transmitter_.haveSink matches no call in a control - retire
+  it (its last caller is gone)`, 1 failed). All restored; the guard prints 14 / 33 and 299 checks, 0 failed again.
+  THE FIRST MUTATION RUN WAS INVALID: the harness (Python) called `bash` with a Windows path to the build script, which Git bash
+  cannot resolve (rc 127), so nothing was rebuilt and every mutant "survived" on the stale binaries. It was caught because all
+  fifteen passed; the harness now prints the build's return code and last line, and every figure above is from the second run.
+- SUITE. Clean rebuild (`cmake --build build --config Release --clean-first -- -m`) 1 min 47 s, exit 0, 0 compiler or linker errors;
+  `ctest -C Release -j 8` 262/262 (261 + test_plugin_status_report), 264.1 s, no failure and none of the known flaky set; the five
+  tests this part touches, three solo runs each, all green: test_plugin_status_report 66 checks, test_catalogue_error_report 7,
+  test_map_window 157 (143 and the new case E3's 14), test_gps_app 54, test_crash_upload 209 (the two shipped-binary cases add
+  10), the guard 299 (it was 251).
+- OPERATOR-VISIBLE DIFFERENCES, by the code and the tests (THE PICTURES below hold the restored position's pixels; the rest is a bounded-run seam): none that can be seen in use. In a
+  bounded run: the crash sweep starts one frame in (and not at all in a `--frames 0` run), the FOXSDR_GPS_PORT read starts at the
+  first pass instead of before the first frame; both are inside the first frame of a run that lasts for minutes. The typed position
+  fields, the map pages' and Patch Map parts' homes and the scope get a restored position at the first look instead of at
+  construction (nothing draws between). The two diagnostics print what they always printed, from the same moments.
+- TRAPS (for the pump move and the fence). (1) `Engine::reportPluginStatus` is called from `run()` after `shutdownQuiesce`, i.e. while
+  the control thread, once the pump has moved, is still alive (the survey's H4): it reads the engine's own state from the GUI
+  thread. It is one call now, so the pump move places it where the join leaves a settled state (after `shutdownStop`, or on the
+  control thread itself: the pictures it needs are the window's buffer, which it takes by const reference) without touching the
+  window's reads. (2) The catalogue report is still reached through the host hook `onCatalogueResult`, so the hook cannot die until
+  the engine owns the CASCADE_PLUGIN_TEST gate (the window's `pluginTestHook_` and the frame number): the pump step's event for it,
+  or a one-line setter. (3) The crash sweep's start is a window call now, driven by the look: when the pump moves, `refreshUiState`
+  keeps running on the GUI thread, so nothing changes; but a front end with no frame loop (the headless engine) has no sweep. (4) A
+  new `src/engine/*.cpp` needs a reconfigure (the glob is CONFIGURE_DEPENDS and picks it up at the next build) and a new tests/test_*.cpp
+  needs ZERO_CHECK built before its target exists. (5) Bash heredocs collapse a backslash and an n into a newline in Python and C++
+  source alike (hit four more times, in the C++ of two tests and the guard): write C++ with the Edit/Write tools. (6) The shipped
+  binary beside a plugin folder: a test that must load modules into the application copies cascade.exe and SoapySDR.dll into a
+  scratch folder and puts the modules in `plugins` beside it (the host looks there first when it is writable); nothing of the build
+  tree is touched. (7) A picture decoder's output moves with a clock: compare the line's prefix, not its numbers.
+- WHAT THE FENCE MUST KNOW THAT THE LEDGER DOES NOT SAY. The ratchet now ENDS at a classified residue, not at zero: the fence step
+  retires it by building the interface target WITHOUT the three classes (the shell members, the stage-5 four, the eight accessors),
+  not by porting them, so `kShellMembers`/`kStage5Members`/`kHostAccessors` are the file list of what stays in the host target
+  and the guard's per-class budgets are what it asserts until then. 50 `engine_.` method CALLS are outside the ratchet (measured
+  with the survey's script, scratchpad mimic.py; the survey's 51 less the two `refreshDiagContext` calls of 14c and the `applyCommand`
+  of the GPS seam, plus the two calls of the relocated reports): run 21, drawUi 11 (the pump's nine, the drop import and
+  `statusText`), the constructor 7, ~AppWindow 2, applyWebControls 2, and applyWebSettings, applyConfig, currentConfig,
+  saveConfigNow, openUiSession, handFrontEndFacts and the onCatalogueResult hook 1 each. The interface must also stop writing
+  files and reading `getenv` seams outside the shell and including the thirteen engine helper headers (the survey's G.5.6;
+  `core::enumerateSerialPorts` left in 14b). `kHostHooks` lists 18 hooks the engine calls from its thread (the survey's 20 less
+  the two that died in 14a and 14b), among them the dead `onBookmarksChanged` (an empty body), which this part did not touch.
+
+GROUP 14, THE PICTURES (the campaign that held parts a to e against the control; the one thing the five parts did not have, and every
+"no picture was taken" above is answered here as far as a picture goes). Method as group 13's, byte for byte in what it protects: the
+application's own framebuffer capture in bounded runs, the window 1502x1405 as the capture measures it (1500x1380 requested, 2 110 310
+pixels), FOXSDR_SINGLE_VIEWPORT=1, one scratch copy of each exe with the same resources beside it (and, where a state fits modules,
+THEIR modules in the scratch exe's own `plugins` directory, never the real one), the built-in signal generator as the source, no radio
+visible to the process (SOAPY_SDR_PLUGIN_PATH removed), each run on its own seeded copy of the config (CASCADE_CONFIG_TEST; telemetry
+and the update check off, volume 0, the usage switch as the state says), USERPROFILE, HOME, APPDATA and LOCALAPPDATA in the run's own
+scratch directory, every URL a dead local port, bounded by `--frames`, and the only input the in-process FOXSDR_INPUT_SCRIPT. THE
+CONTROL is g14-control, the tree at 0022c92 (groups 1 to 13) in its own worktree (cascade.exe 12 400 640 bytes, sha256 b34981ea...);
+THE PORT is 0022c92 plus parts a to e, uncommitted (12 402 688 bytes, a46d931f...; the files are byte-identical to the two builds'
+Release outputs, checked). build\g14-vis-final.txt is the table (the scripts runone14.py, campaign14.py, compare14.py, bracket14.py,
+brareas14.py, logs14.py and the input scripts are in the session's scratch, under g14-vis). THE STATES, FOURTEEN, four runs of each
+build in each (112 runs, 112 captures): MAP_PAGE (the map page of the group-14 track source, the SAME DLL in both builds - a module is
+not part of either build, and the control draws its tracks through its own code - with the position seeded in the config, 51.47 and
+-0.45; the page opens beyond the right edge of the window, where a single-viewport capture cannot see it, so the input script drags it
+by its title bar to a fixed place; stand-in tiles; the home, the rings (10 and 25 km), the coverage line "3 of 72 bearings, best 24 km",
+the typed fields, "Set RX here", the count, the list with its three shown targets (the stale one is not), the three aircraft, the
+legend, the GPS row, and the rail's rows: the map's "3 TGT", the picture row, the panel's "3 ROW", the instrument's "NEW" and its lamp);
+MAP_PAGE_NOPOS (the same with no position: "set the RX position to measure coverage", no rings, "Distance and bearing need the RX
+position"); RADAR_POS (the radar scope with the position, no track source: the scope's range label and position readout "51.5N 000.5W",
+the plates; its sweep is a clock) and RADAR_SYS (the same, the SYS tab and SWEEP switched OFF by two in-process clicks: "ANTENNA
+51.470 -0.450", a still disk); PATCH_MAP and PATCH_MAP_NOPOS (a patch document of a Radio and a Map part, with and without the
+position: the part's home, rings and scale); FOLD_CLOSED, FOLD_OPEN (pressed open by the script) and FOLD_NOPOS (the rail's Radar
+section: the Receiver position fold, the typed fields, the GPS row, and with no position the warning, the "Use the middle of the
+traffic" offer and the explanation); SERIAL_GPS (the System bank's Serial ports section with its GPS row: "No serial ports found",
+this machine showing the process none, the registry only walked); USAGE_OFF and USAGE_ON (the Usage reporting section, both switch
+states, a valid install id seeded); RAIL_PLUGINS (the group-8 text decoder and the group-13 picture decoder fitted: the Decode bank,
+the plugin window rows) and RAIL_TRACKS (the same with the group-14 module besides, so the track map, panel and instrument rows).
+FIVE BRACKETS, frame by frame, three runs of each build (30 runs, 504 captures): SERIAL_EARLY (frames 1 to 12 of the Serial ports
+section), FOLD_CLICK (the fold pressed, 34 to 51), GPS_ARROW (the fold open, the port list's arrow pressed at 38 to 42, 34 to 51),
+USAGE_OFF_CLICK and USAGE_CLICK (the usage checkbox pressed ON to OFF and OFF to ON, 34 to 51). AREAS, tiling the capture exactly (the
+named areas are asserted disjoint, a hole of an area is another named area, and each state's last row is the REMAINDER, the whole capture
+minus the named areas): 19 to 26 named areas a state, the frame's ring, the deck in five pieces, the rail in bands of the rows each
+state draws (or, for the map states, the page's title bar, its four rows, the list and the map body; for the scope states, the bar, the
+corners, the disk, the detail panel and the plates), the Patch page's chrome and inspector, the canvas computed as its rectangle minus
+its nodes, each node in bands; the REMAINDER is 2 892 pixels in the ten states that show the Patch page at its usual place, 110 580
+under the map page and 271 008 under the radar scope.
+THE RESULT. In THIRTEEN of the fourteen states, 0 pixels differ at tolerance 24 AND at tolerance 0 in every area, in every one of the 16
+control-against-port pairs and in the 6 + 6 inside one build, and all 8 captures of each state are ONE FILE (MD5 prefixes MAP_PAGE
+635c3e32, MAP_PAGE_NOPOS 992eee39, RADAR_SYS e40149f7, PATCH_MAP b94ea436, PATCH_MAP_NOPOS 3c8d9105, FOLD_CLOSED 46d7efa5, FOLD_OPEN
+460eb930, FOLD_NOPOS 48a9c8dc, SERIAL_GPS 8ef1736c, USAGE_OFF 370af3b1, USAGE_ON ec05be3d, RAIL_PLUGINS 7b360db5, RAIL_TRACKS
+2f6b3b00). That covers the home, the rings, the position readout, the coverage line and the offers on the map page; the typed fields
+and the home of the Patch Map part (a position seeded in the config reaches the part, the page and the scope, to the same pixels in both builds); the radar scope's own readouts; the rail's Receiver position fold
+and GPS row, closed, pressed open and with no position; the Serial ports section; both states of the usage section; and the plugin
+window rows with the group-8 and group-13 modules fitted, and with the group-14 module's map, panel and instrument rows. THE ONE STATE
+THAT IS NOT EXACT, RADAR_POS, IS A CLOCK: the scope's sweep turns with time, the disk (629 290 pixels) shows cvp24 2 052 and cvp0
+1 189 to 84 255 against a within-build 84 220 (control) and 84 099 (port) and noise24 (2 049, 2 028), four distinct captures of each
+build and none shared; every other area of the state, and the whole capture minus the disk (1 481 020 pixels), is 0 in every pair. It
+is set aside as a LIVE area and answered by RADAR_SYS, the same scope with the sweep switched off, which is one file. NO RUN WAS SET
+ASIDE. The stderr of the two builds is identical in all 56 control-and-port pairs (it is empty), the stdout identical with its digits
+masked, and the config each run saved on exit identical, in all 56. THE COMPARATOR'S OWN CHECKS: control USAGE_OFF against control
+USAGE_ON reports 16 214 pixels (19 603 at tolerance 0), 360 in the chip (707), 625 in the switch row, 1 498 in the install id line
+(2 559), 7 747 in the explanation (9 728) and 5 984 in the two keys; FOLD_CLOSED against FOLD_OPEN 63 856 (78 830), in the fold's rows
+and everything under them; MAP_PAGE against MAP_PAGE_NOPOS 12 130 (20 334), in the fields, the readout, the list and the map; two
+pokes (+30 and +10) on single pixels count as 1 pixel at tolerance 24 and 2 at tolerance 0.
+THE BRACKETS found what the code reading said and nothing it did not, and two of the seven differences listed under parts a to c are now pictures.
+SERIAL_EARLY and FOLD_CLICK: 0 pixels at every frame, one file in all six runs at each (the Serial ports section's answer is already in both builds' first captured frame, so the open edge's un-answered scan is not visible there; the fold opens in the same frame in both; 251298 for 34 to 37, 052b94 for 38 to 41, b6423d for 42
+to 45, 460eb9 from 46). GPS_ARROW (differences 3, the serial-port list): 0 at every frame but frame 43, the first after the release,
+where 9 036 pixels differ in the popup's column (x 239 to 268, y 947 to 1 273): the control's popup already says "no serial ports
+found" and the port's is OPEN AND EMPTY, "nothing, and not none found", for ONE frame; from 44 to 51, 0 and one file. USAGE_OFF_CLICK
+(difference 4, the usage switch; reporting ON, the checkbox pressed at 38 to 42): 0 up to frame 41, and at FRAME 42, the frame the
+click lands in, 18 271 pixels, in the install id line (2 559), the explanation (9 728) and the "What exactly" and "Privacy" keys
+(5 984): the control's lines under the switch have already re-flowed (no id line) and the port's are the old ones for one frame; THE
+CHECKBOX ITSELF IS THE SAME IN BOTH AT FRAME 42 (the pending value) and the chip and the lamp change at frame 43 in BOTH builds (by the code: the header is drawn before the click in the control, and is a pass old in the port); from 43 to 51, 0, one file a frame in all six runs. The shift test
+holds the one-frame reading: the port's frame 43 against the control's 42 is 707 pixels, the chip alone. USAGE_CLICK (reporting OFF to
+ON): the same at frame 42 (18 349 at most over the run pairs, 18 271 in run 1 with the same three areas), and from 43 on ONLY the
+install id line differs (2 341 to 2 444 in the shift test, 2 445 at most across, 2 440 within the control and 2 425 within the port),
+because enabling reporting makes a NEW id (a different one in every run, hence the 2 440 between two control runs): live, in both builds, and not a difference between them. So the
+group's one-frame differences are, as written, one frame, and from the next frame on the port's picture is the control's. WHAT THE CAMPAIGN DID NOT FIND: no difference in the home or the rings of the map page, the Patch Map
+part, the scope or the coverage, in the fold, the plugin window rows or the usage chip after a settle.
+WHAT THE CAPTURES DO NOT DRAW, and so do not hold (held by tests where a test is named): a real GPS receiver or a fix arriving (the fix's effect on the fold, and the wedge clear: test_gps_window and test_map_window), real serial ports in the list, the click of
+"Set RX here" or a click on the map (test_map_window), coverage accumulating from live aircraft (test_plugin_window case C), a target
+details window, a Patch Map part WITH tracks (the fixture is a map-page source; the part's track bit is still covered by no test), the
+picture, panel and instrument WINDOWS themselves (their rail rows are drawn; test_plugin_window draws the windows), the crash offer
+dialog and the diagnostics bundle (test_usage_diag_window, test_diagnostics), the usage heartbeat, the crash sweep and the bounded-run
+status report (test_crash_upload, test_plugin_status_report; the heartbeat by none), and the plugin windows' track fade (a clock). The real config
+(C:\Users\steve\AppData\Roaming\foxsdr\config.json, 5 076 bytes, written 2026-10-19 14:52:27 UTC by another session, sha256
+BA532E6C...A353C) was identical before the first launch, in the middle of the campaign and after the last (size, modification time and
+hash); nothing under %LOCALAPPDATA%\foxsdr or %APPDATA%\foxsdr was written, and no state ran a patch, so nothing recorded.
+
+UNVERIFIED, carried forward from group 14 as a whole. No real GPS receiver, COM port, registry walk of the owner's, track-source plugin
+or radio was driven for any part; the diagnosis of the crash-upload margin is a reading of the code and of the timings, not a failure
+of the old margin reproduced; the context's one-second staleness, the port list's two-second give-up, the sweep's start one frame in
+and the diagnostics' report order are timings held by tests, and the report's order after `shutdownQuiesce` is a property of the pass
+running at the head of the window's frame; no threaded pass has run against any group-14 member (the engine's control thread, the
+host accessors' reads of PluginUi, `setDiagContext`'s one writer and `hostPollImages` under its DSP lock are by reading); the radar
+scope's sweep was stilled by its own switch, not compared moving; the contributors to `ownWindow` in `openPluginWindowsFor` (part d's
+three) are equivalent by construction and untested one by one; and the real GL upload of a picture was not run.
 
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
