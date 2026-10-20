@@ -30,10 +30,27 @@
 // reports (PRIVACY.md), so a lap is named by a fixed word of the caller's - never
 // a plugin, a file or a folder.
 //
+// ANOTHER THREAD CAN ASK WHICH LAP IS OPEN - but only of a PUBLISHING clock
+// (0.99.84). The log line above is written when the operation ENDS, and field
+// report 7591C65EFB69DD94 was an operation that did not end: a plugin reload
+// stalled past the watchdog's cap, with the line that would have named the step
+// never written and the stalled thread's stack ending in system modules. A clock
+// built with PhaseClock::Publish mirrors the name of its open lap into one
+// process-wide atomic, which the freeze watchdog reads when it files a report
+// (the `reload-phase:` line, core/hang_watchdog.cpp) - the same pattern as
+// frame_timing.hpp's currentFrameScope(). Two rules, both the caller's to keep:
+// a publishing clock's lap names must be STRING LITERALS (the atomic holds the
+// pointer, and a reader on another thread may hold it while the stall is
+// captured), and at most one publishing clock is open at a time, on the thread
+// it describes - in this application the GUI thread's plugin reload, whose
+// names come from core/plugin_reload_phases.hpp. An ordinary clock publishes
+// nothing and is unchanged.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_PHASE_CLOCK_HPP
 #define CASCADE_CORE_PHASE_CLOCK_HPP
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -46,6 +63,14 @@
 
 namespace cascade::core {
 
+// The name of the lap a PUBLISHING clock has open, or nullptr when none is -
+// see "ANOTHER THREAD CAN ASK" above. One relaxed load: any thread, no lock.
+// The pointer is a string literal supplied by the clock's caller; never freed.
+inline std::atomic<const char*> g_publishedPhase{nullptr};
+inline const char* publishedPhaseName() {
+    return g_publishedPhase.load(std::memory_order_relaxed);
+}
+
 class PhaseClock {
 public:
     // Seconds on any monotonic clock. Injectable so a test can say what a lap
@@ -57,8 +82,23 @@ public:
         double seconds = 0.0;
     };
 
+    // A publishing clock: its open lap's name is readable from any thread
+    // through publishedPhaseName(). Lap names must be string literals, and at
+    // most one publishing clock is open at a time (see the header comment).
+    struct Publish {};
+
     PhaseClock() : now_(steadySeconds) {}
     explicit PhaseClock(NowFn now) : now_(std::move(now)) {}
+    explicit PhaseClock(Publish) : now_(steadySeconds), publish_(true) {}
+    PhaseClock(Publish, NowFn now) : now_(std::move(now)), publish_(true) {}
+
+    // A publishing clock that dies with a lap open - the early `return` its
+    // caller holds it for - must not leave a dangling name published.
+    ~PhaseClock() {
+        if (publish_) { g_publishedPhase.store(nullptr, std::memory_order_relaxed); }
+    }
+    PhaseClock(const PhaseClock&) = delete;
+    PhaseClock& operator=(const PhaseClock&) = delete;
 
     // Closes the lap in progress, if any, and opens `name`. A name that has been
     // opened before ADDS to its lap rather than starting a second one, so a
@@ -68,11 +108,15 @@ public:
         open_ = true;
         openName_ = name != nullptr ? name : "";
         openedAt_ = now_();
+        if (publish_) { g_publishedPhase.store(name, std::memory_order_relaxed); }
     }
 
     // Closes the lap in progress, if any. Safe to call twice, and safe to call
     // with nothing open.
-    void end() { close(); }
+    void end() {
+        close();
+        if (publish_) { g_publishedPhase.store(nullptr, std::memory_order_relaxed); }
+    }
 
     // The laps in the order they were first opened.
     const std::vector<Lap>& laps() const { return laps_; }
@@ -159,6 +203,7 @@ private:
     }
 
     NowFn now_;
+    bool publish_ = false;
     std::vector<Lap> laps_;
     bool open_ = false;
     std::string openName_;

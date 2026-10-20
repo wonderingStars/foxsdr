@@ -213,6 +213,63 @@ void testRealClockRuns() {
     CHECK(c.laps()[0].seconds < 5.0);
 }
 
+void testPublishing() {
+    // WHY (0.99.84): the clock's one line is written when the operation ENDS,
+    // and field report 7591C65EFB69DD94 was a plugin reload that did not end -
+    // the freeze watchdog reads the published name mid-stall, so the name must
+    // be up for exactly as long as a lap is open and gone the moment the clock
+    // ends or dies, whichever comes first.
+    using cascade::core::publishedPhaseName;
+
+    // An ordinary clock publishes nothing.
+    CHECK(publishedPhaseName() == nullptr);
+    {
+        Hand h;
+        PhaseClock quiet(h.fn());
+        quiet.begin("inventory");
+        CHECK(publishedPhaseName() == nullptr);
+        quiet.end();
+    }
+
+    // A publishing clock: the open lap's own literal, switched by begin(),
+    // cleared by end().
+    {
+        Hand h;
+        PhaseClock c{PhaseClock::Publish{}, h.fn()};
+        CHECK(publishedPhaseName() == nullptr);
+        c.begin("decoders");
+        CHECK(publishedPhaseName() != nullptr);
+        CHECK(std::string(publishedPhaseName()) == "decoders");
+        c.begin("unload");
+        CHECK(std::string(publishedPhaseName()) == "unload");
+        c.end();
+        CHECK(publishedPhaseName() == nullptr);
+        // end() twice stays clear.
+        c.end();
+        CHECK(publishedPhaseName() == nullptr);
+    }
+
+    // A publishing clock that DIES with a lap open - the early `return` its
+    // caller holds it for - clears the name on its way out: the atomic must
+    // never hold a pointer that outlives the code that supplied it.
+    {
+        Hand h;
+        PhaseClock c{PhaseClock::Publish{}, h.fn()};
+        c.begin("load");
+        CHECK(std::string(publishedPhaseName()) == "load");
+    }
+    CHECK(publishedPhaseName() == nullptr);
+
+    // The publish-only real-clock constructor, as detachAndUnloadPlugins
+    // builds it for the callers that ask for no timing.
+    {
+        PhaseClock c{PhaseClock::Publish{}};
+        c.begin("patch");
+        CHECK(std::string(publishedPhaseName()) == "patch");
+    }
+    CHECK(publishedPhaseName() == nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -224,5 +281,6 @@ int main() {
     testLogLevel();
     testNullNames();
     testRealClockRuns();
+    testPublishing();
     return testSummary("test_phase_clock");
 }

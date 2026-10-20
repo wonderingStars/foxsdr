@@ -16,6 +16,7 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/frame_timing.hpp"
+#include "core/phase_clock.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -1090,6 +1091,19 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // it stopped. A freeze then says "rail" or "plugins-reload" before anyone has
     // found a symbol map. `other` in a process with no frame loop.
     out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
+    // AND WHICH STEP OF A PLUGIN RELOAD, when one is under way (0.99.84), from
+    // the publishing PhaseClock the reload keeps (core/phase_clock.hpp,
+    // core/plugin_reload_phases.hpp). Field report 7591C65EFB69DD94: a reload
+    // stalled past the cap, its per-step log line is only written when the
+    // reload ENDS, and the stalled stack ended in system modules under a
+    // Detours hook - so the scope said `plugins-reload` and nothing could say
+    // which of its six waits it was. Always written, `none` outside a reload,
+    // for the reason `note` and `frame-scope` are: the field inventory is
+    // compared as a set, both ways.
+    {
+        const char* phase = publishedPhaseName();
+        out << "reload-phase: " << (phase != nullptr ? phase : "none") << "\n";
+    }
     out << "--- context ---\n";
     out << diagContextBlock();
     // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
@@ -1277,8 +1291,13 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
     out << "threads: " << tids.size() << "\n";
-    // As in the Windows writer above: where the stalled frame was.
+    // As in the Windows writer above: where the stalled frame was, and which
+    // step of a plugin reload, when one is under way (0.99.84).
     out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
+    {
+        const char* phase = publishedPhaseName();
+        out << "reload-phase: " << (phase != nullptr ? phase : "none") << "\n";
+    }
     out << "--- context ---\n";
     out << diagContextBlock();
     // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or

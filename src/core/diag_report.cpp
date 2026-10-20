@@ -1011,9 +1011,13 @@ const std::vector<std::string>& hangReportFieldNames() {
     // `frame-scope` (0.99.64) is the part of the frame the stalled thread was in,
     // one word from core/frame_timing.hpp's closed list, and is always written
     // for the same reason `note` is.
+    // `reload-phase` (0.99.84) is the step of a plugin reload that was under way,
+    // one word from core/plugin_reload_phases.hpp's closed list - the evidence
+    // report 7591C65EFB69DD94 lacked - and `none` outside a reload: always
+    // written, for the same reason again.
     static const std::vector<std::string> names = {"kind",         "note",      "stalled-ms",
                                                    "threshold-ms", "signature", "threads",
-                                                   "frame-scope"};
+                                                   "frame-scope",  "reload-phase"};
     return names;
 }
 

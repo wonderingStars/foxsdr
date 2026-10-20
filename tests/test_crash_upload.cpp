@@ -34,6 +34,7 @@
 #include "core/breadcrumb.hpp"
 #include "core/crash_upload.hpp"
 #include "core/frame_timing.hpp"
+#include "core/plugin_reload_phases.hpp"
 #include "core/sentinel.hpp"
 #include "test_check.hpp"
 
@@ -844,6 +845,71 @@ int main() {
         ParsedReport c;
         CHECK(parseReportText(crash, c));
         CHECK(c.reason == "access violation");
+    }
+
+    // --- A freeze's reload step rides in the context (0.99.84) ---------------
+    //
+    // The freeze writer's `reload-phase:` line - which step of a plugin reload
+    // the stall was captured in - goes up as `context.reloadPhase`, under the
+    // same closed-list rule as frame-scope above: only a word from
+    // core/plugin_reload_phases.hpp is ever forwarded, because this line too is
+    // read back off a file on disk. This is the field report 7591C65EFB69DD94
+    // lacked: a reload stalled past the cap, and nothing could say which of its
+    // six waits held the GUI thread.
+    {
+        auto withPhase = [](const std::string& line) {
+            std::string text = hangReportText();
+            const std::string anchor = "threads: 2\n";
+            const std::size_t at = text.find(anchor);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + anchor.size(), line); }
+            return text;
+        };
+        ParsedReport r;
+        CHECK(parseReportText(withPhase("reload-phase: unload\n"), r));
+        CHECK(r.kind == "hang");
+        CHECK(r.reloadPhase == "unload");
+        const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(j["context"].value("reloadPhase", std::string("x")) == "unload");
+
+        // Every step the reload has is accepted, and comes back as itself -
+        // `panels and map`, the one with spaces, included.
+        for (const char* name : kPluginReloadPhaseNames) {
+            ParsedReport each;
+            CHECK(parseReportText(withPhase(std::string("reload-phase: ") + name + "\n"), each));
+            CHECK(each.reloadPhase == name);
+        }
+
+        // `none` - every freeze outside a reload - and anything that is not a
+        // step's name is dropped, not forwarded.
+        for (const char* bad :
+             {"reload-phase: none\n", "reload-phase: C:\\Users\\someone\\plugin.dll\n",
+              "reload-phase: unload; tuned to 145.500 MHz\n", "reload-phase: Unload\n",
+              "reload-phase: \n", "reload-phase: unload extra\n"}) {
+            ParsedReport dropped;
+            CHECK(parseReportText(withPhase(bad), dropped));
+            CHECK(dropped.kind == "hang");
+            CHECK(dropped.reloadPhase.empty());
+        }
+
+        // A report with no such line - every crash, and every freeze written
+        // before 0.99.84 - answers empty rather than inventing, and the key is
+        // still present in the payload: the inventory is exact both ways.
+        ParsedReport plain;
+        CHECK(parseReportText(hangReportText(), plain));
+        CHECK(plain.reloadPhase.empty());
+        const nlohmann::json pj = parseOrEmpty(uploadJson(plain, std::string()));
+        CHECK(pj["context"].contains("reloadPhase"));
+        CHECK(pj["context"].value("reloadPhase", std::string("x")).empty());
+
+        // A stray reload-phase line in a CRASH header is not carried: the step
+        // of a reload is a freeze's fact.
+        std::string crash = "kind: crash\nreason: access violation\nreload-phase: unload\n"
+                            "code: 0xC0000005\nsignature: 0123456789ABCDEF\n"
+                            "--- context ---\nversion: 0.99.84\n";
+        ParsedReport c;
+        CHECK(parseReportText(crash, c));
+        CHECK(c.reloadPhase.empty());
     }
 
     // --- Rubbish is refused rather than posted ------------------------------

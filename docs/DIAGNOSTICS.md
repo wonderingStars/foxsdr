@@ -1218,6 +1218,20 @@ or a removal, writes it. Since 0.99.61 a rescan past `kExcuseCapMs` (30 s) is al
 **reported with every thread's stack**, which names the plugin whose worker the GUI
 thread is waiting on; the two together say which of the above it was.
 
+That claim met the field in 0.99.81 and came up short: report 7591C65EFB69DD94
+*is* the 30 s report, and it arbitrated nothing. The per-step line is only
+written when the rescan **ends** - this one had not ended, so the report's log
+stops at the `plugins: <dir>` line that opens the rescan - and the stalled
+thread's stack ended four system modules deep (ntdll wait, KERNELBASE, ucrtbase,
+MSVCP140: a condition-variable wait or a thread join), with the unwind broken
+below that; the report's own `foreign-modules` line names a Detours hook
+(`_etoured.dll`) in the process, which rewrites exactly the prologs the unwinder
+replays. **Since 0.99.84 the report itself names the step**: the rescan's
+`PhaseClock` publishes the open step's name and the watchdog writes it as
+`reload-phase:` beside `frame-scope:` (see *A freeze inside a plugin reload also
+names the reload's step*, below). The next such report picks between the fixes
+above on its own line, with no symbols and no log tail needed.
+
 **What this does not do is stop the window freezing**, and that is a design decision
 rather than a repair:
 
@@ -1259,7 +1273,10 @@ joining a worker (`decoders`, `patch`, `panels and map`), and does nothing for t
 disk in `inventory` or `load`, or for the loader in `unload`. The per-phase line
 above and the 30 s report say which it was; a change of that weight is made for the
 phase the field shows, not for the one the reading suggests. B trades a smaller
-change for a window the user still cannot use.
+change for a window the user still cannot use. The field showed its first such
+freeze in 0.99.81 (report 7591C65EFB69DD94) **without** a usable phase - see the
+paragraph above - which is what 0.99.84's `reload-phase:` report line exists to
+fix; A still waits, now on a report that can actually name the phase.
 
 ### A rescan with nothing to find tears nothing down (0.99.63)
 
@@ -1570,6 +1587,22 @@ whoever reads them next (`cascade: frame timing:`, below).
   anything else is dropped, not forwarded (`tests/test_crash_upload.cpp`). So a
   freeze says which part of the frame held the window before anyone has found a
   symbol map.
+- **A freeze inside a plugin reload also names the reload's step (0.99.84).**
+  Field report 7591C65EFB69DD94 was the 30 s report the rescan section below
+  waits on - and it could not arbitrate between the steps: the reload's own
+  per-step log line (`PhaseClock`) is only written when the reload *ends*, and
+  the stalled thread's stack ended in system modules under a Detours hook. The
+  reload's clock now *publishes* the name of its open step
+  (`PhaseClock::Publish`, one atomic, the same pattern as `currentFrameScope()`),
+  and the watchdog writes it as `reload-phase: unload` beside `frame-scope` -
+  `none` outside a reload. The step names are the closed list in
+  `core/plugin_reload_phases.hpp` (the log line's seven, plus `check` for
+  `rescanPluginsIfChanged`'s listing); the uploader forwards the word as
+  `context.reloadPhase`, and only when it is one of them
+  (`tests/test_crash_upload.cpp`). The teardown and removal paths publish too -
+  `detachAndUnloadPlugins` builds a publish-only clock when no caller's clock is
+  handed in, so a freeze in a quit's unload names its step without writing any
+  reload log line.
 - **So does the sentinel.** The process's own timer (and no timer a test builds)
   writes the scope into the sentinel's breadcrumb at every change, as a number;
   see *The sentinel*, *The breadcrumb*.

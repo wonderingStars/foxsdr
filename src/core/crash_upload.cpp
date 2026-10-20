@@ -7,6 +7,7 @@
 #include "core/diag_log.hpp"
 #include "core/foreign_modules.hpp"
 #include "core/frame_timing.hpp"
+#include "core/plugin_reload_phases.hpp"
 #include "core/sentinel.hpp"
 
 #include <algorithm>
@@ -203,6 +204,7 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     Section section = Section::Header;
     std::string addressText;
     std::string frameScopeText;
+    std::string reloadPhaseText;
     bool sawKind = false;
 
     for (const std::string& raw : lines) {
@@ -270,6 +272,11 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                     // A freeze report's own line (0.99.64). Kept aside until the
                     // kind is known - see below, where it becomes the reason.
                     frameScopeText = v;
+                } else if (k == "reload-phase") {
+                    // A freeze report's own line (0.99.84). Kept aside until the
+                    // kind is known - see below, where it is validated against
+                    // the closed list of reload step names.
+                    reloadPhaseText = v;
                 }
                 // thread, stalled-ms, threshold-ms and threads are
                 // deliberately not carried: the rest is either in the stack
@@ -365,6 +372,14 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
         if (frameScopeFromName(frameScopeText.c_str(), scope)) {
             out.reason = std::string(kFreezeReasonPrefix) + frameScopeName(scope);
         }
+    }
+    // THE RELOAD STEP, BY THE SAME RULE (0.99.84): a freeze report's
+    // `reload-phase:` word is carried only when it is one of the reload's own
+    // step names (core/plugin_reload_phases.hpp) - `none`, a crash report's
+    // stray line, and anything a hand or a later build wrote are all dropped,
+    // never forwarded.
+    if (out.kind == "hang" && isPluginReloadPhaseName(reloadPhaseText.c_str())) {
+        out.reloadPhase = reloadPhaseText;
     }
 
     auto lookup = [&out](const std::string& name) -> std::string {
@@ -483,6 +498,12 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["faultThreadOwn"] = (r.faultThreadOwn == "yes")  ? "true"
                             : (r.faultThreadOwn == "no") ? "false"
                                                          : "";
+    // Which step of a plugin reload a freeze was captured in (0.99.84): one of
+    // core/plugin_reload_phases.hpp's fixed step names, already validated where
+    // it was parsed, and empty for every other report - a crash, a freeze
+    // outside a reload, an older build's file. Always present rather than
+    // omitted-when-empty, for the reason `reason` and `code` are.
+    ctx["reloadPhase"] = r.reloadPhase;
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -583,7 +604,8 @@ const std::vector<std::string>& uploadFieldNames() {
 const std::vector<std::string>& uploadContextFieldNames() {
     static const std::vector<std::string> names = {"mode",     "source",    "sampleRate",
                                                    "deviceOpen", "sdrModel", "uptimeSec",
-                                                   "faultThreadOwn", "foreignModules"};
+                                                   "faultThreadOwn", "foreignModules",
+                                                   "reloadPhase"};
     return names;
 }
 

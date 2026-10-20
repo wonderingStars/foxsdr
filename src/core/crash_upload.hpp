@@ -167,6 +167,14 @@ struct ParsedReport {
     std::string foreignModules;
     std::vector<std::string> plugins;  // "name version", as the report writes them
 
+    // The freeze writer's `reload-phase:` line (0.99.84): which step of a plugin
+    // reload was under way when the stall was captured, kept only when it is one
+    // of core/plugin_reload_phases.hpp's closed list of step names - the same
+    // rule as `frame-scope` above - and EMPTY otherwise: for `none`, for a crash
+    // report, for an older build's report, and for any value that is not one of
+    // those words.
+    std::string reloadPhase;
+
     // The `--- process ---` block both writers add since 0.89.0. `uptimeSec`
     // is seconds from process start to the fault (0 when the report predates
     // the block). `faultThreadOwn` is the crash writer's "yes"/"no"/"unknown"

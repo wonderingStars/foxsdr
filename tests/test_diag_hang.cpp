@@ -39,6 +39,8 @@
 #include "core/diag_report.hpp"
 #include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/phase_clock.hpp"
+#include "core/plugin_reload_phases.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -221,6 +223,12 @@ int main() {
         // before the context block.
         CHECK(text.find("\nframe-scope: rail\n") != std::string::npos);
         CHECK(text.find("\nframe-scope: ") < text.find("--- context ---"));
+        // AND WHICH STEP OF A PLUGIN RELOAD (0.99.84): none here - this stall
+        // held no publishing PhaseClock - and the line is written anyway, so
+        // the set comparison below can stay exact both ways. The stall that IS
+        // inside a reload step is asserted after the recovery block.
+        CHECK(text.find("\nreload-phase: none\n") != std::string::npos);
+        CHECK(text.find("\nreload-phase: ") < text.find("--- context ---"));
 
         // THE INVENTORY, BOTH DIRECTIONS. Present-and-correct was already
         // asserted above; this asserts EXHAUSTIVE. PRIVACY.md lists what a
@@ -299,6 +307,27 @@ int main() {
         // line is the scope at THAT stall, not the last one anybody opened.
         CHECK(readFile(fs::path(w.lastReportPath())).find("\nframe-scope: other\n") !=
               std::string::npos);
+
+        // A third stall, inside a STEP OF A PLUGIN RELOAD (0.99.84): the scope
+        // and the step a reload holds open, exactly as AppWindow::rescanPlugins
+        // holds them, and the report names both - which is the evidence field
+        // report 7591C65EFB69DD94 lacked: thirty seconds of `plugins-reload`
+        // and nothing saying which of its waits.
+        beatFor(w, 1600);
+        CHECK(w.running());
+        {
+            FrameScopeGuard inReload(FrameScope::PluginsReload);
+            PhaseClock reload{PhaseClock::Publish{}};
+            reload.begin(kReloadPhaseUnload);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+            reload.end();
+        }
+        CHECK(w.reportsWritten() == 3u);
+        {
+            const std::string third = readFile(fs::path(w.lastReportPath()));
+            CHECK(third.find("\nframe-scope: plugins-reload\n") != std::string::npos);
+            CHECK(third.find("\nreload-phase: unload\n") != std::string::npos);
+        }
 
         w.stop();
         CHECK(!w.running());

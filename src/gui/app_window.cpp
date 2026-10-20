@@ -112,6 +112,9 @@
 #include "gui/window_platform.hpp"
 // Where a slow frame spent its time (0.99.64): the scope guards below.
 #include "core/frame_timing.hpp"
+// The fixed names of a plugin reload's steps (0.99.84): what the publishing
+// PhaseClock in the reload path says, and the freeze watchdog reports.
+#include "core/plugin_reload_phases.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
@@ -13644,9 +13647,21 @@ void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     // the panels' and the map's and the track lookup's destroy() (a basemap that
     // joins its tile workers), and the loader unmapping the modules - and a log
     // line that says only "the rescan took two minutes" cannot tell them apart.
-    const auto lap = [phases](const char* name) {
-        if (phases != nullptr) { phases->begin(name); }
-    };
+    //
+    // EVERY CALLER'S STEPS ARE PUBLISHED, even the ones that ask for no timing
+    // (0.99.84): a removal's unload, a stop and the exit path run these same
+    // four waits under this same frame scope, so a freeze there must name its
+    // step in the watchdog's report too (`reload-phase:`, core/hang_watchdog.
+    // cpp). The caller's clock already publishes; the local one only publishes,
+    // and its laps are never logged - the exit path must not write a "reload"
+    // line at every quit (tests/test_plugin_rescan_log.cpp). Built only when
+    // there is no caller's clock, because a publishing clock clears the
+    // published name when it dies, and this one dies while the caller's still
+    // has its lap open.
+    std::optional<cascade::core::PhaseClock> publishOnly;
+    if (phases == nullptr) { publishOnly.emplace(cascade::core::PhaseClock::Publish{}); }
+    cascade::core::PhaseClock* const clock = (phases != nullptr) ? phases : &*publishOnly;
+    const auto lap = [clock](const char* name) { clock->begin(name); };
 
     // NOTHING IS LOADED AFTER THIS, so no signature taken for an earlier scan
     // describes what is loaded (rescanPluginsIfChanged): a removal calls this and
@@ -13664,7 +13679,7 @@ void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     // is memory inside a module about to be unmapped, and destroy() is code
     // inside that same module. Getting this order wrong is a crash in someone
     // else's DLL with no useful stack.
-    lap("decoders");
+    lap(cascade::core::kReloadPhaseDecoders);
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
     // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
@@ -13675,7 +13690,7 @@ void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     // returns. The catalogue goes too: its API pointers point into the
     // modules about to go. The page rebuilds both from whatever loads next,
     // and the empty signature makes it republish.
-    lap("patch");
+    lap(cascade::core::kReloadPhasePatch);
     pipeline_.patchRunner().flushNow();
     // Every patch radio's runner too (0.99.17): each has its own reader
     // thread that may be inside a decoder this instant. The radios keep
@@ -13692,14 +13707,14 @@ void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     patchRefused_.clear();
     // Same rule as the runner: a track-source or panel handle is memory inside
     // a module whose destroy() is code in that same module.
-    lap("panels and map");
+    lap(cascade::core::kReloadPhasePanels);
     pluginUi_.clear();
     // And the basemap, for exactly the same reason - its handle and its tile
     // borrows live in a module about to be unmapped.
     basemap_.detach();
     trackInfo_.detach();
 
-    lap("unload");
+    lap(cascade::core::kReloadPhaseUnload);
     pluginHost_.unloadAll();
 }
 
@@ -13742,7 +13757,15 @@ void AppWindow::rescanPlugins() {
     // excuses nothing - the watchdog pause above still caps at kExcuseCapMs, and
     // a rescan past that is still reported with every thread's stack
     // (docs/DIAGNOSTICS.md, "A plugin rescan runs on the GUI thread").
-    cascade::core::PhaseClock phases;
+    //
+    // AND IT PUBLISHES (0.99.84): the line below is only written when the rescan
+    // ENDS, and field report 7591C65EFB69DD94 was a rescan that did not end -
+    // thirty seconds of `plugins-reload` with the stalled stack ending in system
+    // modules, and nothing anywhere saying WHICH of the steps' waits had held
+    // it. A publishing clock mirrors the open step's name for the watchdog to
+    // report (`reload-phase:`), so that report can finally pick between the
+    // fixes docs/DIAGNOSTICS.md lays out, one per step.
+    cascade::core::PhaseClock phases{cascade::core::PhaseClock::Publish{}};
     struct ReloadLog {
         cascade::core::PhaseClock& clock;
         ~ReloadLog() {
@@ -13819,7 +13842,7 @@ void AppWindow::rescanPlugins() {
     // quarantined files are renamed back, and every installed file is re-hashed
     // against the record made when it was installed (loadInventory) - all
     // synchronous, all on this thread.
-    phases.begin("inventory");
+    phases.begin(cascade::core::kReloadPhaseInventory);
     std::string restoreError;
     if (!restoreQuarantinedPlugins(restoreError)) { pluginEnforceError_ = restoreError; }
 
@@ -13909,7 +13932,7 @@ void AppWindow::rescanPlugins() {
                                       m->writeTime == manifestRead.when));
     }
 
-    phases.begin("load");
+    phases.begin(cascade::core::kReloadPhaseLoad);
     // WHERE EACH FILE CAME FROM (0.99.74), from the install records the inventory above already
     // read - the host reads no manifest of its own. It is what lets the loader refuse to let a
     // plugin site's module take a declared name from an official one (resolveDuplicatePlugins).
@@ -13918,7 +13941,7 @@ void AppWindow::rescanPlugins() {
         if (!ip.file.empty()) { origins[ip.file] = !ip.source.empty(); }
     }
     pluginHost_.scan(pluginDir_, origins);
-    phases.begin("restart");
+    phases.begin(cascade::core::kReloadPhaseRestart);
 
     // WHICH PLUGINS ARE MAPPED, one line each, because plugins are
     // third-party code running in this process and "which one was loaded" has
@@ -13976,6 +13999,13 @@ void AppWindow::rescanPluginsIfChanged() {
     cascade::core::FrameScopeGuard reloadScope(cascade::core::FrameScope::PluginsReload);
 
     if (pluginScanSigValid_) {
+        // PUBLISHED AS THE STEP `check` (0.99.84, core/plugin_reload_phases.hpp):
+        // a folder slow to list is the case this pause exists for, and a freeze
+        // report taken while the listing hangs should say it was the listing -
+        // not leave the scope's `reload-phase: none` pointing at the reload
+        // proper. The clock publishes only; there is no reload log line to lap.
+        cascade::core::PhaseClock checking{cascade::core::PhaseClock::Publish{}};
+        checking.begin(cascade::core::kReloadPhaseCheck);
         // The folder the scan would read now: the same call the rescan makes,
         // so a folder that moved (the executable's own is no longer writable, a
         // package) is a different signature without further ado.
@@ -13984,6 +14014,7 @@ void AppWindow::rescanPluginsIfChanged() {
         const bool listed = (testHooks_.pluginDirSignature != nullptr
                                  ? testHooks_.pluginDirSignature
                                  : &cascade::core::readPluginDirSignature)(dir, now);
+        checking.end();
         if (listed && now == pluginScanSig_) {
             // Neither a name nor a path: which plugins there are is in the
             // line each scan wrote when it loaded them.
