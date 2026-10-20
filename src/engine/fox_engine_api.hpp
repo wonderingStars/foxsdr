@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "core/freq_manager.hpp"
+#include "core/host_image.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_runner.hpp"
 #include "foxsdr_api.h"
@@ -48,6 +49,8 @@ namespace cascade::engine {
 class Engine;
 class ApiHostImpl;
 struct ApiListBlock;
+struct ApiLiveBlock;
+struct ApiImageSet;
 
 // The engine's side of the table. One per Engine; built with it.
 class ApiHost {
@@ -72,6 +75,17 @@ public:
     // The pumping thread hands over a new list block (before the publish
     // whose listSeq says it changed).
     void setLists(std::shared_ptr<const ApiListBlock> lists);
+    // API 0.3 8.12: the pass's copy of what the patch's running nodes are doing (PATCH_LIVE), handed over once a pass
+    // when its own fingerprint moved. It moves no listSeq.
+    void setPatchLive(std::shared_ptr<const ApiLiveBlock> live);
+    // API 0.3 8.12 (part 3): the patch decoders' newest pictures, as ONE immutable set the pumping thread builds when a
+    // picture arrived or a node's went (Engine::syncPatchImages) and hands over BEFORE the event that names the picture
+    // is queued. read_image serves from it, and nothing else.
+    void setPatchImages(std::shared_ptr<const ApiImageSet> images);
+    // ...and the event for it: FOXAPI_EVENT_DECODER_IMAGE for the patch decoder `node`, picture `imageId`, broadcast by
+    // THIS pass's endPass (after the set above is in place, so a reader that is told can read). The caption is the
+    // node's name.
+    void patchImageArrived(std::uint64_t node, std::uint64_t imageId, const std::string& caption);
     // API 0.3 8.7: the receiver tuned off the presets of `names` plugins that are still running and muting the
     // audio, and the engine has armed the question (Engine::updateAudioMute, on the pumping thread, AFTER the
     // pass's publish). The event FOXAPI_EVENT_MUTE_TUNE_AWAY is broadcast by the NEXT endPass - after the
@@ -333,15 +347,36 @@ struct ApiListBlock {
     struct PatchPart {
         std::string name, key;
         double feed = 0.0, rateHz = 0.0;
+        // API 0.3 8.12, PATCH_PARTS value[2]: the module ALSO has a track source (a Map part can show its targets).
+        bool tracks = false;
     };
     std::vector<PatchPart> patchParts;
+    // PATCH_DEVICES (API 0.3 8.12): the devices a patch Radio can be set to, in Engine::patchDeviceChoices' order.
+    // `key` is the Radio node's device key (core/patch_devices.hpp); `rateHz` a recording's own rate, else 0.
+    struct PatchDevice {
+        std::string label, key;
+        double rateHz = 0.0;
+    };
+    std::vector<PatchDevice> patchDevices;
     struct PatchRadio {
         std::uint64_t node = 0;
         std::string device, error;
         double rateHz = 0.0;
-        bool open = false, fault = false;
+        // API 0.3 8.12: an OPEN radio's AIR centre (its own readback, below 0 Hz through an up-converter), and a
+        // radio whose open is still on its worker.
+        double centreHz = 0.0;
+        bool open = false, fault = false, pending = false;
     };
     std::vector<PatchRadio> patchRadios;
+    // PATCH_PLAN (API 0.3 8.12): one entry per planned channel and decoder.
+    struct PatchPlanEntry {
+        std::uint64_t node = 0;
+        bool decoder = false;
+        std::string key;               // a decoder's plugin key ("" for a channel)
+        const char* source = "";       // a decoder's source: "radio", "channel" or "audio"
+        double v[4] = {0.0, 0.0, 0.0, 0.0};
+    };
+    std::vector<PatchPlanEntry> patchPlan;
     // THE RECORDINGS. What a take IS is fixed when it starts and is in the
     // block; its byte count and its STALLED/FULL state are read LIVE from
     // the recorder (atomics, any thread) so a growing file never rebuilds the
@@ -394,10 +429,47 @@ struct ApiListBlock {
         bool localOnly = false;
     };
     std::map<std::string, Fact> facts;
-    // FOXAPI_EVENT_PATCH: what the graph's publish says.
+    // FOXAPI_EVENT_PATCH: what the graph's publish says. (patchVersion: the graph's version, API 0.3 8.12 - the
+    // same number as fact.patch.version, in the same block.)
     std::uint64_t patchEpoch = 0;
-    std::uint64_t patchGraphHash = 0;
+    std::uint64_t patchVersion = 0;
     bool patchRunning = false;
+};
+
+// PATCH_LIVE (API 0.3 8.12): what the patch's running nodes are doing NOW - a squelch gate, a speaker's level, a
+// channel's level, a decoder's newest line - copied once a pass by the pumping thread (Engine::refreshPatchLive) into
+// ONE immutable block of its own and handed to the host. It is a block apart from ApiListBlock, and moves no listSeq,
+// for the reason the recordings' bytes are read live: these figures change every pass a patch runs, and a rebuild of
+// the whole block (its facts, its plugin sizes) and a re-read of every list by every interface, every pass, is the cost
+// the live figures must not have. It has a fingerprint of its own: a pass that finds the same readings builds nothing.
+// A reader never touches a PatchRadio, a Runner or an AudioDest - their lifetimes end with the pass that erases them.
+struct ApiLiveBlock {
+    std::uint64_t fingerprint = 0;
+    struct Entry {
+        std::uint64_t node = 0;
+        int kind = 0;                // 1 squelch, 2 speaker output, 3 channel level, 4 decoder face, 5 speaker output error
+        double v0 = 0.0, v1 = 0.0;
+        bool open = false;           // kind 1: the gate is open
+        std::string name, detail;
+    };
+    std::vector<Entry> entries;
+};
+
+// THE PATCH DECODERS' PICTURES (API 0.3 8.12, part 3): the newest picture of each picture-decoder node, as ONE immutable
+// set the pumping thread builds and hands to the host (see ApiHost::setPatchImages). Each picture is itself immutable
+// from the moment it is in a set (a `const HostImage` behind a shared pointer, moved in whole from the decoder's runner:
+// no second copy of the pixels is ever made by the engine), and a set is never edited, only replaced. So a reader that
+// takes the set's pointer and a picture's pointer under the host's short lock holds a picture the decoder will never
+// write to: read_image copies it at leisure on the reader's own thread, and a picture the pass replaces meanwhile is still
+// whole in the reader's hand. The id is the engine's own counter, never reused.
+struct ApiImageSet {
+    struct Entry {
+        std::uint64_t node = 0;
+        std::uint64_t id = 0;
+        std::string caption;
+        std::shared_ptr<const cascade::core::HostImage> image;
+    };
+    std::vector<Entry> entries;
 };
 
 // The table, for an interface built for (apiMajor, apiMinor): NULL for a

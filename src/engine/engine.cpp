@@ -93,6 +93,7 @@ Engine::Engine(EngineHost& host)
 void Engine::configureApi(const std::string& options) {
     api_ = std::make_unique<ApiHost>(*this, options);
     apiLists_.reset();  // the new host is handed a block on the next publish
+    apiLive_.reset();   // ...and the patch's live readings (API 0.3 8.12)
 }
 
 void Engine::wakeControl() {
@@ -3207,15 +3208,7 @@ void Engine::rebuildPatchCatalogue() {
 }
 
 bool Engine::patchDecoderIsShown(cascade::core::patch::NodeId node) const {
-    for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
-        if (w.from != node) { continue; }
-        const cascade::core::patch::Node* dst = patchGraph_.find(w.to);
-        if (dst != nullptr && dst->kind == cascade::core::patch::NodeKind::Sink &&
-            !dst->inputs.empty() && dst->inputs[0] == cascade::core::patch::PortType::Text) {
-            return true;
-        }
-    }
-    return false;
+    return cascade::core::patch::decoderIsShown(patchGraph_, node);
 }
 
 std::vector<cascade::gui::IndexedPreset> Engine::validatedPresets(
@@ -4313,7 +4306,7 @@ void Engine::pumpDecoderOutput() {
     // Text out part is for, and a decoder wired to nothing is marked on the
     // canvas as having nobody listening. Tagged with the NODE's name, so two
     // POCSAG decoders on two frequencies read as two sources, not one.
-    // Pictures: the newest per node, kept for its face.
+    // Pictures: the newest per node, kept (takePatchImage) for the face an interface draws from read_image.
     // From the receiver's patch runner and from EVERY patch radio's own
     // (0.99.17) - a decoder runs on whichever radio it is wired to.
     std::vector<cascade::core::patch::Runner*> patchRunners{&pipeline_.patchRunner()};
@@ -4323,7 +4316,7 @@ void Engine::pumpDecoderOutput() {
     }
     std::vector<cascade::core::patch::PatchLine> patchLines;
     for (cascade::core::patch::Runner* pr : patchRunners) {
-        for (auto& [node, img] : pr->drainImages()) { host_->onPatchPicture(node, std::move(img)); }
+        for (auto& [node, img] : pr->drainImages()) { takePatchImage(node, std::move(img)); }
         for (cascade::core::patch::PatchLine& pl : pr->drainText()) {
             patchLines.push_back(std::move(pl));
         }
@@ -4344,18 +4337,12 @@ void Engine::pumpDecoderOutput() {
                                     patchDecoderIsShown(pl.node) ? "" : " (not wired to a Text out)",
                                     pl.text.size());
         }
+        // A line is in the backlog only when its Text output reaches a Text out; WHICH Text outs show it is the
+        // interface's to route (DECODER_LINES' value[0] names the decoder; the engine no longer keeps a copy per Text out).
         if (!patchDecoderIsShown(pl.node)) { continue; }
-        // Onto the face of every Text out this decoder is wired to.
-        for (const cascade::core::patch::Wire& w : patchGraph_.wires()) {
-            if (w.from != pl.node) { continue; }
-            const cascade::core::patch::Node* dst = patchGraph_.find(w.to);
-            if (dst == nullptr || dst->kind != cascade::core::patch::NodeKind::Sink) { continue; }
-            std::deque<std::string>& q = patchSinkLines_[w.to];
-            q.push_back(pl.source + ": " + pl.text);
-            while (q.size() > 200) { q.pop_front(); }
-        }
         ++decoderLinesTotal_;
         cascade::core::DecodedLine l;
+        l.node = pl.node;   // (API 0.3 8.12: DECODER_LINES value[0] - which patch decoder said it)
         l.plugin = std::move(pl.source);
         l.text = std::move(pl.text);
         decoderLog_.push_back(std::move(l));
@@ -5715,15 +5702,66 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 cascade::core::diagWarnf("patch: %s", why.c_str());
                 return refuse(FOXAPI_BAD_ARGUMENT, why.c_str());
             }
+            const bool document = (c.ival[0] & FOXAPP_PATCH_GRAPH_DOCUMENT) != 0;
+            if (c.ival[1] < 0) { return refuse(FOXAPI_BAD_ARGUMENT, "a negative graph version"); }
+            // THE VERSION THE SENDER EDITED FROM (API 0.3 8.12). Whatever the
+            // pass has already changed in the graph - START's switches, a
+            // centre the runtime learnt, an earlier session's edit in this very
+            // pass - is noticed NOW, so the graph this command would replace is
+            // the graph it is compared with. A draft whose base is not the
+            // current version is MERGED over the current graph (what the
+            // sender changed wins, everything else is the engine's), never put
+            // over it: the sender cannot have seen what happened since.
+            syncPatchGraphVersion();
+            bool merged = false;
+            const auto base = static_cast<std::uint64_t>(c.ival[1]);
+            if (!document && base != 0 && base != patchGraphVersion_) {
+                const PatchGraphRecord* from = nullptr;
+                for (const PatchGraphRecord& r : patchGraphHistory_) {
+                    if (r.version == base) { from = &r; }
+                }
+                if (from == nullptr) {
+                    return refuse(FOXAPI_FAILED,
+                                  "the patch graph moved on since this edit was started; it was not applied");
+                }
+                g = cascade::core::patch::rebaseDraft(from->graph, g, patchGraph_);
+                merged = true;
+            }
             // Ids are never handed out twice, across replacements too.
             g.reserveIds(patchGraph_.nextId());
-            if ((c.ival[0] & FOXAPP_PATCH_GRAPH_DOCUMENT) != 0) { ++patchGraphEpoch_; }
-            // No onPatchGraphChanged(): that tells the window the ENGINE
-            // changed its graph. This graph came from the window, which keeps
-            // its own document text for it (an edit marks it, a load sets it).
+            // No window hook: an interface that wants to know the graph moved
+            // reads fact.patch.version (the same block as the graph and the
+            // epoch), whoever moved it.
             patchGraph_ = std::move(g);
+            if (document) {
+                // A NEW PATCH: its own epoch, and no edit of the old one is
+                // ever merged into it (the history goes; a sender still
+                // holding an old version is refused "moved on").
+                ++patchGraphEpoch_;
+                ++patchGraphVersion_;
+                patchGraphHistory_.clear();
+                patchGraphHistory_.push_back({patchGraphVersion_, patchGraph_});
+            } else {
+                syncPatchGraphVersion();
+            }
+            res.applied[0] = static_cast<double>(patchGraphVersion_);
+            res.applied[1] = merged ? 1.0 : 0.0;
+            if (merged) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             return res;
         }
+        case FOXAPP_OP_SET_PATCH_PAGE_OPEN:
+            // THE STANDARD WINDOW'S PATCH VIEW IS SHOWING (API 0.3 8.12): the
+            // engine's pass runs the patch runtime while it is (pumpPatch) and
+            // stops the patch when it goes - the window's frame drives none
+            // of it.
+            patchPageOpen_ = on;
+            return res;
+        case FOXAPP_OP_PATCH_LIST_RECORDINGS:
+            // THE RADIO'S RECORDINGS, listed on the engine's own pass (API 0.3 8.12): the Radio part's device list
+            // opening, or "Look for radios", asks. The files are read through the probe cache, a bounded number of
+            // headers a listing; PATCH_DEVICES and RECORDINGS change as the answer.
+            patchListRecordings();
+            return res;
         case FOXAPP_OP_SOUND_CARDS_WANTED:
             // The sound card row is showing (OPEN 2): list the cards once,
             // on the worker - never again while a list is being taken or a
@@ -7675,6 +7713,7 @@ void Engine::controlPass() {
     pumpFrameBegin();
     pumpInputs();
     pumpPlugins();
+    pumpPatch();
     (void)pumpPublish();
     pumpAudioMute();
     pumpWorkers();
@@ -7740,6 +7779,7 @@ void Engine::pump() {
     pumpFrameBegin();
     pumpInputs();
     pumpPlugins();
+    pumpPatch();
     (void)pumpPublish();
     pumpAudioMute();
     pumpWorkers();

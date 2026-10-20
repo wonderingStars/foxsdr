@@ -733,6 +733,20 @@ inline std::vector<std::string> mapSources(const Graph& g, NodeId map,
     return out;
 }
 
+// True when the decoder node's Text output reaches a Text sink - the only way its lines are shown in the Decoder output
+// window. A pure function of the graph: the engine decides what to show with it, and the Patch page says "wire it to a
+// Text out" with it from its own draft (window port group 13).
+inline bool decoderIsShown(const Graph& g, NodeId node) {
+    for (const Wire& w : g.wires()) {
+        if (w.from != node) { continue; }
+        const Node* dst = g.find(w.to);
+        if (dst != nullptr && dst->kind == NodeKind::Sink && !dst->inputs.empty() && dst->inputs[0] == PortType::Text) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Every problem pinned to one node, for the canvas and the inspector.
 inline std::vector<Problem> problemsFor(const Plan& plan, NodeId id) {
     std::vector<Problem> out;

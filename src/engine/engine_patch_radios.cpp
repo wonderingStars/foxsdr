@@ -20,7 +20,9 @@
 #include "core/utf8_text.hpp"
 #include "core/mp3_writer.hpp"
 #include "core/patch_audio.hpp"
+#include "core/patch_draft.hpp"
 #include "core/patch_devices.hpp"
+#include "core/patch_device_label.hpp"
 #include "engine/rate_follow_status.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "source/iq_file_source.hpp"
@@ -72,16 +74,6 @@ const char* destKind(const pc::AudioDest* dest) {
 // recording's rate is the file's, so it is left out (pc::radioOpenIdentity) -
 // the node taking the file's rate must not reopen it.
 std::string openedAs(const pc::Node& n) { return pc::radioOpenIdentity(n.device, radioRate(n)); }
-
-// The file name of a recording key, for its label - as UTF-8 for the screen.
-std::string recordingFileName(const std::string& key) {
-    try {
-        const auto s = std::filesystem::path(pc::iqFilePath(key)).filename().u8string();
-        return std::string(s.begin(), s.end());
-    } catch (...) {
-        return pc::iqFilePath(key);
-    }
-}
 
 // Whether an EARLIER radio in the graph already has this node's device - the
 // DeviceTwice rule, answered without a compile so the reconcile can use it.
@@ -169,38 +161,15 @@ void Engine::patchListRecordings() {
                             patchRecordings_.size(), patchRecordingCache_.opens - opensBefore);
 }
 
-void Engine::prunePatchSinkLines() {
-    for (auto it = patchSinkLines_.begin(); it != patchSinkLines_.end();) {
-        it = (patchGraph_.find(it->first) == nullptr) ? patchSinkLines_.erase(it) : std::next(it);
-    }
+std::string Engine::patchDeviceLabel(const std::string& key) const {
+    // The rule is core::patch::deviceLabelFor (the window draws the same words from PATCH_DEVICES).
+    return pc::deviceLabelFor(patchDeviceChoices(), key);
 }
 
-std::string Engine::patchDeviceLabel(const std::string& key) const {
-    if (key.empty()) { return tr("No device chosen"); }
-    for (const PatchDeviceChoice& c : patchDeviceChoices()) {
-        if (c.key == key) { return c.label; }
-    }
-    // A RECORDING IS NAMED BY ITS FILE whether or not the list has been read:
-    // the key carries the path, and the list is only read when asked for.
-    if (pc::isIqFileKey(key)) {
-        std::string buf;
-        cascade::core::formatUtf8(buf, tr("Recording: %s"), recordingFileName(key).c_str());
-        return buf;
-    }
-    // NOT LISTED IS NOT "NOT CONNECTED": a SoapySDR radio is listed only after
-    // a scan. Its args carry its own label, which is what the list would say.
-    const std::string args = pc::deviceArgs(key);
-    const std::string own = pc::argField(args, "label");
-    if (!own.empty()) { return own; }
-    const std::string serial = pc::argField(args, "serial");
-    std::string buf;
-    if (serial.empty()) {
-        cascade::core::formatUtf8(buf, tr("%s (not listed)"), pc::deviceDriver(key).c_str());
-    } else {
-        cascade::core::formatUtf8(buf, tr("%s %s (not listed)"), pc::deviceDriver(key).c_str(),
-                      serial.c_str());
-    }
-    return buf;
+std::string Engine::patchReceiverRadioKey() const {
+    if (patchMainKeep_.valid) { return pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args); }
+    if (device_ != nullptr) { return pc::makeDeviceKey(sourceKind_, deviceArgs_); }
+    return std::string();
 }
 
 std::vector<pc::RadioInfo> Engine::patchRadioInfos() const {
@@ -289,7 +258,6 @@ void Engine::patchReconcile() {
                     n->centreChosen = true;
                 }
                 if (n->rateHz <= 0.0) { n->rateHz = keep.rateHz; }
-                host_->onPatchGraphChanged();
             }
             break;   // one radio only: the device cannot be on two
         }
@@ -401,7 +369,6 @@ void Engine::patchReconcile() {
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
                 n->centreChosen = true;
-                host_->onPatchGraphChanged();
             } else if (std::fabs(r.centreHz() - n->freqHz) > 0.5) {
                 if (!r.setCentreHz(n->freqHz)) {
                     patchRadioError_[id] = "the device refused that frequency";
@@ -443,7 +410,6 @@ void Engine::patchReconcile() {
             }
             if (std::fabs(n->rateHz - file->sampleRateHz()) > 0.5) {
                 n->rateHz = file->sampleRateHz();
-                host_->onPatchGraphChanged();
             }
             auto radio = std::make_unique<pc::PatchRadio>(id, std::move(file), "I/Q recording");
             radio->setConverter(conv);
@@ -456,7 +422,6 @@ void Engine::patchReconcile() {
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
                 n->centreChosen = true;
-                host_->onPatchGraphChanged();
             }
             cascade::core::diagLogf("patch: radio node %u playing an I/Q recording at %.0f S/s",
                                     static_cast<unsigned>(id), radio->rateHz());
@@ -483,7 +448,6 @@ void Engine::patchReconcile() {
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = radio->centreHz();
                 n->centreChosen = true;
-                host_->onPatchGraphChanged();
             }
             patchRadioError_.erase(id);
             patchRadioFailedAs_.erase(id);
@@ -832,14 +796,14 @@ void Engine::patchPressStart() {
     }
     // START WITH EVERY RADIO SWITCHED OFF SWITCHES THEM ALL ON (see
     // switchOnForStart for why).
-    if (pc::switchOnForStart(patchGraph_)) { host_->onPatchGraphChanged(); }
+    (void)pc::switchOnForStart(patchGraph_);
     patchRunning_ = true;
 }
 
 void Engine::patchAllOff() {
     // EVERY RADIO OFF, and the patch stopped: the receiver gets its radio back
     // when patchApplyRunning sees the change.
-    if (pc::switchAllRadiosOff(patchGraph_)) { host_->onPatchGraphChanged(); }
+    (void)pc::switchAllRadiosOff(patchGraph_);
     patchRunning_ = false;
 }
 
@@ -857,6 +821,91 @@ void Engine::patchApplyRunning() {
     // The receiver's decoders stand down while the patch runs and come back
     // when it stops.
     refreshPluginRunner();
+}
+
+// --- THE PATCH RUNTIME'S STEP OF THE PASS (API 0.3 8.12) ------------------------------------------------------
+//
+// It was the window's frame: drawPatchView rebuilt the catalogue, applied the transport, reconciled the radios,
+// compiled and published the sets, and drawPatchPage ran the close rule - which is why the patch lists, the node
+// spectra and the event's `running` bit only moved while a window drew the view. All of it is the pass's now, in the
+// order the view ran it (the window's edit of the graph is a command, applied at the head of the pass, so the sets
+// are built from it in the same pass).
+
+void Engine::syncPatchGraphVersion() {
+    if (patchGraphHistory_.empty()) {
+        patchGraphHistory_.push_back({patchGraphVersion_, patchGraph_});
+        return;
+    }
+    if (pc::graphsEqual(patchGraph_, patchGraphHistory_.back().graph)) { return; }
+    ++patchGraphVersion_;
+    patchGraphHistory_.push_back({patchGraphVersion_, patchGraph_});
+    while (patchGraphHistory_.size() > kPatchGraphHistory) { patchGraphHistory_.pop_front(); }
+}
+
+void Engine::compilePatchPlan() {
+    // EACH RADIO ITS OWN (0.99.17): every channel is measured against the radio it hangs off - the running device's
+    // readback, or the node's settings before it opens.
+    patchPlan_ = pc::compile(patchGraph_, patchRadioInfos(), &patchCatalogue_);
+    // A radio whose device would not open is a problem only the attempt could find, as a refusing plugin is. (It
+    // also clears `runnable`.)
+    for (const auto& [id, as] : patchRadioFailedAs_) {
+        (void)as;
+        if (patchRadios_.count(id) == 0 && patchGraph_.find(id) != nullptr) {
+            patchPlan_.problems.push_back({id, pc::Problem::RadioFailed});
+            patchPlan_.runnable = false;
+        }
+    }
+    // A plugin that refused to create() an instance in the last build is a problem the plan cannot know about - it
+    // is only discovered by asking the plugin. It does NOT clear `runnable`: the window always drew "This patch can
+    // run." beside a refused plugin, and fact.patch.runnable says the same (API 0.3 8.12).
+    for (const pc::NodeId id : patchRefused_) { patchPlan_.problems.push_back({id, pc::Problem::PluginRefused}); }
+}
+
+void Engine::pumpPatch() {
+    syncPatchGraphVersion();
+    if (!patchPageOpen_) {
+        // CLOSING THE PAGE STOPS THE PATCH. The page took the radios over when it opened, so handing them back when
+        // it closes is the only symmetric answer - and a patch still playing from a window you have closed is a
+        // receiver whose controls you cannot find. SINCE 0.99.40 "CLOSED" IS "THE RECEIVER VIEW WAS CHOSEN": the
+        // page is the main window's patch face, and leaving it does exactly what closing the page did.
+        if (patchWasOpen_) {
+            cascade::core::diagLogf("patch: view closed%s",
+                                    patchRunning_ ? " while running - every patch radio closes and the receiver "
+                                                    "gets its radio back"
+                                                  : "");
+            patchWasOpen_ = false;
+            patchRunning_ = false;
+            patchWasRunning_ = false;
+            // Forgotten with the set, so reopening builds a fresh one.
+            patchDspSig_.clear();
+            patchRefused_.clear();
+            // Every patch radio stops, every speaker's file is finalised, and the receiver gets its radio back
+            // (0.99.17)...
+            patchStopAll(true);
+            // ...and the receiver's decoders come back.
+            refreshPluginRunner();
+        }
+        return;
+    }
+    // The installed decoder plugins, fresh each pass: a plugin installed from the store a moment ago is a part now,
+    // and one the user just stopped is not.
+    rebuildPatchCatalogue();
+    // START AND STOP TAKE EFFECT HERE, before the radios are reconciled: stopping closes every patch radio,
+    // finalises every file and gives the receiver its radio back; either way the receiver's decoders follow (they
+    // stand down while the patch runs - see refreshPluginRunner).
+    patchApplyRunning();
+    // The patch's own radios: taken, opened, closed and retuned to match the nodes, before anything is compiled.
+    patchReconcile();
+    // ONE COMPILE A PASS, so the marks, the lists and the inspector's words are the same answer.
+    compilePatchPlan();
+    // THE SETS GO TO THE READER THREADS, built here because building them is allocation (a filter per channel, a
+    // resampler, a second of ring and, since 0.99.15, create() on every plugin decoder in it): rebuilt ONLY when
+    // something the DSP reads has changed (radioSignature), so dragging a node does not restart every decoder.
+    patchPublishSets();
+    patchWasOpen_ = true;
+    // What the runtime changed in the graph this pass (a device or centre named at the take-over, a rate an I/Q
+    // recording said) is a version of its own, before the publish.
+    syncPatchGraphVersion();
 }
 
 void Engine::patchPushSquelch() {

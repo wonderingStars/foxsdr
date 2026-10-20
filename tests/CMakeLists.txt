@@ -126,6 +126,19 @@ foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_fitted_mod
             FIXTURE_GROUP9_PLUGIN="$<TARGET_FILE:fixture_group9_plugin>")
     endif()
 endforeach()
+# THE GROUP-13 FIXTURE (window port group 13, part c, API 0.3 section 8.12.7): a REAL picture decoder - the one module that
+# produces a picture through the plugin ABI, deterministically, from the audio a patch on the signal generator hands it - for
+# the tests of the patch decoders' pictures (test_engine_api_03 G13-5, test_engine_publish_alloc F8) and of the face that
+# draws them (test_patch_graph_draft_input scenario W). Copied into a plugin directory of the test's own.
+add_library(fixture_group13_plugin SHARED fixture_group13_plugin.cpp)
+target_include_directories(fixture_group13_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_patch_graph_draft_input)
+    if(TARGET ${_t})
+        add_dependencies(${_t} fixture_group13_plugin)
+        target_compile_definitions(${_t} PRIVATE
+            FIXTURE_GROUP13_PLUGIN="$<TARGET_FILE:fixture_group13_plugin>")
+    endif()
+endforeach()
 # test_snapshot_app loads three decoders at once (engine stage 2): the same
 # fixture built under three descriptor names, since the host runs one plugin
 # per name.

@@ -25,7 +25,8 @@ with NULL, exactly as a 0.2 engine answered `(0, 1)`. `FOXAPI_MIN_ENGINE_API`
 is the whole 0.3 table (the minimum rule, "during 0.x: the current layout"),
 and `FOXAPI_MIN_RECEIVER_STATE` the whole 0.3 `FoxReceiverState`, which grew
 at its end (sections 8.1, 8.2, 8.4, 8.6, 8.10 and 8.11). `FoxScopeInfo` is new, with its own
-`FOXAPI_MIN_SCOPE_INFO` (its one reserved word became `capacityFrames` in section 8.11). No other struct changed.
+`FOXAPI_MIN_SCOPE_INFO` (its one reserved word became `capacityFrames` in section 8.11). `FoxImageInfo` grew at its end
+(`complete`, a reserved word and `sequence`, section 8.12.7; `FOXAPI_MIN_IMAGE_INFO` is unchanged). No other struct changed.
 
 ## 2. Capabilities
 
@@ -35,6 +36,7 @@ at its end (sections 8.1, 8.2, 8.4, 8.6, 8.10 and 8.11). `FoxScopeInfo` is new, 
 | `FOXAPI_CAP_LONG_TEXT` (27) | `submit_text` (section 3) |
 | `FOXAPI_CAP_NODE_SPECTRUM` (28) | `read_node_spectrum` (section 7) |
 | `FOXAPI_CAP_SCOPE` (23, 0.2) | now served: `read_scope` (section 6) |
+| `FOXAPI_CAP_IMAGES` (25, 0.2) | now served: `read_image` and `FOXAPI_EVENT_DECODER_IMAGE`, for the patch decoders' pictures (section 8.12.7) |
 
 ## 3. The long-text channel — `submit_text` (closes 0.2 gap 10)
 
@@ -65,6 +67,13 @@ published in the same block as the lists, in the same pass.
 |---|---|---|
 | `fact.status.<line>` | the whole text of a status line (section 5.1), `""` when it has none | |
 | `fact.patch.graph` | the patch graph as a document — exactly what `FOXAPP_OP_PATCH_SET_GRAPH` (and a patch file) take | LOCAL |
+| `fact.patch.version` | the graph's version, a decimal: a counter the engine bumps on every accepted change to the graph, its own or a session's (starts at 1). In the same block as `fact.patch.graph` and `.epoch`; `FOXAPP_OP_PATCH_SET_GRAPH` names it in `ival[1]` (section 8.12) | |
+| `fact.patch.epoch` | how many patch documents have been loaded, a decimal (section 8.12) | |
+| `fact.patch.runnable` | `1` when the plan can run, else `0` (a refused plugin does not clear it; a radio that would not open does; section 8.12) | |
+| `fact.patch.device.<id>` | the whole device key of `PATCH_DEVICES` entry `<id>` (section 8.12, part 2) | LOCAL |
+| `fact.patch.receiverRadio` | the key of the receiver's radio as a Radio node names it: the one lent to the patch, else the one open, else `""` (8.12) | LOCAL |
+| `fact.patch.receiverCentre` | the AIR centre in Hz the receiver's radio carries, or `""` when it was never tuned; its existence moves `listSeq`, its value does not (8.12) | |
+| `fact.patch.conv.<node>` | the converter in force for a Radio node's device, `"<mode> <LO Hz> <inverted>"` as `fact.converter.live` (8.12) | |
 | `fact.recorder.dir` | the folder recordings go to | LOCAL |
 | `fact.recorder.iq.path`, `fact.recorder.audio.path` | the current or last take's file | LOCAL |
 | `fact.store.<id>.legal` | a catalogue entry's legal notice, whole | |
@@ -123,14 +132,14 @@ says when to read again.
 | `DECIMATIONS` (25) | the open radio's decimation factors. `value[0]`: factor; `value[1]`: the rate it gives, Hz; `ACTIVE` |
 | `PATCH_NODES` (26) | the patch graph's nodes. `id`: node; `name`; `detail`: kind (`radio`, `channel`, `demod`, `decoder`, `display`, `sink`, `map`); `value[0..1]`: x, y; `value[2]`: Hz; `value[3]`: rate Hz; `ACTIVE`: switched on; `REFUSED`: the engine refused to run it; `FAULT`: its radio faulted or would not open |
 | `PATCH_WIRES` (27) | `value[0]`: from node, `[1]`: its output port, `[2]`: to node, `[3]`: its input port |
-| `PATCH_PROBLEMS` (28) | what the plan found wrong. `id`: node; `name`: the problem's code; `detail`: what the page says |
-| `PATCH_PARTS` (29) | the decoder parts a graph may use. `name`; `detail`: key; `value[0]`: the port type it is fed (0 I/Q, 1 audio, 2 text, 3 control, 4 track); `value[1]`: the rate it needs, Hz |
+| `PATCH_PROBLEMS` (28) | what the plan found wrong. `id`: node; `name`: the problem's code, a decimal (the table is in section 8.12; 5 and 14 are advisory); `detail`: what the page says |
+| `PATCH_PARTS` (29) | the decoder parts a graph may use. `name`; `detail`: key; `value[0]`: the port type it is fed (0 I/Q, 1 audio, 2 text, 3 control, 4 track); `value[1]`: the rate it needs, Hz; `value[2]`: 1 when the module also has a track source (8.12) |
 | `RECORDINGS` (30) | the recorders' takes (current or last), then the patch's files. `name`: file; `detail`: path (LOCAL sessions only); `value[0]`: 1 I/Q, 2 audio, 3 patch; `value[1]`: bytes, **read live** (a growing file moves this without moving `listSeq`); `value[2]`: rate Hz; `value[3]`: the take's length in **seconds**, **read live** like `value[1]` (a take that is running moves it without moving `listSeq`; section 8.2); `ACTIVE` recording; `FULL` at its size limit; `STALLED` writes failing (FULL wins when both) |
-| `DECODER_LINES` (31) | the decoder-output backlog, oldest first, at most 500. `id`: line number (1 = the first line since the engine started); `name`: plugin; `detail`: the line (cut to 159 bytes). **A line does not move `listSeq`** (8.7): watch `decoderLinesTotal` (the state's measurement) and read the lines above the last `id` you hold |
+| `DECODER_LINES` (31) | the decoder-output backlog, oldest first, at most 500. `id`: line number (1 = the first line since the engine started); `name`: plugin; `detail`: the line (cut to 159 bytes); `value[0]`: the patch decoder node that said it, 0 for the receiver's own decoders (8.12). **A line does not move `listSeq`** (8.7): watch `decoderLinesTotal` (the state's measurement) and read the lines above the last `id` you hold |
 | `STORE_BLOCKED` (32) | installed plugins the store's policy refuses to load. `name`: file; `detail`: why |
 | `STORE_UPDATES` (33) | the updates the store would install. `name`: catalogue id; `detail`: "from -> to" |
 | `BAND_PLANS` (34) | the plans `SET_BAND_PLAN` takes. `name`; `detail`: id; `ACTIVE` |
-| `PATCH_RADIOS` (35) | the patch's radios. `id`: node; `name`: device; `detail`: why it faulted or did not open; `value[0]`: rate Hz; `ACTIVE` open; `FAULT` |
+| `PATCH_RADIOS` (35) | the patch's radios. `id`: node; `name`: device; `detail`: why it faulted or did not open, or for a running radio the note its face prints (section 8.12); `value[0]`: rate Hz; `value[1]`: an open radio's AIR centre Hz (8.12); `value[2]`: 1 while its open is on its worker (8.12); `ACTIVE` open; `FAULT` |
 | `MUTE_CAUSES` (36) | the plugins muting the receiver's audio now (8.7). `name`: the plugin; `detail`: its module file name; `value[0]`: `1` when the mute is held after a tune-away; `ACTIVE` on every entry. Empty when nothing mutes |
 | `STALE_GRANTS` (37) | the tune grants no loaded module holds (8.7). `name`: the module file name; `REFUSED` when the host holds a record of that file that did not load. In the order the grants were given |
 | `PLUGIN_COMMANDS` (38) | the command keys the loaded modules have added (8.8). `id`: the command id (`FOXAPI_OP_PLUGIN_COMMAND`'s `ival[0]`); `name`: the key's label (at most 32 characters, the module's own text); `detail`: the module file name. Module by module in the order of `PLUGINS`, each module's keys in the order it added them (at most 8 a module) |
@@ -140,6 +149,9 @@ says when to read again.
 | `SOUND_CARDS` (42) | the sound card inputs as the last listing found them (8.10). `id`: index + 1; `name`: `device (host API)`; `detail`: the host API; `ACTIVE`: the entry the form's card is |
 | `SOUND_CARD_RATES` (43) | the rates the form's card offers in the form's format (8.10). `value[0]`: Hz of the card; `EXCLUSIVE`; `ACTIVE`: the form's rate |
 | `SOUND_CARD_FORM` (44) | ONE entry, the sound card form (8.10). `name`: the device, `detail`: its host API (both `""` to a REMOTE session); `value[0]`: rate Hz, `[1]`: I/Q centre Hz, `[2]`: channel (0 left, 1 right); `IQ_STEREO`, `SWAP_IQ`, `PICKED` |
+| `PATCH_PLAN` (45) | the plan the patch page draws (8.12): one entry per planned channel, then per planned decoder. `id`: node; `detail`: `channel`, or `decoder:radio` / `decoder:channel` / `decoder:audio`; `name`: a decoder's plugin key; `value[0]`: a channel's offset Hz from its radio's centre, a decoder's rate Hz; `[1]`: a channel's output rate Hz, a decoder's input rate Hz; `[2]`: a channel's decimation, an I/Q decoder's RF centre Hz at DC; `[3]`: the radio node |
+| `PATCH_DEVICES` (46) | the devices a patch Radio can be set to, in the order its Device combo lists them (8.12, part 2). `id`: index + 1; `name`: the label; `detail`: the device key (**LOCAL sessions only**, else empty; cut at 159 bytes: `fact.patch.device.<id>` is the whole key); `value[0]`: a recording's own rate Hz, else 0 |
+| `PATCH_LIVE` (47) | what the patch's running nodes are doing NOW (8.12, part 2): one entry per node that has something, copied once a pass into a block of its own. **It never moves `listSeq`: read it each time you draw.** `id`: node; `value[2]`: the kind - 1 a demodulator's squelch gate (`value[0]`: the level it judges, dB; `ACTIVE`: open), 2 a speaker's output (`name`: what it plays to; `value[0]`: peak 0..1; `value[1]`: samples written; `detail`: its error), 3 a channel's level (`value[0]`: dB), 4 a decoder's face (`value[0]`: lines said; `detail`: the newest), 5 a speaker whose output could not be made (`detail`: why), 6 a picture decoder's newest picture (`value[0]`: the image id `read_image` takes; `value[1]`: its bytes; `name`: the node's name; `ACTIVE`: finished) - 8.12.7 |
 
 ### 5.2 0.2 lists now served
 
@@ -1207,11 +1219,335 @@ interface whose control computes its next value from the readback (a knob that a
 value until the readback catches up, or two steps sent before the pass publishes would both be added to the old figure
 and one would be lost.
 
+### 8.12 The Patch page, part 1: the runtime in the pass, the graph's version and the plan
+
+The Patch page (the canvas, its parts bin, its faces and its two inspectors) is the standard window's default face. Before
+this section it was also where the patch RAN: the window's frame rebuilt the parts catalogue, applied START and STOP,
+opened and closed the patch's radios, compiled the plan and published each radio's set, and ran the rule that leaving the
+view stops the patch. So the patch lists (`PATCH_RADIOS`, `PATCH_PROBLEMS`, `PATCH_PARTS`), `read_node_spectrum` and the
+`running` bit of `FOXAPI_EVENT_PATCH` only moved while a window was drawing the view. And the page's edit of the graph was
+the one place an interface and the engine shared a document without a protocol: the window merged its draft over the
+engine's graph "as it is now" and the engine then replaced its graph with the result, which is correct only while the merge
+and the apply are one synchronous step. This part moves the runtime into the engine's pass, gives the graph a version
+that is published with it, makes the engine do the merge, and adds the plan the page draws. The page's other reads (the
+device choices, the live readouts, the decoders' lines) are part 2, further down this section; the pictures are part 3.
+**One op, one list, three facts, one field of an op, two fields of a list entry.**
+
+**8.12.1 The runtime is the pass's: `FOXAPP_OP_SET_PATCH_PAGE_OPEN` (0x8421, VIEW, LOCAL sessions only).** `ival[0]` 0 or 1:
+the standard window's patch view is showing. The engine's pass has a patch step between the plugins' step and the publish
+(`Engine::pumpPatch`), which while the flag is set runs exactly what the view ran, in the order it ran it: the parts
+catalogue is rebuilt from the loaded modules, START and STOP are applied (a stop closes every radio, finalises every file
+and gives the receiver its radio back), the radios are reconciled with the graph (the receiver's radio taken when the patch
+runs, devices opened on their workers, a centre or rate the radio reported written back into the graph), the plan is
+compiled, and each radio's set is built and published to its reader thread; and when the flag goes from set to clear, the
+close rule: the patch stops (`FOXAPI_RX_PATCH_RUNNING` clears), every patch radio closes, the receiver gets its radio back
+and its decoders return. Nothing starts a patch by itself: opening the view runs the step, START runs the patch, as before.
+
+- **The default is "showing"**, and it is the engine's, not an interface's: the view is the window's first face, so an
+  engine nobody has told behaves as the first frame of a window that is showing it. An interface that has no patch view
+  sends 0 once (the standard window sends it when it shows the receiver face and once at start-up when its saved
+  configuration says so). The op is idempotent and never refused for its value; a REMOTE session is `DENIED` as every
+  `FOXAPP_OP_*`.
+- **What an interface can now rely on.** The patch lists, the plan, the node spectra and the `running` bit move with the
+  pass whether or not any window draws; a graph edit is applied at the head of the pass and the radios' sets are built
+  from it in the same pass, so a `SET_GRAPH` and the sets it caused are one pass apart at most. With the flag clear the
+  step does nothing but the close rule: the plan, the catalogue and the lists stand where the last pass left them.
+- **What a pass costs.** The step allocates by design while the view is showing (the catalogue is rebuilt from the module
+  list, the plan is compiled into vectors, a set is built when its signature moves); only the PUBLISH side is held to
+  "a settled pass allocates nothing" (`tests/test_engine_publish_alloc.cpp`, F7). The step is a bounded number of
+  small allocations, once a pass, never per sample.
+- **Retired with it:** the receiver pipeline's own patch runner (`Pipeline::patchRunner()`), which nothing in the engine
+  publishes a set to since each patch radio owns its runner (0.99.17), was reaped and cleared by the window's frame; both
+  calls are gone (nothing moved: a runner no one publishes to has nothing to retire). `EngineHost::patchPageOpen` and
+  `EngineHost::onPatchGraphChanged` are gone: the engine reads its own flag, and a change to the graph is a version.
+
+**8.12.2 The graph's identity and a merge-safe `FOXAPP_OP_PATCH_SET_GRAPH`.** Three facts, published in the SAME block as
+`fact.patch.graph` (so they move together, with `listSeq`, and an interface that wants one consistent look reads them in
+this order and checks the first again):
+
+| Fact | Value |
+|---|---|
+| `fact.patch.version` | the graph's version, a decimal: a counter the engine bumps on EVERY accepted change to the graph - an edit from any session, a document, and the engine's own (START's and ALL OFF's switches, a centre or rate the runtime wrote back, a device named at the take-over). It starts at 1 for the empty graph, so 0 means "no version". Not a hash: it never repeats, and it never goes back |
+| `fact.patch.epoch` | the number of documents loaded, a decimal (the epoch the event already carried): it moves when a NEW patch replaces the graph (`FOXAPP_PATCH_GRAPH_DOCUMENT`) |
+| `fact.patch.runnable` | `1` or `0`: whether the plan can run, as the page lettered it (8.12.3) |
+
+`fact.patch.graph` stays LOCAL; the three above name nothing on the machine and are not.
+
+**The op.** `ival[0]` bit 0 is the document flag as before. **`ival[1]` is the version the sender's graph was edited from**
+(0, the default, is "unconditional" and behaves exactly as the op always did: the graph sent replaces the engine's). With a
+version the engine MERGES:
+
+1. the version is the current one: the graph sent replaces the engine's, as above;
+2. the version is an earlier one the engine still holds (it keeps the graphs of its last 8 versions, one per version it
+   noticed; a document clears them): the engine applies `core::patch::rebaseDraft(that version's graph, the graph sent,
+   the graph now)`. What the sender changed - the nodes it added and removed, a position, a size, a name, a centre (the
+   value and its `centreChosen`), a mode, a plugin, a device, a rate, a squelch, a switch, the wires it made and cut -
+   wins; everything else is the engine's. A node the engine removed meanwhile stays removed. The merged graph is what the
+   engine holds afterwards. The result carries `FOXAPI_RESULT_CLAMPED` and `applied[1] = 1`;
+3. the version is one the engine no longer holds (older than 8 changes, or from before a document, or one it never had):
+   `FOXAPI_FAILED`, "the patch graph moved on since this edit was started; it was not applied". Nothing changes. The sender
+   reads the graph again and decides;
+4. a negative version is `FOXAPI_BAD_ARGUMENT`; a document ignores the version.
+
+**`applied[0]` is the version of the graph after the command**, so a sender learns its new base from the answer - and the
+answer, as every answer, is delivered only after the publish that shows the state it describes, so the next read of
+`fact.patch.graph` is at that version or later. A text the engine cannot honour is refused whole as before
+(`FOXAPI_BAD_ARGUMENT`), the version unmoved.
+
+**Why the engine merges.** A command reaches the engine a pass after it was sent, and the graph it replaces is the engine's
+as of THAT pass, not the one the sender last read. Anything the pass did in between is lost by a replacement: START
+throws the radios' switches on and then marks the patch running; a stale document applied after it puts the switches back
+off - the patch is "running" with every radio off and nothing opens until the next START. A merge on the sender's side
+cannot close this, because "now" is a publish old; moved to where "now" is exact, it does (`tests/test_engine_api_03.cpp`,
+G13-2, red with the version left out and green with it, for START and for a second session).
+
+**How an interface uses it.** Read `fact.patch.version`, `fact.patch.epoch`, `fact.patch.graph` and `fact.patch.version`
+again; if the two versions differ a pass was published between the reads, ask again. Edit a copy. Send the whole copy with
+`ival[1]` = the version read. **Do not adopt the engine's graph until the answer names the new version**: the published
+graph is the old one until the pass has applied the command, and a copy that is overwritten with it snaps a node that is
+being dragged back where it was. When the answer arrives (OK, `applied[0]` = V) and a publish at version V or later has been
+read, take that graph as the new base and put the edits made since the send on top of it with the same
+`rebaseDraft` (the edit and the base are both in the window's hands). One command in flight at a time is the simplest
+discipline and the one the standard window uses; more than one is correct too (the engine merges each against the version
+named), only wasteful. A `FOXAPI_FAILED` or `FOXAPI_BAD_ARGUMENT` answer means "show the engine's graph".
+
+`FOXAPI_EVENT_PATCH` (10) is raised, as before, in the pass in which the epoch, whether the patch runs or the graph moved;
+the graph moving is now the version moving, so the engine's own changes to it raise the event, and `value[0]`, `value[1]`
+are unchanged. An interface that reads the facts needs no event.
+
+**8.12.3 The plan.** `Plan::runnable` and the plan's channels and decoders are what the page's marks, its inspector and its
+"fed N Hz" lines draw from; none could be derived from `PATCH_PROBLEMS` (which an interface could read, and which
+cannot say whether the patch has anything to do). They are served now:
+
+- **`PATCH_PLAN` (45)**, one entry per planned channel, then one per planned decoder, in the plan's order. `id`: the node.
+  A channel: `detail` `channel`; `value[0]` its offset from its radio's centre in Hz (signed), `[1]` the rate it outputs,
+  `[2]` the decimation from the radio's rate, `[3]` the radio node it is cut from. A decoder: `name` the plugin's key (a
+  picture decoder's ends `#image`, as in `PATCH_PARTS`); `detail` what feeds it - `decoder:radio` (an I/Q decoder wired
+  to the radio: the whole capture, the radio's centre at DC), `decoder:channel` (an I/Q decoder on a channel: the
+  channel's slice, the channel's frequency at DC) or `decoder:audio` (an audio decoder behind a demodulator);
+  `value[0]` the rate the plugin is created at, `[1]` the rate of the source, `[2]` the RF centre in Hz at DC (I/Q
+  decoders; 0 for audio), `[3]` the radio node it runs on. The plan is compiled against the radios as they are (the
+  open device's own rate and centre, or the node's settings before it opens), once a pass.
+- **`fact.patch.runnable`**: `1` when nothing blocking was found and there is something to run. The two marks only an
+  attempt can find are added after the compile, and they differ, and the difference is kept: **a radio that would not
+  open is a problem and clears `runnable`; a plugin that refused to start is a problem (`PluginRefused` in
+  `PATCH_PROBLEMS`) and does not** - the page has always drawn "This patch can run." beside a refused plugin, and its
+  words say so. (Whether that is right is the owner's; an interface that wants the other reading ORs the two itself.)
+- **`PATCH_PROBLEMS` `name`** is the problem's code as a decimal: 0 `NothingFeedsIt`, 1 `NotFedByARadio`, 2
+  `NoFrequency`, 3 `OutOfBand`, 4 `RateUnreachable`, **5 `NothingListens` (advisory)**, 6 `NoPlugin`, 7 `PluginMissing`, 8
+  `PluginWrongFeed`, 9 `DecoderTooFast`, 10 `PluginRefused`, 11 `NoDevice`, 12 `DeviceTwice`, 13 `RadioFailed`, **14
+  `NoTracks` (advisory)**. Advisory problems do not stop a patch running. `detail` is the sentence, in the language in
+  force. The codes are append-only, pinned by a test.
+- **`PATCH_RADIOS`** gains `value[1]`, an open radio's AIR centre in Hz (its own readback, which may be below 0 Hz through
+  an up-converter; 0 for a radio that is not open); `value[2]`, 1 for a radio whose device is still being opened on its
+  worker (it was not listed at all until it opened: such an entry has no `ACTIVE`, no `FAULT` and a device name from the
+  node's setting); and a `detail` that is the line the face prints under the radio, which for a RUNNING radio is not
+  only a fault: the open that refused the rate asked for and runs at its own, or a device that would not take a retune,
+  leaves a note (`FAULT` stays the fault's alone - a radio with a note and no fault is `ACTIVE` and not `FAULT`).
+- **`PATCH_PARTS`** is hashed by content now, not by count: a module replaced by another keeps the count and used to leave the
+  list stale.
+
+**Timing.** The plan, the marks and the radios' figures trail an edit by the pass that applies it and the pass that compiles
+it (they are one pass: the edit is a command, applied at the head, and the compile is in the same pass); an interface that
+sends an edit and draws in the same frame draws the old plan for a frame. A node an interface adds appears unmarked for a
+frame. The spectrum is read at the call (section 7); the squelch gate, the speakers' levels and the decoders' faces are
+part 2 (`PATCH_LIVE`).
+
+**What moves `listSeq`, beyond 8.1 to 8.11.** The version (so every change to the graph, whoever made it, moves it; the
+hash of the fields, which it replaces as the event's trigger, stays in the fingerprint), the plan (every figure of every
+channel and decoder, and `runnable`), the parts bin (every entry's key, name, input, rate, picture and track bits), an
+open radio's centre. The block, the facts and the lists are built only when it moves. **Nothing in the publish allocates
+in a settled pass**; noticing a change to the graph is one comparison with the newest retained version, and allocates
+only when something changed.
+
+**How the window reads it** (what part 1 of the port holds the engine to):
+
+| The window draws or does | From |
+|---|---|
+| the draft: the graph it edits, the base it was edited from, the version and the epoch | `fact.patch.version`, `fact.patch.epoch`, `fact.patch.graph` of ONE look (the version read again); a draft is never made "in step" with a graph that has not been published |
+| a commit | `FOXAPP_OP_PATCH_SET_GRAPH` through `submit_text`, `ival[1]` the draft's base version, the ticket kept; one in flight; `FOXAPI_BUSY` keeps the edit in the draft and sends it next frame |
+| the commit's answer | `poll_results`: OK with `applied[0]` the new version, or the refusal that shows the engine's graph |
+| a new document (the config's patch, a patch file) | the same op flagged `FOXAPP_PATCH_GRAPH_DOCUMENT` |
+| the rail's chip | `FOXAPI_RX_PATCH_RUNNING` and the node count of the look |
+| the view is showing, and the receiver face | `FOXAPP_OP_SET_PATCH_PAGE_OPEN` |
+| a Radio part's starting device | `FOXAPP_OP_SCAN_NATIVE_ONLY`, then the list it fills, a pass later |
+
+#### 8.12, part 2: the devices, the live readings and the decoders' lines
+
+Part 1 moved the runtime into the pass and served the plan. What the page still read out of the engine's own objects, every
+frame, was the rest of what it draws: the parts bin's last bit, the devices a Radio can be set to and the receiver's radio,
+the converter in force for a Radio's device, what the running nodes are doing at this moment (a squelch gate, a speaker's
+level, a channel's level, a decoder's newest line), which Text out a decoder's line went to, and the recordings a Radio can
+play. This part serves them. **Two lists, an extra figure on each of two lists, two facts and two families of facts, one
+op.** Decoded pictures stay for part 3.
+
+**8.12.4 The devices a Radio can be set to.**
+
+- **`PATCH_DEVICES` (46)** is the Radio's Device combo as the engine composes it (`Engine::patchDeviceChoices`, the one rule,
+  which the engine also names a node's device by): the signal generator, then the I/Q recordings it has listed, the native
+  radios (not a Pluto: its address is typed in the Source section), the SoapySDR radios, the sound cards, and the radio the
+  receiver has lent to the patch when no list shows it. `id`: index + 1; `name`: the label as the combo letters it, in the
+  language in force; `detail`: the device KEY a Radio node names it by (`core/patch_devices.hpp`; **LOCAL sessions only**, a
+  REMOTE session gets `""`, because a key names hardware, and a recording's a path, on this machine; cut at 159 bytes);
+  `value[0]`: a recording's own rate in Hz (the rate its header says: a Radio on a recording runs at it), else 0. The key
+  whole is `fact.patch.device.<id>` (LOCAL), for the id of the entry. A node's label for a key the list does not hold (a
+  SoapySDR radio is only listed after a scan; a recording is named by its file whether or not it was listed) is a function
+  of the key and the list, `core::patch::deviceLabelFor`, which the engine and the standard window share.
+- **`fact.patch.receiverRadio`** (LOCAL): the key of the receiver's radio as a Radio node would name it - the radio lent to
+  the patch while the patch runs, else the one the receiver has open, `""` for the generator, a file or a sound card the
+  receiver has not opened as a radio. What a new Radio starts on first. The interface asks `FOXAPI_RX_DEVICE_OPEN` for
+  "the receiver has it open now" (the list marks that row "lent to the patch when it starts"); the lent one is not open.
+- **`fact.patch.receiverCentre`**: the AIR centre in Hz the receiver's radio carries (`%.17g`, so it reads back to the digit),
+  `""` when it has never been tuned. **Whether it exists** moves `listSeq`; **its value does not**, because a retune would
+  rebuild the block on every tune: the value is as old as the last time something else moved it. The live figure is the
+  state's `centreHz`, which is the same number (it is `activeSource().centerFrequencyHz()`); the standard window starts a
+  Radio on the state's figure when the fact is not empty.
+- **`fact.patch.conv.<node>`**: for every Radio node in the graph that has a device, the converter IN FORCE for that device,
+  `"<mode> <LO Hz> <inverted>"` spelled as `fact.converter.live` spells it (mode 0 off, 1 up, 2 down; the LO to the digit it
+  reads back by; 1 inverted) - the setting `core::radioCentreTakeable` judges a centre typed on the node by (a sound card's is
+  the one its format allows, a recording's the receiver's I/Q-file converter). Absent for a Radio with no device and for any
+  node that is not a Radio. It speaks for the device the ENGINE has the node on: a device an interface has chosen and not yet
+  sent has none yet, and an interface that judges a typed centre in that window judges it as a radio with no converter, and
+  lets the engine be the judge when the edit lands. The setting, the node and the device are inputs of the block's
+  fingerprint.
+- **`FOXAPP_OP_PATCH_LIST_RECORDINGS`** (0x8422, SETTINGS, **LOCAL sessions only**), no arguments: the engine lists the
+  I/Q recordings of the record folder (`fact.recorder.dir`) and of `FOXSDR_PATCH_SAMPLES`, on its own pass - at most 200
+  listed and at most 64 files' headers opened by one listing, a file already read is not opened again until it changes - and
+  the recordings rows of `PATCH_DEVICES` (and `RECORDINGS` kind 3) change as the answer. Nothing lists them by itself. The
+  Radio's device list sends it when it opens, and "Look for radios" sends it with the scan. The listing is now in the
+  fingerprint **by what it names** (each file, its key and its rate), not by its number: a relisting that finds other files
+  moves the block.
+- **`PATCH_PARTS` `value[2]`**: 1 when the module also has a track source (it can put targets on a Map part), else 0. A picture
+  decoder is still the key's `#image` suffix (`FOXAPI_LIST_PATCH_PARTS` says so in `kImageKeySuffix`; there is no bit for it).
+
+**8.12.5 What the running nodes are doing now: `PATCH_LIVE` (47).** The page draws four figures at the frame rate that other
+threads own: a demodulator's squelch gate, a speaker's level and count, a channel's level, a decoder's newest line. They are
+copied by the pass into **a block of their own** (once a pass, on the pumping thread), because they change every pass a patch
+runs: carried in the block of lists they would rebuild it - its facts, its plugin sizes - every pass, and make every interface
+re-read every list every pass; read at the call from the objects they live in they would be read through a pointer to a radio
+that the pass after may have closed. So: **`PATCH_LIVE` never moves `listSeq`, and an interface reads it each time it draws.**
+The block has a fingerprint of its own (hashed from the readings, with the texts that can move without a number moving - a
+speaker's error): **a pass that finds the same readings builds nothing and allocates nothing**. One entry for each node that
+has something; `id` is the node and `value[2]` the kind:
+
+| `value[2]` | Node | `value[0]` | `value[1]` | `name` | `detail` | flags |
+|---|---|---|---|---|---|---|
+| 1 | a demodulator with a squelch gate running (its channel's radio is open and the channel has run a block) | the level the gate is judging, dB | | | | `ACTIVE`: the gate is open |
+| 2 | an audio sink with an output | its newest block's peak, 0..1 | samples written since the output was made | what it plays to (`WAV  patch-4-Name_20260923_101500.wav`, `Playing on ...`; cut at 95) | the output's error, `""` while it takes sound | |
+| 3 | a planned channel whose radio runs | the channel's level, dB, measured off its radio's spectrum | | | | |
+| 4 | a planned decoder that is running (not one that refused to start) | lines it has said since it was built - 0 for a decoder that has said none, which is itself the answer to "is it running" | | | its newest line (cut at 159) | |
+| 5 | an audio sink whose output could not be made | | | | why (the folder cannot be made, ...) | |
+| 6 | a picture decoder that has made a picture (8.12.7), whether or not the patch runs | the newest picture's id (`read_image`) | its bytes | the node's name | | `ACTIVE`: the decoder has finished the picture |
+
+A node can have rows of more than one kind (a speaker with an output has kind 2 and, when it also has an error line of its
+own, kind 5). The nodes' **spectra** are not here: they are read with `read_node_spectrum`, at the call, as before. A row is
+at most one pass old; the bar and the figures cannot show that.
+
+**8.12.6 Which decoder said a line: `DECODER_LINES` `value[0]`.** The originating patch decoder's node id; 0 for the
+receiver's own decoders. A patch decoder's line is in the backlog when its Text output reaches a Text out (the rule the page
+always had), and now says which decoder it came from, so an interface that keeps a face for each Text out routes a line to
+every Text out that decoder is wired to - by its own copy of the graph - and keeps a line from the receiver's decoders off
+them all. (A decoder wired to no Text out says nothing here; its face is its row in `PATCH_LIVE`.)
+
+**8.12.7 The decoded pictures: `read_image`, `FOXAPI_EVENT_DECODER_IMAGE` and `PATCH_LIVE` kind 6.** A patch decoder that makes
+pictures (a weather-satellite or slow-scan decoder: a module with the plugin ABI's image-decoder capability) has always had
+its newest picture on its face on the canvas. The picture reached the face through a hook the engine's pump called into the
+window (`EngineHost::onPatchPicture`), which wrote the window's own picture map from whichever thread pumps - and
+`read_image`, which 0.2's table has for exactly this, answered `UNSUPPORTED` and `FOXAPI_CAP_IMAGES` was clear. This part serves
+the picture through the table and deletes the hook. **`read_image` and `FOXAPI_CAP_IMAGES` are served; one event has its
+patch meaning; one `PATCH_LIVE` kind and two appended fields of `FoxImageInfo` are new.** The receiver's own plugins' pictures
+(the plugin windows) stay the host process's, with the windows they are drawn in (section 10).
+
+- **`read_image(session, imageId, info, pixels, cap)` is 0.2's contract, kept, and now exact.** It copies up to `cap` bytes of
+  the picture the id names into `pixels` and **returns the picture's full byte count**, whatever `cap` copied: a caller that
+  gets a count above its `cap` knows it was short and asks again with room. `info` is optional, and so is `pixels` (with a
+  `cap` of 0): both absent is the size alone, and `info` alone is the size and the shape. The pixels are tightly packed rows,
+  no padding, `width * height * 1` (`format` 1, `GRAY8`) or `* 3` (`format` 2, `RGB24`, R then G then B) bytes -
+  `CASCADE_IMAGE_*`'s two formats, which are all a decoder may make; there is no palette. `info->width`, `height`, `format`,
+  `bytes` and `caption` (the node's name, cut at 63 bytes) are 0.2's fields. A picture is at most
+  `CASCADE_IMAGE_MAX_DIM` (16384) on a side, 805 306 368 bytes: the signed 32-bit return holds every picture the host
+  accepts (a larger one is `FAILED`, and none exists). Results: `BAD_ARGUMENT` for a `cap` with no `pixels`, an `info` shorter
+  than `FOXAPI_MIN_IMAGE_INFO`, or no session; `NOT_FOUND` for an id that names no picture now - one that was never given, 0,
+  one a newer picture has replaced, or a node that has gone; otherwise the byte count.
+- **An id names one picture, for good, and the picture is whole or the read is not made.** The engine gives each picture the next
+  number of a counter that starts at 1 and is never reused (the id is the picture's identity: a new picture is a new id, so "the
+  id moved" is "the pixels changed"), and keeps **the newest picture of each picture-decoder node** - not a history: once a
+  newer picture has replaced it, the older id is `NOT_FOUND` and a reader that fell behind skips to the newest, as the taps do.
+  An interface that must not miss a picture reads on the event; one that draws reads the row (below).
+- **How a reader can never see half a picture (the store's threading design).** A picture is produced on whichever thread the
+  decoder's radio reads on, handed to the engine's pass by the runner (the newest per node, as ever), and **moved in whole**
+  behind a `const` pointer in an immutable set that the pass builds when something moved and swaps into the host in one step.
+  A reader takes the set's pointer under the host's short lock and copies the pixels outside it, on its own thread: the picture
+  it holds is never written again by anyone, so what it copies is whole, and a picture the pass replaces meanwhile is still
+  whole in its hand. The pass waits for no reader and no reader for the pass; a settled pass builds nothing and allocates
+  nothing, and a new picture costs a bounded handful of allocations that does not grow with its size (the pixels are moved, not
+  copied: a 1.4 MB picture costs the publish under a kilobyte).
+- **`FOXAPI_EVENT_DECODER_IMAGE` (6, 0.2's event) is raised once for a picture that arrived, in the pass that took it,** after
+  the set that holds it is in place, so an interface that is told can read at once. For a PATCH decoder: `target`: the patch
+  node; `value[0]`: the image id; `value[1]`: 1 (a patch node - the receiver's own plugins' pictures are not served, section 10);
+  `text`: the node's name. An interface subscribes with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_DECODER_IMAGE)` like any other event,
+  and a full ring raises `FOXAPI_EVENT_OVERFLOW` as for any other, which is why the row below exists. `FOXAPI_CAP_DECODERS` stays
+  clear: it also promises the text events and a decoder list, which this engine serves as `DECODER_LINES` and not as events.
+- **`PATCH_LIVE` kind 6 is the state to the event's edge** (section 8.12.5; it moves no `listSeq`, an interface reads it each time it
+  draws): one row for each node that holds a picture. `id`: the node; `value[0]`: the newest picture's id; `value[1]`: its byte
+  count (a reader's buffer, in one call); `name`: the node's name; `ACTIVE`: the decoder has finished the picture (`complete`).
+  A session that opened after the picture arrived has no event for it and reads the row; so does one whose event ring
+  overflowed. **The row, and the picture, stay while the node is in the graph - whether or not the patch runs**: STOP does not
+  take the picture off the face (as it never did), and nothing more arrives. A node the graph no longer holds takes its
+  picture with it (a pass later than the removal at the most); **a patch document takes every picture** - the nodes of a document
+  are new, and may carry the old ones' ids, so a picture is not shown on a node that is not the one that made it (an edit with
+  `SET_GRAPH` that is not a document keeps them).
+- **`FoxImageInfo` grew at its end (rule 4):** `complete` (0 while the decoder is still receiving the picture - the plugin
+  ABI's `complete` - 1 when it is finished), a reserved word and `sequence` (the decoder's own count of the picture's frames). A
+  caller that gives `FOXAPI_MIN_IMAGE_INFO` bytes gets 0.2's fields and none of these; the returned `structSize` says how much was
+  written. `FOXAPI_MIN_IMAGE_INFO` is unchanged.
+- **REMOTE sessions.** A picture is decoded traffic, like the lines of `DECODER_LINES`, which a REMOTE session already reads (the
+  decoded text is not a path or a device on this machine, so nothing is withheld from a REMOTE session and nothing is
+  `LOCAL`-only); the web remote's page already shows the receiver's plugin pictures. So `read_image`, the event and the row are the
+  same to a REMOTE session as to a LOCAL one, and `FOXAPI_GRANT_VIEW` (every session has it) is the only grant needed. There is
+  no reduced picture: a transport that must limit a link slices the bytes it forwards (TRANSPORTS.md's image message is on
+  request after the event). The node's name in `caption`, the event's `text` and the row's `name` is the name the graph already
+  shows a REMOTE session in `PATCH_NODES`.
+- **What the standard window does with it.** It no longer keeps the picture. A Decoder face asks `PATCH_LIVE` for its node's picture
+  row; when the id differs from the texture it holds, it reads the picture with `read_image` (the row's byte count sizes the
+  buffer), checks that the shape describes the bytes it got, uploads them on its own thread - where the GL context is current,
+  as before - and lets the pixels go: only the texture and the picture's figures are kept. A `NOT_FOUND` (the picture moved on
+  between the row and the read), or an answer that is not a picture, leaves the texture on the face as it is and the next
+  frame asks again of the row.
+
+**What moves `listSeq`, beyond 8.12.3.** The track bit (it was already hashed, and is now served), the listing of the
+recordings by content, the receiver's lent radio (whether it is lent, its kind, its arguments and its label), whether the
+receiver's radio has ever been tuned, and the devices the lists above already hashed. Not the readings of `PATCH_LIVE` (a picture is one of them), not
+the value of `fact.patch.receiverCentre`.
+
+**How the window reads it** (what part 2 of the port holds the engine to):
+
+| The window draws or does | From |
+|---|---|
+| the parts bin (the keys, their twins, the labels and tips), the Decoder inspector's plugin combo, the Map part's sources | `PATCH_PARTS` (input in `value[0]`, rate in `value[1]`, track bit in `value[2]`, picture in the key's suffix), as the core's `DecoderInfo` list |
+| the canvas's marks, "This patch can run", "N channel(s), decimate by D", "fed N Hz", the node's problems, a Display's slice and markers | `PATCH_PLAN`, `PATCH_PROBLEMS` and `fact.patch.runnable`, as the core's `Plan` |
+| a Radio's face and inspector: its rate, its air centre, "opening...", the line under it, the START lamp's "n of m radios open", a decoder that refused to start | `PATCH_RADIOS`, `PATCH_NODES`' `REFUSED`, `FOXAPI_RX_PATCH_RUNNING` |
+| a Radio's device label, the Device combo, a recording's rate, "lent to the patch when it starts", the starter Radio's device and centre | `PATCH_DEVICES`, `fact.patch.receiverRadio`, `fact.patch.receiverCentre` with the state's `centreHz` and `FOXAPI_RX_DEVICE_OPEN` |
+| a typed centre judged (and the sentence that refuses it) | `fact.patch.conv.<node>` |
+| the gate, the channels' numbers, the speakers' bars and seconds, a Spectrum part's trace and waterfall, a decoder's count and line, a speaker with no output | `PATCH_LIVE` once a frame, `read_node_spectrum` for the radio's spectrum (the cursor is the newest sequence held) |
+| a Text out's lines | `DECODER_LINES` (the window's copy of it) and `value[0]`, routed by the draft's wires |
+| a picture decoder's picture | `PATCH_LIVE` kind 6 (the id, the byte count), then `read_image` when the id has moved - uploaded once for each picture |
+| the Sound goes to combo, "Files go in ..." | `AUDIO_DEVICES`, `fact.recorder.dir` |
+| START, STOP, ALL OFF, "Look for radios", the device list opening | `FOXAPI_OP_PATCH_RUN`, `FOXAPI_OP_PATCH_ALL_OFF`, `FOXAPP_OP_PATCH_LOOK_FOR_RADIOS`, `FOXAPI_OP_SCAN_DEVICES`, `FOXAPP_OP_PATCH_RADIO_LIST_OPENED` and `FOXAPP_OP_PATCH_LIST_RECORDINGS`, through the session: applied by the next pass |
+
+The Map part's tracks and paths are the host process's (the plugin ABI polls a track source from the interface's thread at the
+frame rate); the Map's chart, the waterfall's memory and the pictures' textures are the window's own (the pictures themselves are
+the engine's, 8.12.7).
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
 whether it runs moved in the pass; `value[0]`: the epoch, `value[1]`: 1
 running.
+
+`FOXAPI_EVENT_DECODER_IMAGE` (6, 0.2's event, served for the patch decoders' pictures): a picture arrived for a patch decoder in
+this pass. `target`: the patch node; `value[0]`: the image id for `read_image`; `value[1]`: 1; `text`: the node's name. Raised after
+the picture can be read (section 8.12.7). Subscribe with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_DECODER_IMAGE)`.
 
 `FOXAPI_EVENT_MUTE_TUNE_AWAY` (11): the receiver tuned off the presets of plugins that
 are still running and muting the audio, and the engine holds the mute and asks whether to
@@ -1266,6 +1602,16 @@ could not be written is `FAILED` (the note says "Could not write <path>"). Nothi
 in the first two. A REMOTE session is `DENIED`. The text is at most `FOXAPI_MAX_LONG_TEXT` (1
 MiB): about 130 000 ids of seven digits.
 
+`FOXAPP_OP_SET_PATCH_PAGE_OPEN` (0x8421, VIEW, **LOCAL sessions only**): `ival[0]` 0 or 1, whether the standard window's patch
+view is showing. The engine's pass runs the patch runtime while it is (the default) and its close rule when it goes (section 8.12).
+`FOXAPP_OP_PATCH_SET_GRAPH`'s `ival[1]` is the graph version the sender edited from; the engine merges a stale one, and the
+answer's `applied[0]` is the new version (section 8.12).
+
+`FOXAPP_OP_PATCH_LIST_RECORDINGS` (0x8422, SETTINGS, **LOCAL sessions only**): no arguments. The engine lists the I/Q
+recordings of the record folder and of `FOXSDR_PATCH_SAMPLES` on its own pass (a bounded number of headers opened; a file
+already read is not opened again until it changes), and the recordings of `PATCH_DEVICES` and `RECORDINGS` kind 3 change as the
+answer. A VIEW-only session is `DENIED`, as is a REMOTE one (section 8.12, part 2).
+
 `FOXAPP_OP_SOUND_CARD_PICK` (0x8420, SETTINGS, **LOCAL sessions only**): `ival[0]` is a `SOUND_CARDS` entry's `id`; the
 engine puts that card in the sound card form (and keeps, or re-chooses, the rate), see 8.10. `FOXAPP_OP_SOUND_CARD_FORM`
 takes a field mask in `ival[1]` (8.10); 0 is the whole form, as it always was.
@@ -1280,8 +1626,10 @@ reads the graph back and edits it whole through
 `FOXAPP_OP_PATCH_SET_GRAPH` with `submit_text`), the transmitter's microphone
 list and meters (8), device-scan diagnostics (9: served in 0.3 for the SoapySDR runtime's own account, `SCAN_EVIDENCE`, section 8.10), diagnostics (12), updates (13), zoomed spectrum (14),
 multi-VFO (15), a settings catalogue (16). The AUDIO stream, the settings
-store and the decoders' text and image EVENTS are still not served by this
-engine (their capability bits are clear).
+store and the decoders' TEXT events are still not served by this engine (their capability
+bits are clear); the decoders' image event and `read_image` are served for the patch decoders'
+pictures (8.12.7), and the receiver's own plugins' pictures are not (they are the plugin
+windows' and stay with them, below).
 
 **The plugin windows** (a plugin's own panel, drawn by the plugin's code
 through the plugin ABI) are not an interface's to draw and get no API: they

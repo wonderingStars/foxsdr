@@ -28,8 +28,6 @@ void EngineHost::onBookmarksChanged() {}
 void EngineHost::openPluginWindowsFor(const cascade::core::LoadedPlugin&) {}
 void EngineHost::onReceiverPositionApplied(double, double) {}
 void EngineHost::onConverterChanged(bool) {}
-void EngineHost::onPatchGraphChanged() {}
-void EngineHost::onPatchPicture(cascade::core::patch::NodeId, cascade::core::HostImage&&) {}
 void EngineHost::onGpsFixApplied() {}
 void EngineHost::onCatalogueFetchStarting() {}
 void EngineHost::onCatalogueResult() {}
@@ -43,7 +41,6 @@ void EngineHost::attachTrackInfo(const CascadeTrackInfoApi*) {}
 void EngineHost::showDemonstrationInstrument(const cascade::core::HostInstrument&) {}
 std::vector<std::string> EngineHost::drainTrackInfoText() { return {}; }
 
-bool EngineHost::patchPageOpen() const { return false; }
 void EngineHost::enrichWebTrack(cascade::net::RadioStatus::Track&) {}
 void EngineHost::fillWebImages(cascade::net::RadioStatus&) {}
 

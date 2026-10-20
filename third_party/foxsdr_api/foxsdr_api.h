@@ -724,7 +724,7 @@ typedef struct FoxCommandResult {
 #define FOXAPI_EVENT_TX_UNKEYED   3u  /* text: why the key opened on its own */
 #define FOXAPI_EVENT_NOTICE       4u  /* value[0]: level 1 info 2 warn 3 error; text */
 #define FOXAPI_EVENT_DECODER_TEXT 5u  /* target: decoder id; text: one output line */
-#define FOXAPI_EVENT_DECODER_IMAGE 6u /* target: decoder id; value[0]: image id for read_image */
+#define FOXAPI_EVENT_DECODER_IMAGE 6u /* target: decoder id; value[0]: image id for read_image. 0.3 (8.12): a PATCH decoder's picture - target: the patch node, value[1]: 1, text: the node's name; once a pass in which the node's newest picture changed */
 #define FOXAPI_EVENT_LIST_CHANGED 7u  /* target: FOXAPI_LIST_* */
 #define FOXAPI_EVENT_SESSION      8u  /* text: e.g. "keep-alive late" */
 #define FOXAPI_EVENT_OVERFLOW     9u  /* value[0]: events dropped */
@@ -780,13 +780,13 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_PATCH_NODES   26u /* id: node; name; detail: kind; value[0..1]: x, y; [2]: Hz; [3]: rate Hz; ACTIVE on, REFUSED, FAULT */
 #define FOXAPI_LIST_PATCH_WIRES   27u /* value[0]: from node, [1]: its port, [2]: to node, [3]: its port */
 #define FOXAPI_LIST_PATCH_PROBLEMS 28u /* id: node; name: problem; detail: what the page says */
-#define FOXAPI_LIST_PATCH_PARTS   29u /* the parts a graph may use: name; detail: key; value[0]: feed port type, [1]: rate Hz it needs */
+#define FOXAPI_LIST_PATCH_PARTS   29u /* the parts a graph may use: name; detail: key; value[0]: feed port type, [1]: rate Hz it needs, [2]: 1 when the module also has a track source (0.3, 8.12) */
 #define FOXAPI_LIST_RECORDINGS    30u /* name: file; detail: path (LOCAL only); value[0]: 1 I/Q 2 audio 3 patch, [1]: bytes, [2]: rate Hz, [3]: the take's seconds (0.3; live, like [1]); ACTIVE, STALLED, FULL */
-#define FOXAPI_LIST_DECODER_LINES 31u /* the decoder-output backlog, oldest first: id: line number; name: plugin; detail: text */
+#define FOXAPI_LIST_DECODER_LINES 31u /* the decoder-output backlog, oldest first: id: line number; name: plugin; detail: text; value[0]: the patch decoder node the line came from, 0 for the receiver's own decoders (0.3, 8.12) */
 #define FOXAPI_LIST_STORE_BLOCKED 32u /* name: file; detail: why it was refused */
 #define FOXAPI_LIST_STORE_UPDATES 33u /* name: catalogue id; detail: "from -> to" */
 #define FOXAPI_LIST_BAND_PLANS    34u /* the plans SET_BAND_PLAN takes: name; detail: id; ACTIVE */
-#define FOXAPI_LIST_PATCH_RADIOS  35u /* id: node; name: device; detail: error; value[0]: rate Hz; ACTIVE open, FAULT */
+#define FOXAPI_LIST_PATCH_RADIOS  35u /* id: node; name: device; detail: error, or for a running radio the note its face prints (0.3, 8.12); value[0]: rate Hz, [1]: an open radio's AIR centre Hz (0.3, 8.12), [2]: 1 while its open is on its worker (0.3, 8.12); ACTIVE open, FAULT */
 #define FOXAPI_LIST_MUTE_CAUSES   36u /* 0.3 (8.7): the plugins muting the receiver's audio now. name: plugin; detail: its module file name; value[0]: 1 when the mute is held after a tune-away; ACTIVE */
 #define FOXAPI_LIST_STALE_GRANTS  37u /* 0.3 (8.7): the tune grants no loaded module holds. name: the module file name; REFUSED when the host holds a record of that file that did not load */
 #define FOXAPI_LIST_PLUGIN_COMMANDS 38u /* 0.3 (8.8): the command keys the loaded modules have added. id: the command id (FOXAPI_OP_PLUGIN_COMMAND's ival[0]); name: the key's label; detail: the module file name */
@@ -797,6 +797,9 @@ typedef struct FoxEvent {
 #define FOXAPI_LIST_SOUND_CARDS   42u /* 0.3 (8.10): the sound card inputs as the last listing found them. id: index + 1 (what FOXAPP_OP_SOUND_CARD_PICK takes); name: "device (host API)"; detail: the host API; ACTIVE: the entry the form's card is */
 #define FOXAPI_LIST_SOUND_CARD_RATES 43u /* 0.3 (8.10): the rates the form's card offers in the form's format. value[0]: Hz of the card; EXCLUSIVE; ACTIVE: the form's rate. Empty when the card is not listed */
 #define FOXAPI_LIST_SOUND_CARD_FORM 44u /* 0.3 (8.10): ONE entry, the sound card form as the engine holds it. name: the device and detail: its host API (both "" to a REMOTE session; whole in fact.soundcard.device and .hostApi); value[0]: the card's rate Hz, [1]: the I/Q centre Hz, [2]: the channel (0 left, 1 right); IQ_STEREO, SWAP_IQ, PICKED */
+#define FOXAPI_LIST_PATCH_PLAN    45u /* 0.3 (8.12): the plan the patch page draws, one entry per planned channel and decoder. id: node; detail: "channel", or "decoder:radio" / "decoder:channel" / "decoder:audio" (what feeds it); name: a decoder's plugin key; value[0]: a channel's offset Hz from its radio's centre, a decoder's rate Hz it is created at; [1]: a channel's output rate Hz, a decoder's input rate Hz; [2]: a channel's decimation, an I/Q decoder's RF centre Hz at DC; [3]: the radio node it runs on */
+#define FOXAPI_LIST_PATCH_DEVICES 46u /* 0.3 (8.12): the devices a patch Radio can be set to, in the order the Radio's Device combo lists them: the generator, the I/Q recordings, the native radios, the SoapySDR radios, the sound cards, the receiver's lent radio when no list shows it. id: index + 1; name: the label; detail: the device KEY a Radio node names it by (LOCAL sessions only, else empty; cut at 159 bytes: fact.patch.device.<id> is the whole key); value[0]: a recording's own rate Hz, else 0 */
+#define FOXAPI_LIST_PATCH_LIVE    47u /* 0.3 (8.12): what the patch's running nodes are doing NOW, one entry per node that has something, taken once a pass (never moves listSeq; read it each time you draw). id: node; value[2]: the kind - 1 a demodulator's squelch (value[0]: the level it judges, dB; ACTIVE: the gate is open), 2 a speaker's output (name: what it plays to; value[0]: its newest peak 0..1; value[1]: samples written; detail: its error, "" none), 3 a channel's level (value[0]: dB), 4 a decoder's face (value[0]: lines said so far; detail: the newest line), 5 a speaker whose output could not be made (detail: why), 6 a picture decoder's newest picture (value[0]: the image id read_image takes, [1]: its bytes; name: its caption; ACTIVE: the decoder has finished it; the row stays while the node is in the graph, whether or not the patch runs) */
 
 #define FOXAPI_ITEM_ACTIVE    0x00000001u /* the selected / running / current entry */
 #define FOXAPI_ITEM_FAVOURITE 0x00000002u /* a bookmark marked as a favourite */
@@ -862,6 +865,11 @@ typedef struct FoxImageInfo {
     uint32_t format;            /* 1 = GRAY8, 2 = RGB24 (as CASCADE_IMAGE_*) */
     uint64_t bytes;             /* size of the pixel data */
     char caption[FOXAPI_NAME_CHARS];
+    /* 0.3 (8.12), APPENDED (rule 4: a caller that gives FOXAPI_MIN_IMAGE_INFO bytes gets the fields above and none of
+     * these): */
+    uint32_t complete;          /* 0 while the decoder is still receiving the picture, 1 when it is finished */
+    uint32_t reserved;
+    uint64_t sequence;          /* the decoder's own count of the picture's frames (a number that moves as it builds) */
 } FoxImageInfo;
 
 #define FOXAPI_MIN_IMAGE_INFO (offsetof(FoxImageInfo, caption) + FOXAPI_NAME_CHARS)
@@ -1010,7 +1018,11 @@ typedef struct FoxEngineApi {
     int32_t (FOXAPI_CALL *get_setting)(FoxSession *session, const char *key, char *buf, size_t cap);
 
     /* A decoded picture by the id a FOXAPI_EVENT_DECODER_IMAGE carried.
-     * Copies up to `cap` bytes of pixels; returns the full byte count. */
+     * Copies up to `cap` bytes of pixels; returns the full byte count.
+     * 0.3 (8.12): a picture is IMMUTABLE under its id and an id names it for as long as it is the newest picture of
+     * its decoder, so a read is whole or it is not made (NOT_FOUND once a newer picture has replaced it, or the
+     * decoder has gone; the newest id is in the FOXAPI_LIST_PATCH_LIVE row). `info` and `pixels` may each be NULL
+     * (`pixels` with cap 0): the call is then the size and the shape alone. */
     int32_t (FOXAPI_CALL *read_image)(FoxSession *session, uint64_t imageId, FoxImageInfo *info,
                                       uint8_t *pixels, size_t cap);
 

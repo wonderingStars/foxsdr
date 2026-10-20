@@ -27,7 +27,6 @@
 #include <string>
 #include <vector>
 
-#include "core/host_image.hpp"
 #include "core/patch_graph.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
@@ -73,11 +72,11 @@ public:
     // The converter for the radio in use changed: the LO field re-seeds (and
     // its error clears when `clearLoError`).
     virtual void onConverterChanged(bool clearLoError);
-    // The patch graph was changed by the engine (a radio's settings followed
-    // its device, START switched radios on): the canvas re-serialises.
-    virtual void onPatchGraphChanged();
-    // A patch decoder node's newest picture, for its face.
-    virtual void onPatchPicture(cascade::core::patch::NodeId node, cascade::core::HostImage&& img);
+    // (onPatchGraphChanged left with window port group 13: the engine's own
+    // changes to the patch graph move fact.patch.version, which the window
+    // reads in the block it draws from - API 0.3 8.12.)
+    // (onPatchPicture left with window port group 13, part c: a patch decoder's picture is the engine's now - the
+    // newest of each node is read through read_image, and announced by FOXAPI_EVENT_DECODER_IMAGE, API 0.3 8.12.)
     // A GPS fix was applied: the rail's position fold reveals itself.
     virtual void onGpsFixApplied();
     // The store: a catalogue fetch starts; a fetch or install result was
@@ -107,9 +106,8 @@ public:
     virtual std::vector<std::string> drainTrackInfoText();
 
     // --- WHAT THE WINDOW KNOWS THAT THE ENGINE ASKS ---------------------------------
-    // The Patch page is on screen (the patch runtime lists the sound cards
-    // for its inspector only then).
-    virtual bool patchPageOpen() const;
+    // (patchPageOpen left with window port group 13: the window tells the engine
+    // by FOXAPP_OP_SET_PATCH_PAGE_OPEN, Engine::patchPageOpen_.)
     // For the one publish: a track's enrichment from the track-info plugin,
     // and the decoded pictures. (The web listener's state, the counter's face
     // and the basemap plugin's figures are HANDED OVER by the front end since

@@ -1510,7 +1510,7 @@ int AppWindow::run(int frames) {
                         std::fprintf(stderr,
                                      "cascade: patch loaded from %s (%zu nodes, "
                                      "%d dropped)\n",
-                                     pf, engine_.patchGraph_.nodes().size(), pr.dropped);
+                                     pf, pr.graph.nodes().size(), pr.dropped);
                     } else {
                         std::fprintf(stderr, "cascade: %s is not a patch\n", pf);
                     }
@@ -2052,8 +2052,10 @@ int AppWindow::run(int frames) {
     if (inputScriptActive_) {
         std::printf("cascade: script steps run %zu of %zu\n", inputScriptPos_,
                     inputScript_.size());
+        // (The page's own graph: it holds every edit, where the engine's may
+        // be a pass behind the last frame's commit.)
         std::printf("cascade: patch after script:\n%s",
-                    cascade::core::patch::serialise(engine_.patchGraph_, patchUi_.view.pan.x,
+                    cascade::core::patch::serialise(patchDraft_, patchUi_.view.pan.x,
                                                     patchUi_.view.pan.y, patchUi_.view.zoom)
                         .c_str());
     }
@@ -2770,6 +2772,7 @@ void AppWindow::drawUi() {
     // The same for the Patch page's draft of the graph: every edit is
     // committed in the frame it is made, and this makes sure of it for a view
     // that stopped drawing part-way (a no-op when the draft holds no edit).
+    syncPatchPageOpen();
     commitPatchDraft();
     // THE KEY REQUEST IS REBUILT FROM NOTHING EVERY FRAME, and this is where
     // it is cleared. Whatever is holding the PTT down - the mouse on the big
@@ -2810,6 +2813,9 @@ void AppWindow::drawUi() {
     // frame used to be. A Stop scan press is likewise applied before the
     // scanner can tick once more.
     engine_.pumpPlugins();  // Engine: applyPluginApi, then scannerFrame
+    // THE PATCH RUNTIME (window port group 13): the catalogue, START and STOP, the radios, the compile and the sets -
+    // or, with the view not showing, the close rule. The window's frame drives none of it any more.
+    engine_.pumpPatch();    // Engine: the patch's step of the pass
     if (!pendingDropPath_.empty()) {
         const std::string dropped = std::move(pendingDropPath_);
         pendingDropPath_.clear();
@@ -9967,11 +9973,69 @@ void AppWindow::releasePatchPictureTextures() {
     for (auto& [node, pic] : patchPictures_) {
         (void)node;
         if (pic.tex != 0u) {
-            glDeleteTextures(1, &pic.tex);
+            patchPictureGl_.destroy(pic.tex);
             pic.tex = 0u;
         }
     }
     patchPictures_.clear();
+}
+
+// THE GL HALF OF A DECODED PICTURE: the texture made (or refilled) from tightly packed rows. Called on the window's thread
+// with the context current, which is the only thread a picture is ever touched on.
+unsigned int AppWindow::uploadPatchPictureGl(unsigned int tex, std::uint32_t width, std::uint32_t height,
+                                             std::uint32_t format, const std::uint8_t* pixels) {
+    if (tex == 0u) { glGenTextures(1, &tex); }
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Tightly packed rows, as the engine keeps them - not the 4-byte alignment OpenGL assumes, which shears a greyscale
+    // picture whose width is not a multiple of four.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const GLenum fmt = (format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0,
+                 fmt, GL_UNSIGNED_BYTE, pixels);
+    return tex;
+}
+
+void AppWindow::destroyPatchPictureGl(unsigned int tex) {
+    if (tex != 0u) { glDeleteTextures(1, &tex); }
+}
+
+// A DECODED PICTURE, FROM THE SESSION: PATCH_LIVE's picture row named a picture this face has not shown (its id moved), and
+// read_image copies it - whole, because a picture is immutable under its id - into the window's scratch. The row's byte
+// count sizes the buffer; the call's own return is believed over it (a picture that was replaced between the row and the
+// read is NOT_FOUND, the next frame's row names the newer one, and the texture on show stays). Nothing is kept but the
+// texture: the pixels are the scratch's and the next picture's.
+bool AppWindow::takePatchPicture(PatchPicture& pic, const PatchLiveRow& live) {
+    if (uiSession_ == nullptr || engineApi_ == nullptr || live.v0 < 1.0) { return false; }
+    const std::uint64_t id = static_cast<std::uint64_t>(live.v0);
+    const auto bytesOf = [](double v) { return v > 0.0 && v < 2147483647.0 ? static_cast<std::size_t>(v) : std::size_t{0}; };
+    std::vector<std::uint8_t>& px = patchPictureScratch_;
+    px.resize(bytesOf(live.v1));
+    FoxImageInfo info{};
+    info.structSize = sizeof(info);
+    int32_t got = engineApi_->read_image(uiSession_, id, &info, px.empty() ? nullptr : px.data(), px.size());
+    if (got > 0 && static_cast<std::size_t>(got) > px.size()) {
+        px.resize(static_cast<std::size_t>(got));
+        info = FoxImageInfo{};
+        info.structSize = sizeof(info);
+        got = engineApi_->read_image(uiSession_, id, &info, px.data(), px.size());
+    }
+    const std::uint32_t bpp = info.format == CASCADE_IMAGE_RGB24 ? 3u : info.format == CASCADE_IMAGE_GRAY8 ? 1u : 0u;
+    const bool whole = got > 0 && static_cast<std::size_t>(got) <= px.size() && bpp != 0u && info.width >= 1u &&
+                       info.height >= 1u &&
+                       static_cast<std::uint64_t>(info.width) * info.height * bpp == static_cast<std::uint64_t>(got);
+    if (whole) {
+        pic.tex = patchPictureGl_.upload(pic.tex, info.width, info.height, info.format, px.data());
+        pic.imageId = id;
+        pic.width = info.width;
+        pic.height = info.height;
+    }
+    // A picture can be megabytes; the room is not kept for ever for the one that was biggest.
+    if (px.capacity() > (std::size_t{8} << 20)) { std::vector<std::uint8_t>().swap(px); }
+    return whole;
 }
 
 void AppWindow::applyInputScript(long frame) {
@@ -10062,16 +10126,20 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     for (auto it = patchScopeSeq_.begin(); it != patchScopeSeq_.end();) {
         it = gone(it->first) ? patchScopeSeq_.erase(it) : std::next(it);
     }
-    // A reviewed direct call (engine/stage3b-pre fields-to-commands round 2),
-    // not a raw erase from here: patchSinkLines_ is the Engine's own field.
-    engine_.prunePatchSinkLines();
+    for (auto it = patchTextOutLines_.begin(); it != patchTextOutLines_.end();) {
+        it = gone(it->first) ? patchTextOutLines_.erase(it) : std::next(it);
+    }
+    for (auto it = patchSpectrumCache_.begin(); it != patchSpectrumCache_.end();) {
+        it = gone(it->first) ? patchSpectrumCache_.erase(it) : std::next(it);
+    }
     for (auto it = patchMapViews_.begin(); it != patchMapViews_.end();) {
         it = gone(it->first) ? patchMapViews_.erase(it) : std::next(it);
     }
     for (auto it = patchPictures_.begin(); it != patchPictures_.end();) {
-        if (gone(it->first)) {
+        // ...and so does a picture the engine has let go of (a node it removed, a new patch document): its row is gone.
+        if (gone(it->first) || patchLiveRow(6, it->first) == nullptr) {
             // Deleted HERE, mid-frame, where the GL context is current.
-            if (it->second.tex != 0u) { glDeleteTextures(1, &it->second.tex); }
+            patchPictureGl_.destroy(it->second.tex);
             it = patchPictures_.erase(it);
         } else {
             ++it;
@@ -10097,6 +10165,10 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     const auto muted = cascade::gui::theme::vec(cascade::gui::theme::kInkMuted);
     const auto phosphor = cascade::gui::theme::vec(cascade::gui::theme::kPhosphor);
 
+    // WHAT THE TABLE SAYS OF THE PLAN, THE RADIOS AND THE PARTS (patchLists), and what the nodes are doing now
+    // (readPatchLive, from drawPatchView): the faces are drawn from those and from the draft - the engine's objects
+    // are not read.
+    const PatchListCache& lists = patchLists();
     std::vector<pc::NodeId> ids;
     ids.reserve(patchDraft_.nodes().size());
     for (const pc::Node& each : patchDraft_.nodes()) { ids.push_back(each.id); }
@@ -10194,7 +10266,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // ITS OWN DEVICE (0.99.17): which one, where it is tuned, and
                 // what it is doing. The device and rate are set in the panel on
                 // the right; the centre is typed here, as a channel's is.
-                ImGui::TextWrapped("%s", engine_.patchDeviceLabel(n.device).c_str());
+                ImGui::TextWrapped("%s", pc::deviceLabelFor(lists.devices, n.device).c_str());
                 double mhz = n.freqHz / 1e6;
                 ImGui::SetNextItemWidth(faceW);
                 if (ImGui::InputDouble("##rc", &mhz, 0.0, 0.0, "%.6f MHz",
@@ -10205,13 +10277,14 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::SetTooltip("%s", tr("The radio's centre. Type a frequency and press Enter."));
                 }
                 drawPatchCentreNote(n);
-                const auto run = engine_.patchRadios_.find(n.id);
-                const auto err = engine_.patchRadioError_.find(n.id);
-                if (run != engine_.patchRadios_.end()) {
+                const auto runIt = lists.radios.find(n.id);
+                const PatchListCache::Radio* line = runIt != lists.radios.end() ? &runIt->second : nullptr;
+                const PatchListCache::Radio* run = line != nullptr && line->open ? line : nullptr;
+                if (run != nullptr) {
                     ImGui::PushStyleColor(ImGuiCol_Text, amber);
-                    ImGui::Text("%.3f MS/s", run->second->rateHz() / 1e6);
+                    ImGui::Text("%.3f MS/s", run->rateHz / 1e6);
                     ImGui::PopStyleColor();
-                } else if (engine_.patchRadioPending_.count(n.id) != 0) {
+                } else if (line != nullptr && line->pending) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextUnformatted(tr("opening..."));
                     ImGui::PopStyleColor();
@@ -10223,23 +10296,23 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("Switched off."));
                     ImGui::PopStyleColor();
-                } else if (!engine_.patchRunning_) {
+                } else if ((uiState_.flags & FOXAPI_RX_PATCH_RUNNING) == 0u) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("Ready - press START."));
                     ImGui::PopStyleColor();
                 } else {
                     // ONE DEVICE, ONE RADIO, said on the face of the radio that
                     // is not running because of it - not only by its edge.
-                    for (const pc::Problem pr : pc::problemsFor(engine_.patchPlan_, n.id)) {
+                    for (const pc::Problem pr : pc::problemsFor(lists.plan, n.id)) {
                         if (pr != pc::Problem::DeviceTwice) { continue; }
                         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
                         ImGui::TextWrapped("%s", tr("Another radio here already uses this device."));
                         ImGui::PopStyleColor();
                     }
                 }
-                if (err != engine_.patchRadioError_.end()) {
+                if (line != nullptr && !line->note.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-                    ImGui::TextWrapped("%s", err->second.c_str());
+                    ImGui::TextWrapped("%s", line->note.c_str());
                     ImGui::PopStyleColor();
                 }
                 break;
@@ -10275,7 +10348,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     // WHERE IT GOES (0.99.17) - a file by default, the speakers
                     // or another device if it is set to - with its level.
                     const pc::Node* ch = patchDraft_.find(pc::channelFeeding(patchDraft_, n.id));
-                    std::shared_ptr<pc::AudioDest> dest = pc::destFor(engine_.patchDests_, n.id);
+                    const PatchLiveRow* dest = patchLiveRow(2, n.id);
                     if (ch == nullptr) {
                         ImGui::PushStyleColor(ImGuiCol_Text, muted);
                         ImGui::TextWrapped("%s", tr("Wire a demodulator here to listen."));
@@ -10287,20 +10360,20 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::PopStyleColor();
                     if (dest) {
                         ImGui::PushStyleColor(ImGuiCol_Text, muted);
-                        ImGui::TextWrapped("%s", dest->describe().c_str());
+                        ImGui::TextWrapped("%s", dest->name.c_str());
                         ImGui::PopStyleColor();
                         // A level bar: the newest block's peak, on the face's width.
                         const ImVec2 at = ImGui::GetCursorScreenPos();
                         const float barW = faceW;
                         const float barH = 5.0f * zoom;
-                        const float pk = std::clamp(dest->peak(), 0.0f, 1.0f);
+                        const float pk = std::clamp(static_cast<float>(dest->v0), 0.0f, 1.0f);
                         ImDrawList* dl = ImGui::GetWindowDrawList();
                         dl->AddRectFilled(at, ImVec2(at.x + barW, at.y + barH),
                                           cascade::gui::theme::kEnamelDark);
                         dl->AddRectFilled(at, ImVec2(at.x + barW * pk, at.y + barH),
                                           cascade::gui::theme::kPhosphor);
                         ImGui::Dummy(ImVec2(barW, barH));
-                        const std::string e = dest->error();
+                        const std::string& e = dest->detail;
                         if (!e.empty()) {
                             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
                             ImGui::TextWrapped("%s", e.c_str());
@@ -10311,17 +10384,16 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                         ImGui::TextWrapped("%s", tr("Waiting for its radio."));
                         ImGui::PopStyleColor();
                     }
-                    const auto derr = engine_.patchDestError_.find(n.id);
-                    if (derr != engine_.patchDestError_.end()) {
+                    if (const PatchLiveRow* derr = patchLiveRow(5, n.id)) {
                         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-                        ImGui::TextWrapped("%s", derr->second.c_str());
+                        ImGui::TextWrapped("%s", derr->detail.c_str());
                         ImGui::PopStyleColor();
                     }
                     break;
                 }
                 // Text out: the newest lines that fit, oldest at the top.
-                const auto it = engine_.patchSinkLines_.find(n.id);
-                if (it == engine_.patchSinkLines_.end() || it->second.empty()) {
+                const auto it = patchTextOutLines_.find(n.id);
+                if (it == patchTextOutLines_.end() || it->second.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("Decoded lines appear here."));
                     ImGui::PopStyleColor();
@@ -10363,9 +10435,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // OFF ITS OWN RADIO (0.99.17): the spectrum of the radio this
                 // part hangs off, not the receiver's.
                 const pc::NodeId radioId = pc::radioOf(patchDraft_, n.id);
-                const auto rspec = engine_.patchSpectra_.find(radioId);
-                const auto rrun = engine_.patchRadios_.find(radioId);
-                const double rate = rrun != engine_.patchRadios_.end() ? rrun->second->rateHz() : 0.0;
+                const PatchSpectrumCache* rspec = patchSpectrum(radioId);
+                const auto rrun = lists.radios.find(radioId);
+                const double rate = rrun != lists.radios.end() && rrun->second.open ? rrun->second.rateHz : 0.0;
                 double lo = 0.0;
                 double hi = 0.0;
                 bool ok = false;
@@ -10374,7 +10446,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     hi = 0.5 * rate;
                     ok = true;
                 } else if (feeder != nullptr && feeder->kind == pc::NodeKind::Channel) {
-                    if (const pc::ChannelPlan* cp = pc::findChannel(engine_.patchPlan_, feeder->id)) {
+                    if (const pc::ChannelPlan* cp = pc::findChannel(lists.plan, feeder->id)) {
                         lo = cp->offsetHz - 0.5 * cp->outRateHz;
                         hi = cp->offsetHz + 0.5 * cp->outRateHz;
                         ok = true;
@@ -10386,14 +10458,14 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     ImGui::PopStyleColor();
                     break;
                 }
-                if (rspec == engine_.patchSpectra_.end() || rspec->second.db.empty()) {
+                if (rspec == nullptr || rspec->db.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped("%s", tr("No spectrum yet - its radio is not running."));
                     ImGui::PopStyleColor();
                     break;
                 }
-                const std::vector<float>& specDb = rspec->second.db;
-                const std::uint64_t specSeq = rspec->second.seq;
+                const std::vector<float>& specDb = rspec->db;
+                const std::uint64_t specSeq = rspec->seq;
 
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 const float x0 = s0.x + 3.0f * zoom;
@@ -10463,7 +10535,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     }
                 };
                 if (feeder->kind == pc::NodeKind::Radio) {
-                    for (const pc::ChannelPlan& cp : engine_.patchPlan_.channels) {
+                    for (const pc::ChannelPlan& cp : lists.plan.channels) {
                         if (cp.radio != radioId) { continue; }   // another radio's band
                         const pc::Node* ch = patchDraft_.find(cp.node);
                         marker(cp.offsetHz, ch != nullptr ? ch->name.c_str() : nullptr);
@@ -10486,7 +10558,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // should be able to click on it in patch and zoom in the same
                 // way you do in the normal map"). The sentence stays, above
                 // the chart, until a decoder is wired in.
-                const bool unwired = pc::mapSources(patchDraft_, n.id, engine_.patchCatalogue_).empty();
+                const bool unwired = pc::mapSources(patchDraft_, n.id, lists.parts).empty();
                 if (unwired) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
                     ImGui::TextWrapped(
@@ -10518,7 +10590,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 std::unique_ptr<MapView>& view = patchMapViews_[n.id];
                 if (!view) {
                     view = std::make_unique<MapView>();
-                    if (engine_.rxSet_) { view->setHome(engine_.rxLat_, engine_.rxLon_); }
+                    if (receiverPositionKnown()) { view->setHome(uiState_.rxLatDeg, uiState_.rxLonDeg); }
                     view->requestFitToTracks();
                 }
                 const float mapW = faceW;
@@ -10582,38 +10654,23 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 // A text decoder's face is its output - the count and latest
                 // line the canvas draws. A PICTURE decoder's face is its
                 // picture, below that line, fitted and in proportion.
-                const auto it = patchPictures_.find(n.id);
-                if (it == patchPictures_.end() || it->second.img.width == 0u) { break; }
-                PatchPicture& pic = it->second;
-                if (pic.texRev != pic.img.revision) {
-                    if (pic.tex == 0u) { glGenTextures(1, &pic.tex); }
-                    glBindTexture(GL_TEXTURE_2D, pic.tex);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    // Tightly packed rows, as the runner copies them - not the
-                    // 4-byte alignment OpenGL assumes, which shears a
-                    // greyscale picture whose width is not a multiple of four.
-                    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                    const GLenum fmt =
-                        (pic.img.format == CASCADE_IMAGE_RGB24) ? GL_RGB : GL_LUMINANCE;
-                    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt),
-                                 static_cast<GLsizei>(pic.img.width),
-                                 static_cast<GLsizei>(pic.img.height), 0, fmt, GL_UNSIGNED_BYTE,
-                                 pic.img.pixels.data());
-                    pic.texRev = pic.img.revision;
-                }
+                // The picture is the engine's: PATCH_LIVE's picture row names the newest one, and it is read (and
+                // uploaded) only when the id has moved.
+                const PatchLiveRow* live = patchLiveRow(6, n.id);
+                if (live == nullptr) { break; }
+                PatchPicture& pic = patchPictures_[n.id];
+                if (pic.imageId != static_cast<std::uint64_t>(live->v0)) { (void)takePatchPicture(pic, *live); }
+                if (pic.tex == 0u || pic.width == 0u) { break; }
                 const float ax0 = s0.x + 4.0f * zoom;
                 const float ay0 = s0.y + 20.0f * zoom;
                 const float ax1 = s1.x - 4.0f * zoom;
                 const float ay1 = s1.y - 4.0f * zoom;
                 if (ax1 - ax0 < 8.0f || ay1 - ay0 < 8.0f) { break; }
-                const float sx = (ax1 - ax0) / static_cast<float>(pic.img.width);
-                const float sy = (ay1 - ay0) / static_cast<float>(pic.img.height);
+                const float sx = (ax1 - ax0) / static_cast<float>(pic.width);
+                const float sy = (ay1 - ay0) / static_cast<float>(pic.height);
                 const float sc = std::min(sx, sy);
-                const float w = static_cast<float>(pic.img.width) * sc;
-                const float h = static_cast<float>(pic.img.height) * sc;
+                const float w = static_cast<float>(pic.width) * sc;
+                const float h = static_cast<float>(pic.height) * sc;
                 const ImVec2 p0(ax0 + 0.5f * ((ax1 - ax0) - w), ay0);
                 ImGui::GetWindowDrawList()->AddImage(
                     static_cast<ImTextureID>(static_cast<std::uintptr_t>(pic.tex)), p0,
@@ -10643,8 +10700,8 @@ void AppWindow::drawPatchSection() {
     // showing. An empty patch says EMPTY rather than 0, because "0 nodes" and
     // "nothing built yet" read differently to someone who has never opened it.
     std::string chip;
-    const std::size_t nodes = engine_.patchGraph_.nodes().size();
-    if (engine_.patchRunning_) {
+    const std::size_t nodes = patchLook().graph.nodes().size();
+    if ((uiState_.flags & FOXAPI_RX_PATCH_RUNNING) != 0u) {
         // Running is the one thing worth saying from the rail: the receiver
         // is on the generator because of it.
         chip = tr("RUNNING");
@@ -10673,6 +10730,18 @@ void AppWindow::setMainViewPatch(bool patch) {
     // and "Look for radios" (patchListsWanted_), the way the Source section's
     // list asks on its first open.
     patchOpen_ = patch;
+    syncPatchPageOpen();
+}
+
+// THE ENGINE IS TOLD WHETHER THE VIEW IS SHOWING (FOXAPP_OP_SET_PATCH_PAGE_OPEN), the way the Transmit page's open flag
+// is: its pass runs the patch while it is and stops it when it goes. The engine starts "showing", as this window does,
+// so only a difference is sent - and again next frame if the session could not take it.
+void AppWindow::syncPatchPageOpen() {
+    if (patchOpen_ == patchPageOpenSent_ || uiSession_ == nullptr) { return; }
+    if (uiSubmitTicket(cascade::core::cmd::QueuedCommand{
+            cascade::core::cmd::makeInt(FOXAPP_OP_SET_PATCH_PAGE_OPEN, patchOpen_ ? 1 : 0), {}}) != 0u) {
+        patchPageOpenSent_ = patchOpen_;
+    }
 }
 
 float AppWindow::drawViewKeys(float colX, float colW, float top) {
@@ -10716,6 +10785,310 @@ float AppWindow::drawViewKeys(float colX, float colW, float top) {
     return below;
 }
 
+// A NEW PATCH (another epoch), or a document this page loaded itself: whatever the page was doing - a drag, a resize,
+// a wire in the air, a selection - was of a node in the OLD one, and its id may now name a different node altogether.
+void AppWindow::forgetPatchInteraction() {
+    patchUi_.dragNode = cascade::core::patch::kNoNode;
+    patchUi_.resizeNode = cascade::core::patch::kNoNode;
+    patchUi_.wiring = false;
+    patchUi_.selected = cascade::core::patch::kNoNode;
+    patchUi_.wireSelected = false;
+}
+
+// THE DRAFT BECOMES THE ENGINE'S GRAPH, as one publish showed it: the graph, the version it is and the epoch it belongs
+// to.
+void AppWindow::adoptPatchLook(const PatchLook& l, bool documentChanged) {
+    const bool followed = patchDraftInStep_;
+    if (patchDraftInStep_ && patchDraftEpoch_ != l.epoch) {
+        forgetPatchInteraction();
+        // A Radio part waiting for its scan was of the old patch.
+        patchRadioWaits_.clear();
+    }
+    patchDraft_ = l.graph;
+    patchDraftBase_ = l.graph;
+    patchDraftVersion_ = l.version;
+    patchDraftEpoch_ = l.epoch;
+    patchDraftInStep_ = true;
+    // The engine changed it (a loaded patch, START or ALL OFF, a centre the radio reported): the config's document
+    // follows. (The first adoption is not a change, and neither is the answer to a document this page loaded itself: it
+    // set patchText_ with it.)
+    if (followed && documentChanged) { patchUi_.dirty = true; }
+}
+
+// THE GRAPH, ITS VERSION AND ITS EPOCH OF ONE PUBLISH (API 0.3 8.12), read when listSeq has moved: three facts of the
+// block the pass published. A reader that took the version, the graph and then the version again and found the two
+// versions alike holds one publish; one that did not is told to ask again (the pass may be on its own thread). The
+// graph is parsed again only when the version or the epoch changed - a pass that moved something else moves listSeq
+// and costs two small reads.
+const AppWindow::PatchLook& AppWindow::patchLook() {
+    namespace pc = cascade::core::patch;
+    PatchLook& c = patchLook_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    const auto number = [](const std::string& t) { return static_cast<std::uint64_t>(std::strtoull(t.c_str(), nullptr, 10)); };
+    readFactText("fact.patch.version", c.scratch);
+    if (c.scratch.empty()) {
+        // No block has been published (the first frame of a window whose session was opened before any pass).
+        c.valid = false;
+        c.listSeq = uiState_.listSeq;
+        return c;
+    }
+    const std::uint64_t version = number(c.scratch);
+    readFactText("fact.patch.epoch", c.scratch);
+    const std::uint64_t epoch = number(c.scratch);
+    if (!c.valid || version != c.version || epoch != c.epoch) {
+        readFactText("fact.patch.graph", c.text);
+        readFactText("fact.patch.version", c.scratch);
+        if (number(c.scratch) != version) {
+            c.valid = false;
+            c.listSeq = ~std::uint64_t{0};  // a publish between the reads: look again
+            return c;
+        }
+        pc::Graph g;
+        std::string why;
+        if (!pc::graphFromCommandText(c.text, g, why)) {
+            cascade::core::diagWarnf("patch: the engine's graph could not be read back (%s)", why.c_str());
+            c.valid = false;
+            c.listSeq = uiState_.listSeq;
+            return c;
+        }
+        c.graph = std::move(g);
+    }
+    c.version = version;
+    c.epoch = epoch;
+    c.valid = true;
+    c.listSeq = uiState_.listSeq;
+    return c;
+}
+
+// THE PATCH PAGE'S READS OF THE TABLE, when listSeq has moved (the cache is in app_window.hpp; API 0.3 8.12). The lists
+// and facts are rebuilt into the structures the core's pure functions take (the parts bin as DecoderInfo, the plan as
+// Plan), so the page's marks, its words and its canvas are drawn by the same code from the same shapes. `got <= i` is the
+// end of a list that changed under the read: what was read stands. The plan's `plugin` index (an index into the engine's
+// catalogue) is not a thing the table carries and nothing the page draws uses it; it is left at 0.
+const AppWindow::PatchListCache& AppWindow::patchLists() {
+    namespace pc = cascade::core::patch;
+    PatchListCache& c = patchCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c; }
+    c.listSeq = uiState_.listSeq;
+    const auto size = [this](uint32_t list) {
+        return std::max<int32_t>(0, engineApi_->read_list(uiSession_, list, 0, nullptr));
+    };
+    // One item; false at the end of a list that shrank under the read.
+    const auto read = [this](uint32_t list, int32_t i, FoxListItem& it) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+        return engineApi_->read_list(uiSession_, list, static_cast<uint32_t>(i), &it) > i;
+    };
+    FoxListItem it{};
+
+    // THE PARTS BIN: a picture decoder is the key's suffix (kImageKeySuffix); the rest is the entry's.
+    const int32_t parts = size(FOXAPI_LIST_PATCH_PARTS);
+    c.parts.clear();
+    for (int32_t i = 0; i < parts; ++i) {
+        if (!read(FOXAPI_LIST_PATCH_PARTS, i, it)) { break; }
+        pc::DecoderInfo d;
+        d.key = it.detail;
+        d.name = it.name;
+        d.feed = static_cast<pc::PortType>(static_cast<int>(it.value[0]));
+        d.requiredRateHz = it.value[1];
+        d.tracks = it.value[2] != 0.0;
+        const std::string suffix = pc::kImageKeySuffix;
+        d.image = d.key.size() >= suffix.size() && d.key.compare(d.key.size() - suffix.size(), suffix.size(), suffix) == 0;
+        c.parts.push_back(std::move(d));
+    }
+
+    // THE PLAN: a channel is an entry whose detail is "channel"; a decoder's detail says what feeds it.
+    c.plan = pc::Plan{};
+    const int32_t planned = size(FOXAPI_LIST_PATCH_PLAN);
+    for (int32_t i = 0; i < planned; ++i) {
+        if (!read(FOXAPI_LIST_PATCH_PLAN, i, it)) { break; }
+        if (std::strcmp(it.detail, "channel") == 0) {
+            pc::ChannelPlan ch;
+            ch.node = static_cast<pc::NodeId>(it.id);
+            ch.offsetHz = it.value[0];
+            ch.outRateHz = it.value[1];
+            ch.decimation = static_cast<unsigned>(it.value[2]);
+            ch.radio = static_cast<pc::NodeId>(it.value[3]);
+            c.plan.channels.push_back(ch);
+        } else {
+            pc::DecoderPlan dp;
+            dp.node = static_cast<pc::NodeId>(it.id);
+            dp.source = std::strcmp(it.detail, "decoder:radio") == 0     ? pc::DecoderSource::Radio
+                        : std::strcmp(it.detail, "decoder:channel") == 0 ? pc::DecoderSource::Channel
+                                                                         : pc::DecoderSource::Audio;
+            dp.rateHz = it.value[0];
+            dp.inRateHz = it.value[1];
+            dp.centreHz = it.value[2];
+            dp.radio = static_cast<pc::NodeId>(it.value[3]);
+            c.plan.decoders.push_back(dp);
+        }
+    }
+    // ...its problems (the code is the core's Problem, a decimal; a code from a newer engine is not one this window
+    // can word, and is left out) and the verdict.
+    const int32_t problems = size(FOXAPI_LIST_PATCH_PROBLEMS);
+    for (int32_t i = 0; i < problems; ++i) {
+        if (!read(FOXAPI_LIST_PATCH_PROBLEMS, i, it)) { break; }
+        const long code = std::strtol(it.name, nullptr, 10);
+        if (code < 0 || code > static_cast<long>(pc::Problem::NoTracks)) { continue; }
+        c.plan.problems.push_back({static_cast<pc::NodeId>(it.id), static_cast<pc::Problem>(code)});
+    }
+    readFactText("fact.patch.runnable", c.factText);
+    c.plan.runnable = c.factText == "1";
+
+    // THE RADIOS.
+    const int32_t radios = size(FOXAPI_LIST_PATCH_RADIOS);
+    c.radios.clear();
+    c.radiosOpen = 0;
+    for (int32_t i = 0; i < radios; ++i) {
+        if (!read(FOXAPI_LIST_PATCH_RADIOS, i, it)) { break; }
+        PatchListCache::Radio r;
+        r.device = it.name;
+        r.note = it.detail;
+        r.rateHz = it.value[0];
+        r.centreHz = it.value[1];
+        r.pending = it.value[2] != 0.0;
+        r.open = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        r.fault = (it.flags & FOXAPI_ITEM_FAULT) != 0u;
+        if (r.open) { ++c.radiosOpen; }
+        c.radios[static_cast<pc::NodeId>(it.id)] = std::move(r);
+    }
+
+    // THE NODES the engine refused to run, and each Radio node's converter.
+    const int32_t nodes = size(FOXAPI_LIST_PATCH_NODES);
+    c.refused.clear();
+    c.conv.clear();
+    for (int32_t i = 0; i < nodes; ++i) {
+        if (!read(FOXAPI_LIST_PATCH_NODES, i, it)) { break; }
+        const auto id = static_cast<pc::NodeId>(it.id);
+        if ((it.flags & FOXAPI_ITEM_REFUSED) != 0u) { c.refused.push_back(id); }
+        if (std::strcmp(it.detail, "radio") != 0) { continue; }
+        readFactText(("fact.patch.conv." + std::to_string(id)).c_str(), c.factText);
+        int mode = 0;
+        double lo = 0.0;
+        int inverted = 0;
+        if (std::sscanf(c.factText.c_str(), "%d %lf %d", &mode, &lo, &inverted) == 3 && mode >= 0 && mode <= 2) {
+            cascade::core::ConverterSetting s;
+            s.mode = static_cast<cascade::core::ConverterMode>(mode);
+            s.loHz = lo;
+            s.inverted = inverted != 0;
+            c.conv[id] = s;
+        }
+    }
+
+    // THE DEVICES A RADIO CAN BE SET TO, in the Device combo's order, and the receiver's own radio.
+    const int32_t devices = size(FOXAPI_LIST_PATCH_DEVICES);
+    c.devices.clear();
+    for (int32_t i = 0; i < devices; ++i) {
+        if (!read(FOXAPI_LIST_PATCH_DEVICES, i, it)) { break; }
+        PatchListCache::Device d;
+        d.label = it.name;
+        d.key = it.detail;
+        // A key the item cut (159 bytes) is read whole.
+        if (std::strlen(it.detail) >= sizeof(it.detail) - 1u) {
+            readFactText(("fact.patch.device." + std::to_string(it.id)).c_str(), d.key);
+        }
+        d.rateHz = it.value[0];
+        c.devices.push_back(std::move(d));
+    }
+    readFactText("fact.patch.receiverRadio", c.receiverRadio);
+    readFactText("fact.patch.receiverCentre", c.factText);
+    c.receiverTuned = !c.factText.empty();
+    return c;
+}
+
+const AppWindow::PatchListCache::Radio* AppWindow::patchRadio(cascade::core::patch::NodeId node) {
+    const PatchListCache& c = patchLists();
+    const auto it = c.radios.find(node);
+    return it == c.radios.end() ? nullptr : &it->second;
+}
+
+// WHAT THE RUNNING NODES ARE DOING NOW: the rows of PATCH_LIVE, once a frame (it moves no listSeq), into rows that keep
+// their strings' room.
+void AppWindow::readPatchLive() {
+    ++patchFrame_;
+    patchLiveCount_ = 0;
+    if (uiSession_ == nullptr) { return; }
+    const int32_t n = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_PATCH_LIVE, 0, nullptr));
+    if (patchLive_.size() < static_cast<std::size_t>(n)) { patchLive_.resize(static_cast<std::size_t>(n)); }
+    FoxListItem it{};
+    for (int32_t i = 0; i < n; ++i) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_PATCH_LIVE, static_cast<uint32_t>(i), &it) <= i) { break; }
+        PatchLiveRow& r = patchLive_[patchLiveCount_++];
+        r.node = it.id;
+        r.kind = static_cast<int>(it.value[2]);
+        r.v0 = it.value[0];
+        r.v1 = it.value[1];
+        r.open = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+        r.name.assign(it.name);
+        r.detail.assign(it.detail);
+    }
+}
+
+const AppWindow::PatchLiveRow* AppWindow::patchLiveRow(int kind, cascade::core::patch::NodeId node) const {
+    for (std::size_t i = 0; i < patchLiveCount_; ++i) {
+        if (patchLive_[i].kind == kind && patchLive_[i].node == node) { return &patchLive_[i]; }
+    }
+    return nullptr;
+}
+
+// A RADIO'S SPECTRUM, read_node_spectrum with the newest sequence held as the cursor (NO_CHANGE keeps the frame; the
+// sequence is what the waterfall adds a row by), at most once a frame whoever asks. The buffer is sized to the engine's
+// own bin count (the result's binCount) and reused. Null when no radio runs there (NOT_FOUND), and the frame goes with it.
+const AppWindow::PatchSpectrumCache* AppWindow::patchSpectrum(cascade::core::patch::NodeId radio) {
+    if (uiSession_ == nullptr || radio == cascade::core::patch::kNoNode) { return nullptr; }
+    PatchSpectrumCache& c = patchSpectrumCache_[radio];
+    if (c.readFrame != patchFrame_ || patchFrame_ == 0) {
+        c.readFrame = patchFrame_;
+        if (patchSpectrumScratch_.size() < 4096u) { patchSpectrumScratch_.resize(4096u); }
+        FoxSpectrumInfo info{};
+        info.structSize = sizeof(info);
+        int32_t r = engineApi_->read_node_spectrum(uiSession_, radio, c.have ? c.seq : 0u, &info,
+                                                   patchSpectrumScratch_.data(),
+                                                   static_cast<uint32_t>(patchSpectrumScratch_.size()));
+        if (r == FOXAPI_OK && info.binCount > patchSpectrumScratch_.size()) {
+            patchSpectrumScratch_.resize(info.binCount);
+            r = engineApi_->read_node_spectrum(uiSession_, radio, 0u, &info, patchSpectrumScratch_.data(),
+                                               static_cast<uint32_t>(patchSpectrumScratch_.size()));
+        }
+        if (r == FOXAPI_OK) {
+            c.db.assign(patchSpectrumScratch_.begin(),
+                        patchSpectrumScratch_.begin() + static_cast<std::ptrdiff_t>(info.copied));
+            c.seq = info.seq;
+            c.have = true;
+        } else if (r != FOXAPI_NO_CHANGE) {
+            c.have = false;
+            c.db.clear();
+            c.seq = 0;
+        }
+    }
+    return c.have ? &c : nullptr;
+}
+
+// THE LINES EACH TEXT OUT HAS BEEN SHOWN, from the window's copy of DECODER_LINES (whose rows now say which patch decoder
+// said them): a decoder shows on every Text out it is wired to. Only the rows above the highest routed are taken, so a
+// line is routed once; a Clear of the Decoder output window does not touch these (the engine kept them apart too).
+void AppWindow::routePatchSinkLines() {
+    namespace pc = cascade::core::patch;
+    const std::deque<DecoderLineRow>& lines = decoderLineCache_.lines;
+    std::size_t first = lines.size();
+    while (first > 0 && lines[first - 1].id > patchSinkRoutedId_) { --first; }
+    for (std::size_t i = first; i < lines.size(); ++i) {
+        const DecoderLineRow& row = lines[i];
+        patchSinkRoutedId_ = row.id;
+        if (row.node == 0) { continue; }
+        for (const pc::Wire& w : patchDraft_.wires()) {
+            if (w.from != row.node) { continue; }
+            const pc::Node* dst = patchDraft_.find(w.to);
+            if (dst == nullptr || dst->kind != pc::NodeKind::Sink) { continue; }
+            std::deque<std::string>& q = patchTextOutLines_[w.to];
+            q.push_back(row.plugin + ": " + row.text);
+            while (q.size() > 200) { q.pop_front(); }
+        }
+    }
+}
+
 bool AppWindow::patchInteracting() {
     // A drag, a resize or a wire in the air lasts while the button is held,
     // and ends with it - whether or not the canvas was drawn to see the
@@ -10738,96 +11111,173 @@ bool AppWindow::patchInteracting() {
                     patchUi_.resizeNode != cascade::core::patch::kNoNode || patchUi_.wiring);
 }
 
-void AppWindow::adoptPatchGraph() {
-    // A NEW PATCH (another epoch): whatever the page was doing - a drag, a
-    // resize, a wire in the air, a selection - was of a node in the OLD one,
-    // and its id may now name a different node altogether. All of it goes,
-    // however the new patch arrived (a document op, loadPatchDocument).
-    if (patchDraftInStep_ && patchDraftEpoch_ != engine_.patchGraphEpoch_) {
-        patchUi_.dragNode = cascade::core::patch::kNoNode;
-        patchUi_.resizeNode = cascade::core::patch::kNoNode;
-        patchUi_.wiring = false;
-        patchUi_.selected = cascade::core::patch::kNoNode;
-        patchUi_.wireSelected = false;
+// THE ENGINE'S ANSWER TO THE COMMIT IN FLIGHT (pumpTransmitKey drains the session's answers). A refusal means the page
+// shows the patch as the engine holds it (what the synchronous page did after a refused edit); an acceptance names the
+// version the graph is now, which settlePatchSend waits to see published.
+void AppWindow::onPatchGraphResult(const FoxCommandResult& r) {
+    PatchSend& s = patchSend_;
+    if (s.state != PatchSend::State::Sent || r.ticket != s.ticket) { return; }
+    if (r.status != FOXAPI_OK) {
+        cascade::core::diagWarnf("patch: the page's edit was not taken (%s); the page shows the patch as it is",
+                                 r.message);
+        s = PatchSend{};
+        patchAdoptWanted_ = true;
+        return;
     }
-    patchDraft_ = engine_.patchGraph_;
-    patchDraftBase_ = engine_.patchGraph_;
-    patchDraftEpoch_ = engine_.patchGraphEpoch_;
-    patchDraftInStep_ = true;
+    s.state = PatchSend::State::Applied;
+    s.newVersion = static_cast<std::uint64_t>(r.applied[0]);
+    settlePatchSend();
+}
+
+// THE COMMIT'S ANSWER, ONCE THE PUBLISH THAT SHOWS IT HAS BEEN READ. The draft is the engine's graph as it now is (the
+// engine merged what this edit did not know about) with whatever the page changed since it SENT on top: a node still
+// being dragged keeps the pointer's place, and nothing snaps back. A document is adopted whole.
+void AppWindow::settlePatchSend() {
+    namespace pc = cascade::core::patch;
+    PatchSend& s = patchSend_;
+    if (s.state != PatchSend::State::Applied) { return; }
+    const PatchLook& l = patchLook();
+    if (!l.valid || l.version < s.newVersion) { return; }  // the publish that shows it is not read yet
+    if (s.document || l.epoch != patchDraftEpoch_) {
+        // A document, or a NEW PATCH loaded under this edit: the edit was of the old one and belongs to nothing in
+        // the new one. It goes.
+        if (!s.document) {
+            cascade::core::diagLogf("patch: an edit of the previous patch was dropped - a new patch was loaded");
+        }
+        const bool ownDocument = s.document;
+        s = PatchSend{};
+        adoptPatchLook(l, !ownDocument);
+        return;
+    }
+    patchDraft_ = pc::rebaseDraft(s.sent, patchDraft_, l.graph);
+    patchDraftBase_ = l.graph;
+    patchDraftVersion_ = l.version;
+    patchDraftEpoch_ = l.epoch;
+    s = PatchSend{};
+    patchUi_.dirty = true;
+}
+
+// A Radio part's device, once its scan has been answered (see patchAddRadioPart). In the order the parts were
+// pressed, each taking the first free radio of the list as it is now - and the draft already holds the device the part
+// before it took, so two parts never start on the same radio.
+void AppWindow::finishPatchRadioParts() {
+    if (patchRadioWaits_.empty() || !patchDraftInStep_) { return; }
+    std::size_t done = 0;
+    for (; done < patchRadioWaits_.size(); ++done) {
+        if (patchRadioWaits_[done].scanTicket > patchScanDone_) { break; }
+        if (cascade::core::patch::Node* n = patchDraft_.mutableNode(patchRadioWaits_[done].node)) {
+            if (n->device.empty()) {
+                n->device = patchDefaultDeviceKey();
+                patchUi_.dirty = true;
+            }
+        }
+    }
+    patchRadioWaits_.erase(patchRadioWaits_.begin(), patchRadioWaits_.begin() + static_cast<std::ptrdiff_t>(done));
 }
 
 void AppWindow::syncPatchDraft() {
     namespace pc = cascade::core::patch;
-    // NEVER A DEFAULT: the first thing a draft ever holds is the engine's graph.
-    if (!patchDraftInStep_) {
-        adoptPatchGraph();
+    // (Also lets go of a drag the canvas never saw end.)
+    const bool interacting = patchInteracting();
+    settlePatchSend();
+    const PatchLook& l = patchLook();
+    // NEVER A DEFAULT, and never a graph that was not published: before the first publish has been read (the very
+    // first frame, while the config's patch is still queued) the draft is not in step with anything, and nothing
+    // can be committed from it.
+    if (!l.valid) { return; }
+    if (patchAdoptWanted_ && patchSend_.state == PatchSend::State::Idle) {
+        patchAdoptWanted_ = false;
+        adoptPatchLook(l);
+        finishPatchRadioParts();
         return;
     }
-    // Never mid-drag: the node under the pointer would jump back for a frame.
-    // An engine change that lands meanwhile is merged when the drag's own
-    // frame is committed (commitPatchDraft).
-    if (patchInteracting()) { return; }
-    // Compared as graphs, not as text (core::patch::graphsEqual): the same
-    // answer, with nothing written out on a frame where nothing changed.
-    if (pc::graphsEqual(engine_.patchGraph_, patchDraftBase_)) { return; }
-    // The engine's graph changed, and not by this draft: a loaded patch, START
-    // or ALL OFF, a device or centre the patch runtime set. An edit not yet
-    // committed (there is none once a frame has drawn - every edit is
-    // committed in its own frame) would be kept, on top.
-    const bool pending = !pc::graphsEqual(patchDraft_, patchDraftBase_);
-    if (pending && patchDraftEpoch_ == engine_.patchGraphEpoch_) {
-        patchDraft_ = pc::rebaseDraft(patchDraftBase_, patchDraft_, engine_.patchGraph_);
-        patchDraftBase_ = engine_.patchGraph_;
+    // A COMMIT IS IN FLIGHT: the published graph is the old one until the pass has applied it, and adopting it now
+    // would put a dragged node back where it was. The command's answer decides (settlePatchSend).
+    if (patchSend_.state != PatchSend::State::Idle) { return; }
+    if (!patchDraftInStep_ || l.epoch != patchDraftEpoch_) {
+        adoptPatchLook(l);
+        finishPatchRadioParts();
         return;
     }
-    adoptPatchGraph();
+    if (l.version != patchDraftVersion_ && !interacting) {
+        // The engine's graph changed, and not by this draft: a loaded patch, START or ALL OFF, a device or centre the
+        // patch runtime set. An edit not yet committed would be kept, on top. (Never mid-drag: the node under the
+        // pointer would jump back for a frame. What the engine did meanwhile is merged by the engine itself when the
+        // drag's own frame is committed - the draft names the version it was edited from.)
+        const bool pending = !pc::graphsEqual(patchDraft_, patchDraftBase_);
+        if (pending) {
+            patchDraft_ = pc::rebaseDraft(patchDraftBase_, patchDraft_, l.graph);
+            patchDraftBase_ = l.graph;
+            patchDraftVersion_ = l.version;
+            patchUi_.dirty = true;
+        } else {
+            adoptPatchLook(l);
+        }
+    }
+    finishPatchRadioParts();
 }
 
 void AppWindow::commitPatchDraft() {
     namespace pc = cascade::core::patch;
-    if (!patchDraftInStep_) {
-        // Nothing has ever been drawn from this draft, so nothing in it is an
-        // edit - and an empty graph sent now would wipe the engine's.
-        adoptPatchGraph();
+    settlePatchSend();
+    // Nothing has ever been drawn from this draft, so nothing in it is an edit - and an empty graph sent now would
+    // wipe the engine's.
+    if (!patchDraftInStep_) { return; }
+    if (patchAdoptWanted_) {
+        // The engine refused the last edit: the page shows the patch as it is, and does not send it again.
+        const PatchLook& l = patchLook();
+        if (l.valid && patchSend_.state == PatchSend::State::Idle) {
+            patchAdoptWanted_ = false;
+            adoptPatchLook(l);
+        }
         return;
     }
+    // ONE COMMIT IN FLIGHT: edits made meanwhile stay in the draft and go with the next, from the new base.
+    if (patchSend_.state != PatchSend::State::Idle) { return; }
     // Nothing edited: no text written (an idle frame, page open or not).
     if (pc::graphsEqual(patchDraft_, patchDraftBase_)) { return; }
-    if (patchDraftEpoch_ != engine_.patchGraphEpoch_) {
-        // A NEW PATCH was loaded under this edit: the edit was of the old one,
-        // and belongs to nothing in the new one. It goes, and adopting the new
-        // patch drops the drag with it.
+    const PatchLook& l = patchLook();
+    if (!l.valid) { return; }
+    if (patchDraftEpoch_ != l.epoch) {
+        // A NEW PATCH was loaded under this edit: the edit was of the old one, and belongs to nothing in the new
+        // one. It goes, and adopting the new patch drops the drag with it.
         cascade::core::diagLogf("patch: an edit of the previous patch was dropped - a new patch was loaded");
-        adoptPatchGraph();
+        adoptPatchLook(l);
         return;
     }
-    // The engine moved on since the draft was copied (a centre learnt, a
-    // switch thrown, typically while a node is being dragged): the page's
-    // edit goes on top of the engine's graph as it is now, never the page's
-    // stale copy of the rest of it back over it.
-    const std::string text =
-        pc::graphsEqual(engine_.patchGraph_, patchDraftBase_)
-            ? pc::graphCommandText(patchDraft_)
-            : pc::graphCommandText(pc::rebaseDraft(patchDraftBase_, patchDraft_, engine_.patchGraph_));
-    const cascade::core::cmd::QueuedCommand q =
-        cascade::core::cmd::makeText(FOXAPP_OP_PATCH_SET_GRAPH, text);
-    const FoxCommandResult r = engine_.applyCommand(q.c, q.longText);
-    if (r.status != FOXAPI_OK) {
-        cascade::core::diagWarnf("patch: the page's edit was not taken (%s); the page shows the patch as it is",
-                                 r.message);
-    }
-    // In step again: the draft is now exactly the graph the engine holds -
-    // this edit (with anything the engine did meanwhile) or, refused, the
-    // graph it kept.
-    adoptPatchGraph();
+    // THE WHOLE DRAFT, WITH THE VERSION IT WAS EDITED FROM. The engine merges it over the graph as it is when the
+    // command is applied (START's switches, a centre the runtime learnt, another session's edit in the same pass are
+    // kept), so the page no longer rebases against a copy that may be a pass old.
+    const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(
+        FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(patchDraft_), 0, static_cast<std::int64_t>(patchDraftVersion_));
+    const std::uint64_t ticket = uiSubmitTicket(q);
+    if (ticket == 0u) { return; }  // not taken (the session is full): the edit stays in the draft, and goes next frame
+    patchSend_ = PatchSend{};
+    patchSend_.state = PatchSend::State::Sent;
+    patchSend_.ticket = ticket;
+    patchSend_.sent = patchDraft_;
 }
 
 bool AppWindow::loadPatchDocument(const cascade::core::patch::Graph& g) {
+    // A NEW PATCH: nothing of the old one is in this window's hands any more (a drag, a selection, a part waiting for a
+    // device), and the draft is the document at once. The engine's answer - and the publish that shows it - settles the
+    // epoch, the version and whatever the engine added (settlePatchSend adopts it whole).
+    forgetPatchInteraction();
+    patchRadioWaits_.clear();
     const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(
         FOXAPP_OP_PATCH_SET_GRAPH, cascade::core::patch::graphCommandText(g), FOXAPP_PATCH_GRAPH_DOCUMENT);
-    const FoxCommandResult r = engine_.applyCommand(q.c, q.longText);
-    adoptPatchGraph();
-    return r.status == FOXAPI_OK;
+    const std::uint64_t ticket = uiSubmitTicket(q);
+    if (ticket == 0u) { return false; }
+    patchSend_ = PatchSend{};
+    patchSend_.state = PatchSend::State::Sent;
+    patchSend_.ticket = ticket;
+    patchSend_.document = true;
+    patchAdoptWanted_ = false;
+    patchDraft_ = g;
+    patchDraftBase_ = g;
+    patchDraftVersion_ = 0;
+    patchDraftInStep_ = true;
+    return true;
 }
 
 void AppWindow::seedPatchIfNeeded() {
@@ -10835,8 +11285,12 @@ void AppWindow::seedPatchIfNeeded() {
     // wired. An empty canvas gives no clue what a node even is; one node does,
     // and one node is not an opinion about what they want to build.
     if (patchSeeded_) { return; }
-    patchSeeded_ = true;
     syncPatchDraft();
+    // NOT BEFORE A PUBLISH HAS BEEN READ AND ADOPTED, and not while a document is on its way: the first frame's look
+    // finds the engine's graph empty while the config's patch is still queued, and a starter radio committed from an
+    // empty draft would be sent over the patch that is about to land.
+    if (!patchDraftInStep_ || patchSend_.state != PatchSend::State::Idle) { return; }
+    patchSeeded_ = true;
     cascade::gui::patch::seedDefaultPatch(patchDraft_, "Radio");
     // The starter radio is the receiver's own radio or, with none, the
     // generator - named now, because the patch no longer starts (and so
@@ -10849,11 +11303,12 @@ void AppWindow::seedPatchIfNeeded() {
                 // The receiver's AIR centre, which may be below 0 Hz
                 // through a converter (core::patch::radioCentreSet) or be
                 // exactly 0 Hz - marked chosen, never judged by its value.
-                if (!cascade::core::patch::radioCentreSet(*n) && engine_.device_ != nullptr) {
-                    if (const std::optional<double> c = engine_.carriedAirCentre()) {
-                        n->freqHz = *c;
-                        n->centreChosen = true;
-                    }
+                // (The receiver has a radio open, and it has been tuned: fact.patch.receiverCentre exists, and the
+                // centre itself is the state's - the air centre the radio carries.)
+                if (!cascade::core::patch::radioCentreSet(*n) && (uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u &&
+                    patchLists().receiverTuned) {
+                    n->freqHz = uiState_.centreHz;
+                    n->centreChosen = true;
                 }
             }
         }
@@ -10863,48 +11318,6 @@ void AppWindow::seedPatchIfNeeded() {
     // would be the only thing that ever persisted.
     patchUi_.dirty = true;
     commitPatchDraft();
-}
-
-void AppWindow::drawPatchPage() {
-    // FIRST, AND EVERY FRAME, open or not. The DSP thread never destroys a
-    // patch it stops running; it hands it back, and this is where it dies -
-    // on the GUI thread, which is the only place a plugin handle inside it
-    // may be destroyed. Above the early return below because closing the
-    // page is exactly what retires a set, one block AFTER the page has gone.
-    engine_.pipeline_.patchRunner().reap();
-
-    if (!patchOpen_) {
-        // CLOSING THE PAGE STOPS THE PATCH. The page took the radios over
-        // when it opened, so handing them back when it closes is the only
-        // symmetric answer - and a patch still playing from a window you
-        // have closed is a receiver whose controls you cannot find.
-        //
-        // SINCE 0.99.40 "CLOSED" IS "THE RECEIVER VIEW WAS CHOSEN": the page
-        // is the main window's patch face, and leaving it does exactly what
-        // closing the page did - nothing more, nothing less.
-        if (engine_.patchWasOpen_) {
-            cascade::core::diagLogf(
-                "patch: view closed%s",
-                engine_.patchRunning_ ? " while running - every patch radio closes and the receiver "
-                                "gets its radio back"
-                              : "");
-            engine_.patchWasOpen_ = false;
-            engine_.patchRunning_ = false;
-            engine_.patchWasRunning_ = false;
-            engine_.pipeline_.patchRunner().clear();
-            // Forgotten with the set, so reopening builds a fresh one.
-            engine_.patchDspSig_.clear();
-            engine_.patchRefused_.clear();
-            // Every patch radio stops, every speaker's file is finalised, and
-            // the receiver gets its radio back (0.99.17).
-            engine_.patchStopAll(true);
-            // ...and the receiver's decoders come back.
-            engine_.refreshPluginRunner();
-        }
-        return;
-    }
-    // SHOWING: drawn as the main window's face by drawPatchView, from inside
-    // the root window, where it takes the spectrum's place.
 }
 
 void AppWindow::drawPatchView() {
@@ -10920,6 +11333,8 @@ void AppWindow::drawPatchView() {
     // frame (a loaded patch, a switch thrown by START or ALL OFF) is what this
     // frame draws and edits.
     syncPatchDraft();
+    // ...and what the running nodes are doing now (PATCH_LIVE): one read for the whole frame, whoever draws it.
+    readPatchLive();
 
     // THE STARTER RADIO WAITS FOR THE RECEIVER'S (0.99.40). It is named after
     // the receiver's own radio, and the view is now up on the very first
@@ -10927,7 +11342,9 @@ void AppWindow::drawPatchView() {
     // then it would be the generator for good; seeded once the open has
     // answered, it is the radio the user was listening to, as it was when
     // the page was only ever opened by hand.
-    if (!engine_.deviceOpenPending_ && !engine_.soundCardOpenPending_) { seedPatchIfNeeded(); }
+    if ((uiState_.flags & FOXAPI_RX_DEVICE_OPENING) == 0u && (uiState_.sourceFlags & FOXAPI_SRC_CARD_OPENING) == 0u) {
+        seedPatchIfNeeded();
+    }
 
     // THE PLATE, the rail's own: ground, bevel, the engraved name and the rule
     // under it - so the view reads as a panel of the bench rather than a
@@ -10944,22 +11361,12 @@ void AppWindow::drawPatchView() {
     ImGui::PopStyleColor();
 
     if (wellOpen) {
-        // The installed decoder plugins, fresh each frame: a plugin installed
-        // from the store a moment ago is a part now, and one the user just
-        // stopped is not.
-        engine_.rebuildPatchCatalogue();
-        // START AND STOP TAKE EFFECT HERE, before the radios are reconciled:
-        // stopping closes every patch radio, finalises every file and gives the
-        // receiver its radio back; either way the receiver's decoders follow
-        // (they stand down while the patch runs - see refreshPluginRunner).
-        engine_.patchApplyRunning();
-        // The patch's own radios: taken, opened, closed and retuned to match
-        // the nodes, before anything is compiled or drawn this frame.
-        engine_.patchReconcile();
-        // ...which may itself name a device or a centre on a node: the draft
-        // follows it before anything is drawn (never mid-drag).
-        syncPatchDraft();
-
+        // (The catalogue, START and STOP, the radios, the compile and the sets
+        // are the engine's pass's since window port group 13 - Engine::
+        // pumpPatch. What they changed in the graph reaches the draft through
+        // the sync above, from the publish the pass made. The page DRAWS the
+        // pass's answers: the parts bin, the plan, the radios - patchLists.)
+        const PatchListCache& lists = patchLists();
         drawPatchTransport();
 
         // --- the parts bin ----------------------------------------------------
@@ -11025,7 +11432,7 @@ void AppWindow::drawPatchView() {
                               cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
         ImGui::TextUnformatted(tr("Decoders"));
         ImGui::PopStyleColor();
-        if (engine_.patchCatalogue_.empty()) {
+        if (lists.parts.empty()) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
@@ -11040,26 +11447,26 @@ void AppWindow::drawPatchView() {
         // press.
         const float rowRight = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
         const float keySpacing = ImGui::GetStyle().ItemSpacing.x;
-        for (std::size_t i = 0; i < engine_.patchCatalogue_.size(); ++i) {
-            const cascade::core::patch::DecoderInfo& info = engine_.patchCatalogue_[i];
+        for (std::size_t i = 0; i < lists.parts.size(); ++i) {
+            const cascade::core::patch::DecoderInfo& info = lists.parts[i];
             // A DECODER THAT DOES NOT NEED SOUND DOES NOT OFFER IT (owner,
             // 0.99.17: "if the decoder doesnt need sound dont show the option
             // for it"). A module that can decode straight from the radio's I/Q
             // is offered only that way; its audio twin - a second key that
             // needs a demodulator in front of it - is left out of the bin.
             if (!info.image && info.feed == cascade::core::patch::PortType::Audio &&
-                cascade::core::patch::hasIqTwin(engine_.patchCatalogue_, i)) {
+                cascade::core::patch::hasIqTwin(lists.parts, i)) {
                 continue;
             }
             // The input is in the label only when it disambiguates - a
             // module that is both an audio and an I/Q decoder shows two keys.
             bool twin = false;
-            for (std::size_t j = 0; j < engine_.patchCatalogue_.size(); ++j) {
-                if (j == i || engine_.patchCatalogue_[j].key != info.key) { continue; }
+            for (std::size_t j = 0; j < lists.parts.size(); ++j) {
+                if (j == i || lists.parts[j].key != info.key) { continue; }
                 // A twin that is hidden above is not a key to tell this from.
-                const bool hidden = !engine_.patchCatalogue_[j].image &&
-                                    engine_.patchCatalogue_[j].feed == cascade::core::patch::PortType::Audio &&
-                                    cascade::core::patch::hasIqTwin(engine_.patchCatalogue_, j);
+                const bool hidden = !lists.parts[j].image &&
+                                    lists.parts[j].feed == cascade::core::patch::PortType::Audio &&
+                                    cascade::core::patch::hasIqTwin(lists.parts, j);
                 if (!hidden) { twin = true; }
             }
             // A picture decoder always says so - it is a different kind of
@@ -11129,8 +11536,7 @@ void AppWindow::drawPatchView() {
                     patchDraft_.addNode(p.kind, p.label, p.feed, at.x, at.y);
                 }
             } else {
-                const cascade::core::patch::DecoderInfo& info =
-                    engine_.patchCatalogue_[static_cast<std::size_t>(pressedDecoder)];
+                const cascade::core::patch::DecoderInfo& info = lists.parts[static_cast<std::size_t>(pressedDecoder)];
                 const cascade::core::patch::NodeId made = patchDraft_.addNode(
                     cascade::core::patch::NodeKind::Decoder, info.name, info.feed, at.x, at.y);
                 if (cascade::core::patch::Node* n = patchDraft_.mutableNode(made)) {
@@ -11143,73 +11549,42 @@ void AppWindow::drawPatchView() {
             commitPatchDraft();
         }
 
-        // ONE COMPILE A FRAME, before anything is drawn, so the marks on
-        // the canvas and the words in the inspector are the same answer.
-        // It is a pure walk of a graph with a handful of nodes; the
-        // alternative - caching it against a dirty flag - would be a
-        // second piece of state to keep true for no measurable gain.
-        // EACH RADIO ITS OWN (0.99.17): every channel is measured against the
-        // radio it hangs off - the running device's readback, or the node's
-        // settings before it opens.
-        engine_.patchPlan_ = cascade::core::patch::compile(engine_.patchGraph_, engine_.patchRadioInfos(),
-                                                   &engine_.patchCatalogue_);
-        // A radio whose device would not open is a problem only the attempt
-        // could find, as a refusing plugin is.
-        for (const auto& [id, as] : engine_.patchRadioFailedAs_) {
-            (void)as;
-            if (engine_.patchRadios_.count(id) == 0 && engine_.patchGraph_.find(id) != nullptr) {
-                engine_.patchPlan_.problems.push_back({id, cascade::core::patch::Problem::RadioFailed});
-                engine_.patchPlan_.runnable = false;
-            }
-        }
-        // A plugin that refused to create() an instance in the last build is
-        // a problem the plan cannot know about - it is only discovered by
-        // asking the plugin - so it is added here, where the canvas and the
-        // inspector will both read it.
-        for (const cascade::core::patch::NodeId id : engine_.patchRefused_) {
-            engine_.patchPlan_.problems.push_back({id, cascade::core::patch::Problem::PluginRefused});
-        }
+        // THE PLAN is the engine's (Engine::compilePatchPlan, once a pass); the
+        // marks on the canvas and the words in the inspector are one answer, a
+        // pass behind the edit that changed it.
 
         // The live half: what each planned channel is hearing, read out of
         // the wideband spectrum the pipeline already publishes. lastFrame_ is
         // the SAME frame the waterfall is drawing, so the number on a node
         // and the bump on the display cannot disagree.
+        // (The level is the engine's, measured once a pass off ITS radio's spectrum (0.99.17) and served in
+        // PATCH_LIVE; a channel whose radio is not running has none.)
         patchReadings_.clear();
-        for (const auto& ch : engine_.patchPlan_.channels) {
-            // Off ITS radio's spectrum (0.99.17), not the receiver's.
-            const auto rs = engine_.patchSpectra_.find(ch.radio);
-            const auto rr = engine_.patchRadios_.find(ch.radio);
-            if (rs == engine_.patchSpectra_.end() || rr == engine_.patchRadios_.end()) { continue; }
-            const cascade::core::patch::Level lv = cascade::core::patch::channelLevelDb(
-                rs->second.db, rr->second->rateHz(), ch.offsetHz);
-            if (lv.valid) {
-                cascade::gui::patch::NodeReading r;
-                r.node = ch.node;
-                r.db = lv.db;
-                patchReadings_.push_back(std::move(r));
-            }
+        for (const auto& ch : lists.plan.channels) {
+            const PatchLiveRow* lv = patchLiveRow(3, ch.node);
+            if (lv == nullptr) { continue; }
+            cascade::gui::patch::NodeReading r;
+            r.node = ch.node;
+            r.db = static_cast<float>(lv->v0);
+            patchReadings_.push_back(std::move(r));
         }
         // Every RUNNING decoder gets a face, including one that has said
         // nothing yet: "0 lines" on a decoder that is being fed is itself
         // the answer to "is it running".
-        for (const auto& dp : engine_.patchPlan_.decoders) {
-            if (std::find(engine_.patchRefused_.begin(), engine_.patchRefused_.end(), dp.node) !=
-                engine_.patchRefused_.end()) {
-                continue;
-            }
+        for (const auto& dp : lists.plan.decoders) {
+            if (std::find(lists.refused.begin(), lists.refused.end(), dp.node) != lists.refused.end()) { continue; }
             cascade::gui::patch::NodeReading r;
             r.node = dp.node;
             r.hasDb = false;
-            const auto it = engine_.patchDecoderFaces_.find(dp.node);
-            if (it != engine_.patchDecoderFaces_.end()) {
-                r.text = it->second.last;
-                r.lines = it->second.lines;
+            if (const PatchLiveRow* face = patchLiveRow(4, dp.node)) {
+                r.text = face->detail;
+                r.lines = static_cast<decltype(r.lines)>(face->v0);
             }
             patchReadings_.push_back(std::move(r));
         }
 
         if (avail.x > 8.0f && avail.y > 8.0f) {
-            cascade::gui::patch::drawPatchCanvas(patchDraft_, patchUi_, engine_.patchPlan_,
+            cascade::gui::patch::drawPatchCanvas(patchDraft_, patchUi_, lists.plan,
                                                  patchReadings_, origin,
                                                  ImVec2(canvasW, avail.y));
             // AFTER the canvas, so these widgets sit on top of it and take
@@ -11228,7 +11603,7 @@ void AppWindow::drawPatchView() {
             // question someone opening this page is actually asking. Phosphor
             // for working, rust for not - and never amber, which belongs to
             // numbers.
-            if (engine_.patchPlan_.runnable) {
+            if (lists.plan.runnable) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
                 ImGui::TextUnformatted(tr("This patch can run."));
             } else {
@@ -11249,11 +11624,11 @@ void AppWindow::drawPatchView() {
                     break;
                 }
             }
-            if (!engine_.patchPlan_.channels.empty()) {
+            if (!lists.plan.channels.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                          cascade::gui::theme::kInkMuted));
                 ImGui::Text(tr("%zu channel(s), decimate by %u"),
-                            engine_.patchPlan_.channels.size(), engine_.patchPlan_.channels[0].decimation);
+                            lists.plan.channels.size(), lists.plan.channels[0].decimation);
                 ImGui::PopStyleColor();
             }
             ImGui::Separator();
@@ -11347,7 +11722,7 @@ void AppWindow::drawPatchView() {
                             sel->inputs.empty() ? cascade::core::patch::PortType::Iq
                                                 : sel->inputs[0];
                         std::string current = sel->plugin.empty() ? tr("(none)") : sel->plugin;
-                        for (const cascade::core::patch::DecoderInfo& info : engine_.patchCatalogue_) {
+                        for (const cascade::core::patch::DecoderInfo& info : lists.parts) {
                             if (info.key == sel->plugin && info.feed == feed) {
                                 current = info.name;
                                 break;
@@ -11355,8 +11730,8 @@ void AppWindow::drawPatchView() {
                         }
                         ImGui::SetNextItemWidth(-FLT_MIN);
                         if (ImGui::BeginCombo("##patchplugin", current.c_str())) {
-                            for (std::size_t i = 0; i < engine_.patchCatalogue_.size(); ++i) {
-                                const cascade::core::patch::DecoderInfo& info = engine_.patchCatalogue_[i];
+                            for (std::size_t i = 0; i < lists.parts.size(); ++i) {
+                                const cascade::core::patch::DecoderInfo& info = lists.parts[i];
                                 if (info.feed != feed) { continue; }
                                 ImGui::PushID(static_cast<int>(i));
                                 const bool isSel = info.key == sel->plugin;
@@ -11382,7 +11757,7 @@ void AppWindow::drawPatchView() {
                         ImGui::PopStyleColor();
                         // What the plan will actually hand it. A number, so
                         // amber, and on its own line where it can be read.
-                        for (const cascade::core::patch::DecoderPlan& dp : engine_.patchPlan_.decoders) {
+                        for (const cascade::core::patch::DecoderPlan& dp : lists.plan.decoders) {
                             if (dp.node != sel->id) { continue; }
                             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                                      cascade::gui::theme::kAmber));
@@ -11397,7 +11772,7 @@ void AppWindow::drawPatchView() {
                             ImGui::PopStyleColor();
                             break;
                         }
-                        if (!engine_.patchDecoderIsShown(sel->id)) {
+                        if (!cascade::core::patch::decoderIsShown(patchDraft_, sel->id)) {
                             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                                      cascade::gui::theme::kInkMuted));
                             ImGui::TextWrapped("%s", tr(
@@ -11417,7 +11792,7 @@ void AppWindow::drawPatchView() {
                 }
 
                 const std::vector<cascade::core::patch::Problem> probs =
-                    cascade::core::patch::problemsFor(engine_.patchPlan_, sel->id);
+                    cascade::core::patch::problemsFor(lists.plan, sel->id);
                 if (!probs.empty()) {
                     ImGui::Spacing();
                     ImGui::Separator();
@@ -11444,24 +11819,17 @@ void AppWindow::drawPatchView() {
             }
         }
         ImGui::EndChild();
-        // The inspector's edits, to the engine BEFORE the sets are built.
+        // The inspector's edits, to the engine: the pass applies them and builds
+        // the radios' sets from them (Engine::patchPublishSets).
         commitPatchDraft();
-        // THE SET GOES TO THE DSP THREAD, built here because building it
-        // is allocation - a filter per channel, a resampler, a second of ring
-        // - and, since 0.99.15, create() on every plugin decoder in it. So it
-        // is rebuilt ONLY when something the DSP reads has changed, which
-        // dspSignature() spells out: dragging or resizing a node must not
-        // restart every decoder in the patch.
-        // EACH RADIO'S SET (0.99.17): every patch radio runs its own channels,
-        // decoders and speakers on its own reader thread, and each is rebuilt
-        // only when radioSignature() says something it reads has changed.
-        engine_.patchPublishSets();
-        engine_.patchWasOpen_ = true;
 
+        // The document the config keeps: the page's own graph, which holds
+        // every edit (the engine's may be a pass behind it) and, through the
+        // sync, everything the engine did.
         if (patchUi_.dirty) {
             patchUi_.dirty = false;
             patchText_ = cascade::core::patch::serialise(
-                engine_.patchGraph_, patchUi_.view.pan.x, patchUi_.view.pan.y, patchUi_.view.zoom);
+                patchDraft_, patchUi_.view.pan.x, patchUi_.view.pan.y, patchUi_.view.zoom);
         }
     }
     ImGui::EndChild();
@@ -11577,6 +11945,7 @@ void AppWindow::drawScopeModeControl() {
 }
 
 const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return engine_.pluginUi_.tracks(); }
+const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return engine_.pluginUi_.paths(); }
 
 void AppWindow::drawScopeMode() {
     uiNotePanel("scope");
@@ -13399,7 +13768,6 @@ void AppWindow::drawPluginWindows() {
     // The bench oscilloscope, drawn here with the other torn-off pages so it
     // is a real window like every one of them: movable, resizable, and able to
     // sit on a second monitor beside the spectrum it is explaining.
-    drawPatchPage();
     drawDemodScopePage();
     drawFeatureRequestPage();
     drawProblemReportPage();
@@ -15325,19 +15693,24 @@ void AppWindow::setTransmitPageOpen(bool open) {
     uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN, open ? 1 : 0));
 }
 
-void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) {
+void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) { (void)uiSubmitTicket(q); }
+
+std::uint64_t AppWindow::uiSubmitTicket(const cascade::core::cmd::QueuedCommand& q) {
     if (uiSubmitTap_ != nullptr) { uiSubmitTap_->push_back(q); }  // (a test's; see the header)
     if (uiSession_ == nullptr) {
         cascade::core::diagWarnf("ui: no engine API session - %s was not sent",
                                  cascade::core::cmd::opName(q.c.op));
-        return;
+        return 0u;
     }
-    if (q.longText.empty()) {
-        (void)engineApi_->submit(uiSession_, &q.c, 1, nullptr);
-    } else {
-        (void)engineApi_->submit_text(uiSession_, &q.c, q.longText.data(),
-                                      static_cast<uint32_t>(q.longText.size()), nullptr);
-    }
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = q.longText.empty()
+                          ? engineApi_->submit(uiSession_, &q.c, 1, &sr)
+                          : engineApi_->submit_text(uiSession_, &q.c, q.longText.data(),
+                                                    static_cast<uint32_t>(q.longText.size()), &sr);
+    // BUSY (the session already has its maximum pending) takes no ticket and answers nothing: the caller sends again.
+    if (n < 0 || (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE)) { return 0u; }
+    return sr.ticket;
 }
 
 // A PAGE SAYS ITS NAME TO THE USAGE REPORT, ONCE A RUN (window port, group 3).
@@ -15439,6 +15812,8 @@ void AppWindow::refreshUiState() {
     // window and the rail's count draw from, whether or not either is open - the engine kept its tail whether
     // or not they were.
     (void)decoderLines();
+    // ...and, with it, the lines the patch's Text outs show (the draft's wires decide which).
+    routePatchSinkLines();
 }
 
 // THE SPECTRUM, ONCE A FRAME (window port, group 6; docs/engine-stage4.md decision
@@ -16226,6 +16601,7 @@ const AppWindow::DecoderLineCache& AppWindow::decoderLines() {
         row.id = it.id;
         row.plugin = it.name;
         row.text = it.detail;
+        row.node = static_cast<std::uint64_t>(it.value[0]);
         c.fresh.push_back(std::move(row));
     }
     if (c.fresh.empty()) { return c; }
@@ -16311,6 +16687,10 @@ void AppWindow::pumpTransmitKey() {
             if (r[i].op == FOXAPI_OP_SET_FREQUENCY && r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {
                 freqEntryRefusal_ = r[i].message[0] != '\0' ? r[i].message : "the frequency was refused";
             }
+            // THE PATCH PAGE'S TWO ANSWERS (window port group 13): the graph commit in flight, whose answer names the
+            // version the draft is rebased onto, and the native scan a new Radio part waits for.
+            if (r[i].op == FOXAPP_OP_PATCH_SET_GRAPH) { onPatchGraphResult(r[i]); }
+            if (r[i].op == FOXAPP_OP_SCAN_NATIVE_ONLY) { patchScanDone_ = std::max<std::uint64_t>(patchScanDone_, r[i].ticket); }
         }
         if (got < 16) { break; }
     }
@@ -20164,7 +20544,8 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
             (void)loadPatchDocument(pr.graph);
             patchUi_.view.pan = cascade::gui::patch::Vec2{pr.panX, pr.panY};
             patchUi_.view.zoom = pr.zoom;
-            patchSeeded_ = !engine_.patchGraph_.nodes().empty();
+            // (What the document holds: the engine takes it a pass later, so its own graph is not there to ask yet.)
+            patchSeeded_ = !pr.graph.nodes().empty();
             patchText_ = cfg.patch;
             if (pr.dropped > 0) {
                 std::fprintf(stderr,
@@ -20179,6 +20560,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // WHICH FACE: the device lists stay unasked (patchListsWanted_) and the
     // patch stays stopped - showing it starts nothing.
     patchOpen_ = cfg.mainView != "receiver";
+    // Told at once, so the engine's FIRST pass already knows (it starts "showing"): a window that opens on the receiver
+    // must not run the patch step for a pass and stop it again.
+    syncPatchPageOpen();
     bandPlanSizeIndex_ = bandPlanSizeIndexFromKey(cfg.bandPlanSize);
     bandPlanPaletteIndex_ = bandPlanPaletteIndexFromKey(cfg.bandPlanPalette);
     // Language and country: the language is applied before the next frame
@@ -20543,11 +20927,6 @@ void AppWindow::onConverterChanged(bool clearLoError) {
     if (clearLoError) { converterLoBad_ = false; }
 }
 
-void AppWindow::onPatchGraphChanged() { patchUi_.dirty = true; }
-
-void AppWindow::onPatchPicture(cascade::core::patch::NodeId node, cascade::core::HostImage&& img) {
-    patchPictures_[node].img = std::move(img);
-}
 
 void AppWindow::onGpsFixApplied() { gpsRowReveal_ = true; }
 
@@ -20579,7 +20958,6 @@ void AppWindow::showDemonstrationInstrument(const cascade::core::HostInstrument&
 
 std::vector<std::string> AppWindow::drainTrackInfoText() { return trackInfo_.drainText(); }
 
-bool AppWindow::patchPageOpen() const { return patchOpen_; }
 
 bool AppWindow::webListening() const { return webServer_.running(); }
 

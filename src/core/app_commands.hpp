@@ -188,6 +188,13 @@
 // SOUND_CARDS entry's id (index + 1); NOT_FOUND for none, and before the cards are listed. Grant SETTINGS, LOCAL
 // sessions only (every app op is).
 #define FOXAPP_OP_SOUND_CARD_PICK        0x8420u /* ival[0]: the SOUND_CARDS entry's id */
+#define FOXAPP_OP_SET_PATCH_PAGE_OPEN    0x8421u /* ival[0]: 0/1 - the standard window's patch view is showing (API 0.3 8.12); the engine's pass runs the patch while it is, and stops it when it goes (default: showing) */
+// THE PATCH RADIO'S RECORDINGS LISTED (API 0.3 8.12): the engine reads the I/Q recordings of the record folder and of
+// FOXSDR_PATCH_SAMPLES (at most kMaxRecordingOpens headers opened, a file already read is not opened again), on its own
+// pass, and PATCH_DEVICES (the recordings' rows, with their rates) and RECORDINGS kind 3 change as the answer. The Radio
+// part's device list asks when it opens and "Look for radios" asks again. No arguments. Grant SETTINGS, LOCAL sessions only
+// (every app op is).
+#define FOXAPP_OP_PATCH_LIST_RECORDINGS  0x8422u /* no arguments - list the I/Q recordings a patch Radio can play (API 0.3 8.12) */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */
@@ -204,6 +211,14 @@
 // window part-way through an edit of the old document knows not to put that
 // edit on top of the new one.
 #define FOXAPP_PATCH_GRAPH_DOCUMENT      1
+// FOXAPP_OP_PATCH_SET_GRAPH's ival[1] (API 0.3 8.12): the graph VERSION the
+// sender's draft was last in step with (fact.patch.version, read in the same
+// publish as the graph it edited). 0 is "unconditional" (a document load, and
+// today's behaviour). A version that is not the current one is MERGED by the
+// engine (core::patch::rebaseDraft against the retained graph of that
+// version) and not overwritten; one the engine no longer retains is refused
+// FOXAPI_FAILED. The result's applied[0] is the version after the command and
+// applied[1] is 1 when the engine merged.
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu

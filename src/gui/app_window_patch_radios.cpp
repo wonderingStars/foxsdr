@@ -61,6 +61,21 @@ namespace {
 constexpr double kPatchRatesHz[] = {1.0e6,  1.024e6, 2.0e6, 2.048e6, 2.4e6,
                                     2.5e6,  3.0e6,   4.0e6, 6.0e6,   8.0e6, 10.0e6};
 
+// THE CONVERTER'S NAME as the Source section and the engine's fact.converter.name letter it: a pure composition of the
+// setting (the engine's Engine::converterName says the same words; the window has the setting from the table).
+std::string converterNameText(const cascade::core::ConverterSetting& s) {
+    const std::string lo = cascade::core::converterHzText(s.loHz);
+    std::string out;
+    if (s.mode == cascade::core::ConverterMode::Down) {
+        cascade::core::formatUtf8(out, s.inverted ? tr("%s down-converter, spectrum inverted") : tr("%s down-converter"),
+                                  lo.c_str());
+    } else {
+        cascade::core::formatUtf8(out, s.inverted ? tr("%s up-converter, spectrum inverted") : tr("%s up-converter"),
+                                  lo.c_str());
+    }
+    return out;
+}
+
 }  // namespace
 
 bool AppWindow::setPatchRadioCentre(pc::Node& n, double airHz) {
@@ -69,13 +84,26 @@ bool AppWindow::setPatchRadioCentre(pc::Node& n, double airHz) {
     // so refusing everything <= 0 here made such a centre impossible to type
     // back in. What must hold is that the radio behind the node's converter
     // is told something above 0 Hz.
-    const cascade::core::ConverterSetting conv = engine_.converterForKey(n.device);
+    //
+    // THE CONVERTER IN FORCE for the node's device is the table's (fact.patch.conv.<node>, a pass old). It speaks for the
+    // device the ENGINE has the node on: a device chosen a moment ago and not yet applied has none published, and is
+    // judged as a radio with no converter until the pass has caught up (a centre that would only be refused through an
+    // up-converter is accepted into the draft and the radio is the judge).
+    cascade::core::ConverterSetting conv;
+    {
+        const PatchListCache& lists = patchLists();
+        const auto known = lists.conv.find(n.id);
+        const pc::Node* published = patchLook().graph.find(n.id);
+        if (known != lists.conv.end() && published != nullptr && pc::sameDevice(published->device, n.device)) {
+            conv = known->second;
+        }
+    }
     if (!cascade::core::radioCentreTakeable(conv, airHz)) {
         std::string msg;
         if (cascade::core::converterActive(conv)) {
             cascade::core::formatUtf8(
                 msg, tr("%s is out of reach through the %s: the radio would have to tune to 0 Hz or below."),
-                cascade::core::converterHzText(airHz).c_str(), engine_.converterName(conv).c_str());
+                cascade::core::converterHzText(airHz).c_str(), converterNameText(conv).c_str());
         } else {
             cascade::core::formatUtf8(msg, tr("A radio cannot tune to %s - type a centre above 0 Hz."),
                                       cascade::core::converterHzText(airHz).c_str());
@@ -98,20 +126,19 @@ void AppWindow::drawPatchCentreNote(const pc::Node& n) {
     ImGui::PopStyleColor();
 }
 
-std::string AppWindow::patchDefaultDeviceKey() const {
+std::string AppWindow::patchDefaultDeviceKey() {
     const auto taken = [this](const std::string& key) {
         for (const pc::Node& n : patchDraft_.nodes()) {
             if (n.kind == pc::NodeKind::Radio && pc::sameDevice(n.device, key)) { return true; }
         }
         return false;
     };
+    // The receiver's own radio first (the one lent to the patch, else the one it has open: fact.patch.receiverRadio),
+    // then the engine's list of devices in its order (PATCH_DEVICES).
+    const PatchListCache& lists = patchLists();
     std::vector<std::string> candidates;
-    if (engine_.patchMainKeep_.valid) {
-        candidates.push_back(pc::makeDeviceKey(engine_.patchMainKeep_.kind, engine_.patchMainKeep_.args));
-    } else if (engine_.device_ != nullptr) {
-        candidates.push_back(pc::makeDeviceKey(engine_.sourceKind_, engine_.deviceArgs_));
-    }
-    for (const PatchDeviceChoice& c : engine_.patchDeviceChoices()) {
+    if (!lists.receiverRadio.empty()) { candidates.push_back(lists.receiverRadio); }
+    for (const PatchListCache::Device& c : lists.devices) {
         // Radios only: a new Radio is never started on a recording nobody
         // chose - the generator is the stand-in when no radio is free.
         if (!pc::isGeneratorKey(c.key) && !pc::isIqFileKey(c.key)) { candidates.push_back(c.key); }
@@ -126,23 +153,34 @@ pc::NodeId AppWindow::patchAddRadioPart(const std::string& label, pc::PortType f
                                         float y) {
     // A new radio starts on a device nothing else is using - the receiver's
     // own radio first - so it runs the moment it lands. The native list is
-    // read for it here (0.99.40): showing the view no longer reads it, and
-    // adding a radio is asking for one.
+    // read for it (0.99.40): showing the view no longer reads it, and adding
+    // a radio is asking for one.
     //
-    // APPLIED AT ONCE through applyCommand, not queued (engine/stage3b-pre
-    // B1, 2026-09-28): patchDefaultDeviceKey() below reads the native list
-    // on the very next line, and a queued scan would not have run yet - the
-    // node would save the generator instead of the radio it is meant to
-    // start on. f7d1cfc (pre-extraction master) called scanNative() inline
-    // for exactly this reason; applyCommand is its equivalent once the
-    // native walk moved behind the command path.
-    engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
-    // On the page's draft, and to the engine at once - the same "applied at
-    // once" as the scan above (docs/engine-stage3.md OPEN 6).
+    // TWO PASSES, NOT ONE (window port group 13). The scan used to be APPLIED
+    // AT ONCE through applyCommand because patchDefaultDeviceKey() reads the
+    // native list on the very next line, and a queued scan has not run yet -
+    // the node would save the generator instead of the radio it is meant to
+    // start on (engine/stage3b-pre B1, 2026-09-28; f7d1cfc, pre-extraction
+    // master, called scanNative() inline for the same reason). A scan through
+    // the session cannot be applied at once, so the dependency is kept the
+    // other way round: the node is created NOW with no device, so the press
+    // shows, the scan is asked for, and the device is chosen when the scan's
+    // answer arrives (finishPatchRadioParts, from syncPatchDraft) - by which
+    // time the list exists. Two Radio presses before the answer take two
+    // different devices: each choice is made in turn on a draft that holds the
+    // one before.
     syncPatchDraft();
-    const std::string dev = patchDefaultDeviceKey();
     const pc::NodeId made = patchDraft_.addNode(pc::NodeKind::Radio, label, feed, x, y);
-    if (pc::Node* n = patchDraft_.mutableNode(made)) { n->device = dev; }
+    if (made != pc::kNoNode) {
+        const std::uint64_t scan = uiSubmitTicket(cascade::core::cmd::QueuedCommand{
+            cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY), {}});
+        if (scan != 0u) {
+            patchRadioWaits_.push_back({made, scan});
+        } else if (pc::Node* n = patchDraft_.mutableNode(made)) {
+            // The session would not take the scan: the list as it is.
+            n->device = patchDefaultDeviceKey();
+        }
+    }
     commitPatchDraft();
     return made;
 }
@@ -156,12 +194,15 @@ void AppWindow::drawPatchTransport() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const ImVec2 centre(at.x + kR * 1.1f, at.y + kR * 1.1f);
-    if (drawBenchStopButton(dl, centre, kR, engine_.patchRunning_)) {
-        engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, engine_.patchRunning_ ? 0 : 1));
+    // RUNNING is the state's flag (FOXAPI_RX_PATCH_RUNNING); START and STOP are commands through the session, the pass
+    // applies them. A second press inside one pass sends the same command twice, and the second changes nothing.
+    const bool running = (uiState_.flags & FOXAPI_RX_PATCH_RUNNING) != 0u;
+    if (drawBenchStopButton(dl, centre, kR, running)) {
+        uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, running ? 0 : 1), {}});
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "%s", engine_.patchRunning_
+            "%s", running
                       ? tr("Stop the patch: every patch radio closes, recordings are\n"
                            "finished, and the receiver gets its radio back.")
                       : tr("Start the patch: every radio switched on opens. The receiver\n"
@@ -180,7 +221,7 @@ void AppWindow::drawPatchTransport() {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, th::toneHex(0xE07A4E, 255, th::ink::StopBgTop));
     ImGui::PushStyleColor(ImGuiCol_Text, th::toneHex(0xEFE7D2, 255, th::ink::StopText));
     if (ImGui::Button(trId("ALL OFF###patchalloff"), ImVec2(150.0f, kR * 1.7f))) {
-        engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
+        uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF), {}});
     }
     ImGui::PopStyleColor(4);
     if (ImGui::IsItemHovered()) {
@@ -199,13 +240,13 @@ void AppWindow::drawPatchTransport() {
     ImGui::SetCursorScreenPos(
         ImVec2(ImGui::GetCursorScreenPos().x + 8.0f, at.y + kR * 1.1f - ImGui::GetTextLineHeight() * 0.5f));
     std::string line;
-    if (engine_.patchRunning_) {
+    if (running) {
         // Singular and plural as whole keys: an English "s" handed in by %s
         // is a word no catalogue can translate.
         cascade::core::formatUtf8(line,
                       radios == 1 ? tr("RUNNING - %zu of %zu radio open")
                                   : tr("RUNNING - %zu of %zu radios open"),
-                      engine_.patchRadios_.size(), radios);
+                      patchLists().radiosOpen, radios);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kPhosphor));
     } else {
         cascade::core::formatUtf8(line,
@@ -225,7 +266,8 @@ void AppWindow::drawPatchTransport() {
 void AppWindow::drawPatchRadioSwitch(pc::Node& n) {
     // LIT while this radio is actually open, amber while it is switched on and
     // waiting (the patch stopped, or the device still opening), dark when off.
-    const bool live = engine_.patchRadios_.count(n.id) != 0;
+    const PatchListCache::Radio* lit = patchRadio(n.id);
+    const bool live = lit != nullptr && lit->open;
     const ImU32 face = !n.on ? cascade::gui::theme::kEnamel
                        : live ? cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.45f)
                               : cascade::gui::theme::withAlpha(cascade::gui::theme::kAmber, 0.35f);
@@ -260,15 +302,15 @@ void AppWindow::patchCollectMapTargets(pc::NodeId map) {
     // which already applies the host's staleness rule - the same list the map
     // pages draw, so a patch map and a map page never disagree about what is
     // there.
-    const std::vector<std::string> sources = pc::mapSources(patchDraft_, map, engine_.patchCatalogue_);
+    const std::vector<std::string> sources = pc::mapSources(patchDraft_, map, patchLists().parts);
     if (sources.empty()) { return; }
     const auto wanted = [&sources](const std::string& plugin) {
         return std::find(sources.begin(), sources.end(), plugin) != sources.end();
     };
-    for (const cascade::core::HostTrack& t : engine_.pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& t : hostTracks()) {
         if (wanted(t.plugin)) { patchMapTracks_.push_back(t); }
     }
-    for (const cascade::core::HostPath& p : engine_.pluginUi_.paths()) {
+    for (const cascade::core::HostPath& p : hostPaths()) {
         if (wanted(p.plugin)) { patchMapPaths_.push_back(p); }
     }
 }
@@ -283,7 +325,7 @@ void AppWindow::drawPatchMapInspector(pc::Node& n) {
     }
     ImGui::Text(tr("%zu of %zu inputs wired"), wired, pc::kMapInputs);
     patchCollectMapTargets(n.id);
-    for (const std::string& src : pc::mapSources(patchDraft_, n.id, engine_.patchCatalogue_)) {
+    for (const std::string& src : pc::mapSources(patchDraft_, n.id, patchLists().parts)) {
         std::size_t count = 0;
         for (const cascade::core::HostTrack& t : patchMapTracks_) {
             if (t.plugin == src) { ++count; }
@@ -339,14 +381,11 @@ void AppWindow::drawPatchSquelch(pc::Node& n, float width) {
         }
     }
     // WHERE TO SET IT: the level the gate is judging, and whether it is open.
-    const pc::NodeId chan = demodChannel(patchDraft_, n.id);
-    const auto r = engine_.patchRadios_.find(pc::radioOf(patchDraft_, chan));
-    float level = 0.0f;
-    bool open = false;
-    if (chan != pc::kNoNode && r != engine_.patchRadios_.end() &&
-        r->second->runner().squelchState(chan, level, open)) {
+    // (The gate is the pass's reading of the demodulator's own channel, served under the demodulator's node: PATCH_LIVE.)
+    if (const PatchLiveRow* gate = patchLiveRow(1, n.id)) {
+        const bool open = gate->open;
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-        ImGui::Text("%.0f dB", static_cast<double>(level));
+        ImGui::Text("%.0f dB", gate->v0);
         ImGui::PopStyleColor();
         ImGui::SameLine();
         if (!n.squelch || open) {
@@ -369,8 +408,9 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     ImGui::Spacing();
     ImGui::TextUnformatted(tr("Device"));
     ImGui::SetNextItemWidth(-FLT_MIN);
-    const std::vector<PatchDeviceChoice> choices = engine_.patchDeviceChoices();
-    if (ImGui::BeginCombo("##patchdevice", engine_.patchDeviceLabel(n.device).c_str())) {
+    const PatchListCache& lists = patchLists();
+    const std::vector<PatchListCache::Device>& choices = lists.devices;
+    if (ImGui::BeginCombo("##patchdevice", pc::deviceLabelFor(choices, n.device).c_str())) {
         // The native radios and the recordings are read afresh each time the
         // list opens - a dongle plugged in or a file saved a moment ago is in
         // it - and on no other frame, as the Source section's list is. The
@@ -382,16 +422,18 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
         // ONCE EVER by FOXAPP_OP_PATCH_RADIO_LIST_OPENED (patchListsWanted_
         // guards it), and only run by patchReconcile once the scan plan can
         // vouch for every radio this process has open - never here, since a
-        // radio may still be opening under this very call. Applied at once:
-        // the native list this same combo reads is built by it.
+        // radio may still be opening under this very call. Sent through the
+        // session: the engine's pass applies it, and the list this combo
+        // reads is the one after - the rows drawn this frame were read before
+        // it opens, as they always were.
         // (engine/stage3b-pre B2: FOXAPP_OP_SCAN_DEVICES_ON_OPEN used to run
         // the probe here immediately and never retried a deferral.)
         if (ImGui::IsWindowAppearing()) {
-            engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED));
-            engine_.patchListRecordings();
+            uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED), {}});
+            uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::make(FOXAPP_OP_PATCH_LIST_RECORDINGS), {}});
         }
         for (std::size_t i = 0; i < choices.size(); ++i) {
-            const PatchDeviceChoice& c = choices[i];
+            const PatchListCache::Device& c = choices[i];
             // ONE DEVICE, ONE RADIO: a device another Radio already has is
             // shown, greyed, with who has it - not hidden, so the user can see
             // why it is not offered.
@@ -412,8 +454,8 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
             // IN USE BY THE RECEIVER IS NOT "NOT AVAILABLE" (2026-09-23): the
             // receiver lends its radio to the patch when the patch starts, so
             // the row is offered, and says what will happen to it.
-            else if (engine_.device_ != nullptr &&
-                     pc::sameDevice(c.key, pc::makeDeviceKey(engine_.sourceKind_, engine_.deviceArgs_))) {
+            else if ((uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u && !lists.receiverRadio.empty() &&
+                     pc::sameDevice(c.key, lists.receiverRadio)) {
                 text += tr("  (the receiver's - lent to the patch when it starts)");
             }
             ImGui::BeginDisabled(holder != nullptr);
@@ -425,9 +467,7 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
                 n.device = c.key;
                 // A recording's rate is its own: the node takes it now, so
                 // the patch is planned at the rate it will run at.
-                for (const pc::RecordingInfo& r : engine_.patchRecordings_) {
-                    if (r.key == c.key) { n.rateHz = r.rateHz; }
-                }
+                if (pc::isIqFileKey(c.key) && c.rateHz > 0.0) { n.rateHz = c.rateHz; }
                 patchUi_.dirty = true;
             }
             ImGui::EndDisabled();
@@ -438,17 +478,17 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
     // LOOK AGAIN from here, rather than sending the user to the Source panel:
     // a radio plugged in after the page opened, or one a scan beside an open
     // radio had to leave out, is one press away (2026-09-23).
-    ImGui::BeginDisabled(engine_.soapyScanPending_);
+    const bool scanning = (uiState_.sourceFlags & FOXAPI_SRC_SCAN_PENDING) != 0u;
+    ImGui::BeginDisabled(scanning);
     if (ImGui::SmallButton(trId("Look for radios"))) {
-        // A COMMAND, not a direct write (engine/stage3b-pre fields-to-commands
-        // round 2): applied at once, so pollSoundCard's gate (drawSourceSection)
-        // sees patchListsWanted_ true on this same frame, as the direct write did.
-        engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS));
-        engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
-        engine_.patchListRecordings();
+        // COMMANDS through the session, in this order (the pass applies them in the order sent): the wish for the
+        // lists, the scan itself, and the recordings.
+        uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::make(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS), {}});
+        uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES), {}});
+        uiSubmit(cascade::core::cmd::QueuedCommand{cascade::core::cmd::make(FOXAPP_OP_PATCH_LIST_RECORDINGS), {}});
     }
     ImGui::EndDisabled();
-    if (engine_.soapyScanPending_) {
+    if (scanning) {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
         ImGui::TextUnformatted(tr("looking..."));
@@ -493,21 +533,20 @@ void AppWindow::drawPatchRadioInspector(pc::Node& n) {
 
     // What it is actually doing.
     ImGui::Spacing();
-    const auto run = engine_.patchRadios_.find(n.id);
-    if (run != engine_.patchRadios_.end()) {
+    const PatchListCache::Radio* line = patchRadio(n.id);
+    if (line != nullptr && line->open) {
         ImGui::PushStyleColor(ImGuiCol_Text, amber);
-        ImGui::Text(tr("running %.3f MS/s"), run->second->rateHz() / 1e6);
-        ImGui::Text(tr("at %.6f MHz"), run->second->centreHz() / 1e6);
+        ImGui::Text(tr("running %.3f MS/s"), line->rateHz / 1e6);
+        ImGui::Text(tr("at %.6f MHz"), line->centreHz / 1e6);
         ImGui::PopStyleColor();
-    } else if (engine_.patchRadioPending_.count(n.id) != 0) {
+    } else if (line != nullptr && line->pending) {
         ImGui::PushStyleColor(ImGuiCol_Text, muted);
         ImGui::TextUnformatted(tr("opening the device..."));
         ImGui::PopStyleColor();
     }
-    const auto err = engine_.patchRadioError_.find(n.id);
-    if (err != engine_.patchRadioError_.end()) {
+    if (line != nullptr && !line->note.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-        ImGui::TextWrapped("%s", err->second.c_str());
+        ImGui::TextWrapped("%s", line->note.c_str());
         ImGui::PopStyleColor();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
@@ -549,10 +588,12 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
             n.device = "speakers";
             patchUi_.dirty = true;
         }
-        for (std::size_t i = 0; i < engine_.devices_.size(); ++i) {
+        // The output devices are AUDIO_DEVICES (the Sinks section's combo reads the same list).
+        const RailListCache& outputs = railLists();
+        for (std::size_t i = 0; i < outputs.sinks.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
-            const std::string k = pc::makeOutputDeviceKey(engine_.devices_[i].name);
-            if (ImGui::Selectable(engine_.devices_[i].name.c_str(), key == k)) {
+            const std::string k = pc::makeOutputDeviceKey(outputs.sinks[i].name);
+            if (ImGui::Selectable(outputs.sinks[i].name.c_str(), key == k)) {
                 n.device = k;
                 patchUi_.dirty = true;
             }
@@ -560,29 +601,26 @@ void AppWindow::drawPatchSinkInspector(pc::Node& n) {
         }
         ImGui::EndCombo();
     }
-    for (const auto& d : engine_.patchDests_) {
-        if (d.first != n.id || !d.second) { continue; }
+    if (const PatchLiveRow* d = patchLiveRow(2, n.id)) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAmber));
-        ImGui::TextWrapped("%s", d.second->describe().c_str());
-        ImGui::Text("%.1f s", static_cast<double>(d.second->samples()) / pc::kOutRateHz);
+        ImGui::TextWrapped("%s", d->name.c_str());
+        ImGui::Text("%.1f s", d->v1 / pc::kOutRateHz);
         ImGui::PopStyleColor();
-        const std::string e = d.second->error();
-        if (!e.empty()) {
+        if (!d->detail.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-            ImGui::TextWrapped("%s", e.c_str());
+            ImGui::TextWrapped("%s", d->detail.c_str());
             ImGui::PopStyleColor();
         }
     }
-    const auto err = engine_.patchDestError_.find(n.id);
-    if (err != engine_.patchDestError_.end()) {
+    if (const PatchLiveRow* err = patchLiveRow(5, n.id)) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-        ImGui::TextWrapped("%s", err->second.c_str());
+        ImGui::TextWrapped("%s", err->detail.c_str());
         ImGui::PopStyleColor();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, muted);
     if (pc::outputKind(key) == pc::OutputKind::Wav || pc::outputKind(key) == pc::OutputKind::Mp3) {
         ImGui::TextWrapped(tr("Files go in %s, one per speaker, named after it."),
-                           engine_.recordDir_.c_str());
+                           uiFact("fact.recorder.dir").c_str());
     }
     ImGui::PopStyleColor();
 }

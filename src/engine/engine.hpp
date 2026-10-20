@@ -1682,6 +1682,44 @@ private:
     // (FOXAPP_PATCH_GRAPH_DOCUMENT) - read by the window, whose draft edit of
     // the old document must not be put on top of the new one.
     std::uint64_t patchGraphEpoch_ = 0;
+    // THE GRAPH'S VERSION (API 0.3 8.12): a counter that moves on every change
+    // to patchGraph_ - a session's accepted edit, a document, and the patch
+    // runtime's own (START's and ALL OFF's switches, a learnt centre, a device
+    // named at the take-over). Starts at 1 for the empty graph, so 0 can mean
+    // "no version" to a sender. It is published (fact.patch.version) in the
+    // same block as the graph and the epoch, and a SET_GRAPH names the version
+    // its draft was edited from (ival[1]), which is how the engine merges a
+    // stale edit instead of overwriting what happened since.
+    std::uint64_t patchGraphVersion_ = 1;
+    // The last kPatchGraphHistory graphs, one per version they were noticed
+    // at, newest last: what a stale base is merged against. Cleared by a
+    // document (a new epoch's edits are never merged into the old one's).
+    struct PatchGraphRecord {
+        std::uint64_t version = 0;
+        cascade::core::patch::Graph graph;
+    };
+    static constexpr std::size_t kPatchGraphHistory = 8;
+    std::deque<PatchGraphRecord> patchGraphHistory_;
+    // Notices a change to patchGraph_ made since the last notice (a graph
+    // compare against the newest record, no allocation when nothing moved) and
+    // gives it the next version. Called at every point a stale sender could be
+    // merged against, and before every publish.
+    void syncPatchGraphVersion();
+    // THE PATCH RUNTIME'S STEP OF THE PASS (API 0.3 8.12): while the standard
+    // window's patch view is showing (patchPageOpen_), the catalogue, the
+    // transport, the radios, the compile and the sets; when the flag drops, the
+    // close rule (the patch stops, the receiver gets its radio back). Between
+    // pumpPlugins and pumpPublish, so the block published in the pass shows it.
+    void pumpPatch();
+    // The compile of the graph against the radios as they are, with the two
+    // marks only an attempt can find (a radio that would not open, a plugin
+    // that refused): Engine::patchPlan_.
+    void compilePatchPlan();
+    // THE PATCH VIEW IS SHOWING (FOXAPP_OP_SET_PATCH_PAGE_OPEN). True until a
+    // window says otherwise: the view is the window's default face, so an
+    // engine nobody has told must behave as the first frame of one that is
+    // showing it.
+    bool patchPageOpen_ = true;
     // THE PATCH'S OWN TRANSPORT (0.99.18). Opening the page no longer starts
     // anything: START on the page opens the radios that are switched on and
     // takes the receiver's radio; STOP or ALL OFF closes them and gives it
@@ -1721,9 +1759,26 @@ private:
         std::uint64_t lines = 0;
     };
     std::map<cascade::core::patch::NodeId, PatchDecoderFace> patchDecoderFaces_;
-    // Each Text out node's recent lines, newest last, for its face - the
-    // patch's own decoder log. Bounded per node.
-    std::map<cascade::core::patch::NodeId, std::deque<std::string>> patchSinkLines_;
+    // THE PATCH DECODERS' PICTURES (API 0.3 8.12, part 3): the newest picture of each picture-decoder node, kept until
+    // the node leaves the graph or a patch document replaces it (NOT until the patch stops: the face keeps the last
+    // picture, as it always has). The pumping thread's own map; what an interface reads is the immutable set built from
+    // it (ApiImageSet, read_image), so nothing here is ever read from another thread. Each picture is moved in whole from
+    // the decoder's runner (pumpDecoderOutput -> takePatchImage) and never written again.
+    struct PatchImage {
+        std::uint64_t id = 0;
+        std::string caption;
+        std::shared_ptr<const cascade::core::HostImage> image;
+    };
+    std::map<cascade::core::patch::NodeId, PatchImage> patchImages_;
+    std::uint64_t patchImageLastId_ = 0;       // the last id given (ids start at 1 and are never reused)
+    std::uint64_t patchImagesEpoch_ = 0;       // the graph epoch the pictures belong to
+    bool patchImagesDirty_ = false;            // a picture arrived or went since the set was last built
+    std::vector<cascade::core::patch::NodeId> patchImagesFresh_;  // nodes whose picture arrived this pass (room kept)
+    void takePatchImage(cascade::core::patch::NodeId node, cascade::core::HostImage&& img);
+    // Once a pass, in publishApiLists: pictures of nodes the graph no longer holds go (all of them with a new document),
+    // the set read_image serves is rebuilt when anything moved, and the pass's arrivals are announced.
+    void syncPatchImages();
+    std::shared_ptr<const ApiImageSet> apiImages_;
     // GUI thread: rebuilds the two lists above from pluginHost_.
     void rebuildPatchCatalogue();
     // True when the node's Text output reaches a Text sink - the only way
@@ -1807,13 +1862,6 @@ private:
     // that are new or changed (core::patch::RecordingProbeCache).
     cascade::core::patch::RecordingProbeCache patchRecordingCache_;
     void patchListRecordings();
-    // Drops a gone node's cached decoder-text lines (engine/stage3b-pre
-    // fields-to-commands round 2, docs/engine-stage3.md OPEN item 1): the
-    // canvas used to erase straight out of patchSinkLines_ itself, in the
-    // same per-frame pass it prunes its OWN maps (patchScopes_,
-    // patchScopeSeq_) for the same reason - a closed node's memory goes with
-    // it. Same reviewed direct-call pattern as patchListRecordings above.
-    void prunePatchSinkLines();
     std::string patchDeviceLabel(const std::string& key) const;
     // Per frame while the page is open: take the receiver's radio, open and
     // close radios to match the nodes, make and drop speaker outputs, and
@@ -2453,6 +2501,26 @@ private:
     void buildApiListsSource(ApiListBlock& b);
     std::string transmitArgsSeed() const;
     std::shared_ptr<const ApiListBlock> apiLists_;  // the pumping thread's newest
+    // PATCH_LIVE (API 0.3 8.12): the pass's copy of what the patch's running nodes are doing, in a block of its own
+    // that moves no listSeq (ApiLiveBlock), rebuilt only when its own fingerprint moved. Once a pass, from
+    // publishApiLists, on the pumping thread.
+    void refreshPatchLive();
+    std::shared_ptr<const ApiLiveBlock> apiLive_;
+    // The pass's readings before they are text: kept between passes so that a pass which finds nothing new (the common
+    // one) reuses the room and allocates nothing. `ref` points at what the strings of the entry come from (an
+    // AudioDest, a PatchDecoderFace or a patchDestError_ text), valid for the pass that took it.
+    struct PatchLiveRaw {
+        std::uint64_t node = 0;
+        int kind = 0;
+        double v0 = 0.0, v1 = 0.0;
+        bool open = false;
+        const void* ref = nullptr;
+    };
+    std::vector<PatchLiveRaw> patchLiveRaw_;
+    // The receiver's radio as a patch Radio node names its device (fact.patch.receiverRadio, API 0.3 8.12): the radio
+    // lent to the patch, else the one the receiver has open, "" for the generator, a file or a card the receiver
+    // has not opened as a radio.
+    std::string patchReceiverRadioKey() const;
     unsigned apiListsBookmarkVersion_ = 0;
     // The plugins' keys (core::pluginKey), kept so the per-pass fingerprint
     // allocates nothing: rebuilt only when the plugins' paths change.

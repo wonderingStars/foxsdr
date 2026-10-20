@@ -38,6 +38,8 @@ struct GLFWwindow;
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
+#include "core/freq_converter.hpp"
+#include "core/patch_device_label.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
 #include "core/patch_recordings.hpp"
@@ -624,8 +626,6 @@ private:
     void onBookmarksChanged() override;
     void onReceiverPositionApplied(double latDeg, double lonDeg) override;
     void onConverterChanged(bool clearLoError) override;
-    void onPatchGraphChanged() override;
-    void onPatchPicture(cascade::core::patch::NodeId node, cascade::core::HostImage&& img) override;
     void onGpsFixApplied() override;
     void onCatalogueResult() override;
     void beforePluginRescan() override;
@@ -634,7 +634,6 @@ private:
     void attachTrackInfo(const CascadeTrackInfoApi* api) override;
     void showDemonstrationInstrument(const cascade::core::HostInstrument& in) override;
     std::vector<std::string> drainTrackInfoText() override;
-    bool patchPageOpen() const override;
     // The three publish-time facts (engine/stage3b-pre OPEN 4): no longer
     // EngineHost hooks the engine calls while publishing, but this window's
     // answers, HANDED OVER once a frame (handFrontEndFacts).
@@ -660,11 +659,7 @@ private:
     using DeviceOpenResult = cascade::engine::Engine::DeviceOpenResult;
     using SoundCardOpenResult = cascade::engine::Engine::SoundCardOpenResult;
     using ConverterHeldAir = cascade::engine::Engine::ConverterHeldAir;
-    using PatchDecoderFace = cascade::engine::Engine::PatchDecoderFace;
     using PatchRadioOpen = cascade::engine::Engine::PatchRadioOpen;
-    using PatchSpectrum = cascade::engine::Engine::PatchSpectrum;
-    using PatchMainKeep = cascade::engine::Engine::PatchMainKeep;
-    using PatchDeviceChoice = cascade::engine::Engine::PatchDeviceChoice;
     using PluginNotice = cascade::engine::Engine::PluginNotice;
     using PendingUserPresetEdit = cascade::engine::Engine::PendingUserPresetEdit;
     using CatalogFetchResult = cascade::engine::Engine::CatalogFetchResult;
@@ -892,6 +887,10 @@ private:
     // not meant to be (plugin_abi.h: a track source is polled from the GUI thread at frame rate), and the one
     // place the radar scope names the engine: the guard counts it as a read and does not list it.
     const std::vector<cascade::core::HostTrack>& hostTracks();
+    // ...and the paths (a track's trail) the same modules published: the Patch page's Map part draws both (window port
+    // group 13). HOST-PROCESS for the same reason hostTracks() is, and the other place the guard counts as a read and
+    // does not list.
+    const std::vector<cascade::core::HostPath>& hostPaths();
     // Does the receiver have a position? The state's FOXAPI_RX_POSITION_SET (rxLatDeg and rxLonDeg are valid with it).
     bool receiverPositionKnown() const { return (uiState_.flags & FOXAPI_RX_POSITION_SET) != 0u; }
     // The switch that turns it on, in the rail's "Turn on and off plugins"
@@ -1015,19 +1014,24 @@ private:
     void drawTransmitPage();
 
     // --- the patch page ------------------------------------------------------
-    // Every frame, shown or not: retires the receiver's patch sets, and when
-    // the patch view has just been left does what closing the page always
-    // did - stops the patch and gives the receiver its radio back. Draws
-    // nothing since 0.99.40; the canvas is drawPatchView.
-    void drawPatchPage();
+    // (drawPatchPage left with window port group 13: the close rule, the radios,
+    // the plan and the sets are the engine's pass's now - Engine::pumpPatch -
+    // and the window tells it whether the view is showing: setMainViewPatch.)
     // THE PATCH VIEW (0.99.40): the canvas, its transport, parts bin and
     // inspector, drawn as the main window's face in place of the spectrum,
     // the waterfall and the status column - into the child it is called in,
     // so it is exactly as large as the window leaves it.
     void drawPatchView();
     // Which face the main window shows: the patch (true) or the receiver.
-    // Only that - it asks for no device list (see patchListsWanted_).
+    // Only that - it asks for no device list (see patchListsWanted_) - and the
+    // engine is told (FOXAPP_OP_SET_PATCH_PAGE_OPEN), whose pass runs the patch
+    // while it is showing and stops it when it is not.
     void setMainViewPatch(bool patch);
+    // Tells the engine whether the view is showing, when that differs from what
+    // it was last told (the engine starts "showing", as the window does); every
+    // frame from drawUi, so a command the session could not take is sent again.
+    void syncPatchPageOpen();
+    bool patchPageOpenSent_ = true;
     // The two view keys, RECEIVER and PATCH, under the rail's bank keys:
     // at the column's left colX and width colW, laid from `top`. Returns the
     // y below them.
@@ -2124,41 +2128,163 @@ private:
     cascade::engine::Engine::StatusText statusLines_;
     cascade::gui::patch::Interaction patchUi_;
     // THE PAGE'S DRAFT OF THE GRAPH (engine/stage3b-pre, docs/engine-stage3.md
-    // OPEN 6, Design A). The graph is the Engine's (patchGraph_); the canvas,
-    // the faces and the inspector draw from and edit this copy, and
-    // commitPatchDraft() hands the whole of it to the Engine as one
-    // FOXAPP_OP_PATCH_SET_GRAPH - after the parts bin, after the canvas and
-    // faces, and after the inspector, so every edit reaches the engine in the
-    // frame it was made, before patchPublishSets builds from it.
+    // OPEN 6, Design A; on the window's session since window port group 13, API
+    // 0.3 8.12). The graph is the Engine's; the canvas, the faces and the
+    // inspector draw from and edit this copy, and commitPatchDraft() hands the
+    // whole of it to the engine as one FOXAPP_OP_PATCH_SET_GRAPH through the
+    // session, naming the graph VERSION the draft was last in step with
+    // (ival[1]) - the engine MERGES an edit whose version is not the current
+    // one, so nothing it did meanwhile (START's switches, a learnt centre,
+    // another session) is overwritten.
     //
-    // THE THREE RULES the round-3 review's scanner findings make for any
-    // draft (docs/review-harness/engine-round3-review.md):
-    //   - it FOLLOWS THE ENGINE. syncPatchDraft() copies the engine's graph
-    //     whenever it differs from patchDraftBase_ - the graph this draft was
-    //     last in step with (core::patch::graphsEqual, no text written) - so a config load, START/ALL OFF or a centre
-    //     the running radio reported shows at once; never mid-drag, resize or
-    //     wire (patchInteracting()), when the drag's own node would jump;
+    // THE RULES for any draft (docs/review-harness/engine-round3-review.md),
+    // and what an asynchronous commit adds to them:
+    //   - it FOLLOWS THE ENGINE. syncPatchDraft() reads the graph, its version
+    //     and its epoch from ONE publish (patchLook) and, when the version is
+    //     not the draft's base, takes the engine's graph - never mid-drag,
+    //     resize or wire (patchInteracting()), when the drag's own node would
+    //     jump;
     //   - an edit made while the engine moved on is put ON TOP of the
-    //     engine's graph (core::patch::rebaseDraft), never the stale copy
-    //     sent back over it;
-    //   - it is NEVER A DEFAULT: until it has been copied from the engine
-    //     (patchDraftInStep_) nothing is ever committed from it.
-    // drawUi commits once a frame as well, so an edit is never left behind
-    // by a view that stopped drawing.
+    //     engine's graph (core::patch::rebaseDraft), never the stale copy sent
+    //     back over it;
+    //   - it is NEVER A DEFAULT: until a publish has been read and adopted
+    //     (patchDraftInStep_) nothing is ever committed from it, and a draft
+    //     is never made "in step" with a graph that has not been published
+    //     (frame 1 of an application whose patch is still queued);
+    //   - A COMMIT IS NOT AN ADOPT. After a commit the published graph is the
+    //     OLD one until the pass has applied it, so the draft keeps its edit
+    //     and nothing is adopted until the command's own answer names the new
+    //     version (patchSend_): a node dragged across several frames never
+    //     snaps back. One commit is in flight at a time; edits made meanwhile
+    //     stay in the draft and go with the next, from the new base.
+    // drawUi commits once a frame as well, so an edit is never left behind by
+    // a view that stopped drawing.
     cascade::core::patch::Graph patchDraft_;
     cascade::core::patch::Graph patchDraftBase_;
+    std::uint64_t patchDraftVersion_ = 0;   // the version patchDraftBase_ is (0: none known)
     std::uint64_t patchDraftEpoch_ = 0;
     bool patchDraftInStep_ = false;
+    // THE LOOK: fact.patch.graph, .version and .epoch read together, when
+    // listSeq has moved. The graph is parsed again only when its version or
+    // epoch changed. `valid` is false before the first publish and for a read
+    // that straddled one (the version is read again after the graph).
+    struct PatchLook {
+        std::uint64_t listSeq = ~std::uint64_t{0};
+        bool valid = false;
+        std::uint64_t version = 0;
+        std::uint64_t epoch = 0;
+        cascade::core::patch::Graph graph;
+        std::string text;
+        std::string scratch;
+    };
+    PatchLook patchLook_;
+    const PatchLook& patchLook();
+    // THE PATCH PAGE'S READS OF THE TABLE (window port group 13, part b; API 0.3 8.12), taken when listSeq has moved:
+    // the parts bin (PATCH_PARTS, as the DecoderInfo list the core's pure functions take), the plan the canvas marks and
+    // the inspector words are drawn from (PATCH_PLAN, PATCH_PROBLEMS and fact.patch.runnable, as the Plan the core's
+    // pure functions take), the radios (PATCH_RADIOS), the nodes the engine refused to run (PATCH_NODES), the devices a
+    // Radio can be set to (PATCH_DEVICES) with the receiver's own radio and each Radio node's converter. What the pass
+    // changed arrives a pass after it did; the page's own edits are in the draft, not here.
+    struct PatchListCache {
+        std::uint64_t listSeq = ~std::uint64_t{0};
+        std::vector<cascade::core::patch::DecoderInfo> parts;
+        cascade::core::patch::Plan plan;
+        struct Radio {
+            std::string device;              // the label of the device it is on
+            std::string note;                // the line its face prints (why it did not open, or the note of a running one)
+            double rateHz = 0.0;             // a running radio's own rate
+            double centreHz = 0.0;           // ...and its AIR centre
+            bool open = false;
+            bool fault = false;
+            bool pending = false;            // its open is still on the worker
+        };
+        std::map<cascade::core::patch::NodeId, Radio> radios;
+        std::size_t radiosOpen = 0;
+        std::vector<cascade::core::patch::NodeId> refused;   // decoder nodes whose module refused to start
+        struct Device {
+            std::string label;
+            std::string key;
+            double rateHz = 0.0;             // a recording's own rate
+        };
+        std::vector<Device> devices;         // in the Device combo's order
+        std::string receiverRadio;           // fact.patch.receiverRadio
+        bool receiverTuned = false;          // fact.patch.receiverCentre exists (its VALUE is the state's centreHz)
+        std::map<cascade::core::patch::NodeId, cascade::core::ConverterSetting> conv;   // fact.patch.conv.<node>
+        std::string factText;                // the fact as just read (kept for its room)
+    };
+    PatchListCache patchCache_;
+    const PatchListCache& patchLists();
+    const PatchListCache::Radio* patchRadio(cascade::core::patch::NodeId node);
+    // WHAT THE RUNNING NODES ARE DOING NOW (PATCH_LIVE): read once a frame by the page that draws it (the list moves no
+    // listSeq), into rows that keep their room.
+    struct PatchLiveRow {
+        std::uint64_t node = 0;
+        int kind = 0;                        // 1 squelch, 2 speaker, 3 channel level, 4 decoder face, 5 speaker error
+        double v0 = 0.0, v1 = 0.0;
+        bool open = false;
+        std::string name, detail;
+    };
+    std::vector<PatchLiveRow> patchLive_;
+    std::size_t patchLiveCount_ = 0;
+    void readPatchLive();
+    const PatchLiveRow* patchLiveRow(int kind, cascade::core::patch::NodeId node) const;
+    // A radio's spectrum, read once a frame at the most (read_node_spectrum, the cursor the newest sequence held);
+    // null with no radio running there.
+    struct PatchSpectrumCache {
+        std::vector<float> db;
+        std::uint64_t seq = 0;
+        std::uint64_t readFrame = 0;
+        bool have = false;
+    };
+    std::map<cascade::core::patch::NodeId, PatchSpectrumCache> patchSpectrumCache_;
+    std::vector<float> patchSpectrumScratch_;
+    std::uint64_t patchFrame_ = 0;           // bumped by readPatchLive
+    const PatchSpectrumCache* patchSpectrum(cascade::core::patch::NodeId radio);
+    // The newest lines each Text out has been shown (200 at most, "<source>: <text>"), routed from the window's copy of
+    // DECODER_LINES by the draft's wires: a decoder shows on every Text out it is wired to.
+    std::map<cascade::core::patch::NodeId, std::deque<std::string>> patchTextOutLines_;
+    std::uint64_t patchSinkRoutedId_ = 0;
+    void routePatchSinkLines();
+    // THE COMMIT IN FLIGHT (stop-and-wait). Sent: submitted, not answered;
+    // Applied: answered OK with the new version, waiting for the publish that
+    // shows it to be read. `sent` is the draft as it was sent, the base of the
+    // rebase that puts the edits made since on top of what the engine now holds.
+    struct PatchSend {
+        enum class State { Idle, Sent, Applied };
+        State state = State::Idle;
+        std::uint64_t ticket = 0;
+        std::uint64_t newVersion = 0;
+        bool document = false;
+        cascade::core::patch::Graph sent;
+    };
+    PatchSend patchSend_;
+    // The commit was refused (or its base had moved on): the next valid look
+    // is adopted whole.
+    bool patchAdoptWanted_ = false;
+    // The answer to the graph command, from pumpTransmitKey's drain.
+    void onPatchGraphResult(const FoxCommandResult& r);
+    void settlePatchSend();
+    void adoptPatchLook(const PatchLook& l, bool documentChanged = true);
+    void forgetPatchInteraction();
     // True while the button is held on a drag, a resize or a wire; a state
     // left behind by a release the canvas never saw is cleared here.
     bool patchInteracting();
     void syncPatchDraft();
-    void adoptPatchGraph();
     void commitPatchDraft();
     // A NEW DOCUMENT for the engine (the config's patch, a patch file): sent
-    // flagged FOXAPP_PATCH_GRAPH_DOCUMENT, and the draft starts again from
-    // what the engine then holds.
+    // flagged FOXAPP_PATCH_GRAPH_DOCUMENT, and the draft is the document at once
+    // and then what the engine holds when it has answered.
     bool loadPatchDocument(const cascade::core::patch::Graph& g);
+    // A Radio part waiting for the native scan its press asked for: the node is
+    // in the draft with no device, and gets one when the scan's answer arrives
+    // (finishPatchRadioParts, from syncPatchDraft).
+    struct PatchRadioWait {
+        cascade::core::patch::NodeId node = cascade::core::patch::kNoNode;
+        std::uint64_t scanTicket = 0;
+    };
+    std::vector<PatchRadioWait> patchRadioWaits_;
+    std::uint64_t patchScanDone_ = 0;   // the newest SCAN_NATIVE_ONLY ticket answered
+    void finishPatchRadioParts();
     bool patchSeeded_ = false;
     bool patchOpenedByEnv_ = false;
     bool patchStartedByEnv_ = false;
@@ -2177,16 +2303,33 @@ private:
     // waterfall scrolls at the same pace as the main one.
     std::map<cascade::core::patch::NodeId, cascade::gui::patch::ScopeHistory> patchScopes_;
     std::map<cascade::core::patch::NodeId, std::uint64_t> patchScopeSeq_;
-    // Each picture decoder node's newest picture and its GL texture, uploaded
-    // only when the picture's revision moves. Textures are deleted when the
-    // node goes and at shutdown, while the GL context is current.
+    // Each picture decoder node's newest picture, as a GL texture. The PICTURE is the engine's (API 0.3 8.12, part c):
+    // PATCH_LIVE's picture row (kind 6) names the newest picture's id, and when the id moves the face reads that picture
+    // with read_image into patchPictureScratch_ and uploads it - on this thread, where the GL context is current - then
+    // lets the pixels go; only the texture and the figures it was made from are kept. Textures are deleted when the node
+    // goes (or its row does) and at shutdown, while the context is current.
     struct PatchPicture {
-        cascade::core::HostImage img;
         unsigned int tex = 0;
-        std::uint64_t texRev = 0;
+        std::uint64_t imageId = 0;   // the picture the texture shows (0: none yet)
+        std::uint32_t width = 0, height = 0;
     };
     std::map<cascade::core::patch::NodeId, PatchPicture> patchPictures_;
+    std::vector<std::uint8_t> patchPictureScratch_;
     void releasePatchPictureTextures();
+    // Reads the picture `live` names and uploads it (patchPictureGl_.upload); false, and the old texture stays, when the
+    // picture has moved on already (NOT_FOUND: the next frame's row names the newer one) or is not a picture.
+    bool takePatchPicture(PatchPicture& pic, const PatchLiveRow& live);
+    // The GL half, a pair of function pointers so a test that has no GL context can stand in for it (the scope badge's
+    // precedent): make or refill the texture and return its id; delete one.
+    struct PatchPictureGl {
+        unsigned int (*upload)(unsigned int tex, std::uint32_t width, std::uint32_t height, std::uint32_t format,
+                               const std::uint8_t* pixels) = nullptr;
+        void (*destroy)(unsigned int tex) = nullptr;
+    };
+    static unsigned int uploadPatchPictureGl(unsigned int tex, std::uint32_t width, std::uint32_t height,
+                                             std::uint32_t format, const std::uint8_t* pixels);
+    static void destroyPatchPictureGl(unsigned int tex);
+    PatchPictureGl patchPictureGl_{&AppWindow::uploadPatchPictureGl, &AppWindow::destroyPatchPictureGl};
     // Where the patch canvas was drawn last frame, in ImGui screen space:
     // what lets an input script aim at a node by its patch coordinates.
     float patchCanvasOriginX_ = 0.0f;
@@ -2217,12 +2360,15 @@ private:
     // The device a newly added Radio starts on: the receiver's own radio if
     // no other Radio has it, else the first free device listed, else the
     // generator.
-    std::string patchDefaultDeviceKey() const;
+    std::string patchDefaultDeviceKey();
     // A Radio PART dropped from the bin (engine/stage3b-pre B1, 2026-09-28):
-    // starts on a free native radio, so it needs the native list first, at
-    // once - the node is created and given a device on the same call, and a
-    // QUEUED scan would still be sitting in the command queue when
-    // patchDefaultDeviceKey() below reads it, saving the generator instead.
+    // starts on a free native radio, so it needs the native list first. THE
+    // SCAN AND THE READ ARE TWO PASSES since window port group 13: the node is
+    // created at once with no device (so the press shows), the scan is asked
+    // for through the session, and finishPatchRadioParts gives the node its
+    // device when the scan's answer arrives - by which time the engine has the
+    // list patchDefaultDeviceKey() reads. (The queued scan read on the next
+    // line, B1's bug, is the case the wait exists for.)
     cascade::core::patch::NodeId patchAddRadioPart(const std::string& label,
                                                     cascade::core::patch::PortType feed, float x,
                                                     float y);
@@ -2331,6 +2477,10 @@ private:
     // it has one, through submit_text (API 0.3). The answers are drained once
     // a frame with the key's (pumpTransmitKey).
     void uiSubmit(const cascade::core::cmd::QueuedCommand& q);
+    // uiSubmit that answers the ticket the engine gave the command (0 when the
+    // session is not there, or would not take it): what a caller that waits
+    // for the command's answer needs.
+    std::uint64_t uiSubmitTicket(const cascade::core::cmd::QueuedCommand& q);
     void uiSubmit(const FoxCommand& c) { uiSubmit(cascade::core::cmd::QueuedCommand{c, {}}); }
     // TEST SEAM, null in every build of the application and read at exactly one place
     // (uiSubmit): every command uiSubmit takes is appended here, in order, before it is
@@ -2489,6 +2639,7 @@ private:
     // held are never taken again. Bounded at kDecoderLogMax, the newest kept, as the engine's tail was.
     struct DecoderLineRow {
         std::uint64_t id = 0;              // the line's number
+        std::uint64_t node = 0;            // the patch decoder node that said it (value[0]); 0 = the receiver's own
         std::string plugin;                // cut at the list item's 95 bytes
         std::string text;                  // cut at its 159
     };

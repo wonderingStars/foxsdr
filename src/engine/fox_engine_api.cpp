@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -896,6 +897,45 @@ public:
         return FOXAPI_OK;
     }
 
+    // API 0.3 8.12 (part 3): a patch decoder's picture, by the id its FOXAPI_EVENT_DECODER_IMAGE (or its PATCH_LIVE row)
+    // carried. The set is read as a pointer under the short lock and the picture is copied OUTSIDE it: a picture is
+    // immutable under its id (ApiImageSet), so what is copied is whole however the pass moves on, and the pass never
+    // waits for a reader. NOT_FOUND once a newer picture has replaced it (a reader that fell behind skips, as the taps
+    // do), or the node has gone. `info` and `pixels` are each optional (`pixels` with a cap of 0): the size and the
+    // shape alone. The return is the picture's FULL byte count, whatever `cap` copied. A REMOTE session reads exactly
+    // what a LOCAL one does: a picture is decoded traffic like the DECODER_LINES a REMOTE session already reads (8.12).
+    int32_t readImage(uint64_t imageId, FoxImageInfo* info, uint8_t* pixels, size_t cap) {
+        if (info != nullptr && info->structSize < FOXAPI_MIN_IMAGE_INFO) { return FOXAPI_BAD_ARGUMENT; }
+        if (pixels == nullptr && cap != 0) { return FOXAPI_BAD_ARGUMENT; }
+        std::shared_ptr<const ApiImageSet> set;
+        {
+            std::lock_guard<std::mutex> lk(listsMutex_);
+            set = patchImages_;
+        }
+        if (set == nullptr || imageId == 0) { return FOXAPI_NOT_FOUND; }
+        for (const ApiImageSet::Entry& e : set->entries) {
+            if (e.id != imageId) { continue; }
+            const cascade::core::HostImage& im = *e.image;
+            const std::size_t bytes = im.pixels.size();
+            if (bytes > static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) { return FOXAPI_FAILED; }
+            if (info != nullptr) {
+                FoxImageInfo local{};
+                local.structSize = sizeof(local);
+                local.width = im.width;
+                local.height = im.height;
+                local.format = im.format;
+                local.bytes = bytes;
+                copyText(local.caption, e.caption.c_str());
+                local.complete = im.complete ? 1u : 0u;
+                local.sequence = im.sequence;
+                copyOut(local, info, FOXAPI_MIN_IMAGE_INFO);
+            }
+            if (pixels != nullptr && cap != 0) { std::memcpy(pixels, im.pixels.data(), std::min(cap, bytes)); }
+            return static_cast<int32_t>(bytes);
+        }
+        return FOXAPI_NOT_FOUND;
+    }
+
     // API 0.3 8.7: a tune-away is waiting to be told (set by Engine::updateAudioMute, taken by the next
     // endPass - both on the pumping thread, so no lock). -1: none.
     void muteTuneAway(std::uint32_t names) { pendingMuteTuneAway_ = static_cast<std::int64_t>(names); }
@@ -910,6 +950,7 @@ public:
         for (std::size_t i = log.size() - static_cast<std::size_t>(fresh); i < log.size(); ++i) {
             DecoderLine& d = decoderLines_[decoderLinesNext_ % kDecoderLines];
             d.number = total - (log.size() - i) + 1;
+            d.node = log[i].node;
             copyText(d.plugin, log[i].plugin.c_str());
             copyText(d.text, log[i].text.c_str());
             ++decoderLinesNext_;
@@ -1043,6 +1084,7 @@ private:
             case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
                 return FOXAPI_GRANT_ADMIN;
             case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST: case FOXAPP_OP_NOTE_PANEL:
+            case FOXAPP_OP_SET_PATCH_PAGE_OPEN:
                 return FOXAPI_GRANT_VIEW;
             default:
                 if ((op & 0xFF00u) == 0x0A00u) { return FOXAPI_GRANT_TRANSMIT; }
@@ -1186,6 +1228,17 @@ private:
 
     std::mutex listsMutex_;
     std::shared_ptr<const ApiListBlock> lists_;  // under listsMutex_
+    // API 0.3 8.12, PATCH_LIVE: the pass's copy of the running patch nodes' readings (a block apart, no listSeq).
+    std::shared_ptr<const ApiLiveBlock> patchLive_;   // under listsMutex_
+    // API 0.3 8.12 (part 3): the patch decoders' newest pictures, one immutable set (read_image's only source).
+    std::shared_ptr<const ApiImageSet> patchImages_;  // under listsMutex_
+    // ...and the events for the pictures that arrived since the last endPass (the pumping thread's; room kept).
+    struct PendingImage {
+        uint64_t node = 0;
+        uint64_t id = 0;
+        char caption[FOXAPI_NAME_CHARS] = {};
+    };
+    std::vector<PendingImage> pendingImages_;
 
     // API 0.3: the patch radios' spectra, one ring per node with a radio
     // (made when a node's radio first publishes, dropped when it goes).
@@ -1196,6 +1249,7 @@ private:
     static constexpr std::size_t kDecoderLines = 500;
     struct DecoderLine {
         uint64_t number = 0;
+        uint64_t node = 0;       // API 0.3 8.12: the patch decoder node the line came from, 0 = the receiver's own
         char plugin[96] = {};
         char text[160] = {};
     };
@@ -1204,7 +1258,7 @@ private:
     uint64_t decoderLinesNext_ = 0;          // under decoderLinesMutex_
     uint64_t decoderLinesSeen_ = 0;          // the pumping thread's
     // FOXAPI_EVENT_PATCH: the graph as the last pass saw it.
-    uint64_t lastPatchHash_ = 0;
+    uint64_t lastPatchVersion_ = 0;
     uint64_t lastPatchEpoch_ = 0;
     bool lastPatchRunning_ = false;
     bool havePatch_ = false;
@@ -1213,6 +1267,22 @@ public:
     void setLists(std::shared_ptr<const ApiListBlock> l) {
         std::lock_guard<std::mutex> lk(listsMutex_);
         lists_ = std::move(l);
+    }
+    void setPatchLive(std::shared_ptr<const ApiLiveBlock> l) {
+        std::lock_guard<std::mutex> lk(listsMutex_);
+        patchLive_ = std::move(l);
+    }
+    void setPatchImages(std::shared_ptr<const ApiImageSet> s) {
+        std::lock_guard<std::mutex> lk(listsMutex_);
+        patchImages_ = std::move(s);
+    }
+    // The pumping thread's: queued here, broadcast by this pass's endPass.
+    void patchImageArrived(uint64_t node, uint64_t imageId, const std::string& caption) {
+        PendingImage p;
+        p.node = node;
+        p.id = imageId;
+        copyText(p.caption, caption.c_str());
+        pendingImages_.push_back(p);
     }
 
 private:
@@ -1879,7 +1949,7 @@ void ApiHostImpl::endPass() {
     // API 0.3: FOXAPI_EVENT_PATCH - the graph, its epoch or whether it runs
     // moved in this pass (from the list block the pass published).
     if (const ApiListBlock* b = engine_.apiLists_.get()) {
-        if (havePatch_ && (b->patchGraphHash != lastPatchHash_ || b->patchEpoch != lastPatchEpoch_ ||
+        if (havePatch_ && (b->patchVersion != lastPatchVersion_ || b->patchEpoch != lastPatchEpoch_ ||
                            b->patchRunning != lastPatchRunning_)) {
             FoxEvent e{};
             e.kind = FOXAPI_EVENT_PATCH;
@@ -1888,9 +1958,23 @@ void ApiHostImpl::endPass() {
             broadcast(e);
         }
         havePatch_ = true;
-        lastPatchHash_ = b->patchGraphHash;
+        lastPatchVersion_ = b->patchVersion;
         lastPatchEpoch_ = b->patchEpoch;
         lastPatchRunning_ = b->patchRunning;
+    }
+    // API 0.3 8.12 (part 3): FOXAPI_EVENT_DECODER_IMAGE - a patch decoder's newest picture changed in this pass. The set
+    // that holds it was handed over before (Engine::publishApiLists), so an interface that is told can read.
+    if (!pendingImages_.empty()) {
+        for (const PendingImage& p : pendingImages_) {
+            FoxEvent e{};
+            e.kind = FOXAPI_EVENT_DECODER_IMAGE;
+            e.target = static_cast<uint32_t>(p.node);
+            e.value[0] = static_cast<double>(p.id);
+            e.value[1] = 1.0;  // a PATCH decoder (the node); the receiver's own plugins' pictures are the host process's
+            copyText(e.text, p.caption);
+            broadcast(e);
+        }
+        pendingImages_.clear();
     }
     // API 0.3 8.7: FOXAPI_EVENT_MUTE_TUNE_AWAY - the receiver tuned off its muting plugins' presets while they
     // were still running (armed by Engine::updateAudioMute, which runs after the pass's publish). Broadcast HERE,
@@ -2224,8 +2308,39 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 copyText(it.detail, pp.key.c_str());
                 it.value[0] = pp.feed;
                 it.value[1] = pp.rateHz;
+                it.value[2] = pp.tracks ? 1.0 : 0.0;
             }
             break;
+        case FOXAPI_LIST_PATCH_DEVICES:
+            if (want(b->patchDevices.size())) {
+                const auto& d = b->patchDevices[index];
+                it.id = index + 1u;
+                copyText(it.name, d.label.c_str());
+                // A device key names hardware (and a recording a path) on this machine: LOCAL sessions only.
+                if (local) { copyText(it.detail, d.key.c_str()); }
+                it.value[0] = d.rateHz;
+            }
+            break;
+        case FOXAPI_LIST_PATCH_LIVE: {
+            // The pass's copy, from a block of its own (see ApiLiveBlock): read the pointer, never the nodes.
+            std::shared_ptr<const ApiLiveBlock> lv;
+            {
+                std::lock_guard<std::mutex> lk(listsMutex_);
+                lv = patchLive_;
+            }
+            const std::size_t n = lv != nullptr ? lv->entries.size() : 0u;
+            if (want(n)) {
+                const auto& e = lv->entries[index];
+                it.id = e.node;
+                copyText(it.name, e.name.c_str());
+                copyText(it.detail, e.detail.c_str());
+                it.value[0] = e.v0;
+                it.value[1] = e.v1;
+                it.value[2] = static_cast<double>(e.kind);
+                if (e.open) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        }
         case FOXAPI_LIST_PATCH_RADIOS:
             if (want(b->patchRadios.size())) {
                 const auto& r = b->patchRadios[index];
@@ -2233,8 +2348,23 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 copyText(it.name, r.device.c_str());
                 copyText(it.detail, r.error.c_str());
                 it.value[0] = r.rateHz;
+                it.value[1] = r.centreHz;
+                it.value[2] = r.pending ? 1.0 : 0.0;
                 if (r.open) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                 if (r.fault) { it.flags |= FOXAPI_ITEM_FAULT; }
+            }
+            break;
+        case FOXAPI_LIST_PATCH_PLAN:
+            if (want(b->patchPlan.size())) {
+                const auto& e = b->patchPlan[index];
+                it.id = e.node;
+                if (e.decoder) {
+                    copyText(it.name, e.key.c_str());
+                    copyText(it.detail, e.source);
+                } else {
+                    copyText(it.detail, "channel");
+                }
+                for (int k = 0; k < 4; ++k) { it.value[k] = e.v[k]; }
             }
             break;
         case FOXAPI_LIST_RECORDINGS:
@@ -2271,6 +2401,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.id = d.number;
                 copyText(it.name, d.plugin);
                 copyText(it.detail, d.text);
+                it.value[0] = static_cast<double>(d.node);  // (API 0.3 8.12) the patch decoder node, 0 = the receiver's
             }
             break;
         }
@@ -2442,6 +2573,11 @@ void ApiHost::webRemoteStopped(const char* why) { impl_->webRemoteStopped(why); 
 void ApiHost::engineStopping() { impl_->engineStopping(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }
 void ApiHost::setLists(std::shared_ptr<const ApiListBlock> lists) { impl_->setLists(std::move(lists)); }
+void ApiHost::setPatchLive(std::shared_ptr<const ApiLiveBlock> live) { impl_->setPatchLive(std::move(live)); }
+void ApiHost::setPatchImages(std::shared_ptr<const ApiImageSet> images) { impl_->setPatchImages(std::move(images)); }
+void ApiHost::patchImageArrived(std::uint64_t node, std::uint64_t imageId, const std::string& caption) {
+    impl_->patchImageArrived(node, imageId, caption);
+}
 void ApiHost::endPass() { impl_->endPass(); }
 void ApiHost::publishSpectrumForTest(const float* bins, std::size_t count, double centreHz, double spanHz) {
     impl_->publishSpectrumForTest(bins, count, centreHz, spanHz);
@@ -2568,8 +2704,8 @@ int32_t FOXAPI_CALL apiGetSetting(FoxSession* s, const char* key, char* buf, siz
     return onSession(s, [&](ApiSession* x) { return x->host->getSetting(x, key, buf, cap); });
 }
 
-int32_t FOXAPI_CALL apiReadImage(FoxSession* s, uint64_t, FoxImageInfo*, uint8_t*, size_t) {
-    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+int32_t FOXAPI_CALL apiReadImage(FoxSession* s, uint64_t imageId, FoxImageInfo* info, uint8_t* pixels, size_t cap) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readImage(imageId, info, pixels, cap); });
 }
 
 int32_t FOXAPI_CALL apiLogin(FoxEngine* e, const char* user, const char* password, char* token, size_t cap) {
@@ -2609,7 +2745,7 @@ const FoxEngineApi kApi = {
     FOXAPI_CAP_RECEIVER | FOXAPI_CAP_SPECTRUM | FOXAPI_CAP_AUDIO_LEVELS | FOXAPI_CAP_AUDIO_DSP |
         FOXAPI_CAP_EVENTS | FOXAPI_CAP_TRANSMIT |
         // API 0.3 (docs/api-0.3-additions.md).
-        FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM,
+        FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM | FOXAPI_CAP_IMAGES,
     "FoxSDR engine",
     CASCADE_VERSION_STRING,
     apiCreate,

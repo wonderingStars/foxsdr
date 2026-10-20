@@ -357,17 +357,36 @@ struct AppWindowTestAccess {
             n->rateHz = 2.4e6;
             n->on = true;
         }
+        // PUBLISHED, as the page sees a node the engine has: a centre typed on it is judged by the converter the table
+        // says is in force for its device (fact.patch.conv.<node>, window port group 13 part b), which exists once a
+        // pass has published the node.
+        look(a);
         return id;
     }
     static const cascade::core::patch::Node* node(AppWindow& a, cascade::core::patch::NodeId id) {
         return a.engine_.patchGraph_.find(id);
+    }
+    // One frame's engine part, in drawUi's order (window port group 13: the page's graph goes through the window's session, so
+    // what one frame commits the NEXT frame's pass applies, and the page reads the engine's graph from a publish).
+    static void look(AppWindow& a) {
+        a.engine_.pumpFrameBegin();
+        a.engine_.drainLocalCommands();
+        a.commitPatchDraft();
+        a.engine_.pumpInputs();
+        a.engine_.pumpPlugins();
+        (void)a.engine_.pumpPublish();
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
+        a.pumpTransmitKey();
     }
     // The page's starter patch, seeded as opening the page seeds it; returns
     // its Radio node (kNoNode when there is none).
     static cascade::core::patch::NodeId seedPatch(AppWindow& a) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = false;
-        a.seedPatchIfNeeded();
+        look(a);                  // the first publish is read, the draft starts from it
+        a.seedPatchIfNeeded();    // the starter is committed ...
+        look(a);                  // ... and the pass applies it
         for (const pc::Node& n : a.engine_.patchGraph_.nodes()) {
             if (n.kind == pc::NodeKind::Radio) { return n.id; }
         }
@@ -874,6 +893,24 @@ void testPatchSeedCarriesTheAirCentre(double airCentre, double vfo) {
     CHECK(Access::patchRadioAir(app, id) == airCentre);
 }
 
+// With NO RADIO OPEN (the receiver is on the generator) the starter patch has nothing to carry: its radio is the
+// generator and its centre is not set - the generator's own tuning is not "the receiver's radio's air centre"
+// (window port group 13 part b: the seed asks for the open radio before it reads fact.patch.receiverCentre).
+void testPatchSeedOnTheGeneratorCarriesNoCentre() {
+    std::printf("  the starter patch on the generator carries no centre\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    const auto id = Access::seedPatch(app);
+    const cascade::core::patch::Node* n = Access::node(app, id);
+    CHECK(n != nullptr);
+    if (n != nullptr) {
+        CHECK(n->device == cascade::core::patch::kGeneratorKey);
+        CHECK(!cascade::core::patch::radioCentreSet(*n));
+        CHECK(n->freqHz == 0.0);
+    }
+}
+
 // A node that already has a centre of its own keeps it when it takes the
 // receiver's radio (N6 of the second review).
 void testTakeOverKeepsANodesOwnCentre() {
@@ -916,6 +953,17 @@ void testUntunedRadioCarriesNothing() {
     CHECK(Access::selectNative(app, kArgsB));
     CHECK(made(b).args == kArgsB);
     CHECK(made(b).tunes.empty());
+    // ...and the page's starter patch, on that untuned radio, is not given a centre it never had (the seed reads
+    // fact.patch.receiverCentre, which is empty for a radio that was never tuned).
+    {
+        const auto id = Access::seedPatch(app);
+        const cascade::core::patch::Node* n = Access::node(app, id);
+        CHECK(n != nullptr);
+        if (n != nullptr) {
+            CHECK(n->device == kKeyB);
+            CHECK(!cascade::core::patch::radioCentreSet(*n));
+        }
+    }
 }
 
 // The Pluto's Open key reads the frequency to carry BEFORE it closes the radio
@@ -1161,6 +1209,7 @@ int main() {
     testZeroAirCentreTakeOver();
     testPatchSeedCarriesTheAirCentre(kAirCentre, kVfo);
     testPatchSeedCarriesTheAirCentre(0.0, kStation);
+    testPatchSeedOnTheGeneratorCarriesNoCentre();
     testTakeOverKeepsANodesOwnCentre();
     testUntunedRadioCarriesNothing();
     testPlutoCarriesTheAirFrequency();

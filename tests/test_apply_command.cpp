@@ -588,24 +588,35 @@ struct AppWindowTestAccess {
     static bool txMonitor(AppWindow& a) { return a.engine_.transmitMonitor_; }
     static const std::string& txArgs(AppWindow& a) { return a.engine_.transmitArgs_; }
     static std::string plutoUri(AppWindow& a) { return a.engine_.plutoUri_; }
-    // The patch canvas's cached decoder text, and the graph it is pruned
-    // against (round 3: prunePatchSinkLines must actually prune).
+    // The patch decoders' pictures the engine keeps (API 0.3 8.12, part 3), and the graph they are pruned against.
     static cascade::core::patch::NodeId addPatchNode(AppWindow& a) {
         return a.engine_.patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe");
     }
     static void removePatchNode(AppWindow& a, cascade::core::patch::NodeId id) {
         (void)a.engine_.patchGraph_.removeNode(id);
     }
-    static void setPatchSinkLine(AppWindow& a, cascade::core::patch::NodeId id, const std::string& line) {
-        a.engine_.patchSinkLines_[id].push_back(line);
+    static void putPatchImage(AppWindow& a, cascade::core::patch::NodeId id) {
+        cascade::core::HostImage h;
+        h.plugin = "probe";
+        h.width = 2;
+        h.height = 1;
+        h.format = CASCADE_IMAGE_GRAY8;
+        h.pixels = {1, 2};
+        a.engine_.takePatchImage(id, std::move(h));
     }
-    static bool hasPatchSinkLines(AppWindow& a, cascade::core::patch::NodeId id) {
-        return a.engine_.patchSinkLines_.count(id) != 0;
-    }
-    static void prunePatchSinkLines(AppWindow& a) { a.engine_.prunePatchSinkLines(); }
+    static bool hasPatchImage(AppWindow& a, cascade::core::patch::NodeId id) { return a.engine_.patchImages_.count(id) != 0; }
+    static void syncPatchImages(AppWindow& a) { a.engine_.syncPatchImages(); }
     // FOXAPP_OP_PATCH_SET_GRAPH (docs/engine-stage3.md OPEN 6).
     static const cascade::core::patch::Graph& patchGraph(AppWindow& a) { return a.engine_.patchGraph_; }
+    static cascade::core::patch::Graph& mutablePatchGraph(AppWindow& a) { return a.engine_.patchGraph_; }
     static std::uint64_t patchGraphEpoch(AppWindow& a) { return a.engine_.patchGraphEpoch_; }
+    static std::uint64_t patchGraphVersion(AppWindow& a) { return a.engine_.patchGraphVersion_; }
+    static bool patchPageOpen(AppWindow& a) { return a.engine_.patchPageOpen_; }
+    static std::size_t patchRecordingCount(AppWindow& a) { return a.engine_.patchRecordings_.size(); }
+    static double patchRecordingRate(AppWindow& a, std::size_t i) { return a.engine_.patchRecordings_[i].rateHz; }
+    static bool patchWasOpen(AppWindow& a) { return a.engine_.patchWasOpen_; }
+    static void setPatchRunning(AppWindow& a, bool v) { a.engine_.patchRunning_ = v; }
+    static void pumpPatch(AppWindow& a) { a.engine_.pumpPatch(); }
     static void setSoundCardsListed(AppWindow& a, bool on) { a.engine_.soundCardListed_ = on; }
     static bool soundCardScanPending(AppWindow& a) { return a.engine_.soundCardScanPending_; }
     static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
@@ -1008,6 +1019,19 @@ void sourceOps(AppWindow& a) {
         CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN))));
         CHECK(A::waitSoapy(a));
         CHECK(A::soapyCount(a) == 1u);
+    }
+
+    // A Radio part added (0.99.40): the native walk ONLY - never the SoapySDR probe, and it asks for nothing more. (Not in
+    // the op table until window port group 13, which sends it through the session: the table refused it as unknown.)
+    covering(FOXAPP_OP_SCAN_NATIVE_ONLY);
+    {
+        A::clearNative(a);
+        A::clearSoapy(a);
+        CHECK(cascade::core::cmd::isKnownOp(FOXAPP_OP_SCAN_NATIVE_ONLY));
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY))));
+        CHECK(A::nativeCount(a) == 1u);       // the walk ran
+        CHECK(!A::soapyPending(a));           // the vendor probe did not
+        CHECK(!A::patchListsWanted(a));       // and nothing is owed
     }
 
     covering(FOXAPP_OP_PATCH_RADIO_LIST_OPENED);
@@ -1926,20 +1950,22 @@ void patchOps(AppWindow& a) {
     CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_PATCH_ALL_OFF))));
     CHECK(!A::patchRunning(a));
 
-    // prunePatchSinkLines (a reviewed direct call from drawPatchFaces, round
-    // 2): a gone node's cached decoder text goes, a live node's stays.
+    // The picture a patch decoder made goes with its node (Engine::syncPatchImages, the engine's pass: the window used
+    // to be asked for it, and before that to prune its own cache): a gone node's picture goes, a live node's stays. (The
+    // sync is run once first: it settles the graph epoch, which a document load moves and which clears every picture.)
     {
+        A::syncPatchImages(a);
         const cascade::core::patch::NodeId keep = A::addPatchNode(a);
         const cascade::core::patch::NodeId gone = A::addPatchNode(a);
-        A::setPatchSinkLine(a, keep, "kept");
-        A::setPatchSinkLine(a, gone, "pruned");
+        A::putPatchImage(a, keep);
+        A::putPatchImage(a, gone);
         A::removePatchNode(a, gone);
-        A::prunePatchSinkLines(a);
-        CHECK(A::hasPatchSinkLines(a, keep));
-        CHECK(!A::hasPatchSinkLines(a, gone));
+        A::syncPatchImages(a);
+        CHECK(A::hasPatchImage(a, keep));
+        CHECK(!A::hasPatchImage(a, gone));
         A::removePatchNode(a, keep);
-        A::prunePatchSinkLines(a);
-        CHECK(!A::hasPatchSinkLines(a, keep));
+        A::syncPatchImages(a);
+        CHECK(!A::hasPatchImage(a, keep));
     }
 
     // FOXAPP_OP_PATCH_SET_GRAPH (OPEN 6, Design A): the whole graph, as the
@@ -2023,9 +2049,137 @@ void patchOps(AppWindow& a) {
             CHECK(pc::graphCommandText(A::patchGraph(a)) == sent);
         }
 
+        // THE VERSION (API 0.3 8.12). Every accepted change to the graph is a version, an edit's answer names it, and an
+        // edit that names the version it was made from is MERGED over the graph as it is now when that is not the current
+        // one, with what the engine did meanwhile kept. (The wire-level cases, with sessions and the pass, are
+        // tests/test_engine_api_03.cpp G13-2; these are the engine's own rule.)
+        {
+            const FoxCommandResult atOnce = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(g)));
+            CHECK(ok(atOnce));
+            const std::uint64_t v0 = static_cast<std::uint64_t>(atOnce.applied[0]);
+            CHECK(v0 == A::patchGraphVersion(a));
+            // An edit from the CURRENT version replaces; an edit from an older one merges.
+            pc::Graph theirs = g;  // what a second sender read at v0 and changed
+            if (pc::Node* n = theirs.mutableNode(chan)) { n->name = "theirs"; }
+            pc::Graph mine = g;    // and what the first changed, from the same version
+            if (pc::Node* n = mine.mutableNode(radio)) { n->x = 123.0f; }
+            const FoxCommandResult first = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(mine), 0, static_cast<std::int64_t>(v0)));
+            CHECK(ok(first));
+            CHECK(first.applied[0] == static_cast<double>(v0 + 1u) && first.applied[1] == 0.0);
+            CHECK((first.flags & FOXAPI_RESULT_CLAMPED) == 0u);
+            const FoxCommandResult second = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(theirs), 0, static_cast<std::int64_t>(v0)));
+            CHECK(ok(second));
+            CHECK(second.applied[0] == static_cast<double>(v0 + 2u) && second.applied[1] == 1.0);
+            CHECK((second.flags & FOXAPI_RESULT_CLAMPED) != 0u);
+            CHECK(A::patchGraph(a).find(radio)->x == 123.0f);              // the first's edit survived
+            CHECK(A::patchGraph(a).find(chan)->name == "theirs");          // and the second's landed
+            // The engine's own change (a switch thrown, as START does) is a version of its own and is kept too: the sender
+            // read version vSeen with the radio on and renamed a channel; before its command was applied the engine
+            // switched the radio off.
+            const std::uint64_t vSeen = A::patchGraphVersion(a);
+            CHECK(A::patchGraph(a).find(radio)->on);
+            pc::Graph rename = A::patchGraph(a);
+            if (pc::Node* n = rename.mutableNode(chan)) { n->name = "renamed"; }
+            if (pc::Node* n = A::mutablePatchGraph(a).mutableNode(radio)) { n->on = false; }
+            const FoxCommandResult kept = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(rename), 0, static_cast<std::int64_t>(vSeen)));
+            CHECK(ok(kept));
+            CHECK(kept.applied[1] == 1.0);
+            CHECK(!A::patchGraph(a).find(radio)->on);                      // the engine's switch was not put back
+            CHECK(A::patchGraph(a).find(chan)->name == "renamed");
+            // A version the engine does not hold, one from the future, and a negative one.
+            const std::string held = pc::graphCommandText(A::patchGraph(a));
+            const std::uint64_t vNow = A::patchGraphVersion(a);
+            CHECK(refused(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(mine), 0, static_cast<std::int64_t>(vNow + 40u))), FOXAPI_FAILED));
+            CHECK(refused(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(mine), 0, -3)), FOXAPI_BAD_ARGUMENT));
+            CHECK(pc::graphCommandText(A::patchGraph(a)) == held);
+            CHECK(A::patchGraphVersion(a) == vNow);
+            // A document ignores the version, and forgets the history: the next edit naming an old version is refused.
+            const std::uint64_t e0 = A::patchGraphEpoch(a);
+            CHECK(ok(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(mine), FOXAPP_PATCH_GRAPH_DOCUMENT, 7))));
+            CHECK(A::patchGraphEpoch(a) == e0 + 1u);
+            CHECK(refused(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(theirs), 0, static_cast<std::int64_t>(v0))), FOXAPI_FAILED));
+        }
+
         // Leave the patch empty for whatever runs next.
         CHECK(ok(A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(pc::Graph{})))));
         CHECK(A::patchGraph(a).nodes().empty());
+    }
+
+    // FOXAPP_OP_SET_PATCH_PAGE_OPEN (API 0.3 8.12): the standard window's patch view is showing. The engine starts
+    // "showing" (the view is the window's default face); the flag only says whether the pass runs the patch step, and the
+    // close rule - the patch stops, once - belongs to that step.
+    covering(FOXAPP_OP_SET_PATCH_PAGE_OPEN);
+    {
+        CHECK(A::patchPageOpen(a));  // the default
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 0))));
+        CHECK(!A::patchPageOpen(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 0))));  // said again: harmless
+        CHECK(!A::patchPageOpen(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 1))));
+        CHECK(A::patchPageOpen(a));
+        // The close rule runs from the step, and only for a page that was open: showing, the step marks it; closed, the
+        // patch stops and the mark goes; closed again, nothing more happens.
+        A::pumpPatch(a);
+        CHECK(A::patchWasOpen(a));
+        A::setPatchRunning(a, true);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 0))));
+        CHECK(A::patchRunning(a));            // the command only says so ...
+        A::pumpPatch(a);
+        CHECK(!A::patchRunning(a));           // ... the pass's step stops the patch
+        CHECK(!A::patchWasOpen(a));
+        A::setPatchRunning(a, true);
+        A::pumpPatch(a);
+        CHECK(A::patchRunning(a));            // the rule fired once: a page already closed stops nothing more
+        A::setPatchRunning(a, false);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 1))));
+    }
+
+    // FOXAPP_OP_PATCH_LIST_RECORDINGS (API 0.3 8.12): the Radio part's device list asks for the I/Q recordings of the record
+    // folder, and the engine reads them on its own pass (the window used to call the listing itself, on its thread). Nothing
+    // lists them until asked; an empty folder is an empty list, not a refusal; a file is listed with the rate its header
+    // says; a relisting finds what changed.
+    covering(FOXAPP_OP_PATCH_LIST_RECORDINGS);
+    {
+        namespace fs = std::filesystem;
+        const char* base = std::getenv("LOCALAPPDATA");
+        const fs::path dir = fs::path(base != nullptr ? base : ".") / "apply_command_g13b_rec";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        const std::string before = A::recordDir(a);
+        A::setRecordDir(a, dir.string());
+        CHECK(A::patchRecordingCount(a) == 0u);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_PATCH_LIST_RECORDINGS, 0))));
+        CHECK(A::patchRecordingCount(a) == 0u);        // an empty folder: an empty list
+        {
+            std::ofstream f(dir / "tone_96k.wav", std::ios::binary | std::ios::trunc);
+            const auto put16 = [&](std::uint16_t v) { f.put(static_cast<char>(v & 0xFF)); f.put(static_cast<char>(v >> 8)); };
+            const auto put32 = [&](std::uint32_t v) { put16(static_cast<std::uint16_t>(v & 0xFFFF)); put16(static_cast<std::uint16_t>(v >> 16)); };
+            const std::uint32_t frames = 9600;
+            f.write("RIFF", 4);
+            put32(36 + frames * 4);
+            f.write("WAVE", 4);
+            f.write("fmt ", 4);
+            put32(16);
+            put16(1);
+            put16(2);
+            put32(96000);
+            put32(96000 * 4);
+            put16(4);
+            put16(16);
+            f.write("data", 4);
+            put32(frames * 4);
+            for (std::uint32_t i = 0; i < frames; ++i) { put16(1000); put16(0); }
+        }
+        CHECK(A::patchRecordingCount(a) == 0u);        // nothing lists it by itself
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_PATCH_LIST_RECORDINGS, 0))));
+        CHECK(A::patchRecordingCount(a) == 1u);
+        CHECK(A::patchRecordingRate(a, 0) == 96000.0);
+        fs::remove(dir / "tone_96k.wav", ec);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_PATCH_LIST_RECORDINGS, 0))));
+        CHECK(A::patchRecordingCount(a) == 0u);        // ...and the relisting finds it gone
+        A::setRecordDir(a, before);
+        fs::remove_all(dir, ec);
     }
 }
 

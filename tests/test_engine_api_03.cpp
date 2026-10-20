@@ -106,6 +106,21 @@
 //       position in the state (FOXAPI_RX_POSITION_SET and rxLatDeg/rxLonDeg: set by SET_POSITION or restored from the
 //       configuration into the first publish, refused ranges, repeats, moving seq alone); G12-2 FoxScopeInfo's
 //       capacityFrames per tap, for a LOCAL and a REMOTE session, the most a call returns, and the info-edges.
+//   G13 the Patch page, part 1 (window port group 13, API 0.3 section 8.12): G13-1 the patch runtime in the engine's pass
+//       behind FOXAPP_OP_SET_PATCH_PAGE_OPEN (a generator radio, no window: the plan, START, the radio's centre and spectrum,
+//       the page closed and opened, the grants, the default); G13-2 fact.patch.version and .epoch, a merge-safe
+//       FOXAPP_OP_PATCH_SET_GRAPH (two sessions racing, START and a stale rename in one pass - red with the version left
+//       out, green with it - the refusals, the history, the one block); G13-3 PATCH_PLAN against the core's own compile
+//       with two real modules, the problems' codes, fact.patch.runnable and its two marks, PATCH_RADIOS' note and pending
+//       open; G13-4 a settled page moves nothing.
+//   G13c the Patch page, part 3 (the decoded pictures, API 0.3 section 8.12.7), against a REAL picture decoder module
+//       (tests/fixture_group13_plugin.cpp) run by the pass on the generator, no window anywhere: G13c-1 the PATCH_LIVE picture
+//       row, FOXAPI_EVENT_DECODER_IMAGE (every event readable when taken, ids rising, the node's name), read_image's buffer
+//       protocol (info alone, pixels alone, a short buffer, a cap of 0, a cap with no buffer, an info of the minimum and a
+//       roomier one), the unknown, stale and removed id, a VIEW-only and a REMOTE session reading the same, a late session,
+//       a stopped patch keeping its picture, nothing moving listSeq; G13c-2 a patch document takes the pictures and an edit
+//       does not; G13c-3 two reader threads (LOCAL and REMOTE) reading the newest picture as fast as they can against the
+//       pass that takes pictures: every read whole.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -284,6 +299,54 @@ struct AppWindowTestAccess {
     }
     // The panel names the usage report would list (group U).
     static std::vector<std::string> panels(cascade::engine::Engine& e) { return e.telemetryPanels_; }
+    // Group 13: what only an attempt leaves in the patch runtime, put there behind its back - a plugin that refused to
+    // start on a radio's set, the note a running radio's face prints, and an open still on its worker.
+    static void injectRefused(cascade::engine::Engine& e, unsigned radio, std::vector<cascade::core::patch::NodeId> nodes) {
+        e.patchRefusedBy_[radio] = std::move(nodes);
+    }
+    // Group 13b: the devices a Radio can be set to as the engine composes them (key, label), the folder the recordings and
+    // the speakers' files are in, a module put in the parts bin behind its back (the bin is rebuilt from the loaded
+    // modules every pass the page is open: put it there with the page closed), and the key the receiver's open radio has.
+    static std::vector<std::pair<std::string, std::string>> choices(cascade::engine::Engine& e) {
+        std::vector<std::pair<std::string, std::string>> out;
+        for (const auto& c : e.patchDeviceChoices()) { out.emplace_back(c.key, c.label); }
+        return out;
+    }
+    static void addPart(cascade::engine::Engine& e, const std::string& key, const std::string& name,
+                        cascade::core::patch::PortType feed, bool tracks, bool image, bool replace = false) {
+        if (replace) {
+            for (auto& d : e.patchCatalogue_) {
+                if (d.key == key) {
+                    d.tracks = tracks;
+                    d.image = image;
+                    return;
+                }
+            }
+        }
+        cascade::core::patch::DecoderInfo d;
+        d.key = key;
+        d.name = name;
+        d.feed = feed;
+        d.tracks = tracks;
+        d.image = image;
+        e.patchCatalogue_.push_back(d);
+    }
+    static void setRawCentre(cascade::engine::Engine& e, double hz) { (void)e.pipeline_.rawSource().setCenterFrequencyHz(hz); }
+    static std::string deviceKeyNow(cascade::engine::Engine& e) {
+        return cascade::core::patch::makeDeviceKey(e.sourceKind_, e.deviceArgs_);
+    }
+    static void injectRadioNote(cascade::engine::Engine& e, unsigned node, const std::string& text) {
+        e.patchRadioError_[node] = text;
+    }
+    struct PendingOpen {
+        std::promise<cascade::engine::Engine::PatchRadioOpen> promise;
+    };
+    static void injectPending(cascade::engine::Engine& e, unsigned node, PendingOpen& held) {
+        e.patchRadioPending_[node] = held.promise.get_future();
+        e.patchRadioPendingAs_[node] = "test@1";
+    }
+    // The open answers: it failed, with no source. Always before the engine goes (its teardown waits for the future).
+    static void answerPending(PendingOpen& held) { held.promise.set_value(cascade::engine::Engine::PatchRadioOpen{}); }
     // The converter's and the sound card's inputs, set directly: no sound card
     // backend runs in this test, so the engine is told it is on one (Z4).
     static void setSourceKind(cascade::engine::Engine& e, const std::string& kind) { e.sourceKind_ = kind; }
@@ -333,9 +396,9 @@ struct AppWindowTestAccess {
     // Group W: the squelch the scanner compares the pipeline's power with; a hermetic engine
     // hears nothing (-200 dB), so a threshold below that stands in for a signal. Group O/J: the
     // bookmark store, the record folder and the note the engine keeps.
+    static void setRecordDir(cascade::engine::Engine& e, const std::string& dir) { e.recordDir_ = dir; }
     static void setSquelch(cascade::engine::Engine& e, float db) { e.squelchDb_ = db; }
     static cascade::core::FreqManager& store(cascade::engine::Engine& e) { return e.freqMgr_; }
-    static void setRecordDir(cascade::engine::Engine& e, const std::string& dir) { e.recordDir_ = dir; }
     static const std::string& note(cascade::engine::Engine& e) { return e.bookmarkImportNote_; }
     // Group M: the folder the engine looks for plugins in (null: the default).
     static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
@@ -642,7 +705,7 @@ void testEveryListIsServed() {
     testing::Engine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_SOUND_CARD_FORM; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_LIVE; ++l) {
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -996,19 +1059,67 @@ void testTransmitterState() {
 
 // --- Y: the status column as its page draws it (API 0.3 8.2) ----------------------
 
+// THE SINK IN ITS STEADY STATE, which is the only state a counter comparison may be taken against.
+//
+// A test here compares audioSeq / seq (or countersMoved(), which names audio among them) before and after ONE
+// command, and the contract it holds is exact: the command moves the counter once. That is true only if nothing
+// else about the sink moves in between - and the sink is a real output stream on a real device (the hermetic
+// engine opens the machine's own, when it has one). A stream can die under a healthy receiver: Pa_IsStreamActive
+// goes 0, STREAM_ALIVE falls (one audioSeq step), the engine's watchdog (Engine::pollAudioHealth, 1 Hz) reopens
+// it - the first attempt can itself fail and be retried a second later - and STREAM_ALIVE returns (a second
+// step). The engine is right to say so each time. Under a saturated machine (ctest -j 8 over the whole suite,
+// with a dozen other processes opening and closing the same device) that death lands at an arbitrary moment, so
+// a baseline taken while the sink is down - or a baseline/probe pair that straddles the recovery - reads one or
+// two audioSeq steps more than the command made (the recorded failures: 7 vs 6, 9 vs 8, flags 14 vs 10, and
+// "seq audio rds" for "seq rds"). The sampling raced; the engine did not misbehave.
+//
+// So a baseline waits for the sink to be steady first: no open in flight; a sink that has ever opened is alive
+// (the watchdog has done its work); and the 0.2 open flag tells the same story as the watchdog's view. A
+// machine with no output device is steady from the first read (nothing ever opened, nothing to lose).
+bool audioSteady(const FoxReceiverState& st) {
+    if ((st.audioFlags & FOXAPI_AUDIO_OPENING) != 0u) { return false; }  // a worker is still inside the open
+    const bool everOpened = (st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u;
+    const bool alive = (st.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u;
+    if (everOpened && !alive) { return false; }  // the stream died; the watchdog has not brought it back yet
+    return alive == ((st.flags & FOXAPI_RX_SINK_OPEN) != 0u);
+}
+
+// How long a baseline waits for a dead stream to come back: the watchdog probes once a second, a reopen is
+// bounded at 1.5 s (audio_open.hpp kOpenBound) and a refused first attempt is retried a probe later - several
+// seconds on a loaded machine, and the observed worst is under four. Generous: a bound this long is only ever
+// spent when the device is really gone, and then the checks that follow fail by name instead of hanging.
+constexpr int kSinkSteadyMs = 30000;
+
+// s.state() once the sink is steady: for a baseline taken straight off a read rather than after a settle. Costs
+// nothing when the sink is steady (the first read answers); the state returned is that steady read.
+FoxReceiverState steadyState(testing::Session& s) {
+    FoxReceiverState st = s.state();
+    (void)check::waitFor(
+        [&] {
+            st = s.state();
+            return audioSteady(st);
+        },
+        kSinkSteadyMs);
+    return st;
+}
+
 // The state once it has stopped changing: the audio open the engine starts at
 // boot (on a worker) and its first passes have landed - `seq` has held still
 // for 300 ms - so a test that compares counters before and after a command
-// is not comparing against a sink that was still opening.
+// is not comparing against a sink that was still opening. AND the sink is in
+// its steady state (audioSteady) for that whole window, so audioSeq and
+// audioFlags have held still over several reads (about fifteen 20 ms samples)
+// with the stream alive, not merely between two reads taken while it was
+// down. The bound is the sink's (kSinkSteadyMs) plus the settle itself.
 FoxReceiverState settled(testing::Session& s) {
     using Clock = std::chrono::steady_clock;
     FoxReceiverState st = s.state();
     auto since = Clock::now();
-    const auto end = since + std::chrono::seconds(10);
+    const auto end = since + std::chrono::milliseconds(kSinkSteadyMs) + std::chrono::seconds(10);
     while (Clock::now() < end) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         FoxReceiverState now = s.state();
-        if (now.seq != st.seq) {
+        if (now.seq != st.seq || now.audioFlags != st.audioFlags || !audioSteady(now)) {
             since = Clock::now();
         } else if (Clock::now() - since >= std::chrono::milliseconds(300)) {
             return now;
@@ -1187,6 +1298,59 @@ void testStatusColumnState() {
     }
 }
 
+// Y2: A BASELINE IS NEVER TAKEN OFF A SINK THAT IS DOWN. The race that failed Y (and R) under a loaded machine,
+// made deterministic: the stream dies under a healthy receiver (test.audioClose is the stand-in for a USB card
+// re-enumerating or a device dying under load - what the loaded suite does by chance), and the baseline is asked
+// for while it is down. settled() must hand back a state taken after the engine's watchdog has reopened the
+// stream, so the one-command pair that follows reads exactly one audioSeq step, as Y asserts. Before audioSteady()
+// settled() only waited for `seq` to hold still for 300 ms - the watchdog's next probe can be a second away - and
+// the pair then straddled STREAM_ALIVE coming back (audioSeq +2, flags 14 vs 10). Only on a machine that has an
+// output device to lose (without one nothing ever opened and the sink is steady from the first read).
+void testBaselineWaitsForTheSink() {
+    testing::Engine e(api(), kHooks);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    const FoxReceiverState first = settled(s);
+    CHECK(audioSteady(first));  // a settled state is a steady one
+    if ((first.audioFlags & FOXAPI_AUDIO_EVER_OPENED) == 0u) {
+        std::printf("Y2: no output device on this machine - no stream to lose, nothing to wait for\n");
+        return;
+    }
+    CHECK((first.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u);
+
+    // The stream dies; the baseline is asked for at once.
+    CHECK_EQ(setting(s, "test.audioClose="), FOXAPI_OK);
+    const FoxReceiverState down = s.state();
+    CHECK((down.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) == 0u);
+    CHECK(!audioSteady(down));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6)).result.status, FOXAPI_OK);
+    CHECK_EQ(setting(s, "test.muteBy=Alpha decoder@145500000"), FOXAPI_OK);
+    const FoxReceiverState off = settled(s);
+    CHECK(audioSteady(off));
+    CHECK((off.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u);  // the watchdog's reopen is behind the baseline
+    CHECK((off.flags & FOXAPI_RX_SINK_OPEN) != 0u);
+    CHECK_EQ(std::string(off.audioMutedBy), std::string());
+
+    // The pair taken off it keeps its contract exactly: one command, one step.
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6)).result.status, FOXAPI_OK);
+    CHECK(check::waitFor([&] { return std::string(s.state().audioMutedBy) == "Alpha decoder"; }, 2000));
+    const FoxReceiverState on = settled(s);
+    CHECK_EQ(on.audioFlags, off.audioFlags);
+    CHECK_EQ(on.audioSeq, off.audioSeq + 1u);
+
+    // steadyState() is the same wait for a baseline that is not a settle: asked while the stream is down it
+    // returns after the reopen, and it costs nothing when the stream is up.
+    const FoxReceiverState nowSteady = steadyState(s);
+    CHECK(audioSteady(nowSteady));
+    CHECK_EQ(setting(s, "test.audioClose="), FOXAPI_OK);
+    CHECK((s.state().audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) == 0u);
+    const FoxReceiverState back = steadyState(s);
+    CHECK(audioSteady(back));
+    CHECK((back.audioFlags & FOXAPI_AUDIO_STREAM_ALIVE) != 0u);
+    CHECK(back.audioSeq > nowSteady.audioSeq);  // the fall and the return were both seen, and both are behind it
+    std::printf("Y2: baselines waited for the reopened stream (audioSeq %llu -> %llu)\n",
+                static_cast<unsigned long long>(off.audioSeq), static_cast<unsigned long long>(back.audioSeq));
+}
+
 // RECEIVER: the GAINS entries carry the unit token.
 void testStatusColumnGains() {
     testing::Engine e(api(), kHooks);
@@ -1277,7 +1441,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_SOUND_CARD_FORM; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_LIVE; ++l) {
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -1982,7 +2146,7 @@ void testRdsState() {
         {"the RadioText growing", "test.rds=SPNT;2C42;11;400;20;CASCADE?;STEREO RDS TEST 2"},
     };
     for (const auto& o : one) {
-        const FoxReceiverState before = s.state();
+        const FoxReceiverState before = steadyState(s);  // countersMoved() names audio: no baseline off a dead sink
         CHECK_EQ(setting(s, o.hook), FOXAPI_OK);
         const FoxReceiverState after = s.state();
         std::printf("      %-28s -> [%s]\n", o.what, countersMoved(before, after).c_str());
@@ -1991,7 +2155,7 @@ void testRdsState() {
     }
     // The same words again move nothing.
     {
-        const FoxReceiverState before = s.state();
+        const FoxReceiverState before = steadyState(s);
         CHECK_EQ(setting(s, one[4].hook), FOXAPI_OK);
         CHECK_EQ(countersMoved(before, s.state()), std::string());
     }
@@ -6068,6 +6232,1617 @@ void testScopeCapacity() {
     std::printf("G12-2: the capacity per tap and session, the cut at the ring, the edges: done\n");
 }
 // G12 TESTS END>>
+// <<G13 TESTS BEGIN
+// G13: the Patch page, part 1 (window port group 13, API 0.3 section 8.12): the patch runtime in the engine's pass
+// behind FOXAPP_OP_SET_PATCH_PAGE_OPEN, the graph's version and epoch published with the graph, a merge-safe
+// FOXAPP_OP_PATCH_SET_GRAPH, and the plan (PATCH_PLAN, fact.patch.runnable, PATCH_RADIOS' centre, pending and note).
+// Every case drives the engine from THIS thread (controlPass until the thing has happened), against the built-in signal
+// generator as the patch's radio (it opens synchronously and needs no device), so what the test reads is not a race
+// with a control thread and no window draws anything anywhere.
+
+namespace g13 {
+
+namespace pc = cascade::core::patch;
+using Engine = cascade::engine::Engine;
+
+// Submits a graph command without running a pass; the ticket (0: not taken).
+uint64_t submitGraph(testing::Session& s, const FoxCommand& c, const std::string& text) {
+    FoxSubmitResult sr{};
+    sr.structSize = sizeof(sr);
+    const int32_t n = api()->submit_text(s.raw(), &c, text.data(), static_cast<uint32_t>(text.size()), &sr);
+    return (n < 0 || sr.status != FOXAPI_OK) ? 0u : sr.ticket;
+}
+
+// The answer to a ticket, if it has landed.
+bool answerOf(testing::Session& s, uint64_t ticket, FoxCommandResult& out) {
+    FoxCommandResult r[16];
+    for (auto& x : r) { x.structSize = sizeof(x); }
+    const int32_t got = api()->poll_results(s.raw(), r, 16);
+    for (int32_t i = 0; i < got; ++i) {
+        if (r[i].ticket == ticket) {
+            out = r[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+// The graph `g` sent as an edit from the version now published; driven from this thread.
+testing::Outcome g13PumpedGraph(Engine& eng, testing::Session& s, const pc::Graph& g);
+
+FoxCommand setGraph(long long flags, long long base) {
+    FoxCommand c = appCmd(FOXAPP_OP_PATCH_SET_GRAPH, flags);
+    c.ival[1] = base;
+    return c;
+}
+
+FoxCommand pageOpen(int on) { return appCmd(FOXAPP_OP_SET_PATCH_PAGE_OPEN, on); }
+
+uint64_t number(const std::string& t) { return static_cast<uint64_t>(std::strtoull(t.c_str(), nullptr, 10)); }
+uint64_t versionOf(testing::Session& s) { return number(fact(s, "fact.patch.version")); }
+uint64_t epochOf(testing::Session& s) { return number(fact(s, "fact.patch.epoch")); }
+
+// A radio on the generator, a channel 50 kHz above its centre, a demodulator under the channel and a spectrum display on
+// the radio, wired: a patch that can run and that no device is needed for. 2.4 MS/s whole-decimates to 48 kHz by 50.
+struct Starter {
+    pc::Graph g;
+    pc::NodeId radio = pc::kNoNode, chan = pc::kNoNode, demod = pc::kNoNode, display = pc::kNoNode;
+};
+
+Starter starter() {
+    Starter p;
+    p.radio = p.g.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, 40.0f, 40.0f);
+    p.chan = p.g.addNode(pc::NodeKind::Channel, "Channel", pc::PortType::Iq, 420.0f, 40.0f);
+    p.demod = p.g.addNode(pc::NodeKind::Demod, "Demod", pc::PortType::Iq, 420.0f, 320.0f);
+    if (pc::Node* n = p.g.mutableNode(p.radio)) {
+        n->device = pc::kGeneratorKey;
+        n->freqHz = 145.0e6;
+        n->centreChosen = true;
+        n->rateHz = 2.4e6;
+    }
+    if (pc::Node* n = p.g.mutableNode(p.chan)) { n->freqHz = 145.05e6; }
+    CHECK(p.g.connect(p.radio, 0, p.chan, 0) == pc::Connect::Ok);
+    CHECK(p.g.connect(p.chan, 0, p.demod, 0) == pc::Connect::Ok);
+    // (A patch with nothing to show or play is not runnable: a spectrum display on the radio gives it something to do.)
+    p.display = p.g.addNode(pc::NodeKind::Display, "Spectrum", pc::PortType::Iq, 40.0f, 520.0f);
+    CHECK(p.g.connect(p.radio, 0, p.display, 0) == pc::Connect::Ok);
+    return p;
+}
+
+testing::Outcome g13PumpedGraph(Engine& eng, testing::Session& s, const pc::Graph& g) {
+    return pumpedText(eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(g));
+}
+
+pc::Graph graphOf(testing::Session& s) {
+    pc::Graph g;
+    std::string why;
+    CHECK(pc::graphFromCommandText(fact(s, "fact.patch.graph"), g, why));
+    return g;
+}
+
+// The entry of PATCH_PLAN for a node (a zeroed item when there is none).
+// A node's fields, by value: a CHECK_EQ binds references to its operands, and a field of a temporary graph is gone by then.
+float xOf(testing::Session& s, pc::NodeId id) {
+    const pc::Graph g = graphOf(s);
+    const pc::Node* n = g.find(id);
+    return n != nullptr ? n->x : -1.0f;
+}
+bool onOf(testing::Session& s, pc::NodeId id) {
+    const pc::Graph g = graphOf(s);
+    const pc::Node* n = g.find(id);
+    return n != nullptr && n->on;
+}
+std::string nameOf(testing::Session& s, pc::NodeId id) {
+    const pc::Graph g = graphOf(s);
+    const pc::Node* n = g.find(id);
+    return n != nullptr ? n->name : std::string("<no such node>");
+}
+
+FoxListItem planEntry(testing::Session& s, pc::NodeId id) {
+    const int32_t n = count(s, FOXAPI_LIST_PATCH_PLAN);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_PLAN, static_cast<uint32_t>(i));
+        if (it.id == static_cast<uint64_t>(id)) { return it; }
+    }
+    return FoxListItem{};
+}
+
+FoxListItem radioEntry(testing::Session& s, pc::NodeId id) {
+    const int32_t n = count(s, FOXAPI_LIST_PATCH_RADIOS);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_RADIOS, static_cast<uint32_t>(i));
+        if (it.id == static_cast<uint64_t>(id)) { return it; }
+    }
+    return FoxListItem{};
+}
+
+FoxListItem problemFor(testing::Session& s, pc::NodeId id, const char* code) {
+    const int32_t n = count(s, FOXAPI_LIST_PATCH_PROBLEMS);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_PROBLEMS, static_cast<uint32_t>(i));
+        if (it.id == static_cast<uint64_t>(id) && std::string(it.name) == code) { return it; }
+    }
+    return FoxListItem{};
+}
+
+bool patchRunning(testing::Session& s) { return (s.state().flags & FOXAPI_RX_PATCH_RUNNING) != 0u; }
+
+}  // namespace g13
+
+// G13-1: the patch runtime is the pass's. No window anywhere: a document put in the engine is compiled by the pass
+// (PATCH_PLAN, fact.patch.runnable, the advisory problem), START opens the generator radio in the pass (PATCH_RADIOS, its
+// centre, the node's spectrum), and the flag FOXAPP_OP_SET_PATCH_PAGE_OPEN decides whether the step runs: closed, the
+// patch stops (the close rule), an edit moves the version and not the plan, and open again the plan follows. The default is
+// "showing" - a fresh engine compiles with nobody having said so.
+void testPatchRuntimeInThePass() {
+    using namespace g13;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_PLAN), 0);
+    CHECK_EQ(fact(s, "fact.patch.runnable"), std::string("0"));  // the empty patch has nothing to run
+    CHECK_EQ(versionOf(s), 1u);
+    CHECK_EQ(epochOf(s), 0u);
+
+    const Starter p = starter();
+    const std::string doc = pc::graphCommandText(p.g);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), doc).result.status, FOXAPI_OK);
+    passes(d.eng, 2);
+    // THE PASS COMPILED IT: one channel, 50 kHz up, 50:1 to 48 kHz, cut from the radio.
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_PLAN), 1);
+    const FoxListItem ch = planEntry(s, p.chan);
+    std::printf("G13-1: the pass's plan: %s offset %.0f Hz, out %.0f Hz, decimation %.0f, radio %.0f\n", ch.detail,
+                ch.value[0], ch.value[1], ch.value[2], ch.value[3]);
+    CHECK_EQ(std::string(ch.detail), std::string("channel"));
+    CHECK_EQ(std::string(ch.name), std::string());
+    CHECK_EQ(ch.value[0], 50000.0);
+    CHECK_EQ(ch.value[1], 48000.0);
+    CHECK_EQ(ch.value[2], 50.0);
+    CHECK_EQ(ch.value[3], static_cast<double>(p.radio));
+    CHECK_EQ(fact(s, "fact.patch.runnable"), std::string("1"));
+    // The advisory problem keeps its published code: the demodulator's audio goes nowhere (NothingListens, 5).
+    const FoxListItem nl = problemFor(s, p.demod, "5");
+    CHECK_EQ(nl.id, static_cast<uint64_t>(p.demod));
+    CHECK(std::string(nl.detail).size() > 0);
+    CHECK(!patchRunning(s));
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 0);  // nothing starts by itself
+
+    // START: the pass opens the generator radio. Its rate, its AIR centre and its spectrum are served, nobody drew.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_PATCH_RADIOS) == 1; }));
+    const FoxListItem r = radioEntry(s, p.radio);
+    CHECK_EQ(r.id, static_cast<uint64_t>(p.radio));
+    CHECK((r.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+    CHECK((r.flags & FOXAPI_ITEM_FAULT) == 0u);
+    CHECK_EQ(r.value[0], 2.4e6);
+    CHECK_EQ(r.value[1], 145.0e6);  // 8.12: the open radio's AIR centre
+    CHECK_EQ(r.value[2], 0.0);      // not pending: it is open
+    CHECK(patchRunning(s));
+    {
+        FoxSpectrumInfo info{};
+        info.structSize = sizeof(info);
+        std::vector<float> bins(8192);
+        int32_t rc = FOXAPI_NOT_FOUND;
+        const bool got = passUntil(d.eng, [&] {
+            info = FoxSpectrumInfo{};
+            info.structSize = sizeof(info);
+            rc = api()->read_node_spectrum(s.raw(), static_cast<uint32_t>(p.radio), 0, &info, bins.data(),
+                                           static_cast<uint32_t>(bins.size()));
+            return rc == FOXAPI_OK;
+        });
+        std::printf("G13-1: the running radio's spectrum, read from the pass: %s (%u bins)\n", got ? "yes" : "NO", info.copied);
+        CHECK(got);
+        CHECK(info.copied > 0u);
+    }
+
+    // THE PAGE CLOSES (the receiver face chosen): the close rule, in the pass - the patch stops, the radio closes.
+    const uint64_t versionBefore = versionOf(s);
+    CHECK_EQ(pumped(d.eng, s, pageOpen(0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK(!patchRunning(s));
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 0);
+    {
+        FoxSpectrumInfo info{};
+        info.structSize = sizeof(info);
+        float bin[16];
+        CHECK_EQ(api()->read_node_spectrum(s.raw(), static_cast<uint32_t>(p.radio), 0, &info, bin, 16), FOXAPI_NOT_FOUND);
+    }
+    // The close rule does not edit the graph: nothing moved (the node's switch stays as it was).
+    CHECK_EQ(versionOf(s), versionBefore);
+    // While it is closed the step does nothing: an edit that changes the plan moves the version and not the plan.
+    pc::Graph moved = graphOf(s);
+    if (pc::Node* n = moved.mutableNode(p.chan)) { n->freqHz = 145.1e6; }
+    const testing::Outcome edit = pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(moved));
+    CHECK_EQ(edit.result.status, FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(versionOf(s), versionBefore + 1u);
+    CHECK_EQ(planEntry(s, p.chan).value[0], 50000.0);  // still the plan of the last pass that ran the step
+    // ...and showing again, the step runs and the plan follows. Nothing restarts the patch.
+    CHECK_EQ(pumped(d.eng, s, pageOpen(1)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(planEntry(s, p.chan).value[0], 100000.0);
+    CHECK(!patchRunning(s));
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 0);
+    // START again opens it again (the page opened and closed does not spoil the runtime).
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_PATCH_RADIOS) == 1; }));
+    CHECK(patchRunning(s));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 0);
+
+    // GRANTS: VIEW is the grant (and all of it); a REMOTE session is DENIED as for every FOXAPP_OP_*, and the flag is
+    // left alone.
+    {
+        testing::Session viewOnly(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+        CHECK(viewOnly.ok());
+        CHECK_EQ(pumped(d.eng, viewOnly, pageOpen(0)).status(), FOXAPI_OK);
+        passes(d.eng, 1);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+        passes(d.eng, 3);
+        CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 0);  // closed by the VIEW session: START opens nothing
+        testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+        CHECK(remote.ok());
+        CHECK_EQ(pumped(d.eng, remote, pageOpen(1)).status(), FOXAPI_DENIED);
+        passes(d.eng, 3);
+        CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 0);  // the refusal changed nothing
+        // The START sent while the page was closed is still wanted: showing again, the pass opens the radio. (As it
+        // always was: closing stops a patch that is running, it does not forget a START that came after.)
+        CHECK_EQ(pumped(d.eng, viewOnly, pageOpen(1)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_PATCH_RADIOS) == 1 && patchRunning(s); }));
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+    }
+    std::printf("G13-1: the patch runs in the pass: plan, START, spectrum, the page closed and opened, the grants\n");
+}
+
+// G13-2: the graph's version and epoch, and a merge-safe SET_GRAPH.
+void testPatchGraphVersionAndMerge() {
+    using namespace g13;
+    Direct d;
+    testing::Session a(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session b(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(a.ok() && b.ok());
+    passes(d.eng, 2);
+    const Starter p = starter();
+
+    // THE FACTS: version 1 and epoch 0 for the empty graph; a document is a new epoch and a new version; the three
+    // facts are one block (the graph's text and its version never part, whatever moved it, below).
+    CHECK_EQ(versionOf(a), 1u);
+    CHECK_EQ(epochOf(a), 0u);
+    int32_t st = 0;
+    fact(a, "fact.patch.version", &st);
+    CHECK(st > 0);
+    {
+        testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+        CHECK(remote.ok());
+        CHECK_EQ(fact(remote, "fact.patch.version"), std::string("1"));  // a counter names nothing on this machine
+        fact(remote, "fact.patch.graph", &st);
+        CHECK_EQ(st, FOXAPI_DENIED);                                      // the graph does
+    }
+    const testing::Outcome load = pumpedText(d.eng, a, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g));
+    CHECK_EQ(load.result.status, FOXAPI_OK);
+    CHECK_EQ(load.result.applied[0], 2.0);  // the answer names the version after the command
+    passes(d.eng, 1);
+    CHECK_EQ(versionOf(a), 2u);
+    CHECK_EQ(epochOf(a), 1u);
+    const uint64_t v2 = versionOf(a);
+
+    // An EDIT with the current version applies as sent (no merge), names the new version, and does not move the epoch.
+    pc::Graph g1 = graphOf(a);
+    if (pc::Node* n = g1.mutableNode(p.radio)) { n->x = 100.0f; }
+    const testing::Outcome e1 = pumpedText(d.eng, a, setGraph(0, static_cast<long long>(v2)), pc::graphCommandText(g1));
+    CHECK_EQ(e1.result.status, FOXAPI_OK);
+    CHECK_EQ(e1.result.applied[0], 3.0);
+    CHECK_EQ(e1.result.applied[1], 0.0);
+    CHECK((e1.result.flags & FOXAPI_RESULT_CLAMPED) == 0u);
+    passes(d.eng, 1);
+    CHECK_EQ(versionOf(a), 3u);
+    CHECK_EQ(epochOf(a), 1u);
+    CHECK_EQ(xOf(a, p.radio), 100.0f);
+    // The same graph again changes nothing: no version moves, and the answer says which version it is.
+    const testing::Outcome same = pumpedText(d.eng, a, setGraph(0, 3), pc::graphCommandText(g1));
+    CHECK_EQ(same.result.status, FOXAPI_OK);
+    CHECK_EQ(same.result.applied[0], 3.0);
+    passes(d.eng, 2);
+    CHECK_EQ(versionOf(a), 3u);
+
+    // THE ENGINE'S OWN CHANGES ARE VERSIONS: START throws the radio's switch on (it was switched off here), nobody sent
+    // anything.
+    {
+        pc::Graph off = graphOf(a);
+        if (pc::Node* n = off.mutableNode(p.radio)) { n->on = false; }
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(0, 3), pc::graphCommandText(off)).result.status, FOXAPI_OK);
+        passes(d.eng, 1);
+        CHECK_EQ(versionOf(a), 4u);
+        CHECK(!onOf(a, p.radio));
+        CHECK_EQ(pumped(d.eng, a, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+        passes(d.eng, 1);
+        CHECK(onOf(a, p.radio));  // switchOnForStart
+        CHECK_EQ(versionOf(a), 5u);
+        CHECK_EQ(pumped(d.eng, a, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+    }
+    const uint64_t v = versionOf(a);
+
+    // TWO SESSIONS RACING, in one pass: both read version v and edit different things; a's lands first, b's base is
+    // then stale and is MERGED - both edits are kept, and b's answer says it was merged.
+    {
+        const pc::Graph base = graphOf(a);
+        pc::Graph ga = base;
+        if (pc::Node* n = ga.mutableNode(p.radio)) { n->x = 222.0f; n->y = 77.0f; }
+        pc::Graph gb = base;
+        if (pc::Node* n = gb.mutableNode(p.demod)) { n->name = "Demod B"; }
+        const uint64_t ta = submitGraph(a, setGraph(0, static_cast<long long>(v)), pc::graphCommandText(ga));
+        const uint64_t tb = submitGraph(b, setGraph(0, static_cast<long long>(v)), pc::graphCommandText(gb));
+        CHECK(ta != 0u && tb != 0u);
+        d.eng.controlPass();
+        FoxCommandResult ra{}, rb{};
+        CHECK(answerOf(a, ta, ra));
+        CHECK(answerOf(b, tb, rb));
+        CHECK_EQ(ra.status, FOXAPI_OK);
+        CHECK_EQ(rb.status, FOXAPI_OK);
+        CHECK_EQ(ra.applied[1], 0.0);
+        CHECK_EQ(rb.applied[1], 1.0);
+        CHECK((rb.flags & FOXAPI_RESULT_CLAMPED) != 0u);
+        CHECK_EQ(ra.applied[0], static_cast<double>(v + 1));
+        CHECK_EQ(rb.applied[0], static_cast<double>(v + 2));
+        const pc::Graph now = graphOf(b);
+        std::printf("G13-2: two sessions from version %llu: radio at %.0f,%.0f, demod named \"%s\", version %llu\n",
+                    static_cast<unsigned long long>(v), static_cast<double>(now.find(p.radio)->x),
+                    static_cast<double>(now.find(p.radio)->y), now.find(p.demod)->name.c_str(),
+                    static_cast<unsigned long long>(versionOf(b)));
+        CHECK_EQ(now.find(p.radio)->x, 222.0f);        // a's edit survived b's
+        CHECK_EQ(now.find(p.radio)->y, 77.0f);
+        CHECK_EQ(now.find(p.demod)->name, std::string("Demod B"));  // and b's landed
+        CHECK_EQ(versionOf(b), v + 2);
+        // The SAME race with no version (the op as it always was): b's graph REPLACES a's, and a's edit is lost.
+        const pc::Graph base2 = graphOf(a);
+        pc::Graph ga2 = base2;
+        if (pc::Node* n = ga2.mutableNode(p.radio)) { n->x = 300.0f; }
+        pc::Graph gb2 = base2;
+        if (pc::Node* n = gb2.mutableNode(p.demod)) { n->name = "Demod C"; }
+        const uint64_t ta2 = submitGraph(a, setGraph(0, 0), pc::graphCommandText(ga2));
+        const uint64_t tb2 = submitGraph(b, setGraph(0, 0), pc::graphCommandText(gb2));
+        CHECK(ta2 != 0u && tb2 != 0u);
+        d.eng.controlPass();
+        const pc::Graph lost = graphOf(a);
+        CHECK_EQ(lost.find(p.demod)->name, std::string("Demod C"));
+        CHECK_EQ(lost.find(p.radio)->x, 222.0f);  // a's 300 is gone: unconditional means "replace"
+    }
+
+    // THE LOST UPDATE THE ASYNCHRONOUS WINDOW WOULD HAVE: a rename edited from version w, and START applied in the SAME
+    // pass before it. START throws the radio's switch on; the stale rename must not put it back off.
+    {
+        // All radios off first, so START has a switch to throw.
+        pc::Graph off = graphOf(a);
+        if (pc::Node* n = off.mutableNode(p.radio)) { n->on = false; }
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(0, static_cast<long long>(versionOf(a))), pc::graphCommandText(off)).result.status,
+                 FOXAPI_OK);
+        passes(d.eng, 1);
+        const uint64_t w = versionOf(a);
+        pc::Graph rename = graphOf(a);
+        if (pc::Node* n = rename.mutableNode(p.demod)) { n->name = "Renamed"; }
+        const std::string text = pc::graphCommandText(rename);
+        for (int variant = 0; variant < 2; ++variant) {
+            // variant 0: the rename names its base (the version it was edited from); variant 1: unconditional.
+            if (variant == 1) {
+                // restore the same starting point
+                pc::Graph back = graphOf(a);
+                if (pc::Node* n = back.mutableNode(p.radio)) { n->on = false; }
+                if (pc::Node* n = back.mutableNode(p.demod)) { n->name = "Demod B"; }
+                CHECK_EQ(pumpedText(d.eng, a, setGraph(0, 0), pc::graphCommandText(back)).result.status, FOXAPI_OK);
+                passes(d.eng, 1);
+            }
+            const uint64_t base = variant == 0 ? w : 0u;
+            // (START as a command in the same queue, ahead of the rename)
+            FoxSubmitResult sr{};
+            sr.structSize = sizeof(sr);
+            const FoxCommand start = testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1);
+            CHECK_EQ(api()->submit(b.raw(), &start, 1, &sr), 1);
+            const uint64_t t = submitGraph(a, setGraph(0, static_cast<long long>(base)), text);
+            CHECK(t != 0u);
+            d.eng.controlPass();
+            FoxCommandResult r{};
+            CHECK(answerOf(a, t, r));
+            CHECK_EQ(r.status, FOXAPI_OK);
+            const pc::Graph now = graphOf(a);
+            std::printf("G13-2: START and a stale rename in one pass (%s): radio %s, demod \"%s\"\n",
+                        variant == 0 ? "base named" : "unconditional", now.find(p.radio)->on ? "ON" : "OFF",
+                        now.find(p.demod)->name.c_str());
+            CHECK_EQ(now.find(p.demod)->name, std::string("Renamed"));
+            if (variant == 0) {
+                CHECK(now.find(p.radio)->on);   // START's switch survived: the engine merged
+                CHECK_EQ(r.applied[1], 1.0);
+            } else {
+                CHECK(!now.find(p.radio)->on);  // the lost update the version exists to prevent
+            }
+            // back to stopped for the next round
+            CHECK_EQ(pumped(d.eng, b, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+            passes(d.eng, 2);
+        }
+    }
+
+    // A BASE THE ENGINE NO LONGER HOLDS is refused, and nothing changes: more than 8 versions later, a version from the
+    // future, and a version from before a document. A negative base is a bad argument. A document ignores the base.
+    {
+        const uint64_t old = versionOf(a);
+        for (int i = 0; i < 9; ++i) {
+            pc::Graph g = graphOf(a);
+            if (pc::Node* n = g.mutableNode(p.radio)) { n->x = 400.0f + static_cast<float>(i); }
+            CHECK_EQ(pumpedText(d.eng, a, setGraph(0, static_cast<long long>(versionOf(a))), pc::graphCommandText(g)).result.status,
+                     FOXAPI_OK);
+            passes(d.eng, 1);
+        }
+        CHECK_EQ(versionOf(a), old + 9u);
+        const std::string held = fact(a, "fact.patch.graph");
+        pc::Graph stale = graphOf(a);
+        if (pc::Node* n = stale.mutableNode(p.demod)) { n->name = "Too late"; }
+        const testing::Outcome gone = pumpedText(d.eng, a, setGraph(0, static_cast<long long>(old)), pc::graphCommandText(stale));
+        std::printf("G13-2: a base 9 versions old: status %d \"%s\"\n", gone.result.status, gone.result.message);
+        CHECK_EQ(gone.result.status, FOXAPI_FAILED);
+        CHECK(std::string(gone.result.message).find("moved on") != std::string::npos);
+        CHECK_EQ(fact(a, "fact.patch.graph"), held);
+        CHECK_EQ(versionOf(a), old + 9u);
+        // The oldest version still held (8 back) is merged, not refused.
+        const uint64_t oldest = versionOf(a) - 7u;
+        const testing::Outcome edge = pumpedText(d.eng, a, setGraph(0, static_cast<long long>(oldest)), pc::graphCommandText(stale));
+        CHECK_EQ(edge.result.status, FOXAPI_OK);
+        CHECK_EQ(edge.result.applied[1], 1.0);
+        CHECK_EQ(nameOf(a, p.demod), std::string("Too late"));
+        // The future, and a negative.
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(0, static_cast<long long>(versionOf(a) + 50u)), pc::graphCommandText(stale)).result.status,
+                 FOXAPI_FAILED);
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(0, -1), pc::graphCommandText(stale)).result.status, FOXAPI_BAD_ARGUMENT);
+        // A text the engine cannot honour: refused whole, the version unmoved.
+        const uint64_t before = versionOf(a);
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(0, static_cast<long long>(before)), "not a patch\n").result.status,
+                 FOXAPI_BAD_ARGUMENT);
+        passes(d.eng, 1);
+        CHECK_EQ(versionOf(a), before);
+        // A DOCUMENT ignores the base, moves the epoch, and the history goes with it: a version of the old patch is
+        // refused afterwards.
+        const uint64_t e0 = epochOf(a);
+        const uint64_t vOld = versionOf(a);
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 999), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+        passes(d.eng, 1);
+        CHECK_EQ(epochOf(a), e0 + 1u);
+        CHECK(versionOf(a) > vOld);
+        CHECK_EQ(pumpedText(d.eng, a, setGraph(0, static_cast<long long>(vOld)), pc::graphCommandText(stale)).result.status,
+                 FOXAPI_FAILED);
+    }
+
+    // ONE BLOCK: whatever moved the graph, the version and the text moved together and never apart. Read after every
+    // pass of a mixed run (an edit, START, ALL OFF, a merge, a refusal): the version differs from the last pass's exactly
+    // when the graph's text does.
+    {
+        std::string lastText = fact(a, "fact.patch.graph");
+        uint64_t lastVersion = versionOf(a);
+        int moves = 0;
+        const auto step = [&](const char* what) {
+            const std::string text = fact(a, "fact.patch.graph");
+            const uint64_t ver = versionOf(a);
+            if ((text != lastText) != (ver != lastVersion)) {
+                std::printf("G13-2: version %llu -> %llu with the text %s after %s\n", static_cast<unsigned long long>(lastVersion),
+                            static_cast<unsigned long long>(ver), text != lastText ? "changed" : "the same", what);
+            }
+            CHECK((text != lastText) == (ver != lastVersion));
+            moves += ver != lastVersion ? 1 : 0;
+            lastText = text;
+            lastVersion = ver;
+        };
+        pc::Graph g = graphOf(a);
+        for (int i = 0; i < 6; ++i) {
+            if (pc::Node* n = g.mutableNode(p.chan)) { n->freqHz = 145.02e6 + 10000.0 * i; }
+            (void)submitGraph(a, setGraph(0, static_cast<long long>(versionOf(a))), pc::graphCommandText(g));
+            d.eng.controlPass();
+            step("an edit");
+            const FoxCommand run = testing::cmd(FOXAPI_OP_PATCH_RUN, 0, i % 2 == 0 ? 1 : 0);
+            (void)api()->submit(b.raw(), &run, 1, nullptr);
+            d.eng.controlPass();
+            step(i % 2 == 0 ? "START" : "STOP");
+            const FoxCommand allOff = testing::cmd(FOXAPI_OP_PATCH_ALL_OFF);
+            (void)api()->submit(b.raw(), &allOff, 1, nullptr);
+            d.eng.controlPass();
+            step("ALL OFF");
+            g = graphOf(a);
+        }
+        CHECK(moves >= 6);
+    }
+    // THE EVENT follows the version: ALL OFF with the radio ON and the patch stopped changes the graph and nothing else (no
+    // document, the patch does not start or stop), and FOXAPI_EVENT_PATCH is raised for it; the same again changes nothing
+    // and raises nothing. (It used to follow a hash of the graph's fields; now it follows the version, whoever moved it.)
+    {
+        pc::Graph on = graphOf(a);
+        if (pc::Node* n = on.mutableNode(p.radio)) { n->on = true; }
+        CHECK_EQ(g13PumpedGraph(d.eng, a, on).result.status, FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK(!patchRunning(a));
+        CHECK_EQ(api()->subscribe(b.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_PATCH)), FOXAPI_OK);
+        passes(d.eng, 2);
+        (void)takeEvents(b);
+        const uint64_t v0 = versionOf(a);
+        CHECK_EQ(pumped(d.eng, a, testing::cmd(FOXAPI_OP_PATCH_ALL_OFF)).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+        int patchEvents = 0;
+        for (const FoxEvent& e : takeEvents(b)) { patchEvents += e.kind == FOXAPI_EVENT_PATCH ? 1 : 0; }
+        std::printf("G13-2: ALL OFF with the radio on: version %llu -> %llu, %d patch event(s)\n", static_cast<unsigned long long>(v0),
+                    static_cast<unsigned long long>(versionOf(a)), patchEvents);
+        CHECK_EQ(versionOf(a), v0 + 1u);
+        CHECK(patchEvents >= 1);
+        CHECK_EQ(pumped(d.eng, a, testing::cmd(FOXAPI_OP_PATCH_ALL_OFF)).status(), FOXAPI_OK);  // already off: no change
+        passes(d.eng, 2);
+        patchEvents = 0;
+        for (const FoxEvent& e : takeEvents(b)) { patchEvents += e.kind == FOXAPI_EVENT_PATCH ? 1 : 0; }
+        CHECK_EQ(patchEvents, 0);
+        CHECK_EQ(versionOf(a), v0 + 1u);
+    }
+    std::printf("G13-2: the version, the epoch, the merge, the refusals and the one block: done\n");
+}
+
+// G13-3: the plan list (channels and decoders, against two REAL modules), fact.patch.runnable with the two marks only an
+// attempt can find (a radio that would not open clears it, a plugin that refused to start does not), PATCH_RADIOS' note
+// and pending entry, the problems' published codes, and the parts bin hashed by content.
+void testPatchPlanList() {
+    using namespace g13;
+    PluginWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    using Access = cascade::gui::AppWindowTestAccess;
+
+    // THE CODES, pinned: the table section 8.12 prints.
+    CHECK_EQ(static_cast<int>(pc::Problem::NothingFeedsIt), 0);
+    CHECK_EQ(static_cast<int>(pc::Problem::NotFedByARadio), 1);
+    CHECK_EQ(static_cast<int>(pc::Problem::NoFrequency), 2);
+    CHECK_EQ(static_cast<int>(pc::Problem::OutOfBand), 3);
+    CHECK_EQ(static_cast<int>(pc::Problem::RateUnreachable), 4);
+    CHECK_EQ(static_cast<int>(pc::Problem::NothingListens), 5);
+    CHECK_EQ(static_cast<int>(pc::Problem::NoPlugin), 6);
+    CHECK_EQ(static_cast<int>(pc::Problem::PluginMissing), 7);
+    CHECK_EQ(static_cast<int>(pc::Problem::PluginWrongFeed), 8);
+    CHECK_EQ(static_cast<int>(pc::Problem::DecoderTooFast), 9);
+    CHECK_EQ(static_cast<int>(pc::Problem::PluginRefused), 10);
+    CHECK_EQ(static_cast<int>(pc::Problem::NoDevice), 11);
+    CHECK_EQ(static_cast<int>(pc::Problem::DeviceTwice), 12);
+    CHECK_EQ(static_cast<int>(pc::Problem::RadioFailed), 13);
+    CHECK_EQ(static_cast<int>(pc::Problem::NoTracks), 14);
+    CHECK(pc::isAdvisory(pc::Problem::NothingListens) && pc::isAdvisory(pc::Problem::NoTracks));
+
+    // THE PARTS BIN, from the pass: the two modules, the audio decoder and the I/Q decoder, as the catalogue lists them.
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_PARTS), 2);
+    std::string keyIq, keyAudio;
+    std::vector<pc::DecoderInfo> catalogue;
+    for (int i = 0; i < 2; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_PARTS, static_cast<uint32_t>(i));
+        pc::DecoderInfo info;
+        info.key = it.detail;
+        info.name = it.name;
+        info.feed = it.value[0] == static_cast<double>(pc::PortType::Iq) ? pc::PortType::Iq : pc::PortType::Audio;
+        info.requiredRateHz = it.value[1];
+        catalogue.push_back(info);
+        (info.feed == pc::PortType::Iq ? keyIq : keyAudio) = info.key;
+    }
+    CHECK(!keyIq.empty() && !keyAudio.empty());
+
+    // A patch with a channel and its demodulator, an audio decoder behind it, an I/Q decoder on the radio and another on
+    // the channel.
+    Starter p = starter();
+    const pc::NodeId audioDec = p.g.addNode(pc::NodeKind::Decoder, "Audio decoder", pc::PortType::Audio, 700.0f, 320.0f);
+    const pc::NodeId radioDec = p.g.addNode(pc::NodeKind::Decoder, "IQ decoder on the radio", pc::PortType::Iq, 420.0f, 520.0f);
+    const pc::NodeId chanDec = p.g.addNode(pc::NodeKind::Decoder, "IQ decoder on the channel", pc::PortType::Iq, 700.0f, 40.0f);
+    if (pc::Node* n = p.g.mutableNode(audioDec)) { n->plugin = keyAudio; }
+    if (pc::Node* n = p.g.mutableNode(radioDec)) { n->plugin = keyIq; }
+    if (pc::Node* n = p.g.mutableNode(chanDec)) { n->plugin = keyIq; }
+    CHECK(p.g.connect(p.demod, 0, audioDec, 0) == pc::Connect::Ok);
+    CHECK(p.g.connect(p.radio, 0, radioDec, 0) == pc::Connect::Ok);
+    CHECK(p.g.connect(p.chan, 0, chanDec, 0) == pc::Connect::Ok);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+    passes(d.eng, 2);
+
+    // What the core's compile says of the same graph, the same radio (not yet open: its node's own settings) and the same
+    // catalogue: the list is held to it, entry by entry.
+    const pc::Plan want = pc::compile(p.g, {{p.radio, 2.4e6, 145.0e6}}, &catalogue);
+    CHECK_EQ(want.channels.size(), 1u);
+    CHECK_EQ(want.decoders.size(), 3u);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_PLAN), static_cast<int32_t>(want.channels.size() + want.decoders.size()));
+    {
+        const FoxListItem c = planEntry(s, p.chan);
+        CHECK_EQ(c.value[0], want.channels[0].offsetHz);
+        CHECK_EQ(c.value[1], want.channels[0].outRateHz);
+        CHECK_EQ(c.value[2], static_cast<double>(want.channels[0].decimation));
+        CHECK_EQ(c.value[3], static_cast<double>(want.channels[0].radio));
+    }
+    int seenSources = 0;
+    for (const pc::DecoderPlan& dp : want.decoders) {
+        const FoxListItem e = planEntry(s, dp.node);
+        const char* source = dp.source == pc::DecoderSource::Radio     ? "decoder:radio"
+                             : dp.source == pc::DecoderSource::Channel ? "decoder:channel"
+                                                                       : "decoder:audio";
+        std::printf("G13-3: decoder %u %s: %s, rate %.0f from %.0f, centre %.0f, radio %.0f\n", static_cast<unsigned>(dp.node),
+                    e.name, e.detail, e.value[0], e.value[1], e.value[2], e.value[3]);
+        CHECK_EQ(std::string(e.detail), std::string(source));
+        CHECK_EQ(std::string(e.name), catalogue[dp.plugin].key);
+        CHECK_EQ(e.value[0], dp.rateHz);
+        CHECK_EQ(e.value[1], dp.inRateHz);
+        CHECK_EQ(e.value[2], dp.centreHz);
+        CHECK_EQ(e.value[3], static_cast<double>(dp.radio));
+        ++seenSources;
+    }
+    CHECK_EQ(seenSources, 3);
+    // The three sources are three different strings (a swap of two would not be caught by the loop above alone).
+    CHECK_EQ(std::string(planEntry(s, audioDec).detail), std::string("decoder:audio"));
+    CHECK_EQ(std::string(planEntry(s, radioDec).detail), std::string("decoder:radio"));
+    CHECK_EQ(std::string(planEntry(s, chanDec).detail), std::string("decoder:channel"));
+    CHECK_EQ(fact(s, "fact.patch.runnable"), std::string(want.runnable ? "1" : "0"));
+    CHECK(want.runnable);
+
+    // THE TWO MARKS ONLY AN ATTEMPT CAN FIND. A plugin that refused to start is a problem and does NOT clear runnable.
+    {
+        Access::injectRefused(d.eng, p.radio, {chanDec});
+        passes(d.eng, 3);
+        const FoxListItem refusedProblem = problemFor(s, chanDec, "10");
+        CHECK_EQ(refusedProblem.id, static_cast<uint64_t>(chanDec));
+        CHECK_EQ(fact(s, "fact.patch.runnable"), std::string("1"));
+    }
+    // A radio that would not open is a problem and DOES: an I/Q file that is not there, opened by START in the pass.
+    {
+        pc::Graph g = graphOf(s);
+        if (pc::Node* n = g.mutableNode(p.radio)) { n->device = pc::makeIqFileKey("Z:/no/such/recording.wav"); }
+        CHECK_EQ(pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(g)).result.status, FOXAPI_OK);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return fact(s, "fact.patch.runnable") == "0"; }));
+        const FoxListItem failed = problemFor(s, p.radio, "13");
+        CHECK_EQ(failed.id, static_cast<uint64_t>(p.radio));
+        // The radio is listed as what it is: not open, faulted, and why.
+        const FoxListItem re = radioEntry(s, p.radio);
+        CHECK_EQ(re.id, static_cast<uint64_t>(p.radio));
+        CHECK((re.flags & FOXAPI_ITEM_ACTIVE) == 0u);
+        CHECK((re.flags & FOXAPI_ITEM_FAULT) != 0u);
+        CHECK(std::string(re.detail).size() > 0);
+        std::printf("G13-3: a radio that would not open: runnable 0, problem 13, detail \"%s\"\n", re.detail);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+        // back to the generator for the rest
+        pc::Graph back = graphOf(s);
+        if (pc::Node* n = back.mutableNode(p.radio)) { n->device = pc::kGeneratorKey; }
+        CHECK_EQ(pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(back)).result.status, FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, "fact.patch.runnable"), std::string("1"));
+    }
+
+    // PATCH_RADIOS: the note a RUNNING radio's face prints, and a pending open.
+    {
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_PATCH_RADIOS) == 1 && radioEntry(s, p.radio).value[0] > 0.0; }));
+        FoxListItem re = radioEntry(s, p.radio);
+        CHECK((re.flags & FOXAPI_ITEM_ACTIVE) != 0u && (re.flags & FOXAPI_ITEM_FAULT) == 0u);
+        CHECK_EQ(std::string(re.detail), std::string());
+        const std::string note = "the radio refused 2.4 MS/s and runs at its own rate";
+        Access::injectRadioNote(d.eng, p.radio, note);
+        passes(d.eng, 2);
+        re = radioEntry(s, p.radio);
+        CHECK((re.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+        CHECK((re.flags & FOXAPI_ITEM_FAULT) == 0u);   // a note is not a fault
+        CHECK_EQ(std::string(re.detail), note);
+        // A second Radio whose open is on its worker: listed, pending, no flags, its device label.
+        Access::PendingOpen held;
+        const pc::NodeId second = [&] {
+            pc::Graph g = graphOf(s);
+            const pc::NodeId id = g.addNode(pc::NodeKind::Radio, "Radio 2", pc::PortType::Iq, 40.0f, 320.0f);
+            if (pc::Node* n = g.mutableNode(id)) { n->device = pc::kGeneratorKey; n->on = false; }
+            CHECK_EQ(pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(g)).result.status,
+                     FOXAPI_OK);
+            return id;
+        }();
+        Access::injectPending(d.eng, second, held);
+        passes(d.eng, 2);
+        const FoxListItem pe = radioEntry(s, second);
+        CHECK_EQ(pe.id, static_cast<uint64_t>(second));
+        CHECK_EQ(pe.value[2], 1.0);
+        CHECK((pe.flags & (FOXAPI_ITEM_ACTIVE | FOXAPI_ITEM_FAULT)) == 0u);
+        CHECK_EQ(count(s, FOXAPI_LIST_PATCH_RADIOS), 2);
+        // The open answers (it failed, with a null source): pending clears. Fulfilled BEFORE the engine goes.
+        Access::answerPending(held);
+        passes(d.eng, 3);
+        CHECK(radioEntry(s, second).value[2] == 0.0);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+    }
+    std::printf("G13-3: the plan, the codes, the two marks, the note and the pending open: done\n");
+}
+
+// G13-4: the window's looking order is held by the engine - no pass of a long mixed run publishes a graph whose text does
+// not match its version, and a settled engine's passes move no version.
+void testPatchSettledMovesNothing() {
+    using namespace g13;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    const Starter p = starter();
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+    passes(d.eng, 3);
+    const uint64_t listSeq = s.state().listSeq;
+    const uint64_t version = versionOf(s);
+    passes(d.eng, 30);
+    CHECK_EQ(versionOf(s), version);
+    CHECK_EQ(s.state().listSeq, listSeq);  // a settled patch page rebuilds nothing
+    std::printf("G13-4: 30 settled passes with the page open: version %llu, listSeq unmoved\n", static_cast<unsigned long long>(version));
+}
+// G13 TESTS END>>
+// <<G13B TESTS BEGIN
+// G13b: the Patch page, part 2 (window port group 13b, API 0.3 section 8.12): the parts bin's track bit, PATCH_DEVICES and
+// the receiver's radio, the converter in force for each Radio node, PATCH_LIVE (the running nodes' readings, taken once a
+// pass, in a block of its own), DECODER_LINES' originating node, and FOXAPP_OP_PATCH_LIST_RECORDINGS. As in G13, every case
+// drives the engine from THIS thread against the built-in generator or the fake radio, and no window draws anything.
+
+namespace g13b {
+
+namespace pc = cascade::core::patch;
+using Access = cascade::gui::AppWindowTestAccess;
+
+void put16(std::ofstream& f, uint16_t v) {
+    const char b[2] = {static_cast<char>(v & 0xFF), static_cast<char>(v >> 8)};
+    f.write(b, 2);
+}
+void put32(std::ofstream& f, uint32_t v) {
+    const char b[4] = {static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF), static_cast<char>((v >> 16) & 0xFF),
+                       static_cast<char>(v >> 24)};
+    f.write(b, 4);
+}
+
+// A stereo PCM16 I/Q recording of one tone, `rate` Hz, a tenth of a second: the smallest file listIqRecordings plays.
+void writeIqWav(const std::filesystem::path& p, uint32_t rate) {
+    const uint32_t frames = rate / 10u;
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    f.write("RIFF", 4);
+    put32(f, 36 + frames * 4u);
+    f.write("WAVE", 4);
+    f.write("fmt ", 4);
+    put32(f, 16);
+    put16(f, 1);
+    put16(f, 2);
+    put32(f, rate);
+    put32(f, rate * 4u);
+    put16(f, 4);
+    put16(f, 16);
+    f.write("data", 4);
+    put32(f, frames * 4u);
+    for (uint32_t i = 0; i < frames; ++i) {
+        const double ph = 6.283185307179586 * 1000.0 * static_cast<double>(i) / rate;
+        put16(f, static_cast<uint16_t>(static_cast<int16_t>(0.5 * std::cos(ph) * 32767.0)));
+        put16(f, static_cast<uint16_t>(static_cast<int16_t>(0.5 * std::sin(ph) * 32767.0)));
+    }
+}
+
+std::filesystem::path scratchDir(const char* name) {
+    const char* base = std::getenv("LOCALAPPDATA");
+    std::filesystem::path p = std::filesystem::path(base != nullptr ? base : ".") / name;
+    std::error_code ec;
+    std::filesystem::remove_all(p, ec);
+    std::filesystem::create_directories(p, ec);
+    return p;
+}
+
+// The PATCH_LIVE row of `kind` for `node`: a zeroed item (id 0) when there is none.
+FoxListItem liveRow(testing::Session& s, int kind, uint64_t node) {
+    const int32_t n = count(s, FOXAPI_LIST_PATCH_LIVE);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_LIVE, static_cast<uint32_t>(i));
+        if (it.id == node && static_cast<int>(it.value[2]) == kind) { return it; }
+    }
+    return FoxListItem{};
+}
+
+FoxListItem deviceNamed(testing::Session& s, const std::string& key) {
+    const int32_t n = count(s, FOXAPI_LIST_PATCH_DEVICES);
+    for (int32_t i = 0; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_DEVICES, static_cast<uint32_t>(i));
+        if (key == it.detail) { return it; }
+    }
+    return FoxListItem{};
+}
+
+}  // namespace g13b
+
+// G13b-1: the parts bin's track bit (served, and in the fingerprint), PATCH_DEVICES in the engine's own order with every
+// key whole in a LOCAL fact, a recording's rate, and FOXAPP_OP_PATCH_LIST_RECORDINGS (grants, a relisting that finds other
+// files with the same count).
+void testPatchPartsAndDevices() {
+    using namespace g13;
+    using namespace g13b;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(s.ok() && remote.ok());
+    passes(d.eng, 3);
+
+    // THE TRACK BIT. The parts bin is rebuilt from the loaded modules each pass the page is open, so a module with a track
+    // source is put into the engine's catalogue behind its back with the page CLOSED (the step does not touch it then).
+    CHECK_EQ(pumped(d.eng, s, pageOpen(0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_PARTS), 0);
+    const uint64_t seqBefore = s.state().listSeq;
+    Access::addPart(d.eng, "tracker.dll", "Tracker", pc::PortType::Iq, true, false);
+    Access::addPart(d.eng, "plain.dll", "Plain", pc::PortType::Audio, false, false);
+    passes(d.eng, 2);
+    CHECK(s.state().listSeq != seqBefore);  // the bin's content is in the fingerprint
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_PARTS), 2);
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_PATCH_PARTS, 0).detail), std::string("tracker.dll"));
+    CHECK_EQ(item(s, FOXAPI_LIST_PATCH_PARTS, 0).value[2], 1.0);
+    CHECK_EQ(item(s, FOXAPI_LIST_PATCH_PARTS, 1).value[2], 0.0);
+    // ...and a change of ONLY that bit moves the block.
+    {
+        const uint64_t seq = s.state().listSeq;
+        Access::addPart(d.eng, "plain.dll", "Plain", pc::PortType::Audio, true, false, /*replace=*/true);
+        passes(d.eng, 2);
+        CHECK(s.state().listSeq != seq);
+        CHECK_EQ(item(s, FOXAPI_LIST_PATCH_PARTS, 1).value[2], 1.0);
+    }
+    CHECK_EQ(pumped(d.eng, s, pageOpen(1)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+
+    // PATCH_DEVICES, in Engine::patchDeviceChoices' order, whole keys in the facts, LOCAL.
+    const auto same = [&](const char* when) {
+        const std::vector<std::pair<std::string, std::string>> want = Access::choices(d.eng);
+        const int32_t n = count(s, FOXAPI_LIST_PATCH_DEVICES);
+        CHECK_EQ(n, static_cast<int32_t>(want.size()));
+        for (int32_t i = 0; i < n && i < static_cast<int32_t>(want.size()); ++i) {
+            const FoxListItem it = item(s, FOXAPI_LIST_PATCH_DEVICES, static_cast<uint32_t>(i));
+            CHECK_EQ(it.id, static_cast<uint64_t>(i) + 1u);
+            CHECK_EQ(std::string(it.name), want[static_cast<std::size_t>(i)].second);
+            CHECK_EQ(std::string(it.detail), want[static_cast<std::size_t>(i)].first);
+            CHECK_EQ(fact(s, ("fact.patch.device." + std::to_string(i + 1)).c_str()), want[static_cast<std::size_t>(i)].first);
+        }
+        std::printf("G13b-1: PATCH_DEVICES %s: %d entries, the engine's order\n", when, n);
+    };
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), 1);  // the generator, nothing scanned yet
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_PATCH_DEVICES, 0).name), std::string("Signal generator"));
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_PATCH_DEVICES, 0).detail), std::string(pc::kGeneratorKey));
+    same("before a scan");
+    {
+        // A REMOTE session sees the labels, never the keys (they name hardware and paths on this machine).
+        CHECK_EQ(count(remote, FOXAPI_LIST_PATCH_DEVICES), 1);
+        CHECK_EQ(std::string(item(remote, FOXAPI_LIST_PATCH_DEVICES, 0).name), std::string("Signal generator"));
+        CHECK_EQ(std::string(item(remote, FOXAPI_LIST_PATCH_DEVICES, 0).detail), std::string());
+        int32_t st = 0;
+        fact(remote, "fact.patch.device.1", &st);
+        CHECK_EQ(st, FOXAPI_DENIED);
+    }
+    // The fake radio's scan adds the native radios to the list, between the recordings and the sound cards.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_PATCH_DEVICES) > 1; }));
+    same("after a scan");
+
+    // RECORDINGS: the op lists the record folder's I/Q files on the engine's pass.
+    const std::filesystem::path rec = scratchDir("patch_rec_g13b");
+    Access::setRecordDir(d.eng, rec.string());
+    writeIqWav(rec / "one_96k.wav", 96000);
+    const std::string keyOne = pc::makeIqFileKey((rec / "one_96k.wav").string());
+    const int32_t before = count(s, FOXAPI_LIST_PATCH_DEVICES);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before);  // nothing lists them by itself
+    CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before + 1);
+    {
+        const FoxListItem r = deviceNamed(s, keyOne);
+        CHECK_EQ(std::string(r.detail), keyOne);
+        CHECK(std::string(r.name).find("Recording: one_96k.wav") == 0u);
+        CHECK_EQ(r.value[0], 96000.0);  // its own rate
+        CHECK_EQ(item(s, FOXAPI_LIST_PATCH_DEVICES, 0).value[0], 0.0);  // a generator has none
+        std::printf("G13b-1: the recording as a device: \"%s\", %.0f Hz\n", r.name, r.value[0]);
+    }
+    same("with a recording");
+    // A relisting that finds OTHER files, the same number of them, rebuilds the list (the fingerprint has the content).
+    {
+        std::error_code ec;
+        std::filesystem::remove(rec / "one_96k.wav", ec);
+        writeIqWav(rec / "two_250k.wav", 250000);
+        CHECK_EQ(pumped(d.eng, s, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK_EQ(count(s, FOXAPI_LIST_PATCH_DEVICES), before + 1);
+        CHECK_EQ(deviceNamed(s, keyOne).id, 0u);
+        const FoxListItem r = deviceNamed(s, pc::makeIqFileKey((rec / "two_250k.wav").string()));
+        CHECK(r.id != 0u);
+        CHECK_EQ(r.value[0], 250000.0);
+    }
+    // GRANTS: SETTINGS; VIEW alone is refused; a REMOTE session is DENIED as for every FOXAPP_OP_*.
+    {
+        testing::Session viewOnly(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+        CHECK(viewOnly.ok());
+        CHECK_EQ(pumped(d.eng, viewOnly, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_DENIED);
+        CHECK_EQ(pumped(d.eng, remote, appCmd(FOXAPP_OP_PATCH_LIST_RECORDINGS)).status(), FOXAPI_DENIED);
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(rec, ec);
+    std::printf("G13b-1: the track bit, PATCH_DEVICES, the recordings op: done\n");
+}
+
+// G13b-2: the receiver's radio and the converter in force for a Radio node's device (fact.patch.receiverRadio,
+// fact.patch.receiverCentre, fact.patch.conv.<node>).
+void testPatchReceiverRadioAndConverter() {
+    using namespace g13;
+    using namespace g13b;
+    Access::installRadios83();  // (the fake radio, an Airspy and a HackRF on fake wires: six rows after a scan)
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    // The generator is not "a radio".
+    CHECK_EQ(fact(s, "fact.patch.receiverRadio"), std::string());
+    {
+        testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+        int32_t st = 0;
+        fact(remote, "fact.patch.receiverRadio", &st);
+        CHECK_EQ(st, FOXAPI_DENIED);  // it names hardware
+        fact(remote, "fact.patch.receiverCentre", &st);
+        CHECK(st >= 0);               // a frequency does not
+    }
+    // Open the fake radio as the receiver's: its key is the device key a Radio node would name it by.
+    CHECK(openRadio(d.eng, s, engine_api_test::kFakeRadioId));
+    passes(d.eng, 2);
+    const std::string key = fact(s, "fact.patch.receiverRadio");
+    CHECK(!key.empty());
+    CHECK_EQ(key, Access::deviceKeyNow(d.eng));
+    std::printf("G13b-2: the receiver's radio: %s\n", key.c_str());
+    // ...its centre is the AIR centre the radio carries, to the digit: the state's centreHz.
+    const std::string centre = fact(s, "fact.patch.receiverCentre");
+    CHECK(!centre.empty());
+    CHECK_EQ(std::strtod(centre.c_str(), nullptr), s.state().centreHz);
+    // WHETHER IT EXISTS moves the block, its VALUE does not: a radio that was never tuned has no centre to carry (the fact is
+    // empty), and the first tune makes it appear. A retune after that leaves the fact as the last rebuild wrote it - the
+    // live figure is the state's centreHz, which is what the standard window reads once the fact says there is one.
+    {
+        Direct fresh;
+        testing::Session fs(api(), fresh.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+        CHECK(fs.ok());
+        passes(fresh.eng, 3);
+        const std::string tuned = fact(fs, "fact.patch.receiverCentre");
+        std::printf("G13b-2: a fresh engine's generator carries a centre: \"%s\"\n", tuned.c_str());
+        CHECK(!tuned.empty());
+        Access::setRawCentre(fresh.eng, 0.0);   // never tuned
+        passes(fresh.eng, 2);
+        CHECK_EQ(fact(fs, "fact.patch.receiverCentre"), std::string());
+        Access::setRawCentre(fresh.eng, 101.5e6);
+        passes(fresh.eng, 2);
+        const std::string after = fact(fs, "fact.patch.receiverCentre");
+        CHECK(!after.empty());
+        CHECK_EQ(std::strtod(after.c_str(), nullptr), fs.state().centreHz);
+        // ...a retune moves the state and leaves the fact where it was (the value is not an input of the block).
+        const uint64_t seq = fs.state().listSeq;
+        Access::setRawCentre(fresh.eng, 102.5e6);
+        passes(fresh.eng, 3);
+        CHECK_EQ(fs.state().listSeq, seq);
+        CHECK_EQ(fs.state().centreHz, 102.5e6);
+        CHECK_EQ(std::strtod(fact(fs, "fact.patch.receiverCentre").c_str(), nullptr), 101.5e6);
+    }
+
+    // LENT: START takes the receiver's radio (the receiver is on the generator), and the fact still names it. A starter
+    // patch is on the generator itself, so nothing else touches the radio.
+    {
+        const Starter p = starter();
+        CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return patchRunning(s) && (s.state().flags & FOXAPI_RX_DEVICE_OPEN) == 0u; }));
+        CHECK_EQ(fact(s, "fact.patch.receiverRadio"), key);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return !patchRunning(s) && (s.state().flags & FOXAPI_RX_DEVICE_OPEN) != 0u; }));
+        CHECK_EQ(fact(s, "fact.patch.receiverRadio"), key);  // given back
+    }
+
+    // THE CONVERTER IN FORCE for a Radio node's device, "<mode> <LO Hz> <inverted>" as fact.converter.live spells it.
+    {
+        pc::Graph g;
+        const pc::NodeId withDev = g.addNode(pc::NodeKind::Radio, "A", pc::PortType::Iq, 40.0f, 40.0f);
+        const pc::NodeId plain = g.addNode(pc::NodeKind::Radio, "B", pc::PortType::Iq, 40.0f, 200.0f);
+        const pc::NodeId noDev = g.addNode(pc::NodeKind::Radio, "C", pc::PortType::Iq, 40.0f, 360.0f);
+        const pc::NodeId chan = g.addNode(pc::NodeKind::Channel, "D", pc::PortType::Iq, 400.0f, 40.0f);
+        if (pc::Node* n = g.mutableNode(withDev)) { n->device = key; n->on = false; }
+        if (pc::Node* n = g.mutableNode(plain)) { n->device = pc::kGeneratorKey; n->on = false; }
+        Access::storeConverter(d.eng, pc::converterKeyForDevice(key),
+                               cascade::core::ConverterSetting{cascade::core::ConverterMode::Up, 125.0e6, false});
+        CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(g)).result.status, FOXAPI_OK);
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, ("fact.patch.conv." + std::to_string(withDev)).c_str()), std::string("1 125000000 0"));
+        CHECK_EQ(fact(s, ("fact.patch.conv." + std::to_string(plain)).c_str()), std::string("0 0 0"));
+        int32_t st = 0;
+        fact(s, ("fact.patch.conv." + std::to_string(noDev)).c_str(), &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);  // a Radio with no device has none
+        fact(s, ("fact.patch.conv." + std::to_string(chan)).c_str(), &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);  // only a Radio node
+        // The setting moves the block (the converter is an input of the fact, and of the fingerprint).
+        Access::storeConverter(d.eng, pc::converterKeyForDevice(key),
+                               cascade::core::ConverterSetting{cascade::core::ConverterMode::Down, 7.0e6, true});
+        passes(d.eng, 2);
+        CHECK_EQ(fact(s, ("fact.patch.conv." + std::to_string(withDev)).c_str()), std::string("2 7000000 1"));
+        // ...and a node deleted takes its fact with it.
+        pc::Graph less = graphOf(s);
+        less.removeNode(withDev);
+        CHECK_EQ(pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(less)).result.status,
+                 FOXAPI_OK);
+        passes(d.eng, 2);
+        fact(s, ("fact.patch.conv." + std::to_string(withDev)).c_str(), &st);
+        CHECK_EQ(st, FOXAPI_NOT_FOUND);
+    }
+    std::printf("G13b-2: the receiver's radio, lent and given back; the converter in force per Radio node: done\n");
+}
+
+// G13b-3: PATCH_LIVE. A running generator patch (a channel, a demodulator with a squelch, a spectrum display and a speaker
+// to a WAV file) is read once a pass into a block of its own: a squelch gate, a channel's level, a speaker's output - and
+// none of it moves listSeq. A speaker whose output could not be made says why.
+void testPatchLive() {
+    using namespace g13;
+    using namespace g13b;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(s.ok() && remote.ok());
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_LIVE), 0);  // nothing runs
+    const std::filesystem::path rec = scratchDir("patch_live_g13b");
+    Access::setRecordDir(d.eng, rec.string());
+
+    Starter p = starter();
+    const pc::NodeId speaker = p.g.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio, 700.0f, 320.0f);
+    CHECK(p.g.connect(p.demod, 0, speaker, 0) == pc::Connect::Ok);
+    if (pc::Node* n = p.g.mutableNode(p.demod)) {
+        n->squelch = true;
+        n->squelchDb = -20.0f;  // the generator's noise floor is -90 dB: the gate is closed
+    }
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+    passes(d.eng, 2);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_LIVE), 0);  // stopped: nothing is running to read
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] {
+        return liveRow(s, 1, p.demod).id != 0u && liveRow(s, 3, p.chan).id != 0u && liveRow(s, 2, speaker).id != 0u;
+    }, 8000));
+
+    // THE SQUELCH GATE of the demodulator: the level it judges, and whether it is open (ACTIVE).
+    const FoxListItem sq = liveRow(s, 1, p.demod);
+    std::printf("G13b-3: the gate: %.1f dB, %s\n", sq.value[0], (sq.flags & FOXAPI_ITEM_ACTIVE) != 0u ? "open" : "closed");
+    CHECK(sq.value[0] < -20.0);
+    CHECK_EQ(sq.flags & FOXAPI_ITEM_ACTIVE, 0u);
+    // THE CHANNEL'S LEVEL, off its radio's spectrum: the node of the channel, a figure in dB.
+    const FoxListItem lv = liveRow(s, 3, p.chan);
+    CHECK(lv.value[0] < 0.0 && lv.value[0] > -200.0);
+    // THE SPEAKER'S OUTPUT: what it plays to, how much it has written (rising), a peak 0..1, no error.
+    const FoxListItem sp = liveRow(s, 2, speaker);
+    CHECK(std::string(sp.name).find("WAV  patch-") == 0u);
+    CHECK_EQ(std::string(sp.detail), std::string());
+    CHECK(sp.value[0] >= 0.0 && sp.value[0] <= 1.0);
+    std::printf("G13b-3: the speaker: \"%s\", peak %.3f, %.0f samples\n", sp.name, sp.value[0], sp.value[1]);
+    const double samples0 = sp.value[1];
+    CHECK(passUntil(d.eng, [&] { return liveRow(s, 2, speaker).value[1] > samples0 + 4800.0; }, 8000));
+    CHECK_EQ(liveRow(s, 5, speaker).id, 0u);
+
+    // NO listSeq: the readings move every pass and the block of lists does not. A settled running patch rebuilds nothing.
+    {
+        const uint64_t seq = s.state().listSeq;
+        const double w0 = liveRow(s, 2, speaker).value[1];
+        passes(d.eng, 3);
+        CHECK(passUntil(d.eng, [&] { return liveRow(s, 2, speaker).value[1] > w0; }, 8000));
+        CHECK_EQ(s.state().listSeq, seq);
+    }
+    // A REMOTE session reads the same readings (they name nothing on the machine).
+    CHECK(liveRow(remote, 2, speaker).id != 0u);
+    CHECK_EQ(std::string(liveRow(remote, 2, speaker).name), std::string(liveRow(s, 2, speaker).name));
+    // The node's spectrum is still read, not copied: a demodulator that is wired to nothing has no row of its own kind.
+    CHECK_EQ(liveRow(s, 1, speaker).id, 0u);
+
+    // A STOPPED PATCH has no readings (the radio and the dests are gone).
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK_EQ(count(s, FOXAPI_LIST_PATCH_LIVE), 0);
+
+    // A SPEAKER THAT COULD NOT BE MADE: the record folder is a file, so the WAV cannot be created. The reading says why.
+    {
+        const std::filesystem::path blocker = rec / "not_a_folder";
+        { std::ofstream f(blocker); f << "x"; }
+        Access::setRecordDir(d.eng, blocker.string());
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return liveRow(s, 5, speaker).id != 0u; }, 8000));
+        CHECK(std::string(liveRow(s, 5, speaker).detail).size() > 0);
+        CHECK_EQ(liveRow(s, 2, speaker).id, 0u);
+        std::printf("G13b-3: a speaker with no output: \"%s\"\n", liveRow(s, 5, speaker).detail);
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+        passes(d.eng, 3);
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(rec, ec);
+    std::printf("G13b-3: the gate, the level, the speaker, none of it in listSeq: done\n");
+}
+
+// G13b-4: the decoder's face (PATCH_LIVE kind 4) and DECODER_LINES' originating node, against a REAL I/Q decoder module
+// that says three lines (FOXSDR_FIXTURE_G8_LINES) wired to a Text out.
+void testPatchDecoderFaceAndLines() {
+    using namespace g13;
+    using namespace g13b;
+#ifdef _WIN32
+    _putenv_s("FOXSDR_FIXTURE_G8_LINES", "3");
+#else
+    setenv("FOXSDR_FIXTURE_G8_LINES", "3", 1);
+#endif
+    PluginWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    std::string keyIq;
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_PATCH_PARTS); ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_PARTS, static_cast<uint32_t>(i));
+        if (it.value[0] == static_cast<double>(pc::PortType::Iq)) { keyIq = it.detail; }
+    }
+    CHECK(!keyIq.empty());
+    Starter p = starter();
+    const pc::NodeId dec = p.g.addNode(pc::NodeKind::Decoder, "IQ decoder", pc::PortType::Iq, 420.0f, 520.0f);
+    const pc::NodeId lonely = p.g.addNode(pc::NodeKind::Decoder, "Unwired decoder", pc::PortType::Iq, 700.0f, 520.0f);
+    const pc::NodeId out = p.g.addNode(pc::NodeKind::Sink, "Text out", pc::PortType::Text, 700.0f, 40.0f);
+    if (pc::Node* n = p.g.mutableNode(dec)) { n->plugin = keyIq; }
+    if (pc::Node* n = p.g.mutableNode(lonely)) { n->plugin = keyIq; }
+    CHECK(p.g.connect(p.radio, 0, dec, 0) == pc::Connect::Ok);
+    CHECK(p.g.connect(p.radio, 0, lonely, 0) == pc::Connect::Ok);
+    CHECK(p.g.connect(dec, 0, out, 0) == pc::Connect::Ok);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(p.g)).result.status, FOXAPI_OK);
+    const int32_t linesBefore = count(s, FOXAPI_LIST_DECODER_LINES);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_DECODER_LINES) >= linesBefore + 1; }, 8000));
+    // THE FACE: every RUNNING decoder has one, wired or not; the count and the newest line.
+    CHECK(passUntil(d.eng, [&] { return liveRow(s, 4, dec).id != 0u && liveRow(s, 4, lonely).id != 0u; }, 8000));
+    const FoxListItem face = liveRow(s, 4, dec);
+    std::printf("G13b-4: the face of decoder %u: %.0f line(s), newest \"%s\"\n", static_cast<unsigned>(dec), face.value[0],
+                face.detail);
+    CHECK(face.value[0] >= 1.0);
+    CHECK(std::string(face.detail).find("G8 decoded line") == 0u);
+    // THE LINES carry the decoder that said them; the unwired decoder's lines are not shown anywhere (it has a face).
+    const int32_t n = count(s, FOXAPI_LIST_DECODER_LINES);
+    int fromDec = 0;
+    for (int32_t i = linesBefore; i < n; ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(i));
+        CHECK_EQ(it.value[0], static_cast<double>(dec));
+        fromDec += it.value[0] == static_cast<double>(dec) ? 1 : 0;
+    }
+    CHECK(fromDec >= 1);
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_DECODER_LINES, static_cast<uint32_t>(linesBefore)).detail).find("G8 decoded line"), 0u);
+    // A refused decoder has no face (it is not running).
+    Access::injectRefused(d.eng, p.radio, {lonely});
+    passes(d.eng, 3);
+    CHECK_EQ(liveRow(s, 4, lonely).id, 0u);
+    CHECK(liveRow(s, 4, dec).id != 0u);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+    // The receiver's own decoders say 0: a line the engine raises itself carries no node.
+    std::printf("G13b-4: the decoder's face and the lines' node: done\n");
+}
+// G13B TESTS END>>
+// <<G13C TESTS BEGIN
+// G13c: the Patch page, part 3 (window port group 13, API 0.3 section 8.12.7): the decoded pictures. A REAL picture
+// decoder module (tests/fixture_group13_plugin.cpp) runs in a patch on the signal generator, in the engine's pass, with no
+// window anywhere; its pictures are read through read_image, announced by FOXAPI_EVENT_DECODER_IMAGE and named by the
+// PATCH_LIVE picture row (kind 6). Every property of a picture is a function of its sequence number N (see the fixture): an
+// odd N is RGB24 8x6, an even N is GRAY8 5x3, byte i is (N*13 + i*7) & 0xFF, complete when N % 3 == 0 - so a picture that is
+// half one and half another is a picture whose bytes do not follow the formula.
+
+namespace g13c {
+
+namespace pc = cascade::core::patch;
+
+// The scratch plugin folder of this group: the picture fixture and nothing else.
+struct ImageWorld {
+    std::filesystem::path dir;
+    static std::string hook;
+    ImageWorld() {
+        dir = g13b::scratchDir("plugins_group13c");
+        std::error_code ec;
+        const std::filesystem::path p(FIXTURE_GROUP13_PLUGIN);
+        std::filesystem::copy_file(p, dir / p.filename(), std::filesystem::copy_options::overwrite_existing, ec);
+        CHECK(!ec);
+        hook = dir.string();
+        cascade::gui::AppWindowTestAccess::setPluginDir(&ImageWorld::path);
+    }
+    ~ImageWorld() {
+        cascade::gui::AppWindowTestAccess::setPluginDir(nullptr);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+    static std::string path() { return hook; }
+};
+std::string ImageWorld::hook;
+
+// What picture N must look like, byte for byte.
+struct Shape {
+    uint32_t w, h, format, bytes;
+};
+Shape shapeOf(uint64_t n) {
+    const bool rgb = (n % 2u) == 1u;
+    return rgb ? Shape{8u, 6u, CASCADE_IMAGE_RGB24, 144u} : Shape{5u, 3u, CASCADE_IMAGE_GRAY8, 15u};
+}
+bool pixelsFollow(uint64_t n, const std::vector<uint8_t>& px, size_t from = 0, size_t to = size_t(-1)) {
+    to = std::min(to, px.size());
+    for (size_t i = from; i < to; ++i) {
+        if (px[i] != static_cast<uint8_t>((n * 13u + i * 7u) & 0xFFu)) { return false; }
+    }
+    return true;
+}
+
+// A picture read through the table: what read_image said, whole.
+struct Got {
+    int32_t status = FOXAPI_NOT_FOUND;
+    FoxImageInfo info{};
+    std::vector<uint8_t> px;
+};
+Got readPicture(const FoxEngineApi* a, FoxSession* s, uint64_t id) {
+    Got g;
+    g.info.structSize = sizeof(g.info);
+    const int32_t size = a->read_image(s, id, &g.info, nullptr, 0);
+    if (size < 0) {
+        g.status = size;
+        return g;
+    }
+    g.px.assign(static_cast<size_t>(size), 0xEEu);
+    FoxImageInfo again{};
+    again.structSize = sizeof(again);
+    g.status = a->read_image(s, id, &again, g.px.data(), g.px.size());
+    if (g.status == size) { g.info = again; }
+    return g;
+}
+
+// Does the picture follow the fixture's formula, and does it agree with its own info?
+bool coherent(const Got& g) {
+    if (g.status < 0) { return false; }
+    const Shape sh = shapeOf(g.info.sequence);
+    return g.info.sequence >= 1u && g.info.width == sh.w && g.info.height == sh.h && g.info.format == sh.format &&
+           g.info.bytes == sh.bytes && g.px.size() == sh.bytes && g.info.complete == ((g.info.sequence % 3u) == 0u ? 1u : 0u) &&
+           pixelsFollow(g.info.sequence, g.px);
+}
+
+// The picture node of a graph on the generator: radio -> channel -> demod -> the fixture decoder (audio).
+struct Pic {
+    g13::Starter p;
+    pc::NodeId dec = pc::kNoNode;
+};
+Pic picturePatch(testing::Session& s, const char* name = "Fixture picture") {
+    Pic w;
+    w.p = g13::starter();
+    std::string key;
+    for (int32_t i = 0; i < count(s, FOXAPI_LIST_PATCH_PARTS); ++i) {
+        const FoxListItem it = item(s, FOXAPI_LIST_PATCH_PARTS, static_cast<uint32_t>(i));
+        if (std::string(it.name) == "Group Thirteen Fixture") { key = it.detail; }
+    }
+    CHECK(!key.empty());
+    w.dec = w.p.g.addNode(pc::NodeKind::Decoder, name, pc::PortType::Audio, 700.0f, 320.0f);
+    if (pc::Node* n = w.p.g.mutableNode(w.dec)) { n->plugin = key; }
+    CHECK(w.p.g.connect(w.p.demod, 0, w.dec, 0) == pc::Connect::Ok);
+    return w;
+}
+
+}  // namespace g13c
+
+// G13c-1: a picture from the pass to the reader. The row, the event, the info and the pixels, whole; the buffer protocol
+// (info-only, a short buffer, a null buffer); the unknown, the stale and the removed id; a REMOTE session and a VIEW-only
+// one read the same; the capability bit; nothing of it moves listSeq.
+void testPatchPictures() {
+    using namespace g13;
+    using namespace g13b;
+    using namespace g13c;
+    ImageWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session viewer(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+    testing::Session remote(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE,
+                            FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(s.ok() && viewer.ok() && remote.ok());
+    CHECK_EQ(api()->subscribe(s.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_DECODER_IMAGE)), FOXAPI_OK);
+    CHECK_EQ(api()->subscribe(viewer.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_DECODER_IMAGE)), FOXAPI_OK);
+    CHECK_EQ(api()->subscribe(remote.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_DECODER_IMAGE)), FOXAPI_OK);
+    passes(d.eng, 3);
+    // The table says it serves pictures, and says so for what it implements: the decoders' text events and list are not
+    // this bit (FOXAPI_CAP_DECODERS stays clear).
+    CHECK((api()->capabilities & FOXAPI_CAP_IMAGES) != 0u);
+    CHECK((api()->capabilities & FOXAPI_CAP_DECODERS) == 0u);
+    CHECK(FOXAPI_HAS(api(), read_image));
+
+    const Pic w = picturePatch(s);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(w.p.g)).result.status, FOXAPI_OK);
+    passes(d.eng, 3);
+    (void)takeEvents(s);
+    // BEFORE ANY PICTURE: no row, no event, and every id is unknown.
+    CHECK_EQ(liveRow(s, 6, w.dec).id, 0u);
+    for (const uint64_t id : {uint64_t{0}, uint64_t{1}, uint64_t{12345}, ~uint64_t{0}}) {
+        FoxImageInfo info{};
+        info.structSize = sizeof(info);
+        CHECK_EQ(api()->read_image(s.raw(), id, &info, nullptr, 0), FOXAPI_NOT_FOUND);
+    }
+    // A bad session is a bad argument, as everywhere else on the table.
+    CHECK_EQ(api()->read_image(nullptr, 1, nullptr, nullptr, 0), FOXAPI_BAD_ARGUMENT);
+
+    // RUN: the decoder is fed audio from the generator and offers its first picture.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    // EVERY EVENT IS READABLE THE MOMENT IT IS TAKEN: after each pass the events are drained and each one's picture read at
+    // once (a set handed over after the event would be a NOT_FOUND here).
+    std::vector<FoxEvent> seen;
+    int unreadable = 0;
+    CHECK(passUntil(d.eng,
+                    [&] {
+                        for (const FoxEvent& e : takeEvents(s)) {
+                            if (e.kind != FOXAPI_EVENT_DECODER_IMAGE) { continue; }
+                            seen.push_back(e);
+                            FoxImageInfo info{};
+                            info.structSize = sizeof(info);
+                            if (api()->read_image(s.raw(), static_cast<uint64_t>(e.value[0]), &info, nullptr, 0) <= 0) { ++unreadable; }
+                        }
+                        return seen.size() >= 3;
+                    },
+                    20000));
+    CHECK_EQ(unreadable, 0);
+    uint64_t last = 0;
+    for (const FoxEvent& e : seen) {
+        CHECK_EQ(e.target, static_cast<uint32_t>(w.dec));
+        CHECK_EQ(e.value[1], 1.0);                                      // a patch node
+        CHECK_EQ(std::string(e.text), std::string("Fixture picture"));  // the node's name
+        CHECK(static_cast<uint64_t>(e.value[0]) > last);                // ids rise, never reused
+        last = static_cast<uint64_t>(e.value[0]);
+    }
+    std::printf("G13c-1: %zu picture event(s) so far, newest image id %llu, every one readable when taken\n", seen.size(),
+                static_cast<unsigned long long>(last));
+
+    // THE ROW names the newest picture: its id, its byte count, whether it is finished; the node's name.
+    const FoxListItem row = liveRow(s, 6, w.dec);
+    CHECK_EQ(row.id, static_cast<uint64_t>(w.dec));
+    CHECK(row.value[0] >= static_cast<double>(last));
+    CHECK_EQ(std::string(row.name), std::string("Fixture picture"));
+    // READ the picture the row names (a pass may move it on between the two: take the row again until they agree).
+    Got g;
+    FoxListItem at{};
+    for (int tries = 0; tries < 50 && !coherent(g); ++tries) {
+        at = liveRow(s, 6, w.dec);
+        g = readPicture(api(), s.raw(), static_cast<uint64_t>(at.value[0]));
+    }
+    CHECK(coherent(g));
+    const Shape sh = shapeOf(g.info.sequence);
+    std::printf("G13c-1: picture %llu: %ux%u format %u, %llu bytes, sequence %llu, complete %u, caption \"%s\"\n",
+                static_cast<unsigned long long>(at.value[0]), g.info.width, g.info.height, g.info.format,
+                static_cast<unsigned long long>(g.info.bytes), static_cast<unsigned long long>(g.info.sequence), g.info.complete,
+                g.info.caption);
+    CHECK_EQ(g.px.size(), static_cast<size_t>(sh.bytes));
+    CHECK_EQ(at.value[1], static_cast<double>(sh.bytes));                    // the row's byte count is the picture's
+    CHECK_EQ((at.flags & FOXAPI_ITEM_ACTIVE) != 0u, g.info.complete == 1u);  // ...and its finished-ness
+    CHECK_EQ(std::string(g.info.caption), std::string("Fixture picture"));
+    const uint64_t id = static_cast<uint64_t>(at.value[0]);
+
+    // THE BUFFER PROTOCOL, on the picture just read. The pass thread is THIS thread, so nothing moves while these run.
+    {
+        // Info alone: the full size, the shape, no pixel written.
+        FoxImageInfo info{};
+        info.structSize = sizeof(info);
+        CHECK_EQ(api()->read_image(s.raw(), id, &info, nullptr, 0), static_cast<int32_t>(sh.bytes));
+        CHECK_EQ(info.width, sh.w);
+        // Pixels alone (no info).
+        std::vector<uint8_t> px(sh.bytes, 0xEEu);
+        CHECK_EQ(api()->read_image(s.raw(), id, nullptr, px.data(), px.size()), static_cast<int32_t>(sh.bytes));
+        CHECK(pixelsFollow(g.info.sequence, px));
+        // A SHORT buffer: the bytes that fit, the FULL count returned, nothing written past the cap.
+        std::vector<uint8_t> shortBuf(sh.bytes + 8u, 0xEEu);
+        CHECK_EQ(api()->read_image(s.raw(), id, &info, shortBuf.data(), sh.bytes - 1u), static_cast<int32_t>(sh.bytes));
+        CHECK(pixelsFollow(g.info.sequence, shortBuf, 0, sh.bytes - 1u));
+        for (size_t i = sh.bytes - 1u; i < shortBuf.size(); ++i) { CHECK_EQ(shortBuf[i], uint8_t{0xEE}); }
+        CHECK_EQ(info.bytes, static_cast<uint64_t>(sh.bytes));  // the info is whole whatever the buffer
+        // A buffer given and a cap of 0 writes nothing.
+        std::vector<uint8_t> none(sh.bytes, 0xEEu);
+        CHECK_EQ(api()->read_image(s.raw(), id, nullptr, none.data(), 0), static_cast<int32_t>(sh.bytes));
+        for (const uint8_t b : none) { CHECK_EQ(b, uint8_t{0xEE}); }
+        // A cap with no buffer, and an info too short for the minimum, are bad arguments - and write nothing.
+        CHECK_EQ(api()->read_image(s.raw(), id, nullptr, nullptr, 7), FOXAPI_BAD_ARGUMENT);
+        FoxImageInfo tiny{};
+        tiny.structSize = static_cast<uint32_t>(FOXAPI_MIN_IMAGE_INFO) - 1u;
+        tiny.width = 0xDEADBEEFu;
+        CHECK_EQ(api()->read_image(s.raw(), id, &tiny, nullptr, 0), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(tiny.width, 0xDEADBEEFu);
+        // An info of exactly the minimum gets the 0.2 fields and NOT the appended ones (rule 4).
+        FoxImageInfo base{};
+        base.structSize = static_cast<uint32_t>(FOXAPI_MIN_IMAGE_INFO);
+        base.complete = 0xCAFEu;
+        base.sequence = 0xBEEFu;
+        CHECK_EQ(api()->read_image(s.raw(), id, &base, nullptr, 0), static_cast<int32_t>(sh.bytes));
+        CHECK_EQ(base.width, sh.w);
+        CHECK_EQ(base.format, sh.format);
+        CHECK_EQ(base.complete, 0xCAFEu);
+        CHECK_EQ(base.sequence, uint64_t{0xBEEF});
+        CHECK_EQ(base.structSize, static_cast<uint32_t>(FOXAPI_MIN_IMAGE_INFO));
+        // A roomier info (a newer client) is served what there is and told how much.
+        struct Roomy {
+            FoxImageInfo i;
+            uint64_t more[4];
+        } roomy{};
+        roomy.i.structSize = sizeof(roomy);
+        roomy.more[0] = 0x1234u;
+        CHECK_EQ(api()->read_image(s.raw(), id, &roomy.i, nullptr, 0), static_cast<int32_t>(sh.bytes));
+        CHECK_EQ(roomy.i.structSize, static_cast<uint32_t>(sizeof(FoxImageInfo)));
+        CHECK_EQ(roomy.more[0], uint64_t{0x1234});
+    }
+    // THE OTHER SESSIONS read exactly what a LOCAL one does: a VIEW-only session (the grant every session has), and a REMOTE
+    // one (decoded pictures are decoded traffic like DECODER_LINES, which a REMOTE session reads).
+    for (testing::Session* other : {&viewer, &remote}) {
+        const Got o = readPicture(api(), other->raw(), id);
+        CHECK(coherent(o));
+        CHECK_EQ(o.info.sequence, g.info.sequence);
+        CHECK(o.px == g.px);
+        CHECK_EQ(std::string(o.info.caption), std::string("Fixture picture"));
+        // ...and its row, in its own session.
+        CHECK_EQ(liveRow(*other, 6, w.dec).id, static_cast<uint64_t>(w.dec));
+        CHECK(!takeEvents(*other).empty());
+    }
+
+    // A STALE ID: once a newer picture has replaced it, it is NOT_FOUND, and the newer one is not. (NONE OF THE PICTURES
+    // MOVES listSeq - they are PATCH_LIVE's, a block apart - and they arrive in this wait.)
+    const uint64_t listSeqRunning = s.state().listSeq;
+    // (Each pass, the row's ACTIVE is held to the picture it names: finished or still being received - the fixture makes both.)
+    int sampled = 0, flagsRight = 0, finishedSeen = 0, receivingSeen = 0;
+    CHECK(passUntil(d.eng,
+                    [&] {
+                        const FoxListItem r = liveRow(s, 6, w.dec);
+                        const Got x = readPicture(api(), s.raw(), static_cast<uint64_t>(r.value[0]));
+                        if (coherent(x)) {
+                            ++sampled;
+                            flagsRight += ((r.flags & FOXAPI_ITEM_ACTIVE) != 0u) == (x.info.complete == 1u) ? 1 : 0;
+                            (x.info.complete == 1u ? finishedSeen : receivingSeen) += 1;
+                        }
+                        return static_cast<uint64_t>(r.value[0]) > id;
+                    },
+                    20000));
+    CHECK(sampled >= 1);
+    CHECK_EQ(flagsRight, sampled);
+    CHECK(finishedSeen + receivingSeen == sampled);
+    FoxImageInfo stale{};
+    stale.structSize = sizeof(stale);
+    CHECK_EQ(api()->read_image(s.raw(), id, &stale, nullptr, 0), FOXAPI_NOT_FOUND);
+    CHECK(api()->read_image(s.raw(), static_cast<uint64_t>(liveRow(s, 6, w.dec).value[0]), &stale, nullptr, 0) > 0);
+
+    CHECK_EQ(s.state().listSeq, listSeqRunning);
+
+    // STOPPED: the picture stays on its face - the row, the id, the pixels - and nothing more arrives.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 4);
+    (void)takeEvents(s);
+    const FoxListItem kept = liveRow(s, 6, w.dec);
+    CHECK_EQ(kept.id, static_cast<uint64_t>(w.dec));
+    const Got keptPic = readPicture(api(), s.raw(), static_cast<uint64_t>(kept.value[0]));
+    CHECK(coherent(keptPic));
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    passes(d.eng, 6);
+    CHECK_EQ(liveRow(s, 6, w.dec).value[0], kept.value[0]);
+    for (const FoxEvent& e : takeEvents(s)) { CHECK(e.kind != FOXAPI_EVENT_DECODER_IMAGE); }
+
+    // A LATE SESSION has no event for the picture and reads it all the same: from the row.
+    {
+        testing::Session late(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+        CHECK(late.ok());
+        const Got l = readPicture(api(), late.raw(), static_cast<uint64_t>(liveRow(late, 6, w.dec).value[0]));
+        CHECK(coherent(l));
+        CHECK_EQ(l.info.sequence, keptPic.info.sequence);
+        CHECK(takeEvents(late).empty());
+    }
+
+    // A NODE THE GRAPH NO LONGER HOLDS takes its picture with it: the row, and the id.
+    {
+        pc::Graph without = graphOf(s);
+        CHECK(without.removeNode(w.dec));
+        CHECK_EQ(g13PumpedGraph(d.eng, s, without).result.status, FOXAPI_OK);
+        passes(d.eng, 3);
+        CHECK_EQ(liveRow(s, 6, w.dec).id, 0u);
+        FoxImageInfo gone{};
+        gone.structSize = sizeof(gone);
+        CHECK_EQ(api()->read_image(s.raw(), static_cast<uint64_t>(kept.value[0]), &gone, nullptr, 0), FOXAPI_NOT_FOUND);
+        for (const FoxEvent& e : takeEvents(s)) { CHECK(e.kind != FOXAPI_EVENT_DECODER_IMAGE); }
+    }
+    std::printf("G13c-1: the row, the event, the buffer protocol, the sessions, the stale and the removed id: done\n");
+}
+
+// G13c-2: a new patch document is a new set of nodes that may carry the old ones' ids: it takes every picture with it.
+void testPatchPicturesDocument() {
+    using namespace g13;
+    using namespace g13b;
+    using namespace g13c;
+    ImageWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    passes(d.eng, 3);
+    const Pic w = picturePatch(s);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(w.p.g)).result.status, FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return liveRow(s, 6, w.dec).id != 0u; }, 20000));
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 3);
+    const uint64_t id = static_cast<uint64_t>(liveRow(s, 6, w.dec).value[0]);
+    CHECK(coherent(readPicture(api(), s.raw(), id)));
+    // A SET_GRAPH that is not a document edits: the picture stays on its node.
+    {
+        pc::Graph g = graphOf(s);
+        if (pc::Node* n = g.mutableNode(w.dec)) { n->x += 10.0f; }
+        CHECK_EQ(g13PumpedGraph(d.eng, s, g).result.status, FOXAPI_OK);
+        passes(d.eng, 3);
+        CHECK_EQ(static_cast<uint64_t>(liveRow(s, 6, w.dec).value[0]), id);
+    }
+    // The same graph again as a DOCUMENT (the same node ids): the old picture is not shown on the new node.
+    const uint64_t epoch = epochOf(s);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(graphOf(s))).result.status, FOXAPI_OK);
+    passes(d.eng, 3);
+    CHECK(epochOf(s) > epoch);
+    CHECK_EQ(liveRow(s, 6, w.dec).id, 0u);
+    FoxImageInfo info{};
+    info.structSize = sizeof(info);
+    CHECK_EQ(api()->read_image(s.raw(), id, &info, nullptr, 0), FOXAPI_NOT_FOUND);
+    std::printf("G13c-2: an edit keeps the picture, a document takes it: done\n");
+}
+
+// G13c-3: a reader on its own thread never sees a torn picture. Two readers (a LOCAL session and a REMOTE one) read the
+// newest picture as fast as they can while the pass thread takes pictures; every read that returns must follow the
+// fixture's formula for the sequence it names, whole.
+void testPatchPicturesNeverTear() {
+    using namespace g13;
+    using namespace g13b;
+    using namespace g13c;
+    ImageWorld world;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session rl(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+    testing::Session rr(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "s3cret");
+    CHECK(s.ok() && rl.ok() && rr.ok());
+    passes(d.eng, 3);
+    const Pic w = picturePatch(s);
+    CHECK_EQ(pumpedText(d.eng, s, setGraph(FOXAPP_PATCH_GRAPH_DOCUMENT, 0), pc::graphCommandText(w.p.g)).result.status, FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
+    std::atomic<bool> stop{false};
+    struct Tally {
+        std::atomic<long> reads{0}, torn{0}, notFound{0};
+        std::mutex m;
+        std::set<uint64_t> sequences;
+    };
+    Tally tl, tr;
+    const auto reader = [&](testing::Session& session, Tally& t) {
+        while (!stop.load()) {
+            const FoxListItem row = liveRow(session, 6, w.dec);
+            if (row.id == 0u) {
+                std::this_thread::yield();
+                continue;
+            }
+            const Got g = readPicture(api(), session.raw(), static_cast<uint64_t>(row.value[0]));
+            if (g.status < 0) {
+                ++t.notFound;  // moved on between the row and the read: allowed
+                continue;
+            }
+            ++t.reads;
+            if (!coherent(g)) { ++t.torn; }
+            std::lock_guard<std::mutex> lk(t.m);
+            t.sequences.insert(g.info.sequence);
+        }
+    };
+    std::thread a(reader, std::ref(rl), std::ref(tl));
+    std::thread b(reader, std::ref(rr), std::ref(tr));
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(4000);
+    while (std::chrono::steady_clock::now() < end) {
+        d.eng.controlPass();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    stop = true;
+    a.join();
+    b.join();
+    std::printf("G13c-3: LOCAL reader %ld whole read(s), %ld torn, %ld moved on, %zu picture(s) seen; REMOTE reader %ld, %ld, %ld, %zu\n",
+                tl.reads.load(), tl.torn.load(), tl.notFound.load(), tl.sequences.size(), tr.reads.load(), tr.torn.load(),
+                tr.notFound.load(), tr.sequences.size());
+    CHECK(tl.reads.load() > 100);
+    CHECK(tr.reads.load() > 100);
+    CHECK_EQ(tl.torn.load(), 0L);
+    CHECK_EQ(tr.torn.load(), 0L);
+    CHECK(tl.sequences.size() >= 3u);
+    CHECK(tr.sequences.size() >= 3u);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
+    passes(d.eng, 2);
+}
+// G13C TESTS END>>
 int main() {
     engine_api_test::hermetic("api03");
     cascade::gui::AppWindowTestAccess::installFakeRadio();
@@ -6086,6 +7861,7 @@ int main() {
     testBiasTee();
     testTransmitterState();
     testStatusColumnState();
+    testBaselineWaitsForTheSink();
     testStatusColumnGains();
     testStatusColumnRecordings();
     testListsBeforeFirstPublish();
@@ -6150,5 +7926,19 @@ int main() {
     // Group 12: the radar scope and the demod scope.
     testPositionState();
     testScopeCapacity();
+    // Group 13: the Patch page, part 1.
+    testPatchRuntimeInThePass();
+    testPatchGraphVersionAndMerge();
+    testPatchPlanList();
+    testPatchSettledMovesNothing();
+    // Group 13b: the Patch page, part 2.
+    testPatchPartsAndDevices();
+    testPatchReceiverRadioAndConverter();
+    testPatchLive();
+    testPatchDecoderFaceAndLines();
+    // Group 13c: the Patch page, part 3 (the decoded pictures).
+    testPatchPictures();
+    testPatchPicturesDocument();
+    testPatchPicturesNeverTear();
     return check::finish("test_engine_api_03");
 }

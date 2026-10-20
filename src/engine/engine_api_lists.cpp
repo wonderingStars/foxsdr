@@ -20,6 +20,7 @@
 
 #include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
+#include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
 #include "core/plugin_host.hpp"
 #include "core/serial_port.hpp"
@@ -379,23 +380,69 @@ std::uint64_t Engine::apiListsFingerprint() {
     // The patch page: its graph, what the plan said, its radios.
     f.value(graphHash(patchGraph_));
     f.value(patchGraphEpoch_);
+    f.value(patchGraphVersion_);  // (API 0.3 8.12: whatever moved the graph moved the version, the hash apart)
     f.value(patchRunning_);
     for (const auto& pr : patchPlan_.problems) {
         f.value(pr.node);
         f.value(pr.problem);
     }
+    // The plan the page draws (API 0.3 8.12: PATCH_PLAN and fact.patch.runnable): every figure a channel or a
+    // decoder carries moves the block.
+    f.value(patchPlan_.runnable);
+    for (const auto& ch : patchPlan_.channels) {
+        f.value(ch.node);
+        f.value(ch.offsetHz);
+        f.value(ch.decimation);
+        f.value(ch.outRateHz);
+        f.value(ch.radio);
+    }
+    for (const auto& d : patchPlan_.decoders) {
+        f.value(d.node);
+        f.value(d.plugin);
+        f.value(d.source);
+        f.value(d.inRateHz);
+        f.value(d.rateHz);
+        f.value(d.centreHz);
+        f.value(d.radio);
+    }
     for (cascade::core::patch::NodeId n : patchRefused_) { f.value(n); }
+    // The parts bin: the content of each entry, not their number (a module replaced by another keeps the count).
     f.value(patchCatalogue_.size());
+    for (const auto& d : patchCatalogue_) {
+        f.text(d.key);
+        f.text(d.name);
+        f.value(d.feed);
+        f.value(d.requiredRateHz);
+        f.value(d.image);
+        f.value(d.tracks);
+    }
     for (const auto& r : patchRadios_) {
         f.value(r.first);
         f.value(r.second->rateHz());
+        f.value(r.second->centreHz());  // (API 0.3 8.12: PATCH_RADIOS value[1])
         f.value(r.second->fault().empty());
     }
     for (const auto& e : patchRadioError_) {
         f.value(e.first);
         f.text(e.second);
     }
+    // The I/Q recordings the Radio's device list offers (API 0.3 8.12: PATCH_DEVICES, with each one's rate): by what each
+    // names, not their number - a relisting that finds other files must rebuild the list.
     f.value(patchRecordings_.size());
+    for (const auto& r : patchRecordings_) {
+        f.text(r.key);
+        f.text(r.fileName);
+        f.value(r.rateHz);
+    }
+    // The receiver's radio as the patch names it (fact.patch.receiverRadio): the lent one - and the open one, which
+    // sourceKind_, deviceArgs_ and device_ above already hash - and the labels the lent radio is offered by. Whether
+    // the radio has ever been tuned (fact.patch.receiverCentre exists) is hashed, its VALUE is not: a retune would
+    // rebuild the block, as the comment on the converter's centre says.
+    f.value(patchMainKeep_.valid);
+    f.text(patchMainKeep_.kind);
+    f.text(patchMainKeep_.args);
+    f.text(patchMainKeep_.label);
+    f.value(carriedAirCentre().has_value());
     // The recorders: whether each is taking, and to which file (the bytes
     // are read live, never fingerprinted).
     f.value(iqRecorder_.recording());
@@ -903,29 +950,109 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                                    cascade::core::patch::problemText(pr.problem)});
     }
     for (const cascade::core::patch::DecoderInfo& d : patchCatalogue_) {
-        b.patchParts.push_back({d.name, d.key, static_cast<double>(d.feed), d.requiredRateHz});
+        b.patchParts.push_back({d.name, d.key, static_cast<double>(d.feed), d.requiredRateHz, d.tracks});
+    }
+    // THE DEVICES A RADIO CAN BE SET TO (API 0.3 8.12: PATCH_DEVICES), in the order the Radio's Device combo lists them,
+    // each key whole in a LOCAL fact beside the entry (its detail is cut at 159 bytes), and a recording's own rate.
+    {
+        const std::vector<PatchDeviceChoice> choices = patchDeviceChoices();
+        for (std::size_t i = 0; i < choices.size(); ++i) {
+            ApiListBlock::PatchDevice d;
+            d.label = choices[i].label;
+            d.key = choices[i].key;
+            for (const cascade::core::patch::RecordingInfo& r : patchRecordings_) {
+                if (r.key == d.key) { d.rateHz = r.rateHz; }
+            }
+            fact("patch.device." + std::to_string(i + 1), d.key, true);
+            b.patchDevices.push_back(std::move(d));
+        }
+    }
+    // The receiver's radio as a Radio node would name it (the lent one, else the open one), and the air centre it was
+    // last tuned to ("" when it never was): what a new Radio starts on.
+    fact("patch.receiverRadio", patchReceiverRadioKey(), true);
+    {
+        std::string centre;
+        if (const std::optional<double> c = carriedAirCentre()) {
+            char text[40];
+            std::snprintf(text, sizeof(text), "%.17g", *c);
+            centre = text;
+        }
+        fact("patch.receiverCentre", std::move(centre));
+    }
+    // THE CONVERTER IN FORCE FOR EACH RADIO NODE'S DEVICE ("<mode> <LO Hz> <inverted>", as fact.converter.live spells
+    // it): what decides whether a centre a user types can be taken (core::radioCentreTakeable).
+    for (const cascade::core::patch::Node& n : patchGraph_.nodes()) {
+        if (n.kind != cascade::core::patch::NodeKind::Radio || n.device.empty()) { continue; }
+        const cascade::core::ConverterSetting conv = converterForKey(n.device);
+        char text[96];
+        std::snprintf(text, sizeof(text), "%d %.17g %d", static_cast<int>(conv.mode), conv.loHz, conv.inverted ? 1 : 0);
+        fact("patch.conv." + std::to_string(n.id), text);
     }
     for (const auto& r : patchRadios_) {
         ApiListBlock::PatchRadio pr;
         pr.node = r.first;
         pr.device = r.second->label();
         pr.rateHz = r.second->rateHz();
+        pr.centreHz = r.second->centreHz();
         pr.open = true;
+        pr.fault = !r.second->fault().empty();
         pr.error = r.second->fault();
-        pr.fault = !pr.error.empty();
+        // API 0.3 8.12: a RUNNING radio can carry a line that is not a fault - the open refused the rate asked for
+        // and runs at its own, the device would not take a retune - and the face prints it. The line the face prints
+        // (patchRadioError_, which holds a fault too) is the detail, the FAULT flag stays the fault's alone.
+        const auto note = patchRadioError_.find(r.first);
+        if (note != patchRadioError_.end()) { pr.error = note->second; }
+        b.patchRadios.push_back(std::move(pr));
+    }
+    // A radio whose open is still on its worker: its device, and nothing else yet.
+    for (const auto& p : patchRadioPending_) {
+        if (patchRadios_.count(p.first) != 0) { continue; }
+        ApiListBlock::PatchRadio pr;
+        pr.node = p.first;
+        pr.pending = true;
+        if (const cascade::core::patch::Node* n = patchGraph_.find(p.first)) { pr.device = patchDeviceLabel(n->device); }
         b.patchRadios.push_back(std::move(pr));
     }
     for (const auto& e : patchRadioError_) {
-        if (patchRadios_.count(e.first) != 0) { continue; }
+        if (patchRadios_.count(e.first) != 0 || patchRadioPending_.count(e.first) != 0) { continue; }
         ApiListBlock::PatchRadio pr;
         pr.node = e.first;
         pr.error = e.second;
         pr.fault = true;
         b.patchRadios.push_back(std::move(pr));
     }
+    // THE PLAN: a channel's offset, rate, decimation and radio; a decoder's rates, centre and source.
+    for (const auto& ch : patchPlan_.channels) {
+        ApiListBlock::PatchPlanEntry e;
+        e.node = ch.node;
+        e.v[0] = ch.offsetHz;
+        e.v[1] = ch.outRateHz;
+        e.v[2] = static_cast<double>(ch.decimation);
+        e.v[3] = static_cast<double>(ch.radio);
+        b.patchPlan.push_back(std::move(e));
+    }
+    for (const auto& d : patchPlan_.decoders) {
+        ApiListBlock::PatchPlanEntry e;
+        e.node = d.node;
+        e.decoder = true;
+        if (d.plugin < patchCatalogue_.size()) { e.key = patchCatalogue_[d.plugin].key; }
+        e.source = d.source == cascade::core::patch::DecoderSource::Radio     ? "decoder:radio"
+                   : d.source == cascade::core::patch::DecoderSource::Channel ? "decoder:channel"
+                                                                              : "decoder:audio";
+        e.v[0] = d.rateHz;
+        e.v[1] = d.inRateHz;
+        e.v[2] = d.centreHz;
+        e.v[3] = static_cast<double>(d.radio);
+        b.patchPlan.push_back(std::move(e));
+    }
+    // THE GRAPH, ITS VERSION AND ITS EPOCH: three facts of ONE block, so an interface that reads all three holds
+    // one publish (API 0.3 8.12). `runnable` is the plan's verdict as the page lettered it.
     fact("patch.graph", cascade::core::patch::graphCommandText(patchGraph_), true);
+    fact("patch.version", std::to_string(patchGraphVersion_));
+    fact("patch.epoch", std::to_string(patchGraphEpoch_));
+    fact("patch.runnable", patchPlan_.runnable ? "1" : "0");
     b.patchEpoch = patchGraphEpoch_;
-    b.patchGraphHash = graphHash(patchGraph_);
+    b.patchVersion = patchGraphVersion_;
     b.patchRunning = patchRunning_;
     // THE RECORDINGS: the two recorders' takes (current or last), then the
     // patch's files.
@@ -1049,10 +1176,166 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
     }
 }
 
+// A PICTURE ARRIVED from a decoder's runner (pumpDecoderOutput, the pumping thread): it is moved in WHOLE behind a
+// `const` pointer and given the next id, replacing the node's previous picture. Nothing writes it again, and nothing
+// here is read from another thread - an interface reads the set syncPatchImages builds from these.
+void Engine::takePatchImage(cascade::core::patch::NodeId node, cascade::core::HostImage&& img) {
+    if (img.pixels.empty()) { return; }
+    PatchImage& slot = patchImages_[node];
+    slot.id = ++patchImageLastId_;
+    const cascade::core::patch::Node* n = patchGraph_.find(node);
+    slot.caption = n != nullptr ? n->name : img.plugin;
+    slot.image = std::make_shared<const cascade::core::HostImage>(std::move(img));
+    patchImagesDirty_ = true;
+    if (std::find(patchImagesFresh_.begin(), patchImagesFresh_.end(), node) == patchImagesFresh_.end()) {
+        patchImagesFresh_.push_back(node);
+    }
+}
+
+// Once a pass, before PATCH_LIVE is taken: the pictures that belong to this graph, the set read_image serves, and the
+// events that announce the pass's arrivals - in that order, so an interface that is told can read.
+void Engine::syncPatchImages() {
+    // A new patch document is a new set of nodes that may carry the old ones' ids: nothing of the old graph's is
+    // shown on them.
+    if (patchGraphEpoch_ != patchImagesEpoch_) {
+        patchImagesEpoch_ = patchGraphEpoch_;
+        if (!patchImages_.empty()) {
+            patchImages_.clear();
+            patchImagesDirty_ = true;
+        }
+    }
+    // ...and a node the graph no longer holds takes its picture with it.
+    for (auto it = patchImages_.begin(); it != patchImages_.end();) {
+        if (patchGraph_.find(it->first) == nullptr) {
+            it = patchImages_.erase(it);
+            patchImagesDirty_ = true;
+        } else {
+            ++it;
+        }
+    }
+    if (patchImagesDirty_) {
+        auto set = std::make_shared<ApiImageSet>();
+        set->entries.reserve(patchImages_.size());
+        for (const auto& pic : patchImages_) {
+            ApiImageSet::Entry e;
+            e.node = pic.first;
+            e.id = pic.second.id;
+            e.caption = pic.second.caption;
+            e.image = pic.second.image;
+            set->entries.push_back(std::move(e));
+        }
+        apiImages_ = std::move(set);
+        api_->setPatchImages(apiImages_);
+        patchImagesDirty_ = false;
+    }
+    for (const cascade::core::patch::NodeId node : patchImagesFresh_) {
+        const auto it = patchImages_.find(node);
+        if (it != patchImages_.end()) { api_->patchImageArrived(node, it->second.id, it->second.caption); }
+    }
+    patchImagesFresh_.clear();
+}
+
+// PATCH_LIVE (API 0.3 8.12): what the running patch nodes are doing now, taken once a pass. The readings are first
+// collected as numbers (patchLiveRaw_, whose room is kept) and fingerprinted with the text that can move without a
+// number moving (a speaker's error); only when the fingerprint has moved is a block built, with the texts. A pass that
+// finds the same readings builds nothing, allocates nothing and hands the host nothing.
+void Engine::refreshPatchLive() {
+    namespace pc = cascade::core::patch;
+    std::vector<PatchLiveRaw>& raw = patchLiveRaw_;
+    raw.clear();
+    // A demodulator's squelch gate: the level it judges and whether it is open (the channel it listens to, on the radio
+    // that channel is cut from). Keyed by the DEMOD node, which is the node whose face and inspector show it.
+    for (const pc::Node& n : patchGraph_.nodes()) {
+        if (n.kind != pc::NodeKind::Demod) { continue; }
+        const pc::NodeId chan = cascade::gui::demodChannel(patchGraph_, n.id);
+        if (chan == pc::kNoNode) { continue; }
+        const auto r = patchRadios_.find(pc::radioOf(patchGraph_, chan));
+        if (r == patchRadios_.end()) { continue; }
+        float level = 0.0f;
+        bool open = false;
+        if (!r->second->runner().squelchState(chan, level, open)) { continue; }
+        raw.push_back({n.id, 1, static_cast<double>(level), 0.0, open, nullptr});
+    }
+    // A speaker's output: its newest peak and how much it has written. The destination is immutable once made (its
+    // describe() is the same for its life), so only its error is hashed with the figures.
+    for (const auto& d : patchDests_) {
+        if (!d.second) { continue; }
+        raw.push_back({d.first, 2, static_cast<double>(d.second->peak()), static_cast<double>(d.second->samples()), false,
+                       d.second.get()});
+    }
+    // ...and a speaker whose output could not be made.
+    for (const auto& e : patchDestError_) { raw.push_back({e.first, 5, 0.0, 0.0, false, &e.second}); }
+    // A channel's level, measured off the spectrum of the radio it is cut from.
+    for (const auto& ch : patchPlan_.channels) {
+        const auto rs = patchSpectra_.find(ch.radio);
+        const auto rr = patchRadios_.find(ch.radio);
+        if (rs == patchSpectra_.end() || rr == patchRadios_.end()) { continue; }
+        const pc::Level lv = pc::channelLevelDb(rs->second.db, rr->second->rateHz(), ch.offsetHz);
+        if (lv.valid) { raw.push_back({ch.node, 3, static_cast<double>(lv.db), 0.0, false, nullptr}); }
+    }
+    // A running decoder's face: how many lines it has said (a decoder that has said none is "0 lines": it is running),
+    // and its newest. One that refused to start has none.
+    for (const auto& dp : patchPlan_.decoders) {
+        if (std::find(patchRefused_.begin(), patchRefused_.end(), dp.node) != patchRefused_.end()) { continue; }
+        const auto it = patchDecoderFaces_.find(dp.node);
+        raw.push_back({dp.node, 4, it != patchDecoderFaces_.end() ? static_cast<double>(it->second.lines) : 0.0, 0.0,
+                       false, it != patchDecoderFaces_.end() ? &it->second : nullptr});
+    }
+    // A picture decoder's newest picture (read_image takes the id): kept while the node is in the graph, so the row is
+    // there with the patch stopped too. The id is its identity - a new picture is a new id - and `open` says the decoder
+    // has finished it.
+    for (const auto& pic : patchImages_) {
+        raw.push_back({pic.first, 6, static_cast<double>(pic.second.id),
+                       static_cast<double>(pic.second.image->pixels.size()), pic.second.image->complete, &pic.second});
+    }
+    Fingerprint f;
+    for (const PatchLiveRaw& r : raw) {
+        f.value(r.node);
+        f.value(r.kind);
+        f.value(r.v0);
+        f.value(r.v1);
+        f.value(r.open);
+        if (r.kind == 2) { f.text(static_cast<const cascade::core::patch::AudioDest*>(r.ref)->error()); }
+        if (r.kind == 5) { f.text(*static_cast<const std::string*>(r.ref)); }
+        if (r.kind == 4 && r.ref != nullptr) { f.text(static_cast<const PatchDecoderFace*>(r.ref)->last); }
+    }
+    if (apiLive_ != nullptr && apiLive_->fingerprint == f.h) { return; }
+    auto b = std::make_shared<ApiLiveBlock>();
+    b->fingerprint = f.h;
+    b->entries.reserve(raw.size());
+    for (const PatchLiveRaw& r : raw) {
+        ApiLiveBlock::Entry e;
+        e.node = r.node;
+        e.kind = r.kind;
+        e.v0 = r.v0;
+        e.v1 = r.v1;
+        e.open = r.open;
+        if (r.kind == 2) {
+            const auto* d = static_cast<const cascade::core::patch::AudioDest*>(r.ref);
+            e.name = d->describe();
+            e.detail = d->error();
+        } else if (r.kind == 5) {
+            e.detail = *static_cast<const std::string*>(r.ref);
+        } else if (r.kind == 4 && r.ref != nullptr) {
+            e.detail = static_cast<const PatchDecoderFace*>(r.ref)->last;
+        } else if (r.kind == 6) {
+            e.name = static_cast<const PatchImage*>(r.ref)->caption;
+        }
+        b->entries.push_back(std::move(e));
+    }
+    apiLive_ = std::move(b);
+    api_->setPatchLive(apiLive_);
+}
+
 // Once a pass, on the pumping thread, before the state is published: a new
 // block for the table when anything in it changed. Returns the fingerprint
 // the publish carries into listSeq.
 std::uint64_t Engine::publishApiLists() {
+    // A change made to the patch graph since it was last looked at (the runtime's own, a command applied after
+    // pumpPatch) is a version before it is published (API 0.3 8.12).
+    syncPatchGraphVersion();
+    syncPatchImages();
+    refreshPatchLive();
     const std::uint64_t fp = apiListsFingerprint();
     if (apiLists_ == nullptr || apiLists_->fingerprint != fp) {
         apiLists_ = buildApiLists(fp);

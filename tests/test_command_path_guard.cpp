@@ -29,8 +29,9 @@
 //     rule 5 keeps them free of ImGui input.
 //   LINE-ALLOWED MEMBERS (kLineAllowed): members that draw AND carry a few
 //     reviewed engine lines (drawUi's per-frame pump steps and transmit key;
-//     run's startup, teardown and verification seams; drawPatchPage's patch
-//     runtime steps). Only the listed lines are exempt.
+//     run's startup, teardown and verification seams). Only the listed lines are
+//     exempt. (The patch runtime's steps were drawPatchPage's and drawPatchView's
+//     until window port group 13 moved them into the engine's pass.)
 //   CONTROLS: everything else - every widget, key handler, gesture and new
 //     helper. In a control:
 //     1. no call to a state-changing helper (kHelpers), a window-machinery
@@ -225,11 +226,12 @@ const char* const kHostHooks[] = {
     "frameClockRunning",  "frameTimeS",          "wallTimeS",
     "pauseWatchdog",      "resumeWatchdog",      "onDisplayRange",
     "onBookmarksChanged", "openPluginWindowsFor", "onReceiverPositionApplied",
-    "onConverterChanged", "onPatchGraphChanged", "onPatchPicture",
+    "onConverterChanged",
+    // (onPatchPicture left with window port group 13 part c: the pictures are the engine's, read with read_image.)
     "onGpsFixApplied",    "onCatalogueResult",  // (onCatalogueFetchStarting and onAddAllFinished left with
     "beforePluginRescan",                       //  window port group 10: the window watches the table instead)
     "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
-    "showDemonstrationInstrument", "drainTrackInfoText", "patchPageOpen",
+    "showDemonstrationInstrument", "drainTrackInfoText",
     // webListening, tunerDisplayStyle, basemapFacts: no longer hooks
     // (engine/stage3b-pre OPEN 4) - handed over by handFrontEndFacts.
     "enrichWebTrack",     "fillWebImages",
@@ -251,8 +253,10 @@ const char* const kControlMayCall[] = {
     // (currentAbsoluteHz, "a query: the tuned frequency", was allowed here until window
     // port group 6: its last caller in src/gui, the frequency readout, reads the
     // state's tunedHz now, so a direct call is rule 1's again.)
-    // a query: the air centre a switch would carry
-    "carriedAirCentre",
+    // (RETIRED with window port group 13 part b, their last caller gone: carriedAirCentre - the seed reads
+    // fact.patch.receiverCentre and the state's centreHz - patchListRecordings - the Radio part sends
+    // FOXAPP_OP_PATCH_LIST_RECORDINGS - and prunePatchSinkLines - the engine pruned in its own pass, the window's Text
+    // outs keep their own lines; in part c the map it pruned, patchSinkLines_, went too: nothing read it.)
     // a pure function of its argument (static)
     "muteNameList",
     // the crash handler's description of the receiver, refreshed for a diagnostics bundle
@@ -272,13 +276,6 @@ const char* const kControlMayCall[] = {
     // is unaffected - it calls the Engine methods directly (a friend
     // accessor), which still exist, unchanged, for the commands to call.
     "airspyRememberOpen",
-    // the patch Radio inspector lists local I/Q recordings (0.99.40), the
-    // same reviewed direct-call pattern.
-    "patchListRecordings",
-    // drawPatchFaces prunes a gone node's cached decoder text (engine/stage3b-pre
-    // fields-to-commands round 2), the same reviewed direct-call pattern -
-    // patchSinkLines_ CLOSED off kWindowMayWriteScoped as a result.
-    "prunePatchSinkLines",
 };
 
 // ENGINE FIELDS THE WINDOW STILL EDITS IN PLACE. Each is a form or a page
@@ -342,16 +339,10 @@ const LineAllow kLineAllowed[] = {
     {"drawUi", "applyWebControls();"},
     {"drawUi", "(void)applyCommand(q.c, q.longText);"},
     // ...and the transmit key rebuilt every frame - the dead-man's handle (OPEN 1).
-    // drawPatchPage: closing the page stops the patch (OPEN 2), and the
-    // patch's own radios are reconciled with the graph every frame (the patch
-    // page's runtime, API gap 7).
-    {"drawPatchPage", "pipeline_.patchRunner().reap();"},
-    {"drawPatchPage", "patchRunning_ = false;"},
-    {"drawPatchPage", "pipeline_.patchRunner().clear();"},
-    {"drawPatchPage", "patchStopAll(true);"},
-    {"drawPatchPage", "refreshPluginRunner();"},
-    {"drawPatchView", "patchReconcile();"},
-    {"drawPatchView", "patchApplyRunning();"},
+    // (drawPatchPage and drawPatchView's runtime steps - the receiver pipeline's patch runner retired and cleared, the
+    // close rule that stops the patch, the radios reconciled, the transport applied, the catalogue rebuilt, the one
+    // compile, the sets published - LEFT with window port group 13: the engine's pass runs them, Engine::pumpPatch,
+    // and the window tells it whether the view is showing. Sixteen entries.)
     // drawTransmitPage's followTransmitFrequency CLOSED (engine stage 4 window
     // port): the engine's own pass follows the dial (Engine::pumpPublish).
     // run: interactive start, the GPS test seam, the catalogue test hook, the
@@ -384,33 +375,15 @@ const LineAllow kLineAllowed[] = {
     {"run", "telemetryCleanExit_ = true;"},
     // the crash handler's context, once a second and at start
     {"run", "refreshDiagContext();"},
-    // the patch runtime's per-frame steps (OPEN 2/10). Since 0.99.40 the
-    // patch is the main window's other face (drawPatchView), not a page of
-    // its own; drawPatchPage is left with only the per-frame retire and the
-    // close-stops-the-patch rule below.
-    {"drawPatchView", "rebuildPatchCatalogue();"},
-    // closing the page stops the patch (OPEN 2)
-    {"drawPatchPage", "patchWasOpen_ = false;"},
-    // the same
-    {"drawPatchPage", "patchWasRunning_ = false;"},
-    // the same
-    {"drawPatchPage", "patchDspSig_.clear();"},
-    // the same
-    {"drawPatchPage", "patchRefused_.clear();"},
-    // the one compile a frame
-    {"drawPatchView", "patchPlan_ = cascade::core::patch::compile("},
-    // the same (a const pointer handed to compile)
-    {"drawPatchView", "&patchCatalogue_);"},
-    // each radio publishes its set
-    {"drawPatchView", "patchPublishSets();"},
-    // the page is open this frame
-    {"drawPatchView", "patchWasOpen_ = true;"},
     // the engine's frame begins: the snapshot's retry, then the first drain
     {"drawUi", "pumpFrameBegin();"},
     // endTakesOnFault, then pumpDecoderOutput
     {"drawUi", "pumpInputs();"},
     // applyPluginApi, then scannerFrame
     {"drawUi", "pumpPlugins();"},
+    // the patch runtime's step of the pass (window port group 13): the catalogue, the transport, the radios, the plan and
+    // the sets - or the close rule - which drawPatchPage and drawPatchView used to run from the frame
+    {"drawUi", "pumpPatch();"},
     // the bookmark save and the one publish; the window copies the spectrum frame beside it
     // the front end's facts for that publish, handed over first (OPEN 4)
     {"drawUi", "handFrontEndFacts();"},
@@ -1035,10 +1008,52 @@ const char* const kPortedMembers[] = {
     // engine read before and are listed so that none can grow one.
     "drawScopeMode", "drawScopeModeControl", "gatherDemodScope", "pipelineIsWfm", "scopeSignalNow",
     "drawDemodScopePage", "drawDemodScopeSection",
+    // GROUP 13, part a, the Patch page's draft flow and the engine's patch runtime (API 0.3 8.12). The runtime left the
+    // window's frame for the engine's pass (Engine::pumpPatch: no drawPatchPage, no sixteen kLineAllowed entries); what
+    // is ported here is the page's EDIT of the graph: the look at the graph, its version and its epoch in one publish
+    // (patchLook), the draft's follow (syncPatchDraft, adoptPatchLook), the commit through the session with the version
+    // it was edited from and its answer (commitPatchDraft, onPatchGraphResult, settlePatchSend), a document
+    // (loadPatchDocument), the interaction state a new patch drops (patchInteracting, forgetPatchInteraction), the page-open
+    // flag (setMainViewPatch, syncPatchPageOpen), the rail's chip (drawPatchSection), the Radio part's two passes
+    // (patchAddRadioPart, finishPatchRadioParts) - and the ticketed submit they share (uiSubmitTicket).
+    "drawPatchSection", "setMainViewPatch", "syncPatchPageOpen", "uiSubmitTicket", "patchLook", "syncPatchDraft",
+    "commitPatchDraft", "loadPatchDocument", "settlePatchSend", "onPatchGraphResult", "adoptPatchLook",
+    "forgetPatchInteraction", "patchInteracting", "finishPatchRadioParts", "patchAddRadioPart",
+    // GROUP 13, part b, the rest of the Patch page (API 0.3 8.12): the page itself and its faces (drawPatchView,
+    // drawPatchFaces), the seed (seedPatchIfNeeded), the transport, the Radio switch and the three inspectors' bodies
+    // (drawPatchTransport, drawPatchRadioSwitch, drawPatchRadioInspector, drawPatchSinkInspector, drawPatchSquelch,
+    // drawPatchMapInspector), a starter device and a typed centre (patchDefaultDeviceKey, setPatchRadioCentre,
+    // drawPatchCentreNote) and the Map part's targets (patchCollectMapTargets) - and the readers they share: the cache
+    // of the lists and facts the page draws from (patchLists, patchRadio), the frame's PATCH_LIVE (readPatchLive,
+    // patchLiveRow), a radio's spectrum (patchSpectrum) and the routing of decoder lines to the Text outs
+    // (routePatchSinkLines). The Map part's tracks and paths are the HOST PROCESS's, reached through hostTracks() and
+    // hostPaths(), which are NOT listed: they name engine_.pluginUi_, and are the only reach into the engine the page has
+    // left.
+    "drawPatchView", "drawPatchFaces", "seedPatchIfNeeded", "drawPatchTransport", "drawPatchRadioSwitch",
+    "drawPatchRadioInspector", "drawPatchSinkInspector", "drawPatchSquelch", "drawPatchMapInspector",
+    "patchDefaultDeviceKey", "setPatchRadioCentre", "drawPatchCentreNote", "patchCollectMapTargets", "patchLists",
+    "patchRadio", "readPatchLive", "patchLiveRow", "patchSpectrum", "routePatchSinkLines",
+    // GROUP 13, part c, the decoded pictures (API 0.3 8.12): the picture a face shows is read from the session
+    // (takePatchPicture: PATCH_LIVE's picture row names it, read_image copies it) and uploaded on this thread; the
+    // onPatchPicture hook, the only write the engine's thread made into the window's picture state, is gone.
+    "takePatchPicture",
 };
 
-constexpr int kWindowFieldsReadBudget = 56;
-constexpr int kWindowFieldReadsBudget = 269;
+// Window port group 13, part a: 56 fields / 269 reads -> 49 / 230 (patchDspSig_, patchGraphEpoch_, patchGraph_, patchRadioFailedAs_,
+// patchWasOpen_, patchWasRunning_ and soundCardOpenPending_ lost their last reader). Part b, the rest of the page's reads:
+// 49 / 230 -> 33 / 141 (the sixteen fields that lost their last reader: patchCatalogue_, patchPlan_, patchRadios_,
+// patchRadioError_, patchDestError_, patchSpectra_, patchRefused_, patchMainKeep_, patchRadioPending_, patchDests_,
+// patchSinkLines_, patchDecoderFaces_, patchRecordings_, devices_, deviceArgs_ and soapyScanPending_; the one read that
+// came in is hostPaths()'s, beside hostTracks()'s). The survey predicted 34 / 144 from 56 / 269; part a had already moved the
+// three reads of patchGraph_ in run and applyConfig the survey counted as staying (the scripted run's printout now serialises
+// the draft), which is the 34 -> 33 and the 144 -> 141. Part c, the decoded pictures: 33 / 141 -> 33 / 141, because the window's
+// patchPictures_ was never an engine field (the engine's picture hook WROTE it from the engine's side: no read for the ratchet
+// to count) - what part c removes is that write, the onPatchPicture entry of kHostHooks above. The engine-side field patchSinkLines_
+// (write-only since part b) is retired with its pruner; the engine's new picture fields (patchImages_ and its five companions) are
+// read by no window member, and the guard counts none of them.
+
+constexpr int kWindowFieldsReadBudget = 33;
+constexpr int kWindowFieldReadsBudget = 141;
 
 struct Report {
     int violations = 0;
@@ -1229,7 +1244,7 @@ int main(int argc, char** argv) {
                 r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
-    CHECK(r.submitsInDraw >= 11);  // (a sanity floor, not a ratchet: it is the count itself - 30 until group 11 ported the Source section's seventeen, 13 until group 12 ported the radar scope's two)
+    CHECK(r.submitsInDraw >= 8);  // (a sanity floor, not a ratchet: it is the count itself - 30 until group 11 ported the Source section's seventeen, 13 until group 12 ported the radar scope's two, 11 until group 13 part b ported the patch transport's two and the Radio inspector's one; the eight left are the position helpers' and group 14's)
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);

@@ -56,6 +56,19 @@
 //      capacity add nothing to the pass: with a position set the publish allocates nothing, says the position (and
 //      says none, 0 and 0, when it is cleared), moves no list fingerprint, and 1000 rounds of read_state and of the
 //      three taps' info-only read_scope (LOCAL) allocate nothing
+//   F7 the Patch page, part 1 (API 0.3 8.12): with a graph of eight nodes, a plan of two channels and two decoders, a parts
+//      bin of three modules and a graph that the engine itself changes, every pass's fingerprint, an unchanged pass and the
+//      publish (noticing a change to the graph is one comparison with the newest retained version) allocate nothing, and
+//      so do 1000 rounds of reading the version, the epoch, the runnable fact and the plan; each input the page adds moves
+//      the fingerprint ALONE (the version, runnable, every figure of every channel and decoder, every field of every
+//      parts-bin entry) and the rebuild is counted, once for the change; a change to the graph is noticed as a version by
+//      the publish and by nothing else, and said again moves nothing. THE PATCH STEP ITSELF ALLOCATES BY DESIGN (it
+//      rebuilds the catalogue and compiles the plan once a pass): the claim here is the PUBLISH side only.
+//   F9 the decoded pictures (API 0.3 8.12, part 3): a picture the runner hands over is moved in, never copied (a 1.4 MB
+//      picture costs the publish under 8 KB and the take no more than its own pixels, and the allocation count is a bounded
+//      handful for a small picture and a large one alike), a settled pass with pictures held allocates nothing, so do 1000
+//      rounds of reading the picture row, its info and its pixels, a replaced picture costs the same again, a node's removal
+//      takes its picture with one bounded rebuild, and none of it moves the list block's fingerprint.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <vector>
@@ -82,10 +95,14 @@
 namespace {
 thread_local bool t_counting = false;
 thread_local long t_news = 0;
+thread_local long long t_bytes = 0;   // ...and the bytes they asked for (F9: a picture's pixels are never copied)
 }  // namespace
 
 void* operator new(std::size_t n) {
-    if (t_counting) { ++t_news; }
+    if (t_counting) {
+        ++t_news;
+        t_bytes += static_cast<long long>(n);
+    }
     void* p = std::malloc(n != 0 ? n : 1);
     if (p == nullptr) { throw std::bad_alloc(); }
     return p;
@@ -269,6 +286,46 @@ struct AppWindowTestAccess {
     static bool& networkUsrps(cascade::engine::Engine& e) { return e.lookForNetworkUsrps_; }
     static bool& scanned(cascade::engine::Engine& e) { return e.soapyScanned_; }
 // F5 ACCESS END>>
+// <<F7 ACCESS BEGIN
+    // The Patch page's inputs (API 0.3 8.12), each reachable alone.
+    static cascade::core::patch::Graph& patchGraph(cascade::engine::Engine& e) { return e.patchGraph_; }
+    static cascade::core::patch::Plan& patchPlan(cascade::engine::Engine& e) { return e.patchPlan_; }
+    static std::vector<cascade::core::patch::DecoderInfo>& patchCatalogue(cascade::engine::Engine& e) {
+        return e.patchCatalogue_;
+    }
+    static std::uint64_t& patchVersion(cascade::engine::Engine& e) { return e.patchGraphVersion_; }
+    static std::uint64_t& patchEpoch(cascade::engine::Engine& e) { return e.patchGraphEpoch_; }
+// F7 ACCESS END>>
+// <<F8 ACCESS BEGIN
+    // The Patch page, part 2 (API 0.3 8.12): the readings PATCH_LIVE copies and the inputs of the device list.
+    static cascade::core::patch::DestTable& patchDests(cascade::engine::Engine& e) { return e.patchDests_; }
+    static std::map<cascade::core::patch::NodeId, std::string>& patchDestError(cascade::engine::Engine& e) {
+        return e.patchDestError_;
+    }
+    static void setFace(cascade::engine::Engine& e, cascade::core::patch::NodeId node, std::uint64_t lines, const std::string& last) {
+        cascade::engine::Engine::PatchDecoderFace& f = e.patchDecoderFaces_[node];
+        f.lines = lines;
+        f.last = last;
+    }
+    static cascade::engine::Engine::PatchMainKeep& patchMainKeep(cascade::engine::Engine& e) { return e.patchMainKeep_; }
+    static std::vector<cascade::core::patch::RecordingInfo>& patchRecordings(cascade::engine::Engine& e) {
+        return e.patchRecordings_;
+    }
+// F8 ACCESS END>>
+// <<F9 ACCESS BEGIN
+    // The Patch page, part 3 (API 0.3 8.12): a picture as the decoder's runner hands it to the engine's pass.
+    static void takeImage(cascade::engine::Engine& e, cascade::core::patch::NodeId node, std::uint32_t w, std::uint32_t h,
+                          std::uint32_t format, std::uint8_t fill) {
+        cascade::core::HostImage img;
+        img.plugin = "alloc fixture";
+        img.width = w;
+        img.height = h;
+        img.format = format;
+        img.complete = false;
+        img.pixels.assign(static_cast<std::size_t>(w) * h * (format == CASCADE_IMAGE_RGB24 ? 3u : 1u), fill);
+        e.takePatchImage(node, std::move(img));
+    }
+// F9 ACCESS END>>
     // The radar scope's position (API 0.3 8.11): set or cleared, as SET_POSITION and the configuration leave it.
     static void position(cascade::engine::Engine& e, bool set, double lat, double lon) {
         e.rxSet_ = set;
@@ -1204,5 +1261,465 @@ int main() {
     }
 
 // F6 CASE END>>
+// <<F7 CASE BEGIN
+
+    // F7: the Patch page, part 1 (API 0.3 8.12). A graph of eight nodes, a plan of two channels and two decoders and a
+    // parts bin of three modules, the way the pass leaves them: every pass's fingerprint, an unchanged pass and the publish
+    // allocate nothing (noticing a change to the graph is one comparison with the newest retained version), and so do 1000
+    // rounds of reading the version, the epoch, `runnable` and the plan; each input moves the fingerprint ALONE and the
+    // rebuild is counted (bounded, once for the change); a change made to the graph behind the engine's back is a version
+    // when the publish looks, and the same change said again moves nothing.
+    {
+        namespace pc = cascade::core::patch;
+        cascade::engine::Engine e7;
+        e7.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e7.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        pc::Graph& g = Access::patchGraph(e7);
+        const pc::NodeId radio = g.addNode(pc::NodeKind::Radio, "Radio with a name of some length", pc::PortType::Iq, 40.0f, 40.0f);
+        const pc::NodeId chanA = g.addNode(pc::NodeKind::Channel, "Channel A", pc::PortType::Iq, 420.0f, 40.0f);
+        const pc::NodeId chanB = g.addNode(pc::NodeKind::Channel, "Channel B", pc::PortType::Iq, 420.0f, 200.0f);
+        const pc::NodeId demod = g.addNode(pc::NodeKind::Demod, "Demod", pc::PortType::Iq, 700.0f, 40.0f);
+        const pc::NodeId decA = g.addNode(pc::NodeKind::Decoder, "Decoder A", pc::PortType::Iq, 700.0f, 200.0f);
+        const pc::NodeId decB = g.addNode(pc::NodeKind::Decoder, "Decoder B", pc::PortType::Audio, 980.0f, 40.0f);
+        (void)g.addNode(pc::NodeKind::Display, "Spectrum", pc::PortType::Iq, 40.0f, 400.0f);
+        (void)g.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio, 980.0f, 200.0f);
+        if (pc::Node* n = g.mutableNode(radio)) {
+            n->device = pc::kGeneratorKey;
+            n->freqHz = 145.0e6;
+            n->rateHz = 2.4e6;
+        }
+        pc::Plan& plan = Access::patchPlan(e7);
+        plan.runnable = true;
+        plan.channels = {{chanA, 50000.0, 50, 48000.0, radio}, {chanB, -125000.0, 50, 48000.0, radio}};
+        {
+            pc::DecoderPlan a;
+            a.node = decA;
+            a.plugin = 0;
+            a.source = pc::DecoderSource::Channel;
+            a.channel = chanA;
+            a.inRateHz = 48000.0;
+            a.rateHz = 48000.0;
+            a.centreHz = 145.05e6;
+            a.radio = radio;
+            pc::DecoderPlan b = a;
+            b.node = decB;
+            b.plugin = 1;
+            b.source = pc::DecoderSource::Audio;
+            b.centreHz = 0.0;
+            plan.decoders = {a, b};
+        }
+        (void)demod;
+        std::vector<pc::DecoderInfo>& bin = Access::patchCatalogue(e7);
+        for (int i = 0; i < 3; ++i) {
+            pc::DecoderInfo d;
+            d.key = "module_" + std::to_string(i) + ".dll";
+            d.name = "Module number " + std::to_string(i);
+            d.feed = i == 1 ? pc::PortType::Audio : pc::PortType::Iq;
+            d.requiredRateHz = 48000.0 * static_cast<double>(i);
+            bin.push_back(d);
+        }
+        (void)Access::publishLists(e7);  // the first block, and the first retained version
+        const long none = [&] {
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e7); }
+            t_counting = false;
+            return t_news;
+        }();
+        std::printf("F7: %d settled publishes with a graph of 8 nodes, a plan of 4 entries and a parts bin of 3: %ld heap allocations\n",
+                    kPublishes, none);
+        CHECK(none == 0);
+        CHECK(Access::patchVersion(e7) == 1u);  // nothing noticed a change: the graph was never different from itself
+        // 1000 rounds of reading what the page adds allocate nothing.
+        {
+            char text[8192];
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            CHECK(table->get_setting(session, "fact.patch.version", text, sizeof(text)) > 0);  // (warm-up)
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                (void)table->get_setting(session, "fact.patch.version", text, sizeof(text));
+                (void)table->get_setting(session, "fact.patch.epoch", text, sizeof(text));
+                (void)table->get_setting(session, "fact.patch.runnable", text, sizeof(text));
+                (void)table->read_list(session, FOXAPI_LIST_PATCH_PLAN, 0, nullptr);
+                (void)table->read_list(session, FOXAPI_LIST_PATCH_PLAN, static_cast<std::uint32_t>(i % 4), &it);
+            }
+            t_counting = false;
+            std::printf("F7: 1000 rounds of the version, epoch, runnable and a plan entry: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);
+        }
+        // The content: three facts and four plan entries, as the pass's block carries them.
+        {
+            char text[64];
+            CHECK(table->get_setting(session, "fact.patch.version", text, sizeof(text)) > 0);
+            CHECK(std::string(text) == "1");
+            CHECK(table->get_setting(session, "fact.patch.runnable", text, sizeof(text)) > 0);
+            CHECK(std::string(text) == "1");
+            CHECK(table->read_list(session, FOXAPI_LIST_PATCH_PLAN, 0, nullptr) == 4);
+        }
+
+        // EACH INPUT MOVES THE FINGERPRINT ALONE, and the rebuild is counted (bounded), once for the change.
+        const auto movedBy = [&](const char* what, auto change) {
+            const std::uint64_t before = Access::fingerprint(e7);
+            change();
+            const std::uint64_t after = Access::fingerprint(e7);
+            CHECK(after != before);
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e7);  // the rebuild
+            t_counting = false;
+            const long rebuild = t_news;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e7); }
+            t_counting = false;
+            std::printf("F7: %-44s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n", what,
+                        rebuild, kPublishes, t_news);
+            CHECK(rebuild > 0 && rebuild < 3000);
+            CHECK(t_news == 0);
+        };
+        movedBy("the version, alone", [&] { ++Access::patchVersion(e7); });
+        movedBy("the epoch, alone", [&] { ++Access::patchEpoch(e7); });
+        movedBy("runnable", [&] { plan.runnable = false; });
+        movedBy("runnable again", [&] { plan.runnable = true; });
+        movedBy("a channel's node", [&] { plan.channels[0].node = chanB + 1u; });
+        movedBy("a channel's offset", [&] { plan.channels[0].offsetHz = 60000.0; });
+        movedBy("a channel's decimation", [&] { plan.channels[0].decimation = 25; });
+        movedBy("a channel's output rate", [&] { plan.channels[0].outRateHz = 96000.0; });
+        movedBy("a channel's radio", [&] { plan.channels[1].radio = radio + 1u; });
+        movedBy("a decoder's node", [&] { plan.decoders[0].node = decB + 1u; });
+        movedBy("a decoder's plugin", [&] { plan.decoders[0].plugin = 2; });
+        movedBy("a decoder's source", [&] { plan.decoders[0].source = pc::DecoderSource::Radio; });
+        movedBy("a decoder's input rate", [&] { plan.decoders[1].inRateHz = 24000.0; });
+        movedBy("a decoder's own rate", [&] { plan.decoders[1].rateHz = 24000.0; });
+        movedBy("a decoder's centre", [&] { plan.decoders[0].centreHz = 145.06e6; });
+        movedBy("a decoder's radio", [&] { plan.decoders[1].radio = radio + 1u; });
+        movedBy("a plan entry added", [&] { plan.channels.push_back({chanB + 2u, 0.0, 50, 48000.0, radio}); });
+        movedBy("a parts-bin entry's key", [&] { bin[0].key = "module_0_v2.dll"; });
+        movedBy("a parts-bin entry's name", [&] { bin[1].name = "Module number one"; });
+        movedBy("a parts-bin entry's input", [&] { bin[2].feed = pc::PortType::Audio; });
+        movedBy("a parts-bin entry's rate", [&] { bin[2].requiredRateHz = 12000.0; });
+        movedBy("a parts-bin entry's picture bit", [&] { bin[0].image = true; });
+        movedBy("a parts-bin entry's track bit", [&] { bin[1].tracks = true; });
+        movedBy("a parts-bin entry replaced by another", [&] {
+            bin[2].key = "module_2_other.dll";  // the same count, a different module: the count alone would miss it
+        });
+
+        // A CHANGE TO THE GRAPH is a version, noticed by the publish: nothing else bumped it, and the block is built once
+        // for it. The same change said again (the graph is already so) moves nothing.
+        {
+            (void)Access::publishLists(e7);
+            const std::uint64_t v0 = Access::patchVersion(e7);
+            if (pc::Node* n = g.mutableNode(chanA)) { n->freqHz = 145.123e6; }
+            CHECK(Access::patchVersion(e7) == v0);  // (a plain write: nobody has looked)
+            const std::uint64_t before = Access::fingerprint(e7);
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e7);
+            t_counting = false;
+            const long noticed = t_news;
+            CHECK(Access::patchVersion(e7) == v0 + 1u);
+            CHECK(Access::fingerprint(e7) != before);
+            std::printf("F7: a graph change behind the engine's back: noticed as version %llu by the publish (%ld heap allocations)\n",
+                        static_cast<unsigned long long>(v0 + 1u), noticed);
+            CHECK(noticed > 0 && noticed < 3000);
+            for (int i = 0; i < 25; ++i) { (void)Access::publishLists(e7); }
+            CHECK(Access::patchVersion(e7) == v0 + 1u);
+            if (pc::Node* n = g.mutableNode(chanA)) { n->freqHz = 145.123e6; }  // said again
+            for (int i = 0; i < 25; ++i) { (void)Access::publishLists(e7); }
+            CHECK(Access::patchVersion(e7) == v0 + 1u);
+            std::printf("F7: the same change said again 25 times: the version stays\n");
+        }
+        table->close_session(session);
+    }
+
+// F7 CASE END>>
+// <<F8 CASE BEGIN
+
+    // F8: the Patch page, part 2 (API 0.3 8.12). PATCH_LIVE is a block of its own, copied once a pass and fingerprinted by
+    // itself: with a speaker's output, a speaker whose output could not be made and two decoders' faces, a settled pass
+    // (the same readings) copies nothing, builds nothing and allocates nothing; a reading that moves rebuilds THAT block
+    // (bounded, once) and never the list block - listSeq's fingerprint stays where it was, which is the point of the block.
+    // And each new input of the device list moves the list fingerprint alone.
+    {
+        namespace pc = cascade::core::patch;
+        // A speaker's output with nothing behind it: it counts what it is written and describes itself.
+        struct Dest : pc::AudioDest {
+            std::string error_;
+            void write(const float* samples, std::size_t n) override { note(samples, n); }
+            std::string describe() const override { return "TEST  speaker.wav"; }
+            std::string error() const override { return error_; }
+            void push(float level, std::size_t n) {
+                std::vector<float> v(n, level);
+                note(v.data(), n);
+            }
+        };
+        cascade::engine::Engine e8;
+        e8.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc8";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e8.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        pc::Graph& g = Access::patchGraph(e8);
+        const pc::NodeId radio = g.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, 40.0f, 40.0f);
+        const pc::NodeId speaker = g.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio, 700.0f, 40.0f);
+        const pc::NodeId broken = g.addNode(pc::NodeKind::Sink, "Broken speaker", pc::PortType::Audio, 700.0f, 200.0f);
+        const pc::NodeId decA = g.addNode(pc::NodeKind::Decoder, "Decoder A", pc::PortType::Iq, 420.0f, 40.0f);
+        const pc::NodeId decB = g.addNode(pc::NodeKind::Decoder, "Decoder B", pc::PortType::Iq, 420.0f, 200.0f);
+        (void)radio;
+        auto dest = std::make_shared<Dest>();
+        dest->push(0.25f, 480);
+        Access::patchDests(e8).push_back({speaker, dest});
+        Access::patchDestError(e8)[broken] = "recorder: cannot create the file";
+        pc::Plan& plan = Access::patchPlan(e8);
+        for (const pc::NodeId n : {decA, decB}) {
+            pc::DecoderPlan d;
+            d.node = n;
+            d.source = pc::DecoderSource::Radio;
+            d.radio = radio;
+            d.inRateHz = d.rateHz = 2.4e6;
+            plan.decoders.push_back(d);
+        }
+        Access::setFace(e8, decA, 3, "decoded line three of the first decoder, long enough not to fit a small string buffer");
+        (void)Access::publishLists(e8);
+        const std::uint64_t listFp = Access::fingerprint(e8);
+        const int rows = table->read_list(session, FOXAPI_LIST_PATCH_LIVE, 0, nullptr);
+        std::printf("F8: PATCH_LIVE with a speaker, a broken speaker and two faces: %d rows\n", rows);
+        CHECK(rows == 4);  // kind 2 speaker, kind 5 broken speaker, kind 4 twice (the second has said nothing: 0 lines)
+        const long none = [&] {
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e8); }
+            t_counting = false;
+            return t_news;
+        }();
+        std::printf("F8: %d settled publishes with those readings: %ld heap allocations\n", kPublishes, none);
+        CHECK(none == 0);
+        CHECK(Access::fingerprint(e8) == listFp);
+        // 1000 rounds of reading the list allocate nothing either.
+        {
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            (void)table->read_list(session, FOXAPI_LIST_PATCH_LIVE, 0, &it);  // warm-up
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                (void)table->read_list(session, FOXAPI_LIST_PATCH_LIVE, 0, nullptr);
+                (void)table->read_list(session, FOXAPI_LIST_PATCH_LIVE, static_cast<std::uint32_t>(i % 4), &it);
+            }
+            t_counting = false;
+            std::printf("F8: 1000 rounds of reading PATCH_LIVE: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);
+        }
+
+        // EACH READING MOVES THE LIVE BLOCK ALONE: its row changes, the list block's fingerprint does not, the rebuild is
+        // bounded and the passes after it are settled again.
+        const auto liveMoved = [&](const char* what, auto change, auto rowChanged) {
+            change();
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e8);
+            t_counting = false;
+            const long rebuild = t_news;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e8); }
+            t_counting = false;
+            std::printf("F8: %-40s the live rebuild: %ld heap allocations, then %d settled passes: %ld\n", what, rebuild,
+                        kPublishes, t_news);
+            CHECK(rowChanged());
+            CHECK(Access::fingerprint(e8) == listFp);  // (the list block did not move)
+            CHECK(rebuild > 0 && rebuild < 200);
+            CHECK(t_news == 0);
+        };
+        const auto row = [&](int kind, pc::NodeId node) {
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            const int32_t n = table->read_list(session, FOXAPI_LIST_PATCH_LIVE, 0, nullptr);
+            for (int32_t i = 0; i < n; ++i) {
+                FoxListItem x{};
+                x.structSize = sizeof(x);
+                (void)table->read_list(session, FOXAPI_LIST_PATCH_LIVE, static_cast<std::uint32_t>(i), &x);
+                if (x.id == node && static_cast<int>(x.value[2]) == kind) { return x; }
+            }
+            return it;
+        };
+        liveMoved("a speaker's peak", [&] { dest->push(0.75f, 0); }, [&] { return row(2, speaker).value[0] == 0.0; });
+        liveMoved("a speaker's samples (with the peak)", [&] { dest->push(0.75f, 960); },
+                  [&] { return row(2, speaker).value[1] == 480.0 + 960.0 && row(2, speaker).value[0] == 0.75; });
+        liveMoved("a speaker's samples, the peak held", [&] { dest->push(0.75f, 480); },
+                  [&] { return row(2, speaker).value[1] == 480.0 + 960.0 + 480.0 && row(2, speaker).value[0] == 0.75; });
+        liveMoved("a speaker's error", [&] { dest->error_ = "disk full"; },
+                  [&] { return std::string(row(2, speaker).detail) == "disk full"; });
+        liveMoved("a speaker's output error", [&] { Access::patchDestError(e8)[broken] = "recorder: cannot open it"; },
+                  [&] { return std::string(row(5, broken).detail) == "recorder: cannot open it"; });
+        liveMoved("a decoder's count", [&] { Access::setFace(e8, decB, 1, "first"); },
+                  [&] { return row(4, decB).value[0] == 1.0; });
+        liveMoved("a decoder's newest line, the count alone", [&] { Access::setFace(e8, decB, 1, "other"); },
+                  [&] { return std::string(row(4, decB).detail) == "other"; });
+        liveMoved("a speaker gone", [&] { Access::patchDests(e8).clear(); }, [&] { return row(2, speaker).id == 0u; });
+        // (A decoder that is refused or leaves the plan moves the PLAN, which is the list block's: its face goes with it.)
+
+        // THE DEVICE LIST'S INPUTS move the LIST fingerprint, each alone.
+        const auto movedBy = [&](const char* what, auto change) {
+            const std::uint64_t before = Access::fingerprint(e8);
+            change();
+            const std::uint64_t after = Access::fingerprint(e8);
+            CHECK(after != before);
+            std::printf("F8: %-44s moved the list fingerprint\n", what);
+        };
+        auto& keep = Access::patchMainKeep(e8);
+        movedBy("the lent radio, valid", [&] { keep.valid = true; });
+        movedBy("the lent radio's kind", [&] { keep.kind = "rtlsdr"; });
+        movedBy("the lent radio's args", [&] { keep.args = "serial=00000001"; });
+        movedBy("the lent radio's label", [&] { keep.label = "RTL-SDR (serial 00000001)"; });
+        std::vector<pc::RecordingInfo>& recs = Access::patchRecordings(e8);
+        recs.push_back({"C:/rec/a.wav", "a.wav", pc::makeIqFileKey("C:/rec/a.wav"), 96000.0});
+        movedBy("a recording's file (the count held)", [&] {
+            recs[0] = {"C:/rec/b.wav", "b.wav", pc::makeIqFileKey("C:/rec/b.wav"), 96000.0};
+        });
+        movedBy("a recording's rate", [&] { recs[0].rateHz = 250000.0; });
+        table->close_session(session);
+    }
+
+// F8 CASE END>>
+// <<F9 CASE BEGIN
+
+    // F9: the Patch page, part 3 (API 0.3 8.12): a decoded picture is the engine's. A picture the runner hands over is moved in
+    // WHOLE behind a const pointer (the engine makes no second copy of the pixels, so what a new picture costs does not grow
+    // with its size), the set read_image serves is rebuilt once for it and the PATCH_LIVE block once for it; a settled pass
+    // allocates nothing, 1000 rounds of reading the picture (the info alone and the pixels) allocate nothing, and none of it
+    // moves the list block's fingerprint.
+    {
+        namespace pc = cascade::core::patch;
+        cascade::engine::Engine e9;
+        e9.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc9";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e9.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        pc::Graph& g = Access::patchGraph(e9);
+        const pc::NodeId decA = g.addNode(pc::NodeKind::Decoder, "Picture decoder A", pc::PortType::Audio, 420.0f, 40.0f);
+        const pc::NodeId decB = g.addNode(pc::NodeKind::Decoder, "Picture decoder B", pc::PortType::Audio, 420.0f, 200.0f);
+        (void)Access::publishLists(e9);  // (settles the graph's version, which the first publish notices)
+        (void)Access::publishLists(e9);
+        const std::uint64_t listFp = Access::fingerprint(e9);
+        const auto liveRows = [&] { return table->read_list(session, FOXAPI_LIST_PATCH_LIVE, 0, nullptr); };
+        CHECK(liveRows() == 0);
+        // A picture's cost in allocations - the take and the publish that builds the set, the block and the event - for a
+        // small picture and one 1000 times the size: the same, because the pixels are moved and never copied.
+        // What the engine does with a picture costs, in allocations and in BYTES: the take (which includes the test's own
+        // making of the picture - its pixel vector - counted apart) and the publish that builds the set and the block.
+        long long bytesOfBig = 0, takeBytes = 0;
+        const auto costOf = [&](pc::NodeId node, std::uint32_t w, std::uint32_t h, std::uint32_t format, std::uint8_t fill) {
+            t_news = 0;
+            t_bytes = 0;
+            t_counting = true;
+            Access::takeImage(e9, node, w, h, format, fill);
+            t_counting = false;
+            const long making = t_news;
+            const long long madeBytes = t_bytes;
+            takeBytes = madeBytes;
+            t_news = 0;
+            t_bytes = 0;
+            t_counting = true;
+            (void)Access::publishLists(e9);
+            t_counting = false;
+            const long publish = t_news;
+            bytesOfBig = t_bytes;
+            std::printf("F9: a %ux%u picture on node %u: taking it %ld allocation(s) (%lld bytes, its pixels among them), the publish "
+                        "that builds the set and the block %ld (%lld bytes)\n",
+                        w, h, static_cast<unsigned>(node), making, madeBytes, publish, bytesOfBig);
+            return publish;
+        };
+        const long small = costOf(decA, 8, 6, CASCADE_IMAGE_RGB24, 0x11);
+        const long big = costOf(decB, 800, 600, CASCADE_IMAGE_RGB24, 0x22);
+        CHECK(small > 0 && small < 40);
+        CHECK(big > 0 && big < 40);
+        // A 1.44 MB picture costs the publish no more than a few KB: its pixels were moved, never copied.
+        CHECK(bytesOfBig < 8192);
+        // ...and the take allocated the picture's pixels (the test's own making of them) ONCE: the engine's move copied none.
+        CHECK(takeBytes < 800ll * 600ll * 3ll + 4096ll);
+        CHECK(Access::fingerprint(e9) == listFp);
+        // SETTLED: the same pictures, publish after publish - nothing.
+        const long settled = [&] {
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e9); }
+            t_counting = false;
+            return t_news;
+        }();
+        std::printf("F9: %d settled publishes with two pictures held: %ld heap allocations\n", kPublishes, settled);
+        CHECK(settled == 0);
+        // 1000 rounds of reading: the row, the picture's info alone and its pixels - nothing.
+        {
+            std::vector<std::uint8_t> px(800u * 600u * 3u);
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            (void)table->read_list(session, FOXAPI_LIST_PATCH_LIVE, 0, &it);
+            const std::uint64_t idA = static_cast<std::uint64_t>(it.value[0]);
+            FoxImageInfo info{};
+            info.structSize = sizeof(info);
+            CHECK(table->read_image(session, idA, &info, px.data(), px.size()) == 8 * 6 * 3);  // (warm-up, and it is the picture)
+            CHECK(info.width == 8u && info.height == 6u && info.format == CASCADE_IMAGE_RGB24);
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                (void)table->read_list(session, FOXAPI_LIST_PATCH_LIVE, static_cast<std::uint32_t>(i % 2), &it);
+                (void)table->read_image(session, static_cast<std::uint64_t>(it.value[0]), &info, nullptr, 0);
+                (void)table->read_image(session, static_cast<std::uint64_t>(it.value[0]), &info, px.data(), px.size());
+            }
+            t_counting = false;
+            std::printf("F9: 1000 rounds of reading the row, the info and the pixels: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);
+        }
+        // A NEW PICTURE for a node that has one replaces it: the same bounded cost, and one row still.
+        const long again = costOf(decA, 8, 6, CASCADE_IMAGE_RGB24, 0x33);
+        CHECK(again > 0 && again < 40);
+        CHECK(liveRows() == 2);
+        CHECK(Access::fingerprint(e9) == listFp);
+        // ...and a node gone takes its picture: one bounded rebuild, then settled again.
+        CHECK(g.removeNode(decB));
+        (void)Access::publishLists(e9);  // (the graph's version moves; the pictures follow it)
+        (void)Access::publishLists(e9);
+        CHECK(liveRows() == 1);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e9); }
+        t_counting = false;
+        std::printf("F9: after a node's removal, %d settled publishes: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        table->close_session(session);
+    }
+
+// F9 CASE END>>
     return testSummary("test_engine_publish_alloc");
 }
