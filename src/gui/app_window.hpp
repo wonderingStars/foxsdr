@@ -47,7 +47,7 @@ struct GLFWwindow;
 #include "gui/patch_view_math.hpp"
 #include "gui/patch_scope_math.hpp"
 #include "gui/input_script.hpp"
-#include "core/plugin_ui.hpp"
+#include "core/plugin_ui_data.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
 #include "core/utf8_text.hpp"
@@ -624,9 +624,7 @@ private:
     void resumeWatchdog() override;
     void onDisplayRange(float dbMin, float dbMax) override;
     void onBookmarksChanged() override;
-    void onReceiverPositionApplied(double latDeg, double lonDeg) override;
     void onConverterChanged(bool clearLoError) override;
-    void onGpsFixApplied() override;
     void onCatalogueResult() override;
     void beforePluginRescan() override;
     void onPluginsUnloading() override;
@@ -859,7 +857,7 @@ private:
     // The by-id lookup both of those share: the host's track vector is rebuilt
     // every poll, so a stored pointer or index would go stale within a frame —
     // find it fresh, and only among tracks the staleness rule still shows.
-    const cascade::core::HostTrack* findVisibleTrack(const std::string& id) const;
+    const cascade::core::HostTrack* findVisibleTrack(const std::string& id);
 
     // --- the ADS-B radar scope (see gui/scope_view.hpp) ---------------------
     //
@@ -891,6 +889,24 @@ private:
     // group 13). HOST-PROCESS for the same reason hostTracks() is, and the other place the guard counts as a read and
     // does not list.
     const std::vector<cascade::core::HostPath>& hostPaths();
+    // ...and the rest of what the map pages and the plugin rows take of the plugin UI (window port group 14, part a): the
+    // altitude a track had where its trail runs (the map view's lookup), the panels and the instruments the rail's rows
+    // list. HOST-PROCESS like the two above - the plugin UI is polled from this thread at frame rate - and counted by the
+    // guard as one read each, none of them listed as ported.
+    bool hostAltitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
+                          double& outAltM);
+    const std::vector<cascade::core::HostPanel>& hostPanels();
+    const std::vector<cascade::core::HostInstrument>& hostInstruments();
+    // ...and the three the plugin windows themselves take (window port group 14, part d): the names of the modules that hold a
+    // track-source instance (the map pages are one per name), the frame's one poll of the plugin UI (the plugins are asked once
+    // and the answer is shared by the map, the panels and the instruments), and the receiver plugins' own pictures (the runner
+    // takes its DSP lock for the copy; the patch decoders' pictures are the engine's and read_image's, these are not).
+    // HOST-PROCESS, counted by the guard as one read each, none listed as ported: with hostTracks(), hostPaths(), hostPanels(),
+    // hostInstruments() and hostAltitudeNear() they are the whole of what the plugin windows take of the engine, and the
+    // method set of the one feed interface the fence will put in their place (docs/engine-stage4.md, group 14 part d).
+    const std::vector<std::string>& hostTrackPluginNames();
+    void hostPollPlugins();
+    void hostPollImages(std::vector<cascade::core::HostImage>& out);
     // Does the receiver have a position? The state's FOXAPI_RX_POSITION_SET (rxLatDeg and rxLonDeg are valid with it).
     bool receiverPositionKnown() const { return (uiState_.flags & FOXAPI_RX_POSITION_SET) != 0u; }
     // The switch that turns it on, in the rail's "Turn on and off plugins"
@@ -921,7 +937,9 @@ private:
 
     void drawPluginPresets(const cascade::gui::PluginRow& p);
     // The window half of a preset press: the plugin's map page, picture,
-    // panels and instruments, or Decoder output for a text decoder.
+    // panels and instruments, or Decoder output for a text decoder. STILL A HOOK the engine calls (2026-10-20, group 14 part d: its
+    // reads of the plugin UI go through the host accessors; the event that replaces the call is the pump move's work - see the
+    // definition).
     void openPluginWindowsFor(const cascade::core::LoadedPlugin& p) override;
     // The REMNANT of the receiver-control rows, and it is the half the fitted
     // window cannot draw: the refusal notice PluginUi records, and the grants
@@ -1788,6 +1806,17 @@ private:
     // "Usage reporting" settings section: the opt-in switch and what it sends.
     void drawUsageReportingSection();
     bool privacyNoticeOpen_ = false;
+    // THE SWITCH'S CHECKBOX SHOWS WHAT WAS JUST ASKED FOR until the engine's fact catches up (window port group 14, part c;
+    // fact.telemetry.enabled): the consent goes through the session and lands at the next pass, so a checkbox that read the
+    // fact alone would snap back for a frame or two after a click. Released when the fact says what was asked, or after half
+    // a second if it never does (a command that was refused). The chip, the lamp and the install id are the fact's own: they
+    // show the change a pass after the click, where the old direct call showed it on the same frame.
+    struct TelemetryPending {
+        bool valid = false;
+        bool on = false;
+        double at = 0.0;
+    };
+    TelemetryPending telemetryPending_;
 
     // -----------------------------------------------------------------------
     // Diagnostics (see core/crash_handler.hpp, core/hang_watchdog.hpp)
@@ -1838,7 +1867,14 @@ private:
     // limiter - so switching diagnostics off for one session would re-arm the
     // sender for the next.
     bool crashUploadSwept_ = false;
-    void crashUploadStart();
+    // THE SWEEP STARTS ON THE FIRST FRAME THAT CAN SAY WHOSE IT IS (window port group 14, part e). run() used to start it before
+    // the frame loop, reading the engine's usage switch and install id directly; the id is now read as the engine's facts
+    // (fact.telemetry.enabled, .installId) like everything else the window knows of it, and a fact answers nothing before the
+    // engine's first publish (a read there would have started the sweep with an EMPTY id: "reporting is off"). run() arms
+    // this; the frame's look (drawUi, right after refreshUiState) calls crashUploadStart until it answers true - decided:
+    // started, or nothing to start - and the first look after the first publish is the first that can.
+    bool crashUploadStartPending_ = false;
+    bool crashUploadStart();
     void crashUploadFinish();
 
     // --- REQUEST A FEATURE (see core/feature_request.hpp) -------------------
@@ -2043,25 +2079,70 @@ private:
 
     double rxLatInput_ = 0.0;
     double rxLonInput_ = 0.0;
+    // THE RECEIVER'S POSITION, FOLLOWED (window port group 14, part a). The engine used to call the window from its
+    // own pass when a position was applied (EngineHost::onReceiverPositionApplied: the typed fields, every map page's
+    // home, the scope, the coverage map); the window now looks at the position the state carries once a frame
+    // (refreshUiState -> followReceiverPosition) and does the same when it MOVED. positionSeen_ is what the last look
+    // saw: set, latitude, longitude.
+    struct PositionSeen {
+        bool set = false;
+        double latDeg = 0.0;
+        double lonDeg = 0.0;
+    };
+    PositionSeen positionSeen_;
+    void followReceiverPosition();
+    // THE ONE DOOR THE WINDOW'S OWN PRESSES SEND A POSITION BY ("Set RX here", the two offers, a map click): the
+    // FOXAPI_OP_SET_POSITION through the session, and - for a pair the rule accepts - the note that the coverage map
+    // starts again at the next look EVEN WHEN THE NUMBERS ARE THE ONES IN FORCE. The state shows no change for a re-apply
+    // of the same pair, and the old hook cleared the wedges on every apply; this keeps that, as the window's own effect.
+    void submitReceiverPosition(double latDeg, double lonDeg);
+    bool coverageResetPending_ = false;
     std::string gpsPort_;
     int gpsBaud_ = cascade::core::kDefaultGpsBaud;
     char gpsPortInput_[cascade::core::kMaxSerialPortNameChars + 1] = "";
-    std::vector<std::string> gpsPorts_;
-    // Set by pollGpsReader when a fix is applied; the rail's "Receiver
-    // position" fold opens itself once on it, so the Fixed status line is
-    // seen rather than lost with the no-position block that held the row.
+    // THE GPS READER AS THE POSITION ROW DRAWS IT (window port group 14, part b; API 0.3 section 8.13): the GPS list's one
+    // entry, read at the call once a look (readGpsRow, in refreshUiState) because the reader's seconds and sentence move every
+    // second it listens and the entry is NOT part of the block listSeq counts. The reader itself is the engine's.
+    struct GpsRow {
+        int state = 0;               // 0 idle, 1 listening, 2 fixed, 3 failed, 4 timed out (the entry's value[0])
+        bool listening = false;      // ACTIVE: what disables the port and baud fields and flips the key to Stop
+        bool trouble = false;        // FAULT: failed or timed out - the warning ink
+        double elapsedS = 0.0;
+        int satellites = -1;
+        int baud = 0;
+        std::string port;            // as given to the last start ("" idle; the entry is blank to a session that is not LOCAL)
+        std::string line;            // the engine's sentence (core::gpsStatusLine); "" idle: the row draws nothing
+    };
+    GpsRow gpsRow_;
+    void readGpsRow();
+    const GpsRow& gpsRow() const { return gpsRow_; }
+    // A port or baud edit forgets the last result and the refusal: two FOXAPP_OP_CLEAR_STATUS through the session.
+    void clearGpsResult();
+    // Set when the GPS entry goes to Fixed (the cue the engine's onGpsFixApplied hook used to give); the rail's "Receiver
+    // position" fold opens itself once on it, so the Fixed status line is seen rather than lost with the no-position block
+    // that held the row.
     bool gpsRowReveal_ = false;
-    // --- SYSTEM > Serial ports: the machine's ports gathered in one place,
-    // so a person is not sent hunting through Radar to find the GPS row.
-    // A SEPARATE cache from gpsPorts_ above, on a DIFFERENT trigger: this one
-    // is read when the SECTION opens (and on its own Refresh key), not when a
-    // combo inside it is pressed - a table that re-read the registry every
-    // frame it was open would be the same cost drawGpsPositionControl's own
-    // comment warns against, paid by a row with no combo to hide it behind.
-    std::vector<std::string> serialPortsList_;
+    // --- THE MACHINE'S SERIAL PORTS, the engine's (FOXAPI_OP_SCAN_SERIAL_PORTS, the SERIAL_PORTS list; window port group 14
+    // part b). The window used to walk the registry itself in four places; it now ASKS - when the drop-down's arrow is
+    // pressed, when SYSTEM > Serial ports opens or is refreshed, and once to seed the row's chip - and draws the list the
+    // engine's pass answers with (a pass later: nothing is drawn of it, and no "none found", until the answer is in).
+    // serialPorts() is the cache, read again only when listSeq moves.
+    struct SerialPortsCache {
+        std::uint64_t listSeq = 0;
+        std::uint32_t refreshes = 0;       // times the list was read (a test reads it)
+        std::vector<std::string> ports;
+    };
+    SerialPortsCache serialPortsCache_;
+    const std::vector<std::string>& serialPorts();
+    void askForSerialPorts();
+    // True from the ask until the lists move (the scan's answer) or two seconds pass (a command that was never applied).
+    bool serialPortsWaiting() const;
+    bool serialPortsAsked_ = false;
+    std::uint64_t serialPortsAskedSeq_ = 0;
+    double serialPortsAskedAt_ = 0.0;
     bool serialPortsListLoaded_ = false;
     // Last frame's open/closed state, so drawSerialPortsSection can tell
-    // "just opened" (enumerate) from "still open" (use the cache) from one
+    // "just opened" (ask) from "still open" (use the cache) from one
     // benchSection() call that only ever reports the current state.
     bool serialPortsSectionWasOpen_ = false;
     // How far anything has been heard, per five-degree bearing bucket. Fed
@@ -3013,20 +3094,15 @@ private:
     // frame the fetch resolved on — which is what proves the window kept
     // rendering while the transfer was in flight.
     int frameCounter_ = 0;
-    // A HOST-HOOK DIAGNOSTIC, not a draw member: called by the ENGINE from inside its poll (onCatalogueResult), reading
-    // its live catalogue on purpose, with no frame and no session in between. Prints that summary from the LIVE member state (catalog_ /
-    // catalogError_), not from the future's payload, so what it reports is
-    // exactly what the UI is about to draw.
-    void reportPluginTestResult();
-
-    // CASCADE_PLUGIN_STATUS=1, honored ONLY by run(frames >= 0), like the hook
-    // above. Prints what the ENFORCEMENT decided: how many candidates the host
-    // actually mapped, what blockedCount() says, and one line per retired
-    // plugin including whether the host has any record of it (mapped=0 is the
-    // proof that the stale code is not in the process). It is printed at the
-    // end of the run so it reflects any catalogue fetch the run performed.
-    bool pluginStatusHook_ = false;
-    void reportPluginStatus();
+    // THE SUMMARY ITSELF IS THE ENGINE'S (Engine::reportPluginTestResult, window port group 14 part e), printed from the engine's
+    // LIVE catalogue and not from the future's payload, so what it reports is exactly what the UI is about to draw: the engine
+    // calls this window's onCatalogueResult from inside its poll and the hook, with the switch above set, names the frame.
+    //
+    // CASCADE_PLUGIN_STATUS=1, honored ONLY by run(frames >= 0), like the hook above, is a local of run(): Engine::
+    // reportPluginStatus prints what the ENFORCEMENT decided (how many candidates the host actually mapped, what blockedCount()
+    // says, one line per retired plugin including whether the host has any record of it - mapped=0 is the proof that the stale
+    // code is not in the process) at the end of the run, so it reflects any catalogue fetch the run performed. The receiver
+    // plugins' pictures are the one thing it takes from this window (pluginImages_, polled by the plugin windows).
 
     // --- Web server mode (P11) ------------------------------------------------
     //

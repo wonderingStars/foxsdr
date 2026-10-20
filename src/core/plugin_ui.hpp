@@ -37,109 +37,12 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
 #include "core/plugin_host.hpp"
+#include "core/plugin_ui_data.hpp"
 
 namespace cascade::core {
 
-// A track as the host holds it: the plugin's POD plus which plugin said it.
-// Copied out of the plugin (see the ABI's note on why tracks are copied and
-// images are borrowed), so nothing here has a lifetime tied to a module.
-struct HostTrack {
-    CascadeTrack t{};
-    std::string plugin;
-};
-
-// How stale a target is allowed to get before the host stops showing it.
-//
-// THIS IS THE HOST'S JOB, and the ABI says so: CascadeTrack::ageMs exists
-// precisely because "the host fades and eventually drops stale targets". A
-// plugin that never evicts - and the shipped ADS-B decoder never does - would
-// otherwise keep every aircraft it has ever heard on the map and in the list
-// for the whole session. Putting the rule here rather than in the drawing code
-// means the map, the flight list, the target counts and the web snapshot all
-// answer the same question the same way, instead of three of them disagreeing.
-//
-// THE THRESHOLDS ARE PER KIND because the sources report at wildly different
-// cadences, and one number would be wrong for all but one of them:
-//
-//   AIRCRAFT (ADS-B)  positions arrive about twice a second; dump1090 and
-//                     tar1090 drop an aircraft at 60 s of silence, so an
-//                     aircraft quiet for 30 s is already anomalous and one
-//                     quiet for 60 s has gone - out of range, or landed.
-//   VESSEL (AIS)      2-10 s under way, up to 3 minutes at anchor, and Class B
-//                     transmits as slowly as every 3 minutes by design. Fading
-//                     at 5 minutes is the first point at which silence is not
-//                     simply a slow reporting class; 10 minutes is gone.
-//   STATION (APRS)    beacons are every 10-30 minutes, and a fixed digipeater
-//                     is not "stale" for being quiet - it has not moved. 30
-//                     and 60 minutes are one and two missed beacon slots at
-//                     the slow end.
-//   SATELLITE         a tracker PROPAGATES a position rather than hearing one,
-//                     so it should update every frame. Two minutes of no new
-//                     position means the propagator has stopped, not that the
-//                     satellite went quiet; 10 minutes before dropping, because
-//                     an orbit that reappears is far more useful than a gap.
-//   UNKNOWN           the host cannot know the cadence of a kind it does not
-//                     recognise, so it uses the MOST forgiving rule it has.
-//                     Dropping an unfamiliar source on an aircraft's schedule
-//                     would erase a target that was behaving perfectly.
-//
-// Times in milliseconds, to match CascadeTrack::ageMs.
-constexpr std::uint64_t kTrackFadeMsAircraft = 30ull * 1000ull;
-constexpr std::uint64_t kTrackDropMsAircraft = 60ull * 1000ull;
-constexpr std::uint64_t kTrackFadeMsVessel = 5ull * 60ull * 1000ull;
-constexpr std::uint64_t kTrackDropMsVessel = 10ull * 60ull * 1000ull;
-constexpr std::uint64_t kTrackFadeMsStation = 30ull * 60ull * 1000ull;
-constexpr std::uint64_t kTrackDropMsStation = 60ull * 60ull * 1000ull;
-constexpr std::uint64_t kTrackFadeMsSatellite = 2ull * 60ull * 1000ull;
-constexpr std::uint64_t kTrackDropMsSatellite = 10ull * 60ull * 1000ull;
-
-// How faint a target may get before it is dropped. Not zero: a marker that
-// reaches full transparency and only THEN disappears has already been invisible
-// for a while, so the user sees a target vanish with no warning at all - which
-// is the behaviour fading exists to avoid.
-constexpr float kTrackMinAlpha = 0.30f;
-
-// The single visibility rule. Pure: same answer for the same inputs, no state,
-// no clock - which is what makes it testable and what makes re-acquisition
-// automatic. A dropped target whose plugin hears it again reports a small
-// ageMs on the very next poll and is visible on that frame; the host keeps no
-// "I dropped this one" memory that would have to be undone.
-struct TrackPresentation {
-    bool visible = true;
-    float alpha = 1.0f;  // 1.0 fresh, ramping to kTrackMinAlpha, then invisible
-};
-TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind);
-
-// How many of `tracks` the rule says to show. The counts beside the map and
-// above the flight list must agree with what is drawn: "30 targets" over a
-// list of twelve is worse than no count at all.
-std::size_t visibleTrackCount(const std::vector<HostTrack>& tracks);
-
-// A polyline. The plugin owns its vertices only until the next poll, so they
-// are copied here too - the host draws on its own schedule and must not hold a
-// pointer into a plugin across frames.
-struct HostPath {
-    std::string id;
-    std::string plugin;
-    std::uint32_t kind = 0;
-    std::uint32_t flags = 0;
-    std::vector<CascadePathPoint> points;
-};
-
-// THE SAME RULE, FOR A TRAIL. A CascadePath carries no age of its own - see
-// the ABI - so the only honest answer about a trail's staleness is its OWNER's:
-// the track with the same id, from the same plugin. Without this the marker
-// obeys the rule and the line under it does not, and a dropped target leaves a
-// trail starting where its marker would have been and running off into empty
-// space - which says "something is here" about the one thing the host has just
-// decided is not.
-//
-// A path with NO matching track keeps today's behaviour (visible, full
-// strength): a source may plot a line that is not a target at all - a
-// footprint, a predicted ground track, a boundary - and the host has no age
-// for it and no business hiding it.
-TrackPresentation pathPresentation(const HostPath& path,
-                                   const std::vector<HostTrack>& tracks);
+// (HostTrack, HostPath and the visibility rule they are drawn by - trackPresentation, pathPresentation, visibleTrackCount,
+// the fade and drop ages - moved to core/plugin_ui_data.hpp, which the views include instead of this header.)
 
 // --- Observed altitudes along a trail ---------------------------------------
 //
@@ -273,56 +176,7 @@ inline bool mapSelfOpens(bool hadVisibleLastFrame, bool haveVisibleNow) {
     return haveVisibleNow && !hadVisibleLastFrame;
 }
 
-// One plugin-declared window, resolved once at create time.
-struct HostPanel {
-    std::string plugin;
-    std::string title;
-    std::vector<std::string> headings;   // 1..CASCADE_PANEL_MAX_COLUMNS
-    std::vector<CascadePanelRow> rows;   // refreshed each poll
-};
-
-// One plugin-declared INSTRUMENT: a face the host draws as equipment, fed
-// by the plugin's state (see CASCADE_CAP_INSTRUMENT). `have` is false until
-// the plugin has answered poll_state with 1 at least once, and the face is
-// then drawn with no reading rather than with zeroes - the distinction this
-// product has been bitten by before. The memory rows are optional and follow
-// the panel contract exactly.
-struct HostInstrument {
-    std::string plugin;
-    std::string title;
-    std::uint32_t kind = 0;
-    bool have = false;
-    CascadeInstrumentState state{};
-    std::vector<std::string> headings;   // empty when the plugin has no memory feed
-    std::vector<CascadePanelRow> rows;   // refreshed each poll
-};
-
-// WHICH PLUGIN WINDOWS ARE ON SCREEN - a decoder's picture, a plugin's own
-// panel - by ImGui window identity. EMPTY AT EVERY LAUNCH AND NEVER SAVED:
-// the application starts on the main screen alone (the user's instruction,
-// 0.79.1: "if you close the software, that is it for the day"), and a
-// plugin's window opens when the user presses its row on the rail and
-// closes from its own key. Until 0.79.1 the rule ran the other way - every
-// published window appeared by itself and a close was remembered across
-// launches in AppConfig::closedWindows, which the host no longer applies.
-//
-// Pure state, no drawing, so the rule "nothing is shown until asked" can be
-// tested without a window: a fresh instance shows nothing, show/hide/toggle
-// do what they say, and an identity nobody has asked for stays hidden
-// however often a plugin publishes it.
-class PluginWindows {
-public:
-    bool shown(const std::string& id) const { return open_.count(id) != 0u; }
-    void show(const std::string& id) { open_.insert(id); }
-    void hide(const std::string& id) { open_.erase(id); }
-    void toggle(const std::string& id) {
-        if (open_.erase(id) == 0u) { open_.insert(id); }
-    }
-    std::size_t count() const { return open_.size(); }
-
-private:
-    std::set<std::string> open_;
-};
+// (HostPanel, HostInstrument and PluginWindows moved to core/plugin_ui_data.hpp, with the other data the views draw.)
 
 // What the host lets a plugin do to the receiver. Supplied by the owner (the
 // GUI), so this header stays free of the pipeline and the source stack.
@@ -395,33 +249,7 @@ std::size_t attachedHostBridgeCount();
 // Nothing here calls into a plugin: the preset API is the plugin's own code
 // and must not be run once per frame per plugin from inside a mute decision.
 
-// One preset, reduced to what the mute decision needs - PLUS what the 0.99.0
-// preset bars need to draw and re-apply the same preset, added rather than
-// kept as a second cache: this snapshot is already rebuilt on every plugin-
-// set change (AppWindow::rebuildMuteStates), which is exactly the cadence the
-// bars are not allowed to call count()/get() at any faster than.
-struct MutePreset {
-    double frequencyHz = 0.0;
-    // The preset's channel bandwidth, or 0 when it declares none (most do).
-    double bandwidthHz = 0.0;
-    // CASCADE_PRESET_DEVICE_CENTRE: the preset moves the DEVICE centre rather
-    // than the VFO, so that is the number it must be compared against. Getting
-    // this wrong is not cosmetic - a user with a VFO offset dialled in from
-    // the last station would press "ADS-B 1090 MHz", land the device exactly
-    // on the preset, and be told they are not on it.
-    bool deviceCentre = false;
-    // The RAW index this preset was read from (get(index, ...)), not its
-    // position in this filtered vector - the two disagree the moment any
-    // earlier index failed validation. A bar's key press records this index
-    // so the deferred apply can re-fetch the same preset from the plugin
-    // itself rather than trusting anything carried across frames.
-    std::uint32_t index = 0;
-    // Bounded already (see cascade::gui::presetLabel): the plugin's own label,
-    // or this plugin's display name when it left the label empty. Never the
-    // raw ABI bytes, so nothing downstream of this cache has to bound them
-    // again.
-    std::string label;
-};
+// (MutePreset - one preset as the decoder surfaces read it - moved to core/plugin_ui_data.hpp; see the header comment there.)
 
 // One plugin's contribution to the decision.
 struct MutePlugin {

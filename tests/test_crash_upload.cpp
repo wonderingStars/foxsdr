@@ -590,6 +590,32 @@ void writeConfig(const fs::path& p, bool diagnostics) {
 
 #endif  // _WIN32
 
+// A config with diagnostics ON and the usage switch as the caller says, with the install id the engine will take from it (a valid
+// one: the loader drops anything of another shape and switches reporting off with it).
+void writeConfigWithUsage(const fs::path& p, bool usageOn, const std::string& installId) {
+    std::ofstream out(p, std::ios::binary | std::ios::trunc);
+    out << "{\n";
+    out << "  \"schemaVersion\": 1,\n";
+    out << "  \"diagnosticsEnabled\": true,\n";
+    out << "  \"diagnosticsMinidump\": false,\n";
+    out << "  \"telemetryEnabled\": " << (usageOn ? "true" : "false") << ",\n";
+    out << "  \"telemetryInstallId\": \"" << installId << "\"\n";
+    out << "}\n";
+}
+
+// One environment variable, either platform (an empty value removes it).
+void setEnvVar(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    ::SetEnvironmentVariableA(name, value.empty() ? nullptr : value.c_str());
+#else
+    if (value.empty()) {
+        ::unsetenv(name);
+    } else {
+        ::setenv(name, value.c_str(), 1);
+    }
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -1199,7 +1225,7 @@ int main() {
 
         StubServer srv;
         CHECK(srv.start(StubServer::Mode::Accept204));
-        runAppMs(diagDir, cfg, srv.url(), 20);
+        runAppMs(diagDir, cfg, srv.url(), 240);
         CHECK(srv.connections() == 1);
         const std::vector<std::string> bodies = srv.bodies();
         CHECK(bodies.size() == 1);
@@ -1580,7 +1606,7 @@ int main() {
 
         StubServer srv;
         CHECK(srv.start(StubServer::Mode::Accept204));
-        runAppMs(diagDir, cfg, srv.url(), 20);
+        runAppMs(diagDir, cfg, srv.url(), 240);
         CHECK(srv.connections() == 1);
         const std::vector<std::string> bodies = srv.bodies();
         CHECK(bodies.size() == 1);
@@ -1621,6 +1647,53 @@ int main() {
         fs::remove_all(root2, ec);
     }
 #endif  // _WIN32
+
+    // --- THE REAL BINARY: THE FIRST SWEEP CARRIES THE INSTALL ID THE USAGE SWITCH NAMES (window port group 14, part e) ------------
+    //
+    // The sweep is armed by run() and started by the first frame's look, which reads the usage switch and the install id as the
+    // engine's FACTS - and a fact answers nothing before the engine's first publish. Started where it used to be (before the frame
+    // loop) it would have read "no answer" as "reporting is off" and sent an EMPTY id for a user who had switched reporting on.
+    // The unit cases above build the sweep's parameters themselves, so none of them could see this: the shipped binary is run, with a
+    // config that has reporting on and an id, and then one that has it off while an id is still on file.
+    {
+        const std::string kId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+        struct Case {
+            const char* tag;
+            bool usageOn;
+            std::string expected;
+        };
+        const Case cases[] = {{"app-id-on", true, kId}, {"app-id-off", false, std::string()}};
+        for (const Case& c : cases) {
+            const fs::path root = scratchDir(c.tag);
+            const fs::path diagDir = root / "diag";
+            const fs::path cfg = root / "config.json";
+            writeConfigWithUsage(cfg, c.usageOn, kId);
+            fs::create_directories(diagDir / "crashes");
+            writeFile(diagDir / "crashes" / "crash-20260825-120000-1234-1.txt", crashReportText("1D1D1D1D1D1D1D1D"));
+
+            StubServer srv;
+            CHECK(srv.start(StubServer::Mode::Accept204));
+            // Nothing here may reach the live usage endpoint, whatever the config says.
+            setEnvVar("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9/");
+            runAppMs(diagDir, cfg, srv.url(), 240);
+            setEnvVar("FOXSDR_TELEMETRY_URL", std::string());
+            const std::vector<std::string> bodies = srv.bodies();
+            std::printf("%s: %zu upload(s), installId \"%s\" (expected \"%s\")\n", c.tag,
+                        bodies.size(),
+                        bodies.empty() ? "" : parseOrEmpty(at(bodies, 0)).value("installId", std::string("?")).c_str(),
+                        c.expected.c_str());
+            CHECK(bodies.size() == 1);
+            if (bodies.size() == 1) {
+                const nlohmann::json j = parseOrEmpty(at(bodies, 0));
+                CHECK(j.value("signature", std::string()) == "1D1D1D1D1D1D1D1D");
+                CHECK(j.contains("installId"));
+                CHECK(j.value("installId", std::string("?")) == c.expected);
+            }
+            srv.stop();
+            std::error_code ec;
+            fs::remove_all(root, ec);
+        }
+    }
 
     // --- THE OFFER DIALOG SAYS ONLY WHAT ACTUALLY HAPPENS -------------------
     //

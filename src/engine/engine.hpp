@@ -255,6 +255,9 @@ private:
         // sets are about to be built from: tests/test_patch_graph_draft_input
         // checks that a node dragged THIS frame is already there.
         void (*patchPublishing)(const cascade::core::patch::Graph& graph);
+        // Replaces the serial-port walk FOXAPI_OP_SCAN_SERIAL_PORTS makes when set (the registry on Windows, /dev on
+        // Linux): a window test asks for the machine's ports and must get the ones it names, not the desk's.
+        std::vector<std::string> (*serialPorts)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -1652,6 +1655,16 @@ private:
     // mode, source, rate, radio model, loaded plugins with versions. Nothing
     // here is re-derived.
     void refreshDiagContext();
+    // THE PASS RENDERS IT (window port group 14, part c): once at the end of applyConfig and then, from pumpAudio, at most
+    // once a second - and only when what the context is made of (mode, source, rate, radio model, loaded plugins with
+    // versions) has changed, so a settled pass allocates nothing. The window no longer calls refreshDiagContext: the
+    // diagnostics bundle takes the block the pass rendered, and the crash handler prints the same bytes.
+    void pumpDiagContext();
+    std::uint64_t diagContextInputs();
+    std::chrono::steady_clock::time_point diagContextAt_{};
+    std::uint64_t diagContextHash_ = 0;
+    bool diagContextHave_ = false;
+    std::uint64_t diagContextRenders_ = 0;  // times the context was rendered (a test reads it: the gate and the hash)
     std::size_t diagPluginCount_ = static_cast<std::size_t>(-1);
 
     bool rxSet_ = false;
@@ -2419,6 +2432,15 @@ public:
     void shutdownStop();
     void shutdownRelease();
     void shutdown();
+    // THE TWO BOUNDED-RUN PLUGIN DIAGNOSTICS (window port group 14, part e; engine_diagnostics.cpp). Test machinery that
+    // prints what the engine decided to stdout; they read nothing but the engine's own state and were the window's until
+    // then. A front end calls reportPluginStatus once, right after shutdownQuiesce (the state a bounded run finished in,
+    // including any retirement a catalogue fetch brought into force) when CASCADE_PLUGIN_STATUS asked, handing over the
+    // receiver plugins' pictures it holds (the plugin windows poll them into a buffer of their own); and
+    // reportPluginTestResult from onCatalogueResult when CASCADE_PLUGIN_TEST asked, naming the frame the fetch resolved on.
+    // Neither changes the engine (the status report is not const only because the pipeline's accessors are not).
+    void reportPluginStatus(const std::vector<cascade::core::HostImage>& images);
+    void reportPluginTestResult(int frame) const;
     void pumpWorkers();
     void pumpAudio();
     void pump();

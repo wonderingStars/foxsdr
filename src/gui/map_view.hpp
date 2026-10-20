@@ -47,7 +47,7 @@
 #include <string>
 #include <vector>
 
-#include "core/plugin_ui.hpp"
+#include "core/plugin_ui_data.hpp"
 #include "gui/aircraft_icons.hpp"
 #include "gui/track_metrics.hpp"
 

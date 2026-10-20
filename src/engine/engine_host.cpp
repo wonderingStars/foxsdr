@@ -26,9 +26,7 @@ void EngineHost::resumeWatchdog() {}
 void EngineHost::onDisplayRange(float, float) {}
 void EngineHost::onBookmarksChanged() {}
 void EngineHost::openPluginWindowsFor(const cascade::core::LoadedPlugin&) {}
-void EngineHost::onReceiverPositionApplied(double, double) {}
 void EngineHost::onConverterChanged(bool) {}
-void EngineHost::onGpsFixApplied() {}
 void EngineHost::onCatalogueFetchStarting() {}
 void EngineHost::onCatalogueResult() {}
 void EngineHost::onAddAllFinished() {}

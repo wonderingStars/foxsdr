@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
-#include "core/plugin_ui.hpp"
+#include "core/plugin_ui_data.hpp"
 #include "engine/running_view.hpp"
 #include "gui/module_census.hpp"
 
@@ -161,6 +161,17 @@ inline bool runnerStatusEmpty(const std::vector<PluginRow>& rows) {
         if (r.loaded && !r.stopped) { return false; }
     }
     return true;
+}
+
+// The module file a plugin's DISPLAY name stands for (Engine::pluginKeyForDisplayName over the table's rows: the first
+// row of that name; "" for an empty name or none): what a map page's or a plugin window's rail row sends
+// FOXAPP_OP_PLUGIN_AUTO_PRESET with, because the pages and windows carry the display name and the op takes the file.
+inline std::string moduleFileForName(const std::vector<PluginRow>& rows, const std::string& displayName) {
+    if (displayName.empty()) { return {}; }
+    for (const PluginRow& r : rows) {
+        if (r.name == displayName) { return r.file; }
+    }
+    return {};
 }
 
 // The census of the rows against one capability mask (module_census.hpp's rule, over the table's entries). A

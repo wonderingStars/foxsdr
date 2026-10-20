@@ -78,7 +78,7 @@ endforeach()
 # the exe beside the test binaries' parent for the Soapy child tests). Building
 # one of them alone must rebuild the application too, or its end-to-end half
 # drives whatever stale cascade.exe the build tree last held.
-foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics
+foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang test_diagnostics test_plugin_status_report
                            test_gps_app test_shutdown_budget test_startup_state
                            test_stop_ends_recordings test_theme_census test_soapy_enum_proc
                            test_soapy_source)
@@ -104,7 +104,7 @@ target_compile_definitions(test_apply_command PRIVATE
 # copies them into a plugin directory of its own (Engine::testHooks_.pluginDir).
 add_library(fixture_group8_plugin SHARED fixture_group8_plugin.cpp)
 target_include_directories(fixture_group8_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_mute_grants test_fitted_modules_window test_plugin_store_window)
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_mute_grants test_fitted_modules_window test_plugin_store_window test_plugin_window test_plugin_status_report)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_stage1_plugin fixture_group8_plugin)
         target_compile_definitions(${_t} PRIVATE
@@ -132,11 +132,42 @@ endforeach()
 # draws them (test_patch_graph_draft_input scenario W). Copied into a plugin directory of the test's own.
 add_library(fixture_group13_plugin SHARED fixture_group13_plugin.cpp)
 target_include_directories(fixture_group13_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_patch_graph_draft_input)
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_patch_graph_draft_input test_plugin_window test_plugin_status_report)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_group13_plugin)
         target_compile_definitions(${_t} PRIVATE
             FIXTURE_GROUP13_PLUGIN="$<TARGET_FILE:fixture_group13_plugin>")
+    endif()
+endforeach()
+# THE GROUP-14 FIXTURE (window port group 14, part a): a REAL track source - four aircraft at fixed places (one of them
+# stale) and a trail - for the tests of the map pages, the target register, the details window and the offer to take the
+# middle of the traffic (test_map_window). Before it no hermetic frame could put a track in the window's plugin UI: the
+# aircraft of the radar scope and of the Patch page's Map part were held by code reading. Copied into a plugin directory of
+# the test's own. SINCE PART D it also declares a PANEL and an INSTRUMENT (a fixed table and a fixed reading), so the plugin
+# windows the plugin UI feeds besides the map have something to draw (test_plugin_window, which loads this fixture with the
+# stage-1 text decoder and the group-13 picture decoder).
+add_library(fixture_group14_plugin SHARED fixture_group14_plugin.cpp)
+target_include_directories(fixture_group14_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+foreach(_t IN ITEMS test_map_window test_plugin_window test_plugin_status_report)
+    if(TARGET ${_t})
+        add_dependencies(${_t} fixture_group14_plugin)
+        target_compile_definitions(${_t} PRIVATE
+            FIXTURE_GROUP14_PLUGIN="$<TARGET_FILE:fixture_group14_plugin>")
+    endif()
+endforeach()
+# ...and a SECOND track source from the same file under another name and id prefix ("Group Fourteen Tracks B", ids G14B...), for
+# the tests of one map page per plugin (test_plugin_window: the per-page filter of tracks and paths, a page pruned beside a
+# live one).
+add_library(fixture_group14_plugin_b SHARED fixture_group14_plugin.cpp)
+target_include_directories(fixture_group14_plugin_b PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(fixture_group14_plugin_b PRIVATE FIXTURE_NAME="Group Fourteen Tracks B" FIXTURE_PREFIX="G14B")
+# (window port group 14, part e: test_plugin_status_report fits four of these fixtures to hold the bounded-run status report the
+# engine prints, line by line.)
+foreach(_t IN ITEMS test_plugin_window test_plugin_status_report)
+    if(TARGET ${_t})
+        add_dependencies(${_t} fixture_group14_plugin_b)
+        target_compile_definitions(${_t} PRIVATE
+            FIXTURE_GROUP14B_PLUGIN="$<TARGET_FILE:fixture_group14_plugin_b>")
     endif()
 endforeach()
 # test_snapshot_app loads three decoders at once (engine stage 2): the same

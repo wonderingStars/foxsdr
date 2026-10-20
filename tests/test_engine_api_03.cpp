@@ -121,6 +121,18 @@
 //       a stopped patch keeping its picture, nothing moving listSeq; G13c-2 a patch document takes the pictures and an edit
 //       does not; G13c-3 two reader threads (LOCAL and REMOTE) reading the newest picture as fast as they can against the
 //       pass that takes pictures: every read whole.
+//   G14b the GPS reader as the position row draws it (window port group 14, part b, API 0.3 section 8.13): the GPS list (48), ONE
+//       entry read at the call, against a receiver on a fake wire through the reader's own opener and a source handed to it with
+//       a timeout of the test's choosing: the idle entry, listening (the sentence, the satellites, the baud, the seconds LIVE),
+//       the entry blank to a REMOTE session in its words and not in its figures, a run of states that moves no listSeq, Stop,
+//       FIXED (the sentence the core words it, no coordinate anywhere in it, the position in the state), FOXAPP_STATUS_GPS_RESULT
+//       (6: forgets a finished read, a no-op while it listens, DENIED to a REMOTE session), FAILED and TIMED OUT.
+//   G14c the usage switch, the session counters and the diagnostics context (part c, section 8.13): G14c-1 fact.telemetry.enabled
+//       and .installId (LOCAL: DENIED to a REMOTE session), consent mints the id and moves the lists once, a repeat is NO_CHANGE,
+//       OFF forgets the id and a later consent mints a NEW one, the API's own switch stays refused, fact.diag.launches and
+//       .crashes; G14c-2 the context block is rendered by the engine's own pass (a mode change and a radio opening follow within
+//       the second, the radio's model alone moves it, a bundle carries the block whole and replaces nothing) and by applyConfig
+//       (a context stands the moment it returns, before any pass).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -147,6 +159,11 @@
 #include "core/freq_converter.hpp"
 #include "core/freq_import.hpp"
 #include "core/freq_manager.hpp"
+#include "core/diag_report.hpp"
+#include "core/gps_reader.hpp"
+#include "core/version.hpp"
+#include "core/nmea.hpp"
+#include "core/serial_port.hpp"
 #include "core/scanner.hpp"
 #include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
@@ -299,6 +316,27 @@ struct AppWindowTestAccess {
     }
     // The panel names the usage report would list (group U).
     static std::vector<std::string> panels(cascade::engine::Engine& e) { return e.telemetryPanels_; }
+    // Group 14b: the engine's GPS reader - a receiver on a fake wire (the opener the op's start goes through, or a source
+    // handed to it directly with a timeout of the test's choosing), and the reader's own account of itself.
+    static void gpsOpener(cascade::engine::Engine& e, cascade::core::GpsReader::Opener op) { e.gpsReader_.setOpenerForTest(std::move(op)); }
+    static void gpsStart(cascade::engine::Engine& e, std::unique_ptr<cascade::core::ByteSource> src, const std::string& port, int baud,
+                         double timeoutS) {
+        cascade::core::GpsReader::Options o;
+        o.port = port;
+        o.baud = baud;
+        o.timeoutS = timeoutS;
+        e.gpsReader_.start(std::move(src), o);
+    }
+    static cascade::core::GpsReader::Status gpsStatus(cascade::engine::Engine& e) { return e.gpsReader_.status(); }
+    // Group 14c: the session counters a config would have set, and the engine's own account of itself.
+    static void setCounters(cascade::engine::Engine& e, std::uint64_t launches, std::uint64_t crashes) {
+        e.telemetryLaunches_ = launches;
+        e.telemetryCrashes_ = crashes;
+    }
+    static bool telemetryOn(cascade::engine::Engine& e) { return e.telemetryEnabled_; }
+    static std::string telemetryId(cascade::engine::Engine& e) { return e.telemetryInstallId_; }
+    static void setDeviceModel(cascade::engine::Engine& e, const std::string& m) { e.deviceModel_ = m; }
+    static void gpsStop(cascade::engine::Engine& e) { e.gpsReader_.stop(); }
     // Group 13: what only an attempt leaves in the patch runtime, put there behind its back - a plugin that refused to
     // start on a radio's set, the note a running radio's face prints, and an open still on its worker.
     static void injectRefused(cascade::engine::Engine& e, unsigned radio, std::vector<cascade::core::patch::NodeId> nodes) {
@@ -705,7 +743,7 @@ void testEveryListIsServed() {
     testing::Engine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_LIVE; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_GPS; ++l) {
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -1441,7 +1479,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_PATCH_LIVE; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_GPS; ++l) {
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -7843,6 +7881,389 @@ void testPatchPicturesNeverTear() {
     passes(d.eng, 2);
 }
 // G13C TESTS END>>
+// ======================================================================================================================
+// G14b: the GPS reader as the position row draws it (window port group 14, part b, API 0.3 section 8.13): the GPS list,
+// one entry read at the call, and the status code that forgets a finished read.
+// ======================================================================================================================
+namespace g14 {
+
+// A receiver on a fake wire: delivers its chunks one after another (each after `delayMs`), then says nothing, every 20 ms.
+class Wire final : public cascade::core::ByteSource {
+public:
+    struct Step {
+        std::string chunk;
+        int delayMs = 0;
+    };
+    explicit Wire(std::vector<Step> steps) : steps_(std::move(steps)) {}
+    int read(char* buf, std::size_t cap) override {
+        if (next_ < steps_.size()) {
+            const Step& s = steps_[next_++];
+            std::this_thread::sleep_for(std::chrono::milliseconds(s.delayMs));
+            const std::size_t n = std::min(s.chunk.size(), cap);
+            std::memcpy(buf, s.chunk.data(), n);
+            return static_cast<int>(n);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return 0;
+    }
+
+private:
+    std::vector<Step> steps_;
+    std::size_t next_ = 0;
+};
+
+std::string framed(const char* payload) { return cascade::core::nmeaFrame(payload) + "\r\n"; }
+// 8 satellites in view, no fix yet; and a fix at 51.50735 N, 0.12776 W with 8 satellites and an HDOP of 1.1.
+const char* kViewPayload = "GPGGA,123519.00,,,,,0,08,1.1,,M,,M,,";
+const char* kFixPayload = "GPGGA,123519.00,5130.4410,N,00007.6656,W,1,08,1.1,35.0,M,46.9,M,,";
+
+std::unique_ptr<cascade::core::ByteSource> viewing() {
+    return std::make_unique<Wire>(std::vector<Wire::Step>{{framed(kViewPayload), 0}});
+}
+std::unique_ptr<cascade::core::ByteSource> fixing() {
+    return std::make_unique<Wire>(std::vector<Wire::Step>{{framed(kViewPayload), 0}, {framed(kFixPayload), 60}});
+}
+
+}  // namespace g14
+
+void testGpsList() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    using cascade::core::GpsReader;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session r(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(s.ok());
+    CHECK(r.ok());
+    CHECK_EQ(FOXAPI_LIST_GPS, 48u);
+    const auto row = [&](testing::Session& who) { return item(who, FOXAPI_LIST_GPS, 0); };
+    const auto untilState = [&](double state, int ms = 4000) {
+        return passUntil(d.eng, [&] { return row(s).value[0] == state; }, ms);
+    };
+
+    // IDLE: one entry, always, saying nothing - no port, no sentence, no satellites, neither flag.
+    d.eng.controlPass();
+    CHECK_EQ(count(s, FOXAPI_LIST_GPS), 1);
+    CHECK_EQ(count(r, FOXAPI_LIST_GPS), 1);
+    {
+        const FoxListItem it = row(s);
+        CHECK_EQ(it.list, uint32_t(FOXAPI_LIST_GPS));
+        CHECK_EQ(it.id, 1ull);
+        CHECK_EQ(it.value[0], 0.0);
+        CHECK_EQ(it.value[2], -1.0);
+        CHECK_EQ(it.flags & (FOXAPI_ITEM_ACTIVE | FOXAPI_ITEM_FAULT), 0u);
+        CHECK_EQ(std::string(it.name), std::string());
+        CHECK_EQ(std::string(it.detail), std::string());
+        // An index past the one entry is not an entry (the count says so and nothing is filled).
+        FoxListItem past{};
+        past.structSize = sizeof(past);
+        CHECK_EQ(api()->read_list(s.raw(), FOXAPI_LIST_GPS, 1, &past), 1);
+        CHECK_EQ(past.list, 0u);
+    }
+    // The entry is not part of the lists' block: the count of lists the block rebuilds on is unmoved by anything below.
+    const std::uint64_t listSeq0 = s.state().listSeq;
+
+    // LISTENING: started by the op through the engine's opener (a receiver that sees 8 satellites and no fix).
+    Access::gpsOpener(d.eng, [](const std::string&, int, std::string&) { return g14::viewing(); });
+    FoxCommand start = testing::cmd(FOXAPI_OP_GPS, static_cast<double>(9600), 1, "FAKE1");
+    CHECK_EQ(pumped(d.eng, s, start).status(), FOXAPI_OK);
+    CHECK(passUntil(d.eng, [&] { return row(s).value[0] == 1.0 && row(s).value[2] == 8.0; }));
+    {
+        const FoxListItem it = row(s);
+        std::printf("G14b-1: listening: name [%s] detail [%s] state %.0f seconds %.2f satellites %.0f baud %.0f flags %08x\n",
+                    it.name, it.detail, it.value[0], it.value[1], it.value[2], it.value[3], it.flags);
+        CHECK((it.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+        CHECK((it.flags & FOXAPI_ITEM_FAULT) == 0u);
+        CHECK_EQ(std::string(it.name), std::string("FAKE1"));
+        CHECK(std::string(it.detail).rfind("Listening on FAKE1 at 9600 - 8 satellites, HDOP 1.1, no fix yet (", 0) == 0);
+        CHECK_EQ(it.value[3], 9600.0);
+        CHECK(it.value[1] >= 0.0 && it.value[1] < 30.0);
+        // The sentence is the core's own, whole - the engine composes it, so its wording is tested once.
+        CHECK_EQ(std::string(it.detail), cascade::core::gpsStatusLine(Access::gpsStatus(d.eng)).substr(0, 159));
+    }
+    // ...the seconds are LIVE (a read later, a larger figure, no pass between) ...
+    {
+        const double a = row(s).value[1];
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        CHECK(row(s).value[1] > a);
+    }
+    // ...and nothing a listening reader does moves the lists: not the seconds, not the sentence, not the satellites.
+    for (int i = 0; i < 12; ++i) {
+        d.eng.controlPass();
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    CHECK_EQ(s.state().listSeq, listSeq0);
+
+    // A REMOTE session sees the numbers and the flags, and none of the words (the port is this machine's).
+    {
+        const FoxListItem it = row(r);
+        CHECK_EQ(it.value[0], 1.0);
+        CHECK_EQ(it.value[2], 8.0);
+        CHECK_EQ(it.value[3], 9600.0);
+        CHECK((it.flags & FOXAPI_ITEM_ACTIVE) != 0u);
+        CHECK_EQ(std::string(it.name), std::string());
+        CHECK_EQ(std::string(it.detail), std::string());
+    }
+
+    // CLEARING A RUNNING READ DOES NOTHING (FOXAPP_STATUS_GPS_RESULT is the reader's own clearResult), and a REMOTE session
+    // cannot send it (an app op).
+    const FoxCommand clearResult = appCmd(FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_GPS_RESULT);
+    CHECK(static_cast<int>(cascade::core::cmd::FOXAPP_STATUS_GPS_RESULT) == 6);
+    CHECK_EQ(pumped(d.eng, s, clearResult).status(), FOXAPI_OK);
+    CHECK_EQ(row(s).value[0], 1.0);
+    CHECK_EQ(pumped(d.eng, r, clearResult).status(), FOXAPI_DENIED);
+    CHECK_EQ(row(s).value[0], 1.0);
+
+    // STOP: the reader returns to Idle (a listen cut short), and the entry is empty again.
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_GPS, 0.0, 0)).status(), FOXAPI_OK);
+    CHECK(untilState(0.0));
+    {
+        const FoxListItem it = row(s);
+        CHECK_EQ(it.flags & (FOXAPI_ITEM_ACTIVE | FOXAPI_ITEM_FAULT), 0u);
+        CHECK_EQ(std::string(it.name), std::string());
+        CHECK_EQ(std::string(it.detail), std::string());
+    }
+
+    // FIXED: the reader takes the fix, closes the port; the engine's pass applies the position (the state's, not the entry's)
+    // and the entry says Fixed, not listening, with the sentence the core words it and NO coordinate anywhere.
+    Access::gpsOpener(d.eng, [](const std::string&, int, std::string&) { return g14::fixing(); });
+    CHECK_EQ(pumped(d.eng, s, start).status(), FOXAPI_OK);
+    CHECK(untilState(2.0));
+    CHECK(passUntil(d.eng, [&] { return (s.state().flags & FOXAPI_RX_POSITION_SET) != 0u; }));
+    {
+        const FoxListItem it = row(s);
+        std::printf("G14b-1: fixed: detail [%s] satellites %.0f flags %08x; the state's position %.5f %.5f\n", it.detail, it.value[2],
+                    it.flags, s.state().rxLatDeg, s.state().rxLonDeg);
+        CHECK_EQ(it.flags & (FOXAPI_ITEM_ACTIVE | FOXAPI_ITEM_FAULT), 0u);
+        CHECK_EQ(std::string(it.detail), std::string("Fix: 8 satellites, HDOP 1.1 - position set"));
+        CHECK_EQ(it.value[2], 8.0);
+        CHECK_EQ(std::string(it.name), std::string("FAKE1"));
+        for (const char* digits : {"51.5", "0.127", "5130", "00007", "7.66"}) {
+            CHECK(std::string(it.detail).find(digits) == std::string::npos);
+            CHECK(std::string(it.name).find(digits) == std::string::npos);
+        }
+        CHECK(std::fabs(s.state().rxLatDeg - 51.50735) < 1e-4);
+        CHECK(std::fabs(s.state().rxLonDeg + 0.12776) < 1e-4);
+    }
+    // ...and the entry stays Fixed until it is cleared: CLEAR_STATUS 6 forgets the finished read.
+    for (int i = 0; i < 6; ++i) { d.eng.controlPass(); }
+    CHECK_EQ(row(s).value[0], 2.0);
+    CHECK_EQ(pumped(d.eng, s, clearResult).status(), FOXAPI_OK);
+    CHECK_EQ(row(s).value[0], 0.0);
+    CHECK_EQ(std::string(row(s).detail), std::string());
+
+    // FAILED: a port that cannot be opened. FAULT, not listening, the sentence names the port and carries the OS's words.
+    Access::gpsOpener(d.eng, [](const std::string&, int, std::string& error) -> std::unique_ptr<cascade::core::ByteSource> {
+        error = "no such device";  // (the reader words it: "<port> could not be opened: <this>")
+        return nullptr;
+    });
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_GPS, 4800.0, 1, "NOPE9")).status(), FOXAPI_OK);
+    CHECK(untilState(3.0));
+    {
+        const FoxListItem it = row(s);
+        std::printf("G14b-1: failed: detail [%s] flags %08x\n", it.detail, it.flags);
+        CHECK((it.flags & FOXAPI_ITEM_FAULT) != 0u);
+        CHECK((it.flags & FOXAPI_ITEM_ACTIVE) == 0u);
+        CHECK_EQ(std::string(it.detail), std::string("NOPE9 could not be opened: no such device"));
+        CHECK_EQ(it.value[3], 4800.0);
+        CHECK_EQ(std::string(row(r).detail), std::string());  // (the REMOTE one is blank: it names the port)
+        CHECK((row(r).flags & FOXAPI_ITEM_FAULT) != 0u);
+    }
+    CHECK_EQ(pumped(d.eng, s, clearResult).status(), FOXAPI_OK);
+    CHECK_EQ(row(s).value[0], 0.0);
+
+    // TIMED OUT: a receiver that says nothing for as long as the read was given (0.25 s here, 60 s by the op).
+    Access::gpsStart(d.eng, std::make_unique<g14::Wire>(std::vector<g14::Wire::Step>{}), "FAKE2", 9600, 0.25);
+    CHECK(untilState(4.0));
+    {
+        const FoxListItem it = row(s);
+        std::printf("G14b-1: timed out: detail [%s] flags %08x\n", it.detail, it.flags);
+        CHECK((it.flags & FOXAPI_ITEM_FAULT) != 0u);
+        CHECK((it.flags & FOXAPI_ITEM_ACTIVE) == 0u);
+        CHECK(std::string(it.detail).rfind("Nothing arrived from FAKE2 in ", 0) == 0);
+    }
+    // The whole run of states moved no list.
+    CHECK_EQ(s.state().listSeq, listSeq0);
+    Access::gpsStop(d.eng);
+}
+
+// ======================================================================================================================
+// G14c: the usage switch and the session counters as facts, and the diagnostics context the engine renders itself
+// (window port group 14, part c, API 0.3 section 8.13).
+// ======================================================================================================================
+void testTelemetryFacts() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session r(api(), d.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_SETTINGS, "s3cret");
+    CHECK(s.ok());
+    CHECK(r.ok());
+    const FoxCommand consent1 = appCmd(FOXAPP_OP_TELEMETRY_CONSENT, 1);
+    const FoxCommand consent0 = appCmd(FOXAPP_OP_TELEMETRY_CONSENT, 0);
+    const auto enabled = [&] { return fact(s, "fact.telemetry.enabled"); };
+    const auto id = [&] { return fact(s, "fact.telemetry.installId"); };
+    d.eng.controlPass();
+    d.eng.controlPass();
+
+    // OFF, the engine's start: "0" and no id - known and EMPTY (a status of 0, not NOT_FOUND) - and the counters as decimals.
+    int32_t st = 0;
+    CHECK_EQ(enabled(), std::string("0"));
+    CHECK_EQ(fact(s, "fact.telemetry.installId", &st), std::string());
+    CHECK_EQ(st, 0);
+    CHECK_EQ(fact(s, "fact.diag.launches"), std::string("0"));
+    CHECK_EQ(fact(s, "fact.diag.crashes"), std::string("0"));
+    // ...LOCAL ones: a REMOTE session is DENIED all four, whether the switch is off or on, and learns nothing of the id.
+    for (const char* key : {"fact.telemetry.enabled", "fact.telemetry.installId", "fact.diag.launches", "fact.diag.crashes"}) {
+        int32_t rs = 0;
+        CHECK_EQ(fact(r, key, &rs), std::string());
+        CHECK_EQ(rs, FOXAPI_DENIED);
+    }
+
+    // CONSENT: the switch is on and the id is minted AT THE MOMENT OF CONSENT - one block, so the two facts move together.
+    const std::uint64_t seq0 = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, consent1).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(enabled(), std::string("1"));
+    const std::string first = id();
+    std::printf("G14c-1: consent: fact.telemetry.enabled %s, an id of %zu characters, listSeq %llu -> %llu\n", enabled().c_str(),
+                first.size(), static_cast<unsigned long long>(seq0), static_cast<unsigned long long>(s.state().listSeq));
+    CHECK(!first.empty());
+    CHECK_EQ(first, Access::telemetryId(d.eng));  // the engine's own id, whole
+    CHECK(Access::telemetryOn(d.eng));
+    CHECK_EQ(s.state().listSeq, seq0 + 1u);
+    for (const char* key : {"fact.telemetry.enabled", "fact.telemetry.installId"}) {
+        int32_t rs = 0;
+        (void)fact(r, key, &rs);
+        CHECK_EQ(rs, FOXAPI_DENIED);
+    }
+    // A REPEAT changes nothing: the id a machine reports under does not change behind its back, and nothing moves.
+    CHECK_EQ(pumped(d.eng, s, consent1).status(), FOXAPI_NO_CHANGE);
+    d.eng.controlPass();
+    CHECK_EQ(id(), first);
+    CHECK_EQ(s.state().listSeq, seq0 + 1u);
+
+    // OFF forgets the id (the fact is "" - the id does not exist while reporting is off), once.
+    CHECK_EQ(pumped(d.eng, s, consent0).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    CHECK_EQ(enabled(), std::string("0"));
+    CHECK_EQ(id(), std::string());
+    CHECK_EQ(Access::telemetryId(d.eng), std::string());
+    CHECK_EQ(s.state().listSeq, seq0 + 2u);
+    // ...and a later opt-in cannot be tied to the old one.
+    CHECK_EQ(pumped(d.eng, s, consent1).status(), FOXAPI_OK);
+    d.eng.controlPass();
+    const std::string second = id();
+    CHECK(!second.empty());
+    CHECK(second != first);
+    // The API's own switch is refused from everyone, and moves nothing.
+    const std::uint64_t seqNow = s.state().listSeq;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_TELEMETRY_ENABLE, 0.0, 0)).status(), FOXAPI_DENIED);
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_TELEMETRY_ENABLE, 0.0, 1)).status(), FOXAPI_DENIED);
+    d.eng.controlPass();
+    CHECK_EQ(enabled(), std::string("1"));
+    CHECK_EQ(id(), second);
+    CHECK_EQ(s.state().listSeq, seqNow);
+    // A REMOTE session cannot send the desktop's op either (an app op).
+    CHECK_EQ(pumped(d.eng, r, consent0).status(), FOXAPI_DENIED);
+    CHECK_EQ(enabled(), std::string("1"));
+
+    // THE COUNTERS: decimals, each one a move of the lists when it changes (they change at start-up, from the config).
+    const std::uint64_t seqC = s.state().listSeq;
+    Access::setCounters(d.eng, 12, 0);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.diag.launches"), std::string("12"));
+    CHECK_EQ(fact(s, "fact.diag.crashes"), std::string("0"));
+    CHECK_EQ(s.state().listSeq, seqC + 1u);
+    Access::setCounters(d.eng, 12, 3);
+    d.eng.controlPass();
+    CHECK_EQ(fact(s, "fact.diag.crashes"), std::string("3"));
+    CHECK_EQ(s.state().listSeq, seqC + 2u);
+    // Settled passes move nothing.
+    for (int i = 0; i < 5; ++i) { d.eng.controlPass(); }
+    CHECK_EQ(s.state().listSeq, seqC + 2u);
+    std::printf("G14c-1: launches %s, crashes %s; the id is gone at off, new at the next consent, and the API's own switch is refused\n",
+                fact(s, "fact.diag.launches").c_str(), fact(s, "fact.diag.crashes").c_str());
+}
+
+void testDiagContextIsTheEngines() {
+    using Access = cascade::gui::AppWindowTestAccess;
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    CHECK(s.ok());
+    d.eng.controlPass();
+    // RENDERED BY THE ENGINE'S OWN PASS: nobody called refreshDiagContext, and the crash handler's block is there.
+    std::string block = cascade::core::diagContextBlock();
+    std::printf("G14c-2: the context after the first pass:\n%s", block.c_str());
+    CHECK(block.find(std::string("version: ") + cascade::versionString() + "\n") != std::string::npos);
+    CHECK(block.find("device-open: no\n") != std::string::npos);
+    CHECK(block.find("plugin: ") != std::string::npos);
+    const std::string modeLine = [&] {
+        const std::size_t at = block.find("mode: ");
+        return at == std::string::npos ? std::string() : block.substr(at, block.find('\n', at) - at);
+    }();
+    CHECK(!modeLine.empty());
+
+    // A CHANGE OF MODE shows in the block within the pass's second (the gate is one second; the pass re-renders only when
+    // an input of the context moved).
+    const auto activeMode = [&] {
+        for (int32_t i = 0; i < count(s, FOXAPI_LIST_MODES); ++i) {
+            const FoxListItem it = item(s, FOXAPI_LIST_MODES, static_cast<uint32_t>(i));
+            if ((it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { return std::string(it.name); }
+        }
+        return std::string();
+    };
+    const uint32_t other = (s.state().demodMode == FOXAPI_DEMOD_AM) ? FOXAPI_DEMOD_NFM : FOXAPI_DEMOD_AM;
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SET_MODE, 0.0, other)).status(), FOXAPI_OK);
+    const std::string wanted = "mode: " + activeMode();
+    CHECK(wanted != modeLine);
+    const bool followed = passUntil(d.eng, [&] { return cascade::core::diagContextBlock().find(wanted) != std::string::npos; }, 3000);
+    std::printf("G14c-2: after SET_MODE the block says [%s]: %s\n", wanted.c_str(), followed ? "yes" : "NO");
+    CHECK(followed);
+
+    // A RADIO OPENING shows too (the device flag and the model it came with).
+    const bool opened = openRadio(d.eng, s, engine_api_test::kFakeRadioId);
+    CHECK(opened);
+    CHECK(passUntil(d.eng, [&] { return cascade::core::diagContextBlock().find("device-open: yes\n") != std::string::npos; }, 3000));
+    CHECK(cascade::core::diagContextBlock().find("sdr-model: (none)\n") == std::string::npos);
+
+    // THE RADIO'S MODEL ALONE is an input of the context (the device is open, the model is what a report names it by).
+    (void)passUntil(d.eng, [] { return false; }, 1600);  // (everything else settles first: the model is the only thing that moves)
+    CHECK(cascade::core::diagContextBlock().find("sdr-model: uhd b200\n") == std::string::npos);
+    Access::setDeviceModel(d.eng, "uhd b200");
+    CHECK(passUntil(d.eng, [&] { return cascade::core::diagContextBlock().find("sdr-model: uhd b200\n") != std::string::npos; }, 3000));
+
+    // THE BUNDLE TAKES THE BLOCK THE ENGINE RENDERED, whole: no other context, none of its own.
+    const std::string engines = cascade::core::diagContextBlock();
+    cascade::core::DiagBundleInput in;
+    in.contextBlock = engines;
+    const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
+    CHECK(bundle.find(engines) != std::string::npos);
+    CHECK(cascade::core::diagContextBlock() == engines);  // (building it replaced nothing)
+
+    // IT DOES NOT FLAP: a pass that finds the inputs unmoved renders nothing (the block's bytes are the same object).
+    for (int i = 0; i < 6; ++i) { d.eng.controlPass(); }
+    CHECK(cascade::core::diagContextBlock() == engines + std::string());
+}
+
+// ...and the config's restore ends with it: a context stands the moment applyConfig returns, before any pass (the window used
+// to render it at the top of run(); a report from a start-up that never reached a pass still describes the session).
+void testDiagContextAtApplyConfig() {
+    cascade::core::DiagContext sentinel;
+    sentinel.version = "sentinel";
+    sentinel.mode = "none";
+    cascade::core::setDiagContext(sentinel);
+    CHECK(cascade::core::diagContextBlock().find("version: sentinel") != std::string::npos);
+    cascade::engine::Engine eng;
+    eng.configureApi(kHooks);
+    eng.initialise();
+    cascade::core::AppConfig cfg;
+    eng.applyConfig(cfg);
+    const std::string block = cascade::core::diagContextBlock();
+    std::printf("G14c-2: the context the moment applyConfig returned, no pass yet: %s\n",
+                block.find("sentinel") == std::string::npos ? "the engine's" : "STILL THE SENTINEL");
+    CHECK(block.find("sentinel") == std::string::npos);
+    CHECK(block.find(std::string("version: ") + cascade::versionString() + "\n") != std::string::npos);
+}
+
 int main() {
     engine_api_test::hermetic("api03");
     cascade::gui::AppWindowTestAccess::installFakeRadio();
@@ -7940,5 +8361,11 @@ int main() {
     testPatchPictures();
     testPatchPicturesDocument();
     testPatchPicturesNeverTear();
+    // Group 14b: the GPS reader.
+    testGpsList();
+    // Group 14c: the usage switch, the session counters, the diagnostics context.
+    testTelemetryFacts();
+    testDiagContextIsTheEngines();
+    testDiagContextAtApplyConfig();
     return check::finish("test_engine_api_03");
 }

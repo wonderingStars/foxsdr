@@ -6,7 +6,8 @@
 // the engine's own members. Engine::pollPluginAsync set catalogError_ and then
 // told the host the result (onCatalogueResult) WITHOUT publishing first - so
 // the host read the copy from before the fetch, with no error in it. Under
-// CASCADE_PLUGIN_TEST the window's report (reportPluginTestResult) then printed
+// CASCADE_PLUGIN_TEST the report (the window's, then; since window port group 14 part e Engine::reportPluginTestResult, which
+// the window's onCatalogueResult hook calls with the frame - this file's case C is unchanged by the move) then printed
 // "plugin catalogue: ... entries=0" for a fetch that had failed, instead of
 // "plugin catalogue: FAILED ... <reason>" - a bounded run that proves the store
 // works, fooled by a store that does not.

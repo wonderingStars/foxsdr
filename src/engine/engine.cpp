@@ -456,6 +456,48 @@ void Engine::refreshDiagContext() {
     }
 }
 
+// What the diagnostics context is made of, as one hash (the bytes of the same fields refreshDiagContext reads). No allocation.
+std::uint64_t Engine::diagContextInputs() {
+    std::uint64_t h = 1469598103934665603ull;
+    const auto bytes = [&h](const void* p, std::size_t len) {
+        const auto* b = static_cast<const unsigned char*>(p);
+        for (std::size_t i = 0; i < len; ++i) {
+            h ^= b[i];
+            h *= 1099511628211ull;
+        }
+    };
+    const auto text = [&](const std::string& s) {
+        bytes(s.data(), s.size());
+        const unsigned char end = 0xFF;
+        bytes(&end, 1);
+    };
+    bytes(&modeIndex_, sizeof(modeIndex_));
+    text(sourceKind_);
+    const double rate = pipeline_.activeSource().sampleRateHz();
+    bytes(&rate, sizeof(rate));
+    const bool open = (device_ != nullptr);
+    bytes(&open, sizeof(open));
+    text(deviceModel_);
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded) { continue; }
+        text(p.name);
+        text(p.version);
+    }
+    return h;
+}
+
+void Engine::pumpDiagContext() {
+    const auto now = std::chrono::steady_clock::now();
+    if (diagContextHave_ && now - diagContextAt_ < std::chrono::seconds(1)) { return; }
+    diagContextAt_ = now;
+    const std::uint64_t inputs = diagContextInputs();
+    if (diagContextHave_ && inputs == diagContextHash_) { return; }
+    diagContextHave_ = true;
+    diagContextHash_ = inputs;
+    ++diagContextRenders_;
+    refreshDiagContext();
+}
+
 void Engine::pollAudioHealth() {
     cascade::sink::AudioOut& out = pipeline_.audio();
     // Never opened means there is no device on this machine (or audio is
@@ -3122,9 +3164,9 @@ bool Engine::applyReceiverPosition(double latDeg, double lonDeg) {
     rxLat_ = latDeg;
     rxLon_ = lonDeg;
     rxSet_ = true;
-    // The typed fields, every map page's home, the scope and the coverage map
-    // follow - the window's half (AppWindow::onReceiverPositionApplied).
-    host_->onReceiverPositionApplied(latDeg, lonDeg);
+    // The typed fields, every map page's home, the scope and the coverage map follow in the WINDOW, which looks at the
+    // position the state carries once a frame (AppWindow::followReceiverPosition; window port group 14, part a) - the
+    // engine no longer calls it from its pass.
     return true;
 }
 
@@ -3140,11 +3182,8 @@ void Engine::pollGpsReader() {
     // a coordinate) rather than swallowed.
     if (applyReceiverPosition(fix.latDeg, fix.lonDeg)) {
         gpsRefusal_.clear();
-        // The rail's "Receiver position" fold opens on this frame, because
-        // rxSet_ just flipped and the row the user was watching (on the
-        // rail's no-position block) is about to be replaced by that fold:
-        // the Fixed status line has to be seen somewhere.
-        host_->onGpsFixApplied();
+        // (The rail's "Receiver position" fold opens when the fix lands: the window sees the GPS entry go to Fixed and
+        // does that itself - AppWindow::readGpsRow, window port group 14 part b. The engine no longer calls it.)
         cascade::core::diagLogf("gps: fix applied as the receiver position");
     } else {
         gpsRefusal_ = tr("The GPS fix was refused by the position rule (off the globe, or 0,0).");
@@ -6456,7 +6495,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // API 0.3: the ports of this machine, listed on the engine's
             // thread when asked (the window's GPS drop-down, the Serial
             // ports page) - FOXAPI_LIST_SERIAL_PORTS, listSeq moving.
-            serialPorts_ = cascade::core::enumerateSerialPorts();
+            serialPorts_ = testHooks_.serialPorts != nullptr ? testHooks_.serialPorts()
+                                                            : cascade::core::enumerateSerialPorts();
             ++serialPortsScans_;
             return res;
         case FOXAPI_OP_GPS:
@@ -6559,6 +6599,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     return res;
                 case cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED:
                     mutePopupQueued_ = false;
+                    return res;
+                case cmd::FOXAPP_STATUS_GPS_RESULT:
+                    // The finished read's line (GPS list 48, API 0.3 8.13): the window sends this with GPS_REFUSAL when
+                    // the port or the baud is edited. A no-op while a read is running, as the reader's own call is.
+                    gpsReader_.clearResult();
                     return res;
                 default:
                     return refuse(FOXAPI_OUT_OF_RANGE, "no such status line");
@@ -7128,6 +7173,10 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     off = (lim > 0.0) ? std::clamp(off, -lim, lim) : 0.0;
     pipeline_.setVfoOffsetHz(off);
     vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
+    // The context a report describes the session by is rendered NOW, with the config applied (the window used to render it
+    // at the top of run(); from here the engine is the one writer).
+    diagContextHave_ = false;
+    pumpDiagContext();
 }
 
 // THE RECEIVER'S HALF OF THE CONFIG SNAPSHOT (engine stage 3a): every line of
@@ -7576,6 +7625,8 @@ void Engine::pumpWorkers() {
 }
 
 void Engine::pumpAudio() {
+    // The diagnostics context a crash or a hang report prints, and the diagnostics bundle carries (window port group 14).
+    pumpDiagContext();
     pollAudioOpen();
     pollAudioHealth();
     pollMicOpen();

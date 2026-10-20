@@ -46,7 +46,7 @@
 #include <vector>
 
 #include "core/i18n.hpp"  // FOX_TR_NOOP: marked here, translated where drawn
-#include "core/plugin_ui.hpp"
+#include "core/plugin_ui_data.hpp"
 #include "core/receiver_position.hpp"
 #include "core/utf8_text.hpp"
 #include "core/view_settings.hpp"

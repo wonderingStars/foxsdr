@@ -404,16 +404,11 @@ bool peBuildId(const std::string& path, std::string& buildId, std::string& pdbNa
 #endif
 }
 
-void setDiagContext(const DiagContext& ctx) {
-    // Rendered ONCE, here, on the healthy path. The fault path writes these
-    // bytes out and formats nothing.
-    //
+std::string renderDiagContext(const DiagContext& ctx) {
     // Every line is "<name>: <value>", which is also the shape the bundle's
     // field inventory is parsed from - so a field added here without being
     // added to bundleFieldNames() and to PRIVACY.md fails
     // tests/test_diagnostics.cpp rather than shipping undocumented.
-    // Assembled as a std::string here (healthy path, allocation is fine) and
-    // then copied ONCE into the fixed buffer the fault path reads.
     char rate[32] = {};
     std::snprintf(rate, sizeof(rate), "%.0f", ctx.sampleRateHz);
 
@@ -436,7 +431,15 @@ void setDiagContext(const DiagContext& ctx) {
     } else {
         for (const std::string& s : ctx.plugins) { block += "plugin: " + s + "\n"; }
     }
+    return block;
+}
 
+void setDiagContext(const DiagContext& ctx) {
+    // Rendered ONCE, here, on the healthy path. The fault path writes these
+    // bytes out and formats nothing. Assembled as a std::string (healthy path,
+    // allocation is fine) and then copied ONCE into the fixed buffer the fault
+    // path reads.
+    const std::string block = renderDiagContext(ctx);
     std::size_t n = block.size();
     if (n > kContextBytes - 1) { n = kContextBytes - 1; }
     std::memcpy(g_context, block.data(), n);
@@ -543,11 +546,12 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
     out += "\n";
 
     // The context block is REUSED, not re-derived: it is the same text a crash
-    // report carries, so a support bundle and a crash report describe the
+    // report carries (the engine rendered it on its pass and the caller handed
+    // it over), so a support bundle and a crash report describe the
     // application in identical words, and there is one place to keep in step
-    // with PRIVACY.md rather than two.
-    setDiagContext(in.context);
-    out += diagContextBlock();
+    // with PRIVACY.md rather than two. Nothing is stored: building a bundle
+    // must not replace the crash handler's copy of it.
+    out += in.contextBlock;
 
     auto kv = [&out](const char* name, const std::string& value) {
         out += name;

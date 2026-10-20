@@ -1039,7 +1039,7 @@ int main() {
         ctx.plugins.push_back("AIS 1.0.0");
 
         DiagBundleInput in;
-        in.context = ctx;
+        in.contextBlock = renderDiagContext(ctx);
         in.logLines.push_back("2026-08-24 10:00:00 info source opened");
         in.logLines.push_back("2026-08-24 10:00:01 warn audio stream reopened");
         in.logPath = "C:/Users/x/AppData/Local/FoxSDR/logs/foxsdr.log";
@@ -1108,6 +1108,54 @@ int main() {
         CHECK(block.find("deadbeef") != std::string::npos);
         CHECK(block.find("NFM") != std::string::npos);
         CHECK(block.find("POCSAG 1.0.0") != std::string::npos);
+    }
+
+    // --- BUILDING A BUNDLE DOES NOT REWRITE THE CRASH HANDLER'S CONTEXT (window port group 14, part c) ---------------
+    // The context block is process-global: it is what a crash or a hang report prints, rendered on the healthy path by
+    // the engine. buildDiagnosticsBundle used to call setDiagContext(in.context) itself, so pressing "Copy diagnostics"
+    // replaced the crash handler's copy with whatever context the bundle's caller had put together - the window's own
+    // re-derivation of the engine's. (They are the same code today, so nothing visible went wrong; the defect is that a
+    // bundle is a READ of the application and it WROTE the one structure a fault report trusts.)
+    {
+        DiagContext crashCopy;
+        crashCopy.version = "9.9.9";
+        crashCopy.commit = "c0ffee";
+        crashCopy.mode = "WFM";
+        crashCopy.sourceKind = "generator";
+        crashCopy.sampleRateHz = 2400000.0;
+        crashCopy.plugins.push_back("Held 1.0.0");
+        setDiagContext(crashCopy);
+        const std::string held = diagContextBlock();
+        CHECK(held.find("version: 9.9.9") != std::string::npos);
+
+        DiagContext other;
+        other.version = "1.2.3";
+        other.commit = "feedface";
+        other.mode = "NFM";
+        other.sourceKind = "soapy";
+        other.sampleRateHz = 1000000.0;
+        other.plugins.push_back("Other 2.0.0");
+        DiagBundleInput in;
+        in.contextBlock = renderDiagContext(other);
+        const std::string bundle = buildDiagnosticsBundle(in);
+        CHECK(!bundle.empty());
+        const std::string after = diagContextBlock();
+        std::printf("  the crash handler's context after a bundle was built: %s\n",
+                    after == held ? "unchanged" : "REPLACED by the bundle's");
+        CHECK(after == held);
+        // The bundle carries the block it was given, whole and once, and none of the other.
+        CHECK(bundle.find(in.contextBlock) != std::string::npos);
+        CHECK(bundle.find("version: 1.2.3") != std::string::npos);
+        CHECK(bundle.find("Held 1.0.0") == std::string::npos);
+        // Rendering is pure: it gives the text setDiagContext stores, and stores nothing itself.
+        CHECK(renderDiagContext(crashCopy) == held);
+        CHECK(diagContextBlock() == held);
+        // A bundle built before the engine rendered a context has no context lines (and is still a bundle).
+        DiagBundleInput bare;
+        const std::string none = buildDiagnosticsBundle(bare);
+        CHECK(none.find("version: ") == std::string::npos);
+        CHECK(none.find("launches: 0") != std::string::npos);
+        CHECK(diagContextBlock() == held);
     }
 
     return testSummary("test_diagnostics");

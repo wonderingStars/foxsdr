@@ -69,8 +69,18 @@
 //      handful for a small picture and a large one alike), a settled pass with pictures held allocates nothing, so do 1000
 //      rounds of reading the picture row, its info and its pixels, a replaced picture costs the same again, a node's removal
 //      takes its picture with one bounded rebuild, and none of it moves the list block's fingerprint.
+//   F10 the GPS reader (API 0.3 8.13): the GPS list is ONE entry read at the call from the reader, outside the block: 1000 rounds of
+//      reading the idle entry allocate nothing, a LISTENING reader moves nothing in the lists (the fingerprint is the same, the
+//      publish still allocates nothing) and a read costs the sentence the engine words, a bounded handful.
+//   F11 the usage switch, the session counters and the diagnostics context (API 0.3 8.13): the four facts are built with the block
+//      and hashed into its fingerprint, each input ALONE (the switch, the id, the launches, the crashes), a settled pass with
+//      them allocates nothing and so do 1000 reads of the two diag facts (the switch's key is 17 bytes, and the table's lookup of
+//      a key past the small-string size allocates once: counted and stated); the pass's context check - the one-second gate and the
+//      hash of what the context describes - allocates nothing and renders only when something moved and the gate allows.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <chrono>
+#include <thread>
 #include <vector>
 #include <future>
 #include <cstdio>
@@ -84,7 +94,9 @@
 #include <filesystem>
 #include <string>
 
+#include "core/gps_reader.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/serial_port.hpp"
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_test_env.hpp"
@@ -141,6 +153,36 @@ public:
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
+    // Window port group 14, part b: a receiver on a fake wire that says nothing (the reader listens until it is stopped).
+    static void gpsListen(cascade::engine::Engine& e, const std::string& port) {
+        struct Silent final : cascade::core::ByteSource {
+            int read(char*, std::size_t) override {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                return 0;
+            }
+        };
+        cascade::core::GpsReader::Options o;
+        o.port = port;
+        o.baud = 9600;
+        o.timeoutS = 120.0;
+        e.gpsReader_.start(std::make_unique<Silent>(), o);
+    }
+    static void gpsStop(cascade::engine::Engine& e) { e.gpsReader_.stop(); }
+    // Group 14c: the usage switch and the counters as a config would have set them, and the context's pass.
+    static void telemetry(cascade::engine::Engine& e, bool on, const std::string& id, std::uint64_t launches, std::uint64_t crashes) {
+        e.telemetryEnabled_ = on;
+        e.telemetryInstallId_ = id;
+        e.telemetryLaunches_ = launches;
+        e.telemetryCrashes_ = crashes;
+    }
+    static void telemetryEnabled(cascade::engine::Engine& e, bool on) { e.telemetryEnabled_ = on; }
+    static void telemetryId(cascade::engine::Engine& e, const std::string& id) { e.telemetryInstallId_ = id; }
+    static void launches(cascade::engine::Engine& e, std::uint64_t n) { e.telemetryLaunches_ = n; }
+    static void crashes(cascade::engine::Engine& e, std::uint64_t n) { e.telemetryCrashes_ = n; }
+    static void pumpContext(cascade::engine::Engine& e) { e.pumpDiagContext(); }
+    static std::uint64_t contextRenders(cascade::engine::Engine& e) { return e.diagContextRenders_; }
+    static void setMode(cascade::engine::Engine& e, int index) { e.modeIndex_ = index; }
+    static int mode(cascade::engine::Engine& e) { return e.modeIndex_; }
     static RefusingSink* installSink(cascade::engine::Engine& e) {
         auto sink = std::make_unique<RefusingSink>();
         RefusingSink* raw = sink.get();
@@ -1721,5 +1763,213 @@ int main() {
     }
 
 // F9 CASE END>>
+// <<F10 CASE BEGIN
+
+    // F10: the GPS reader (API 0.3 8.13). The GPS list is ONE entry read at the call from the reader, outside the block: a
+    // reader that is idle costs a read nothing at all (the state, the numbers and two empty strings), 1000 rounds of
+    // reading it allocate nothing, and a reader that is LISTENING moves nothing in the lists - the pass's fingerprint is
+    // the same, the publish still allocates nothing, and what a read costs while it listens is the sentence the engine
+    // words (a handful of allocations, bounded, and none of them the lists').
+    {
+        cascade::engine::Engine e10;
+        e10.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc10";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e10.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        (void)Access::publishLists(e10);
+        (void)Access::publishLists(e10);
+        const std::uint64_t listFp = Access::fingerprint(e10);
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        CHECK(table->read_list(session, FOXAPI_LIST_GPS, 0, &it) == 1);  // (warm-up)
+        CHECK(it.value[0] == 0.0);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < 1000; ++i) {
+            (void)table->read_list(session, FOXAPI_LIST_GPS, 0, nullptr);
+            (void)table->read_list(session, FOXAPI_LIST_GPS, 0, &it);
+        }
+        t_counting = false;
+        std::printf("F10: 1000 rounds of reading the idle GPS entry (count and entry): %ld heap allocations\n", t_news);
+        CHECK(t_news == 0);
+
+        // LISTENING: the lists are untouched, whatever the reader says.
+        Access::gpsListen(e10, "FAKE1");
+        for (int i = 0; i < 500 && it.value[0] != 1.0; ++i) {
+            (void)table->read_list(session, FOXAPI_LIST_GPS, 0, &it);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(it.value[0] == 1.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // (the seconds move: so does the sentence)
+        (void)table->read_list(session, FOXAPI_LIST_GPS, 0, &it);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e10); }
+        t_counting = false;
+        std::printf("F10: %d publishes while the reader listens (%.2f s in): %ld heap allocations\n", kPublishes, it.value[1], t_news);
+        CHECK(t_news == 0);
+        CHECK(Access::fingerprint(e10) == listFp);
+        // What one read costs while it listens: the status copy and the sentence, a bounded handful.
+        constexpr int kReads = 200;
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kReads; ++i) { (void)table->read_list(session, FOXAPI_LIST_GPS, 0, &it); }
+        t_counting = false;
+        const double perRead = static_cast<double>(t_news) / kReads;
+        std::printf("F10: %d reads of the GPS entry while it listens: %.1f heap allocations a read (the sentence: \"%s\")\n", kReads,
+                    perRead, it.detail);
+        CHECK(perRead <= 10.0);
+        CHECK(std::string(it.detail).rfind("Listening on FAKE1 at 9600", 0) == 0);
+        CHECK(Access::fingerprint(e10) == listFp);
+        Access::gpsStop(e10);
+        table->close_session(session);
+    }
+
+// F10 CASE END>>
+// <<F11 CASE BEGIN
+
+    // F11: the usage switch and the session counters as facts, and the diagnostics context the pass renders (API 0.3 8.13).
+    // The four facts are built with the block and hashed into its fingerprint, each input ALONE (the switch, the id, the two
+    // counters); a settled pass with them set allocates nothing, so do 1000 reads of the three short ones; and the pass's
+    // context check - the gate, the hash of what the context is made of - allocates nothing when nothing it describes moved.
+    {
+        cascade::engine::Engine e11;
+        e11.initialise();
+        const FoxEngineApi* const table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        CHECK(table != nullptr);
+        FoxSession* session = nullptr;
+        {
+            FoxSessionParams sp{};
+            sp.structSize = sizeof(sp);
+            sp.flags = FOXAPI_SESSION_LOCAL;
+            sp.grants = FOXAPI_GRANT_VIEW;
+            sp.clientName = "alloc11";
+            sp.clientVersion = "0";
+            CHECK(table->open_session(e11.apiHandle(), &sp, &session) == FOXAPI_OK);
+        }
+        Access::telemetry(e11, true, "0123456789abcdef0123456789abcdef", 7, 2);
+        (void)Access::publishLists(e11);
+        (void)Access::publishLists(e11);
+        const std::uint64_t base = Access::fingerprint(e11);
+        const auto read = [&](const char* key) {
+            char buf[128] = {};
+            const int32_t n = table->get_setting(session, key, buf, sizeof(buf));
+            return n >= 0 ? std::string(buf) : std::string("?");
+        };
+        CHECK(read("fact.telemetry.enabled") == "1");
+        CHECK(read("fact.telemetry.installId") == "0123456789abcdef0123456789abcdef");
+        CHECK(read("fact.diag.launches") == "7");
+        CHECK(read("fact.diag.crashes") == "2");
+        // Settled: nothing is built and nothing allocated.
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e11); }
+        t_counting = false;
+        std::printf("F11: %d settled publishes with the switch on, an id and the counters: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        CHECK(Access::fingerprint(e11) == base);
+        // 1000 rounds of reading the facts. The value of each fits a small string and costs nothing; the table builds the key
+        // it looks up as a std::string (the lookup is by a std::string), which allocates for a key past the small-string size:
+        // "telemetry.enabled" is one (17 bytes), "diag.launches" and "diag.crashes" are not. That is the table's, for every
+        // fact of that length, and it is stated here and not hidden.
+        {
+            char buf[64];
+            (void)table->get_setting(session, "fact.telemetry.enabled", buf, sizeof(buf));  // warm-up
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                (void)table->get_setting(session, "fact.diag.launches", buf, sizeof(buf));
+                (void)table->get_setting(session, "fact.diag.crashes", buf, sizeof(buf));
+            }
+            t_counting = false;
+            std::printf("F11: 1000 rounds of reading fact.diag.launches and fact.diag.crashes: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) { (void)table->get_setting(session, "fact.telemetry.enabled", buf, sizeof(buf)); }
+            t_counting = false;
+            std::printf("F11: 1000 reads of fact.telemetry.enabled: %ld heap allocations (the table's key lookup, 17 bytes)\n", t_news);
+            CHECK(t_news <= 1000);
+        }
+        // EACH INPUT MOVES THE FINGERPRINT ALONE, the block is rebuilt once for it, and the passes after it are settled.
+        const auto movedBy = [&](const char* what, auto change, const char* key, const char* want) {
+            const std::uint64_t before = Access::fingerprint(e11);
+            change();
+            const std::uint64_t after = Access::fingerprint(e11);
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e11);
+            t_counting = false;
+            const long rebuild = t_news;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e11); }
+            t_counting = false;
+            std::printf("F11: %-34s moves the fingerprint, the rebuild %ld heap allocations, then %d settled passes: %ld\n", what, rebuild,
+                        kPublishes, t_news);
+            CHECK(after != before);
+            CHECK(read(key) == want);
+            CHECK(Access::fingerprint(e11) == after);
+            CHECK(t_news == 0);
+        };
+        movedBy("the switch (off)", [&] { Access::telemetryEnabled(e11, false); }, "fact.telemetry.enabled", "0");
+        // (with the switch off the id fact is empty whatever the engine's id holds)
+        CHECK(read("fact.telemetry.installId").empty());
+        movedBy("the switch (on again)", [&] { Access::telemetryEnabled(e11, true); }, "fact.telemetry.enabled", "1");
+        movedBy("the install id", [&] { Access::telemetryId(e11, "fedcba9876543210fedcba9876543210"); }, "fact.telemetry.installId",
+                "fedcba9876543210fedcba9876543210");
+        movedBy("the launch counter", [&] { Access::launches(e11, 8); }, "fact.diag.launches", "8");
+        movedBy("the crash counter", [&] { Access::crashes(e11, 3); }, "fact.diag.crashes", "3");
+
+        // THE CONTEXT'S CHECK is free when nothing moved: 1000 calls inside the gate, and - past it - the hash alone.
+        Access::pumpContext(e11);  // (renders the first one)
+        Access::pumpContext(e11);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < 1000; ++i) { Access::pumpContext(e11); }
+        t_counting = false;
+        std::printf("F11: 1000 context checks inside the gate: %ld heap allocations\n", t_news);
+        CHECK(t_news == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        t_news = 0;
+        t_counting = true;
+        Access::pumpContext(e11);  // (past the gate: the inputs are hashed, nothing moved, nothing is rendered)
+        t_counting = false;
+        std::printf("F11: a context check past the gate with nothing moved: %ld heap allocations\n", t_news);
+        CHECK(t_news == 0);
+        // THE GATE AND THE HASH, by counting renders: nothing moved, nothing rendered - however often it is asked; a change of
+        // what the context describes is rendered once the gate (a second) allows, and not before.
+        const std::uint64_t renders0 = Access::contextRenders(e11);
+        for (int i = 0; i < 50; ++i) { Access::pumpContext(e11); }
+        CHECK(Access::contextRenders(e11) == renders0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        Access::pumpContext(e11);  // past the gate, nothing moved: hashed, not rendered
+        CHECK(Access::contextRenders(e11) == renders0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        Access::setMode(e11, Access::mode(e11) == 0 ? 1 : 0);
+        Access::pumpContext(e11);  // past the gate with something moved: rendered now
+        const bool renderedNow = Access::contextRenders(e11) == renders0 + 1u;
+        Access::setMode(e11, Access::mode(e11) == 0 ? 1 : 0);
+        for (int i = 0; i < 1000; ++i) { Access::pumpContext(e11); }  // (a second change inside the same second)
+        std::printf("F11: a mode change was rendered at once past the gate: %s; renders after a second change inside it: %llu (one more is the gate failing)\n",
+                    renderedNow ? "yes" : "NO", static_cast<unsigned long long>(Access::contextRenders(e11) - renders0));
+        CHECK(renderedNow);
+        CHECK(Access::contextRenders(e11) == renders0 + 1u);  // the gate holds the second change back
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        Access::pumpContext(e11);
+        CHECK(Access::contextRenders(e11) == renders0 + 2u);
+        table->close_session(session);
+    }
+
+// F11 CASE END>>
     return testSummary("test_engine_publish_alloc");
 }

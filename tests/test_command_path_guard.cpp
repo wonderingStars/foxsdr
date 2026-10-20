@@ -121,67 +121,27 @@ const char* const kEngineObjects[] = {
     "retuneCoalescer_",
 };
 
-// Calls a control may make: "object.method", or "object.accessor().method".
-// Reads, and the stream reads a panel consumes (a spectrum frame, images, a
-// peak) - never a change to the receiver. gpsReader_.clearResult() clears the
-// finished read's status line when the form's port changes (view state).
+// Calls a control may make: "object.method", or "object.accessor().method". Reads of an engine object that survived the
+// port: only what the three residue classes (the shell's seams, the host accessors, stage 5's web feeds) still need. EVERY
+// ENTRY MUST BE MATCHED by a call in a control (the check in main(): a stale entry fails), so the list is exactly the set of
+// engine-object calls the window still makes - and it is the fence's list of what the interface may NOT name.
+// (RETIRED with window port group 14 part e, their last caller gone - 63 entries the earlier groups left behind, found by the
+// guard itself now and confirmed by a spelling-agnostic search of src/gui (`.` and `->`, an accessor between): audioOpen_ and
+// micOpen_ .inFlight / micOpen_.result().ok, audioRecorder_ and iqRecorder_ .sizeLimitReached / .writeFailed, device_
+// .deviceDead / .frequencyRangeHz / .name / .lastError / .gainDb / .antenna / .autoGain, freqMgr_ .list().empty / .range /
+// .nearestSubset / .indexOfId, eighteen pipeline_ reads (activeSource().sampleRateHz / .faulted, activeSourceName, audio()
+// .everOpened / .openedDeviceName / .streamAlive / .underruns, audioMuted, autoNotchEngaged / FrequencyHz, converter,
+// getLatestFrame, pilotLevel / Locked, rdsSnapshot, running, stereoActive, rawSource().centerFrequencyHz), pluginHost_
+// .loadedCount, pluginRunner_ .activeCount / .audioFramesFed / .audioGapFrames / .audioGaps / .status / .iqFramesFed, pluginUi_
+// .panels / .paths / .tracks().size and .tuneRequesters().size, soapyView_ .deadReason / .deviceDead and fourteen transmitter_
+// reads. Thirteen of them (the pipeline_, pluginHost_, pluginRunner_ and pluginUi_ ones) had their last caller in the two
+// bounded-run diagnostics that part e moved into the engine; the others are leftovers of the groups that ported the sections they
+// were read for. Earlier retirements are in the notes of their groups, in docs/engine-stage4.md.)
 const char* const kReadOnly[] = {
-    "audioOpen_.inFlight",
-    // (RETIRED with window port group 7, their last caller gone: audioRecorder_ and iqRecorder_
-    // .recording / .bytesWritten / .samplesWritten, freqMgr_.list / .list().size / .version and
-    // scanner_.active / .currentHz / .state - the Recorder, Bookmarks and Scanner sections read the
-    // table now.)
-    "audioRecorder_.sizeLimitReached", "audioRecorder_.writeFailed",
-    "iqRecorder_.sizeLimitReached", "iqRecorder_.writeFailed",
-    // (RETIRED with window port group 11, their last caller gone: device_.sampleRateHz - the Source section letters
-    // "actual %.4g MS/s" from the state's sampleRateHz - and pipeline_.activeSource().name, pipeline_.faultMessage
-    // and pipeline_.faulted - its header reads the state's deviceName and the FAULTED flag, its fault line the
-    // STATUS_LINES key deviceFault.)
-    "device_.deviceDead", "device_.frequencyRangeHz", "device_.name",
-    "device_.lastError", "device_.gainDb", "device_.antenna", "device_.autoGain",
-    "freqMgr_.list().empty",
-    "freqMgr_.range", "freqMgr_.nearestSubset", "freqMgr_.indexOfId",
-    "gpsReader_.listening", "gpsReader_.status", "gpsReader_.clearResult",
-    "micOpen_.inFlight", "micOpen_.result().ok",
-    "pipeline_.activeSource().centerFrequencyHz",
-    "pipeline_.activeSource().sampleRateHz", "pipeline_.activeSource().faulted",
-    "pipeline_.activeSourceName", "pipeline_.audio().everOpened", "pipeline_.audio().openedDeviceName",
-    "pipeline_.audio().streamAlive", "pipeline_.audio().underruns", "pipeline_.audioMuted",
-    "pipeline_.autoNotchEngaged", "pipeline_.autoNotchFrequencyHz",
-    "pipeline_.converter",
-    "pipeline_.getLatestFrame", "pipeline_.inputRateHz", "pipeline_.pilotLevel", "pipeline_.pilotLocked",
-    "pipeline_.rdsSnapshot", "pipeline_.running", "pipeline_.stereoActive",
-    // (RETIRED with window port group 12, their last caller gone: pipeline_.signalPowerDb, channelRateHz and
-    // demodMode - the radar scope's SIG gauge reads the state's signalDb, the demod scope the state's
-    // channelRateHz (or the I/Q tap's rateHz) and demodMode - the nine pipeline_.scopeAudio / scopeIq / scopeMpx
-    // .capacity / .snapshot / .written entries - the demod scope reads the table's read_scope, whose info carries
-    // written, rateHz and capacityFrames - and pluginRunner_.playingPlugin and
-    // pluginUi_.trackPluginNames().empty - the scope reads the state's audioPlayingPlugin and the PLUGINS census.)
-    // (RETIRED with window port group 8, its last caller gone: pipeline_.vfoOffsetHz - the preset keys read the
-    // state's vfoOffsetHz - and pluginUi_.lastDeniedPlugin - the Receiver control rows read fact.plugin.lastDenied.)
-    // (RETIRED with window port group 9, their last caller gone: pluginRunner_.isFeeding, pluginUi_.api().commands,
-    // pluginUi_.api().settingsRequesters and pluginUi_.settingsAllowed - the fitted-modules window reads the
-    // MATCHED, ASKED_SETTINGS and SETTINGS_ALLOWED flags of PLUGINS and the PLUGIN_COMMANDS list.)
-    "pipeline_.rawSource().centerFrequencyHz", "pipeline_.audioSamplesProduced",
-    "pipeline_.audioTap",
-    "pluginHost_.plugins", "pluginHost_.loadedCount",
-    "pluginRunner_.activeCount", "pluginRunner_.audioFramesFed", "pluginRunner_.audioGapFrames",
-    "pluginRunner_.audioGaps",
-    "pluginRunner_.status", "pluginRunner_.iqFramesFed", "pluginRunner_.pollImages",
-    "pluginUi_.instruments",
-    "pluginUi_.panels", "pluginUi_.panels().size", "pluginUi_.paths", "pluginUi_.paths().size",
-    "pluginUi_.trackPluginNames",
-    "pluginUi_.tracks", "pluginUi_.tracks().size",
-    "pluginUi_.altitudeNear", "pluginUi_.tuneRequesters().size", "pluginUi_.poll",
-    // (RETIRED with window port group 10, their last caller gone: pluginRepo_.progress - the store window's bar
-    // reads the transfer's STORE_ACTIVITY entry, live - and pluginUi_.tuneAllowed - the store's plate reads the
-    // TUNE_ALLOWED flag of the PLUGINS record joined to the entry.)
-    "soapyView_.deadReason", "soapyView_.deviceDead",
-    "transmitter_.haveSink", "transmitter_.lastAutoUnkeyReason", "transmitter_.lastError",
-    "transmitter_.latched", "transmitter_.remoteHoldRemainingMs", "transmitter_.sink",
-    "transmitter_.sink().faulted", "transmitter_.sink().gainDb", "transmitter_.sink().name",
-    "transmitter_.takeInputPeak", "transmitter_.toneHz", "transmitter_.transmitting",
-    "transmitter_.frequencyHz", "transmitter_.audioIn().running",
+    "pipeline_.activeSource().centerFrequencyHz", "pipeline_.inputRateHz", "pipeline_.audioSamplesProduced",
+    "pipeline_.audioTap", "pluginHost_.plugins", "pluginRunner_.pollImages", "pluginUi_.instruments",
+    "pluginUi_.panels", "pluginUi_.paths", "pluginUi_.trackPluginNames", "pluginUi_.tracks", "pluginUi_.altitudeNear",
+    "pluginUi_.poll",
 };
 
 // Accessors that hand the object out; a control may bind them only `const`.
@@ -225,10 +185,12 @@ const char* const kWindowMachinery[] = {
 const char* const kHostHooks[] = {
     "frameClockRunning",  "frameTimeS",          "wallTimeS",
     "pauseWatchdog",      "resumeWatchdog",      "onDisplayRange",
-    "onBookmarksChanged", "openPluginWindowsFor", "onReceiverPositionApplied",
+    "onBookmarksChanged", "openPluginWindowsFor",
+    // (onReceiverPositionApplied left with window port group 14 part a: the window follows the position in the state.)
     "onConverterChanged",
     // (onPatchPicture left with window port group 13 part c: the pictures are the engine's, read with read_image.)
-    "onGpsFixApplied",    "onCatalogueResult",  // (onCatalogueFetchStarting and onAddAllFinished left with
+    // (onGpsFixApplied left with part b: the GPS list's entry going to Fixed is the cue.)
+    "onCatalogueResult",  // (onCatalogueFetchStarting and onAddAllFinished left with
     "beforePluginRescan",                       //  window port group 10: the window watches the table instead)
     "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
     "showDemonstrationInstrument", "drainTrackInfoText",
@@ -259,8 +221,8 @@ const char* const kControlMayCall[] = {
     // outs keep their own lines; in part c the map it pruned, patchSinkLines_, went too: nothing read it.)
     // a pure function of its argument (static)
     "muteNameList",
-    // the crash handler's description of the receiver, refreshed for a diagnostics bundle
-    "refreshDiagContext",
+    // (refreshDiagContext RETIRED with window port group 14 part c: the engine's pass renders the context the crash handler
+    // prints and the diagnostics bundle carries; the window never calls it.)
     // scanSoundCards CLOSED engine/stage3b-pre OPEN 2: the panel sends
     // FOXAPP_OP_SOUND_CARDS_WANTED.
     // The config's receiver half, handed over NOW for a save that must be
@@ -349,7 +311,10 @@ const LineAllow kLineAllowed[] = {
     // device seam's scan, the preset seam for a plugin with none (OPEN 5),
     // FOXSDR_PATCH_START (OPEN 5), the measurement hook, and the teardown.
     {"run", "startReceiver();"},
-    {"run", "gpsReader_.start({hookPort, baud, cascade::core::GpsReader::kDefaultTimeoutS});"},
+    // (The FOXSDR_GPS_PORT seam's gpsReader_.start line LEFT with window port group 14 part e: the seam sends the key's own
+    // FOXAPI_OP_GPS through the session now.)
+    // the bounded-run diagnostic, the engine's since part e: printed once after the teardown's first phase, when the run asked
+    {"run", "reportPluginStatus(pluginImages_);"},
     {"run", "startCatalogFetch();"},
     {"run", "scanNative();"},
     {"run", "recordPluginStopped(cascade::core::pluginKey(lp), false);"},
@@ -374,7 +339,6 @@ const LineAllow kLineAllowed[] = {
     // the teardown marks the clean exit
     {"run", "telemetryCleanExit_ = true;"},
     // the crash handler's context, once a second and at start
-    {"run", "refreshDiagContext();"},
     // the engine's frame begins: the snapshot's retry, then the first drain
     {"drawUi", "pumpFrameBegin();"},
     // endTakesOnFault, then pumpDecoderOutput
@@ -706,7 +670,7 @@ void judgeWholeObjectUses(const std::string& before, const std::string& l, std::
 // Rules 1-4 on one line of a control. Appends "rule: token" for each finding.
 void judgeControlLine(const std::string& l, const std::vector<std::string>& helpers,
                       const std::vector<FieldPatterns>& fields, bool query,
-                      std::vector<std::string>& found) {
+                      std::vector<std::string>& found, std::set<std::string>* readOnlyUsed = nullptr) {
     // 1. helpers and engine members, called (never as x.name / x->name)
     for (const std::string& name : helpers) {
         const bool call = name.back() == '(';
@@ -749,6 +713,7 @@ void judgeControlLine(const std::string& l, const std::vector<std::string>& help
                     }
                 }
                 bool ok = inList(chain, kReadOnly);
+                if (ok && readOnlyUsed != nullptr) { readOnlyUsed->insert(chain); }
                 if (!ok && bare && inList(chain, kBareAccessors)) {
                     const std::size_t s = skipSpace(l, 0);
                     ok = l.compare(s, 6, "const ") == 0;
@@ -909,11 +874,52 @@ const char* const kPublishedOnly[] = {
     "installReport_", "installError_", "catalogStatus_", "addAllSummary_", "addAllFailed_",
 };
 
-// THE RATCHET ON EVERY OTHER DIRECT READ (OPEN 3). The window still reads the
-// rest of the engine's fields directly as a friend - safe only while both run
-// on one thread. Each round that moves a group behind a handed copy lowers
-// these; nothing may raise them. Counted over every AppWindow member, as
-// `engine_.<field>` for any field the Engine declares.
+// THE RATCHET ON EVERY OTHER DIRECT READ (OPEN 3), AND ITS END STATE (window port group 14, part e - the last window group).
+// The window reads engine fields directly as a friend - safe only while both run on one thread. Counted over every AppWindow
+// member as `engine_.<field>` for any field the Engine declares; each round that moved a group behind a handed copy lowered
+// these, and nothing may raise them. THE END OF THE ROAD IS HERE: every window member that still names the engine is either
+// PORTED (kPortedMembers below: not at all - a direct `engine_.` in one is a violation) or belongs to exactly ONE of the three
+// classes that follow, a read in any OTHER member fails the guard ("unclassified"), and each class has a read budget of its own
+// beside the total. These three are the residue the fence step (plan step 5: the interface becomes its own target and sees only
+// foxsdr_api.h and app_commands.hpp) inherits, and each says what the fence does with it:
+//
+//   1. SHELL SEAMS (kShellMembers: run, applyConfig, the constructor). The host process's composition root: it creates the
+//      Engine, opens the session, runs the frame loop and the teardown, restores the config and owns the bounded-run seams
+//      (the FOXSDR_/CASCADE_ environment hooks that exist for tests and captures: a stand-in bias tee, the device and preset
+//      seams, FOXSDR_PATCH_START, the catalogue test hook, the measurement hook, the scripted basemap) beside the start-up and
+//      teardown steps no interface has (the usage heartbeat armed for an interactive run, the clean-exit marker, the native
+//      device scan the device seam reads, the catalogue URL the store's box is seeded from, the config announce a test reads).
+//      THE FENCE KEEPS THEM IN THE HOST TARGET: the class AppWindow splits into the shell, which sees the engine, and the
+//      interface, which draws from the table; the env-driven seams are a candidate for a translation unit of their own, because
+//      they exist for tests and captures only. The interface must never call shutdownQuiesce/Stop/Release, installSource or
+//      scanNative.
+//   2. WEB / CAT (kStage5Members: publishWebAudio, publishWebSpectrum, webStatusNow, catStatusNow). The browser's and the CAT
+//      server's feeds: the audio tap and the spectrum's rate are read from the GUI thread, and the two status providers run on
+//      the SERVERS' threads (they read the engine's published receiver snapshot, which is built for it). STAGE 5 makes the web
+//      server and the CAT server sessions of the engine's API like any other front end; after it they are gone from the window,
+//      not moved. If the fence lands first they stay a named list. The pump move depends on stage 5, not the other way round
+//      (docs/engine-stage4.md, OPEN FOR THE PUMP MOVE: F3).
+//   3. HOST ACCESSORS (kHostAccessors: hostTracks, hostPaths, hostPanels, hostInstruments, hostAltitudeNear,
+//      hostTrackPluginNames, hostPollPlugins, hostPollImages). The plugin windows, the radar scope and the Patch page's Map part
+//      draw what the plugins' own code hands the HOST PROCESS each frame (the plugin ABI polls a track source from the GUI
+//      thread at frame rate; the plugin API is deliberately not part of the engine API: 0.3 section 10). Eight narrow
+//      accessors, one counted read each, none of them ported by design, so a ninth cannot appear unseen. THE FENCE TURNS THEM
+//      INTO THE METHODS OF ONE HostPluginFeed INTERFACE the host target implements over PluginUi and PluginRunner and installs
+//      into the window (the data the views draw already lives in core/plugin_ui_data.hpp, which the interface may include); the
+//      thread ownership of PluginUi - rebuilt by the pass while the GUI thread polls and draws it - is fixed behind that
+//      interface, and it is the one class the fence must DESIGN rather than rename.
+//
+// What is NOT in the ratchet, and the fence sees: calls (the engine's methods, not its fields), the EngineHost overrides
+// (kHostHooks, below: the engine calls them from its thread), direct non-engine reaches in draw members (files, the BMP save,
+// std::filesystem) and the engine helper headers the window includes. docs/engine-stage4.md, group 14, has the ledger.
+//
+// Fixed by name: a member listed in a residue class must exist (a stale name cannot quietly allow a future member), and none may
+// also be PORTED.
+const char* const kShellMembers[] = {"run", "applyConfig", "AppWindow"};
+const char* const kStage5Members[] = {"publishWebAudio", "publishWebSpectrum", "webStatusNow", "catStatusNow"};
+const char* const kHostAccessors[] = {"hostTracks",      "hostPaths",      "hostPanels",       "hostInstruments",
+                                      "hostAltitudeNear", "hostTrackPluginNames", "hostPollPlugins", "hostPollImages"};
+
 // THE WINDOW'S PORT (engine-stage4.md plan step 4), group by group: a member
 // listed here draws from its engine API session ONLY - its state read, its
 // lists and facts, its submits - and may not name `engine_.` at all, field
@@ -1037,6 +1043,38 @@ const char* const kPortedMembers[] = {
     // (takePatchPicture: PATCH_LIVE's picture row names it, read_image copies it) and uploaded on this thread; the
     // onPatchPicture hook, the only write the engine's thread made into the window's picture state, is gone.
     "takePatchPicture",
+    // GROUP 14, part a, the receiver's position and the map (API 0.3 8.11.1; no new API): the map pages (the page a
+    // plugin's tracks get, its target register, the details of one target, the rail's rows for pages and windows), the
+    // receiver-position offers and the typed entry, the satellite map's click, and the window's follow of the position the
+    // state carries (followReceiverPosition: it replaced the engine's onReceiverPositionApplied hook) with the one door
+    // its own presses send a position by (submitReceiverPosition). The plugin UI's tracks, paths, panels, instruments and
+    // altitudes are the HOST PROCESS's, reached through hostTracks(), hostPaths(), hostPanels(), hostInstruments() and
+    // hostAltitudeNear(), which are NOT listed: they name engine_.pluginUi_ and the guard counts each as one read.
+    "ensureMapPage", "drawReceiverPositionOffers", "drawRxPositionEntry", "drawSatelliteMapBody", "drawMapPageSections",
+    "drawPluginWindowRows", "drawTrackList", "findVisibleTrack", "drawTargetDetailsSection", "drawTargetDetailsWindow",
+    "followReceiverPosition", "submitReceiverPosition",
+    // GROUP 14, part b, the GPS row (API 0.3 8.13: the GPS list, FOXAPP_STATUS_GPS_RESULT) and the machine's serial ports (the
+    // SERIAL_PORTS list, the scan the engine makes on its pass): the row itself, the SYSTEM > Serial ports section, the
+    // once-a-look read of the entry, the two clears of an edit, and the ports' cache with its ask. The reader (the engine's
+    // gpsReader_) is named by no window member at all since part e: run()'s FOXSDR_GPS_PORT seam sends the key's op too.
+    "drawGpsPositionControl", "drawSerialPortsSection", "readGpsRow", "clearGpsResult", "serialPorts", "askForSerialPorts",
+    "serialPortsWaiting",
+    // GROUP 14, part c, the usage switch and the diagnostics bundle (API 0.3 8.13: fact.telemetry.enabled, .installId,
+    // fact.diag.launches and .crashes; the bundle takes the engine's rendered context block). crashUploadStart joined in part e:
+    // run() only ARMS the sweep, and the first frame's look - the first that can read a fact - starts it (a fact answers nothing
+    // before the engine's first publish, which would have started it with an EMPTY install id: "reporting is off").
+    "drawUsageReportingSection", "copyDiagnosticsBundle", "crashUploadStart",
+    // GROUP 14, part d, the plugin windows (no API: the plugin UI is the HOST PROCESS's, polled from the frame as the plugin ABI
+    // says): the windows' whole frame (the store and the fitted window first, then the poll, the coverage feed, the map pages,
+    // the details, the picture, panel and instrument windows) and the hook the engine calls on a preset press. Both name the
+    // engine nowhere now: the plugin UI comes through hostPollPlugins(), hostTracks(), hostPaths(), hostTrackPluginNames(),
+    // hostPanels() and hostInstruments(), the receiver plugins' pictures through hostPollImages(), the recorder's folder from
+    // fact.recorder.dir at the click and the receiver's position from the state. THE EIGHT ACCESSORS ARE NOT LISTED (hostTracks,
+    // hostPaths, hostPanels, hostInstruments, hostAltitudeNear, hostTrackPluginNames, hostPollPlugins, hostPollImages): they name
+    // engine_.pluginUi_ and engine_.pluginRunner_ by design, the guard counts each as one read, and a ninth cannot appear
+    // unseen. openPluginWindowsFor stays in kHostHooks too (the engine calls it; it is judged as machinery) - the event that
+    // replaces the call is the pump move's work (docs/engine-stage4.md, group 14 part d).
+    "drawPluginWindows", "openPluginWindowsFor",
 };
 
 // Window port group 13, part a: 56 fields / 269 reads -> 49 / 230 (patchDspSig_, patchGraphEpoch_, patchGraph_, patchRadioFailedAs_,
@@ -1052,8 +1090,36 @@ const char* const kPortedMembers[] = {
 // (write-only since part b) is retired with its pruner; the engine's new picture fields (patchImages_ and its five companions) are
 // read by no window member, and the guard counts none of them.
 
-constexpr int kWindowFieldsReadBudget = 33;
-constexpr int kWindowFieldReadsBudget = 141;
+// Window port group 14, part a, the receiver's position and the map: 33 / 141 -> 33 / 115 (the 29 reads of the eleven members, three of
+// them new reads - hostAltitudeNear, hostPanels and hostInstruments, the host-process accessors; no field lost its last
+// reader: rxLat_, rxLon_ and rxSet_ are still read by drawPluginWindows and applyConfig, pluginUi_ by the accessors).
+// Part b, the GPS row and the serial ports: 33 / 115 -> 33 / 109 (the five reads of drawGpsPositionControl and the one of
+// drawSerialPortsSection; no field lost its last reader - gpsReader_ is still read by run()'s FOXSDR_GPS_PORT seam).
+// Part c, the usage switch and the diagnostics bundle: 33 / 109 -> 29 / 96 (the five reads of drawUsageReportingSection and
+// the eight of copyDiagnosticsBundle; device_, deviceModel_, telemetryLaunches_ and telemetryCrashes_ lost their last reader -
+// telemetryEnabled_ and telemetryInstallId_ are still read by crashUploadStart and run(), modeIndex_, sourceKind_, pipeline_ and
+// pluginHost_ by other members). The two refreshDiagContext lines of run() left kLineAllowed with the calls (31 -> 29).
+// Part d, the plugin windows: 29 / 96 -> 28 / 77 (the seventeen reads of drawPluginWindows and the five of openPluginWindowsFor,
+// three of them new as accessor reads - hostTrackPluginNames, hostPollPlugins and hostPollImages, the host-process accessors; the
+// survey predicted 28 / 77 and the guard printed it; recordDir_ lost its last reader - rxLat_, rxLon_ and rxSet_ are still read
+// by applyConfig and run's seam, pluginUi_ and pluginRunner_ by the accessors).
+// Part e, the last of the window groups - the test machinery, the crash sweep and the shell's own reads: 28 / 77 -> 14 / 33 (the
+// survey predicted 18 / 39 for the first three moves; two more came out of the shell, so the printed pair is lower). The bounded-run
+// diagnostics left the window: reportPluginStatus (33 reads) and reportPluginTestResult (3) are the engine's now
+// (src/engine/engine_diagnostics.cpp), which took catalog_, decoderLog_, muteStates_, pluginBlocked_, pluginDir_, pluginInventory_,
+// pluginTuneAllowed_, pluginsStopped_ and sourceKind_ out of the window's reach for good. crashUploadStart (2 reads) reads the
+// engine's facts from the first look (telemetryEnabled_ lost its last reader). applyConfig's five reads of the position (redundant
+// since part a's follow: rxLat_, rxLon_, rxSet_ lost their last reader) and run()'s FOXSDR_GPS_PORT seam (it sends the key's own
+// FOXAPI_OP_GPS through the session: gpsReader_ lost its last reader) are deleted. WHAT IS LEFT IS EXACTLY THE THREE CLASSES ABOVE:
+// 19 shell reads (run 15, applyConfig 1, the constructor 3), 6 web/CAT reads (stage 5) and 8 host accessor reads - 33 reads on
+// 14 fields - and every one of them is classified: a read in any other member fails the guard.
+constexpr int kWindowFieldsReadBudget = 14;
+constexpr int kWindowFieldReadsBudget = 33;
+// THE RESIDUE'S OWN BUDGETS, one per class (the totals above are their sum). A new read in a listed member raises its class, and
+// the class budget fails even where another class has slack.
+constexpr int kShellReadsBudget = 19;
+constexpr int kStage5ReadsBudget = 6;
+constexpr int kHostAccessorReadsBudget = 8;
 
 struct Report {
     int violations = 0;
@@ -1065,7 +1131,18 @@ struct Report {
     int allowedLinesUsed = 0;
     std::set<std::string> membersSeen;
     std::set<std::string> allowedLinesSeen;
+    std::set<std::string> readOnlyUsed;  // the kReadOnly entries a control line actually matched
+    int residueReads[3] = {0, 0, 0};     // the reads of the three residue classes: shell, stage 5, host accessors
+    std::map<std::string, int> unclassifiedReads;  // reads in a member that is none of them (and not ported)
 };
+
+// 0 shell seams, 1 web/CAT (stage 5), 2 host accessors, -1 none of them.
+int residueClassOf(const std::string& member) {
+    if (inList(member, kShellMembers)) { return 0; }
+    if (inList(member, kStage5Members)) { return 1; }
+    if (inList(member, kHostAccessors)) { return 2; }
+    return -1;
+}
 
 void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
     const fs::path gui = root / "src" / "gui";
@@ -1145,6 +1222,19 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
                 if (eng.fields.count(field) == 0) { continue; }
                 ++r.fieldReads;
                 r.fieldsRead.insert(field);
+                {
+                    const int cls = residueClassOf(member);
+                    if (cls >= 0) {
+                        ++r.residueReads[cls];
+                    } else if (!inList(member, kPortedMembers)) {  // (a ported member's read is already a violation, above)
+                        ++r.unclassifiedReads[member];
+                        ++r.violations;
+                        std::printf("FAIL: AppWindow::%s reads engine_.%s at %s:%zu but is in none of the residue classes "
+                                    "(kShellMembers, kStage5Members, kHostAccessors) and is not ported\n      -> port it "
+                                    "(read the table), or - only for a shell seam, a stage-5 feed or a host accessor - list it\n",
+                                    member.c_str(), field.c_str(), file.c_str(), i + 1);
+                    }
+                }
                 if (inList(field, kPublishedOnly)) {
                     ++r.violations;
                     std::printf("FAIL: AppWindow::%s reads engine_.%s at %s:%zu\n      -> read it from the "
@@ -1181,7 +1271,7 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
                 ++r.submitsInDraw;
             }
             std::vector<std::string> found;
-            judgeControlLine(l, helpers, fields, false, found);
+            judgeControlLine(l, helpers, fields, false, found, &r.readOnlyUsed);
             {
                 std::string before;
                 for (std::size_t j = (i >= 2 ? i - 2 : 0); j < i; ++j) { before += lines[j] + "\n"; }
@@ -1244,7 +1334,13 @@ int main(int argc, char** argv) {
                 r.controls, r.submitsInDraw, r.machineryLines, r.allowedLinesUsed, r.violations);
     // The scan saw the real files.
     CHECK(r.controls >= 60);
-    CHECK(r.submitsInDraw >= 8);  // (a sanity floor, not a ratchet: it is the count itself - 30 until group 11 ported the Source section's seventeen, 13 until group 12 ported the radar scope's two, 11 until group 13 part b ported the patch transport's two and the Radio inspector's one; the eight left are the position helpers' and group 14's)
+    // NO DRAW MEMBER SENDS THROUGH THE LEGACY QUEUE ANY MORE. This was a sanity floor ("the scan saw the real files") that
+    // counted down as the groups ported - 30 until group 11 ported the Source section's seventeen, 13 until group 12 ported
+    // the radar scope's two, 11 until group 13 part b ported the patch transport's two and the Radio inspector's one, 8
+    // until group 14 part a ported the position helpers' six, 2 until part b ported the GPS row's two - and at zero it is a
+    // rule: a draw member that sends with engine_.submitCommand again fails here (every command goes through uiSubmit). The
+    // scan seeing the real files is the controls check above.
+    CHECK(r.submitsInDraw == 0);
     CHECK(eng.methods.size() >= 100);
     CHECK(eng.fields.size() >= 200);
     CHECK(r.violations == 0);
@@ -1262,6 +1358,81 @@ int main(int argc, char** argv) {
     }
     CHECK(static_cast<int>(r.fieldsRead.size()) <= kWindowFieldsReadBudget);
     CHECK(r.fieldReads <= kWindowFieldReadsBudget);
+    // ...and the residue, by class: nothing is read outside the three, and each stays inside its own budget.
+    {
+        std::string names;
+        for (const std::string& f : r.fieldsRead) { names += (names.empty() ? "" : " ") + f; }
+        std::printf("  the residue: shell seams %d reads (budget %d), web/CAT for stage 5 %d (budget %d), host accessors %d "
+                    "(budget %d), unclassified %zu members\n  the fields: %s\n",
+                    r.residueReads[0], kShellReadsBudget, r.residueReads[1], kStage5ReadsBudget, r.residueReads[2],
+                    kHostAccessorReadsBudget, r.unclassifiedReads.size(), names.c_str());
+        CHECK(r.unclassifiedReads.empty());
+        CHECK(r.residueReads[0] <= kShellReadsBudget);
+        CHECK(r.residueReads[1] <= kStage5ReadsBudget);
+        CHECK(r.residueReads[2] <= kHostAccessorReadsBudget);
+        // The classes are named members that exist, and none is also ported (a ported member names the engine nowhere).
+        const auto namedAndNotPorted = [&](const char* what, const char* const* b, const char* const* e) {
+            for (const char* const* m = b; m != e; ++m) {
+                if (r.membersSeen.count(*m) == 0) {
+                    std::printf("FAIL: %s names %s, which the window does not define - remove it\n", what, *m);
+                }
+                CHECK(r.membersSeen.count(*m) != 0);
+                if (inList(*m, kPortedMembers)) {
+                    std::printf("FAIL: %s names %s, which is also in kPortedMembers\n", what, *m);
+                }
+                CHECK(!inList(*m, kPortedMembers));
+            }
+        };
+        namedAndNotPorted("kShellMembers", std::begin(kShellMembers), std::end(kShellMembers));
+        namedAndNotPorted("kStage5Members", std::begin(kStage5Members), std::end(kStage5Members));
+        namedAndNotPorted("kHostAccessors", std::begin(kHostAccessors), std::end(kHostAccessors));
+    }
+    // THE READ-ONLY LIST HOLDS NOTHING STALE (rule 6, for kReadOnly): every entry is matched by at least one call in a control,
+    // so an entry whose last caller went - a group ported it, a spelling changed - is found here, whatever the spelling the call
+    // used (`.` or `->`, an accessor between: the guard's own parse of the line, not a text search of the tree). The tree
+    // before part e held 47 such entries that nothing had noticed.
+    for (const char* e : kReadOnly) {
+        if (r.readOnlyUsed.count(e) == 0) {
+            std::printf("FAIL: kReadOnly entry %s matches no call in a control - retire it (its last caller is gone)\n", e);
+        }
+        CHECK(r.readOnlyUsed.count(e) != 0);
+    }
+    // THE DATA HEADER SPLIT (window port group 14, part d; the fence ledger): the views draw plugin data - a track, a path, a
+    // panel's rows, an instrument's state, a preset - and need none of the machinery that fills it. core/plugin_ui_data.hpp
+    // carries the data; core/plugin_ui.hpp (PluginUi, the host table, the mute policy) includes it and is the HOST PROCESS's.
+    // The gui headers the interface draws from include the data header and NEVER plugin_ui.hpp, so the fence can forbid
+    // plugin_ui.hpp to the interface target while the views keep their types. (tests/test_plugin_ui_data_split.cpp is the
+    // compile proof for the five that do not include the engine; app_window.hpp still reaches plugin_ui.hpp through
+    // engine/engine.hpp, so only the text of its include is held here.)
+    {
+        const char* const kDataOnlyHeaders[] = {"app_window.hpp",   "decoder_reads.hpp",      "instrument_face.hpp",
+                                                "map_view.hpp",     "scope_view.hpp",         "track_detail_view.hpp"};
+        for (const char* h : kDataOnlyHeaders) {
+            const std::string text = readFile(root / "src" / "gui" / h);
+            const bool names = text.find("#include \"core/plugin_ui.hpp\"") != std::string::npos;
+            const bool uses = text.find("#include \"core/plugin_ui_data.hpp\"") != std::string::npos;
+            if (names) { std::printf("FAIL: src/gui/%s includes core/plugin_ui.hpp - the views take core/plugin_ui_data.hpp\n", h); }
+            if (!uses) { std::printf("FAIL: src/gui/%s does not include core/plugin_ui_data.hpp\n", h); }
+            CHECK(!names);
+            CHECK(uses);
+        }
+        // ...and the data header carries no host machinery: it includes the standard library and the plugin ABI, nothing else.
+        const std::string data = readFile(root / "src" / "core" / "plugin_ui_data.hpp");
+        CHECK(!data.empty());
+        std::size_t at = 0;
+        int includes = 0;
+        while ((at = data.find("#include", at)) != std::string::npos) {
+            const std::size_t eol = data.find('\n', at);
+            const std::string line = data.substr(at, eol == std::string::npos ? std::string::npos : eol - at);
+            const bool std_ = line.find('<') != std::string::npos;
+            const bool abi = line.find("\"core/plugin_abi.h\"") != std::string::npos;
+            if (!std_ && !abi) { std::printf("FAIL: core/plugin_ui_data.hpp includes %s - it may take only the ABI\n", line.c_str()); }
+            CHECK(std_ || abi);
+            ++includes;
+            at += 8;
+        }
+        CHECK(includes >= 5);
+    }
     // 5. The engine is built without ImGui (the configure-time check enforces
     // the includes; this is the belt to that brace).
     CHECK(eng.imguiUses == 0);

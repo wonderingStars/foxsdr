@@ -290,7 +290,7 @@ std::vector<std::string> hangPathLines(bool& parsed) {
 // Path 3: the diagnostics bundle's log section.
 std::vector<std::string> bundleLines() {
     cascade::core::DiagBundleInput in;
-    in.context.version = "0.99.33";
+    in.contextBlock = "version: 0.99.33\n";
     in.logLines = DiagLog::instance().ringSnapshot();
     in.logLinesTotal = DiagLog::instance().linesWritten();
     const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
@@ -564,7 +564,7 @@ void bundleHeaderPaths() {
     for (const Case& c : cases) {
         setEnv(var, c.base);
         cascade::core::DiagBundleInput in;
-        in.context.version = "0.99.33";
+        in.contextBlock = "version: 0.99.33\n";
         in.logPath = c.logPath;
         in.crashDir = c.crashDir;
         const std::string bundle = cascade::core::buildDiagnosticsBundle(in);

@@ -450,6 +450,11 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(iqRecordStartS_);
     f.value(audioRecordStartS_);
     f.text(recordDir_);
+    // The usage switch, the install id it minted, and the session counters (API 0.3 8.13: fact.telemetry.* and fact.diag.*).
+    f.value(telemetryEnabled_);
+    f.text(telemetryInstallId_);
+    f.value(telemetryLaunches_);
+    f.value(telemetryCrashes_);
     // An Airspy's own choices.
     if (airspy != nullptr) {
         f.value(airspy->gainMode());
@@ -1054,6 +1059,15 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     b.patchEpoch = patchGraphEpoch_;
     b.patchVersion = patchGraphVersion_;
     b.patchRunning = patchRunning_;
+    // THE USAGE SWITCH AND THE SESSION'S COUNTERS (API 0.3 8.13), all LOCAL: consent to usage reporting is given at this
+    // machine (FOXAPI_OP_TELEMETRY_ENABLE is refused from everyone; the desktop's FOXAPP_OP_TELEMETRY_CONSENT is the one
+    // door), and the id it mints is the one identifier this product holds - "" while reporting is off, because then it does
+    // not exist. The counters are the diagnostics bundle's (launches, and crashes: the runs that never wrote their clean-exit
+    // marker).
+    fact("telemetry.enabled", telemetryEnabled_ ? "1" : "0", true);
+    fact("telemetry.installId", telemetryEnabled_ ? telemetryInstallId_ : std::string(), true);
+    fact("diag.launches", std::to_string(telemetryLaunches_), true);
+    fact("diag.crashes", std::to_string(telemetryCrashes_), true);
     // THE RECORDINGS: the two recorders' takes (current or last), then the
     // patch's files.
     fact("recorder.dir", recordDir_, true);

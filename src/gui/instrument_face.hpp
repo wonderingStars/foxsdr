@@ -26,7 +26,7 @@
 
 #include <cstdint>
 
-#include "core/plugin_ui.hpp"
+#include "core/plugin_ui_data.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {

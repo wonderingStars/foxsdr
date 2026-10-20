@@ -234,6 +234,7 @@ enum FoxAppStatus : std::int64_t {
     FOXAPP_STATUS_DECODER_LOG = 3,                // decoderLog_.clear()
     FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED = 4, // soapyScanDeferredLogged_ = false
     FOXAPP_STATUS_MUTE_POPUP_QUEUED = 5,          // mutePopupQueued_ = false (consumed)
+    FOXAPP_STATUS_GPS_RESULT = 6,                 // gpsReader_.clearResult(): a finished read's line goes (a no-op while it listens)
 };
 
 // A command and, when its text did not fit FoxCommand::text, the whole of it.

@@ -628,6 +628,29 @@ struct AppWindowTestAccess {
         return a.engine_.rxSet_ && a.engine_.rxLat_ == lat && a.engine_.rxLon_ == lon;
     }
     static bool gpsListening(AppWindow& a) { return a.engine_.gpsReader_.listening(); }
+    // Window port group 14, part b (FOXAPP_STATUS_GPS_RESULT): a read that ended in failure, and one that is running.
+    static int gpsState(AppWindow& a) { return static_cast<int>(a.engine_.gpsReader_.status().state); }
+    static bool gpsFail(AppWindow& a) {
+        a.engine_.gpsReader_.setOpenerForTest(
+            [](const std::string&, int, std::string& error) -> std::unique_ptr<cascade::core::ByteSource> {
+                error = "could not be opened: test";
+                return nullptr;
+            });
+        a.engine_.gpsReader_.start({"BAD1", 9600, 5.0});
+        for (int i = 0; i < 2000 && gpsState(a) != 3; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        return gpsState(a) == 3;
+    }
+    struct Silent final : cascade::core::ByteSource {
+        int read(char*, std::size_t) override {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return 0;
+        }
+    };
+    static bool gpsListen(AppWindow& a) {
+        a.engine_.gpsReader_.start(std::make_unique<Silent>(), {"SILENT", 9600, 30.0});
+        return gpsState(a) == 1;
+    }
+    static void gpsStop(AppWindow& a) { a.engine_.gpsReader_.stop(); }
 };
 
 }  // namespace cascade::gui
@@ -2474,8 +2497,27 @@ void statusLineOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED))));
         CHECK(!A::mutePopupQueued(a));
 
+        // THE FINISHED READ'S LINE (window port group 14, part b; code 6): a failed read is Idle again, and the call is a no-op
+        // while a read is running (the reader's own clearResult says so).
+        CHECK(A::gpsFail(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_RESULT))));
+        CHECK(A::gpsState(a) == 0);
+        CHECK(A::gpsListen(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_RESULT))));
+        CHECK(A::gpsState(a) == 1);
+        CHECK(A::gpsListening(a));
+        A::gpsStop(a);
+        // The refusal and the result are two selectors: clearing one leaves the other.
+        A::setGpsRefusal(a, "refused");
+        CHECK(A::gpsFail(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_RESULT))));
+        CHECK(A::gpsRefusal(a) == "refused");
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_REFUSAL))));
+        CHECK(A::gpsRefusal(a).empty());
+
         // An out-of-range selector is a refusal, not a silent no-op.
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, 999)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, 7)), FOXAPI_OUT_OF_RANGE));
     }
 
     covering(FOXAPP_OP_MUTE_KEEP_RUNNING);

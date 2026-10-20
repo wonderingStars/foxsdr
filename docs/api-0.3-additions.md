@@ -76,6 +76,9 @@ published in the same block as the lists, in the same pass.
 | `fact.patch.conv.<node>` | the converter in force for a Radio node's device, `"<mode> <LO Hz> <inverted>"` as `fact.converter.live` (8.12) | |
 | `fact.recorder.dir` | the folder recordings go to | LOCAL |
 | `fact.recorder.iq.path`, `fact.recorder.audio.path` | the current or last take's file | LOCAL |
+| `fact.telemetry.enabled` | `1` when anonymous usage reporting is on, else `0` (section 8.13) | LOCAL |
+| `fact.telemetry.installId` | the random id the engine minted at consent, whole; `""` while reporting is off - the id does not exist then (section 8.13) | LOCAL |
+| `fact.diag.launches`, `fact.diag.crashes` | this installation's launch count and the runs that never wrote their clean-exit marker, decimals (section 8.13) | LOCAL |
 | `fact.store.<id>.legal` | a catalogue entry's legal notice, whole | |
 | `fact.store.<id>.summary`, `.description`, `.homepage`, `.version` | the entry's texts | |
 | `fact.store.<id>.blocked` | why installing it would be refused now (the notice taken as acknowledged); `""` when it would not | |
@@ -152,6 +155,7 @@ says when to read again.
 | `PATCH_PLAN` (45) | the plan the patch page draws (8.12): one entry per planned channel, then per planned decoder. `id`: node; `detail`: `channel`, or `decoder:radio` / `decoder:channel` / `decoder:audio`; `name`: a decoder's plugin key; `value[0]`: a channel's offset Hz from its radio's centre, a decoder's rate Hz; `[1]`: a channel's output rate Hz, a decoder's input rate Hz; `[2]`: a channel's decimation, an I/Q decoder's RF centre Hz at DC; `[3]`: the radio node |
 | `PATCH_DEVICES` (46) | the devices a patch Radio can be set to, in the order its Device combo lists them (8.12, part 2). `id`: index + 1; `name`: the label; `detail`: the device key (**LOCAL sessions only**, else empty; cut at 159 bytes: `fact.patch.device.<id>` is the whole key); `value[0]`: a recording's own rate Hz, else 0 |
 | `PATCH_LIVE` (47) | what the patch's running nodes are doing NOW (8.12, part 2): one entry per node that has something, copied once a pass into a block of its own. **It never moves `listSeq`: read it each time you draw.** `id`: node; `value[2]`: the kind - 1 a demodulator's squelch gate (`value[0]`: the level it judges, dB; `ACTIVE`: open), 2 a speaker's output (`name`: what it plays to; `value[0]`: peak 0..1; `value[1]`: samples written; `detail`: its error), 3 a channel's level (`value[0]`: dB), 4 a decoder's face (`value[0]`: lines said; `detail`: the newest), 5 a speaker whose output could not be made (`detail`: why), 6 a picture decoder's newest picture (`value[0]`: the image id `read_image` takes; `value[1]`: its bytes; `name`: the node's name; `ACTIVE`: finished) - 8.12.7 |
+| `GPS` (48) | ONE entry, the GPS reader as the position row draws it (8.13). **Read at the call and never part of the lists' block: it never moves `listSeq`, so read it each time you draw.** `name`: the port given to the last start, `""` when the reader is idle (**LOCAL sessions only**); `detail`: the status line the engine words (`""` when idle; **LOCAL sessions only** - the sentence names the port; cut at 159 bytes); `value[0]`: the state (0 idle, 1 listening, 2 fixed, 3 failed, 4 timed out); `value[1]`: seconds since the start (live while it listens, frozen when it ends); `value[2]`: satellites in view, -1 until a sentence says; `value[3]`: the baud; `ACTIVE`: listening; `FAULT`: failed or timed out. Never a coordinate |
 
 ### 5.2 0.2 lists now served
 
@@ -1173,7 +1177,10 @@ only. 0.3 had almost all of it: `FOXAPI_RX_RUNNING`, `FOXAPI_RX_DEVICE_OPEN`, `F
 `PLUGINS`, the samples through `read_scope`, and every command (`FOXAPP_OP_SET_GAIN_NO_READBACK`, `FOXAPI_OP_RUN`). It
 lacked two small things. **No op, list, fact or status line is added.**
 
-**8.11.1 The receiver's position.** `FoxReceiverState` gains at its END two `double`s, `rxLatDeg` and `rxLonDeg`
+**8.11.1 The receiver's position.** (Window port group 14, part a, retired the hook the engine used to call when a position was
+applied, `EngineHost::onReceiverPositionApplied`: the typed fields, every map page's and Patch Map part's home, the scope and the
+coverage map follow the state, which the window reads once a frame - a change of the pair moves `seq` - on its own thread. No API
+changed. One difference: a re-apply of the pair already held, from a session that is not the window's own press, is not seen.) `FoxReceiverState` gains at its END two `double`s, `rxLatDeg` and `rxLonDeg`
 (degrees north and east), and the state flag `FOXAPI_RX_POSITION_SET` 0x40000000 (the next free bit of `flags`). The
 coordinates are valid when the flag is set and are 0 otherwise (a position that was never set, or was cleared, is never
 published as 0 N 0 E with the flag up: the flag is the truth, and the numbers are a pair that means nothing without it).
@@ -1538,6 +1545,55 @@ the value of `fact.patch.receiverCentre`.
 The Map part's tracks and paths are the host process's (the plugin ABI polls a track source from the interface's thread at the
 frame rate); the Map's chart, the waterfall's memory and the pictures' textures are the window's own (the pictures themselves are
 the engine's, 8.12.7).
+
+### 8.13 The GPS row, the usage switch and the diagnostics bundle as they draw
+
+The position row (a port field, a baud, a key and a status line), the Usage reporting row and the Copy diagnostics key read the
+table only. 0.3 had the position (8.11.1), `FOXAPI_OP_GPS`, `FOXAPI_OP_SCAN_SERIAL_PORTS` and the `SERIAL_PORTS` list, the
+status line `gpsRefusal`, `FOXAPP_OP_CLEAR_STATUS` and `FOXAPP_OP_TELEMETRY_CONSENT`. It lacked the GPS reader's own account of
+itself, a read of the usage switch, and two counters. **One list, one status code and four facts are added; no op.**
+
+**8.13.1 The GPS reader: `GPS` (48) and `FOXAPP_STATUS_GPS_RESULT` (6).** ONE entry, always (an idle reader is an entry that says
+nothing), read AT THE CALL from the engine's reader - an engine-lifetime member behind its own mutex, so a live read can neither
+dangle nor wait on the pass - and never part of the lists' block: the seconds and the sentence of a listening read change every
+second and must not rebuild the block or move `listSeq`. The state, the flags and the figures come from ONE copy of the reader's
+status, so they cannot disagree. `name` (the port given to the last start) and `detail` (the sentence, worded by the core's
+`gpsStatusLine` so its wording is tested once) name a device on this machine and are **blank to a REMOTE session**, which
+still gets the state, the figures and the flags. No coordinate is anywhere in it: the position a fix gives is the state's
+(`FOXAPI_RX_POSITION_SET`, `rxLatDeg`, `rxLonDeg`, 8.11.1), and the log and the sentence never carry one (PRIVACY.md).
+`FOXAPP_OP_CLEAR_STATUS` code **6** forgets a finished read (the reader's own `clearResult`: a no-op while it listens); a port or a
+baud edit sends it with code 1 (the refusal), in that order, and both land in one pass. Started and stopped with the existing
+`FOXAPI_OP_GPS` (start: `ival[0]` 1, `text` the port, `num[0]` the baud; stop: `ival[0]` 0). The serial ports the drop-down and the Serial ports
+section list are the engine's, asked for with `FOXAPI_OP_SCAN_SERIAL_PORTS` and read from `SERIAL_PORTS` (the window used to walk the
+registry itself in four places; the engine's comment already said it did not).
+
+**The hook that died with it.** `EngineHost::onGpsFixApplied` (the engine told the window, from its own pass, to open the rail's
+position fold) is deleted: the interface sees the entry go to Fixed. The same cue also starts its coverage map again, because the
+old hook cleared it for every fix, including a fix equal to the position already held - a re-apply the state cannot show
+(`seq` does not move for the same pair).
+
+**8.13.2 The usage switch: `fact.telemetry.enabled` and `fact.telemetry.installId`, both LOCAL.** `1`/`0`, and the id the
+engine minted at the moment of consent (`""` while reporting is off - the id does not exist then; OFF deletes it, so a later
+opt-in cannot be tied to the old one). Consent is given at this machine: both facts answer `FOXAPI_DENIED` to a REMOTE session,
+`FOXAPI_OP_TELEMETRY_ENABLE` stays refused from everyone, and `FOXAPP_OP_TELEMETRY_CONSENT` (the desktop's own op, a REMOTE
+session is refused) is unchanged - ON while already on answers `NO_CHANGE` and changes nothing. All four facts of this section
+are in the lists' fingerprint (a consent changes the block once).
+
+**8.13.3 The diagnostics bundle: `fact.diag.launches` and `fact.diag.crashes` (LOCAL), and the context.** Decimals; they move
+`listSeq` when they change (at start-up, from the configuration). The bundle's context lines are no longer re-derived by the
+interface: they are **the engine's block** (`core::diagContextBlock()`, the very text a crash or a hang report prints), which
+the engine's own pass renders - at the end of `applyConfig` and then at most once a second, and only when something it describes
+changed (the mode, the source, the rate, the radio, the loaded plugins), so a settled pass allocates nothing. Staleness: the block
+can be up to a second old, where the press used to render it. `core::buildDiagnosticsBundle` no longer calls `setDiagContext`:
+**a bundle is a read, and it used to replace the crash handler's copy of the context** with whatever the caller had built (the
+window's re-derivation of the engine's - the same code today, so nothing visible went wrong; proved red in
+tests/test_diagnostics.cpp before the change). `renderDiagContext` is the pure rendering `setDiagContext` stores.
+
+The interface-side differences, by the code and the tests (tests/test_gps_window.cpp, tests/test_usage_diag_window.cpp): the
+status line of a finished read clears a pass or two after a port or baud edit; the key turns to Stop a pass or two after the press
+(it did one frame late already); a click on the usage checkbox shows at once (the interface keeps the value asked for until the
+fact says it, half a second at most) and the chip, the lamp and the install id follow a pass later; the serial-port list
+appears a pass after the arrow is pressed (nothing is said, and not "none found", until the scan's answer is in).
 
 ## 9. Events and ops
 

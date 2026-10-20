@@ -2341,6 +2341,30 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
             }
             break;
         }
+        case FOXAPI_LIST_GPS: {
+            // ONE entry, read AT THE CALL from the reader (an engine-lifetime member behind its own mutex, so a live
+            // read can neither dangle nor wait on the pass) and never part of the block: a listening reader's seconds
+            // and sentence change every second and must not rebuild the lists. The state, the flags and the
+            // numbers come from ONE copy of the reader's status, so they cannot disagree. The port and the sentence
+            // name a device on this machine: LOCAL sessions only. No coordinate is in it (the status carries none
+            // outside `fix`, which is not read).
+            const cascade::core::GpsReader::Status st = engine_.gpsReader_.status();
+            if (want(1)) {
+                using State = cascade::core::GpsReader::State;
+                it.id = 1;
+                if (local && st.state != State::Idle) {
+                    copyText(it.name, st.port.c_str());
+                    copyText(it.detail, cascade::core::gpsStatusLine(st).c_str());
+                }
+                it.value[0] = static_cast<double>(st.state);  // Idle 0, Listening 1, Fixed 2, Failed 3, TimedOut 4
+                it.value[1] = st.elapsedS;
+                it.value[2] = static_cast<double>(st.satellites);
+                it.value[3] = static_cast<double>(st.baud);
+                if (st.state == State::Listening) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (st.state == State::Failed || st.state == State::TimedOut) { it.flags |= FOXAPI_ITEM_FAULT; }
+            }
+            break;
+        }
         case FOXAPI_LIST_PATCH_RADIOS:
             if (want(b->patchRadios.size())) {
                 const auto& r = b->patchRadios[index];

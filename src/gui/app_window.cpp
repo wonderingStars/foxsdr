@@ -1060,7 +1060,9 @@ int AppWindow::run(int frames) {
     // environment variable.
     pluginTestHook_.clear();
     pluginTestStarted_ = false;
-    pluginStatusHook_ = false;
+    // The enforcement diagnostic's switch (CASCADE_PLUGIN_STATUS), read below in a bounded run only; the report itself is
+    // the engine's (Engine::reportPluginStatus), called once after the teardown's first phase.
+    bool pluginStatusReport = false;
     // The deliberate SHUTDOWN wedge, and the only way to hold the shutdown
     // budget against the real teardown of the real binary. --diag-stall proves
     // the frame-loop half; there is no equivalent for the teardown, because
@@ -1105,11 +1107,11 @@ int AppWindow::run(int frames) {
             shutdownStallMs = std::atoi(shutdownStall);
             if (shutdownStallMs < 0) { shutdownStallMs = 0; }
         }
-        // The enforcement diagnostic (see reportPluginStatus). Same rules: only
+        // The enforcement diagnostic (Engine::reportPluginStatus). Same rules: only
         // in a bounded run, and silent unless asked for, so the
         // byte-identical-stdout contract of a plain --frames run is untouched.
         const char* status = std::getenv("CASCADE_PLUGIN_STATUS");
-        pluginStatusHook_ = (status != nullptr && *status != '\0');
+        pluginStatusReport = (status != nullptr && *status != '\0');
         // The engine measurement (core/engine_measure.hpp, driven by
         // tools/measure_engine.ps1). Bounded runs only, like the hooks above.
         measure_ = cascade::core::EngineMeasure::fromEnvironment();
@@ -1152,9 +1154,10 @@ int AppWindow::run(int frames) {
             }
             cascade::core::diagLogf("gps: startup read requested by FOXSDR_GPS_PORT on %s at %d",
                                     cascade::core::loggableSerialPortName(hookPort).c_str(), baud);
-            (void)engine_.applyCommand(cascade::core::cmd::makeInt(
-                FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
-            engine_.gpsReader_.start({hookPort, baud, cascade::core::GpsReader::kDefaultTimeoutS});
+            // THE START THE ROW'S KEY MAKES, through the window's session (window port group 14, part e): the engine's pass takes it on
+            // the first frame (it clears the refusal line itself, as the key's press always did) - this seam used to clear the refusal
+            // with a direct applyCommand and start the engine's reader itself, before the first frame.
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_GPS, hookPort, 1, 0, static_cast<double>(baud)));
         }
     }
 
@@ -1189,13 +1192,15 @@ int AppWindow::run(int frames) {
     // The same one call the Settings checkbox makes, so the arming path and
     // the mid-session toggle cannot drift apart again.
     applyDiagnosticsEnabled(diagnosticsEnabled_);
-    engine_.refreshDiagContext();
+    // (The diagnostics context is the engine's: rendered at the end of its applyConfig and again by its pass; window port
+    // group 14, part c.)
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
     // to "may this run touch the disk at all", which is diagCrashDir_ and is
-    // only settled by main() after the constructor.
-    crashUploadStart();
+    // only settled by main() after the constructor. ARMED here, STARTED by the first frame's look: the sweep's install id
+    // is the engine's fact, and a fact answers nothing until the engine's first publish (window port group 14, part e).
+    crashUploadStartPending_ = true;
     cascade::core::diagLogf("frame loop starting (%s)",
                             frames >= 0 ? "bounded" : "interactive");
 
@@ -1780,10 +1785,8 @@ int AppWindow::run(int frames) {
             }
         }
 
-        // The context follows the session rather than being frozen at
-        // start-up: a report filed after the user switched to the B200 must
-        // say so. Once a second at 60 Hz, out of state that already exists.
-        if ((rendered % 60) == 0) { engine_.refreshDiagContext(); }
+        // (The context follows the session rather than being frozen at start-up - a report filed after the user switched
+        // to the B200 must say so - and the engine's pass keeps it so: once a second at most, when its inputs change.)
 
         // --diag-toggle: flip the Settings > Diagnostics switch mid-session,
         // through the SAME function the checkbox calls, on frame 30 - before
@@ -1879,7 +1882,9 @@ int AppWindow::run(int frames) {
     // The enforcement diagnostic, printed at the END so it reports the state
     // the run actually finished in — including any retirement that a catalogue
     // fetch during the run brought into force.
-    if (pluginStatusHook_) { reportPluginStatus(); }
+    // (Prints what the plugin host, the runner and the source finished in: the engine's own report, which prints the
+    // receiver plugins' pictures from the buffer the plugin windows polled into - the one thing only this window holds.)
+    if (pluginStatusReport) { engine_.reportPluginStatus(pluginImages_); }
 
     // Final-state save, unconditional: cheap, and it guarantees the on-disk
     // config matches the final session state even when the debounce never
@@ -2840,6 +2845,9 @@ void AppWindow::drawUi() {
     // THE STATE, ONCE A FRAME, through the session (the key's flags are
     // per-session: TX_KEY_MINE, TX_LATCH_RELEASE_FIRST).
     refreshUiState();
+    // THE CRASH SWEEP, once, on the first look that can answer whose install id it carries (the facts are the engine's
+    // after its first publish, which this frame has just made); armed by run().
+    if (crashUploadStartPending_ && crashUploadStart()) { crashUploadStartPending_ = false; }
     // WHEN THE GUI TOOK DELIVERY of the spectrum frame readSpectrum just took, which
     // is what the spectrum's "HEARD n s AGO" line reports. SpectrumFrame carries a
     // sequence number and no timestamp, so the closest honest measurement available is
@@ -9542,7 +9550,7 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
     // Receiver-wide facts reach every page at birth. Applying the position
     // here — at the one place a view is created — is what makes the old
     // "config applied before the view existed" ordering bug impossible now.
-    if (engine_.rxSet_) { page.view->setHome(engine_.rxLat_, engine_.rxLon_); }
+    if (receiverPositionKnown()) { page.view->setHome(uiState_.rxLatDeg, uiState_.rxLonDeg); }
     // WHAT ALTITUDE THIS AIRCRAFT HAD WHERE ITS TRAIL RUNS, answered by the
     // observations PluginUi records as it polls (see altitudeNear). Installed
     // ONCE, here, for the same reason the receiver position is: this is the
@@ -9552,7 +9560,7 @@ AppWindow::MapPage& AppWindow::ensureMapPage(const std::string& plugin) {
     // and are cleared, never detached.
     page.view->setAltitudeLookup([this](const std::string& plugin, const std::string& id,
                                         double latDeg, double lonDeg, double& outAltM) {
-        return engine_.pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
+        return hostAltitudeNear(plugin, id, latDeg, lonDeg, outAltM);
     });
 
     // Geometry and open state: the page's own saved entry wins; failing that,
@@ -9662,7 +9670,7 @@ void AppWindow::drawRxPositionEntry() {
     // The typed pair is a form; SET_POSITION (applyReceiverPosition) is what
     // moves every page's home, the scope and the coverage origin.
     if (ImGui::SmallButton(trId("Set RX here"))) {
-        engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_POSITION, rxLatInput_, rxLonInput_));
+        submitReceiverPosition(rxLatInput_, rxLonInput_);
     }
     ImGui::EndDisabled();
     if (!rxInputOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -9702,7 +9710,7 @@ void AppWindow::drawRxPositionEntry() {
 void AppWindow::drawReceiverPositionOffers() {
     double tLat = 0.0;
     double tLon = 0.0;
-    const int heard = cascade::gui::scopeTrafficCentre(engine_.pluginUi_.tracks(), tLat, tLon);
+    const int heard = cascade::gui::scopeTrafficCentre(hostTracks(), tLat, tLon);
     const bool trafficReady = heard >= cascade::gui::kScopeTrafficCentreMinAircraft &&
                               cascade::gui::receiverPositionAcceptable(tLat, tLon);
     std::string label;
@@ -9721,7 +9729,7 @@ void AppWindow::drawReceiverPositionOffers() {
     // The caption is a whole sentence with figures in it; a translation that
     // outgrows the rail is drawn smaller rather than cut (gui/text_fit.hpp).
     if (cascade::gui::fittedButton(label.c_str(), ImVec2(-1.0f, 0.0f))) {
-        engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_POSITION, tLat, tLon));
+        submitReceiverPosition(tLat, tLon);
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -9751,7 +9759,7 @@ void AppWindow::drawReceiverPositionOffers() {
                       cascade::i18n::hemisphereLetter(true, mLat >= 0.0), std::fabs(mLon),
                       cascade::i18n::hemisphereLetter(false, mLon >= 0.0));
         if (cascade::gui::fittedButton(label.c_str(), ImVec2(-1.0f, 0.0f))) {
-            engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_POSITION, mLat, mLon));
+            submitReceiverPosition(mLat, mLon);
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(tr("Where that map is looking right now. If you have been panning\n"
@@ -9808,7 +9816,10 @@ void AppWindow::drawReceiverPositionOffers() {
 // searches the log ring for the digits).
 void AppWindow::drawGpsPositionControl() {
     using cascade::core::GpsReader;
-    const bool listening = engine_.gpsReader_.listening();
+    // (Window port group 14, part b: everything below is the GPS list's entry, read once a look, and the session's
+    // commands; the reader is the engine's.)
+    const GpsRow& gps = gpsRow();
+    const bool listening = gps.listening;
 
     benchHint(tr("or read it from a GPS receiver on a serial port:"));
 
@@ -9838,9 +9849,7 @@ void AppWindow::drawGpsPositionControl() {
         // rule, so what is saved is what the port layer will be asked for.
         // The field keeps what was typed until the user changes it.
         gpsPort_ = cascade::core::sanitiseSerialPortName(gpsPortInput_);
-        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
-                                                         cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
-        engine_.gpsReader_.clearResult();
+        clearGpsResult();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(tr("The serial port the GPS receiver is on - COM3, or /dev/ttyUSB0.\n"
@@ -9848,23 +9857,22 @@ void AppWindow::drawGpsPositionControl() {
     }
     ImGui::SameLine(0.0f, 0.0f);
     if (ImGui::ArrowButton("##gpsports", ImGuiDir_Down)) {
-        // ENUMERATED HERE, on the press, and cached: the list is what the
-        // machine had when the drop-down opened, which is what a person
-        // expects of a drop-down.
-        gpsPorts_ = cascade::core::enumerateSerialPorts();
+        // ASKED FOR HERE, on the press, and never per frame: the engine lists the machine's ports on its pass (a registry
+        // or /dev walk), and the list drawn below is what that scan found - a pass after the press.
+        askForSerialPorts();
         ImGui::OpenPopup("##gpsportlist");
     }
     if (ImGui::BeginPopup("##gpsportlist")) {
-        if (gpsPorts_.empty()) {
+        const std::vector<std::string>& ports = serialPorts();
+        // Until the scan's answer is in nothing is said, so a machine WITH ports is not told it has none.
+        if (ports.empty() && !serialPortsWaiting()) {
             benchHint(tr("no serial ports found"));
         }
-        for (const std::string& name : gpsPorts_) {
+        for (const std::string& name : ports) {
             if (ImGui::Selectable(name.c_str(), name == gpsPort_)) {
                 gpsPort_ = name;
                 cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", name.c_str());
-                engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
-                                                                 cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
-                engine_.gpsReader_.clearResult();
+                clearGpsResult();
             }
         }
         ImGui::EndPopup();
@@ -9881,9 +9889,7 @@ void AppWindow::drawGpsPositionControl() {
             std::snprintf(item, sizeof(item), "%d", baud);
             if (ImGui::Selectable(item, baud == gpsBaud_)) {
                 gpsBaud_ = baud;
-                engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS,
-                                                                 cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
-                engine_.gpsReader_.clearResult();
+                clearGpsResult();
             }
         }
         ImGui::EndCombo();
@@ -9904,14 +9910,13 @@ void AppWindow::drawGpsPositionControl() {
     const ImVec2 keySize = wide ? ImVec2(keyW, 0.0f) : ImVec2(-1.0f, 0.0f);
     if (listening) {
         if (ImGui::Button(trId("Stop"), keySize)) {
-            engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_GPS, 0));
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_GPS, 0));
         }
     } else {
         ImGui::BeginDisabled(gpsPort_.empty());
         if (ImGui::Button(trId("Read position from GPS"), keySize)) {
             // The port and baud fields are a form; GPS starts the read.
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPI_OP_GPS, gpsPort_, 1, 0,
-                                                       static_cast<double>(gpsBaud_)));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_GPS, gpsPort_, 1, 0, static_cast<double>(gpsBaud_)));
         }
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -9929,15 +9934,11 @@ void AppWindow::drawGpsPositionControl() {
     // THE STATUS LINE, in the bench's hint ink while it is news and in the
     // warning ink when it is a problem the user has to act on. Idle draws
     // nothing at all - the row is not a place for "ready".
-    const GpsReader::Status status = engine_.gpsReader_.status();
-    const std::string line = cascade::core::gpsStatusLine(status);
-    if (!line.empty()) {
-        const bool trouble = status.state == GpsReader::State::Failed ||
-                             status.state == GpsReader::State::TimedOut;
+    if (!gps.line.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text,
-                              trouble ? cascade::gui::theme::warning()
-                                      : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
-        ImGui::TextWrapped("%s", line.c_str());
+                              gps.trouble ? cascade::gui::theme::warning()
+                                          : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
+        ImGui::TextWrapped("%s", gps.line.c_str());
         ImGui::PopStyleColor();
     }
     if (!statusLines_.gpsRefusal.empty()) {
@@ -11946,6 +11947,15 @@ void AppWindow::drawScopeModeControl() {
 
 const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return engine_.pluginUi_.tracks(); }
 const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return engine_.pluginUi_.paths(); }
+bool AppWindow::hostAltitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
+                                 double& outAltM) {
+    return engine_.pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
+}
+const std::vector<cascade::core::HostPanel>& AppWindow::hostPanels() { return engine_.pluginUi_.panels(); }
+const std::vector<cascade::core::HostInstrument>& AppWindow::hostInstruments() { return engine_.pluginUi_.instruments(); }
+const std::vector<std::string>& AppWindow::hostTrackPluginNames() { return engine_.pluginUi_.trackPluginNames(); }
+void AppWindow::hostPollPlugins() { engine_.pluginUi_.poll(); }
+void AppWindow::hostPollImages(std::vector<cascade::core::HostImage>& out) { engine_.pluginRunner_.pollImages(out); }
 
 void AppWindow::drawScopeMode() {
     uiNotePanel("scope");
@@ -13109,7 +13119,7 @@ void AppWindow::drawPluginWindows() {
     // One poll per frame feeds both the map and every panel: the plugins are
     // asked once and the answer is shared, so a plugin cannot be charged twice
     // for having two kinds of output.
-    engine_.pluginUi_.poll();
+    hostPollPlugins();
 
     // --- coverage accumulation ------------------------------------------------
     // FED HERE RATHER THAN INSIDE THE MAP WINDOW, because the antenna is
@@ -13122,13 +13132,13 @@ void AppWindow::drawPluginWindows() {
     // only thing that grows, which is to say nothing grows. The staleness rule
     // is applied first so a plugin that never evicts cannot keep re-recording
     // an aircraft it last heard an hour ago.
-    if (engine_.rxSet_) {
-        for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
+    if (receiverPositionKnown()) {
+        for (const cascade::core::HostTrack& ht : hostTracks()) {
             if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
                 continue;
             }
-            coverage_.record(initialBearingDeg(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg),
-                             greatCircleKm(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg));
+            coverage_.record(initialBearingDeg(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg),
+                             greatCircleKm(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg));
         }
     }
 
@@ -13141,7 +13151,7 @@ void AppWindow::drawPluginWindows() {
     // empty" answers the user's question and "the page is missing" does not.
     // Pages are created lazily here and never destroyed while the app runs;
     // rescanPlugins() leaves them in place.
-    for (const std::string& name : engine_.pluginUi_.trackPluginNames()) {
+    for (const std::string& name : hostTrackPluginNames()) {
         ensureMapPage(name);
     }
     // A page whose plugin is GONE (removed, or a rescan came back without it)
@@ -13150,7 +13160,7 @@ void AppWindow::drawPluginWindows() {
     // than in rescanPlugins is what lets live pages survive a rescan with
     // their view state intact (see there).
     {
-        const std::vector<std::string>& live = engine_.pluginUi_.trackPluginNames();
+        const std::vector<std::string>& live = hostTrackPluginNames();
         bool anyDead = false;
         for (const MapPage& pg : mapPages_) {
             if (std::find(live.begin(), live.end(), pg.plugin) == live.end()) {
@@ -13179,10 +13189,10 @@ void AppWindow::drawPluginWindows() {
         // is why nothing here is measured or cached across frames.
         pageTracks_.clear();
         pagePaths_.clear();
-        for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
+        for (const cascade::core::HostTrack& ht : hostTracks()) {
             if (ht.plugin == page.plugin) { pageTracks_.push_back(ht); }
         }
-        for (const cascade::core::HostPath& hp : engine_.pluginUi_.paths()) {
+        for (const cascade::core::HostPath& hp : hostPaths()) {
             if (hp.plugin == page.plugin) { pagePaths_.push_back(hp); }
         }
 
@@ -13481,7 +13491,7 @@ void AppWindow::drawPluginWindows() {
                 if (ImGui::SmallButton(trId("Reset coverage"))) { coverage_.reset(); }
                 ImGui::EndDisabled();
                 ImGui::SameLine();
-                if (!engine_.rxSet_) {
+                if (!receiverPositionKnown()) {
                     // DEGRADED, AND SAYING SO. Without a receiver position there is
                     // nothing to measure a bearing from, so the accumulator is
                     // never fed and the overlay would be an empty circle the user
@@ -13606,7 +13616,7 @@ void AppWindow::drawPluginWindows() {
     // decoders samples. pluginImages_ is this window's own buffer and is
     // rewritten only when a decoder produces something new, so redrawing an
     // image the user is looking at costs nothing.
-    engine_.pluginRunner_.pollImages(pluginImages_);
+    hostPollImages(pluginImages_);
     // THE SAVE NOTE EXPIRES, because it is a message about something that just
     // happened rather than a caption. It used to be written once and never
     // cleared, so a filename saved in the first minute of a session was still
@@ -13702,8 +13712,10 @@ void AppWindow::drawPluginWindows() {
                     // Named by plugin, sequence and wall-clock time, next to
                     // the recordings rather than in the install directory.
                     std::error_code ec;
-                    const std::filesystem::path dir =
-                        std::filesystem::path(engine_.recordDir_.empty() ? "." : engine_.recordDir_);
+                    // The recorder's folder is read AT THE CLICK, from the session's facts (fact.recorder.dir), not cached.
+                    std::string recordDir;
+                    readFactText("fact.recorder.dir", recordDir);
+                    const std::filesystem::path dir = std::filesystem::path(recordDir.empty() ? "." : recordDir);
                     std::filesystem::create_directories(dir, ec);
                     char stamp[32];
                     const std::time_t t = std::time(nullptr);
@@ -13774,7 +13786,7 @@ void AppWindow::drawPluginWindows() {
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
-    for (const cascade::core::HostPanel& p : engine_.pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& p : hostPanels()) {
         // The plugin NAME is part of the ImGui id, not just the title: two
         // plugins may legitimately call their window the same thing, and
         // colliding ids would merge them into one window.
@@ -13800,7 +13812,7 @@ void AppWindow::drawPluginWindows() {
 
     // INSTRUMENT windows: a face drawn as equipment, its memory beneath.
     std::size_t instrumentIndex = 0;
-    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : hostInstruments()) {
         const std::size_t nth = instrumentIndex++;
         const std::string id = instrumentWindowId(in);
         if (!pluginWindows_.shown(id)) { continue; }
@@ -14073,9 +14085,7 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
     // edge-triggered inside draw(), so neither can be lost by a frame that
     // happened to skip; both are cleared here, after acting.
     if (page.view->receiverPositionRequested()) {
-        engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_POSITION,
-                                                  page.view->requestedReceiverLatDeg(),
-                                                  page.view->requestedReceiverLonDeg()));
+        submitReceiverPosition(page.view->requestedReceiverLatDeg(), page.view->requestedReceiverLonDeg());
         page.view->clearReceiverPositionRequest();
     }
     if (page.view->coverageResetRequested()) {
@@ -14121,9 +14131,9 @@ void AppWindow::drawPluginWindowRows() {
         if (!cascade::gui::autoPresetTriggersOnWindowClick(/*clicked=*/true, wasShown)) {
             return;
         }
-        const std::string key = engine_.pluginKeyForDisplayName(displayName);
+        const std::string key = cascade::gui::moduleFileForName(pluginLists().plugins, displayName);
         if (!key.empty()) {
-            engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_AUTO_PRESET, key, 1));
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_AUTO_PRESET, key, 1));
         }
     };
     for (const cascade::core::HostImage& im : pluginImages_) {
@@ -14144,7 +14154,7 @@ void AppWindow::drawPluginWindowRows() {
             autoPresetOnClick(on, im.plugin);
         }
     }
-    for (const cascade::core::HostPanel& p : engine_.pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& p : hostPanels()) {
         const std::string id = p.title + "###panel_" + p.plugin;
         const bool on = pluginWindows_.shown(id);
         std::string chip;
@@ -14159,7 +14169,7 @@ void AppWindow::drawPluginWindowRows() {
             autoPresetOnClick(on, p.plugin);
         }
     }
-    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : hostInstruments()) {
         const std::string id = instrumentWindowId(in);
         const bool on = pluginWindows_.shown(id);
         // NEW while an event has arrived that the window has not drawn - the
@@ -14252,9 +14262,9 @@ void AppWindow::drawMapPageSections() {
             // key; an empty result (module unloaded since this row was
             // drawn) is silently skipped.
             if (cascade::gui::autoPresetTriggersOnWindowClick(/*clicked=*/true, wasOpen)) {
-                const std::string key = engine_.pluginKeyForDisplayName(pg.plugin);
+                const std::string key = cascade::gui::moduleFileForName(pluginLists().plugins, pg.plugin);
                 if (!key.empty()) {
-                    engine_.submitCommand(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_AUTO_PRESET, key, 1));
+                    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_AUTO_PRESET, key, 1));
                 }
             }
         }
@@ -14286,9 +14296,9 @@ void AppWindow::drawMapPageSections() {
                    cascade::gui::theme::kPhosphor, false, false, nullptr);
     ImGui::PushStyleColor(ImGuiCol_Text,
                           ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    const cascade::gui::ModuleCensus census = cascade::gui::censusModules(
-        engine_.pluginHost_.plugins(), CASCADE_CAP_TRACK_SOURCE,
-        [this](const std::string& key) { return engine_.pluginIsStopped(key); });
+    // (From the table's PLUGINS rows, as the radar scope's line is: the capability word, loaded and stopped.)
+    const cascade::gui::ModuleCensus census =
+        cascade::gui::censusOf(pluginLists().plugins, CASCADE_CAP_TRACK_SOURCE);
     ImGui::TextWrapped("%s",
                        cascade::gui::trackSourceAbsenceNote(
                            census, tr("target positions"),
@@ -14358,9 +14368,9 @@ void AppWindow::drawTrackList(MapPage& page,
         // print "no RX" instead of a distance from the Gulf of Guinea. It also
         // sorts them to the bottom, which is the right place for a column that
         // has no values at all.
-        if (engine_.rxSet_) {
-            r.distanceKm = greatCircleKm(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg);
-            r.bearingDeg = initialBearingDeg(engine_.rxLat_, engine_.rxLon_, ht.t.latDeg, ht.t.lonDeg);
+        if (receiverPositionKnown()) {
+            r.distanceKm = greatCircleKm(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg);
+            r.bearingDeg = initialBearingDeg(uiState_.rxLatDeg, uiState_.rxLonDeg, ht.t.latDeg, ht.t.lonDeg);
         }
         r.ageMs = ht.t.ageMs;
         r.source = i;
@@ -14403,7 +14413,7 @@ void AppWindow::drawTrackList(MapPage& page,
     // when there is a line to hold back.
     const float tableH = tableHeightReservingLines(ImGui::GetContentRegionAvail().y,
                                                    ImGui::GetTextLineHeightWithSpacing(),
-                                                   engine_.rxSet_ ? 0 : 1);
+                                                   receiverPositionKnown() ? 0 : 1);
 
     // --- how wide the three columns come out ---------------------------------
     // THE HEADINGS ARE MEASURED, NOT GUESSED. Two weights picked by eye (2.0
@@ -14533,7 +14543,7 @@ void AppWindow::drawTrackList(MapPage& page,
         // the registry lookup for every listed target.
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            drawTrackDetailOf(ht, &trackInfo_, engine_.rxSet_, engine_.rxLat_, engine_.rxLon_);
+            drawTrackDetailOf(ht, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
             ImGui::EndTooltip();
         }
 
@@ -14564,7 +14574,7 @@ void AppWindow::drawTrackList(MapPage& page,
     // bearing columns to sit blank: sorting by distance with no receiver
     // position produces an order that looks arbitrary, and this is the line
     // that explains it.
-    if (!engine_.rxSet_) {
+    if (!receiverPositionKnown()) {
         ImGui::TextDisabled("%s", tr("Distance and bearing need the RX position above."));
     }
 }
@@ -14616,13 +14626,13 @@ void AppWindow::drawTrackSortControl() {
     }
 }
 
-const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& id) const {
+const cascade::core::HostTrack* AppWindow::findVisibleTrack(const std::string& id) {
     // FOUND BY ID EVERY FRAME. The host's track vector is rebuilt on every
     // poll, so a stored index or pointer would be describing a different
     // aircraft - or freed memory - within a frame or two. Only tracks the
     // staleness rule still shows count: a dropped target must read as "no
     // longer being heard", not as its last stale values.
-    for (const cascade::core::HostTrack& ht : engine_.pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& ht : hostTracks()) {
         if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
             continue;
         }
@@ -14711,7 +14721,7 @@ void AppWindow::drawTargetDetailsSection() {
         return;
     }
 
-    drawTrackDetailOf(*found, &trackInfo_, engine_.rxSet_, engine_.rxLat_, engine_.rxLon_);
+    drawTrackDetailOf(*found, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
     ImGui::Separator();
     // The same two gestures the details window offers, so acting on what was
     // just read never requires finding the row it came from. Both land on the
@@ -14787,7 +14797,7 @@ void AppWindow::drawTargetDetailsWindow() {
             ImGui::Separator();
             ImGui::TextDisabled("%s", tr("No longer being reported."));
         } else {
-            drawTrackDetailOf(*found, &trackInfo_, engine_.rxSet_, engine_.rxLat_, engine_.rxLon_);
+            drawTrackDetailOf(*found, &trackInfo_, receiverPositionKnown(), uiState_.rxLatDeg, uiState_.rxLonDeg);
             ImGui::Separator();
             // The same two gestures the row offers, as named buttons: the
             // details window is reachable from a row, and a user who got here
@@ -14924,9 +14934,16 @@ void AppWindow::drawPluginPresets(const cascade::gui::PluginRow& p) {
     }
 }
 
+// STILL AN ENGINE HOOK (window port group 14, part d, 2026-10-20), and kept one on purpose: the engine calls it from
+// applyPluginPreset (and run()'s bounded-run seam calls it directly), on the thread that runs the pass. It names the engine
+// nowhere any more - the plugin UI is read through hostTrackPluginNames(), hostPanels() and hostInstruments() - but it WRITES
+// window state (mapPages_, pluginWindows_, decoderWindowOpen_), which is what a pass on its own thread cannot do. THE PUMP
+// MOVE'S WORK, NOT BUILT HERE: an event raised by applyPluginPreset once per application (the survey's G4, proposed as
+// FOXAPI_EVENT_PRESET_APPLIED, `text` the module file name) that the window drains in pumpUiEvents and answers with this body,
+// from the PLUGINS rows and the host accessors; the hook and its kHostHooks entry then go.
 void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
     {
-        const std::vector<std::string>& trackNames = engine_.pluginUi_.trackPluginNames();
+        const std::vector<std::string>& trackNames = hostTrackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
             MapPage& pg = ensureMapPage(p.name);
             pg.open = true;
@@ -14938,20 +14955,20 @@ void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
     // A panel's id carries the panel's OWN TITLE, which only the instance
     // knows, so this asks the instances rebuilt a moment ago rather than the
     // descriptor. A module may publish more than one.
-    for (const cascade::core::HostPanel& hp : engine_.pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& hp : hostPanels()) {
         if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
     }
     bool ownWindow = p.imageDecoder != nullptr;
     {
-        const std::vector<std::string>& trackNames = engine_.pluginUi_.trackPluginNames();
+        const std::vector<std::string>& trackNames = hostTrackPluginNames();
         if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
             ownWindow = true;
         }
     }
-    for (const cascade::core::HostPanel& hp : engine_.pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& hp : hostPanels()) {
         if (hp.plugin == p.name) { ownWindow = true; }
     }
-    for (const cascade::core::HostInstrument& in : engine_.pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : hostInstruments()) {
         if (in.plugin == p.name) {
             pluginWindows_.show(instrumentWindowId(in));
             ownWindow = true;
@@ -15814,6 +15831,11 @@ void AppWindow::refreshUiState() {
     (void)decoderLines();
     // ...and, with it, the lines the patch's Text outs show (the draft's wires decide which).
     routePatchSinkLines();
+    // ...and the receiver's position, followed (window port group 14, part a): the typed fields, the map pages' and
+    // the Patch Map parts' home, the scope and the coverage, when the state shows the position moved.
+    // The GPS reader's entry first (window port group 14, part b): a fix landing is a cue the follow's coverage note uses.
+    readGpsRow();
+    followReceiverPosition();
 }
 
 // THE SPECTRUM, ONCE A FRAME (window port, group 6; docs/engine-stage4.md decision
@@ -18052,181 +18074,8 @@ void AppWindow::drawDemodScopePage() {
     endPage();
 }
 
-void AppWindow::reportPluginTestResult() {
-    // Bounded-run diagnostic only (CASCADE_PLUGIN_TEST). Machine-readable on
-    // purpose: the install gate is a UI decision, and this is the only way a
-    // headless run can prove which way it went.
-    if (!engine_.statusText().catalogError.empty()) {
-        std::printf("plugin catalogue: FAILED frame=%d %s\n", frameCounter_,
-                    engine_.statusText().catalogError.c_str());
-        return;
-    }
-    std::printf("plugin catalogue: frame=%d entries=%d\n", frameCounter_,
-                static_cast<int>(engine_.catalog_.size()));
-    for (int i = 0; i < static_cast<int>(engine_.catalog_.size()); ++i) {
-        const cascade::core::PluginCatalogEntry& e =
-            engine_.catalog_[static_cast<std::size_t>(i)];
-        // Both answers: what the gate says with the acknowledgement UNTICKED
-        // (what the user first sees) and with it ticked. A gate that stopped
-        // requiring the tick would print install=ok on the first of these.
-        const std::string noAck = engine_.pluginInstallBlockedReason(i, false);
-        const std::string ack = engine_.pluginInstallBlockedReason(i, true);
-        const std::string noAckText = noAck.empty() ? "ok" : ("blocked(" + noAck + ")");
-        const std::string ackText = ack.empty() ? "ok" : ("blocked(" + ack + ")");
-        std::printf("plugin entry: id=%s abi=%u compatible=%d installed=%d legal=%d "
-                    "licence=\"%s\" install=%s installAcked=%s\n",
-                    e.id.c_str(), static_cast<unsigned>(e.abiVersion),
-                    e.compatible ? 1 : 0, engine_.catalogEntryInstalled(e) ? 1 : 0,
-                    e.legalNotice.empty() ? 0 : 1, e.licence.c_str(),
-                    noAckText.c_str(), ackText.c_str());
-    }
-}
-
-void AppWindow::reportPluginStatus() {
-    // Bounded-run diagnostic only (CASCADE_PLUGIN_STATUS). It exists because
-    // "the plugin is disabled" is a claim about what is MAPPED in this
-    // process, and a screenshot of a red row proves nothing about that. Every
-    // number here is read from the live objects the GUI draws from.
-    const std::vector<cascade::core::LoadedPlugin>& list = engine_.pluginHost_.plugins();
-    const std::size_t blocked = cascade::core::PluginRepo::blockedCount(
-        engine_.pluginInventory_.plugins, engine_.pluginInventory_.policies);
-    std::printf("plugin status: dir=%s candidates=%d loaded=%d blocked=%d managed=%d "
-                "unmanaged=%d\n",
-                engine_.pluginDir_.c_str(), static_cast<int>(list.size()),
-                static_cast<int>(engine_.pluginHost_.loadedCount()), static_cast<int>(blocked),
-                static_cast<int>(engine_.pluginInventory_.plugins.size()),
-                static_cast<int>(engine_.pluginInventory_.unmanaged.size()));
-    if (!engine_.statusText().pluginEnforceError.empty()) {
-        std::printf("plugin enforce: %s\n", engine_.statusText().pluginEnforceError.c_str());
-    }
-    for (const std::string& note : engine_.pluginInventory_.notes) {
-        std::printf("plugin inventory: %s\n", note.c_str());
-    }
-    for (const cascade::core::LoadedPlugin& p : list) {
-        const std::string file = std::filesystem::path(p.path).filename().string();
-        std::printf("plugin host: file=%s loaded=%d name=%s version=%s error=%s\n",
-                    file.c_str(), p.loaded ? 1 : 0, p.name.c_str(), p.version.c_str(),
-                    p.error.empty() ? "-" : p.error.c_str());
-    }
-
-    // The SOURCE, because a decoder starved of samples is indistinguishable
-    // from a decoder that decoded nothing, and sourceError_ is otherwise only
-    // ever shown in the GUI - invisible to exactly the headless runs used to
-    // verify decoding.
-    // The device rate is printed to six decimals ON PURPOSE. A hardware rate
-    // readback is a double the tuner computed from a master clock divider, and
-    // it is very often NOT the round number that was asked for. The chain
-    // requires an integer channel rate, so 2400000.000001 is refused while
-    // "2400000" appears in every log - which reads as a nonsensical refusal of
-    // a rate that is obviously fine.
-    std::printf("source status: kind=%s name=%s deviceRate=%.6f chainRate=%.6f "
-                "centre=%.0f running=%d error=%s\n",
-                engine_.sourceKind_.c_str(), engine_.pipeline_.activeSourceName(),
-                engine_.pipeline_.activeSource().sampleRateHz(), engine_.pipeline_.inputRateHz(),
-                engine_.pipeline_.activeSource().centerFrequencyHz(),
-                engine_.pipeline_.running() ? 1 : 0,
-                engine_.statusText().sourceError.empty() ? "-" : engine_.statusText().sourceError.c_str());
-
-    // The RUNNER, reported separately from the host, because "loaded" and
-    // "being fed real audio" are different claims and the whole point of this
-    // subsystem is the second one. A screenshot of a loaded plugin proves
-    // nothing about whether a single sample ever reached it.
-    // The UI capabilities, reported like the decoders: "the plugin is loaded"
-    // and "the plugin put something on the map" are different claims.
-    // tuneGranted is printed beside tuneRequests because the pair is the whole
-    // permission story: a request with no grant is a refusal the user can undo,
-    // and a grant with no request is a permission nothing is using.
-    std::printf("plugin ui: tracks=%d paths=%d panels=%d tuneRequests=%d tuneGranted=%d\n",
-                static_cast<int>(engine_.pluginUi_.tracks().size()),
-                static_cast<int>(engine_.pluginUi_.paths().size()),
-                static_cast<int>(engine_.pluginUi_.panels().size()),
-                static_cast<int>(engine_.pluginUi_.tuneRequesters().size()),
-                static_cast<int>(engine_.pluginTuneAllowed_.size()));
-    for (const cascade::core::HostPanel& p : engine_.pluginUi_.panels()) {
-        std::printf("plugin panel: name=%s title=\"%s\" columns=%d rows=%d\n",
-                    p.plugin.c_str(), p.title.c_str(), static_cast<int>(p.headings.size()),
-                    static_cast<int>(p.rows.size()));
-    }
-    for (const cascade::core::HostImage& im : pluginImages_) {
-        std::printf("plugin image: from=%s %ux%u fmt=%u complete=%d seq=%llu bytes=%zu\n",
-                    im.plugin.c_str(), im.width, im.height, im.format, im.complete ? 1 : 0,
-                    static_cast<unsigned long long>(im.sequence), im.pixels.size());
-    }
-    for (const cascade::core::HostTrack& t : engine_.pluginUi_.tracks()) {
-        std::printf("plugin track: from=%s id=%s label=%s pos=%.4f,%.4f kind=%u\n",
-                    t.plugin.c_str(), t.t.id, t.t.label, t.t.latDeg, t.t.lonDeg, t.t.kind);
-    }
-
-    // WHICH PLUGINS ARE STOPPED, printed even when the list is empty (as
-    // "stopped=0"), because "no line" and "nothing stopped" have to be
-    // distinguishable in a bounded run's output - the same rule the counts
-    // above follow.
-    std::printf("plugin stopped: count=%d\n", static_cast<int>(engine_.pluginsStopped_.size()));
-    for (const std::string& k : engine_.pluginsStopped_) {
-        std::printf("plugin stopped: file=%s\n", k.c_str());
-    }
-    // THE SNAPSHOT THE MUTE DECISION IS TAKEN FROM, one line per loaded
-    // plugin. `mutes` is the setting the checkbox shows - the capability
-    // default with the user's override applied - and `running` is whether the
-    // plugin has any claim on the audio at all, which is where "not stopped"
-    // was once wrongly good enough. Printed because the alternative way to
-    // find out which plugins mute by default is to read five checkboxes off a
-    // screenshot, and a README written from a screenshot is how the shipped
-    // documentation came to name two plugins that do not consume I/Q.
-    for (const cascade::core::MutePlugin& m : engine_.muteStates_) {
-        std::printf("plugin mute: file=%s name=%s running=%d mutes=%d presets=%d\n",
-                    m.key.c_str(), m.name.c_str(), m.running ? 1 : 0, m.mutes ? 1 : 0,
-                    static_cast<int>(m.presets.size()));
-    }
-    // THE MUTE, printed every run including "not muted", for the same reason
-    // the counts above are: in a bounded run "no line" and "nothing is muting"
-    // must not look the same.
-    std::printf("audio mute: muted=%d by=%s\n",
-                engine_.pipeline_.audioMuted() ? 1 : 0, engine_.muteSubjectText().c_str());
-    std::printf("plugin runner: active=%d lines=%d audioFed=%llu iqFed=%llu\n",
-                static_cast<int>(engine_.pluginRunner_.activeCount()),
-                static_cast<int>(engine_.decoderLog_.size()),
-                static_cast<unsigned long long>(engine_.pluginRunner_.audioFramesFed()),
-                static_cast<unsigned long long>(engine_.pluginRunner_.iqFramesFed()));
-    for (const cascade::core::DecoderStatus& s : engine_.pluginRunner_.status()) {
-        std::printf("plugin decode: name=%s state=%s%s\n", s.plugin.c_str(),
-                    s.reason == cascade::core::DecoderIdleReason::Running ? "running"
-                                                                          : "idle",
-                    s.reason == cascade::core::DecoderIdleReason::Running
-                        ? ""
-                        : (" reason=" + s.detail).c_str());
-    }
-    // The last few decoded lines: the only evidence that the chain from
-    // antenna to plugin text actually closed.
-    std::size_t shown = 0;
-    for (auto it = engine_.decoderLog_.rbegin(); it != engine_.decoderLog_.rend() && shown < 5; ++it, ++shown) {
-        std::printf("plugin text: [%s] %s\n", it->plugin.c_str(), it->text.c_str());
-    }
-    for (const cascade::core::BlockedPlugin& b : engine_.pluginBlocked_) {
-        // mapped=1 would mean enforcement failed: the host would have a record
-        // of a file it was supposed never to see.
-        int mapped = 0;
-        for (const cascade::core::LoadedPlugin& p : list) {
-            const std::string file = std::filesystem::path(p.path).filename().string();
-            if (equalsFileNameAscii(file, b.installed.file)) { mapped = 1; }
-        }
-        const char* reason =
-            b.reason == cascade::core::PluginBlockReason::AbiMismatch ? "abi-mismatch"
-                                                                      : "below-minimum-version";
-        std::printf("plugin blocked: id=%s file=%s version=%s floor=%s catalogue=%s "
-                    "reason=%s mapped=%d message=\"%s\"\n",
-                    b.installed.id.c_str(), b.installed.file.c_str(),
-                    b.installed.version.c_str(),
-                    b.policy.minSupportedVersion.empty() ? "-"
-                                                         : b.policy.minSupportedVersion.c_str(),
-                    b.policy.catalogueVersion.empty() ? "-" : b.policy.catalogueVersion.c_str(),
-                    reason, mapped, b.message.c_str());
-    }
-    for (const cascade::core::PluginUpdate& u : engine_.plannedPluginUpdates()) {
-        std::printf("plugin update: id=%s from=%s to=%s\n", u.id.c_str(),
-                    u.fromVersion.c_str(), u.toVersion.c_str());
-    }
-}
+// (reportPluginTestResult and reportPluginStatus, the two bounded-run plugin diagnostics, are the ENGINE's since window
+// port group 14, part e: src/engine/engine_diagnostics.cpp. The window keeps the switches and names the frame.)
 
 // --- Band plan overlay (P7) -----------------------------------------------------
 
@@ -19906,8 +19755,15 @@ void AppWindow::drawUsageReportingSection() {
     // build gets it was describing an intention rather than the code. A state
     // nothing can produce is not a state; where the reports go is a fact about
     // the endpoint, not about whether the switch exists.
-    if (!benchSection(trId("Usage reporting"), false, engine_.telemetryEnabled_ ? tr("ON") : tr("OFF"),
-                      cascade::gui::theme::kPhosphor, engine_.telemetryEnabled_)) {
+    // From the table (window port group 14, part c): the switch and the install id are the engine's facts, LOCAL ones -
+    // consent is given at this machine - and what the checkbox has just asked for is kept in telemetryPending_ until the
+    // fact says it.
+    const bool enabled = uiFact("fact.telemetry.enabled") == "1";
+    if (telemetryPending_.valid && (enabled == telemetryPending_.on || ImGui::GetTime() - telemetryPending_.at > 0.5)) {
+        telemetryPending_.valid = false;
+    }
+    if (!benchSection(trId("Usage reporting"), false, enabled ? tr("ON") : tr("OFF"),
+                      cascade::gui::theme::kPhosphor, enabled)) {
         return;
     }
     uiNotePanel("usage reporting");
@@ -19920,20 +19776,25 @@ void AppWindow::drawUsageReportingSection() {
            "address is recorded."));
     ImGui::Spacing();
 
-    bool on = engine_.telemetryEnabled_;
+    bool on = telemetryPending_.valid ? telemetryPending_.on : enabled;
     if (ImGui::Checkbox(trId("Send anonymous usage reports"), &on)) {
         // A COMMAND (engine/stage3b-pre, the fields-to-commands round): the
         // id-minting, the id-forgetting and the heartbeat reconfigure all
-        // move into FOXAPP_OP_TELEMETRY_CONSENT's handler, applied at once so
-        // the switch's label and the install-id line below still update on
-        // THIS frame, exactly as the direct writes did. The desktop's own
-        // op, not the API's FOXAPI_OP_TELEMETRY_ENABLE, which is refused
-        // from everyone (round 3 fix: consent is given here, never remotely).
-        engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, on ? 1 : 0));
+        // move into FOXAPP_OP_TELEMETRY_CONSENT's handler. Through the window's
+        // session since window port group 14 (part c): it lands at the engine's
+        // next pass, and the checkbox shows the value asked for until the fact
+        // says it; the label and the install-id line follow a pass later. The
+        // desktop's own op, not the API's FOXAPI_OP_TELEMETRY_ENABLE, which is
+        // refused from everyone (round 3 fix: consent is given here, never
+        // remotely).
+        uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, on ? 1 : 0));
+        telemetryPending_.valid = true;
+        telemetryPending_.on = on;
+        telemetryPending_.at = ImGui::GetTime();
     }
 
-    if (engine_.telemetryEnabled_) {
-        ImGui::TextDisabled(tr("Install id: %s"), engine_.telemetryInstallId_.c_str());
+    if (enabled) {
+        ImGui::TextDisabled(tr("Install id: %s"), uiFact("fact.telemetry.installId").c_str());
         // TWO MESSAGES, NOT ONE. This line named only the launch report while
         // HeartbeatSender has been posting a "still running" beat every five
         // minutes for as long as it has existed - PRIVACY.md documents both,
@@ -20011,10 +19872,11 @@ void AppWindow::drawSerialPortsSection() {
     // triggers are the two named below: the section's own open edge, and
     // Refresh.
     if (!serialPortsListLoaded_) {
-        serialPortsList_ = cascade::core::enumerateSerialPorts();
+        askForSerialPorts();
         serialPortsListLoaded_ = true;
     }
-    const std::string chip = cascade::gui::formatSerialPortsChip(serialPortsList_.size());
+    const std::vector<std::string>& ports = serialPorts();
+    const std::string chip = cascade::gui::formatSerialPortsChip(ports.size());
 
     // VERIFICATION ONLY, same house rule as FOXSDR_GPS_PORT above: this row's
     // open/closed state is ImGui's own in-memory storage, not AppConfig - so
@@ -20025,7 +19887,7 @@ void AppWindow::drawSerialPortsSection() {
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     }
 
-    const bool listening = engine_.gpsReader_.listening();
+    const bool listening = gpsRow().listening;
     const bool open =
         benchSection(trId("Serial ports"), false, chip.c_str(), cascade::gui::theme::kPhosphor, listening);
     // THE SECOND TRIGGER: the row's own OPEN EDGE - closed last frame, open
@@ -20037,7 +19899,7 @@ void AppWindow::drawSerialPortsSection() {
     const bool justOpened = open && !serialPortsSectionWasOpen_;
     serialPortsSectionWasOpen_ = open;
     if (!open) { return; }
-    if (justOpened) { serialPortsList_ = cascade::core::enumerateSerialPorts(); }
+    if (justOpened) { askForSerialPorts(); }
     uiNotePanel("serial ports");
 
     ImGui::TextWrapped(
@@ -20048,11 +19910,13 @@ void AppWindow::drawSerialPortsSection() {
     ImGui::Spacing();
 
     if (ImGui::Button(trId("Refresh"))) {
-        serialPortsList_ = cascade::core::enumerateSerialPorts();
+        askForSerialPorts();
     }
     ImGui::Spacing();
 
-    if (serialPortsList_.empty()) {
+    if (ports.empty() && serialPortsWaiting()) {
+        // (the scan's answer is a pass away: nothing is said yet)
+    } else if (ports.empty()) {
         // DEVICE MANAGER, NAMED EXACTLY, because "no ports found" leaves a
         // beta tester with a USB-serial adapter plugged in nowhere to look
         // next - and the one place Windows will say whether the OPERATING
@@ -20070,7 +19934,7 @@ void AppWindow::drawSerialPortsSection() {
                                  ImVec2(-1.0f, 0.0f))) {
         ImGui::TableSetupColumn(trId("Port"));
         ImGui::TableHeadersRow();
-        for (const std::string& name : serialPortsList_) {
+        for (const std::string& name : ports) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(name.c_str());
@@ -20441,34 +20305,24 @@ void AppWindow::drawDiagnosticsOffer() {
 }
 
 void AppWindow::copyDiagnosticsBundle() {
-    // EVERY FIELD HERE ALREADY EXISTS somewhere in this window. A bundle that
-    // re-derived the version, the plugin list or the radio model would be a
-    // second source of truth for exactly the facts a support conversation
-    // turns on, and the two would eventually disagree.
-    engine_.refreshDiagContext();
-
+    // EVERY FIELD HERE ALREADY EXISTS somewhere. A bundle that re-derived the
+    // version, the plugin list or the radio model would be a second source of
+    // truth for exactly the facts a support conversation turns on, and the two
+    // would eventually disagree - which is what this used to do: it rebuilt the
+    // engine's context field by field, and the bundle then WROTE that copy over
+    // the one the crash handler prints. The context is now the ENGINE's block, as
+    // its pass rendered it (at most a second old, and re-rendered the moment
+    // anything it describes changes), taken as it is; the two counters are the
+    // engine's facts (fact.diag.launches and fact.diag.crashes, LOCAL).
     cascade::core::DiagBundleInput in;
-    in.context.version = cascade::versionString();
-    in.context.commit = cascade::gitCommit();
-    in.context.os = cascade::core::osDescription();
-    in.context.arch = cascade::core::archDescription();
-    in.context.mode = kModeNames[engine_.modeIndex_];
-    in.context.sourceKind = engine_.sourceKind_;
-    in.context.sampleRateHz = engine_.pipeline_.activeSource().sampleRateHz();
-    in.context.deviceOpen = (engine_.device_ != nullptr);
-    in.context.sdrModel = engine_.deviceModel_;
-    for (const cascade::core::LoadedPlugin& p : engine_.pluginHost_.plugins()) {
-        if (p.loaded && in.context.plugins.size() < 32) {
-            in.context.plugins.push_back(p.name + " " + p.version);
-        }
-    }
+    in.contextBlock = cascade::core::diagContextBlock();
     in.logLines = cascade::core::DiagLog::instance().ringSnapshot();
     in.logLinesTotal = cascade::core::DiagLog::instance().linesWritten();
     in.logPath = cascade::core::DiagLog::instance().filePath();
     in.crashDir = cascade::core::diagCrashDir();
     in.lastRunUnclean = lastRunUnclean_;
-    in.launches = engine_.telemetryLaunches_;
-    in.crashes = engine_.telemetryCrashes_;
+    in.launches = std::strtoull(uiFact("fact.diag.launches").c_str(), nullptr, 10);
+    in.crashes = std::strtoull(uiFact("fact.diag.crashes").c_str(), nullptr, 10);
 
     const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
     ImGui::SetClipboardText(bundle.c_str());
@@ -20641,28 +20495,17 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     mapWinX_ = cfg.mapWindowX;
     mapWinY_ = cfg.mapWindowY;
 
-    // The receiver's own position from the last session, PUSHED INTO THE MAP
-    // here rather than waiting for the user to press the button again. It is
-    // what the range rings, the hover readout and the track table's distance
-    // and bearing columns are measured from, and a position that had to be
-    // re-typed every launch is a position those columns could not rely on.
-    // The sanitizer has already discarded anything out of range, so an unset
-    // flag here means genuinely unset.
-    rxLatInput_ = engine_.rxLat_;
-    rxLonInput_ = engine_.rxLon_;
+    // (The receiver's own position from the last session reaches the typed fields, the map pages' home and the scope by the
+    // window's FOLLOW of the position the state carries - followReceiverPosition, at the first look after the engine's first
+    // publish, which sees a restored position as a change from "unset" - not by a read of the engine here: window port group 14,
+    // part e deleted the five reads this restore made, redundant since part a. The sanitizer has already discarded anything
+    // out of range, so an unset flag there means genuinely unset.)
     // The GPS port and baud the user chose last time, already sanitised by
     // the store, into the field's buffer as well so the row shows the name
     // that will be opened. The reader is NOT started: a read is a click.
     gpsPort_ = cfg.gpsPort;
     gpsBaud_ = cfg.gpsBaud;
     cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", gpsPort_.c_str());
-    if (engine_.rxSet_) {
-        // Every existing page; a page created later gets the position in
-        // ensureMapPage. At construction this loop is empty and harmless.
-        for (MapPage& pg : mapPages_) {
-            pg.view->setHome(engine_.rxLat_, engine_.rxLon_);
-        }
-    }
     // The store's URL box shows the restored URL (Engine::applyConfig says
     // why restoring it starts no fetch).
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
@@ -20697,24 +20540,37 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     refreshCatServer();
 }
 
-void AppWindow::crashUploadStart() {
+bool AppWindow::crashUploadStart() {
     // OFF MEANS OFF FOR UPLOADING TOO. Both halves are required: the user's
     // switch, and "may this run write to the machine at all" - a bounded CI run
     // has an empty diagCrashDir_ and must not start sending whatever the config
-    // says.
-    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) { return; }
+    // says. (True: decided - there is nothing to start.)
+    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) { return true; }
+
+    // THE SAME anonymous id the usage report uses, and empty when usage reporting is off - because then it does not exist. A
+    // crash report must not be what mints an identifier the user switched off. See PRIVACY.md. Both come from the engine as
+    // facts (LOCAL: the id is the one identifier this product holds), and a fact answers NOTHING before the engine's first
+    // publish - which would read as "reporting is off" and start the sweep with an empty id for the whole run. An unanswered
+    // switch is therefore "not yet", never "off": false, and the next look asks again. The id fact is BLANK while reporting is
+    // off (the engine words it so, `telemetryEnabled_ ? id : ""`): the rule above, kept where the id lives. (No session at all -
+    // the table could not be opened - is the privacy-safe side: no id.)
+    std::string enabled;
+    std::string installId;
+    if (uiSession_ != nullptr) {
+        readFactText("fact.telemetry.enabled", enabled);
+        if (enabled.empty()) { return false; }
+        readFactText("fact.telemetry.installId", installId);
+    }
 
     cascade::core::SweepParams p;
     p.crashDir = diagCrashDir_;
     p.url = cascade::core::crashUploadEndpoint();
-    // The SAME anonymous id the usage report uses, and empty when usage
-    // reporting is off - because then it does not exist. A crash report must
-    // not be what mints an identifier the user switched off. See PRIVACY.md.
-    p.installId = engine_.telemetryEnabled_ ? engine_.telemetryInstallId_ : std::string();
+    p.installId = installId;
     p.enabled = true;
     p.state = crashUploadState_;
     crashUploader_.start(p);
     crashUploadSwept_ = true;
+    return true;
 }
 
 void AppWindow::crashUploadFinish() {
@@ -20899,27 +20755,119 @@ void AppWindow::onDisplayRange(float dbMin, float dbMax) { spectrum_->setRange(d
 // from the engine's pass, which is not where the window reads its session.)
 void AppWindow::onBookmarksChanged() {}
 
-void AppWindow::onReceiverPositionApplied(double latDeg, double lonDeg) {
-    // THE TYPED FIELDS FOLLOW THE APPLIED POSITION. They are the toolbar's
-    // draft of this same number, and a position set from the satellites
-    // window would otherwise leave them showing whatever was last typed
-    // somewhere else - two controls claiming to be the receiver's latitude
-    // and disagreeing about it.
-    rxLatInput_ = latDeg;
-    rxLonInput_ = lonDeg;
-    // EVERY page, not just the one whose control was used: the receiver's
-    // position is a fact about the antenna, and two pages disagreeing about
-    // where home is would put the range rings in two different places at
-    // once. The scope is told for the same reason - it is a third view of
-    // the same antenna.
-    for (MapPage& other : mapPages_) {
-        other.view->setHome(engine_.rxLat_, engine_.rxLon_);
+// THE RECEIVER'S POSITION, FOLLOWED (window port group 14, part a). The engine called the window from its own pass
+// whenever a position was applied (a hook), and the window then moved its typed fields, every map page's home, the
+// scope and the coverage map from a thread that was not the one drawing them. The position is in the state now
+// (FOXAPI_RX_POSITION_SET, rxLatDeg, rxLonDeg: window port group 12) and a change of it moves `seq`, so the window
+// does the same work on its own thread, when it LOOKS: once a frame, after the state is read.
+//
+//  - THE TYPED FIELDS follow the applied position (they are the toolbar's draft of this same number, and a position
+//    set from a map click would otherwise leave them showing whatever was last typed elsewhere);
+//  - EVERY map page and EVERY Patch Map part moves home (the receiver's position is a fact about the antenna, and
+//    two views disagreeing about where home is would put the range rings in two places; the Patch Map parts were
+//    NOT told before - a position set after one was made left its rings at the old home);
+//  - the radar scope is told (it also takes the position every frame it draws);
+//  - THE OLD COVERAGE GOES: every wedge in it was measured from somewhere else.
+// A position already in the FIRST published state (a restored configuration) is a change from "unset" at the first
+// look, so a view made before it and the typed fields get it without a read of the engine.
+//
+// A re-apply of the pair already in force moves nothing in the state, and the old hook cleared the coverage on every
+// apply: the window's own presses say so themselves (submitReceiverPosition: coverageResetPending_), so what the
+// operator sees of THAT does not change.
+void AppWindow::followReceiverPosition() {
+    const bool set = receiverPositionKnown();
+    const bool moved = set && (!positionSeen_.set || positionSeen_.latDeg != uiState_.rxLatDeg ||
+                               positionSeen_.lonDeg != uiState_.rxLonDeg);
+    if (moved) {
+        rxLatInput_ = uiState_.rxLatDeg;
+        rxLonInput_ = uiState_.rxLonDeg;
+        for (MapPage& other : mapPages_) {
+            if (other.view != nullptr) { other.view->setHome(uiState_.rxLatDeg, uiState_.rxLonDeg); }
+        }
+        for (auto& entry : patchMapViews_) {
+            if (entry.second != nullptr) { entry.second->setHome(uiState_.rxLatDeg, uiState_.rxLonDeg); }
+        }
+        scope_.setReceiver(uiState_.rxLatDeg, uiState_.rxLonDeg);
     }
-    scope_.setReceiver(engine_.rxLat_, engine_.rxLon_);
-    // A NEW ORIGIN INVALIDATES THE OLD COVERAGE. Every wedge in it was
-    // measured from somewhere else, and keeping them would draw one antenna's
-    // pattern around another antenna's position.
-    coverage_.reset();
+    positionSeen_.set = set;
+    positionSeen_.latDeg = set ? uiState_.rxLatDeg : 0.0;
+    positionSeen_.lonDeg = set ? uiState_.rxLonDeg : 0.0;
+    if (moved || coverageResetPending_) { coverage_.reset(); }
+    coverageResetPending_ = false;
+}
+
+// THE GPS READER, AS THE ROW DRAWS IT: the GPS list's one entry (API 0.3 8.13), read once a look. The engine's reader is an
+// engine-lifetime member behind its own mutex and the entry is a live read, so the seconds and the sentence of a listening
+// read move with no list rebuilt. The entry going to FIXED is the cue the engine's onGpsFixApplied hook used to give from
+// its own pass: the rail's position fold opens once (gpsRowReveal_), and the coverage starts again even when the fix is the
+// pair already in force (the old hook cleared it on every apply - the position follow cannot see a re-apply).
+void AppWindow::readGpsRow() {
+    if (uiSession_ == nullptr) { return; }
+    FoxListItem it{};
+    it.structSize = sizeof(it);
+    if (engineApi_->read_list(uiSession_, FOXAPI_LIST_GPS, 0, &it) < 1) {
+        gpsRow_ = GpsRow{};  // (a table that does not serve it: an idle row)
+        return;
+    }
+    const int before = gpsRow_.state;
+    gpsRow_.state = static_cast<int>(it.value[0]);
+    gpsRow_.listening = (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+    gpsRow_.trouble = (it.flags & FOXAPI_ITEM_FAULT) != 0u;
+    gpsRow_.elapsedS = it.value[1];
+    gpsRow_.satellites = static_cast<int>(it.value[2]);
+    gpsRow_.baud = static_cast<int>(it.value[3]);
+    gpsRow_.port.assign(it.name);
+    gpsRow_.line.assign(it.detail);
+    if (gpsRow_.state == 2 && before != 2) {
+        gpsRowReveal_ = true;
+        coverageResetPending_ = true;
+    }
+}
+
+void AppWindow::clearGpsResult() {
+    // The refusal (a status line, FOXAPP_STATUS_GPS_REFUSAL) and the finished read's line (the reader's own result,
+    // FOXAPP_STATUS_GPS_RESULT): both go at the engine's next pass, so the old line shows for a frame or two after an edit.
+    uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_GPS_REFUSAL));
+    uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_CLEAR_STATUS, cascade::core::cmd::FOXAPP_STATUS_GPS_RESULT));
+}
+
+// THE MACHINE'S SERIAL PORTS, from the engine (the SERIAL_PORTS list; asked for with FOXAPI_OP_SCAN_SERIAL_PORTS). Read
+// again only when listSeq has moved - a scan always moves it, found ports or none.
+const std::vector<std::string>& AppWindow::serialPorts() {
+    SerialPortsCache& c = serialPortsCache_;
+    if (uiSession_ == nullptr || c.listSeq == uiState_.listSeq) { return c.ports; }
+    c.listSeq = uiState_.listSeq;
+    ++c.refreshes;
+    const int32_t n = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_SERIAL_PORTS, 0, nullptr));
+    c.ports.resize(static_cast<std::size_t>(n));
+    FoxListItem it{};
+    for (int32_t i = 0; i < n; ++i) {
+        it = FoxListItem{};
+        it.structSize = sizeof(it);
+        if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SERIAL_PORTS, static_cast<std::uint32_t>(i), &it) <= i) {
+            c.ports.resize(static_cast<std::size_t>(i));
+            break;
+        }
+        c.ports[static_cast<std::size_t>(i)].assign(it.name);
+    }
+    return c.ports;
+}
+
+void AppWindow::askForSerialPorts() {
+    uiSubmit(cascade::core::cmd::make(FOXAPI_OP_SCAN_SERIAL_PORTS));
+    serialPortsAsked_ = true;
+    serialPortsAskedSeq_ = uiState_.listSeq;
+    serialPortsAskedAt_ = ImGui::GetTime();
+}
+
+bool AppWindow::serialPortsWaiting() const {
+    return serialPortsAsked_ && uiState_.listSeq == serialPortsAskedSeq_ && ImGui::GetTime() - serialPortsAskedAt_ < 2.0;
+}
+
+void AppWindow::submitReceiverPosition(double latDeg, double lonDeg) {
+    uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_POSITION, latDeg, lonDeg));
+    // Only a pair the engine will take: a refused apply cleared nothing before, and clears nothing now.
+    if (cascade::gui::receiverPositionAcceptable(latDeg, lonDeg)) { coverageResetPending_ = true; }
 }
 
 void AppWindow::onConverterChanged(bool clearLoError) {
@@ -20928,10 +20876,11 @@ void AppWindow::onConverterChanged(bool clearLoError) {
 }
 
 
-void AppWindow::onGpsFixApplied() { gpsRowReveal_ = true; }
 
 void AppWindow::onCatalogueResult() {
-    if (!pluginTestHook_.empty()) { reportPluginTestResult(); }
+    // A bounded run's diagnostic (CASCADE_PLUGIN_TEST): the engine prints the catalogue and every entry's install-gate decision
+    // from its own state, and this window names the frame (window port group 14, part e: the body moved into the engine).
+    if (!pluginTestHook_.empty()) { engine_.reportPluginTestResult(frameCounter_); }
 }
 
 void AppWindow::beforePluginRescan() { syncMapPagesToSaved(); }

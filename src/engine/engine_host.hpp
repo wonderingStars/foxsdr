@@ -66,9 +66,9 @@ public:
     virtual void onBookmarksChanged();
     // A plugin preset was applied: open what that plugin contributes.
     virtual void openPluginWindowsFor(const cascade::core::LoadedPlugin& p);
-    // The receiver's position was applied: the typed fields follow, every map
-    // page and the scope move home, the coverage map starts again.
-    virtual void onReceiverPositionApplied(double latDeg, double lonDeg);
+    // (onReceiverPositionApplied left with window port group 14, part a: the receiver's position is in the state, and
+    // the window follows it - the typed fields, every map page's and Patch Map part's home, the scope, the coverage map
+    // - on its own thread when it moves. API 0.3 8.11.1.)
     // The converter for the radio in use changed: the LO field re-seeds (and
     // its error clears when `clearLoError`).
     virtual void onConverterChanged(bool clearLoError);
@@ -77,8 +77,7 @@ public:
     // reads in the block it draws from - API 0.3 8.12.)
     // (onPatchPicture left with window port group 13, part c: a patch decoder's picture is the engine's now - the
     // newest of each node is read through read_image, and announced by FOXAPI_EVENT_DECODER_IMAGE, API 0.3 8.12.)
-    // A GPS fix was applied: the rail's position fold reveals itself.
-    virtual void onGpsFixApplied();
+    // (onGpsFixApplied left with window port group 14, part b: the GPS list's entry going to Fixed is the window's cue.)
     // The store: a catalogue fetch starts; a fetch or install result was
     // collected (the bounded-run test hook reports); an ADD ALL run finished.
     // THE STANDARD WINDOW IMPLEMENTS ONLY onCatalogueResult (window port,

@@ -108,10 +108,16 @@ struct DiagContext {
     std::vector<std::string> plugins;  // "name version", loaded plugins only
 };
 
+// The block of "name: value" lines `ctx` renders to - the text setDiagContext stores, a crash or a hang report prints and
+// the diagnostics bundle carries. PURE: it touches no process-global state, so a caller that wants the text (a test, a
+// tool) can have it without replacing what a fault would print.
+std::string renderDiagContext(const DiagContext& ctx);
+
 // Renders `ctx` into a fixed static buffer, ONCE, on the healthy path. The
 // fault path writes those bytes out and formats nothing. Safe to call as
 // often as the application likes; the cost is one snprintf of a few hundred
-// bytes.
+// bytes. THE ENGINE IS ITS ONE CALLER in the product (Engine::refreshDiagContext, from its own pass): a bundle, a window
+// or a test that built a context of its own must not replace the one a crash will print (see DiagBundleInput).
 void setDiagContext(const DiagContext& ctx);
 
 // The rendered block, for tests and for the bundle. Empty until the first
@@ -151,7 +157,12 @@ void crashSignatureRaw(unsigned long code, const char* moduleName,
 // The "copy diagnostics" bundle
 // ---------------------------------------------------------------------------
 struct DiagBundleInput {
-    DiagContext context;
+    // THE CONTEXT, AS THE ENGINE RENDERED IT: diagContextBlock(), the very text a crash or a hang report carries (window
+    // port group 14, part c). It used to be a DiagContext the window re-derived field by field - the engine's own code, a
+    // second time - and buildDiagnosticsBundle then called setDiagContext with it, so pressing "Copy diagnostics" REPLACED
+    // the crash handler's copy with the window's. A bundle is a read of the application: it takes the block as it is and
+    // writes nothing process-global. Empty only before the engine has rendered one (the bundle then has no context lines).
+    std::string contextBlock;
     std::vector<std::string> logLines;
     std::string logPath;
     std::string crashDir;
