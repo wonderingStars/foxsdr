@@ -709,6 +709,10 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // The browser page's own poll is the web remote's keep-alive (API 0.2:
     // only an interface's heartbeat counts) - never its PTT re-assertions.
     webServer_.setStatusPollHook([this]() { engine_.api().webRemoteBeat(); });
+    // THE REMOTE CONTROLS' SOURCE (pump move step P1, F3): the engine's pass pulls the web server's and the CAT server's
+    // queued requests - where the frame's applyWebControls used to apply them - so nothing but the pumping thread ever
+    // applies one. Cleared in the destructor, before either server goes.
+    engine_.setRemoteControlSource([this]() { return takeRemoteControls(); });
     // The CAT server reads the SAME published snapshot - and the plugin host
     // API reads it too - so a frequency read over CAT, one read in the
     // browser and one a plugin reads come from the same publishes. They can
@@ -814,6 +818,8 @@ AppWindow::~AppWindow() {
     // start of the engine's next pass (the engine's teardown stops the
     // transmitter in any case).
     closeUiSession();
+    // The engine no longer calls into this window for the browser's requests.
+    engine_.setRemoteControlSource({});
 
     // A catalogue fetch or a plugin download may still be in flight: the
     // engine cancels its own (Engine::stopTransfers says why), first, as
@@ -1436,7 +1442,7 @@ int AppWindow::run(int frames) {
                                 static_cast<std::int64_t>(ps.front().index)));
                         } else {
                             engine_.recordPluginStopped(cascade::core::pluginKey(lp), false);
-                            openPluginWindowsFor(lp);
+                            openPluginWindowsFor(lp.name, lp.capabilities);
                         }
                         break;
                     }
@@ -2764,6 +2770,9 @@ void AppWindow::drawUi() {
     // its session holds (a frame loop that stops, stops it - the engine's
     // keep-alive and the TX thread's own dead-man both release the key).
     if (uiSession_ != nullptr) { engineApi_->heartbeat(uiSession_); }
+    // The track-info plugin's status lines, polled here (its cache is this thread's) and sent as commands, so the drain just
+    // below applies them in this frame's pass (the pump move's step P2: the pass used to ask for them through a host hook).
+    sendTrackInfoText();
     engine_.pumpFrameBegin();  // Engine: the snapshot retry, this drain, the API's queue
     // (THE KEYBOARD is dispatched below, right after the frame's read of the
     // state: a key reads the value it changes, and since the window's port
@@ -2804,7 +2813,7 @@ void AppWindow::drawUi() {
     // Anything a browser asked for since the last frame, applied before the
     // panels are drawn so the window shows the new state this frame rather
     // than one frame late.
-    applyWebControls();
+    engine_.pumpRemoteControls();  // Engine: the web remote's and CAT's requests, and the remote key's standing condition
     // And what PLUGINS asked for (host API level 1), by the same code, in the
     // same place and for the same reason. The snapshot they read is published
     // below (publishReceiverState), so it already carries this frame's
@@ -2882,7 +2891,7 @@ void AppWindow::drawUi() {
     // panel line and the popup all report this frame's answer, and a decision
     // taken after them would show the user the previous frame's.
     //
-    // After applyWebControls for the same reason that call is where it is: a
+    // After pumpRemoteControls for the same reason that call is where it is: a
     // browser's tune has already landed, so the mute follows a web tune in the
     // same frame rather than one behind it.
     engine_.pumpAudioMute();
@@ -14934,42 +14943,44 @@ void AppWindow::drawPluginPresets(const cascade::gui::PluginRow& p) {
     }
 }
 
-// STILL AN ENGINE HOOK (window port group 14, part d, 2026-10-20), and kept one on purpose: the engine calls it from
-// applyPluginPreset (and run()'s bounded-run seam calls it directly), on the thread that runs the pass. It names the engine
-// nowhere any more - the plugin UI is read through hostTrackPluginNames(), hostPanels() and hostInstruments() - but it WRITES
-// window state (mapPages_, pluginWindows_, decoderWindowOpen_), which is what a pass on its own thread cannot do. THE PUMP
-// MOVE'S WORK, NOT BUILT HERE: an event raised by applyPluginPreset once per application (the survey's G4, proposed as
-// FOXAPI_EVENT_PRESET_APPLIED, `text` the module file name) that the window drains in pumpUiEvents and answers with this body,
-// from the PLUGINS rows and the host accessors; the hook and its kHostHooks entry then go.
-void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
+// THE WINDOW HALF OF A PRESET PRESS (window port group 14 part d made it read the plugin UI through the host accessors; the pump
+// move's step P2 made it the window's own answer to an EVENT). The engine used to call it from applyPluginPreset, on the thread that
+// runs the pass - and it WRITES window state (mapPages_, pluginWindows_, decoderWindowOpen_), which a pass on its own thread cannot
+// do. Now pumpUiEvents takes FOXAPI_EVENT_PRESET_APPLIED (the module's file name, raised once per application, API 0.3 8.14) and
+// calls this with the PLUGINS row's name and capability word; run()'s bounded-run seam calls it with what the loaded plugin
+// declares. `caps` is CASCADE_CAP_*: the table pointers the old body tested (p.decoder, p.imageDecoder) are set exactly when the
+// module declared the bit (PluginHost::load).
+void AppWindow::openPluginWindowsFor(const std::string& name, std::uint32_t caps) {
+    const bool imageDecoder = (caps & CASCADE_CAP_IMAGE_DECODER) != 0u;
+    const bool textDecoder = (caps & CASCADE_CAP_DECODER) != 0u;
     {
         const std::vector<std::string>& trackNames = hostTrackPluginNames();
-        if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
-            MapPage& pg = ensureMapPage(p.name);
+        if (std::find(trackNames.begin(), trackNames.end(), name) != trackNames.end()) {
+            MapPage& pg = ensureMapPage(name);
             pg.open = true;
         }
     }
-    if (p.imageDecoder != nullptr) {
-        pluginWindows_.show(p.name + " image###image_" + p.name);
+    if (imageDecoder) {
+        pluginWindows_.show(name + " image###image_" + name);
     }
     // A panel's id carries the panel's OWN TITLE, which only the instance
     // knows, so this asks the instances rebuilt a moment ago rather than the
     // descriptor. A module may publish more than one.
     for (const cascade::core::HostPanel& hp : hostPanels()) {
-        if (hp.plugin == p.name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
+        if (hp.plugin == name) { pluginWindows_.show(hp.title + "###panel_" + hp.plugin); }
     }
-    bool ownWindow = p.imageDecoder != nullptr;
+    bool ownWindow = imageDecoder;
     {
         const std::vector<std::string>& trackNames = hostTrackPluginNames();
-        if (std::find(trackNames.begin(), trackNames.end(), p.name) != trackNames.end()) {
+        if (std::find(trackNames.begin(), trackNames.end(), name) != trackNames.end()) {
             ownWindow = true;
         }
     }
     for (const cascade::core::HostPanel& hp : hostPanels()) {
-        if (hp.plugin == p.name) { ownWindow = true; }
+        if (hp.plugin == name) { ownWindow = true; }
     }
     for (const cascade::core::HostInstrument& in : hostInstruments()) {
-        if (in.plugin == p.name) {
+        if (in.plugin == name) {
             pluginWindows_.show(instrumentWindowId(in));
             ownWindow = true;
         }
@@ -14979,11 +14990,11 @@ void AppWindow::openPluginWindowsFor(const cascade::core::LoadedPlugin& p) {
     // pressing POCSAG tuned the radio and showed nothing at all (GitHub issue
     // 2). See cascade::gui::presetOpensDecoderOutput. Logged, because "a
     // window opened" is otherwise invisible to anyone reading a report.
-    if (cascade::gui::presetOpensDecoderOutput(p.decoder != nullptr, ownWindow) &&
+    if (cascade::gui::presetOpensDecoderOutput(textDecoder, ownWindow) &&
         !decoderWindowOpen_) {
         decoderWindowOpen_ = true;
         cascade::core::diagLogf("preset: opened the Decoder output window for %s",
-                                p.name.c_str());
+                                name.c_str());
     }
 }
 
@@ -15799,7 +15810,9 @@ void AppWindow::openUiSession() {
     // The one event the window asks to be told (API 0.3 8.7): the receiver tuned off the presets of plugins
     // that are still muting the audio. pumpUiEvents drains it once a frame.
     if (uiSession_ != nullptr) {
-        (void)engineApi_->subscribe(uiSession_, FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY));
+        // ...and the one the pump move's step P2 added (API 0.3 8.14): a plugin's preset was applied, so its windows open.
+        (void)engineApi_->subscribe(uiSession_, FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY) |
+                                                    FOXAPI_EVENT_MASK(FOXAPI_EVENT_PRESET_APPLIED));
     }
     uiState_.structSize = sizeof(uiState_);
 }
@@ -15818,6 +15831,10 @@ void AppWindow::refreshUiState() {
     // A read that keeps overlapping a publish answers BUSY: the last good one stands.
     if (engineApi_->read_state(uiSession_, &st) == FOXAPI_OK) {
         uiState_ = st;
+        // THE SPECTRUM'S AXIS follows the display range the state carries (the pump move's step P2: the engine used to call
+        // this window's onDisplayRange from its pass the moment the range changed, writing the view's two floats from beside
+        // the frame that draws them). The waterfall is fed from the same two numbers (readSpectrum, below).
+        if (spectrum_ != nullptr) { spectrum_->setRange(static_cast<float>(uiState_.dbMin), static_cast<float>(uiState_.dbMax)); }
         // What a drag sent last frame has landed in this state (one pass): the
         // window's own copy of it goes (tuneLocal_).
         tuneLocal_ = TuneLocal{};
@@ -16642,7 +16659,8 @@ const AppWindow::DecoderLineCache& AppWindow::decoderLines() {
 void AppWindow::clearDecoderLines() { decoderLineCache_.lines.clear(); }
 
 // THE SESSION'S EVENTS, once a frame (after the key's answers): the receiver tuned off the presets of plugins
-// that are still muting the audio - the engine holds the mute and asks (API 0.3 8.7).
+// that are still muting the audio - the engine holds the mute and asks (API 0.3 8.7) - and a plugin's preset was applied, so its
+// windows open (API 0.3 8.14).
 void AppWindow::pumpUiEvents() {
     if (uiSession_ == nullptr) { return; }
     FoxEvent ev[8];
@@ -16651,6 +16669,17 @@ void AppWindow::pumpUiEvents() {
         const int32_t got = engineApi_->poll_events(uiSession_, ev, 8);
         for (int32_t i = 0; i < got; ++i) {
             if (ev[i].kind == FOXAPI_EVENT_MUTE_TUNE_AWAY) { askAboutMutedPlugins(); }
+            if (ev[i].kind == FOXAPI_EVENT_PRESET_APPLIED) {
+                // A plugin's preset was applied (API 0.3 8.14; the engine used to call openPluginWindowsFor from its pass): open
+                // what that module contributes - from its PLUGINS row, found by the module file name the event carries.
+                const PluginListCache& c = pluginLists();
+                for (const cascade::gui::PluginRow& row : c.plugins) {
+                    if (row.file == ev[i].text) {
+                        openPluginWindowsFor(row.name, row.caps);
+                        break;
+                    }
+                }
+            }
         }
         if (got < 8) { break; }
     }
@@ -19301,9 +19330,10 @@ namespace {
 namespace {
 }  // namespace
 
-void AppWindow::applyWebControls() {
-    std::vector<cascade::net::ControlRequest> requests =
-        webServer_.takePendingControls();
+cascade::engine::Engine::RemoteControls AppWindow::takeRemoteControls() {
+    cascade::engine::Engine::RemoteControls pulled;
+    std::vector<cascade::net::ControlRequest>& requests = pulled.requests;
+    requests = webServer_.takePendingControls();
     // CAT requests are the SAME ControlRequest type, so they are appended here
     // and applied by the identical code below rather than by a second copy of
     // it. That is the whole reason CAT emits control requests instead of
@@ -19318,28 +19348,24 @@ void AppWindow::applyWebControls() {
         requests.insert(requests.end(), std::make_move_iterator(fromCat.begin()),
                         std::make_move_iterator(fromCat.end()));
     }
-    for (const cascade::net::ControlRequest& r : requests) {
-        engine_.applyControlRequest(r);
-    }
-
     // --- THE STANDING CONDITIONS ON THE REMOTE KEY ---------------------------
     //
     // Both close a window that the hold's own expiry would otherwise leave
-    // open for two seconds, and both are the ENGINE's now (engine/stage3b-pre,
-    // docs/engine-stage3.md OPEN 7 (c)) - the window no longer reaches into
-    // transmitter_ for either:
+    // open for two seconds, and both are the ENGINE's (engine/stage3b-pre,
+    // docs/engine-stage3.md OPEN 7 (c); the pump move, step P1, made the
+    // engine's pass the only thing that applies them):
     //
     // THE CONSENT is the local operator's TX_REMOTE_ARM (the Transmit page's
     // "Allow remote transmit"), which the window withdraws when the page goes
     // away, and which lapses with its session (engine stage 4).
-    // THE SERVER is this window's until stage 5, so it says when it is not
-    // running - where it stops it (applyWebSettings) and here, once a frame,
-    // for a server that never started or was disabled in the settings panel.
-    // WebServer::stop() also queues a release for the loop above; releasing
-    // twice costs nothing.
-    if (!webServer_.running()) {
-        (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED));
-    }
+    // THE SERVER is this window's until stage 5, so it says whether it is
+    // running, read here AFTER the queues were taken (the order the frame's
+    // drain had): the engine ends a key the web remote holds, in the phase
+    // that applies these requests, when it is not - a server that never
+    // started or was disabled in the settings panel. WebServer::stop() also
+    // queues a release among the requests above; releasing twice costs nothing.
+    pulled.serverRunning = webServer_.running();
+    return pulled;
 }
 
 void AppWindow::refreshCatServer() {
@@ -19380,8 +19406,10 @@ void AppWindow::applyWebSettings() {
 
     if (!webCfg_.enabled) {
         webServer_.stop();
-        // ...and the remote key goes WITH it, in this same step (OPEN 7 (c)).
-        (void)engine_.applyCommand(cascade::core::cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED));
+        // ...and the remote key goes WITH it (OPEN 7 (c)): stop() queued its release, and the engine's next pass pulls it
+        // - and finds the server not running - in the phase that applies the browser's requests. The window does not
+        // reach into the engine for it (that call ran beside the pass once the pass has a thread of its own: the pump
+        // move's F3), so the release lands at that pass, not inside this click.
         return;
     }
 
@@ -20747,13 +20775,10 @@ void AppWindow::pauseWatchdog() { watchdog_.pause(); }
 
 void AppWindow::resumeWatchdog() { watchdog_.resume(); }
 
-void AppWindow::onDisplayRange(float dbMin, float dbMax) { spectrum_->setRange(dbMin, dbMax); }
-
-// (The engine told the window its bookmarks changed so that it could rebuild its view at once. The
-// view is built over the window's copy of BOOKMARKS now, which follows the store's version on its
-// own the frame after (rebuildBookmarkView), so the call has nothing left to do - and it is made
-// from the engine's pass, which is not where the window reads its session.)
-void AppWindow::onBookmarksChanged() {}
+// (onDisplayRange, onBookmarksChanged and onConverterChanged are not here any more: the pump move's step P2 took them out. The
+// spectrum's range is set from the state in refreshUiState; the bookmark view follows the store's version on its own
+// (rebuildBookmarkView), so the hook had nothing left to do; the converter's LO field re-seeds from the radio key and the stored
+// setting it reads (drawConverterControls, converterLoSeed).)
 
 // THE RECEIVER'S POSITION, FOLLOWED (window port group 14, part a). The engine called the window from its own pass
 // whenever a position was applied (a hook), and the window then moved its typed fields, every map page's home, the
@@ -20870,18 +20895,8 @@ void AppWindow::submitReceiverPosition(double latDeg, double lonDeg) {
     if (cascade::gui::receiverPositionAcceptable(latDeg, lonDeg)) { coverageResetPending_ = true; }
 }
 
-void AppWindow::onConverterChanged(bool clearLoError) {
-    converterLoSeededFor_.clear();
-    if (clearLoError) { converterLoBad_ = false; }
-}
-
-
-
-void AppWindow::onCatalogueResult() {
-    // A bounded run's diagnostic (CASCADE_PLUGIN_TEST): the engine prints the catalogue and every entry's install-gate decision
-    // from its own state, and this window names the frame (window port group 14, part e: the body moved into the engine).
-    if (!pluginTestHook_.empty()) { engine_.reportPluginTestResult(frameCounter_); }
-}
+// (onCatalogueResult is not here any more either: a bounded run's catalogue diagnostic (CASCADE_PLUGIN_TEST) is the engine's, which
+// prints it when the fetch resolves, naming the frame this window handed over in the facts - handFrontEndFacts.)
 
 void AppWindow::beforePluginRescan() { syncMapPagesToSaved(); }
 
@@ -20905,8 +20920,15 @@ void AppWindow::showDemonstrationInstrument(const cascade::core::HostInstrument&
     pluginWindows_.show(instrumentWindowId(in));
 }
 
-std::vector<std::string> AppWindow::drainTrackInfoText() { return trackInfo_.drainText(); }
-
+// THE TRACK-INFO PLUGIN'S STATUS LINES, from this thread (the pump move's step P2): the cache's text polled here, in the frame,
+// and sent to the engine as one command each. The engine used to ask through a hook, from its pass, and the plugin's poll_text
+// ran there beside the GUI's trackInfo_.get.
+void AppWindow::sendTrackInfoText() {
+    if (!trackInfo_.active()) { return; }
+    for (std::string& line : trackInfo_.drainText()) {
+        uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_TRACK_INFO_LINE, line));
+    }
+}
 
 bool AppWindow::webListening() const { return webServer_.running(); }
 
@@ -20915,7 +20937,52 @@ void AppWindow::handFrontEndFacts() {
     f.webListening = webListening();
     f.tunerDisplayStyle = tunerDisplayStyle();
     f.basemap = basemapFacts();
+    f.webExtras = webExtrasNow();
+    // The bounded run's catalogue diagnostic (CASCADE_PLUGIN_TEST): whether it is on, and the frame it names.
+    f.pluginTestReport = !pluginTestHook_.empty();
+    f.frame = frameCounter_;
     engine_.setFrontEndFacts(std::move(f));
+}
+
+// WHAT THE WEB STATUS TAKES OF THE PLUGIN POLL, built here and handed over (the pump move's step P2). The engine's pass used to
+// call this window for it while it published (enrichWebTrack per track, fillWebImages per pass), reading trackInfo_ and
+// pluginImages_ - state only this thread may touch. Asking the cache for a track is also what STARTS the plugin looking it up
+// (non-blocking; PENDING costs nothing; answers are cached), so this runs every frame over the tracks the poll found, exactly as
+// the pass's loop did, and with the same staleness rule. The tracks and pictures are the last poll's (drawPluginWindows polls them
+// later in the frame): an answer for a track that has just appeared follows a frame later than it did, which no browser can tell
+// from the plugin's own time to look it up.
+std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
+    const std::vector<cascade::core::HostTrack>& tracks = hostTracks();
+    if (tracks.empty() && pluginImages_.empty()) { return nullptr; }
+    auto x = std::make_shared<cascade::engine::WebExtras>();
+    if (trackInfo_.active()) {
+        for (const cascade::core::HostTrack& t : tracks) {
+            if (!cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { continue; }
+            const std::string id = t.t.id;
+            const cascade::gui::TrackInfoCache::Info* d = trackInfo_.get(id, t.t.kind);
+            if (d == nullptr) { continue; }
+            cascade::engine::WebTrackInfo w;
+            w.id = id;
+            w.kind = t.t.kind;
+            w.infoState = d->known ? 1u : 2u;
+            if (d->known) {
+                w.registration = d->registration;
+                w.acType = !d->typeName.empty() ? d->typeName : d->typeCode;
+                w.acOperator = d->operatorName;
+                w.acCountry = d->country;
+            }
+            x->tracks.push_back(std::move(w));
+        }
+        std::sort(x->tracks.begin(), x->tracks.end(),
+                  [](const cascade::engine::WebTrackInfo& a, const cascade::engine::WebTrackInfo& b) {
+                      return a.id != b.id ? a.id < b.id : a.kind < b.kind;
+                  });
+    }
+    for (const cascade::core::HostImage& im : pluginImages_) {
+        x->images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
+    }
+    if (x->tracks.empty() && x->images.empty()) { return nullptr; }
+    return x;
 }
 
 std::string AppWindow::tunerDisplayStyle() const { return cascade::gui::tunerStyleName(tunerStyle_); }
@@ -20928,27 +20995,6 @@ cascade::engine::EngineHost::BasemapFacts AppWindow::basemapFacts() const {
     f.tileSize = basemap_.tileSize();
     f.attribution = basemap_.attribution();
     return f;
-}
-
-void AppWindow::enrichWebTrack(cascade::net::RadioStatus::Track& w) {
-    if (trackInfo_.active()) {
-        const cascade::gui::TrackInfoCache::Info* d = trackInfo_.get(w.id, w.kind);
-        if (d != nullptr) {
-            w.infoState = d->known ? 1u : 2u;
-            if (d->known) {
-                w.registration = d->registration;
-                w.acType = !d->typeName.empty() ? d->typeName : d->typeCode;
-                w.acOperator = d->operatorName;
-                w.acCountry = d->country;
-            }
-        }
-    }
-}
-
-void AppWindow::fillWebImages(cascade::net::RadioStatus& s) {
-    for (const cascade::core::HostImage& im : pluginImages_) {
-        s.images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
-    }
 }
 
 void AppWindow::publishWebSpectrum(double centerHz) {

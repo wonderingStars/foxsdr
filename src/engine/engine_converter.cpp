@@ -142,8 +142,8 @@ std::optional<double> Engine::carriedAirCentre() {
 void Engine::applyConverterForSource() {
     pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
     converterHeldAir_.reset();   // a station held for the radio just replaced
-    // The LO field re-seeds from the radio now installed.
-    host_->onConverterChanged(true);
+    // (The LO field re-seeds from the radio now installed: the window sees the stored converter and the radio key move in the
+    // state it reads - the pump move's step P2 took the host hook out.)
 }
 
 double Engine::radioHzForSource(const std::string& kind, const std::string& args,
@@ -353,7 +353,6 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
     // is one too; applyRetuneNow already told them when the radio moved).
     pipeline_.resetRds();
     pluginRunner_.retune(pipeline_.activeSource().centerFrequencyHz());
-    host_->onConverterChanged(false);
     // Which way it was set, never a frequency (PRIVACY.md: what somebody
     // tunes to stays out of reports - an LO says which band they listen to).
     cascade::core::diagLogf("source: converter %s%s for the %s", cc::converterModeKey(eff.mode),

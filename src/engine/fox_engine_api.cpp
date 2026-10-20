@@ -629,14 +629,30 @@ public:
     // ---- THE KEY (core/tx_key_rules.hpp) ---------------------------------------
     // Everything below runs on the pumping thread, except webRemoteBeat.
 
+    // THE THREAD TRIPWIRE (pump move step P1, F3). The key rules are single-threaded by contract: only the thread that
+    // pumps the engine may reach them. While the engine's own control thread runs, that is the control thread, so a call
+    // from any other thread is a defect (the window's frame applying a browser PTT beside the pass was the one the review
+    // found). Counted, never acted on: the tests read it (offPassKeyTouches) and a product build pays one atomic load. With
+    // no control thread running the caller IS the pump (the window's frame, a test calling pump()), and nothing is judged.
+    void noteKeyTouch() {
+        if (engine_.controlThreadRunning() && !engine_.onControlThread()) {
+            offPassKeyTouches_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    std::uint64_t offPassKeyTouches() const { return offPassKeyTouches_.load(std::memory_order_relaxed); }
+
     // An end the ENGINE makes (Engine::applyCommand's RUN 0, TX_OPEN,
     // TX_CLOSE - whichever client sent them - and a fault).
-    void endKeyFromEngine(const char* why) { rules_.endKey(why, steadyMs()); }
+    void endKeyFromEngine(const char* why) {
+        noteKeyTouch();
+        rules_.endKey(why, steadyMs());
+    }
 
     // The web remote's PTT (Engine::applyCommand's TX_PTT: the browser's
     // transmitPtt arrives there through applyControlRequest). A REMOTE key:
     // a 2 s hold the page re-asserts, only with the local operator's consent.
     cascade::core::TxKeyAnswer webRemotePtt(bool on) {
+        noteKeyTouch();
         cascade::core::TxKeySender snd{kWebSessionId, true, webSession_.principal, true};
         const cascade::core::TxKeyAnswer a = rules_.key(snd, false, on, engine_.transmitter_.haveSink(), steadyMs());
         if (on && a.status == FOXAPI_OK) { engine_.transmitter_.keyRemote(); }
@@ -648,6 +664,7 @@ public:
     // The web server is not running: no browser can ask again, so a key the
     // web remote holds ends now rather than at its hold.
     void webRemoteStopped(const char* why) {
+        noteKeyTouch();
         if (rules_.keyOwner() == kWebSessionId) { rules_.endKey(why, steadyMs()); }
         engine_.transmitter_.releaseRemote(why);
     }
@@ -657,7 +674,10 @@ public:
     void webRemoteBeat() { webBeatMs_.store(steadyMs(), std::memory_order_relaxed); }
 
     // The control loop's last act, before it stops the Transmitter.
-    void engineStopping() { rules_.endKey("the engine is shutting down", steadyMs()); }
+    void engineStopping() {
+        noteKeyTouch();
+        rules_.endKey("the engine is shutting down", steadyMs());
+    }
 
     ApiHost::TxFacts txFacts() const {
         ApiHost::TxFacts f;
@@ -1084,7 +1104,7 @@ private:
             case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
                 return FOXAPI_GRANT_ADMIN;
             case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST: case FOXAPP_OP_NOTE_PANEL:
-            case FOXAPP_OP_SET_PATCH_PAGE_OPEN:
+            case FOXAPP_OP_SET_PATCH_PAGE_OPEN: case FOXAPP_OP_TRACK_INFO_LINE:
                 return FOXAPI_GRANT_VIEW;
             default:
                 if ((op & 0xFF00u) == 0x0A00u) { return FOXAPI_GRANT_TRANSMIT; }
@@ -1186,6 +1206,7 @@ private:
     ApiSession webSession_;                  // its id and principal only
     std::atomic<std::int64_t> webBeatMs_{0};
     std::atomic<std::uint64_t> keyOwner_{0};  // rules_.keyOwner(), for heartbeat()
+    std::atomic<std::uint64_t> offPassKeyTouches_{0};  // noteKeyTouch: key-rule entries by a thread that is not the pump's
     bool lastPassFaulted_ = false;
 
     struct Outgoing {
@@ -1239,6 +1260,8 @@ private:
         char caption[FOXAPI_NAME_CHARS] = {};
     };
     std::vector<PendingImage> pendingImages_;
+    // API 0.3 8.14: the presets applied since the last endPass, by the module's file name (the pumping thread's; room kept).
+    std::vector<std::string> pendingPresets_;
 
     // API 0.3: the patch radios' spectra, one ring per node with a radio
     // (made when a node's radio first publishes, dropped when it goes).
@@ -1276,6 +1299,9 @@ public:
         std::lock_guard<std::mutex> lk(listsMutex_);
         patchImages_ = std::move(s);
     }
+    // API 0.3 8.14: a plugin's preset was applied (Engine::applyPluginPreset, on the pumping thread); the event is
+    // broadcast by this pass's endPass, once per application.
+    void presetApplied(const std::string& moduleFile) { pendingPresets_.push_back(moduleFile); }
     // The pumping thread's: queued here, broadcast by this pass's endPass.
     void patchImageArrived(uint64_t node, uint64_t imageId, const std::string& caption) {
         PendingImage p;
@@ -1768,6 +1794,7 @@ void ApiHostImpl::broadcast(FoxEvent e) {
 }
 
 void ApiHostImpl::beginPass() {
+    noteKeyTouch();  // the pass itself (sessionGone, the key commands, txPass below) is the rules' one legitimate caller
     work_.clear();
     closedWork_.clear();
     {
@@ -1975,6 +2002,17 @@ void ApiHostImpl::endPass() {
             broadcast(e);
         }
         pendingImages_.clear();
+    }
+    // API 0.3 8.14: FOXAPI_EVENT_PRESET_APPLIED - a plugin's preset was applied in this pass (or since the last endPass, for
+    // an application made between passes). The state it changed is in the publish above, so an interface that is told reads it.
+    if (!pendingPresets_.empty()) {
+        for (const std::string& file : pendingPresets_) {
+            FoxEvent e{};
+            e.kind = FOXAPI_EVENT_PRESET_APPLIED;
+            copyText(e.text, file.c_str());
+            broadcast(e);
+        }
+        pendingPresets_.clear();
     }
     // API 0.3 8.7: FOXAPI_EVENT_MUTE_TUNE_AWAY - the receiver tuned off its muting plugins' presets while they
     // were still running (armed by Engine::updateAudioMute, which runs after the pass's publish). Broadcast HERE,
@@ -2593,8 +2631,10 @@ void ApiHost::takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log
     impl_->takeDecoderLines(log, total);
 }
 void ApiHost::muteTuneAway(std::uint32_t names) { impl_->muteTuneAway(names); }
+void ApiHost::presetApplied(const std::string& moduleFile) { impl_->presetApplied(moduleFile); }
 void ApiHost::webRemoteStopped(const char* why) { impl_->webRemoteStopped(why); }
 void ApiHost::engineStopping() { impl_->engineStopping(); }
+std::uint64_t ApiHost::offPassKeyTouches() const { return impl_->offPassKeyTouches(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }
 void ApiHost::setLists(std::shared_ptr<const ApiListBlock> lists) { impl_->setLists(std::move(lists)); }
 void ApiHost::setPatchLive(std::shared_ptr<const ApiLiveBlock> live) { impl_->setPatchLive(std::move(live)); }

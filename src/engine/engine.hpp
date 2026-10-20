@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <future>
 #include <limits>
 #include <map>
@@ -115,12 +116,37 @@ struct ControlThreadOptions {
     unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
 };
 
+// WHAT THE WEB STATUS NEEDS FROM THE WINDOW'S PLUGIN POLL (pump move step P2): the track-info plugin's answers for the tracks on
+// screen, and the headers of the receiver plugins' decoded pictures. Both used to be asked of the window while the engine published
+// (the host hooks enrichWebTrack and fillWebImages), reading the window's TrackInfoCache and picture buffer - GUI-thread state - from
+// the pass. The window builds this once a frame, immutable, and hands the pointer over inside FrontEndFacts (a copy of the facts is
+// a refcount, so the publish's three copies stay free); the pass only looks the answer up.
+struct WebTrackInfo {
+    std::string id;           // the track's id and kind: the key (the vector is sorted by id, then kind)
+    unsigned kind = 0;
+    unsigned infoState = 0;   // 1 = known, 2 = the source does not have it (RadioStatus::Track::infoState)
+    std::string registration;
+    std::string acType;
+    std::string acOperator;
+    std::string acCountry;
+};
+struct WebExtras {
+    std::vector<WebTrackInfo> tracks;
+    std::vector<cascade::net::RadioStatus::Image> images;
+};
+
 struct FrontEndFacts {
     bool webListening = false;
     // A front end that has handed nothing over (the headless engine) shows
     // the product's default face, as EngineHost's own answer always was.
     std::string tunerDisplayStyle = cascade::gui::tunerStyleName(cascade::gui::TunerStyle::Nixie);
     EngineHost::BasemapFacts basemap;
+    // The web status' extras (above); null when there are none, which is every pass of a headless engine.
+    std::shared_ptr<const WebExtras> webExtras;
+    // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_TEST): whether to print the catalogue report when a fetch resolves, and the
+    // window's frame count to name in it - the window's onCatalogueResult hook used to read its own counter from the pass.
+    bool pluginTestReport = false;
+    int frame = 0;
 };
 
 // Engine::StatusText - see Engine::publishStatusText.
@@ -385,7 +411,7 @@ private:
     // same persistence, same re-application after every rebuild.
     void setPluginSettingsAllowed(const std::string& pluginKey, bool allowed);
     void applyPluginSettingsGrants();
-    // ONCE A FRAME, straight after applyWebControls: applies what plugins
+    // ONCE A PASS, straight after pumpRemoteControls: applies what plugins
     // asked of the receiver (through applyControlRequest, the code a click or
     // a browser goes through), turns their log lines into decoder-output lines
     // and plate notices, folds their settings into the config, and collects
@@ -2340,6 +2366,7 @@ private:
     // read once by the caller and handed to both.
     void fillPublishedState(cascade::core::PublishedState& ps, const std::string& faultMessage,
                             const cascade::core::RdsSnapshot& rds);
+    static void applyWebTrackInfo(const WebExtras& x, cascade::net::RadioStatus::Track& w);
     void fillStatusLists(cascade::net::RadioStatus& s, const std::string& faultMessage,
                          const cascade::core::RdsSnapshot& rds, std::vector<std::uint64_t>& bookmarkIds);
     // The runner's feeding keys, reused every frame (fillPublishedState), and
@@ -2404,6 +2431,31 @@ public:
     // thread; the publish reads the newest handed over.
     void setFrontEndFacts(FrontEndFacts f);
     FrontEndFacts frontEndFacts() const;
+    // Just the web extras of the newest facts (a pointer copy under the same lock), for the publish.
+    std::shared_ptr<const WebExtras> webExtras() const;
+
+    // THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md). The web remote and CAT hand the
+    // engine ControlRequests through queues of their own (WebServer/CatServer::takePendingControls - mutex-protected, any
+    // thread, bounded, drop-oldest). The ENGINE pulls them, in its own pass, in a phase of its own (pumpRemoteControls)
+    // where the window's applyWebControls used to run in the frame: after the local and API queues and the inputs, before
+    // the plugins' requests and the scanner. Nothing else applies a remote request, so the key rules (ApiHostImpl::rules_,
+    // single-threaded by contract) and the whole of applyCommand are touched by the pumping thread alone. A front end that
+    // serves a browser or a CAT client installs the source once (before the pass runs on a thread of its own, or from it);
+    // an engine with none - the table's headless engine - pulls nothing and judges nothing.
+    //
+    // WHY A PULL AND NOT A PUSH THROUGH submitCommand OR THE API QUEUE: both drain BEFORE this phase, so a remote request
+    // that arrived in the same pass as a local one would be applied FIRST and could win the key (rule 6, first come); the
+    // pull keeps today's order, the web after both.
+    struct RemoteControls {
+        std::vector<cascade::net::ControlRequest> requests;  // web first, then CAT (the order applyWebControls had)
+        // Whether the server that carries the browser's key is running AT THE MOMENT OF THE PULL (the standing condition
+        // of the remote key, docs/engine-stage3.md OPEN 7 (c)): when it is not, a key the web remote holds ends in the same
+        // phase (FOXAPP_OP_WEB_CONTROL_STOPPED's rule), since no browser can ask again.
+        bool serverRunning = true;
+    };
+    using RemoteControlSource = std::function<RemoteControls()>;
+    void setRemoteControlSource(RemoteControlSource source);
+    void pumpRemoteControls();
 
     // The per-frame pump (engine.cpp says what each phase runs, in order).
     void pumpFrameBegin();
@@ -2513,6 +2565,10 @@ public:
 
 private:
     bool tornDown_ = false;  // teardown() ran (so ~Engine does not run it again)
+    // The remote controls' source (setRemoteControlSource): the pass copies the pointer under the lock and calls it
+    // outside it, so a front end may replace or clear it from any thread.
+    std::mutex remoteSourceMutex_;
+    std::shared_ptr<const RemoteControlSource> remoteSource_;
     // The wake a submit gives the control loop (wakeControl).
     std::mutex controlWakeMutex_;
     std::condition_variable controlWakeCv_;

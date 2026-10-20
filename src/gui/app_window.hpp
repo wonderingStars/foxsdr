@@ -607,8 +607,10 @@ private:
     // --- WHAT THE ENGINE ASKS OF THIS WINDOW (engine/engine_host.hpp) ---------
     // Each answers exactly as the line the moved code used to run here did,
     // on the same (GUI) thread at the same moment; the definitions are at the
-    // end of app_window.cpp. openPluginWindowsFor, declared further down, is
-    // the one this window already had under the same name.
+    // end of app_window.cpp. (The pump move's step P2 took seven hooks out of this list - onDisplayRange, onBookmarksChanged,
+    // onConverterChanged, drainTrackInfoText, enrichWebTrack, fillWebImages and the window's onCatalogueResult - and turned
+    // openPluginWindowsFor into the window's own answer to an event: each wrote or read state the window owns from the engine's
+    // pass, which a pass on a thread of its own must not.)
     // THE FRAME CLOCK, THREAD-AWARE (engine/stage3b-pre, docs/engine-stage3.md
     // OPEN 4): on the GUI thread both read ImGui as they always did and leave
     // the answer in an atomic; from any other thread they return that answer
@@ -622,25 +624,25 @@ private:
     double wallTimeS() const override;
     void pauseWatchdog() override;
     void resumeWatchdog() override;
-    void onDisplayRange(float dbMin, float dbMax) override;
-    void onBookmarksChanged() override;
-    void onConverterChanged(bool clearLoError) override;
-    void onCatalogueResult() override;
     void beforePluginRescan() override;
     void onPluginsUnloading() override;
     void attachBasemap(const CascadeBasemapApi* api) override;
     void attachTrackInfo(const CascadeTrackInfoApi* api) override;
     void showDemonstrationInstrument(const cascade::core::HostInstrument& in) override;
-    std::vector<std::string> drainTrackInfoText() override;
-    // The three publish-time facts (engine/stage3b-pre OPEN 4): no longer
+    // The publish-time facts (engine/stage3b-pre OPEN 4): no longer
     // EngineHost hooks the engine calls while publishing, but this window's
-    // answers, HANDED OVER once a frame (handFrontEndFacts).
+    // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the
+    // pump move's step P2, the track-info plugin's answers for the web status
+    // and the pictures' headers (webExtrasNow), the bounded run's report switch
+    // and the frame count it names.
     bool webListening() const;
     std::string tunerDisplayStyle() const;
     BasemapFacts basemapFacts() const;
     void handFrontEndFacts();
-    void enrichWebTrack(cascade::net::RadioStatus::Track& w) override;
-    void fillWebImages(cascade::net::RadioStatus& s) override;
+    std::shared_ptr<const cascade::engine::WebExtras> webExtrasNow();
+    // The track-info plugin's status lines, polled on THIS thread (the cache is GUI-thread state) and sent to the engine, one
+    // FOXAPP_OP_TRACK_INFO_LINE each - at the head of the frame, so they land in the pass that frame's drain applies.
+    void sendTrackInfoText();
     // THE WINDOW'S HALVES OF THREE ENGINE FUNCTIONS THAT WERE ONE. The engine
     // publishes the receiver snapshot and hands back the centre it published;
     // the browser's spectrum frame (a stream, not state) is copied here,
@@ -937,10 +939,10 @@ private:
 
     void drawPluginPresets(const cascade::gui::PluginRow& p);
     // The window half of a preset press: the plugin's map page, picture,
-    // panels and instruments, or Decoder output for a text decoder. STILL A HOOK the engine calls (2026-10-20, group 14 part d: its
-    // reads of the plugin UI go through the host accessors; the event that replaces the call is the pump move's work - see the
-    // definition).
-    void openPluginWindowsFor(const cascade::core::LoadedPlugin& p) override;
+    // panels and instruments, or Decoder output for a text decoder. The engine no longer calls it (the pump move's step P2): the
+    // press is an EVENT, FOXAPI_EVENT_PRESET_APPLIED (the module's file name), that pumpUiEvents takes in the look and answers
+    // with this, from the PLUGINS row; run()'s bounded-run seam calls it directly with what the loaded plugin declares.
+    void openPluginWindowsFor(const std::string& name, std::uint32_t caps);
     // The REMNANT of the receiver-control rows, and it is the half the fitted
     // window cannot draw: the refusal notice PluginUi records, and the grants
     // held by modules that are NOT installed any more. The fitted window
@@ -3161,9 +3163,15 @@ private:
     // (modeIndex_, vfoOffsetKhz_, squelchDb_ ...) in step, so a change made
     // from a browser shows up on the desktop window and in the debounced
     // config save exactly as though it had been clicked.
-    // Drains BOTH servers' queued requests — the browser's and CAT's — and
-    // applies them through one body of code, so the two can never drift.
-    void applyWebControls();
+    // Hands BOTH servers' queued requests — the browser's and CAT's — to the engine's pass
+    // (Engine::setRemoteControlSource, installed by the constructor; the engine's
+    // pumpRemoteControls phase calls this where the frame's applyWebControls used to run) and
+    // says whether the browser's server is running at that moment. The ENGINE applies them,
+    // through one body of code, so the two can never drift - and the key rules are touched by
+    // the pumping thread alone (the pump move's F3). Called by the engine, on the pumping
+    // thread: it reads two servers whose queues are mutex-protected and whose running flags
+    // are atomic, and nothing of the window's.
+    cascade::engine::Engine::RemoteControls takeRemoteControls();
     // Starts or stops the CAT server to match the current configuration, and
     // records why in catStatus_ when it will not start.
     void refreshCatServer();

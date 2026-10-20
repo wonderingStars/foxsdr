@@ -288,6 +288,9 @@ public:
     // safe behavior for it, and silently reordering would hide the caller's
     // bug instead of degrading visibly (flat-lined plot, no grid).
     void setRange(float dbMin, float dbMax);
+    // ...and what it holds (the window sets it from the published state; a test reads it back).
+    float dbMin() const { return dbMin_; }
+    float dbMax() const { return dbMax_; }
 
     // HOW MANY 10 dB GRIDLINES TO STEP BETWEEN LABELS on the dB axis, so the
     // ladder cannot collide with itself.

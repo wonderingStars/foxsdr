@@ -2758,6 +2758,13 @@ void Engine::pollPluginAsync() {
         // (tests/test_catalogue_error_report.cpp).
         publishStatusText();
         host_->onCatalogueResult();
+        // A bounded run's diagnostic (CASCADE_PLUGIN_TEST): the engine prints the catalogue and every entry's install-gate
+        // decision from its own state, naming the frame the window had reached - both handed over in FrontEndFacts (pump move
+        // step P2: the window's onCatalogueResult hook used to read its own frame counter from this pass).
+        {
+            const FrontEndFacts facts = frontEndFacts();
+            if (facts.pluginTestReport) { reportPluginTestResult(facts.frame); }
+        }
     }
 
     if (installPending_ && installFuture_.valid() &&
@@ -3455,7 +3462,11 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // yet. A decoder that has produced no picture still gets its window, which
     // says it is waiting - the truth, and what was asked to be seen. Each id
     // is the one drawPluginWindows draws by, built from the same display name.
-    host_->openPluginWindowsFor(p);
+    // (The windows a preset opens are the interface's to open, on its own thread: it is TOLD, by an event - API 0.3 8.14,
+    // FOXAPI_EVENT_PRESET_APPLIED, text the module's file name - raised once per application, in this pass's endPass. The
+    // engine used to call the window's openPluginWindowsFor from here, which writes the map pages, the plugin windows and the
+    // Decoder output window's flag.)
+    api_->presetApplied(cascade::core::pluginKey(p));
 
     std::string note;
     cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
@@ -4326,19 +4337,9 @@ void Engine::pumpDecoderOutput() {
         ++decoderLinesTotal_;
         decoderLog_.push_back(std::move(l));
     }
-    // The track-info plugin's status ("cannot reach the registry") lands in
-    // the same log: it is the only place a user looks when a plugin is quiet.
-    for (std::string& s : host_->drainTrackInfoText()) {
-        cascade::core::DecodedLine l;
-        l.plugin = "Aircraft info";
-        l.text = std::move(s);
-        // COUNTED like every other line (API 0.3 8.7): an uncounted one never reached the backlog an
-        // interface reads (the ring takes the lines the count says are new), so the window that now draws
-        // the Decoder output window from that backlog would have lost the only place a user sees why the
-        // track-info plugin is quiet.
-        ++decoderLinesTotal_;
-        decoderLog_.push_back(std::move(l));
-    }
+    // (The track-info plugin's status lines ("cannot reach the registry") reach the same log as a COMMAND since the pump
+    // move's step P2 - FOXAPP_OP_TRACK_INFO_LINE, sent by the window that owns the plugin's cache and polls its text on its
+    // own thread; this pass used to ask the window for them through a host hook, on whichever thread it ran.)
     // THE PATCH'S DECODERS, drained every frame for the same reason the
     // runner's are: its queue is bounded and drops. A line is SHOWN only when
     // its node's Text output is wired to a Text sink - that wire is what the
@@ -5312,6 +5313,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         }
     }
 
+    const std::shared_ptr<const WebExtras> extras = webExtras();
     for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
         // THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do
         // not disagree about what is still flying. A dropped target simply
@@ -5331,14 +5333,15 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         w.ageMs = t.t.ageMs;
         w.kind = t.t.kind;
         w.flags = t.t.flags;
-        // Enrichment from the track-info plugin. Running every frame for
-        // every live target, this loop is ALSO what drives the lookups: the
-        // ask is non-blocking, PENDING costs nothing, and answers are cached.
-        host_->enrichWebTrack(w);
+        // Enrichment from the track-info plugin, as the window handed it over (FrontEndFacts::webExtras, pump move step P2):
+        // the window asks the plugin's cache for every live target once a frame - which is what drives the lookups, the ask
+        // being non-blocking, PENDING costing nothing and answers cached - and this pass only looks the answer up.
+        if (extras != nullptr) { applyWebTrackInfo(*extras, w); }
         s.tracks.push_back(std::move(w));
     }
 
-    host_->fillWebImages(s);
+    // The receiver plugins' decoded pictures (headers only; the pixels are served by the web server's own set), as handed over.
+    if (extras != nullptr) { s.images.insert(s.images.end(), extras->images.begin(), extras->images.end()); }
 
     s.basemap.attribution = frontEndFacts().basemap.attribution;   // handed over (OPEN 4)
 
@@ -5677,7 +5680,6 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             dbMin_ = lo;
             dbMax_ = hi;
-            host_->onDisplayRange(dbMin_, dbMax_);
             res.applied[0] = dbMin_;
             res.applied[1] = dbMax_;
             return res;
@@ -6126,7 +6128,6 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             const std::size_t n = freqMgr_.removeGroup(text);
             bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
             saveBookmarks();
-            host_->onBookmarksChanged();
             res.applied[0] = static_cast<double>(n);
             return res;
         }
@@ -6540,6 +6541,23 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
                                           cascade::versionString());
             return res;
+        case FOXAPP_OP_TRACK_INFO_LINE: {
+            // The track-info plugin's status ("cannot reach the registry") lands in the same log as the decoders' lines: it is
+            // the only place a user looks when a plugin is quiet. SENT BY THE WINDOW (it owns the plugin's cache and polls its
+            // text on its own thread - TrackInfoCache is GUI-thread only); the pump move's step P2 replaced the host hook this
+            // pass used to ask (drainTrackInfoText) with this command.
+            if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no line"); }
+            cascade::core::DecodedLine l;
+            l.plugin = "Aircraft info";
+            l.text = text;
+            // COUNTED like every other line (API 0.3 8.7): an uncounted one never reached the backlog an interface reads (the
+            // ring takes the lines the count says are new), so the window that draws the Decoder output window from that
+            // backlog would have lost the only place a user sees why the track-info plugin is quiet.
+            ++decoderLinesTotal_;
+            decoderLog_.push_back(std::move(l));
+            while (decoderLog_.size() > kDecoderLogMax) { decoderLog_.pop_front(); }
+            return res;
+        }
         case FOXAPP_OP_NOTE_PANEL:
             // Window port group 3: the page names itself ONCE a run (the
             // window's own once-per-name set), where it used to call
@@ -6782,7 +6800,6 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.audio().setVolume(volume_);
     dbMin_ = cfg.dbMin;
     dbMax_ = cfg.dbMax;
-    host_->onDisplayRange(dbMin_, dbMax_);
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
     // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
@@ -7314,8 +7331,8 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
 
 // THE ENGINE'S START-UP (engine stage 3a): what gui::AppWindow's constructor
 // did to the receiver before its config restore, in the order it did it. The
-// spectrum's range and the watchdog pause around a device open are the
-// host's (onDisplayRange, pause/resumeWatchdog). Called once, before
+// watchdog pause around a device open is the host's (pause/resumeWatchdog).
+// (The spectrum's range is the window's own: it follows the state's.) Called once, before
 // applyConfig and before the first pump.
 void Engine::initialise() {
     recordDir_ = defaultRecordDir();
@@ -7327,7 +7344,6 @@ void Engine::initialise() {
     gen.setTone(0, 300000.0, -30.0f);
     gen.setTone(1, -500000.0, -45.0f);
     gen.setNoiseFloorDb(-90.0f);
-    host_->onDisplayRange(dbMin_, dbMax_);
 
     // Park the VFO on demo tone 0 so the receiver is tuned to something from
     // the first Play: WFM (the default mode) renders an unmodulated carrier
@@ -7491,6 +7507,36 @@ void Engine::pumpFrameBegin() {
 void Engine::pumpInputs() {
     endTakesOnFault();
     pumpDecoderOutput();
+}
+
+// THE REMOTE CONTROLS, in the place applyWebControls had in the frame (pump move step P1, F3): after the local queue and the
+// API's (pumpFrameBegin) and the inputs (pumpInputs), before the plugins' requests and the scanner (pumpPlugins), so the order
+// the operator could observe is the one the window's frame had - a local press landed in the same pass is applied first and a
+// remote one meets its key (rule 6). Every request is a TRANSLATION into commands (applyControlRequest) and applyCommand
+// reaches the key rules from RUN 0, TX_OPEN, TX_CLOSE and the web's TX_PTT, so this phase and no other thread is what keeps
+// ApiHostImpl::rules_ single-threaded. A source that is not installed makes the phase a no-op - the table's headless engine
+// pulls nothing and judges nothing (it has no server, so no standing condition either).
+void Engine::pumpRemoteControls() {
+    std::shared_ptr<const RemoteControlSource> source;
+    {
+        std::lock_guard<std::mutex> lk(remoteSourceMutex_);
+        source = remoteSource_;
+    }
+    if (source == nullptr) { return; }
+    const RemoteControls pulled = (*source)();
+    for (const cascade::net::ControlRequest& r : pulled.requests) { applyControlRequest(r); }
+    // THE STANDING CONDITION ON THE REMOTE KEY, once a pass: the server that carries the browser's PTT is not running (never
+    // started, disabled in the settings panel). The consent half is the local operator's TX_REMOTE_ARM, which the key rules
+    // themselves withdraw with its session. WebServer::stop() also queues a release for the requests above; releasing twice
+    // costs nothing (a no-op with no remote key held).
+    if (!pulled.serverRunning) { api_->webRemoteStopped("the web server is not running"); }
+}
+
+void Engine::setRemoteControlSource(RemoteControlSource source) {
+    std::shared_ptr<const RemoteControlSource> next =
+        source ? std::make_shared<const RemoteControlSource>(std::move(source)) : nullptr;
+    std::lock_guard<std::mutex> lk(remoteSourceMutex_);
+    remoteSource_ = std::move(next);
 }
 
 void Engine::pumpPlugins() {
@@ -7687,6 +7733,28 @@ FrontEndFacts Engine::frontEndFacts() const {
     return frontEndFacts_;
 }
 
+std::shared_ptr<const WebExtras> Engine::webExtras() const {
+    std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
+    return frontEndFacts_.webExtras;
+}
+
+// One track's enrichment from the handed-over answers (sorted by id, then kind): the same fields the window's enrichWebTrack hook
+// set, and nothing for a track the plugin has not answered (infoState stays 0 = "no answer yet").
+void Engine::applyWebTrackInfo(const WebExtras& x, cascade::net::RadioStatus::Track& w) {
+    const auto it = std::lower_bound(x.tracks.begin(), x.tracks.end(), std::make_pair(w.id, w.kind),
+                                     [](const WebTrackInfo& a, const std::pair<std::string, unsigned>& key) {
+                                         return a.id != key.first ? a.id < key.first : a.kind < key.second;
+                                     });
+    if (it == x.tracks.end() || it->id != w.id || it->kind != w.kind) { return; }
+    w.infoState = it->infoState;
+    if (it->infoState == 1u) {
+        w.registration = it->registration;
+        w.acType = it->acType;
+        w.acOperator = it->acOperator;
+        w.acCountry = it->acCountry;
+    }
+}
+
 Engine::StatusText Engine::statusText() const {
     std::lock_guard<std::mutex> lk(statusTextMutex_);
     return statusText_;
@@ -7763,6 +7831,7 @@ void Engine::controlPass() {
     pollGpsReader();
     pumpFrameBegin();
     pumpInputs();
+    pumpRemoteControls();
     pumpPlugins();
     pumpPatch();
     (void)pumpPublish();
@@ -7829,6 +7898,7 @@ void Engine::pump() {
     pollGpsReader();
     pumpFrameBegin();
     pumpInputs();
+    pumpRemoteControls();
     pumpPlugins();
     pumpPatch();
     (void)pumpPublish();

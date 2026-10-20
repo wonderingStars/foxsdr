@@ -23,10 +23,6 @@ double EngineHost::wallTimeS() const { return frameTimeS(); }
 void EngineHost::pauseWatchdog() {}
 void EngineHost::resumeWatchdog() {}
 
-void EngineHost::onDisplayRange(float, float) {}
-void EngineHost::onBookmarksChanged() {}
-void EngineHost::openPluginWindowsFor(const cascade::core::LoadedPlugin&) {}
-void EngineHost::onConverterChanged(bool) {}
 void EngineHost::onCatalogueFetchStarting() {}
 void EngineHost::onCatalogueResult() {}
 void EngineHost::onAddAllFinished() {}
@@ -37,9 +33,5 @@ void EngineHost::onPluginsUnloading() {}
 void EngineHost::attachBasemap(const CascadeBasemapApi*) {}
 void EngineHost::attachTrackInfo(const CascadeTrackInfoApi*) {}
 void EngineHost::showDemonstrationInstrument(const cascade::core::HostInstrument&) {}
-std::vector<std::string> EngineHost::drainTrackInfoText() { return {}; }
-
-void EngineHost::enrichWebTrack(cascade::net::RadioStatus::Track&) {}
-void EngineHost::fillWebImages(cascade::net::RadioStatus&) {}
 
 }  // namespace cascade::engine

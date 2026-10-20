@@ -107,6 +107,38 @@ race:paUtilErr_
 #                  re-verified. Reported in test_audio_open_log. The function is a
 #                  dozen lines whose only shared field is that flag.
 race:PaUnixThread_NotifyParent
+#
+# THIRD, ADDED ON THE ENGINE/STAGE4 BRANCH (not on master; decided once, with the pump move's first step that ran
+# threaded tests, 2026-10-20) from the branch's own first local run (WSL, GCC 15.2), the first report behind the
+# libpulse layer above, in test_command_queue_threads - and, since every engine test opens the sound sink, the first one
+# every engine test would meet. The report, verbatim in its decisive frames:
+#
+#   WARNING: ThreadSanitizer: data race
+#     Read of size 4 at 0x726000000240 by thread T5:
+#       #0 OnExit third_party/portaudio/src/hostapi/alsa/pa_linux_alsa.c:3397
+#       #1 CallbackThreadFunc ...pa_linux_alsa.c:4217
+#     Previous write of size 4 at 0x726000000240 by main thread (mutexes: write M0):
+#       #0 RealStop third_party/portaudio/src/hostapi/alsa/pa_linux_alsa.c:3099
+#       #1 AbortStream ...:3138   #2 Pa_AbortStream ...pa_front.c:1495
+#       #3 cascade::sink::AudioOut::closeLocked() src/sink/audio_out.cpp:166 ... ~AudioOut ... ~Pipeline ... ~Engine
+#   SUMMARY: ThreadSanitizer: data race pa_linux_alsa.c:3397 in OnExit
+#
+#   callbackAbort - `volatile sig_atomic_t callbackAbort` in PaAlsaStream. RealStop (the closing thread) stores it and
+#                  then calls PaUnixThread_Terminate, which flags the stop under the thread's mutex and pthread_cancel()s
+#                  the callback thread; OnExit is that thread's cleanup handler, and reads the flag to choose between
+#                  draining and dropping the stream. The store is ordered before the read by the cancel and the join
+#                  that follows, which ThreadSanitizer does not model as synchronisation (pthread_cancel is not an
+#                  interceptor edge), so it reports a race between two accesses that can only happen in that order. The
+#                  flag is written by the stopping thread before the thread is told to stop and by the callback thread
+#                  only in CallbackThreadFunc's own exit path, never concurrently.
+#                  The field is a struct member, which a `race:` line cannot name, so the line names the FUNCTION that
+#                  makes the write and nothing else: RealStop is PortAudio's, runs no code of ours (no callback is
+#                  invoked from it) and does nothing but this flag, the thread's termination and two more stream
+#                  fields. NOT `race:OnExit`: OnExit calls the stream's finished callback, which is OUR code, so a race
+#                  in the audio sink's own finished handler would have been hidden behind it. The patch to the vendored
+#                  file was not made for the reason given above (pa_linux_alsa.c is not compiled on Windows, so the
+#                  change could not be built where this repository is developed).
+race:RealStop
 
 # DELIBERATELY NOT LISTED.
 #   libusb       - not linked: the USB drivers use usbfs directly (src/usb).

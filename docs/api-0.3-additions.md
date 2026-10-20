@@ -1595,6 +1595,32 @@ status line of a finished read clears a pass or two after a port or baud edit; t
 fact says it, half a second at most) and the chip, the lamp and the install id follow a pass later; the serial-port list
 appears a pass after the arrow is pressed (nothing is said, and not "none found", until the scan's answer is in).
 
+### 8.14 A preset applied, and the track-info plugin's lines (the pump move, step P2)
+
+Two hooks the engine used to call into the interface from its own pass became the interface's own to answer, on its own thread.
+
+**8.14.1 `FOXAPI_EVENT_PRESET_APPLIED` (12).** A plugin's preset was applied: the engine tuned, set the mode, bandwidth and device
+rate the preset asks for, rebuilt the decoders against the receiver they are now pointed at - and an interface is told, once for
+each application, so it can open what that plugin contributes (a map page, the picture window, a panel, an instrument, or the shared
+Decoder output window for a text decoder with no window of its own). `text`: the plugin's **module file name** - `PLUGINS`' `detail`,
+the key every plugin op and grant takes (a display name is the plugin's own choice and is not unique). No other field is set.
+- **When.** Raised by the `endPass` of the pass that applied the preset, after the publish that carries what it changed - the new
+  frequency, the decoder rows (`DECODERS`, `PLUGINS`) - so an interface that is told finds them already in the lists. A preset applied
+  by any route raises it: the `FOXAPI_OP_PLUGIN_PRESET` command (a preset bar's key, the browser's `pluginPresetName`), a user preset
+  (`FOXAPP_OP_USER_PRESET_APPLY`), and the automatic preset when a plugin is started or its window opened (`FOXAPP_OP_PLUGIN_AUTO_PRESET`).
+- **Who gets it.** A session that subscribed to it (`FOXAPI_EVENT_MASK(FOXAPI_EVENT_PRESET_APPLIED)`), any grant and any kind of
+  session: the event names a module the session can already read in `PLUGINS`. The standard window subscribes, finds the module's row
+  by its file name and opens its windows; a session that does not care ignores it.
+- **What it replaces.** `EngineHost::openPluginWindowsFor`, a call the engine made from inside `applyPluginPreset` into the window,
+  which wrote the window's map pages and window set from whichever thread the pass ran on. The windows now open when the interface
+  looks - one frame after the press, where the hook opened them in the frame of the drain.
+
+**8.14.2 `FOXAPP_OP_TRACK_INFO_LINE` (0x8423, VIEW, LOCAL sessions only).** `text` (or long text): one status line from the
+track-info plugin ("cannot reach the registry"). The engine appends it to the Decoder output backlog as "Aircraft info", counted like
+every other line (`decoderLinesTotal` moves, `DECODER_LINES` serves it, `listSeq` does not). An empty text is `FOXAPI_BAD_ARGUMENT`. The
+interface that holds the plugin's cache (the standard window's `TrackInfoCache` is GUI-thread state) polls the plugin's text in its own
+frame and sends each line; the engine used to ask for them through `EngineHost::drainTrackInfoText` on every pass.
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or
@@ -1610,6 +1636,10 @@ are still running and muting the audio, and the engine holds the mute and asks w
 stop them. `value[0]`: how many plugins; `MUTE_CAUSES` names them (`value[0] = 1` on each).
 Once for each tune-away, raised by the publish that shows the held mute (section 8.7).
 Subscribe with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_MUTE_TUNE_AWAY)`.
+
+`FOXAPI_EVENT_PRESET_APPLIED` (12): a plugin's preset was applied (section 8.14.1). `text`: the plugin's module file name.
+Once for each application, raised by the `endPass` of the pass that applied it, after the publish that shows what it changed.
+Subscribe with `FOXAPI_EVENT_MASK(FOXAPI_EVENT_PRESET_APPLIED)`.
 
 `FOXAPI_OP_SCAN_SERIAL_PORTS` (0x0F03, SETTINGS, **LOCAL sessions only** —
 they are this machine's ports): the engine lists them on its own thread; the

@@ -54,6 +54,7 @@
 #include "gui/app_window.hpp"
 #include "gui/fonts.hpp"
 #include "gui/map_view.hpp"
+#include "gui/spectrum_view.hpp"
 #include "gui/track_metrics.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -100,7 +101,17 @@ struct AppWindowTestAccess {
 
     // ---- the members ---------------------------------------------------------------------------------------------------------
     static void drawPluginWindows(AppWindow& a) { a.drawPluginWindows(); }
-    static void openFor(AppWindow& a, const cascade::core::LoadedPlugin& p) { a.openPluginWindowsFor(p); }
+    // The window's half of a preset press, as the event handler and run()'s seam call it: the module's name and what it declares.
+    static void openFor(AppWindow& a, const cascade::core::LoadedPlugin& p) { a.openPluginWindowsFor(p.name, p.capabilities); }
+    // The session's events, once (the frame's pumpTransmitKey does it at its end; a look here does not).
+    static void pumpEvents(AppWindow& a) { a.pumpUiEvents(); }
+    // What the window hands the engine once a frame (the track-info answers, the pictures' headers), and what a browser reads.
+    static void hand(AppWindow& a) { a.handFrontEndFacts(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
+    static void attachTrackInfo(AppWindow& a, const CascadeTrackInfoApi* api) { a.trackInfo_.attach(api); }
+    static void sendTrackInfoText(AppWindow& a) { a.sendTrackInfoText(); }
+    static const AppWindow::DecoderLineCache& decoderLines(AppWindow& a) { return a.decoderLines(); }
+    static const SpectrumView& spectrum(AppWindow& a) { return *a.spectrum_; }
     // the eight accessors
     static void pollPlugins(AppWindow& a) { a.hostPollPlugins(); }
     static const std::vector<cascade::core::HostTrack>& tracks(AppWindow& a) { return a.hostTracks(); }
@@ -556,6 +567,169 @@ void testOpenFor(AppWindow& a) {
 }
 
 // ======================================================================================================================
+// E2. THE PRESET PRESS IS AN EVENT (the pump move, step P2; API 0.3 8.14)
+// ======================================================================================================================
+// The engine used to call the window's openPluginWindowsFor from inside applyPluginPreset, on whichever thread the pass ran on.
+// It raises FOXAPI_EVENT_PRESET_APPLIED now, once for each application (the module's file name), and the window opens what the
+// module contributes when it looks. Held here against the real engine and the real fixture plugin: the engine's pass opens NOTHING
+// (the hook is gone), the event does, from the PLUGINS row, once.
+void testPresetEvent(AppWindow& a) {
+    std::printf("  E2: a preset applied is an event: the pass opens nothing, the window's look opens the Decoder output window\n");
+    drawPlugins(a);
+    Access::pumpEvents(a);  // whatever earlier parts left in the session's ring goes first
+    Access::decoderWindowOpen(a) = false;
+    std::string file;
+    for (const cascade::gui::PluginRow& row : Access::pluginRows(a).plugins) {
+        if (row.name == kText) { file = row.file; }
+    }
+    CHECK(!file.empty());
+    if (file.empty()) { return; }
+    // The press: PLUGIN_PRESET through the window's own session, applied by the engine's next pass.
+    send(a, cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, file, 0));
+    CHECK(!Access::decoderWindowOpen(a));   // the engine opened nothing itself
+    Access::pumpEvents(a);
+    CHECK(Access::decoderWindowOpen(a));    // ...the event did: the text decoder has no window of its own
+    // ONE event for ONE application: a second look finds none, and closing the window by hand is not undone by it.
+    Access::decoderWindowOpen(a) = false;
+    Access::pumpEvents(a);
+    CHECK(!Access::decoderWindowOpen(a));
+    // The same press again is a new application: a new event.
+    send(a, cmd::makeText(FOXAPI_OP_PLUGIN_PRESET, file, 0));
+    Access::pumpEvents(a);
+    CHECK(Access::decoderWindowOpen(a));
+    Access::decoderWindowOpen(a) = false;
+    std::printf("      one application, one event, one window\n");
+}
+
+// ======================================================================================================================
+// F2. WHAT THE WEB STATUS TAKES OF THE PLUGIN POLL, AND THE TRACK-INFO PLUGIN'S LINES (the pump move, step P2)
+// ======================================================================================================================
+// The engine's pass used to ask the window, through two hooks, for a track's enrichment and the pictures' headers while it
+// published (reading the window's TrackInfoCache and picture buffer from the pass), and for the track-info plugin's status lines
+// every pass. The window hands the first two over in FrontEndFacts::webExtras and SENDS the lines as commands. A fake track-info
+// plugin (a scripted C table, test_track_info_cache.cpp's shape) and the fixture track source and picture decoder drive both.
+std::string g_infoKnownId;
+bool g_infoLineSent = false;
+void* infoCreate() { return reinterpret_cast<void*>(1); }
+std::int32_t infoGet(void*, const char* id, std::uint32_t, CascadeTrackInfo* out) {
+    if (id == nullptr || g_infoKnownId != id) { return CASCADE_INFO_MISSING; }
+    out->registration = "G-TEST";
+    out->typeCode = "A319";
+    out->typeName = "Airbus A319-111";
+    out->manufacturer = "Airbus";
+    out->operatorName = "Test Air";
+    out->country = "Testland";
+    return CASCADE_INFO_READY;
+}
+void infoRelease(void*, const CascadeTrackInfo*) {}
+std::int32_t infoPollText(void*, char* buf, size_t cap) {
+    if (g_infoLineSent || cap < 40) { return 0; }
+    g_infoLineSent = true;
+    const char line[] = "cannot reach the registry\n";
+    std::memcpy(buf, line, sizeof(line) - 1);
+    return static_cast<std::int32_t>(sizeof(line) - 1);
+}
+void infoDestroy(void*) {}
+
+void testWebExtras(AppWindow& a) {
+    std::printf("  F2: the web status' enrichment and picture headers are HANDED OVER; the track-info lines are SENT\n");
+    drawPlugins(a);
+    const std::vector<cascade::core::HostTrack> tracks = Access::tracks(a);
+    CHECK(tracks.size() >= 2u);
+    if (tracks.size() < 2u) { return; }
+    g_infoKnownId = tracks[0].t.id;
+    CascadeTrackInfoApi api{};
+    api.structSize = static_cast<std::uint32_t>(sizeof(api));
+    api.create = &infoCreate;
+    api.get_info = &infoGet;
+    api.release_info = &infoRelease;
+    api.poll_text = &infoPollText;
+    api.destroy = &infoDestroy;
+    Access::attachTrackInfo(a, &api);
+
+    // NOTHING HANDED OVER YET: the web status carries no enrichment and no pictures (a headless pass has none either).
+    {
+        Access::look(a);
+        const cascade::net::RadioStatus st = Access::webStatus(a);
+        CHECK(!st.tracks.empty());
+        for (const auto& t : st.tracks) { CHECK_EQ(t.infoState, 0u); }
+        CHECK(st.images.empty());
+    }
+    // HANDED OVER: the known track is enriched, the other is "the source does not have it" (2), and the pictures' headers are listed.
+    Access::hand(a);
+    Access::look(a);
+    {
+        const cascade::net::RadioStatus st = Access::webStatus(a);
+        int known = 0;
+        int missing = 0;
+        for (const auto& t : st.tracks) {
+            if (t.id == g_infoKnownId) {
+                ++known;
+                CHECK_EQ(t.infoState, 1u);
+                CHECK(t.registration == "G-TEST");
+                CHECK(t.acType == "Airbus A319-111");
+                CHECK(t.acOperator == "Test Air");
+                CHECK(t.acCountry == "Testland");
+            } else {
+                ++missing;
+                CHECK_EQ(t.infoState, 2u);
+                CHECK(t.registration.empty());
+            }
+        }
+        CHECK_EQ(known, 1);
+        CHECK(missing >= 1);
+        CHECK_EQ(st.images.size(), Access::images(a).size());
+        if (!st.images.empty() && !Access::images(a).empty()) {
+            CHECK(st.images[0].plugin == Access::images(a)[0].plugin);
+            CHECK_EQ(st.images[0].width, Access::images(a)[0].width);
+            CHECK_EQ(st.images[0].revision, Access::images(a)[0].revision);
+        }
+        std::printf("      %d track enriched, %d answered missing, %zu picture header(s) listed\n", known, missing,
+                    st.images.size());
+    }
+    // THE TRACK-INFO PLUGIN'S STATUS LINE: polled on this thread and sent; it lands in the Decoder output backlog, counted.
+    const std::uint64_t total0 = Access::state(a).decoderLinesTotal;
+    Access::sendTrackInfoText(a);
+    passes(a, 2);
+    CHECK_EQ(Access::state(a).decoderLinesTotal, total0 + 1u);
+    const auto& lines = Access::decoderLines(a);
+    CHECK(!lines.lines.empty());
+    if (!lines.lines.empty()) {
+        CHECK(lines.lines.back().plugin == "Aircraft info");
+        CHECK(lines.lines.back().text == "cannot reach the registry");
+    }
+    // ...once: the plugin said it once, and polling again sends nothing.
+    Access::sendTrackInfoText(a);
+    passes(a, 2);
+    CHECK_EQ(Access::state(a).decoderLinesTotal, total0 + 1u);
+    // DETACHED: no enrichment is handed over any more.
+    Access::attachTrackInfo(a, nullptr);
+    Access::hand(a);
+    Access::look(a);
+    for (const auto& t : Access::webStatus(a).tracks) { CHECK_EQ(t.infoState, 0u); }
+}
+
+// ======================================================================================================================
+// F3. THE SPECTRUM'S RANGE FOLLOWS THE STATE (the pump move, step P2: the engine's onDisplayRange hook is gone)
+// ======================================================================================================================
+void testDisplayRange(AppWindow& a) {
+    std::printf("  F3: the spectrum's axis follows the display range the state carries\n");
+    send(a, cmd::makeNum(FOXAPI_OP_SET_DISPLAY_RANGE, -83.0, -17.0));
+    CHECK_EQ(Access::spectrum(a).dbMin(), -83.0f);
+    CHECK_EQ(Access::spectrum(a).dbMax(), -17.0f);
+    send(a, cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MIN, -90.0));
+    CHECK_EQ(Access::spectrum(a).dbMin(), -90.0f);
+    CHECK_EQ(Access::spectrum(a).dbMax(), -17.0f);
+    // a span below the minimum is pushed back by the engine (kMinDbSpan), and the axis shows what the ENGINE took
+    send(a, cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MAX, -89.999));
+    CHECK(Access::spectrum(a).dbMax() > Access::spectrum(a).dbMin());
+    CHECK_EQ(static_cast<double>(Access::spectrum(a).dbMax()), Access::state(a).dbMax);
+    send(a, cmd::makeNum(FOXAPI_OP_SET_DISPLAY_RANGE, -100.0, 0.0));
+    CHECK_EQ(Access::spectrum(a).dbMin(), -100.0f);
+    CHECK_EQ(Access::spectrum(a).dbMax(), 0.0f);
+}
+
+// ======================================================================================================================
 // F. THE RECEIVER'S OWN PICTURES, AND "SAVE AS BMP"
 // ======================================================================================================================
 void testImages(AppWindow& a) {
@@ -778,7 +952,10 @@ int main() {
         testCoverage(a);
         testPages(a);
         testOpenFor(a);
+        testPresetEvent(a);
         testImages(a);
+        testWebExtras(a);
+        testDisplayRange(a);
     }
     testTwoSources();
 

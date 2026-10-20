@@ -730,6 +730,7 @@ typedef struct FoxCommandResult {
 #define FOXAPI_EVENT_OVERFLOW     9u  /* value[0]: events dropped */
 #define FOXAPI_EVENT_PATCH        10u /* 0.3; value[0]: graph epoch; value[1]: 1 running */
 #define FOXAPI_EVENT_MUTE_TUNE_AWAY 11u /* 0.3 (8.7); value[0]: how many plugins were muting the audio when the receiver tuned off their preset (FOXAPI_LIST_MUTE_CAUSES names them); once per tune-away */
+#define FOXAPI_EVENT_PRESET_APPLIED 12u /* 0.3 (8.14); text: the plugin's module file name (PLUGINS' detail); once for each preset applied, raised by the endPass of the pass that applied it */
 #define FOXAPI_EVENT_MASK(kind) (1ull << (kind))
 
 typedef struct FoxEvent {

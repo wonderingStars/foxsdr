@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <sstream>
 #include <string>
@@ -81,6 +82,11 @@ struct AppWindowTestAccess {
     static void poll(Engine& e) { e.pollPluginAsync(); }
     static Engine& engine(AppWindow& a) { return a.engine_; }
     static void armPluginTest(AppWindow& a) { a.pluginTestHook_ = "http://127.0.0.1:9/catalogue.json"; }
+    // What the window hands the engine once a frame (handFrontEndFacts): here, the report switch and the frame it names.
+    static void handFacts(AppWindow& a, int frame) {
+        a.frameCounter_ = frame;
+        a.handFrontEndFacts();
+    }
 };
 }  // namespace cascade::gui
 
@@ -123,43 +129,55 @@ int main() {
         e.teardown();
     }
 
-    // C: the window's report, as a bounded run prints it.
+    // C: the bounded run's report. Since the pump move's step P2 the ENGINE prints it - when the fetch resolves, if the front end
+    // handed over (FrontEndFacts) that the diagnostic is on, naming the frame it handed over - where the window's
+    // onCatalogueResult hook used to read the window's own frame counter from the engine's pass.
     ImGuiContext* ctx = ImGui::CreateContext();
     {
         cascade::gui::AppWindow app;
-        A::armPluginTest(app);
+        const auto captured = [&](const std::function<void()>& body) {
+            const std::string out = (scratch / "report.txt").string();
+            std::fflush(stdout);
+#if defined(_WIN32)
+            const int saved = _dup(_fileno(stdout));
+            FILE* f = std::fopen(out.c_str(), "wb");
+            _dup2(_fileno(f), _fileno(stdout));
+#else
+            const int saved = dup(fileno(stdout));
+            FILE* f = std::fopen(out.c_str(), "wb");
+            dup2(fileno(f), fileno(stdout));
+#endif
+            body();
+            std::fflush(stdout);
+#if defined(_WIN32)
+            _dup2(saved, _fileno(stdout));
+            _close(saved);
+#else
+            dup2(saved, fileno(stdout));
+            close(saved);
+#endif
+            std::fclose(f);
+            std::ifstream in(out);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            const std::string text = ss.str();
+            const std::size_t at = text.find("plugin catalogue:");
+            return at == std::string::npos ? std::string() : text.substr(at, text.find('\n', at) - at);
+        };
+        // C0: nothing handed over - the diagnostic is off, whatever the fetch did: the engine prints nothing.
         A::finishFetch(A::engine(app), false, "the store could not be reached", "");
-        const std::string out = (scratch / "report.txt").string();
-        std::fflush(stdout);
-#if defined(_WIN32)
-        const int saved = _dup(_fileno(stdout));
-        FILE* f = std::fopen(out.c_str(), "wb");
-        _dup2(_fileno(f), _fileno(stdout));
-#else
-        const int saved = dup(fileno(stdout));
-        FILE* f = std::fopen(out.c_str(), "wb");
-        dup2(fileno(f), fileno(stdout));
-#endif
-        A::poll(A::engine(app));
-        std::fflush(stdout);
-#if defined(_WIN32)
-        _dup2(saved, _fileno(stdout));
-        _close(saved);
-#else
-        dup2(saved, fileno(stdout));
-        close(saved);
-#endif
-        std::fclose(f);
-        std::ifstream in(out);
-        std::stringstream ss;
-        ss << in.rdbuf();
-        const std::string text = ss.str();
-        std::string line;
-        const std::size_t at = text.find("plugin catalogue:");
-        if (at != std::string::npos) { line = text.substr(at, text.find('\n', at) - at); }
+        const std::string silent = captured([&] { A::poll(A::engine(app)); });
+        std::printf("C0: no switch handed over: \"%s\"\n", silent.c_str());
+        CHECK(silent.empty());
+        // C: armed and handed over, naming frame 7.
+        A::armPluginTest(app);
+        A::handFacts(app, 7);
+        A::finishFetch(A::engine(app), false, "the store could not be reached", "");
+        const std::string line = captured([&] { A::poll(A::engine(app)); });
         std::printf("C: the bounded run's report: \"%s\"\n", line.c_str());
         CHECK(line.find("FAILED") != std::string::npos);
         CHECK(line.find("the store could not be reached") != std::string::npos);
+        CHECK(line.find("frame=7") != std::string::npos);
         CHECK(line.find("entries=") == std::string::npos);
     }
     ImGui::DestroyContext(ctx);

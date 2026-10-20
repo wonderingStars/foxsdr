@@ -59,19 +59,15 @@ public:
     virtual void resumeWatchdog();
 
     // --- WHAT THE WINDOW DOES WHEN THE ENGINE HAS DONE SOMETHING -----------------
-    // The display range changed (the spectrum's axis and the waterfall's
-    // colour map read it).
-    virtual void onDisplayRange(float dbMin, float dbMax);
-    // The bookmark list changed under a command (the list's cached view).
-    virtual void onBookmarksChanged();
-    // A plugin preset was applied: open what that plugin contributes.
-    virtual void openPluginWindowsFor(const cascade::core::LoadedPlugin& p);
+    // (THE PUMP MOVE, step P2, took six of these out - each wrote state the window draws from, and a pass on a thread of its
+    // own must not: onDisplayRange and onConverterChanged are gone because the window follows the state it already reads
+    // (the display range and the stored converter), onBookmarksChanged because nothing used it, openPluginWindowsFor because
+    // a preset applied is an EVENT now (FOXAPI_EVENT_PRESET_APPLIED, API 0.3 8.14) the window answers on its own thread, and
+    // drainTrackInfoText, enrichWebTrack and fillWebImages because the window hands the track-info plugin's lines in as a
+    // command (FOXAPP_OP_TRACK_INFO_LINE) and its answers for the web status over in FrontEndFacts::webExtras.)
     // (onReceiverPositionApplied left with window port group 14, part a: the receiver's position is in the state, and
     // the window follows it - the typed fields, every map page's and Patch Map part's home, the scope, the coverage map
     // - on its own thread when it moves. API 0.3 8.11.1.)
-    // The converter for the radio in use changed: the LO field re-seeds (and
-    // its error clears when `clearLoError`).
-    virtual void onConverterChanged(bool clearLoError);
     // (onPatchGraphChanged left with window port group 13: the engine's own
     // changes to the patch graph move fact.patch.version, which the window
     // reads in the block it draws from - API 0.3 8.12.)
@@ -102,16 +98,14 @@ public:
     virtual void attachBasemap(const CascadeBasemapApi* api);
     virtual void attachTrackInfo(const CascadeTrackInfoApi* api);
     virtual void showDemonstrationInstrument(const cascade::core::HostInstrument& in);
-    virtual std::vector<std::string> drainTrackInfoText();
 
     // --- WHAT THE WINDOW KNOWS THAT THE ENGINE ASKS ---------------------------------
     // (patchPageOpen left with window port group 13: the window tells the engine
     // by FOXAPP_OP_SET_PATCH_PAGE_OPEN, Engine::patchPageOpen_.)
-    // For the one publish: a track's enrichment from the track-info plugin,
-    // and the decoded pictures. (The web listener's state, the counter's face
-    // and the basemap plugin's figures are HANDED OVER by the front end since
-    // engine/stage3b-pre - Engine::setFrontEndFacts, docs/engine-stage3.md
-    // OPEN 4 - rather than asked for here; BasemapFacts is their type.)
+    // (A track's enrichment from the track-info plugin and the decoded pictures the web status lists were asked for here
+    // until the pump move's step P2; the front end HANDS THEM OVER now, Engine::setFrontEndFacts, like the web listener's
+    // state, the counter's face and the basemap plugin's figures since engine/stage3b-pre - docs/engine-stage3.md OPEN 4.
+    // BasemapFacts is the basemap's type.)
     struct BasemapFacts {
         bool active = false;
         std::uint32_t minZoom = 0;
@@ -119,8 +113,6 @@ public:
         std::uint32_t tileSize = 0;
         std::string attribution;
     };
-    virtual void enrichWebTrack(cascade::net::RadioStatus::Track& w);
-    virtual void fillWebImages(cascade::net::RadioStatus& s);
 
 private:
     std::chrono::steady_clock::time_point born_;

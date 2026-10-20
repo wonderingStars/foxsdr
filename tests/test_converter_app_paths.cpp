@@ -47,6 +47,7 @@
 
 #include "core/freq_converter.hpp"
 #include "gui/app_window.hpp"
+#include "gui/converter_lo_seed.hpp"
 #include "engine/tune_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -311,6 +312,11 @@ struct AppWindowTestAccess {
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static void reopen(AppWindow& a) { a.engine_.reopenAfterDriverFault(); }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) { a.engine_.changeConverter(s); }
+    // The key the window seeds its LO field from (gui/converter_lo_seed.hpp): the open radio and the stored setting, as the
+    // window reads them from the table - the replacement for the engine's onConverterChanged hook.
+    static std::string loSeed(AppWindow& a) {
+        return cascade::gui::converterLoSeed(a.uiFact("fact.converter.radioKey"), a.converterLists().stored);
+    }
     static void scanNativeForTest(AppWindow& a) { a.engine_.scanNative(); }
     // The note is the window's, read from its engine API session (window port,
     // group 4): with no frame, the engine publishes and the window looks first.
@@ -1185,6 +1191,38 @@ void testRspPreTuneGoesThroughItsConverter(double airCentre, double vfo) {
 
 }  // namespace
 
+// THE LO FIELD'S RE-SEED FOLLOWS THE ENGINE (the pump move, step P2): the engine used to call the window's onConverterChanged from
+// its pass - on a radio installed and on every converter change - and the hook cleared the field's seed. The window derives the
+// seed from the radio's key and the stored setting it reads, so it moves for each of those, and holds while nothing does.
+void testLoSeedFollowsTheEngine() {
+    std::printf("  the LO field's seed moves with the radio and the stored setting, and holds while nothing changes\n");
+    resetRegistry();
+    twoDongles();
+    cascade::gui::AppWindow app;
+    Access::setConverter(app, kKeyA, up(125.0e6));
+    CHECK(Access::selectNative(app, kArgsA));
+    Access::look(app);
+    Access::look(app);
+    const std::string s0 = Access::loSeed(app);
+    Access::look(app);
+    CHECK(Access::loSeed(app) == s0);                       // nothing changed: the user's typing would stay
+    Access::changeConverter(app, up(100.0e6));              // another LO
+    Access::look(app);
+    const std::string s1 = Access::loSeed(app);
+    CHECK(s1 != s0);
+    ConverterSetting inverted = up(100.0e6);
+    inverted.inverted = true;
+    Access::changeConverter(app, inverted);                 // the inversion toggled
+    Access::look(app);
+    const std::string s2 = Access::loSeed(app);
+    CHECK(s2 != s1);
+    Access::look(app);
+    CHECK(Access::loSeed(app) == s2);
+    CHECK(Access::selectNative(app, kArgsB));               // another radio
+    Access::look(app);
+    CHECK(Access::loSeed(app) != s2);
+}
+
 int main() {
     std::printf("test_converter_app_paths\n");
     isolate();
@@ -1202,6 +1240,7 @@ int main() {
     testSoapyFallbackKeepsTheConverter(true);
     testSwitchingOnKeepsTheAirFrequency();
     testLoTypoRoundTrip();
+    testLoSeedFollowsTheEngine();
     testQuickKeysRoundTrip(125.0e6, 100.0e6);
     testQuickKeysRoundTrip(100.0e6, 125.0e6);
     testUnreachableChangeRelabels();

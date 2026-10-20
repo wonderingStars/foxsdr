@@ -10,7 +10,9 @@
 // never started, or that is switched off in the settings panel, releases a
 // key already held in the same step (FOXAPP_OP_WEB_CONTROL_STOPPED), because
 // the 2 s hold's own expiry would otherwise leave the transmitter keyed with
-// nobody able to ask again.
+// nobody able to ask again. (Since the pump move's step P1 the ENGINE judges
+// both, in its remote-controls phase, and the "same step" is "the same
+// phase": the window no longer applies the command itself.)
 //
 // test_transmit_dead_man.cpp holds (a)'s timing end to end on a bare Engine
 // (withdrawn, closed, silent); THIS FILE holds it through the window - the
@@ -120,7 +122,9 @@ struct AppWindowTestAccess {
         return a.engine_.transmitter_.remoteHoldRemainingMs();
     }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
-    static void applyWebControls(AppWindow& a) { a.applyWebControls(); }
+    // The engine's remote-controls phase: the web and CAT queues pulled through the source the window installed, and the
+    // remote key's standing condition judged (the pump move's step P1 - this was the window's applyWebControls).
+    static void pumpRemote(AppWindow& a) { a.engine_.pumpRemoteControls(); }
     // The settings panel switching the web server off.
     static void disableWeb(AppWindow& a) {
         a.webCfg_.enabled = false;
@@ -191,7 +195,7 @@ int main() {
     // Run FIRST, before the server is ever started: WebServer::stop() itself
     // QUEUES a synthetic "transmitPtt=false" ControlRequest (web_server.cpp,
     // "A SERVER THAT HAS STOPPED RELEASES THE TRANSMIT KEY... by queueing the
-    // release"), which applyWebControls's FIRST loop would apply regardless of
+    // release"), which the remote-controls phase's FIRST loop would apply regardless of
     // the standing condition this test means to isolate. A server that was
     // NEVER started queues nothing, so running()==false here is exactly the
     // case the condition names: "a server that never started or was disabled
@@ -201,7 +205,7 @@ int main() {
         consent(1);
         CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
-        Access::applyWebControls(app);
+        Access::pumpRemote(app);
         CHECK(Access::remoteHoldMs(app) == 0);
         // The rules let go IN THE SAME STEP, not only the radio - not left
         // for the next pass to notice.
@@ -232,14 +236,14 @@ int main() {
     }
 
     // === control: consent standing AND the server running - a fresh key
-    //     survives applyWebControls and a pass untouched (a mutant that always
+    //     survives the remote-controls phase and a pass untouched (a mutant that always
     //     releases would pass A, B, D and E but fail here). ==================
     {
         CHECK(webServer.running());
         consent(1);
         CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
-        Access::applyWebControls(app);
+        Access::pumpRemote(app);
         desk.frame(true, false, false);
         Access::pass(app);
         CHECK(Access::remoteHoldMs(app) > 0);  // neither condition applies - still held
@@ -259,8 +263,14 @@ int main() {
     }
 
     // === E: switching the web server OFF in the settings panel releases a
-    //     key held IN THE SAME STEP - applyWebSettings alone, with no frame,
-    //     no applyWebControls and no pass after it. ==========================
+    //     key held, in the engine's NEXT PASS - not inside the click. Until the
+    //     pump move (step P1) the window applied FOXAPP_OP_WEB_CONTROL_STOPPED
+    //     itself in applyWebSettings, "in the same step"; that call ran beside
+    //     the pass once the pass has a thread of its own (the review's F3), so
+    //     it is gone: WebServer::stop() queues a release and the engine's
+    //     remote-controls phase pulls it (and finds the server not running).
+    //     The one timing difference of the change, said here: a pass (<= 16 ms
+    //     in the product) instead of the click's own frame. ==================
     {
         desk.frame(true, false, false);
         consent(1);
@@ -268,8 +278,12 @@ int main() {
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::disableWeb(app);
         CHECK(!webServer.running());
+        // The window did NOT reach into the engine: the key is still held until the pass runs.
+        CHECK(Access::remoteHoldMs(app) > 0);
+        Access::pumpRemote(app);
         CHECK(Access::remoteHoldMs(app) == 0);
-        std::printf("  E: web server switched off -> remote hold %lld ms\n",
+        CHECK((engine.api().txFacts().owner) == 0u);
+        std::printf("  E: web server switched off -> the key held until the engine's pass, then remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
 

@@ -23,7 +23,7 @@
 //
 // THREE KINDS OF WINDOW DEFINITION.
 //   WINDOW MACHINERY (kWindowMachinery): construction, teardown, the config
-//     restore, the web/CAT drain - the few window members that still drive
+//     restore - the few window members that still drive
 //     the engine directly - and the EngineHost overrides (kHostHooks): the
 //     window's side of calls the ENGINE makes. Allowed to reach the engine;
 //     rule 5 keeps them free of ImGui input.
@@ -100,7 +100,7 @@ namespace {
 const char* const kHelpers[] = {
     "startReceiver(", "stopReceiver(", "retuneSourceHz(", "tuneAbsoluteHz(", "setVfoToAbsoluteHz(",
     "applyRetuneNow(", "setModeIndex(", "requestAudioOpen(", "applyPluginPreset(", "loadBandPlan(",
-    "spectrum_->setRange(", "selectSource(", "scanNative(", "scanSoapy(", "openPlutoFromBox(",
+    "selectSource(", "scanNative(", "scanSoapy(", "openPlutoFromBox(",
     "openPlutoAt(", "openIqFile(", "launchSoundCardOpen(", "switchBiasTee(", "changeConverter(",
     "installSource(", "withRfNotch(", "withDabNotch(", "withHdrMode(", "withAdcSwitches(",
     "startIqRecording(", "startAudioRecording(", "stopIqRecording(", "stopAudioRecording(",
@@ -163,13 +163,13 @@ const char* const kFields[] = {
 
 // --- the window's machinery ---------------------------------------------------------
 // The window members that still drive the engine directly: construction,
-// teardown, the config restore and the web/CAT drain.
+// teardown and the config restore. (The web/CAT drain left with the pump move's step P1: the ENGINE pulls the two servers'
+// queues in its own pass, Engine::pumpRemoteControls, through the source the constructor installs.)
 const char* const kWindowMachinery[] = {
     "AppWindow",
     "~AppWindow",
     "applyConfig",
     "currentConfig",
-    "applyWebControls",
     // hands the engine what only the window knows for the publish - its web
     // listener, the counter's face, the basemap's figures (engine/stage3b-pre
     // OPEN 4: these were EngineHost hooks the engine called while publishing)
@@ -177,26 +177,33 @@ const char* const kWindowMachinery[] = {
 };
 
 // The EngineHost overrides (engine/engine_host.hpp): the window's half of a
-// call the ENGINE makes, on the engine's behalf - it redraws, re-seeds a
-// field, pauses the watchdog, answers a question about the view. Judged as
-// machinery: rule 5 applies, rules 1-4 do not (the one rule-1 helper they
-// use is spectrum_->setRange, in onDisplayRange: the engine's new range
-// applied to this window's spectrum).
+// call the ENGINE makes, on the engine's behalf - it pauses the watchdog, answers a
+// question about the clock or the plugin UI. Judged as machinery: rule 5 applies, rules
+// 1-4 do not.
+//
+// THE PUMP MOVE'S STEP P2 TOOK EIGHT OUT (18 -> 10), each a call the engine made from its pass that WROTE or READ window state:
+//   onDisplayRange        the spectrum's range follows the state (refreshUiState);
+//   onBookmarksChanged    dead - its body was empty since group 7;
+//   onConverterChanged    the LO field re-seeds from the radio and stored setting it reads (gui/converter_lo_seed.hpp);
+//   onCatalogueResult     the window's override read its frame counter from the pass: the report switch and the frame are handed
+//                         over in FrontEndFacts and the ENGINE prints (the base class keeps the virtual for a headless front end);
+//   openPluginWindowsFor  an EVENT, FOXAPI_EVENT_PRESET_APPLIED (API 0.3 8.14), answered in pumpUiEvents;
+//   drainTrackInfoText    the window polls its cache's text in its own frame and sends FOXAPP_OP_TRACK_INFO_LINE;
+//   enrichWebTrack and fillWebImages   handed over in FrontEndFacts::webExtras (webExtrasNow).
+// What is left: the clocks and the watchdog (thread-safe by construction, engine/stage3b-pre OPEN 4), and the five that belong to
+// the plugin UI - the unload handshake and the instances the GUI polls - which is step P3's (docs/engine-stage4.md).
 const char* const kHostHooks[] = {
     "frameClockRunning",  "frameTimeS",          "wallTimeS",
-    "pauseWatchdog",      "resumeWatchdog",      "onDisplayRange",
-    "onBookmarksChanged", "openPluginWindowsFor",
+    "pauseWatchdog",      "resumeWatchdog",
     // (onReceiverPositionApplied left with window port group 14 part a: the window follows the position in the state.)
-    "onConverterChanged",
     // (onPatchPicture left with window port group 13 part c: the pictures are the engine's, read with read_image.)
     // (onGpsFixApplied left with part b: the GPS list's entry going to Fixed is the cue.)
-    "onCatalogueResult",  // (onCatalogueFetchStarting and onAddAllFinished left with
-    "beforePluginRescan",                       //  window port group 10: the window watches the table instead)
+    // (onCatalogueFetchStarting and onAddAllFinished left with window port group 10: the window watches the table instead.)
+    "beforePluginRescan",
     "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
-    "showDemonstrationInstrument", "drainTrackInfoText",
+    "showDemonstrationInstrument",
     // webListening, tunerDisplayStyle, basemapFacts: no longer hooks
     // (engine/stage3b-pre OPEN 4) - handed over by handFrontEndFacts.
-    "enrichWebTrack",     "fillWebImages",
 };
 
 // Calls a control MAY make to a state-changing name: the command path itself,
@@ -298,7 +305,7 @@ const LineAllow kLineAllowed[] = {
     // drawUi IS the frame loop's body: the command drains, the remote and
     // plugin applies, the scanner, and the per-frame machinery polls.
     {"drawUi", "drainLocalCommands();"},
-    {"drawUi", "applyWebControls();"},
+    {"drawUi", "pumpRemoteControls();"},
     {"drawUi", "(void)applyCommand(q.c, q.longText);"},
     // ...and the transmit key rebuilt every frame - the dead-man's handle (OPEN 1).
     // (drawPatchPage and drawPatchView's runtime steps - the receiver pipeline's patch runner retired and cleared, the
@@ -1318,6 +1325,94 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
     r.controls = static_cast<int>(controls.size());
 }
 
+// THE PUMP MOVE'S RULE FOR THE COMMAND PATH (step P1, the review's F3): once the engine's pass runs on a thread of its own, a
+// window thread that calls Engine::applyCommand or Engine::applyControlRequest runs the whole command surface - and the key rules,
+// which are single-threaded by contract - beside the pass. So the window makes NO such direct call, with the ONE exception that
+// is still listed and goes in the move itself: drawUi's dropped-file import. The three that stood here (the web/CAT drain's
+// applyControlRequest, its per-frame WEB_CONTROL_STOPPED and applyWebSettings' own) are the engine's pass now
+// (Engine::pumpRemoteControls). Every other command goes through uiSubmit, the session's submit or Engine::submitCommand.
+constexpr int kDirectApplyCommandCalls = 1;      // drawUi: the file drop (P4/P5 sends it through uiSubmit like the Import key)
+constexpr int kDirectApplyControlRequestCalls = 0;
+
+void checkNoDirectApply(const fs::path& root) {
+    const fs::path gui = root / "src" / "gui";
+    int applyCommandCalls = 0;
+    int controlRequestCalls = 0;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(gui, ec)) {
+        if (e.path().extension() != ".cpp") { continue; }
+        for (const std::string& l : codeLines(readFile(e.path()), true)) {
+            for (std::size_t at = l.find("engine_.applyCommand("); at != std::string::npos;
+                 at = l.find("engine_.applyCommand(", at + 1)) {
+                ++applyCommandCalls;
+                std::printf("  direct engine_.applyCommand in %s: %s\n", e.path().filename().string().c_str(), l.c_str());
+            }
+            for (std::size_t at = l.find("engine_.applyControlRequest("); at != std::string::npos;
+                 at = l.find("engine_.applyControlRequest(", at + 1)) {
+                ++controlRequestCalls;
+                std::printf("  direct engine_.applyControlRequest in %s: %s\n", e.path().filename().string().c_str(), l.c_str());
+            }
+        }
+    }
+    std::printf("  the window's direct calls into the command path: applyCommand %d (allowed %d), applyControlRequest %d "
+                "(allowed %d)\n",
+                applyCommandCalls, kDirectApplyCommandCalls, controlRequestCalls, kDirectApplyControlRequestCalls);
+    if (applyCommandCalls > kDirectApplyCommandCalls || controlRequestCalls > kDirectApplyControlRequestCalls) {
+        std::printf("FAIL: a window member calls the engine's command path directly - the pump move (F3) made the engine's "
+                    "pass the only thing that applies a remote request; send the command through uiSubmit or let the "
+                    "engine pull it (Engine::setRemoteControlSource)\n");
+    }
+    CHECK(applyCommandCalls <= kDirectApplyCommandCalls);
+    CHECK(controlRequestCalls <= kDirectApplyControlRequestCalls);
+}
+
+// THE HOOKS THE PUMP MOVE'S STEP P2 REMOVED STAY REMOVED. Each was a call the engine made from its pass into the window, writing or
+// reading window state (see the note above kHostHooks): the engine's host class must not declare them, no engine source may call them
+// through host_, and the window must not override them. (onCatalogueResult stays in the BASE class for a front end that wants to be
+// told - the headless tests do - but the standard window no longer overrides it: the engine prints the bounded run's catalogue
+// report itself, from the report switch and the frame the window hands over in FrontEndFacts.)
+const char* const kRetiredHooks[] = {"onDisplayRange",     "onBookmarksChanged", "onConverterChanged", "openPluginWindowsFor",
+                                     "drainTrackInfoText", "enrichWebTrack",     "fillWebImages"};
+
+void checkRetiredHooks(const fs::path& root) {
+    int found = 0;
+    const auto codeOf = [&](const fs::path& rel) { return codeLines(readFile(root / rel)); };
+    const auto flag = [&](const std::string& where, const std::string& line, const char* hook) {
+        ++found;
+        std::printf("FAIL: retired host hook %s is back in %s: %s\n", hook, where.c_str(), line.c_str());
+    };
+    // the engine's host class: no declaration, no default
+    for (const char* rel : {"src/engine/engine_host.hpp", "src/engine/engine_host.cpp"}) {
+        for (const std::string& l : codeOf(rel)) {
+            for (const char* h : kRetiredHooks) {
+                if (l.find(std::string(h) + "(") != std::string::npos) { flag(rel, l, h); }
+            }
+        }
+    }
+    // the engine's sources: no call through the host
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(root / "src" / "engine", ec)) {
+        const std::string ext = e.path().extension().string();
+        if (ext != ".cpp" && ext != ".hpp") { continue; }
+        for (const std::string& l : codeLines(readFile(e.path()))) {
+            for (const char* h : kRetiredHooks) {
+                if (l.find(std::string("host_->") + h + "(") != std::string::npos) { flag(e.path().filename().string(), l, h); }
+            }
+        }
+    }
+    // the window: no override of any of them, and no override of onCatalogueResult
+    for (const std::string& l : codeOf("src/gui/app_window.hpp")) {
+        if (l.find("override") == std::string::npos) { continue; }
+        for (const char* h : kRetiredHooks) {
+            if (l.find(std::string(h) + "(") != std::string::npos) { flag("app_window.hpp", l, h); }
+        }
+        if (l.find("onCatalogueResult(") != std::string::npos) { flag("app_window.hpp", l, "onCatalogueResult"); }
+    }
+    std::printf("  the retired host hooks (%zu + the window's onCatalogueResult) are still gone: %d reappeared\n",
+                sizeof(kRetiredHooks) / sizeof(kRetiredHooks[0]), found);
+    CHECK(found == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1497,5 +1592,7 @@ int main(int argc, char** argv) {
         }
         CHECK(r.allowedLinesSeen.count(key) != 0);
     }
+    checkNoDirectApply(root);
+    checkRetiredHooks(root);
     return testSummary("test_command_path_guard");
 }

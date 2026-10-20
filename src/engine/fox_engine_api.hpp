@@ -92,6 +92,10 @@ public:
     // publish that carries the held mute in MUTE_CAUSES - so an interface that is told finds the plugins
     // already named. Once per call; a call before that endPass replaces the one waiting.
     void muteTuneAway(std::uint32_t names);
+    // API 0.3 8.14: a plugin's preset was applied (Engine::applyPluginPreset). The pumping thread's call; the event
+    // FOXAPI_EVENT_PRESET_APPLIED (text: the module's file name, what PLUGINS' detail and every plugin op key by) is
+    // broadcast by this pass's endPass, once for each application, after the publish that carries what it changed.
+    void presetApplied(const std::string& moduleFile);
     // TESTS ONLY - nothing in the product calls it: put one spectrum frame in
     // the ring the way endPass puts the pipeline's newest there (the next
     // sequence number, `count` bins of dB, the centre and span the frame
@@ -119,6 +123,10 @@ public:
     void webRemoteStopped(const char* why);
     // The control loop's last act, before it stops the Transmitter.
     void engineStopping();
+    // How many times a thread other than the control thread entered the key rules (every entry above, and the pass itself)
+    // WHILE the engine's control thread was running. The key rules are single-threaded by contract; this is the tripwire
+    // that proves it (pump move step P1, F3): 0 for a correct front end, and the tests assert it.
+    std::uint64_t offPassKeyTouches() const;
     // What the publish carries of the key (Engine::fillPublishedState).
     struct TxFacts {
         std::uint64_t owner = 0;

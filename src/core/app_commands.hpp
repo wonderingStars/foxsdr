@@ -71,8 +71,8 @@
 #define FOXAPP_OP_STORE_REMOVE_BLOCKED   0x8706u /* text: file name of a plugin the catalogue policy blocked */
 // The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
 // OPEN 1/10, SAFETY): ival[0] 0/1. Closing it (0) releases a remote transmit
-// key already held, in the SAME step - the window's own per-frame poll in
-// applyWebControls still does the same check as a second line of defence for
+// key already held, in the SAME step - the engine's remote-controls phase
+// (Engine::pumpRemoteControls, once a pass) still does the same check as a second line of defence for
 // anything that still sets transmitOpen_ directly (a test's friend accessor,
 // today), but this is the immediate, zero-frame-latency release for the
 // normal UI path (the Transmit toolbar switch, the page's own close button).
@@ -195,6 +195,11 @@
 // part's device list asks when it opens and "Look for radios" asks again. No arguments. Grant SETTINGS, LOCAL sessions only
 // (every app op is).
 #define FOXAPP_OP_PATCH_LIST_RECORDINGS  0x8422u /* no arguments - list the I/Q recordings a patch Radio can play (API 0.3 8.12) */
+// THE TRACK-INFO PLUGIN'S STATUS LINE (the pump move, step P2): the window owns the plugin's cache (GUI thread only) and polls its
+// text in its own frame; each line it finds is sent here and lands in the Decoder output backlog as "Aircraft info", counted like
+// every other line. Replaces the host hook the engine's pass used to ask (EngineHost::drainTrackInfoText). Grant VIEW (it reads and
+// changes nothing but that backlog), LOCAL sessions only (every app op is).
+#define FOXAPP_OP_TRACK_INFO_LINE        0x8423u /* text (or long text): one status line from the track-info plugin; empty is BAD_ARGUMENT */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */

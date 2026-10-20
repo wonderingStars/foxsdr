@@ -36,7 +36,10 @@
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <memory>
+#include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 
@@ -51,6 +54,7 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "gui/transmit_page.hpp"
+#include "net/web_control.hpp"
 #include "test_check.hpp"
 #include "tx_front_end.hpp"
 
@@ -361,6 +365,90 @@ int main() {
         CHECK(Access::latched(e) && raw->running());
         fe.frame(false, false, false);
         e.pump();
+        CHECK(waitQuiet(raw, 150));
+    }
+
+    // G: THE HAMMER (C's), with the browser's and CAT's queues in the path - the pump move's step P1 (F3). The engine pulls
+    // the two servers' requests in its own pass, so the key rules are reached by the control thread alone; two producer
+    // threads flood the queue (PTT true and false, RUN 0, volume) and the server flag toggles, all the while the front end
+    // presses and lets go as in C. No local session has consented to a remote key, so every browser PTT is refused and the
+    // front end's key-up stays up - C's invariant, unchanged by the noise - and the rules were entered by no other thread
+    // (ApiHost::offPassKeyTouches). tests/test_remote_control_pull.cpp holds the cases where the browser DOES key.
+    {
+        Engine e;
+        e.initialise();
+        RecordingSink* raw = Access::installSink(e);
+        std::mutex qm;
+        std::deque<cascade::net::ControlRequest> queue;
+        std::atomic<bool> serverUp{true};
+        std::atomic<std::uint64_t> pulls{0};
+        e.setRemoteControlSource([&] {
+            Engine::RemoteControls rc;
+            {
+                std::lock_guard<std::mutex> lk(qm);
+                rc.requests.assign(queue.begin(), queue.end());
+                queue.clear();
+            }
+            rc.serverRunning = serverUp.load();
+            pulls.fetch_add(1);
+            return rc;
+        });
+        cascade::engine::ControlThreadOptions opts;
+        opts.period = std::chrono::milliseconds(1);
+        opts.watchdogThresholdMs = 5000;
+        e.startControlThread(opts);
+        FrontEnd fe(e);
+        std::atomic<bool> noise{true};
+        std::vector<std::thread> producers;
+        for (int t = 0; t < 2; ++t) {
+            producers.emplace_back([&, t] {
+                std::mt19937 rng(7u + static_cast<unsigned>(t));
+                while (noise.load()) {
+                    cascade::net::ControlRequest r;
+                    switch (rng() % 4) {
+                        case 0: r.transmitPtt = true; break;
+                        case 1: r.transmitPtt = false; break;
+                        case 2: r.running = false; break;
+                        default: r.volume = static_cast<double>(rng() % 100) / 100.0; break;
+                    }
+                    {
+                        std::lock_guard<std::mutex> lk(qm);
+                        if (queue.size() >= 64) { queue.pop_front(); }
+                        queue.push_back(std::move(r));
+                    }
+                    std::this_thread::sleep_for(std::chrono::microseconds(100 + rng() % 400));
+                }
+            });
+        }
+        std::thread flip([&] {
+            while (noise.load()) {
+                serverUp.store(!serverUp.load());
+                std::this_thread::sleep_for(std::chrono::milliseconds(11));
+            }
+        });
+        constexpr int kHammerG = 300;
+        int undone = 0;
+        for (int i = 0; i < kHammerG; ++i) {
+            fe.frame(true, true, false);
+            const std::uint64_t p0 = Access::passes(e);
+            while (Access::passes(e) < p0 + 1) { std::this_thread::yield(); }
+            fe.frame(true, false, false);
+            const std::uint64_t p1 = Access::passes(e);
+            while (Access::passes(e) < p1 + 2) { std::this_thread::yield(); }
+            if (Access::transmitting(e)) { ++undone; }
+        }
+        noise.store(false);
+        for (std::thread& t : producers) { t.join(); }
+        flip.join();
+        const std::uint64_t touches = e.api().offPassKeyTouches();
+        e.stopControlThread();
+        std::printf("G: %d key-down/key-up cycles with %llu pulls of a flooded remote queue: still keyed two passes after "
+                    "the key-up %d times; key-rule entries from other threads: %llu\n",
+                    kHammerG, static_cast<unsigned long long>(pulls.load()), undone,
+                    static_cast<unsigned long long>(touches));
+        CHECK(undone == 0);
+        CHECK(touches == 0u);
+        CHECK(pulls.load() > 50u);
         CHECK(waitQuiet(raw, 150));
     }
 

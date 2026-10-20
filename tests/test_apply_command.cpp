@@ -460,6 +460,8 @@ struct AppWindowTestAccess {
         a.engine_.decoderLog_.push_back(cascade::core::DecodedLine{"test", "line"});
     }
     static std::size_t decoderLogSize(AppWindow& a) { return a.engine_.decoderLog_.size(); }
+    static std::uint64_t decoderLinesTotal(AppWindow& a) { return a.engine_.decoderLinesTotal_; }
+    static cascade::core::DecodedLine decoderLogBack(AppWindow& a) { return a.engine_.decoderLog_.back(); }
     static void setSoapyScanDeferredLogged(AppWindow& a, bool v) { a.engine_.soapyScanDeferredLogged_ = v; }
     static bool soapyScanDeferredLogged(AppWindow& a) { return a.engine_.soapyScanDeferredLogged_; }
     static void setMutePopupQueued(AppWindow& a, bool v) { a.engine_.mutePopupQueued_ = v; }
@@ -473,7 +475,7 @@ struct AppWindowTestAccess {
     static bool mutePopupOpen(AppWindow& a) { return a.engine_.mutePopup_.open; }
     static std::size_t mutePopupKeyCount(AppWindow& a) { return a.engine_.mutePopup_.keys.size(); }
     // The web remote's side: the snapshot a browser reads (and the row map it
-    // leaves), and a request applied as applyWebControls applies it.
+    // leaves), and a request applied as the engine's pumpRemoteControls applies it.
     static void publishWeb(AppWindow& a) { a.engine_.publishReceiverState(); }
     // The row a browser sees a bookmark on: read off the PUBLISHED snapshot
     // (what /api/status serves - the web provider's own call), never off the
@@ -2203,6 +2205,24 @@ void patchOps(AppWindow& a) {
         CHECK(A::patchRecordingCount(a) == 0u);        // ...and the relisting finds it gone
         A::setRecordDir(a, before);
         fs::remove_all(dir, ec);
+    }
+
+    // FOXAPP_OP_TRACK_INFO_LINE (the pump move, step P2): the track-info plugin's status line, polled by the window on its own
+    // thread and SENT (the engine used to ask a host hook from its pass). It lands in the Decoder output backlog as "Aircraft
+    // info", COUNTED (an uncounted line never reached the ring an interface reads), the tail stays bounded, and an empty line
+    // is refused and changes nothing.
+    covering(FOXAPP_OP_TRACK_INFO_LINE);
+    {
+        const std::uint64_t total0 = A::decoderLinesTotal(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_TRACK_INFO_LINE, "cannot reach the registry"))));
+        CHECK(A::decoderLinesTotal(a) == total0 + 1u);
+        CHECK(A::decoderLogBack(a).plugin == "Aircraft info");
+        CHECK(A::decoderLogBack(a).text == "cannot reach the registry");
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACK_INFO_LINE, "")), FOXAPI_BAD_ARGUMENT));
+        CHECK(A::decoderLinesTotal(a) == total0 + 1u);
+        for (int i = 0; i < 700; ++i) { (void)A::apply(a, text(FOXAPP_OP_TRACK_INFO_LINE, "again")); }
+        CHECK(A::decoderLogSize(a) <= 500u);
+        CHECK(A::decoderLinesTotal(a) == total0 + 701u);
     }
 }
 

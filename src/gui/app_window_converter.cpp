@@ -44,6 +44,7 @@
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/soundcard_panel.hpp"
+#include "gui/converter_lo_seed.hpp"
 #include "gui/theme.hpp"
 #include "engine/tune_control.hpp"
 
@@ -237,7 +238,9 @@ void AppWindow::drawConverterControls() {
         // --- the local oscillator -------------------------------------------------
         // Seeded from the remembered LO whenever the radio or the LO changes
         // under it; while the user types, what they type stays.
-        const std::string seed = key + "\x1f" + cc::converterHzText(mine.loHz);
+        // (The seed names the radio AND its stored setting: the engine's onConverterChanged hook used to clear it from the pass
+        // when anything about the converter changed; now the window sees the change in what it reads. gui/converter_lo_seed.hpp.)
+        const std::string seed = converterLoSeed(key, mine);
         if (converterLoSeededFor_ != seed) {
             std::snprintf(converterLoBuf_, sizeof(converterLoBuf_), "%s",
                           cc::converterLoValid(mine.loHz) ? cc::converterHzText(mine.loHz).c_str()

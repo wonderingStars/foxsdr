@@ -3304,6 +3304,13 @@ remain the one thread that pumps: the only caller of `startControlThread()`
 outside the engine itself is the table's `create()` (an engine the host
 process does not own, which has no window beside it).
 
+F3 IS FIXED (pump move step P1, 2026-10-20 - the record at the end of this
+file). The fix is not the one proposed above: a push through the API queue or
+`submitCommand` drains BEFORE the web's phase, so a browser's PTT arriving in
+the same pass as a local press would have been applied first and could have won
+the key. The engine PULLS the web/CAT queues in a phase of its own where the
+window's `applyWebControls` sat, and nothing else applies a remote request.
+
 F5, the TX thread's front-end stamp is NOT written in two clock bases. The
 stamp is written by `Transmitter::frontEndAlive()` (the key holder's
 heartbeat) with the Transmitter's `nowMs()`, and by a key grant through
@@ -3328,3 +3335,81 @@ be neither far in the past nor in the future. Nothing to fix. The two
 functions are duplicates, though: if either is ever changed to another clock,
 change both (or give them one definition), because no test can tell them apart
 while they read the same clock.
+
+PUMP MOVE, STEPS P1 AND P2 (2026-10-20; the survey's section 7, scratchpad/pump-move-survey.md; F3 fixed, eight host hooks out).
+Nothing about the product's behaviour changes except the timings listed at the end; the window still runs the pass in its frame
+(the move itself is P5). P0 is the ThreadSanitizer plumbing (4c81f0c).
+
+P1, THE WEB/CAT PULL (the review's F3). The engine gained a pass phase, Engine::pumpRemoteControls, between pumpInputs and
+pumpPlugins - exactly where AppWindow::applyWebControls sat in the frame - that calls a source the front end installed
+(Engine::setRemoteControlSource; the window's constructor installs one over its two servers, its destructor clears it) and applies
+every ControlRequest it returns, then ends a key the web remote holds when the source says the server is not running. The source
+returns the requests (web first, then CAT - the order the frame had) AND whether the server was running at the moment it was
+pulled, so the standing condition is read where it always was and not from the facts a frame later (the survey proposed the facts'
+webListening; this is strictly closer to "nothing changes observably"). Nothing else applies a remote request: AppWindow::
+applyWebControls, its per-frame WEB_CONTROL_STOPPED and applyWebSettings' own are gone, so ApiHostImpl::rules_ is entered by the
+pumping thread alone. It is a PULL on purpose: a push through submitCommand or the API queue drains BEFORE this phase, so a
+browser's PTT that arrived in the same pass as a local press would have been applied first and could have won the key (rule 6,
+first come); the pull keeps the web after both queues, as today. No new queue and no new overflow policy: the servers' own bounded
+queues (web 64, CAT 64, oldest dropped, stop() queues its release) are untouched.
+THE TRIPWIRE (ApiHost::offPassKeyTouches): while the engine's control thread runs, every entry into the key rules
+(endKeyFromEngine, webRemotePtt, webRemoteStopped, engineStopping, the pass) from any other thread is counted. 0 for a correct
+front end; tests/test_remote_control_pull.cpp D0 proves it counts (a stray applyControlRequest beside the control thread).
+GUARD (tests/test_command_path_guard.cpp): kWindowMachinery loses applyWebControls; the drawUi line becomes pumpRemoteControls();
+and a new rule, checkNoDirectApply, fails any window member that calls engine_.applyControlRequest (0 allowed) or
+engine_.applyCommand (1 allowed: drawUi's dropped-file import, which P4/P5 sends through uiSubmit like the Import key).
+
+P2, THE HOOKS (kHostHooks 18 -> 10). Each of the eight below wrote or read window state from the engine's pass:
+  onDisplayRange        DELETED. The window sets the spectrum's range from the state it reads (refreshUiState: uiState_.dbMin/dbMax;
+                        SpectrumView gained dbMin()/dbMax() readers). The three engine call sites go.
+  onBookmarksChanged    DELETED (dead: its body was empty since group 7).
+  onConverterChanged    DELETED. The LO field's seed (gui/converter_lo_seed.hpp, converterLoSeed) is the radio key plus the stored
+                        setting's LO, mode and inversion - all read from the table - so it moves for every change the hook announced.
+  onCatalogueResult     The window's override is gone (the base class keeps the virtual for a headless front end). The bounded run's
+                        switch and frame count ride in FrontEndFacts (pluginTestReport, frame) and the engine prints the report.
+  openPluginWindowsFor  An EVENT: FOXAPI_EVENT_PRESET_APPLIED (12, API 0.3 8.14, decision 4: upstream-shaped, in the vendored header
+                        and docs/api-0.3-additions.md). Raised by endPass once per application, text = the module file name; the
+                        window subscribes, finds the PLUGINS row by file name in pumpUiEvents and opens its windows
+                        (openPluginWindowsFor(name, caps) - the table pointers the old body tested are set exactly when the
+                        capability bit is declared). run()'s bounded-run seam calls the same body with the loaded plugin's name and caps.
+  drainTrackInfoText    INVERTED. The window polls its TrackInfoCache's text in its own frame (sendTrackInfoText, first thing in
+                        drawUi, so the drain just below applies it in the same frame) and sends FOXAPP_OP_TRACK_INFO_LINE
+                        (0x8423, VIEW, LOCAL only); the engine appends "Aircraft info", counted, bounded at kDecoderLogMax.
+  enrichWebTrack        HANDED OVER. The window builds an immutable WebExtras once a frame (webExtrasNow: asking the cache for each
+                        visible track is also what starts the lookups, as the pass's loop did) and hands the pointer over in
+                        FrontEndFacts::webExtras (a refcount copy, so the publish's copies stay free); the pass looks the answer up.
+  fillWebImages         HANDED OVER, in the same WebExtras (the pictures' headers).
+NOT DONE HERE, BY THE SURVEY'S OWN PLAN: hooks 11-14 (beforePluginRescan, onPluginsUnloading, attachBasemap, attachTrackInfo) and
+15 (showDemonstrationInstrument) are step P3's - PluginUi ownership and the bounded unload handshake, which wait on owner
+decisions (1) and (2) of the survey's section 7 (the legacy request_tune, the handshake's timeout policy). kHostHooks keeps them,
+with the clocks (3 SAFE) and the watchdog pair (2 SAFE): 10.
+
+TESTS (the files and what each proves; the break-it runs are in the report that accompanied this step):
+  tests/test_remote_control_pull.cpp (new): A order (a local press and a browser PTT landed in one pass: the local key wins, by
+  hand and with the control thread parked between passes; the browser alone keys; the web volume lands after the local queue's and a
+  session's commands), B the standing condition, C request order / overflow / cleared source / no source, D the threaded storm with
+  the tripwire (two producers, two local sessions, a flapping server flag: quiet afterwards, 0 off-pass key touches), E the 2 s hold
+  (four words 400 ms apart never drop the key; silence releases it at 2.0-2.5 s; PTT 0 within two passes), F the latch's owner
+  marking and the 1 s re-arm (a latch ended by the browser's RUN 0 through the pull marks the operator exactly as a local RUN 0
+  does: the same three answers).
+  tests/test_transmit_key_race.cpp case G: C's hammer with the flooded remote queue in the path.
+  tests/test_remote_key_release.cpp: the standing conditions through the engine's phase; E now records the one timing difference.
+  tests/test_plugin_window.cpp E2 (the preset event), F2 (extras handed over, lines sent), F3 (the spectrum's range);
+  tests/test_converter_app_paths.cpp (the seed follows the engine) and tests/test_converter_lo_seed.cpp; tests/test_catalogue_error_
+  report.cpp C0/C (the report is the engine's, off until handed over); tests/test_apply_command.cpp (the new op);
+  tests/test_engine_api_03.cpp M4 (the track-info line as a command); the guard (checkRetiredHooks: the seven are gone from the
+  host class, the engine's sources and the window's overrides).
+TSan: tests/tsan.cmake gains test_remote_control_pull and test_remote_key_release (moved in from "not run yet"; test_transmit_key_race
+was in): 16 tests. tools/sanitize/tsan.supp gains the PortAudio callbackAbort line (race:RealStop) with the report quoted: decided once.
+The first run of the whole selection under it (WSL, GCC 15.2): 12 pass, 4 fail on races behind the one suppressed that are NOT the pump
+move's - PortAudio's open-stream list and its initialisation count (test_engine_api_transmit/merge/conformance) and the scope tap's
+seqlock (test_engine_api_03) - investigated and written up, not suppressed (docs/SANITIZERS-AND-FUZZING.md). A stray applyControlRequest
+beside the running control thread is reported at once, TxKeyRules::key against the publish's changes(): the leg sees the F3 defect.
+
+OPERATOR-VISIBLE DIFFERENCES (all small, all by design of the move):
+  * Switching the web server off in the settings panel releases a held browser key in the engine's NEXT PASS (<= 16 ms), not inside
+    the click's own frame. The window no longer reaches into the engine for it.
+  * A preset's windows (map page, picture, panel, instrument, Decoder output) open when the window next looks at its events - the
+    frame after the press - where the hook opened them in the frame of the drain.
+  * The track-info plugin's answers reach the web status a frame after the window first sees the track.
+  * A converter command that changed nothing no longer re-seeds the LO field (typed-but-uncommitted text stays).

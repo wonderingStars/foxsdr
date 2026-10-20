@@ -143,6 +143,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_SOUND_CARD_PICK, "APP_SOUND_CARD_PICK", true},
     {FOXAPP_OP_SET_PATCH_PAGE_OPEN, "APP_SET_PATCH_PAGE_OPEN", true},
     {FOXAPP_OP_PATCH_LIST_RECORDINGS, "APP_PATCH_LIST_RECORDINGS", true},
+    {FOXAPP_OP_TRACK_INFO_LINE, "APP_TRACK_INFO_LINE", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

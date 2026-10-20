@@ -60,7 +60,12 @@ set(CASCADE_TSAN_TESTS
     # every op the engine applies, on the real application
     test_apply_command
     # the transmit key across the front end, the control thread and the TX thread
-    test_transmit_key_race test_transmit_liveness test_transmit_dead_man)
+    test_transmit_key_race test_transmit_liveness test_transmit_dead_man
+    # the pump move's step P1 (the review's F3): the engine PULLS the web remote's and CAT's requests in its own pass, and the key
+    # rules are touched by the control thread alone - producers, two local sessions and a flapping server flag against the threaded
+    # pass, the ordering, the 2 s hold, the latch's marking and the re-arm (test_transmit_key_race's case G is the same storm
+    # against the hammer); and the same standing conditions through the window's own source and a real web server
+    test_remote_control_pull test_remote_key_release)
 
 set(CASCADE_TSAN_EXCLUDED_TESTS)
 
@@ -114,7 +119,7 @@ _cascade_tsan_exclude(
 
 _cascade_tsan_exclude(
     "NOT RUN YET: it is this branch's own and starts threads or drives code that has them, but it is not engine-threading proper (the window's frames, a signal-delivered stack capture, the sound card's list lock, the engine's per-pass publish) and has never been run under ThreadSanitizer, so the pump move's threaded window tests will say which of these join"
-    test_engine_headless test_engine_publish_alloc test_snapshot_app test_remote_key_release
+    test_engine_headless test_engine_publish_alloc test_snapshot_app
     test_hang_capture_concurrent test_pa_stream_list_guard test_patch_graph_draft_input)
 
 # Everything else starts no thread of its own and drives no code that has one: a

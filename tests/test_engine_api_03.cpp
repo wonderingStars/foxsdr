@@ -3510,21 +3510,10 @@ void testPresetsAndMarks() {
     std::printf("M3: PRESETS' device-centre flag and raw ids, MARKERS' kind and flags\n");
 }
 
-// A host whose track-info plugin has something to say (the window's own does, through its cache).
-struct TrackInfoHost : cascade::engine::EngineHost {
-    std::vector<std::string> pending;
-    std::vector<std::string> drainTrackInfoText() override {
-        std::vector<std::string> out;
-        out.swap(pending);
-        return out;
-    }
-};
-
 // M4 (D3): a decoder line moves decoderLinesTotal and NOT listSeq; the lines still reach the backlog, track-info
 // status lines among them; anything else that changes a list still moves listSeq.
 void testDecoderLinesLeaveListSeqAlone() {
-    TrackInfoHost host;
-    cascade::engine::Engine eng(host);
+    cascade::engine::Engine eng;
     eng.configureApi(kHooks);
     eng.initialise();
     eng.controlPass();
@@ -3562,8 +3551,9 @@ void testDecoderLinesLeaveListSeqAlone() {
     CHECK(afterStatus != base.listSeq);
 
     // THE TRACK-INFO PLUGIN'S STATUS LINES go to the decoder output as they always did - and are COUNTED, so
-    // they reach the backlog an interface reads (an uncounted line never did).
-    host.pending = {"cannot reach the registry"};
+    // they reach the backlog an interface reads (an uncounted line never did). Since the pump move's step P2 the window polls
+    // the plugin's text on its own thread and SENDS each line (FOXAPP_OP_TRACK_INFO_LINE); the engine no longer asks a host hook.
+    CHECK_EQ(pumped(eng, s, testing::cmd(FOXAPP_OP_TRACK_INFO_LINE, 0, 0, "cannot reach the registry")).status(), FOXAPI_OK);
     passes(eng, 2);
     const FoxReceiverState info = s.state();
     CHECK_EQ(info.decoderLinesTotal, lots.decoderLinesTotal + 1u);
