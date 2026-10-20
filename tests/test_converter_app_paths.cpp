@@ -47,6 +47,7 @@
 
 #include "core/freq_converter.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/converter_lo_seed.hpp"
 #include "engine/tune_control.hpp"
 #include "source/device_source.hpp"
@@ -321,7 +322,7 @@ struct AppWindowTestAccess {
     // The note is the window's, read from its engine API session (window port,
     // group 4): with no frame, the engine publishes and the window looks first.
     static std::string aliasNote(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
         return a.converterAliasNote();
     }
@@ -375,12 +376,14 @@ struct AppWindowTestAccess {
     // One frame's engine part, in drawUi's order (window port group 13: the page's graph goes through the window's session, so
     // what one frame commits the NEXT frame's pass applies, and the page reads the engine's graph from a publish).
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.drainLocalCommands();
-        a.commitPatchDraft();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.drainLocalCommands();
+            a.commitPatchDraft();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            (void)a.engine_.pumpPublish();
+        }, [&] { a.commitPatchDraft(); });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
         a.pumpTransmitKey();

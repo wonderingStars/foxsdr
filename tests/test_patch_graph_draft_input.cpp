@@ -115,6 +115,7 @@
 #include "core/app_commands.hpp"
 #include "core/patch_draft.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/patch_view_math.hpp"
 #include "imgui.h"
@@ -205,14 +206,19 @@ struct AppWindowTestAccess {
     // once-a-frame commit and the page-open flag, the patch step, the publish, the window's read of it, and the session's
     // answers (pumpTransmitKey) - which is where a commit's answer reaches the page.
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.drainLocalCommands();
-        a.syncPatchPageOpen();
-        a.commitPatchDraft();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        a.engine_.pumpPatch();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.drainLocalCommands();
+            a.syncPatchPageOpen();
+            a.commitPatchDraft();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            a.engine_.pumpPatch();
+            (void)a.engine_.pumpPublish();
+        }, [&] {
+            a.syncPatchPageOpen();
+            a.commitPatchDraft();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
         a.pumpTransmitKey();

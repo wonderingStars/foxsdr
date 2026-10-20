@@ -27,6 +27,7 @@
 #include "engine/airspy_panel.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/airspy_source.hpp"
 #include "test_check.hpp"
@@ -162,7 +163,7 @@ struct AppWindowTestAccess {
     static void sliderSetGain(AppWindow& a, const std::string& name, double db) {
         a.engine_.submitCommand(
             cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, name, 0, 0, db));
-        a.engine_.drainLocalCommands();
+        passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); });
     }
     // The op the branch used by mistake (FOXAPP_OP_SET_GAIN_NO_READBACK, the
     // radar scope's knob): kept here only so this test can show what it
@@ -170,7 +171,7 @@ struct AppWindowTestAccess {
     static void sliderSetGainNoReadback(AppWindow& a, const std::string& name, double db) {
         a.engine_.submitCommand(
             cascade::core::cmd::makeText(FOXAPP_OP_SET_GAIN_NO_READBACK, name, 0, 0, db));
-        a.engine_.drainLocalCommands();
+        passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); });
     }
     // engine/stage3b-pre Airspy round (OPEN 2/3): the panel's commands, and
     // the published state drawAirspyControls now reads instead of the raw
@@ -178,7 +179,7 @@ struct AppWindowTestAccess {
     // the application itself no longer holds onto it).
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c); }
     static cascade::core::AppStateExt publishedAirspy(AppWindow& a) {
-        (void)a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { (void)a.engine_.publishReceiverState(); });
         cascade::core::PublishedState s;
         if (!a.engine_.receiverSnapshot_->read(s)) { s = a.engine_.receiverSnapshot_->readFull()->state; }
         return s.app;

@@ -72,7 +72,13 @@ set(CASCADE_TSAN_TESTS
     # and an instrumented plugin module (rebuild churn against a polling frame, epochs skipped, a reference held across a
     # rebuild, a Doppler corrector, a rescan releasing the basemap and the track-info client); and the handshake's timings (a
     # window inside the plugin, a window not framing, a stop mid-wait, the watchdog pause, no window at all)
-    test_plugin_directive test_plugin_ui_threaded test_plugin_unload_handshake)
+    test_plugin_directive test_plugin_ui_threaded test_plugin_unload_handshake
+    # the pump move's steps P4 and P5 (the pass on a thread of its own, driven and looked at): the wake, the floor, the stepped mode, runPassNow
+    # and the work posted to the pass against the engine's thread (test_pass_control); a real window's frame - the look, the submits, the key -
+    # against a free-running pass, three session threads and a snapshot reader (test_window_threaded_look); the order the look reads in against a
+    # publish that is held between its two halves (test_look_order); and the unload handshake measured under live traffic
+    # (test_pump_live_traffic)
+    test_pass_control test_window_threaded_look test_look_order test_pump_live_traffic)
 
 set(CASCADE_TSAN_EXCLUDED_TESTS)
 

@@ -45,6 +45,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -63,18 +64,20 @@ struct AppWindowTestAccess {
     static double draft(AppWindow& a, int i) { return a.scanDraft_[i]; }
     static bool active(AppWindow& a) { return a.engine_.scanner_.active(); }
     static double scanningHz(AppWindow& a) { return a.engine_.scanner_.currentHz(); }
-    static void drain(AppWindow& a) { a.engine_.drainLocalCommands(); }
+    static void drain(AppWindow& a) { passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); }); }
     // Window port group 7: the section draws from the state the engine PUBLISHED and sends its
     // commands on the window's engine API session. A frame of this harness therefore looks first
     // (the engine publishes, the window reads its state, as drawUi does) and, after the draw, lets
     // the engine's pass take what the session was handed (and the local queue, as before).
     static void look(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
     }
     static void pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.drainLocalCommands();
+        passseam::custom(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.drainLocalCommands();
+        });
     }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c); }
 };

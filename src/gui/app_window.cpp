@@ -718,6 +718,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // queued requests - where the frame's applyWebControls used to apply them - so nothing but the pumping thread ever
     // applies one. Cleared in the destructor, before either server goes.
     engine_.setRemoteControlSource([this]() { return takeRemoteControls(); });
+    // While this window's frame waits for the engine's pass (a STEPPED run: stepPass, runPassNow) it is blocked, not hung - it beats its
+    // watchdog from the wait (the gap is not a frame gap), and a pass part that really hangs is the control thread's own watchdog's to report.
+    engine_.setFrontEndWaitBeat([this] { watchdog_.heartbeat(false); });
     // The CAT server reads the SAME published snapshot - and the plugin host
     // API reads it too - so a frequency read over CAT, one read in the
     // browser and one a plugin reads come from the same publishes. They can
@@ -824,6 +827,7 @@ AppWindow::~AppWindow() {
     // transmitter in any case).
     closeUiSession();
     // The engine no longer calls into this window for the browser's requests.
+    engine_.setFrontEndWaitBeat({});
     engine_.setRemoteControlSource({});
 
     // A catalogue fetch or a plugin download may still be in flight: the
@@ -1234,6 +1238,37 @@ int AppWindow::run(int frames) {
     // at exit, so this costs a write that was already going to happen.
     if (!configPath_.empty()) { saveConfigNow(); }
 
+    // THE ENGINE'S PASS STARTS ON ITS OWN THREAD (the pump move's step P5), after everything the window does to the engine from
+    // this thread before the loop - the receiver started, the bounded-run stand-ins, the config's first save - and stops in
+    // shutdownQuiesce, before anything the teardown does to it. From here the window is the engine's INTERFACE: it looks at what
+    // the pass publishes, draws, and submits; it does not pump (tests/test_command_path_guard.cpp holds that).
+    //
+    // WHICH PASS: free-running - at the period, woken by every submit - is the product. A BOUNDED run (--frames N) is STEPPED
+    // unless FOXSDR_PASS=free asks otherwise (adopted decision 3): the pass runs only when this window's frame says, at the places
+    // the pump ran in the frame, so N frames is N frames and every test and picture that holds one stays reproducible. The
+    // engine measurement is the one bounded run that is free-running by nature: it times the product's own arrangement. An
+    // interactive run is never stepped, whatever the environment says.
+    {
+        const char* passEnv = std::getenv("FOXSDR_PASS");
+        const bool wantFree = passEnv != nullptr && std::string(passEnv) == "free";
+        const bool stepped = frames >= 0 && !wantFree && !measure_;
+        cascade::engine::ControlThreadOptions opt;
+        opt.period = std::chrono::milliseconds(16);
+        opt.floor = std::chrono::milliseconds(2);
+        opt.stepped = stepped;
+        // The control thread's own hang watchdog is armed exactly as this window's is (a bounded run keeps its empty directory, so
+        // writes nothing, and applyDiagnosticsEnabled moves both together).
+        opt.watchdogReportDir = diagnosticsEnabled_ ? diagCrashDir_ : std::string();
+        // A free-running pass published nothing yet when the first frame looks: the first one is made here, as the table's own
+        // create() makes it, so the window's first read is a real state. (A stepped run has none: its first frame's own front part
+        // is the first pass, as the first frame's pump always was.)
+        if (!stepped) { engine_.controlPass(); }
+        engine_.startControlThread(opt);
+        cascade::core::diagLogf("engine pass: %s on its own thread (period %d ms, floor %d ms)",
+                                stepped ? "STEPPED by the frame" : "free-running",
+                                static_cast<int>(opt.period.count()), static_cast<int>(opt.floor.count()));
+    }
+
     // THE FRAMES THIS APPLICATION IS NOT EXPECTED TO PRESENT. See
     // gui/present_grace.hpp and false-positive rule 2d in
     // core/hang_watchdog.hpp: a display change stalls the driver's present call
@@ -1304,10 +1339,9 @@ int AppWindow::run(int frames) {
         ImGui::NewFrame();
 
         frameCounter_ = rendered;
-        // The GPS fix, if one landed since the last frame: applied here, on
-        // the GUI thread, through the one door. Before the UI is drawn so the
-        // frame that shows "position set" is the frame the scope has it.
-        engine_.pollGpsReader();
+        // (THE GPS FIX is the pass's: it applies one that landed through the one door as the first thing it does, Engine::
+        // runPassPart. It was taken here, on this thread, until the pump move's step P4 - the engine's own field it sets, the
+        // receiver's position, is the pass's to set.)
         // Collects a feature-request worker that has finished and, once its
         // post-send cooldown has passed, returns the SEND key to Idle on its
         // own - see core/feature_request.hpp for why this never blocks.
@@ -1320,11 +1354,14 @@ int AppWindow::run(int frames) {
         // the button press a headless run cannot make.
         if (!pluginTestHook_.empty() && !pluginTestStarted_) {
             pluginTestStarted_ = true;
-            engine_.pluginCatalogueUrl_ = pluginTestHook_;
-            cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s",
-                          engine_.pluginCatalogueUrl_.c_str());
+            // (The engine's fields are the pass's, so a bounded run's seams reach them through runOnPass: with the pass stepped it is
+            // this call on this thread, between its parts, as before the move; free-running it is the pass's own thread that does it.)
+            engine_.runOnPass([this] {
+                engine_.pluginCatalogueUrl_ = pluginTestHook_;
+                engine_.startCatalogFetch();
+            });
+            cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginTestHook_.c_str());
             pluginBrowseOpen_ = true;
-            engine_.startCatalogFetch();
         }
         // VERIFICATION ONLY, same house rule as FOXSDR_OPEN_SERIAL_PORTS and
         // FOXSDR_OPEN_KEY_BINDINGS above: this page's open/closed state is
@@ -1390,19 +1427,21 @@ int AppWindow::run(int frames) {
                 sourceDeviceByEnv_ = true;
                 if (const char* want = std::getenv("FOXSDR_SOURCE_DEVICE");
                     want != nullptr && *want != '\0') {
-                    engine_.scanNative();
-                    for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
-                        if (cascade::core::patch::makeDeviceKey(engine_.nativeDevices_[i].driver,
-                                                                engine_.nativeDevices_[i].args) == want) {
-                            // The row's own command, as a click would send it.
-                            // (the engine's own spelling of the row's id, a const query: the table's
-                            // fact.source.id.<n> is the same function)
-                            engine_.submitCommand(cascade::core::cmd::makeText(
-                                FOXAPI_OP_SELECT_SOURCE,
-                                engine_.sourceIdForRow(kNativeRowBase + static_cast<int>(i))));
-                            break;
+                    engine_.runOnPass([this, want] {
+                        engine_.scanNative();
+                        for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
+                            if (cascade::core::patch::makeDeviceKey(engine_.nativeDevices_[i].driver,
+                                                                    engine_.nativeDevices_[i].args) == want) {
+                                // The row's own command, as a click would send it.
+                                // (the engine's own spelling of the row's id, a const query: the table's
+                                // fact.source.id.<n> is the same function)
+                                engine_.submitCommand(cascade::core::cmd::makeText(
+                                    FOXAPI_OP_SELECT_SOURCE,
+                                    engine_.sourceIdForRow(kNativeRowBase + static_cast<int>(i))));
+                                break;
+                            }
                         }
-                    }
+                    });
                 }
             }
             // A FREQUENCY LIST IN THE IMPORT BOX (0.99.19): VIEW opened on
@@ -1425,7 +1464,11 @@ int AppWindow::run(int frames) {
             // After the radio has finished opening: a device opens off the GUI
             // thread and its open re-applies the centre it had, so a tune made
             // before that lands was simply overwritten (the first capture sweep).
-            if (!pressPresetByEnvDone_ && rendered >= 30 && !engine_.deviceOpenPending_) {
+            bool deviceOpening = false;
+            if (!pressPresetByEnvDone_ && rendered >= 30) {
+                engine_.runOnPass([this, &deviceOpening] { deviceOpening = engine_.deviceOpenPending_; });
+            }
+            if (!pressPresetByEnvDone_ && rendered >= 30 && !deviceOpening) {
                 pressPresetByEnvDone_ = true;
                 // FOXSDR_TUNE_HZ (captures): where the receiver listens, through
                 // the same absolute-tune path the frequency dial uses.
@@ -1437,22 +1480,32 @@ int AppWindow::run(int frames) {
                 }
                 if (const char* want = std::getenv("FOXSDR_PRESS_PRESET"); want != nullptr && *want != '\0') {
                     bool found = false;
-                    for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
-                        if (lp.name != want) { continue; }
-                        found = true;
-                        const std::vector<cascade::gui::IndexedPreset> ps = engine_.validatedPresets(lp);
-                        if (!ps.empty()) {
-                            // Its key's own command, queued AFTER the tune
-                            // above so the preset still has the last word.
-                            engine_.submitCommand(cascade::core::cmd::makeText(
-                                FOXAPI_OP_PLUGIN_PRESET, cascade::core::pluginKey(lp),
-                                static_cast<std::int64_t>(ps.front().index)));
-                        } else {
-                            engine_.recordPluginStopped(cascade::core::pluginKey(lp), false);
-                            openPluginWindowsFor(lp.name, lp.capabilities);
+                    // What the pass knows - the loaded plugins, their validated presets - is read where the pass cannot change it; the
+                    // windows a plugin with no preset opens are this window's own and are opened after.
+                    bool openWindows = false;
+                    std::string openName;
+                    std::uint32_t openCaps = 0;
+                    engine_.runOnPass([&] {
+                        for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
+                            if (lp.name != want) { continue; }
+                            found = true;
+                            const std::vector<cascade::gui::IndexedPreset> ps = engine_.validatedPresets(lp);
+                            if (!ps.empty()) {
+                                // Its key's own command, queued AFTER the tune
+                                // above so the preset still has the last word.
+                                engine_.submitCommand(cascade::core::cmd::makeText(
+                                    FOXAPI_OP_PLUGIN_PRESET, cascade::core::pluginKey(lp),
+                                    static_cast<std::int64_t>(ps.front().index)));
+                            } else {
+                                engine_.recordPluginStopped(cascade::core::pluginKey(lp), false);
+                                openWindows = true;
+                                openName = lp.name;
+                                openCaps = lp.capabilities;
+                            }
+                            break;
                         }
-                        break;
-                    }
+                    });
+                    if (openWindows) { openPluginWindowsFor(openName, openCaps); }
                     cascade::core::diagLogf("capture: preset for '%s' %s", want,
                                             found ? "pressed" : "NOT FOUND - no such plugin loaded");
                 }
@@ -1471,13 +1524,15 @@ int AppWindow::run(int frames) {
             // through the same function the keys on the page call.
             if (!patchStartedByEnv_) {
                 patchStartedByEnv_ = true;
-                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { engine_.patchRunning_ = true; }
+                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { engine_.runOnPass([this] { engine_.patchRunning_ = true; }); }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_RUN_AT"); at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
                     // The dome's own command.
-                    engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, engine_.patchRunning_ ? 0 : 1));
+                    bool patchWasRunning = false;
+                    engine_.runOnPass([this, &patchWasRunning] { patchWasRunning = engine_.patchRunning_; });
+                    engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchWasRunning ? 0 : 1));
                 }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_ALLOFF_AT");
@@ -1784,13 +1839,21 @@ int AppWindow::run(int frames) {
                                                           cascade::core::cmd::foxDemodFromName(mode)));
             };
             hooks.tuneVfoHz = [this](double offsetHz) {
-                engine_.submitCommand(cascade::core::cmd::makeNumInt(
-                    FOXAPP_OP_VFO_TO_ABSOLUTE,
-                    engine_.pipeline_.activeSource().centerFrequencyHz() + offsetHz, 0));
+                // The centre the receiver last published (the click on the spectrum reads the same number): the source itself is
+                // the pass's, and a swap of it would race a read from this thread.
+                engine_.submitCommand(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
             };
             hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
-                engine_.installSource(std::move(src));  // the app's one swap door
-                engine_.followInputRate();
+                // THE PASS INSTALLS IT (the pump move's step P4): the swap and the chain's following it are the engine's own
+                // work on the engine's own state, which the free-running pass is changing beside this thread. Posted, then one
+                // whole pass is awaited, so the generator is in and the chain follows its rate when this returns - the driver
+                // reads the rate straight after.
+                auto held = std::make_shared<std::unique_ptr<cascade::source::IqSource>>(std::move(src));
+                engine_.postToPass([this, held] {
+                    engine_.installSource(std::move(*held));  // the app's one swap door
+                    engine_.followInputRate();
+                });
+                (void)engine_.runPassNow();
             };
             if (!measure_->tick(engine_.pipeline_, hooks)) {
                 measure_.reset();
@@ -2757,22 +2820,20 @@ void benchGroup(const char* caption) {
 
 }  // namespace
 
+// A FILE DROPPED ON THE WINDOW (the drop callback only records its path; this is the frame taking it): an import like the Import key's,
+// as the same command on this window's session (see drawUi).
+void AppWindow::submitPendingDrop() {
+    if (pendingDropPath_.empty()) { return; }
+    const std::string dropped = std::move(pendingDropPath_);
+    pendingDropPath_.clear();
+    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, dropped));
+}
+
 void AppWindow::drawUi() {
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
-    // THE SNAPSHOT'S RETRY, EVERY PASS (engine stage 2): a block the last
-    // publish handed over through the slot - because a reader held the swap
-    // lock - is installed now if no reader took it first, whether or not
-    // anything changes this frame. Never waits.
-    // THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME, FIRST (engine extraction
-    // stage 1: every control ends in applyCommand - see app_window.hpp). At
-    // the top, before anything is drawn and before any list is walked, so a
-    // command that rebuilds the plugin set or the bookmark list can never do
-    // it under a loop, and everything drawn below reads the state they left.
-    // The frame clock, read here on the GUI thread once a frame so the answer
-    // a thread other than this one gets is at most a frame old (OPEN 4).
-    (void)frameClockRunning();
-    (void)frameTimeS();
+    // (THE SNAPSHOT'S RETRY and THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME are the pass's: its front part, run below, does both before
+    // anything this frame draws is read - a command that rebuilds the plugin set or the bookmark list can never do it under a loop.)
     // THE NEWEST PLUGIN DIRECTIVE, before anything is drawn (pump move step P3): a rebuild or a release (the engine's unload
     // handshake) lets go of the basemap's GL textures and destroys the instances every reference below points into, so it
     // happens here, at the head of the frame, and not part-way through it. (hostPollPlugins applies it too, for a caller that polls
@@ -2785,16 +2846,29 @@ void AppWindow::drawUi() {
     // The track-info plugin's status lines, polled here (its cache is this thread's) and sent as commands, so the drain just
     // below applies them in this frame's pass (the pump move's step P2: the pass used to ask for them through a host hook).
     sendTrackInfoText();
-    engine_.pumpFrameBegin();  // Engine: the snapshot retry, this drain, the API's queue
+    // A FILE DROPPED ON THE WINDOW is an import like the Import key's (0.99.19): the same command, sent through this window's
+    // session where the drop is taken - it used to be applied here with a direct applyCommand, in the middle of the frame's own pump,
+    // which a pass on a thread of its own would race (the pump move's step P4). Sent before the pass's front part, so the pass this
+    // frame runs applies it and the publish it makes shows the import, as the direct call's did.
+    submitPendingDrop();
+    // What only this window knows, for the publish: handed over, not asked
+    // for while the engine publishes (engine/stage3b-pre, OPEN 4). Before the pass's front part, which publishes it.
+    handFrontEndFacts();
+    // THE ENGINE'S PASS IS NOT THIS FRAME'S (the pump move's step P5). It runs on the control thread - at its own period, woken by
+    // every submit - and this frame is a LOOK at what it published, a draw, and the submits the draw makes. In a bounded run the pass
+    // is STEPPED: the three stepPass calls in this function run its three parts HERE, where the frame's pump ran them before the
+    // move (the front part up to the publish, the audio mute after the look, the workers and the sink at the end), and each waits for
+    // the part to finish - so a --frames N run is the same N frames it always was, and every picture and test that holds it stays
+    // reproducible. Free-running (the product) stepPass does nothing. THE FRONT PART: the snapshot's retry, the local queue and the
+    // API's (this frame's submits, the window's session's included: pumpFrameBegin drains them), the inputs (a fault ends the takes
+    // on the first frame that sees it, before any stop or start a browser or plugin queued can run), the web remote's and CAT's
+    // requests and the remote key's standing condition, what plugins asked for, the scanner (after every command of the pass has
+    // landed: its user-wins test must see any manual tune), the patch runtime, and the publish the look below reads.
+    engine_.stepPass(cascade::engine::PassPart::Front);
     // (THE KEYBOARD is dispatched below, right after the frame's read of the
     // state: a key reads the value it changes, and since the window's port
     // (stage 4, group 6) its command lands at the engine's next pass like a
     // widget's, so it reads what the engine published THIS pass.)
-    engine_.drainLocalCommands();
-    // (THE SCANNER'S PENDING EDIT is committed below, right after the frame's read of the
-    // state: it carries the engine's own values for the fields nobody edited, and since the
-    // window's port, group 7, those are the state's - which has to be this pass's, with every
-    // command of the frame before in it.)
     // The same for the Patch page's draft of the graph: every edit is
     // committed in the frame it is made, and this makes sure of it for a view
     // that stopped drawing part-way (a no-op when the draft holds no edit).
@@ -2808,64 +2882,29 @@ void AppWindow::drawUi() {
     // rather than leaving it where it was. That is the shape the hard rule in
     // core/transmitter.hpp needs from this end of it. The LATCH press, the
     // remote-transmit switch and the page's own "my controls are on screen"
-    // flag are rebuilt the same way, and pumpTransmitKey turns all of them
+    // flag are rebuilt the same way, and submitTransmitKey turns all of them
     // into ONE batch on the window's engine API session (gui::txKeyCommands).
     transmitPttHeld_ = false;
     transmitPageLive_ = false;
     transmitLatchPressed_ = false;
     transmitArmRequest_ = -1;
-    // A fault ends the takes on the first frame that sees it, before any stop
-    // or start a browser or plugin queued can run below (see the header).
-    // Before anything is drawn: the decoders' output is bounded in the runner
-    // and must be collected whether or not the panel that shows it is open.
-    engine_.pumpInputs();  // Engine: endTakesOnFault, then pumpDecoderOutput
-    // Same contract for the web server's view of the radio: a browser must be
-    // served whether or not the settings panel is expanded, and this is the
-    // only thread allowed to read the source identity (see app_window.hpp).
-    // Anything a browser asked for since the last frame, applied before the
-    // panels are drawn so the window shows the new state this frame rather
-    // than one frame late.
-    engine_.pumpRemoteControls();  // Engine: the web remote's and CAT's requests, and the remote key's standing condition
-    // And what PLUGINS asked for (host API level 1), by the same code, in the
-    // same place and for the same reason. The snapshot they read is published
-    // below (publishReceiverState), so it already carries this frame's
-    // changes. Before updateAudioMute below, which applies a plugin's
-    // set_muted.
-    // THE SCANNER, AFTER EVERY COMMAND OF THIS FRAME HAS LANDED (moved here
-    // from the end of the frame in stage 1). Its user-wins test must see any
-    // manual tune made through a widget, and a widget's tune is now applied
-    // by the drain at the top of the frame rather than inside its own draw -
-    // so this is the first point that sees it, exactly as the end of the
-    // frame used to be. A Stop scan press is likewise applied before the
-    // scanner can tick once more.
-    engine_.pumpPlugins();  // Engine: applyPluginApi, then scannerFrame
-    // THE PATCH RUNTIME (window port group 13): the catalogue, START and STOP, the radios, the compile and the sets -
-    // or, with the view not showing, the close rule. The window's frame drives none of it any more.
-    engine_.pumpPatch();    // Engine: the patch's step of the pass
-    if (!pendingDropPath_.empty()) {
-        const std::string dropped = std::move(pendingDropPath_);
-        pendingDropPath_.clear();
-        // A file dropped on the window is an import like the Import key's,
-        // applied here where the drop has always been taken.
-        const cascade::core::cmd::QueuedCommand q =
-            cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, dropped);
-        (void)engine_.applyCommand(q.c, q.longText);
-    }
-    // THE ONE RECEIVER SNAPSHOT (engine stage 2): every command of this frame
-    // has landed (the drains, web/CAT, plugins, the scanner, a drop), nothing
-    // has been drawn yet. The plugin host API, the web server and CAT all
-    // answer from what this publishes.
-    // What only this window knows, for the publish: handed over, not asked
-    // for while the engine publishes (engine/stage3b-pre, OPEN 4).
-    handFrontEndFacts();
-    publishWebSpectrum(engine_.pumpPublish());  // Engine: flushBookmarkSave(false), then the publish
-    // THE STATUS LINES this frame's panels letter, as the engine just handed
+    // ===== THE LOOK, in the one order the engine's publish allows a reader that is not the pass (the pump move's step P4) =====
+    // THE SESSION'S ANSWERS FIRST (results and events: the table never shows one before the snapshot that carries its effect, so a
+    // reader that takes them before the state reads a state at least as new), THE STATUS LINES next (the pass publishes the state and
+    // then the lines, so lines read before the state are never from a later pass than it), THEN THE STATE, the spectrum and the lists
+    // keyed on its sequence (refreshUiState), and only then are the answers acted on - against that state.
+    pollUiAnswers();
+    // THE STATUS LINES this frame's panels letter, as the engine handed
     // them over (engine/stage3b-pre, docs/engine-stage3.md OPEN 3): one copy
     // a frame, never the engine's own fields.
     statusLines_ = engine_.statusText();
     // THE STATE, ONCE A FRAME, through the session (the key's flags are
     // per-session: TX_KEY_MINE, TX_LATCH_RELEASE_FIRST).
     refreshUiState();
+    actOnUiAnswers();
+    // THE WEB SPECTRUM, labelled with the centre the state just read carries (the pass's publish used to hand it back; it is the same
+    // number, and read here it is no longer a frame behind the lines it labels).
+    publishWebSpectrum(uiState_.centreHz);
     // THE CRASH SWEEP, once, on the first look that can answer whose install id it carries (the facts are the engine's
     // after its first publish, which this frame has just made); armed by run().
     if (crashUploadStartPending_ && crashUploadStart()) { crashUploadStartPending_ = false; }
@@ -2906,7 +2945,7 @@ void AppWindow::drawUi() {
     // After pumpRemoteControls for the same reason that call is where it is: a
     // browser's tune has already landed, so the mute follows a web tune in the
     // same frame rather than one behind it.
-    engine_.pumpAudioMute();
+    engine_.stepPass(cascade::engine::PassPart::Mute);  // Engine: the audio mute, the part of the pass that follows the look
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
@@ -2936,7 +2975,7 @@ void AppWindow::drawUi() {
     // stage 4 it is a SUBMIT on the window's own engine API session
     // (pumpTransmitKey), applied by the engine's next pass under API 0.2's
     // rules - a control lands one pass later (engine-stage4.md decision 2).
-    pumpTransmitKey();
+    submitTransmitKey();
 
     // One borderless window pinned to the viewport: the app IS the layout, so
     // nothing is movable or collapsible at this level.
@@ -3171,12 +3210,15 @@ void AppWindow::drawUi() {
     // device list), pollSoundCard, pollSoapyRecovery (after the poll, so a
     // reopen that just resolved is seen), pollPendingRetune (a held wheel
     // burst), pollPluginAsync and - after that poll, never before - pumpAddAll.
-    engine_.pumpWorkers();
+    // (pollUpdateAsync is this window's own - the update check and download - and touches nothing of the engine's, so it no longer
+    // stands between the workers and the sink.)
     pollUpdateAsync();
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing. The collect comes first - the health check must
     // not judge a stream an open is still installing.
-    engine_.pumpAudio();  // Engine: pollAudioOpen, pollAudioHealth, pollMicOpen, the heartbeat
+    // THE BACK PART OF THE PASS (stepped runs only; free-running it ran by itself): the workers above, then the sink's collect and
+    // health check, the microphone's open, the heartbeat and the config copy.
+    engine_.stepPass(cascade::engine::PassPart::Back);
 }
 
 namespace {
@@ -15780,6 +15822,40 @@ void AppWindow::setTransmitPageOpen(bool open) {
 
 void AppWindow::uiSubmit(const cascade::core::cmd::QueuedCommand& q) { (void)uiSubmitTicket(q); }
 
+// The setters whose newest figure supersedes every older one (an absolute value a drag, a slider or a knob sends every frame it moves).
+bool AppWindow::latestWins(std::uint32_t op) {
+    switch (op) {
+        case FOXAPI_OP_SET_VFO_OFFSET:
+        case FOXAPP_OP_SET_VFO_OFFSET_FREE:
+        case FOXAPP_OP_SET_BANDWIDTH_DRAG:
+        case FOXAPI_OP_SET_BANDWIDTH:
+        case FOXAPI_OP_SET_SQUELCH:
+        case FOXAPI_OP_SET_VOLUME:
+        case FOXAPI_OP_SET_DISPLAY_RANGE:
+        case FOXAPP_OP_SET_DISPLAY_MIN:
+        case FOXAPP_OP_SET_DISPLAY_MAX:
+        case FOXAPP_OP_SET_NR_STRENGTH:
+        case FOXAPP_OP_SET_NOTCH_FREQUENCY:
+        case FOXAPP_OP_SET_NOTCH_Q: return true;
+        default: return false;
+    }
+}
+
+// What was held while the session was nearly full goes now that it has room (once a frame, after the answers are read).
+void AppWindow::flushHeldSetters() {
+    if (uiHeld_.empty() || uiSession_ == nullptr) { return; }
+    for (auto it = uiHeld_.begin(); it != uiHeld_.end();) {
+        FoxSubmitResult sr{};
+        sr.structSize = sizeof(sr);
+        const int32_t n = engineApi_->submit(uiSession_, &it->second.c, 1, &sr);
+        if (n >= 0 && sr.status != FOXAPI_BUSY) {
+            it = uiHeld_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 std::uint64_t AppWindow::uiSubmitTicket(const cascade::core::cmd::QueuedCommand& q) {
     if (uiSubmitTap_ != nullptr) { uiSubmitTap_->push_back(q); }  // (a test's; see the header)
     if (uiSession_ == nullptr) {
@@ -15793,8 +15869,24 @@ std::uint64_t AppWindow::uiSubmitTicket(const cascade::core::cmd::QueuedCommand&
                           ? engineApi_->submit(uiSession_, &q.c, 1, &sr)
                           : engineApi_->submit_text(uiSession_, &q.c, q.longText.data(),
                                                     static_cast<uint32_t>(q.longText.size()), &sr);
-    // BUSY (the session already has its maximum pending) takes no ticket and answers nothing: the caller sends again.
-    if (n < 0 || (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE)) { return 0u; }
+    // BUSY (the session already has its maximum pending) takes no ticket and answers nothing: the caller sends again. With the pass on a
+    // thread of its own this is a new way to lose a command (the pump move's step P4, the survey's 1.6 I): a pass stalled for seconds
+    // (a rescan, a vendor wait) while a gesture emits one non-mergeable command a frame fills the session's queue after FOXAPI_MAX_PENDING
+    // of them. The mergeable kinds (a drag's offset, a volume) merge into the pending one and are never refused; the rest are dropped here,
+    // COUNTED and SAID ONCE, so a stalled pass shows as one line in the log and not as controls that silently stop answering.
+    if (n < 0 || sr.status == FOXAPI_BUSY) {
+        // THE NEWEST FIGURE WINS (see uiHeld_): a setter whose newest value supersedes the older ones is held and offered again, not dropped.
+        if (latestWins(q.c.op)) {
+            uiHeld_[q.c.op] = q;
+            return 0u;
+        }
+        if (uiBusyDrops_++ == 0) {
+            cascade::core::diagWarnf("ui: the engine's pass is not keeping up - %s was dropped (BUSY: %d commands already waiting); later ones are counted, not said",
+                                     cascade::core::cmd::opName(q.c.op), static_cast<int>(FOXAPI_MAX_PENDING));
+        }
+        return 0u;
+    }
+    if (sr.status != FOXAPI_OK && sr.status != FOXAPI_NO_CHANGE) { return 0u; }
     return sr.ticket;
 }
 
@@ -15875,6 +15967,7 @@ void AppWindow::openUiSession() {
 }
 
 void AppWindow::closeUiSession() {
+    uiHeld_.clear();   // (a figure held for the session being closed belongs to nobody else)
     if (uiSession_ != nullptr) {
         engineApi_->close_session(uiSession_);
         uiSession_ = nullptr;
@@ -15892,9 +15985,11 @@ void AppWindow::refreshUiState() {
         // this window's onDisplayRange from its pass the moment the range changed, writing the view's two floats from beside
         // the frame that draws them). The waterfall is fed from the same two numbers (readSpectrum, below).
         if (spectrum_ != nullptr) { spectrum_->setRange(static_cast<float>(uiState_.dbMin), static_cast<float>(uiState_.dbMax)); }
-        // What a drag sent last frame has landed in this state (one pass): the
-        // window's own copy of it goes (tuneLocal_).
-        tuneLocal_ = TuneLocal{};
+        // What a drag sent has landed in this state, or has had its moment: the window's own copy of it goes (tuneLocal_; the rule is
+        // gui/tune_local.hpp's - not "the next state read", which only held while the frame was the pass).
+        const double nowS = uiClockS_();
+        (void)cascade::gui::tuneLocalRelease(tuneLocal_.offset, uiState_.vfoOffsetHz, nowS);
+        (void)cascade::gui::tuneLocalRelease(tuneLocal_.bandwidth, uiState_.bandwidthHz, nowS);
     }
     // ...and the spectrum, after the state: the waterfall is fed from it with the
     // display range this very read carried.
@@ -16014,6 +16109,10 @@ const AppWindow::TuningListCache& AppWindow::tuningLists() {
 // engine's own limits - the same functions the engine applies when the command lands, so
 // the band the panel is drawn with is the band the engine will have (tests/
 // test_tuning_surface.cpp holds the two against each other at the edges).
+double AppWindow::steadyNowS() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void AppWindow::dragVfoCentre(double wantAbsHz) {
     // The offset that puts the tuned frequency at wantAbsHz, kept inside the span the
     // chain runs at with the filter whole inside it (Engine::applyCommand's SET_VFO_OFFSET).
@@ -16021,8 +16120,7 @@ void AppWindow::dragVfoCentre(double wantAbsHz) {
     // far past the panel's edge on a wide source reaches, where the engine clamps it.
     const double offset = vfoOffsetInsideSpan(wantAbsHz - uiState_.centreHz, tuningLists().inputRateHz,
                                               tunedBandwidthHz());
-    tuneLocal_.offsetValid = true;
-    tuneLocal_.offsetHz = offset;
+    cascade::gui::tuneLocalSent(tuneLocal_.offset, offset, uiClockS_());
     uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, offset));
 }
 
@@ -16032,8 +16130,7 @@ void AppWindow::dragVfoEdge(double mouseHz, double bandCentreAbsHz) {
     // (FOXAPP_OP_SET_BANDWIDTH_DRAG). The request is sent as asked.
     const double asked = 2.0 * std::fabs(mouseHz - bandCentreAbsHz);
     const double hi = kVfoBwMaxChanFrac * uiState_.channelRateHz;
-    tuneLocal_.bandwidthValid = true;
-    tuneLocal_.bandwidthHz = std::max(kVfoBwMinHz, std::min(asked, hi));
+    cascade::gui::tuneLocalSent(tuneLocal_.bandwidth, std::max(kVfoBwMinHz, std::min(asked, hi)), uiClockS_());
     uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_BANDWIDTH_DRAG, asked));
 }
 
@@ -16724,21 +16821,23 @@ void AppWindow::pumpUiEvents() {
     for (;;) {
         for (auto& x : ev) { x.structSize = sizeof(x); }
         const int32_t got = engineApi_->poll_events(uiSession_, ev, 8);
-        for (int32_t i = 0; i < got; ++i) {
-            if (ev[i].kind == FOXAPI_EVENT_MUTE_TUNE_AWAY) { askAboutMutedPlugins(); }
-            if (ev[i].kind == FOXAPI_EVENT_PRESET_APPLIED) {
-                // A plugin's preset was applied (API 0.3 8.14; the engine used to call openPluginWindowsFor from its pass): open
-                // what that module contributes - from its PLUGINS row, found by the module file name the event carries.
-                const PluginListCache& c = pluginLists();
-                for (const cascade::gui::PluginRow& row : c.plugins) {
-                    if (row.file == ev[i].text) {
-                        openPluginWindowsFor(row.name, row.caps);
-                        break;
-                    }
-                }
+        for (int32_t i = 0; i < got; ++i) { handleUiEvent(ev[i]); }
+        if (got < 8) { break; }
+    }
+}
+
+void AppWindow::handleUiEvent(const FoxEvent& ev) {
+    if (ev.kind == FOXAPI_EVENT_MUTE_TUNE_AWAY) { askAboutMutedPlugins(); }
+    if (ev.kind == FOXAPI_EVENT_PRESET_APPLIED) {
+        // A plugin's preset was applied (API 0.3 8.14; the engine used to call openPluginWindowsFor from its pass): open
+        // what that module contributes - from its PLUGINS row, found by the module file name the event carries.
+        const PluginListCache& c = pluginLists();
+        for (const cascade::gui::PluginRow& row : c.plugins) {
+            if (row.file == ev.text) {
+                openPluginWindowsFor(row.name, row.caps);
+                break;
             }
         }
-        if (got < 8) { break; }
     }
 }
 
@@ -16760,9 +16859,9 @@ void AppWindow::askAboutMutedPlugins() {
 }
 
 // THE KEY, ONCE A FRAME (see the members in app_window.hpp): this frame's
-// presses as commands on the window's session, in ONE submit, and the
-// answers drained. No allocation: a fixed batch, a fixed result buffer.
-void AppWindow::pumpTransmitKey() {
+// presses as commands on the window's session, in ONE submit. No allocation: a
+// fixed batch.
+void AppWindow::submitTransmitKey() {
     if (uiSession_ == nullptr) { return; }
     cascade::gui::TxKeyFrame f;
     f.pageLive = transmitPageLive_;
@@ -16775,34 +16874,73 @@ void AppWindow::pumpTransmitKey() {
     FoxCommand batch[cascade::gui::kTxKeyMaxCommands];
     const std::uint32_t n = cascade::gui::txKeyCommands(f, transmitKey_, batch);
     if (n > 0) { (void)engineApi_->submit(uiSession_, batch, n, nullptr); }
-    // Every answer, every frame (a session that stops reading is answered
-    // BUSY): a refused LATCH 1 or remote-arm is lettered on the page.
-    FoxCommandResult r[16];
-    for (;;) {
-        for (auto& x : r) { x.structSize = sizeof(x); }
-        const int32_t got = engineApi_->poll_results(uiSession_, r, 16);
-        for (int32_t i = 0; i < got; ++i) {
-            const bool keyOp = r[i].op == FOXAPI_OP_TX_LATCH || r[i].op == FOXAPI_OP_TX_REMOTE_ARM;
-            if (keyOp && r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {
-                transmitKeyNote_ = r[i].message;
-            } else if (keyOp && r[i].status == FOXAPI_OK && r[i].op == FOXAPI_OP_TX_LATCH) {
-                transmitKeyNote_.clear();
-            }
-            // THE TYPED FREQUENCY'S ANSWER (window port, group 6): the one op the readout
-            // sends whose refusal the operator is owed. The table refuses a figure outside
-            // (0, 6 GHz] and the engine can drop a tune for a radio that closed; the readout
-            // says it next frame, in the engine's words, on the entry's red line.
-            if (r[i].op == FOXAPI_OP_SET_FREQUENCY && r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {
-                freqEntryRefusal_ = r[i].message[0] != '\0' ? r[i].message : "the frequency was refused";
-            }
-            // THE PATCH PAGE'S TWO ANSWERS (window port group 13): the graph commit in flight, whose answer names the
-            // version the draft is rebased onto, and the native scan a new Radio part waits for.
-            if (r[i].op == FOXAPP_OP_PATCH_SET_GRAPH) { onPatchGraphResult(r[i]); }
-            if (r[i].op == FOXAPP_OP_SCAN_NATIVE_ONLY) { patchScanDone_ = std::max<std::uint64_t>(patchScanDone_, r[i].ticket); }
-        }
-        if (got < 16) { break; }
+}
+
+// THE SESSION'S ANSWERS, TAKEN (the first half of the look; see the members in app_window.hpp): every result and event the session
+// has, into the window's fixed buffer - read BEFORE the state, so each is handled (actOnUiAnswers) against a state at least as new as
+// the snapshot that raised it. What does not fit stays on the session for the next frame (a session that stops reading is answered
+// BUSY; one frame's backlog is not that). A buffer not yet acted on is kept, never overwritten.
+void AppWindow::pollUiAnswers() {
+    if (uiSession_ == nullptr) { return; }
+    UiAnswers& a = uiAnswers_;
+    if (a.nResults < UiAnswers::kMaxResults) {
+        for (int i = a.nResults; i < UiAnswers::kMaxResults; ++i) { a.results[i].structSize = sizeof(a.results[i]); }
+        const int32_t got = engineApi_->poll_results(uiSession_, a.results + a.nResults,
+                                                     static_cast<uint32_t>(UiAnswers::kMaxResults - a.nResults));
+        if (got > 0) { a.nResults += static_cast<int>(got); }
     }
-    pumpUiEvents();
+    flushHeldSetters();
+    if (a.nEvents < UiAnswers::kMaxEvents) {
+        for (int i = a.nEvents; i < UiAnswers::kMaxEvents; ++i) { a.events[i].structSize = sizeof(a.events[i]); }
+        const int32_t got = engineApi_->poll_events(uiSession_, a.events + a.nEvents,
+                                                    static_cast<uint32_t>(UiAnswers::kMaxEvents - a.nEvents));
+        if (got > 0) { a.nEvents += static_cast<int>(got); }
+    }
+}
+
+// ...AND HANDLED (the second half): after the state, the spectrum and the lists this frame's look read.
+void AppWindow::actOnUiAnswers() {
+    UiAnswers& a = uiAnswers_;
+    for (int i = 0; i < a.nResults; ++i) {
+        const FoxCommandResult& r = a.results[i];
+        if (uiAnswerTap_ != nullptr) { (*uiAnswerTap_)(r); }
+        const bool keyOp = r.op == FOXAPI_OP_TX_LATCH || r.op == FOXAPI_OP_TX_REMOTE_ARM;
+        if (keyOp && r.status != FOXAPI_OK && r.status != FOXAPI_NO_CHANGE) {
+            transmitKeyNote_ = r.message;
+        } else if (keyOp && r.status == FOXAPI_OK && r.op == FOXAPI_OP_TX_LATCH) {
+            transmitKeyNote_.clear();
+        }
+        // THE TYPED FREQUENCY'S ANSWER (window port, group 6): the one op the readout
+        // sends whose refusal the operator is owed. The table refuses a figure outside
+        // (0, 6 GHz] and the engine can drop a tune for a radio that closed; the readout
+        // says it, in the engine's words, on the entry's red line.
+        if (r.op == FOXAPI_OP_SET_FREQUENCY && r.status != FOXAPI_OK && r.status != FOXAPI_NO_CHANGE) {
+            freqEntryRefusal_ = r.message[0] != '\0' ? r.message : "the frequency was refused";
+        }
+        // THE PATCH PAGE'S TWO ANSWERS (window port group 13): the graph commit in flight, whose answer names the
+        // version the draft is rebased onto, and the native scan a new Radio part waits for.
+        if (r.op == FOXAPP_OP_PATCH_SET_GRAPH) { onPatchGraphResult(r); }
+        if (r.op == FOXAPP_OP_SCAN_NATIVE_ONLY) { patchScanDone_ = std::max<std::uint64_t>(patchScanDone_, r.ticket); }
+    }
+    a.nResults = 0;
+    // (An event handler may poll the session itself - nothing today does - so the buffer is released before they run.)
+    const int nEvents = a.nEvents;
+    a.nEvents = 0;
+    for (int i = 0; i < nEvents; ++i) { handleUiEvent(a.events[i]); }
+}
+
+// THE KEY AND THE ANSWERS TOGETHER, in the order the frame used to do them (the key's submit, then the drain): for a caller that is
+// not a frame (a test). drawUi does not call this: it polls the answers before the look and acts on them after it.
+void AppWindow::pumpTransmitKey() {
+    if (uiSession_ == nullptr) { return; }
+    submitTransmitKey();
+    // Every answer, every frame (a session that stops reading is answered BUSY): a refused LATCH 1 or remote-arm is lettered on the page.
+    for (;;) {
+        pollUiAnswers();
+        const bool more = uiAnswers_.nResults == UiAnswers::kMaxResults || uiAnswers_.nEvents == UiAnswers::kMaxEvents;
+        actOnUiAnswers();
+        if (!more) { break; }
+    }
 }
 
 void AppWindow::drawTransmitPage() {
@@ -20225,6 +20363,9 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
                                                      diagnosticsEnabled_);
     }
     watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // THE ENGINE'S OWN WATCHDOG (the pump move's step P5) is a second hang detector with a report directory of its own: "off means
+    // off" has to reach it, or a session switched off would keep writing the pass's hang reports.
+    engine_.setControlWatchdogReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
 }
 
 void AppWindow::drawDiagnosticsSection() {
@@ -20811,20 +20952,6 @@ void AppWindow::pollConfigWriter() {
 // verbatim; where that code reached into the window, it now calls one of these,
 // at the same moment and on the same (GUI) thread, and each body below is the
 // line (or lines) the moved code used to run here - moved, not rewritten.
-
-bool AppWindow::frameClockRunning() const {
-    if (std::this_thread::get_id() != guiThread_) { return frameClockCache_.load(std::memory_order_relaxed); }
-    const bool running = ImGui::GetCurrentContext() != nullptr;
-    frameClockCache_.store(running, std::memory_order_relaxed);
-    return running;
-}
-
-double AppWindow::frameTimeS() const {
-    if (std::this_thread::get_id() != guiThread_) { return frameTimeCache_.load(std::memory_order_relaxed); }
-    const double t = ImGui::GetTime();
-    frameTimeCache_.store(t, std::memory_order_relaxed);
-    return t;
-}
 
 double AppWindow::wallTimeS() const { return glfwGetTime(); }
 

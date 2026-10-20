@@ -50,6 +50,7 @@
 #include "core/freq_converter.hpp"
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "engine/source_fallback.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
@@ -314,10 +315,12 @@ struct AppWindowTestAccess {
     // lists and facts (the engine's own pumpWorkers is what collects a card's listing and open, as here), the window
     // copies the status lines and reads its state. The assertions are unchanged: they only see what a frame sees.
     static void lookFull(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
     }
@@ -394,7 +397,7 @@ struct AppWindowTestAccess {
     // (window port, group 4): with no frame, the engine publishes and the
     // window looks first.
     static void look(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
     }
     static std::vector<ConverterMode> offered(AppWindow& a) {

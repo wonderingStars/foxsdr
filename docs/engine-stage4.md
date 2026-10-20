@@ -3641,3 +3641,208 @@ EVIDENCE OF THIS STEP
   ThreadSanitizer (WSL, GCC 15.2, halt_on_error=1): ctest -L tsan -R "plugin|ui|unload|directive" 3/3 clean; the whole selection 15/19 with
   the four races that were already there and are written up (docs/SANITIZERS-AND-FUZZING.md); no new race.
   Nothing committed, pushed, stashed or switched. Untracked build logs from earlier steps are untouched.
+
+PUMP MOVE, STEPS P4 AND P5 (2026-10-20; the survey's section 1.6, section 3 and section 7, scratchpad/pump-move-survey.md): THE FRAME ASSUMPTIONS FIXED, AND THE PASS LEAVES THE FRAME.
+The engine's pass now runs on the control thread; the window's frame is a LOOK at what it published, a draw, and the submits the draw makes. Built, not
+merged with anything: the same worktree, on top of P3 (0fd57f3). Nothing committed, pushed, stashed or switched.
+
+THE OWNER DECISIONS, adopted with the survey's recommendations (each reversible; they are one constant or one default apiece):
+  (3) STEPPED MODE for bounded runs. A --frames N run steps the pass from the frame; free-running is the product's default and FOXSDR_PASS=free makes a bounded
+      run free-running too. An interactive run is never stepped.
+  (5) THE ENGINE'S OWN CLOCK, now: Engine::clockS(), seconds on a steady clock since the engine was built, readable from any thread. EngineHost's frameTimeS and
+      frameClockRunning are GONE (kHostHooks 5 -> 3: wallTimeS and the watchdog pair); the nine places the engine read the window's ImGui clock (scanner dwell,
+      bookmark-save debounce, audio watchdog cadence, radio reopen hold-off, recordings' start times, the usage beat) read their own. A window that stops
+      framing - a title-bar drag, a modal loop - no longer freezes any of them.
+  (6) THE PASS FLOOR: 2 ms between the STARTS of two passes (ControlThreadOptions::floor; 0 turns it off). A submit wakes the loop at once; without a floor a
+      flood of submits is a flood of passes. Measured: one second of submits as fast as a thread can make them is 41 078-51 411 passes with the floor off and 24-25
+      with a 40 ms floor (the bound is 25); a wake after an idle spell is served in 0.1 ms whatever the floor, and a wake that lands inside the floor waits for it.
+  THE TIMER TICK, found by the interactive smoke: on this system's default 15.6 ms tick a 16 ms wait ends on the SECOND tick, so the free-running pass ran at 35 a second
+  (422 passes in 12 s), not 62 - half the waterfall's line rate and a 2 ms floor of ~15 ms. startControlThread now asks Windows for a 1 ms tick (timeBeginPeriod, given
+  back by stopControlThread; ControlThreadOptions::timerResolutionMs, 0 leaves it alone; the audio stream's WASAPI host already does the same whenever one is open): the
+  same run is 612 passes in 10.1 s (60.5 a second), test_pass_control A2 holds it (>= 60 passes in 1.5 s), break-it RED. Linked: winmm.
+
+THE MOVE, AS BUILT
+  PACING. Engine::controlLoop, free-running: a pass at least every `period` (16 ms), at once on any wake - Engine::submitCommand (new: it did not wake the thread,
+  P3's TRAP 7), a session's submit or close, postToPass, runPassNow - and never two passes' starts closer than `floor`. The wake flag is cleared when a pass
+  STARTS, not when the wait ends, so a submit that lands during a pass makes the next one due at once instead of being eaten. The window starts it from run()
+  after the first config save: free-running, one controlPass() first (so the first look reads a real state, as the table's create() does), then
+  startControlThread; the control watchdog gets the GUI watchdog's arguments, and Settings > Diagnostics now moves both (applyDiagnosticsEnabled ->
+  Engine::setControlWatchdogReportDir): "off means off" reaches the engine's own hang reports. shutdownQuiesce stops it first, as before; the join is charged in
+  the shutdown budget (kControlJoinWait weight 1, kShutdownBoundedWaitsMs 10500 -> 13500, kShutdownThresholdMs 27000 -> 33000, test_shutdown_budget).
+  THE PASS HAS THREE PARTS (PassPart): FRONT (the GPS fix, the command queues, inputs, the remote controls, plugins and scanner, the patch, the publish), MUTE (the
+  audio mute) and BACK (the workers and the sink, the config copy). controlPass() is the three in turn; the frame's order before the move was exactly these three
+  with the look and the draw between them, which is what makes the stepped mode exact.
+  STEPPED MODE. The thread exists (onControlThread(), the control watchdog, the table's thread gating, every hook's real call path are real) but runs no pass of
+  its own: AppWindow::drawUi calls Engine::stepPass(Front) where its pump used to begin, stepPass(Mute) where updateAudioMute ran, stepPass(Back) where the workers
+  and the sink ran, and each waits for the part to finish. A free-running pass makes the three calls no-ops - one drawUi, two modes. So a --frames N run is the same
+  N frames in the same order of effects; the stepped idle thread beats its watchdog every 250 ms (a front end drawing is not a hung pass), the front end's own
+  watchdog is beaten from inside the wait (setFrontEndWaitBeat: a frame blocked in stepPass is blocked, not hung). STEPPED ORDERS THREADS; IT CANNOT FIND A RACE
+  (the front end is parked while a part runs) - the free-running mode, test_window_threaded_look and ThreadSanitizer do that, and it is said wherever it is used.
+  DRIVING THE PASS FROM ANOTHER THREAD. runPassNow: a whole pass that STARTED after the call, finished, returns false for a pass that does not come (bounded), on
+  the control thread itself, or a stopped thread; inline with no thread. postToPass: work for the pass, run at its head after the command queues (wakes it).
+  runOnPass: work run with the pass out of the way - on the caller's thread for a stepped or absent thread (the pass is parked between parts, exactly what a
+  bounded run did before the move), posted and awaited for a free-running one - and never after it returns. A WAIT FOR THE PASS APPLIES THE FRONT END'S
+  DIRECTIVES: a front end blocked in stepPass or runPassNow is "the window" the unload handshake waits for, so the waiting thread applies any plugin directive the
+  pass posts (PluginDirectiveLink::setOnPost wakes it): the handshake takes 0.8 ms in a stepped run instead of timing out at 250 ms with the modules mapped.
+  THE ENGINE'S OWN FIGURES for the measurement run (P7): passStats (passes, the sum and longest of their durations, how many ran past the period, how many started by
+  a wake - logged once at the thread's end) and pluginUiWaitStats (the handshake's waits: count, total, longest, ran out, skipped by the silence rule).
+
+P4: EVERY "THE FRAME IS THE PASS" ASSUMPTION THE SURVEY NAMES, AND ITS TEST
+  1.6 A  tuneLocal_ (the VFO and bandwidth drag's local copy) went on every successful state read - "one pass, by which time the state carries the command" - so a
+         read that preceded the pass that lands the drag snapped the passband back for a frame. It is now the scope knob's rule (gui/tune_local.hpp): it stands
+         until the readback EQUALS it or kTuneLocalHoldS (0.5 s) has gone by. TESTS: test_tune_local (the rule alone: sent, read a hundred times, caught up,
+         the hold at its edge, a newer send, another interface's figure), test_tuning_surface (through a real window: a read before the pass keeps the figure and
+         the next step starts from it; the pass landing it, or the hold, releases it), test_window_threaded_look D (1.2 M drag steps beside a free-running pass: the
+         copy never outlives its hold, shows only what was sent, and the last figure lands). Break-it: the old rule -> test_tuning_surface RED.
+  1.6 B  RESULTS FIRST. The look is: the session's answers polled (pollUiAnswers), the status lines copied, the state, the spectrum and the lists read
+         (refreshUiState), THEN the answers acted on (actOnUiAnswers) - against a state at least as new as the snapshot that raised them (an event handler that reads
+         the lists an event announces must read them after the state that moved their sequence). pumpTransmitKey (the key's submit AND the drain, at the frame's end)
+         is split: submitTransmitKey stays at the end of the frame, the answers' two halves frame the look; pumpTransmitKey remains as the three in turn for a test.
+         TESTS: test_look_order B - the window's own functions, the pass free-running at 1 ms: with the answers first, the state read for each result shows the
+         figure the result names in 1.36 M of 1.36 M answers; the CONTROL (state first, answers polled after a pass may publish) is older than the answer in
+         3 807 of 3 887. The guard holds the call order in drawUi as text (checkTheFrameIsALook). Break-it: act before the state -> guard RED.
+  1.6 C  statusSeq, WITHOUT an API change. The status lines had no sequence, so a status string and a flag could be one pass apart. Closed by ORDER: the pass now
+         publishes the state THEN the status lines (pumpPublish), and the window reads the lines THEN the state - so the lines can only be older than the state,
+         the lag every status line already had, never newer. TEST: test_look_order A with a hook holding the pass between the two publishes (Engine::TestHooks::
+         betweenPublishes): 500 000 pairs over 134 held passes, lines newer than the state 0, one round behind seen (the gap was exercised). Break-it (the
+         control): publish the lines first -> RED.
+  1.6 D  saveConfigNow reads receiver fields: called from run() exactly twice, before the thread starts and after shutdownQuiesce joins it, and nowhere else.
+         TEST: the guard (checkConfigSaveIsTheShells: two calls, both in run(), in that order around the thread's life).
+  1.6 E  THE CLOCK - above (decision 5). TESTS: test_engine_host_threads A/B (the engine's clock moves with no frame, ImGui's does not; from another thread with
+         no context it is the same clock); test_pass_control G; the guard (the two hooks gone). Break-it: a frozen clock -> RED.
+  1.6 F  submitCommand WAKES THE CONTROL THREAD (the tune-to-audio budget rides on it). TESTS: test_pass_control A: period 1500 ms, twenty submits from an idle front
+         end: submit to the state that shows it, median 0.1 ms, longest 0.3 ms; postToPass the same. Break-it: no wake -> RED.
+  1.6 G  THE MEASUREMENT HARNESS' HOOKS ARE PASS-SAFE: installSource and followInputRate run on the pass (postToPass, then one runPassNow: the generator is in and
+         the chain follows its rate when the hook returns), the tune reads the published centre, not the source. The measurement is always free-running.
+  1.6 H  BOUNDED RUNS ARE DETERMINISTIC: the stepped mode, above; every seam of run() that reaches an engine field does it through runOnPass (the catalogue hook, a
+         device by name, the preset press, the patch start and run key). TESTS: the 14 binary tests and app_smoke unchanged and green; the capture campaign below.
+  1.6 I  A STALLED PASS AND A WINDOW THAT KEEPS SUBMITTING. The survey's note ("the safer kinds merge and are never lost") is about the safety commands only: a drag's
+         figures do NOT merge, and with the pass parked 5000 of them fill the session's 256 slots and the NEWEST are the ones refused. The window now HOLDS the newest
+         figure of such a setter (uiHeld_: the VFO offset, the bandwidths, the squelch, the volume, the display range, the NR strength, the notch) when the session
+         answers BUSY and offers it again each frame; any other command refused with BUSY is counted (uiBusyDrops_) and the first is said in the log. TEST:
+         test_window_threaded_look G: the pass parked, 5000 drag steps dropped 0 (one held), the receiver ends on the last figure when the pass runs again; 300
+         non-setters into the full queue: all counted, said once. Break-it: no hold -> RED.
+  1.6 J  INDEX-CARRYING OPS: audited (the guard's checkIndexOps holds the SET). Five name a position and none is a moving list: SET_BANDWIDTH_STEP indexes a constant
+         table; PLUGIN_PRESET a preset in the module's own static array; USER_PRESET_APPLY/FORGET_AT an ordinal within one plugin's stored presets (a user gesture a
+         frame apart); SOUND_CARD_PICK the id (index + 1) of the last listing - the one that can shift if the cards are re-listed between the click and the pass,
+         refused with "no such sound card entry" past the end and the same window as before the move a pass wider. RECORDED, NOT CLOSED (closing it means carrying the
+         card's name and host API beside the id). Everything else is named by id, key, text or value.
+  AND, from the brief: the drawUi file drop is a SUBMIT (submitPendingDrop sends APP_BOOKMARK_IMPORT_FILE on the session; test_recorder_bookmarks_scanner K and the
+  guard: applyCommand 0, applyControlRequest 0 anywhere in the window); pollGpsReader left run() for the pass (the guard bans it in src/gui; test_gps_app and
+  test_gps_window cover the path through the pass); the diagnostics switch moves the control watchdog (test_pass_control H, the guard).
+
+THE HANDSHAKE, THE ATTACH-ORDERING WAIT AND THE TRANSMIT STALL UNDER LIVE TRAFFIC (tests/test_pump_live_traffic.cpp, a real AppWindow, the pass free-running at 4 ms,
+the instrumented fixture module; every figure below was printed by the test, this desk, MSVC Release, one run's figures unless a range is given)
+  THE ATTACH-ORDERING SOFT WAIT (P3 TRAP 2) - MEASURED, AND EXACT WHILE THE WINDOW FRAMES. refreshPluginRunner waits for the window to apply the directive before it
+  builds the decoders; every wait that ends APPLIED is an exact ordering, so the count of waits that ran out is the count of overtakes. Twelve rescans at each cadence
+  (each makes two waits, its release and its rebuild): frames flat out 0.0 ms mean (longest 0.1 ms); frames at ~60 Hz 15.4 ms mean (longest 30 ms); frames at ~20 Hz
+  46 ms mean (longest 62 ms) - the wait is the time to the window's next frame, no more. RAN OUT: 0 of 70 waits. A frame that stalls 150 ms: the one wait is 157 ms,
+  none ran out. An overtake therefore needs a window silent for more than the 250 ms bound, where the decoders are built without it and it is said. NOT MOVED to the
+  engine's thread: attach() stays the window's, as the ABI text now promises (plugin_abi.h).
+  THE GL RULE UNDER THE SAME TRAFFIC. The fixture writes what it saw in each image when it is unmapped: across 45 unmaps - every rescan above and the teardown - none was
+  left with an instance, a basemap client or a track-info client alive, and none had a call through a dead handle, a destroy beside a poll, or a create or destroy on a
+  thread other than the polling (the window's) one: 0 of 45.
+  THE TRANSMIT STALL (P3 TRAP 3) - MEASURED. The key held by the window's own session (a heartbeat and TX_PTT every frame at 100 Hz) across rescans: with the window
+  framing the pass waited 10 ms and the key never moved; with the window SILENT for 400 ms the wait ran out at its bound ONCE (250 ms; 277 ms in all over three waits),
+  the modules stayed mapped, the unload completed at the window's first frames after it came back, and the radio was never unkeyed (stops 0). The longest span in which
+  no pass finished, sampled from outside, was 263-266 ms: 734 ms inside the 1 s control stamp. (The control watchdog's own worst gap says 16 ms for the same case, because
+  the handshake pauses it - on purpose - so it is not the figure; the sampler is.) A window that never frames again: one 259 ms wait, three skipped by the silence rule,
+  the pass keeps running (30 passes in 700 ms), and stopControlThread with it parked returns in 0.3 ms.
+  HostCtx::self (P3 TRAP 4): NOT HOT, RECORDED. The plain pointer ~PluginUi nulls is only touched at the window's destruction, which happens after shutdownRelease has
+  unmapped the modules - no plugin code can be running - and a rescan's release never nulls it. The move does not change that. A window destroyed while its engine lives on,
+  which nothing does, would make it hot.
+
+THE TEST SEAM AND THE THREADED SUITE
+  tests/pass_seam.hpp: the one place a hermetic window test says "one pass". FOXSDR_TEST_PASS unset: the test's own phases (what every test did until the move);
+  =stepped: the control thread runs the PART of the pass the phases are (front for the look, mute, back for the workers), the test waits; =free: the thread free-runs and
+  "one pass" is runPassNow, a whole pass that started after the call. 25 test files go through it; each is registered again as <name>_stepped (25, all green) and, where its own reads and writes of the engine all go through the session and
+  the published state, as <name>_free (11: airspy_app, config_snapshot_app, gps_window, map_window, panel_note_once, patch_graph_draft_input,
+  plugin_window, rail_reads, remote_key_release, scanner_draft_input, usage_diag_window - eight runs of each binary, 8/8, then 24 more under load; fitted_modules_window was 22/24 under load and is out). THE OTHERS ARE NOT FREE-COMPATIBLE, AND THAT IS A
+  FINDING ABOUT THEM: apply_command, bias_key_app, converter_app_paths (crashes), decoders_mute_grants, patch_add_radio_part (2/8), plugin_store_window, radio_panel_reads
+  (crashes), recorder_bookmarks_scanner (7/8: it asks for a scanner tick a free pass gives beside it), scope_window, snapshot_app (crashes), soundcard_app_paths (7/8),
+  source_section_window, tuning_surface read or write engine fields (device_, pipeline_, nativeDevices_, soundCard_, applyCommand ...) from the test's thread beside the
+  pass; their stepped variants hold the order, and a free-running proof of what they check is the web/CAT and key tests' job (test_remote_control_pull, test_transmit_*).
+  New: test_pass_control (the wake, the floor, runPassNow, stepped, a stop mid-step and restart, the wait's beat, posted work, the proxy apply, the clock, the watchdog),
+  test_look_order, test_tune_local, test_window_threaded_look (a real AppWindow's frame against a free-running pass, three session threads and a snapshot reader, three
+  seconds: 3.4 M frames, 424 000 passes, the state never went back, the lists' cache never disagreed with the state, 0 off-pass key-rule entries), test_pump_live_traffic.
+  The four that hold real times are RUN_SERIAL. Changed: test_command_path_guard (below), test_shutdown_budget (the join charged; two new named waits at weight 0),
+  test_engine_host_threads, test_transmit_page (the key's submit is submitTransmitKey), test_tuning_surface (the copy's fields; the new cases).
+
+THE GUARD (tests/test_command_path_guard.cpp)
+  kHostHooks 5 -> 3 (wallTimeS, pauseWatchdog, resumeWatchdog). kLineAllowed 29 -> 24 entries: drawUi 13 -> 4 (handFrontEndFacts and the three stepPass calls), run 16 -> 20
+  (the seams' engine lines, now reached through runOnPass, and the pass's own start). The window reads 13 engine fields 24 times (was 26; the budget ratcheted), the shell's
+  reads 17 (was 19). New rules: checkTheFrameIsALook (no engine phase, drain, GPS poll or applyCommand anywhere in src/gui; stepPass exactly three times in drawUi as Front,
+  Mute, Back; the look's order; run() starts the pass once, after one controlPass, before the loop; the diagnostics switch moves both watchdogs), checkConfigSaveIsTheShells,
+  checkIndexOps. checkNoDirectApply is now 0 and 0. Not done, deliberately: the survey's "phases made private" - ten test files drive a bare Engine through them (pump(),
+  pumpFrameBegin ...) and the guard, which fails any window member that names one, is the barrier that matters.
+
+OPERATOR-VISIBLE DIFFERENCES
+  * The engine's work no longer stalls the window: a rescan, a source open or a 3 s vendor wait leaves the frame drawing the last state. (That is the point of the move.)
+  * A command takes effect within a pass of its submit (0.1 ms headless; with the window, at most the display's frame plus the pass), not at the next frame's drain.
+  * The waterfall's line rate is min(pass rate ~62.5/s, frame rate, DSP rate), with a beat between the two clocks; a skipped frame is a line not drawn, not an error.
+  * A drag's passband no longer snaps back for a frame when a read precedes the pass that lands it; a figure the engine took differently shows for at most half a second.
+  * A rescan or removal started while the window is not framing (a Windows move/resize loop, a modal) still waits 250 ms, leaves the modules mapped and completes at the
+    first frame after (P3); and a transmission held through a window that stops framing is released by the dead-man in at most a second, as before - now with the radio
+    controlled by a pass that goes on running.
+  * A web or CAT press landing while the window is slow is applied at the pass's own cadence, not the frame's.
+
+TRAPS (for P6, P7 and the fence)
+  1. A FRONT-END THREAD BLOCKED IN stepPass/runPassNow IS A FRAME THAT IS NOT DRAWING: a stepped part that runs long freezes the frame (the GUI watchdog is beaten from the wait,
+     the control watchdog judges the part). In the product nothing waits: only the measurement harness and a bounded run's seams call runPassNow/runOnPass.
+  2. STEPPED MODE HIDES RACES. Every test that says it is stepped proves an ORDER. The races are the free-running window test, test_window_threaded_look and the TSan leg.
+  3. tests/pass_seam.hpp's custom() runs a test's phase subset on the test's thread while the pass is parked (stepped) - it adds no coverage over inline beyond "the thread
+     exists"; use pass()/mute()/workers() where the parts are what is wanted.
+  4. EngineHost::pauseWatchdog is now called only from the window's own thread (the constructor's scan, shutdown): the engine's waits pause the CONTROL watchdog (WaitWatchdogPause).
+     The GUI watchdog's printed "watchdog pauses" count is therefore the window's own (1 at start-up), and test_diag_hang's "at least one" still holds on the constructor's scan.
+  5. UiAnswers is a fixed 64/16 buffer: more answers than that in one frame stay on the session for the next frame's poll.
+  6. A hold of a latest-wins setter is offered once a frame (pollUiAnswers): a window that stops framing holds the figure until it frames again.
+  7. The floor on Windows is ~15 ms in practice for a wake inside it (the timer tick); a P7 reader looking at the passes-per-second under a submit flood should expect ~64, not 500.
+
+WHAT P6 AND P7 MUST COVER
+  P6: the free-running window tests that cannot go free today (the 13 above) need their direct engine reads moved onto the session/lists or runOnPass; the survey's
+  test_hooks_threaded (the remaining hooks are three, all thread-safe by construction); the 10-minute soak with a rescan and a rate change; the hung-window case with a real Windows
+  move/resize loop (nothing here can drive one); SOUND_CARD_PICK carrying the card's name; a TSan job on Linux CI (the Clang 18 leg still has not run).
+  P7: the measurement run - the baseline is the commit before the move commit, built in the same configuration, interleaved; add the pass-specific outputs (passStats and
+  pluginUiWaitStats exist for it; waterfall lines per second and BUSY counts are the window's: waterfallLines_, uiBusyDrops_).
+
+EVIDENCE
+  Build: clean full rebuild (cmake --build build --config Release --clean-first -- -m), no errors, no new warning in a file this step touched. Source tree otherwise as P3 left it.
+  Suite (ctest -j 8, Release, MSVC): 319 tests = P3's 267 + 5 new (test_pass_control, test_look_order, test_tune_local, test_window_threaded_look, test_pump_live_traffic) + 25
+  <name>_stepped + 11 window <name>_free + 11 real-binary <name>_free. Full suite twice, back to back, the final build: run 1 100% (319/319, 335 s); run 2 318/319, the one failure test_engine_api_03 (the documented audio-load flake, see "THE API_03 LOAD RACE" above; five solo repeats afterwards all passed). Earlier full runs on the way: the failures were the two test flakes named below, both fixed in the tests.
+  THE FREE-MODE SWEEPS (what decides who is in the _free lists): the window tests, once each then eight runs each of the 16 that were green, then 24 more each (six copies at once, four
+  rounds) of the 12 that were still green: 11 of 11 24/24; test_fitted_modules_window 22/24 and out. The real-binary tests, once each (13/13 green) then six runs each, the processes
+  running in parallel: 11 of 13 6/6; test_bias_key_run 5/6 and test_main_view 5/6, out (both are frame-exact: a scripted click at a fixed frame, a census that walks the rail by frame number).
+  Two of the first run's failures were TESTS' own flakes, found by the suites and fixed in the tests: test_plugin_ui_threaded D2 counted the fixture's "no request made yet" sentinel
+  (12345) as an answer when its first polls preceded the instance the pass was still building (once in three full runs; 120 solo runs green before and after, the fix is the sentinel's
+  exclusion and the first odd answer is now printed); test_fitted_modules_window_free (above).
+  Stepped capture (the g14 campaign, scratchpad g14-vis, runone14.py with the NEW cascade.exe, bounded so STEPPED): eight states, two runs each, byte-compared by MD5 with g14-vis-final.txt:
+  map_page 635c3e32, fold_open 460eb930, usage_off 370af3b1, usage_on ec05be3d, rail_plugins 7b360db5, rail_tracks 2f6b3b00, serial_gps 8ef1736c: SAME AS THE TABLE in every run (7 of 7);
+  patch_map: b1fee314 where the table has b94ea436 - and the PRE-MOVE BASELINE (0fd57f3, built beside, run through the same harness) gives b1fee314 too, so that difference is
+  P1-P3's or earlier, not the move's: stepped mode changed no pixel of any of the eight states. FOXSDR_PASS=free, three runs each of map_page, fold_open, usage_off and rail_plugins:
+  the same MD5s (these states are static by frame 120; a free-running bounded run proves nothing about a moving one).
+  Latency (the smoke; tools' latency measurement, FOXSDR_MEASURE=latency, 40 retunes a run, a 60 Hz frame cap, interleaved A B A B, six runs each, this desk, a quiet machine; the baseline
+  is 0fd57f3 built beside): tune-to-audio median 16.0 ms in BOTH (the audio sample clock quantises to 5.33 ms blocks: three blocks); baseline p90 16.0 and longest 16.0-21.3 ms; candidate
+  p90 16.0-21.3 and longest 26.7 ms in every run: the TAIL is one audio block longer, the median is unchanged - inside the gate (median not worse by more than 16.7 ms). The engine's own
+  submit-to-publish (test_pass_control A, headless, period 1500 ms): median 0.1 ms, longest 0.3 ms.
+  Interactive smoke (the real window, free-running, a scratch home, 12 s, closed with WM_CLOSE): exits 0; the log's last pass line "612 passes, mean 56 us, longest 207 us, 0 longer
+  than the 16 ms period, 2 started by a wake" (60.5 passes a second after the timer fix; the first smoke, before it, said 422 passes in 12 s); "frame loop ended after 1213 frames".
+  A bounded run prints the same four stdout lines as before (teardown, rendered N frames, worst frame gap, watchdog pauses 1).
+  ThreadSanitizer (WSL, GCC 15.2, halt_on_error=1): the selection is 23 tests (19 + the four new): 19 pass, the SAME 4 fail on the SAME races (PortAudio AddOpenStream x2, Pa_Initialize
+  against the pass's Pa_IsStreamActive, the scope tap's seqlock memcpy); the four new tests and every P1/P3 threaded test are clean. (docs/SANITIZERS-AND-FUZZING.md.)
+  BREAK-IT, each mutant alone (one text change, a rebuild, the named test, source restored byte-identically - sha256 compared; the logs and the runner are in the scratchpad of this step):
+    no wake in submitCommand ................ RED test_pass_control (median lag 15 ms+, 6 FAILs)        no wake in postToPass ....................... RED (A)
+    the floor ignored ........................ RED (B: passes in a second over the bound)               the floor measured from the wake ............ RED (B: an idle submit waits the floor)
+    no proxy apply in the wait ............... RED (F: the handshake times out, 4 FAILs)                 stepsDone_ not reset at a restart ........... RED (D2: the step waits out its bound)
+    no beat from the waiting front end ....... RED (D3)                                                  the config copy moved into the front part ... RED (D: the parts are not distinct)
+    runOnPass always inline .................. RED (E)                                                    runPassNow's target one short ................ RED (C: 4 FAILs)
+    no timer resolution request .............. RED (A2: 48 passes in 1.5 s, not 60+)                     the engine clock frozen ...................... RED (host_threads A, pass_control G)
+    status lines published BEFORE the state .. RED test_look_order A (the control the test has no in-test copy of)
+    tuneLocal_ released on every read (the old rule) ... RED test_tuning_surface (7 FAILs)               closeUiSession keeps held figures ............ RED test_tuning_surface (the found bug)
+    BUSY setters dropped, not held ............ RED test_window_threaded_look G (4 FAILs)                BUSY not counted / not said once ............. RED (G)
+    answers acted on before the state ......... RED the guard (checkTheFrameIsALook)                      answers not polled first ..................... RED the guard
+    a pump phase called from drawUi ........... RED the guard                                           pollGpsReader back in run() .................. RED the guard
+    the file drop applied with applyCommand ... RED the guard                                           the shutdown budget not raised ............... RED test_shutdown_budget
+  THE ONE FINDING THE RUNS MADE ABOUT THE MOVE ITSELF, besides the timer: the survey's "the safer kinds merge" is about the safety commands only, so a drag's figures filled the session
+  and the newest were refused (1.6 I above), found because test_window_threaded_look G asserted the opposite and failed.
+  Nothing committed, pushed, stashed or switched. The scratchpad holds the scripts (mutants.py, capture_cmp.py, latency_ab.py, smoke.ps1, freeloop.sh, binstress.sh) and their logs.
+

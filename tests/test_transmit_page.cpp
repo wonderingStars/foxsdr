@@ -676,10 +676,17 @@ int main() {
         CHECK(liveHits(text, "transmitter_.keyRemote(").empty());
         CHECK(liveHits(text, "transmitter_.tick();").empty());
 
-        // THE WINDOW'S HALF: pumpTransmitKey, once, in drawUi after the pages
+        // THE WINDOW'S HALF: submitTransmitKey (the key's submit; the pump move's step P4 split the answers' drain off it), once, in drawUi after the pages
         // are drawn (inside drawPluginWindows), never in the page body; and
         // it is the only caller of txKeyCommands.
-        const std::vector<std::size_t> pumpCalls = liveHits(text, "    pumpTransmitKey();");
+        // (the legacy pumpTransmitKey - the key's submit and the answers' drain together, for a caller that is not a frame - calls it
+        // too, outside drawUi; the rule is about the FRAME: one submit, in drawUi)
+        const std::size_t drawUiAt = text.find("void AppWindow::drawUi()");
+        const std::size_t drawUiStop = drawUiAt == std::string::npos ? std::string::npos : text.find("\n}", drawUiAt);
+        std::vector<std::size_t> pumpCalls;
+        for (const std::size_t at : liveHits(text, "    submitTransmitKey();")) {
+            if (drawUiAt != std::string::npos && at > drawUiAt && at < drawUiStop) { pumpCalls.push_back(at); }
+        }
         const std::vector<std::size_t> ruleCalls = liveHits(text, "cascade::gui::txKeyCommands(");
         CHECK(pumpCalls.size() == 1u);
         CHECK(ruleCalls.size() == 1u);

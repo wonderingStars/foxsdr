@@ -58,6 +58,7 @@
 #include "engine/plugin_store_reasons.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/plugin_store_view.hpp"
 #include "imgui.h"
@@ -166,18 +167,22 @@ struct AppWindowTestAccess {
     // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the
     // window's read of the state.
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
     }
     // ...and the end of the frame: the workers polled (a fetch or a download that finished is applied, the ADD ALL
     // queue steps) and the lines handed over, as drawUi does after the draw.
     static void after(AppWindow& a) {
-        a.engine_.pumpWorkers();
-        a.engine_.pumpAudio();
+        passseam::workers(a.engine_, [&] {
+            a.engine_.pumpWorkers();
+            a.engine_.pumpAudio();
+        });
     }
     static std::vector<Answer> answers(AppWindow& a) {
         std::vector<Answer> out;

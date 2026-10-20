@@ -43,6 +43,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
@@ -72,8 +73,10 @@ struct AppWindowTestAccess {
     // The engine's pass as far as the session's queue needs it - applied and
     // published (the same two calls the other window tests make).
     static void pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
     }
     static std::vector<std::string> panels(AppWindow& a) { return a.engine_.telemetryPanels_; }
     // The usage record the engine writes for the next launch to send: reporting

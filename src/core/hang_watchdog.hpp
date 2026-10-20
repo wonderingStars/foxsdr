@@ -265,7 +265,12 @@ public:
     // once no matter how many saves were requested during the teardown,
     // because they coalesce to the last content - see that file). 9000 ->
     // 10500, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 10500;
+    //
+    // AND THE ENGINE'S CONTROL THREAD IS THE THIRD (the pump move's step P5, which starts it from AppWindow::run()):
+    // shutdownQuiesce() stops it first, and stopControlThread() waits for the pass it is in - Engine::kControlJoinWait,
+    // 3000 ms, the longest bound anything a pass can wait on has - before it joins. Spent once, at the top of the
+    // teardown. 10500 -> 13500, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 13500;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, queuing the teardown's two config saves (the WRITE is
@@ -284,7 +289,8 @@ public:
     // while the user is still looking at a window that will not close.
     // tests/test_shutdown_budget.cpp pins the "at least twice". 24000 ->
     // 27000 with kShutdownBoundedWaitsMs's 9000 -> 10500 above (0.97.2).
-    static constexpr unsigned kShutdownThresholdMs = 27000;
+    // (27000 -> 33000 with the control thread's join above: twice (13500 + kShutdownReserveMs 3000).)
+    static constexpr unsigned kShutdownThresholdMs = 33000;
 
     HangWatchdog() = default;
     ~HangWatchdog();

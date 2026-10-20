@@ -82,6 +82,67 @@ foreach(src ${CASCADE_TESTS})
     endif()
 endforeach()
 
+# THE WINDOW TESTS AGAINST THE ENGINE'S PASS ON ITS OWN THREAD (the pump move's step P5; tests/pass_seam.hpp). A hermetic window test is its
+# own pump: it never starts the engine's control thread and runs one frame's engine part by hand. Every test that says "one pass" through
+# the seam is registered again, with FOXSDR_TEST_PASS set, so the same test runs against the pass on the control thread:
+#   _stepped  the thread exists and runs a whole pass (its three parts in turn) each time the test asks for one, and the test waits for it -
+#             the same order as inline, on the real thread (onControlThread(), the directive handshake and the table's thread gating are real)
+#   _free     the thread free-runs (3 ms) and "one pass" is Engine::runPassNow() - passes of its own beside the test's. Only for the tests
+#             that touch the engine through the session and the published state; a test that reads or writes an engine field directly races
+#             the pass in this mode (that is a finding about the test, listed beside the names below, not something to paper over)
+# (Not under a sanitizer build: the variants are not in the selection lists.)
+if(NOT CASCADE_SANITIZE_ENABLED)
+    # The tests whose own reads and writes of the engine are all through the published state and the session, so they hold against free passes.
+    #   in: test_airspy_app test_config_snapshot_app test_gps_window test_map_window test_panel_note_once test_patch_graph_draft_input
+    #       test_plugin_window test_rail_reads test_remote_key_release test_scanner_draft_input test_usage_diag_window - eight runs each
+    #       of the built binary and then 24 more each (six copies at once, four rounds), all green (recorded in docs/engine-stage4.md)
+    #       test_fitted_modules_window WAS IN and is out: 22 of 24 under load - its clicks are recorded by a tap but still reach the
+    #       session, and a free pass applies a PLUGIN_RESCAN the inline test never lets run, mid-survey
+    #   out, and why (each reads or writes engine fields from the test's thread, or drives a phase subset no free pass can be asked for,
+    #   so it races the pass or sees phases it never meant to):
+    #       test_apply_command (pipeline_, device_, applyCommand direct)      test_bias_key_app (device_, biasTeePanel_, selectSource)
+    #       test_converter_app_paths (converters_, device_, scanNative: crashes)   test_decoders_mute_grants (decoderLog_, muteStates_, applyCommand)
+    #       test_patch_add_radio_part (the native scan's own worker and patchScanDone_: 2 of 8)
+    #       test_plugin_store_window (addAllRun_, installPending_, applyCommand)   test_radio_panel_reads (nativeDevices_, device_, selectSource: crashes)
+    #       test_recorder_bookmarks_scanner (scannerFrame() on request: a free pass ticks the scanner beside it: 7 of 8)
+    #       test_scope_window (pipeline_, deviceGainsDb_)   test_snapshot_app (receiverSnapshot_, freqMgr_, applyCommand: crashes)
+    #       test_soundcard_app_paths (soundCard_ and its worker: 7 of 8)   test_source_section_window (the source's own fields)
+    #       test_tuning_surface (muteStates_, pipeline_, volume_, applyCommand)
+    set(CASCADE_FREE_PASS_TESTS test_airspy_app test_config_snapshot_app test_gps_window test_map_window
+        test_panel_note_once test_patch_graph_draft_input test_plugin_window test_rail_reads test_remote_key_release
+        test_scanner_draft_input test_usage_diag_window)
+    foreach(src ${CASCADE_TESTS})
+        get_filename_component(_name "${src}" NAME_WE)
+        file(STRINGS "${src}" _seam REGEX "^[ \t]*#[ \t]*include[ \t]*\"pass_seam[.]hpp\"")
+        if(_seam AND TARGET ${_name})
+            add_test(NAME ${_name}_stepped COMMAND ${_name})
+            set_tests_properties(${_name}_stepped PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=stepped" TIMEOUT 120)
+            if(${_name} IN_LIST CASCADE_FREE_PASS_TESTS)
+                add_test(NAME ${_name}_free COMMAND ${_name})
+                set_tests_properties(${_name}_free PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=free" TIMEOUT 120)
+            endif()
+        endif()
+    endforeach()
+endif()
+
+# THE REAL-BINARY TESTS ALSO RUN WITH THE ENGINE'S PASS FREE-RUNNING (the pump move's step P5, adopted decision 3). A bounded run (--frames N)
+# STEPS the pass from the frame - so N frames is the same N frames and a picture at a frame is reproducible - and these eleven assert
+# invariants, not frame-exact states, so they hold with the pass running on its own thread beside the frame as it does in the product:
+# FOXSDR_PASS=free (read by AppWindow::run; the child process inherits it). Each ran six more times on top of its first green (11 of 11
+# 6/6). OUT, because they are frame-exact: test_bias_key_run (a scripted click at a fixed frame expects the dialog and the lamp a few frames
+# later: 5 of 6 - a pass at 60 a second has not answered by then at 1300 frames a second) and test_main_view (the UI census walks the rail's
+# banks by frame number: 5 of 6); test_theme_census (sixteen layouts photographed at fixed frames) was not run free at all. The picture
+# campaigns stay stepped.
+if(NOT CASCADE_SANITIZE_ENABLED)
+    foreach(_t IN ITEMS test_config test_crash_upload test_diag_hang test_diagnostics test_gps_app test_patch_map_credit
+                       test_plugin_status_report test_shell_open test_shutdown_budget test_startup_state test_stop_ends_recordings)
+        if(TARGET ${_t})
+            add_test(NAME ${_t}_free COMMAND ${_t})
+            set_tests_properties(${_t}_free PROPERTIES ENVIRONMENT "FOXSDR_PASS=free" TIMEOUT 300)
+        endif()
+    endforeach()
+endif()
+
 # TESTS THAT RUN THE APPLICATION ITSELF (CASCADE_APP_BINDIR/cascade.exe, or
 # the exe beside the test binaries' parent for the Soapy child tests). Building
 # one of them alone must rebuild the application too, or its end-to-end half
@@ -185,7 +246,7 @@ endforeach()
 # the engine posts and the window applies, and the unload handshake. Copied into a plugin directory of the test's own.
 add_library(fixture_pump3_plugin SHARED fixture_pump3_plugin.cpp)
 target_include_directories(fixture_pump3_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_plugin_ui_threaded test_plugin_unload_handshake)
+foreach(_t IN ITEMS test_plugin_ui_threaded test_plugin_unload_handshake test_pump_live_traffic)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_pump3_plugin)
         target_compile_definitions(${_t} PRIVATE
@@ -199,6 +260,16 @@ endforeach()
 if(TARGET test_plugin_ui_threaded AND TARGET test_plugin_unload_handshake)
     set_tests_properties(test_plugin_ui_threaded test_plugin_unload_handshake PROPERTIES RUN_SERIAL TRUE)
 endif()
+# THE PUMP MOVE'S STEP P5 TESTS THAT HOLD REAL TIMES RUN ALONE TOO: test_pump_live_traffic measures the handshake and the transmit key
+# against a framing window (and a silent one) at real bounds - 250 ms waits, 400 ms silences, a 1 s keep-alive - and test_pass_control
+# holds a wake to a few milliseconds and a floor to a count of passes in a second; test_window_threaded_look spins four threads against
+# the pass for three seconds and test_look_order two more for several - beside seven other tests on a loaded runner a bound can be missed
+# by the machine and not by the code.
+foreach(_t IN ITEMS test_pump_live_traffic test_pass_control test_window_threaded_look test_look_order)
+    if(TARGET ${_t})
+        set_tests_properties(${_t} PROPERTIES RUN_SERIAL TRUE)
+    endif()
+endforeach()
 # test_snapshot_app loads three decoders at once (engine stage 2): the same
 # fixture built under three descriptor names, since the host runs one plugin
 # per name.

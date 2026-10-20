@@ -984,6 +984,13 @@ state is not in the config a script can pre-write (only which BANK is showing
 is); `FOXSDR_OPEN_SERIAL_PORTS=1` opens SYSTEM's Serial ports section on the
 first frame it is drawn, for a shot that needs to show its contents.
 
+**How the engine's pass is driven in a bounded run.** The engine's pass runs on its own thread (the receiver's control thread), at its own
+period and woken by every command. A bounded run (`--frames N`, which is what the tests and the screenshots use) STEPS it instead: the
+window's frame asks for the three parts of the pass at the places the pass always ran in the frame, so a run of N frames is the same N frames
+every time and a picture taken at a frame is reproducible. `FOXSDR_PASS=free` makes a bounded run free-running like the product (for a test of
+an invariant, not of a frame; the run's `FOXSDR_SOURCE_DEVICE`, `FOXSDR_PRESS_PRESET` and similar seams reach the engine only through the pass
+and are fine in both); an interactive run is always free-running. The log says which on its first line after "frame loop starting".
+
 ## Building (Linux — in development, see the notice at the top)
 
 **This is unfinished work.** It builds and the tests pass, and seventeen of the

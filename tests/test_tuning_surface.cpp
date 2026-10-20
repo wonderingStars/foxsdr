@@ -60,6 +60,7 @@
 #include "core/plugin_ui.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/key_bindings.hpp"
 #include "gui/tuning_reads.hpp"
@@ -113,7 +114,7 @@ struct AppWindowTestAccess {
     // The window looks, as a frame does: the engine publishes, the window reads (the state,
     // then the spectrum).
     static void look(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
     }
     static void refresh(AppWindow& a) { a.refreshUiState(); }
@@ -121,9 +122,11 @@ struct AppWindowTestAccess {
     // status copy, the window's read of the state, the key when one is down (drawUi
     // dispatches the keyboard right after the read), the answers drained.
     static void frame(AppWindow& a, const KeyAction* key = nullptr) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.drainLocalCommands();
-        (void)a.engine_.pumpPublish();
+        passseam::custom(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.drainLocalCommands();
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
         if (key != nullptr) { a.applyKeyAction(*key); }
@@ -131,8 +134,10 @@ struct AppWindowTestAccess {
     }
     // The pass as far as a submit needs it, and what the session answered, in order.
     static std::vector<Answer> answers(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
         std::vector<Answer> out;
         for (;;) {
             FoxCommandResult r[16];
@@ -177,6 +182,7 @@ struct AppWindowTestAccess {
         a.engine_.api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz);
     }
     static const AppWindow::TuneLocal& local(AppWindow& a) { return a.tuneLocal_; }
+    static void clock(AppWindow& a, double (*f)()) { a.uiClockS_ = f != nullptr ? f : &AppWindow::steadyNowS; }
     static double tunedOffset(AppWindow& a) { return a.tunedVfoOffsetHz(); }
     static double tunedBandwidth(AppWindow& a) { return a.tunedBandwidthHz(); }
     static void dragCentre(AppWindow& a, double wantAbsHz) { a.dragVfoCentre(wantAbsHz); }
@@ -242,7 +248,7 @@ struct AppWindowTestAccess {
     static double engineBandwidth(AppWindow& a) { return a.engine_.vfoBandwidthHz_; }
     static void command(AppWindow& a, const FoxCommand& c) { (void)a.engine_.applyCommand(c); }
     static void setSourceError(AppWindow& a, const std::string& s) { a.engine_.sourceError_ = s; }
-    static void pumpMute(AppWindow& a) { a.engine_.pumpAudioMute(); }
+    static void pumpMute(AppWindow& a) { passseam::mute(a.engine_, [&] { a.engine_.pumpAudioMute(); }); }
     static void muteBy(AppWindow& a, const std::string& name, double hz) {
         cascade::core::MutePlugin m;
         m.name = name;
@@ -724,16 +730,16 @@ void testTheDragsLocalCopyIsWhatTheEngineDoes() {
     (void)Access::answers(app);
     Access::command(app, cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, 0.0));
     Access::look(app);
-    CHECK(!Access::local(app).offsetValid && !Access::local(app).bandwidthValid);
+    CHECK(!Access::local(app).offset.valid && !Access::local(app).bandwidth.valid);
     CHECK_EQ(Access::tunedOffset(app), 0.0);
     Access::dragCentre(app, Access::state(app).centreHz + 100000.0);
-    CHECK(Access::local(app).offsetValid);
+    CHECK(Access::local(app).offset.valid);
     CHECK_EQ(Access::tunedOffset(app), 100000.0);
     CHECK_EQ(Access::state(app).vfoOffsetHz, 0.0);  // the state has not seen it yet
     (void)Access::answers(app);                     // the engine applies it...
     CHECK_EQ(Access::tunedOffset(app), 100000.0);   // ...the copy still stands until the window reads again
     Access::look(app);
-    CHECK(!Access::local(app).offsetValid);
+    CHECK(!Access::local(app).offset.valid);
     CHECK_EQ(Access::tunedOffset(app), Access::state(app).vfoOffsetHz);
     CHECK_EQ(Access::state(app).vfoOffsetHz, 100000.0);
     // A change made some other way after that is what is read: a copy that outlived its pass
@@ -743,13 +749,73 @@ void testTheDragsLocalCopyIsWhatTheEngineDoes() {
     CHECK_EQ(Access::tunedOffset(app), 25000.0);
     // The bandwidth likewise.
     Access::dragEdge(app, Access::state(app).centreHz + 25000.0 + 40000.0, Access::state(app).centreHz + 25000.0);
-    CHECK(Access::local(app).bandwidthValid);
+    CHECK(Access::local(app).bandwidth.valid);
     CHECK_EQ(Access::tunedBandwidth(app), 80000.0);
     (void)Access::answers(app);
     Access::look(app);
-    CHECK(!Access::local(app).bandwidthValid);
+    CHECK(!Access::local(app).bandwidth.valid);
     CHECK_EQ(Access::tunedBandwidth(app), Access::state(app).bandwidthHz);
     CHECK_EQ(Access::state(app).bandwidthHz, 80000.0);
+
+    // =============================================================================================================================
+    // THE COPY OUTLIVES A READ THAT PRECEDES THE PASS (the pump move's step P4; the survey's 1.6 A). With the pass on a thread of its own
+    // the window can read the state between a drag's submit and the pass that lands it. The copy used to go on EVERY successful read
+    // ("one pass, by which time the state carries the command"), so the passband snapped back for a frame and the next drag step
+    // started from the old figure. It goes when the readback EQUALS it, or after kTuneLocalHoldS (gui/tune_local.hpp) - the rule the
+    // radar scope's gain knob has.
+    // =============================================================================================================================
+    {
+        static double s_now = 1000.0;
+        Access::clock(app, +[] { return s_now; });
+        Access::look(app);
+        (void)Access::answers(app);
+        Access::command(app, cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, 0.0));
+        Access::look(app);
+        CHECK(!Access::local(app).offset.valid);
+        Access::dragCentre(app, Access::state(app).centreHz + 60000.0);
+        CHECK(Access::local(app).offset.valid);
+        // A READ BEFORE THE PASS: the state still says 0, and the window must go on showing the figure it sent (and take its next
+        // step from it).
+        Access::refresh(app);
+        CHECK_EQ(Access::state(app).vfoOffsetHz, 0.0);
+        CHECK(Access::local(app).offset.valid);
+        CHECK_EQ(Access::tunedOffset(app), 60000.0);
+        s_now += 0.2;
+        Access::refresh(app);
+        CHECK(Access::local(app).offset.valid);              // 0.2 s on, the readback still differs: the hold stands
+        CHECK_EQ(Access::tunedOffset(app), 60000.0);
+        // THE PASS LANDS IT: the next read shows the same figure, and the copy goes.
+        (void)Access::answers(app);
+        Access::look(app);
+        CHECK_EQ(Access::state(app).vfoOffsetHz, 60000.0);
+        CHECK(!Access::local(app).offset.valid);
+        CHECK_EQ(Access::tunedOffset(app), 60000.0);
+        // THE HOLD RUNS OUT when the engine took something else (a refusal, a limit the window does not know): the readback is the
+        // truth. Send a figure, let the engine land a DIFFERENT one, and read.
+        Access::dragCentre(app, Access::state(app).centreHz + 90000.0);
+        CHECK_EQ(Access::tunedOffset(app), 90000.0);
+        Access::submit(app, cmd::makeNum(FOXAPP_OP_SET_VFO_OFFSET_FREE, 5000.0));    // someone else tunes right after (the session's order)
+        (void)Access::answers(app);
+        s_now += 0.3;
+        Access::look(app);
+        CHECK_EQ(Access::state(app).vfoOffsetHz, 5000.0);
+        CHECK(Access::local(app).offset.valid);              // 0.3 s since the send: the figure still stands...
+        s_now += cascade::gui::kTuneLocalHoldS;
+        Access::refresh(app);
+        CHECK(!Access::local(app).offset.valid);              // ...and 0.8 s on it does not
+        CHECK_EQ(Access::tunedOffset(app), 5000.0);
+        // The bandwidth, the same.
+        Access::dragEdge(app, Access::state(app).centreHz + 5000.0 + 30000.0, Access::state(app).centreHz + 5000.0);
+        Access::refresh(app);
+        CHECK(Access::local(app).bandwidth.valid);
+        CHECK_EQ(Access::tunedBandwidth(app), 60000.0);
+        (void)Access::answers(app);
+        Access::look(app);
+        CHECK(!Access::local(app).bandwidth.valid);
+        CHECK_EQ(Access::tunedBandwidth(app), 60000.0);
+        Access::clock(app, nullptr);
+        std::printf("      a read before the pass keeps the sent figure; the pass landing it, or %.1f s, releases it\n", cascade::gui::kTuneLocalHoldS);
+    }
 }
 
 // --- E -----------------------------------------------------------------------

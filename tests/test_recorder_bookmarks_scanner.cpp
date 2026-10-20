@@ -63,6 +63,7 @@
 #include "core/scanner.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/section_reads.hpp"
 #include "imgui.h"
@@ -118,9 +119,11 @@ struct AppWindowTestAccess {
     // since lands here), the scanner's frame when asked, the publish, the status copy, the window's
     // read of the state.
     static void look(AppWindow& a, bool scannerTick = false) {
-        a.engine_.pumpFrameBegin();
-        if (scannerTick) { a.engine_.scannerFrame(); }
-        (void)a.engine_.pumpPublish();
+        passseam::custom(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            if (scannerTick) { a.engine_.scannerFrame(); }
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
     }
@@ -178,6 +181,12 @@ struct AppWindowTestAccess {
     static unsigned& pending(AppWindow& a) { return a.scanDraftPending_; }
     static void commit(AppWindow& a, unsigned bits, bool reconfigure) { a.commitScannerDraft(bits, reconfigure); }
     static void flush(AppWindow& a) { a.flushScannerDraft(); }
+    // A file dropped on the window: the glfw callback records the path, the frame takes it.
+    static void drop(AppWindow& a, const std::string& path) {
+        a.pendingDropPath_ = path;
+        a.submitPendingDrop();
+    }
+    static const std::string& pendingDrop(AppWindow& a) { return a.pendingDropPath_; }
 
     // The members, drawn.
     static void drawRecorder(AppWindow& a) { a.drawRecorderSection(); }
@@ -1011,6 +1020,46 @@ void testTheBookmarkLinesAreDrawn() {
     CHECK(has(t, "Could not import"));
 }
 
+// --- K -----------------------------------------------------------------------------------------
+
+// A FILE DROPPED ON THE WINDOW (the pump move's step P4). drawUi used to apply the import with a direct applyCommand, in the middle of the
+// frame's own pump - which a pass on a thread of its own would race (the key rules and the bookmark store are the pass's). The frame takes
+// the dropped path as the SAME COMMAND the Import key sends, on the window's session (AppWindow::submitPendingDrop), and the pass applies it.
+void testADroppedFileIsImportedThroughTheSession() {
+    std::printf("  K: a file dropped on the window is imported through the session\n");
+    AppWindow app;
+    Access::look(app);
+    const std::filesystem::path csv = g_scratch / "dropped.csv";
+    {
+        std::ofstream f(csv, std::ios::binary);
+        f << "frequency,name\n100100000,Dropped One\n100200000,Dropped Two\n";
+    }
+    const std::size_t before = Access::store(app).list().size();
+    Access::Sent sent;
+    Access::tap(app, &sent);
+    Access::drop(app, csv.string());
+    // Sent, not applied: the command is on the session, the engine's store has not moved.
+    CHECK_EQ(sent.size(), 1u);
+    if (sent.size() == 1u) {
+        CHECK_EQ(sent[0].c.op, static_cast<std::uint32_t>(FOXAPP_OP_BOOKMARK_IMPORT_FILE));
+        CHECK_EQ(sent[0].longText.empty() ? std::string(sent[0].c.text) : sent[0].longText, csv.string());
+    }
+    CHECK_EQ(Access::store(app).list().size(), before);
+    CHECK(Access::pendingDrop(app).empty());              // the drop was taken (a second frame would not import it again)
+    Access::look(app);                                    // the pass applies it
+    const auto got = Access::answers(app);
+    bool answered = false;
+    for (const auto& r : got) { answered = answered || (r.first == FOXAPP_OP_BOOKMARK_IMPORT_FILE && r.second == FOXAPI_OK); }
+    CHECK(answered);
+    CHECK_EQ(Access::store(app).list().size(), before + 2u);
+    // Nothing to take: nothing sent.
+    sent.clear();
+    Access::drop(app, std::string());
+    CHECK(sent.empty());
+    Access::tap(app, nullptr);
+    std::printf("      the drop became one APP_BOOKMARK_IMPORT_FILE on the session; the engine imported two rows when its pass ran\n");
+}
+
 // --- I -----------------------------------------------------------------------------------------
 
 // drawUi commits a scanner edit left pending by a section that stopped being drawn. The commit carries the
@@ -1448,6 +1497,7 @@ int main() {
     testNothingAllocatesOnceSettled();
     testTheBookmarkLinesAreDrawn();
     testFlushStandsAfterTheRead();
+    testADroppedFileIsImportedThroughTheSession();
     testDrawnAndClicked();
     testTheCommandsReachTheEngine();
 

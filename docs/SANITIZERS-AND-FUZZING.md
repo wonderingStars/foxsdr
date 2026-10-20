@@ -72,7 +72,13 @@ threads, not master's list:
   leg sees what the step prevents: with the pass applying the directive itself (the old design) `test_plugin_ui_threaded` reports
   "data race plugin_ui.cpp:1064 in PluginUi::destroyInstances()" against `PluginUi::poll()` in its first churn frame.
 
-That is 19 tests (label `tsan`; 14 until the pump move's step P1, 16 until step P3). Everything else is registered, disabled and labelled
+- the pump move's steps P4 and P5 (the pass is driven and looked at from another thread): `test_pass_control` (the wake, the floor, the stepped
+  mode, `runPassNow`, the work posted to the pass, a stop mid-step, the proxy apply of a plugin directive, the watchdog), `test_look_order` (the
+  order a frame reads in, against a publish held between its two halves), `test_window_threaded_look` (a real window's frame against a
+  free-running pass, three session threads and a snapshot reader) and `test_pump_live_traffic` (the unload handshake and the transmit key
+  under live traffic). **All four are clean under ThreadSanitizer, `halt_on_error=1`.**
+
+That is 23 tests (label `tsan`; 14 until the pump move's step P1, 16 until step P3, 19 until steps P4/P5). Everything else is registered, disabled and labelled
 `sanitize-excluded`, so `ctest -N -L sanitize-excluded` prints it, and every excluded
 test that is named in the file carries its reason: it starts the real application as a
 child, faults a process on purpose, measures against the wall clock, drives the whole
@@ -231,8 +237,17 @@ A deliberate stray call also proved the leg catches the defect P1 fixes: `Engine
 the running control thread is reported at once (`TxKeyRules::key` writing `changes_` while the pass's publish reads `changes()`),
 which is why `test_remote_control_pull` D0 uses the one stray call that only reads the rules.
 
-**Not run:** the Clang 18 CI job itself, the whole `cascade_tsan_tests` set under
-ThreadSanitizer (only the three tests above were built and run), and any ASan or UBSan job.
+**The run of the selection with the pump move's steps P4 and P5 in it (2026-10-20, WSL, GCC 15.2).** 23 tests: **19 pass** - the 15 above and the
+four of these steps (`test_pass_control` 11 s, `test_look_order` 4 s, `test_window_threaded_look` 4 s, `test_pump_live_traffic` 7 s), with no
+ThreadSanitizer report - and the SAME 4 FAIL on the SAME races (`pa_front.c:312/313 AddOpenStream` in `test_engine_api_transmit` and
+`test_engine_api_merge`, `pa_front.c:363 Pa_Initialize` against the pass's `Pa_IsStreamActive` in `test_engine_api_conformance`, the scope tap's
+seqlock `memcpy` in `test_engine_api_03`): no stack of them names anything these steps added. No new race. One finding of the first run, in the
+TEST, not the product: `test_look_order` set its test hook (`Engine::testHooks_`) after the control thread had started - a plain global read by the
+pass - and ThreadSanitizer said so at once; the rule ("set before the pass exists, cleared after it is gone") is now kept and written in the test.
+The window's frame (`test_window_threaded_look`: 3.4 M frames beside 424 000 passes, three session threads and a snapshot reader) is clean.
+
+**Not run:** the Clang 18 CI job itself, the window tests' stepped and free-running variants (`_stepped`, `_free`: registered in a build without a sanitizer, so
+not in the selection), and any ASan or UBSan job.
 
 ## Master-only, not on this branch
 

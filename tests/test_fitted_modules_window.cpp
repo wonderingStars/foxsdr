@@ -49,6 +49,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/plugins_view.hpp"
 #include "imgui.h"
@@ -110,10 +111,12 @@ struct AppWindowTestAccess {
     // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the
     // window's read of the state.
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
     }

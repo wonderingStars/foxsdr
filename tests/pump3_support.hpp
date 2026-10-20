@@ -236,6 +236,32 @@ struct AppWindowTestAccess {
     static unsigned watchdogReports(AppWindow& a) { return a.engine_.controlWatchdog_.reportsWritten(); }
     static unsigned watchdogPauses(AppWindow& a) { return a.engine_.controlWatchdog_.pausesTaken(); }
 
+    // ---- the window's frame, engine-facing half, in drawUi's order (the pump move's step P5; the order is held as text by the guard) ---------
+    // With the pass free-running the two stepPass calls do nothing; with it stepped they run the parts here. `key`: the page's PTT is held
+    // this frame (the window's session sends TX_PTT 1, a 2 s hold re-asserted every frame).
+    static void frame(AppWindow& a, bool key = false) {
+        a.applyPluginDirective();
+        if (a.uiSession_ != nullptr) { a.engineApi_->heartbeat(a.uiSession_); }
+        a.sendTrackInfoText();
+        a.handFrontEndFacts();
+        a.engine_.stepPass(cascade::engine::PassPart::Front);
+        a.pollUiAnswers();
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
+        a.actOnUiAnswers();
+        a.engine_.stepPass(cascade::engine::PassPart::Mute);
+        if (key) { a.uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_TX_PTT, 1)); }
+        a.hostPollPlugins();
+        a.engine_.stepPass(cascade::engine::PassPart::Back);
+    }
+    static void installSink(AppWindow& a, std::unique_ptr<cascade::source::IqSink> sink) {
+        a.engine_.transmitter_.setSink(std::move(sink));
+        a.engine_.transmitter_.setInput(cascade::core::TxInput::Tone);
+    }
+    static double worstGapMs(AppWindow& a) { return a.engine_.controlWatchdog_.worstGapMs(); }
+    static Engine::PluginUiWaitStats waitStats(AppWindow& a) { return a.engine_.pluginUiWaitStats(); }
+    static void stall(AppWindow& a, int ms) { a.engine_.controlStallForTestMs_.store(ms); }
+
     // ---- the link and the engine half of the plugin system ---------------------------------------------------------------------
     static cascade::core::PluginDirectiveLink& link(AppWindow& a) { return a.engine_.pluginLink_; }
     static cascade::core::PluginApiCore& core(AppWindow& a) { return *a.engine_.pluginApi_; }

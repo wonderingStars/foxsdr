@@ -37,6 +37,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -47,10 +48,10 @@ struct AppWindowTestAccess {
     static cascade::core::AppConfig lastRequested(AppWindow& a) { return a.lastRequestedConfig_; }
     static void saveNow(AppWindow& a) { a.saveConfigNow(); }
     static void publish(AppWindow& a) { a.engine_.publishConfig(); }
-    static void pump(AppWindow& a) { a.engine_.pump(); }
+    static void pump(AppWindow& a) { passseam::whole(a.engine_, [&] { a.engine_.pump(); }); }
     static cascade::engine::EngineStatusText status(AppWindow& a) { return a.engine_.statusText(); }
-    static void pumpPublish(AppWindow& a) { (void)a.engine_.pumpPublish(); }
-    static void pumpAudio(AppWindow& a) { a.engine_.pumpAudio(); }
+    static void pumpPublish(AppWindow& a) { passseam::custom(a.engine_, [&] { (void)a.engine_.pumpPublish(); }); }
+    static void pumpAudio(AppWindow& a) { passseam::workers(a.engine_, [&] { a.engine_.pumpAudio(); }); }
     // Every status line, set as the engine's own code sets it.
     static void setAllStatus(AppWindow& a, const std::string& p) {
         cascade::engine::Engine& e = a.engine_;

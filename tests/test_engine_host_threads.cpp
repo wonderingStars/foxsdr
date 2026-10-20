@@ -2,18 +2,15 @@
 // thread that is not the window's (engine/stage3b-pre, docs/engine-stage3.md
 // OPEN 4).
 //
-// THE FRAME CLOCK. The engine asks its host for the frame time (recordings'
-// start times, the bookmark save's debounce, the scanner's dwell, the audio
-// watchdog's cadence, the reopen hold-off). The window answered with
-// ImGui::GetTime(), which reads ImGui's context - owned by the GUI thread and
-// rewritten by it every frame. Once the engine pumps on a control thread that
-// is a read of another thread's state. Now the window answers ON its own
-// thread from ImGui, and caches the answer; from any other thread it answers
-// the cache, and ImGui's context is never touched:
-//   A  the GUI thread reads T1; ImGui's clock moves to T2 without being read;
-//      a call from another thread gets T1, not T2
-//   B  the same for frameClockRunning(): with the context gone, another
-//      thread still gets the last answer the GUI thread gave
+// THE CLOCK (changed by the pump move's step P4, adopted decision 5). The engine used to ask its host for the frame time (recordings'
+// start times, the bookmark save's debounce, the scanner's dwell, the audio watchdog's cadence, the reopen hold-off), which the
+// window answered from ImGui::GetTime() - a clock owned by the GUI thread that stands still when the window does (a drag of the
+// title bar, a modal loop) and that a pass on a thread of its own could only read from a cache refreshed once a frame. The engine
+// has its OWN clock now, Engine::clockS(): seconds on a steady clock, readable from any thread, always current:
+//   A  it runs with no frame at all: ImGui's clock has not moved (no frame was drawn) and the engine's has
+//   B  from another thread it answers the same clock - monotone, between the reader's own bounds - and ImGui's context is never
+//      touched (the context is gone for the read)
+// and the host class no longer has frameTimeS or frameClockRunning (tests/test_command_path_guard.cpp holds the hook list).
 //
 // THE PUBLISH-TIME FACTS. webListening, tunerDisplayStyle and basemapFacts
 // were hooks the engine called while publishing; now the window HANDS them
@@ -42,6 +39,7 @@
 namespace cascade::gui {
 struct AppWindowTestAccess {
     static cascade::engine::EngineHost& host(AppWindow& a) { return a; }
+    static double clockS(AppWindow& a) { return a.engine_.clockS(); }
     static void handFacts(AppWindow& a, const cascade::engine::FrontEndFacts& f) { a.engine_.setFrontEndFacts(f); }
     static cascade::core::PublishedState published(AppWindow& a) {
         (void)a.engine_.publishReceiverState();
@@ -101,29 +99,30 @@ int main() {
         AppWindow app;
         cascade::engine::EngineHost& host = A::host(app);
 
-        // A: the frame clock.
+        // A: the engine's clock moves with no frame; ImGui's does not.
         frame(1.0);
-        const double t1 = host.frameTimeS();   // the GUI thread reads it
-        frame(1.0);
-        frame(1.0);
-        const double t2 = ImGui::GetTime();    // ImGui has moved on, unread
-        double fromOther = -1.0;
-        std::thread([&] { fromOther = host.frameTimeS(); }).join();
-        std::printf("A: GUI thread read %.1f s; ImGui is now at %.1f s; another thread got %.1f s\n", t1, t2,
-                    fromOther);
-        CHECK(t2 > t1);
-        CHECK(fromOther == t1);
+        const double imgui1 = ImGui::GetTime();
+        const double e1 = A::clockS(app);
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        const double e2 = A::clockS(app);
+        const double imgui2 = ImGui::GetTime();   // no frame was drawn in between
+        std::printf("A: no frame for 120 ms: the engine's clock moved %.3f s, ImGui's %.3f s\n", e2 - e1, imgui2 - imgui1);
+        CHECK(imgui2 == imgui1);
+        CHECK(e2 - e1 >= 0.100 && e2 - e1 < 5.0);
 
-        // B: frameClockRunning, with ImGui's context gone.
-        CHECK(host.frameClockRunning());   // the GUI thread's answer: a context exists
+        // B: from another thread, with ImGui's context gone: the same clock, between the caller's own bounds.
         ImGui::SetCurrentContext(nullptr);
-        bool otherRunning = false;
-        std::thread([&] { otherRunning = host.frameClockRunning(); }).join();
+        double lo = 0.0, mid = 0.0, hi = 0.0;
+        std::thread([&] {
+            lo = A::clockS(app);
+            mid = A::clockS(app);
+            hi = A::clockS(app);
+        }).join();
         ImGui::SetCurrentContext(ctx);
-        std::printf("B: another thread, the context gone: frameClockRunning=%d (the GUI thread's last "
-                    "answer: 1)\n",
-                    otherRunning ? 1 : 0);
-        CHECK(otherRunning);
+        std::printf("B: another thread, no ImGui context: %.6f <= %.6f <= %.6f (monotone), %.3f s after the GUI thread's read\n",
+                    lo, mid, hi, lo - e2);
+        CHECK(lo >= e2);
+        CHECK(mid >= lo && hi >= mid);
 
         // C: the publish-time facts are the ones HANDED OVER, not asked of the
         // window (whose web server is not running and has no basemap here).

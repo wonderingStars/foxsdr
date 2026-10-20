@@ -14,11 +14,9 @@ namespace cascade::engine {
 EngineHost::EngineHost() : born_(std::chrono::steady_clock::now()) {}
 EngineHost::~EngineHost() = default;
 
-bool EngineHost::frameClockRunning() const { return true; }
-double EngineHost::frameTimeS() const {
+double EngineHost::wallTimeS() const {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - born_).count();
 }
-double EngineHost::wallTimeS() const { return frameTimeS(); }
 
 void EngineHost::pauseWatchdog() {}
 void EngineHost::resumeWatchdog() {}

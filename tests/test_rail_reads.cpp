@@ -50,6 +50,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "gui/rail_reads.hpp"
 #include "imgui.h"
@@ -100,14 +101,16 @@ struct AppWindowTestAccess {
     }
     // The window looks, as a frame does: the engine publishes, the window reads.
     static void look(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
     }
     // The engine's pass as far as a submit needs it, the answers drained as a
     // frame's pumpTransmitKey does: how many commands the session had taken.
     static int pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
         int answered = 0;
         for (;;) {
             FoxCommandResult r[16];
@@ -122,8 +125,10 @@ struct AppWindowTestAccess {
     static const Rail& rail(AppWindow& a) { return a.railLists(); }
     // The engine's pass, and the statuses of the answers the session was given for what it submitted.
     static std::vector<int32_t> passStatuses(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
         std::vector<int32_t> out;
         for (;;) {
             FoxCommandResult r[16];

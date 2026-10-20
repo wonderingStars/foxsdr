@@ -115,7 +115,33 @@ struct ControlThreadOptions {
     // not come back is a hang.
     std::string watchdogReportDir;
     unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
+    // THE PASS FLOOR (pump move P4, adopted decision 6; the survey's section 3.4): the least time between the STARTS of two passes. A
+    // submit wakes the loop at once (that is what keeps a tune-to-audio inside one pass of its submit), so without a floor a flood
+    // of submits - a drag at the frame rate, a script, a misbehaving client - becomes a flood of passes, each paying the whole
+    // pass's cost (the publish allocates a status block). The floor turns a flood into at most 1000/floor passes a second and
+    // costs a burst nothing it was not going to wait for: a wake that arrives after the floor has passed (any submit after an
+    // idle spell) is served at once. 0 turns it off. A wake from runPassNow() is exempt (the caller asked for exactly one pass).
+    std::chrono::milliseconds floor{2};
+    // STEPPED MODE (adopted decision 3): the thread exists - so onControlThread(), the control watchdog, the table's thread
+    // gating and every hook's real call path are all real - but runs NO pass of its own. It runs one PART of a pass (PassPart)
+    // for each stepPass() the front end makes and the front end waits for it, so a bounded run is deterministic: the parts run
+    // at the same places in the frame the pump ran them before the move. Stepped mode orders threads; it cannot find a race (the
+    // front end is parked while a part runs) - the free-running mode and ThreadSanitizer do that.
+    bool stepped = false;
+    // THE TIMER TICK (Windows only; 0 leaves it alone): a wait of 16 ms on this system's default 15.6 ms tick ends on the SECOND tick, ~31 ms
+    // - so a "62 passes a second" thread ran at 35, found by the interactive smoke of step P5 - and a floor of 2 ms is ~15 ms. The thread asks for
+    // this resolution (timeBeginPeriod) from its start to its stop, as the audio stream's WASAPI host already does whenever one is open; the
+    // operating system keeps the finest request any process makes, per process since Windows 10 2004.
+    unsigned timerResolutionMs = 1;
 };
+
+// THE THREE PARTS OF A PASS (pump move P4/P5). A free-running pass runs them in this order as one; a stepped one runs each when
+// the front end asks (Engine::stepPass), which is how the window keeps the order the pump had in its frame - the part up to and
+// including the publish, then the audio mute (which the frame ran after its look, before it drew), then the workers and audio:
+//   Front  the GPS fix, the command queues, the inputs, the remote controls, the plugins and the scanner, the patch, the publish
+//   Mute   the audio mute (a decision about the receiver the state it just published describes)
+//   Back   the workers (device scans and opens, the retune coalescer, downloads) and the audio sink's health, the config copy
+enum class PassPart { Front, Mute, Back };
 
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
@@ -304,6 +330,10 @@ private:
         // the interface has acknowledged its release: the instrumented fixture module counts the instances still alive there
         // (tests/test_plugin_unload_handshake.cpp). Never set in the product.
         void (*pluginsAboutToUnmap)();
+        // Called in the pass between the state's publish and the status lines' (pumpPublish): a test that holds the pass there proves a
+        // reader that takes the status lines and THEN the state never sees lines from a later pass than the state (the pump move's
+        // step P4, the survey's 1.6 C). Never set in the product.
+        void (*betweenPublishes)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -343,6 +373,17 @@ private:
     // it was applied before this returned.
     bool deliverPluginDirective(cascade::core::PluginDirective d);
     std::atomic<std::uint64_t> pluginUiSilentPolls_{~std::uint64_t{0}};
+    // WHAT THE PASS HAS SPENT WAITING FOR THE INTERFACE'S ACKNOWLEDGEMENT (the pump move's step P5: the handshake and the attach-ordering
+    // soft wait now carry live traffic, and are measured): how many waits were made, their total and longest in microseconds, how many ran
+    // out, and how many were skipped by the silence rule. Written by the pass, read by anyone.
+    struct PluginUiWaitCounters {
+        std::atomic<std::uint64_t> waits{0};
+        std::atomic<std::uint64_t> totalUs{0};
+        std::atomic<std::uint64_t> maxUs{0};
+        std::atomic<std::uint64_t> timeouts{0};
+        std::atomic<std::uint64_t> silenceSkips{0};
+    };
+    PluginUiWaitCounters pluginUiWait_;
     // An unload that was refused because the interface was not framing, retried at the next pass in which it has been
     // (pumpPlugins): what was being done, the file it named, and the interface's poll count when it failed.
     // (Also: THE SILENCE RULE of deliverPluginDirective - a wait that ran out records the interface's poll count, and no wait is made
@@ -484,16 +525,18 @@ public:
     // rule for when a widget's command is queued and when it is applied at
     // once, and the line between receiver state and view state; tests/
     // test_command_path_guard.cpp fails a widget that changes the receiver
-    // any other way. GUI thread only - the same rule every setter it calls
-    // has always had. `longText` is the command's text when it did not fit
+    // any other way. THE PUMPING THREAD ONLY - the engine's pass, which is the
+    // control thread since the pump move's step P5 (the same rule every setter
+    // it calls has always had: the window never calls it - it submits). `longText`
+    // is the command's text when it did not fit
     // FoxCommand::text (a long path); empty otherwise.
     FoxCommandResult applyCommand(const FoxCommand& c, const std::string& longText = {});
 private:
 public:
-    // What a widget or key does: queue a command for the top of the next
-    // drain. Drained twice at the top of every frame (drawUi): once before the
-    // keyboard is read - what the widgets asked for last frame - and once
-    // after, so a key still acts in the frame it is pressed.
+    // Queue a command for the next pass's drain (any thread): the front end's
+    // own seams use it (the window's widgets go through its engine API session).
+    // It WAKES the control thread, so the command lands within a pass's time of
+    // the submit and not a period's (the pump move's step P4).
     void submitCommand(const FoxCommand& c);
 private:
 public:
@@ -2021,7 +2064,7 @@ private:
     // not the folder beside the executable.
     std::string bandPlanDirForTest_;
     // The control thread (startControlThread).
-    void controlLoop(std::chrono::milliseconds period);
+    void controlLoop(std::chrono::milliseconds period, std::chrono::milliseconds floor, bool stepped);
     std::thread controlThread_;
     // Set by the control loop as its last act (after transmitter_.stop()),
     // so stopControlThread can bound its wait for the thread before joining.
@@ -2582,8 +2625,12 @@ public:
     // watchdog. While it runs, a front end talks to the engine ONLY through
     // the thread-safe surface: the engine API's table, submitCommand, the
     // snapshot, statusText, configSnapshot, setFrontEndFacts - never
-    // applyCommand, the pump phases or a field. The window does not start it
-    // yet (section 10 says why); a headless front end may.
+    // applyCommand, the pump phases or a field. THE WINDOW STARTS IT since the
+    // pump move's step P5 (AppWindow::run, before its frame loop): free-running
+    // in the product, STEPPED in a bounded run (ControlThreadOptions::stepped).
+    // How it is paced and driven from another thread - the wake every submit
+    // gives it, the floor between passes, stepPass, runPassNow, the work posted
+    // to it - is declared below; docs/engine-stage4.md records the design.
     //
     // stopControlThread() lets go of every key FIRST, from the calling thread
     // (the front end's key-up stores, under the request slot's lock, and the
@@ -2602,13 +2649,69 @@ public:
     // thread runs on this Engine and must not outlive it (the same trade as
     // Transmitter::kThreadJoinWait; tests/test_shutdown_budget.cpp charges it).
     static constexpr std::chrono::milliseconds kControlJoinWait{3000};
+    // How often a STEPPED control thread that is idle (its front end is drawing) beats its watchdog: the wait is a heartbeat interval, not a
+    // bound anyone depends on - it ends the moment a step is asked for or the thread is told to stop.
+    static constexpr std::chrono::milliseconds kSteppedIdleBeat{250};
+    // The safety net on a front-end thread's wait for the pass (stepPass, runPassNow): the wait ends on the pass's own notification, and this
+    // is how often it looks again in case one was missed - never the way it is normally left.
+    static constexpr std::chrono::milliseconds kPassWaitNet{20};
     void startControlThread();
     void startControlThread(const ControlThreadOptions& options);
     void stopControlThread();
     bool controlThreadRunning() const { return controlRun_.load(); }
+    // Where the control thread's hang reports go (empty: none); the front end moves it with its own diagnostics switch.
+    void setControlWatchdogReportDir(const std::string& dir) { controlWatchdog_.setReportDir(dir); }
     bool onControlThread() const { return controlThreadId_.load() == std::this_thread::get_id(); }
     // One pass of the control loop (the thread calls it; tests may).
     void controlPass();
+    // One PART of a pass, in the pass's own order (controlPass is the three in turn). The control thread calls these.
+    void runPassPart(PassPart part);
+    // --- THE PASS, DRIVEN FROM ANOTHER THREAD (pump move P4/P5) ---------------
+    // stepPass: for a STEPPED control thread, runs `part` on it and waits for it to finish; for a free-running one, does nothing
+    // (the pass runs by itself); with no control thread at all, runs the part inline on the calling thread (the front end is
+    // then the pump, as it was before the move). While it waits, a caller that is the front end's own thread (the one that
+    // installed the plugin UI's applier) applies any plugin directive the part posts - a part that waits for the interface's
+    // acknowledgement (the unload handshake) must find it "framing" even though the interface's frame is blocked in this call -
+    // so a stepped run answers the handshake in microseconds, not by timing out.
+    void stepPass(PassPart part);
+    // runPassNow: wakes the control thread and waits for ONE WHOLE PASS THAT STARTED AFTER THIS CALL to finish, so everything
+    // submitted before the call has been applied and published when it returns. Works on a free-running and a stepped thread (a
+    // stepped one runs the three parts in turn); with no control thread it runs controlPass() inline. Returns false when the
+    // pass did not come back within `bound` (a pass held by a test hook, or one stalled past it) or the control thread stopped.
+    // This is the test seam for "the look after the pass" and the front end's way to say "I need a pass now".
+    bool runPassNow(std::chrono::milliseconds bound = std::chrono::milliseconds(30000));
+    bool controlStepped() const { return controlStepped_.load(); }
+    // A function the front end's thread calls every kPassWaitNet while it waits inside stepPass or runPassNow (null: none). The window
+    // installs its own watchdog's heartbeat: its frame is BLOCKED in the wait - not hung - and a pass part that really hangs is the control
+    // thread's own watchdog's to report. (Set and cleared by the thread that waits; nothing else reads it.)
+    void setFrontEndWaitBeat(std::function<void()> beat) { frontEndWaitBeat_ = std::move(beat); }
+    // WHAT THE FREE-RUNNING PASS COSTS (the measurement run's pass-specific figures, the survey's section 4; written by the pass, read by anyone):
+    // how many passes, the sum and the longest of their durations in microseconds, how many ran longer than the period, and how many were
+    // started by a wake rather than by the period running out. A stepped thread keeps none (its parts are timed by the front end that asks).
+    struct PassStats {
+        std::uint64_t passes = 0, sumUs = 0, maxUs = 0, overPeriod = 0, wakes = 0;
+    };
+    PassStats passStats() const {
+        return {passStats_.passes.load(), passStats_.sumUs.load(), passStats_.maxUs.load(), passStats_.overPeriod.load(), passStats_.wakes.load()};
+    }
+    // Passes begun and finished (whole passes; a stepped pass counts when its Back part ends).
+    std::uint64_t passesBegun() const { return passesBegun_.load(); }
+    std::uint64_t passesEnded() const { return passesEnded_.load(); }
+    // WORK THE FRONT END MAY NOT DO ITSELF, run by the pass instead: queued here and run on the control thread at the head of the
+    // next pass, after the command queues' drain (the same place a command lands), on the pumping thread with every engine field
+    // legal to touch. A bounded run's seams (a device found by name, the measurement harness installing a source) use it, so
+    // they never write an engine field from the window's thread while a pass runs. Wakes the control thread. Order is the order
+    // of the posts.
+    void postToPass(std::function<void()> work);
+    // runOnPass: `work` is run with the pass out of the way, and has run when this returns (true). Where the control thread is
+    // STEPPED or absent the pass is parked between its parts whenever the caller is not inside stepPass, so the work runs right here
+    // on the caller's thread - exactly what a bounded run did before the move, which is what keeps its seams deterministic. Where the
+    // thread is free-running the work is posted to it and awaited. Either way it never runs beside a pass, so it may read and write
+    // any engine field; and it runs at most once and never after this returns (false: the pass stopped first and the work did not
+    // run). The seams of a bounded run use this for every engine field they read or write.
+    bool runOnPass(const std::function<void()>& work);
+    // How many posted works have run (a test that needs to know one did).
+    std::uint64_t passWorkRan() const { return passWorkRan_.load(); }
     // The engine's bounded waits (a plugin rescan, the audio and microphone
     // opens) bracket themselves with these: on the control thread they pause
     // the control thread's own watchdog, anywhere else the host's (the GUI's,
@@ -2633,6 +2736,21 @@ public:
     // Wakes the control thread for a pass now (a submit, a close): a command
     // is applied within a pass's time of its submit, not a period's.
     void wakeControl();
+    // A snapshot of the interface-wait counters (see PluginUiWaitCounters).
+    struct PluginUiWaitStats {
+        std::uint64_t waits = 0, totalUs = 0, maxUs = 0, timeouts = 0, silenceSkips = 0;
+    };
+    PluginUiWaitStats pluginUiWaitStats() const {
+        return {pluginUiWait_.waits.load(), pluginUiWait_.totalUs.load(), pluginUiWait_.maxUs.load(), pluginUiWait_.timeouts.load(),
+                pluginUiWait_.silenceSkips.load()};
+    }
+    // THE ENGINE'S OWN CLOCK (pump move P4, adopted decision 5): seconds on a steady clock since this engine was built, readable from
+    // any thread and always current. The pass used to ask the front end for the frame's time (EngineHost::frameTimeS), which the
+    // window answered from ImGui's clock - a clock that stands still when the window does (a drag of its title bar, a modal loop) and,
+    // read from the control thread, a cache the window refreshed once a frame - so the scanner's dwell, the bookmark save's debounce,
+    // the audio watchdog's cadence, the radio reopen's hold-off and the recordings' elapsed time all froze with the window. They are
+    // the engine's business and run on the engine's clock now.
+    double clockS() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - clockOrigin_).count(); }
 
     // What the receiver published last: the one receiver snapshot (read()
     // and readFull() are the reader side; core/receiver_snapshot.hpp).
@@ -2642,14 +2760,41 @@ public:
 
 private:
     bool tornDown_ = false;  // teardown() ran (so ~Engine does not run it again)
+    const std::chrono::steady_clock::time_point clockOrigin_ = std::chrono::steady_clock::now();
     // The remote controls' source (setRemoteControlSource): the pass copies the pointer under the lock and calls it
     // outside it, so a front end may replace or clear it from any thread.
     std::mutex remoteSourceMutex_;
     std::shared_ptr<const RemoteControlSource> remoteSource_;
-    // The wake a submit gives the control loop (wakeControl).
+    // THE PASS'S PACING (everything below the mutex is guarded by it unless it says atomic). The wake a submit gives the control
+    // loop (wakeControl); the wake runPassNow gives it, which is exempt from the floor; and, in a stepped run, the request a
+    // stepPass makes and the count of steps the thread has finished.
     std::mutex controlWakeMutex_;
-    std::condition_variable controlWakeCv_;
+    std::mutex stepRequestMutex_;             // one stepPass at a time (the request slot holds one part)
+    std::condition_variable controlWakeCv_;   // the control thread waits here
+    std::condition_variable passDoneCv_;      // a front-end thread waiting for a pass or a step waits here
     bool controlWake_ = false;
+    bool controlWakeNow_ = false;
+    bool stepPending_ = false;
+    PassPart stepPart_ = PassPart::Front;
+    std::uint64_t stepsAsked_ = 0;
+    std::uint64_t stepsDone_ = 0;
+    std::chrono::milliseconds controlFloor_{0};
+    std::atomic<bool> controlStepped_{false};
+    unsigned timerResolutionApplied_ = 0;   // the resolution startControlThread asked the OS for (0: none), given back by stopControlThread
+    struct PassStatsCounters {
+        std::atomic<std::uint64_t> passes{0}, sumUs{0}, maxUs{0}, overPeriod{0}, wakes{0};
+    };
+    PassStatsCounters passStats_;
+    std::atomic<std::uint64_t> passesBegun_{0};
+    std::atomic<std::uint64_t> passesEnded_{0};
+    // The wait a front-end thread makes for a pass or a step; applies a plugin directive for it if it is the front end's thread.
+    std::function<void()> frontEndWaitBeat_;
+    bool waitForPassCounter(std::unique_lock<std::mutex>& lk, const std::function<bool()>& done, std::chrono::milliseconds bound);
+    // WORK POSTED TO THE PASS (postToPass).
+    std::mutex passWorkMutex_;
+    std::vector<std::function<void()>> passWork_;
+    std::atomic<std::uint64_t> passWorkRan_{0};
+    void runPassWork();
     std::uint64_t apiListsFingerprint();
     std::shared_ptr<const ApiListBlock> buildApiLists(std::uint64_t fingerprint);
     void buildApiLists03(ApiListBlock& b);

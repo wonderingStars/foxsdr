@@ -375,7 +375,12 @@ void testDopplerChurn() {
             // OK - or DENIED, which is the right answer in the moments after a stop was applied by the pass and before the window
             // has destroyed the instance (the core's stop set is the engine's and takes effect at once). Nothing else may appear.
             const int rc = fx.lastTuneRc();
-            if (rc != CASCADE_TUNE_OK && rc != CASCADE_TUNE_DENIED) { ++notOk; }
+            // (12345 is the fixture's "no request made yet" - the first polls after the churn is switched on can precede the instance the pass is
+            // still building; the full-suite run of step P5 caught this test counting it as an answer, once in three runs.)
+            constexpr int kNoRequestYet = 12345;
+            if (rc != kNoRequestYet && rc != CASCADE_TUNE_OK && rc != CASCADE_TUNE_DENIED) {
+                if (notOk++ == 0) { std::printf("      (first answer other than OK or DENIED: %d after %ld calls)\n", rc, fx.tuneCalls()); }
+            }
             if (std::chrono::steady_clock::now() - lastToggle >= std::chrono::milliseconds(120)) {
                 lastToggle = std::chrono::steady_clock::now();
                 stopped = !stopped;

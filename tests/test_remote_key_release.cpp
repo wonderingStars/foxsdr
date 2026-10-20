@@ -40,6 +40,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "iiod_fake_server.hpp"
 #include "net/web_policy.hpp"
 #include "net/web_server.hpp"
@@ -115,8 +116,10 @@ struct AppWindowTestAccess {
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
     static void pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
     }
     static std::int64_t remoteHoldMs(AppWindow& a) {
         return a.engine_.transmitter_.remoteHoldRemainingMs();
@@ -124,7 +127,7 @@ struct AppWindowTestAccess {
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     // The engine's remote-controls phase: the web and CAT queues pulled through the source the window installed, and the
     // remote key's standing condition judged (the pump move's step P1 - this was the window's applyWebControls).
-    static void pumpRemote(AppWindow& a) { a.engine_.pumpRemoteControls(); }
+    static void pumpRemote(AppWindow& a) { passseam::pass(a.engine_, [&] { a.engine_.pumpRemoteControls(); }); }
     // The settings panel switching the web server off.
     static void disableWeb(AppWindow& a) {
         a.webCfg_.enabled = false;

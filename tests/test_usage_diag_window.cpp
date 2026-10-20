@@ -49,6 +49,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -77,16 +78,20 @@ struct AppWindowTestAccess {
         Engine::testHooks_.pluginDir = &pluginDir;
     }
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        a.engine_.pumpWorkers();
-        a.engine_.pumpAudio();
+        passseam::workers(a.engine_, [&] {
+            a.engine_.pumpWorkers();
+            a.engine_.pumpAudio();
+        });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
     static void submit(AppWindow& a, const FoxCommand& c) { a.uiSubmit(c); }

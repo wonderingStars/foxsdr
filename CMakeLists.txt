@@ -372,6 +372,8 @@ if(WIN32)
     # pipes. All three are inbox on Windows 10+, so the installer payload
     # contract (cascade.exe + SoapySDR.dll) does not change.
     target_link_libraries(cascade_engine PUBLIC winusb setupapi cfgmgr32)
+    # The multimedia timer (timeBeginPeriod): the engine's control thread asks for a 1 ms tick so its period and floor mean what they say.
+    target_link_libraries(cascade_engine PUBLIC winmm)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
     # output (core/mp3_writer.cpp, 0.99.17).
     target_link_libraries(cascade_engine PUBLIC mf mfplat mfreadwrite mfuuid ole32)

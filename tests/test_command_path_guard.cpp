@@ -143,9 +143,11 @@ const char* const kEngineObjects[] = {
 // (RETIRED with the pump move's step P3, their callers gone because the plugin UI is the window's: pluginUi_ .instruments / .panels /
 // .paths / .trackPluginNames / .tracks / .altitudeNear / .poll - seven of the eight host accessors named the engine through them.)
 const char* const kReadOnly[] = {
-    "pipeline_.activeSource().centerFrequencyHz", "pipeline_.inputRateHz", "pipeline_.audioSamplesProduced",
+    "pipeline_.inputRateHz", "pipeline_.audioSamplesProduced",
     "pipeline_.audioTap", "pluginHost_.plugins", "pluginRunner_.pollImages",
 };
+// (RETIRED with the pump move's step P4: pipeline_.activeSource().centerFrequencyHz - the measurement hook's tune reads the centre the
+// receiver published, the source itself being the pass's to swap.)
 
 // Accessors that hand the object out; a control may bind them only `const`.
 const char* const kBareAccessors[] = {"pipeline_.activeSource", "pipeline_.audio",
@@ -202,8 +204,11 @@ const char* const kWindowMachinery[] = {
 //   attachBasemap, attachTrackInfo  the directive's two tables, attached by the window when it applies a rebuild;
 //   showDemonstrationInstrument  the window that rebuilt the demonstration instruments shows their windows.
 // What is left: the clocks and the watchdog - five calls, thread-safe by construction (engine/stage3b-pre OPEN 4).
+// THE PUMP MOVE'S STEP P4 TOOK THE CLOCK OUT (5 -> 3): frameClockRunning and frameTimeS are gone - the engine runs on its own steady clock
+// (Engine::clockS), because the pass is no longer the frame and a clock that stood still when the window did froze the scanner's
+// dwell, the bookmark save's debounce, the audio watchdog and the radio reopen's hold-off with it.
 const char* const kHostHooks[] = {
-    "frameClockRunning",  "frameTimeS",          "wallTimeS",
+    "wallTimeS",
     "pauseWatchdog",      "resumeWatchdog",
     // (onReceiverPositionApplied left with window port group 14 part a: the window follows the position in the state.)
     // (onPatchPicture left with window port group 13 part c: the pictures are the engine's, read with read_image.)
@@ -252,6 +257,9 @@ const char* const kControlMayCall[] = {
     // is unaffected - it calls the Engine methods directly (a friend
     // accessor), which still exist, unchanged, for the commands to call.
     "airspyRememberOpen",
+    // Where the engine's own hang watchdog writes its reports (the pump move's step P5): the Settings checkbox that moves the
+    // window's watchdog's directory moves this one with it. A diagnostics path, no receiver state.
+    "setControlWatchdogReportDir",
 };
 
 // ENGINE FIELDS THE WINDOW STILL EDITS IN PLACE. Each is a form or a page
@@ -309,34 +317,35 @@ struct LineAllow {
     const char* code;  // the exact code the line must contain
 };
 const LineAllow kLineAllowed[] = {
-    // drawUi IS the frame loop's body: the command drains, the remote and
-    // plugin applies, the scanner, and the per-frame machinery polls.
-    {"drawUi", "drainLocalCommands();"},
-    {"drawUi", "pumpRemoteControls();"},
-    {"drawUi", "(void)applyCommand(q.c, q.longText);"},
-    // ...and the transmit key rebuilt every frame - the dead-man's handle (OPEN 1).
-    // (drawPatchPage and drawPatchView's runtime steps - the receiver pipeline's patch runner retired and cleared, the
-    // close rule that stops the patch, the radios reconciled, the transport applied, the catalogue rebuilt, the one
-    // compile, the sets published - LEFT with window port group 13: the engine's pass runs them, Engine::pumpPatch,
-    // and the window tells it whether the view is showing. Sixteen entries.)
-    // drawTransmitPage's followTransmitFrequency CLOSED (engine stage 4 window
-    // port): the engine's own pass follows the dial (Engine::pumpPublish).
-    // run: interactive start, the GPS test seam, the catalogue test hook, the
-    // device seam's scan, the preset seam for a plugin with none (OPEN 5),
-    // FOXSDR_PATCH_START (OPEN 5), the measurement hook, and the teardown.
+    // THE FRAME IS A LOOK (the pump move's step P5): drawUi no longer pumps. It runs no engine phase; the three lines below are
+    // its STEPPED hooks - in a bounded run the pass is stepped by the frame, and each asks the engine to run one PART of the pass here,
+    // where the frame's pump ran it before the move (and does nothing at all when the pass free-runs, the product). The front end's
+    // facts for the publish are handed over first (OPEN 4).
+    {"drawUi", "handFrontEndFacts();"},
+    {"drawUi", "stepPass(cascade::engine::PassPart::Front);"},
+    {"drawUi", "stepPass(cascade::engine::PassPart::Mute);"},
+    {"drawUi", "stepPass(cascade::engine::PassPart::Back);"},
+    // (The transmit key's submit, drawUi's pumpTransmitKey line, is the window's own member now: submitTransmitKey.)
+    // run: the receiver started before the loop, the engine's own pass started on its thread, the bounded-run seams (each reaches the
+    // engine only through runOnPass, which runs it with the pass out of the way), the measurement hook, and the teardown.
     {"run", "startReceiver();"},
-    // (The FOXSDR_GPS_PORT seam's gpsReader_.start line LEFT with window port group 14 part e: the seam sends the key's own
-    // FOXAPI_OP_GPS through the session now.)
+    // the engine's pass: its first publish for a free-running run, and its thread
+    {"run", "controlPass();"},
+    {"run", "startControlThread(opt);"},
     // the bounded-run diagnostic, the engine's since part e: printed once after the teardown's first phase, when the run asked
     {"run", "reportPluginStatus(pluginImages_, pluginUiReport());"},
+    // the seams: the catalogue hook, a device by name, a plugin's preset, the patch's start and its run key
+    {"run", "runOnPass("},
     {"run", "startCatalogFetch();"},
     {"run", "scanNative();"},
     {"run", "recordPluginStopped(cascade::core::pluginKey(lp), false);"},
     {"run", "patchRunning_ = true;"},
-    {"run", "installSource(std::move(src));"},
+    // the measurement harness installs its generator through the pass
+    {"run", "postToPass("},
+    {"run", "installSource(std::move(*held));"},
     {"run", "followInputRate();"},
+    {"run", "runPassNow()"},
     {"run", "if (!measure_->tick(pipeline_, hooks)) {"},
-    {"run", "pollGpsReader();"},
     // the engine's teardown, in its three ordered phases between the
     // window's own steps (engine/stage3b-pre OPEN 9 - they were eight lines
     // here: the transmitter, the GPS reader, the recordings, the bookmark
@@ -347,33 +356,10 @@ const LineAllow kLineAllowed[] = {
     // --- engine stage 3a: window lines that still drive the engine directly ---
     // the census seam: a stand-in bias tee for a bounded run
     {"run", "biasStandIn_ = cascade::gui::biasStandInFor("},
-    // the GPS test seam starts a read
     // the catalogue test hook points the store at its catalogue
     {"run", "pluginCatalogueUrl_ = pluginTestHook_;"},
     // the teardown marks the clean exit
     {"run", "telemetryCleanExit_ = true;"},
-    // the crash handler's context, once a second and at start
-    // the engine's frame begins: the snapshot's retry, then the first drain
-    {"drawUi", "pumpFrameBegin();"},
-    // endTakesOnFault, then pumpDecoderOutput
-    {"drawUi", "pumpInputs();"},
-    // applyPluginApi, then scannerFrame
-    {"drawUi", "pumpPlugins();"},
-    // the patch runtime's step of the pass (window port group 13): the catalogue, the transport, the radios, the plan and
-    // the sets - or the close rule - which drawPatchPage and drawPatchView used to run from the frame
-    {"drawUi", "pumpPatch();"},
-    // the bookmark save and the one publish; the window copies the spectrum frame beside it
-    // the front end's facts for that publish, handed over first (OPEN 4)
-    {"drawUi", "handFrontEndFacts();"},
-    {"drawUi", "publishWebSpectrum(pumpPublish());"},
-    // where the receiver is decides the mute, before anything draws
-    {"drawUi", "pumpAudioMute();"},
-    // the page's key submitted on the window's session, for the engine's next pass (stage 4)
-    {"drawUi", "pumpTransmitKey();"},
-    // the device, sound card, recovery, retune and plugin workers collected
-    {"drawUi", "pumpWorkers();"},
-    // the audio and microphone gates, the sink health, the heartbeat
-    {"drawUi", "pumpAudio();"},
 };
 
 // --- rule 5: ImGui input ---------------------------------------------------------------
@@ -1142,11 +1128,15 @@ const char* const kPortedMembers[] = {
 // 14 fields - and every one of them is classified: a read in any other member fails the guard.
 // The pump move's step P3, the plugin UI the window's own: 14 / 33 -> 13 / 26 (the seven reads of pluginUi_ the host accessors made, and
 // the field itself: only hostPollImages is left of the eight accessors, reading pluginRunner_).
+// The pump move's steps P4 and P5, the frame a look: 13 / 26 -> 13 / 24 (two reads went: the measurement hook's tune reads the centre the receiver
+// published instead of pipeline_.activeSource().centerFrequencyHz() - the source is the pass's to swap - and the catalogue seam formats the window's
+// own copy of the URL instead of reading pluginCatalogueUrl_ back; run()'s other seams still read engine fields, now inside runOnPass, which runs
+// them with the pass out of the way).
 constexpr int kWindowFieldsReadBudget = 13;
-constexpr int kWindowFieldReadsBudget = 26;
+constexpr int kWindowFieldReadsBudget = 24;
 // THE RESIDUE'S OWN BUDGETS, one per class (the totals above are their sum). A new read in a listed member raises its class, and
 // the class budget fails even where another class has slack.
-constexpr int kShellReadsBudget = 19;
+constexpr int kShellReadsBudget = 17;
 constexpr int kStage5ReadsBudget = 6;
 constexpr int kHostAccessorReadsBudget = 1;
 
@@ -1353,7 +1343,7 @@ void scan(const fs::path& root, const EngineSurface& eng, Report& r) {
 // is still listed and goes in the move itself: drawUi's dropped-file import. The three that stood here (the web/CAT drain's
 // applyControlRequest, its per-frame WEB_CONTROL_STOPPED and applyWebSettings' own) are the engine's pass now
 // (Engine::pumpRemoteControls). Every other command goes through uiSubmit, the session's submit or Engine::submitCommand.
-constexpr int kDirectApplyCommandCalls = 1;      // drawUi: the file drop (P4/P5 sends it through uiSubmit like the Import key)
+constexpr int kDirectApplyCommandCalls = 0;      // (drawUi's file drop went through uiSubmit like the Import key in step P4)
 constexpr int kDirectApplyControlRequestCalls = 0;
 
 void checkNoDirectApply(const fs::path& root) {
@@ -1386,6 +1376,199 @@ void checkNoDirectApply(const fs::path& root) {
     }
     CHECK(applyCommandCalls <= kDirectApplyCommandCalls);
     CHECK(controlRequestCalls <= kDirectApplyControlRequestCalls);
+}
+
+// THE FRAME IS A LOOK (the pump move's steps P4 and P5): the engine's pass runs on its own thread, so the window runs no engine phase,
+// drains no queue, applies no command and takes no GPS fix; it looks at what the pass published, draws, and submits. What this holds, as
+// text over src/gui:
+//   * no call to the pass's phases - pump, pumpFrameBegin, pumpInputs, pumpRemoteControls, pumpPlugins, pumpPatch, pumpPublish,
+//     pumpAudioMute, pumpWorkers, pumpAudio, drainLocalCommands, pollGpsReader, runPassPart - anywhere in the window;
+//   * stepPass appears exactly three times, all in drawUi, as Front, Mute and Back, in that order, and the engine's pass is started in
+//     run() exactly once (startControlThread) after the one controlPass() that makes a free-running run's first publish;
+//   * THE LOOK'S ORDER (survey 1.6 B and C): in drawUi the session's answers are polled (pollUiAnswers), then the status lines
+//     are copied, then the state is read (refreshUiState), then the answers are acted on (actOnUiAnswers) - and the Front part of
+//     the pass comes before all of it, the Mute part after it, and the Back part after everything else the frame does;
+//   * the transmit key is SUBMITTED at the end of the frame (submitTransmitKey), after the page has drawn what it holds.
+void checkTheFrameIsALook(const fs::path& root) {
+    int bad = 0;
+    int stepCalls = 0, controlPassCalls = 0, startCalls = 0;
+    const char* const kPhases[] = {"engine_.pump(",          "engine_.pumpFrameBegin(", "engine_.pumpInputs(",
+                                   "engine_.pumpRemoteControls(", "engine_.pumpPlugins(", "engine_.pumpPatch(",
+                                   "engine_.pumpPublish(",   "engine_.pumpAudioMute(",   "engine_.pumpWorkers(",
+                                   "engine_.pumpAudio(",     "engine_.drainLocalCommands(", "engine_.pollGpsReader(",
+                                   "engine_.runPassPart("};
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(root / "src" / "gui", ec)) {
+        if (e.path().extension() != ".cpp" && e.path().extension() != ".hpp") { continue; }
+        for (const std::string& l : codeLines(readFile(e.path()), true)) {
+            for (const char* ph : kPhases) {
+                if (l.find(ph) != std::string::npos) {
+                    ++bad;
+                    std::printf("FAIL: the window runs an engine phase (%s) in %s: %s\n      -> the pass is the control thread's; submit "
+                                "a command and look at what it publishes\n",
+                                ph, e.path().filename().string().c_str(), l.c_str());
+                }
+            }
+            if (l.find("engine_.stepPass(") != std::string::npos) { ++stepCalls; }
+            if (l.find("engine_.controlPass(") != std::string::npos) { ++controlPassCalls; }
+            if (l.find("engine_.startControlThread(") != std::string::npos) { ++startCalls; }
+        }
+    }
+    std::printf("  the frame is a look: stepPass %d (expect 3), controlPass %d (expect 1), startControlThread %d (expect 1)\n",
+                stepCalls, controlPassCalls, startCalls);
+    CHECK(stepCalls == 3);
+    CHECK(controlPassCalls == 1);
+    CHECK(startCalls == 1);
+    const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
+    const std::size_t draw = text.find("void AppWindow::drawUi() {");
+    CHECK(draw != std::string::npos);
+    // the end of drawUi: the next definition at column 0
+    std::size_t drawEnd = text.find("\n}\n", draw);
+    CHECK(drawEnd != std::string::npos);
+    const std::string body = text.substr(draw, drawEnd - draw);
+    const auto at = [&](const char* needle) { return body.find(needle); };
+    const std::size_t front = at("engine_.stepPass(cascade::engine::PassPart::Front);");
+    const std::size_t poll = at("pollUiAnswers();");
+    const std::size_t status = at("statusLines_ = engine_.statusText();");
+    const std::size_t look = at("refreshUiState();");
+    const std::size_t act = at("actOnUiAnswers();");
+    const std::size_t mute = at("engine_.stepPass(cascade::engine::PassPart::Mute);");
+    const std::size_t key = at("submitTransmitKey();");
+    const std::size_t back = at("engine_.stepPass(cascade::engine::PassPart::Back);");
+    const bool found = front != std::string::npos && poll != std::string::npos && status != std::string::npos &&
+                       look != std::string::npos && act != std::string::npos && mute != std::string::npos &&
+                       key != std::string::npos && back != std::string::npos;
+    if (!found) { std::printf("FAIL: drawUi lacks one of the look's steps\n"); }
+    CHECK(found);
+    if (found) {
+        const bool order = front < poll && poll < status && status < look && look < act && act < mute && mute < key && key < back;
+        if (!order) {
+            std::printf("FAIL: drawUi's look is out of order - the pass's front part, then the session's answers polled, the status lines "
+                        "copied, the state read and the answers acted on, then the mute part, the transmit key, the back part\n");
+        }
+        CHECK(order);
+    }
+    // THE DIAGNOSTICS SWITCH MOVES BOTH WATCHDOGS: "off means off" has to reach the engine's own hang watchdog (the control thread's), or
+    // a session switched off would keep writing the pass's hang reports.
+    {
+        const std::size_t diag = text.find("void AppWindow::applyDiagnosticsEnabled(bool on) {");
+        const std::size_t diagEnd = diag == std::string::npos ? std::string::npos : text.find("\n}\n", diag);
+        const bool both = diag != std::string::npos && diagEnd != std::string::npos &&
+                          text.find("watchdog_.setReportDir(", diag) < diagEnd &&
+                          text.find("engine_.setControlWatchdogReportDir(", diag) < diagEnd;
+        if (!both) { std::printf("FAIL: applyDiagnosticsEnabled does not move both the window's watchdog and the engine's control watchdog\n"); }
+        CHECK(both);
+    }
+    // run(): the first publish, then the thread - and the thread starts before the frame loop
+    const std::size_t run = text.find("int AppWindow::run(int frames) {");
+    CHECK(run != std::string::npos);
+    const std::size_t firstPass = text.find("engine_.controlPass();", run);
+    const std::size_t startThread = text.find("engine_.startControlThread(opt);", run);
+    const std::size_t loop = text.find("while (!glfwWindowShouldClose(window) && !closeRequested_) {", run);
+    const bool startOk = firstPass != std::string::npos && startThread != std::string::npos && loop != std::string::npos &&
+                         firstPass < startThread && startThread < loop;
+    if (!startOk) { std::printf("FAIL: run() does not start the engine's pass (first publish, then the thread) before the frame loop\n"); }
+    CHECK(startOk);
+    CHECK(bad == 0);
+}
+
+// THE CONFIG SAVE IS THE SHELL'S, NOT THE FRAME'S (the pump move's step P4; the survey's 1.6 D). saveConfigNow asks the engine to hand over
+// its half of the config (Engine::publishConfig -> fillConfig, which reads receiver fields) - a read of the pass's own state, safe only when no
+// pass is running: before the control thread starts and after it is joined. So it is called from run() exactly twice, the first before
+// startControlThread and the second after shutdownQuiesce (which joins it), and from nowhere else - in particular from no frame member (a
+// language switch used to be a mid-run caller; nothing is now).
+void checkConfigSaveIsTheShells(const fs::path& root) {
+    int calls = 0;
+    int callsOutsideRun = 0;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(root / "src" / "gui", ec)) {
+        if (e.path().extension() != ".cpp") { continue; }
+        const std::string text = readFile(e.path());
+        std::size_t at = 0;
+        while ((at = text.find("saveConfigNow();", at)) != std::string::npos) {
+            // a call is a code line, not a comment, and not the definition's own line
+            const std::size_t lineStart = text.rfind('\n', at) == std::string::npos ? 0 : text.rfind('\n', at) + 1;
+            const std::string line = text.substr(lineStart, text.find('\n', at) - lineStart);
+            const bool comment = line.find("//") != std::string::npos && line.find("//") < line.find("saveConfigNow();");
+            const bool definition = line.find("void AppWindow::saveConfigNow") != std::string::npos;
+            if (!comment && !definition) {
+                ++calls;
+                const std::size_t run = text.find("int AppWindow::run(int frames) {");
+                const std::size_t runEnd = run == std::string::npos ? std::string::npos : text.find("\n}\n", run);
+                if (run == std::string::npos || at < run || at > runEnd) { ++callsOutsideRun; }
+            }
+            at += 1;
+        }
+    }
+    std::printf("  saveConfigNow: %d call(s) (expect 2, both in run()), %d outside run()\n", calls, callsOutsideRun);
+    CHECK(calls == 2);
+    CHECK(callsOutsideRun == 0);
+    const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
+    const std::size_t run = text.find("int AppWindow::run(int frames) {");
+    const std::size_t first = text.find("if (!configPath_.empty()) { saveConfigNow(); }", run);
+    const std::size_t start = text.find("engine_.startControlThread(opt);", run);
+    const std::size_t quiesce = text.find("engine_.shutdownQuiesce();", run);
+    const std::size_t second = text.find("if (!configPath_.empty()) { saveConfigNow(); }", quiesce);
+    const bool ordered = first != std::string::npos && start != std::string::npos && quiesce != std::string::npos &&
+                         second != std::string::npos && first < start && start < quiesce && quiesce < second;
+    if (!ordered) {
+        std::printf("FAIL: run()'s two config saves are not around the control thread's life (first save, start thread, ..., shutdownQuiesce, second save)\n");
+    }
+    CHECK(ordered);
+}
+
+// THE OPS THAT NAME A ROW BY ITS POSITION (the pump move's step P4; the survey's 1.6 J). A command that carries an INDEX into a list the
+// window cached can land on a different row once the lists move under it: with the pass on a thread of its own a list can move between the
+// window's look and the pass that applies the click, where before the move it moved only in the pass that applied it. The port moved the
+// dangerous ones to ids and keys (the bias tee carries the radio's key; a device, a source, a bookmark, a decoder, a store entry, a gain stage
+// and an antenna are named by id, text or key). What is left names a position, and each was audited against the engine's handler:
+//   FOXAPP_OP_SET_BANDWIDTH_STEP   an index into kBwHz, a CONSTANT table (not a list): it cannot move.
+//   FOXAPI_OP_PLUGIN_PRESET        the raw index of a preset in the module's own static array; changes only when the module file is replaced
+//                                  and rescanned (the command also carries the module's name, and the engine refuses an index past the end).
+//   FOXAPP_OP_USER_PRESET_APPLY / FOXAPP_OP_USER_PRESET_FORGET_AT   an ordinal among the stored user presets of ONE plugin key (also carried):
+//                                  the list changes only by this window's own FORGET and by a save, both user gestures a frame apart.
+//   FOXAPP_OP_SOUND_CARD_PICK      the SOUND_CARDS entry's id (index + 1) of the last listing: a re-listing between the click and the pass could
+//                                  shift it (the engine refuses an id past the end and says "no such sound card entry"); the same window as before
+//                                  the move, a pass wider. RECORDED, NOT CLOSED: closing it would carry the card's name and host API beside the id.
+// THE TEST holds the SET: any op whose documented argument is an index or an ordinal must be on the reviewed list above, so a new one is a
+// decision somebody makes and not a thing that happens.
+void checkIndexOps(const fs::path& root) {
+    const std::set<std::string> reviewed = {"FOXAPP_OP_SET_BANDWIDTH_STEP", "FOXAPI_OP_PLUGIN_PRESET", "FOXAPP_OP_USER_PRESET_APPLY",
+                                            "FOXAPP_OP_USER_PRESET_FORGET_AT", "FOXAPP_OP_SOUND_CARD_PICK"};
+    std::set<std::string> found;
+    const std::regex define("^#define\\s+(FOX(?:API|APP)_OP_[A-Z0-9_]+)\\s+0x[0-9A-Fa-f]+u?\\s*(.*)$");
+    const std::regex positional("(index|ordinal|\\bid \\(index)", std::regex::icase);
+    for (const char* rel : {"third_party/foxsdr_api/foxsdr_api.h", "src/core/app_commands.hpp"}) {
+        std::istringstream in(readFile(root / rel));
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+            std::smatch m;
+            if (!std::regex_match(line, m, define)) { continue; }
+            const std::string doc = m[2].str();
+            // (SET_BANDWIDTH_DRAG's text says the combo's step INDEX is "left alone": it carries a width, not an index.)
+            if (m[1].str() != "FOXAPP_OP_SET_BANDWIDTH_DRAG" && std::regex_search(doc, positional)) { found.insert(m[1].str()); }
+        }
+    }
+    // SOUND_CARD_PICK's index is documented a few lines above its define; the other four on the define's own line.
+    found.insert("FOXAPP_OP_SOUND_CARD_PICK");
+    std::string unreviewed;
+    for (const std::string& f : found) {
+        if (reviewed.count(f) == 0) { unreviewed += (unreviewed.empty() ? "" : ", ") + f; }
+    }
+    std::string stale;
+    for (const std::string& r : reviewed) {
+        if (found.count(r) == 0) { stale += (stale.empty() ? "" : ", ") + r; }
+    }
+    std::printf("  ops that name a row by position: %zu found, %zu reviewed (see checkIndexOps)\n", found.size(), reviewed.size());
+    if (!unreviewed.empty()) {
+        std::printf("FAIL: an op documents an index or an ordinal argument and is not on the reviewed list: %s\n      -> carry the row's id or key instead, or audit it "
+                    "against the engine's handler and add it to checkIndexOps (the pump move's survey, 1.6 J)\n",
+                    unreviewed.c_str());
+    }
+    if (!stale.empty()) { std::printf("FAIL: the reviewed list names ops that no longer document an index: %s\n", stale.c_str()); }
+    CHECK(unreviewed.empty());
+    CHECK(stale.empty());
 }
 
 // THE HOOKS THE PUMP MOVE'S STEP P2 REMOVED STAY REMOVED. Each was a call the engine made from its pass into the window, writing or
@@ -1695,6 +1878,9 @@ int main(int argc, char** argv) {
         CHECK(r.allowedLinesSeen.count(key) != 0);
     }
     checkNoDirectApply(root);
+    checkTheFrameIsALook(root);
+    checkConfigSaveIsTheShells(root);
+    checkIndexOps(root);
     checkRetiredHooks(root);
     checkPluginUiOwnership(root);
     return testSummary("test_command_path_guard");

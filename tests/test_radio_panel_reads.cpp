@@ -43,6 +43,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
 #include "source/airspy_source.hpp"
@@ -161,15 +162,17 @@ struct AppWindowTestAccess {
     static void selectGenerator(AppWindow& a) { a.engine_.selectSource(0); }
     // The window looks, as a frame does: the engine publishes, the window reads.
     static void look(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
     }
     // The engine's pass as far as a submit needs it (the queue applied, the
     // state published), the answers drained as a frame's pumpTransmitKey does:
     // how many commands the window's session had taken and the engine answered.
     static int pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
         int answered = 0;
         for (;;) {
             FoxCommandResult r[16];

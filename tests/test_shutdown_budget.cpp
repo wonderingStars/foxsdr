@@ -829,13 +829,25 @@ const KnownWait kKnownWaits[] = {
     // Transmitter::stop()'s own sink_->stop() spends the 1500 instead.
     // Charging both is therefore conservative in the direction a budget
     // should be conservative in.
-    {"src/engine/engine.hpp", "kControlJoinWait", 0,
+    {"src/engine/engine.hpp", "kControlJoinWait", 1,
      "Engine::stopControlThread() - the bound on the engine's control thread coming back "
-     "before it is joined (not abandoned: the thread runs on the Engine). NOT on the window's "
-     "shutdown path yet: the window does not start the control thread (engine-stage3.md "
-     "section 10), so its teardown's stopControlThread returns at once. The step that moves "
-     "the window's pump onto the control thread (engine-stage4.md, plan step 4) charges it "
-     "once and raises kShutdownBoundedWaitsMs with it"},
+     "before it is joined (not abandoned: the thread runs on the Engine). ON THE WINDOW'S "
+     "SHUTDOWN PATH SINCE THE PUMP MOVE'S STEP P5, which starts the thread from run(): "
+     "shutdownQuiesce() stops it first, at the very top of the teardown, so a pass still "
+     "inside a bounded wait (the audio and microphone opens' grace, the plugin rescan, a "
+     "vendor call - the longest is the source's own 3000 ms) is waited for here once, "
+     "before anything the teardown does to the engine. Charged ONCE: the other waits on "
+     "the path are the ones the stopped pass was inside, spent in it and not again, and "
+     "the key is already up before this is spent (stopControlThread lets go of it first, "
+     "from the calling thread). 10500 -> 13500, and kShutdownThresholdMs 27000 -> 33000 with it"},
+    {"src/engine/engine.hpp", "kSteppedIdleBeat", 0,
+     "Engine::controlLoop() - how often a STEPPED control thread that is idle (its front end is drawing a frame) beats its own watchdog. "
+     "A heartbeat interval, not a bound: the wait ends the moment a step is asked for or the thread is told to stop (stopControlThread "
+     "notifies it), so the shutdown path never spends it (the pump move's step P5)"},
+    {"src/engine/engine.hpp", "kPassWaitNet", 0,
+     "Engine::waitForPassCounter() - the safety net on a front-end thread's wait for the pass (stepPass, runPassNow): the wait ends on the "
+     "pass's own notification, and this is how often it looks again in case one was missed. NOT on the shutdown path: stopControlThread "
+     "notifies the same condition variable and the wait's predicate is the loop's run flag, so a wait in progress ends at once (P5)"},
     {"src/engine/engine.hpp", "kPluginUiHandshake", 0,
      "Engine::deliverPluginDirective() - the bound on the front end (the window) acknowledging a plugin directive, which is the "
      "unload handshake: before a module is unmapped the control thread's pass posts a release and waits for the window's frame to "

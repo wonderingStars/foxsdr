@@ -58,6 +58,7 @@
 #include "core/config.hpp"
 #include "engine/soundcard_panel.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "iiod_fake_server.hpp"
 #include "imgui.h"
 #include "net/web_control.hpp"
@@ -313,7 +314,7 @@ struct AppWindowTestAccess {
     }
     static void submit(AppWindow& a, const FoxCommand& c) { a.engine_.submitCommand(c); }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.engine_.submitCommand(q); }
-    static void drain(AppWindow& a) { a.engine_.drainLocalCommands(); }
+    static void drain(AppWindow& a) { passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); }); }
     static std::size_t queued(AppWindow& a) { return a.engine_.localCommands_.size(); }
 
     // The receiver.
@@ -476,7 +477,7 @@ struct AppWindowTestAccess {
     static std::size_t mutePopupKeyCount(AppWindow& a) { return a.engine_.mutePopup_.keys.size(); }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied as the engine's pumpRemoteControls applies it.
-    static void publishWeb(AppWindow& a) { a.engine_.publishReceiverState(); }
+    static void publishWeb(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); }); }
     // The row a browser sees a bookmark on: read off the PUBLISHED snapshot
     // (what /api/status serves - the web provider's own call), never off the
     // row map under test.
@@ -576,8 +577,10 @@ struct AppWindowTestAccess {
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
     static void pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
     }
     static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
     static std::int64_t remoteHoldMs(AppWindow& a) { return a.engine_.transmitter_.remoteHoldRemainingMs(); }
@@ -618,7 +621,7 @@ struct AppWindowTestAccess {
     static double patchRecordingRate(AppWindow& a, std::size_t i) { return a.engine_.patchRecordings_[i].rateHz; }
     static bool patchWasOpen(AppWindow& a) { return a.engine_.patchWasOpen_; }
     static void setPatchRunning(AppWindow& a, bool v) { a.engine_.patchRunning_ = v; }
-    static void pumpPatch(AppWindow& a) { a.engine_.pumpPatch(); }
+    static void pumpPatch(AppWindow& a) { passseam::custom(a.engine_, [&] { a.engine_.pumpPatch(); }); }
     static void setSoundCardsListed(AppWindow& a, bool on) { a.engine_.soundCardListed_ = on; }
     static bool soundCardScanPending(AppWindow& a) { return a.engine_.soundCardScanPending_; }
     static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }

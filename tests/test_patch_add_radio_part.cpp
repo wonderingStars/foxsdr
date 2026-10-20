@@ -40,6 +40,7 @@
 #include "core/app_commands.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace pc = cascade::core::patch;
@@ -97,13 +98,15 @@ struct AppWindowTestAccess {
     static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &fakeScan; }
     // One frame's engine part, in drawUi's order (see the header comment), and the page's own steps that follow it.
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.drainLocalCommands();
-        a.commitPatchDraft();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        a.engine_.pumpPatch();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.drainLocalCommands();
+            a.commitPatchDraft();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            a.engine_.pumpPatch();
+            (void)a.engine_.pumpPublish();
+        }, [&] { a.commitPatchDraft(); });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
         a.pumpTransmitKey();

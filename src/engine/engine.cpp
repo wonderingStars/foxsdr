@@ -57,6 +57,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <timeapi.h>
 #endif
 
 #include "engine/audio_open.hpp"
@@ -88,7 +89,15 @@ Engine::Engine(EngineHost& host)
     : host_(&host),
       pipeline_(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha,
                                                 /*audioEnabled=*/true}),
-      api_(std::make_unique<ApiHost>(*this, std::string())) {}
+      api_(std::make_unique<ApiHost>(*this, std::string())) {
+    // A directive posted wakes a front-end thread that is waiting for the pass (waitForPassCounter): the pass it waits for may be
+    // waiting, in turn, for that thread to apply the directive. The lock is taken and dropped so a waiter between its check and
+    // its wait cannot miss the notify.
+    pluginLink_.setOnPost([this] {
+        { std::lock_guard<std::mutex> lk(controlWakeMutex_); }
+        passDoneCv_.notify_all();
+    });
+}
 
 void Engine::configureApi(const std::string& options) {
     api_ = std::make_unique<ApiHost>(*this, options);
@@ -514,7 +523,7 @@ void Engine::pollAudioHealth() {
     const std::size_t ringFrames = out.ringFrames();
     if (ringFrames < audioRingLowWaterFrames_) { audioRingLowWaterFrames_ = ringFrames; }
 
-    const double now = host_->frameTimeS();
+    const double now = clockS();
 
     // Once-a-minute starvation digest. Silent unless something actually
     // starved in the window just closed — same "quiet unless it has news"
@@ -1377,7 +1386,7 @@ void Engine::pollSoapyRecovery() {
     if (soapyView_ == nullptr || !soapyView_->deviceDead()) { return; }
     using DeadReason = cascade::source::SoapySource::DeadReason;
     const DeadReason reason = soapyView_->deadReason();
-    const double now = host_->frameTimeS();
+    const double now = clockS();
     if (!cascade::gui::autoReopenDue(reason == DeadReason::VendorFault,
                                      reason == DeadReason::Abandoned, deviceOpenPending_,
                                      soapyScanPending_, now, soapyReopenAttemptSec_)) {
@@ -2447,14 +2456,27 @@ bool Engine::deliverPluginDirective(cascade::core::PluginDirective d) {
     // not framed since, and the pass does not wait on it again - a window that hangs costs the pass ONE bound (250 ms), not one
     // per refresh, which a transmitting pass cannot afford (its key is judged by this thread's heartbeat). The directive is
     // posted all the same and the interface applies it at its next frame.
-    if (pluginUiSilentPolls_.load() == pluginLink_.polls()) { return false; }
+    if (pluginUiSilentPolls_.load() == pluginLink_.polls()) {
+        pluginUiWait_.silenceSkips.fetch_add(1);
+        return false;
+    }
     bool applied = false;
+    const auto waitStart = std::chrono::steady_clock::now();
     {
         WaitWatchdogPause holdWatchdog(*this);
         applied = pluginLink_.waitApplied(epoch, kPluginUiHandshake, [this] { return !controlRun_.load(); });
     }
     // (A wait ended by the control thread stopping is not the interface's silence.)
     if (!applied && controlRun_.load()) { pluginUiSilentPolls_.store(pluginLink_.polls()); }
+    {
+        const std::uint64_t us = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStart).count());
+        pluginUiWait_.waits.fetch_add(1);
+        pluginUiWait_.totalUs.fetch_add(us);
+        std::uint64_t prev = pluginUiWait_.maxUs.load();
+        while (us > prev && !pluginUiWait_.maxUs.compare_exchange_weak(prev, us)) {}
+        if (!applied && controlRun_.load()) { pluginUiWait_.timeouts.fetch_add(1); }
+    }
     return applied;
 }
 
@@ -4759,7 +4781,7 @@ bool Engine::startAudioRecording() {
     }
     recordError_.clear();
     recordNotice_.clear();
-    audioRecordStartS_ = host_->frameTimeS();
+    audioRecordStartS_ = clockS();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setAudioRecorder contract).
     pipeline_.setAudioRecorder(&audioRecorder_);
@@ -4780,7 +4802,7 @@ bool Engine::startIqRecording() {
     recordError_.clear();
     recordNotice_.clear();
     iqRecordRateHz_ = rate;
-    iqRecordStartS_ = host_->frameTimeS();
+    iqRecordStartS_ = clockS();
     // Install AFTER start(): the tap must never feed a recorder that is not
     // accepting (Pipeline::setIqRecorder contract).
     pipeline_.setIqRecorder(&iqRecorder_);
@@ -5078,12 +5100,12 @@ std::int32_t Engine::exportBookmarks(const std::string& idsText) {
 void Engine::saveBookmarks() {
     if (bookmarkPath_.empty()) { return; }  // hermetic run: never touch disk
     bookmarkSaveDirty_ = true;
-    bookmarkSaveDueS_ = host_->frameTimeS() + 1.0;
+    bookmarkSaveDueS_ = clockS() + 1.0;
 }
 
 void Engine::flushBookmarkSave(bool force) {
     if (!bookmarkSaveDirty_ || bookmarkPath_.empty()) { return; }
-    if (!force && host_->frameClockRunning() && host_->frameTimeS() < bookmarkSaveDueS_) { return; }
+    if (!force && clockS() < bookmarkSaveDueS_) { return; }
     bookmarkSaveDirty_ = false;
     std::string err;
     if (freqMgr_.save(bookmarkPath_, err)) {
@@ -5317,7 +5339,7 @@ void Engine::scannerFrame() {
     // GUI thread.
     const bool squelchOpen = pipeline_.signalPowerDb() > squelchDb_;
     const std::optional<double> retune =
-        scanner_.tick(host_->frameTimeS() * 1000.0, squelchOpen);
+        scanner_.tick(clockS() * 1000.0, squelchOpen);
     if (retune.has_value()) {
         tuneAbsoluteHz(*retune);
         // Baseline from READBACK, not the request: a device that coerces
@@ -5577,8 +5599,73 @@ void Engine::submitCommand(cascade::core::cmd::QueuedCommand q) {
     LocalCommand lc;
     lc.q = std::move(q);
     lc.sourceGen = sourceGen_.load();
-    std::lock_guard<std::mutex> lk(localCommandsMutex_);
-    localCommands_.push_back(std::move(lc));
+    {
+        std::lock_guard<std::mutex> lk(localCommandsMutex_);
+        localCommands_.push_back(std::move(lc));
+    }
+    // A SUBMIT WAKES THE CONTROL THREAD (pump move P4): with the pass on a thread of its own a command that waited for the next
+    // period's pass would land up to one period late, which is the whole of the latency gate's allowance (the survey's 1.6 F). The
+    // lock is not held: the pass that takes the wake finds the command in the queue because the push is done. A no-op with no
+    // control thread (the pass is then the caller's frame).
+    wakeControl();
+}
+
+void Engine::postToPass(std::function<void()> work) {
+    if (!work) { return; }
+    {
+        std::lock_guard<std::mutex> lk(passWorkMutex_);
+        passWork_.push_back(std::move(work));
+    }
+    wakeControl();
+}
+
+bool Engine::runOnPass(const std::function<void()>& work) {
+    if (!work) { return true; }
+    if (!controlThreadRunning() || controlStepped_.load() || onControlThread()) {
+        work();
+        return true;
+    }
+    // Free-running: posted, with a state the caller can cancel under the same lock the work runs under, so work that captures the
+    // caller's locals can never run after the caller has left.
+    struct Slot {
+        std::mutex m;
+        bool done = false;
+        bool cancelled = false;
+    };
+    auto slot = std::make_shared<Slot>();
+    postToPass([slot, &work] {
+        std::lock_guard<std::mutex> lk(slot->m);
+        if (slot->cancelled) { return; }
+        work();
+        slot->done = true;
+    });
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lk(slot->m);
+            if (slot->done) { return true; }
+        }
+        if (!runPassNow(std::chrono::milliseconds(2000))) {
+            std::lock_guard<std::mutex> lk(slot->m);
+            if (slot->done) { return true; }
+            if (!controlThreadRunning()) {
+                slot->cancelled = true;
+                return false;
+            }
+        }
+    }
+}
+
+void Engine::runPassWork() {
+    std::vector<std::function<void()>> batch;
+    {
+        std::lock_guard<std::mutex> lk(passWorkMutex_);
+        if (passWork_.empty()) { return; }
+        batch.swap(passWork_);
+    }
+    for (const std::function<void()>& w : batch) {
+        w();
+        passWorkRan_.fetch_add(1);
+    }
 }
 
 void Engine::drainLocalCommands() {
@@ -6300,7 +6387,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 scanStopMhz_ = c.num[1] / 1.0e6;
                 scanStepKhz_ = c.num[2] / 1.0e3;
                 scanner_.configure(scannerParams());
-                scanner_.start(host_->frameTimeS() * 1000.0);
+                scanner_.start(clockS() * 1000.0);
                 scannerHasExpected_ = false;
             } else {
                 scanner_.stop();
@@ -7647,6 +7734,8 @@ void Engine::pumpFrameBegin() {
     drainLocalCommands();
     // The engine API's queue, after the local one (engine/fox_engine_api.hpp).
     api_->beginPass();
+    // ...and what the front end posted to be done by the pass (postToPass): a bounded run's seams, the measurement harness.
+    runPassWork();
 }
 
 void Engine::pumpInputs() {
@@ -7699,10 +7788,16 @@ double Engine::pumpPublish() {
     // into the engine). A no-op with no radio open, and a write only when
     // the frequency moved.
     followTransmitFrequency();
+    // THE STATE FIRST, THEN THE STATUS LINES (the pump move's step P4; the survey's 1.6 C). The window takes the two as separate reads
+    // - the lines, then the state - and the lines have no sequence of their own. With the pass on a thread of its own a frame can fall
+    // between the two publishes of one pass: published the other way round it would read the lines of pass N with the state of pass
+    // N-1 (a red source-error line beside a RUN flag that has not moved yet); published this way, and read in that order, the lines
+    // can only be OLDER than the state, which is the lag every status line already had. test_look_order holds it with a hook in the gap.
+    const double centre = publishReceiverState();
+    if (testHooks_.betweenPublishes != nullptr) { testHooks_.betweenPublishes(); }
     // The status lines as this frame's commands left them, before any panel
     // draws (OPEN 3).
     publishStatusText();
-    const double centre = publishReceiverState();
     // The API's results, only now that the state they describe is published.
     api_->endPass();
     return centre;
@@ -7825,7 +7920,7 @@ void Engine::pumpAudio() {
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
-    telemetryHeartbeat_.poll(host_->frameTimeS());
+    telemetryHeartbeat_.poll(clockS());
     // THE CONFIG'S RECEIVER HALF, handed to the window once a frame (OPEN 2):
     // last, so it carries everything this frame's phases changed.
     publishConfig();
@@ -7934,8 +8029,25 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
         controlExited_ = false;
     }
+    {
+        // (The pacing state is the loop's and the stepping callers': set under the lock they wait on.)
+        std::lock_guard<std::mutex> lk(controlWakeMutex_);
+        controlWake_ = false;
+        controlWakeNow_ = false;
+        stepPending_ = false;
+        // A step the last thread never finished (a stop mid-stepPass) must not leave the counters one behind for ever: the next request's
+        // ticket would then never be reached.
+        stepsDone_ = stepsAsked_;
+        controlFloor_ = options.floor;
+    }
+    controlStepped_.store(options.stepped);
+#ifdef _WIN32
+    if (options.timerResolutionMs > 0 && !options.stepped && timeBeginPeriod(options.timerResolutionMs) == TIMERR_NOERROR) {
+        timerResolutionApplied_ = options.timerResolutionMs;
+    }
+#endif
     controlRun_.store(true);
-    controlThread_ = std::thread(&Engine::controlLoop, this, options.period);
+    controlThread_ = std::thread(&Engine::controlLoop, this, options.period, options.floor, options.stepped);
 }
 
 void Engine::stopControlThread() {
@@ -7970,27 +8082,113 @@ void Engine::stopControlThread() {
     controlThread_.join();
     controlThreadId_.store(std::thread::id{});
     controlWatchdog_.stop();
+#ifdef _WIN32
+    if (timerResolutionApplied_ > 0) {
+        (void)timeEndPeriod(timerResolutionApplied_);
+        timerResolutionApplied_ = 0;
+    }
+#endif
 }
 
-// pump()'s phases, in pump()'s order. The transmitter is ticked by the
-// engine API's pass (pumpFrameBegin), from the key rules.
+// pump()'s phases, in pump()'s order, in the pass's three parts. The transmitter is ticked by the engine API's pass
+// (pumpFrameBegin), from the key rules.
 void Engine::controlPass() {
-    pollGpsReader();
-    pumpFrameBegin();
-    pumpInputs();
-    pumpRemoteControls();
-    pumpPlugins();
-    pumpPatch();
-    (void)pumpPublish();
-    pumpAudioMute();
-    pumpWorkers();
-    pumpAudio();
+    runPassPart(PassPart::Front);
+    runPassPart(PassPart::Mute);
+    runPassPart(PassPart::Back);
 }
 
-void Engine::controlLoop(std::chrono::milliseconds period) {
+void Engine::runPassPart(PassPart part) {
+    switch (part) {
+        case PassPart::Front:
+            pollGpsReader();
+            pumpFrameBegin();
+            pumpInputs();
+            pumpRemoteControls();
+            pumpPlugins();
+            pumpPatch();
+            (void)pumpPublish();
+            break;
+        case PassPart::Mute:
+            pumpAudioMute();
+            break;
+        case PassPart::Back:
+            pumpWorkers();
+            pumpAudio();
+            break;
+    }
+}
+
+// THE LOOP. Free-running (the product): a pass at least every `period`, at once when anything wakes it (a submit, a session's
+// close, a posted piece of work, runPassNow), and never two passes' STARTS closer than `floor` (a wake inside the floor waits for the
+// floor's end; a runPassNow's does not). Stepped (a bounded run): no pass of its own; the three parts of a pass, one for each
+// stepPass, in the order the front end asks.
+//
+// WHY THE WAKE FLAG IS CLEARED WHEN THE PASS STARTS, not after the wait: a submit that lands while a pass is running sets the flag
+// after the pass's own clearing, so the next pass is due at once (after the floor) - and a command pushed before the clearing is in
+// the queue the pass drains afterwards. Clearing it after the wait would eat exactly that wake.
+void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::milliseconds floor, bool stepped) {
     controlThreadId_.store(std::this_thread::get_id());
+    using SteadyClock = std::chrono::steady_clock;
+    SteadyClock::time_point passStart{};
+    bool first = true;
     while (controlRun_.load()) {
-        const auto passStart = std::chrono::steady_clock::now();
+        controlWatchdog_.heartbeat();
+        if (stepped) {
+            // IDLE UNTIL ASKED: the heartbeat goes on while the front end draws (a wait of a quarter second at most), so a front
+            // end that is simply busy is not a hung pass - a part that runs long is, and is the watchdog's to report.
+            std::unique_lock<std::mutex> lk(controlWakeMutex_);
+            while (controlRun_.load() && !stepPending_) {
+                controlWakeCv_.wait_for(lk, kSteppedIdleBeat);
+                controlWatchdog_.heartbeat();
+            }
+            if (!controlRun_.load()) { break; }
+            const PassPart part = stepPart_;
+            stepPending_ = false;
+            if (part == PassPart::Front) { passesBegun_.fetch_add(1); }
+            lk.unlock();
+            if (part == PassPart::Front) {
+                while (controlParkForTest_.load() && controlRun_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (const int stallMs = controlStallForTestMs_.exchange(0); stallMs > 0) {
+                    controlInStallForTest_.store(true);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(stallMs));
+                    controlInStallForTest_.store(false);
+                }
+            }
+            if (!controlRun_.load()) { break; }
+            runPassPart(part);
+            lk.lock();
+            if (part == PassPart::Back) {
+                controlPasses_.fetch_add(1);
+                passesEnded_.store(passesBegun_.load());
+            }
+            ++stepsDone_;
+            lk.unlock();
+            passDoneCv_.notify_all();
+            continue;
+        }
+        {
+            std::unique_lock<std::mutex> lk(controlWakeMutex_);
+            if (!first) {
+                // THE PASS PERIOD (engine-stage4.md decision 2): a pass every `period`, and at once when an interface submits or
+                // closes a session (wakeControl) - so a control lands within one pass's own time of its submit, not a period later.
+                controlWakeCv_.wait_until(lk, passStart + period,
+                                          [this] { return controlWake_ || controlWakeNow_ || !controlRun_.load(); });
+                // THE FLOOR (adopted decision 6): a wake inside it waits the rest of it out; a runPassNow's does not.
+                if (floor.count() > 0 && controlRun_.load() && !controlWakeNow_) {
+                    controlWakeCv_.wait_until(lk, passStart + floor, [this] { return controlWakeNow_ || !controlRun_.load(); });
+                }
+            }
+            first = false;
+            if (controlWake_ || controlWakeNow_) { passStats_.wakes.fetch_add(1); }
+            controlWake_ = false;
+            controlWakeNow_ = false;
+            if (!controlRun_.load()) { break; }
+            passesBegun_.fetch_add(1);
+        }
+        passStart = SteadyClock::now();
         controlWatchdog_.heartbeat();
         while (controlParkForTest_.load() && controlRun_.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -8003,13 +8201,29 @@ void Engine::controlLoop(std::chrono::milliseconds period) {
         }
         controlPass();
         controlPasses_.fetch_add(1);
-        // THE PASS PERIOD (engine-stage4.md decision 2): a pass every
-        // `period`, and at once when an interface submits or closes a session
-        // (wakeControl) - so a control lands within one pass's own time of
-        // its submit, not a period later.
-        std::unique_lock<std::mutex> lk(controlWakeMutex_);
-        controlWakeCv_.wait_until(lk, passStart + period, [this] { return controlWake_ || !controlRun_.load(); });
-        controlWake_ = false;
+        {
+            const std::uint64_t us = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(SteadyClock::now() - passStart).count());
+            passStats_.passes.fetch_add(1);
+            passStats_.sumUs.fetch_add(us);
+            std::uint64_t prev = passStats_.maxUs.load();
+            while (us > prev && !passStats_.maxUs.compare_exchange_weak(prev, us)) {}
+            if (us > static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(period).count())) {
+                passStats_.overPeriod.fetch_add(1);
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lk(controlWakeMutex_);
+            passesEnded_.store(passesBegun_.load());
+        }
+        passDoneCv_.notify_all();
+    }
+    if (!stepped) {
+        const PassStats st = passStats();
+        cascade::core::diagLogf("engine pass: %llu passes, mean %.0f us, longest %.0f us, %llu longer than the %d ms period, %llu started by a wake",
+                                static_cast<unsigned long long>(st.passes), st.passes > 0 ? static_cast<double>(st.sumUs) / static_cast<double>(st.passes) : 0.0,
+                                static_cast<double>(st.maxUs), static_cast<unsigned long long>(st.overPeriod), static_cast<int>(period.count()),
+                                static_cast<unsigned long long>(st.wakes));
     }
     // THE LAST ACT, by the thread that ticks the transmitter: stop() never
     // runs beside a tick(). The key is already up (stopControlThread let go
@@ -8023,6 +8237,76 @@ void Engine::controlLoop(std::chrono::milliseconds period) {
         controlExited_ = true;
     }
     controlExitCv_.notify_all();
+    // Anyone waiting for a pass or a step is told the thread has gone.
+    passDoneCv_.notify_all();
+}
+
+// THE WAIT A FRONT-END THREAD MAKES FOR THE PASS (stepPass, runPassNow). `lk` holds controlWakeMutex_. If the caller is the front
+// end's own thread - the one that installed the plugin UI's applier - it applies any directive the pass posts while it waits: the
+// pass is, at that moment, doing what the frame's own apply would have answered (the unload handshake waits for the interface to
+// acknowledge), and the interface's frame is blocked in this very call. The post notifies passDoneCv_ (PluginDirectiveLink's
+// onPost), so the apply follows it at once; the 20 ms timeout is a safety net, not the mechanism.
+bool Engine::waitForPassCounter(std::unique_lock<std::mutex>& lk, const std::function<bool()>& done,
+                                std::chrono::milliseconds bound) {
+    const auto deadline = std::chrono::steady_clock::now() + bound;
+    const bool frontEnd = pluginGuiThread_.load() == std::this_thread::get_id();
+    for (;;) {
+        if (done()) { return true; }
+        if (!controlRun_.load()) { return false; }
+        if (std::chrono::steady_clock::now() >= deadline) { return false; }
+        if (frontEnd && pluginLink_.hasPending()) {
+            std::shared_ptr<const PluginUiApplier> applier;
+            {
+                std::lock_guard<std::mutex> ak(pluginApplierMutex_);
+                applier = pluginApplier_;
+            }
+            if (applier != nullptr) {
+                lk.unlock();
+                pluginLink_.applyNewest(*applier);
+                lk.lock();
+                continue;
+            }
+        }
+        passDoneCv_.wait_for(lk, kPassWaitNet);
+        if (frontEndWaitBeat_) { frontEndWaitBeat_(); }
+    }
+}
+
+void Engine::stepPass(PassPart part) {
+    if (!controlThreadRunning()) {
+        runPassPart(part);  // no control thread: the front end is the pump, as it was before the move
+        return;
+    }
+    if (!controlStepped_.load() || onControlThread()) { return; }  // free-running: the pass runs by itself
+    // One requester at a time: the request slot holds one part.
+    std::lock_guard<std::mutex> serial(stepRequestMutex_);
+    std::unique_lock<std::mutex> lk(controlWakeMutex_);
+    const std::uint64_t ticket = ++stepsAsked_;
+    stepPart_ = part;
+    stepPending_ = true;
+    controlWakeCv_.notify_one();
+    (void)waitForPassCounter(lk, [this, ticket] { return stepsDone_ >= ticket; }, std::chrono::milliseconds(60000));
+}
+
+bool Engine::runPassNow(std::chrono::milliseconds bound) {
+    if (!controlThreadRunning()) {
+        controlPass();
+        return true;
+    }
+    if (onControlThread()) { return false; }  // a pass cannot wait for itself
+    if (controlStepped_.load()) {
+        const std::uint64_t target = passesBegun_.load() + 1;
+        stepPass(PassPart::Front);
+        stepPass(PassPart::Mute);
+        stepPass(PassPart::Back);
+        return passesEnded_.load() >= target;
+    }
+    std::unique_lock<std::mutex> lk(controlWakeMutex_);
+    const std::uint64_t target = passesBegun_.load() + 1;
+    controlWake_ = true;
+    controlWakeNow_ = true;
+    controlWakeCv_.notify_one();
+    return waitForPassCounter(lk, [this, target] { return passesEnded_.load() >= target; }, bound);
 }
 
 void Engine::pauseWaitWatchdog() {
@@ -8041,17 +8325,6 @@ void Engine::resumeWaitWatchdog() {
     }
 }
 
-void Engine::pump() {
-    pollGpsReader();
-    pumpFrameBegin();
-    pumpInputs();
-    pumpRemoteControls();
-    pumpPlugins();
-    pumpPatch();
-    (void)pumpPublish();
-    pumpAudioMute();
-    pumpWorkers();
-    pumpAudio();
-}
+void Engine::pump() { controlPass(); }
 
 }  // namespace cascade::engine

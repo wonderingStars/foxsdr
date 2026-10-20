@@ -69,6 +69,7 @@ struct GLFWwindow;
 #include "gui/tuning_reads.hpp"
 #include "gui/decoder_reads.hpp"
 #include "gui/scope_gain.hpp"
+#include "gui/tune_local.hpp"
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
@@ -620,16 +621,8 @@ private:
     // onConverterChanged, drainTrackInfoText, enrichWebTrack, fillWebImages and the window's onCatalogueResult - and turned
     // openPluginWindowsFor into the window's own answer to an event: each wrote or read state the window owns from the engine's
     // pass, which a pass on a thread of its own must not.)
-    // THE FRAME CLOCK, THREAD-AWARE (engine/stage3b-pre, docs/engine-stage3.md
-    // OPEN 4): on the GUI thread both read ImGui as they always did and leave
-    // the answer in an atomic; from any other thread they return that answer
-    // and never touch ImGui's context. drawUi reads them once a frame, so the
-    // answer another thread gets is at most a frame old.
-    bool frameClockRunning() const override;
-    double frameTimeS() const override;
-    std::thread::id guiThread_ = std::this_thread::get_id();
-    mutable std::atomic<double> frameTimeCache_{0.0};
-    mutable std::atomic<bool> frameClockCache_{false};
+    // (The pump move's step P4 took the frame clock out: frameClockRunning and frameTimeS, and the caches that made them answerable from
+    // the pass's thread. The engine runs on its own steady clock, Engine::clockS().)
     double wallTimeS() const override;
     void pauseWatchdog() override;
     void resumeWatchdog() override;
@@ -2570,7 +2563,32 @@ private:
     void openUiSession();
     void closeUiSession();
     void refreshUiState();
+    // THE KEY'S SUBMIT AND THE ANSWERS' DRAIN, which pumpTransmitKey did together at the END of the frame (the pump move's step P4;
+    // the survey's 1.6 B). The rule for the look is: the session's results and events FIRST, then the state, the spectrum and the lists -
+    // the table promises a result is never readable before the snapshot that shows it, which only helps a reader that reads the result
+    // before the state - and the answers are ACTED ON after the state is read, so each one is handled against a state at least as new as
+    // the snapshot that raised it (an event handler that reads the lists the event announces must read them after the state that moved
+    // their sequence). pollUiAnswers takes them into a fixed buffer, actOnUiAnswers handles that buffer; drawUi runs the first before the
+    // look and the second after it, and submitTransmitKey at the end of the frame. pumpTransmitKey stays as the three in turn for a
+    // caller (a test frame) that has no look of its own to put them around.
+    void submitTransmitKey();
+    void pollUiAnswers();
+    void actOnUiAnswers();
     void pumpTransmitKey();
+    // The frame takes a file dropped on the window (pendingDropPath_) as an import command on the window's session (the pump move's step P4).
+    void submitPendingDrop();
+    struct UiAnswers {
+        static constexpr int kMaxResults = 64;
+        static constexpr int kMaxEvents = 16;
+        FoxCommandResult results[kMaxResults];
+        FoxEvent events[kMaxEvents];
+        int nResults = 0;
+        int nEvents = 0;
+    };
+    UiAnswers uiAnswers_;
+    // A test's tap on the answers the window acts on (null: none): called for each result with the state the window had read when it
+    // acted - which tests/test_look_order.cpp holds to be at least as new as the snapshot that raised the result.
+    std::function<void(const FoxCommandResult&)>* uiAnswerTap_ = nullptr;
     // THE WINDOW'S COMMANDS ON ITS SESSION (the engine-stage4 window port):
     // one command, submitted for the engine's next pass - its long text, when
     // it has one, through submit_text (API 0.3). The answers are drained once
@@ -2586,6 +2604,17 @@ private:
     // sent. It lets a test hold the window's commands against the ones its members always
     // sent without an engine pass applying them - a key that starts the receiver, or a tune.
     std::vector<cascade::core::cmd::QueuedCommand>* uiSubmitTap_ = nullptr;
+    // Commands uiSubmit could not hand over because the session was full (BUSY): counted, the first said in the log (uiSubmitTicket).
+    std::uint64_t uiBusyDrops_ = 0;
+    // THE NEWEST FIGURE OF A SETTER WINS when the session is full (the pump move's step P5, found by test_window_threaded_look G: the engine's
+    // queue merges only the commands that make the key SAFER, so a drag that sends a figure every frame fills the 256 slots in 256 frames
+    // while a pass is stalled - 0.2 s on a display that does not pace the frame - and the figures that would have mattered, the LAST ones,
+    // are the ones refused). A setter of this kind (latestWins) the session refuses with BUSY is HELD instead - one per op, a newer figure
+    // replacing an older - and offered again once a frame (pollUiAnswers) until the session has room. Everything else is refused as ever
+    // (counted, the first said in the log).
+    std::map<std::uint32_t, cascade::core::cmd::QueuedCommand> uiHeld_;
+    static bool latestWins(std::uint32_t op);
+    void flushHeldSetters();
     // THE USAGE REPORT'S PANEL NAMES (window port, group 3): a page calls
     // this every frame it is open, and the name goes to the engine ONCE a run
     // as FOXAPP_OP_NOTE_PANEL. uiNotedPanels_ is the names already sent, kept
@@ -2759,6 +2788,7 @@ private:
     // THOSE plugins, however the lists move on - and asks drawMutePopup to open. The dialog closes when
     // fact.mute.keptRunning reads 0 again (the engine's own withdrawal) or the operator answers.
     void pumpUiEvents();
+    void handleUiEvent(const FoxEvent& ev);
     void askAboutMutedPlugins();
     bool mutePopupOpen_ = false;           // the question is up (or about to be)
     bool mutePopupOpenRequest_ = false;    // ImGui::OpenPopup is due on the next drawMutePopup
@@ -2776,17 +2806,21 @@ private:
     // passband the panel measures PEAK IN PASSBAND over and paints must be the one the
     // drag just set - and a command lands at the engine's next pass. So the drag keeps
     // the numbers it sent (clamped by the engine's own limits, which the engine will
-    // apply to the same figures) for the rest of the frame; refreshUiState drops them -
-    // one pass, by which time the state carries the command.
+    // apply to the same figures) until the state shows them: refreshUiState drops one when
+    // the readback has come to EQUAL it or a moment (kTuneLocalHoldS) has gone by - not "when
+    // the next state is read", which was right only while the frame was the pass (the pump
+    // move's step P4; gui/tune_local.hpp).
     struct TuneLocal {
-        bool offsetValid = false;
-        double offsetHz = 0.0;
-        bool bandwidthValid = false;
-        double bandwidthHz = 0.0;
+        cascade::gui::TuneLocalFigure offset;
+        cascade::gui::TuneLocalFigure bandwidth;
     };
     TuneLocal tuneLocal_;
-    double tunedVfoOffsetHz() const { return tuneLocal_.offsetValid ? tuneLocal_.offsetHz : uiState_.vfoOffsetHz; }
-    double tunedBandwidthHz() const { return tuneLocal_.bandwidthValid ? tuneLocal_.bandwidthHz : uiState_.bandwidthHz; }
+    double tunedVfoOffsetHz() const { return tuneLocal_.offset.valid ? tuneLocal_.offset.hz : uiState_.vfoOffsetHz; }
+    double tunedBandwidthHz() const { return tuneLocal_.bandwidth.valid ? tuneLocal_.bandwidth.hz : uiState_.bandwidthHz; }
+    // THE WINDOW'S CLOCK for the kept figures: seconds on a steady clock. A member so a test can drive it (ImGui's own is not
+    // available to refreshUiState, which tests call with no context).
+    static double steadyNowS();
+    double (*uiClockS_)() = &AppWindow::steadyNowS;
     // The two drag steps (drawCenterPanels): send the command and keep what it will have
     // done. The centre drag sends FOXAPI_OP_SET_VFO_OFFSET with the offset the engine's
     // own limit (vfoOffsetInsideSpan, over the chain's input rate and the bandwidth) allows

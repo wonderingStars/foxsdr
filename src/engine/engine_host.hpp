@@ -41,13 +41,9 @@ public:
     virtual ~EngineHost();
 
     // --- CLOCKS ---------------------------------------------------------------
-    // The frame clock the moved code always read (ImGui::GetTime() in the
-    // window): recordings' start times, the bookmark save's debounce, the
-    // scanner's dwell, the audio watchdog's cadence, the radio reopen's
-    // hold-off. frameClockRunning() stands for "an ImGui context exists", the
-    // guard the bookmark flush put in front of it.
-    virtual bool frameClockRunning() const;
-    virtual double frameTimeS() const;
+    // (The FRAME CLOCK left with the pump move's step P4: the engine runs on its own steady clock, Engine::clockS(), because the
+    // pass is not the frame any more and a clock that stands still when the window does - a drag of its title bar, a modal loop -
+    // froze the scanner's dwell, the bookmark save's debounce, the audio watchdog and the radio reopen's hold-off with it.)
     // The wall-clock the usage report measures a session with (glfwGetTime()
     // in the window).
     virtual double wallTimeS() const;

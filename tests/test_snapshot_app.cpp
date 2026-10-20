@@ -42,6 +42,7 @@
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "iiod_fake_server.hpp"
 #include "imgui.h"
 #include "net/web_control.hpp"
@@ -226,13 +227,15 @@ struct AppWindowTestAccess {
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
     static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
-    static void publish(AppWindow& a) { a.engine_.publishReceiverState(); }
+    static void publish(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); }); }
     static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
     // The engine's pass as far as the key needs it (the queue applied, the
     // state published), without the audio half, which reads ImGui's clock.
     static void pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
     }
     static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }
     static std::size_t fedDecoders(AppWindow& a) { return a.engine_.fedDecoderCount(); }
@@ -246,7 +249,9 @@ struct AppWindowTestAccess {
     }
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < n; ++i) { a.engine_.publishReceiverState(); }
+        passseam::on(a.engine_, [&] {
+            for (int i = 0; i < n; ++i) { a.engine_.publishReceiverState(); }
+        });
         return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / n;
     }
 };

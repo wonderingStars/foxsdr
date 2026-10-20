@@ -47,6 +47,7 @@
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "gui/decoder_reads.hpp"
 #include "gui/fonts.hpp"
 #include "imgui.h"
@@ -110,16 +111,18 @@ struct AppWindowTestAccess {
     // window's read of the state, the audio mute decided (AFTER the publish: what it decides is published by the
     // NEXT pass), and the key's drain (answers and, since group 8, the session's events).
     static void look(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        a.engine_.pumpInputs();
-        a.engine_.pumpPlugins();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            a.engine_.pumpInputs();
+            a.engine_.pumpPlugins();
+            (void)a.engine_.pumpPublish();
+        });
         a.statusLines_ = a.engine_.statusText();
         a.refreshUiState();
     }
     static void frameOf(AppWindow& a) {
         look(a);
-        a.engine_.pumpAudioMute();
+        passseam::mute(a.engine_, [&] { a.engine_.pumpAudioMute(); });
         a.pumpTransmitKey();
     }
     static void frames(AppWindow& a, int n) {

@@ -85,12 +85,23 @@ public:
     // Posts `d` (epoch assigned here) as the newest; a directive still waiting is replaced and counted in skipped(). Returns
     // the epoch. Any thread.
     std::uint64_t post(PluginDirective d) {
-        std::lock_guard<std::mutex> lk(m_);
-        d.epoch = ++posted_;
-        if (pending_.has_value()) { ++skipped_; }
-        pending_ = std::move(d);
-        return posted_;
+        std::uint64_t epoch = 0;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            d.epoch = ++posted_;
+            if (pending_.has_value()) { ++skipped_; }
+            pending_ = std::move(d);
+            epoch = posted_;
+        }
+        // (Outside the lock: the hook takes locks of its own.)
+        if (onPost_) { onPost_(); }
+        return epoch;
     }
+
+    // A function called, on the posting thread and without the link's lock, after every post. The engine uses it to wake a front-end
+    // thread that is waiting for the pass (Engine::stepPass) and so is the very thread that has to apply this directive. Set once,
+    // before any thread posts.
+    void setOnPost(std::function<void()> f) { onPost_ = std::move(f); }
 
     // Waits until `epoch` (or a newer one) has been applied, for at most `bound`. Returns whether it was. `giveUp` is asked
     // every few milliseconds and ends the wait early (the engine passes "the control thread is stopping": a shutdown must not
@@ -161,6 +172,7 @@ public:
 private:
     mutable std::mutex m_;
     std::condition_variable cv_;
+    std::function<void()> onPost_;
     std::optional<PluginDirective> pending_;
     std::uint64_t posted_ = 0;
     std::uint64_t applied_ = 0;

@@ -49,6 +49,7 @@
 #include "airspy_fake_usb.hpp"
 #include "core/config.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "engine/bias_tee.hpp"
 #include "hackrf_fake_usb.hpp"
 #include "source/airspy_source.hpp"
@@ -287,12 +288,14 @@ struct AppWindowTestAccess {
     // window looks (look); the window submits, the engine's pass applies and
     // publishes, the answers are drained (pass) as pumpTransmitKey does.
     static void look(AppWindow& a) {
-        a.engine_.publishReceiverState();
+        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
         a.refreshUiState();
     }
     static void pass(AppWindow& a) {
-        a.engine_.pumpFrameBegin();
-        (void)a.engine_.pumpPublish();
+        passseam::pass(a.engine_, [&] {
+            a.engine_.pumpFrameBegin();
+            (void)a.engine_.pumpPublish();
+        });
         FoxCommandResult r[16];
         for (;;) {
             for (auto& x : r) { x.structSize = sizeof(x); }

@@ -262,7 +262,9 @@ struct UnmapWitness {
             alive = g_live.size();
         }
         if (std::FILE* f = std::fopen(path, "ab")) {
-            std::fprintf(f, "unmapped live=%zu creates=%ld destroys=%ld\n", alive, g_creates.load(), g_destroys.load());
+            std::fprintf(f, "unmapped live=%zu creates=%ld destroys=%ld stale=%ld beside_poll=%ld wrong_thread=%ld basemap_live=%ld info_live=%ld\n", alive,
+                         g_creates.load(), g_destroys.load(), g_staleCalls.load(), g_destroyDuringPoll.load(), g_wrongThread.load(),
+                         g_basemapLive.load(), g_infoLive.load());
             std::fclose(f);
         }
     }
