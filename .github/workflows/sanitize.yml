@@ -1,0 +1,148 @@
+# ThreadSanitizer on Linux, for the engine's threads (engine/stage4 branch).
+#
+# PORTED from origin/master's .github/workflows/sanitize.yml ahead of the full master
+# merge, as groundwork for the pump move's threaded tests. Master's file has three jobs;
+# THIS BRANCH CARRIES ONLY THE `tsan` JOB:
+#
+#   sanitize  (AddressSanitizer + UBSan over the whole suite) - NOT HERE YET. It needs
+#             master's leak_on_purpose.hpp and ubsan_exempt.hpp (the crash and Soapy
+#             enumeration tests fault a process on purpose, and master marks those functions
+#             exempt), neither of which the branch has; it comes with the merge.
+#   fuzz      (libFuzzer targets) - NOT HERE: tests/fuzz and CASCADE_FUZZ are master-only.
+#   tsan      Clang 18, ThreadSanitizer. Clang and not GCC because GCC 13's libtsan has no
+#             interceptor for pthread_mutex_clocklock, which libstdc++ calls for every
+#             std::timed_mutex::try_lock_for, so TSan never sees the lock, reports every
+#             unlock of such a mutex as "unlock of an unlocked mutex" and loses the
+#             happens-before edge the lock gives (master's first run, 37355910809, failed
+#             three tests on it; the interceptor is in LLVM 18). It cannot share a build
+#             with ASan, so it is a build of its own, and it runs a SELECTION of the suite:
+#             the tests that put the engine's threads against each other (tests/tsan.cmake
+#             says which, and why the rest are out).
+#
+# A SEPARATE WORKFLOW FROM build.yml, ON PURPOSE (as on master): nothing here may slow
+# build.yml's jobs or colour their result, its checks appear beside theirs as a distinct,
+# separately named status, and it is not a required check unless the repository is
+# configured to make it one. build.yml is not edited by the change that added this file.
+#
+# WHEN IT RUNS (the branch's changes to master's triggers):
+#   - every push to engine/stage4 (master's file ignores master and fires on other
+#     branches only for sanitizer-file changes; GitHub cannot OR a branch filter with a
+#     paths filter inside one push trigger, so the branch gets the unfiltered push and
+#     every other branch gets the paths-filtered pull_request below);
+#   - a pull request that changes the sanitizer files themselves (master's paths);
+#   - "Run workflow" in the Actions tab, or
+#       gh workflow run sanitize.yml --ref <branch>
+#     which GitHub offers only for a workflow file that exists on the default branch
+#     (this file is not on master yet, so on this branch the push trigger is the way).
+#
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+name: sanitize
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [engine/stage4]
+  pull_request:
+    paths:
+      - ".github/workflows/sanitize.yml"
+      - "cmake/sanitize.cmake"
+      - "tests/tsan.cmake"
+      - "tools/sanitize/**"
+
+# One run per ref: a newer push replaces a run still in progress.
+concurrency:
+  group: sanitize-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # THREADSANITIZER. A thread sanitizer's first run on a program with this many
+  # threads is normally the one that teaches you what its noise is; master's first run
+  # (37355910809) did, and tools/sanitize/tsan.supp (ported unchanged) carries what it
+  # taught. THIS BRANCH HAS NOT YET HAD ITS OWN RUN: expect the first one to show what is
+  # different here (the engine's control thread, the clang build of this tree). halt_on_error means each test shows only its FIRST report, so the
+  # next run is expected to show the next one: read the log before believing it.
+  tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      # Clang 18, not GCC 13: see the head of this file (pthread_mutex_clocklock).
+      CC: clang-18
+      CXX: clang++-18
+      # halt_on_error: the first race ends the process. second_deadlock_stack: a
+      # lock-order report shows both orders. history_size=4: the "previous access"
+      # stack of a race that is a while old (the default of 2 loses it). The same
+      # string cmake/sanitize.cmake gives every test as its CTest ENVIRONMENT;
+      # repeated here for readability and for steps outside CTest. Suppressions are
+      # third-party libraries only (tools/sanitize/tsan.supp); nothing of ours is in
+      # it.
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:history_size=4:symbolize=1:print_suppressions=0:suppressions=${{ github.workspace }}/tools/sanitize/tsan.supp
+    steps:
+      - uses: actions/checkout@v4
+
+      # The package set of build.yml's "linux" job, plus clang-18 and the runtime package
+      # that carries libclang_rt.tsan, and llvm-18 for llvm-symbolizer.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            clang-18 libclang-rt-18-dev \
+            libgl1-mesa-dev libsoapysdr-dev libssl-dev libunwind-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
+            libasound2-dev libasound2-plugins \
+            xvfb libgl1-mesa-dri \
+            llvm-18
+          # On PATH under its plain name, which is where every sanitizer looks, so
+          # it is found whatever TSAN_OPTIONS says (CTest sets its own).
+          sudo ln -sf "$(command -v llvm-symbolizer-18)" /usr/local/bin/llvm-symbolizer
+
+      # ThreadSanitizer maps its shadow at fixed addresses and fails at start-up
+      # ("unexpected memory mapping") on a kernel that randomises mmap with more
+      # entropy than it allows for; lowering it is the documented workaround.
+      - name: Make the address space safe for ThreadSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28 || true
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCASCADE_SANITIZE=thread
+
+      # Only the tests this job runs (and the libraries they link): the target
+      # cascade_tsan_tests is made by tests/tsan.cmake from the list there.
+      - name: Build
+        run: cmake --build build -j"$(nproc)" --target cascade_tsan_tests
+
+      - name: Provide a null audio device
+        run: |
+          sudo modprobe snd-dummy || true
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' | sudo tee /etc/asound.conf
+
+      # What is not run, and why, where it can be read: the disabled tests are
+      # listed by ctest, and the reasons are in tests/tsan.cmake (the named ones are
+      # also printed at configure time).
+      - name: Tests not run under ThreadSanitizer
+        run: |
+          echo "::group::excluded tests"
+          ctest --test-dir build -N -L sanitize-excluded
+          echo "::endgroup::"
+          echo "run: $(ctest --test-dir build -N -L tsan | tail -n 1)"
+
+      - name: Test
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -o pipefail
+          xvfb-run -a ctest --test-dir build -L tsan --output-on-failure -j2 2>&1 | tee ctest.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tsan-test-log
+          path: |
+            ctest.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn

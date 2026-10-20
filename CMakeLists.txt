@@ -118,6 +118,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# -DCASCADE_SANITIZE=thread (GCC/Clang, Linux CI) or address (MSVC, or
+# address,undefined on GCC/Clang) builds the engine, the window, the application,
+# the report reader and every test with that sanitizer. Empty - the default, and
+# what every shipped binary is built with - this changes nothing: the file returns
+# before it defines a target or edits a flag. Ported from origin/master ahead of the
+# full merge; see cmake/sanitize.cmake and docs/SANITIZERS-AND-FUZZING.md.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/sanitize.cmake")
+
 # ---------------------------------------------------------------------------
 # External dependencies (deliberately minimal — see header comment)
 # ---------------------------------------------------------------------------
@@ -683,6 +691,21 @@ target_link_libraries(cascade PRIVATE cascade_gui)
 add_executable(foxsdr-reports tools/report-reader/main.cpp)
 # Engine only: the reader resolves reports against symbols/ and draws nothing.
 target_link_libraries(foxsdr-reports PRIVATE cascade_engine)
+
+# Sanitizer build only (CASCADE_SANITIZE, cmake/sanitize.cmake): instrument the
+# vendored libraries that are linked into the executables, hand the flags to
+# everything that links cascade_engine (the window, the application, the tests -
+# master carries this on cascade_lib, which the branch has split in two), and put
+# the runtime beside the programs. Not in a normal build: the block is skipped.
+if(CASCADE_SANITIZE_ENABLED)
+    foreach(_vendored imgui glfw portaudio_static cascade_pffft)
+        cascade_sanitize_target(${_vendored})
+    endforeach()
+    target_link_libraries(cascade_engine PUBLIC cascade_sanitize)
+    cascade_sanitize_stage_runtime(cascade)
+    cascade_sanitize_stage_runtime(foxsdr-reports)
+    cascade_sanitize_stage_runtime(cascade_engine_link_check)
+endif()
 
 # Delay-load SoapySDR so a missing or broken hardware runtime cannot stop the
 # app from starting. Without this the Windows loader kills the process before

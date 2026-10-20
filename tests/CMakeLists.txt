@@ -72,6 +72,14 @@ foreach(src ${CASCADE_TESTS})
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+    # For the sanitizer block at the end of this file: every test this loop
+    # registers, by name.
+    list(APPEND CASCADE_ALL_TEST_NAMES ${name})
+    # The AddressSanitizer runtime DLL beside the test (MSVC sanitizer build
+    # only), for the reason SoapySDR.dll is staged above.
+    if(CASCADE_SANITIZE_ENABLED)
+        cascade_sanitize_stage_runtime(${name})
+    endif()
 endforeach()
 
 # TESTS THAT RUN THE APPLICATION ITSELF (CASCADE_APP_BINDIR/cascade.exe, or
@@ -246,3 +254,94 @@ add_test(NAME app_cli_missing_value COMMAND cascade --frames)
 add_test(NAME app_cli_unknown_arg COMMAND cascade --bogus)
 set_tests_properties(app_cli_bad_value app_cli_negative app_cli_missing_value
                      app_cli_unknown_arg PROPERTIES WILL_FAIL TRUE TIMEOUT 30)
+
+# ---------------------------------------------------------------------------
+# Sanitizer build (-DCASCADE_SANITIZE=..., cmake/sanitize.cmake). Nothing below
+# runs, and nothing above changes, when it is off. AT THE END OF THE FILE ON
+# PURPOSE: it reads each test's TIMEOUT to scale it, so every property set
+# above must already be set.
+#
+# Ported from origin/master ahead of the full merge (docs/SANITIZERS-AND-FUZZING.md,
+# "Engine/stage4 branch"). Master's block, with two differences: the exclusion
+# lists are filtered to the tests THIS branch registers (set_tests_properties on
+# a test that is not there is a configure error), and the ThreadSanitizer list in
+# tests/tsan.cmake is the branch's own.
+# ---------------------------------------------------------------------------
+if(CASCADE_SANITIZE_ENABLED)
+    list(APPEND CASCADE_ALL_TEST_NAMES engine_link_check app_smoke app_selftest app_version
+         app_cli_bad_value app_cli_negative app_cli_missing_value app_cli_unknown_arg)
+
+    # TESTS THAT CANNOT RUN UNDER A SANITIZER, AND WHY. Each is still registered,
+    # so ctest lists it - "Not Run (Disabled)" in its summary, and
+    # `ctest -N -L sanitize-excluded` prints the set - rather than the suite
+    # quietly getting smaller. One "name|reason" per entry (no semicolons). These
+    # are master's AddressSanitizer exclusions; only the ones whose test exists
+    # here are kept. (A ThreadSanitizer build replaces this list: tests/tsan.cmake.)
+    set(_cascade_san_excluded_master
+        "test_crash_second_fault|its heap-trashed case writes into freed heap blocks on purpose to prove the crash handler survives a damaged heap and AddressSanitizer reports that write as a heap-use-after-free and ends the process before the handler under test runs"
+        "test_channel_bandwidth|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone levels fail with no sanitizer report"
+        "test_pipeline_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so RDS and stereo measurements fail with no sanitizer report"
+        "test_pipeline_device_rate_audio|its pipeline cases measure audio against a real-time source and the instrumented DSP thread falls behind the clock (sink underruns) so tone share fails with no sanitizer report"
+        "app_selftest|it measures the CW sidetone of the built-in generator through the real pipeline and the instrumented DSP thread falls behind the clock (ring overflow drops samples) so the tone reads 773 Hz instead of 700 with no sanitizer report"
+        "test_patch_audio|its pipeline cases measure tone levels against a real-time source and the instrumented DSP thread falls behind the clock (ring overflow drops samples, the patch's own ring starves) so levels fail with no sanitizer report"
+        "test_pipeline_audio_lead|it reads the drift matcher's correction while a pipeline plays to the real output, and the instrumented DSP thread falls behind the clock (sink underruns un-prime the ring, where the matcher holds) so the correction is never seen to move, with no sanitizer report"
+        "test_plugin_audio|its takeover case measures the length of a changeover in the real pipeline's audio against a real-time source and the instrumented DSP thread falls behind the clock: the fade read 68 frames where it is 240 with no sanitizer report (1896 of its 1897 checks passed, so this one is a loss of coverage worth revisiting)")
+    set(CASCADE_SANITIZE_EXCLUDED_TESTS)
+    foreach(_entry ${_cascade_san_excluded_master})
+        string(REPLACE "|" ";" _parts "${_entry}")
+        list(GET _parts 0 _n)
+        if(TEST ${_n})
+            list(APPEND CASCADE_SANITIZE_EXCLUDED_TESTS "${_entry}")
+        endif()
+    endforeach()
+
+    # TESTS THAT FAULT A CHILD PROCESS ON PURPOSE, to prove the crash handler
+    # writes its report. They run under AddressSanitizer with ASan's OWN handlers
+    # for access violations, aborts, illegal instructions and arithmetic faults
+    # switched off: with them on, the sanitizer's handler runs first, prints its
+    # report and ends the process (exit 1), and the product's handler - the thing
+    # under test - never sees the fault. Memory-error CHECKS (heap, stack, use
+    # after free) are instrumentation, not handlers, and stay on.
+    set(CASCADE_SANITIZE_FAULT_TESTS)
+    foreach(_n test_crash_capture test_crash_late_module test_soapy_enum_proc)
+        if(TEST ${_n})
+            list(APPEND CASCADE_SANITIZE_FAULT_TESTS ${_n})
+        endif()
+    endforeach()
+    set(_cascade_fault_env ${CASCADE_SANITIZE_TEST_ENV})
+    list(TRANSFORM _cascade_fault_env REPLACE "^ASAN_OPTIONS=(.*)$"
+         "ASAN_OPTIONS=\\1:handle_segv=0:handle_abort=0:handle_sigill=0:handle_sigfpe=0")
+
+    if(CASCADE_SANITIZE_THREAD)
+        # THREADSANITIZER RUNS A SELECTION, NOT THE SUITE. Only a test that puts
+        # two of our threads against each other can find a race, so the job builds
+        # and runs those (label `tsan`, target cascade_tsan_tests) and every other
+        # test is disabled and labelled `sanitize-excluded`, with its reason, as
+        # above. The lists and the judgement behind them are in tests/tsan.cmake.
+        include("${CMAKE_CURRENT_SOURCE_DIR}/tsan.cmake")
+        cascade_tsan_select()
+    endif()
+
+    foreach(t ${CASCADE_ALL_TEST_NAMES})
+        # The per-test limits were chosen for a plain build.
+        get_test_property(${t} TIMEOUT _limit)
+        if(_limit)
+            math(EXPR _limit "${_limit} * ${CASCADE_SANITIZE_TIMEOUT_SCALE}")
+            set_tests_properties(${t} PROPERTIES TIMEOUT ${_limit})
+        endif()
+        # Runtime options travel with the test, not with whoever runs ctest.
+        if(t IN_LIST CASCADE_SANITIZE_FAULT_TESTS)
+            set_tests_properties(${t} PROPERTIES ENVIRONMENT "${_cascade_fault_env}")
+        else()
+            set_tests_properties(${t} PROPERTIES ENVIRONMENT "${CASCADE_SANITIZE_TEST_ENV}")
+        endif()
+    endforeach()
+
+    foreach(entry ${CASCADE_SANITIZE_EXCLUDED_TESTS})
+        string(REPLACE "|" ";" entry "${entry}")
+        list(GET entry 0 t)
+        list(GET entry 1 why)
+        set_tests_properties(${t} PROPERTIES DISABLED TRUE LABELS "sanitize-excluded")
+        message(STATUS "sanitizer: ${t} is excluded - ${why}")
+    endforeach()
+endif()
