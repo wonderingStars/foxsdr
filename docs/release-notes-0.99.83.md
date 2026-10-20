@@ -7,19 +7,19 @@ Still not fixed: two 2026-10-05/06 fast-fail crash reports from 0.99.64/65 remai
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.83.exe`:**
-`TBD`
+`da8a560d2c2f6803df4b922c66047a07133e3fce14cfcf7e75ce48882308340f`
 
 **SHA-256 of `FoxSDR-0.99.83-x86_64.AppImage`:**
-`TBD`
+`e858bda18545a36e9341f84d0c3f2a8d5b9c58a034d124846a5dc3d7e59082f9`
 
 **SHA-256 of `foxsdr-0.99.83-linux-x64.tar.gz`:**
-`TBD`
+`748ded1142b202c2b453064ca2b9db9dc5bd9310d52a36203c7fca0431725683`
 
 **SHA-256 of `FoxSDR-0.99.83-aarch64.AppImage`:**
-`TBD`
+`ef3cd849b3e0cea16cfc911cb831e7f5fe29760c064cadf170ab077503ee936b`
 
 **SHA-256 of `foxsdr-0.99.83-linux-arm64.tar.gz`:**
-`TBD`
+`608b514df28f7976bc11ed53c528a4ccb0072a55a4875fd18eaa5e3c1a0b16a4`
 
 ## Features and fixes, 2026-10-19
 
