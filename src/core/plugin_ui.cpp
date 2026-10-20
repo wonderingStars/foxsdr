@@ -1027,6 +1027,16 @@ void PluginUi::stepDemos(double nowSec) {
     }
 }
 
+void PluginUi::apply(const PluginDirective& d) {
+    // The services first, then the stop set, then the rebuild: attach() runs during the rebuild and may read the receiver at
+    // once (the order refreshPluginRunner always kept). The core's own stop set and grants are the engine's, set before the
+    // directive was posted. A RELEASE LEAVES THE SERVICES AS THEY WERE: the instances it destroys may ask the host for the time
+    // or the centre on their way out (Survey Engine's destroy() does), and clear() never emptied them either.
+    if (!d.release) { setServices(d.services); }
+    stopped_.set(d.stopped);
+    rebuild(d.plugins);
+}
+
 void PluginUi::clear() {
     destroyInstances();
     // THE BRIDGES ARE NOT TOUCHED HERE, and that is the whole of the fix for
@@ -1035,9 +1045,8 @@ void PluginUi::clear() {
     // loaded and still holding the table the ABI promised it - a table read
     // moments later by a decoder's destroy(). They are reused by the next
     // rebuild and reclaimed at process exit, after the modules are unmapped.
-    tuneRequesters_.clear();
-    tuneAllowed_.clear();
-    lastDenied_.clear();
+    // (The requesters, the last refusal and the grants are the core's: one reset, beside the live set, below.)
+    api_->clearTuneRecords();
     // The level-1 half of the same reset: no plugin is live until the next
     // rebuild attaches it (a call in between is answered DETACHED and its
     // marks and commands are gone), and the grants go with the tune grants,
@@ -1365,22 +1374,15 @@ bool PluginUi::tuneAllowed(const std::string& pluginKey) const {
     // An empty key is what a record with no path produces, and it must never
     // match: otherwise every path-less plugin would share one grant.
     if (pluginKey.empty()) { return false; }
-    return std::find(tuneAllowed_.begin(), tuneAllowed_.end(), pluginKey) !=
-           tuneAllowed_.end();
+    // THE CORE'S GRANT, the only copy since step P3: request_tune is asked from a plugin's own thread and the grant is set by
+    // the engine's, and a list this class kept for itself would be written by one and read by the other with no lock. The
+    // level-1 set_frequency and set_vfo_offset need the same grant request_tune does, and they read it here too.
+    return api_->tuneGranted(pluginKey);
 }
 
 void PluginUi::setTuneAllowed(const std::string& pluginKey, bool allowed) {
     if (pluginKey.empty()) { return; }
-    // Mirrored into the level-1 core, whose copy is the one a plugin thread
-    // reads (lock-free, per client) - set_frequency and set_vfo_offset need
-    // the same grant request_tune does.
     api_->setTuneGranted(pluginKey, allowed);
-    const auto it = std::find(tuneAllowed_.begin(), tuneAllowed_.end(), pluginKey);
-    if (allowed && it == tuneAllowed_.end()) {
-        tuneAllowed_.push_back(pluginKey);
-    } else if (!allowed && it != tuneAllowed_.end()) {
-        tuneAllowed_.erase(it);
-    }
 }
 
 std::int32_t PluginUi::tuneRequestFromPlugin(const std::string& plugin, double centreHz) {
@@ -1397,35 +1399,39 @@ std::int32_t PluginUi::tuneRequestFromPlugin(const std::string& plugin, double c
     // Not recorded as a requester: that list drives a permission row the user
     // is invited to tick, and inviting them to grant the receiver to a plugin
     // they have switched off would be an odd thing to offer.
-    if (stopped_.contains(plugin)) {
-        lastDenied_ = plugin;
+    //
+    // THE CORE'S STOP SET, not this object's: a plugin's own thread asks, and the set this object keeps is the GUI thread's.
+    if (api_->isStopped(plugin)) {
+        api_->noteTuneDenied(plugin);
         return CASCADE_TUNE_DENIED;
     }
 
     // Recorded whether or not it is allowed, so the GUI can offer the toggle
     // exactly for the plugins that actually want it. A tracker that is denied
     // must be discoverable, not invisible.
-    if (std::find(tuneRequesters_.begin(), tuneRequesters_.end(), plugin) ==
-        tuneRequesters_.end()) {
-        tuneRequesters_.push_back(plugin);
-    }
+    api_->noteTuneRequester(plugin);
     if (!tuneAllowed(plugin)) {
-        lastDenied_ = plugin;
+        api_->noteTuneDenied(plugin);
         return CASCADE_TUNE_DENIED;
     }
     // Copied under the lock and called outside it - see servicesMutex_ - so
     // a rescan replacing the services on the GUI thread can neither tear the
     // callable nor wait on a tune that is inside the driver.
     std::function<std::int32_t(double)> tune;
+    std::function<std::int32_t(const std::string&, double)> tuneFrom;
     {
         std::lock_guard<std::mutex> lk(servicesMutex_);
         tune = services_.tune;
+        tuneFrom = services_.tuneFrom;
     }
-    if (!tune) { return CASCADE_TUNE_NO_DEVICE; }
+    if (!tune && !tuneFrom) { return CASCADE_TUNE_NO_DEVICE; }
     // NaN and absurd frequencies are refused here rather than handed to a
     // driver: written as a positive test, because the negation would accept
     // NaN (every comparison with NaN is false).
     if (!(centreHz > 0.0 && centreHz < 1e12)) { return CASCADE_TUNE_OUT_OF_RANGE; }
+    // THE ENGINE'S ANSWER NAMES THE MODULE (HostServices::tuneFrom): it queues the retune for the pass and answers OK meaning
+    // ACCEPTED, so the receiver is never moved from this thread.
+    if (tuneFrom) { return tuneFrom(plugin, centreHz); }
     return tune(centreHz);
 }
 

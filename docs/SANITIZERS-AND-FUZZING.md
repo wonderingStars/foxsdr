@@ -62,9 +62,17 @@ threads, not master's list:
 - the transmit key across front end, control thread and TX thread:
   `test_transmit_key_race`, `test_transmit_liveness`, `test_transmit_dead_man`;
 - the pump move's step P1 (the engine PULLS the web/CAT queues in its own pass; the key rules are the control thread's alone):
-  `test_remote_control_pull` and `test_remote_key_release`.
+  `test_remote_control_pull` and `test_remote_key_release`;
+- the pump move's step P3 (the plugin UI is the WINDOW'S: the directive the engine's pass posts and the window applies at the head
+  of its poll, the bounded unload handshake, the queued `request_tune`): `test_plugin_directive` (the link's protocol, with threads),
+  `test_plugin_ui_threaded` (a real window and engine with the pass on its own thread, an instrumented plugin module, a rebuild churn
+  against a polling frame, a Doppler corrector, a rescan releasing the basemap) and `test_plugin_unload_handshake` (a window inside the
+  plugin, a window not framing, a stop mid-wait, the watchdog pause, no window at all). **Run with
+  `ctest -L tsan -R "plugin|ui|unload|directive"`; clean under ThreadSanitizer, `halt_on_error=1`.** The break-it run that shows the
+  leg sees what the step prevents: with the pass applying the directive itself (the old design) `test_plugin_ui_threaded` reports
+  "data race plugin_ui.cpp:1064 in PluginUi::destroyInstances()" against `PluginUi::poll()` in its first churn frame.
 
-That is 16 tests (label `tsan`; 14 until the pump move's step P1). Everything else is registered, disabled and labelled
+That is 19 tests (label `tsan`; 14 until the pump move's step P1, 16 until step P3). Everything else is registered, disabled and labelled
 `sanitize-excluded`, so `ctest -N -L sanitize-excluded` prints it, and every excluded
 test that is named in the file carries its reason: it starts the real application as a
 child, faults a process on purpose, measures against the wall clock, drives the whole
@@ -214,6 +222,11 @@ suppressed. Investigated, NOT suppressed, and not fixed here; the owner's call:
    torn copy is discarded - the usual seqlock, which ThreadSanitizer reports because the payload is not atomic. Master's list has
    `test_scope_tap` under "not run yet" for the same family. The fix is word-wise relaxed atomics in the tap (or an annotated
    reader), not a suppression.
+**The run of the selection with the pump move's step P3 in it (2026-10-20, WSL, GCC 15.2).** 19 tests: **15 pass** - the 12 above and the
+three of step P3, `test_plugin_directive` (0.4 s), `test_plugin_ui_threaded` (5 s) and `test_plugin_unload_handshake` (2 s), with no
+ThreadSanitizer report - and the SAME 4 FAIL on the SAME races as before (`pa_front.c:312/313 AddOpenStream` in `test_engine_api_transmit` and
+`test_engine_api_merge`, `pa_front.c:363 Pa_Initialize` in `test_engine_api_conformance`, the scope tap's seqlock `memcpy` in
+`test_engine_api_03`): nothing P3 changed is in any of their stacks. No new race. `ctest -L tsan -R "plugin|ui|unload|directive"` is 3/3.
 A deliberate stray call also proved the leg catches the defect P1 fixes: `Engine::applyControlRequest` made from a test thread beside
 the running control thread is reported at once (`TxKeyRules::key` writing `changes_` while the pass's publish reads `changes()`),
 which is why `test_remote_control_pull` D0 uses the one stray call that only reads the rules.

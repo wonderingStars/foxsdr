@@ -50,7 +50,15 @@ struct AppWindowTestAccess {
     // What the engine's pass does when a source opens or changes: rebuild the runner and the plugin UI over the loaded modules.
     static void refreshRunner(cascade::engine::Engine& e) { e.refreshPluginRunner(); }
     // The frame's one poll of the plugin UI (what the window's hostPollPlugins does).
-    static void poll(cascade::engine::Engine& e) { e.pluginUi_.poll(); }
+    // (No window here, so the engine's own plugin UI is the one the poll feeds, and the one the report is handed.)
+    static void poll(cascade::engine::Engine& e) { e.headlessUi_.poll(); }
+    static cascade::engine::PluginUiReport uiReport(cascade::engine::Engine& e) {
+        cascade::engine::PluginUiReport r;
+        r.tracks = e.headlessUi_.tracks();
+        r.paths = e.headlessUi_.paths().size();
+        r.panels = e.headlessUi_.panels();
+        return r;
+    }
     static std::string pluginDir(cascade::engine::Engine& e) { return e.pluginDir_; }
     static void setCatalogue(cascade::engine::Engine& e, std::vector<cascade::core::PluginCatalogEntry> entries,
                              const std::string& error) {
@@ -160,7 +168,7 @@ int main() {
             img.pixels.assign(144, 0x5a);
             const std::vector<cascade::core::HostImage> images{img};
 
-            const std::vector<std::string> out = capture(scratch / "status.txt", [&] { e.reportPluginStatus(images); });
+            const std::vector<std::string> out = capture(scratch / "status.txt", [&] { e.reportPluginStatus(images, Access::uiReport(e)); });
             for (const std::string& l : out) { std::printf("  | %s\n", l.c_str()); }
             CHECK(!out.empty());
 
@@ -230,7 +238,7 @@ int main() {
         e.initialise();
         Access::setPluginDir(nullptr);
         const std::vector<std::string> out =
-            capture(scratch / "empty.txt", [&] { e.reportPluginStatus(std::vector<cascade::core::HostImage>{}); });
+            capture(scratch / "empty.txt", [&] { e.reportPluginStatus(std::vector<cascade::core::HostImage>{}, Access::uiReport(e)); });
         CHECK(!out.empty());
         CHECK(!out.empty() && out[0] == "plugin status: dir=" + Access::pluginDir(e) + " candidates=0 loaded=0 blocked=0 managed=0 unmanaged=0");
         CHECK(indexOfPrefix(out, "plugin host: ") < 0);

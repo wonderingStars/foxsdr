@@ -88,16 +88,12 @@ public:
     virtual void onAddAllFinished();
     // (ADD ALL is planned by the Engine itself since engine/stage3b-pre -
     // engine/add_all_plan.hpp, docs/engine-stage3.md OPEN 5.)
-    // Plugins: before a rescan (the map pages' geometry is folded into the
-    // saved list), before the modules are unmapped (the basemap and the
-    // track-info cache let go of what they borrowed), the basemap and the
-    // track-info plugin chosen by a rebuild, a demonstration instrument that
-    // opens its own window, and the track-info plugin's status lines.
-    virtual void beforePluginRescan();
-    virtual void onPluginsUnloading();
-    virtual void attachBasemap(const CascadeBasemapApi* api);
-    virtual void attachTrackInfo(const CascadeTrackInfoApi* api);
-    virtual void showDemonstrationInstrument(const cascade::core::HostInstrument& in);
+    // (THE PUMP MOVE'S STEP P3 took the last five out, the plugin UI's: beforePluginRescan, onPluginsUnloading, attachBasemap,
+    // attachTrackInfo and showDemonstrationInstrument. The plugin UI is the front end's - its instances, its basemap cache, its
+    // track-info cache and its windows are polled and drawn on its own thread - so the engine no longer reaches them: it posts a
+    // PluginDirective (core/plugin_directive.hpp) the front end applies at the head of its frame, and an unload waits for the
+    // front end's acknowledgement before it unmaps a module. The map pages' geometry is folded into the saved list, the basemap
+    // and the track-info client let go, and a demonstration instrument's window opened, by the front end's own applier.)
 
     // --- WHAT THE WINDOW KNOWS THAT THE ENGINE ASKS ---------------------------------
     // (patchPageOpen left with window port group 13: the window tells the engine

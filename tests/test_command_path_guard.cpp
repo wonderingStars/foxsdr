@@ -117,8 +117,11 @@ const char* const kHelpers[] = {
 const char* const kEngineObjects[] = {
     "pipeline_",    "device_",      "soapyView_",   "transmitter_",  "freqMgr_",
     "scanner_",     "iqRecorder_",  "audioRecorder_", "gpsReader_",  "pluginRepo_",
-    "pluginHost_",  "pluginRunner_", "pluginUi_",   "micOpen_",      "audioOpen_",
+    "pluginHost_",  "pluginRunner_", "micOpen_",      "audioOpen_",
     "retuneCoalescer_",
+    // (pluginUi_ left this list with the pump move's step P3: the plugin UI is the WINDOW'S member now, built over the API core the
+    // engine owns - pluginApi_, with pluginLink_ and headlessUi_, which the window must not name.)
+    "pluginApi_",   "pluginLink_",   "headlessUi_",
 };
 
 // Calls a control may make: "object.method", or "object.accessor().method". Reads of an engine object that survived the
@@ -137,11 +140,11 @@ const char* const kEngineObjects[] = {
 // reads. Thirteen of them (the pipeline_, pluginHost_, pluginRunner_ and pluginUi_ ones) had their last caller in the two
 // bounded-run diagnostics that part e moved into the engine; the others are leftovers of the groups that ported the sections they
 // were read for. Earlier retirements are in the notes of their groups, in docs/engine-stage4.md.)
+// (RETIRED with the pump move's step P3, their callers gone because the plugin UI is the window's: pluginUi_ .instruments / .panels /
+// .paths / .trackPluginNames / .tracks / .altitudeNear / .poll - seven of the eight host accessors named the engine through them.)
 const char* const kReadOnly[] = {
     "pipeline_.activeSource().centerFrequencyHz", "pipeline_.inputRateHz", "pipeline_.audioSamplesProduced",
-    "pipeline_.audioTap", "pluginHost_.plugins", "pluginRunner_.pollImages", "pluginUi_.instruments",
-    "pluginUi_.panels", "pluginUi_.paths", "pluginUi_.trackPluginNames", "pluginUi_.tracks", "pluginUi_.altitudeNear",
-    "pluginUi_.poll",
+    "pipeline_.audioTap", "pluginHost_.plugins", "pluginRunner_.pollImages",
 };
 
 // Accessors that hand the object out; a control may bind them only `const`.
@@ -170,6 +173,7 @@ const char* const kWindowMachinery[] = {
     "~AppWindow",
     "applyConfig",
     "currentConfig",
+
     // hands the engine what only the window knows for the publish - its web
     // listener, the counter's face, the basemap's figures (engine/stage3b-pre
     // OPEN 4: these were EngineHost hooks the engine called while publishing)
@@ -190,8 +194,14 @@ const char* const kWindowMachinery[] = {
 //   openPluginWindowsFor  an EVENT, FOXAPI_EVENT_PRESET_APPLIED (API 0.3 8.14), answered in pumpUiEvents;
 //   drainTrackInfoText    the window polls its cache's text in its own frame and sends FOXAPP_OP_TRACK_INFO_LINE;
 //   enrichWebTrack and fillWebImages   handed over in FrontEndFacts::webExtras (webExtrasNow).
-// What is left: the clocks and the watchdog (thread-safe by construction, engine/stage3b-pre OPEN 4), and the five that belong to
-// the plugin UI - the unload handshake and the instances the GUI polls - which is step P3's (docs/engine-stage4.md).
+// THE PUMP MOVE'S STEP P3 TOOK THE LAST FIVE OUT (10 -> 5): the plugin UI is the window's, so the engine posts a directive and the
+// window applies it, and an unload waits for the window's acknowledgement (core/plugin_directive.hpp):
+//   beforePluginRescan, onPluginsUnloading  one RELEASE directive - the window folds the map pages' geometry into the saved list,
+//                         destroys the plugin UI's instances and lets go of the basemap and the track-info client, on its thread,
+//                         and acknowledges; the engine unmaps the modules only after that, or not at all (bounded, retried);
+//   attachBasemap, attachTrackInfo  the directive's two tables, attached by the window when it applies a rebuild;
+//   showDemonstrationInstrument  the window that rebuilt the demonstration instruments shows their windows.
+// What is left: the clocks and the watchdog - five calls, thread-safe by construction (engine/stage3b-pre OPEN 4).
 const char* const kHostHooks[] = {
     "frameClockRunning",  "frameTimeS",          "wallTimeS",
     "pauseWatchdog",      "resumeWatchdog",
@@ -199,9 +209,6 @@ const char* const kHostHooks[] = {
     // (onPatchPicture left with window port group 13 part c: the pictures are the engine's, read with read_image.)
     // (onGpsFixApplied left with part b: the GPS list's entry going to Fixed is the cue.)
     // (onCatalogueFetchStarting and onAddAllFinished left with window port group 10: the window watches the table instead.)
-    "beforePluginRescan",
-    "onPluginsUnloading", "attachBasemap",       "attachTrackInfo",
-    "showDemonstrationInstrument",
     // webListening, tunerDisplayStyle, basemapFacts: no longer hooks
     // (engine/stage3b-pre OPEN 4) - handed over by handFrontEndFacts.
 };
@@ -321,7 +328,7 @@ const LineAllow kLineAllowed[] = {
     // (The FOXSDR_GPS_PORT seam's gpsReader_.start line LEFT with window port group 14 part e: the seam sends the key's own
     // FOXAPI_OP_GPS through the session now.)
     // the bounded-run diagnostic, the engine's since part e: printed once after the teardown's first phase, when the run asked
-    {"run", "reportPluginStatus(pluginImages_);"},
+    {"run", "reportPluginStatus(pluginImages_, pluginUiReport());"},
     {"run", "startCatalogFetch();"},
     {"run", "scanNative();"},
     {"run", "recordPluginStopped(cascade::core::pluginKey(lp), false);"},
@@ -924,9 +931,14 @@ const char* const kPublishedOnly[] = {
 // also be PORTED.
 const char* const kShellMembers[] = {"run", "applyConfig", "AppWindow"};
 const char* const kStage5Members[] = {"publishWebAudio", "publishWebSpectrum", "webStatusNow", "catStatusNow"};
-const char* const kHostAccessors[] = {"hostTracks",      "hostPaths",      "hostPanels",       "hostInstruments",
-                                      "hostAltitudeNear", "hostTrackPluginNames", "hostPollPlugins", "hostPollImages"};
+// (ONE LEFT after the pump move's step P3: the plugin UI is the window's, so hostTracks, hostPaths, hostPanels, hostInstruments,
+// hostAltitudeNear, hostTrackPluginNames and hostPollPlugins read the window's own PluginUi and are PORTED members now - they name
+// the engine nowhere. hostPollImages still reads the receiver plugins' pictures from the runner, under its lock.)
+const char* const kHostAccessors[] = {"hostPollImages"};
 
+// (THE NOTES BELOW THAT SAY THE HOST ACCESSORS "ARE NOT LISTED: they name engine_.pluginUi_" ARE THE HISTORY OF GROUPS 12-14: since the pump move's
+// step P3 the plugin UI is the window's own member, seven of the eight accessors are in this list - they name the engine nowhere - and
+// hostPollImages alone stays a host accessor, reading pluginRunner_.)
 // THE WINDOW'S PORT (engine-stage4.md plan step 4), group by group: a member
 // listed here draws from its engine API session ONLY - its state read, its
 // lists and facts, its submits - and may not name `engine_.` at all, field
@@ -1082,6 +1094,14 @@ const char* const kPortedMembers[] = {
     // unseen. openPluginWindowsFor stays in kHostHooks too (the engine calls it; it is judged as machinery) - the event that
     // replaces the call is the pump move's work (docs/engine-stage4.md, group 14 part d).
     "drawPluginWindows", "openPluginWindowsFor",
+    // THE PUMP MOVE'S STEP P3: the plugin UI is the window's. The seven host accessors that read it (they named engine_.pluginUi_), the
+    // window's half of a plugin directive (applyDirective: the rebuild or release, the basemap and the track-info client, the
+    // demonstration windows - every GL delete a release causes is made here, on the thread that owns the context) and the report the
+    // bounded run hands the engine (pluginUiReport) name the engine nowhere.
+    "hostTracks", "hostPaths", "hostPanels", "hostInstruments", "hostAltitudeNear", "hostTrackPluginNames", "hostPollPlugins",
+    // ...and applyPluginDirective, the frame head's apply of the engine's posted directive through the link the constructor took by
+    // reference (the window's half of the unload handshake: the engine posts, this applies and acknowledges).
+    "applyDirective", "pluginUiReport", "applyPluginDirective",
 };
 
 // Window port group 13, part a: 56 fields / 269 reads -> 49 / 230 (patchDspSig_, patchGraphEpoch_, patchGraph_, patchRadioFailedAs_,
@@ -1120,13 +1140,15 @@ const char* const kPortedMembers[] = {
 // FOXAPI_OP_GPS through the session: gpsReader_ lost its last reader) are deleted. WHAT IS LEFT IS EXACTLY THE THREE CLASSES ABOVE:
 // 19 shell reads (run 15, applyConfig 1, the constructor 3), 6 web/CAT reads (stage 5) and 8 host accessor reads - 33 reads on
 // 14 fields - and every one of them is classified: a read in any other member fails the guard.
-constexpr int kWindowFieldsReadBudget = 14;
-constexpr int kWindowFieldReadsBudget = 33;
+// The pump move's step P3, the plugin UI the window's own: 14 / 33 -> 13 / 26 (the seven reads of pluginUi_ the host accessors made, and
+// the field itself: only hostPollImages is left of the eight accessors, reading pluginRunner_).
+constexpr int kWindowFieldsReadBudget = 13;
+constexpr int kWindowFieldReadsBudget = 26;
 // THE RESIDUE'S OWN BUDGETS, one per class (the totals above are their sum). A new read in a listed member raises its class, and
 // the class budget fails even where another class has slack.
 constexpr int kShellReadsBudget = 19;
 constexpr int kStage5ReadsBudget = 6;
-constexpr int kHostAccessorReadsBudget = 8;
+constexpr int kHostAccessorReadsBudget = 1;
 
 struct Report {
     int violations = 0;
@@ -1372,7 +1394,10 @@ void checkNoDirectApply(const fs::path& root) {
 // told - the headless tests do - but the standard window no longer overrides it: the engine prints the bounded run's catalogue
 // report itself, from the report switch and the frame the window hands over in FrontEndFacts.)
 const char* const kRetiredHooks[] = {"onDisplayRange",     "onBookmarksChanged", "onConverterChanged", "openPluginWindowsFor",
-                                     "drainTrackInfoText", "enrichWebTrack",     "fillWebImages"};
+                                     "drainTrackInfoText", "enrichWebTrack",     "fillWebImages",
+                                     // step P3: the plugin UI's five
+                                     "beforePluginRescan", "onPluginsUnloading", "attachBasemap",   "attachTrackInfo",
+                                     "showDemonstrationInstrument"};
 
 void checkRetiredHooks(const fs::path& root) {
     int found = 0;
@@ -1411,6 +1436,83 @@ void checkRetiredHooks(const fs::path& root) {
     std::printf("  the retired host hooks (%zu + the window's onCatalogueResult) are still gone: %d reappeared\n",
                 sizeof(kRetiredHooks) / sizeof(kRetiredHooks[0]), found);
     CHECK(found == 0);
+}
+
+// THE PLUGIN UI'S OWNERSHIP (pump move step P3): the plugin UI - its instances, its basemap cache, its track-info cache - is the WINDOW'S
+// and is touched from the window's thread alone; the engine reaches it only by posting a directive. What this holds, as text:
+//   * no engine source names a PluginUi except through headlessUi_, and that only as the member's declaration and as the one line that
+//     applies a directive to the engine's own plugin UI where there is no window (Engine::deliverPluginDirective);
+//   * the window mutates its PluginUi only through apply() - never rebuild, clear, setServices, setStopped, setTuneAllowed or
+//     setSettingsAllowed (grants and the stop set are the core's, set by the engine);
+//   * the basemap cache and the track-info cache are attached and detached in applyDirective and, for the bounded run's stand-in, in
+//     run() - nowhere else, so every GL delete they cause is on the window's thread;
+//   * the engine's directive link is named by the window only in applyPluginDirective.
+void checkPluginUiOwnership(const fs::path& root) {
+    int bad = 0;
+    const auto flag = [&](const std::string& where, const std::string& line, const char* why) {
+        ++bad;
+        std::printf("FAIL: %s: %s [%s]\n", where.c_str(), line.c_str(), why);
+    };
+    std::error_code ec;
+    int headlessLines = 0;
+    for (const auto& e : fs::directory_iterator(root / "src" / "engine", ec)) {
+        const std::string ext = e.path().extension().string();
+        if (ext != ".cpp" && ext != ".hpp") { continue; }
+        for (const std::string& l : codeLines(readFile(e.path()))) {
+            if (l.find("pluginUi_") != std::string::npos) { flag(e.path().filename().string(), l, "the engine has no pluginUi_ any more"); }
+            if (l.find("headlessUi_") != std::string::npos) {
+                ++headlessLines;
+                const bool declaration = l.find("PluginUi headlessUi_{pluginApi_}") != std::string::npos;
+                const bool apply = l.find("headlessUi_.apply(x)") != std::string::npos;
+                if (!declaration && !apply) { flag(e.path().filename().string(), l, "the engine drives its own plugin UI only through apply()"); }
+            }
+        }
+    }
+    CHECK(headlessLines == 2);  // the declaration and the one apply: both exist, and nothing else
+    int basemapAttach = 0, basemapDetach = 0, infoAttach = 0, infoDetach = 0, linkNamed = 0;
+    for (const std::string& l : codeLines(readFile(root / "src" / "gui" / "app_window.cpp"))) {
+        for (const char* m : {"pluginUi_.rebuild(", "pluginUi_.clear(", "pluginUi_.setServices(", "pluginUi_.setStopped(",
+                              "pluginUi_.setTuneAllowed(", "pluginUi_.setSettingsAllowed("}) {
+            if (l.find(m) != std::string::npos) { flag("app_window.cpp", l, "the window changes its plugin UI only by applying a directive"); }
+        }
+        if (l.find("basemap_.attach(") != std::string::npos) { ++basemapAttach; }
+        if (l.find("basemap_.detach(") != std::string::npos) { ++basemapDetach; }
+        if (l.find("trackInfo_.attach(") != std::string::npos) { ++infoAttach; }
+        if (l.find("trackInfo_.detach(") != std::string::npos) { ++infoDetach; }
+        if (l.find("pluginDirectives()") != std::string::npos) { ++linkNamed; }
+    }
+    std::printf("  the plugin UI is the window's: basemap attach %d detach %d, track-info attach %d detach %d, link named %d (expect 2 1 1 1 1)\n",
+                basemapAttach, basemapDetach, infoAttach, infoDetach, linkNamed);
+    // basemap attach: applyDirective, and run()'s FOXSDR_FORCE_BASEMAP stand-in (a bounded run's seam, on the window's thread)
+    CHECK(basemapAttach == 2);
+    CHECK(basemapDetach == 1);
+    CHECK(infoAttach == 1);
+    CHECK(infoDetach == 1);
+    CHECK(linkNamed == 1);
+    // WHERE THE APPLY STANDS: the newest directive is applied at the head of the frame (drawUi) before the frame touches the engine
+    // or draws a thing, and at the head of the plugin poll (hostPollPlugins) before the poll - a reference into the plugin UI is
+    // never taken before it. (A directive applied part-way through a frame would destroy instances that earlier code in the frame
+    // still holds, and delete GL textures the draw list already names.)
+    {
+        const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
+        const std::size_t draw = text.find("void AppWindow::drawUi() {");
+        CHECK(draw != std::string::npos);
+        const std::size_t applyInDraw = text.find("applyPluginDirective();", draw);
+        const std::size_t firstEngine = text.find("engine_.", draw);
+        CHECK(applyInDraw != std::string::npos && firstEngine != std::string::npos);
+        const bool drawOk = applyInDraw < firstEngine && applyInDraw - draw < 2500;
+        if (!drawOk) { std::printf("FAIL: drawUi does not apply the plugin directive before its first engine call\n"); }
+        CHECK(drawOk);
+        const std::size_t poll = text.find("void AppWindow::hostPollPlugins() {");
+        CHECK(poll != std::string::npos);
+        const std::size_t applyInPoll = text.find("applyPluginDirective();", poll);
+        const std::size_t pollCall = text.find("pluginUi_.poll();", poll);
+        const bool pollOk = applyInPoll != std::string::npos && pollCall != std::string::npos && applyInPoll < pollCall &&
+                            pollCall - poll < 1500;
+        if (!pollOk) { std::printf("FAIL: hostPollPlugins does not apply the plugin directive before it polls\n"); }
+        CHECK(pollOk);
+    }
+    CHECK(bad == 0);
 }
 
 }  // namespace
@@ -1594,5 +1696,6 @@ int main(int argc, char** argv) {
     }
     checkNoDirectApply(root);
     checkRetiredHooks(root);
+    checkPluginUiOwnership(root);
     return testSummary("test_command_path_guard");
 }

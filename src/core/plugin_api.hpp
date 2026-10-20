@@ -31,8 +31,9 @@
 //     and allocates, which the DSP thread must never do; a call from a thread
 //     marked by RealtimeThreadScope gets CASCADE_API_WRONG_THREAD.
 //
-// LIFETIME. A PluginApiCore is held by shared_ptr: by the PluginUi that owns
-// it AND by every host bridge handed to a plugin. Bridges live until process
+// LIFETIME. A PluginApiCore is held by shared_ptr: by the ENGINE that creates it (since the pump move's step P3 the engine
+// owns it - the plugin UI is the window's and is built over it), by the PluginUi built over it AND by every host bridge handed
+// to a plugin. Bridges live until process
 // exit (see plugin_ui.cpp: a plugin may keep the table pointer for as long as
 // it is loaded), so this object does too - a plugin calling through a stale
 // table finds live memory that answers CASCADE_API_DETACHED, never freed
@@ -241,6 +242,38 @@ public:
     // both from its config after the rescan.
     void clearGrants();
     bool settingsGranted(const std::string& key) const;
+    // The tune grant and the stop set, asked by key, from any thread (the legacy request_tune path asks both from a plugin's
+    // own thread; the engine asks from its pass).
+    bool tuneGranted(const std::string& key) const;
+    bool isStopped(const std::string& key) const;
+
+    // THE LEGACY request_tune'S RECORDS (moved here from PluginUi by the pump move's step P3: they are written from whatever
+    // thread the plugin calls request_tune on and read by the engine's pass, so they live where a lock does). Which modules
+    // have asked to tune at least once (the toggle's reason to exist) and the module whose request was refused last. The
+    // engine hashes lastDeniedSeq() each pass and copies lastDeniedPlugin() only when it moved.
+    void noteTuneRequester(const std::string& key);
+    void noteTuneDenied(const std::string& key);
+    std::vector<std::string> tuneRequesters() const;
+    std::size_t tuneRequesterCount() const;
+    std::string lastDeniedPlugin() const;
+    std::uint64_t lastDeniedSeq() const { return deniedSeq_.load(std::memory_order_acquire); }
+    // Forgets both (a rescan: the instances that asked are gone, and they ask again).
+    void clearTuneRecords();
+
+    // THE LEGACY request_tune, QUEUED (pump move step P3, owner decision 1). The call used to retune the receiver on the
+    // caller's thread - the GUI thread or a plugin's own worker - which is a write into the receiver from outside the pass. It
+    // is now a request like the level-1 set_frequency: checked and queued here, answered CASCADE_TUNE_OK meaning ACCEPTED, and
+    // applied by the pass at its next plugin phase (within one pass, 16 ms). One slot per module, newest wins: a corrector that
+    // asks every second is unaffected and one that asks every frame cannot fill anything. Returns a CASCADE_TUNE_* code.
+    std::int32_t queueCentreRetune(const std::string& key, double centreHz);
+    struct CentreRetune {
+        std::size_t client = 0;
+        double hz = 0.0;
+    };
+    // Drains the queue (appended to `out`). The pass.
+    void takeCentreRetunes(std::vector<CentreRetune>& out);
+    // Whether a drained request may still be applied NOW (the module is live, not stopped, and still holds the tune grant).
+    bool centreRetuneStillAllowed(const CentreRetune& r) const;
     // Module keys that have asked for a SETTINGS-grant function.
     std::vector<std::string> settingsRequesters() const;
     // ALLOCATION-FREE GENERATIONS of the two answers above that build a vector per call, for a reader that asks
@@ -321,6 +354,7 @@ public:
     static constexpr std::size_t kControlQueue = 256;
     static constexpr std::size_t kLogQueue = 256;
     static constexpr std::size_t kPressQueue = 16;
+    static constexpr std::size_t kCentreRetuneQueue = 16;
 
 private:
     struct LogEntry {
@@ -368,6 +402,12 @@ private:
     std::size_t logCount_ = 0;
     std::uint64_t logDropped_ = 0;
     std::uint64_t markersSeq_ = 1;
+    // The legacy request_tune's records and queue (see the public block): under mutex_, except the sequence.
+    std::vector<std::string> tuneRequesters_;
+    std::string lastDenied_;
+    std::atomic<std::uint64_t> deniedSeq_{0};
+    std::array<CentreRetune, kCentreRetuneQueue> retunes_{};
+    std::size_t retuneCount_ = 0;
     // See settingsRequestersSeq() / commandsSeq(): written under mutex_ (commands) or by the plugin's own
     // thread after its flag is set (askers), read lock-free.
     std::atomic<std::uint64_t> askersSeq_{0};

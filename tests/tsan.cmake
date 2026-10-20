@@ -65,7 +65,14 @@ set(CASCADE_TSAN_TESTS
     # rules are touched by the control thread alone - producers, two local sessions and a flapping server flag against the threaded
     # pass, the ordering, the 2 s hold, the latch's marking and the re-arm (test_transmit_key_race's case G is the same storm
     # against the hammer); and the same standing conditions through the window's own source and a real web server
-    test_remote_control_pull test_remote_key_release)
+    test_remote_control_pull test_remote_key_release
+    # the pump move's step P3 (PluginUi's thread ownership): the directive the engine's pass posts and the window applies at the head
+    # of its poll, the bounded unload handshake, the queued request_tune, the plugin UI's instances created, polled and destroyed on
+    # the window's thread alone - the link's protocol with threads; a real window, a real engine with its pass on its own thread
+    # and an instrumented plugin module (rebuild churn against a polling frame, epochs skipped, a reference held across a
+    # rebuild, a Doppler corrector, a rescan releasing the basemap and the track-info client); and the handshake's timings (a
+    # window inside the plugin, a window not framing, a stop mid-wait, the watchdog pause, no window at all)
+    test_plugin_directive test_plugin_ui_threaded test_plugin_unload_handshake)
 
 set(CASCADE_TSAN_EXCLUDED_TESTS)
 

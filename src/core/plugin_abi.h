@@ -72,6 +72,29 @@
  * block, allocate unboundedly, or perform I/O. destroy happens-after the last
  * process/retune/poll_text for that instance.
  *
+ * THE GUI CAPABILITIES (track source, panel, instrument, basemap, track info) AND
+ * THE HOST CLIENT'S attach - WHAT A HOST NOW GUARANTEES (FoxSDR, engine extraction
+ * stage 4, the pump move's step P3; appended, nothing above changes). On a host with
+ * an interface - the desktop application - every instance of these capabilities is
+ * created, polled and destroyed on ONE host thread, the interface's (GUI) thread:
+ * create() and destroy() are called by that thread BETWEEN its frames, never from
+ * inside one of the instance's own poll_* / get_* calls and never while another
+ * thread is in one, and a handle is never used from two threads at once. They used
+ * to be created and destroyed from "the host's control thread" like a decoder's,
+ * beside the GUI's polls; a host that moves its control work onto a thread of its own
+ * can no longer do that safely, and does not. attach() of the host-client capability
+ * is called by the same thread, before any capability's create() of the same rebuild
+ * on that thread, and MAY be called again with the same pointer. A host
+ * never unmaps a module while one of these instances (or the basemap or track-info
+ * client) is alive: it has its interface thread destroy them all first, and
+ * unmaps the module only after that thread says it has - so destroy() and every
+ * call a plugin's code makes from it run with the module mapped, and a host that
+ * cannot reach that point (its interface is not running frames) does not unmap the
+ * module at all, it waits. A host with NO interface (a headless engine) creates
+ * and destroys these instances from its control thread and never polls them.
+ * DECODERS ARE UNCHANGED: create and destroy come from the host's control thread, as
+ * above.
+ *
  * ====================== ABI 3 - WHAT CHANGED, AND WHY ======================
  *
  * Version 3 exists to be THE LAST BREAKING VERSION. Versions 1 and 2 each
@@ -1194,6 +1217,26 @@ typedef struct CascadeAudioProcessorApi {
 #define CASCADE_TUNE_OUT_OF_RANGE (-2)
 #define CASCADE_TUNE_NO_DEVICE (-3)
 #define CASCADE_TUNE_FAILED (-4)     /* the device refused or errored */
+
+/*
+ * request_tune IS A REQUEST THE HOST ACCEPTS, NOT A TUNE IT HAS DONE (FoxSDR, the
+ * pump move's step P3; this paragraph is APPENDED to the text above, which still
+ * describes the errors exactly). CASCADE_TUNE_OK (0) now means ACCEPTED: the host has
+ * checked the grant, the range and that a radio is open, and has QUEUED the retune.
+ * It is applied by the host's receiver control at its next pass - within about
+ * 16 ms, never inside the call - after checking the grant again, so a grant
+ * revoked, or a plugin stopped, between the call and the pass stops the retune
+ * silently. Read centre_hz() (or the level-1 state's centreHz and tuneSeq) to see it
+ * land. One request per plugin is held: a second call before the first is applied
+ * REPLACES it (the newest frequency is the one that matters), so a corrector that
+ * asks once a second - a satellite tracker's Doppler tracking - is unaffected, and
+ * one that asks every frame cannot fill anything. The refusals are unchanged and
+ * are answered at once, in the call: DENIED, OUT_OF_RANGE, NO_DEVICE and FAILED. A
+ * host older than this answered OK only after the receiver had been retuned, on the
+ * calling thread; apiLevel does not distinguish the two (a plugin must not rely on
+ * the retune having happened when the call returns, which it could not have relied on
+ * for set_frequency either).
+ */
 
 /* ==========================================================================
  * HOST API LEVEL 1 (FoxSDR 0.99.31) - the whole receiver, through one table.

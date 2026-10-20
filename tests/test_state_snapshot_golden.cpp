@@ -248,7 +248,7 @@ struct AppWindowTestAccess {
             return a.engine_.pipeline_.activeSource().centerFrequencyHz() == hz;
         });
     }
-    static cascade::core::PluginApiCore& api(AppWindow& a) { return a.engine_.pluginUi_.api(); }
+    static cascade::core::PluginApiCore& api(AppWindow& a) { return *a.engine_.pluginApi_; }
 
     // State no command sets: the strings a reader passes through verbatim.
     static void fixRecordDir(AppWindow& a) { a.engine_.recordDir_ = "/golden/recordings"; }

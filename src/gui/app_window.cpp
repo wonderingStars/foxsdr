@@ -674,6 +674,8 @@ const char* scannerStateName(std::uint32_t state) {
 AppWindow::AppWindow(std::string configPath, bool announceConfig)
     : engineHolder_(std::make_unique<cascade::engine::Engine>(static_cast<cascade::engine::EngineHost&>(*this))),
       engine_(*engineHolder_),
+      pluginUi_(engine_.pluginApiShared()),
+      directives_(engine_.pluginDirectives()),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
       // The plugin store's view and both windows' decks. Created here, where
@@ -693,6 +695,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // catalogue URL's default, the audio and microphone gates and the output
     // device list - Engine::initialise, in the order this constructor always
     // did them. The window's own start-up follows it.
+    // THE PLUGIN UI'S APPLIER, before the scan the start-up runs: the engine applies a directive through it inline while it runs
+    // on this thread, and posts it for the frame's head to apply while its control thread does (Engine::setPluginUiApplier).
+    engine_.setPluginUiApplier([this](const cascade::core::PluginDirective& d) { applyDirective(d); });
     engine_.initialise();
     // THE WINDOW'S ENGINE API SESSION (stage 4): a LOCAL session with every
     // grant, on this process's own engine - the one the Transmit page keys
@@ -849,6 +854,8 @@ AppWindow::~AppWindow() {
     // plugin system brought down in their stated order, the recorders
     // stopped - Engine::teardown, in the order this destructor always did it.
     engine_.teardown();
+    // The engine no longer applies a directive through this window (the plugin UI below is about to be destroyed with it).
+    engine_.setPluginUiApplier({});
 }
 
 int AppWindow::run(int frames) {
@@ -1890,7 +1897,7 @@ int AppWindow::run(int frames) {
     // fetch during the run brought into force.
     // (Prints what the plugin host, the runner and the source finished in: the engine's own report, which prints the
     // receiver plugins' pictures from the buffer the plugin windows polled into - the one thing only this window holds.)
-    if (pluginStatusReport) { engine_.reportPluginStatus(pluginImages_); }
+    if (pluginStatusReport) { engine_.reportPluginStatus(pluginImages_, pluginUiReport()); }
 
     // Final-state save, unconditional: cheap, and it guarantees the on-disk
     // config matches the final session state even when the debounce never
@@ -2766,6 +2773,11 @@ void AppWindow::drawUi() {
     // a thread other than this one gets is at most a frame old (OPEN 4).
     (void)frameClockRunning();
     (void)frameTimeS();
+    // THE NEWEST PLUGIN DIRECTIVE, before anything is drawn (pump move step P3): a rebuild or a release (the engine's unload
+    // handshake) lets go of the basemap's GL textures and destroys the instances every reference below points into, so it
+    // happens here, at the head of the frame, and not part-way through it. (hostPollPlugins applies it too, for a caller that polls
+    // without a frame; with nothing pending this is one lock and a counter.)
+    applyPluginDirective();
     // THE WINDOW'S HEARTBEAT, first thing in the frame: what keeps any key
     // its session holds (a frame loop that stops, stops it - the engine's
     // keep-alive and the TX thread's own dead-man both release the key).
@@ -11954,16 +11966,61 @@ void AppWindow::drawScopeModeControl() {
     }
 }
 
-const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return engine_.pluginUi_.tracks(); }
-const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return engine_.pluginUi_.paths(); }
+const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return pluginUi_.tracks(); }
+const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return pluginUi_.paths(); }
 bool AppWindow::hostAltitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
                                  double& outAltM) {
-    return engine_.pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
+    return pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
 }
-const std::vector<cascade::core::HostPanel>& AppWindow::hostPanels() { return engine_.pluginUi_.panels(); }
-const std::vector<cascade::core::HostInstrument>& AppWindow::hostInstruments() { return engine_.pluginUi_.instruments(); }
-const std::vector<std::string>& AppWindow::hostTrackPluginNames() { return engine_.pluginUi_.trackPluginNames(); }
-void AppWindow::hostPollPlugins() { engine_.pluginUi_.poll(); }
+const std::vector<cascade::core::HostPanel>& AppWindow::hostPanels() { return pluginUi_.panels(); }
+const std::vector<cascade::core::HostInstrument>& AppWindow::hostInstruments() { return pluginUi_.instruments(); }
+const std::vector<std::string>& AppWindow::hostTrackPluginNames() { return pluginUi_.trackPluginNames(); }
+void AppWindow::hostPollPlugins() {
+    // THE NEWEST PLUGIN DIRECTIVE FIRST, before the poll and before any reference into the plugin UI is taken (pump move step P3):
+    // a rebuild destroys the instances and empties the vectors every reference points into, and this is the one place - with the head
+    // of the frame - where that may happen. Applying it also acknowledges it to the engine, which may be waiting to unmap a module.
+    applyPluginDirective();
+    pluginUi_.poll();
+}
+
+void AppWindow::applyPluginDirective() {
+    (void)directives_.applyNewest([this](const cascade::core::PluginDirective& d) { applyDirective(d); });
+}
+
+void AppWindow::applyDirective(const cascade::core::PluginDirective& d) {
+    // A RELEASE is the engine about to unmap the modules (a rescan, a removal, the shutdown). The map pages' geometry is folded into
+    // the saved list first, as the beforePluginRescan hook did: a page whose plugin does not come back is pruned only after a re-sync.
+    if (d.release) { syncMapPagesToSaved(); }
+    // The instances: destroyed, and created again over the plugins the directive carries - none for a release.
+    pluginUi_.apply(d);
+    if (d.release) {
+        // The basemap's tiles are GL textures, and its handle and the track-info client's are memory inside the modules about to be
+        // unmapped: both let go HERE, on the thread that owns them and has the context (they were let go from the engine's pass).
+        basemap_.detach();
+        trackInfo_.detach();
+        return;
+    }
+    // A bounded run's stand-in (FOXSDR_FORCE_BASEMAP), only where no plugin supplies a basemap: the engine hands over the plugin's
+    // table or null, and the window is where the stand-in itself lives (it is not engine-linkable - gui/basemap_stand_in.hpp).
+    const CascadeBasemapApi* basemap = d.basemap;
+    if (basemap == nullptr && basemapStandIn_) { basemap = cascade::gui::standInBasemap(); }
+    basemap_.attach(basemap);
+    trackInfo_.attach(d.trackInfo);
+    // DEMONSTRATION instruments open their windows by themselves: the one deliberate exception to "nothing opens but by your hand"
+    // (0.79.1), safe because a demonstration exists only when a developer set FOXSDR_DEMO_INSTRUMENT for this launch. The window that
+    // rebuilt them shows them - the engine used to ask for it through a hook.
+    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+        if (in.plugin == "Demonstration") { pluginWindows_.show(instrumentWindowId(in)); }
+    }
+}
+
+cascade::engine::PluginUiReport AppWindow::pluginUiReport() const {
+    cascade::engine::PluginUiReport r;
+    r.tracks = pluginUi_.tracks();
+    r.paths = pluginUi_.paths().size();
+    r.panels = pluginUi_.panels();
+    return r;
+}
 void AppWindow::hostPollImages(std::vector<cascade::core::HostImage>& out) { engine_.pluginRunner_.pollImages(out); }
 
 void AppWindow::drawScopeMode() {
@@ -20898,27 +20955,8 @@ void AppWindow::submitReceiverPosition(double latDeg, double lonDeg) {
 // (onCatalogueResult is not here any more either: a bounded run's catalogue diagnostic (CASCADE_PLUGIN_TEST) is the engine's, which
 // prints it when the fetch resolves, naming the frame this window handed over in the facts - handFrontEndFacts.)
 
-void AppWindow::beforePluginRescan() { syncMapPagesToSaved(); }
-
-void AppWindow::onPluginsUnloading() {
-    basemap_.detach();
-    trackInfo_.detach();
-}
-
-void AppWindow::attachBasemap(const CascadeBasemapApi* api) {
-    // A bounded run's stand-in (FOXSDR_FORCE_BASEMAP), only where no plugin
-    // supplies one: refreshPluginRunner hands this the plugin's basemap or
-    // null, and the window is where the stand-in itself lives (it is not
-    // engine-linkable - see gui/basemap_stand_in.hpp).
-    if (api == nullptr && basemapStandIn_) { api = cascade::gui::standInBasemap(); }
-    basemap_.attach(api);
-}
-
-void AppWindow::attachTrackInfo(const CascadeTrackInfoApi* api) { trackInfo_.attach(api); }
-
-void AppWindow::showDemonstrationInstrument(const cascade::core::HostInstrument& in) {
-    pluginWindows_.show(instrumentWindowId(in));
-}
+// (beforePluginRescan, onPluginsUnloading, attachBasemap, attachTrackInfo and showDemonstrationInstrument are not here any more: the
+// pump move's step P3 made them one directive the engine posts and applyDirective answers, above.)
 
 // THE TRACK-INFO PLUGIN'S STATUS LINES, from this thread (the pump move's step P2): the cache's text polled here, in the frame,
 // and sent to the engine as one command each. The engine used to ask through a hook, from its pass, and the plugin's poll_text
@@ -20955,6 +20993,12 @@ std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
     const std::vector<cascade::core::HostTrack>& tracks = hostTracks();
     if (tracks.empty() && pluginImages_.empty()) { return nullptr; }
     auto x = std::make_shared<cascade::engine::WebExtras>();
+    // THE TRACKS THEMSELVES, the visible ones (the pass's list for the browser; pump move step P3): the pass read the plugin UI's own
+    // vector for them, which this window's poll rewrites every frame. A copy per frame of what is on the screen, not of every
+    // stale target a source never evicts.
+    for (const cascade::core::HostTrack& t : tracks) {
+        if (cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { x->polled.push_back(t); }
+    }
     if (trackInfo_.active()) {
         for (const cascade::core::HostTrack& t : tracks) {
             if (!cascade::core::trackPresentation(t.t.ageMs, t.t.kind).visible) { continue; }
@@ -20981,7 +21025,7 @@ std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
     for (const cascade::core::HostImage& im : pluginImages_) {
         x->images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
     }
-    if (x->tracks.empty() && x->images.empty()) { return nullptr; }
+    if (x->tracks.empty() && x->images.empty() && x->polled.empty()) { return nullptr; }
     return x;
 }
 

@@ -8,10 +8,12 @@
 //   reportPluginTestResult(frame)  CASCADE_PLUGIN_TEST: the catalogue and every entry's install-gate decision. The window's
 //                                  onCatalogueResult hook (a bounded run with the hook set) calls it from inside the engine's
 //                                  poll, naming the frame; tests/test_catalogue_error_report.cpp reads its output.
-//   reportPluginStatus(images)     CASCADE_PLUGIN_STATUS: what the enforcement decided, the source, the plugin UI, the runner.
+//   reportPluginStatus(images, ui) CASCADE_PLUGIN_STATUS: what the enforcement decided, the source, the plugin UI, the runner.
 //                                  run() calls it right after shutdownQuiesce (a bounded run only), where it has always stood;
 //                                  the receiver plugins' PICTURES are the window's own buffer (the plugin windows poll them
 //                                  into it), so the window hands them over and the engine prints them where they always came.
+//                                  THE PLUGIN UI IS THE WINDOW'S TOO since the pump move's step P3 (the tracks, paths and panels
+//                                  its poll found): it hands those over beside the pictures.
 //
 // The bodies are the window's, moved: not a word of what they print changed (tests/test_plugin_status_report.cpp holds the
 // output against a fixture's).
@@ -59,7 +61,7 @@ void Engine::reportPluginTestResult(int frame) const {
     }
 }
 
-void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& images) {
+void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui) {
     // Bounded-run diagnostic only (CASCADE_PLUGIN_STATUS). It exists because
     // "the plugin is disabled" is a claim about what is MAPPED in this
     // process, and a screenshot of a red row proves nothing about that. Every
@@ -114,12 +116,12 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
     // permission story: a request with no grant is a refusal the user can undo,
     // and a grant with no request is a permission nothing is using.
     std::printf("plugin ui: tracks=%d paths=%d panels=%d tuneRequests=%d tuneGranted=%d\n",
-                static_cast<int>(pluginUi_.tracks().size()),
-                static_cast<int>(pluginUi_.paths().size()),
-                static_cast<int>(pluginUi_.panels().size()),
-                static_cast<int>(pluginUi_.tuneRequesters().size()),
+                static_cast<int>(ui.tracks.size()),
+                static_cast<int>(ui.paths),
+                static_cast<int>(ui.panels.size()),
+                static_cast<int>(pluginApi_->tuneRequesterCount()),
                 static_cast<int>(pluginTuneAllowed_.size()));
-    for (const cascade::core::HostPanel& p : pluginUi_.panels()) {
+    for (const cascade::core::HostPanel& p : ui.panels) {
         std::printf("plugin panel: name=%s title=\"%s\" columns=%d rows=%d\n",
                     p.plugin.c_str(), p.title.c_str(), static_cast<int>(p.headings.size()),
                     static_cast<int>(p.rows.size()));
@@ -129,7 +131,7 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
                     im.plugin.c_str(), im.width, im.height, im.format, im.complete ? 1 : 0,
                     static_cast<unsigned long long>(im.sequence), im.pixels.size());
     }
-    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+    for (const cascade::core::HostTrack& t : ui.tracks) {
         std::printf("plugin track: from=%s id=%s label=%s pos=%.4f,%.4f kind=%u\n",
                     t.plugin.c_str(), t.t.id, t.t.label, t.t.latDeg, t.t.lonDeg, t.t.kind);
     }

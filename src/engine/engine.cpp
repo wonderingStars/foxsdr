@@ -131,6 +131,8 @@ void Engine::wakeControl() {
 Engine::~Engine() {
     if (!tornDown_) {
         host_ = &ownHost_;
+        // The front end's applier points into a window that is, by construction of this path, no longer there.
+        setPluginUiApplier({});
         stopTransfers();
         teardown();
     }
@@ -2342,7 +2344,7 @@ bool Engine::quarantineBlockedPlugins(std::string& error) {
     return true;
 }
 
-void Engine::detachAndUnloadPlugins() {
+bool Engine::detachAndUnloadPlugins() {
     // THE ORDER IS THE FEATURE, and it is why this is a function rather than
     // an open-coded sequence: it was open-coded, removeInstalledPlugin() then
     // called unloadAll() on its own, and the careful ordering below existed in
@@ -2379,13 +2381,117 @@ void Engine::detachAndUnloadPlugins() {
     patchDspSig_.clear();
     patchRefused_.clear();
     // Same rule as the runner: a track-source or panel handle is memory inside
-    // a module whose destroy() is code in that same module.
-    pluginUi_.clear();
-    // And the basemap, for exactly the same reason - its handle and its tile
-    // borrows live in a module about to be unmapped.
-    host_->onPluginsUnloading();
+    // a module whose destroy() is code in that same module - and so are the basemap's handle and tile borrows and the
+    // track-info client's. All of them are the INTERFACE'S, held on its thread and polled from its frame, so this does not
+    // reach for them (it used to, through two window hooks and PluginUi::clear(), which was safe only while the frame was the
+    // pass): it posts a RELEASE directive - "let go of everything borrowed from the modules" - and unmaps only once the
+    // interface has said it did. THE HANDSHAKE (pump move step P3, owner decision 2): where the calling thread is the
+    // interface's own, or no control thread runs, the release is applied right here; where it is not, the wait is bounded
+    // (kPluginUiHandshake), the control thread's watchdog is paused across it, it ends early when the control thread is
+    // stopping, and a wait that runs out means DO NOT UNLOAD. Unmapping a module the interface still holds is the failure this
+    // exists to prevent; an unload that cannot happen yet is retried (deferPluginUnload).
+    {
+        cascade::core::PluginDirective release;
+        release.release = true;
+        release.stopped = pluginsStopped_;
+        if (!deliverPluginDirective(std::move(release))) {
+            cascade::core::diagWarnf(
+                "plugins: the interface did not release the plugin UI (it is not framing; waited at most %d ms); the modules are NOT unloaded, and this will be retried",
+                static_cast<int>(kPluginUiHandshake.count()));
+            return false;
+        }
+    }
+    // The API half that follows the instances (PluginUi::clear() did these beside destroying them): no module is live until
+    // the next rebuild attaches it, and the grants and the request_tune records go, to be re-applied or re-learned. AFTER the
+    // release, so a plugin saving its settings from destroy() still found itself live.
+    pluginApi_->setLiveSet({});
+    pluginApi_->clearGrants();
+    pluginApi_->clearTuneRecords();
 
+    if (testHooks_.pluginsAboutToUnmap != nullptr) { testHooks_.pluginsAboutToUnmap(); }
     pluginHost_.unloadAll();
+    return true;
+}
+
+void Engine::setPluginUiApplier(PluginUiApplier applier) {
+    std::lock_guard<std::mutex> lk(pluginApplierMutex_);
+    if (applier) {
+        pluginApplier_ = std::make_shared<const PluginUiApplier>(std::move(applier));
+        pluginGuiThread_.store(std::this_thread::get_id());
+    } else {
+        pluginApplier_.reset();
+        pluginGuiThread_.store(std::thread::id{});
+    }
+}
+
+bool Engine::deliverPluginDirective(cascade::core::PluginDirective d) {
+    std::shared_ptr<const PluginUiApplier> applier;
+    {
+        std::lock_guard<std::mutex> lk(pluginApplierMutex_);
+        applier = pluginApplier_;
+    }
+    // Inline where nothing can be inside the plugin UI but this thread: no front end (the engine's own plugin UI, driven by
+    // whichever thread posts), the front end's own thread, or no control thread (the pass IS the front end's frame).
+    const bool inlineHere = applier == nullptr || std::this_thread::get_id() == pluginGuiThread_.load() ||
+                            !controlThreadRunning();
+    const std::uint64_t epoch = pluginLink_.post(std::move(d));
+    if (inlineHere) {
+        if (applier != nullptr) {
+            pluginLink_.applyNewest(*applier);
+        } else {
+            pluginLink_.applyNewest([this](const cascade::core::PluginDirective& x) { headlessUi_.apply(x); });
+        }
+        return pluginLink_.appliedEpoch() >= epoch;
+    }
+    // THE SILENCE RULE. A wait that ran out recorded the interface's poll count; while that count has not moved the interface has
+    // not framed since, and the pass does not wait on it again - a window that hangs costs the pass ONE bound (250 ms), not one
+    // per refresh, which a transmitting pass cannot afford (its key is judged by this thread's heartbeat). The directive is
+    // posted all the same and the interface applies it at its next frame.
+    if (pluginUiSilentPolls_.load() == pluginLink_.polls()) { return false; }
+    bool applied = false;
+    {
+        WaitWatchdogPause holdWatchdog(*this);
+        applied = pluginLink_.waitApplied(epoch, kPluginUiHandshake, [this] { return !controlRun_.load(); });
+    }
+    // (A wait ended by the control thread stopping is not the interface's silence.)
+    if (!applied && controlRun_.load()) { pluginUiSilentPolls_.store(pluginLink_.polls()); }
+    return applied;
+}
+
+void Engine::deferPluginUnload(PluginUnloadOp op, const std::string& file) {
+    // A removal outranks a rescan (its retry rescans at the end anyway); nothing outranks a removal.
+    if (pluginUnloadOp_ == PluginUnloadOp::Remove || pluginUnloadOp_ == PluginUnloadOp::RemoveBlocked) {
+        if (op == PluginUnloadOp::Rescan) { return; }
+    }
+    pluginUnloadOp_ = op;
+    pluginUnloadFile_ = file;
+    pluginUnloadPolls_ = pluginLink_.polls();
+}
+
+void Engine::retryPluginUnload() {
+    if (pluginUnloadOp_ == PluginUnloadOp::None) { return; }
+    // Only once the interface has framed since the refusal: a wait on one that is still not framing would only stall the pass
+    // for the bound again, every pass, which is the very thing the handshake must not turn into.
+    if (pluginLink_.polls() == pluginUnloadPolls_) { return; }
+    const PluginUnloadOp op = pluginUnloadOp_;
+    const std::string file = pluginUnloadFile_;
+    pluginUnloadOp_ = PluginUnloadOp::None;
+    pluginUnloadFile_.clear();
+    switch (op) {
+        case PluginUnloadOp::Rescan: rescanPlugins(); break;
+        case PluginUnloadOp::Remove: removeInstalledPlugin(file); break;
+        case PluginUnloadOp::RemoveBlocked: removeBlockedPlugin(file); break;
+        case PluginUnloadOp::None: break;
+    }
+}
+
+const std::string& Engine::lastDeniedNow() {
+    const std::uint64_t seq = pluginApi_->lastDeniedSeq();
+    if (seq != apiLastDeniedSeq_) {
+        apiLastDenied_ = pluginApi_->lastDeniedPlugin();
+        apiLastDeniedSeq_ = seq;
+    }
+    return apiLastDenied_;
 }
 
 void Engine::rescanPlugins() {
@@ -2419,7 +2525,8 @@ void Engine::rescanPlugins() {
     // objects and their views all ride through the rescan untouched. A
     // plugin that reappears finds its page exactly
     // where it was.
-    host_->beforePluginRescan();
+    // (The belt is the window's, taken when it applies the release below - the engine used to call it through a hook,
+    // beforePluginRescan, from this pass.)
 
     // A missing plugins directory is the normal case and yields an empty list
     // without an error — the host's documented behaviour, and the reason
@@ -2451,7 +2558,12 @@ void Engine::rescanPlugins() {
     // because a live handle is memory inside a module that is about to be
     // unmapped, and destroy() is code inside that same module. Getting this
     // order wrong is a crash in someone else's DLL with no useful stack.
-    detachAndUnloadPlugins();
+    if (!detachAndUnloadPlugins()) {
+        // The interface is not framing: nothing was unmapped, nothing below may run (a scan over mapped modules is exactly
+        // what the order above exists to prevent). Retried when it frames.
+        deferPluginUnload(PluginUnloadOp::Rescan, std::string());
+        return;
+    }
     pluginEnforceError_.clear();
 
     // Un-quarantine BEFORE taking the inventory. Reconciliation and
@@ -3004,7 +3116,10 @@ void Engine::removeInstalledPlugin(const std::string& fileName) {
     // permissions changed — PluginRepo's reason is shown verbatim in red and
     // the rescan puts everything back exactly as it was. Nothing is lost and
     // nothing is claimed that did not happen.
-    detachAndUnloadPlugins();
+    if (!detachAndUnloadPlugins()) {
+        deferPluginUnload(PluginUnloadOp::Remove, fileName);
+        return;
+    }
     std::string err;
     if (pluginRepo_.remove(pluginDir_, fileName, err)) {
         std::string removedBuf;
@@ -3037,7 +3152,9 @@ void Engine::refreshPluginRunner() {
     // exactly when the two halves have been cleared and could otherwise start a
     // plugin the user stopped.
     pluginRunner_.setStopped(pluginsStopped_);
-    pluginUi_.setStopped(pluginsStopped_);
+    // The core's stop set is the engine's and thread-safe: set at once, so a stopped plugin's marks and commands leave the
+    // screen now and its queued requests are refused. The plugin UI's own copy rides in the directive below.
+    pluginApi_->setStopped(pluginsStopped_);
     // THE HOST TABLE FIRST, THEN THE DECODERS (0.99.31). The ABI promises that
     // attach() runs before any capability's create() (CascadeHostClientApi);
     // the runner used to be rebuilt first, so on the first rebuild of a
@@ -3055,7 +3172,15 @@ void Engine::refreshPluginRunner() {
     // runs before any capability's create() and a tracker may read the
     // receiver while building its initial state.
     cascade::core::HostServices svc;
-    svc.centreHz = [this] { return pipeline_.activeSource().centerFrequencyHz(); };
+    // THE CENTRE A PLUGIN READS IS THE PUBLISHED ONE (pump move step P3): this is called from the plugin UI's thread (a tracker's
+    // poll) or a plugin's own worker, and the active source is swapped by the pass - a read of it from outside the pass is a read
+    // of an object that can be replaced under it. The published state is the pass's own copy of the same figure, at most one pass
+    // old. Before the first publish there is no pass beside this call (the scan in initialise), so the source is read directly.
+    svc.centreHz = [this] {
+        cascade::core::PublishedState ps;
+        if (receiverSnapshot_->read(ps)) { return ps.rx.centreHz; }
+        return controlThreadRunning() ? 0.0 : pipeline_.activeSource().centerFrequencyHz();
+    };
     svc.sampleRateHz = [this] { return pipeline_.inputRateHz(); };
     svc.unixTimeMs = [] {
         return static_cast<std::int64_t>(
@@ -3063,28 +3188,73 @@ void Engine::refreshPluginRunner() {
                 std::chrono::system_clock::now().time_since_epoch())
                 .count());
     };
-    svc.tune = [this](double hz) -> std::int32_t {
-        // PluginUi has already applied the per-plugin permission; this only
-        // has to tune and report what the device said. There is no isOpen() on
-        // the IqSource interface, and a source with no usable rate is one
-        // nothing has opened - a state a plugin needs told apart from "the
-        // device refused".
-        if (!(pipeline_.activeSource().sampleRateHz() > 0.0)) {
-            return CASCADE_TUNE_NO_DEVICE;
-        }
-        retuneSourceHz(hz);
-        return CASCADE_TUNE_OK;
+    // THE LEGACY request_tune IS QUEUED, NOT APPLIED (pump move step P3, owner decision 1; plugin_abi.h's request_tune text).
+    // PluginUi has already applied the per-plugin permission - stopped, requester recorded, granted - and this runs on
+    // WHICHEVER THREAD THE PLUGIN CALLED FROM (the GUI thread inside a poll, or its own worker), so it must not touch the
+    // receiver: it queues the retune on the API core, keyed on the module, and answers OK meaning ACCEPTED. The pass applies it
+    // in applyPluginApi, at its next plugin phase, after checking the grant again. What it can still tell the plugin at the
+    // call is "no device": a source with no usable rate is one nothing has opened (there is no isOpen() on the IqSource
+    // interface, and the signal generator has a rate) - read from the published state, the pass's own copy of the same figure,
+    // not from the pipeline (a read of the source from outside the pass).
+    svc.tuneFrom = [this](const std::string& key, double hz) -> std::int32_t {
+        cascade::core::PublishedState ps;
+        if (receiverSnapshot_->read(ps) && !(ps.rx.sampleRateHz > 0.0)) { return CASCADE_TUNE_NO_DEVICE; }
+        return pluginApi_->queueCentreRetune(key, hz);
     };
-    pluginUi_.setServices(std::move(svc));
-    // THE GRANTS GO IN BEFORE THE REBUILD as well as after it (below): a
-    // plugin may ask for the receiver from inside its attach(), and must be
-    // answered by the grant the user gave, not by a clear() the rescan did.
+    // THE GRANTS GO IN BEFORE THE DIRECTIVE: a plugin may ask for the receiver from inside its attach(), and must be answered
+    // by the grant the user gave, not by a clear() the rescan did. They go straight to the core (thread-safe) and never
+    // through the directive - a toggle must not rebuild a plugin's instances, and a grant applied from a directive posted a
+    // moment ago could overwrite one the user has just changed.
     applyPluginTuneGrants();
     applyPluginSettingsGrants();
-    pluginUi_.rebuild(pluginHost_.plugins());
+    // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring
+    // the capability wins: two basemaps cannot both be the map, and picking
+    // silently by load order is more predictable than picking by some quality
+    // the user cannot see. A rescan that removed the plugin takes its tiles - and its textures - with it (the release).
+    //
+    // A STOPPED plugin is skipped here too, and that is the whole of what
+    // "stopped" means for a basemap: the map falls back to its built-in
+    // coastlines rather than keeping tiles from a plugin the user has switched
+    // off. Skipping it in the runner and the UI half but not here would leave
+    // the stopped plugin drawing the entire map background.
+    const CascadeBasemapApi* wantBasemap = nullptr;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (lp.loaded && lp.basemap != nullptr &&
+            !pluginIsStopped(cascade::core::pluginKey(lp))) {
+            wantBasemap = lp.basemap;
+            break;
+        }
+    }
+    // Track enrichment, by the same first-wins rule and for the same reason.
+    const CascadeTrackInfoApi* wantTrackInfo = nullptr;
+    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
+        if (lp.loaded && lp.trackInfo != nullptr &&
+            !pluginIsStopped(cascade::core::pluginKey(lp))) {
+            wantTrackInfo = lp.trackInfo;
+            break;
+        }
+    }
+    // THE DIRECTIVE: what the plugin UI is to be built over, as values. The interface rebuilds its track sources, panels and
+    // instruments, attaches the host table (the ABI's attach(), before any capability's create()) and the basemap and the
+    // track-info client from it, on its own thread. Where that thread is not this one the wait is bounded and is NOT an error
+    // when it runs out - nothing is being unmapped - but it is why a decoder's create() below can overtake the attach() of a
+    // plugin the interface has not yet been given, so it is said.
+    {
+        cascade::core::PluginDirective d;
+        d.plugins = pluginHost_.plugins();
+        d.stopped = pluginsStopped_;
+        d.services = std::move(svc);
+        d.basemap = wantBasemap;
+        d.trackInfo = wantTrackInfo;
+        if (!deliverPluginDirective(std::move(d))) {
+            cascade::core::diagWarnf(
+                "plugins: the interface had not applied the plugin directive (it is not framing; waited at most %d ms); the decoders are built without it",
+                static_cast<int>(kPluginUiHandshake.count()));
+        }
+    }
     // The receiver's stream clock, which the runner writes and the
     // level-1 get_stream_info reads (CascadeStreamInfo).
-    pluginRunner_.setStreamClock(pluginUi_.api().streamClock());
+    pluginRunner_.setStreamClock(pluginApi_->streamClock());
     pipeline_.setPluginRunner(nullptr);
     if (patchRunning_) {
         // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
@@ -3109,54 +3279,10 @@ void Engine::refreshPluginRunner() {
     // from the receiver the user has just left.
     rebuildMuteStates();
 
-    // DEMONSTRATION instruments open their windows by themselves. This is the
-    // one deliberate exception to "nothing opens but by your hand" (0.79.1),
-    // and it is safe because a demonstration exists only when a developer set
-    // FOXSDR_DEMO_INSTRUMENT for this launch: its whole purpose is to put a
-    // face on screen to be looked at, and a switch that then required a
-    // second step would be a switch for nothing.
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
-        if (in.plugin == "Demonstration") {
-            host_->showDemonstrationInstrument(in);
-        }
-    }
-
-    // THE BASEMAP, if a plugin supplies one. The first loaded plugin declaring
-    // the capability wins: two basemaps cannot both be the map, and picking
-    // silently by load order is more predictable than picking by some quality
-    // the user cannot see. Detached first so a rescan that removed the plugin
-    // takes its tiles - and its textures - with it.
-    //
-    // A STOPPED plugin is skipped here too, and that is the whole of what
-    // "stopped" means for a basemap: the map falls back to its built-in
-    // coastlines rather than keeping tiles from a plugin the user has switched
-    // off. Skipping it in the runner and the UI half but not here would leave
-    // the stopped plugin drawing the entire map background.
-    const CascadeBasemapApi* wantBasemap = nullptr;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-        if (lp.loaded && lp.basemap != nullptr &&
-            !pluginIsStopped(cascade::core::pluginKey(lp))) {
-            wantBasemap = lp.basemap;
-            break;
-        }
-    }
-    host_->attachBasemap(wantBasemap);
-    // Track enrichment, by the same first-wins rule and for the same reason.
-    const CascadeTrackInfoApi* wantTrackInfo = nullptr;
-    for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
-        if (lp.loaded && lp.trackInfo != nullptr &&
-            !pluginIsStopped(cascade::core::pluginKey(lp))) {
-            wantTrackInfo = lp.trackInfo;
-            break;
-        }
-    }
-    host_->attachTrackInfo(wantTrackInfo);
-    // Grants LAST, and every time. rescanPlugins() calls PluginUi::clear(),
-    // which drops the permission set along with the instances, so without this
-    // a rescan would silently revoke every permission the user had given — and
-    // the tracker that worked a moment ago would go quiet with no explanation.
-    applyPluginTuneGrants();
-    applyPluginSettingsGrants();
+    // (The demonstration instruments' windows, the basemap and the track-info client are the interface's, chosen from the
+    // directive above and applied on its thread: the engine used to reach them through three hooks - showDemonstrationInstrument,
+    // attachBasemap and attachTrackInfo - from this pass. The grants are not re-applied here: they are the core's, set before the
+    // directive, and nothing between clears them.)
 }
 
 bool Engine::applyReceiverPosition(double latDeg, double lonDeg) {
@@ -3479,11 +3605,12 @@ void Engine::applyPluginTuneGrants() {
     // written by an older build holds DISPLAY NAMES instead; those match no
     // module, so such a grant reverts to its default of OFF and shows up as a
     // revocable row rather than quietly granting anything.
-    for (const std::string& k : pluginTuneAllowed_) { pluginUi_.setTuneAllowed(k, true); }
+    for (const std::string& k : pluginTuneAllowed_) { pluginApi_->setTuneGranted(k, true); }
 }
 
 void Engine::setPluginTuneAllowed(const std::string& pluginKey, bool allowed) {
-    pluginUi_.setTuneAllowed(pluginKey, allowed);
+    // (An empty key never holds a grant - the core's own rule, as PluginUi's was.)
+    if (!pluginKey.empty()) { pluginApi_->setTuneGranted(pluginKey, allowed); }
     const auto it =
         std::find(pluginTuneAllowed_.begin(), pluginTuneAllowed_.end(), pluginKey);
     if (allowed && it == pluginTuneAllowed_.end()) {
@@ -3494,13 +3621,13 @@ void Engine::setPluginTuneAllowed(const std::string& pluginKey, bool allowed) {
 }
 
 void Engine::applyPluginSettingsGrants() {
-    for (const std::string& k : pluginSettingsAllowed_) { pluginUi_.setSettingsAllowed(k, true); }
+    for (const std::string& k : pluginSettingsAllowed_) { pluginApi_->setSettingsGranted(k, true); }
 }
 
 void Engine::setPluginSettingsAllowed(const std::string& pluginKey, bool allowed) {
     // The live grant and the durable one in one place, exactly as the tune
     // grant does, so a grant that took effect can never fail to be saved.
-    pluginUi_.setSettingsAllowed(pluginKey, allowed);
+    pluginApi_->setSettingsGranted(pluginKey, allowed);
     const auto it =
         std::find(pluginSettingsAllowed_.begin(), pluginSettingsAllowed_.end(), pluginKey);
     if (allowed && it == pluginSettingsAllowed_.end()) {
@@ -3876,7 +4003,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
 }
 
 void Engine::applyPluginApi() {
-    cascade::core::PluginApiCore& api = pluginUi_.api();
+    cascade::core::PluginApiCore& api = *pluginApi_;
 
     // --- 1. What plugins asked of the receiver -------------------------------
     //
@@ -3893,6 +4020,18 @@ void Engine::applyPluginApi() {
         if (!api.controlStillAllowed(c)) { continue; }
         FoxCommand command{};
         if (cascade::net::pluginControlToCommand(c, command)) { (void)applyCommand(command); }
+    }
+    // The legacy request_tune's queued retunes (pump move step P3): each retunes the SOURCE's centre, as the call always did,
+    // here on the pass - after the grant is checked again, and only while a device is open (the call's own answer said so then;
+    // it may have closed since).
+    {
+        std::vector<cascade::core::PluginApiCore::CentreRetune> retunes;
+        api.takeCentreRetunes(retunes);
+        for (const cascade::core::PluginApiCore::CentreRetune& r : retunes) {
+            if (!api.centreRetuneStillAllowed(r)) { continue; }
+            if (!(pipeline_.activeSource().sampleRateHz() > 0.0)) { continue; }
+            retuneSourceHz(r.hz);
+        }
     }
 
     // --- 2. What plugins said ---------------------------------------------------
@@ -4010,7 +4149,7 @@ void Engine::recordPluginStopped(const std::string& pluginKey, bool stopped) {
     // before every rebuild, but a caller that only records (the preset path
     // does) still leaves the live objects agreeing with the durable list.
     pluginRunner_.setStopped(pluginsStopped_);
-    pluginUi_.setStopped(pluginsStopped_);
+    pluginApi_->setStopped(pluginsStopped_);
     // The mute snapshot holds the same running state and is read every frame,
     // so it has to follow here too, not only at the next rebuild.
     rebuildMuteStates();
@@ -4463,7 +4602,10 @@ void Engine::removeBlockedPlugin(const std::string& fileName) {
     // an abort() the crash handler never sees. The ordered sequence exists so
     // there is exactly one way to take a module down; this was the one caller
     // that did not use it.
-    detachAndUnloadPlugins();
+    if (!detachAndUnloadPlugins()) {
+        deferPluginUnload(PluginUnloadOp::RemoveBlocked, fileName);
+        return;
+    }
     std::string err;
     if (pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err)) {
         // The same sentence removeInstalledPlugin() writes, and translated the
@@ -5314,7 +5456,10 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
     }
 
     const std::shared_ptr<const WebExtras> extras = webExtras();
-    for (const cascade::core::HostTrack& t : pluginUi_.tracks()) {
+    // THE TRACKS ARE THE WINDOW'S POLL, AS IT HANDED THEM OVER (WebExtras::polled; pump move step P3): the plugin UI is the
+    // window's and its poll rewrites its vectors every frame, so this pass reads an immutable copy and never the vector itself.
+    static const std::vector<cascade::core::HostTrack> kNoTracks;
+    for (const cascade::core::HostTrack& t : extras != nullptr ? extras->polled : kNoTracks) {
         // THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do
         // not disagree about what is still flying. A dropped target simply
         // stops appearing in the snapshot; ageMs is still published for the
@@ -6290,7 +6435,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_PLUGIN_COMMAND:
             // Queued for the plugin to take with poll_command; nothing of the
             // plugin's runs here.
-            if (c.ival[0] < 0 || !pluginUi_.api().pressCommand(text, static_cast<std::uint32_t>(c.ival[0]))) {
+            if (c.ival[0] < 0 || !pluginApi_->pressCommand(text, static_cast<std::uint32_t>(c.ival[0]))) {
                 return refuse(FOXAPI_NOT_FOUND, "no such command key");
             }
             return res;
@@ -6893,8 +7038,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     pluginSettingsAllowed_ = cfg.pluginSettingsAllowed;
     applyPluginSettingsGrants();
     pluginSettings_ = cfg.pluginSettings;
-    pluginUi_.api().loadSettings(pluginSettings_);
-    pluginSettingsGen_ = pluginUi_.api().settingsGeneration();
+    pluginApi_->loadSettings(pluginSettings_);
+    pluginSettingsGen_ = pluginApi_->settingsGeneration();
     // STOPS ARE APPLIED, not merely stored, for a stronger version of the same
     // reason: the scan in the constructor has already built every plugin's
     // instances against the default source, so a plugin the user stopped last
@@ -7540,6 +7685,8 @@ void Engine::setRemoteControlSource(RemoteControlSource source) {
 }
 
 void Engine::pumpPlugins() {
+    // An unload the interface could not take (it was not framing) is retried once it has framed (pump move step P3).
+    retryPluginUnload();
     applyPluginApi();
     scannerFrame();
 }

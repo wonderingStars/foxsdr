@@ -836,6 +836,13 @@ const KnownWait kKnownWaits[] = {
      "section 10), so its teardown's stopControlThread returns at once. The step that moves "
      "the window's pump onto the control thread (engine-stage4.md, plan step 4) charges it "
      "once and raises kShutdownBoundedWaitsMs with it"},
+    {"src/engine/engine.hpp", "kPluginUiHandshake", 0,
+     "Engine::deliverPluginDirective() - the bound on the front end (the window) acknowledging a plugin directive, which is the "
+     "unload handshake: before a module is unmapped the control thread's pass posts a release and waits for the window's frame to "
+     "apply it. NOT on the shutdown path, for two reasons: the teardown releases the plugin UI AFTER the control thread is joined "
+     "(shutdownQuiesce stops it first), where the release is applied inline by the thread that owns the plugin UI and nothing "
+     "waits; and a wait already in progress when the control thread is told to stop ends at once (its predicate is the loop's "
+     "own run flag), so stopControlThread's bound is not spent on it either (pump move step P3)"},
     {"src/core/transmitter.hpp", "kThreadJoinWait", 1,
      "Transmitter::stopThread() - the bound on the TX thread coming back, spent at the very "
      "top of the teardown. NOT followed by an abandonment: everything that thread can be "

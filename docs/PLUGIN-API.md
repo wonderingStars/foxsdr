@@ -126,9 +126,28 @@ that might be mid-unload.
 **Nothing you call waits for plugin work** - the host's own threads never wait on
 yours, and you never wait on theirs beyond a bounded copy.
 
-The existing four functions keep their existing rules. In particular
-`request_tune` still retunes on the calling thread and is documented for the GUI
-thread; from any other thread use `set_frequency`, which is queued.
+The existing four functions keep their existing rules, with one amendment. **`request_tune` is a
+request the host accepts, no longer a tune it has done** (engine extraction stage 4, the pump move's
+step P3): `CASCADE_TUNE_OK` (0) means *accepted* - the grant, the range and "a radio is open" were
+checked, and the retune is queued for the host's receiver control, which applies it at its next pass
+(within about 16 ms; never inside your call) after checking the grant again. Read `centre_hz()` (or
+the level-1 state's `centreHz`/`tuneSeq`) to see it land. One request per plugin is held: a second
+call before the first is applied replaces it, so a tracker that corrects once a second is unaffected
+and one that calls every frame cannot fill anything. The refusals (`DENIED`, `OUT_OF_RANGE`,
+`NO_DEVICE`, `FAILED`) are still answered at once, in the call. It is safe from any thread now, like
+`set_frequency`, which it matches. (`apiLevel` does not tell the two behaviours apart; do not rely on
+the retune having happened when the call returns.)
+
+**Which thread your GUI capabilities run on.** A track source, panel, instrument, basemap or
+track-info instance is created, polled and destroyed on **one thread - the host's interface (GUI)
+thread** - and `create`/`destroy` are never called from inside, or beside, one of that instance's own
+`poll_*`/`get_*` calls. (They used to come from the host's control thread, like a decoder's; they do
+not any more.) `attach` of the host-client capability comes from the same thread, before any
+capability's `create` of the same rebuild, and may be repeated with the same pointer. The host never
+unmaps your module while any of them is alive: it has the interface thread destroy them all, and
+unmaps only after that thread says it has - or, if the interface is not running frames, not at all.
+A host with no interface creates and destroys them from its control thread and never polls them.
+Decoders are unchanged: `create`/`destroy` on the control thread, `process` on the real-time thread.
 
 **After unload.** A call made through a table the host has shut down - the
 plugin was stopped, its module is being unloaded, the application is exiting -

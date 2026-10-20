@@ -237,8 +237,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.text(pluginDir_);
     // Which modules have asked for a setting, whose command keys changed, and whether any module's idle sentence
     // moved: counters the plugin API and the runner keep, so none of the three builds a vector or copies a row.
-    f.value(pluginUi_.api().settingsRequestersSeq());
-    f.value(pluginUi_.api().commandsSeq());
+    f.value(pluginApi_->settingsRequestersSeq());
+    f.value(pluginApi_->commandsSeq());
     f.value(pluginRunner_.statusGeneration());
     // The install records' verdict on each file (integrity: not the file that was installed).
     for (const cascade::core::InstalledPlugin& r : pluginInventory_.plugins) {
@@ -251,7 +251,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     // (fact.plugin.lastDenied), and the plugin-mute cluster (MUTE_CAUSES, fact.mute.*): who is muting, by
     // which module file, and whether the mute is held after a tune-away.
     for (const std::string& g : pluginTuneAllowed_) { f.text(g); }
-    f.text(pluginUi_.lastDeniedPlugin());
+    f.text(lastDeniedNow());
     for (const std::string& n : mutedBy_) { f.text(n); }
     for (const std::string& k : mutedByKeys_) { f.text(k); }
     f.value(muteKeptRunning_);
@@ -572,7 +572,7 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         b->audioDevices.push_back({a.name, a.index, i == deviceIndex_});
     }
     // API 0.3 8.8: who has asked to change a setting (one vector for the whole block, asked once).
-    const std::vector<std::string> settingsAskers = pluginUi_.api().settingsRequesters();
+    const std::vector<std::string> settingsAskers = pluginApi_->settingsRequesters();
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         ApiListBlock::Plugin w;
         w.name = p.name;
@@ -670,7 +670,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(k + "integrity",
                  cascade::core::PluginRepo::changedSinceInstallNote(pluginInventory_.plugins, w.key));
             if (w.loaded) {
-                for (const cascade::core::HostCommand& hc : pluginUi_.api().commands(w.key)) {
+                for (const cascade::core::HostCommand& hc : pluginApi_->commands(w.key)) {
                     b.pluginCommands.push_back({hc.id, hc.label, w.key});
                 }
             }
@@ -785,7 +785,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // THE TUNE GRANTS (API 0.3 8.7): the last request to tune that was refused (the module file name, as the
     // grants are keyed), and the grants no LOADED module holds - removed, renamed aside, or refused - each
     // flagged when the host holds a record of that file that did not load.
-    fact("plugin.lastDenied", pluginUi_.lastDeniedPlugin());
+    fact("plugin.lastDenied", lastDeniedNow());
     for (const std::string& g : pluginTuneAllowed_) {
         bool loadedHere = false;
         bool present = false;

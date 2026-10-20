@@ -178,6 +178,27 @@ foreach(_t IN ITEMS test_plugin_window test_plugin_status_report)
             FIXTURE_GROUP14B_PLUGIN="$<TARGET_FILE:fixture_group14_plugin_b>")
     endif()
 endforeach()
+# THE PUMP MOVE'S STEP P3 FIXTURE (tests/fixture_pump3_plugin.cpp): an INSTRUMENTED track source that is also a host client (it can
+# Doppler-churn request_tune from its poll), with a basemap and a track-info table, which counts every create and destroy, the
+# thread each ran on, any poll or destroy through a dead handle and any destroy beside a poll, can be HELD inside poll_tracks, and
+# writes how many handles were alive when its image was unmapped. For the tests of the plugin UI's thread ownership: the directive
+# the engine posts and the window applies, and the unload handshake. Copied into a plugin directory of the test's own.
+add_library(fixture_pump3_plugin SHARED fixture_pump3_plugin.cpp)
+target_include_directories(fixture_pump3_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+foreach(_t IN ITEMS test_plugin_ui_threaded test_plugin_unload_handshake)
+    if(TARGET ${_t})
+        add_dependencies(${_t} fixture_pump3_plugin)
+        target_compile_definitions(${_t} PRIVATE
+            FIXTURE_PUMP3_PLUGIN="$<TARGET_FILE:fixture_pump3_plugin>")
+    endif()
+endforeach()
+# THE TWO THREADED PLUGIN-UI TESTS RUN ALONE (RUN_SERIAL), for the reason the transmit suite does: they hold REAL bounds (the unload
+# handshake's 250 ms, a stop that must come back in milliseconds, a frame that must acknowledge within one) and spin a frame thread
+# against the engine's pass for seconds, so beside seven other tests on a loaded runner a bound can be missed by the machine and not by
+# the code - and they would add their own load to the audio-timing tests beside them.
+if(TARGET test_plugin_ui_threaded AND TARGET test_plugin_unload_handshake)
+    set_tests_properties(test_plugin_ui_threaded test_plugin_unload_handshake PROPERTIES RUN_SERIAL TRUE)
+endif()
 # test_snapshot_app loads three decoders at once (engine stage 2): the same
 # fixture built under three descriptor names, since the host runs one plugin
 # per name.

@@ -8,6 +8,14 @@
 // would have tied the lifetime of a satellite tracker - which consumes no
 // signal - to the audio chain.
 //
+// WHOSE IT IS (the pump move's step P3). This object belongs to the FRONT END's thread: the window builds it over the engine's
+// PluginApiCore (the half of the plugin system that IS thread-safe - grants, the stop set, request queues, settings, the
+// request_tune records) and is the only thing that ever calls rebuild(), poll() or the instance-touching members. The engine
+// never does: it posts a PluginDirective (core/plugin_directive.hpp) and the window applies it with apply(), at the head of its
+// frame's poll. A front end with no window (the headless engine) lets the engine drive a PluginUi of its own through the same
+// apply() on its own thread. Everything that a plugin's own thread may reach - tuneRequestFromPlugin, the host services - is
+// guarded, because a plugin may call request_tune and the clock from a worker.
+//
 // IMAGE DECODERS ARE NOT HERE, and that is the same rule applied honestly:
 // they consume samples, so they belong to PluginRunner with the other
 // decoders. They were created here while nothing routed samples to them, which
@@ -36,6 +44,7 @@
 
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
+#include "core/plugin_directive.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_ui_data.hpp"
 
@@ -178,17 +187,7 @@ inline bool mapSelfOpens(bool hadVisibleLastFrame, bool haveVisibleNow) {
 
 // (HostPanel, HostInstrument and PluginWindows moved to core/plugin_ui_data.hpp, with the other data the views draw.)
 
-// What the host lets a plugin do to the receiver. Supplied by the owner (the
-// GUI), so this header stays free of the pipeline and the source stack.
-struct HostServices {
-    std::function<double()> centreHz;
-    std::function<double()> sampleRateHz;
-    // Returns a CASCADE_TUNE_* code. The permission check is applied by
-    // PluginUi BEFORE this is called, so an implementation only has to do the
-    // tuning and report device-level outcomes.
-    std::function<std::int32_t(double)> tune;
-    std::function<std::int64_t()> unixTimeMs;
-};
+// (HostServices moved to core/plugin_directive.hpp, where a directive carries it.)
 
 // ---------------------------------------------------------------------------
 // The host bridges behind CascadeHostApi, counted
@@ -417,6 +416,10 @@ public:
     // nothing publishes.
     explicit PluginUi(std::shared_ptr<ReceiverSnapshot> snapshot)
         : api_(std::make_shared<PluginApiCore>(std::move(snapshot))) {}
+    // Over an API core someone else owns (the pump move's step P3): the engine creates the core and the window's PluginUi is
+    // built over it, so pluginUi.api() is the engine's pluginApi_. Null makes a private one.
+    explicit PluginUi(std::shared_ptr<PluginApiCore> core)
+        : api_(core != nullptr ? std::move(core) : std::make_shared<PluginApiCore>()) {}
     ~PluginUi();
 
     PluginUi(const PluginUi&) = delete;
@@ -430,6 +433,13 @@ public:
     // Creates instances for every loaded plugin that declares a UI or
     // host-client capability. Destroys whatever existed before.
     void rebuild(const std::vector<LoadedPlugin>& plugins);
+
+    // APPLIES ONE DIRECTIVE (core/plugin_directive.hpp): the host services, the local stop set, and a rebuild over the plugin
+    // list it carries - over nothing at all for a release, which is how the engine has the instances destroyed before it
+    // unmaps the modules. What it does NOT do is touch the core's grants, stop set or request_tune records: those are the
+    // engine's and go straight to the core (thread-safe), so applying a directive is never what changes a permission. The
+    // basemap and track-info tables the directive names are the window's to attach (they are its caches). GUI thread.
+    void apply(const PluginDirective& d);
 
     // DEMONSTRATION INSTRUMENTS, for designing faces without a radio. `spec`
     // is a comma-separated list of kind names (pager, teleprinter, tone,
@@ -555,14 +565,15 @@ public:
     // Which plugins have asked to control the receiver at least once, so the
     // GUI can offer the toggle only where it means something. A plugin that
     // never asks never appears. These are tuneKey() values, not display names.
-    const std::vector<std::string>& tuneRequesters() const { return tuneRequesters_; }
+    // (Kept in the API core, under its lock, since step P3: a plugin's own thread writes it. A copy.)
+    std::vector<std::string> tuneRequesters() const { return api_->tuneRequesters(); }
     bool tuneAllowed(const std::string& pluginKey) const;
     void setTuneAllowed(const std::string& pluginKey, bool allowed);
 
     // The last refusal, for display: "X asked to tune and was not allowed" is
     // the message that turns a mysteriously idle tracker into an obvious
-    // one-click fix.
-    const std::string& lastDeniedPlugin() const { return lastDenied_; }
+    // one-click fix. (A copy, for the same reason.)
+    std::string lastDeniedPlugin() const { return api_->lastDeniedPlugin(); }
 
     std::size_t trackCount() const { return tracks_.size(); }
 
@@ -671,12 +682,12 @@ private:
     // copy what they need under this lock and call it after releasing it.
     mutable std::mutex servicesMutex_;
     HostServices services_;
+    // The stop set rebuild() skips by: this object's own copy, set on its thread (by setStopped, or by a directive).
+    // tuneRequestFromPlugin does NOT read it - a plugin's thread asks the core's.
     PluginStopSet stopped_;
-    // Created with this object, shared with every bridge. See api().
+    // Shared with every bridge, and (since step P3) with the engine that created it. See api(). The tune grant, the
+    // requesters and the last refusal are the core's.
     std::shared_ptr<PluginApiCore> api_ = std::make_shared<PluginApiCore>();
-    std::vector<std::string> tuneRequesters_;
-    std::vector<std::string> tuneAllowed_;
-    std::string lastDenied_;
 
     // What the host has watched each live track do. Bounded twice over: by the
     // number of tracks the plugins are reporting right now (see

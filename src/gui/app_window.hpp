@@ -603,6 +603,15 @@ private:
     // everything the window keeps.
     std::unique_ptr<cascade::engine::Engine> engineHolder_;
     cascade::engine::Engine& engine_;
+    // THE PLUGIN UI IS THIS WINDOW'S (the pump move's step P3): the track sources, panels and instruments polled in the frame
+    // (hostPollPlugins) and drawn all frame long, built over the API core the ENGINE owns. Only this thread touches it. The engine
+    // does not rebuild or clear it: it posts a directive (core/plugin_directive.hpp) and this window applies the newest at the head
+    // of its frame (applyPluginDirective), which is also its acknowledgement of an unload - see Engine::detachAndUnloadPlugins.
+    // Declared right after the engine so the engine is built first and outlives it.
+    cascade::core::PluginUi pluginUi_;
+    // The engine's directive link, held by reference so the window's frame-head apply names the engine nowhere (it is the engine's
+    // object and the window only ever applies from it).
+    cascade::core::PluginDirectiveLink& directives_;
 
     // --- WHAT THE ENGINE ASKS OF THIS WINDOW (engine/engine_host.hpp) ---------
     // Each answers exactly as the line the moved code used to run here did,
@@ -624,11 +633,18 @@ private:
     double wallTimeS() const override;
     void pauseWatchdog() override;
     void resumeWatchdog() override;
-    void beforePluginRescan() override;
-    void onPluginsUnloading() override;
-    void attachBasemap(const CascadeBasemapApi* api) override;
-    void attachTrackInfo(const CascadeTrackInfoApi* api) override;
-    void showDemonstrationInstrument(const cascade::core::HostInstrument& in) override;
+    // (The pump move's step P3 took the last five hooks out - beforePluginRescan, onPluginsUnloading, attachBasemap, attachTrackInfo
+    // and showDemonstrationInstrument: the plugin UI is this window's, so the engine POSTS a directive and this window applies it.)
+    // Applies the newest plugin directive, if one is waiting, on this thread: at the head of the frame and at the head of
+    // hostPollPlugins (both before any reference into the plugin UI is taken); the engine runs it too, inline, where it is
+    // running on this thread (Engine::setPluginUiApplier).
+    void applyPluginDirective();
+    // What one directive does here: fold the map pages' geometry into the saved list (a release), the plugin UI rebuilt or
+    // emptied, the basemap and the track-info client attached or let go (every GL delete this causes is on this thread, with the
+    // context current), and a demonstration instrument's window shown.
+    void applyDirective(const cascade::core::PluginDirective& d);
+    // What the bounded-run status report prints of the plugin UI.
+    cascade::engine::PluginUiReport pluginUiReport() const;
     // The publish-time facts (engine/stage3b-pre OPEN 4): no longer
     // EngineHost hooks the engine calls while publishing, but this window's
     // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the

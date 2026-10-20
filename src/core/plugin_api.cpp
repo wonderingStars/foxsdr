@@ -222,6 +222,12 @@ void PluginApiCore::clearClientLocked(std::size_t index) {
     controls_ = keep;
     controlHead_ = 0;
     controlCount_ = kept;
+    // ...and its legacy tune, if one is waiting.
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < retuneCount_; ++i) {
+        if (retunes_[i].client != index) { retunes_[k++] = retunes_[i]; }
+    }
+    retuneCount_ = k;
 }
 
 void PluginApiCore::setLiveSet(const std::vector<std::string>& keys) {
@@ -278,6 +284,99 @@ void PluginApiCore::clearGrants() {
 bool PluginApiCore::settingsGranted(const std::string& key) const {
     std::lock_guard<std::mutex> lk(mutex_);
     return contains(settingsGranted_, key);
+}
+
+bool PluginApiCore::tuneGranted(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return contains(tuneGranted_, key);
+}
+
+bool PluginApiCore::isStopped(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return contains(stopped_, key);
+}
+
+void PluginApiCore::noteTuneRequester(const std::string& key) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (std::find(tuneRequesters_.begin(), tuneRequesters_.end(), key) == tuneRequesters_.end()) {
+        tuneRequesters_.push_back(key);
+    }
+}
+
+void PluginApiCore::noteTuneDenied(const std::string& key) {
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        lastDenied_ = key;
+    }
+    deniedSeq_.fetch_add(1, std::memory_order_release);
+}
+
+std::vector<std::string> PluginApiCore::tuneRequesters() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return tuneRequesters_;
+}
+
+std::size_t PluginApiCore::tuneRequesterCount() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return tuneRequesters_.size();
+}
+
+std::string PluginApiCore::lastDeniedPlugin() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return lastDenied_;
+}
+
+void PluginApiCore::clearTuneRecords() {
+    bool hadDenied = false;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        tuneRequesters_.clear();
+        hadDenied = !lastDenied_.empty();
+        lastDenied_.clear();
+    }
+    if (hadDenied) { deniedSeq_.fetch_add(1, std::memory_order_release); }
+}
+
+std::int32_t PluginApiCore::queueCentreRetune(const std::string& key, double centreHz) {
+    if (!attached()) { return CASCADE_TUNE_FAILED; }
+    // The range test the legacy path always applied, as a positive test (NaN fails it).
+    if (!(centreHz > 0.0 && centreHz < 1e12)) { return CASCADE_TUNE_OUT_OF_RANGE; }
+    std::lock_guard<std::mutex> lk(mutex_);
+    std::size_t index = clients_.size();
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        if (c->key == key) {
+            index = c->index;
+            break;
+        }
+    }
+    if (index >= clients_.size()) { return CASCADE_TUNE_FAILED; }
+    // NEWEST WINS, one slot per module.
+    for (std::size_t i = 0; i < retuneCount_; ++i) {
+        if (retunes_[i].client == index) {
+            retunes_[i].hz = centreHz;
+            return CASCADE_TUNE_OK;
+        }
+    }
+    if (retuneCount_ == kCentreRetuneQueue) { return CASCADE_TUNE_FAILED; }
+    retunes_[retuneCount_++] = CentreRetune{index, centreHz};
+    return CASCADE_TUNE_OK;
+}
+
+void PluginApiCore::takeCentreRetunes(std::vector<CentreRetune>& out) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (std::size_t i = 0; i < retuneCount_; ++i) { out.push_back(retunes_[i]); }
+    retuneCount_ = 0;
+}
+
+bool PluginApiCore::centreRetuneStillAllowed(const CentreRetune& r) const {
+    if (!attached()) { return false; }
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (r.client >= clients_.size()) { return false; }
+    const PluginApiClient& cl = *clients_[r.client];
+    if (!cl.live.load(std::memory_order_acquire)) { return false; }
+    const std::uint32_t g = cl.grants.load(std::memory_order_acquire);
+    if ((g & CASCADE_STATE_STOPPED) != 0u) { return false; }
+    return (g & CASCADE_STATE_TUNE_GRANTED) != 0u;
 }
 
 std::vector<std::string> PluginApiCore::settingsRequesters() const {

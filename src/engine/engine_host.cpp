@@ -28,10 +28,4 @@ void EngineHost::onCatalogueResult() {}
 void EngineHost::onAddAllFinished() {}
 
 
-void EngineHost::beforePluginRescan() {}
-void EngineHost::onPluginsUnloading() {}
-void EngineHost::attachBasemap(const CascadeBasemapApi*) {}
-void EngineHost::attachTrackInfo(const CascadeTrackInfoApi*) {}
-void EngineHost::showDemonstrationInstrument(const cascade::core::HostInstrument&) {}
-
 }  // namespace cascade::engine

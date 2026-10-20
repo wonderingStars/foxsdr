@@ -57,6 +57,7 @@
 #include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
+#include "core/plugin_directive.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_runner.hpp"
@@ -116,6 +117,9 @@ struct ControlThreadOptions {
     unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
 };
 
+// The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
+using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
+
 // WHAT THE WEB STATUS NEEDS FROM THE WINDOW'S PLUGIN POLL (pump move step P2): the track-info plugin's answers for the tracks on
 // screen, and the headers of the receiver plugins' decoded pictures. Both used to be asked of the window while the engine published
 // (the host hooks enrichWebTrack and fillWebImages), reading the window's TrackInfoCache and picture buffer - GUI-thread state - from
@@ -133,6 +137,10 @@ struct WebTrackInfo {
 struct WebExtras {
     std::vector<WebTrackInfo> tracks;
     std::vector<cascade::net::RadioStatus::Image> images;
+    // THE TRACKS THE LAST PLUGIN POLL FOUND, as the window drew them (the pump move's step P3): the pass used to walk the plugin
+    // UI's own vector for the browser's target list - a vector the window's poll clears and refills every frame - and walks this
+    // immutable copy now. The window carries the VISIBLE ones (the staleness rule the desktop applies); the pass applies it again.
+    std::vector<cascade::core::HostTrack> polled;
 };
 
 struct FrontEndFacts {
@@ -147,6 +155,14 @@ struct FrontEndFacts {
     // window's frame count to name in it - the window's onCatalogueResult hook used to read its own counter from the pass.
     bool pluginTestReport = false;
     int frame = 0;
+};
+
+// WHAT THE BOUNDED-RUN STATUS REPORT PRINTS OF THE PLUGIN UI (pump move step P3): the engine no longer holds the plugin UI - it is
+// the front end's - so the front end hands over what it polled when it asks for the report (Engine::reportPluginStatus).
+struct PluginUiReport {
+    std::vector<cascade::core::HostTrack> tracks;
+    std::size_t paths = 0;
+    std::vector<cascade::core::HostPanel> panels;
 };
 
 // Engine::StatusText - see Engine::publishStatusText.
@@ -284,6 +300,10 @@ private:
         // Replaces the serial-port walk FOXAPI_OP_SCAN_SERIAL_PORTS makes when set (the registry on Windows, /dev on
         // Linux): a window test asks for the machine's ports and must get the ones it names, not the desk's.
         std::vector<std::string> (*serialPorts)();
+        // Called on the unloading thread at the last moment before the modules are unmapped (detachAndUnloadPlugins), when
+        // the interface has acknowledged its release: the instrumented fixture module counts the instances still alive there
+        // (tests/test_plugin_unload_handshake.cpp). Never set in the product.
+        void (*pluginsAboutToUnmap)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -313,7 +333,35 @@ private:
     // Takes every live plugin handle off the pipeline and the UI, in the one
     // order that is safe, then unmaps the modules. The ONLY way any code here
     // may call PluginHost::unloadAll() — see the note in its body.
-    void detachAndUnloadPlugins();
+    //
+    // RETURNS WHETHER THE MODULES WERE UNMAPPED. False means the interface (which holds the plugin UI) did not acknowledge the
+    // release within kPluginUiHandshake - it is not framing - and nothing was unmapped; the caller does not go on to touch the
+    // files or scan, and the operation is retried (pluginUnloadOp_) when the interface frames again.
+    bool detachAndUnloadPlugins();
+    // THE ONE WAY A DIRECTIVE IS DELIVERED (see setPluginUiApplier): posted, and applied inline where the calling thread is the
+    // interface's (or there is none), otherwise waited for - bounded - with the control thread's watchdog paused. Returns whether
+    // it was applied before this returned.
+    bool deliverPluginDirective(cascade::core::PluginDirective d);
+    std::atomic<std::uint64_t> pluginUiSilentPolls_{~std::uint64_t{0}};
+    // An unload that was refused because the interface was not framing, retried at the next pass in which it has been
+    // (pumpPlugins): what was being done, the file it named, and the interface's poll count when it failed.
+    // (Also: THE SILENCE RULE of deliverPluginDirective - a wait that ran out records the interface's poll count, and no wait is made
+    // again until that count has moved, so a window that hangs costs the pass ONE bound, not one per refresh.)
+    enum class PluginUnloadOp { None, Rescan, Remove, RemoveBlocked };
+    // (An atomic so a test on another thread may watch for the deferral; the pass is the only writer.)
+    std::atomic<PluginUnloadOp> pluginUnloadOp_{PluginUnloadOp::None};
+    std::string pluginUnloadFile_;
+    std::uint64_t pluginUnloadPolls_ = 0;
+    void deferPluginUnload(PluginUnloadOp op, const std::string& file);
+    void retryPluginUnload();
+    // The last refusal's module (PLUGINS' lastDenied), copied from the core only when it moved - a settled pass allocates nothing.
+    std::string apiLastDenied_;
+    std::uint64_t apiLastDeniedSeq_ = ~std::uint64_t{0};
+    const std::string& lastDeniedNow();
+    // The applier the front end installed (null: none), and the thread that installed it.
+    mutable std::mutex pluginApplierMutex_;
+    std::shared_ptr<const PluginUiApplier> pluginApplier_;
+    std::atomic<std::thread::id> pluginGuiThread_{};
     // Runs one SoapySDR enumeration into soapyDevices_ and re-points the
     // combo selection at the active device by args (labels can repeat; a
     // device that vanished from the scan leaves sourceSel_ = -1 and the
@@ -393,15 +441,14 @@ private:
     // muteStates_ and the long comment on rebuildMuteStates for why.
     std::vector<cascade::gui::IndexedPreset> validatedPresets(
         const cascade::core::LoadedPlugin& p) const;
-    // Grants or revokes one plugin, updating both the live PluginUi and the
+    // Grants or revokes one plugin, updating both the live grant (the API core's, since the pump move's step P3) and the
     // persisted list. One function so the two can never disagree: a grant that
     // took effect but was not saved would come back revoked next launch.
     // `pluginKey` is a PluginUi::tuneKey() — the module file name, never the
     // display name, which the plugin itself chooses.
     void setPluginTuneAllowed(const std::string& pluginKey, bool allowed);
-    // Pushes pluginTuneAllowed_ into pluginUi_. Called after every
-    // PluginUi::rebuild, because rebuild follows a clear() that drops the
-    // grants along with the instances — without this a rescan silently revoked
+    // Pushes pluginTuneAllowed_ into the API core. Called before every plugin directive, because a release
+    // (detachAndUnloadPlugins) drops the grants along with the live set — without this a rescan silently revoked
     // every permission the user had given.
     void applyPluginTuneGrants();
 
@@ -1631,20 +1678,33 @@ private:
     // that, because reverse declaration order is what the destructor falls
     // back on and it used to have these two the wrong way round. A decoder's
     // destroy() may ask the host for the time (Survey Engine 0.1.0 does, to
-    // timestamp the dwell it is finishing), and with pluginUi_ destroyed first
+    // timestamp the dwell it is finishing), and with the plugin UI destroyed first
     // that call reached a dead host: an access violation on Windows and an
     // abort inside libc++ on Android, both reported from the field on
-    // 2026-09-16 from the same plugin at shutdown.
+    // 2026-09-16 from the same plugin at shutdown. (Since the pump move's step P3 the
+    // WINDOW'S PluginUi is destroyed before the engine, after ~AppWindow has taken the plugin system down in
+    // that order; the bridges it leaves behind answer "detached" - plugin_ui.cpp.)
     //
     // THE ONE RECEIVER SNAPSHOT (engine stage 2, core/receiver_snapshot.hpp),
-    // declared first so pluginUi_ can be built on it: publishReceiverState
+    // declared first so the API core can be built on it: publishReceiverState
     // fills it once a frame, and the plugin host API, the web server and CAT
     // all answer from it. Shared, because plugin bridges outlive this window.
     std::shared_ptr<cascade::core::ReceiverSnapshot> receiverSnapshot_ =
         std::make_shared<cascade::core::ReceiverSnapshot>();
-    cascade::core::PluginUi pluginUi_{receiverSnapshot_};
+    // THE PLUGIN SYSTEM'S ENGINE HALF (the pump move's step P3). The API core - the grants, the stop set, the plugins' request
+    // queues, settings, command keys and the request_tune records, all thread-safe by their own lock - is the ENGINE'S, created
+    // here; the plugin UI (the track sources, panels and instruments the window polls, the basemap and the track-info client)
+    // is the WINDOW'S, built over this core, and the engine never touches it: it posts a directive through pluginLink_ and the
+    // window applies it on its own thread (core/plugin_directive.hpp; docs/engine-stage4.md, step P3).
+    std::shared_ptr<cascade::core::PluginApiCore> pluginApi_ =
+        std::make_shared<cascade::core::PluginApiCore>(receiverSnapshot_);
+    cascade::core::PluginDirectiveLink pluginLink_;
+    // THE PLUGIN UI OF AN ENGINE WITH NO WINDOW (the table's headless engine, the tests that build an Engine alone): driven by
+    // the engine itself, on the thread that posts, through the same apply() the window uses. Dormant - never rebuilt, never
+    // polled - once a window has installed its applier (setPluginUiApplier), which is before its first scan.
+    cascade::core::PluginUi headlessUi_{pluginApi_};
     // Drives the loaded decoders with real audio. Declared AFTER pluginHost_
-    // and pluginUi_ so it is destroyed BEFORE both: the runner's destructor
+    // and the API core / headlessUi_ so it is destroyed BEFORE them: the runner's destructor
     // calls each plugin's destroy(), which is code inside a module the host
     // unmaps and which may call a host service on its way out.
     cascade::core::PluginRunner pluginRunner_;
@@ -2071,8 +2131,8 @@ private:
     // succeeds and persisted with the rest of the config.
     std::int64_t pluginLastUpdateCheck_ = 0;
     // AppConfig::pluginTuneAllowed. THIS is the durable copy of the grant, and
-    // PluginUi holds the live one: PluginUi::clear() drops its set with the
-    // instances on every rescan, so the permission has to survive somewhere
+    // the API core holds the live one: a release (every rescan) drops its set
+    // with the live modules, so the permission has to survive somewhere
     // that a rescan does not touch.
     std::vector<std::string> pluginTuneAllowed_;
     // AppConfig::pluginSettingsAllowed - the durable copy of the level-1
@@ -2457,6 +2517,22 @@ public:
     void setRemoteControlSource(RemoteControlSource source);
     void pumpRemoteControls();
 
+    // THE PLUGIN UI'S OWNER (pump move step P3). The front end that holds the plugin UI installs a function that applies one
+    // directive to it (core/plugin_directive.hpp); the engine never calls it from the control thread - it posts, and the front
+    // end applies at the head of its frame (pluginDirectives().applyNewest). The engine runs it INLINE, on the calling thread,
+    // only where that thread is the front end's own: the thread that installed it, or any thread while no control thread runs
+    // (the pass is then in the front end's frame, as it is today). The calling thread is recorded as the front end's. An empty
+    // function removes the front end: the engine drives its own plugin UI again. Install before the first scan.
+    void setPluginUiApplier(PluginUiApplier applier);
+    cascade::core::PluginDirectiveLink& pluginDirectives() { return pluginLink_; }
+    // The engine-owned API core the window builds its PluginUi over.
+    const std::shared_ptr<cascade::core::PluginApiCore>& pluginApiShared() const { return pluginApi_; }
+    // THE BOUND ON THE INTERFACE ACKNOWLEDGING A DIRECTIVE (the unload handshake): the pass waits at most this long for the
+    // front end's frame to apply the directive it posted, with the control thread's watchdog paused. On a release that runs
+    // out, the modules are NOT unmapped (unmapping one the interface still holds is the failure the handshake exists to
+    // prevent): the pass logs it and retries when the interface frames again.
+    static constexpr std::chrono::milliseconds kPluginUiHandshake{250};
+
     // The per-frame pump (engine.cpp says what each phase runs, in order).
     void pumpFrameBegin();
     void pumpInputs();
@@ -2491,7 +2567,8 @@ public:
     // receiver plugins' pictures it holds (the plugin windows poll them into a buffer of their own); and
     // reportPluginTestResult from onCatalogueResult when CASCADE_PLUGIN_TEST asked, naming the frame the fetch resolved on.
     // Neither changes the engine (the status report is not const only because the pipeline's accessors are not).
-    void reportPluginStatus(const std::vector<cascade::core::HostImage>& images);
+    // THE PLUGIN UI IS THE FRONT END'S (pump move step P3), so it hands over what it polled for the "plugin ui:" lines.
+    void reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui);
     void reportPluginTestResult(int frame) const;
     void pumpWorkers();
     void pumpAudio();

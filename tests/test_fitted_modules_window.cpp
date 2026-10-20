@@ -160,9 +160,9 @@ struct AppWindowTestAccess {
     static const std::vector<cascade::core::LoadedPlugin>& host(AppWindow& a) { return a.engine_.pluginHost_.plugins(); }
     static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
     static bool stopped(AppWindow& a, const std::string& key) { return a.engine_.pluginIsStopped(key); }
-    static bool tuneAllowed(AppWindow& a, const std::string& key) { return a.engine_.pluginUi_.tuneAllowed(key); }
-    static bool settingsAllowed(AppWindow& a, const std::string& key) { return a.engine_.pluginUi_.settingsAllowed(key); }
-    static cascade::core::PluginApiCore& core(AppWindow& a) { return a.engine_.pluginUi_.api(); }
+    static bool tuneAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.tuneAllowed(key); }
+    static bool settingsAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.settingsAllowed(key); }
+    static cascade::core::PluginApiCore& core(AppWindow& a) { return *a.engine_.pluginApi_; }
     static cascade::core::PluginInventory& inventory(AppWindow& a) { return a.engine_.pluginInventory_; }
     static const std::string& engineDir(AppWindow& a) { return a.engine_.pluginDir_; }
     static void aLine(AppWindow& a, const std::string& plugin, const std::string& text) {
@@ -180,7 +180,7 @@ struct AppWindowTestAccess {
         model.receiverRunning = e.pipeline_.running();
         const std::vector<cascade::core::DecoderStatus> status = e.pluginRunner_.status();
         const std::vector<cascade::core::LoadedPlugin>& list = e.pluginHost_.plugins();
-        const std::vector<std::string> settingsAskers = e.pluginUi_.api().settingsRequesters();
+        const std::vector<std::string> settingsAskers = e.pluginApi_->settingsRequesters();
         model.modules.reserve(list.size());
         for (const cascade::core::LoadedPlugin& p : list) {
             const std::string file = cascade::core::pluginKey(p);
@@ -193,10 +193,10 @@ struct AppWindowTestAccess {
             }
             FittedModule m = makeFittedModule(p, e.pluginIsStopped(file), e.pluginRunner_.isFeeding(file),
                                               std::move(idleDetail),
-                                              e.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
+                                              a.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(p)));
             m.settingsCapable = std::find(settingsAskers.begin(), settingsAskers.end(), file) != settingsAskers.end();
-            m.settingsAllowed = e.pluginUi_.settingsAllowed(file);
-            for (const cascade::core::HostCommand& hc : e.pluginUi_.api().commands(file)) {
+            m.settingsAllowed = a.pluginUi_.settingsAllowed(file);
+            for (const cascade::core::HostCommand& hc : e.pluginApi_->commands(file)) {
                 m.commands.push_back(FittedModule::Command{hc.id, hc.label});
             }
             if (const auto nit = e.pluginNotices_.find(file); nit != e.pluginNotices_.end()) {

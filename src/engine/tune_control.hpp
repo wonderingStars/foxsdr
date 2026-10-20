@@ -366,8 +366,9 @@ inline std::vector<PresetBarKey> presetBarKeys(
 
 // --- The mid-iteration-rebuild hazard: record now, apply after the loop ----
 //
-// applyPluginPreset ends by calling refreshPluginRunner(), which rebuilds
-// pluginUi_'s panels, instruments and images and, through ensureMapPage's own
+// applyPluginPreset ends by calling refreshPluginRunner(), which posts a plugin directive that
+// the window applies by rebuilding its plugin UI's panels, instruments and images (the pump move's step P3;
+// it was the engine's own rebuild before) and, through ensureMapPage's own
 // bookkeeping, the map page list too - the very containers
 // AppWindow::drawPluginWindows is iterating when one of ITS windows draws a
 // preset bar. 0.96.1 fixed a crash of exactly this shape in a different list

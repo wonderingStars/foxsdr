@@ -1621,6 +1621,46 @@ every other line (`decoderLinesTotal` moves, `DECODER_LINES` serves it, `listSeq
 interface that holds the plugin's cache (the standard window's `TrackInfoCache` is GUI-thread state) polls the plugin's text in its own
 frame and sends each line; the engine used to ask for them through `EngineHost::drainTrackInfoText` on every pass.
 
+### 8.15 The plugin UI is the interface's thread (the pump move, step P3) - what a plugin author and an interface may rely on
+
+No new op, list, fact or event: the engine API is unchanged. What moved is WHICH THREAD touches a plugin's GUI capabilities, and with it
+three promises of the **plugin ABI** (`src/core/plugin_abi.h`, `docs/PLUGIN-API.md`, appended - nothing above them changed, and
+`CASCADE_HOST_API_LEVEL` stays 1: the table's shape and every function in it are as they were). Decided by the owner (the pump move's
+survey, decisions 1 and 2) and adopted with the recommendation, each reversible:
+
+**8.15.1 `request_tune` is queued; `CASCADE_TUNE_OK` means ACCEPTED (decision 1).** The legacy host call used to retune the receiver on
+its caller's thread - the GUI thread inside a track source's `poll_tracks`, or a plugin's own worker - which is a write into the
+receiver from outside the engine's pass. It is now checked and queued like the level-1 `set_frequency`: the refusals are answered in the
+call, as always (`DENIED` for a stopped plugin or no grant - and the refusal is recorded for the Fitted modules plate; `OUT_OF_RANGE`;
+`NO_DEVICE` when no source has a rate; `FAILED` for a detached host or a full queue), and everything else is `OK`, meaning the retune is
+queued for the pass. The pass applies it at its next plugin phase - **within one pass, 16 ms** - after checking the grant and the stop set
+again (a grant withdrawn between the call and the pass stops the retune silently) and that a source is still open, then retunes the
+source's centre exactly as the call used to. **One request is held per plugin**: a second call before the pass applies the first
+replaces it (the newest frequency is the one that matters; a corrector that asks once a second is unaffected, one that asks every frame
+cannot fill anything). The ABI text now says all of this next to `CASCADE_TUNE_*`, and the plugin author's guide's "Threads" section. A
+plugin that must know the receiver has moved reads `centre_hz()` or the level-1 state's `centreHz`/`tuneSeq`; the centre `centre_hz()`
+answers is the published one (at most one pass old), not a read of the source from outside the pass.
+
+**8.15.2 The GUI capabilities run on one thread (what a host now guarantees).** A track source, panel, instrument, basemap or track-info
+instance, and the host-client `attach`, are created, polled and destroyed on the interface's (GUI) thread - `create`/`destroy` between
+frames, never from inside or beside one of that instance's own `poll_*`/`get_*` calls - where they used to be created and destroyed from
+the host's control thread. A host with no interface (a headless engine) still creates and destroys them from its control thread and never
+polls them. Decoders are unchanged.
+
+**8.15.3 A module is never unmapped while one of them is alive (the unload handshake; decision 2).** Before a rescan, a removal or the
+shutdown unmaps the modules, the engine posts a RELEASE directive and waits for the interface to say it has destroyed every instance and
+let go of the basemap and the track-info client - **bounded at 250 ms**, with the control thread's watchdog paused across the wait, and
+ending at once if the control thread is told to stop. **If the wait runs out the modules are NOT unmapped**: the pass writes one
+warning, goes on running at its own period, and retries when the interface frames again (it does not wait again while the interface is
+silent). The shutdown does not wait on an interface that is no longer framing: it joins the control thread first and then releases the
+plugin UI on the interface's own thread, as it always did.
+
+**What an interface does.** The standard window applies the engine's newest plugin directive at the head of each frame and at the head of
+its plugin poll (`AppWindow::applyPluginDirective`), which is also the acknowledgement; it owns its `PluginUi` (built over the engine's
+API core), the basemap's tiles (GL textures - every GL delete they cause is on its thread) and the track-info cache. An interface that
+holds none of this has nothing to do: the engine drives its own plugin UI, inline, when no interface has installed an applier
+(`Engine::setPluginUiApplier`).
+
 ## 9. Events and ops
 
 `FOXAPI_EVENT_PATCH` (10): the patch graph, its epoch (a document load) or

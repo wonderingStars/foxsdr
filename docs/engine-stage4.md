@@ -3413,3 +3413,231 @@ OPERATOR-VISIBLE DIFFERENCES (all small, all by design of the move):
     frame after the press - where the hook opened them in the frame of the drain.
   * The track-info plugin's answers reach the web status a frame after the window first sees the track.
   * A converter command that changed nothing no longer re-seeds the LO field (typed-but-uncommitted text stays).
+
+PUMP MOVE, STEP P3 (2026-10-20; the survey's section 1.4 and section 7 step P3, scratchpad/pump-move-survey.md): THE PLUGIN UI IS THE WINDOW'S.
+The "most dangerous thing" of the move, fixed by an ownership change and a handshake, not an edit. Nothing about the product changes while the
+pass still runs in the frame (the move itself is P5) except the timings listed at the end: the window now APPLIES what the engine POSTS.
+Owner decisions adopted with the survey's recommendations (each reversible; recorded in docs/api-0.3-additions.md 8.15): (1) request_tune is
+QUEUED and answers OK meaning "accepted" - not the rendezvous, which could deadlock against the handshake; (2) the unload handshake is bounded
+at 250 ms, pauses the control watchdog through the existing WaitWatchdogPause, does NOT unload on a timeout (an error line, retried at the next
+pass in which the window has framed), and its wait also ends when the control thread is told to stop - the shutdown joins the control thread
+first and releases the window's side itself, on the window's thread, as it always did.
+
+THE OWNERSHIP, AS BUILT
+  Engine (src/engine/engine.hpp)  pluginApi_      the PluginApiCore (grants, stop set, request queues, settings, command keys, and since this
+                                                    step the request_tune records) - created by the engine over the one receiver snapshot.
+                                  pluginLink_     the directive link (core/plugin_directive.hpp): a mutex, an epoch, the newest directive, an
+                                                    atomic acknowledgement, a condition variable for the bounded wait.
+                                  headlessUi_     the plugin UI of an engine with NO window (the table's headless engine, an Engine built
+                                                    alone in a test). Dormant once a window has installed its applier. See DEVIATIONS 2.
+  Window (src/gui/app_window.hpp) pluginUi_       the PluginUi, constructed OVER pluginApi_ (pluginUi_.api() is still the engine's core).
+                                  directives_     a reference to the engine's link, so applyPluginDirective names the engine nowhere.
+  PluginDirective (the record):   epoch, release, plugins (LoadedPlugin value copies), stopped (keys), services (centre, rate, time, tune),
+                                  basemap and trackInfo (the two plugin tables chosen, first-wins, not stopped).
+  The engine stops calling setServices / rebuild / clear / setStopped / setTuneAllowed / setSettingsAllowed on any PluginUi but its own
+  headless one. refreshPluginRunner builds a directive and hands it to Engine::deliverPluginDirective; detachAndUnloadPlugins hands it a
+  RELEASE ("release everything borrowed from the modules, epoch N"). deliverPluginDirective posts it (a newer one replaces an older one that
+  nobody applied: newest wins, PluginDirectiveLink::skipped() counts them) and then either
+    - applies it INLINE, on the calling thread, when the caller IS the window's thread (the thread that installed the applier) or no control
+      thread is running (the pass is then in the window's frame, as it is in the product today) or no window exists (the headless engine,
+      through headlessUi_.apply) - so today's production behaviour is unchanged, to the call; or
+    - WAITS, bounded (Engine::kPluginUiHandshake, 250 ms), with the control thread's watchdog paused, ending early on !controlRun_ -
+      and not at all (the SILENCE RULE, below) while the window has not framed since a wait last ran out.
+  The window applies the newest directive in AppWindow::applyDirective at the head of the frame (drawUi, before anything is drawn or any
+  reference is taken) and at the head of hostPollPlugins (before the poll): pluginUi_.apply(d) - services, the local stop set, and a rebuild
+  over d.plugins (over nothing for a release) - then the basemap and the track-info client attached from the directive's two tables (a release
+  detaches both: every GL delete is made here, on the window's thread, with the context current, and before the frame's draw lists name a
+  texture), a demonstration instrument's window shown, and the acknowledgement: an atomic epoch the engine's wait reads.
+  The pass-side readers of the plugin UI are gone: the browser's target list is WebExtras::polled, an immutable copy of the visible tracks the
+  window hands over in FrontEndFacts every frame (the same hand-over and the same one-frame lag the track-info answers already had); the
+  demonstration instruments are the window's; the bounded-run status report is handed the tracks, paths and panels it prints
+  (Engine::reportPluginStatus(images, PluginUiReport)).
+  An unload that the window could not acknowledge is deferred (Engine::pluginUnloadOp_: a rescan, a removal or a blocked-plugin removal),
+  and retried at the top of the next pass in which the link's poll count has moved - that is, the window has framed again; a window that is
+  still silent is not waited on again, so the pass runs at its own period meanwhile.
+
+DEVIATIONS FROM THE SURVEY, and why
+  1. GRANTS AND THE STOP SET DO NOT TRAVEL IN THE DIRECTIVE. The survey listed "the stop set, grants" in the record. The grants are the core's
+     (thread-safe by their own lock): the engine sets them there directly, before it posts. Through the directive a toggle would rebuild a
+     plugin's instances, and a grant carried by a directive posted a moment earlier could overwrite one the user had just changed. The
+     directive carries the stop set only for the window's local copy (the rebuild skips by it); the core's own stop set is set at once.
+  2. THE HEADLESS ENGINE KEEPS A PLUGIN UI OF ITS OWN (headlessUi_). The survey's design made PluginUi the window's and did not say what a
+     window-less engine does. attach() of the host-client capability, the host table and the level-1 API (logs, marks, commands, set_*) live in
+     PluginUi::rebuild; without one a headless engine (the table's create(), every Engine built alone in a test) would never attach a
+     plugin. It is the same class driven through the same apply(), by the thread that posts, and dormant once a window has installed its
+     applier. The window never touches it; the guard holds the count (two lines in the engine's sources).
+  3. THE APPLY IS AT THE HEAD OF THE FRAME TOO, not only at the head of hostPollPlugins. hostPollPlugins is called from the middle of the
+     frame (drawPluginWindows), after the radar scope and the rail have drawn: a release there would delete GL textures the frame's draw
+     lists already name. The guard holds the position of both calls.
+  4. THE CENTRE A PLUGIN READS (centre_hz) IS THE PUBLISHED ONE. The service read pipeline_.activeSource() from the plugin UI's thread (a
+     tracker's poll) or a plugin's own worker, while the pass swaps the active source; it answers from the receiver snapshot now (at most one
+     pass old). The rate service reads an atomic and is unchanged. Not in the survey's table.
+  5. THE ABI'S attach-BEFORE-ANY-create() PROMISE FOR DECODERS NOW COSTS A WAIT. attach() is part of PluginUi::rebuild and so the window's; the
+     runner's decoder create() follows it in refreshPluginRunner. In the threaded world refreshPluginRunner therefore waits (the same 250 ms
+     bound, the same watchdog pause) for the window to apply the directive before it rebuilds the runner; a wait that runs out is a warning,
+     not an error (nothing is being unmapped) and the decoders are built without waiting. Inline (today) it is exact. See TRAPS 2.
+  6. kHostHooks 10 -> 5, not the survey's "8 -> 4": the survey counted before P2's own removals (10 after P2); the five plugin-UI hooks were
+     the last that touched window state, what is left are the clocks and the watchdog pair (all thread-safe by construction).
+
+THE FIVE HOOKS (the survey's 11-15), each resolved by the handshake
+  11 beforePluginRescan         GONE. The window folds the map pages' geometry into the saved list (syncMapPagesToSaved) when it applies a
+                                RELEASE - the same moment relative to the unmap, on the window's thread. UNVERIFIED in the survey that no
+                                ordering needed it earlier: the pages ride through a rescan untouched, and the prune in drawPluginWindows
+                                re-syncs before it erases, so nothing needs it before the engine acts.
+  12 onPluginsUnloading         GONE. A release: basemap_.detach() and trackInfo_.detach() (GL textures, the plugin handles) on the
+                                window's thread, after the instances.
+  13 attachBasemap              GONE. d.basemap, attached by applyDirective (the bounded run's stand-in still stands in when none is given).
+  14 attachTrackInfo            GONE. d.trackInfo, attached by applyDirective.
+  15 showDemonstrationInstrument GONE. The window that rebuilt the demonstration instruments shows their windows.
+  16-18 were P2's. kHostHooks: frameClockRunning, frameTimeS, wallTimeS, pauseWatchdog, resumeWatchdog.
+
+request_tune (H12), AS AMENDED - the text now in src/core/plugin_abi.h beside CASCADE_TUNE_* and in docs/PLUGIN-API.md:
+  "request_tune IS A REQUEST THE HOST ACCEPTS, NOT A TUNE IT HAS DONE ... CASCADE_TUNE_OK (0) now means ACCEPTED: the host has checked the
+   grant, the range and that a radio is open, and has QUEUED the retune. It is applied by the host's receiver control at its next pass -
+   within about 16 ms, never inside the call - after checking the grant again, so a grant revoked, or a plugin stopped, between the call and
+   the pass stops the retune silently. Read centre_hz() ... to see it land. One request per plugin is held: a second call before the first is
+   applied REPLACES it ... The refusals are unchanged and are answered at once, in the call: DENIED, OUT_OF_RANGE, NO_DEVICE and FAILED."
+  Built as: PluginUi::tuneRequestFromPlugin (permission, requester, refusal) -> HostServices::tuneFrom (the engine's: no-device test from the
+  published state, then PluginApiCore::queueCentreRetune, one slot per module, newest wins, bounded 16) -> the pass drains it in
+  applyPluginApi (centreRetuneStillAllowed: live, not stopped, still granted; and a source with a rate) and retunes the source's centre exactly
+  as the call used to. The records the survey flagged (tuneRequesters_, lastDenied_) and the tune grant moved INTO the core, under its lock;
+  the pass copies lastDeniedPlugin() only when its sequence moves, so a settled pass still allocates nothing (test_engine_publish_alloc).
+  apiLevel is NOT bumped (CASCADE_HOST_API_LEVEL stays 1, pinned by test_plugin_api): the table is unchanged and the header's own rule is that
+  apiLevel answers what structSize cannot; whether a queued request_tune is worth a level 2 is the owner's call (TRAPS 6).
+
+THE ABI'S GUI-CAPABILITY THREADING TEXT now states what is guaranteed (plugin_abi.h THREADING AND LIFETIME CONTRACT, appended; PLUGIN-API.md):
+  track source, panel, instrument, basemap and track info are created, polled and destroyed on ONE host thread (the interface's); create and
+  destroy between frames, never inside or beside one of the instance's own polls; attach() from the same thread; a module is never unmapped
+  while one is alive (the interface destroys them all first and the host waits for that, or does not unmap); a host with no interface creates
+  and destroys them from its control thread and never polls them. Decoders unchanged. Doc trail: docs/api-0.3-additions.md section 8.15.
+
+GUARD (tests/test_command_path_guard.cpp): kHostHooks 10 -> 5; the five retired names join kRetiredHooks (12 now); the window reads 13 engine
+fields 26 times (was 14 / 33: pluginUi_ and its seven accessor reads left); kHostAccessors 8 -> 1 (hostPollImages) with the seven others in
+kPortedMembers (they name the engine nowhere), host-accessor read budget 8 -> 1; kEngineObjects drops pluginUi_ and gains pluginApi_,
+pluginLink_, headlessUi_; kLineAllowed's reportPluginStatus line takes the report; the new checkPluginUiOwnership: the engine's sources have no
+pluginUi_ and name headlessUi_ in exactly two lines (declaration, apply); the window's PluginUi is changed only through apply(); basemap /
+track-info attach and detach appear exactly where they may (attach 2: applyDirective and run()'s stand-in; detach 1 and 1: applyDirective);
+the window names the engine's link once (the constructor); the apply stands at the head of drawUi and of hostPollPlugins.
+
+THE HANDSHAKE'S OBSERVED TIMINGS (this desktop, MSVC Release; the Windows timer tick is ~15.6 ms, so a frame thread that sleeps 1 ms polls every ~15 ms)
+  window framing:        release posted -> acknowledged   median 15.2 ms, max 16.4 ms (one frame); the whole rescan, press -> modules unmapped and
+                         reloaded -> plugin UI rebuilt, median 45.8 ms, max 47.2 ms (twelve rescans, test_plugin_unload_handshake H8)
+  window inside the plugin's poll for 110+ ms: nothing destroyed, nothing unmapped for as long as it is inside; the unmap came after it came out
+  window not framing:    the wait ran out at 250-274 ms (bound 250), the modules stayed mapped with their instance alive, one error line, the pass kept
+                         running at its own period (27 passes in 400 ms on MSVC, where a pass is ~15 ms, 191 on the Linux TSan build), the unload was
+                         retried and completed at the first frame after, the error line not repeated
+  four rebuilds posted with the window silent:   267 ms for all four (one bound: the silence rule) - 1000 ms without the rule (mutant)
+  control thread stopped mid-wait:   1.3 ms (MSVC), 5.4 ms (TSan) - the join bound is 3000 ms and the wait's bound 250
+  watchdog:              two pauses per deferred rescan (rescanPlugins' own and the handshake's); none reported against a 100 ms threshold
+  no window (headless):  release applied and modules unmapped in 7 ms (MSVC) / 1 ms (TSan) - nothing to wait for
+
+THE BREAK-IT RUNS (each mutant alone: one text change, a rebuild, the named tests; the source was restored byte-identically after every one -
+sha256 compared; logs in the scratchpad of this step)
+  mutant                                                      verdict
+  hostPollPlugins does not apply the directive               RED: test_plugin_ui_threaded 20 FAILs, test_plugin_unload_handshake 15 (deterministic: no
+                                                               rebuild or release is ever acknowledged)
+  the pass applies the directive itself, on its own thread   RED. Case C alone (the stale reference, PUMP3_CASES=C): 5 FAILs - the directive is
+   (the OLD design: Engine::deliverPluginDirective inline      never pending, the instance is destroyed under the reference the frame is holding
+   always)                                                     (live 0, destroys 1), the vector it points into is emptied (size 3 -> 0), create/destroy
+                                                               on the wrong thread. Whole test: heap corruption, exit 0xC0000374. Case E: the basemap's
+                                                               and the track-info client's destroy and create on the pass's thread (2+2 FAILs).
+                                                               UNDER THREADSANITIZER (WSL, GCC 15.2): "data race plugin_ui.cpp:1064 in
+                                                               PluginUi::destroyInstances()" against PluginUi::poll() (plugin_ui.cpp:1101) in the
+                                                               first rebuild-churn frame - exit 66, 0.3 s.
+  the acknowledgement stored before the applier runs          RED: test_plugin_directive D (3000 rounds: a waiter saw an epoch acknowledged before
+                                                               the applier's work was done) and E; test_plugin_unload_handshake (the basemap and the
+                                                               track-info client were alive at the unmap)
+  the wait's result ignored (unmap on a timeout)              RED: test_plugin_unload_handshake 14 FAILs (H1: unmapped under the held frame; H2)
+  a release acknowledged without destroying anything          RED, and the instructive one: the unmap crashes with an access violation (0xC0000005)
+                                                               - a module unmapped with a live instance, the failure the handshake exists to prevent
+  the handshake's WaitWatchdogPause removed                   RED: H4 (one pause, not two)
+  the wait's !controlRun_ predicate removed                   RED: H3 (the stop took the whole bound instead of 1.3 ms)
+  the retry made on every pass (no poll-count guard)          RED: H2 8 FAILs (the pass re-waits the bound each time: the error line repeated, the
+                                                               passes collapse, the unload still pending)
+  the silence rule removed                                    RED: case B (four waits: 1 s; four warnings counted against a pass that waited)
+  request_tune applied inside the call                        RED: case D 4 FAILs (the receiver itself moved while the pass was parked; a withdrawn
+                                                               grant did not stop it)
+  the grant not checked again when the retune is applied      RED: cases D and F (5 FAILs)
+  one slot per module removed (queue appends)                 RED: cases F and D (6 FAILs)
+  WebExtras::polled not filled                                RED: test_plugin_window F2 (the web status lists no tracks to enrich)
+  the apply at the head of drawUi removed                     RED: the guard (drawUi does not apply before its first engine call)
+  the fallback ~Engine keeps the front end's applier          RED: test_engine_fallback_teardown 2 FAILs
+  the headless engine not applied inline                      RED: H5 3 FAILs (it waited for a window that does not exist)
+
+OPERATOR-VISIBLE DIFFERENCES (small; with the pass still in the frame, P3 changes only the timing of a plugin's own request)
+  * A plugin's request_tune lands at the next pass - the next frame's drain - not inside the call, and the centre it reads back (centre_hz) is
+    the published one, so it shows the new frequency one frame later. A tracker that corrects once a second cannot tell; the grants, the
+    "asked to tune and was not allowed" notice and the permission row are unchanged (the records moved into the core).
+  * The browser's target list is the copy the window hands over each frame: a track appears in /api/status one frame after the window's poll
+    first sees it (the pass used to read the window's vector between frames, which was the same lag).
+  * With the pass in the frame nothing waits and nothing is deferred: the release and every rebuild are applied inline, to the call.
+    (In the threaded world a rescan/removal started while the window is not framing - a Windows move/resize loop, a modal - waits 250 ms,
+    leaves the modules mapped, says so once, and completes at the first frame after; decoders are stopped for that stretch.)
+
+TRAPS (for P4, P5 and the fence)
+  1. A WINDOW THAT STOPS FRAMING STOPS PLUGIN RESCANS, INSTALLS, REMOVALS AND SOURCE-CHANGE REBUILDS FROM COMPLETING. They are deferred or
+     soft-waited (above), never lost, and the decoders are off meanwhile (detachAndUnloadPlugins clears the runner before it asks for the
+     release). The pass does not spin: after a wait that ran out the next one is not made until the window has framed again (polls moved).
+  2. ABI ORDERING (deviation 5): attach() is the window's, so in the threaded world a decoder's first create() can run before its plugin has
+     been attached when the window is slow. Inline (today) the order is exact. If it matters, the host-client attach (and only it) can move to
+     the engine's thread - the bridge needs its services, which are the core's, not the plugin UI's.
+  3. TX: a pass blocked in the handshake is a pass that does not tick the key. 250 ms per refresh is inside the 1 s control stamp, and the
+     once-per-silence rule bounds a hung window to ONE such stall; but a rescan or install DURING a transmission with a window that is not
+     framing still costs the pass 250 ms, once. (Survey risk 4.)
+  4. HostCtx::self is a plain pointer the window's ~PluginUi nulls (detachBridges) while a plugin's own thread may be reading it - a
+     pre-existing race that P3 did not create but that now sits on the window's destructor rather than the engine's. Not touched.
+  5. EngineHost::pauseWatchdog/resumeWatchdog are what a non-control caller of the wait pauses; in the threaded world every caller is the
+     control thread and the control watchdog is the one paused (verified: two pauses per deferred rescan, one by rescanPlugins, one by the wait).
+  6. OWNER, STILL OPEN: should the queued request_tune bump CASCADE_HOST_API_LEVEL to 2? The header says apiLevel answers what structSize
+     cannot ("does this host also honour X in Y"); a plugin that wants to know whether OK means "tuned" or "queued" can only tell by reading
+     centre_hz() after a pass. Not bumped: test_plugin_api pins level 1 and no plugin in the catalogue branches on it.
+  7. Engine::submitCommand still does not wake the control thread (survey 1.6 F, P4): the tests start the pass at a 2 ms period for it.
+  8. PluginUi::~PluginUi clears the shared core (grants, live set, records) and marks it detached: right at shutdown, wrong if a window were
+     ever destroyed while its engine lived on - which nothing does. The headless engine's own dtor does the same to the same core, last.
+  9. pluginUnloadOp_ is the one new engine field a test (another thread) reads: an atomic. The retry's file name is pass-owned.
+
+TESTS (all new files are in tests/; the existing window/plugin tests are unchanged except where an accessor now names the window's PluginUi)
+  tests/test_plugin_directive.cpp (new)        the link: A post/apply on the caller's thread/ack, B newest wins (five posts, one apply, four
+                                               skipped), C the bounded wait (not early, not late; a give-up predicate; a mid-wait apply),
+                                               D the acknowledgement follows the apply (3000 rounds across two threads), E a post during an
+                                               apply is kept, F a 20000-post storm (applied + skipped = posts, epochs only grow), G polls.
+  tests/test_plugin_ui_threaded.cpp (new)      on a REAL AppWindow + Engine with the pass on its own thread and the instrumented module
+                                               (tests/fixture_pump3_plugin.cpp): A rebuild churn against a polling frame, B epochs skipped
+                                               under load, C the stale reference held across a rebuild, D request_tune queued (accepted /
+                                               tuned by the pass / newest wins / withdrawn grant / stopped / refused / out of range), D2 a
+                                               Doppler corrector at poll rate beside a rebuild churn, E a rescan releases the basemap, the
+                                               track-info client and the instances on the window's thread, F the core's queue alone.
+  tests/test_plugin_unload_handshake.cpp (new) H1 a window inside the plugin, H2 a window not framing (bounded, not unmapped, said once,
+                                               retried), H3 shutdown with no window framing, H4 the watchdog pause, H5 no window at all, H6
+                                               PluginUi::apply, H7 the ABI header and the plugin guide state the contract.
+  tests/fixture_pump3_plugin.cpp, tests/pump3_support.hpp   the module (counts creates/destroys, dead-handle calls, destroys beside a
+                                               poll, threads; can be held inside poll_tracks; churns request_tune; writes how many handles
+                                               were alive when its image was unmapped) and the shared Access/probes.
+  Both threaded files are RUN_SERIAL (tests/CMakeLists.txt): they hold real bounds (the 250 ms handshake) and spin a frame thread for seconds.
+  Changed: test_command_path_guard (above), test_shutdown_budget (kPluginUiHandshake declared, weight 0, with the reason),
+  test_engine_fallback_teardown (the front end's applier stands where the unload hook stood), test_plugin_window F2 (before anything is
+  handed over the web status carries no tracks - they travel in the hand-over now), test_scope_window (the radar scope's accessor names the
+  window's own plugin UI), and eight accessors that read the plugin UI through the window (test_decoders_mute_grants,
+  test_fitted_modules_window, test_map_window, test_plugin_store_window, test_state_snapshot_golden) or the engine's own
+  (test_engine_api_03, test_engine_publish_alloc, test_plugin_status_report).
+
+THE SILENCE RULE (added after the first threaded runs showed the cost of its absence): a wait that runs out records the interface's poll count
+(Engine::pluginUiSilentPolls_), and while that count has not moved - the window has not framed since - the pass does not wait on it again: it
+posts the directive and returns. Four rebuilds against a window that is not framing cost the pass one bound (267 ms measured), not four (1 s,
+the mutant). It is what keeps a hung window from turning a burst of refreshes into a pass that misses its keep-alive.
+
+EVIDENCE OF THIS STEP
+  Build: clean full rebuild (cmake --build build --config Release --clean-first), no errors.
+  Suite (ctest -j 8, Release, MSVC): 267 tests (264 + the three new). Run 1: 267/267, 253.8 s. Runs 2, 3 and 4: 266/267, test_engine_api_03 failing one
+  audio-counter check ("seq audio list rds" against "seq rds" in run 2; audioSeq 10 against 8 in a run that excluded the three new
+  tests altogether) and passing solo (3 of 3, 3731-3739 checks): THE DOCUMENTED ENVIRONMENTAL LOAD FLAKE (the audio output stream dying on this desk's USB device and being reopened;
+  "THE API_03 LOAD RACE" above, which records the residual). It is not P3's: the untouched baseline commit (ab9077e, exported with git
+  archive and built beside, ctest -j 8) fails the same test the same way in 1 of 2 runs today, and with test_engine_api_03 excluded two
+  full runs are 266/266 and 266/266 (the three new tests included, 237 s each). (The baseline copy's two other failures,
+  test_patch_graph_draft_input and test_scope_window, are artefacts of the archive: they read files the archive does not hold.)
+  The new tests solo, 50 runs each of the built binary (md5 pinned): test_plugin_directive 50/50 (md5 7a7bfae5), test_plugin_unload_handshake 50/50 (93925027) and test_plugin_ui_threaded 50/50
+  (df6d2fdf), solo, the binary md5-pinned; and eight copies at once on the same machine: 48/48 and 24/24 - the two timing-bound
+  tests are RUN_SERIAL in the suite (tests/CMakeLists.txt) so a loaded runner cannot make them miss a 250 ms bound that the code met
+  ThreadSanitizer (WSL, GCC 15.2, halt_on_error=1): ctest -L tsan -R "plugin|ui|unload|directive" 3/3 clean; the whole selection 15/19 with
+  the four races that were already there and are written up (docs/SANITIZERS-AND-FUZZING.md); no new race.
+  Nothing committed, pushed, stashed or switched. Untracked build logs from earlier steps are untouched.

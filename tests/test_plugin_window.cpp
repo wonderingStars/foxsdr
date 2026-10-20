@@ -647,11 +647,13 @@ void testWebExtras(AppWindow& a) {
     api.destroy = &infoDestroy;
     Access::attachTrackInfo(a, &api);
 
-    // NOTHING HANDED OVER YET: the web status carries no enrichment and no pictures (a headless pass has none either).
+    // NOTHING HANDED OVER YET: the web status carries no enrichment, no pictures and - since the pump move's step P3 - no tracks either
+    // (a headless pass has none): the pass reads NOTHING of the plugin UI itself, which is the window's and rewritten by its poll
+    // every frame; the tracks reach the browser in the same hand-over as the enrichment and the pictures' headers.
     {
         Access::look(a);
         const cascade::net::RadioStatus st = Access::webStatus(a);
-        CHECK(!st.tracks.empty());
+        CHECK(st.tracks.empty());
         for (const auto& t : st.tracks) { CHECK_EQ(t.infoState, 0u); }
         CHECK(st.images.empty());
     }

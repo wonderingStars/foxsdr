@@ -217,10 +217,12 @@ struct AppWindowTestAccess {
     static const std::vector<cascade::core::HostMarker>& engineMarkers(AppWindow& a) { return a.engine_.pluginMarkers_; }
     static bool stopped(AppWindow& a, const std::string& key) { return a.engine_.pluginIsStopped(key); }
     static bool pluginMutes(AppWindow& a, const cascade::core::LoadedPlugin& p) { return a.engine_.pluginMutes(p); }
-    static bool tuneAllowed(AppWindow& a, const std::string& key) { return a.engine_.pluginUi_.tuneAllowed(key); }
-    static bool settingsAllowed(AppWindow& a, const std::string& key) { return a.engine_.pluginUi_.settingsAllowed(key); }
+    // (the plugin UI is the window's since the pump move's step P3, the API core the engine's; the bridge a plugin calls
+    // through reaches the window's PluginUi)
+    static bool tuneAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.tuneAllowed(key); }
+    static bool settingsAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.settingsAllowed(key); }
     static std::int32_t askToTune(AppWindow& a, const std::string& key) {
-        return a.engine_.pluginUi_.tuneRequestFromPlugin(key, 100.0e6);
+        return a.pluginUi_.tuneRequestFromPlugin(key, 100.0e6);
     }
     static std::size_t engineLog(AppWindow& a) { return a.engine_.decoderLog_.size(); }
     static bool enginePopupOpen(AppWindow& a) { return a.engine_.mutePopup_.open; }

@@ -334,7 +334,7 @@ struct AppWindowTestAccess {
                 sm.plate.running = lp->loaded && !e.pluginIsStopped(key);
                 if (lp->hostClient != nullptr) {
                     sm.plate.haveTuneGrant = true;
-                    sm.plate.tuneGranted = e.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
+                    sm.plate.tuneGranted = a.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
                 }
             }
             const bool acked = (i == a.pluginStoreDeck_->selected) && a.pluginStoreDeck_->legalAck;

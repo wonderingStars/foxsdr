@@ -264,7 +264,7 @@ struct AppWindowTestAccess {
     static std::uint64_t publishLists(cascade::engine::Engine& e) { return e.publishApiLists(); }
     // The fitted-modules window's inputs (API 0.3 8.8): the plugin API's host side (what a module's own calls
     // reach through the bridge), the install records, and the drain of what the modules said.
-    static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return e.pluginUi_.api(); }
+    static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return *e.pluginApi_; }
     static cascade::core::PluginInventory& inventory(cascade::engine::Engine& e) { return e.pluginInventory_; }
     static void applyPluginApi(cascade::engine::Engine& e) { e.applyPluginApi(); }
     // The runner's matched keys, as the pass's publish leaves them, and a rebuild of the runner and the plugin

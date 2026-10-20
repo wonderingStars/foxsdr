@@ -1153,9 +1153,11 @@ void testAllocationsAndSource() {
         }
         // The POWER press stays in drawScopeMode's own text (tests/test_stop_ends_recordings.cpp reads it there).
         CHECK(bodyOf(text, "void AppWindow::drawScopeMode() {").find("FOXAPI_OP_RUN") != std::string::npos);
-        // The one accessor the radar scope keeps names the engine, and is only that.
+        // The one accessor the radar scope keeps is only that: the window's own plugin UI's tracks (it named the engine's before the
+        // pump move's step P3, which made the plugin UI the window's) - and names the engine nowhere.
         const std::string tracks = bodyOf(text, "const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks()");
-        CHECK(tracks.find("engine_.pluginUi_.tracks()") != std::string::npos);
+        CHECK(tracks.find("pluginUi_.tracks()") != std::string::npos);
+        CHECK(tracks.find("engine_.") == std::string::npos);
     }
 }
 

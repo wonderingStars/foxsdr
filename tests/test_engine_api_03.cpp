@@ -442,12 +442,12 @@ struct AppWindowTestAccess {
     static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
     // Group M: a plugin asks to tune the receiver (the host bridge's request_tune), by its module file name.
     static std::int32_t askToTune(cascade::engine::Engine& e, const std::string& key) {
-        return e.pluginUi_.tuneRequestFromPlugin(key, 100.0e6);
+        return e.headlessUi_.tuneRequestFromPlugin(key, 100.0e6);  // (no window here: the engine's own plugin UI answers the bridge)
     }
     // Group 9: the host's side of the plugin API, which a plugin's own calls reach through the host
     // bridge's trampolines (log, add_command, a request that needs the settings grant...). The test makes
     // the same calls on the loaded module's client, from the test thread.
-    static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return e.pluginUi_.api(); }
+    static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return *e.pluginApi_; }
     // The install records the engine holds, as the last rescan read them (a rescan replaces them).
     static cascade::core::PluginInventory& inventory(cascade::engine::Engine& e) { return e.pluginInventory_; }
     // Group 10 (the plugin store): a transfer as its worker would leave it. The engine's install slot holds a
