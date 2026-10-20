@@ -2362,6 +2362,432 @@ THE TRAPS, for the next group.
     through a wrapped table; the lag of difference 1 as a picture (it does not exist until the pump moves); the cost of the
     deleted runner lock.
 
+GROUP 13, the Patch page (the standard window's default face: drawPatchSection, drawPatchView, drawPatchFaces and drawPatchPage; the
+draft flow, adoptPatchGraph, syncPatchDraft, commitPatchDraft, loadPatchDocument, seedPatchIfNeeded, settlePatchSend and the new
+`patchLook`; and src/gui/app_window_patch_radios.cpp, the transport, the Radio and speaker inspectors, the squelch, the Map inspector
+and the device rule; the window gained `patchLists()`, `hostPaths()`, the stop-and-wait committer and the two-step Radio part, and
+lost `EngineHost::patchPageOpen`, `onPatchGraphChanged` and `onPatchPicture`): API 0.3 section 8.12 in THREE parts (8.12.1 to 8.12.3,
+8.12.4 to 8.12.6, 8.12.7), the biggest group of step 4 by a distance: one op for the page's open flag, one op for the recordings, one
+list for the plan, one for the devices, one for the live readings, three facts for the graph's identity, a family of facts for the
+devices and converters, a merge-safe SET_GRAPH, `read_image` with its event and one more kind of the live list, and the engine's whole
+patch runtime moved from the window's frame into the pass. Nothing committed; three parts, one api_03 test repair and this record, in
+the worktree. The survey, the three reports and the repair were written one after another and are folded here.
+
+THE SURVEY AND THE SCOPE JUDGEMENT. The window's own survey, written before the first edit (and run, as groups 9 to 12 were, on a
+scratch copy of src with the real guard binary), found where the brief and the code disagreed, in this order of consequence: (1) THE
+CLUSTER IS IN TWO FILES. app_window.cpp carries 90 counted reads (drawPatchView 45, drawPatchFaces 22, drawPatchPage 9, syncPatchDraft 4,
+adoptPatchGraph 4, commitPatchDraft 3, seedPatchIfNeeded 1, drawPatchSection 2, loadPatchDocument 0); the page's other half,
+app_window_patch_radios.cpp (590 lines), carries 36 more in eight members and ALL THREE `submitCommand` lines that count towards the
+guard's floor. The page is 126 reads on 33 fields, not the brief's ~94, and 22 of those fields lose their last reader. (2) MOST OF THE
+GROUP IS NOT READS. The page is where the window still DROVE the engine's patch runtime from its frame: drawPatchView called
+`rebuildPatchCatalogue()`, `patchApplyRunning()`, `patchReconcile()` and `patchPublishSets()` and wrote `engine_.patchPlan_` and
+`engine_.patchWasOpen_`, and drawPatchPage ran the close-stops-the-patch rule: 16 `kLineAllowed` entries and about a dozen uncounted
+calls, work that section 6.5's pattern says moves into the pass and that had not. The consequence nobody had written down: PATCH_RADIOS,
+PATCH_PROBLEMS, PATCH_PARTS, `read_node_spectrum` and the `running` bit of the patch event only changed while a window was DRAWING the
+patch view. That prerequisite is the group's real size. (3) "NOTHING READS A DOCUMENT BACK" was stale on both halves: the graph was
+readable (`fact.patch.graph`, PATCH_NODES, PATCH_WIRES, FOXAPI_EVENT_PATCH), and FOXAPP_OP_PATCH_SET_GRAPH, an APP op, is the writer,
+so a REMOTE session can read the graph and cannot edit it; `FOXAPI_OP_PATCH_LOAD` is in the op table and not implemented by this engine
+at all (it falls to UNSUPPORTED). (4) THE WINDOW ALREADY EDITED THROUGH SET_GRAPH, BUT NOT THROUGH ITS SESSION: commitPatchDraft and
+loadPatchDocument called `engine_.applyCommand` directly, synchronous, same frame, result read at once. The vocabulary was ready; the
+TIMING was the whole problem (a lost update: a window-side merge over the engine's graph "as it is now", then a replace, is correct only
+while merge and apply are one step). (5) "DECODED PICTURES" WERE ZERO GUARD READS AND WERE NOT SERVED AT ALL: `read_image` was a stub
+returning UNSUPPORTED, FOXAPI_CAP_IMAGES was clear, nothing raised FOXAPI_EVENT_DECODER_IMAGE, and the window's `patchPictures_` was
+filled by an EngineHost HOOK, a cross-thread write the day the pump moves. (6) `pipeline_.patchRunner()` was vestigial (each patch
+radio has owned its runner since 0.99.17; the page called `.reap()` and `.clear()` on one nothing published to). (7) the ~60-read
+"device choices" were mostly uncounted method calls. (8) Four lists were weaker than their descriptions (PATCH_RADIOS lacked the
+coerced-rate note, PATCH_PARTS the track bit, PATCH_PROBLEMS a published code table, and no list carried the Plan). (9)
+`Plan::runnable` was not derivable from the problems: the window pushed `PluginRefused` problems WITHOUT clearing `runnable` and
+`RadioFailed` WITH clearing it, so the green "This patch can run." stayed up with a refused plugin. THE JUDGEMENT: counting the
+work and not the reads, the group is closer to groups 10 and 11 together than to group 12, so it was SPLIT three ways on the
+dependency order and on where the risk sits: 13a, THE STRUCTURAL AND THE HARD HALF (the runtime into the pass, the graph's version
+and a merging SET_GRAPH, the plan, and the draft flow with its stop-and-wait committer: the part that changes WHEN things happen and
+therefore the part that can lose an edit); 13b, THE READINGS (the devices, the live figures, the line routing, the recordings, and the
+view, the faces and the inspectors that draw them: wide, mechanical once 13a stands, and the part that holds most of the guard's
+movement); 13c, THE PICTURES (a delivery gap and not a read gap, with its own protocol, its own fixture and its own threading
+question, separable because nothing in 13a or 13b waits on it and the hook it removes was the last of the page's three cross-thread
+hooks).
+The survey MEASURED the ratchet on a scratch copy before the first edit: the whole page, both files, the Map's tracks and paths
+through two accessors, was predicted at 34 fields / 144 reads, floor 8, 22 fields leaving, 16 allowed lines deleted (46 to 30), and
+the split alternatives (the draft flow alone 55/255; app_window.cpp's members 45/179 with the floor staying 11). The three parts
+printed 49/230 (13a), 33/141 (13b) and 33/141 (13c): one field and three reads under the prediction, the `patchGraph_` reads in `run`
+and `applyConfig` that 13a moved too and the survey had not counted; 23 fields left, not 22.
+
+13a, THE RUNTIME IN THE PASS, THE GRAPH'S VERSION, THE PLAN AND THE DRAFT FLOW (docs/api-0.3-additions.md 8.12.1 to 8.12.3). Server side:
+- 8.12.1 THE RUNTIME IS THE PASS'S. `FOXAPP_OP_SET_PATCH_PAGE_OPEN` (0x8421, VIEW, LOCAL, `ival[0]` 0 or 1, idempotent; the engine's
+  default is OPEN, matching the default face, and the window tells it only on a change). `Engine::pumpPatch()` sits between
+  `pumpPlugins` and `pumpPublish` in `controlPass`, `pump` and `drawUi`; while the flag is set it rebuilds the catalogue, applies START
+  and STOP, reconciles the radios, compiles the plan (two marks) and publishes the sets, in the order the view ran them; on a set-to-clear
+  edge it runs the close rule once. `EngineHost::patchPageOpen` and `onPatchGraphChanged` are deleted from the host and from the guard's
+  `kHostHooks`; `pipeline_.patchRunner().reap()` and `.clear()` were confirmed vestigial and deleted with their `kLineAllowed` entries;
+- 8.12.2 THE VERSION / EPOCH / MERGE PROTOCOL, exactly. `patchGraphVersion_` is a counter from 1 (0 means none) that bumps on EVERY
+  change of the graph by anyone: a session's edit, a document, and the runtime's own (START and ALL OFF's switches, a learnt centre or
+  rate, a take-over of the receiver's device); the change is noticed by `syncPatchGraphVersion`, run at the start and the end of
+  `pumpPatch`, before every publish and at a SET_GRAPH's apply, and a settled pass allocates nothing. The engine RETAINS THE LAST EIGHT
+  versions' graphs (a document clears them). `fact.patch.version`, `fact.patch.epoch` and `fact.patch.graph` are built in ONE block, so
+  they move together with `listSeq`, and the version is in the fingerprint. `FOXAPP_OP_PATCH_SET_GRAPH` takes the BASE VERSION in
+  `ival[1]`: 0 is an unconditional replace; the CURRENT version is applied as sent; a RETAINED older one is MERGED, by
+  `rebaseDraft(retained, draft, current)`, and answers `FOXAPI_RESULT_CLAMPED` with `applied[1] = 1`; a version the engine does not
+  hold, or one from the future, is `FOXAPI_FAILED` ("the patch graph moved on since this edit was started; it was not applied"); a
+  negative one is BAD_ARGUMENT; a DOCUMENT ignores the base, bumps the epoch and the version and clears the history. `applied[0]` is the
+  version after the command. FOXAPI_EVENT_PATCH now triggers on the version moving. THE LOST-UPDATE PROOF (G13-2): with the base named,
+  a START survives a stale rename of the same pass; sent unconditionally, the START is LOST (the stale text puts the radios' switches back
+  OFF and the patch is "RUNNING" with every radio off until the next START); two racing sessions keep BOTH edits when each names its base.
+  The lost update is real only for an ASYNCHRONOUS window, which is why it had never shown;
+- 8.12.3 THE PLAN. `PATCH_PLAN` (45): channel entries (id = node, detail "channel", `value[0]` the offset in Hz, `value[1]` the output
+  rate, `value[2]` the decimation, `value[3]` the radio) then decoder entries (name = the plugin's key, detail "decoder:" and then
+  "radio", "channel" or "audio", `value[0]` the rate it was created at, `value[1]` the source rate, `value[2]` the RF centre at DC,
+  `value[3]` the radio). `fact.patch.runnable` copies the window's quirk EXACTLY (a failed radio clears it, a refused plugin does not;
+  whether to change that is the owner's call and is recorded in the section). `PATCH_RADIOS` gains `value[1]`, the open radio's AIR
+  centre, `value[2]`, 1 while it is opening on its worker, and `detail`, the running radio's line (the coerced-rate or retune note);
+  `PATCH_PROBLEMS` codes 0 to 14 are pinned (advisory: 5 and 14); the parts bin is hashed by content;
+- THE BUG FOUND ON THE WAY, fixed red first: `FOXAPP_OP_SCAN_NATIVE_ONLY` was never in the op table, so a SESSION submit of it was
+  refused as unsupported and only a direct `applyCommand` worked; test_main_view caught it once the port sent the Radio part's scan
+  through a session, and the `test_apply_command` case that holds it (the op is in the table) was written to fail before the
+  one-line table entry went in. It is a PRE-EXISTING bug that nothing exercised because nothing but a direct call used the op.
+Window side (the part that changes the draft flow, and the reason for the split):
+- `patchLook()` reads the version, the epoch and the graph from ONE publish (the version re-read after the graph, to detect a
+  straddle), re-parses only on movement and is invalid before the first publish; `syncPatchDraft` never adopts until a look is valid;
+- THE ADOPT FIX. Today's trailing `adoptPatchGraph()` after a commit copied the engine's graph over the draft; from a PUBLISHED graph,
+  still the old one, that is a snap-back (three commits a frame while a node is dragged would draw the node at its old place and then
+  its new one). `commitPatchDraft` now sends the WHOLE draft by `submit_text` with the base in `ival[1]`, keeps the ticket, and is
+  STOP-AND-WAIT: one in flight, a BUSY or a missing session leaves the edit and retries next frame, nothing is adopted while one is in
+  flight, the answer is drained in `pumpTransmitKey`, and on OK, once the publish at the new version is read, `settlePatchSend` sets the
+  draft to `rebaseDraft(sent, draft-now, engine graph)` and the base to the engine's graph (a node being dragged never snaps back); a
+  REFUSAL adopts the engine's graph. The three commits a frame collapse to at most one SET_GRAPH in flight;
+- THE FRAME-1 SEED. The very first `commitPatchDraft` is at the TOP of frame 1, before the first publish, so a graph read there is
+  empty and adopting it would make the draft "in step" with an empty graph while the config's document is queued, and the seed's commit
+  would overwrite the loaded patch (test I guarded the synchronous version only). The seed now waits for a valid look and for any document
+  in flight, and `applyConfig` sets `patchSeeded_` from the document it sent;
+- `loadPatchDocument` is asynchronous: it drops a drag, the selection and the waiting Radio parts at once, shows the document
+  immediately and adopts when settled. The page-open flag goes through `syncPatchPageOpen` (difference-only, initially open).
+  `patchAddRadioPart` is TWO steps: the node is added at once with NO device (so the press shows), the scan goes through the session,
+  and the device is chosen in `finishPatchRadioParts` in PRESS ORDER, `taken()` running over the draft so a second Radio press does not
+  take the first's device. `drawPatchPage` is deleted; `patchText_` is serialised from the draft; "dirty" is marked on an
+  engine-originated version movement except when the page adopts its own document.
+Ratchet: 56 fields / 269 reads to 49 / 230, printed `261 controls judged, 11 submitCommand calls in draw members, 658 window-machinery
+lines, 31 allowed engine lines in drawing members, 0 violations` and `the window reads 49 engine fields directly, 230 times (budget 49
+fields, 230 reads)`, 196 checks 0 failed. Per member: adoptPatchGraph 4 to 0, commitPatchDraft 3 to 0, syncPatchDraft 4 to 0,
+drawPatchSection 2 to 0, drawPatchPage 9 to 0, drawPatchView 45 to 31, applyConfig 7 to 6, run 18 to 17. Seven fields lost their last
+reader (`patchDspSig_`, `patchGraphEpoch_`, `patchGraph_` - `run`'s end-of-script printout now serialises `patchDraft_` -,
+`patchRadioFailedAs_`, `patchWasOpen_`, `patchWasRunning_`, `soundCardOpenPending_`). THE 16 `kLineAllowed` ENTRIES THE SURVEY LISTED
+WERE ALL DELETED (the guard fails on every stale one) and ONE ADDED, `drawUi`'s `pumpPatch();`, so 46 allowed lines became 31 (the
+survey predicted 30 without the addition). `kHostHooks` lost two; `kPortedMembers` gained 15 (drawPatchSection, setMainViewPatch,
+syncPatchPageOpen, uiSubmitTicket, patchLook, syncPatchDraft, commitPatchDraft, loadPatchDocument, settlePatchSend, onPatchGraphResult,
+adoptPatchLook, forgetPatchInteraction, patchInteracting, finishPatchRadioParts, patchAddRadioPart). Two members were NOT listed and
+say why in the guard: `seedPatchIfNeeded` (it still read `device_` and `carriedAirCentre()`) and `patchDefaultDeviceKey` (13b's).
+The floor `submitsInDraw >= 11` did not move (the transport's two submits and the Radio inspector's one were 13b's).
+
+13b, THE READINGS (8.12.4 to 8.12.6). Server side: `PATCH_PARTS` `value[2]` is the track bit; NEW `PATCH_DEVICES` (46), the Radio's Device
+combo as the engine composes it (`Engine::patchDeviceChoices`, the one rule); NEW `PATCH_LIVE` (47), the figures a running patch changes
+every pass (a squelch gate, a speaker's peak and count and error, a channel's level, a decoder's face), IN A BLOCK OF ITS OWN with its
+own fingerprint that NEVER MOVES `listSeq` - the group-9/D3 lesson applied: carried in the block of lists the figures would rebuild the
+block, its facts and its plugin sizes every pass and make every interface re-read every list every pass; a settled pass builds nothing
+and allocates nothing, and the window reads it once a frame. Where 13b kept to the brief and where it did not: PATCH_LIVE is NOT in the
+main fingerprint (above); the converter fact is the SPACE form `"<mode> <LO Hz> <inverted>"` that `fact.converter.live` spells (the
+survey had commas); `fact.patch.receiverCentre`'s existence moves the block and its value does not (below); and a decoder's newest line
+is in `detail` (159 bytes) and not in `name` (95). `DECODER_LINES` `value[0]` is the ORIGINATING NODE (0 for the receiver's own decoders), so a window that
+keeps a face for each Text out routes a line to every Text out its decoder is wired to by its own copy of the graph. New facts:
+`fact.patch.device.<id>` (the key whole; LOCAL), `fact.patch.receiverRadio`, `fact.patch.receiverCentre` (its EXISTENCE moves the block,
+its value does not, because a retune would rebuild the block on every tune; the window uses the state's `centreHz` once the fact is
+non-empty) and `fact.patch.conv.<node>`, the converter in force for a Radio node's device. THE PER-NODE FACTS ARE PER NODE ON PURPOSE:
+a typed centre is judged by `core::radioCentreTakeable` against the converter of the device the ENGINE has the node on. NEW
+`FOXAPP_OP_PATCH_LIST_RECORDINGS` (0x8422, SETTINGS, LOCAL; a VIEW-only and a REMOTE session are DENIED): the engine lists the I/Q
+recordings on its own pass (at most 200 listed, at most 64 headers opened by one listing), and the recordings are hashed BY CONTENT
+(each file, its key and its rate) and not by count. The fingerprint also gained the lent radio's four fields and whether the receiver's
+radio was ever tuned (not its value). THE SHARED LABEL RULE: `core/patch_device_label.hpp` holds `deviceLabelFor` and `decoderIsShown`
+moved into patch_plan.hpp, so the engine and the window name a node's device and decide a decoder's face by one function. The engine
+pruned its own Text-out lines each pass in 13b (dead state, retired in 13c).
+Window side: drawPatchView, drawPatchFaces, seedPatchIfNeeded, patchDefaultDeviceKey and the whole radios file are ported; no `engine_`
+read remains in the page except `hostTracks()` and the new `hostPaths()` (the Map's tracks and paths stay HOST-PROCESS, as group 12
+decided for the radar, and the two accessors concentrate that in two places that are NOT in `kPortedMembers`). The transport's START
+and ALL OFF, the Radio inspector's two former `applyCommand` calls and "Look for radios" go through `uiSubmit`. A new cache reader,
+`patchLists()`, builds once per `listSeq` the parts, the plan, the radios, the refused nodes, the devices, the receiver's radio and each
+Radio node's converter; PATCH_LIVE is read once a frame and `read_node_spectrum` at most once per radio per frame, with a negative
+return never a length (group 12's trap 5). Four unused `Engine::` type aliases left the window header.
+Ratchet: 49 / 230 to 33 / 141, printed `269 controls judged, 8 submitCommand calls in draw members, 658 window-machinery lines, 31
+allowed engine lines in drawing members, 0 violations` and `the window reads 33 engine fields directly, 141 times (budget 33 fields,
+141 reads)`, 212 checks 0 failed; the floor `submitsInDraw >= 11` is `>= 8` (the eight that remain are group 14's and the position
+helpers'); `kControlMayCall` retired `carriedAirCentre`, `patchListRecordings` and `prunePatchSinkLines`; `kPortedMembers` gained 19.
+The guard went red on a single read put back: `(void)engine_.patchPlan_.runnable;` in drawPatchFaces printed `FAIL: AppWindow::
+drawPatchFaces is PORTED ... reaches the engine directly at app_window.cpp:10053`, 34 / 142 against the budget, 3 failed; restored,
+33 / 141.
+
+13c, THE PICTURES (8.12.7). `read_image(session, imageId, info, pixels, cap)` copies up to `cap` bytes and returns the full byte count,
+`info` and `pixels` each optional; a `cap` with no pixels, an `info` shorter than FOXAPI_MIN_IMAGE_INFO or a null session is
+BAD_ARGUMENT, and id 0, an unknown or replaced id or a removed node is NOT_FOUND; the pixels are tightly packed GRAY8 or RGB24 with no
+palette. FOXAPI_CAP_IMAGES is set (FOXAPI_CAP_DECODERS stays clear: text events are unserved). `FoxImageInfo` gained `complete`, a
+reserved word and `sequence` at its END (append-only: a caller built to the 0.2 minimum gets the 0.2 fields only). THE ROW OVER THE
+EVENT: `FOXAPI_EVENT_DECODER_IMAGE` (6, the 0.2 id; target the node, `value[0]` the image id, `value[1]` 1, text the node's name) is
+raised once per arrival, AFTER the picture is readable, but THE WINDOW POLLS `PATCH_LIVE` kind 6 (id the node, `value[0]` the newest
+image id, `value[1]` the byte count, name the node's name, ACTIVE = complete), not the event, because a row is state: a session that
+attaches late, or whose event ring overflowed, still sees every picture, and the window's correctness does not depend on a channel it
+could miss (the same decision as the patch event, where version, epoch and graph from one block replaced the event for the window).
+The row and the picture live while the node is in the graph, so a STOPPED patch keeps its picture. REMOTE is the same as LOCAL with the
+VIEW grant only (decoded traffic like DECODER_LINES; it names no path or device). THE STORE THREADING: the pass moves each picture whole
+into a `const HostImage` behind a `shared_ptr` and swaps an immutable SET into the host; a reader takes the set pointer under the short
+lock and copies pixels on its own thread, so a replaced picture is still whole in the reader's hand and the window never touches a
+buffer a decoder writes. THE HOOK IS DELETED: `EngineHost::onPatchPicture`, the window's override and its `kHostHooks` entry; with it
+the third and last of the three EngineHost hooks the survey found touching plain window state across threads (13a took the other
+two). `patchSinkLines_`, with its writer loop in `pumpDecoderOutput` and
+`prunePatchSinkLines`, is RETIRED (write-only: the Text outs' lines come from DECODER_LINES and the window's copy; the old prune test
+became the picture-store equivalent); `patchDecoderFaces_` stays (PATCH_LIVE kind 4 reads it, and it is in that block's fingerprint).
+The window's `patchPictures_` holds only a texture and its figures, no pixels; a Decoder face reads kind 6 and, when the id moved,
+`takePatchPicture` reads and uploads ON THE WINDOW'S THREAD (NOT_FOUND or a malformed reply leaves the texture and retries next frame; one
+upload per picture, as before); a document load now clears every picture. Guard: `272 controls judged, 8 submitCommand calls in draw
+members, 654 window-machinery lines, 31 allowed engine lines in drawing members, 0 violations`, 33 / 141 unchanged (`patchPictures_` was
+never an engine field and the hook write was never counted; the gain is a hook leaving `kHostHooks`), `takePatchPicture` added to
+`kPortedMembers` and red on a read put back (`FAIL: ... takePatchPicture is PORTED ... at app_window.cpp:10012`).
+THE MUTATION-HARNESS MISHAP, in the record because it was close: the 13c mutation harness was launched twice, the two instances briefly
+overwrote each other's restore copies and left the E1 and E7 edits in engine_api_lists.cpp and fox_engine_api.cpp. It was caught by
+reading the diff and repaired by hand; every mutant's original string was then verified to occur EXACTLY ONCE in its file, the tree was
+rebuilt and the serial suite was green after the repair. (13b recorded the same trap in its own list: a mutant batch is never started
+twice, and a restore from a snapshot is how it was undone there.) The mutant harness is not a place to be clever with a second terminal.
+
+THE API_03 LOAD RACE (the repair that closes the part; only tests/test_engine_api_03.cpp changed, the engine did not). After 13c the
+suite was green serially and test_engine_api_03 FAILED under `ctest -j 8`: group Y's `playing.audioSeq == quiet.audioSeq + 1u (7 vs
+6)`, and other groups as "seq audio rds" against "seq rds". THE DIAGNOSIS, proved for the transitions and unproven for the trigger: the
+extra transition is the audio OUTPUT STREAM DYING and being REOPENED, not a late open. `AudioOut::streamAlive()` sees
+`Pa_IsStreamActive == 0` on the real Realtek USB device, STREAM_ALIVE (bit 4) falls (one `audioSeq` step), and `Engine::pollAudioHealth()`
+(a 1 Hz watchdog) reopens it - in traced failing runs the first reopen failed once and succeeded about a second later - and STREAM_ALIVE
+returns (a second step). The old `settled()` waited only for the seq to be still for 300 ms, and the watchdog's next probe can be a
+second away, so baselines straddled the recovery (14 flags against 10, 7 against 6 and 9 against 8 seqs). THE ENGINE IS NOT AT FAULT: it
+reports a dead stream truthfully and recovers it. WHY the stream dies is UNPROVEN (nothing in-process stops it; no device event in the
+event log; the rate varied over the session; external contention on the device is the likely reading). THE FIX: `audioSteady()` (no
+open in flight, a sink that has ever opened is alive, STREAM_ALIVE agrees with RX_SINK_OPEN), `settled()` additionally requires
+`audioSteady()` and unchanged audio flags for the whole 300 ms window (bounded at about 40 s, which fixes every `settled()` caller, groups Y
+and R and others), and `steadyState()` is a free wait for baselines taken straight off the session's state, applied to the two RDS-loop
+baselines; no `== base + 1` or `countersMoved` check was weakened. THE DETERMINISTIC BREAK-IT: a new test, `testBaselineWaitsForTheSink`,
+kills the stream with `test.audioClose`, asks for the baseline while it is down and checks the one-command pair reads exactly +1; with
+the OLD `settled()` restored it FAILS 3 of 3 with `on.audioFlags == off.audioFlags (6 vs 2)` and `on.audioSeq == off.audioSeq + 1u (4 vs
+3)`, the exact shape of the load failure on demand, and passes with the fix. The 13c hammer test does NOT run alongside the audio checks
+(sequential in one process), so it was not moved; the direct-engine tests were left alone (their own passes; the baseline-to-probe gap is
+milliseconds). After the repair: api_03 solo 3 of 3 green (3582 checks, about 72 s); the full suite at `-j 8` run 1: 256/256; run 2:
+255/256, test_theme_census failed in the first seconds of the run and passed solo 3 of 3; run 3: 255/256, test_startup_state, solo 3 of
+3; and the GUI subset (api_03 and the four big window tests, `-j 5`) green twice. THE RESIDUAL, recorded as ENVIRONMENTAL and not
+diagnosed: four tests fail under load and pass alone - test_theme_census (group 11 recorded one crash of it inside `NahimicOSD.dll`,
+an injected audio-overlay DLL, 0xC0000005; the cause of this run's failure was NOT examined), test_startup_state, and, once or twice each
+during the investigation, test_crash_upload and test_pa_stream_list_guard (neither re-run after, neither investigated). Full-suite runs are
+weak evidence of a flake fix on their own (the pre-fix rate swung from 0 of 9 to most runs); the deterministic red-then-green is the
+proof, and a stream death landing in the few-millisecond window between a baseline and its probe can still fail one check (widening the
+wait further would weaken the contract). Logs: ctest-fix-before.log and ctest-fix-after1.log to ctest-fix-after3.log in the worktree.
+
+THE TESTS AND THE BREAK-IT CHECKS, per part (every case went into an EXISTING executable, so the suite stayed at 256 tests; the new
+files are tests/fixture_group13_plugin.cpp, a real picture decoder module, and its CMake line). 13a: test_engine_api_03 G13-1 (the
+pass runs the patch with no window: the plan, START, the centre, a node's spectrum, the page edges, the grants, the default), G13-2
+(version, epoch, the merge, the refusals, the eight-version edge, one-block consistency, the event), G13-3 (the plan against the core's
+compile with two real modules; the radios' note and pending; the two marks), G13-4 (30 settled passes move nothing); alloc F7;
+test_apply_command (SET_PATCH_PAGE_OPEN, SCAN_NATIVE_ONLY, the version cases); the window scenarios L (a drag across a stalled pass), M
+(the first-frame seed, three ways), N (a stale commit and a START), O and O2 (the page-open edges) and B2 (BUSY), with LOOKs added to
+test_patch_graph_draft_input, test_patch_add_radio_part and test_converter_app_paths' `seedPatch` accessor. Mutants, each applied alone
+and each RED: the engine's (page default closed; the close rule; the op ignored; no merge; history 7; a document keeps the history; the
+engine's own changes not versioned; epoch equal to version; the refused-plugin and failed-radio runnable rules; the decoder source
+mapping swapped; the channel's offset and out-rate swapped; the radios' centre equal to the rate; the note dropped; pending dropped;
+the event ignoring the version; sync-before-block removed; every fingerprint input alone in F7) and the window's (W2 base not named, W3
+an unpublished graph adopted, W5 and W6 the flag never sent and sent every frame, W7 a device before the scan's answer, W8 the answer
+adopted whole, W9 a refusal unanswered, W10 a document keeping the interaction, W11 a second commit in flight, W13 applyConfig silent,
+W14 BUSY dropping the edit). SURVIVORS: W1 (adopt while in flight) and W4 (the seed ignoring a document in flight) are equivalent by
+construction; W12 (no second version read) matters only with a concurrent publish, UNVERIFIED and kept as defence. One fingerprint input
+is not mutant-tested alone: an open radio's centre (no hermetic way to move it without the graph moving), tested by value. 13b:
+api_03 G13b-1 to G13b-4 (the devices and the recordings op; the receiver's radio and the converter; PATCH_LIVE against a running
+generator patch; the decoder face with DECODER_LINES' node ids against the real group-8 fixture), alloc F8, apply_command's new op,
+the window scenarios Q, R, S, T, V and X of test_patch_graph_draft_input (text read through ImGui's log), add_radio_part's device
+order and the lent radio, and converter_app_paths' two seed cases and the published-node `look()`; 35 mutants, all red but two
+equivalents (W4: a node-0 guard no wire can match; E7 and E14 went red once the missing alloc cases were added; evidence in the
+session's scratch under w13). Not covered: the Map's track bit at the window (no track-source fixture) and the engine's then-dead
+`patchSinkLines_` prune (retired by 13c). 13c: api_03 G13c-1 to G13c-3 against the REAL picture-decoder fixture in the pass with no
+window (the event readable the moment it is taken; ids rising; the node's name in the event; the buffer protocol, a stale id, a removed
+node; VIEW-only, REMOTE and a late LOCAL session; a stopped patch keeping its picture; an edit against a document load; `listSeq`
+unchanged; two reader threads against the pass), alloc F9, draft_input scenario W (a GL stand-in: one upload per picture shown,
+NOT_FOUND and a bad shape leave the texture, a document load and a node's removal delete it, the hook gone by a source check),
+apply_command and the guard; 25 mutants, 24 red first or corrected, and the survivor (PATCH_LIVE kind 6's ACTIVE always true) was
+closed by a new per-pass check and is red. Among the engine reds: no event, ids reused, no prune on removal, no clear on a document
+load, the set handed over a pass late, info-only returning 0, a short buffer returning the copied count, REMOTE denied, the
+capability clear, the row's byte count 0, the caption empty, the event's `value[1]` wrong, STOP clearing pictures, the cap-without-buffer
+check dropped, the info-size check dropped, the appended fields unguarded, the pixels copied and not moved, and an IN-PLACE OVERWRITE
+(5 torn reads); the window's: upload every frame, NOT_FOUND marked shown, the shape check dropped, the row prune dropped, the hook
+re-added. THE FINAL NUMBERS, solo, on this tree after the api_03 repair and before this record: test_engine_api_03 3 582 checks, 0
+failed (72.55 s); test_engine_publish_alloc 466/0; test_patch_graph_draft_input 383/0; test_apply_command 1 231/0;
+test_converter_app_paths 336/0; test_patch_add_radio_part 25/0; test_command_path_guard 212/0 (below). The last serial `ctest -C
+Release`, 256/256, was after 13c (1 078 s, ctest-after-g13c-serial.log); the `-j 8` runs after the repair are above.
+
+THE ALLOCATION NUMBERS, per part. 13a: a SETTLED pass allocates nothing (`syncPatchGraphVersion` against the same graph; 30 settled
+passes move nothing, G13-4), and every input of the fingerprint moves it alone (alloc case F7, 404 checks); the patch step's cost per
+pass was by design and was NOT measured. 13b: 200 unchanged `patchLists()` refreshes allocate 0, a settled pass with PATCH_LIVE builds
+nothing and allocates 0 (F8, 448 checks), and a RUNNING page's whole frame averages 43 heap allocations (a speaker and a Spectrum
+part); the old draw was not measured, by code reading it built the ids vector, `patchReadings_`, a `compile()` plan and
+`patchDeviceChoices()` strings for every Radio face and copied two graphs. 13c: a settled pass and 1000 reads of the row, the info and the
+pixels allocate 0 (F9, now 466 checks), a NEW picture costs 5 to 10 allocations and under 1 KB in the publish for a 1.4 MB picture
+(the pixels move, they are not copied), and two reader threads of about 2.9 million reads each ran against the pass with 0 torn.
+
+THE OPERATOR-VISIBLE DIFFERENCES, by the code and the tests; the capture below holds the ones it says it holds. FROM 13a: (1) the plan's
+marks, "This patch can run.", "fed N Hz" and a radio's rate and centre trail an edit by a pass or two, and a node added from the bin is
+unmarked for a frame; (2) a new Radio part shows "Choose a device on the right." for about two frames before its device is chosen; (3)
+the engine is one frame behind the draft (test P's allowance is 5 per drag frame, it was 3; idle frames 0); (4) the scripted run's
+end-of-script printout and the config's patch text come from the page's graph; (5) START pressed while the view is closed is still
+honoured when it reopens; (6) a rare open race: an unsent Radio part with no device could be given the lent radio the take-over names
+(the later device edit wins the merge). FROM 13b (six: the report's five, its first split in two): (1) the gate, level, speaker and decoder-face readouts are one pass later;
+(2) a Radio's rate and centre and START's effects are one pass later; (3) Text-out faces are fed from the 500-line DECODER_LINES ring, cut
+at 159 bytes, and are NOT cleared by the Decoder output window's Clear (THE TEXT-OUT FEED CHANGE: the old feed was the window's own
+`patchSinkLines_`; a line longer than 159 bytes now differs, so a long line was kept out of the capture); (4) "Sound goes to" device
+names are cut at 95 bytes by AUDIO_DEVICES (a longer name gets a different key); (5) a typed Radio centre is judged by the converter
+published for the node's device, and a device chosen in the last couple of frames is judged as having no converter (the engine is the
+judge when the edit lands); (6) the recordings listing appears one frame after the combo opens. FROM 13c: (1) a picture can trail its
+decoder by one pass; (2) A DOCUMENT LOAD CLEARS EVERY PICTURE (before, an old picture could show on a new node that reused an id). AND
+ONE THE CAMPAIGN FOUND AND NO REPORT HAD: (3, new) AT THE FRAME OF A START OR A STOP the port shows its consequences ONE FRAME EARLIER
+than the control, not later: the first frame after the click, the Speaker's face (the file name, "Waiting for its radio." before) and the
+rail's SoapySDR-deferral note appear in the port's frame N and in the control's frame N+1 (178 891 pixels differ at the frame, 6 at
+every frame after, below). The reading by code: the control's runtime ran inside `drawPatchView`, AFTER the rail and the faces of the
+frame it applied the command in; the port's runs in `pumpPatch` at the head of the pass, before the draw; and it holds only while
+the pass runs at the head of the window's frame (once the pass has its own thread the 13a/13b statements, one pass later, are the right
+ones). It is recorded as a difference, not a defect: nothing is lost or shown wrong at any frame.
+
+THE PICTURES, as far as a picture goes. The application's own framebuffer capture in bounded runs, the window 1502x1405 as the capture
+measures it (1500x1380 requested, 2 110 310 pixels), FOXSDR_SINGLE_VIEWPORT=1, one scratch copy of each exe with the same resources
+beside it (and, for the Text-out states, the group-8 fixture module in the scratch exe's own `plugins` directory, never the real one),
+the built-in signal generator as the source, no radio visible to the process (SOAPY_SDR_PLUGIN_PATH removed), each run on its own seeded
+copy of the config (CASCADE_CONFIG_TEST; telemetry and the update check off, volume 0) with every folder the process derives from the
+environment (USERPROFILE, HOME, APPDATA, LOCALAPPDATA) pointing into the run's own scratch directory and every URL at a dead local
+port, and bounded by `--frames`. THE CONTROL is g13-control, the tree at 69f7d6a (groups 1 to 12, no group 13) in its own worktree, the
+PORT is 69f7d6a plus parts a, b and c plus the api_03 repair; build\g13-vis-final.txt is the table (the scripts runone13.py,
+campaign13.py, compare13.py, bracket13.py, shift13.py, where13.py, pts13.py and the input scripts are in the session's scratch, under
+g13-vis). THE PATCH PAGE IS THE DEFAULT FACE, so it is in every capture and the campaign is TWELVE states, four runs of each build in each
+(96 runs): DEFAULT (a fresh config on the generator: the app seeds a STARTER Radio once the receiver's open has answered, so the default
+page is not empty); EMPTYDOC (no node at all: FOXSDR_PATCH_FILE with a document of no nodes, because a config document with no nodes does
+not count - `patchSeeded_` is set only for a document that has one); SEEDED (a generator Radio wired to a Channel, a Demod and a
+Speaker, a document in the config, NOT running: the faces, the plan marks, "This patch can run."); RUNNING (the same, the bounded-run
+FOXSDR_PATCH_START seam: the transport, the readouts); RUNNING_SPEC (the same with a Spectrum part on the radio, a live trace);
+RUNNING_CLICK (the same started by a click on the START dome from the input script, frames 38 to 42); ADDRADIO (the Radio key pressed
+on the default page: a second Radio on top of the starter); ADDRADIO_EMPTY (the Radio key pressed on the empty page) and ADDRADIO_DOC
+(the same radio as a document: the control for the history point below); TEXTOUT_OFF, TEXTOUT and TEXTOUT_CLICK (the group-8 fixture
+decoder, which says "G8 decoded line 001..003" once a process with FOXSDR_FIXTURE_G8_LINES=3, wired to a Text out; idle, started
+from the seam, started by a click; the lines are short, so the 159-byte cut does not enter and all three lines are the same in both
+builds). THREE BRACKETS, frame by frame, three runs of each build: STARTCLICK and STOPCLICK (the dome pressed, a capture a frame from 34
+to 61) and ADDBRACKET (the Radio key on the empty page, 36 to 59). The captures are 576 files. Areas, tiling the capture exactly (the
+named areas are asserted disjoint, each node's bands lie inside the canvas, and each state's last row is the REMAINDER, the whole
+capture minus the named areas, 2 892 pixels in every state): the frame's ring, the deck in five pieces, the rail in three, the page's
+title strip, the transport in four (the dome, ALL OFF, the status sentence, the rest of the row), the parts bin, the decoders row,
+the inspector in two, the CANVAS (computed as the canvas rectangle minus the node bands: the grid and the wires), and each node in
+bands (the title bar, the rows its face draws, the readout row): 19 areas in EMPTYDOC up to 39 in RUNNING_SPEC. THE LIVE AREAS, measured
+and printed and NOT in the 0-pixel claim, because their content is not a function of the build: the Channel's level readout, the
+Demod's gate readout, the Speaker's file name and level bar (a second-resolution time stamp in the WAV's name: 8 distinct crops in 8
+captures of every running state) and the Spectrum's trace.
+THE RESULT. In SEVEN states (DEFAULT, EMPTYDOC, SEEDED, ADDRADIO, ADDRADIO_DOC, TEXTOUT_OFF, TEXTOUT_CLICK), 0 pixels differ at tolerance 24 AND at tolerance 0 in every area, in every one of the 16 control-against-port
+pairs and in the 6 + 6 inside one build, and all 8 captures of each state are ONE FILE (9daeed2f, 1f3139fc, 21bcb389, fa928f6c, f40a48de,
+c53e36df, 4618ca28). That covers the empty page's whole chrome and parts bin, the starter Radio's face, the seeded chain with its marks,
+verdict and channel count, the idle Text-out chain, a Text out's three lines ("IQ decoder: G8 decoded line 00", cut by the face), the
+decoder face ("3 lines", the newest line), the rail, the deck and the cabinet. In the five states with a running patch or a click
+history, at tolerance 24 the figure is 0 everywhere outside the live areas but ONE pixel (below), and at tolerance 0: RUNNING and
+RUNNING_SPEC 6 pixels in the decoders row, RUNNING_CLICK 6 in the transport's status sentence, ADDRADIO_EMPTY 2 in the Radio's centre
+field and TEXTOUT 2 in the decoder's newest line, every one the SAME in all 16 control-against-port pairs and 0 inside either build, so
+deterministic and not noise. THE THIRD-DIFFERENCE RULE: what are they? Each is one column at the edge of a SINGLE GLYPH of static
+text (the decoders row's sentence; the status sentence; the serif tips, top and bottom, of the "M" of "MHz" in a centre field, seen at
+12 times; a glyph of a decoder's newest line), the largest channel delta 27 (the one pixel over tolerance 24), 20, 11 and 8. They are not a
+layout or a state difference, and the evidence is that the same kind of difference exists between two runs of ONE build whose only
+difference is HISTORY: control START-by-seam against control START-by-click, same final state, 1 pixel in the decoders row; port
+START-by-seam against port START-by-click, 5; control SEEDED against control RUNNING, 1; while the control's click run and the
+port's click run are the SAME in that row (0), the port's RADIO-AS-DOCUMENT and the control's are the same (0), and the two builds'
+TEXTOUT_CLICK are one file. The reading, UNVERIFIED as a mechanism: ImGui 1.92.8 (third_party/imgui) rasterises glyphs into a DYNAMIC
+atlas in the order they are first drawn, and the port draws some text in a different order and frame from the control (a new Radio
+shows "Choose a device on the right." for a frame that the control never draws; START's consequences come a frame sooner; the seam
+starts the patch at frame 1 in both builds but the port's readouts arrive on other frames), which can change the sampling of an edge
+column; the atlas itself was not dumped. NOTHING OUTSIDE THESE EIGHT FIGURES differs in any pair of any state. THE LIVE AREAS, with the
+bound of the largest count two runs of one build show: RUNNING, Channel level (4 600 px) cvp24 163, cvp0 0 to 226, cvc0 183, pvp0 226,
+noise24 (80, 163); Demod gate (7 590) cvp24 375, cvp0 0 to 545, cvc0 545, pvp0 0, noise24 (375, 0); Speaker (13 800) cvp24 299, cvp0
+233 to 422, cvc0 405, pvp0 426, noise24 (277, 296); the whole capture cvp24 668, cvp0 239 to 1 096, cvc0 1 122, pvp0 591. RUNNING_SPEC,
+the same bands within 10 pixels of the same bounds (the Speaker's cvp0 reaches 432 against a within-build 422, 16 pairs against 6)
+and the Spectrum's trace (38 808 px) cvp24 561, cvp0 0 to 1 801, cvc0 1 806, pvp0 1 795, noise24 (558, 522); the whole capture cvp24
+1 255, cvp0 215 to 2 799. RUNNING_CLICK, Channel cvp0 0 to 183 against 183, Demod gate 0 in every pair (one crop in 8 captures), Speaker
+191 to 321 against 328, the whole capture cvp0 229 to 510 against a within-build 487 (6 of it the glyph pixels above). The control-
+against-port counts are inside the noise of one build, and the shared-file evidence is better than a count: the Channel's level crop
+is 3 distinct crops in 8 captures of RUNNING and 2 of the 3 are drawn by both builds, the Demod gate 2 and 1 shared, RUNNING_CLICK's
+Demod gate ONE crop in all 8, RUNNING_SPEC's trace 6 distinct and 1 shared; the Speaker's name is a clock and shares nothing (8 in 8).
+The stderr of the two builds is identical in all 48 control-and-port pairs (12 of them after masking the run's own directory in the
+"patch loaded from" line), the stdout identical with its digits masked, and the config each run saved on exit identical in all 48.
+THE COMPARATOR'S OWN CHECKS: control SEEDED against control RUNNING reports 127 282 pixels (187 985 at tolerance 0) with 121 577 in the
+rail (the "Patch RUNNING" lamp, the SoapySDR note), 1 152 in the START dome, 1 381 in the status sentence, 329 in the Radio's device
+row and 737 in its rate line, and 0 elsewhere; control DEFAULT against control EMPTYDOC reports 10 935 (16 325), 9 819 of them in the starter
+Radio's five bands, 786 in the status sentence and 330 in the rail; control TEXTOUT_OFF against control TEXTOUT 128 679, 97 in the decoder's
+line count, 434 in its newest line and 2 970 in the Text out's lines; and a +30 and a +10 poke on single pixels are counted as 1 pixel
+at tolerance 24 and 2 at tolerance 0.
+THE BRACKETS. STARTCLICK, 34 to 61 (button down at 38, up at 42): every frame from 34 to 42 is ONE FILE in all six runs (2f22dc.. for
+34 to 37, f6faec.. for 38 to 41, 40cee1.. for 42): 0 pixels differ between the builds. AT FRAME 43, THE FIRST AFTER THE RELEASE, 178 891
+pixels differ outside the live bands, in the rail (the SoapySDR note and the section list shift) and the Speaker's face; from 44 to 61
+6 pixels (the glyph edge). The SHIFT TEST holds the one-frame reading: the port's frame 43 against the control's frame 44, outside the
+live bands and the START dome's hover tooltip (which fades in by frame count, so is a frame younger there: 1 732 pixels), is 6 pixels,
+and 44 against 45 the same. STOPCLICK (running from the seam, the dome pressed at the same frames) is the same shape: 178 890 at
+frame 43, 6 before (the seam's history) and after, shift test 6. ADDBRACKET (the Radio key on the empty page): frames 36 to 41 ONE FILE
+(0 differ); FRAME 42, the port shows the node as "No device chosen" with "Choose a device on the right." (the control: "Signal
+generator", "Ready - press START.", 2 189 pixels); FRAME 43 the port's node already has its device and carries an orange outline round it,
+which by the survey's and 13a's account is the plan's mark, a pass old, on a node that had no device (not separately identified;
+2 115 pixels); from 44 to 59, 2 pixels (the "M"). That is 13a's difference 2, exactly
+one frame of the sentence and one of the mark, and the plan marks trailing an edit by a pass; what the page shows from frame 44 is the
+control's page. NO RUN WAS SET ASIDE. What the capture does NOT draw, and so does not hold: a real radio's device list, a SoapySDR
+scan, a real sound card, a lent radio taken over by the patch, a Map with tracks (no hermetic track source, `hostTracks()` and
+`hostPaths()` are held by code reading, and the Map's track bit at the window is not covered by any test), a decoded picture (the
+fixture picture decoder makes a new picture per poll, so a capture of one is never deterministic, and the upload and delete of the
+texture are held by the GL stand-in of scenario W), a document load frame, a drag mid-commit, the recordings combo just opened, a
+Text out fed a LONG line (the 159-byte cut), and the squelch gate when it opens (the generator's level never opens it). The real
+config (C:\Users\steve\AppData\Roaming\foxsdr\config.json, 5 076 bytes, written 2026-10-19 14:52:27 UTC by another session, sha256
+BA532E6C...A353C) was identical before the first launch, in the middle of the campaign and after the last (size, modification time and
+hash), and none of the scratch values (the seeded documents, the fixture's module name) is in it; nothing under
+%LOCALAPPDATA%\foxsdr or %APPDATA%\foxsdr was written. ONE SIDE EFFECT OUTSIDE THE RULE: the first two RUNNING trial runs, before the
+environment was redirected, were running patches whose Speaker records, and wrote two WAV files (11 564 and 12 524 bytes) into
+%USERPROFILE%\Documents\SDR-recordings, a folder those runs created (its parent's modification time is the first run's, 06:10:31
+on 2026-10-20); every later run wrote under its own scratch directory. The two
+files are left in place for the owner to delete (nothing in the campaign deletes).
+
+WHAT COULD MOVE A MEASURED NUMBER. 13a: the patch step runs every pass while the page is open (the catalogue, START and STOP, the
+reconcile and the compile are by design a per-pass cost; with a settled graph the version sync and the publish allocate nothing, and
+a graph that CHANGES, a drag, parses the SET_GRAPH text in the engine and `fact.patch.graph` in the window on every published change,
+which the old frame never did, and is the allocation the whole frame's 43 below is part of); 8 retained graphs (a few KB each) and one
+`rebaseDraft` per racing edit. 13b: PATCH_LIVE copies the readings into its block once a pass while a patch runs (its fingerprint
+makes a pass that finds the same readings build nothing), `read_node_spectrum` copies 8 KB per radio per new frame, and a recordings
+relisting is bounded (200 listed, 64 headers per listing). 13c: a NEW picture costs a move and one set swap (5 to 10 allocations, under
+1 KB), a reader copies its pixels on its own thread and a 1.4 MB picture is a 1.4 MB copy per read (once per picture, in the window);
+one `read_image` call is a short lock and a copy. The new window-side state is one cache refresh per `listSeq` and a stop-and-wait
+ticket. None of these was measured in situ as a whole frame; the running frame's 43 allocations are the only whole-frame figure.
+
+THE TRAPS, for the next group, by part.
+13a. (1) `CHECK_EQ` binds REFERENCES: a temporary graph in a `CHECK_EQ` dangles; use by-value helpers. (2) Bash heredocs collapse a
+backslash and an `n`; any file that holds a literal `\n` (this campaign's own scripts, again) is written with the file tools. (3) A test
+frame is LOOK (`pumpFrameBegin`, `pumpPatch`, `pumpPublish`, `refreshUiState`, `pumpTransmitKey`), then DRAW; a draw that follows an engine
+mutation without the LOOK reads the previous publish. (4) NEVER LEAVE AN ENGINE-HELD PROMISE UNFULFILLED: teardown waits for it. (5) A
+`FOXAPP_OP_*` that is not in the op table cannot go through a session, whatever `applyCommand` says: the SCAN_NATIVE_ONLY bug was found by
+a test that went through a session. (6) The adopt is the dangerous line: nothing may be adopted while a send is in flight, and a draft
+that was never copied from a PUBLISHED graph is never sent. (7) The graph's version moves on ANYONE's change, including the runtime's
+own; a test that expects it to stay still while a patch runs expects the wrong thing.
+13b. (1) Bash heredocs mangle certain quote and backslash sequences: file tools. (2) `look()` is needed before touching an
+unpublished node in a window test. (3) NEVER START A MUTANT BATCH TWICE: the instances contend for the files and one restore is from a
+snapshot. (4) PATCH_LIVE is NOT in the fingerprint and must not be put there: it would rebuild the whole block every pass of a running
+patch. (5) The receiver centre's VALUE is not in the fingerprint either; read the state's `centreHz`. (6) A device chosen in the last
+couple of frames has no converter yet; a typed centre in that window is judged as a radio's with none.
+13c. (1) Never overwrite a mutant harness's restore copy; verify every original string occurs exactly once before the rebuild. (2) A
+picture row outlives a STOP and ends with its node: the window polls the row, never the event. (3) `FoxImageInfo` is append-only, and
+a caller built to FOXAPI_MIN_IMAGE_INFO must be handed only the fields it was built to. (4) The picture fixture (tests/fixture_group13_plugin.cpp)
+offers a new picture each time samples have arrived, so no capture of it is deterministic; a test that wants one waits for an id.
+The api_03 repair. (1) A full-suite run proves nothing about an intermittent fix: break it deterministically. (2) A baseline in a test
+that counts transitions must wait for the SINK to be steady, not only the counter to be still: a dead stream is a legitimate state
+that recovers on the watchdog's schedule.
+The campaign. (1) The default face is not empty (the starter Radio); a page with no node needs FOXSDR_PATCH_FILE. (2) A RUNNING PATCH
+RECORDS: the Speaker writes a WAV under %USERPROFILE%\Documents\SDR-recordings, so redirect USERPROFILE, HOME, APPDATA and LOCALAPPDATA
+into the run's scratch before the FIRST running run. (3) The Speaker's file name is a clock: its face is live in every running state.
+(4) A node's capture rectangle is the canvas origin (427, 350 at 1500x1380) plus the document's (x, y) and size; a node wider than the
+canvas (about 800 px) hides behind the inspector. (5) The decoder fixture goes in the SCRATCH exe's `plugins` directory (the plugin
+directory is the one beside the exe when it is writable), never the real one. (6) Equal drawing HISTORY is part of equal pictures:
+the seam, a click and a document reach the same state by different histories, and static text's edge pixels can differ between them;
+compare like with like, and when a few pixels differ, compare the build against ITSELF reached by the other path before calling it a
+port difference. (7) Python in a Bash heredoc loses its `\n` escapes (trap 2 of 13a): write scripts with the file tools.
+(8) The tooltip of a pressed key fades in by frame count: a shift test excludes its rectangle.
+
+UNVERIFIED, carried forward. No real radio, SoapySDR, sound card or hardware of any kind was driven for any part; no threaded pass was
+run against the window (the pass runs at the head of the window's frame, so difference 3 of the capture, a frame early, is a property
+of that order); the cross-thread safety of the picture store is proven by the two-reader test and not by a standard-window run; the
+real GL upload and `glDeleteTextures` were held by a stand-in; a stale picture from a closed radio's runner could in principle show
+once on a same-id node right after a document load (not reproduced); the patch step's per-pass cost; window mutant W12 (no second
+version read: it matters only with a concurrent publish) and one fingerprint input (an open radio's centre, which no hermetic
+test can move without moving the graph) are tested by VALUE and not alone; the unproven cause of the dying audio stream and the
+undiagnosed four load flakes above; and the MECHANISM of the glyph-edge pixels (the atlas reading is a hypothesis).
+
 OPEN FOR THE PUMP MOVE (the independent review of 47e991e..c47def4, 2026-10-13;
 F3 is recorded, not fixed; F5 was checked and needs nothing).
 
