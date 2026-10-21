@@ -73,25 +73,25 @@ struct AppWindowTestAccess {
     // The engine's pass as far as the session's queue needs it - applied and
     // published (the same two calls the other window tests make).
     static void pass(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
     }
     // The engine's list, COPIED on the pass's thread with the pass out of the way (passseam::read).
     static std::vector<std::string> panels(AppWindow& a) {
-        return passseam::read<std::vector<std::string>>(a.engine_, [&] { return a.engine_.telemetryPanels_; });
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).telemetryPanels_; });
     }
     // The usage record the engine writes for the next launch to send: reporting
     // switched on the way the checkbox does (the desktop's own op), then the
     // config snapshot the save reads, whose telemetryPending is that record.
     // (The consent and the publish are the pass's, made through passseam::on; configSnapshot() is the published copy, any thread.)
     static std::string usageRecord(AppWindow& a) {
-        passseam::on(a.engine_, [&] {
-            (void)a.engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1));
-            a.engine_.publishConfig();
+        passseam::on(rawEngine(a.engine_), [&] {
+            (void)rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1));
+            rawEngine(a.engine_).publishConfig();
         });
-        return a.engine_.configSnapshot().telemetryPending;
+        return rawEngine(a.engine_).configSnapshot().telemetryPending;
     }
     static std::size_t notedByWindow(AppWindow& a) { return a.uiNotedPanels_.size(); }
     // How many FOXAPP_OP_NOTE_PANEL results the window's session holds (one

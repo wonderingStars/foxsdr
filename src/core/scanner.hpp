@@ -101,19 +101,13 @@
 #include <optional>
 #include <utility>
 
+#include "core/scanner_params.hpp"
+
 namespace cascade::core {
 
 class Scanner {
 public:
-    struct Params {
-        double startHz = 88e6;
-        double stopHz = 108e6;
-        double stepHz = 100e3;
-        double dwellMs = 50;
-        double holdMs = 2000;
-        double resumeMs = 500;
-        double listenMs = 0;  // longest stay on one signal; 0 = until quiet
-    };
+    using Params = ScannerParams;  // (core/scanner_params.hpp: the window holds drafts of it)
 
     enum class State { Idle, Scanning, Paused, Holding };
 

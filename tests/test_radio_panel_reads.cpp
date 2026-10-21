@@ -127,12 +127,12 @@ struct AppWindowTestAccess {
     // THE ROW CHOSEN, with the pass out of the way (passseam::read: the scan, the search and selectSource are one step on the
     // pass's thread, as they were one step of the test's): -1 no such row, 1 the open is pending on its worker, 0 not pending.
     static int selectRow(AppWindow& a, const std::string& driver, const std::string& args) {
-        return passseam::read<int>(a.engine_, [&]() -> int {
-            a.engine_.scanNative();
-            for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
-                if (a.engine_.nativeDevices_[i].driver != driver || a.engine_.nativeDevices_[i].args != args) { continue; }
-                a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-                return a.engine_.deviceOpenPending_ ? 1 : 0;
+        return passseam::read<int>(rawEngine(a.engine_), [&]() -> int {
+            rawEngine(a.engine_).scanNative();
+            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+                if (rawEngine(a.engine_).nativeDevices_[i].driver != driver || rawEngine(a.engine_).nativeDevices_[i].args != args) { continue; }
+                rawEngine(a.engine_).selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
+                return rawEngine(a.engine_).deviceOpenPending_ ? 1 : 0;
             }
             return -1;
         });
@@ -151,32 +151,32 @@ struct AppWindowTestAccess {
     static bool finishOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
         const auto state = [&] {
-            return passseam::read<int>(a.engine_, [&]() -> int {
-                return a.engine_.deviceOpenPending_ ? 1 : (a.engine_.device_ != nullptr ? 2 : 0);
+            return passseam::read<int>(rawEngine(a.engine_), [&]() -> int {
+                return rawEngine(a.engine_).deviceOpenPending_ ? 1 : (rawEngine(a.engine_).device_ != nullptr ? 2 : 0);
             });
         };
         int s = state();
         while (s == 1) {
-            if (passseam::mode() != passseam::Mode::Free) { passseam::on(a.engine_, [&] { a.engine_.pollSourceAsync(); }); }
+            if (passseam::mode() != passseam::Mode::Free) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); }); }
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             s = state();
         }
         return s == 2;
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.selectSource(0); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
     // The window looks, as a frame does: the engine publishes, the window reads.
     static void look(AppWindow& a) {
-        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
         a.refreshUiState();
     }
     // The engine's pass as far as a submit needs it (the queue applied, the
     // state published), the answers drained as a frame's pumpTransmitKey does:
     // how many commands the window's session had taken and the engine answered.
     static int pass(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
         int answered = 0;
         for (;;) {
@@ -190,7 +190,7 @@ struct AppWindowTestAccess {
         return answered;
     }
     static void tune(AppWindow& a, double airCentreHz) {
-        passseam::on(a.engine_, [&] { a.engine_.applyRetuneNow(airCentreHz); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).applyRetuneNow(airCentreHz); });
     }
     static const AirspyCache& airspy(AppWindow& a) { return a.airspyLists(); }
     static const ConverterCache& converter(AppWindow& a) { return a.converterLists(); }
@@ -205,25 +205,25 @@ struct AppWindowTestAccess {
     }
     // The engine's side, for comparison (each made on the pass's thread with the pass out of the way: passseam::read).
     static bool agc(AppWindow& a, bool lna, bool on) {
-        return passseam::read<bool>(a.engine_, [&] { return a.engine_.chooseAirspyAgc(lna, on); });
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyAgc(lna, on); });
     }
     static bool decimate(AppWindow& a, unsigned d) {
-        return passseam::read<bool>(a.engine_, [&] { return a.engine_.chooseAirspyDecimation(d); });
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyDecimation(d); });
     }
     static bool mode(AppWindow& a, cascade::source::AirspySource::GainMode m) {
-        return passseam::read<bool>(a.engine_, [&] { return a.engine_.chooseAirspyGainMode(m); });
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyGainMode(m); });
     }
     static double chainRate(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.inputRateHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.inputRateHz(); });
     }
     static double hardwareRate(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] {
-            auto* s = dynamic_cast<cascade::source::AirspySource*>(a.engine_.device_);
+        return passseam::read<double>(rawEngine(a.engine_), [&] {
+            auto* s = dynamic_cast<cascade::source::AirspySource*>(rawEngine(a.engine_).device_);
             return s == nullptr ? 0.0 : s->hardwareSampleRateHz();
         });
     }
     static double radioCentre(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.rawSource().centerFrequencyHz(); });
     }
 };
 

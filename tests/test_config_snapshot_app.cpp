@@ -55,14 +55,14 @@ struct AppWindowTestAccess {
     // but it hands the engine's half over itself (Engine::publishConfig), which the product does only with no pass running
     // (before the control thread starts, and after shutdownQuiesce).
     static void saveNowHeld(AppWindow& a) { a.saveConfigNow(); }
-    static void publishHeld(AppWindow& a) { a.engine_.publishConfig(); }
-    static void pump(AppWindow& a) { passseam::whole(a.engine_, [&] { a.engine_.pump(); }); }
-    static cascade::engine::EngineStatusText status(AppWindow& a) { return a.engine_.statusText(); }
-    static void pumpPublish(AppWindow& a) { passseam::custom(a.engine_, [&] { (void)a.engine_.pumpPublish(); }); }
-    static void pumpAudio(AppWindow& a) { passseam::workers(a.engine_, [&] { a.engine_.pumpAudio(); }); }
+    static void publishHeld(AppWindow& a) { rawEngine(a.engine_).publishConfig(); }
+    static void pump(AppWindow& a) { passseam::whole(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pump(); }); }
+    static cascade::engine::EngineStatusText status(AppWindow& a) { return rawEngine(a.engine_).statusText(); }
+    static void pumpPublish(AppWindow& a) { passseam::custom(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).pumpPublish(); }); }
+    static void pumpAudio(AppWindow& a) { passseam::workers(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpAudio(); }); }
     // Every status line, set as the engine's own code sets it.
     static void setAllStatusHeld(AppWindow& a, const std::string& p) {
-        cascade::engine::Engine& e = a.engine_;
+        cascade::engine::Engine& e = rawEngine(a.engine_);
         e.sourceError_ = p + "1";
         e.gpsRefusal_ = p + "2";
         e.catalogError_ = p + "3";
@@ -86,7 +86,7 @@ struct AppWindowTestAccess {
         e.addAllSummary_ = p + "21";       // ADD ALL summary, the twentieth and the twenty-first
     }
     static FoxCommandResult volumeHeld(AppWindow& a, double v) {
-        return a.engine_.applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
+        return rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
     }
     // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is
     // let go. Once it has STARTED no other pass can start until it ends, so between the constructor and the destructor the
@@ -97,10 +97,10 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(a.engine_);
+            passseam::attach(rawEngine(a.engine_));
             s_ = std::make_shared<State>();
             std::shared_ptr<State> s = s_;
-            a.engine_.postToPass([s] {
+            rawEngine(a.engine_).postToPass([s] {
                 std::unique_lock<std::mutex> lk(s->m);
                 s->running = true;
                 s->cv.notify_all();

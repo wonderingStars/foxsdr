@@ -80,19 +80,19 @@ struct AppWindowTestAccess {
         Engine::testHooks_.pluginDir = &pluginDir;
     }
     static void look(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(a.engine_, [&] {
-            a.engine_.pumpWorkers();
-            a.engine_.pumpAudio();
+        passseam::workers(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpWorkers();
+            rawEngine(a.engine_).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -108,15 +108,15 @@ struct AppWindowTestAccess {
     // The engine's own fields, for what the engine says and the window must agree with. They are the pass's: each read and
     // write goes through passseam::read/on (on the pass's thread with the pass out of the way when it free-runs; right here
     // otherwise) - or, the "Held" form, from this thread while a PassHold parks the pass.
-    static bool engineOnHeld(AppWindow& a) { return a.engine_.telemetryEnabled_; }
-    static bool engineOn(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return engineOnHeld(a); }); }
+    static bool engineOnHeld(AppWindow& a) { return rawEngine(a.engine_).telemetryEnabled_; }
+    static bool engineOn(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return engineOnHeld(a); }); }
     static std::string engineId(AppWindow& a) {
-        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.telemetryInstallId_; });
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).telemetryInstallId_; });
     }
     static void setCounters(AppWindow& a, std::uint64_t launches, std::uint64_t crashes) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.telemetryLaunches_ = launches;
-            a.engine_.telemetryCrashes_ = crashes;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).telemetryLaunches_ = launches;
+            rawEngine(a.engine_).telemetryCrashes_ = crashes;
         });
     }
     // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is
@@ -129,10 +129,10 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(a.engine_);
+            passseam::attach(rawEngine(a.engine_));
             s_ = std::make_shared<State>();
             std::shared_ptr<State> s = s_;
-            a.engine_.postToPass([s] {
+            rawEngine(a.engine_).postToPass([s] {
                 std::unique_lock<std::mutex> lk(s->m);
                 s->running = true;
                 s->cv.notify_all();

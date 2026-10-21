@@ -72,6 +72,7 @@
 #include "engine/bias_tee.hpp"
 #include "engine/device_scan_plan.hpp"
 #include "engine/engine_host.hpp"
+#include "engine/engine_shell.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/pass_stats.hpp"
 #include "engine/running_view.hpp"
@@ -90,148 +91,20 @@
 #include "source/soundcard_source.hpp"
 #include "usb/usb_device.hpp"
 
-// The window and its tests are named, never included: the engine does not
-// depend on them. Stage 3a's window still reaches the engine's members
-// directly (as friends); stage 4 replaces that with the engine API's table.
+// The window's tests are named, never included: the engine does not depend on them. (The window itself reaches the engine only through
+// EngineShell - engine/engine_shell.hpp - since the fence; stage 4 step 5.)
 namespace cascade::gui {
-class AppWindow;
 struct AppWindowTestAccess;
 }  // namespace cascade::gui
 
 namespace cascade::engine {
 
-// WHAT THE FRONT END HANDS OVER FOR THE PUBLISH (engine/stage3b-pre, docs/
-// engine-stage3.md OPEN 4): three facts only the window knows - its web
-// listener's state, the counter's face (the web page mirrors it) and the
-// basemap plugin's figures - handed to the engine once a frame
-// (Engine::setFrontEndFacts) instead of the engine calling the window for
-// them while it publishes.
-// How the engine's control thread runs (Engine::startControlThread; stage
-// 3b, docs/engine-stage3.md section 10).
-struct ControlThreadOptions {
-    // One pass of the control loop per period (the GUI's frame, by default).
-    std::chrono::milliseconds period{16};
-    // The control thread's own hang watchdog (OPEN 8): where a report goes
-    // (empty: logged to the ring, no file) and after how long a pass that has
-    // not come back is a hang.
-    std::string watchdogReportDir;
-    unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
-    // THE PASS FLOOR (pump move P4, adopted decision 6; the survey's section 3.4): the least time between the STARTS of two passes. A
-    // submit wakes the loop at once (that is what keeps a tune-to-audio inside one pass of its submit), so without a floor a flood
-    // of submits - a drag at the frame rate, a script, a misbehaving client - becomes a flood of passes, each paying the whole
-    // pass's cost (the publish allocates a status block). The floor turns a flood into at most 1000/floor passes a second and
-    // costs a burst nothing it was not going to wait for: a wake that arrives after the floor has passed (any submit after an
-    // idle spell) is served at once. 0 turns it off. A wake from runPassNow() is exempt (the caller asked for exactly one pass).
-    std::chrono::milliseconds floor{2};
-    // STEPPED MODE (adopted decision 3): the thread exists - so onControlThread(), the control watchdog, the table's thread
-    // gating and every hook's real call path are all real - but runs NO pass of its own. It runs one PART of a pass (PassPart)
-    // for each stepPass() the front end makes and the front end waits for it, so a bounded run is deterministic: the parts run
-    // at the same places in the frame the pump ran them before the move. Stepped mode orders threads; it cannot find a race (the
-    // front end is parked while a part runs) - the free-running mode and ThreadSanitizer do that.
-    bool stepped = false;
-    // THE TIMER TICK (Windows only; 0 leaves it alone): a wait of 16 ms on this system's default 15.6 ms tick ends on the SECOND tick, ~31 ms
-    // - so a "62 passes a second" thread ran at 35, found by the interactive smoke of step P5 - and a floor of 2 ms is ~15 ms. The thread asks for
-    // this resolution (timeBeginPeriod) from its start to its stop, as the audio stream's WASAPI host already does whenever one is open; the
-    // operating system keeps the finest request any process makes, per process since Windows 10 2004.
-    unsigned timerResolutionMs = 1;
-};
-
-// THE THREE PARTS OF A PASS (pump move P4/P5). A free-running pass runs them in this order as one; a stepped one runs each when
-// the front end asks (Engine::stepPass), which is how the window keeps the order the pump had in its frame - the part up to and
-// including the publish, then the audio mute (which the frame ran after its look, before it drew), then the workers and audio:
-//   Front  the GPS fix, the command queues, the inputs, the remote controls, the plugins and the scanner, the patch, the publish
-//   Mute   the audio mute (a decision about the receiver the state it just published describes)
-//   Back   the workers (device scans and opens, the retune coalescer, downloads) and the audio sink's health, the config copy
-enum class PassPart { Front, Mute, Back };
+// The vocabulary the engine shares with its front end (ControlThreadOptions, PassPart, WebTrackInfo, WebExtras, BasemapFacts, FrontEndFacts,
+// PluginUiReport, EngineStatusText, RemoteControls) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
+// name reachable only through this header is a name the interface cannot use. They are in namespace cascade::engine still.
 
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
-
-// WHAT THE WEB STATUS NEEDS FROM THE WINDOW'S PLUGIN POLL (pump move step P2): the track-info plugin's answers for the tracks on
-// screen, and the headers of the receiver plugins' decoded pictures. Both used to be asked of the window while the engine published
-// (the host hooks enrichWebTrack and fillWebImages), reading the window's TrackInfoCache and picture buffer - GUI-thread state - from
-// the pass. The window builds this once a frame, immutable, and hands the pointer over inside FrontEndFacts (a copy of the facts is
-// a refcount, so the publish's three copies stay free); the pass only looks the answer up.
-struct WebTrackInfo {
-    std::string id;           // the track's id and kind: the key (the vector is sorted by id, then kind)
-    unsigned kind = 0;
-    unsigned infoState = 0;   // 1 = known, 2 = the source does not have it (RadioStatus::Track::infoState)
-    std::string registration;
-    std::string acType;
-    std::string acOperator;
-    std::string acCountry;
-};
-struct WebExtras {
-    std::vector<WebTrackInfo> tracks;
-    std::vector<cascade::net::RadioStatus::Image> images;
-    // THE TRACKS THE LAST PLUGIN POLL FOUND, as the window drew them (the pump move's step P3): the pass used to walk the plugin
-    // UI's own vector for the browser's target list - a vector the window's poll clears and refills every frame - and walks this
-    // immutable copy now. The window carries the VISIBLE ones (the staleness rule the desktop applies); the pass applies it again.
-    std::vector<cascade::core::HostTrack> polled;
-};
-
-struct FrontEndFacts {
-    bool webListening = false;
-    // A front end that has handed nothing over (the headless engine) shows
-    // the product's default face, as EngineHost's own answer always was.
-    std::string tunerDisplayStyle = cascade::gui::tunerStyleName(cascade::gui::TunerStyle::Nixie);
-    EngineHost::BasemapFacts basemap;
-    // The web status' extras (above); null when there are none, which is every pass of a headless engine.
-    std::shared_ptr<const WebExtras> webExtras;
-    // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_TEST): whether to print the catalogue report when a fetch resolves, and the
-    // window's frame count to name in it - the window's onCatalogueResult hook used to read its own counter from the pass.
-    bool pluginTestReport = false;
-    int frame = 0;
-};
-
-// WHAT THE BOUNDED-RUN STATUS REPORT PRINTS OF THE PLUGIN UI (pump move step P3): the engine no longer holds the plugin UI - it is
-// the front end's - so the front end hands over what it polled when it asks for the report (Engine::reportPluginStatus).
-struct PluginUiReport {
-    std::vector<cascade::core::HostTrack> tracks;
-    std::size_t paths = 0;
-    std::vector<cascade::core::HostPanel> panels;
-};
-
-// Engine::StatusText - see Engine::publishStatusText.
-struct EngineStatusText {
-    std::string sourceError;
-    std::string gpsRefusal;
-    std::string catalogError;
-    std::string bandPlanError;
-    std::string tuneMismatchNote;
-    std::string transmitError;
-    std::string soundCardMissing;
-    std::string sdrPlayApiDetail;
-    std::string sdrPlayAdvice;
-    std::string recordNotice;
-    std::string recordError;
-    std::string presetNote;
-    std::string pluginEnforceError;
-    std::string restoreKeepLabel;
-    // API 0.3 8.4: the Sinks section's watchdog note (STATUS_LINES key
-    // audioHealth).
-    std::string audioHealth;
-    // API 0.3 8.6: the Bookmarks section's note (what the last import, export or group
-    // removal did: bookmarkImportNote_) and its red line (bookmarkError_).
-    std::string bookmarkNote;
-    std::string bookmarkError;
-    // API 0.3 8.8: what the last install or removal of a plugin did (installReport_, green: STATUS_LINES key
-    // installReport, level 1) and why the last one failed (installError_, red, verbatim: installError, level 3).
-    // The store window and the fitted-modules window show the same pair.
-    std::string installReport;
-    std::string installError;
-    // API 0.3 8.9, what the plugin store window draws beside them: the catalogue status line ("N plugins in the
-    // catalogue", catalogStatus_; STATUS_LINES key catalogStatus, level 1) and what the last ADD ALL run did
-    // (addAllSummary_; key addAllSummary, level 1, or 3 when the run had failures: addAllFailed_, which is the
-    // level's own source and is handed over with it).
-    std::string catalogStatus;
-    std::string addAllSummary;
-    bool addAllFailed = false;
-    // API 0.3 8.10: the radio's fault sentence WHOLE (STATUS_LINES key deviceFault, level 3): the pipeline's, or the
-    // test stand-in's. FoxReceiverState::faultMessage is the same text cut at 127 bytes, and the zombie-source
-    // sentence is 134 - a drawing that looks for the end of it ("restart FoxSDR") must read this, not that.
-    std::string deviceFault;
-};
 
 class Engine {
 public:
@@ -246,7 +119,9 @@ public:
     Engine& operator=(const Engine&) = delete;
 
 private:
-    friend class cascade::gui::AppWindow;
+    // THE WINDOW IS NOT A FRIEND ANY MORE (stage 4, the fence): its door is EngineShell, the only class here besides the table's host
+    // and the tests' accessor that reaches the members below.
+    friend class EngineShell;
     friend struct cascade::gui::AppWindowTestAccess;
     // The engine API's host (engine/fox_engine_api.cpp) applies commands
     // through applyCommand and reads the snapshot, the source generation and
@@ -525,8 +400,8 @@ public:
     // core/app_commands.hpp). docs/engine-stage1.md has the op table, the
     // rule for when a widget's command is queued and when it is applied at
     // once, and the line between receiver state and view state; tests/
-    // test_command_path_guard.cpp fails a widget that changes the receiver
-    // any other way. THE PUMPING THREAD ONLY - the engine's pass, which is the
+    // the interface target cannot name this class (engine/engine_shell.hpp is its door), so a widget that
+    // changes the receiver any other way does not compile. THE PUMPING THREAD ONLY - the engine's pass, which is the
     // control thread since the pump move's step P5 (the same rule every setter
     // it calls has always had: the window never calls it - it submits). `longText`
     // is the command's text when it did not fit
@@ -890,8 +765,8 @@ private:
     // as "3" at the dozen sites that index this list, because one of those
     // sites forgetting that the native block exists is an off-by-N that opens
     // the wrong radio.
-    static constexpr int kSoundCardRow = 2;
-    static constexpr int kNativeRowBase = 3;
+    static constexpr int kSoundCardRow = cascade::engine::kSoundCardRow;
+    static constexpr int kNativeRowBase = cascade::engine::kNativeRowBase;
     int soapyRowBase() const {
         return kNativeRowBase + static_cast<int>(nativeDevices_.size());
     }
@@ -2112,7 +1987,7 @@ private:
     // Decoded output, newest last, bounded. The panel is a tail, not an
     // archive; the recorder is where a permanent copy belongs.
     std::deque<cascade::core::DecodedLine> decoderLog_;
-    static constexpr std::size_t kDecoderLogMax = 500;
+    static constexpr std::size_t kDecoderLogMax = cascade::engine::kDecoderLogMax;
     // THE ONLY MESSAGE COUNT THIS APPLICATION HAS. No decoder plugin reports a
     // message tally over the ABI and the runner keeps none, so the one
     // countable thing a decoder produces is a LINE of output, counted here as
@@ -2527,8 +2402,8 @@ public:
     // with the frame's snapshot (pumpPublish, before anything is drawn) and
     // at the end of the frame (pumpAudio, after the workers' answers); the
     // window reads its own copy of it, refreshed once a frame, and never these
-    // fields themselves (tests/test_command_path_guard.cpp, kPublishedOnly).
-    using StatusText = EngineStatusText;
+    // fields themselves (the interface cannot name them: engine/engine_shell.hpp).
+    using StatusText = cascade::engine::EngineStatusText;
     void publishStatusText();
     StatusText statusText() const;
     // The front end's facts for the publish (FrontEndFacts above). Any
@@ -2550,14 +2425,8 @@ public:
     // WHY A PULL AND NOT A PUSH THROUGH submitCommand OR THE API QUEUE: both drain BEFORE this phase, so a remote request
     // that arrived in the same pass as a local one would be applied FIRST and could win the key (rule 6, first come); the
     // pull keeps today's order, the web after both.
-    struct RemoteControls {
-        std::vector<cascade::net::ControlRequest> requests;  // web first, then CAT (the order applyWebControls had)
-        // Whether the server that carries the browser's key is running AT THE MOMENT OF THE PULL (the standing condition
-        // of the remote key, docs/engine-stage3.md OPEN 7 (c)): when it is not, a key the web remote holds ends in the same
-        // phase (FOXAPP_OP_WEB_CONTROL_STOPPED's rule), since no browser can ask again.
-        bool serverRunning = true;
-    };
-    using RemoteControlSource = std::function<RemoteControls()>;
+    using RemoteControls = cascade::engine::RemoteControls;
+    using RemoteControlSource = cascade::engine::RemoteControlSource;
     void setRemoteControlSource(RemoteControlSource source);
     void pumpRemoteControls();
 

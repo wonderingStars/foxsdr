@@ -10,7 +10,7 @@
 //   A  it runs with no frame at all: ImGui's clock has not moved (no frame was drawn) and the engine's has
 //   B  from another thread it answers the same clock - monotone, between the reader's own bounds - and ImGui's context is never
 //      touched (the context is gone for the read)
-// and the host class no longer has frameTimeS or frameClockRunning (tests/test_command_path_guard.cpp holds the hook list).
+// and the host class no longer has frameTimeS or frameClockRunning (tests/test_engine_shell_guard.cpp holds the hook list).
 //
 // THE PUBLISH-TIME FACTS. webListening, tunerDisplayStyle and basemapFacts
 // were hooks the engine called while publishing; now the window HANDS them
@@ -32,19 +32,20 @@
 #include <unistd.h>
 #endif
 
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static cascade::engine::EngineHost& host(AppWindow& a) { return a; }
-    static double clockS(AppWindow& a) { return a.engine_.clockS(); }
-    static void handFacts(AppWindow& a, const cascade::engine::FrontEndFacts& f) { a.engine_.setFrontEndFacts(f); }
+    static cascade::engine::ShellHooks& host(AppWindow& a) { return a; }
+    static double clockS(AppWindow& a) { return rawEngine(a.engine_).clockS(); }
+    static void handFacts(AppWindow& a, const cascade::engine::FrontEndFacts& f) { rawEngine(a.engine_).setFrontEndFacts(f); }
     static cascade::core::PublishedState published(AppWindow& a) {
-        (void)a.engine_.publishReceiverState();
+        (void)rawEngine(a.engine_).publishReceiverState();
         cascade::core::PublishedState s;
-        if (!a.engine_.receiverSnapshot_->read(s)) { s = a.engine_.receiverSnapshot_->readFull()->state; }
+        if (!rawEngine(a.engine_).receiverSnapshot_->read(s)) { s = rawEngine(a.engine_).receiverSnapshot_->readFull()->state; }
         return s;
     }
 };
@@ -97,7 +98,7 @@ int main() {
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     {
         AppWindow app;
-        cascade::engine::EngineHost& host = A::host(app);
+        cascade::engine::ShellHooks& host = A::host(app);
 
         // A: the engine's clock moves with no frame; ImGui's does not.
         frame(1.0);

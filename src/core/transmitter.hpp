@@ -119,6 +119,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/tx_input.hpp"
 #include "dsp/modulator.hpp"
 #include "dsp/resampler.hpp"
 #include "sink/audio_in.hpp"
@@ -126,16 +127,7 @@
 
 namespace cascade::core {
 
-// Where the audio comes from. MICROPHONE is what a transmitter is for; TONE
-// is what answers "is anything coming out at all" without needing a
-// microphone, a quiet room, or a second receiver to listen on.
-enum class TxInput : int { Microphone = 0, Tone, Count };
-
-inline constexpr int kTxInputCount = static_cast<int>(TxInput::Count);
-
-const char* txInputName(TxInput in);
-TxInput txInputFromIndex(int index);
-bool txInputFromName(const char* name, TxInput& out);
+// (TxInput, kTxInputCount, txInputName, txInputFromIndex and txInputFromName moved to core/tx_input.hpp with the fence.)
 
 // --- the rate matcher --------------------------------------------------------
 //

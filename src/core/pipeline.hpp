@@ -99,6 +99,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/spectrum_frame.hpp"
 #include "dsp/agc.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/noise_reduction.hpp"
@@ -127,10 +128,7 @@ namespace cascade::core {
 // non-owning pointers, so the full type is needed in pipeline.cpp alone.
 class Recorder;
 
-struct SpectrumFrame {
-    std::vector<float> dbBins;   // fftshifted dB power spectrum, size == fftSize
-    std::uint64_t seq = 0;       // strictly increasing per published frame
-};
+// (SpectrumFrame moved to core/spectrum_frame.hpp with the fence: the window holds the frame it drew.)
 
 // What the GUI needs to render the RDS panel, as ONE value snapshot so the
 // fields it displays can never come from two different instants.

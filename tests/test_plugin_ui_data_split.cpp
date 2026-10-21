@@ -9,8 +9,8 @@
 //
 // THE COMPILE PROOF IS THIS FILE'S INCLUDES. It includes the five of those headers that do not reach the engine and then
 // refuses to compile if core/plugin_ui.hpp came in with any of them (its include guard is defined). The sixth, app_window.hpp,
-// is the shell and still reaches plugin_ui.hpp through engine/engine.hpp, so test_command_path_guard holds the text of its
-// include instead. Everything below then uses the data through the data header alone, so a name that stayed behind in
+// reached plugin_ui.hpp through engine/engine.hpp until the fence: it is in the interface target now, where core/plugin_ui.hpp is a
+// denied header (cmake/interface_fence.cmake), and test_engine_shell_guard holds the text of its include. Everything below then uses the data through the data header alone, so a name that stayed behind in
 // plugin_ui.hpp is a compile error here too.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0

@@ -262,7 +262,7 @@ struct AppWindowTestAccess {
     }
 
     static void setConverter(AppWindow& a, const std::string& key, const ConverterSetting& s) {
-        passseam::on(a.engine_, [&] { a.engine_.converters_[key] = s; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).converters_[key] = s; });
     }
 
     // Waits for the worker open to resolve and applies it, as the frame loop
@@ -271,8 +271,8 @@ struct AppWindowTestAccess {
     // (pumpWorkers) and custom() is a whole pass.
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(a.engine_, [&] { return a.engine_.deviceOpenPending_; })) {
-            passseam::custom(a.engine_, [&] { a.engine_.pollSourceAsync(); });
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -281,8 +281,8 @@ struct AppWindowTestAccess {
 
     // ON THE PASS (called from inside passseam::on / read only).
     static int nativeRowOnPass(AppWindow& a, const std::string& args) {
-        for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
-            if (a.engine_.nativeDevices_[i].args == args) {
+        for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+            if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
                 return AppWindow::kNativeRowBase + static_cast<int>(i);
             }
         }
@@ -292,20 +292,20 @@ struct AppWindowTestAccess {
     // Selects a native row as the Source combo would, and waits for it.
     static bool selectNative(AppWindow& a, const std::string& args) {
         int row = -1;
-        passseam::on(a.engine_, [&] {
-            a.engine_.scanNative();
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
             row = nativeRowOnPass(a, args);
-            if (row >= 0) { a.engine_.selectSource(row); }
+            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
         });
         if (row < 0) { return false; }
         return waitOpen(a);
     }
 
     static bool selectSoapy(AppWindow& a, const std::string& args, const std::string& label) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.soapyDevices_.clear();
-            a.engine_.soapyDevices_.push_back({label, args});
-            a.engine_.selectSource(a.engine_.soapyRowBase());
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).soapyDevices_.clear();
+            rawEngine(a.engine_).soapyDevices_.push_back({label, args});
+            rawEngine(a.engine_).selectSource(rawEngine(a.engine_).soapyRowBase());
         });
         return waitOpen(a);
     }
@@ -313,83 +313,83 @@ struct AppWindowTestAccess {
     // A tune by the counter, applied at once (the coalescer's pacing is not
     // what is under test).
     static void tune(AppWindow& a, double airCentreHz) {
-        passseam::on(a.engine_, [&] { a.engine_.applyRetuneNow(airCentreHz); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).applyRetuneNow(airCentreHz); });
     }
 
     static double airCentre(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz(); });
     }
     static double counter(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.currentAbsoluteHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); });
     }
     static void setVfo(AppWindow& a, double hz) {
-        passseam::on(a.engine_, [&] { a.engine_.pipeline_.setVfoOffsetHz(hz); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.setVfoOffsetHz(hz); });
     }
     static double vfo(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.vfoOffsetHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.vfoOffsetHz(); });
     }
     static ConverterSetting live(AppWindow& a) {
-        return passseam::read<ConverterSetting>(a.engine_, [&] { return a.engine_.pipeline_.converter(); });
+        return passseam::read<ConverterSetting>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.converter(); });
     }
     static std::string kind(AppWindow& a) {
-        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.sourceKind_; });
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; });
     }
 
     // The window's applyConfig (its engine half is Engine::applyConfig), with the pass out of the way.
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) {
-        passseam::on(a.engine_, [&] { a.applyConfig(cfg); });
+        passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); });
     }
-    static void reopen(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.reopenAfterDriverFault(); }); }
+    static void reopen(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).reopenAfterDriverFault(); }); }
     static void changeConverter(AppWindow& a, const ConverterSetting& s) {
-        passseam::on(a.engine_, [&] { a.engine_.changeConverter(s); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).changeConverter(s); });
     }
     // The key the window seeds its LO field from (gui/converter_lo_seed.hpp): the open radio and the stored setting, as the
     // window reads them from the table - the replacement for the engine's onConverterChanged hook.
     static std::string loSeed(AppWindow& a) {
         return cascade::gui::converterLoSeed(a.uiFact("fact.converter.radioKey"), a.converterLists().stored);
     }
-    static void scanNativeForTest(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.scanNative(); }); }
+    static void scanNativeForTest(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).scanNative(); }); }
     // The note is the window's, read from its engine API session (window port,
     // group 4): with no frame, the engine publishes and the window looks first.
     static std::string aliasNote(AppWindow& a) {
-        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
         a.refreshUiState();
         return a.converterAliasNote();
     }
     static bool hasStored(AppWindow& a, const std::string& k) {
-        return passseam::read<bool>(a.engine_, [&] { return a.engine_.converters_.count(k) != 0; });
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).converters_.count(k) != 0; });
     }
     static ConverterSetting stored(AppWindow& a, const std::string& k) {
-        return passseam::read<ConverterSetting>(a.engine_, [&] {
-            const auto it = a.engine_.converters_.find(k);
-            return it == a.engine_.converters_.end() ? ConverterSetting{} : it->second;
+        return passseam::read<ConverterSetting>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).converters_.find(k);
+            return it == rawEngine(a.engine_).converters_.end() ? ConverterSetting{} : it->second;
         });
     }
-    static void selectGenerator(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.selectSource(0); }); }
+    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
     // What the radio itself was last told and kept (the raw source).
     static double radioNow(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.rawSource().centerFrequencyHz(); });
     }
     // The note line under the counter (a coerced, refused or unreachable tune).
     static std::string tuneNote(AppWindow& a) {
-        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.tuneMismatchNote_; });
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).tuneMismatchNote_; });
     }
 
     // The Pluto row: selecting it only selects (see selectSource); Open
     // closes the radio in use and opens the board at the typed address.
     static bool selectPlutoRow(AppWindow& a, const std::string& args) {
-        return passseam::read<bool>(a.engine_, [&] {
-            a.engine_.scanNative();
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
             const int row = nativeRowOnPass(a, args);
             if (row < 0) { return false; }
-            a.engine_.selectSource(row);
-            return a.engine_.sourceSel_ == row;
+            rawEngine(a.engine_).selectSource(row);
+            return rawEngine(a.engine_).sourceSel_ == row;
         });
     }
     static bool openPluto(AppWindow& a, const std::string& uri) {
-        passseam::on(a.engine_, [&] {
-            std::snprintf(a.engine_.plutoUri_, sizeof(a.engine_.plutoUri_), "%s", uri.c_str());
-            a.engine_.openPlutoFromBox();
+        passseam::on(rawEngine(a.engine_), [&] {
+            std::snprintf(rawEngine(a.engine_).plutoUri_, sizeof(rawEngine(a.engine_).plutoUri_), "%s", uri.c_str());
+            rawEngine(a.engine_).openPlutoFromBox();
         });
         return waitOpen(a);
     }
@@ -399,9 +399,9 @@ struct AppWindowTestAccess {
                                                      double freqHz) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;  // no starter patch: this test builds its own
-        const pc::NodeId id = passseam::read<pc::NodeId>(a.engine_, [&] {
-            const pc::NodeId nid = a.engine_.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-            if (pc::Node* n = a.engine_.patchGraph_.mutableNode(nid)) {
+        const pc::NodeId id = passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            const pc::NodeId nid = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(nid)) {
                 n->device = device;
                 n->freqHz = freqHz;
                 n->rateHz = 2.4e6;
@@ -417,23 +417,23 @@ struct AppWindowTestAccess {
     }
     // A COPY of the engine's node (null when it has none), made on the pass.
     static std::shared_ptr<const cascade::core::patch::Node> node(AppWindow& a, cascade::core::patch::NodeId id) {
-        return passseam::read<std::shared_ptr<const cascade::core::patch::Node>>(a.engine_, [&] {
-            const cascade::core::patch::Node* n = a.engine_.patchGraph_.find(id);
+        return passseam::read<std::shared_ptr<const cascade::core::patch::Node>>(rawEngine(a.engine_), [&] {
+            const cascade::core::patch::Node* n = rawEngine(a.engine_).patchGraph_.find(id);
             return n == nullptr ? nullptr : std::make_shared<const cascade::core::patch::Node>(*n);
         });
     }
     // One frame's engine part, in drawUi's order (window port group 13: the page's graph goes through the window's session, so
     // what one frame commits the NEXT frame's pass applies, and the page reads the engine's graph from a publish).
     static void look(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.drainLocalCommands();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).drainLocalCommands();
             a.commitPatchDraft();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         }, [&] { a.commitPatchDraft(); });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -445,8 +445,8 @@ struct AppWindowTestAccess {
         look(a);                  // the first publish is read, the draft starts from it
         a.seedPatchIfNeeded();    // the starter is committed ...
         look(a);                  // ... and the pass applies it
-        return passseam::read<pc::NodeId>(a.engine_, [&] {
-            for (const pc::Node& n : a.engine_.patchGraph_.nodes()) {
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            for (const pc::Node& n : rawEngine(a.engine_).patchGraph_.nodes()) {
                 if (n.kind == pc::NodeKind::Radio) { return n.id; }
             }
             return pc::kNoNode;
@@ -461,8 +461,8 @@ struct AppWindowTestAccess {
         cascade::core::patch::Node n = *have;
         if (!a.setPatchRadioCentre(n, airHz)) { return false; }
         bool written = false;
-        passseam::on(a.engine_, [&] {
-            if (cascade::core::patch::Node* e = a.engine_.patchGraph_.mutableNode(id)) {
+        passseam::on(rawEngine(a.engine_), [&] {
+            if (cascade::core::patch::Node* e = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
                 e->freqHz = n.freqHz;
                 e->centreChosen = n.centreChosen;
                 written = true;
@@ -477,32 +477,32 @@ struct AppWindowTestAccess {
     // One reconcile per frame, until the node's radio runs (or 20 s). Free-running the pass reconciles by itself (pumpPatch)
     // and custom() is a whole pass.
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.patchRunning_ = true;
-            a.engine_.patchWasOpen_ = true;  // the page's first-frame scan is not under test
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = true;
+            rawEngine(a.engine_).patchWasOpen_ = true;  // the page's first-frame scan is not under test
         });
         const auto t0 = std::chrono::steady_clock::now();
-        while (passseam::read<bool>(a.engine_, [&] { return a.engine_.patchRadios_.count(id) == 0; })) {
-            passseam::custom(a.engine_, [&] { a.engine_.patchReconcile(); });
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) == 0; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         // A few more frames: the running radio's follow must not move it.
-        for (int i = 0; i < 5; ++i) { passseam::custom(a.engine_, [&] { a.engine_.patchReconcile(); }); }
+        for (int i = 0; i < 5; ++i) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); }); }
         return true;
     }
     static double patchRadioAir(AppWindow& a, cascade::core::patch::NodeId id) {
-        return passseam::read<double>(a.engine_, [&] {
-            const auto it = a.engine_.patchRadios_.find(id);
-            return it == a.engine_.patchRadios_.end() ? std::nan("") : it->second->centreHz();
+        return passseam::read<double>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).patchRadios_.find(id);
+            return it == rawEngine(a.engine_).patchRadios_.end() ? std::nan("") : it->second->centreHz();
         });
     }
     // STOP on the patch page: every patch radio closes and the receiver gets
     // its radio back.
     static bool stopPatch(AppWindow& a) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.patchRunning_ = false;
-            a.engine_.patchStopAll(true);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = false;
+            rawEngine(a.engine_).patchStopAll(true);
         });
         return waitOpen(a);
     }

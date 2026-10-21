@@ -122,12 +122,12 @@ struct AppWindowTestAccess {
     // since lands here), the scanner's frame when asked, the publish, the status copy, the window's
     // read of the state.
     static void look(AppWindow& a, bool scannerTick = false) {
-        passseam::custom(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            if (scannerTick) { a.engine_.scannerFrame(); }
-            (void)a.engine_.pumpPublish();
+        passseam::custom(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            if (scannerTick) { rawEngine(a.engine_).scannerFrame(); }
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     // The answers the session has been given since it was last asked, in order.
@@ -201,57 +201,57 @@ struct AppWindowTestAccess {
     // recorders fed there (a Recorder's writes must never overlap the pass's start or stop of it) - or, the Held forms, from this
     // thread while a PassHold parks the pass.
     static void storeDo(AppWindow& a, const std::function<void(cascade::core::FreqManager&)>& fn) {
-        passseam::on(a.engine_, [&] { fn(a.engine_.freqMgr_); });
+        passseam::on(rawEngine(a.engine_), [&] { fn(rawEngine(a.engine_).freqMgr_); });
     }
     static std::vector<cascade::core::Bookmark> storeList(AppWindow& a) {
         return passseam::read<std::vector<cascade::core::Bookmark>>(
-            a.engine_, [&]() -> std::vector<cascade::core::Bookmark> { return a.engine_.freqMgr_.list(); });
+            rawEngine(a.engine_), [&]() -> std::vector<cascade::core::Bookmark> { return rawEngine(a.engine_).freqMgr_.list(); });
     }
-    static std::size_t storeSizeHeld(AppWindow& a) { return a.engine_.freqMgr_.list().size(); }
+    static std::size_t storeSizeHeld(AppWindow& a) { return rawEngine(a.engine_).freqMgr_.list().size(); }
     static void writeAudio(AppWindow& a, const float* s, std::size_t n) {
-        passseam::on(a.engine_, [&] { a.engine_.audioRecorder_.writeAudio(s, n); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).audioRecorder_.writeAudio(s, n); });
     }
     static void writeIq(AppWindow& a, const std::complex<float>* s, std::size_t n) {
-        passseam::on(a.engine_, [&] { a.engine_.iqRecorder_.writeIq(s, n); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).iqRecorder_.writeIq(s, n); });
     }
-    static void setSquelch(AppWindow& a, float db) { passseam::on(a.engine_, [&] { a.engine_.squelchDb_ = db; }); }
+    static void setSquelch(AppWindow& a, float db) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).squelchDb_ = db; }); }
     // Where the scanner is, and then the squelch set - one step on the pass (free-running, a pass between the two would step the
     // scanner off the frequency the test names).
     static double scannerHzThenSquelch(AppWindow& a, float db) {
-        return passseam::read<double>(a.engine_, [&] {
-            const double hz = a.engine_.scanner_.currentHz();
-            a.engine_.squelchDb_ = db;
+        return passseam::read<double>(rawEngine(a.engine_), [&] {
+            const double hz = rawEngine(a.engine_).scanner_.currentHz();
+            rawEngine(a.engine_).squelchDb_ = db;
             return hz;
         });
     }
     static void muteBy(AppWindow& a, std::vector<std::string> names) {
-        passseam::on(a.engine_, [&] { a.engine_.mutedBy_ = std::move(names); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).mutedBy_ = std::move(names); });
     }
-    static void muteByHeld(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
+    static void muteByHeld(AppWindow& a, std::vector<std::string> names) { rawEngine(a.engine_).mutedBy_ = std::move(names); }
     // A change of the lists that touches nothing these tests read. A decoder line used to be it (it moved
     // listSeq once a line); since API 0.3 8.7 (D3) a line moves no list counter, so the preset note - a
     // status line the Decoders section letters - changes instead, and moves listSeq all the same.
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
         const std::string line = "note " + std::to_string(++n);
-        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = line; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).presetNote_ = line; });
     }
-    static std::string recordDir(AppWindow& a) { return passseam::read<std::string>(a.engine_, [&] { return a.engine_.recordDir_; }); }
+    static std::string recordDir(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordDir_; }); }
     static cascade::core::Scanner::Params engineParams(AppWindow& a) {
-        return passseam::read<cascade::core::Scanner::Params>(a.engine_, [&] { return a.engine_.scannerParams(); });
+        return passseam::read<cascade::core::Scanner::Params>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scannerParams(); });
     }
-    static double engineStartMhz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanStartMhz_; }); }
-    static double engineStopMhz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanStopMhz_; }); }
-    static double engineStepKhz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanStepKhz_; }); }
-    static double engineDwell(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanDwellMs_; }); }
-    static double engineHold(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanHoldMs_; }); }
-    static double engineResume(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanResumeMs_; }); }
-    static double engineListen(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanListenMs_; }); }
-    static double scannerHzHeld(AppWindow& a) { return a.engine_.scanner_.currentHz(); }
-    static double scannerHz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return scannerHzHeld(a); }); }
-    static bool scannerActiveHeld(AppWindow& a) { return a.engine_.scanner_.active(); }
-    static bool scannerActive(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return scannerActiveHeld(a); }); }
-    static double tuned(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.currentAbsoluteHz(); }); }
+    static double engineStartMhz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanStartMhz_; }); }
+    static double engineStopMhz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanStopMhz_; }); }
+    static double engineStepKhz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanStepKhz_; }); }
+    static double engineDwell(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanDwellMs_; }); }
+    static double engineHold(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanHoldMs_; }); }
+    static double engineResume(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanResumeMs_; }); }
+    static double engineListen(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanListenMs_; }); }
+    static double scannerHzHeld(AppWindow& a) { return rawEngine(a.engine_).scanner_.currentHz(); }
+    static double scannerHz(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return scannerHzHeld(a); }); }
+    static bool scannerActiveHeld(AppWindow& a) { return rawEngine(a.engine_).scanner_.active(); }
+    static bool scannerActive(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return scannerActiveHeld(a); }); }
+    static double tuned(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); }); }
     // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
     // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head, after
     // its command queues and before its scanner tick and its publish) from the constructor to the destructor - so what the
@@ -261,9 +261,9 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) : a_(a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(a_.engine_);
+            passseam::attach(rawEngine(a_.engine_));
             holder_ = std::thread([this] {
-                passseam::on(a_.engine_, [this] {
+                passseam::on(rawEngine(a_.engine_), [this] {
                     std::unique_lock<std::mutex> lk(m_);
                     held_ = true;
                     cv_.notify_all();
@@ -298,7 +298,7 @@ struct AppWindowTestAccess {
     // run since the look: nothing to read again, and nothing is.)
     static void relook(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free) { return; }
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     // A look made under a PassHold: inline and stepped exactly look(); free-running the pass is parked, so the publish is made
@@ -308,8 +308,8 @@ struct AppWindowTestAccess {
             look(a);
             return;
         }
-        (void)a.engine_.publishReceiverState();
-        a.statusLines_ = a.engine_.statusText();
+        (void)rawEngine(a.engine_).publishReceiverState();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     // The allocations one get_setting of a fact makes inside the table.

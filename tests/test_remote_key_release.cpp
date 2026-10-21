@@ -113,43 +113,43 @@ struct AppWindowTestAccess {
     // A command applied as the engine applies one: on the pass's thread, with the pass out of the way when it free-runs
     // (passseam::read - the key rules are the pass's alone, and an apply from this thread would run beside it).
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(c, lt); });
+        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c, lt); });
     }
     static FoxCommandResult apply(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(q.c, q.longText); });
+        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
     }
     // The web remote's press and the hold it left, in ONE step on the pass's thread: free-running, a pass between the two
     // could judge the standing condition (B: no server) before the hold was read, and that check is that the press TOOK.
     static std::pair<FoxCommandResult, std::int64_t> webPress(AppWindow& a, const FoxCommand& c) {
-        return passseam::read<std::pair<FoxCommandResult, std::int64_t>>(a.engine_, [&] {
-            const FoxCommandResult r = a.engine_.applyCommand(c, {});
-            return std::make_pair(r, a.engine_.transmitter_.remoteHoldRemainingMs());
+        return passseam::read<std::pair<FoxCommandResult, std::int64_t>>(rawEngine(a.engine_), [&] {
+            const FoxCommandResult r = rawEngine(a.engine_).applyCommand(c, {});
+            return std::make_pair(r, rawEngine(a.engine_).transmitter_.remoteHoldRemainingMs());
         });
     }
     // The engine itself, for what is any thread's: the API handle a desk session opens on, and the web remote's beat.
-    static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
+    static cascade::engine::Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
     // What the publish carries of the key: the key rules' own fields, read on the pass's thread (passseam::read).
     static cascade::engine::ApiHost::TxFacts txFacts(AppWindow& a) {
-        return passseam::read<cascade::engine::ApiHost::TxFacts>(a.engine_, [&] { return a.engine_.api().txFacts(); });
+        return passseam::read<cascade::engine::ApiHost::TxFacts>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).api().txFacts(); });
     }
     // The engine's pass as far as the key needs it - the queue applied, the
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
     static void pass(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
     }
     // Any thread: Transmitter::remoteHoldRemainingMs reads only atomics, haveSink takes the transmitter's own mutex, and
     // transmitter_ is a member the engine never replaces.
     static std::int64_t remoteHoldMs(AppWindow& a) {
-        return a.engine_.transmitter_.remoteHoldRemainingMs();
+        return rawEngine(a.engine_).transmitter_.remoteHoldRemainingMs();
     }
-    static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
+    static bool haveTx(AppWindow& a) { return rawEngine(a.engine_).transmitter_.haveSink(); }
     // The engine's remote-controls phase: the web and CAT queues pulled through the source the window installed, and the
     // remote key's standing condition judged (the pump move's step P1 - this was the window's applyWebControls).
-    static void pumpRemote(AppWindow& a) { passseam::pass(a.engine_, [&] { a.engine_.pumpRemoteControls(); }); }
+    static void pumpRemote(AppWindow& a) { passseam::pass(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpRemoteControls(); }); }
     // The settings panel switching the web server off.
     static void disableWeb(AppWindow& a) {
         a.webCfg_.enabled = false;
@@ -175,9 +175,9 @@ struct AppWindowTestAccess {
     }
     static void holdPass(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
-        passseam::attach(a.engine_);
+        passseam::attach(rawEngine(a.engine_));
         auto h = std::make_shared<Hold>();
-        a.engine_.postToPass([h] {
+        rawEngine(a.engine_).postToPass([h] {
             std::unique_lock<std::mutex> lk(h->m);
             h->running = true;
             h->cv.notify_all();

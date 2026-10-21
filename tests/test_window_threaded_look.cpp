@@ -6,7 +6,7 @@
 // draw - the look (answers, status lines, state, spectrum, lists, answers acted on), the window's submits, the key - as fast as it can,
 // for three seconds, while three more threads hammer the engine through sessions of their own and one reads the snapshot as a browser's
 // status does. (drawUi itself needs a GL context for its panels; the frame below is its engine-facing half, in its order - and the
-// order is held as text by tests/test_command_path_guard.cpp, checkTheFrameIsALook.)
+// order is held as text by tests/test_engine_shell_guard.cpp, checkTheFrameIsALook.)
 //
 //   A  THE STATE NEVER GOES BACK: the sequence a reader sees only rises, on the window's thread and on a reader thread's
 //   B  THE LISTS AGREE WITH THE STATE THEY ARE KEYED ON: the window's cache of the lists is keyed on listSeq, and after a frame's reads
@@ -55,13 +55,13 @@ namespace cmd = cascade::core::cmd;
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static Engine& engine(AppWindow& a) { return a.engine_; }
+    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
     static void start(AppWindow& a, int periodMs, int floorMs) {
         cascade::engine::ControlThreadOptions o;
         o.period = std::chrono::milliseconds(periodMs);
         o.floor = std::chrono::milliseconds(floorMs);
         o.watchdogThresholdMs = 20000;
-        a.engine_.startControlThread(o);
+        rawEngine(a.engine_).startControlThread(o);
     }
     // THE FRAME'S ENGINE-FACING HALF, in drawUi's order (free-running: the two stepPass calls are no-ops).
     static void frame(AppWindow& a) {
@@ -69,17 +69,17 @@ struct AppWindowTestAccess {
         if (a.uiSession_ != nullptr) { a.engineApi_->heartbeat(a.uiSession_); }
         a.sendTrackInfoText();
         a.handFrontEndFacts();
-        a.engine_.stepPass(PassPart::Front);
+        rawEngine(a.engine_).stepPass(PassPart::Front);
         a.syncPatchPageOpen();
         a.commitPatchDraft();
         a.pollUiAnswers();
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
         a.actOnUiAnswers();
         a.publishWebSpectrum(a.uiState_.centreHz);
-        a.engine_.stepPass(PassPart::Mute);
+        rawEngine(a.engine_).stepPass(PassPart::Mute);
         a.submitTransmitKey();
-        a.engine_.stepPass(PassPart::Back);
+        rawEngine(a.engine_).stepPass(PassPart::Back);
     }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     static const AppWindow::TuningListCache& tuning(AppWindow& a) { return a.tuningLists(); }
@@ -87,12 +87,12 @@ struct AppWindowTestAccess {
     static double tunedOffset(AppWindow& a) { return a.tunedVfoOffsetHz(); }
     static void dragCentre(AppWindow& a, double absHz) { a.dragVfoCentre(absHz); }
     static void submit(AppWindow& a, const FoxCommand& c) { a.uiSubmit(c); }
-    static std::uint64_t passes(AppWindow& a) { return a.engine_.controlPasses_.load(); }
-    static void park(AppWindow& a, bool on) { a.engine_.controlParkForTest_.store(on); }
+    static std::uint64_t passes(AppWindow& a) { return rawEngine(a.engine_).controlPasses_.load(); }
+    static void park(AppWindow& a, bool on) { rawEngine(a.engine_).controlParkForTest_.store(on); }
     static std::uint64_t busyDrops(AppWindow& a) { return a.uiBusyDrops_; }
     static std::size_t held(AppWindow& a) { return a.uiHeld_.size(); }
-    static std::uint64_t offPassKeyTouches(AppWindow& a) { return a.engine_.api().offPassKeyTouches(); }
-    static std::shared_ptr<cascade::core::ReceiverSnapshot> snapshot(AppWindow& a) { return a.engine_.receiverSnapshot_; }
+    static std::uint64_t offPassKeyTouches(AppWindow& a) { return rawEngine(a.engine_).api().offPassKeyTouches(); }
+    static std::shared_ptr<cascade::core::ReceiverSnapshot> snapshot(AppWindow& a) { return rawEngine(a.engine_).receiverSnapshot_; }
 };
 }  // namespace cascade::gui
 using A = cascade::gui::AppWindowTestAccess;

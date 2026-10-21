@@ -26,24 +26,23 @@
 // headless build depend on one.
 struct GLFWwindow;
 
-#include "engine/engine.hpp"
+#include "engine/engine_shell.hpp"
 #include "engine/receiver_tables.hpp"
 #include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/freq_manager.hpp"
-#include "core/gps_reader.hpp"
 #include "core/i18n.hpp"
-#include "core/pipeline.hpp"
 #include "core/plugin_host.hpp"
-#include "core/plugin_runner.hpp"
 #include "core/patch_graph.hpp"
+#include "core/scanner_params.hpp"
+#include "core/serial_port.hpp"
+#include "core/tx_input.hpp"
+#include "dsp/modulator.hpp"
+#include "core/spectrum_frame.hpp"
 #include "core/freq_converter.hpp"
 #include "core/patch_device_label.hpp"
 #include "core/patch_plan.hpp"
-#include "core/patch_radio.hpp"
-#include "core/patch_recordings.hpp"
-#include "core/patch_runner.hpp"
 #include "gui/patch_view_math.hpp"
 #include "gui/patch_scope_math.hpp"
 #include "gui/input_script.hpp"
@@ -51,12 +50,8 @@ struct GLFWwindow;
 #include "core/plugin_repo.hpp"
 #include "core/updater.hpp"
 #include "core/utf8_text.hpp"
-#include "core/recorder.hpp"
-#include "core/retune_coalescer.hpp"
 #include "core/engine_measure.hpp"
 #include "gui/frame_log.hpp"
-#include "core/scanner.hpp"
-#include "core/transmitter.hpp"
 #include "gui/basemap_cache.hpp"
 // The floor a torn-off page cannot be dragged under, and the reset generation
 // that puts an already-wrong one back. ImGui-free for the same reason as the
@@ -544,7 +539,7 @@ inline void mapPlaceDefaultRect(float& x, float& y, float& w, float& h,
 // Owns the GLFW window, the ImGui context and the top-level panel layout.
 // All GLFW/ImGui usage stays behind this interface so main() (and any future
 // headless harness) never needs GUI headers.
-class AppWindow : private cascade::engine::EngineHost {
+class AppWindow : private cascade::engine::ShellHooks {
 public:
     // Constructs the render pipeline with the demo SigGen signal already
     // configured, so the first Play click shows spectrum content immediately.
@@ -598,23 +593,21 @@ private:
     // build of the application - nothing ever sets them outside that test -
     // and each is read at exactly one place.
     friend struct AppWindowTestAccess;
-    // THE ENGINE (engine extraction stage 3a, docs/engine-stage3.md): the
-    // receiver's state and machinery, owned by an Engine this window holds
-    // and asks. Declared FIRST, so it is built before and destroyed after
-    // everything the window keeps.
-    std::unique_ptr<cascade::engine::Engine> engineHolder_;
-    cascade::engine::Engine& engine_;
+    // THE ENGINE (engine extraction stage 3a, docs/engine-stage3.md), BEHIND THE FENCE (stage 4, step 5): the receiver's state and
+    // machinery are owned by an Engine this window holds - but the window holds it as an EngineShell, the narrow door declared in
+    // engine/engine_shell.hpp, and the interface target cannot include engine.hpp at all. Declared FIRST, so it is built before and
+    // destroyed after everything the window keeps.
+    std::unique_ptr<cascade::engine::EngineShell> engineHolder_;
+    cascade::engine::EngineShell& engine_;
     // THE PLUGIN UI IS THIS WINDOW'S (the pump move's step P3): the track sources, panels and instruments polled in the frame
-    // (hostPollPlugins) and drawn all frame long, built over the API core the ENGINE owns. Only this thread touches it. The engine
-    // does not rebuild or clear it: it posts a directive (core/plugin_directive.hpp) and this window applies the newest at the head
-    // of its frame (applyPluginDirective), which is also its acknowledgement of an unload - see Engine::detachAndUnloadPlugins.
-    // Declared right after the engine so the engine is built first and outlives it.
-    cascade::core::PluginUi pluginUi_;
-    // The engine's directive link, held by reference so the window's frame-head apply names the engine nowhere (it is the engine's
-    // object and the window only ever applies from it).
-    cascade::core::PluginDirectiveLink& directives_;
+    // (hostPollPlugins) and drawn all frame long, built over the API core the ENGINE owns and held behind the HOST feed
+    // (engine_shell.hpp: HostPluginFeed - the window names neither the PluginUi nor the directive link). Only this thread touches it.
+    // The engine does not rebuild or clear it: it posts a directive and this window applies the newest at the head of its frame
+    // (applyPluginDirective), which is also its acknowledgement of an unload - see Engine::detachAndUnloadPlugins. Declared right after
+    // the engine so the engine is built first and outlives it.
+    std::unique_ptr<cascade::engine::HostPluginFeed> pluginFeed_;
 
-    // --- WHAT THE ENGINE ASKS OF THIS WINDOW (engine/engine_host.hpp) ---------
+    // --- WHAT THE ENGINE ASKS OF THIS WINDOW (engine/engine_shell.hpp: ShellHooks) ---------
     // Each answers exactly as the line the moved code used to run here did,
     // on the same (GUI) thread at the same moment; the definitions are at the
     // end of app_window.cpp. (The pump move's step P2 took seven hooks out of this list - onDisplayRange, onBookmarksChanged,
@@ -630,14 +623,13 @@ private:
     // and showDemonstrationInstrument: the plugin UI is this window's, so the engine POSTS a directive and this window applies it.)
     // Applies the newest plugin directive, if one is waiting, on this thread: at the head of the frame and at the head of
     // hostPollPlugins (both before any reference into the plugin UI is taken); the engine runs it too, inline, where it is
-    // running on this thread (Engine::setPluginUiApplier).
+    // running on this thread (the feed installs the applier).
     void applyPluginDirective();
-    // What one directive does here: fold the map pages' geometry into the saved list (a release), the plugin UI rebuilt or
-    // emptied, the basemap and the track-info client attached or let go (every GL delete this causes is on this thread, with the
-    // context current), and a demonstration instrument's window shown.
-    void applyDirective(const cascade::core::PluginDirective& d);
-    // What the bounded-run status report prints of the plugin UI.
-    cascade::engine::PluginUiReport pluginUiReport() const;
+    // What one directive does HERE, in the two steps the feed runs around the plugin UI's own rebuild: BEFORE it, a release folds the map
+    // pages' geometry into the saved list while the instances still stand; AFTER it, the basemap and the track-info client are attached or
+    // let go (every GL delete this causes is on this thread, with the context current), and a demonstration instrument's window shown.
+    void applyDirectiveBefore(const cascade::engine::PluginDirectiveFacts& d);
+    void applyDirectiveAfter(const cascade::engine::PluginDirectiveFacts& d);
     // The publish-time facts (engine/stage3b-pre OPEN 4): no longer
     // EngineHost hooks the engine calls while publishing, but this window's
     // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the
@@ -646,7 +638,7 @@ private:
     // and the frame count it names.
     bool webListening() const;
     std::string tunerDisplayStyle() const;
-    BasemapFacts basemapFacts() const;
+    cascade::engine::BasemapFacts basemapFacts() const;
     void handFrontEndFacts();
     std::shared_ptr<const cascade::engine::WebExtras> webExtrasNow();
     // The track-info plugin's status lines, polled on THIS thread (the cache is GUI-thread state) and sent to the engine, one
@@ -662,24 +654,13 @@ private:
     void publishWebSpectrum(double centerHz);
     void diagnosticsStartup(const cascade::core::AppConfig& cfg);
     void diagnosticsJournal(cascade::core::AppConfig& cfg);
-    // The engine's types and constants under the names this window's code
-    // has always used them by.
-    using LocalCommand = cascade::engine::Engine::LocalCommand;
-    using DeviceOpenResult = cascade::engine::Engine::DeviceOpenResult;
-    using SoundCardOpenResult = cascade::engine::Engine::SoundCardOpenResult;
-    using ConverterHeldAir = cascade::engine::Engine::ConverterHeldAir;
-    using PatchRadioOpen = cascade::engine::Engine::PatchRadioOpen;
-    using PluginNotice = cascade::engine::Engine::PluginNotice;
-    using PendingUserPresetEdit = cascade::engine::Engine::PendingUserPresetEdit;
-    using CatalogFetchResult = cascade::engine::Engine::CatalogFetchResult;
-    using PluginInstallResult = cascade::engine::Engine::PluginInstallResult;
-    using AddAllRun = cascade::engine::Engine::AddAllRun;
-    static constexpr auto kSoundCardRow = cascade::engine::Engine::kSoundCardRow;
-    static constexpr auto kNativeRowBase = cascade::engine::Engine::kNativeRowBase;
-    static constexpr auto kAudioOpenByUser = cascade::engine::Engine::kAudioOpenByUser;
-    static constexpr auto kAudioOpenByWatchdog = cascade::engine::Engine::kAudioOpenByWatchdog;
-    static constexpr auto kDecoderLogMax = cascade::engine::Engine::kDecoderLogMax;
-    static constexpr auto kMaxPresetsPerPlugin = cascade::engine::Engine::kMaxPresetsPerPlugin;
+    // The engine's constants under the names this window's code has always used them by. (The engine's nested types the window once
+    // aliased here - LocalCommand, DeviceOpenResult, SoundCardOpenResult, ConverterHeldAir, PatchRadioOpen, PluginNotice,
+    // PendingUserPresetEdit, CatalogFetchResult, PluginInstallResult, AddAllRun - had no user left in src/gui; the fence cannot see
+    // them and the aliases are gone with it.)
+    static constexpr auto kSoundCardRow = cascade::engine::kSoundCardRow;
+    static constexpr auto kNativeRowBase = cascade::engine::kNativeRowBase;
+    static constexpr auto kDecoderLogMax = cascade::engine::kDecoderLogMax;
 
     // One plugin's map page — declared ahead of the drawing methods that take
     // it, defined in full beside the map state below.
@@ -1480,10 +1461,10 @@ private:
     // typed in nor holding an edit not yet committed (scanDraftPending_), so
     // the form always shows what Start would scan - see drawScannerSection.
     double scanDraft_[7] = {
-        cascade::core::Scanner::Params{}.startHz / 1.0e6, cascade::core::Scanner::Params{}.stopHz / 1.0e6,
-        cascade::core::Scanner::Params{}.stepHz / 1.0e3,  cascade::core::Scanner::Params{}.dwellMs,
-        cascade::core::Scanner::Params{}.holdMs,          cascade::core::Scanner::Params{}.resumeMs,
-        cascade::core::Scanner::Params{}.listenMs,
+        cascade::core::ScannerParams{}.startHz / 1.0e6, cascade::core::ScannerParams{}.stopHz / 1.0e6,
+        cascade::core::ScannerParams{}.stepHz / 1.0e3,  cascade::core::ScannerParams{}.dwellMs,
+        cascade::core::ScannerParams{}.holdMs,          cascade::core::ScannerParams{}.resumeMs,
+        cascade::core::ScannerParams{}.listenMs,
     };
     // Bit i: scanDraft_[i] was edited while a scan was RUNNING and is not
     // committed yet (a running scan takes a field only once it is finished
@@ -2217,7 +2198,7 @@ private:
     // The engine's status lines as it last handed them over (Engine::
     // statusText, OPEN 3): refreshed once a frame, after the frame's publish;
     // every panel letters from this, never from the engine's fields.
-    cascade::engine::Engine::StatusText statusLines_;
+    cascade::engine::EngineStatusText statusLines_;
     cascade::gui::patch::Interaction patchUi_;
     // THE PAGE'S DRAFT OF THE GRAPH (engine/stage3b-pre, docs/engine-stage3.md
     // OPEN 6, Design A; on the window's session since window port group 13, API
@@ -3230,7 +3211,7 @@ private:
     // the pumping thread alone (the pump move's F3). Called by the engine, on the pumping
     // thread: it reads two servers whose queues are mutex-protected and whose running flags
     // are atomic, and nothing of the window's.
-    cascade::engine::Engine::RemoteControls takeRemoteControls();
+    cascade::engine::RemoteControls takeRemoteControls();
     // Starts or stops the CAT server to match the current configuration, and
     // records why in catStatus_ when it will not start.
     void refreshCatServer();

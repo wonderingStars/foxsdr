@@ -31,6 +31,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
 #include "core/plugin_ui.hpp"
+#include "engine/engine_shell.hpp"
 #include "net/web_server.hpp"
 
 namespace cascade::engine {
@@ -98,13 +99,7 @@ public:
     // until the pump move's step P2; the front end HANDS THEM OVER now, Engine::setFrontEndFacts, like the web listener's
     // state, the counter's face and the basemap plugin's figures since engine/stage3b-pre - docs/engine-stage3.md OPEN 4.
     // BasemapFacts is the basemap's type.)
-    struct BasemapFacts {
-        bool active = false;
-        std::uint32_t minZoom = 0;
-        std::uint32_t maxZoom = 0;
-        std::uint32_t tileSize = 0;
-        std::string attribution;
-    };
+    using BasemapFacts = cascade::engine::BasemapFacts;  // (moved to engine_shell.hpp with the fence: the interface names it)
 
 private:
     std::chrono::steady_clock::time_point born_;

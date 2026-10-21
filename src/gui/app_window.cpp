@@ -88,7 +88,6 @@
 // unique_ptr behind forward declarations for exactly that reason.
 #include "gui/plugin_store_view.hpp"
 #include "engine/running_view.hpp"
-#include "net/control_ops.hpp"
 #include "net/status_compose.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
@@ -672,10 +671,8 @@ const char* scannerStateName(std::uint32_t state) {
 }  // namespace
 
 AppWindow::AppWindow(std::string configPath, bool announceConfig)
-    : engineHolder_(std::make_unique<cascade::engine::Engine>(static_cast<cascade::engine::EngineHost&>(*this))),
+    : engineHolder_(cascade::engine::EngineShell::create(static_cast<cascade::engine::ShellHooks&>(*this))),
       engine_(*engineHolder_),
-      pluginUi_(engine_.pluginApiShared()),
-      directives_(engine_.pluginDirectives()),
       spectrum_(std::make_unique<SpectrumView>()),
       waterfall_(std::make_unique<WaterfallView>(static_cast<int>(kFftSize), kWaterfallHistory)),
       // The plugin store's view and both windows' decks. Created here, where
@@ -697,7 +694,13 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // did them. The window's own start-up follows it.
     // THE PLUGIN UI'S APPLIER, before the scan the start-up runs: the engine applies a directive through it inline while it runs
     // on this thread, and posts it for the frame's head to apply while its control thread does (Engine::setPluginUiApplier).
-    engine_.setPluginUiApplier([this](const cascade::core::PluginDirective& d) { applyDirective(d); });
+    // (the feed installs the engine's applier itself; the window's two steps around the plugin UI's rebuild are handed to it.)
+    {
+        cascade::engine::HostPluginFeed::Steps steps;
+        steps.before = [this](const cascade::engine::PluginDirectiveFacts& d) { applyDirectiveBefore(d); };
+        steps.after = [this](const cascade::engine::PluginDirectiveFacts& d) { applyDirectiveAfter(d); };
+        pluginFeed_ = engine_.makePluginFeed(std::move(steps));
+    }
     engine_.initialise();
     // THE WINDOW'S ENGINE API SESSION (stage 4): a LOCAL session with every
     // grant, on this process's own engine - the one the Transmit page keys
@@ -705,7 +708,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     openUiSession();
     // The store's URL box starts at the engine's default (a config restore
     // below overwrites both).
-    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
+    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl().c_str());
     // Web server providers. Installed once, before any start(), because the
     // server refuses to change them while running. Both do nothing but read
     // the snapshot the GUI thread publishes each frame — see the note in
@@ -713,7 +716,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     webServer_.setStatusProvider([this]() { return webStatusNow(); });
     // The browser page's own poll is the web remote's keep-alive (API 0.2:
     // only an interface's heartbeat counts) - never its PTT re-assertions.
-    webServer_.setStatusPollHook([this]() { engine_.api().webRemoteBeat(); });
+    webServer_.setStatusPollHook([this]() { engine_.webRemoteBeat(); });
     // THE REMOTE CONTROLS' SOURCE (pump move step P1, F3): the engine's pass pulls the web server's and the CAT server's
     // queued requests - where the frame's applyWebControls used to apply them - so nothing but the pumping thread ever
     // applies one. Cleared in the destructor, before either server goes.
@@ -778,9 +781,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             // demod mode the pipeline mirrors actually hold and the center
             // the active source reports — not an echo of the file.
             if (loaded) {
+                const cascade::engine::EngineShell::ConfigReadback readback = engine_.configReadback();
                 std::printf("config applied: mode=%s center=%.0f\n",
-                            kModeNames[engine_.modeIndex_],
-                            engine_.pipeline_.activeSource().centerFrequencyHz());
+                            kModeNames[readback.modeIndex], readback.centreHz);
             } else {
                 std::printf("config applied: defaults (%s)\n", err.c_str());
             }
@@ -859,7 +862,7 @@ AppWindow::~AppWindow() {
     // stopped - Engine::teardown, in the order this destructor always did it.
     engine_.teardown();
     // The engine no longer applies a directive through this window (the plugin UI below is about to be destroyed with it).
-    engine_.setPluginUiApplier({});
+    pluginFeed_->disconnect();
 }
 
 int AppWindow::run(int frames) {
@@ -1093,7 +1096,7 @@ int AppWindow::run(int frames) {
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
-        engine_.biasStandIn_ = cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true);
+        engine_.seamBiasStandIn(cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true));
         // The stand-in basemap (gui/basemap_stand_in.hpp), the same way: a
         // map's tiles and their attribution, with no plugin and no network.
         basemapStandIn_ =
@@ -1193,8 +1196,7 @@ int AppWindow::run(int frames) {
         // first-poll beat at the LIVE endpoint. One machine running one copy
         // read as four "running right now". configure() still refuses an
         // empty id, so an opted-out interactive run arms nothing here either.
-        engine_.telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(),
-                                      engine_.telemetryInstallId_, cascade::versionString());
+        engine_.configureHeartbeat();
     }
 
     // DIAGNOSTICS, armed here rather than in the constructor: the context has
@@ -1241,7 +1243,7 @@ int AppWindow::run(int frames) {
     // THE ENGINE'S PASS STARTS ON ITS OWN THREAD (the pump move's step P5), after everything the window does to the engine from
     // this thread before the loop - the receiver started, the bounded-run stand-ins, the config's first save - and stops in
     // shutdownQuiesce, before anything the teardown does to it. From here the window is the engine's INTERFACE: it looks at what
-    // the pass publishes, draws, and submits; it does not pump (tests/test_command_path_guard.cpp holds that).
+    // the pass publishes, draws, and submits; it does not pump (tests/test_engine_shell_guard.cpp holds that).
     //
     // WHICH PASS: free-running - at the period, woken by every submit - is the product. A BOUNDED run (--frames N) is STEPPED
     // unless FOXSDR_PASS=free asks otherwise (adopted decision 3): the pass runs only when this window's frame says, at the places
@@ -1356,10 +1358,7 @@ int AppWindow::run(int frames) {
             pluginTestStarted_ = true;
             // (The engine's fields are the pass's, so a bounded run's seams reach them through runOnPass: with the pass stepped it is
             // this call on this thread, between its parts, as before the move; free-running it is the pass's own thread that does it.)
-            engine_.runOnPass([this] {
-                engine_.pluginCatalogueUrl_ = pluginTestHook_;
-                engine_.startCatalogFetch();
-            });
+            engine_.seamFetchCatalogue(pluginTestHook_);
             cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", pluginTestHook_.c_str());
             pluginBrowseOpen_ = true;
         }
@@ -1427,21 +1426,7 @@ int AppWindow::run(int frames) {
                 sourceDeviceByEnv_ = true;
                 if (const char* want = std::getenv("FOXSDR_SOURCE_DEVICE");
                     want != nullptr && *want != '\0') {
-                    engine_.runOnPass([this, want] {
-                        engine_.scanNative();
-                        for (std::size_t i = 0; i < engine_.nativeDevices_.size(); ++i) {
-                            if (cascade::core::patch::makeDeviceKey(engine_.nativeDevices_[i].driver,
-                                                                    engine_.nativeDevices_[i].args) == want) {
-                                // The row's own command, as a click would send it.
-                                // (the engine's own spelling of the row's id, a const query: the table's
-                                // fact.source.id.<n> is the same function)
-                                engine_.submitCommand(cascade::core::cmd::makeText(
-                                    FOXAPI_OP_SELECT_SOURCE,
-                                    engine_.sourceIdForRow(kNativeRowBase + static_cast<int>(i))));
-                                break;
-                            }
-                        }
-                    });
+                    engine_.seamSelectNativeDevice(want);
                 }
             }
             // A FREQUENCY LIST IN THE IMPORT BOX (0.99.19): VIEW opened on
@@ -1466,7 +1451,7 @@ int AppWindow::run(int frames) {
             // before that lands was simply overwritten (the first capture sweep).
             bool deviceOpening = false;
             if (!pressPresetByEnvDone_ && rendered >= 30) {
-                engine_.runOnPass([this, &deviceOpening] { deviceOpening = engine_.deviceOpenPending_; });
+                deviceOpening = engine_.seamDeviceOpenPending();
             }
             if (!pressPresetByEnvDone_ && rendered >= 30 && !deviceOpening) {
                 pressPresetByEnvDone_ = true;
@@ -1475,36 +1460,17 @@ int AppWindow::run(int frames) {
                 if (const char* hz = std::getenv("FOXSDR_TUNE_HZ"); hz != nullptr && *hz != '\0') {
                     const double f = std::atof(hz);
                     if (f > 0.0) {
-                        engine_.submitCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, f));
+                        engine_.seamSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, f));
                     }
                 }
                 if (const char* want = std::getenv("FOXSDR_PRESS_PRESET"); want != nullptr && *want != '\0') {
-                    bool found = false;
                     // What the pass knows - the loaded plugins, their validated presets - is read where the pass cannot change it; the
                     // windows a plugin with no preset opens are this window's own and are opened after.
-                    bool openWindows = false;
-                    std::string openName;
-                    std::uint32_t openCaps = 0;
-                    engine_.runOnPass([&] {
-                        for (const cascade::core::LoadedPlugin& lp : engine_.pluginHost_.plugins()) {
-                            if (lp.name != want) { continue; }
-                            found = true;
-                            const std::vector<cascade::gui::IndexedPreset> ps = engine_.validatedPresets(lp);
-                            if (!ps.empty()) {
-                                // Its key's own command, queued AFTER the tune
-                                // above so the preset still has the last word.
-                                engine_.submitCommand(cascade::core::cmd::makeText(
-                                    FOXAPI_OP_PLUGIN_PRESET, cascade::core::pluginKey(lp),
-                                    static_cast<std::int64_t>(ps.front().index)));
-                            } else {
-                                engine_.recordPluginStopped(cascade::core::pluginKey(lp), false);
-                                openWindows = true;
-                                openName = lp.name;
-                                openCaps = lp.capabilities;
-                            }
-                            break;
-                        }
-                    });
+                    const cascade::engine::EngineShell::PresetPress press = engine_.seamPressPreset(want);
+                    const bool found = press.found;
+                    const bool openWindows = press.openWindows;
+                    const std::string& openName = press.name;
+                    const std::uint32_t openCaps = press.capabilities;
                     if (openWindows) { openPluginWindowsFor(openName, openCaps); }
                     cascade::core::diagLogf("capture: preset for '%s' %s", want,
                                             found ? "pressed" : "NOT FOUND - no such plugin loaded");
@@ -1524,22 +1490,21 @@ int AppWindow::run(int frames) {
             // through the same function the keys on the page call.
             if (!patchStartedByEnv_) {
                 patchStartedByEnv_ = true;
-                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { engine_.runOnPass([this] { engine_.patchRunning_ = true; }); }
+                if (std::getenv("FOXSDR_PATCH_START") != nullptr) { engine_.seamPatchStart(); }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_RUN_AT"); at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
                     // The dome's own command.
-                    bool patchWasRunning = false;
-                    engine_.runOnPass([this, &patchWasRunning] { patchWasRunning = engine_.patchRunning_; });
-                    engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchWasRunning ? 0 : 1));
+                    const bool patchWasRunning = engine_.seamPatchRunning();
+                    engine_.seamSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, patchWasRunning ? 0 : 1));
                 }
             }
             if (const char* at = std::getenv("FOXSDR_PATCH_ALLOFF_AT");
                 at != nullptr && *at != '\0') {
                 const std::string list = std::string(",") + at + ",";
                 if (list.find("," + std::to_string(rendered) + ",") != std::string::npos) {
-                    engine_.submitCommand(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
+                    engine_.seamSubmit(cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF));
                 }
             }
             // FOXSDR_PATCH_MAP_FIT_AT (0.99.40): frames at which every Map
@@ -1832,32 +1797,24 @@ int AppWindow::run(int frames) {
         if (measure_) {
             cascade::core::MeasureHooks hooks;
             hooks.startReceiver = [this] {
-                engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
+                engine_.seamSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
             };
             hooks.setMode = [this](const char* mode) {
-                engine_.submitCommand(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE,
-                                                          cascade::core::cmd::foxDemodFromName(mode)));
+                engine_.seamSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE,
+                                                               cascade::core::cmd::foxDemodFromName(mode)));
             };
             hooks.tuneVfoHz = [this](double offsetHz) {
                 // The centre the receiver last published (the click on the spectrum reads the same number): the source itself is
                 // the pass's, and a swap of it would race a read from this thread.
-                engine_.submitCommand(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
+                engine_.seamSubmit(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
             };
-            hooks.markPassStats = [this] { engine_.markPassStats(); };
-            hooks.passStatsJson = [this] { return engine_.passStatsJson(); };
+            hooks.markPassStats = [this] { engine_.seamMarkPassStats(); };
+            hooks.passStatsJson = [this] { return engine_.seamPassStatsJson(); };
             hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
-                // THE PASS INSTALLS IT (the pump move's step P4): the swap and the chain's following it are the engine's own
-                // work on the engine's own state, which the free-running pass is changing beside this thread. Posted, then one
-                // whole pass is awaited, so the generator is in and the chain follows its rate when this returns - the driver
-                // reads the rate straight after.
-                auto held = std::make_shared<std::unique_ptr<cascade::source::IqSource>>(std::move(src));
-                engine_.postToPass([this, held] {
-                    engine_.installSource(std::move(*held));  // the app's one swap door
-                    engine_.followInputRate();
-                });
-                (void)engine_.runPassNow();
+                // THE PASS INSTALLS IT (the pump move's step P4; EngineShell::seamInstallSource says how, and waits one whole pass).
+                engine_.seamInstallSource(std::move(src));
             };
-            if (!measure_->tick(engine_.pipeline_, hooks)) {
+            if (!engine_.seamMeasureTick(*measure_, hooks)) {
                 measure_.reset();
                 closeRequested_ = true;
             }
@@ -1962,7 +1919,7 @@ int AppWindow::run(int frames) {
     // fetch during the run brought into force.
     // (Prints what the plugin host, the runner and the source finished in: the engine's own report, which prints the
     // receiver plugins' pictures from the buffer the plugin windows polled into - the one thing only this window holds.)
-    if (pluginStatusReport) { engine_.reportPluginStatus(pluginImages_, pluginUiReport()); }
+    if (pluginStatusReport) { engine_.reportPluginStatus(pluginImages_, pluginFeed_->report()); }
 
     // Final-state save, unconditional: cheap, and it guarantees the on-disk
     // config matches the final session state even when the debounce never
@@ -2025,7 +1982,7 @@ int AppWindow::run(int frames) {
     // everything was still alive. Residual, stated plainly: a death in the
     // GL/GLFW teardown below still counts as a clean exit — the watchdog,
     // stopped last as ever, is what covers that stretch.
-    engine_.telemetryCleanExit_ = true;
+    engine_.markCleanExit();
     if (!configPath_.empty()) {
         // Built on lastRequestedConfig_, not savedCfg_: the final-state save
         // just above (still async - see gui/config_writer.hpp) may not have
@@ -9880,7 +9837,6 @@ void AppWindow::drawReceiverPositionOffers() {
 // logs counts and names, never the fix (its header says why, and a test
 // searches the log ring for the digits).
 void AppWindow::drawGpsPositionControl() {
-    using cascade::core::GpsReader;
     // (Window port group 14, part b: everything below is the GPS list's entry, read once a look, and the session's
     // commands; the reader is the engine's.)
     const GpsRow& gps = gpsRow();
@@ -9991,7 +9947,7 @@ void AppWindow::drawGpsPositionControl() {
                 ImGui::SetTooltip(tr("Opens the port, waits up to %.0f s for a fix, sets the receiver's\n"
                                   "position from it exactly as if it had been typed, and closes the\n"
                                   "port again. The position is never written to the diagnostic log."),
-                                  GpsReader::kDefaultTimeoutS);
+                                  cascade::core::kDefaultGpsTimeoutS);
             }
         }
     }
@@ -12010,33 +11966,34 @@ void AppWindow::drawScopeModeControl() {
     }
 }
 
-const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return pluginUi_.tracks(); }
-const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return pluginUi_.paths(); }
+const std::vector<cascade::core::HostTrack>& AppWindow::hostTracks() { return pluginFeed_->tracks(); }
+const std::vector<cascade::core::HostPath>& AppWindow::hostPaths() { return pluginFeed_->paths(); }
 bool AppWindow::hostAltitudeNear(const std::string& plugin, const std::string& id, double latDeg, double lonDeg,
                                  double& outAltM) {
-    return pluginUi_.altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
+    return pluginFeed_->altitudeNear(plugin, id, latDeg, lonDeg, outAltM);
 }
-const std::vector<cascade::core::HostPanel>& AppWindow::hostPanels() { return pluginUi_.panels(); }
-const std::vector<cascade::core::HostInstrument>& AppWindow::hostInstruments() { return pluginUi_.instruments(); }
-const std::vector<std::string>& AppWindow::hostTrackPluginNames() { return pluginUi_.trackPluginNames(); }
+const std::vector<cascade::core::HostPanel>& AppWindow::hostPanels() { return pluginFeed_->panels(); }
+const std::vector<cascade::core::HostInstrument>& AppWindow::hostInstruments() { return pluginFeed_->instruments(); }
+const std::vector<std::string>& AppWindow::hostTrackPluginNames() { return pluginFeed_->trackPluginNames(); }
 void AppWindow::hostPollPlugins() {
     // THE NEWEST PLUGIN DIRECTIVE FIRST, before the poll and before any reference into the plugin UI is taken (pump move step P3):
     // a rebuild destroys the instances and empties the vectors every reference points into, and this is the one place - with the head
     // of the frame - where that may happen. Applying it also acknowledges it to the engine, which may be waiting to unmap a module.
     applyPluginDirective();
-    pluginUi_.poll();
+    pluginFeed_->poll();
 }
 
-void AppWindow::applyPluginDirective() {
-    (void)directives_.applyNewest([this](const cascade::core::PluginDirective& d) { applyDirective(d); });
-}
+void AppWindow::applyPluginDirective() { pluginFeed_->applyNewestDirective(); }
 
-void AppWindow::applyDirective(const cascade::core::PluginDirective& d) {
+void AppWindow::applyDirectiveBefore(const cascade::engine::PluginDirectiveFacts& d) {
     // A RELEASE is the engine about to unmap the modules (a rescan, a removal, the shutdown). The map pages' geometry is folded into
     // the saved list first, as the beforePluginRescan hook did: a page whose plugin does not come back is pruned only after a re-sync.
     if (d.release) { syncMapPagesToSaved(); }
-    // The instances: destroyed, and created again over the plugins the directive carries - none for a release.
-    pluginUi_.apply(d);
+}
+
+void AppWindow::applyDirectiveAfter(const cascade::engine::PluginDirectiveFacts& d) {
+    // (The feed has applied the directive to the plugin UI between the two steps: the instances destroyed, and created again over the
+    // plugins the directive carries - none for a release.)
     if (d.release) {
         // The basemap's tiles are GL textures, and its handle and the track-info client's are memory inside the modules about to be
         // unmapped: both let go HERE, on the thread that owns them and has the context (they were let go from the engine's pass).
@@ -12053,19 +12010,12 @@ void AppWindow::applyDirective(const cascade::core::PluginDirective& d) {
     // DEMONSTRATION instruments open their windows by themselves: the one deliberate exception to "nothing opens but by your hand"
     // (0.79.1), safe because a demonstration exists only when a developer set FOXSDR_DEMO_INSTRUMENT for this launch. The window that
     // rebuilt them shows them - the engine used to ask for it through a hook.
-    for (const cascade::core::HostInstrument& in : pluginUi_.instruments()) {
+    for (const cascade::core::HostInstrument& in : pluginFeed_->instruments()) {
         if (in.plugin == "Demonstration") { pluginWindows_.show(instrumentWindowId(in)); }
     }
 }
 
-cascade::engine::PluginUiReport AppWindow::pluginUiReport() const {
-    cascade::engine::PluginUiReport r;
-    r.tracks = pluginUi_.tracks();
-    r.paths = pluginUi_.paths().size();
-    r.panels = pluginUi_.panels();
-    return r;
-}
-void AppWindow::hostPollImages(std::vector<cascade::core::HostImage>& out) { engine_.pluginRunner_.pollImages(out); }
+void AppWindow::hostPollImages(std::vector<cascade::core::HostImage>& out) { pluginFeed_->pollImages(out); }
 
 void AppWindow::drawScopeMode() {
     uiNotePanel("scope");
@@ -15109,7 +15059,7 @@ cascade::net::RadioStatus AppWindow::webStatusNow() const {
     // the publishing thread takes it BLOCKING is applyControlRequest's own
     // readFull() (core/receiver_snapshot.hpp).
     const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full =
-        engine_.receiverSnapshot_->readFull();
+        engine_.readFullSnapshot();
     return cascade::net::composeRadioStatus(full->state, full->lists.get());
 }
 
@@ -15119,7 +15069,7 @@ cascade::net::RadioStatus AppWindow::catStatusNow() const {
     // overlapping a publish it takes the installed block instead - whole,
     // and at most a frame older - rather than answer nothing.
     cascade::core::PublishedState s;
-    if (!engine_.receiverSnapshot_->read(s)) { s = engine_.receiverSnapshot_->readFull()->state; }
+    if (!engine_.readSnapshot(s)) { s = engine_.readFullSnapshot()->state; }
     return cascade::net::composeRadioStatus(s, nullptr);
 }
 
@@ -15946,7 +15896,7 @@ void AppWindow::readFactText(const char* key, std::string& out) {
 // --- THE WINDOW'S ENGINE API SESSION (engine stage 4) --------------------------
 
 void AppWindow::openUiSession() {
-    engineApi_ = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    engineApi_ = cascade::engine::EngineShell::apiTable();
     FoxSessionParams p{};
     p.structSize = sizeof(p);
     p.flags = FOXAPI_SESSION_LOCAL;
@@ -19360,7 +19310,7 @@ void AppWindow::flushScannerDraft() {
 // --- Web server mode (P11) ---------------------------------------------------
 
 void AppWindow::publishWebAudio() {
-    const std::uint64_t produced = engine_.pipeline_.audioSamplesProduced();
+    const std::uint64_t produced = engine_.audioSamplesProduced();
     if (!webServer_.running()) {
         // Keep the mark current so switching the server on later starts from
         // live rather than trying to publish everything since launch.
@@ -19382,7 +19332,7 @@ void AppWindow::publishWebAudio() {
         fresh = kTapFrames;
     }
     webAudioBuf_.resize(static_cast<std::size_t>(fresh));
-    const std::size_t got = engine_.pipeline_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
+    const std::size_t got = engine_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
     webServer_.pushAudio(webAudioBuf_.data(), got);
     webAudioLastProduced_ = produced;
 }
@@ -19531,8 +19481,8 @@ namespace {
 namespace {
 }  // namespace
 
-cascade::engine::Engine::RemoteControls AppWindow::takeRemoteControls() {
-    cascade::engine::Engine::RemoteControls pulled;
+cascade::engine::RemoteControls AppWindow::takeRemoteControls() {
+    cascade::engine::RemoteControls pulled;
     std::vector<cascade::net::ControlRequest>& requests = pulled.requests;
     requests = webServer_.takePendingControls();
     // CAT requests are the SAME ControlRequest type, so they are appended here
@@ -20740,7 +20690,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     cascade::core::formatUtf8(gpsPortInput_, sizeof(gpsPortInput_), "%s", gpsPort_.c_str());
     // The store's URL box shows the restored URL (Engine::applyConfig says
     // why restoring it starts no fetch).
-    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl_.c_str());
+    cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl().c_str());
     pluginBrowseOpen_ = cfg.pluginBrowserOpen;
     // The fitted modules window: its rectangle is restored, its open flag
     // arrives cleared for the same reason. Opening it later starts no scan,
@@ -21164,8 +21114,8 @@ std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
 
 std::string AppWindow::tunerDisplayStyle() const { return cascade::gui::tunerStyleName(tunerStyle_); }
 
-cascade::engine::EngineHost::BasemapFacts AppWindow::basemapFacts() const {
-    BasemapFacts f;
+cascade::engine::BasemapFacts AppWindow::basemapFacts() const {
+    cascade::engine::BasemapFacts f;
     f.active = basemap_.active();
     f.minZoom = basemap_.minZoom();
     f.maxZoom = basemap_.maxZoom();
@@ -21178,7 +21128,7 @@ void AppWindow::publishWebSpectrum(double centerHz) {
     // THE SPECTRUM FRAME for the browser - a stream, not state, and not part
     // of stage 2 (docs/engine-stage2.md, OPEN): copied under webMutex_ only
     // when the frame advanced, as before.
-    const double spanHz = engine_.pipeline_.inputRateHz();
+    const double spanHz = engine_.inputRateHz();
     std::lock_guard<std::mutex> lock(webMutex_);
     // Copy the bins only when the frame actually advanced. lastFrame_ is what
     // the spectrum panel just drew, so the browser and the window are showing

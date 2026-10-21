@@ -226,21 +226,21 @@ struct AppWindowTestAccess {
     // An engine read or write from this thread: on the pass (passseam), or right here while the pass is parked.
     template <class R>
     static R onPass(AppWindow& a, const std::function<R()>& f) {
-        return parked() ? f() : passseam::read<R>(a.engine_, f);
+        return parked() ? f() : passseam::read<R>(rawEngine(a.engine_), f);
     }
     static void doOnPass(AppWindow& a, const std::function<void()>& f) {
         if (parked()) {
             f();
         } else {
-            passseam::on(a.engine_, f);
+            passseam::on(rawEngine(a.engine_), f);
         }
     }
     // The pass parked at its next publish (free-running; nothing otherwise) - for the click, the survey's clicks, the
     // ADD ALL walk - and let go by the next look, the next workers' poll or dropQueued.
-    static void park(AppWindow& a) { parkAtPublish(a.engine_); }
+    static void park(AppWindow& a) { parkAtPublish(rawEngine(a.engine_)); }
     // ...at the first publish of a fetch in flight.
     static void parkAtFetch(AppWindow& a) {
-        parkAtPublish(a.engine_, [&a] { return a.engine_.catalogPending_; });
+        parkAtPublish(rawEngine(a.engine_), [&a] { return rawEngine(a.engine_).catalogPending_; });
     }
     // THE LOOK OF ONE PUBLISH: free-running, the pass parked at its next publish (the one parked now let go) and that
     // publish read; otherwise the look. With its `after`: free-running nothing (the parked pass polls its workers when it
@@ -250,8 +250,8 @@ struct AppWindowTestAccess {
             look(a);
             return;
         }
-        parkAtPublish(a.engine_);
-        a.statusLines_ = a.engine_.statusText();
+        parkAtPublish(rawEngine(a.engine_));
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void afterPublish(AppWindow& a) {
@@ -264,7 +264,7 @@ struct AppWindowTestAccess {
             return;
         }
         parkAtFetch(a);
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
 
@@ -272,22 +272,22 @@ struct AppWindowTestAccess {
     // window's read of the state.
     static void look(AppWindow& a) {
         unpark();
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     // ...and the end of the frame: the workers polled (a fetch or a download that finished is applied, the ADD ALL
     // queue steps) and the lines handed over, as drawUi does after the draw.
     static void after(AppWindow& a) {
         unpark();
-        passseam::workers(a.engine_, [&] {
-            a.engine_.pumpWorkers();
-            a.engine_.pumpAudio();
+        passseam::workers(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpWorkers();
+            rawEngine(a.engine_).pumpAudio();
         });
     }
     static std::vector<Answer> answers(AppWindow& a) {
@@ -312,18 +312,18 @@ struct AppWindowTestAccess {
         unpark();  // (what was queued is gone: the pass may go on)
     }
     static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        doOnPass(a, [&] { (void)a.engine_.applyCommand(q.c, q.longText); });
+        doOnPass(a, [&] { (void)rawEngine(a.engine_).applyCommand(q.c, q.longText); });
     }
     static void command(AppWindow& a, const FoxCommand& c) {
-        doOnPass(a, [&] { (void)a.engine_.applyCommand(c); });
+        doOnPass(a, [&] { (void)rawEngine(a.engine_).applyCommand(c); });
     }
     static std::uint64_t listSeq(AppWindow& a) { return a.uiState_.listSeq; }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     static std::size_t loadedDecoders(AppWindow& a) {
-        return onPass<std::size_t>(a, [&] { return a.engine_.loadedDecoderCount(); });
+        return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).loadedDecoderCount(); });
     }
     static std::size_t fedDecoders(AppWindow& a) {
-        return onPass<std::size_t>(a, [&] { return a.engine_.fedDecoderCount(); });
+        return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).fedDecoderCount(); });
     }
 
     // The window's own: its cache, its deck, its open flag, the flag the fitted window reads.
@@ -352,31 +352,31 @@ struct AppWindowTestAccess {
 
     // The engine, for comparison and for what a hermetic window cannot make (by value: never a reference into a member
     // the pass rewrites).
-    static std::size_t catalogSize(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.catalog_.size(); }); }
-    static bool catalogPending(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.catalogPending_; }); }
-    static bool installPending(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.installPending_; }); }
-    static bool addAllActive(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.addAllRun_.active; }); }
-    static std::size_t addAllNext(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.addAllRun_.next; }); }
-    static std::size_t addAllTotal(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.addAllRun_.total; }); }
-    static std::string engineUrl(AppWindow& a) { return onPass<std::string>(a, [&] { return a.engine_.pluginCatalogueUrl_; }); }
-    static std::string engineSummary(AppWindow& a) { return onPass<std::string>(a, [&] { return a.engine_.addAllSummary_; }); }
+    static std::size_t catalogSize(AppWindow& a) { return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).catalog_.size(); }); }
+    static bool catalogPending(AppWindow& a) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).catalogPending_; }); }
+    static bool installPending(AppWindow& a) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).installPending_; }); }
+    static bool addAllActive(AppWindow& a) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).addAllRun_.active; }); }
+    static std::size_t addAllNext(AppWindow& a) { return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).addAllRun_.next; }); }
+    static std::size_t addAllTotal(AppWindow& a) { return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).addAllRun_.total; }); }
+    static std::string engineUrl(AppWindow& a) { return onPass<std::string>(a, [&] { return rawEngine(a.engine_).pluginCatalogueUrl_; }); }
+    static std::string engineSummary(AppWindow& a) { return onPass<std::string>(a, [&] { return rawEngine(a.engine_).addAllSummary_; }); }
     // What writes the engine's lines (the table's own hook is not in an engine the window holds): set where the engine
     // keeps them, handed over at the end of the next frame.
-    static void setAddAllFailed(AppWindow& a, bool v) { doOnPass(a, [&] { a.engine_.addAllFailed_ = v; }); }
-    static void setCatalogStatus(AppWindow& a, const std::string& v) { doOnPass(a, [&] { a.engine_.catalogStatus_ = v; }); }
-    static void setAddAllSummary(AppWindow& a, const std::string& v) { doOnPass(a, [&] { a.engine_.addAllSummary_ = v; }); }
+    static void setAddAllFailed(AppWindow& a, bool v) { doOnPass(a, [&] { rawEngine(a.engine_).addAllFailed_ = v; }); }
+    static void setCatalogStatus(AppWindow& a, const std::string& v) { doOnPass(a, [&] { rawEngine(a.engine_).catalogStatus_ = v; }); }
+    static void setAddAllSummary(AppWindow& a, const std::string& v) { doOnPass(a, [&] { rawEngine(a.engine_).addAllSummary_ = v; }); }
     static std::string blockedReason(AppWindow& a, int idx, bool acked) {
-        return onPass<std::string>(a, [&] { return a.engine_.pluginInstallBlockedReason(idx, acked); });
+        return onPass<std::string>(a, [&] { return rawEngine(a.engine_).pluginInstallBlockedReason(idx, acked); });
     }
-    static bool stopped(AppWindow& a, const std::string& key) { return onPass<bool>(a, [&] { return a.engine_.pluginIsStopped(key); }); }
+    static bool stopped(AppWindow& a, const std::string& key) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).pluginIsStopped(key); }); }
     static std::vector<cascade::core::LoadedPlugin> host(AppWindow& a) {
-        return onPass<std::vector<cascade::core::LoadedPlugin>>(a, [&] { return a.engine_.pluginHost_.plugins(); });
+        return onPass<std::vector<cascade::core::LoadedPlugin>>(a, [&] { return rawEngine(a.engine_).pluginHost_.plugins(); });
     }
     static std::vector<cascade::core::BlockedPlugin> engineBlocked(AppWindow& a) {
-        return onPass<std::vector<cascade::core::BlockedPlugin>>(a, [&] { return a.engine_.pluginBlocked_; });
+        return onPass<std::vector<cascade::core::BlockedPlugin>>(a, [&] { return rawEngine(a.engine_).pluginBlocked_; });
     }
     static std::vector<cascade::core::PluginUpdate> plans(AppWindow& a) {
-        return onPass<std::vector<cascade::core::PluginUpdate>>(a, [&] { return a.engine_.plannedPluginUpdates(); });
+        return onPass<std::vector<cascade::core::PluginUpdate>>(a, [&] { return rawEngine(a.engine_).plannedPluginUpdates(); });
     }
 
     // A transfer as its worker would have left it (test_engine_api_03, group I): the engine's install slot holds a
@@ -389,9 +389,9 @@ struct AppWindowTestAccess {
     static void beginTransfer(AppWindow& a, const std::string& name) {
         doOnPass(a, [&] {
             installPromise() = std::promise<Engine::PluginInstallResult>();
-            a.engine_.installFuture_ = installPromise().get_future();
-            a.engine_.installBusyName_ = name;
-            a.engine_.installPending_ = true;
+            rawEngine(a.engine_).installFuture_ = installPromise().get_future();
+            rawEngine(a.engine_).installBusyName_ = name;
+            rawEngine(a.engine_).installPending_ = true;
         });
     }
     static void endTransfer(bool ok, const std::string& name, const std::string& error) {
@@ -402,7 +402,7 @@ struct AppWindowTestAccess {
         installPromise().set_value(std::move(r));
     }
     // (the repo's progress is an atomic, stored by a worker in the product: any thread)
-    static void setProgress(AppWindow& a, float p) { a.engine_.pluginRepo_.setProgressForTest(p); }
+    static void setProgress(AppWindow& a, float p) { rawEngine(a.engine_).pluginRepo_.setProgressForTest(p); }
 
     // THE MODEL AS IT WAS BEFORE THE PORT: built from the engine's own members, every frame the window was open (the
     // code AppWindow::buildPluginStoreModel held from the day it was written to the day it was ported, restated). The
@@ -418,7 +418,7 @@ struct AppWindowTestAccess {
         });
     }
     static PluginStoreModel oldModelOnPass(AppWindow& a) {
-        Engine& e = a.engine_;
+        Engine& e = rawEngine(a.engine_);
         PluginStoreModel model;
         model.sourceUrl = e.pluginCatalogueUrl_;
         model.haveCatalogue = !e.catalog_.empty();
@@ -475,7 +475,7 @@ struct AppWindowTestAccess {
                 sm.plate.running = lp->loaded && !e.pluginIsStopped(key);
                 if (lp->hostClient != nullptr) {
                     sm.plate.haveTuneGrant = true;
-                    sm.plate.tuneGranted = a.pluginUi_.tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
+                    sm.plate.tuneGranted = rawPluginUi(*a.pluginFeed_).tuneAllowed(cascade::core::PluginUi::tuneKey(*lp));
                 }
             }
             const bool acked = (i == a.pluginStoreDeck_->selected) && a.pluginStoreDeck_->legalAck;
@@ -496,13 +496,13 @@ struct AppWindowTestAccess {
     // serves and the window letters. The OLD window lettered min(next + 1, total) here. (Both read the engine's run:
     // called on the pass, or with the pass parked at the publish being compared.)
     static std::string trueAddAllLine(AppWindow& a) {
-        const auto& run = a.engine_.addAllRun_;
+        const auto& run = rawEngine(a.engine_).addAllRun_;
         if (!run.active) { return {}; }
         const std::size_t pos = std::clamp<std::size_t>(run.next, 1u, run.total);
         return storeAddAllLine(pos, run.total, run.currentName);
     }
     static std::string oldAddAllLine(AppWindow& a) {
-        const auto& run = a.engine_.addAllRun_;
+        const auto& run = rawEngine(a.engine_).addAllRun_;
         if (!run.active) { return {}; }
         return cascade::core::formatText(cascade::i18n::tr("installing %zu of %zu: %s"), std::min(run.next + 1u, run.total),
                                          run.total, run.currentName.empty() ? cascade::i18n::tr("starting") : run.currentName.c_str());

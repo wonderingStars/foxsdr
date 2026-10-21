@@ -102,16 +102,16 @@ struct AppWindowTestAccess {
     static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &fakeScan; }
     // One frame's engine part, in drawUi's order (see the header comment), and the page's own steps that follow it.
     static void look(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.drainLocalCommands();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).drainLocalCommands();
             a.commitPatchDraft();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            a.engine_.pumpPatch();
-            (void)a.engine_.pumpPublish();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            rawEngine(a.engine_).pumpPatch();
+            (void)rawEngine(a.engine_).pumpPublish();
         }, [&] { a.commitPatchDraft(); });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -135,13 +135,13 @@ struct AppWindowTestAccess {
             fn();
             return;
         }
-        passseam::attach(a.engine_);
+        passseam::attach(rawEngine(a.engine_));
         std::mutex m;
         std::condition_variable cv;
         bool held = false;
         bool release = false;
         std::thread holder([&] {
-            passseam::on(a.engine_, [&] {
+            passseam::on(rawEngine(a.engine_), [&] {
                 std::unique_lock<std::mutex> lk(m);
                 held = true;
                 cv.notify_all();
@@ -166,10 +166,10 @@ struct AppWindowTestAccess {
         return a.patchAddRadioPart("Radio", pc::PortType::Iq, x, y);
     }
     static std::size_t nativeCount(AppWindow& a) {
-        return passseam::read<std::size_t>(a.engine_, [&] { return a.engine_.nativeDevices_.size(); });
+        return passseam::read<std::size_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).nativeDevices_.size(); });
     }
     // The same, made INSIDE withPassHeld (the pass is parked: a read through runOnPass would wait for the pass it holds).
-    static std::size_t nativeCountHeld(AppWindow& a) { return a.engine_.nativeDevices_.size(); }
+    static std::size_t nativeCountHeld(AppWindow& a) { return rawEngine(a.engine_).nativeDevices_.size(); }
     // Group 13 part b: the table's device list as the window reads it, the recording the engine has listed and the radio the
     // receiver has lent to the patch (put there behind the engine's back).
     static std::vector<std::string> deviceKeys(AppWindow& a) {
@@ -179,22 +179,22 @@ struct AppWindowTestAccess {
     }
     static std::string receiverRadio(AppWindow& a) { return a.patchLists().receiverRadio; }
     static void listRecording(AppWindow& a, const std::string& path, double rateHz) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.patchRecordings_.push_back({path, "rec.wav", pc::makeIqFileKey(path), rateHz});
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRecordings_.push_back({path, "rec.wav", pc::makeIqFileKey(path), rateHz});
         });
     }
     static void lend(AppWindow& a, const std::string& kind, const std::string& args) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.patchMainKeep_.valid = true;
-            a.engine_.patchMainKeep_.kind = kind;
-            a.engine_.patchMainKeep_.args = args;
-            a.engine_.patchMainKeep_.label = "Lent radio";
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchMainKeep_.valid = true;
+            rawEngine(a.engine_).patchMainKeep_.kind = kind;
+            rawEngine(a.engine_).patchMainKeep_.args = args;
+            rawEngine(a.engine_).patchMainKeep_.label = "Lent radio";
         });
     }
     // A COPY of the engine graph's node, made with the pass out of the way (null: no such node).
     static std::unique_ptr<const pc::Node> find(AppWindow& a, pc::NodeId id) {
-        return passseam::read<std::unique_ptr<const pc::Node>>(a.engine_, [&]() -> std::unique_ptr<const pc::Node> {
-            const pc::Node* n = a.engine_.patchGraph_.find(id);
+        return passseam::read<std::unique_ptr<const pc::Node>>(rawEngine(a.engine_), [&]() -> std::unique_ptr<const pc::Node> {
+            const pc::Node* n = rawEngine(a.engine_).patchGraph_.find(id);
             return n != nullptr ? std::make_unique<const pc::Node>(*n) : nullptr;
         });
     }
@@ -206,10 +206,10 @@ struct AppWindowTestAccess {
     static pc::NodeId addRadioPartQueued(AppWindow& a, float x, float y) {
         pc::NodeId made = pc::kNoNode;
         withPassHeld(a, [&] {
-            a.engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+            rawEngine(a.engine_).submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
             const std::string dev = a.patchDefaultDeviceKey();
-            made = a.engine_.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, x, y);
-            if (pc::Node* n = a.engine_.patchGraph_.mutableNode(made)) { n->device = dev; }
+            made = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, x, y);
+            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(made)) { n->device = dev; }
         });
         return made;
     }

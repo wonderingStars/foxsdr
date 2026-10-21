@@ -77,6 +77,11 @@ public:
 // what a u-blox configured for high-rate output uses.
 inline constexpr int kSerialBaudRates[] = {4800, 9600, 19200, 38400, 57600, 115200};
 inline constexpr int kDefaultGpsBaud = 9600;
+// How long a GPS read waits for a fix before giving up (GpsReader::kDefaultTimeoutS is this; moved here with the fence so the
+// Settings tooltip that names it need not include the reader). A cold receiver indoors needs 30-60 s to see enough satellites; a warm
+// one outdoors answers in a few seconds. 60 s is generous for the first and costs nothing for the second, and the user can press Stop at
+// any moment.
+inline constexpr double kDefaultGpsTimeoutS = 60.0;
 
 // True when `baud` is one of kSerialBaudRates.
 bool serialBaudSupported(int baud);

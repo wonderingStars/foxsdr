@@ -1,7 +1,7 @@
 // test_look_order.cpp - THE ORDER IN WHICH A FRAME LOOKS AT WHAT THE PASS PUBLISHED (the pump move's step P4; the survey's 1.6 B and C).
 //
 // With the pass on a thread of its own, the window's look is a series of separate reads that a publish can fall between. The rule the
-// look follows (AppWindow::drawUi; tests/test_command_path_guard.cpp holds the order of the calls as text): the session's results and
+// look follows (AppWindow::drawUi; tests/test_engine_shell_guard.cpp holds the order of the calls as text): the session's results and
 // events FIRST, the status lines next, THEN the state, the spectrum and the lists keyed on its sequence, and only then are the answers
 // ACTED ON - against that state. Two properties, each with its control (the opposite order, which the test can see fail):
 //
@@ -47,11 +47,11 @@ namespace cmd = cascade::core::cmd;
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static Engine& engine(AppWindow& a) { return a.engine_; }
+    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
     static void betweenPublishes(void (*f)()) { Engine::testHooks_.betweenPublishes = f; }
     static void poll(AppWindow& a) { a.pollUiAnswers(); }
     static void look(AppWindow& a) {
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void act(AppWindow& a) { a.actOnUiAnswers(); }
@@ -67,7 +67,7 @@ struct AppWindowTestAccess {
         o.period = std::chrono::milliseconds(periodMs);
         o.floor = std::chrono::milliseconds(0);
         o.watchdogThresholdMs = 20000;
-        a.engine_.startControlThread(o);
+        rawEngine(a.engine_).startControlThread(o);
     }
     static cascade::core::PublishedState published(Engine& e) {
         cascade::core::PublishedState ps;

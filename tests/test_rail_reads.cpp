@@ -101,22 +101,22 @@ struct AppWindowTestAccess {
     // (Every reach into the engine below is made through passseam::on / passseam::read: on the pass's thread with the pass out
     // of the way when it free-runs, and a READ returns a copy made there - never a reference into the engine's members.)
     static void usePlans(AppWindow& a) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.bandPlanDirForTest_ = kPlans;
-            a.engine_.loadBandPlan();
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).bandPlanDirForTest_ = kPlans;
+            rawEngine(a.engine_).loadBandPlan();
         });
     }
     // The window looks, as a frame does: the engine publishes, the window reads.
     static void look(AppWindow& a) {
-        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
         a.refreshUiState();
     }
     // The engine's pass as far as a submit needs it, the answers drained as a
     // frame's pumpTransmitKey does: how many commands the session had taken.
     static int pass(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
         int answered = 0;
         for (;;) {
@@ -132,9 +132,9 @@ struct AppWindowTestAccess {
     static const Rail& rail(AppWindow& a) { return a.railLists(); }
     // The engine's pass, and the statuses of the answers the session was given for what it submitted.
     static std::vector<int32_t> passStatuses(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
         std::vector<int32_t> out;
         for (;;) {
@@ -161,27 +161,27 @@ struct AppWindowTestAccess {
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
         const std::string note = "note " + std::to_string(++n);
-        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = note; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).presetNote_ = note; });
     }
     // The engine's side, for comparison: COPIES, made on the pass's thread.
     static cascade::core::BandPlan plan(AppWindow& a) {
-        return passseam::read<cascade::core::BandPlan>(a.engine_, [&] { return a.engine_.bandPlan_; });
+        return passseam::read<cascade::core::BandPlan>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).bandPlan_; });
     }
     static std::vector<cascade::core::PlanInfo> choices(AppWindow& a) {
-        return passseam::read<std::vector<cascade::core::PlanInfo>>(a.engine_, [&] { return a.engine_.bandPlanChoices_; });
+        return passseam::read<std::vector<cascade::core::PlanInfo>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).bandPlanChoices_; });
     }
     static std::string selection(AppWindow& a) {
-        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.bandPlanSelection_; });
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).bandPlanSelection_; });
     }
     static std::vector<cascade::sink::AudioDevice> outputs(AppWindow& a) {
-        return passseam::read<std::vector<cascade::sink::AudioDevice>>(a.engine_, [&] { return a.engine_.devices_; });
+        return passseam::read<std::vector<cascade::sink::AudioDevice>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).devices_; });
     }
-    static int outputIndex(AppWindow& a) { return passseam::read<int>(a.engine_, [&] { return a.engine_.deviceIndex_; }); }
+    static int outputIndex(AppWindow& a) { return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceIndex_; }); }
     static void setAudioHealth(AppWindow& a, const std::string& note) {
-        passseam::on(a.engine_, [&] { a.engine_.audioHealthNote_ = note; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).audioHealthNote_ = note; });
     }
     static void setBandPlanError(AppWindow& a, const std::string& note) {
-        passseam::on(a.engine_, [&] { a.engine_.bandPlanError_ = note; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).bandPlanError_ = note; });
     }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     // The members, drawn.
@@ -194,29 +194,29 @@ struct AppWindowTestAccess {
     static void drawOverlay(AppWindow& a) { a.drawBandPlanOverlay(0.0f, 0.0f, 900.0f, 300.0f); }
     // The engine's stand-ins and settings, set as the table's test hooks and commands do.
     static void rds(AppWindow& a, const cascade::core::RdsSnapshot* heard) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.testRdsOn_ = heard != nullptr;
-            if (heard != nullptr) { a.engine_.testRds_ = *heard; }
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).testRdsOn_ = heard != nullptr;
+            if (heard != nullptr) { rawEngine(a.engine_).testRds_ = *heard; }
         });
     }
     static void pilot(AppWindow& a, bool locked) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.testPilotOn_ = true;
-            a.engine_.testPilotLocked_ = locked;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).testPilotOn_ = true;
+            rawEngine(a.engine_).testPilotLocked_ = locked;
         });
     }
     static void autoNotch(AppWindow& a, bool engaged, double hz) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.testAutoNotchOn_ = true;
-            a.engine_.testAutoNotchEngaged_ = engaged;
-            a.engine_.testAutoNotchHz_ = hz;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).testAutoNotchOn_ = true;
+            rawEngine(a.engine_).testAutoNotchEngaged_ = engaged;
+            rawEngine(a.engine_).testAutoNotchHz_ = hz;
         });
     }
     static void command(AppWindow& a, const FoxCommand& c) {
-        passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(c); });
+        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(c); });
     }
     static void mutedBy(AppWindow& a, std::vector<std::string> names) {
-        passseam::on(a.engine_, [&] { a.engine_.mutedBy_ = std::move(names); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).mutedBy_ = std::move(names); });
     }
     // THE PASS HELD, free-running only (RAII): a piece of work posted to the pass (Engine::postToPass) that waits until the hold
     // goes. A pass runs posted work at the head of its front part, so while the hold stands no pass runs and what this thread
@@ -227,10 +227,10 @@ struct AppWindowTestAccess {
     public:
         explicit PassHold(AppWindow& a) {
             if (passseam::mode() != passseam::Mode::Free) { return; }
-            passseam::attach(a.engine_);
+            passseam::attach(rawEngine(a.engine_));
             h_ = std::make_shared<State>();
             const std::shared_ptr<State> h = h_;
-            a.engine_.postToPass([h] {
+            rawEngine(a.engine_).postToPass([h] {
                 std::unique_lock<std::mutex> lk(h->m);
                 h->running = true;
                 h->cv.notify_all();
@@ -263,7 +263,7 @@ struct AppWindowTestAccess {
     // The plugins' mute stand-in, written under a PassHold (free-running a pass of the thread's own recomputes mutedBy_ from the
     // plugins' presets - none here - at its mute part, and would clear it before any look could publish it). Inline and stepped
     // the pass is not running or is parked: the same write.
-    static void mutedByHeld(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
+    static void mutedByHeld(AppWindow& a, std::vector<std::string> names) { rawEngine(a.engine_).mutedBy_ = std::move(names); }
     // A look made under a PassHold: inline and stepped exactly look(); free-running the pass is parked, so the publish is made
     // here, on this thread, and the window reads it.
     static void lookHeld(AppWindow& a) {
@@ -271,7 +271,7 @@ struct AppWindowTestAccess {
             look(a);
             return;
         }
-        a.engine_.publishReceiverState();
+        rawEngine(a.engine_).publishReceiverState();
         a.refreshUiState();
     }
     static void country(AppWindow& a, const std::string& code) { a.countrySetting_ = code; }

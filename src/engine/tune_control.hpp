@@ -19,7 +19,7 @@
 #include "core/i18n.hpp"
 #include "core/patch_devices.hpp"
 #include "core/plugin_abi.h"
-#include "core/plugin_ui.hpp"
+#include "core/plugin_ui_data.hpp"  // MutePreset (the data; the machinery, core/plugin_ui.hpp, is not the interface's - the fence)
 #include "core/user_presets.hpp"
 #include "core/utf8_text.hpp"  // utf8Floor: joinMuteNamesInto cuts on a character
 // normalisedSerial lives with the driver that needs it, and the prefer-native

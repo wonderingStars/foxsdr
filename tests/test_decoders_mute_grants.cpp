@@ -154,18 +154,18 @@ struct AppWindowTestAccess {
     // NEXT pass), and the key's drain (answers and, since group 8, the session's events).
     static void look(AppWindow& a) {
         releasePass();
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void frameOf(AppWindow& a) {
         look(a);
-        passseam::mute(a.engine_, [&] { a.engine_.pumpAudioMute(); });
+        passseam::mute(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpAudioMute(); });
         a.pumpTransmitKey();
     }
     static void frames(AppWindow& a, int n) {
@@ -191,13 +191,13 @@ struct AppWindowTestAccess {
         a.refreshUiState();
         releasePass();  // (what was queued is gone: a pass may run again)
     }
-    static void hold(AppWindow& a) { holdPass(a.engine_); }
+    static void hold(AppWindow& a) { holdPass(rawEngine(a.engine_)); }
     // A command applied at once (what a test needs before it looks), on the pass.
     static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(q.c, q.longText); });
+        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(q.c, q.longText); });
     }
     static void command(AppWindow& a, const FoxCommand& c) {
-        passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(c); });
+        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(c); });
     }
 
     // The window's state and what it keeps.
@@ -259,65 +259,65 @@ struct AppWindowTestAccess {
     // reference into a member the pass rewrites).
     template <class R, class F>
     static R onPass(AppWindow& a, F f) {
-        return passseam::read<R>(a.engine_, f);
+        return passseam::read<R>(rawEngine(a.engine_), f);
     }
     static std::vector<cascade::core::LoadedPlugin> host(AppWindow& a) {
-        return onPass<std::vector<cascade::core::LoadedPlugin>>(a, [&] { return a.engine_.pluginHost_.plugins(); });
+        return onPass<std::vector<cascade::core::LoadedPlugin>>(a, [&] { return rawEngine(a.engine_).pluginHost_.plugins(); });
     }
     static std::vector<cascade::core::MutePlugin> muteStates(AppWindow& a) {
-        return onPass<std::vector<cascade::core::MutePlugin>>(a, [&] { return a.engine_.muteStates_; });
+        return onPass<std::vector<cascade::core::MutePlugin>>(a, [&] { return rawEngine(a.engine_).muteStates_; });
     }
     static std::vector<cascade::gui::RunnableDecoder> runnable(AppWindow& a) {
-        return onPass<std::vector<cascade::gui::RunnableDecoder>>(a, [&] { return a.engine_.runnableDecoders(); });
+        return onPass<std::vector<cascade::gui::RunnableDecoder>>(a, [&] { return rawEngine(a.engine_).runnableDecoders(); });
     }
     static bool statusEmpty(AppWindow& a) {
-        return onPass<bool>(a, [&] { return a.engine_.pluginRunner_.status().empty(); });
+        return onPass<bool>(a, [&] { return rawEngine(a.engine_).pluginRunner_.status().empty(); });
     }
     static std::size_t activeCount(AppWindow& a) {
-        return onPass<std::size_t>(a, [&] { return a.engine_.pluginRunner_.activeCount(); });
+        return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).pluginRunner_.activeCount(); });
     }
-    static bool running(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.pipeline_.running(); }); }
+    static bool running(AppWindow& a) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).pipeline_.running(); }); }
     static cascade::gui::ModuleCensus census(AppWindow& a) {
         return onPass<cascade::gui::ModuleCensus>(a, [&] {
-            return cascade::gui::censusModules(a.engine_.pluginHost_.plugins(), cascade::gui::kDecoderCaps,
-                                               [&a](const std::string& key) { return a.engine_.pluginIsStopped(key); });
+            return cascade::gui::censusModules(rawEngine(a.engine_).pluginHost_.plugins(), cascade::gui::kDecoderCaps,
+                                               [&a](const std::string& key) { return rawEngine(a.engine_).pluginIsStopped(key); });
         });
     }
     static std::vector<cascade::core::HostMarker> engineMarkers(AppWindow& a) {
-        return onPass<std::vector<cascade::core::HostMarker>>(a, [&] { return a.engine_.pluginMarkers_; });
+        return onPass<std::vector<cascade::core::HostMarker>>(a, [&] { return rawEngine(a.engine_).pluginMarkers_; });
     }
     static bool stopped(AppWindow& a, const std::string& key) {
-        return onPass<bool>(a, [&] { return a.engine_.pluginIsStopped(key); });
+        return onPass<bool>(a, [&] { return rawEngine(a.engine_).pluginIsStopped(key); });
     }
     static bool pluginMutes(AppWindow& a, const cascade::core::LoadedPlugin& p) {
-        return onPass<bool>(a, [&] { return a.engine_.pluginMutes(p); });
+        return onPass<bool>(a, [&] { return rawEngine(a.engine_).pluginMutes(p); });
     }
     // (the plugin UI is the window's since the pump move's step P3, the API core the engine's; the bridge a plugin calls
     // through reaches the window's PluginUi. The grants and a plugin's request_tune are the API core's, under its lock:
     // any thread - a plugin calls request_tune from its own)
-    static bool tuneAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.tuneAllowed(key); }
-    static bool settingsAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.settingsAllowed(key); }
+    static bool tuneAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).tuneAllowed(key); }
+    static bool settingsAllowed(AppWindow& a, const std::string& key) { return rawPluginUi(*a.pluginFeed_).settingsAllowed(key); }
     static std::int32_t askToTune(AppWindow& a, const std::string& key) {
-        return a.pluginUi_.tuneRequestFromPlugin(key, 100.0e6);
+        return rawPluginUi(*a.pluginFeed_).tuneRequestFromPlugin(key, 100.0e6);
     }
-    static std::size_t engineLog(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.decoderLog_.size(); }); }
-    static bool enginePopupOpen(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.mutePopup_.open; }); }
-    static bool engineKept(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.muteKeptRunning_; }); }
-    static double tuned(AppWindow& a) { return onPass<double>(a, [&] { return a.engine_.currentAbsoluteHz(); }); }
+    static std::size_t engineLog(AppWindow& a) { return onPass<std::size_t>(a, [&] { return rawEngine(a.engine_).decoderLog_.size(); }); }
+    static bool enginePopupOpen(AppWindow& a) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).mutePopup_.open; }); }
+    static bool engineKept(AppWindow& a) { return onPass<bool>(a, [&] { return rawEngine(a.engine_).muteKeptRunning_; }); }
+    static double tuned(AppWindow& a) { return onPass<double>(a, [&] { return rawEngine(a.engine_).currentAbsoluteHz(); }); }
     // Stand-ins for the engine's: a decoder line (test.decoderLine) and plugins that mute the audio on a preset
     // (test.muteBy: "name@hz;name@hz", each a running, muting plugin with one preset at that frequency). Made on the pass.
     static void aLine(AppWindow& a, const std::string& plugin, const std::string& text) {
-        passseam::on(a.engine_, [&] {
-            a.engine_.decoderLog_.push_back({plugin, text});
-            while (a.engine_.decoderLog_.size() > Engine::kDecoderLogMax) { a.engine_.decoderLog_.pop_front(); }
-            ++a.engine_.decoderLinesTotal_;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).decoderLog_.push_back({plugin, text});
+            while (rawEngine(a.engine_).decoderLog_.size() > Engine::kDecoderLogMax) { rawEngine(a.engine_).decoderLog_.pop_front(); }
+            ++rawEngine(a.engine_).decoderLinesTotal_;
         });
     }
     static void muteBy(AppWindow& a, const std::string& spec) {
-        passseam::on(a.engine_, [&] { muteByOnPass(a, spec); });
+        passseam::on(rawEngine(a.engine_), [&] { muteByOnPass(a, spec); });
     }
     static void muteByOnPass(AppWindow& a, const std::string& spec) {
-        a.engine_.muteStates_.clear();
+        rawEngine(a.engine_).muteStates_.clear();
         std::size_t at = 0;
         while (at < spec.size()) {
             const std::size_t semi = spec.find(';', at);
@@ -333,7 +333,7 @@ struct AppWindowTestAccess {
                 ps.frequencyHz = std::atof(one.c_str() + amp + 1);
                 ps.label = m.name;
                 m.presets.push_back(std::move(ps));
-                a.engine_.muteStates_.push_back(std::move(m));
+                rawEngine(a.engine_).muteStates_.push_back(std::move(m));
             }
             if (semi == std::string::npos) { break; }
             at = semi + 1;
@@ -343,7 +343,7 @@ struct AppWindowTestAccess {
     static void aListChange(AppWindow& a) {
         static unsigned n = 0;
         const std::string note = "note " + std::to_string(++n);
-        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = note; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).presetNote_ = note; });
     }
 };
 

@@ -86,19 +86,19 @@ struct AppWindowTestAccess {
 
     // ---- one frame's engine part, in drawUi's order ----------------------------------------------------------------------
     static void look(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(a.engine_, [&] {
-            a.engine_.pumpWorkers();
-            a.engine_.pumpAudio();
+        passseam::workers(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpWorkers();
+            rawEngine(a.engine_).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -119,7 +119,7 @@ struct AppWindowTestAccess {
     static std::vector<AppWindow::MapPage>& pages(AppWindow& a) { return a.mapPages_; }
     static const std::vector<cascade::core::HostTrack>& tracks(AppWindow& a) { return a.hostTracks(); }
     static const std::vector<cascade::core::HostPath>& paths(AppWindow& a) { return a.hostPaths(); }
-    static const std::vector<std::string>& trackNames(AppWindow& a) { return a.pluginUi_.trackPluginNames(); }
+    static const std::vector<std::string>& trackNames(AppWindow& a) { return rawPluginUi(*a.pluginFeed_).trackPluginNames(); }
     static const std::vector<cascade::core::HostTrack>& pageTracks(AppWindow& a) { return a.pageTracks_; }
     static const std::vector<cascade::core::HostPath>& pagePaths(AppWindow& a) { return a.pagePaths_; }
     static bool altitudeNear(AppWindow& a, const std::string& plugin, const std::string& id, double lat, double lon,
@@ -139,11 +139,11 @@ struct AppWindowTestAccess {
     }
     // The engine's own fields, for what the engine says and the window must agree with: read (and written) on the pass's
     // thread with the pass out of the way (passseam::read / on), never from this thread beside a free-running pass.
-    static bool engineHasPosition(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.rxSet_; }); }
-    static double engineLat(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.rxLat_; }); }
-    static double engineLon(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.rxLon_; }); }
+    static bool engineHasPosition(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).rxSet_; }); }
+    static double engineLat(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).rxLat_; }); }
+    static double engineLon(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).rxLon_; }); }
     static void engineSetPosition(AppWindow& a, double lat, double lon) {
-        passseam::on(a.engine_, [&] { (void)a.engine_.applyReceiverPosition(lat, lon); });
+        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyReceiverPosition(lat, lon); });
     }
 };
 

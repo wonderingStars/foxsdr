@@ -209,13 +209,13 @@ struct AppWindowTestAccess {
     }
 
     static void setUnmapHook(void (*hook)()) { Engine::testHooks_.pluginsAboutToUnmap = hook; }
-    static Engine& engine(AppWindow& a) { return a.engine_; }
+    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
     static void submit(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { a.uiSubmit(q); }
 
     // ---- the window's plugin UI: the one thing the GUI thread does with it --------------------------------------------------
     static void poll(AppWindow& a) { a.hostPollPlugins(); }                     // head-of-poll apply, then the poll
     static void applyOnly(AppWindow& a) { a.applyPluginDirective(); }
-    static cascade::core::PluginUi& ui(AppWindow& a) { return a.pluginUi_; }
+    static cascade::core::PluginUi& ui(AppWindow& a) { return rawPluginUi(*a.pluginFeed_); }
     static const std::vector<cascade::core::HostTrack>& tracks(AppWindow& a) { return a.hostTracks(); }
     static BasemapCache& basemap(AppWindow& a) { return a.basemap_; }
     static TrackInfoCache& trackInfo(AppWindow& a) { return a.trackInfo_; }
@@ -227,14 +227,14 @@ struct AppWindowTestAccess {
         o.period = period;
         o.watchdogReportDir = reportDir;
         o.watchdogThresholdMs = thresholdMs;
-        a.engine_.startControlThread(o);
+        rawEngine(a.engine_).startControlThread(o);
     }
-    static void stopControl(AppWindow& a) { a.engine_.stopControlThread(); }
-    static bool controlRunning(AppWindow& a) { return a.engine_.controlThreadRunning(); }
-    static void park(AppWindow& a, bool on) { a.engine_.controlParkForTest_.store(on); }
-    static std::uint64_t passes(AppWindow& a) { return a.engine_.controlPasses_.load(); }
-    static unsigned watchdogReports(AppWindow& a) { return a.engine_.controlWatchdog_.reportsWritten(); }
-    static unsigned watchdogPauses(AppWindow& a) { return a.engine_.controlWatchdog_.pausesTaken(); }
+    static void stopControl(AppWindow& a) { rawEngine(a.engine_).stopControlThread(); }
+    static bool controlRunning(AppWindow& a) { return rawEngine(a.engine_).controlThreadRunning(); }
+    static void park(AppWindow& a, bool on) { rawEngine(a.engine_).controlParkForTest_.store(on); }
+    static std::uint64_t passes(AppWindow& a) { return rawEngine(a.engine_).controlPasses_.load(); }
+    static unsigned watchdogReports(AppWindow& a) { return rawEngine(a.engine_).controlWatchdog_.reportsWritten(); }
+    static unsigned watchdogPauses(AppWindow& a) { return rawEngine(a.engine_).controlWatchdog_.pausesTaken(); }
 
     // ---- the window's frame, engine-facing half, in drawUi's order (the pump move's step P5; the order is held as text by the guard) ---------
     // With the pass free-running the two stepPass calls do nothing; with it stepped they run the parts here. `key`: the page's PTT is held
@@ -244,45 +244,45 @@ struct AppWindowTestAccess {
         if (a.uiSession_ != nullptr) { a.engineApi_->heartbeat(a.uiSession_); }
         a.sendTrackInfoText();
         a.handFrontEndFacts();
-        a.engine_.stepPass(cascade::engine::PassPart::Front);
+        rawEngine(a.engine_).stepPass(cascade::engine::PassPart::Front);
         a.pollUiAnswers();
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
         a.actOnUiAnswers();
-        a.engine_.stepPass(cascade::engine::PassPart::Mute);
+        rawEngine(a.engine_).stepPass(cascade::engine::PassPart::Mute);
         if (key) { a.uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_TX_PTT, 1)); }
         a.hostPollPlugins();
-        a.engine_.stepPass(cascade::engine::PassPart::Back);
+        rawEngine(a.engine_).stepPass(cascade::engine::PassPart::Back);
     }
     static void installSink(AppWindow& a, std::unique_ptr<cascade::source::IqSink> sink) {
-        a.engine_.transmitter_.setSink(std::move(sink));
-        a.engine_.transmitter_.setInput(cascade::core::TxInput::Tone);
+        rawEngine(a.engine_).transmitter_.setSink(std::move(sink));
+        rawEngine(a.engine_).transmitter_.setInput(cascade::core::TxInput::Tone);
     }
-    static double worstGapMs(AppWindow& a) { return a.engine_.controlWatchdog_.worstGapMs(); }
-    static Engine::PluginUiWaitStats waitStats(AppWindow& a) { return a.engine_.pluginUiWaitStats(); }
-    static void stall(AppWindow& a, int ms) { a.engine_.controlStallForTestMs_.store(ms); }
+    static double worstGapMs(AppWindow& a) { return rawEngine(a.engine_).controlWatchdog_.worstGapMs(); }
+    static Engine::PluginUiWaitStats waitStats(AppWindow& a) { return rawEngine(a.engine_).pluginUiWaitStats(); }
+    static void stall(AppWindow& a, int ms) { rawEngine(a.engine_).controlStallForTestMs_.store(ms); }
 
     // ---- the link and the engine half of the plugin system ---------------------------------------------------------------------
-    static cascade::core::PluginDirectiveLink& link(AppWindow& a) { return a.engine_.pluginLink_; }
-    static cascade::core::PluginApiCore& core(AppWindow& a) { return *a.engine_.pluginApi_; }
-    static bool unloadPending(AppWindow& a) { return a.engine_.pluginUnloadOp_ != Engine::PluginUnloadOp::None; }
-    static std::size_t pluginsLoaded(AppWindow& a) { return a.engine_.pluginHost_.loadedCount(); }
+    static cascade::core::PluginDirectiveLink& link(AppWindow& a) { return rawEngine(a.engine_).pluginLink_; }
+    static cascade::core::PluginApiCore& core(AppWindow& a) { return *rawEngine(a.engine_).pluginApi_; }
+    static bool unloadPending(AppWindow& a) { return rawEngine(a.engine_).pluginUnloadOp_ != Engine::PluginUnloadOp::None; }
+    static std::size_t pluginsLoaded(AppWindow& a) { return rawEngine(a.engine_).pluginHost_.loadedCount(); }
     // (Only while the pass is not running: the pass owns the list.)
-    static const std::vector<cascade::core::LoadedPlugin>& loaded(AppWindow& a) { return a.engine_.pluginHost_.plugins(); }
+    static const std::vector<cascade::core::LoadedPlugin>& loaded(AppWindow& a) { return rawEngine(a.engine_).pluginHost_.plugins(); }
 
     // ---- what the receiver is doing, from the one snapshot ------------------------------------------------------------------
     static double centre(AppWindow& a) {
         cascade::core::PublishedState ps;
         for (int i = 0; i < 50; ++i) {
-            if (a.engine_.receiverSnapshot_->read(ps)) { return ps.rx.centreHz; }
+            if (rawEngine(a.engine_).receiverSnapshot_->read(ps)) { return ps.rx.centreHz; }
         }
         return -1.0;
     }
     // The SOURCE'S own centre - what the receiver is actually tuned to - read while the pass is parked (the pass owns the source).
-    static double sourceCentre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
+    static double sourceCentre(AppWindow& a) { return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz(); }
     static std::uint64_t statePasses(AppWindow& a) {
         cascade::core::PublishedState ps;
-        return a.engine_.receiverSnapshot_->read(ps) ? ps.rx.seq : 0u;
+        return rawEngine(a.engine_).receiverSnapshot_->read(ps) ? ps.rx.seq : 0u;
     }
 };
 

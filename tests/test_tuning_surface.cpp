@@ -117,7 +117,7 @@ struct AppWindowTestAccess {
     // The window looks, as a frame does: the engine publishes, the window reads (the state,
     // then the spectrum).
     static void look(AppWindow& a) {
-        passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
         a.refreshUiState();
     }
     static void refresh(AppWindow& a) { a.refreshUiState(); }
@@ -125,21 +125,21 @@ struct AppWindowTestAccess {
     // status copy, the window's read of the state, the key when one is down (drawUi
     // dispatches the keyboard right after the read), the answers drained.
     static void frame(AppWindow& a, const KeyAction* key = nullptr) {
-        passseam::custom(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.drainLocalCommands();
-            (void)a.engine_.pumpPublish();
+        passseam::custom(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).drainLocalCommands();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
         if (key != nullptr) { a.applyKeyAction(*key); }
         a.pumpTransmitKey();
     }
     // The pass as far as a submit needs it, and what the session answered, in order.
     static std::vector<Answer> answers(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
         std::vector<Answer> out;
         for (;;) {
@@ -182,7 +182,7 @@ struct AppWindowTestAccess {
         return a.engineApi_->read_spectrum(a.uiSession_, since, info, out, cap);
     }
     static void publish(AppWindow& a, const std::vector<float>& bins, double centreHz, double spanHz) {
-        passseam::on(a.engine_, [&] { a.engine_.api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz); });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz); });
     }
     static const AppWindow::TuneLocal& local(AppWindow& a) { return a.tuneLocal_; }
     static void clock(AppWindow& a, double (*f)()) { a.uiClockS_ = f != nullptr ? f : &AppWindow::steadyNowS; }
@@ -206,7 +206,7 @@ struct AppWindowTestAccess {
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
         const std::string note = "note " + std::to_string(++n);
-        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = note; });
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).presetNote_ = note; });
     }
     // The allocations one get_setting of a fact makes inside the table.
     static long factAllocations(AppWindow& a, const char* key) {
@@ -223,9 +223,9 @@ struct AppWindowTestAccess {
         double tuned, sourceRate, bandwidth, channelRate, centre, offset, inputRate;
         int mode;
     };
-    static Old oldReads(AppWindow& a) { return passseam::read<Old>(a.engine_, [&] { return oldReadsOnPass(a); }); }
+    static Old oldReads(AppWindow& a) { return passseam::read<Old>(rawEngine(a.engine_), [&] { return oldReadsOnPass(a); }); }
     static Old oldReadsOnPass(AppWindow& a) {
-        Engine& e = a.engine_;
+        Engine& e = rawEngine(a.engine_);
         Old o{};
         o.running = e.pipeline_.running();
         o.faulted = e.pipeline_.faulted() || !e.testFault_.empty();
@@ -247,20 +247,20 @@ struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     // Every engine field these read or write is the pass's: each goes through passseam::on/read (on the pass's own thread, with the
     // pass out of the way, when it free-runs; right here otherwise).
-    static void setVolume(AppWindow& a, float v) { passseam::on(a.engine_, [&] { a.engine_.volume_ = v; }); }
-    static void setSquelch(AppWindow& a, float v) { passseam::on(a.engine_, [&] { a.engine_.squelchDb_ = v; }); }
-    static void setFault(AppWindow& a, const std::string& why) { passseam::on(a.engine_, [&] { a.engine_.testFault_ = why; }); }
+    static void setVolume(AppWindow& a, float v) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).volume_ = v; }); }
+    static void setSquelch(AppWindow& a, float v) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).squelchDb_ = v; }); }
+    static void setFault(AppWindow& a, const std::string& why) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).testFault_ = why; }); }
     static bool setChainRate(AppWindow& a, double hz) {
-        return passseam::read<bool>(a.engine_, [&] { return a.engine_.pipeline_.setInputRateHz(hz); });
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.setInputRateHz(hz); });
     }
     static double engineOffset(AppWindow& a) {
-        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.vfoOffsetHz(); });
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.vfoOffsetHz(); });
     }
-    static double engineBandwidth(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.vfoBandwidthHz_; }); }
-    static void command(AppWindow& a, const FoxCommand& c) { passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(c); }); }
-    static void setSourceError(AppWindow& a, const std::string& s) { passseam::on(a.engine_, [&] { a.engine_.sourceError_ = s; }); }
-    static void pumpMute(AppWindow& a) { passseam::mute(a.engine_, [&] { a.engine_.pumpAudioMute(); }); }
-    static void muteBy(AppWindow& a, const std::string& name, double hz) { passseam::on(a.engine_, [&] { muteByOnPass(a, name, hz); }); }
+    static double engineBandwidth(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).vfoBandwidthHz_; }); }
+    static void command(AppWindow& a, const FoxCommand& c) { passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyCommand(c); }); }
+    static void setSourceError(AppWindow& a, const std::string& s) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).sourceError_ = s; }); }
+    static void pumpMute(AppWindow& a) { passseam::mute(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpAudioMute(); }); }
+    static void muteBy(AppWindow& a, const std::string& name, double hz) { passseam::on(rawEngine(a.engine_), [&] { muteByOnPass(a, name, hz); }); }
     static void muteByOnPass(AppWindow& a, const std::string& name, double hz) {
         cascade::core::MutePlugin m;
         m.name = name;
@@ -271,19 +271,19 @@ struct AppWindowTestAccess {
         ps.frequencyHz = hz;
         ps.label = name;
         m.presets.push_back(ps);
-        a.engine_.muteStates_.clear();
-        a.engine_.muteStates_.push_back(std::move(m));
+        rawEngine(a.engine_).muteStates_.clear();
+        rawEngine(a.engine_).muteStates_.push_back(std::move(m));
     }
-    static void noMuteBy(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.muteStates_.clear(); }); }
+    static void noMuteBy(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).muteStates_.clear(); }); }
     // The bookmark store, which the pass reads (the save, the lists): a change made in it, a COPY of its list, and its search.
     static void storeDo(AppWindow& a, const std::function<void(cascade::core::FreqManager&)>& change) {
-        passseam::on(a.engine_, [&] { change(a.engine_.freqMgr_); });
+        passseam::on(rawEngine(a.engine_), [&] { change(rawEngine(a.engine_).freqMgr_); });
     }
     static std::vector<cascade::core::Bookmark> storeList(AppWindow& a) {
-        return passseam::read<std::vector<cascade::core::Bookmark>>(a.engine_, [&] { return a.engine_.freqMgr_.list(); });
+        return passseam::read<std::vector<cascade::core::Bookmark>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMgr_.list(); });
     }
     static std::pair<std::size_t, std::size_t> storeRange(AppWindow& a, double lo, double hi) {
-        return passseam::read<std::pair<std::size_t, std::size_t>>(a.engine_, [&] { return a.engine_.freqMgr_.range(lo, hi); });
+        return passseam::read<std::pair<std::size_t, std::size_t>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMgr_.range(lo, hi); });
     }
 
     // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is let go.
@@ -305,9 +305,9 @@ struct AppWindowTestAccess {
     }
     static void holdPass(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
-        passseam::attach(a.engine_);
+        passseam::attach(rawEngine(a.engine_));
         auto h = std::make_shared<Hold>();
-        a.engine_.postToPass([h] {
+        rawEngine(a.engine_).postToPass([h] {
             std::unique_lock<std::mutex> lk(h->m);
             h->running = true;
             h->cv.notify_all();

@@ -93,11 +93,8 @@ namespace cascade::core {
 
 class GpsReader {
 public:
-    // How long to wait for a fix before giving up. A cold receiver indoors
-    // needs 30-60 s to see enough satellites; a warm one outdoors answers in
-    // a few seconds. 60 s is generous for the first and costs nothing for
-    // the second, and the user can press Stop at any moment.
-    static constexpr double kDefaultTimeoutS = 60.0;
+    // How long to wait for a fix before giving up (the rationale is with the constant, core/serial_port.hpp).
+    static constexpr double kDefaultTimeoutS = kDefaultGpsTimeoutS;
 
     enum class State {
         Idle,       // never started, or stop() completed without a fix

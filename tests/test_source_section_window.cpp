@@ -252,20 +252,20 @@ struct AppWindowTestAccess {
     // ---- one frame's engine part, in drawUi's order ----------------------------------------------------------------
     static void look(AppWindow& a) {
         releasePass(a);  // (a pass asked for ends a hold: see THE PASS HELD)
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
         releasePass(a);
-        passseam::workers(a.engine_, [&] {
-            a.engine_.pumpWorkers();
-            a.engine_.pumpAudio();
+        passseam::workers(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpWorkers();
+            rawEngine(a.engine_).pumpAudio();
         });
     }
     static std::vector<Answer> answers(AppWindow& a) {
@@ -289,7 +289,7 @@ struct AppWindowTestAccess {
         a.refreshUiState();
     }
     static FoxCommandResult command(AppWindow& a, const cmd::QueuedCommand& q) {
-        return engineRead<FoxCommandResult>(a, [&] { return a.engine_.applyCommand(q.c, q.longText); });
+        return engineRead<FoxCommandResult>(a, [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
     }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
 
@@ -326,7 +326,7 @@ struct AppWindowTestAccess {
     template <class R, class F>
     static R engineRead(AppWindow& a, F f) {
         if (held() != nullptr) { return f(); }
-        return passseam::read<R>(a.engine_, std::function<R()>(f));
+        return passseam::read<R>(rawEngine(a.engine_), std::function<R()>(f));
     }
     template <class F>
     static void engineDo(AppWindow& a, F f) {
@@ -334,25 +334,25 @@ struct AppWindowTestAccess {
             f();
             return;
         }
-        passseam::on(a.engine_, std::function<void()>(f));
+        passseam::on(rawEngine(a.engine_), std::function<void()>(f));
     }
-    static int sourceSel(AppWindow& a) { return engineRead<int>(a, [&] { return a.engine_.sourceSel_; }); }
-    static bool patchRunning(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.patchRunning_; }); }
-    static void setPatchRunning(AppWindow& a, bool on) { engineDo(a, [&] { a.engine_.patchRunning_ = on; }); }
-    static void setTestFault(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.testFault_ = s; }); }
-    static SoundCardSettings form(AppWindow& a) { return engineRead<SoundCardSettings>(a, [&] { return a.engine_.soundCard_; }); }
-    static SoundCardSettings liveCard(AppWindow& a) { return engineRead<SoundCardSettings>(a, [&] { return a.engine_.soundCardLive_; }); }
-    static void setCardMissing(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.soundCardMissing_ = s; }); }
-    static void setKeepKind(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.restoreKeep_.kind = s; }); }
-    static void setKeepLabel(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.restoreKeepLabel_ = s; }); }
-    static bool cardOpening(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.soundCardOpenPending_; }); }
-    static std::string sourceError(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.sourceError_; }); }
-    static std::string sdrAdvice(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.sdrPlayAdvice_; }); }
-    static std::string tuneNote(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.tuneMismatchNote_; }); }
-    static std::string sourceKind(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.sourceKind_; }); }
-    static bool deviceOpen(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.device_ != nullptr; }); }
-    static bool agcOn(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.deviceAgc_; }); }
-    static void setAntennas(AppWindow& a, const std::vector<std::string>& v) { engineDo(a, [&] { a.engine_.deviceAntennas_ = v; }); }
+    static int sourceSel(AppWindow& a) { return engineRead<int>(a, [&] { return rawEngine(a.engine_).sourceSel_; }); }
+    static bool patchRunning(AppWindow& a) { return engineRead<bool>(a, [&] { return rawEngine(a.engine_).patchRunning_; }); }
+    static void setPatchRunning(AppWindow& a, bool on) { engineDo(a, [&] { rawEngine(a.engine_).patchRunning_ = on; }); }
+    static void setTestFault(AppWindow& a, const std::string& s) { engineDo(a, [&] { rawEngine(a.engine_).testFault_ = s; }); }
+    static SoundCardSettings form(AppWindow& a) { return engineRead<SoundCardSettings>(a, [&] { return rawEngine(a.engine_).soundCard_; }); }
+    static SoundCardSettings liveCard(AppWindow& a) { return engineRead<SoundCardSettings>(a, [&] { return rawEngine(a.engine_).soundCardLive_; }); }
+    static void setCardMissing(AppWindow& a, const std::string& s) { engineDo(a, [&] { rawEngine(a.engine_).soundCardMissing_ = s; }); }
+    static void setKeepKind(AppWindow& a, const std::string& s) { engineDo(a, [&] { rawEngine(a.engine_).restoreKeep_.kind = s; }); }
+    static void setKeepLabel(AppWindow& a, const std::string& s) { engineDo(a, [&] { rawEngine(a.engine_).restoreKeepLabel_ = s; }); }
+    static bool cardOpening(AppWindow& a) { return engineRead<bool>(a, [&] { return rawEngine(a.engine_).soundCardOpenPending_; }); }
+    static std::string sourceError(AppWindow& a) { return engineRead<std::string>(a, [&] { return rawEngine(a.engine_).sourceError_; }); }
+    static std::string sdrAdvice(AppWindow& a) { return engineRead<std::string>(a, [&] { return rawEngine(a.engine_).sdrPlayAdvice_; }); }
+    static std::string tuneNote(AppWindow& a) { return engineRead<std::string>(a, [&] { return rawEngine(a.engine_).tuneMismatchNote_; }); }
+    static std::string sourceKind(AppWindow& a) { return engineRead<std::string>(a, [&] { return rawEngine(a.engine_).sourceKind_; }); }
+    static bool deviceOpen(AppWindow& a) { return engineRead<bool>(a, [&] { return rawEngine(a.engine_).device_ != nullptr; }); }
+    static bool agcOn(AppWindow& a) { return engineRead<bool>(a, [&] { return rawEngine(a.engine_).deviceAgc_; }); }
+    static void setAntennas(AppWindow& a, const std::vector<std::string>& v) { engineDo(a, [&] { rawEngine(a.engine_).deviceAntennas_ = v; }); }
     // What a driver with these things reports (the members the table's lists are built from), written in ONE go as an open of
     // such a radio would have set them - so no pass publishes a half-written panel (three gain names beside one range).
     struct RadioPanel {
@@ -368,7 +368,7 @@ struct AppWindowTestAccess {
     };
     static void setRadioPanel(AppWindow& a, const RadioPanel& p) {
         engineDo(a, [&] {
-            Engine& e = a.engine_;
+            Engine& e = rawEngine(a.engine_);
             e.deviceAntennas_ = p.antennas;
             e.deviceAntenna_ = p.antenna;
             e.deviceAgcSupported_ = p.agcSupported;
@@ -386,18 +386,18 @@ struct AppWindowTestAccess {
         });
     }
     static double engineRateNow(AppWindow& a) {
-        return engineRead<double>(a, [&] { return a.engine_.pipeline_.activeSource().sampleRateHz(); });
+        return engineRead<double>(a, [&] { return rawEngine(a.engine_).pipeline_.activeSource().sampleRateHz(); });
     }
     static void setConverter(AppWindow& a, const std::string& key, const cascade::core::ConverterSetting& s) {
-        engineDo(a, [&] { a.engine_.converters_[key] = s; });
+        engineDo(a, [&] { rawEngine(a.engine_).converters_[key] = s; });
     }
-    static void eraseConverter(AppWindow& a, const std::string& key) { engineDo(a, [&] { a.engine_.converters_.erase(key); }); }
-    static int soapyRowBase(AppWindow& a) { return engineRead<int>(a, [&] { return a.engine_.soapyRowBase(); }); }
-    static std::string idForRow(AppWindow& a, int row) { return engineRead<std::string>(a, [&] { return a.engine_.sourceIdForRow(row); }); }
-    static std::string plutoBuffer(AppWindow& a) { return engineRead<std::string>(a, [&] { return std::string(a.engine_.plutoUri_); }); }
-    static bool gated(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.soapyScanGated(); }); }
-    static void setAbsent(AppWindow& a, const std::vector<std::string>& v) { engineDo(a, [&] { a.engine_.soapyAbsentDrivers_ = v; }); }
-    static bool scanned(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.soapyScanned_; }); }
+    static void eraseConverter(AppWindow& a, const std::string& key) { engineDo(a, [&] { rawEngine(a.engine_).converters_.erase(key); }); }
+    static int soapyRowBase(AppWindow& a) { return engineRead<int>(a, [&] { return rawEngine(a.engine_).soapyRowBase(); }); }
+    static std::string idForRow(AppWindow& a, int row) { return engineRead<std::string>(a, [&] { return rawEngine(a.engine_).sourceIdForRow(row); }); }
+    static std::string plutoBuffer(AppWindow& a) { return engineRead<std::string>(a, [&] { return std::string(rawEngine(a.engine_).plutoUri_); }); }
+    static bool gated(AppWindow& a) { return engineRead<bool>(a, [&] { return rawEngine(a.engine_).soapyScanGated(); }); }
+    static void setAbsent(AppWindow& a, const std::vector<std::string>& v) { engineDo(a, [&] { rawEngine(a.engine_).soapyAbsentDrivers_ = v; }); }
+    static bool scanned(AppWindow& a) { return engineRead<bool>(a, [&] { return rawEngine(a.engine_).soapyScanned_; }); }
     // The test's own world (the hooks' data) written where the pass and the workers it starts are ordered after it.
     template <class F>
     static void onPass(AppWindow& a, F f) { engineDo(a, f); }
@@ -423,9 +423,9 @@ struct AppWindowTestAccess {
     }
     static void holdPass(AppWindow& a) {
         if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
-        passseam::attach(a.engine_);
+        passseam::attach(rawEngine(a.engine_));
         auto h = std::make_shared<Hold>();
-        a.engine_.postToPass([h] {
+        rawEngine(a.engine_).postToPass([h] {
             std::unique_lock<std::mutex> lk(h->m);
             h->running = true;
             h->cv.notify_all();

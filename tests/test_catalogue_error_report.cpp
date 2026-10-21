@@ -80,7 +80,7 @@ struct AppWindowTestAccess {
         e.catalogPending_ = true;
     }
     static void poll(Engine& e) { e.pollPluginAsync(); }
-    static Engine& engine(AppWindow& a) { return a.engine_; }
+    static Engine& engine(AppWindow& a) { return rawEngine(a.engine_); }
     static void armPluginTest(AppWindow& a) { a.pluginTestHook_ = "http://127.0.0.1:9/catalogue.json"; }
     // What the window hands the engine once a frame (handFrontEndFacts): here, the report switch and the frame it names.
     static void handFacts(AppWindow& a, int frame) {

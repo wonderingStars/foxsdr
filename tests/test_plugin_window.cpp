@@ -86,19 +86,19 @@ struct AppWindowTestAccess {
 
     // ---- one frame's engine part, in drawUi's order ----------------------------------------------------------------------
     static void look(AppWindow& a) {
-        passseam::pass(a.engine_, [&] {
-            a.engine_.pumpFrameBegin();
-            a.engine_.pumpInputs();
-            a.engine_.pumpPlugins();
-            (void)a.engine_.pumpPublish();
+        passseam::pass(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpFrameBegin();
+            rawEngine(a.engine_).pumpInputs();
+            rawEngine(a.engine_).pumpPlugins();
+            (void)rawEngine(a.engine_).pumpPublish();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
-        passseam::workers(a.engine_, [&] {
-            a.engine_.pumpWorkers();
-            a.engine_.pumpAudio();
+        passseam::workers(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).pumpWorkers();
+            rawEngine(a.engine_).pumpAudio();
         });
     }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.uiSubmit(q); }
@@ -144,8 +144,8 @@ struct AppWindowTestAccess {
     // The engine's plugin host's records: a COPY made on the pass's thread (the pass owns the host; a reference into it
     // would be read from this thread beside a free-running pass).
     static std::vector<cascade::core::LoadedPlugin> loaded(AppWindow& a) {
-        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(a.engine_,
-                                                                          [&] { return a.engine_.pluginHost_.plugins(); });
+        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(rawEngine(a.engine_),
+                                                                          [&] { return rawEngine(a.engine_).pluginHost_.plugins(); });
     }
     static const AppWindow::PluginListCache& pluginRows(AppWindow& a) { return a.pluginLists(); }
     static std::string fact(AppWindow& a, const char* key) {
@@ -157,13 +157,13 @@ struct AppWindowTestAccess {
     // (passseam::on); the runner is fed and counted directly: PluginRunner guards every call with its own mutex (the product
     // feeds it from the audio thread beside the pass), and pluginRunner_ is a member the engine never replaces.
     static void engineSetPosition(AppWindow& a, double lat, double lon) {
-        passseam::on(a.engine_, [&] { (void)a.engine_.applyReceiverPosition(lat, lon); });
+        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).applyReceiverPosition(lat, lon); });
     }
     static void feedAudio(AppWindow& a, std::size_t frames) {
         std::vector<float> mono(frames, 0.0f);
-        a.engine_.pluginRunner_.processAudio(mono.data(), frames);
+        rawEngine(a.engine_).pluginRunner_.processAudio(mono.data(), frames);
     }
-    static std::size_t activeDecoders(AppWindow& a) { return a.engine_.pluginRunner_.activeCount(); }
+    static std::size_t activeDecoders(AppWindow& a) { return rawEngine(a.engine_).pluginRunner_.activeCount(); }
 };
 
 }  // namespace cascade::gui

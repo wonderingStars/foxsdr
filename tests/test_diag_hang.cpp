@@ -781,7 +781,7 @@ int main() {
         const std::string text = readFile(src);
         CHECK(!text.empty());
 
-        const std::size_t marker = text.find("telemetryCleanExit_ = true;");
+        const std::size_t marker = text.find("engine_.markCleanExit();");
         // The join is the ENGINE's (Engine::shutdownStop, engine/stage3b-pre
         // OPEN 9): run() calls it here, and the engine's phase holds the
         // pipeline_.stop() itself - both halves are checked.

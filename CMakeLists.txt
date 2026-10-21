@@ -310,6 +310,9 @@ file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
 # shares with the window. Part of cascade_engine, under the same line as the
 # rest of it - no gui/ header, imgui, GLFW or OpenGL (checked below).
 file(GLOB CASCADE_ENGINE_SRC CONFIGURE_DEPENDS src/engine/*.cpp)
+# ...except engine_shell.cpp: the fence's one door (engine/engine_shell.hpp) is the SHELL target's (below), which links the engine, so
+# the headless engine is built and linked without it.
+list(FILTER CASCADE_ENGINE_SRC EXCLUDE REGEX "engine_shell\\.cpp$")
 # Native radio drivers talk to the hardware through our own USB transport
 # (src/usb) - WinUSB on Windows, usbfs directly on Linux - not through
 # SoapySDR modules or libusb: see src/usb/usb_device.hpp.
@@ -390,9 +393,26 @@ if(NOT WIN32)
     target_link_libraries(cascade_engine PUBLIC PkgConfig::LIBUNWIND)
 endif()
 
-# --- the window --------------------------------------------------------------
+# --- the shell: the fence's one door ----------------------------------------
 
-add_library(cascade_gui STATIC ${CASCADE_GUI})
+# engine/engine_shell.hpp is the whole of what the interface may ask of the engine that is not the engine API's table; its
+# implementation is the one translation unit that sees both that header and the Engine. It links the engine. The headless engine
+# (cascade_engine, and cascade_engine_link_check over it) does not link it: it is front-end glue, and stage 5 deletes the web/CAT
+# part of it and stage 7 the rest (docs/engine-stage4.md, the section that closes the stage).
+add_library(cascade_shell STATIC src/engine/engine_shell.cpp)
+target_link_libraries(cascade_shell PUBLIC cascade_engine)
+
+# --- the interface -----------------------------------------------------------
+
+# THE FENCE (engine extraction stage 4, step 5). The window's translation units are their own target, and the compiler is told what
+# that target may include: cmake/interface_fence.cmake generates a stub for every engine header the interface must not name, and
+# cascade_apply_interface_fence puts them first on its include path. engine/engine.hpp, engine_host.hpp, fox_engine_api.hpp, the
+# pipeline ... are not reachable from a src/gui translation unit: naming one is a compile error that says why. What the interface
+# asks of the engine it asks through engine/engine_shell.hpp (implemented by cascade_shell) and through the engine API's table.
+include(cmake/interface_fence.cmake)
+
+add_library(cascade_interface STATIC ${CASCADE_GUI})
+cascade_apply_interface_fence(cascade_interface)
 # The window's own include root first, then imgui, GLFW and OpenGL BEFORE the
 # engine: the engine carries SoapySDR, whose include root is vcpkg's shared
 # installed-include directory, and that directory holds other packages'
@@ -401,12 +421,18 @@ add_library(cascade_gui STATIC ${CASCADE_GUI})
 # src, the generated commit header, the vendored imgui/GLFW roots, then the
 # engine's vendored roots, then vcpkg - so no window translation unit can pick
 # up a different imgui.h than the imgui library it links.
-target_include_directories(cascade_gui PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
-target_link_libraries(cascade_gui PUBLIC
+target_include_directories(cascade_interface PUBLIC src "${CASCADE_COMMIT_HEADER_DIR}")
+target_link_libraries(cascade_interface PUBLIC
     imgui
     glfw
     OpenGL::GL
-    cascade_engine)
+    cascade_shell)
+
+# cascade_gui is the window AS THE PRODUCT AND THE TESTS LINK IT: the interface, the shell glue and (through the shell) the engine.
+# A name kept so that "links cascade_gui" still means "reaches the window", for tests/CMakeLists.txt's rule and for the engine-side
+# check below, which refuses it to the engine.
+add_library(cascade_gui INTERFACE)
+target_link_libraries(cascade_gui INTERFACE cascade_interface cascade_shell cascade_engine)
 
 # --- the line between them, enforced -----------------------------------------
 
@@ -439,7 +465,7 @@ endfunction()
 set_property(GLOBAL PROPERTY _CASCADE_ENGINE_CHECK_DEFERS 0)
 function(_cascade_window_word word out)
     string(TOLOWER "${word}" _lw)
-    if(_lw MATCHES "imgui|glfw|opengl|^gl$|^cascade_gui$")
+    if(_lw MATCHES "imgui|glfw|opengl|^gl$|^cascade_gui$|^cascade_interface$|^cascade_shell$")
         set(${out} TRUE PARENT_SCOPE)
     else()
         set(${out} FALSE PARENT_SCOPE)
@@ -457,7 +483,8 @@ function(_cascade_check_engine_links)
         cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _cascade_check_engine_links)
         return()
     endif()
-    set(_todo cascade_engine)
+    # The engine, and the headless programs built on it: none of them reaches the interface or the shell either.
+    set(_todo cascade_engine cascade_engine_link_check foxsdr-reports)
     set(_seen "")
     set(_bad "")
     string(TOLOWER "${CMAKE_SOURCE_DIR}/" _root)
@@ -470,7 +497,7 @@ function(_cascade_check_engine_links)
         list(APPEND _seen "${_t}")
         # The target itself: its real name (an ALIAS has already been
         # resolved to it) and, when imported, the library it stands for.
-        if(NOT _t STREQUAL "cascade_engine")
+        if(NOT _t STREQUAL "cascade_engine" AND NOT _t STREQUAL "cascade_engine_link_check" AND NOT _t STREQUAL "foxsdr-reports")
             _cascade_window_word("${_t}" _hit)
             if(_hit)
                 list(APPEND _bad "reaches ${_t}")
@@ -589,7 +616,7 @@ function(_cascade_check_engine_links)
         string(REPLACE ";" "\n  " _bad "${_bad}")
         message(FATAL_ERROR
             "cascade_engine links the window (the engine must not depend on imgui, GLFW, "
-            "OpenGL or cascade_gui):\n  ${_bad}")
+            "OpenGL, cascade_gui, cascade_interface or cascade_shell):\n  ${_bad}")
     endif()
 endfunction()
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _cascade_check_engine_links)
