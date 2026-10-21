@@ -1356,6 +1356,7 @@ private:
             std::uint64_t id = 0;            // the entry's id: what fact.source.id.<n> is keyed by
             bool soapy = false;              // the id begins "soapy:"
             bool pluto = false;              // the id begins "pluto:"
+            bool rtltcp = false;             // the id begins "rtltcp:" (0.99.70: the Pluto's kind of row)
         };
         std::vector<Row> rows;               // DEVICES, in the combo's order
         bool anySoapyRow = false;            // some entry is a SoapySDR row (its id begins "soapy:")
@@ -1367,6 +1368,7 @@ private:
         std::string scanSkip;                // fact.source.scanSkip
         std::string faultedDrivers;          // fact.source.faultedDrivers
         std::string plutoUri;                // fact.source.plutoUri
+        std::string rtlTcpAddr;              // fact.source.rtlTcpAddr
         struct Rate {
             double hz = 0.0;                 // what SET_SAMPLE_RATE takes
             std::string label;               // the Rate combo's caption
@@ -1437,6 +1439,10 @@ private:
     // that was never opened; the sound card's centre box sends it when Return is pressed.
     bool plutoUriPending_ = false;
     double plutoUriEditedAt_ = 0.0;           // ImGui::GetTime() of the last edit
+    // The rtl_tcp box (0.99.70): the Pluto box's twin, with its own draft (FOXAPP_OP_SET_RTLTCP_ADDR per edit).
+    bool rtlTcpAddrPending_ = false;
+    double rtlTcpAddrEditedAt_ = 0.0;
+    char rtlTcpAddrDraft_[192] = "127.0.0.1:1234";
     bool soundCardCentrePending_ = false;
     double soundCardCentreSentHz_ = 0.0;      // the centre the last commit sent
     double soundCardCentreEditedAt_ = 0.0;
@@ -1573,6 +1579,25 @@ private:
     // places that tune a source BEFORE it is installed (the restore at start
     // and the IQ file's Open).
     void drawConverterControls();
+    // THE CRYSTAL CORRECTION'S CONTROLS (0.99.56, app_window_ppm.cpp): the engine owns the correction (engine/engine_ppm.cpp) and
+    // publishes fact.ppm.*; these draw it and send FOXAPP_OP_SET_PPM. The cache is re-read only when listSeq moves.
+    struct PpmCache {
+        std::uint64_t listSeq = 0;
+        bool on = false;
+        std::string method;       // "na" | "radio" | "retune"
+        double stored = 0.0;      // this radio's value
+        bool wholeRadio = false;
+        int wholeValue = 0;
+        std::string error, card, model, serial, key;
+    };
+    PpmCache ppmCache_;
+    const PpmCache& ppmLists();
+    std::string ppmCardLine();
+    void drawPpmControls();
+    void drawPpmSection();
+    void drawPpmBody();
+    double ppmEdit_ = 0.0;          // the field's value while it is edited
+    std::string ppmEditSeededFor_;  // the radio key + value the field was seeded from
     // The modes the Converter combo offers for the source installed, in the
     // combo's order; EMPTY means the Converter controls are not drawn at all.
     // (fact.converter.modes, kept in converterCache_; not const, like the
@@ -1831,6 +1856,11 @@ private:
     // --diag-toggle on|off: flip the diagnostics switch on frame 30. See
     // setDiagToggle().
     int diagToggle_ = 0;
+    // CASCADE_FOREIGN_MODULE_TEST=<path of a DLL> (0.99.69, bounded runs only, Windows only): the frame loop maps that DLL with
+    // LoadLibrary on frame 90, from the window's own thread, once - what another program's injected hook looks like to the loader.
+    // Empty once it has been done, and in every run that is not a bounded one.
+    std::string foreignModuleTestPath_;
+    void loadForeignModuleForTest(int rendered);
     bool testerLinkReveal_ = false;  // see setLinkTesterReveal
     // The whole diagnostics switch - crash handler, log AND watchdog - in one
     // place. The checkbox, the arming path in run() and the test hook all go
@@ -2686,6 +2716,9 @@ private:
         std::string bandPlanName;          // fact.bandPlan.name: the loaded plan, a chain joined with " + "
         std::string bandPlanError;         // fact.status.bandPlanError
         std::string audioHealth;           // fact.status.audioHealth
+        int audioBufferMs = 0;             // fact.audio.bufferMs: the chosen buffer, 0 AUTOMATIC (0.99.73)
+        int audioLeadMs = 0;               // fact.audio.leadMs: the lead in force (the AUTOMATIC preview's number)
+        std::string audioLeadNote;         // fact.audio.leadNote: "raised|restored|lowered <ms> <count>", "" nothing
         std::vector<cascade::gui::BandRow> bands;
         int bandsCount = -1;               // what the rows were read for: their number...
         std::string bandsPlanId;           // ...the plan in force...
@@ -2694,6 +2727,8 @@ private:
     };
     RailListCache railCache_;
     const RailListCache& railLists();
+    // The Sinks rail's note about what AUTOMATIC last did to the buffer (translated), from fact.audio.leadNote; "" when nothing.
+    std::string audioLeadNotice() const;
     // A fact's text into `out` (cleared first, "" when the engine has none), whole:
     // what uiFact caches, for a reader that keeps its own string.
     void readFactText(const char* key, std::string& out);

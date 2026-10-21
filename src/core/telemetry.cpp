@@ -497,6 +497,11 @@ namespace {
 constexpr char kSentMarkerPrefix[] = "telemetry-sent-";
 }  // namespace
 
+std::shared_ptr<StallLedger> globalStallLedger() {
+    static const std::shared_ptr<StallLedger> g = std::make_shared<StallLedger>();
+    return g;
+}
+
 std::string installChannel() {
 #if defined(__ANDROID__)
     return "android";

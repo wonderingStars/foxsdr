@@ -200,6 +200,11 @@
 // every other line. Replaces the host hook the engine's pass used to ask (EngineHost::drainTrackInfoText). Grant VIEW (it reads and
 // changes nothing but that backlog), LOCAL sessions only (every app op is).
 #define FOXAPP_OP_TRACK_INFO_LINE        0x8423u /* text (or long text): one status line from the track-info plugin; empty is BAD_ARGUMENT */
+// THE 0.99.84 MERGE'S OPS (docs/engine-merge-0.99.84.md; docs/api-0.3-additions.md section 9): what master's window did with engine fields in place and
+// the table had no op for. Same rules as every app op: LOCAL sessions only, grant CONTROL unless said.
+#define FOXAPP_OP_SET_RTLTCP_ADDR        0x8424u /* text: the rtl_tcp address box, committed as typed (rtlTcpAddr_); the Pluto box's twin */
+#define FOXAPP_OP_SET_PPM                0x8426u /* ival[0]: the crystal correction's switch (0/1); num[0]: the open radio's value, ppm (core::sanitisePpm; 0 = none) */
+#define FOXAPP_OP_SET_AUDIO_BUFFER       0x8425u /* ival[0]: the Sinks rail's AUDIO BUFFER, 0 AUTOMATIC | 120 | 240 | 480 | 960 ms (sink::validAudioBufferSetting) */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */

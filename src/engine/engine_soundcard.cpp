@@ -273,8 +273,7 @@ void Engine::pollSoundCard() {
     installSource(std::move(r.src));
     sourceKind_ = "soundcard";
     cascade::core::health::noteRadioOpen("soundcard");
-    // FIXME(2026-10-21, 0.99.84 merge, ledger HEALTH-DIAG): master follows this with healthWatchSamples("soundcard") - the "samples have
-    // arrived" mark of the usage record's radio-health counts; the engine has no health poll yet.
+    healthWatchSamples("soundcard");
     // THIS CARD'S converter, after the install put the pipeline back to Off
     // and before anything reads the air centre below (see
     // soundCardConverter for what a card can have in front of it).

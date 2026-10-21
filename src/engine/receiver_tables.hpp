@@ -121,6 +121,9 @@ inline void formatBandwidth(double hz, char* out, std::size_t n) {
 // selection, and the address field it shows instead), and a literal in each
 // is three chances for a typo that compiles.
 constexpr const char* kPlutoDriverKey = "pluto";
+// THE RTL_TCP SERVER'S ROW (0.99.70) is the Pluto's kind of row and follows its rules: an address typed in a box (rtlTcpAddr_), a row that
+// selects and does not connect, an Open key that does.
+constexpr const char* kRtlTcpDriverKey = "rtltcp";
 
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};

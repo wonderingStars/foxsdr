@@ -180,6 +180,7 @@ struct AppWindowTestAccess {
     static void launches(cascade::engine::Engine& e, std::uint64_t n) { e.telemetryLaunches_ = n; }
     static void crashes(cascade::engine::Engine& e, std::uint64_t n) { e.telemetryCrashes_ = n; }
     static void pumpContext(cascade::engine::Engine& e) { e.pumpDiagContext(); }
+    static bool foreignScanned(cascade::engine::Engine& e) { return e.foreignModules_.scanned(); }
     static std::uint64_t contextRenders(cascade::engine::Engine& e) { return e.diagContextRenders_; }
     static void setMode(cascade::engine::Engine& e, int index) { e.modeIndex_ = index; }
     static int mode(cascade::engine::Engine& e) { return e.modeIndex_; }
@@ -1933,6 +1934,15 @@ int main() {
         // THE CONTEXT'S CHECK is free when nothing moved: 1000 calls inside the gate, and - past it - the hash alone.
         Access::pumpContext(e11);  // (renders the first one)
         Access::pumpContext(e11);
+        // THE FOREIGN-MODULE SCAN IS ASYNCHRONOUS (0.99.84: its result is a line of the context block): let it finish and its one
+        // render happen BEFORE counting, or the first gated check below renders the block (a real change, not an allocation leak).
+        for (int i = 0; i < 600 && !Access::foreignScanned(e11); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            Access::pumpContext(e11);
+        }
+        CHECK(Access::foreignScanned(e11));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        Access::pumpContext(e11);  // (renders what the finished scan changed)
         t_news = 0;
         t_counting = true;
         for (int i = 0; i < 1000; ++i) { Access::pumpContext(e11); }

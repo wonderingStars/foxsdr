@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
                     if (originOf(name) == "app_window_converter.cpp") {
                         verdict = "RADIO FIGURE (the converter's own file: status lines, carriedAirCentre)";
                         ++allowed;
-                    } else if (name == "app_window_ppm.cpp") {
+                    } else if (name == "app_window_ppm.cpp" || name == "engine_ppm.cpp") {
                         // 0.99.56: whether the radio corrects its own crystal,
                         // sending it that correction, and "is it still where
                         // the pre-install tune put it" - never a tune.

@@ -44,8 +44,6 @@ cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no di
     test_iq_open_async test_bookmark_save_async test_patch_dest_async)
 cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, health ledger, slow frames, previous-session bundle
     test_health_app test_slow_frames_app test_diag_context_app test_diag_audio_app test_diag_history)
-cascade_merge_pending(PPM              # 0.99.56 PPM frequency correction
-    test_ppm_app)
 cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain
     test_autogain_app test_one_chip_app test_source_row_app)
 cascade_merge_pending(NEW-RADIOS      # 0.99.49 AOR, 0.99.66 HydraSDR, 0.99.70 rtl_tcp: the window's rows, boxes and Open keys

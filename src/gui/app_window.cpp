@@ -43,7 +43,14 @@
 
 #include "core/version.hpp"
 #include "core/crash_handler.hpp"
+#include "core/console_close.hpp"
+#include "core/frame_timing.hpp"
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
+#include "core/sentinel.hpp"
+#include "core/breadcrumb.hpp"
+#include "gui/window_platform.hpp"
+#include "gui/page_resize_id.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/i18n.hpp"
@@ -864,7 +871,12 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             // Sends nothing unless the user previously opted in.
             diagnosticsEnabled_ = cfg.diagnosticsEnabled;
             diagnosticsMinidump_ = cfg.diagnosticsMinidump;
-            engine_.telemetryStartup(cfg);
+            {
+                std::string configDir;
+                const std::size_t cut = configPath_.find_last_of("/\\");
+                if (cut != std::string::npos) { configDir = configPath_.substr(0, cut); }
+                engine_.telemetryStartup(cfg, configDir);
+            }
             diagnosticsStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
         } else {
@@ -960,12 +972,70 @@ AppWindow::~AppWindow() {
     pluginFeed_->disconnect();
 }
 
+namespace {
+// THE WINDOW COULD NOT BE CREATED: tell the person (gui/window_platform.hpp, failureMessage). The text goes to stderr everywhere (where
+// the `cascade: ... failed` message already went) and, on Windows in a real session, into a message box with no owner window - there is
+// no window to own it. A bounded --frames run only logs that the box was skipped, so a test never waits on a click. The log lines are
+// flushed one by one, so the one before the box is on disk while it is open.
+void tellUserWindowFailed(const char* what, int frames) {
+    namespace wp = cascade::gui::windowplatform;
+    const std::string text = wp::failureMessage(cascade::core::DiagLog::instance().filePath());
+    std::fprintf(stderr, "cascade: %s\n%s\n", what, text.c_str());
+    if (!wp::errorDialogAllowed(frames)) {
+        cascade::core::diagLogf("window: error dialog suppressed for a flagged run");
+        return;
+    }
+#if defined(_WIN32)
+    cascade::core::diagLogf("window: error dialog shown");
+    ::MessageBoxA(nullptr, text.c_str(), "FoxSDR", MB_OK | MB_ICONERROR);
+#endif
+}
+}  // namespace
+
 int AppWindow::run(int frames) {
+    // WHERE THE SENTINEL SEES THIS PROCESS (core/breadcrumb.hpp): the phases are stages this function really has, set at the line that
+    // begins each of them.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::CreatingWindow);
     glfwSetErrorCallback(&glfwErrorCallback);
+    // THE WINDOW SYSTEM, IN THE LOG BEFORE GLFW IS ASKED FOR ANYTHING (0.99.78). A Linux start-up death at this point (field report
+    // A0E0967441A8E6B4, 0.99.75, an AppImage on Ubuntu 24.04) could not say which window system GLFW had chosen, whether DISPLAY or
+    // WAYLAND_DISPLAY was there at all, or what GLFW had complained of. These lines are flushed one by one, so the last one on disk is
+    // the last step reached. Presence only - never the value of DISPLAY.
+    //
+    // FOXSDR_WINDOW_PLATFORM=x11|wayland|any is applied here, before glfwInit: the workaround for a machine where GLFW's own choice
+    // (Wayland first when the session says wayland) is the one that fails. Anything else is logged and ignored.
+    {
+        namespace wp = cascade::gui::windowplatform;
+        std::vector<std::string> supported;
+        for (const int id : {wp::kWin32, wp::kCocoa, wp::kWayland, wp::kX11}) {
+            if (glfwPlatformSupported(id) == GLFW_TRUE) { supported.emplace_back(wp::platformName(id)); }
+        }
+        cascade::core::diagLogf(
+            "%s", wp::environmentLine(glfwGetVersionString(), supported, std::getenv("DISPLAY"),
+                                      std::getenv("WAYLAND_DISPLAY"), std::getenv("XDG_SESSION_TYPE"))
+                      .c_str());
+        const wp::Request request = wp::parseRequest(std::getenv("FOXSDR_WINDOW_PLATFORM"));
+        const bool buildHasIt = request.platform == wp::kAny || glfwPlatformSupported(request.platform) == GLFW_TRUE;
+        const std::string requestLine = wp::requestLine(request, buildHasIt);
+        if (!requestLine.empty()) { cascade::core::diagLogf("%s", requestLine.c_str()); }
+        if (request.set && request.valid && request.platform != wp::kAny && buildHasIt) {
+            glfwInitHint(GLFW_PLATFORM, request.platform);
+        }
+    }
     if (!glfwInit()) {
-        std::fprintf(stderr, "cascade: glfwInit failed\n");
+        cascade::core::diagWarnf(
+            "window: glfwInit failed; the GLFW error line before this, if there is one, says why");
+        // TELLS THE SENTINEL THIS ENDING IS OUR OWN (core/breadcrumb.hpp, kFlagWindowFailed): an exit code 1 on Windows is also what
+        // `taskkill /F` leaves, and the report must not call this one a kill (field signature 85FF854AA2C772F9).
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("glfwInit failed", frames);
         return 1;
     }
+    cascade::core::diagLogf("window: GLFW initialised; platform chosen: %s",
+                            cascade::gui::windowplatform::platformName(glfwGetPlatform()));
+    // The same word, for the report writers (a literal: the pointer is kept). The log line above is the first of the session and rolls
+    // out of the 256-line ring; a freeze in the swap reads differently on Wayland, so the report carries it beside `window-state`.
+    cascade::core::setWindowSystem(cascade::gui::windowplatform::platformName(glfwGetPlatform()));
 
     const std::string title =
         std::string(cascade::appName()) + " " + cascade::versionString();
@@ -978,14 +1048,26 @@ int AppWindow::run(int frames) {
     // until a resize made the layers agree again. Nothing sees this window
     // until the style it will keep is the style it has.
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    // FOXSDR_TEST_WINDOW_FAIL=1 (a test seam, honoured only in a bounded --frames run like every seam in this file): asks for an OpenGL
+    // version no driver has, so that glfwCreateWindow fails for real - the same call, the same GLFW error, the same return below - on a
+    // machine whose window can be made. The request is refused before a window exists, so nothing is ever shown, which is what lets a
+    // test run the whole failure path on a desktop.
+    if (frames >= 0) {
+        const char* forceFail = std::getenv("FOXSDR_TEST_WINDOW_FAIL");
+        if (forceFail != nullptr && forceFail[0] == '1') { glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99); }
+    }
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     mainWindow_ = window;
     if (window == nullptr) {
-        std::fprintf(stderr, "cascade: glfwCreateWindow failed\n");
+        cascade::core::diagWarnf(
+            "window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why");
+        cascade::core::breadcrumb::noteWindowFailed();  // see the glfwInit failure above
+        tellUserWindowFailed("glfwCreateWindow failed", frames);
         glfwTerminate();
         return 1;
     }
+    cascade::core::diagLogf("window: window created (hidden until its frame is settled)");
     // A FLOOR ON THE WIDTH, because the top bar has one and could not keep it
     // alone: narrower than this and the volume dial is drawn outside the bar's
     // own child and clipped away, leaving no volume control at all.
@@ -1138,6 +1220,10 @@ int AppWindow::run(int frames) {
     // and drawCabinetRail draws no keys.
     cascade::gui::frame::install(window);
     glfwShowWindow(window);
+    cascade::core::diagLogf("window: window shown; the Dear ImGui backends are up");
+    // The window is up. Everything from here to the end of the first frame - the receiver, the watchdog, the config save, the first draw -
+    // is still start-up to the sentinel; the second heartbeat (HangWatchdog::heartbeat) ends it.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::AwaitingFirstFrame);
 
     // A previous run() tore the waterfall down with its GL context (see the
     // teardown below); re-create it against the new context so run() stays
@@ -1189,6 +1275,11 @@ int AppWindow::run(int frames) {
     if (frames >= 0) {
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // A DLL to map on frame 90, standing in for another program's injected hook (foreignModuleTestPath_ in the header). Bounded
+        // runs only, like every hook here.
+        if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
+            foreignModuleTestPath_ = fm;
+        }
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
         engine_.seamBiasStandIn(cascade::gui::biasStandInFor(std::getenv("FOXSDR_FORCE_BIAS_KEY"), true));
@@ -1308,6 +1399,11 @@ int AppWindow::run(int frames) {
     applyDiagnosticsEnabled(diagnosticsEnabled_);
     // (The diagnostics context is the engine's: rendered at the end of its applyConfig and again by its pass; window port
     // group 14, part c.)
+    // A freeze the watchdog classifies as the DISPLAY's, not ours, is counted on
+    // the watchdog's own thread (see StallLedger). The ledger refuses unless
+    // usage reporting is on, so an opted-out run counts nothing. (The process's
+    // one ledger, core::globalStallLedger: the engine's usage journal reads it.)
+    watchdog_.setDisplayStallSink([ledger = cascade::core::globalStallLedger()] { ledger->note(); });
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
@@ -1380,9 +1476,21 @@ int AppWindow::run(int frames) {
         cascade::gui::frame::displayChangeCount() +
         g_glfwDisplayErrors.load(std::memory_order_relaxed);
 
+    // WHERE A SLOW FRAME SPENT ITS TIME (0.99.64, core/frame_timing.hpp). The timer is the process's. The two hooks are bounded runs only,
+    // like every other hook here: a stall held inside a named scope at a named frame, and the three things the operating system does that
+    // a test cannot make it do (hide the window, change the display, run a modal loop inside the message pump).
+    cascade::core::FrameTimer& frameTimer = cascade::core::frameTimer();
+    cascade::core::FrameSituations frameSituations;
+    if (frames >= 0) {
+        frameTimer.setStalls(cascade::core::parseFrameStalls(std::getenv("FOXSDR_FRAME_STALL")));
+        frameSituations = cascade::core::parseFrameSituations(std::getenv("FOXSDR_FRAME_SITUATION"));
+    }
+
     int rendered = 0;
     frameCounter_ = 0;
-    while (!glfwWindowShouldClose(window) && !closeRequested_) {
+    // ...or the console the program was started on asked for the close - Ctrl+C, Ctrl+Break or its window closing
+    // (core/console_close.hpp, 0.99.67).
+    while (!glfwWindowShouldClose(window) && !closeRequested_ && !cascade::core::consoleCloseRequested()) {
         // Exact-count contract: check before rendering so --frames N produces
         // N frames, and --frames 0 produces none.
         if (frames >= 0 && rendered >= frames) { break; }
@@ -1391,13 +1499,30 @@ int AppWindow::run(int frames) {
         if (frameLog_) { frameLog_->frameStart(); }
         if (frameCap_) { frameCap_->frameStart(); }
 
+        // THE FRAME'S CLOCK STARTS HERE and stops at the bottom of the body; the guard is the scope the frame is in until it says otherwise
+        // (to()), and everything not inside a scope is `other`.
+        frameTimer.beginFrame(rendered);
+        cascade::core::FrameScopeGuard frameScope(cascade::core::FrameScope::Events);
+
         // The heartbeat. One relaxed store; the whole hang-detection scheme is
         // "did this line run recently", so it must stay cheap enough that
         // nobody is ever tempted to call it less often than every frame.
         watchdog_.heartbeat(!diagSkipNextGap_);
         diagSkipNextGap_ = false;
+        // What else is going on, for the sentinel: a radio being opened on a worker. Mirrored from the state the window already keeps,
+        // each frame - a pointer test and a compare when nothing changed. And, about every five seconds, one non-blocking look at
+        // whether the watcher itself is still there (it says so once in the log if not).
+        cascade::core::breadcrumb::setActivity(cascade::core::breadcrumb::kOpeningRadio,
+                                               (uiState_.flags & FOXAPI_RX_DEVICE_OPENING) != 0u);
+        if (rendered % 300 == 0) { cascade::core::sentinelPoll(); }
 
+        // A MODAL WINDOW LOOP INSIDE THE PUMP is a person holding the window, not a slow frame: the pump does not return until they let go.
+        const unsigned modalLoopsBefore = cascade::gui::frame::modalLoopCount();
         glfwPollEvents();
+        if (cascade::gui::frame::modalLoopCount() != modalLoopsBefore || frameSituations.modalLoopAt(rendered)) {
+            frameTimer.moveToUserWait(cascade::core::FrameScope::Events);
+        }
+        frameScope.to(cascade::core::FrameScope::Other);
 
         // AFTER THE PUMP, BEFORE THE FRAME. glfwPollEvents is where the window
         // procedure runs, so a WM_DISPLAYCHANGE that arrived this frame has
@@ -1409,7 +1534,7 @@ int AppWindow::run(int frames) {
         {
             const unsigned changes = cascade::gui::frame::displayChangeCount() +
                                      g_glfwDisplayErrors.load(std::memory_order_relaxed);
-            const bool displayChanged = changes != lastDisplayChanges;
+            const bool displayChanged = changes != lastDisplayChanges || frameSituations.displayChangeAt(rendered);
             if (displayChanged) {
                 lastDisplayChanges = changes;
                 cascade::core::diagLogf(
@@ -1420,14 +1545,28 @@ int AppWindow::run(int frames) {
             // is false while the window is still being built (it is created
             // hidden on purpose, see above) and true for the whole session
             // afterwards; GLFW_ICONIFIED is the minimise.
-            const bool hidden = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0 ||
-                                glfwGetWindowAttrib(window, GLFW_VISIBLE) == 0;
+            const bool iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0;
+            const bool visible = glfwGetWindowAttrib(window, GLFW_VISIBLE) != 0;
+            // THE WINDOW'S STATE, HANDED TO THE REPORT WRITERS (core/diag_report.hpp). This is the only place the attributes are read for
+            // that purpose, and the GUI thread the only one that reads them: GLFW is not thread-safe, so the hang watchdog and the fault
+            // handlers see three booleans and a time, never the window. A freeze report then says whether the frame that stopped was one
+            // nobody could see (field report 6A586D4DAD464BB8: minutes inside the swap, then recovered). Recorded, never acted on: it is
+            // exactly as old as this frame.
+            cascade::core::publishWindowState(visible, iconified, glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0);
+            const bool hidden = iconified || !visible || frameSituations.hiddenAt(rendered);
             presentGrace.update(glfwGetTime(), displayChanged, hidden);
+            // THE FRAMES THIS APPLICATION IS NOT EXPECTED TO PRESENT ARE NOT SLOW FRAMES: the window is not being shown, or a display
+            // change is being settled. And the slow frame the PREVIOUS pass left is dropped when the display changed or the window stopped
+            // being shown now: the stall a display change causes is in the swap that came before the message that says so
+            // (core/frame_timing.hpp).
+            frameTimer.settlePrevious(displayChanged || presentGrace.paused());
+            if (presentGrace.paused()) { frameTimer.excludeFrame(); }
         }
 
         // BETWEEN FRAMES: the one place the interface theme and language may
         // change. The theme first, so a typeface pair it asks for is built by
         // the same applyPending the language ends with.
+        frameScope.to(cascade::core::FrameScope::FrameStart);
         applyPendingTheme();
         applyPendingLanguage();
         ImGui_ImplOpenGL3_NewFrame();
@@ -1442,9 +1581,11 @@ int AppWindow::run(int frames) {
         // Collects a feature-request worker that has finished and, once its
         // post-send cooldown has passed, returns the SEND key to Idle on its
         // own - see core/feature_request.hpp for why this never blocks.
+        frameScope.to(cascade::core::FrameScope::Polls);
         featureRequestSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
         // ...and the same for the REPORT A BUG / DISLIKE page's sender.
         problemReportSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
+        frameScope.to(cascade::core::FrameScope::Other);
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
         // flight. Everything else about the browser is unchanged — this is
@@ -1683,13 +1824,16 @@ int AppWindow::run(int frames) {
         // gui/config_writer.hpp's callers. A no-op every frame nothing was
         // ever requested (hermetic runs, or a session that never changed a
         // setting), so it costs nothing to call unconditionally.
+        frameScope.to(cascade::core::FrameScope::Saves);
         pollConfigWriter();
 
         // Debounced runtime persistence: the config file follows the session
         // ~2 s after the last change, so a crash loses almost nothing.
         // Hermetic runs (empty configPath_) never touch the disk.
         if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
+        frameScope.to(cascade::core::FrameScope::Other);
 
+        frameScope.to(cascade::core::FrameScope::Render);
         ImGui::Render();
         int fbWidth = 0;
         int fbHeight = 0;
@@ -1746,6 +1890,7 @@ int AppWindow::run(int frames) {
         // window - and the geometry read-back that persists their rectangles
         // is unaffected, because a hidden window keeps its position.
         applyScopeWindowVisibility();
+        frameScope.to(cascade::core::FrameScope::Other);
 
         // SELF-CAPTURE, from the framebuffer this frame was drawn into. The
         // screen-grab routes (PrintWindow, a BitBlt of the desktop) cannot see
@@ -1880,7 +2025,9 @@ int AppWindow::run(int frames) {
             }
         }
 
+        frameScope.to(cascade::core::FrameScope::Present);
         glfwSwapBuffers(window);
+        frameScope.to(cascade::core::FrameScope::Other);
         if (frameLog_) { frameLog_->frameEnd(); }
         if (frameCap_) { frameCap_->waitForNext(); }
         ++rendered;
@@ -1924,6 +2071,7 @@ int AppWindow::run(int frames) {
         // checkbox from ctest, and the defect this exists for lived precisely
         // in the difference between what the checkbox governed and what it
         // did not, so a unit test of the watchdog cannot see it.
+        loadForeignModuleForTest(rendered);  // the bounded-run seam, see the header
         if (diagToggle_ != 0 && rendered == 30) {
             const bool want = diagToggle_ > 0;
             diagToggle_ = 0;
@@ -1944,7 +2092,10 @@ int AppWindow::run(int frames) {
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             diagSkipNextGap_ = true;
         }
+        frameTimer.endFrame();
     }
+    // The slow frame still held is counted, and the session's summary line is written if there was anything to say.
+    frameTimer.finish();
 
     // The frame log's only write, now the frames are over and before the
     // teardown, which is not a frame.
@@ -1991,6 +2142,9 @@ int AppWindow::run(int frames) {
     // invisible again.
     presentGrace.release();
 
+    // THE SENTINEL'S SHUTDOWN STEPS (core/breadcrumb.hpp), set where each stage of this teardown begins: a freeze in any of them is "the
+    // shutdown stopped in step N" to the watcher, judged against the same long budget the watchdog uses.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownBegun);
     watchdog_.beginShutdown();
     const auto teardownStart = std::chrono::steady_clock::now();
     // NO SOUND CARD CLOSE IS WAITED FOR FROM HERE ON: each is handed to its
@@ -2058,6 +2212,7 @@ int AppWindow::run(int frames) {
     // THE ENGINE'S SECOND PHASE (OPEN 9): the bookmark list flushed, then the
     // pipeline stopped and joined - the stretch where the bounded driver waits
     // are spent and the 120 s CAT freeze happened (Engine::shutdownStop).
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownStoppingReceiver);
     engine_.shutdownStop();
 
     // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
@@ -2077,6 +2232,10 @@ int AppWindow::run(int frames) {
     // everything was still alive. Residual, stated plainly: a death in the
     // GL/GLFW teardown below still counts as a clean exit — the watchdog,
     // stopped last as ever, is what covers that stretch.
+    // (The branch writes the clean-exit marker BEFORE the plugins come down - Engine::shutdownRelease below - where master unloaded them
+    // first: the phases follow the order the stages really run in, and ShutdownClosingWindow, which the sentinel reads as "the exit was a
+    // clean one", is set after the last of them.)
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownWritingMarker);
     engine_.markCleanExit();
     if (!configPath_.empty()) {
         // Built on lastRequestedConfig_, not savedCfg_: the final-state save
@@ -2132,7 +2291,10 @@ int AppWindow::run(int frames) {
     //
     // THE ENGINE'S LAST PHASE (OPEN 9): the patch's radios, then the plugins
     // unloaded (Engine::shutdownRelease).
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);
     engine_.shutdownRelease();
+    // THE MARKER STAGE IS OVER, saved or abandoned, and the plugins are down: from here a normal exit is a clean one to the sentinel.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
 
     // The waterfall owns a GL texture whose deletion requires the creating
     // context to be current. AppWindow outlives that context (main() destroys
@@ -2205,6 +2367,9 @@ int AppWindow::run(int frames) {
     // sentence in a header, not a protection. tests/test_diag_hang.cpp reads
     // this line back and requires at least one — the plugin scan.
     std::printf("cascade: watchdog pauses %u\n", watchdog_.pausesTaken());
+    // The same, for the slow frames the session counted: the line tests/test_slow_frames_app.cpp reads back.
+    std::printf("cascade: frame timing: %s\n", frameTimer.summaryText().c_str());
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::Finished);
     return 0;
 }
 
@@ -2884,6 +3049,9 @@ void AppWindow::submitPendingDrop() {
 }
 
 void AppWindow::drawUi() {
+    // WHICH PART OF THE FRAME THIS IS (0.99.64, core/frame_timing.hpp): one guard walks the function through its phases with to(), and
+    // gives the caller's scope back on every way out.
+    cascade::core::FrameScopeGuard frameScope(cascade::core::FrameScope::PreDraw);
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
     // (THE SNAPSHOT'S RETRY and THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME are the pass's: its front part, run below, does both before
@@ -3003,7 +3171,9 @@ void AppWindow::drawUi() {
     // Plugin windows are top-level and are drawn OUTSIDE the root window, so
     // they are movable and resizable like any other window. Drawn first so the
     // root layout below owns the remaining space.
+    frameScope.to(cascade::core::FrameScope::PluginPanels);
     drawPluginWindows();
+    frameScope.to(cascade::core::FrameScope::PreDraw);
     // (A preset bar's key press used to be applied here, the first point
     // after drawPluginWindows' loops. It is a command now, and the drain at
     // the top of the next frame is that safe point for every control.)
@@ -3041,6 +3211,7 @@ void AppWindow::drawUi() {
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoScrollWithMouse;
+    frameScope.to(cascade::core::FrameScope::Toolbar);
     ImGui::Begin("##cascade_root", nullptr, rootFlags);
 
     // THE CABINET, FIRST AND UNDERNEATH. Painted into the root window's own
@@ -3159,8 +3330,10 @@ void AppWindow::drawUi() {
         // there, so the tally and the ring cannot drift apart across a spell
         // in scope mode. drawCenterPanels restarts its averaging window rather
         // than dividing this by the time the scope was up - see the note there.
+        frameScope.to(cascade::core::FrameScope::Spectrum);
         drawScopeMode();
     } else {
+        frameScope.to(cascade::core::FrameScope::Rail);
         ImGui::BeginChild("##menu_column", ImVec2(kMenuWidth, 0.0f), ImGuiChildFlags_None);
         drawMenuColumn();
         ImGui::EndChild();
@@ -3181,6 +3354,7 @@ void AppWindow::drawUi() {
             // would come back with a hole in its history.
             ImGui::BeginChild("##patchview", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            frameScope.to(cascade::core::FrameScope::Patch);
             drawPatchView();
             ImGui::EndChild();
         } else {
@@ -3206,6 +3380,7 @@ void AppWindow::drawUi() {
                 cascade::gui::census::note("view:receiver");
                 cascade::gui::census::rect("view:receiver", at.x, at.y, at.x + sz.x, at.y + sz.y);
             }
+            frameScope.to(cascade::core::FrameScope::Spectrum);
             drawCenterPanels();
             ImGui::EndChild();
 
@@ -3213,6 +3388,7 @@ void AppWindow::drawUi() {
                 ImGui::SameLine();
                 ImGui::BeginChild("##status_column", ImVec2(kStatusWidth, 0.0f),
                                   ImGuiChildFlags_None);
+                frameScope.to(cascade::core::FrameScope::Status);
                 drawStatusColumn();
                 ImGui::EndChild();
             }
@@ -3224,6 +3400,7 @@ void AppWindow::drawUi() {
     ImGui::EndChild();
 
     ImGui::End();
+    frameScope.to(cascade::core::FrameScope::Dialogs);
 
     // The mute dialog LAST, and outside the root window: a modal is a
     // top-level thing and opening it inside a borderless full-viewport window
@@ -3266,6 +3443,7 @@ void AppWindow::drawUi() {
     // burst), pollPluginAsync and - after that poll, never before - pumpAddAll.
     // (pollUpdateAsync is this window's own - the update check and download - and touches nothing of the engine's, so it no longer
     // stands between the workers and the sink.)
+    frameScope.to(cascade::core::FrameScope::Polls);
     pollUpdateAsync();
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing. The collect comes first - the health check must
@@ -4014,7 +4192,7 @@ void AppWindow::drawStatusColumn() {
         const bool faulted = (uiState_.flags & FOXAPI_RX_FAULTED) != 0u;
         // A radio (not the built-in generator) is open: the state's flag.
         const bool deviceOpen = (uiState_.flags & FOXAPI_RX_DEVICE_OPEN) != 0u;
-        StatusLine lines[4];
+        StatusLine lines[5];
         int n = 0;
         // Translated when it is the built-in generator; a driver's own device
         // name is in no catalogue and passes through tr() unchanged.
@@ -4049,6 +4227,8 @@ void AppWindow::drawStatusColumn() {
             }
             if (!l2.empty()) { lines[n++] = {l2.c_str(), cascade::gui::theme::kCream}; }
         }
+        const std::string ppmLine = ppmCardLine();
+        if (!ppmLine.empty()) { lines[n++] = {ppmLine.c_str(), cascade::gui::theme::kCream}; }
         const double rate = uiState_.sampleRateHz;
         if (std::isfinite(rate) && rate > 0.0) {
             cascade::core::formatUtf8(l3, "%.3f MS/s", rate / 1.0e6);
@@ -5914,6 +6094,9 @@ void AppWindow::drawMenuColumn() {
         case cascade::gui::RailBank::System:
             benchGroup(tr("SYSTEM"));
             drawLanguageSection();
+            // The crystal correction (0.99.56): the owner asked for it "in
+            // settings"; the Source section carries the same controls.
+            drawPpmSection();
             drawUpdatesSection();
             drawSerialPortsSection();
             drawKeyBindingsSection();
@@ -6091,6 +6274,45 @@ void AppWindow::drawRadioSection() {
 
 // The Sinks section: the output device and why there is no sound. Moved out
 // of drawMenuColumn unchanged, for the reason drawRadioSection gives.
+void AppWindow::loadForeignModuleForTest(int rendered) {
+    // THE BOUNDED-RUN SEAM (foreignModuleTestPath_, CASCADE_FOREIGN_MODULE_TEST): another program's DLL arrives on frame 90, on this
+    // thread, the way a hook an overlay injects does - once, and left mapped. The arrival is written to the log by the engine's pass
+    // (ForeignModuleWatch::poll, Engine::pumpDiagContext). Nothing to do in any other run: the path is empty.
+#if defined(_WIN32)
+    if (foreignModuleTestPath_.empty() || rendered != 90) { return; }
+    const std::string path = foreignModuleTestPath_;
+    foreignModuleTestPath_.clear();
+    if (::LoadLibraryA(path.c_str()) == nullptr) {
+        std::fprintf(stderr, "cascade: CASCADE_FOREIGN_MODULE_TEST could not load its DLL\n");
+    }
+#else
+    (void)rendered;
+#endif
+}
+
+std::string AppWindow::audioLeadNotice() const {
+    // "kind ms count" from fact.audio.leadNote (the engine's sentence parts): the words are the window's, translated here.
+    const std::string& f = railCache_.audioLeadNote;
+    if (f.empty()) { return {}; }
+    const std::size_t a = f.find(' ');
+    const std::size_t b = a == std::string::npos ? std::string::npos : f.find(' ', a + 1);
+    if (a == std::string::npos || b == std::string::npos) { return {}; }
+    const std::string kind = f.substr(0, a);
+    const int ms = std::atoi(f.substr(a + 1, b - a - 1).c_str());
+    const int count = std::atoi(f.substr(b + 1).c_str());
+    std::string s;
+    if (kind == "raised") {
+        cascade::core::formatUtf8(
+            s, tr("Audio buffer raised to %d ms: this computer fell behind %d times in the last minute."), ms, count);
+    } else if (kind == "restored") {
+        cascade::core::formatUtf8(
+            s, tr("Audio buffer restored to %d ms: the depth this computer needed when it last ran."), ms);
+    } else if (kind == "lowered") {
+        cascade::core::formatUtf8(s, tr("Audio buffer lowered to %d ms after %d quiet minutes."), ms, count);
+    }
+    return s;
+}
+
 void AppWindow::drawSinksSection() {
     // MUTED is the state worth seeing from the rail without opening it -
         // "why is there no sound" is the question this chip answers - but it
@@ -6179,6 +6401,56 @@ void AppWindow::drawSinksSection() {
         // chain.
         if (!rail.audioHealth.empty()) {
             ImGui::TextColored(cascade::gui::theme::warning(), "%s", rail.audioHealth.c_str());
+        }
+        // THE AUDIO BUFFER (0.99.73): how much sound is held back before it
+        // plays. AUTOMATIC starts at 120 ms, deepens itself when this computer
+        // falls behind and eases back after a quiet quarter hour
+        // (Engine::closeAudioMinute); the rest are fixed and never step. The
+        // preview carries the value in force - "AUTOMATIC  240 ms" - because that
+        // is the number the person came here to find, and the notice below it
+        // says when and why automatic mode moved it. Opening the list never
+        // changes it; only a pick does (the same BeginCombo discipline as the
+        // bandwidth). The "ms" is the unit, written as the rail's sliders write
+        // theirs ("%.0f kHz"), not a sentence to translate.
+        {
+            // std::string and formatUtf8, not a fixed buffer: a translation of AUTOMATIC
+            // is whatever length the language makes it (tests/test_i18n.cpp refuses a
+            // translated format into a sizeof'd buffer).
+            std::string preview;
+            if (rail.audioBufferMs == 0) {
+                cascade::core::formatUtf8(preview, "%s  %d ms", tr("AUTOMATIC"), rail.audioLeadMs);
+            } else {
+                cascade::core::formatUtf8(preview, "%d ms", rail.audioBufferMs);
+            }
+            if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Audio buffer")), preview.c_str())) {
+                for (const int choice : {0, 120, 240, 480, 960}) {
+                    std::string item;
+                    if (choice == 0) {
+                        item = tr("AUTOMATIC");
+                    } else {
+                        cascade::core::formatUtf8(item, "%d ms", choice);
+                    }
+                    if (ImGui::Selectable(item.c_str(), rail.audioBufferMs == choice)) {
+                        uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SET_AUDIO_BUFFER, choice));
+                    }
+                    if (rail.audioBufferMs == choice) { ImGui::SetItemDefaultFocus(); }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    tr("How much sound is held back before it plays. A larger buffer rides "
+                       "out a slow computer, at the cost of a longer delay between the radio "
+                       "and the speakers. AUTOMATIC starts at 120 ms and deepens itself, to "
+                       "at most 960 ms, when this computer falls behind. After a quarter of "
+                       "an hour of quiet minutes it eases back one step at a time."));
+            }
+            const std::string leadNote = audioLeadNotice();
+            if (!leadNote.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+                ImGui::TextWrapped("%s", leadNote.c_str());
+                ImGui::PopStyleColor();
+            }
         }
         // WHY THERE IS NO SOUND, said where the sound settings are. This is the
         // panel a user goes to when the speakers are silent, and finding a
@@ -6831,10 +7103,27 @@ void AppWindow::pollUpdateAsync() {
 }
 
 cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
+    // THE ONE USER-PACED PAUSE in the application, and so the one that is not capped (HangWatchdog::pauseUser). What this bracket waits
+    // for is a person reading an elevation or SmartScreen prompt, however long that takes; the 30 s cap every other pause has would file
+    // the "hang ntdll.dll @ AppWindow::launchInstaller" report again for a prompt left open past it. tests/test_excuse_cap.cpp holds this
+    // to being the only use in src/.
     cascade::gui::ShellPauseHooks hooks;
-    hooks.pause = [this] { watchdog_.pause(); };
-    hooks.resume = [this] { watchdog_.resume(); };
-    return hooks;
+    hooks.pause = [this] { watchdog_.pauseUser(); };
+    hooks.resume = [this] { watchdog_.resumeUser(); };
+    // THE SAME BRACKET ENDS THE FRAME'S ACCOUNT OF IT (0.99.64): a person reading a Windows prompt is not a slow frame, so the wait is the
+    // scope `user-wait`, which is subtracted from the frame and never counted (core/frame_timing.hpp). The only user-paced time there is
+    // is the only user of pauseUser(). The two hooks above stay as they were - tests/test_excuse_cap.cpp reads them - and are wrapped,
+    // not edited.
+    cascade::gui::ShellPauseHooks accounted;
+    accounted.pause = [watchdogSide = hooks.pause] {
+        watchdogSide();
+        cascade::core::frameTimer().userWaitBegin();
+    };
+    accounted.resume = [watchdogSide = hooks.resume] {
+        cascade::core::frameTimer().userWaitEnd();
+        watchdogSide();
+    };
+    return accounted;
 }
 
 bool AppWindow::shellOpen(const std::string& target) {
@@ -7473,6 +7762,39 @@ void AppWindow::drawSourceSection() {
                                                   std::string("open-pluto:uri=") + plutoUriDraft_));
         }
     }
+    // THE RTL_TCP SERVER'S ADDRESS: the Pluto's box in every respect above (Open, never selection; nothing contacted until pressed; a
+    // failed Open leaves whatever is installed running) - its own draft, its own op (FOXAPP_OP_SET_RTLTCP_ADDR), its own Open id.
+    if (c.row >= kNativeRowBase && c.row < static_cast<int>(c.rows.size()) &&
+        c.rows[static_cast<std::size_t>(c.row)].rtltcp) {
+        ImGui::BeginDisabled(deviceOpening);
+        ImGui::SetNextItemWidth(-60.0f);
+        const bool rtlBoxActive = ImGui::GetActiveID() == ImGui::GetID("##rtltcp_addr");
+        if (rtlTcpAddrPending_ &&
+            (c.rtlTcpAddr == rtlTcpAddrDraft_ || (!rtlBoxActive && ImGui::GetTime() - rtlTcpAddrEditedAt_ > 2.0))) {
+            rtlTcpAddrPending_ = false;
+        }
+        if (!rtlBoxActive && !rtlTcpAddrPending_) {
+            cascade::core::formatUtf8(rtlTcpAddrDraft_, sizeof(rtlTcpAddrDraft_), "%s", c.rtlTcpAddr.c_str());
+        }
+        if (ImGui::InputText("##rtltcp_addr", rtlTcpAddrDraft_, sizeof(rtlTcpAddrDraft_))) {
+            rtlTcpAddrPending_ = true;
+            rtlTcpAddrEditedAt_ = ImGui::GetTime();
+            uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_SET_RTLTCP_ADDR, rtlTcpAddrDraft_));
+        }
+        ImGui::SameLine();
+        const bool openRtlTcp = ImGui::Button(trId("Open"));
+        ImGui::EndDisabled();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(
+            tr("The address of a running rtl_tcp server, as host or host:port (the port is "
+               "1234 unless the server was started with another). Nothing is contacted "
+               "until you press Open."));
+        ImGui::PopStyleColor();
+        if (openRtlTcp) {
+            uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE,
+                                                  std::string("open-rtltcp:rtltcp=") + rtlTcpAddrDraft_));
+        }
+    }
 
     // Device panel, shown while a RADIO of any kind is INSTALLED in the
     // pipeline (FOXAPI_RX_DEVICE_OPEN tracks setSource, not the combo row, so the panel
@@ -7713,6 +8035,8 @@ void AppWindow::drawSourceSection() {
     // The up- or down-converter in front of whatever source is installed
     // (app_window_converter.cpp), remembered per radio.
     drawConverterControls();
+    // The crystal correction (app_window_ppm.cpp): one switch, a value per radio.
+    drawPpmControls();
 
     if (!statusLines_.sourceError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
@@ -7813,6 +8137,7 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
         // in the first ones).
         r.soapy = std::strncmp(it.detail, "soapy:", 6) == 0;
         r.pluto = std::strncmp(it.detail, "pluto:", 6) == 0;
+        r.rtltcp = std::strncmp(it.detail, "rtltcp:", 7) == 0;
         c.anySoapyRow = c.anySoapyRow || r.soapy;
         if (i == 0 && (it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.generatorActive = true; }
         // THE CAPTION THE COMBO LETTERS: a native radio is "<name> (native)" - not decoration: with a Soapy row
@@ -7823,7 +8148,7 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
             r.caption.clear();
         } else if (r.soapy) {
             r.caption = r.name;
-        } else if (r.pluto) {
+        } else if (r.pluto || r.rtltcp) {
             r.caption = tr(r.name.c_str());  // FOX_TR_NOOP where the engine sets it
         } else {
             cascade::core::formatUtf8(r.caption, tr("%s (native)"), r.name.c_str());
@@ -7839,6 +8164,7 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
     readFactText("fact.source.scanSkip", c.scanSkip);
     readFactText("fact.source.faultedDrivers", c.faultedDrivers);
     readFactText("fact.source.plutoUri", c.plutoUri);
+    readFactText("fact.source.rtlTcpAddr", c.rtlTcpAddr);
 
     // The open radio's lists (all empty with none open).
     const int32_t rates = size(FOXAPI_LIST_SAMPLE_RATES);
@@ -9456,9 +9782,14 @@ bool AppWindow::beginPage(const char* id, const char* title, bool* open, int fla
                                          mouse.y - pc.gripMy, nw, nh);
             ImGui::SetWindowSize(id, ImVec2(nw, nh));
         }
+        // THE CORNER'S ID IS ASKED OF gui/page_resize_id.hpp, NEVER OF IMGUI (0.99.76). ImGui::GetWindowResizeCornerID reads
+        // window->DockNode->HostWindow->ID for a window that is DockIsActive, and a window being dropped into or pulled out of a dock node
+        // is DockIsActive in frames where the node has no host window yet: 0xC0000005 at GetWindowResizeCornerID+0x1b, called from here,
+        // fatal, in field reports D94CCD4584724FAC (0.99.58) and DE3F72AAE6B69997 (0.99.75). The helper answers 0 in those frames, and
+        // pageGripIdHot does not read 0 == 0 as "the pointer is on the grip".
+        const ImGuiID cornerId = cascade::gui::pageResizeCornerId(self);
         const bool gripLit = gripLive || ImGui::IsItemHovered() ||
-                             ImGui::GetHoveredID() == ImGui::GetWindowResizeCornerID(self, 0) ||
-                             ImGui::GetActiveID() == ImGui::GetWindowResizeCornerID(self, 0);
+                             cascade::gui::pageGripIdHot(cornerId, ImGui::GetHoveredID(), ImGui::GetActiveID());
         if (gripLit) { ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); }
         const ImU32 groove = gripLit ? cascade::gui::theme::kPhosphor
                                      : cascade::gui::theme::kEnamelDark;
@@ -16300,6 +16631,15 @@ const AppWindow::RailListCache& AppWindow::railLists() {
     readFactText("fact.bandPlan.name", c.bandPlanName);
     readFactText("fact.status.bandPlanError", c.bandPlanError);
     readFactText("fact.status.audioHealth", c.audioHealth);
+    {
+        std::string bufferText;
+        readFactText("fact.audio.bufferMs", bufferText);
+        c.audioBufferMs = static_cast<int>(std::atof(bufferText.c_str()));
+        readFactText("fact.audio.leadNote", c.audioLeadNote);
+        std::string leadText;
+        readFactText("fact.audio.leadMs", leadText);
+        c.audioLeadMs = static_cast<int>(std::atof(leadText.c_str()));
+    }
 
     const int32_t plans = std::max<int32_t>(0, engineApi_->read_list(uiSession_, FOXAPI_LIST_BAND_PLANS, 0, nullptr));
     c.plans.resize(static_cast<std::size_t>(plans));
@@ -20049,7 +20389,12 @@ void AppWindow::drawUsageReportingSection() {
     ImGui::TextWrapped(
         "%s",
         tr("Anonymous counts only: version, operating system, how long sessions "
-           "run, which modes and plugins get used, and which radio model. Never "
+           "run, which modes and plugins get used, which radio model, how many "
+           "times the window froze waiting for the display driver, how many "
+           "times something quietly did not work (a radio that would not open, no "
+           "sound output, a failed update or plugin install), how many times the "
+           "window was slow and which part of it was, and how many times FoxSDR "
+           "recovered from a fault on its own. Never "
            "frequencies, never anything decoded, never your location, and no IP "
            "address is recorded."));
     ImGui::Spacing();
@@ -20124,7 +20469,15 @@ void AppWindow::drawUsageReportingSection() {
         ImGui::TextWrapped(
             "%s",
             tr("Each launch: id (random), version, os, arch, launches, crashes, "
-               "session seconds, sdr model, modes used, panels, plugins."));
+               "display stalls, failure counts, session seconds, sdr model, modes "
+               "used, panels, plugins."));
+        // 0.99.69: the crash count is split by how the unclean exit ended. Four more bare counts; the sentence says what they are and
+        // that they are only counts.
+        ImGui::TextWrapped(
+            "%s",
+            tr("The crash count is also split by how each unclean exit ended: crashed, "
+               "ended from outside, ended by the system, or not known. Four more counts, "
+               "nothing else."));
         ImGui::TextWrapped(
             "%s",
             tr("Every five minutes while open: id (the same one), version, a beat "
@@ -20409,15 +20762,36 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     // one call, and tests/test_diag_hang.cpp drives the real application
     // through THIS function in both of them.
     diagnosticsEnabled_ = on;
-    cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
-    // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
-    // never allowed to write (a bounded CI run) must not start writing because
-    // a switch was flipped.
-    if (!diagCrashDir_.empty()) {
-        cascade::core::DiagLog::instance().configure(cascade::core::diagLogDir(),
-                                                     diagnosticsEnabled_);
+    // THE FAILURE COUNTS FOLLOW THIS SWITCH TOO (0.99.64), as the stall count
+    // does: with Diagnostics off nothing new is counted (what is already kept
+    // stays, and is still sent with the next record). The ledger is the process's
+    // one (core/health_events.hpp): the engine arms and reads it, this switch gates it.
+    cascade::core::health::globalLedger()->setAllowed(on);
+    {
+        // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window
+        // does no disk work"): the reports folder and the log folder are made and the
+        // log file opened - once at start-up, and on a press of the switch.
+        cascade::core::WatchdogPause holdWatchdog(watchdog_);
+        cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
+        // never allowed to write (a bounded CI run) must not start writing because
+        // a switch was flipped.
+        if (!diagCrashDir_.empty()) {
+            cascade::core::DiagLog::instance().configure(cascade::core::diagLogDir(),
+                                                         diagnosticsEnabled_);
+        }
     }
     watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // AND THE SENTINEL, by the same switch (core/sentinel.hpp): off ends the watcher
+    // and forbids any report from it; on starts one if this run may have one at all
+    // (main() armed it only for an interactive session, or a test that asked) and
+    // none is running. A run never allowed to write has no directory, and gets none.
+    if (!diagCrashDir_.empty()) {
+        cascade::core::sentinelSetEnabled(diagnosticsEnabled_);
+    }
+    // FIXME(2026-10-21, 0.99.84 merge, ledger HEALTH-DIAG): master also records here whether the log file was on at the session's
+    // start (diagLogHasSessionStart_) and starts the early read of the previous session's log (startDiagHistoryRead) - the
+    // diagnostics bundle's "previous session" sections (0.99.62); the window has no history cache yet.
     // THE ENGINE'S OWN WATCHDOG (the pump move's step P5) is a second hang detector with a report directory of its own: "off means
     // off" has to reach it, or a session switched off would keep writing the pass's hang reports.
     engine_.setControlWatchdogReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
@@ -20686,6 +21060,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
                 std::fprintf(stderr,
                              "cascade: patch loaded with %d connection(s) dropped\n",
                              pr.dropped);
+                // THE SAVED PATCH LOST CONNECTIONS on the way back in, and the window went on with the rest: counted (the restore runs
+                // before the usage decision is made, and the ledger holds it until it is).
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::PatchLoad);
             }
         }
     }
@@ -20996,6 +21373,10 @@ void AppWindow::pollConfigWriter() {
         if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
     } else {
         std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
+        // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk, a file another program holds) and the window carries
+        // on with what it has: counted, once a session - the debounce asks again by itself, so a count of 1 means "this session had it".
+        // Never the message (a path). (0.99.65's back-off - the wait lengthened after failures - is DISK-WORK, still to carry.)
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::CfgSave);
     }
 }
 

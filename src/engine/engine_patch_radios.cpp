@@ -16,6 +16,7 @@
 #include <set>
 #include <thread>
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "core/mp3_writer.hpp"
@@ -58,6 +59,27 @@ namespace {
 std::string modelOnly(const std::string& label) {
     const std::size_t at = label.find(" (serial ");
     return at == std::string::npos ? label : label.substr(0, at);
+}
+
+// A radio the patch borrowed from the receiver, as the LOG names it. A sound
+// card's label is "Sound card: <its name> (<host API>)", and the name the
+// operating system gives an input is often one a person chose ("Headset
+// (Alice's AirPods Pro)"), so it is described instead (0.99.59).
+std::string keptRadioForLog(const std::string& kind, const cascade::source::SoundCardSettings& card,
+                            const std::string& label) {
+    if (kind == "soundcard") {
+        return "Sound card (" + cascade::source::loggableSoundCardDescription(card) + ")";
+    }
+    return modelOnly(label);
+}
+
+// A patch radio as the LOG names it: a sound card and a recording by kind -
+// the card's name may be a person's, and a recording's label is its file
+// name, which is the user's own data - and anything else by its model.
+std::string patchRadioForLog(const std::string& deviceKey, const std::string& label) {
+    if (pc::deviceDriver(deviceKey) == "soundcard") { return "a sound card"; }
+    if (pc::isIqFileKey(deviceKey)) { return "a recording"; }
+    return modelOnly(label);
 }
 
 // A speaker's destination by KIND: the WAV/MP3 file is named after the node,
@@ -113,7 +135,8 @@ std::vector<Engine::PatchDeviceChoice> Engine::patchDeviceChoices() const {
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // A Pluto needs its address typed in the Source panel; the patch has
         // no field for it, so it is not offered here rather than failing.
-        if (d.driver == "pluto") { continue; }
+        // The rtl_tcp server's row is an address too, and the same.
+        if (d.driver == "pluto" || d.driver == "rtltcp") { continue; }
         out.push_back({pc::makeDeviceKey(d.driver, d.args), d.label});
     }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
@@ -189,6 +212,13 @@ std::vector<pc::RadioInfo> Engine::patchRadioInfos() const {
 }
 
 void Engine::patchReconcile() {
+    // THE REPORT CONTEXT NAMES THE PATCH PAGE'S RADIOS (0.99.62), by driver kind,
+    // and this is where they start and stop - a radio that opened, one that was
+    // switched off or changed, one that faulted and was retired - so the block is
+    // rendered on the way out, whichever of the paths below was taken. Without it
+    // a fault on a patch radio's thread was reported as a fault with no radio at
+    // all (`source: siggen`, `device-open: no`).
+    DiagContextOnExit refreshOnExit{*this};
     // THE DEVICE LISTS. Until 0.99.40 the page read the native list and asked
     // for the SoapySDR scan (2026-09-23: a B200 is only found by that scan)
     // on the frame it opened. The scan is still asked for as a WISH, not fired
@@ -237,7 +267,7 @@ void Engine::patchReconcile() {
         cascade::core::diagLogf(
             "patch: the receiver's radio (%s) is handed to the patch page; the receiver "
             "runs on the signal generator until the patch is stopped",
-            keep.label.c_str());
+            keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         selectSource(0);
         // ...AND THE CONFIG STILL NAMES IT: currentConfig() saves the radio
         // held here rather than the generator standing in for it, so a
@@ -284,8 +314,22 @@ void Engine::patchReconcile() {
         if (!r.src) {
             patchRadioError_[id] = r.error.empty() ? "the device would not open" : r.error;
             patchRadioFailedAs_[id] = as;
-            cascade::core::diagWarnf("patch: radio node %u would not open: %s",
-                                     static_cast<unsigned>(id), patchRadioError_[id].c_str());
+            // THE PATCH PAGE'S RADIO THAT WOULD NOT OPEN is counted as the
+            // receiver's is (0.99.64, core/health_events.hpp): the driver kind
+            // and a reason class, nothing of the message.
+            if (const std::string kind = pc::deviceDriver(n->device);
+                kind != "file" && kind != "siggen") {
+                cascade::core::health::noteRadioFail(kind, patchRadioError_[id]);
+            }
+            if (pc::isIqFileKey(n->device)) {
+                // The NODE, never the file's name: a path is the user's data, and the
+                // reason a recording would not open can carry it.
+                cascade::core::diagWarnf("patch: radio node %u: its I/Q recording would not open",
+                                         static_cast<unsigned>(id));
+            } else {
+                cascade::core::diagWarnf("patch: radio node %u would not open: %s",
+                                         static_cast<unsigned>(id), patchRadioError_[id].c_str());
+            }
             continue;
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
@@ -293,6 +337,11 @@ void Engine::patchReconcile() {
         // core::converterRadioKey IS the patch device key), so the node's
         // frequency is an air frequency here too.
         radio->setConverter(converterForKey(n->device));
+        // THE SAME CRYSTAL CORRECTION the receiver uses for this device
+        // (0.99.56), as the worker applied it before its first tune: in the
+        // radio, or by retuning - then the view reads that tune back exactly.
+        radio->noteRadioPpm(r.radioPpm);
+        if (r.softwarePpm != 0.0) { radio->setSoftwarePpm(r.softwarePpm, r.ppmMemo); }
         std::string err;
         if (!radio->start(err)) {
             patchRadioError_[id] = err;
@@ -304,11 +353,16 @@ void Engine::patchReconcile() {
         if (!r.error.empty()) { patchRadioError_[id] = r.error; } else { patchRadioError_.erase(id); }
         patchRadioFailedAs_.erase(id);
         cascade::core::diagLogf("patch: radio node %u running %s at %.0f S/s",
-                                static_cast<unsigned>(id), modelOnly(r.label).c_str(),
+                                static_cast<unsigned>(id), patchRadioForLog(n->device, r.label).c_str(),
                                 radio->rateHz());
         patchRadioOpenedAs_[id] = as;
         patchRadios_[id] = std::move(radio);
         patchRadioSig_.erase(id);
+        if (const std::string kind = pc::deviceDriver(n->device); kind != "file" && kind != "siggen") {
+            cascade::core::health::noteRadioOpen(kind);
+        }
+        // FIXME(2026-10-21, 0.99.84 merge, ledger TESTER-USAGE): master counts the radio for the beta-tester usage record here
+        // (testerUsage_.noteRadio(driver) and noteFeature("native-drivers")); the engine has no tester-usage recorder yet.
     }
 
     // --- which radios should run ------------------------------------------------
@@ -342,7 +396,16 @@ void Engine::patchReconcile() {
         if (!it->second->fault().empty()) {
             patchRadioError_[id] = it->second->fault();
             patchRadioFailedAs_[id] = patchRadioOpenedAs_[id];
-            cascade::core::diagWarnf("patch: radio stopped: %s", it->second->fault().c_str());
+            // A RECORDING'S FAULT NAMES THE FILE ("I/O error while reading 'IQ file: <name>'"), and
+            // a log line never does (0.99.65): the line says which node and that it was a recording;
+            // the words, file name and all, are on the node's face for the person who chose it.
+            if (n != nullptr && pc::isIqFileKey(n->device)) {
+                cascade::core::diagWarnf(
+                    "patch: radio node %u stopped: its I/Q recording could not be read any further",
+                    static_cast<unsigned>(id));
+            } else {
+                cascade::core::diagWarnf("patch: radio stopped: %s", it->second->fault().c_str());
+            }
         }
         it->second->stop();
         it = patchRadios_.erase(it);
@@ -366,6 +429,19 @@ void Engine::patchReconcile() {
             // the node's AIR frequency is what it hears.
             const cascade::core::ConverterSetting conv = converterForKey(n->device);
             if (r.converter() != conv) { r.setConverter(conv); }
+            // So does a crystal correction switched or changed there (0.99.56):
+            // a radio that corrects itself is sent the new value; any other is
+            // retuned so the node's frequency is where it really sits.
+            const double ppm = ppmForPatchDevice(n->device);
+            if (r.radioCorrects()) {
+                if (r.radioPpm() != ppm && !r.setRadioPpm(ppm)) {
+                    r.noteRadioPpm(ppm);   // asked once; the reason is on the node
+                    patchRadioError_[id] = "the radio refused the frequency correction";
+                }
+            } else if (r.softwarePpm() != ppm) {
+                r.setSoftwarePpm(ppm);
+                if (pc::radioCentreSet(*n)) { r.setCentreHz(n->freqHz); }
+            }
             if (!pc::radioCentreSet(*n)) {
                 n->freqHz = r.centreHz();
                 n->centreChosen = true;
@@ -481,8 +557,11 @@ void Engine::patchReconcile() {
             (pc::radioCentreSet(*n) && cascade::core::airReachable(conv, centre))
                 ? std::optional<double>(cascade::core::radioFromAir(conv, centre))
                 : std::nullopt;
+        // This radio's crystal correction, read HERE for the same reason: the
+        // worker applies it before the first tune (0 = none, nothing sent).
+        const double ppm = ppmForPatchDevice(n->device);
         patchRadioPending_[id] = std::async(std::launch::async, [driver, args, label, rate,
-                                                                 centre = radioCentre]() {
+                                                                 centre = radioCentre, ppm]() {
             PatchRadioOpen r;
             r.label = label;
             // SoapySDR's modules are loaded by its enumeration, and the
@@ -531,7 +610,32 @@ void Engine::patchReconcile() {
             } else if (!set.sourceError.empty()) {
                 r.error = set.sourceError;
             }
-            if (centre.has_value()) { dev->setCenterFrequencyHz(*centre); }
+            // THE CRYSTAL CORRECTION, before the first tune (0.99.56): in the radio
+            // when it corrects its own crystal, otherwise by telling it the
+            // corrected frequency - with a memo of that tune, so the view the radio
+            // is handed to reads it back exactly.
+            double told = centre.value_or(0.0);
+            if (ppm != 0.0) {
+                if (dev->hasFrequencyCorrection()) {
+                    if (dev->setFrequencyCorrectionPpm(ppm)) {
+                        r.radioPpm = ppm;
+                    } else if (r.error.empty()) {
+                        r.error = "the radio refused the frequency correction";
+                    }
+                } else {
+                    r.softwarePpm = ppm;
+                    if (centre.has_value()) {
+                        told = cascade::core::ppmRequestHz(*centre, ppm);
+                        r.ppmMemo = cascade::core::PpmMemo{true, *centre, told};
+                    }
+                }
+                cascade::core::diagLogf("patch: %s frequency correction %s ppm %s", driver.c_str(),
+                                        cascade::core::ppmText(ppm).c_str(),
+                                        r.radioPpm != 0.0 ? "in the radio" : "by retuning");
+            }
+            if (centre.has_value() && !dev->setCenterFrequencyHz(told)) {
+                r.ppmMemo = cascade::core::PpmMemo{};
+            }
             // A patch radio has no gain slider of its own yet, so the radio's
             // own automatic gain is used where it has one - a dongle left at
             // its power-on gain hears very little.
@@ -593,10 +697,13 @@ void Engine::patchPublishSets() {
                 break;
             }
             case pc::OutputKind::Speakers:
-                dest = pc::makeDeviceDest(std::string{}, err);
+                // With the receiver's buffer (0.99.73): a fixed setting, or a
+                // lead the receiver has had to deepen, is not lost on a speaker
+                // made afterwards.
+                dest = pc::makeDeviceDest(std::string{}, err, audioLeadNowMs());
                 break;
             case pc::OutputKind::Device:
-                dest = pc::makeDeviceDest(pc::outputDeviceName(key), err);
+                dest = pc::makeDeviceDest(pc::outputDeviceName(key), err, audioLeadNowMs());
                 break;
         }
         bool replaced = false;
@@ -669,6 +776,11 @@ void Engine::patchPublishSets() {
 }
 
 void Engine::patchStopAll(bool restoreMain) {
+    // Every radio is retired below, and the block names the running ones (see
+    // patchReconcile), so it is rendered on every way out of here, the early
+    // return included. Rendered AFTER the radios are gone: a fault while one is
+    // being closed is still reported with that radio running, which is true.
+    DiagContextOnExit refreshOnExit{*this};
     if (!patchRadios_.empty()) {
         // Worded apart, so a log says which: a patch stopped (STOP, ALL OFF,
         // the receiver view chosen) or the application closing.
@@ -734,7 +846,8 @@ void Engine::patchStopAll(bool restoreMain) {
             soundCardRemembered_ = keep.card;
             restoreKeepLabel_ = keep.label;
         }
-        cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+        cascade::core::diagLogf("patch: handing %s back to the receiver",
+                                keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(false, keep.card);
         return;
@@ -778,14 +891,15 @@ void Engine::patchStopAll(bool restoreMain) {
                       keep.label.c_str());
         sourceError_ = buf;
         cascade::core::diagWarnf("patch: could not hand %s back to the receiver - not listed",
-                                 keep.label.c_str());
+                                 keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         return;
     }
     // Back where it was tuned when the patch took it: the AIR centre is handed
     // to the open itself, which sends it through THIS radio's converter. (It
     // used to be parked on the generator standing in and read back from
     // there, which lost a centre below 0 Hz on the air.)
-    cascade::core::diagLogf("patch: handing %s back to the receiver", keep.label.c_str());
+    cascade::core::diagLogf("patch: handing %s back to the receiver",
+                            keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
     selectSource(row, keep.centreHz);
 }
 

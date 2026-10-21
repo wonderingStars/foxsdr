@@ -1,0 +1,522 @@
+ 134/169  AppWindow::run@app_window.cpp
+        | float xscale = 1.0f, yscale = 1.0f;
+        | glfwGetWindowContentScale(window, &xscale, &yscale);
+        | cascade::gui::uiscale::setMonitorDpi(
+        | static_cast<unsigned>(std::lround(96.0 * static_cast<double>(xscale))));
+        | if (const char* envScale = std::getenv("FOXSDR_UI_SCALE");
+        | envScale != nullptr && envScale[0] != '\0') {
+ 117/124  AppWindow::drawToolbar@app_window.cpp
+        | const float uiScaleFactor = cascade::gui::uiscale::factor();
+        | cascade::gui::deckScale(availW / uiScaleFactor, layout, kBarMinScale);
+        | const float scale = deckScaleOnly * uiScaleFactor;
+        | const float capPxBase = std::max(9.0f, cascade::gui::fonts::kTinySize * deckScaleOnly);
+        | stopReceiver("the STOP dome");
+        | ImGui::PushFont(cascade::gui::fonts::legend(), capPxBase);
+  86/87   AppWindow::drawCenterPanels@app_window.cpp
+        | displayTipShown_ = false; // set again below by whichever panel shows the 4-second tip
+        | const double centreNow = src.centerFrequencyHz();
+        | const bool followLive = ImGui::GetTime() < passbandFollowUntilS_ && !airbandListening_ &&
+        | vfoDrag_ == VfoDrag::None && !wfPanning_;
+        | scale_.setSpan(centreNow, pipeline_.inputRateHz());
+        | const double tunedNow = centreNow + pipeline_.vfoOffsetHz();
+  66/67   AppWindow::drawPatchFaces@app_window.cpp
+        | const float drawZoom = zoom * cascade::gui::uiscale::factor();
+        | for (auto it = patchHolds_.begin(); it != patchHolds_.end();) {
+        | it = gone(it->first) ? patchHolds_.erase(it) : std::next(it);
+        | const pg::View v{pg::Vec2{originX + patchUi_.view.pan.x, originY + patchUi_.view.pan.y}, drawZoom};
+        | ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f * drawZoom, 2.0f * drawZoom));
+        | ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * drawZoom, 3.0f * drawZoom));
+  65/74   AppWindow::drawPluginWindows@app_window.cpp
+        | recordCoverage(coverage_, rxLat_, rxLon_, ht.t.latDeg, ht.t.lonDeg,
+        | detailTrackKind(ht.t.kind));
+        | const std::vector<std::string> declaredTrackers = declaredTrackPluginNames();
+        | for (const std::string& name : declaredTrackers) {
+        | const std::vector<std::string>& live = declaredTrackers;
+        | for (const cascade::core::HostTrack& ht : pluginUi_.unplacedTracks()) {
+  63/71   AppWindow::drawProblemReportPage@app_window.cpp
+        | constexpr float kH = 660.0f;
+        | cascade::core::problemReportDefaultAttachDiagnostics(problemReportKind_);
+        | cascade::core::problemReportDefaultAttachDiagnostics(problemReportKind_);
+        | if (!problemReportPastedValid_ || problemReportPastedFor_ != problemReportText_) {
+        | problemReportPasted_ = cascade::core::detectPastedReport(problemReportText_);
+        | problemReportPastedFor_ = problemReportText_;
+  63/65   AppWindow::drawFittedModulesWindow@app_window.cpp
+        | fittedDeck_->pictures.releaseAll();
+        | fittedDeck_->pageFile.clear();
+        | placeSavedFeatureWindow(7, fittedWinX_, fittedWinY_, fittedWinW_, fittedWinH_, 1060.0f, 720.0f);
+        | const bool drawn = beginPage("Fitted modules###fittedmoduleswindow", tr("FITTED MODULES"), &open,
+        | const std::vector<cascade::core::PluginFileVerdict> verdicts =
+        | cascade::core::classifyPluginFiles(list, pluginInventory_.plugins, catalog_);
+  60/61   AppWindow::startCatalogFetch@app_window.cpp
+        | if (catalogPending_ || installPending_ || screenshotPending_) { return; }
+        | const std::vector<std::string> sites = pluginSites_;
+        | const std::vector<cascade::core::PluginCatalogEntry> shown =
+        | sites.empty() ? std::vector<cascade::core::PluginCatalogEntry>{} : catalog_;
+        | catalogFuture_ = std::async(std::launch::async, [this, url, dir, sites, shown] {
+        | const auto readSites = [&](std::vector<cascade::core::PluginCatalogEntry>& fresh) {
+  50/71   AppWindow::drawTransmitPage@app_window.cpp
+        | constexpr float kTxH = 640.0f;
+        | const bool armed = txArming_.armed();
+        | ImGui::TextUnformatted(tr("ARM FOR PLUGINS"));
+        | ImGui::SetTooltip("%s", tr("Lets a plugin you have granted TRANSMIT key this radio, for\n"
+        | "the time you choose. It chooses nothing else: the\n"
+        | "frequency, the power and the mode are the ones on this page,\n"
+  49/53   AppWindow::drawPatchView@app_window.cpp
+        | const float platePad = cascade::gui::uiscale::px(kRailPlatePad);
+        | const ImVec2 wellSize(viewSize.x - platePad * 2.0f, viewBR.y - bodyTop - platePad);
+        | ImGui::SetCursorScreenPos(ImVec2(viewTL.x + platePad, bodyTop));
+        | const ImVec2 bandTL = ImGui::GetCursorScreenPos();
+        | const float pageW = ImGui::GetContentRegionAvail().x;
+        | const float uiS = cascade::gui::uiscale::factor();
+  47/51   AppWindow::drawDecodersSection@app_window.cpp
+        | rd.idle = pluginIsIdle(rd.key);
+        | std::size_t index = 0; // into `list`
+        | std::vector<RailRow> railRows;
+        | rr.hasPresets = p.preset != nullptr && p.preset->count() > 0u;
+        | rr.isDecoder = p.decoder != nullptr || p.iqDecoder != nullptr || p.imageDecoder != nullptr;
+        | rr.hasSettings = p.settingsUi != nullptr &&
+  45/51   AppWindow::drawPluginStoreWindow@app_window.cpp
+        | if (pluginStoreView_) { pluginStoreView_->releasePictures(); }
+        | if (pluginStoreDeck_) { pluginStoreDeck_->pageId.clear(); }
+        | testerUsage_.noteFeature("plugins");
+        | if (cascade::gui::storeShouldCheckOnOpen(storeFirstOpen_, true, catalogueReadThisSession(),
+        | catalogPending_ || installPending_ ||
+        | for (int mi = 0; mi < pio.Monitors.Size; ++mi) {
+  40/41   AppWindow::applyInputScript@app_window.cpp
+        | ImGuiContext& g = *ImGui::GetCurrentContext();
+        | for (int i = g.InputEventsQueue.Size - 1; i >= 0; --i) {
+        | const ImGuiInputEvent& e = g.InputEventsQueue[i];
+        | const bool input = e.Type == ImGuiInputEventType_MousePos ||
+        | e.Type == ImGuiInputEventType_MouseWheel ||
+        | e.Type == ImGuiInputEventType_MouseButton ||
+  39/40   AppWindow::pollPluginAsync@app_window.cpp
+        | regionalState_ = r.regionalState;
+        | regionalAdded_ = r.regionalAdded;
+        | regionalDropped_ = r.regionalDropped;
+        | if (r.sitesDone) { applySiteResults(r.sites); }
+        | catalogueFromCache_ = false;
+        | catalogueRefreshFailed_ = false;
+  38/42   AppWindow::rescanPlugins@app_window.cpp
+        | cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(
+        | cascade::core::breadcrumb::kReloadingPlugins);
+        | cascade::core::FrameScopeGuard reloadScope(cascade::core::FrameScope::PluginsReload);
+        | cascade::core::PhaseClock phases{cascade::core::PhaseClock::Publish{}};
+        | cascade::core::PhaseClock& clock;
+        | clock.log("plugins: reload",
+  36/37   AppWindow::drawDisplaySection@app_window.cpp
+        | benchSection(trId("Display"), displayOpen_, bandPlanOverlay_ ? tr("PLAN") : tr("PLAIN"),
+        | cascade::gui::theme::kPhosphor, planDrawing);
+        | displayOpen_ = displayShown;
+        | cascade::gui::census::note("display:body");
+        | const std::string now = cascade::gui::uiscale::choice();
+        | const bool isAuto = now == cascade::gui::uiscale::kAuto;
+  35/59   AppWindow::applyConfig@app_window.cpp
+        | radioSetupDontShow_ = cfg.radioSetupDontShow;
+        | displayRange_.restore(cascade::core::resolveRangeMode(
+        | cfg.waterfallRangeMode, cascade::core::DbPair{cfg.dbMin, cfg.dbMax}),
+        | cascade::core::DbPair{cfg.dbMin, cfg.dbMax});
+        | squelchAuto_ = cfg.squelchAuto; // quietly: a restored setting is not a decision to log
+        | if (replacePatch(cfg.patch, PatchReplace::Restore, &dropped) && dropped > 0) {
+  35/38   AppWindow::drawPluginWindowRows@app_window.cpp
+        | if (!lp.loaded || lp.imageDecoder == nullptr ||
+        | pluginIsStopped(cascade::core::pluginKey(lp))) {
+        | const cascade::core::HostImage* live = nullptr;
+        | for (const cascade::core::HostImage& cand : pluginImages_) {
+        | if (cand.plugin == lp.name) {
+        | const std::string id = imageWindowId(lp.name);
+  34/34   AppWindow::drawUi@app_window.cpp
+        | cascade::core::FrameScopeGuard frameScope(cascade::core::FrameScope::PreDraw);
+        | cascade::gui::beginSettingsFormFrame(pluginSettingsForms_);
+        | cascade::core::FrameScopeGuard savesScope(cascade::core::FrameScope::Saves);
+        | frameScope.to(cascade::core::FrameScope::PluginPanels);
+        | frameScope.to(cascade::core::FrameScope::PreDraw);
+        | if (key.latched || key.pttHeld) { testerUsage_.noteFeature("transmit"); }
+  32/44   AppWindow::drawTrackList@app_window.cpp
+        | const std::vector<cascade::core::HostTrack>& heard) {
+        | const std::size_t total = cascade::core::visibleTrackCount(tracks);
+        | const std::size_t shown = listedTrackCount(*page.view, tracks, mapListOnScreenOnly_);
+        | const std::size_t heardCount = cascade::core::visibleUnplacedTrackCount(heard);
+        | const std::size_t heardRows = mapListOnScreenOnly_ ? 0u : heardCount;
+        | if (shown + heardRows == 0u) {
+  30/38   AppWindow::drawSourceSection@app_window.cpp
+        | const std::string sourceChip = sourceRowChip();
+        | const auto rowLabel = [this](int idx) -> const char* { return sourceRowLabel(idx); };
+        | const bool keepPreview = sourceKeepPreview();
+        | const std::string preview = sourceComboPreview();
+        | const bool comboOpen = ImGui::BeginCombo("##source_select", preview.c_str());
+        | if (ImGui::SmallButton(trId("RADIO SETUP"))) { radioSetupOpen_ = true; }
+  30/35   AppWindow::drawStatusColumn@app_window.cpp
+        | const float kPad = cascade::gui::uiscale::px(8.0f);
+        | drawStatusFoldKey(colTL.x, colTL.y, colSize.x);
+        | const float valuePx = cascade::gui::fonts::uiPx() * cascade::gui::theme::readingsScale();
+        | const float baseValuePx = cascade::gui::fonts::uiPx();
+        | const float plateH = tinyH * 2.0f + 13.0f * s;
+        | const float featureKeyH = tinyH + 8.0f * s;
+  27/33   AppWindow::currentConfig@app_window.cpp
+        | cfg.patchPresets = patchPresets_.list();
+        | cfg.patchPresetPrevious = patchPresets_.previous();
+        | cfg.railCollapsed = railCollapsed_;
+        | cfg.statusCollapsed = statusCollapsed_;
+        | cfg.displayOpen = displayOpen_;
+        | cfg.radioSetupDontShow = radioSetupDontShow_;
+  27/29   AppWindow::drawUpdatesSection@app_window.cpp
+        | const bool storeOffered = packaged && storeUpdate_.ok && storeUpdate_.updates > 0;
+        | const bool offered = packaged ? storeOffered : update_.newer;
+        | const bool important = packaged ? storeUpdate_.mandatory : update_.critical;
+        | if (packaged && storeInstallPending_) {
+        | updateLamp = cascade::gui::theme::kAmber;
+        | updateChip = important ? tr("IMPT") : tr("NEW");
+  20/27   AppWindow::drawBookmarksSection@app_window.cpp
+        | cascade::gui::census::rect("bookmarks:importpath", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+        | if (bookmarkImportPath_[0] == '\0') {
+        | openImportDialog(cascade::core::ImportInto{}, std::string());
+        | importBookmarkFile(bookmarkImportPath_);
+        | cascade::gui::census::rect("bookmarks:import", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+        | ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"),
+  19/22   AppWindow::drawPatchTransport@app_window_patch_radios.cpp
+        | const bool presetsLit = patchPresetsOpen_;
+        | cascade::gui::theme::withAlpha(cascade::gui::theme::kPhosphor, 0.35f));
+        | if (ImGui::Button(trId("PRESETS###patchpresets"), ImVec2(0.0f, kR * 1.7f))) {
+        | patchPresetsOpen_ = !patchPresetsOpen_;
+        | if (presetsLit) { ImGui::PopStyleColor(); }
+        | ImGui::SetTooltip("%s", tr("Save the patch on the canvas under a name, or load one you saved.\n"
+  18/18   AppWindow::drawRecorderSection@app_window.cpp
+        | const auto drawStarting = [](const cascade::gui::RecordStart& st, const char* label,
+        | const char* cancelling) -> bool {
+        | ImGui::Button(cancelling, ImVec2(-FLT_MIN, 0.0f));
+        | cancel = ImGui::Button(label, ImVec2(-FLT_MIN, 0.0f));
+        | ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"),
+        | if (drawStarting(iqStart_, trId("Starting IQ - click to cancel##recIqStarting"),
+  17/18   AppWindow::drawBookmarkMarkers@app_window.cpp
+        | const float lineH = font != nullptr ? font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, "Hg").y
+        | : ImGui::GetTextLineHeight();
+        | const float rowPitch = lineH + 1.0f;
+        | const int rowCap = bookmarkStackNames_ ? cascade::gui::kBookmarkNameMaxRows : 1;
+        | const int maxRows = cascade::gui::bookmarkNameRowCapacity(strip0 - labelY, rowPitch, rowCap);
+        | std::vector<std::vector<std::pair<float, float>>> placedByRow(static_cast<std::size_t>(maxRows));
+  15/53   AppWindow::patchReconcile@app_window_patch_radios.cpp
+        | patchRadioError_[id].c_str());
+        | if (pc::Node* mn = patchGraph_.mutableNode(id);
+        | mn != nullptr && std::fabs(mn->rateHz - r.src->sampleRateHz()) > 0.5) {
+        | mn->rateHz = r.src->sampleRateHz();
+        | const std::string patchDriver = pc::deviceDriver(n->device);
+        | if (patchDriver != "file") {
+  15/17   AppWindow::drawDiagnosticsSection@app_window.cpp
+        | if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
+        | tr("For SDRplay owners: steps the RSP through every sample rate, band, LNA state "
+        | "and antenna once, times every call to the SDRplay API, and writes one text "
+        | "file you can attach to a bug report. It contains no serial number and no file "
+        | const bool probeRunning = sdrplayProbeChild_ != nullptr;
+        | device_ != nullptr && std::strcmp(device_->driverKey(), "sdrplay") == 0;
+  14/14   AppWindow::applyControlRequest@app_window.cpp
+        | if (holdAudioLockMs_ > 0 && !holdAudioLockDone_ && pipeline_.running()) {
+        | stopReceiver("a control request (the web remote or a plugin)");
+        | const double remoteBwBefore = vfoBandwidthHz_;
+        | if (vfoBandwidthHz_ != remoteBwBefore) { logBandwidthChange("remote request"); }
+        | setSquelchAuto(false, "remote"); // the web control's threshold is a manual choice
+        | displayRange_.restore(cascade::core::RangeMode::Manual, cascade::core::DbPair{lo, hi});
+  13/15   AppWindow::refreshPluginRunner@app_window.cpp
+        | const std::string lkey = cascade::core::pluginKey(lp);
+        | if (lkey.empty()) { continue; }
+        | const cascade::core::PluginRun mode = pluginRunMode(lkey);
+        | if (mode == cascade::core::PluginRun::Always ||
+        | (mode == cascade::core::PluginRun::Auto &&
+        | cascade::core::pluginCapsStandingDuty(lp.capabilities))) {
+  13/15   AppWindow::pollUpdateAsync@app_window.cpp
+        | for (const std::string& id : messagesSeen_) {
+        | for (const cascade::core::TeamMessage& m : update_.messages) {
+        | if (kept.size() != messagesSeen_.size()) {
+        | messagesSeen_ = std::move(kept);
+        | cascade::core::StoreUpdateCheck storeChecked;
+        | if (storeCheck_.poll(storeChecked)) {
+  13/14   AppWindow::stopReceiver@app_window.cpp
+        | void AppWindow::stopReceiver(const char* who) {
+        | const bool running = pipeline_.running() || pipeline_.faulted();
+        | const bool iq = running && (iqRecorder_.recording() || iqStart_.pending() || iqStartQueued_);
+        | running && (audioRecorder_.recording() || audioStart_.pending() || audioStartQueued_);
+        | const auto recordersFrom = std::chrono::steady_clock::now();
+        | if (iq) { stopIqRecording(); }
+  11/11   AppWindow::detachAndUnloadPlugins@app_window.cpp
+        | void AppWindow::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
+        | cascade::core::FrameScopeGuard reloadScope(cascade::core::FrameScope::PluginsReload);
+        | std::optional<cascade::core::PhaseClock> publishOnly;
+        | if (phases == nullptr) { publishOnly.emplace(cascade::core::PhaseClock::Publish{}); }
+        | cascade::core::PhaseClock* const clock = (phases != nullptr) ? phases : &*publishOnly;
+        | const auto lap = [clock](const char* name) { clock->begin(name); };
+  10/12   AppWindow::drawScannerSection@app_window.cpp
+        | const std::size_t tickedCount = tickedScanList().size();
+        | bool listMode = scanTicked_;
+        | cascade::core::formatUtf8(tickId, tr("Ticked frequencies (%zu)"), tickedCount);
+        | if (ImGui::Checkbox(tickId.c_str(), &listMode)) {
+        | ImGui::SetTooltip("%s", tr("Scans the rows ticked in the Bookmarks list, in frequency order,\n"
+        | "tuning each one's mode and bandwidth with it."));
+  10/11   AppWindow::reportPluginStatus@app_window.cpp
+        | for (const auto& [id, mode] : pluginRun_) {
+        | if (mode == cascade::core::PluginRun::Stopped) { ++stoppedCount; }
+        | std::printf("plugin stopped: count=%d\n", stoppedCount);
+        | for (const auto& [id, mode] : pluginRun_) {
+        | if (mode == cascade::core::PluginRun::Stopped) {
+        | std::printf("plugin stopped: file=%s\n", id.c_str());
+  10/11   AppWindow::drawFrequencyReadout@app_window.cpp
+        | std::max(14.0f, cascade::gui::counterTubeH(layout) * s * 0.60f) /
+        | cascade::gui::uiscale::factor());
+        | const cascade::core::BandEntry* fromBand = bandPlan_.at(hz);
+        | const cascade::core::BandEntry* toBand = bandPlan_.at(typed);
+        | const char* follow = toBand == nullptr
+        | : cascade::core::conventionalModeForBand(
+   9/11   AppWindow::scannerFrame@app_window.cpp
+        | if (scanTicked_ && freqMgr_.version() != scanListVersion_) {
+        | const std::vector<double> now = tickedScanList();
+        | if (now != scanList_) { startTickedScan(); }
+        | if (retune.has_value() && scanTicked_) {
+        | const std::vector<cascade::core::Bookmark>& list = freqMgr_.list();
+        | const cascade::core::Bookmark* row = nullptr;
+   9/11   AppWindow::applyPluginPreset@app_window.cpp
+        | const CascadePreset& ps, bool pin) {
+        | if (pin) { recordPluginStopped(cascade::core::pluginKey(p), false); }
+        | const cascade::gui::RateSetOutcome set = cascade::gui::applySourceRate(
+        | const double bwBefore = vfoBandwidthHz_;
+        | if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("decoder preset"); }
+        | if ((ps.flags & CASCADE_PRESET_FLAT_AUDIO) != 0u) {
+   7/8    AppWindow::drawViewKeys@app_window.cpp
+        | const float keyH = std::max(cascade::gui::uiscale::px(22.0f), cascade::gui::fonts::tinyPx() + 9.0f * s);
+        | const float x0 = colX + cascade::gui::uiscale::px(cascade::gui::kBankKeyInset);
+        | const float keyW = cascade::gui::bankKeyWidth(colW, 2, s);
+        | if (keyW < 24.0f * s || dl == nullptr) { return top; }
+        | const float keyGap = cascade::gui::uiscale::px(cascade::gui::kBankKeyGap);
+        | const ImVec2 tl(x0 + static_cast<float>(i) * (keyW + keyGap), top);
+   7/8    AppWindow::drawRailBankKeys@app_window.cpp
+        | const float kPad = cascade::gui::uiscale::px(cascade::gui::kBankKeyInset); // the plate's own inset
+        | const float kGap = cascade::gui::uiscale::px(cascade::gui::kBankKeyGap);
+        | const float kStrip = cascade::gui::uiscale::px(7.0f); // the lamp strip and its gap, below the key
+        | const float keyH = std::max(cascade::gui::uiscale::px(22.0f), cascade::gui::fonts::tinyPx() + 9.0f * s);
+        | const float keyW = cascade::gui::bankKeyWidth(colW, cascade::gui::kRailBankCount, s);
+        | if (keyW < 24.0f * s || dl == nullptr) { return bodyTop; }
+   7/7    AppWindow::watchdogShellHooks@app_window.cpp
+        | hooks.pause = [this] { watchdog_.pauseUser(); };
+        | hooks.resume = [this] { watchdog_.resumeUser(); };
+        | cascade::gui::ShellPauseHooks accounted;
+        | accounted.pause = [watchdogSide = hooks.pause] {
+        | cascade::core::frameTimer().userWaitBegin();
+        | accounted.resume = [watchdogSide = hooks.resume] {
+   6/17   AppWindow::drawSinksSection@app_window.cpp
+        | cascade::core::formatUtf8(preview, "%s %d ms", tr("AUTOMATIC"), audioLeadNowMs());
+        | cascade::core::formatUtf8(preview, "%d ms", audioBufferMs_);
+        | if (ImGui::BeginCombo(cascade::gui::labelAboveIfNeeded(trId("Audio buffer")),
+        | if (ImGui::Selectable(item.c_str(), audioBufferMs_ == choice)) {
+        | if (audioBufferMs_ == choice) { ImGui::SetItemDefaultFocus(); }
+        | if (!muteSubjectText().empty()) {
+   6/14   AppWindow::drawUsageReportingSection@app_window.cpp
+        | telemetryFirstRun_ = telemetryEnabled_ ? cascade::core::utcDateToday() : std::string();
+        | telemetryFirstVersion_ = telemetryEnabled_ ? cascade::versionString() : std::string();
+        | stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_,
+        | healthLedger_->arm(healthLedgerPath_, telemetryInstallId_,
+        | telemetryFirstVersion_.clear();
+        | "display stalls, failure counts, session seconds, sdr model, modes used, "
+   6/7    AppWindow::openPluginWindowsFor@app_window.cpp
+        | const bool tracker = p.trackSource != nullptr && !pluginIsStopped(cascade::core::pluginKey(p));
+        | pluginWindows_.show(imageWindowId(p.name));
+        | pluginWindows_.show(panelWindowId(p.name, panelTitleOf(p)));
+        | bool ownWindow = p.imageDecoder != nullptr || tracker || p.panel != nullptr;
+        | if (p.instrument != nullptr) {
+        | pluginWindows_.show(instrumentWindowIdFor(p.name, instrumentTitleOf(p)));
+   6/6    AppWindow::startAudioRecording@app_window.cpp
+        | cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
+        | if (audioRecorder_.recording() || audioStart_.pending()) { return !audioStart_.cancelled(); }
+        | cascade::core::Recorder::OpenRequest req;
+        | if (!audioRecorder_.prepare(cascade::core::RecordKind::Audio, recordDir_,
+        | cascade::core::Pipeline::kAudioRateHz, std::string{}, req,
+        | audioStart_.request(audioRecorder_.opener(), std::move(req));
+   6/6    AppWindow::reportPluginTestResult@app_window.cpp
+        | std::printf("plugin regional: state=%s added=%d dropped=%d\n", regionalState_.c_str(),
+        | regionalAdded_, regionalDropped_);
+        | std::printf("plugin regional: state=%s added=%d dropped=%d\n", regionalState_.c_str(),
+        | regionalAdded_, regionalDropped_);
+        | "licence=\"%s\" install=%s installAcked=%s regional=%d\n",
+        | noAckText.c_str(), ackText.c_str(), e.regional ? 1 : 0);
+   6/6    AppWindow::maybeAutoPreset@app_window.cpp
+        | void AppWindow::maybeAutoPreset(const std::string& pluginKey, const char* verb, bool pin) {
+        | CascadePreset ps = presets[static_cast<std::size_t>(idx)];
+        | if ((ps.flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) {
+        | ps.frequencyHz = deviceCentreHz + vfoOffsetHz;
+        | ps.flags &= ~CASCADE_PRESET_DEVICE_CENTRE;
+        | applyPluginPreset(*found, ps, pin);
+   6/6    AppWindow::drawDecoderWindow@app_window.cpp
+        | float pageW = kSeparatePageW;
+        | float pageH = kSeparatePageH;
+        | placeInsideMainWindow(0, kSeparatePageW, kSeparatePageH, pageW, pageH);
+        | const bool pageDrawn = beginPage("Decoder output###decoderout", tr("DECODER OUTPUT"),
+        | &decoderWindowOpen_, 0, pageW, pageH);
+        | noteWindowRectInCensus("decoder:window", "Decoder output###decoderout");
+   5/10   AppWindow::finishDeviceOpen@app_window.cpp
+        | testerUsage_.noteFeature("siggen");
+        | } else if (r.kind != "file") {
+        | testerUsage_.noteRadio(r.kind);
+        | if (r.kind != "soapy" && r.kind != "soundcard") {
+        | testerUsage_.noteFeature("native-drivers");
+   5/8    AppWindow::drawDecoderStatusRows@app_window.cpp
+        | [this](const std::string& key) { return pluginIsStopped(key); },
+        | [this](const std::string& key) { return pluginIsIdle(key); });
+        | decoders.live + decoders.stopped + decoders.refused + decoders.idle > 0;
+        | if (!decoderLog_.empty() || pluginRunner_.activeCount() > 0 || wakeableTextDecoderCount() > 0) {
+        | cascade::gui::census::rect("decoder:showkey", a.x, a.y, b.x, b.y);
+   5/6    AppWindow::applyKeyAction@app_window.cpp
+        | stopReceiver("the Start/Stop key");
+        | setSquelchAuto(false, "keys"); // a hand on the keys is a manual choice
+        | testerUsage_.noteFeature("cleanup");
+        | passbandFollowUntilS_ = 0.0;
+        | passbandFollowUntilS_ = 0.0;
+   5/5    AppWindow::startAddAll@app_window.cpp
+        | void AppWindow::startAddAll(bool noticesAcknowledged, bool updatesOnly) {
+        | if (addAllRun_.active || catalogPending_ || installPending_ || screenshotPending_) { return; }
+        | cascade::gui::AddAllPlan plan = cascade::gui::planAddAll(model, noticesAcknowledged);
+        | if (model.haveCatalogue && !model.busy && plan.update.empty()) {
+        | FOX_TR_NOOP("every module in the catalogue is already fitted, and none has a newer build");
+   4/5    AppWindow::startUpdateCheck@app_window.cpp
+        | storeUpdate_ = cascade::core::StoreUpdateCheck{};
+        | cascade::core::diagLogf("%s", cascade::core::storeUpdateAskLine());
+        | void* const owner = cascade::gui::frame::nativeHandle(mainWindow_);
+        | storeCheck_.start([owner]() { return cascade::core::checkStoreForUpdates(owner); });
+   4/4    AppWindow::recordPluginStopped@app_window.cpp
+        | const std::string id = cascade::core::pluginRunId(pluginKey);
+        | pluginRun_[id] = cascade::core::PluginRun::Stopped;
+        | pluginLife_[id].running = false;
+        | pluginRun_[id] = cascade::core::PluginRun::Always;
+   4/4    AppWindow::drawPluginsSection@app_window.cpp
+        | const std::size_t idlePlugins = idleDecoderCount();
+        | const std::size_t notFedPlugins =
+        | decoders > fedPlugins + idlePlugins ? decoders - fedPlugins - idlePlugins : 0u;
+        | const bool notFed = pipeline_.running() && notFedPlugins > 0u;
+   4/4    AppWindow::drawPluginStoreSection@app_window.cpp
+        | const bool haveCatalog = catalogueReadThisSession();
+        | "are always https and always sha256-verified.\n"
+        | "This replaces the FoxSDR catalogue. To add someone else's\n"
+        | "catalogue beside it, use SITES in the plugin store."));
+   3/6    AppWindow::applyDiagnosticsEnabled@app_window.cpp
+        | healthLedger_->setAllowed(on);
+        | diagLogHasSessionStart_ = on;
+        | if (diagnosticsEnabled_) { startDiagHistoryRead(); }
+   3/5    AppWindow::patchPublishSets@app_window_patch_radios.cpp
+        | dest = pc::makeWavDestAsync(recordDir_, prefix, err, &patchDestSeams_);
+        | dest = pc::makeMp3Dest(recordDir_, prefix, err, &patchDestSeams_);
+        | dest = pc::makeWavDestAsync(recordDir_, prefix, werr, &patchDestSeams_);
+   3/3    AppWindow::startUpdate@app_window.cpp
+        | if (catalogPending_ || installPending_ || screenshotPending_ || u.entry == nullptr) { return; }
+        | installBusyId_ = cascade::core::PluginRepo::catalogueKey(u.entry->source, u.entry->id);
+        | installResultId_ = installBusyId_;
+   3/3    AppWindow::startInstall@app_window.cpp
+        | if (catalogPending_ || installPending_ || screenshotPending_) { return; }
+        | installBusyId_ = cascade::core::PluginRepo::catalogueKey(entry.source, entry.id);
+        | installResultId_ = installBusyId_;
+   3/3    AppWindow::pumpAddAll@app_window.cpp
+        | if (installPending_ || catalogPending_ || screenshotPending_) { return; }
+        | const int idx = catalogIndexByKey(id);
+        | if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) != id) { continue; }
+   3/3    AppWindow::maybeSaveConfig@app_window.cpp
+        | if (configWriter_.writesForbidden()) { return; }
+        | const bool retryHeld = configRetryHeld(nowS, kConfigDebounceS);
+        | if (!retryHeld && nowS - lastChangeTimeS_ >= kConfigDebounceS) {
+   2/4    AppWindow::drawFeatureRequestPage@app_window.cpp
+        | if (!cascade::core::featureRequestContactHasEmailAddress(featureRequestContact_)) {
+        | "%s", tr("Without an email address we cannot reply or tell you when this is added."));
+   2/3    AppWindow::pollSourceAsync@app_window.cpp
+        | if (!soapyScanPartial_ && soapyDevices_.empty() && nativeDevices_.empty()) {
+        | cascade::core::health::noteScanNone();
+   2/3    AppWindow::pollConfigWriter@app_window.cpp
+        | noteConfigWrite(true, std::string()); // the wait after failures goes back to the start
+        | noteConfigWrite(false, configWriter_.lastError());
+   2/3    AppWindow::launchDeviceOpen@app_window.cpp
+        | if (r.kind == "airspy" || r.kind == "hydrasdr") {
+        | const auto mem = airspyMemory_.find(cascade::core::airspyRadioKey(r.args, r.kind));
+   2/3    AppWindow::drawMenuColumn@app_window.cpp
+        | drawRailFoldKey(colTL.x, colTL.y, colSize.x);
+        | if (testerSectionVisible()) { drawTesterUsageSection(); }
+   2/3    AppWindow::beginPage@app_window.cpp
+        | m = drawCabinet(dl, tl, br, cascade::gui::uiscale::px(kRailMinMargin));
+        | cascade::gui::pageGripIdHot(cornerId, ImGui::GetHoveredID(),
+   2/2    AppWindow::tuneAbsoluteHz@app_window.cpp
+        | if (pipeline_.running() && !scanner_.active() && !isPluginPreset) {
+        | audioOutputTunePending_ = true;
+   2/2    AppWindow::stopAudioRecording@app_window.cpp
+        | cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
+        | audioStart_.cancel(); // see stopIqRecording
+   2/2    AppWindow::setPluginStopped@app_window.cpp
+        | setPluginRun(pluginKey, stopped ? cascade::core::PluginRun::Stopped
+        | : cascade::core::PluginRun::Always);
+   2/2    AppWindow::pluginInstallBlockedReason@app_window.cpp
+        | if (catalogPending_ || installPending_ || screenshotPending_) {
+        | if ((!e.legalNotice.empty() || !e.source.empty()) && !acknowledged) {
+   2/2    AppWindow::openTransmitRadio@app_window.cpp
+        | transmitter_.setDataFlat(transmitDataFlat_);
+        | txArmRefusal_ = cascade::core::TxArming::Refusal::None;
+   2/2    AppWindow::launchInstaller@app_window.cpp
+        | const bool started = cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
+        | if (!started) { cascade::core::health::noteUpdateRunFailed(); }
+   2/2    AppWindow::drawSatelliteMapBody@app_window.cpp
+        | const float spx = cascade::gui::fonts::tinyPx();
+        | ImVec2(x, stripY + (kStripKeyH - spx) * 0.5f),
+   2/2    AppWindow::drawRadioSection@app_window.cpp
+        | if (ImGui::Selectable(kBwLabels[i], bandwidthIndex_ == i)) { setBandwidthIndex(i); }
+        | setSquelchAuto(false, "slider"); // a hand on the slider is a manual choice
+   2/2    AppWindow::drawMuteBanner@app_window.cpp
+        | ImGui::PushFont(nullptr, mb.wordsPx / cascade::gui::uiscale::factor());
+        | ImGui::PushFont(nullptr, mb.px / cascade::gui::uiscale::factor());
+   2/2    AppWindow::drawDemodScopePage@app_window.cpp
+        | ImVec2(cascade::gui::uiscale::px(84.0f), 0.0f))) {
+        | ImVec2(cascade::gui::uiscale::px(84.0f), 0.0f))) {
+   2/2    AppWindow::drawAudioFilterSection@app_window.cpp
+        | if (nrEnabled_) { testerUsage_.noteFeature("cleanup"); }
+        | if (notchEnabled_) { testerUsage_.noteFeature("cleanup"); }
+   2/2    AppWindow::applyPendingTheme@app_window.cpp
+        | cascade::gui::uiscale::applyThemeComposed(
+        | g_uiStyleBase, g_uiStyleBaseCaptured, cascade::gui::uiscale::factor());
+   1/33   AppWindow::telemetryStartup@app_window.cpp
+        | healthLedger_->setAllowed(diagnosticsEnabled_);
+   1/13   AppWindow::telemetryJournal@app_window.cpp
+        | cfg.messagesSeen = messagesSeen_;
+   1/9    AppWindow::adoptDeviceMirrors@app_window.cpp
+        | "source: auto gain remembered on but the radio refused it");
+   1/4    AppWindow::selectSource@app_window.cpp
+        | testerUsage_.noteFeature("siggen");
+   1/4    AppWindow::findVisibleTrack@app_window.cpp
+        | for (const cascade::core::HostTrack& ht : pluginUi_.unplacedTracks()) {
+   1/2    AppWindow::removeInstalledPlugin@app_window.cpp
+        | deleted = pluginRepo_.remove(pluginDir_, fileName, err);
+   1/2    AppWindow::removeBlockedPlugin@app_window.cpp
+        | deleted = pluginRepo_.removeQuarantined(pluginDir_, fileName, pluginQuarantineSuffix(), err);
+   1/2    AppWindow::drawUpdateBanner@app_window.cpp
+        | cascade::gui::census::note("update:site-banner");
+   1/2    AppWindow::copyDiagnosticsBundle@app_window.cpp
+        | const std::string bundle = currentDiagnosticsBundle(/*freshHistory=*/true);
+   1/1    AppWindow::stopIqRecording@app_window.cpp
+        | cascade::core::FrameScopeGuard recorderScope(cascade::core::FrameScope::Recorder);
+   1/1    AppWindow::setModeIndex@app_window.cpp
+        | testerUsage_.noteFeature("modes");
+   1/1    AppWindow::refreshDiagContext@app_window.cpp
+        | cascade::core::setDiagContext(currentDiagContext(&loaded));
+   1/1    AppWindow::pluginIsStopped@app_window.cpp
+        | return pluginRunMode(pluginKey) == cascade::core::PluginRun::Stopped;
+   1/1    AppWindow::maybeAutoPresetOnStart@app_window.cpp
+        | maybeAutoPreset(pluginKey, "started", /*pin=*/true);
+   1/1    AppWindow::maybeAutoPresetOnShow@app_window.cpp
+        | maybeAutoPreset(pluginKey, "window opened", /*pin=*/false);
+   1/1    AppWindow::drawTargetDetailsWindow@app_window.cpp
+        | ImGui::BeginDisabled(!cascade::core::trackHasPosition(found->t));
+   1/1    AppWindow::drawTargetDetailsSection@app_window.cpp
+        | ImGui::BeginDisabled(!cascade::core::trackHasPosition(found->t));
+   1/1    AppWindow::drawStereoRdsControls@app_window.cpp
+        | testerUsage_.noteFeature("fm-rds");
+   1/1    AppWindow::drawScopeModeControl@app_window.cpp
+        | if (declaredTrackPluginNames().empty()) {
+   1/1    AppWindow::drawScopeMode@app_window.cpp
+        | stopReceiver("the scope's POWER key");
+   1/1    AppWindow::drawDiagnosticsOffer@app_window.cpp
+        | if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
+   1/1    AppWindow::drawDemodScopeSection@app_window.cpp
+        | if (demodScopeOpen_) { testerUsage_.noteFeature("scope"); }
+   1/1    AppWindow::dispatchKeyBindings@app_window.cpp
+        | testerUsage_.noteFeature("keys");
+   1/1    AppWindow::closeTransmitRadio@app_window.cpp
+        | disarmTransmitPlugins("the transmit radio was closed");
+   1/1    AppWindow::catalogEntryInstalled@app_window.cpp
+        | if (pluginInstallState(e).kind != cascade::core::InstallStateKind::NotInstalled) {

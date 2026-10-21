@@ -868,6 +868,11 @@ void HealthLedger::setAllowed(bool allowed) {
     if (!allowed && !s_->decided) { s_->counts.clear(); }
 }
 
+bool HealthLedger::allowed() const {
+    std::lock_guard<std::mutex> lk(s_->m);
+    return s_->allowed;
+}
+
 bool HealthLedger::decided() const {
     std::lock_guard<std::mutex> lk(s_->m);
     return s_->decided;

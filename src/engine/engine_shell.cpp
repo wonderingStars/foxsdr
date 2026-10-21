@@ -128,7 +128,9 @@ cascade::core::PluginUi& rawPluginUi(HostPluginFeed& feed) { return static_cast<
 
 void EngineShell::initialise() { SHELL_ENGINE.initialise(); }
 void EngineShell::loadBookmarks() { SHELL_ENGINE.loadBookmarks(); }
-void EngineShell::telemetryStartup(const cascade::core::AppConfig& cfg) { SHELL_ENGINE.telemetryStartup(cfg); }
+void EngineShell::telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir) {
+    SHELL_ENGINE.telemetryStartup(cfg, configDir);
+}
 void EngineShell::applyConfig(const cascade::core::AppConfig& cfg) { SHELL_ENGINE.applyConfig(cfg); }
 std::string EngineShell::pluginCatalogueUrl() const { return SHELL_ENGINE.pluginCatalogueUrl_; }
 

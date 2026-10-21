@@ -783,7 +783,8 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     CHECK(run != std::string::npos);
     const std::size_t firstPass = text.find("engine_.controlPass();", run);
     const std::size_t startThread = text.find("engine_.startControlThread(opt);", run);
-    const std::size_t loop = text.find("while (!glfwWindowShouldClose(window) && !closeRequested_) {", run);
+    // (0.99.67: the loop also ends when the console the program started on asks for the close - core/console_close.hpp.)
+    const std::size_t loop = text.find("while (!glfwWindowShouldClose(window) && !closeRequested_ && !cascade::core::consoleCloseRequested()) {", run);
     const bool startOk = firstPass != std::string::npos && startThread != std::string::npos && loop != std::string::npos &&
                          firstPass < startThread && startThread < loop;
     if (!startOk) { std::printf("FAIL: run() does not start the engine's pass (first publish, then the thread) before the frame loop\n"); }

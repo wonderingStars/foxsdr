@@ -1395,6 +1395,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             // the same two ("open-pluto:") and the sound card's open, too.
             if (remote && (std::strncmp(c.text, "file:", 5) == 0 || std::strncmp(c.text, "pluto:", 6) == 0 ||
                            std::strncmp(c.text, "open-pluto:", 11) == 0 ||
+                           std::strncmp(c.text, "open-rtltcp:", 12) == 0 ||
                            std::strncmp(c.text, "soundcard:", 10) == 0)) {
                 return FOXAPI_DENIED;
             }

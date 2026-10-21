@@ -1395,6 +1395,9 @@ void testTransmitterHandPrecedence() {
 
     // The operator presses PTT: the plugin's key stops being the only one. The audio is the
     // tone's (the page's input) and the pre-emphasis is back; the plugin's ring is not read.
+    // (A hand on the key is a hand on the WINDOW, and the branch's TX thread releases it when the front end has not stamped
+    // frontEndAlive() for kKeyAliveWait: this test's frame stamps once, as the key holder's heartbeat does, 250 ms of hold is inside it.)
+    tx.frontEndAlive();
     tx.setPttHeld(true);
     tickFor(tx, 100);
     CHECK(tx.transmitting());

@@ -485,6 +485,26 @@ std::uint64_t Engine::apiListsFingerprint() {
     //  - the Pluto's address, the dongles that cannot be opened, what the last scans said about drivers and the
     //    runtime (the evidence as one counter: its rows are paths)
     f.cstr(plutoUri_);
+    f.cstr(rtlTcpAddr_);
+    //  - the audio buffer setting and what automatic last did (0.99.73 / 0.99.83: fact.audio.*)
+    f.value(audioBufferMs_);
+    f.value(audioLeadNowMs());
+    //  - the crystal correction's facts (0.99.56: fact.ppm.*), hashed from the members they are built from: this runs on
+    //    every pass and allocates nothing (test_engine_publish_alloc), so the fact strings are not built here.
+    f.value(ppmCorrectionOn_);
+    f.value(ppmRadioApplied_);
+    f.text(ppmError_);
+    f.text(sourceKind_);
+    f.text(deviceArgs_);
+    f.text(deviceModel_);
+    for (const auto& kv : ppmValues_) {
+        f.text(kv.first);
+        f.value(kv.second);
+    }
+    //  - what automatic last did to the audio buffer (the parts of fact.audio.leadNote)
+    f.value(static_cast<int>(audioLeadNote_));
+    f.value(audioLeadNoteMs_);
+    f.value(audioLeadNoteCount_);
     for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
         f.value(u.vid);
         f.value(u.pid);
@@ -1128,6 +1148,28 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
     }
     fact("source.faultedDrivers", joined(faultedDrivers_));
     fact("source.plutoUri", plutoUri_, true);
+    fact("source.rtlTcpAddr", rtlTcpAddr_, true);
+    // The Sinks rail's AUDIO BUFFER (0.99.73): the chosen value (0 = AUTOMATIC) and the sentence's parts when automatic last moved the lead
+    // ("raised|restored|lowered <ms> <count>", empty when nothing). The lead in force is the state's audioLeadMs.
+    fact("audio.bufferMs", std::to_string(audioBufferMs_), true);
+    fact("audio.leadNote", audioLeadNoteFact(), true);
+    fact("audio.leadMs", std::to_string(audioLeadNowMs()), true);
+    // THE CRYSTAL CORRECTION (0.99.56): the switch, how it is applied to the open radio ("na" nothing to correct, "radio", "retune"),
+    // this radio's value, whether the radio takes whole ppm only, why it refused, the card's value, and which radio the value is for.
+    {
+        const PpmFacts p = ppmFacts();
+        char num[48];
+        std::snprintf(num, sizeof num, "%.17g", p.stored);
+        fact("ppm.on", p.on ? "1" : "0");
+        fact("ppm.method", p.method);
+        fact("ppm.value", num);
+        fact("ppm.whole", p.wholeRadio ? std::to_string(p.wholeValue) : std::string());
+        fact("ppm.error", p.error);
+        fact("ppm.card", p.cardValue);
+        fact("ppm.model", p.model, true);
+        fact("ppm.serial", p.serial, true);
+        fact("ppm.key", p.key, true);
+    }   // the lead in force, ms (the rail's AUTOMATIC preview)
     // Every DEVICES entry's whole id, keyed by the entry's own id (index + 1): the item's detail cuts at 159 bytes
     // and the Pluto's, with its address, can run past it.
     for (std::size_t i = 0; i < b.devices.size(); ++i) { fact("source.id." + std::to_string(i + 1), b.devices[i].id); }

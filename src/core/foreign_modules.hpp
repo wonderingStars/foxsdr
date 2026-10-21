@@ -249,6 +249,10 @@ public:
     // start scan has finished, `(none)`, the list, or `(not applicable)` off Windows.
     std::string contextValue() const;
 
+    // A hash of contextValue()'s bytes, allocating nothing: what the engine's per-pass check of "did the diagnostics context
+    // move" reads (a copy of a long list would allocate on every pass).
+    std::uint64_t contextHash() const;
+
     // The scan has finished and the start line has been written.
     bool scanned() const;
 

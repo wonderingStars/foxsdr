@@ -313,7 +313,7 @@ public:
     // --- construction and restore (the constructor, applyConfig) ---
     void initialise();
     void loadBookmarks();
-    void telemetryStartup(const cascade::core::AppConfig& cfg);
+    void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir);
     void applyConfig(const cascade::core::AppConfig& cfg);
     // applyConfig's one read, and the constructor's: the store's URL box is seeded from the engine's catalogue URL.
     std::string pluginCatalogueUrl() const;

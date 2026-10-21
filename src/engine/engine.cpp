@@ -35,6 +35,7 @@
 #include <utility>
 #include "core/version.hpp"
 #include "core/crash_handler.hpp"
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
@@ -450,6 +451,48 @@ void Engine::refreshDiagContext() {
     // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
     // report does. A report is a support artefact, not a hardware fingerprint.
     ctx.sdrModel = deviceModel_;
+    // The crystal correction and how it is applied - never a frequency.
+    ctx.ppm = ppmDiagText();
+    // THE PATCH PAGE'S RADIOS, by driver kind and nothing else: the part of the
+    // node's device key before its '|' (a generator is "siggen", a recording is
+    // "iqfile"), so the key's arguments - a serial, a path - are never read into
+    // the block. A fault on a patch radio otherwise reads as a fault with no radio
+    // at all (the 0.99.59 `sdrplay` report: `source: siggen`, `device-open: no`).
+    // One entry per RUNNING radio (patchRadios_), not per node on the canvas.
+    for (const auto& running : patchRadios_) {
+        const cascade::core::patch::Node* node = patchGraph_.find(running.first);
+        const std::string key = node != nullptr ? node->device : std::string();
+        const std::string driver = cascade::core::patch::deviceDriver(key);
+        ctx.patchRadioKinds.push_back(driver.empty() ? key.substr(0, key.find('|')) : driver);
+    }
+    std::sort(ctx.patchRadioKinds.begin(), ctx.patchRadioKinds.end());
+    // The other software's DLLs in this process, by file name (0.99.69): what the watch has
+    // seen at start and since. In the one builder, so a bundle and a fault report say the
+    // same thing about it.
+    ctx.foreignModules = foreignModules_.contextValue();
+    // The sound path: the same facts the Sinks panel's chip and the rail's
+    // volume, mute and squelch controls show, none of them a frequency.
+    {
+        cascade::sink::AudioOut& out = pipeline_.audio();
+        const bool opening = audioOpen_.inFlight();
+        cascade::core::DiagAudio& a = ctx.audio;
+        a.known = true;
+        a.opening = opening;
+        if (!opening) {
+            a.everOpened = out.everOpened();
+            a.alive = a.everOpened && out.streamAlive();
+            a.channels = out.channels();
+            a.hostApi = out.openedHostApi();
+        }
+        a.restarts = audioRecoveries_ > 0 ? static_cast<unsigned>(audioRecoveries_) : 0u;
+        a.volumePercent = static_cast<int>(std::lround(static_cast<double>(volume_) * 100.0));
+        a.mutedByUser = userMuted_;
+        a.mutedByPlugin = !muteSubjectText().empty();
+        a.mutedByTransmit = transmitter_.transmitting() && !transmitMonitor_;
+        a.squelchDb = static_cast<double>(squelchDb_);
+        a.squelchOpen = pipeline_.squelchOpen();
+        a.signalDb = static_cast<double>(pipeline_.signalPowerDb());
+    }
     std::size_t loaded = 0;
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
@@ -498,10 +541,48 @@ std::uint64_t Engine::diagContextInputs() {
         text(p.name);
         text(p.version);
     }
+    for (const auto& running : patchRadios_) { bytes(&running.first, sizeof(running.first)); }
+    {
+        const std::uint64_t foreign = foreignModules_.contextHash();
+        bytes(&foreign, sizeof(foreign));
+    }
+    // The crystal correction's line in the block (ppmDiagText), from the members it is built from: no string is made here.
+    bytes(&ppmCorrectionOn_, sizeof(ppmCorrectionOn_));
+    bytes(&ppmRadioApplied_, sizeof(ppmRadioApplied_));
+    text(ppmError_);
+    for (const auto& kv : ppmValues_) {
+        text(kv.first);
+        bytes(&kv.second, sizeof(kv.second));
+    }
+    // The sound path's facts move with the volume, the mutes, the squelch and the sink's life (the level and the squelch lamp are
+    // measurements: rounded to the whole decibel the block prints, and the lamp itself).
+    {
+        const bool alive = audioOpen_.inFlight() ? false : pipeline_.audio().streamAlive();
+        bytes(&alive, sizeof(alive));
+        const bool opening = audioOpen_.inFlight();
+        bytes(&opening, sizeof(opening));
+        const int vol = static_cast<int>(std::lround(static_cast<double>(volume_) * 100.0));
+        bytes(&vol, sizeof(vol));
+        bytes(&userMuted_, sizeof(userMuted_));
+        const bool pluginMuted = !muteSubjectText().empty();
+        bytes(&pluginMuted, sizeof(pluginMuted));
+        const bool txMuted = transmitter_.transmitting() && !transmitMonitor_;
+        bytes(&txMuted, sizeof(txMuted));
+        const int sq = static_cast<int>(std::lround(static_cast<double>(squelchDb_)));
+        bytes(&sq, sizeof(sq));
+        const bool sqOpen = pipeline_.squelchOpen();
+        bytes(&sqOpen, sizeof(sqOpen));
+        const int sig = static_cast<int>(std::lround(static_cast<double>(pipeline_.signalPowerDb())));
+        bytes(&sig, sizeof(sig));
+        bytes(&audioRecoveries_, sizeof(audioRecoveries_));
+    }
     return h;
 }
 
 void Engine::pumpDiagContext() {
+    // The foreign-module watch starts with the first pass (idempotent) and writes a line for each module that arrives afterwards.
+    foreignModules_.start();
+    foreignModules_.poll();
     const auto now = std::chrono::steady_clock::now();
     if (diagContextHave_ && now - diagContextAt_ < std::chrono::seconds(1)) { return; }
     diagContextAt_ = now;
@@ -511,6 +592,186 @@ void Engine::pumpDiagContext() {
     diagContextHash_ = inputs;
     ++diagContextRenders_;
     refreshDiagContext();
+}
+
+void Engine::closeAudioMinute(std::size_t ringFramesNow) {
+    cascade::sink::AudioOut& out = pipeline_.audio();
+    const std::uint64_t underrunsNow = out.underruns();
+    const std::uint64_t primingNow = out.primingCallbacks();
+    // The minute's starved callbacks. The counter is monotonic; the guard is for
+    // a sink that was replaced under an engine that kept its mark.
+    const std::uint64_t starved =
+        underrunsNow >= audioUnderrunsAtLogStart_ ? underrunsNow - audioUnderrunsAtLogStart_ : 0;
+    if (starved > 0) {
+        const double rateHz = cascade::core::Pipeline::kAudioRateHz;
+        const double lowWaterMs = 1000.0 * static_cast<double>(audioRingLowWaterFrames_) / rateHz;
+        const double capacityMs = 1000.0 * static_cast<double>(out.ringCapacityFrames()) / rateHz;
+        cascade::core::diagLogf(
+            "audio: %llu starved callbacks in the last minute (%llu priming), "
+            "ring low water %.0f ms of %.0f ms",
+            static_cast<unsigned long long>(starved),
+            static_cast<unsigned long long>(primingNow - audioPrimingAtLogStart_), lowWaterMs,
+            capacityMs);
+    }
+    audioUnderrunsAtLogStart_ = underrunsNow;
+    audioPrimingAtLogStart_ = primingNow;
+    audioRingLowWaterFrames_ = ringFramesNow;  // next minute's mark starts here
+
+    // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
+    // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
+    // - is the case: when a minute closes with three or more, the lead steps up
+    // one rung (sink::nextAudioLead, which is also where the ceiling and "a
+    // fixed setting never steps" live); a quarter hour of played, starvation-free
+    // minutes steps it back down one (sink::audioLeadAfterQuietMinutes, where
+    // the asymmetry is argued). Either step is one relaxed store the audio
+    // callback reads at its next re-prime; this is the engine's thread and the
+    // callback is never involved. A raise is counted once a session as
+    // `recovered.audiolead`, so the effect of the release can be measured; the
+    // way back down is not a recovery and counts nothing.
+    const auto sayRaised = [](int toMs, std::uint64_t starvedCount, const char* who) {
+        const int shown = static_cast<int>(std::min<std::uint64_t>(starvedCount, 1000000u));
+        cascade::core::diagLogf("audio: buffer raised to %d ms after %d starved callbacks in a minute%s",
+                                toMs, shown, who);
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::AudioLead);
+        return shown;
+    };
+    const int leadMs = cascade::sink::audioLeadMs(out.leadFrames());
+    const int nextMs = cascade::sink::nextAudioLead(starved, leadMs, audioBufferMs_);
+    if (nextMs > leadMs) {
+        out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
+        audioLeadNote_ = AudioLeadNote::kRaised;
+        audioLeadNoteMs_ = nextMs;
+        audioLeadNoteCount_ = sayRaised(nextMs, starved, "");
+        audioLeadQuietMinutes_ = 0;   // whatever run there was ended in a raise
+        // REMEMBERED FOR THE NEXT LAUNCH: a computer that fell behind this often is slow every time,
+        // and starting at 120 ms again costs the same bad minutes at every start. Only the
+        // receiver's own raise is kept (the patch speakers are seeded from it when they are made),
+        // and only in AUTOMATIC - nextAudioLead never raises a fixed setting. Saved by the normal
+        // config save, as audioBufferAutoMs; audioBufferMs itself stays 0, because a raise is the
+        // session's and not a choice.
+        audioBufferAutoMs_ = nextMs;
+    } else {
+        // THE WAY BACK DOWN (0.99.83). A quiet minute is one the sink PLAYED
+        // through (primed at its close - an idle sink proves nothing; stopping
+        // the radio starves the last callback, which resets the run anyway) and
+        // starved nobody. A quarter hour of them in a row lowers the lead one
+        // rung, and the remembered depth with it - at the 120 ms floor there is
+        // nothing left to remember, so the memory is 0 again. Why a lead comes
+        // back down at all, against the old "a machine that fell behind once
+        // will again": sink/audio_out.hpp, the policy comment.
+        audioLeadQuietMinutes_ =
+            starved == 0 && out.primed()
+                ? std::min(audioLeadQuietMinutes_ + 1, cascade::sink::kAudioLeadQuietMinutesToStepDown)
+                : 0;
+        const int downMs = cascade::sink::audioLeadAfterQuietMinutes(audioLeadQuietMinutes_, leadMs,
+                                                                     audioBufferMs_);
+        if (downMs < leadMs) {
+            out.setLeadFrames(cascade::sink::audioLeadFrames(downMs));
+            cascade::core::diagLogf("audio: buffer lowered to %d ms after %d quiet minutes", downMs,
+                                    audioLeadQuietMinutes_);
+            audioLeadNote_ = AudioLeadNote::kLowered;
+            audioLeadNoteMs_ = downMs;
+            audioLeadNoteCount_ = audioLeadQuietMinutes_;
+            audioLeadQuietMinutes_ = 0;   // the next rung needs a quarter hour of its own
+            audioBufferAutoMs_ = downMs == 120 ? 0 : downMs;
+        }
+    }
+
+    // EACH PATCH SPEAKER THAT IS A SOUND DEVICE has a sink of its own, a matcher of
+    // its own and so a count of its own: the same rule on its minute. A speaker
+    // seen for the first time only sets its baseline - what it starved before the
+    // engine looked is not this minute's. Files have no buffer (leadMs() is 0).
+    std::set<cascade::core::patch::NodeId> speakers;
+    for (const auto& [node, dest] : patchDests_) {
+        if (!dest || dest->leadMs() <= 0) { continue; }
+        speakers.insert(node);
+        const std::uint64_t total = dest->starvedCallbacks();
+        const auto was = patchStarvedAtMinute_.find(node);
+        const std::uint64_t before = was == patchStarvedAtMinute_.end() ? total : was->second;
+        const std::uint64_t minute = total >= before ? total - before : 0;
+        patchStarvedAtMinute_[node] = total;
+        const int speakerMs = dest->leadMs();
+        const int speakerNext = cascade::sink::nextAudioLead(minute, speakerMs, audioBufferMs_);
+        if (speakerNext > speakerMs) {
+            dest->setLeadMs(speakerNext);
+            (void)sayRaised(speakerNext, minute, " (patch speaker)");
+            patchQuietMinutes_[node] = 0;
+        } else {
+            // The same way back down, on the speaker's own run. A dest cannot
+            // say whether it played (no primed() crosses the AudioDest seam),
+            // so its quiet minute is only "starved nobody" - a cheaper test is
+            // acceptable here because nothing about a speaker is persisted and
+            // a wrong step costs one bad minute on that speaker alone.
+            int& quiet = patchQuietMinutes_[node];
+            quiet = minute == 0
+                        ? std::min(quiet + 1, cascade::sink::kAudioLeadQuietMinutesToStepDown)
+                        : 0;
+            const int speakerDown =
+                cascade::sink::audioLeadAfterQuietMinutes(quiet, speakerMs, audioBufferMs_);
+            if (speakerDown < speakerMs) {
+                dest->setLeadMs(speakerDown);
+                cascade::core::diagLogf(
+                    "audio: buffer lowered to %d ms after %d quiet minutes (patch speaker)",
+                    speakerDown, quiet);
+                quiet = 0;
+            }
+        }
+    }
+    for (auto it = patchStarvedAtMinute_.begin(); it != patchStarvedAtMinute_.end();) {
+        it = speakers.count(it->first) != 0 ? std::next(it) : patchStarvedAtMinute_.erase(it);
+    }
+    for (auto it = patchQuietMinutes_.begin(); it != patchQuietMinutes_.end();) {
+        it = speakers.count(it->first) != 0 ? std::next(it) : patchQuietMinutes_.erase(it);
+    }
+}
+
+void Engine::setAudioBufferMs(int ms) {
+    if (!cascade::sink::validAudioBufferSetting(ms)) { ms = 0; }
+    const bool changed = ms != audioBufferMs_;
+    audioBufferMs_ = ms;
+    cascade::sink::AudioOut& out = pipeline_.audio();
+    // A fixed value is the lead from now on (and applying it again is harmless:
+    // a restore from the saved file does it before the first prime). AUTOMATIC
+    // starts again from the default - but only when it is a CHANGE to automatic: a
+    // restore that names automatic for an engine that is already automatic must not
+    // undo what the session has had to do.
+    int toMs = 0;
+    if (ms != 0) {
+        toMs = ms;
+    } else if (changed) {
+        toMs = cascade::sink::audioLeadMs(cascade::sink::AudioOut::kPrimeFrames);
+        // CHOOSING AUTOMATIC (from a fixed value) IS A FRESH START, and forgets the depth it had
+        // remembered across launches: the person asking for it is asking not to be held at what an
+        // earlier session had to do. Picking a fixed value does NOT forget it (it is kept, and
+        // ignored while the fixed value is in force).
+        audioBufferAutoMs_ = 0;
+    }
+    if (toMs != 0) {
+        out.setLeadFrames(cascade::sink::audioLeadFrames(toMs));
+        audioLeadNote_ = AudioLeadNote::kNone;   // the notice was about automatic mode's last step
+        audioLeadNoteMs_ = 0;
+        audioLeadNoteCount_ = 0;
+        audioLeadQuietMinutes_ = 0;              // a chosen lead starts a quiet run of its own
+        patchQuietMinutes_.clear();
+        for (const auto& entry : patchDests_) {
+            if (entry.second && entry.second->leadMs() > 0) { entry.second->setLeadMs(toMs); }
+        }
+    }
+}
+
+int Engine::audioLeadNowMs() {
+    return cascade::sink::audioLeadMs(pipeline_.audio().leadFrames());
+}
+
+std::string Engine::audioLeadNoteFact() const {
+    const char* kind = nullptr;
+    switch (audioLeadNote_) {
+        case AudioLeadNote::kNone: return std::string();
+        case AudioLeadNote::kRaised: kind = "raised"; break;
+        case AudioLeadNote::kRestored: kind = "restored"; break;
+        case AudioLeadNote::kLowered: kind = "lowered"; break;
+    }
+    return std::string(kind) + " " + std::to_string(audioLeadNoteMs_) + " " + std::to_string(audioLeadNoteCount_);
 }
 
 void Engine::pollAudioHealth() {
@@ -535,25 +796,8 @@ void Engine::pollAudioHealth() {
     // nobody watches (this goes to the log, not the screen) stays worth
     // reading when it does fire.
     if (now - lastAudioLogSec_ >= 60.0) {
-        const std::uint64_t underrunsNow = out.underruns();
-        const std::uint64_t primingNow = out.primingCallbacks();
-        if (underrunsNow > audioUnderrunsAtLogStart_) {
-            const double rateHz = cascade::core::Pipeline::kAudioRateHz;
-            const double lowWaterMs =
-                1000.0 * static_cast<double>(audioRingLowWaterFrames_) / rateHz;
-            const double capacityMs =
-                1000.0 * static_cast<double>(out.ringCapacityFrames()) / rateHz;
-            cascade::core::diagLogf(
-                "audio: %llu starved callbacks in the last minute (%llu priming), "
-                "ring low water %.0f ms of %.0f ms",
-                static_cast<unsigned long long>(underrunsNow - audioUnderrunsAtLogStart_),
-                static_cast<unsigned long long>(primingNow - audioPrimingAtLogStart_),
-                lowWaterMs, capacityMs);
-        }
-        audioUnderrunsAtLogStart_ = underrunsNow;
-        audioPrimingAtLogStart_ = primingNow;
-        audioRingLowWaterFrames_ = ringFrames;  // next minute's mark starts here
         lastAudioLogSec_ = now;
+        closeAudioMinute(ringFrames);
     }
 
     // 1 Hz. Fast enough that a dropout is a hiccup rather than an outage,
@@ -670,6 +914,9 @@ void Engine::applyAudioOpenResult() {
         return;
     }
     ++audioRecoveries_;
+    // THE OUTPUT STOPPED AND CAME BACK ON ITS OWN: counted once a session (the watchdog checks once a second, so a device that flaps would
+    // otherwise count every flap; audioRecoveries_ above is the number the Sinks panel shows).
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::Audio);
     std::string buf;
     // Two whole sentences rather than an "s" glued on: a translation's plural
     // is not a suffix.
@@ -1080,6 +1327,11 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     if (!r.dev) {
         const std::string why = r.error.empty() ? "device open failed" : r.error;
         sourceError_ = why;
+        // A RADIO THAT WOULD NOT OPEN, COUNTED ANONYMOUSLY (0.99.64,
+        // core/health_events.hpp): the driver kind and one of eight reason
+        // classes read off what the driver said - and nothing of what it said.
+        // Not for a result the user had already moved on from (returned above).
+        cascade::core::health::noteRadioFail(r.kind, why);
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -1143,7 +1395,11 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     // the make() that just finished on the worker. One shared function with
     // the synchronous config restore, which used to keep its own copy of this
     // and had already drifted from it.
-    adoptDeviceMirrors(*r.dev, r.kind, r.args, r.requestRateHz);
+    //
+    // A RECOVERY REOPEN DOES NOT PUT THE REMEMBERED AUTO GAIN BACK (the last
+    // argument): it is the same radio to the user, whose own state a moment ago
+    // (r.recoveryAgc) is applied below, after the gains, exactly as before.
+    adoptDeviceMirrors(*r.dev, r.kind, r.args, r.requestRateHz, !r.recovery);
     if (r.recovery) {
         // THE GAINS THE USER HAD, written over the defaults just primed: a
         // reopen after a driver fault is the same radio to the user, and a
@@ -1164,6 +1420,9 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         }
         if (r.recoveryAgc && deviceAgcSupported_ && r.dev->setAutoGain(true)) {
             deviceAgc_ = true;
+            // ...and written down for this radio again (0.99.73): it was on, and
+            // the memory should say so even if nothing wrote it earlier.
+            rememberAutoGain(*r.dev, r.args, true);
         }
     }
     // The antenna is settled by adoptDeviceMirrors above, on the same rule it
@@ -1194,6 +1453,14 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     ++sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     sourceKind_ = r.kind;
+    // A RADIO OPENED - the denominator of the failures above - and the watch for
+    // its samples to arrive (0.99.64, core/health_events.hpp).
+    if (r.kind != "siggen" && r.kind != "file") {
+        cascade::core::health::noteRadioOpen(r.kind);
+        healthWatchSamples(r.kind);
+    }
+    // FIXME(2026-10-21, 0.99.84 merge, ledger TESTER-USAGE): master also counts the radio for the beta-tester usage record here
+    // (testerUsage_.noteRadio(kind), noteFeature("native-drivers"), noteFeature("siggen")); the engine has no tester-usage recorder yet.
     // A dongle the native driver refused, opened through SoapySDR instead, is
     // still the radio the user chose: its converter comes with it.
     if (!r.fellBackFromKey.empty()) {
@@ -1285,7 +1552,13 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
             converterForKey(cascade::core::converterRadioKey(r.kind, r.args));
         if (cascade::core::airReachable(conv, *r.keepCenterHz)) {
             const double radioHz = cascade::core::radioFromAir(conv, *r.keepCenterHz);
-            if (radioHz > 0.0) { r.preTuneRadioHz = radioHz; }
+            // ...and through its crystal correction (0.99.56): an RSP corrects
+            // by retuning (SdrPlaySource drives no correction of its own), so
+            // it is told the corrected frequency here and the later tune finds
+            // it already there (ppmPreTellHz).
+            if (radioHz > 0.0) {
+                r.preTuneRadioHz = ppmPreTellHz(r.kind, r.args, false, radioHz);
+            }
         }
     }
     // An Airspy's own memory travels with the request (see airspyAtOpen).
@@ -1409,6 +1682,10 @@ void Engine::reopenAfterDriverFault() {
     // gate let it through - so the reopen itself is DeviceSource work and a
     // test can drive it with a device of its own (AppWindowTestAccess).
     if (device_ == nullptr) { return; }
+    // THE DRIVER FAULTED AND THE RADIO IS BEING REOPENED BY ITSELF: counted, once
+    // a session (at most once a minute, by itself, for as long as the driver keeps
+    // faulting). Nothing of the fault - the driver's words, the radio - is kept.
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::Reopen);
 
     // EVERYTHING THE REOPEN NEEDS IS READ FROM THE DEAD SOURCE FIRST. Its
     // mirrors survive the fault on purpose (a rate or a retune that faulted
@@ -1536,6 +1813,42 @@ void Engine::openPlutoAt(const std::string& args) {
     launchDeviceOpen(std::move(req), "ADALM-Pluto at " + uri);
 }
 
+void Engine::openRtlTcpFromBox() { openRtlTcpAt(std::string("rtltcp=") + rtlTcpAddr_); }
+
+void Engine::openRtlTcpAt(const std::string& args) {
+    sourceError_.clear();
+    // The Pluto's recipe, step for step (see openPlutoAt): the args name the address typed, the air frequency is read before the close, and
+    // the open runs on the worker so a server that is not there spends its connect bound off the thread that must not wait.
+    const std::string addr = (args.rfind("rtltcp=", 0) == 0) ? args.substr(7) : args;
+    cascade::core::formatUtf8(rtlTcpAddr_, sizeof(rtlTcpAddr_), "%s", addr.c_str());
+    const std::optional<double> keepCenterHz = carriedAirCentre();
+    DeviceOpenResult req;
+    if (device_ != nullptr) {
+        req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+            sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
+            pipeline_.activeSource().sampleRateHz());
+        req.closedLabel = deviceModel_;
+        // The model, never the address: this line goes in the report.
+        cascade::core::diagLogf("source: closing %s before opening the rtl_tcp server",
+                                deviceModel_.c_str());
+        device_ = nullptr;
+        soapyView_ = nullptr;
+        deviceArgs_.clear();
+        deviceModel_.clear();
+        ++sourceGen_;
+        installSource(nullptr);
+        sourceKind_ = "siggen";
+        applyConverterForSource();
+        followInputRate();
+    }
+    req.kind = kRtlTcpDriverKey;
+    req.args = std::string("rtltcp=") + addr;
+    req.row = sourceSel_;
+    req.requestRateHz = kSoapyRateHz[kSoapyRateDefaultIndex];
+    req.keepCenterHz = keepCenterHz;
+    launchDeviceOpen(std::move(req), "rtl_tcp server at " + addr);
+}
+
 void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
     // RE-CLICK ON THE CURRENT ROW: a no-op - unless the radio installed there
     // has DIED (unplugged, or a driver fault the receiver latched), when the
@@ -1607,8 +1920,8 @@ void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
         // sentence instead (gui::soundCardDeadReopenNeedsRestart).
         sourceSel_ = kSoundCardRow;
         if (installedCardDead) {
-            cascade::core::diagLogf("source: reopening the sound card %s (%s), which had stopped",
-                                    soundCardLive_.device.c_str(), soundCardLive_.hostApi.c_str());
+            cascade::core::diagLogf("source: reopening the sound card (%s), which had stopped",
+                                    cascade::source::loggableSoundCardDescription(soundCardLive_).c_str());
             soundCard_ = soundCardLive_;
             launchSoundCardOpen(false, soundCardLive_);
             return;
@@ -1637,7 +1950,7 @@ void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
         // front of a user who was only reading the list. The address box and
         // the Open key appear instead (see drawSourceSection), and the
         // pipeline keeps whatever is installed until Open succeeds.
-        if (kind == kPlutoDriverKey) {
+        if (kind == kPlutoDriverKey || kind == kRtlTcpDriverKey) {
             sourceSel_ = idx;
             return;
         }
@@ -1745,6 +2058,7 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
     if (kind == "rx888") { return std::make_unique<cascade::source::Rx888Source>(); }
     if (kind == "aor") { return std::make_unique<cascade::source::AorSource>(); }
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
+    if (kind == kRtlTcpDriverKey) { return std::make_unique<cascade::source::RtlTcpSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
@@ -1966,6 +2280,18 @@ void Engine::scanNative() {
         pluto.args = std::string("uri=") + plutoUri_;
         nativeDevices_.push_back(std::move(pluto));
     }
+    // THE RTL_TCP SERVER, THE SAME KIND OF ROW AND FOR THE SAME REASON: a
+    // server on a network cannot be found by looking, so one fixed row follows
+    // the Pluto's, and choosing it shows an address box and an Open key.
+    {
+        cascade::source::NativeDeviceInfo rtlTcp;
+        rtlTcp.driver = kRtlTcpDriverKey;
+        rtlTcp.label = FOX_TR_NOOP("rtl_tcp server (network)");
+        // Kept in step with the box, as the Pluto's args are, so a restored
+        // server's saved nativeArgs matches this row (see applyConfig).
+        rtlTcp.args = std::string("rtltcp=") + rtlTcpAddr_;
+        nativeDevices_.push_back(std::move(rtlTcp));
+    }
     nativeRowLabels_.clear();
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         // "(native)" is not decoration: with a Soapy row for the same dongle
@@ -1973,7 +2299,7 @@ void Engine::scanNative() {
         // are picking, and which one they got. The Pluto's row is exempt: it
         // is not a radio that was found, and "(native)" on it would suggest
         // there is a non-native row for the same board somewhere.
-        if (d.driver == kPlutoDriverKey) {
+        if (d.driver == kPlutoDriverKey || d.driver == kRtlTcpDriverKey) {
             nativeRowLabels_.push_back(tr(d.label.c_str()));  // FOX_TR_NOOP where it is set
         } else {
             std::string rowBuf;
@@ -2151,7 +2477,9 @@ std::vector<cascade::gui::SourceRowKey> Engine::sourceRowKeys() const {
         // THE PLUTO ROW BY ITS FAMILY ALONE: there is only ever one, and its
         // args are whatever the address box held when the list was built, so
         // an address typed since would otherwise lose the selection.
-        keys.push_back({d.driver, d.driver == kPlutoDriverKey ? std::string() : d.args});
+        // ...AND THE RTL_TCP ROW LIKEWISE: one row, whatever address is typed.
+        const bool addressRow = d.driver == kPlutoDriverKey || d.driver == kRtlTcpDriverKey;
+        keys.push_back({d.driver, addressRow ? std::string() : d.args});
     }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
         keys.push_back({"soapy", d.args});
@@ -2160,7 +2488,8 @@ std::vector<cascade::gui::SourceRowKey> Engine::sourceRowKeys() const {
 }
 
 void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
-                                   const std::string& args, double requestRateHz) {
+                                   const std::string& args, double requestRateHz,
+                                   bool restoreRemembered) {
     // ONE COPY OF THIS, shared by the worker-thread open and the synchronous
     // config restore. There were two before, and they had already drifted:
     // only one of them pointed the Rate combo at the device's ACTUAL readback
@@ -2203,6 +2532,7 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     deviceGainRanges_ = dev.gains();
     deviceGainNames_.clear();
     deviceGainsDb_.clear();
+    manualGainsBeforeAgc_.clear();  // another radio's numbers are not this one's
     for (const cascade::source::GainInfo& g : deviceGainRanges_) {
         deviceGainNames_.push_back(g.name);
         deviceGainsDb_.push_back(0.0f);
@@ -2229,6 +2559,58 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
         // that hardware. Overwriting it with a panel constant would throw away
         // the one thing the driver knows that the panel does not.
         deviceGainsDb_[i] = static_cast<float>(dev.gainDb(deviceGainNames_[i]));
+    }
+
+    // THE MANUAL GAIN THE USER LEFT THIS RADIO AT (0.99.75): the 30 dB pushed into every
+    // stage of a Soapy radio just above is a boot value, and the owner runs his B200 at
+    // 76 dB - every start began 46 dB down. Whatever stage the user last set on THIS radio
+    // (the same key as the switch below: driver and serial, the whole args for a radio with
+    // no serial) is put back here: only for a stage the radio still reports, clamped into
+    // that stage's own range, and the mirror is read back so the dial and the sliders show
+    // what the radio TOOK. After the push and the first readback, because it overrides the
+    // one and is read in place of the other; BEFORE the remembered auto gain below, so a
+    // radio that comes back on auto gain has the user's numbers under it, to return to
+    // when the switch goes off.
+    //
+    // ONLY ON AN ORDINARY OPEN (restoreRemembered): a recovery reopen after a driver fault
+    // gets the gains the user had a moment ago from its caller. NOT AN AIRSPY: its gains are
+    // part of its gain mode, which airspyMemory_ already puts back. A refused stage is
+    // skipped without a word - it is the radio's to turn down - and one line says what went
+    // back, so a gain that came back different from the dial's last position can be traced.
+    if (restoreRemembered && cascade::gui::asAirspy(&dev) == nullptr) {
+        restoreManualGain(dev, args);
+    }
+
+    // THE AUTO GAIN THE USER LEFT THIS RADIO ON (0.99.73): the probe above has
+    // put every radio but an Airspy on manual gain, and the sliders have read
+    // the manual values off it - so a radio whose box was ticked when it was
+    // last used is put back on auto gain HERE, after both, and the box and the
+    // greyed sliders then say so (deviceAgc_). Per radio, under the same key as
+    // the bias tee (driver and serial; the whole args for a radio with no
+    // serial). A "false" or no entry leaves the manual gain the probe chose,
+    // which is what every open did before this. Nothing is erased on an open: the
+    // map keeps the radios that are not plugged in.
+    //
+    // NOTHING HERE IS DRIVER-SPECIFIC: every native driver, an rtl_tcp server
+    // and a Soapy device that answers autoGainSupported() gets it through the
+    // same setAutoGain call the box makes. A radio that does not support auto
+    // gain, or refuses the call, stays on manual gain with the box off - said
+    // once in the log, since a user who ticked it last time would otherwise find
+    // it unticked with no reason given.
+    //
+    // NOT AN AIRSPY: its two AGC switches are part of its gain mode, which the
+    // Airspy path put back at open (AppConfig::airspy), and the code above read
+    // them back into deviceAgc_. And not a recovery reopen (restoreRemembered
+    // false): the caller applies the state the user had a moment ago.
+    if (restoreRemembered && cascade::gui::asAirspy(&dev) == nullptr) {
+        const auto mem = autoGainMemory_.find(cascade::core::biasTeeRadioKey(dev.driverKey(), args));
+        if (mem != autoGainMemory_.end() && mem->second) {
+            if (deviceAgcSupported_ && dev.setAutoGain(true)) {
+                deviceAgc_ = true;
+            } else {
+                cascade::core::diagWarnf("source: auto gain remembered on but the radio refused it");
+            }
+        }
     }
 
     // THE BIAS TEE, AFTER THE DEVICE IS UP, and only when the radio has one
@@ -2308,6 +2690,12 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(
 
 void Engine::followInputRate() {
     const double rate = pipeline_.activeSource().sampleRateHz();
+    // THE REPORT CONTEXT SAYS THE RATE, so it is rendered on every way out of
+    // here - a rate change by the Rate combo, a plugin preset or the browser, and
+    // every source change, all end in this function - and it is the rate the
+    // source reads back, not the one that was asked for. A 30.72 MS/s Pluto was
+    // the whole cause of one 0.99.59 crash and was nowhere in its context.
+    DiagContextOnExit refreshOnExit{*this};
     if (!(rate > 0.0)) { return; }  // never-opened source; nothing to follow
     // A refusal (the chain kept its old rate: no decimation gives an exact
     // channel, or out of the supported range) is said on the device panel,
@@ -2607,6 +2995,9 @@ void Engine::rescanPlugins() {
     //
     // Scope guard, because there is a `return` in the middle of this function.
     WaitWatchdogPause holdWatchdog(*this);
+    // AND TOLD TO THE SENTINEL (core/breadcrumb.hpp), the same way: a death inside a plugin's load or unload is the most likely death this
+    // application has, and the report should say it was in one. Raised for the length of the call - which is also the first load.
+    cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(cascade::core::breadcrumb::kReloadingPlugins);
     ++pluginScans_;  // (API 0.3 8.8: hashed into the lists' fingerprint, so a rescan rebuilds the block)
 
     // The plugin windows the user has OPEN ride through the rescan: their
@@ -4448,6 +4839,7 @@ std::string Engine::muteNameList(const std::vector<std::string>& names) {
 }
 
 std::string Engine::muteSubjectText() const {
+    if (!pipeline_.pluginAudioMuted()) { return {}; }
     return muteNameList(mutedBy_);
 }
 
@@ -4521,7 +4913,8 @@ void Engine::updateAudioMute() {
     // tuning every frame, so a user mute stored in the same place would be
     // wiped the moment a decoder's preset decided anything, and the Mute key
     // would appear to stop working. The two mutes are separate facts about the
-    // same audio; the pipeline is told their OR.
+    // same audio. A data decoder suppresses only the demodulated carrier;
+    // its own decoded programme must remain audible through that suppression.
     // AND THE THIRD FACT ABOUT THIS AUDIO: whether the radio is transmitting.
     // A receiver left unmuted on the frequency it is transmitting on is a
     // howl, and on a full-duplex board like the Pluto the receiver really is
@@ -4534,7 +4927,8 @@ void Engine::updateAudioMute() {
     // each other: it is recomputed from the KEY every frame, and folding it
     // into either of the others would wipe whichever one it was folded into.
     const bool txMute = transmitter_.transmitting() && !transmitMonitor_;
-    pipeline_.setAudioMuted(muted || userMuted_ || txMute);
+    pipeline_.setDemodAudioMuted(muted);
+    pipeline_.setAudioMuted(userMuted_ || txMute);
 }
 
 void Engine::stopMutingPlugins(const std::vector<std::string>& keys) {
@@ -5027,6 +5421,10 @@ bool Engine::selectSourceById(const std::string& id) {
         openPlutoAt(args);
         return true;
     }
+    if (kind == "open-rtltcp") {
+        openRtlTcpAt(args);
+        return true;
+    }
     // The KIND is matched too - a native row and a Soapy row for one dongle
     // carry the same serial.
     if (cascade::gui::isNativeSourceKind(kind)) {
@@ -5342,7 +5740,9 @@ void Engine::noteTuneRefused(double requestHz, bool isPluginPreset) {
                         : radioHz < rangeLoHz   ? "below its range"
                         : radioHz > rangeHiHz   ? "above its range"
                                                 : "inside its range";
-    cascade::core::diagLogf("source: the %s refused a tune %s", pipeline_.activeSource().name(),
+    // A sound card is not named (its name() carries the card's own name).
+    cascade::core::diagLogf("source: the %s refused a tune %s",
+                            sourceKind_ == "soundcard" ? "sound card" : pipeline_.activeSource().name(),
                             where);
 }
 
@@ -5385,7 +5785,7 @@ void Engine::noteTuneMismatch(double requestHz, double answeredHz, bool isPlugin
                            ? (answeredRadioHz - requestRadioHz) / requestRadioHz * 1.0e6
                            : 0.0;
     cascade::core::diagLogf("source: the %s answered a tune somewhere else (%s, %+.0f ppm)",
-                            pipeline_.activeSource().name(),
+                            sourceKind_ == "soundcard" ? "sound card" : pipeline_.activeSource().name(),
                             atEdge ? "at the edge of its range" : "not at a range edge", ppm);
 }
 
@@ -6187,6 +6587,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 if (deviceGainNames_[i] == text && i < deviceGainsDb_.size()) {
                     deviceGainsDb_[i] = static_cast<float>(device_->gainDb(text));
                     res.applied[0] = floatAsDecimal(deviceGainsDb_[i]);
+                    // A gain somebody chose is remembered for this radio (0.99.75; not an Airspy's, not under auto gain).
+                    rememberManualGain(i);
                 }
             }
             if (res.applied[0] != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
@@ -6219,11 +6621,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_SET_DEVICE_AGC:
             if (device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
             if (!deviceAgcSupported_) { return refuse(FOXAPI_UNSUPPORTED, "no automatic gain"); }
-            if (!device_->setAutoGain(on)) {
-                sourceError_ = device_->lastError();
-                return refuse(FOXAPI_FAILED, "the radio refused");
-            }
-            deviceAgc_ = on;
+            // The box's own path (changeAutoGain): on acceptance the mirror follows and the radio's memory is written (0.99.73); on a
+            // refusal the driver's words go to sourceError_.
+            if (!changeAutoGain(on)) { return refuse(FOXAPI_FAILED, "the radio refused"); }
             if (cascade::gui::asAirspy(device_) != nullptr) {
                 refreshDeviceGainMirrors();
                 airspyRememberOpen();
@@ -6900,6 +7300,19 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // openPlutoAt stores the address it opens as well.
             cascade::core::formatUtf8(plutoUri_, sizeof(plutoUri_), "%s", text.c_str());
             return res;
+        case FOXAPP_OP_SET_AUDIO_BUFFER:
+            // The Sinks rail's AUDIO BUFFER combo (0.99.73): 0 AUTOMATIC, 120, 240, 480 or 960 ms.
+            if (!cascade::sink::validAudioBufferSetting(c.ival[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "no such buffer"); }
+            setAudioBufferMs(c.ival[0]);
+            return res;
+        case FOXAPP_OP_SET_PPM:
+            // The Source section's PPM controls (0.99.56): ival[0] the switch, num[0] this radio's value (sanitised, 0 = none).
+            changePpm(c.ival[0] != 0, c.num[0]);
+            return res;
+        case FOXAPP_OP_SET_RTLTCP_ADDR:
+            // The rtl_tcp address box, committed as it is typed - the Pluto box's twin (openRtlTcpAt stores the address it opens as well).
+            cascade::core::formatUtf8(rtlTcpAddr_, sizeof(rtlTcpAddr_), "%s", text.c_str());
+            return res;
         case FOXAPP_OP_SET_TRANSMIT_ARGS:
             // The Transmit page's address box, the same way. Stored only:
             // nothing opens until TX_OPEN, and a board already open keeps
@@ -7025,33 +7438,135 @@ void Engine::telemetryNotePanel(const char* name) {
     }
 }
 
-void Engine::telemetryStartup(const cascade::core::AppConfig& cfg) {
+void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir) {
     telemetryEnabled_ = cfg.telemetryEnabled;
     telemetryInstallId_ = cfg.telemetryInstallId;
+    telemetryFirstRun_ = cfg.telemetryFirstRun;
+    telemetryFirstVersion_ = cfg.telemetryFirstVersion;
     // Reporting is on by default, so a first run arrives here enabled with no
     // identifier. Mint one now. If the CSPRNG fails there is no id, and
     // reporting stays off rather than falling back to anything guessable.
     if (telemetryEnabled_ && telemetryInstallId_.empty()) {
         telemetryInstallId_ = cascade::core::newInstallId();
         telemetryEnabled_ = !telemetryInstallId_.empty();
+        // The first run is NOW - and only now: an id that already existed
+        // before these fields did keeps them empty rather than claiming
+        // today as its first day.
+        if (telemetryEnabled_) {
+            telemetryFirstRun_ = cascade::core::utcDateToday();
+            telemetryFirstVersion_ = cascade::versionString();
+        }
     }
     telemetryLaunches_ = cfg.telemetryLaunches + 1;
     telemetryCrashes_ = cfg.telemetryCrashes;
+    telemetryExits_.died = cfg.telemetryExitsDied;
+    telemetryExits_.killed = cfg.telemetryExitsKilled;
+    telemetryExits_.ended = cfg.telemetryExitsEnded;
+    telemetryExits_.unknown = cfg.telemetryExitsUnknown;
+    // WHEN THIS SESSION BEGAN, for the next start-up (core/exit_cause.hpp, "which
+    // report belongs to the previous session"). Written by every save of this
+    // session, the first of which is the forced one at the top of the frame loop that
+    // also puts the unclean-exit marker on disk, so the two reach the file together.
+    {
+        const std::time_t began = std::time(nullptr);
+        telemetrySessionStartedEpoch_ = began > 0 ? static_cast<std::uint64_t>(began) : 0u;
+    }
     // The previous run never wrote its clean-exit marker, so it did not end
     // normally. This is the whole crash-counting mechanism: no crash handler,
     // no minidump, nothing uploaded from the failure itself - just the
     // observation that last time the marker was never set.
-    if (!cfg.telemetryCleanExit) { ++telemetryCrashes_; }
+    if (!cfg.telemetryCleanExit) {
+        ++telemetryCrashes_;
+        // HOW IT ENDED (0.99.69). Counted as `unknown` in the same breath as
+        // `crashes` goes up, so the four classes add up to the unclean exits at every
+        // instant; the evidence is read a moment later, off this thread, and moves it
+        // to its class (exitCausePoll). A run with nothing to read - Diagnostics off,
+        // or a predecessor that recorded no start - is final at once.
+        telemetryExits_.noteUnclean();
+        exitCausePrevStart_ = cfg.telemetrySessionStarted;
+        if (!cfg.diagnosticsEnabled) {
+            exitCauseFinish(cascade::core::unknownExit(
+                "Diagnostics were off, so nothing was recorded about it"));
+        } else if (exitCausePrevStart_ == 0) {
+            exitCauseFinish(cascade::core::classifyPreviousExit(
+                cascade::core::ReportListing{}, 0, static_cast<std::int64_t>(telemetrySessionStartedEpoch_)));
+        } else {
+            exitCausePending_ = true;
+            // The read of the previous session's reports starts now, on a worker: the evidence is in the files, and this session's own
+            // lines can rotate them (the window's bundle reads through a cache of its own).
+            const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count();
+            if (!cascade::core::diagCrashDir().empty()) {
+                exitHistory_.refresh(cascade::core::diagLogDir(), cascade::core::diagCrashDir(), nowMs, 0);
+            }
+        }
+    }
     // (The same marker is also the window's trigger to offer a crash report,
     // and the crash-loop limiter's memory is read beside it: both are the
     // window's diagnostics, AppWindow::diagnosticsStartup.)
     telemetrySessionStart_ = host_->wallTimeS();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
+    // DISPLAY STALLS. Armed only for a real identity, which an opted-out run
+    // does not have - so off means nothing is counted and nothing is kept - and
+    // it picks up what earlier sessions left (a session ended from the taskbar
+    // mid-freeze left its count in this file, written by the watchdog's own
+    // thread). This is start-up: the read is not on the frame path. An opted-out
+    // run also clears a file an earlier opted-in run left behind.
+    telemetryLedgerPath_ = cascade::core::StallLedger::pathIn(configDir);
+    if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
+        stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
+    } else {
+        stallLedger_->disarm();
+        cascade::core::StallLedger::removeFile(telemetryLedgerPath_);
+    }
+    // THE FAILURES THAT ARE NOT CRASHES (0.99.64), on the same terms: armed only
+    // for a real identity, which an opted-out run does not have, and counted only
+    // while Diagnostics is on as well (the rule the stall count follows). It
+    // picks up what earlier sessions left AND keeps what THIS run counted before
+    // it knew whether reporting was on - the saved radio is opened by the config
+    // restore, which ran first, and that failure belongs to this session. An
+    // opted-out run drops all of it and removes a file an earlier opted-in run
+    // left.
+    healthLedgerPath_ = cascade::core::health::HealthLedger::pathIn(configDir);
+    healthLedger_->setAllowed(cfg.diagnosticsEnabled);
+    if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
+        healthLedger_->arm(healthLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
+    } else {
+        healthLedger_->disarm();
+        cascade::core::health::HealthLedger::removeFile(healthLedgerPath_);
+    }
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
+    //
+    // ONCE. The report stays in config.json until the first save of this
+    // session replaces it, so a launch that dies before that save - or a
+    // second copy started while this one is still coming up - would send it
+    // again; one install sent the same report fifteen times in one second.
+    // claimReportSend lets exactly one process send each report (telemetry.hpp).
+    // A hermetic run (no config path) has no directory to claim in and keeps
+    // the old behaviour.
     if (telemetryEnabled_ && !telemetryInstallId_.empty() &&
         !cfg.telemetryPending.empty()) {
-        telemetryReporter_.send(cascade::core::telemetryEndpoint(), cfg.telemetryPending);
+        // prepareStartupRecord claims the report AS STORED and hands back what
+        // to send: the record with the ledger's count as of THIS moment - the
+        // ledger is written by the watchdog thread the instant a stall is
+        // classified, so it holds the freeze the user ended from the taskbar,
+        // which no save ever saw. The ledger is reduced by exactly `carried`,
+        // and only if the server answers 2xx.
+        std::string record;
+        std::uint64_t carried = 0;
+        // The health counts ride the same record, and are taken off by the same
+        // acceptance: what EARLIER sessions left (this run's own counts describe
+        // this session and go with the next record).
+        cascade::core::health::Counts carriedHealth;
+        if (cascade::core::prepareStartupRecord(configDir, cfg.telemetryPending, *stallLedger_,
+                                                *healthLedger_, record, carried, carriedHealth)) {
+            telemetryReporter_.send(
+                cascade::core::telemetryEndpoint(), record,
+                cascade::core::settleOnAccept(stallLedger_, carried, healthLedger_,
+                                              std::move(carriedHealth)));
+        }
     }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
     // and arming them for those put ctest's throwaway install ids on the live
@@ -7064,8 +7579,15 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     // the window's: AppWindow::diagnosticsJournal writes them just before.)
     cfg.telemetryEnabled = telemetryEnabled_;
     cfg.telemetryInstallId = telemetryInstallId_;
+    cfg.telemetryFirstRun = telemetryFirstRun_;
+    cfg.telemetryFirstVersion = telemetryFirstVersion_;
     cfg.telemetryLaunches = telemetryLaunches_;
     cfg.telemetryCrashes = telemetryCrashes_;
+    cfg.telemetryExitsDied = telemetryExits_.died;
+    cfg.telemetryExitsKilled = telemetryExits_.killed;
+    cfg.telemetryExitsEnded = telemetryExits_.ended;
+    cfg.telemetryExitsUnknown = telemetryExits_.unknown;
+    cfg.telemetrySessionStarted = telemetrySessionStartedEpoch_;
     cfg.telemetryPending.clear();
     if (!telemetryEnabled_ || telemetryInstallId_.empty()) {
         return;  // opted out: nothing is written, so nothing can later be sent
@@ -7077,8 +7599,20 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     r.appVersion = cascade::versionString();
     r.os = cascade::core::osDescription();
     r.arch = cascade::core::archDescription();
+    r.channel = cascade::core::installChannel();
+    r.firstRun = telemetryFirstRun_;
+    r.firstVersion = telemetryFirstVersion_;
     r.launches = telemetryLaunches_;
     r.crashes = telemetryCrashes_;
+    r.exits = telemetryExits_;
+    // One atomic read - the frame path never touches the ledger's file. This is
+    // the figure as of THIS save; what is actually sent is the ledger's own at
+    // the next start-up (see telemetryStartup), which also holds a stall that
+    // happened after the last save.
+    r.stalls = stallLedger_->count();
+    // The health counts as of THIS save, for the same reason: what is actually
+    // sent is the ledger's at the next start-up (telemetryStartup).
+    r.health = healthLedger_->encoded();
     const double now = host_->wallTimeS();
     r.session.seconds = static_cast<std::uint64_t>(
         now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);
@@ -7093,6 +7627,82 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
         }
     }
     cfg.telemetryPending = r.toJson();
+}
+
+void Engine::healthPoll() {
+    // THE OUTPUT HAS PLAYED, once a session: the sink's own latch, set by the
+    // audio callback when the ring held its lead and the first real block went
+    // out (AudioOut::primed). One relaxed atomic read a pass until it is seen.
+    // The host API is asked for with it, and a pass on which the sink is busy
+    // being (re)opened answers empty - the next pass asks again.
+    if (!healthSoundNoted_ && pipeline_.audio().primed()) {
+        const std::string api = pipeline_.audio().openedHostApi();
+        if (!api.empty()) {
+            healthSoundNoted_ = true;
+            cascade::core::health::noteSoundOk(api);
+        }
+    }
+    // AN OPENED RADIO'S SAMPLES HAVE ARRIVED: a spectrum frame newer than the
+    // newest one the pipeline held when the radio was installed can only have
+    // been made from this radio's samples (installing a source quiesces and
+    // joins the old one's threads first). Read with the watch's own cursor, so
+    // the display's is untouched, and only until the radio has been seen.
+    if (healthWatching_ && pipeline_.getLatestFrame(healthProbe_) &&
+        healthProbe_.seq > healthWatchSeq_) {
+        healthWatching_ = false;
+        cascade::core::health::noteRadioData(healthWatchKind_);
+    }
+    // WHAT THE PROGRAM RECOVERED FROM IN PLACES THIS ENGINE MUST NOT COUNT FROM
+    // (0.99.65): the flags a plugin's thread raised, and four counters the
+    // pipeline's threads and a vendor call's worker keep. Every one is read here,
+    // by a poll the pass already makes - nothing is counted on the DSP,
+    // source or audio thread, and the cost is one atomic exchange and four relaxed
+    // loads a pass.
+    cascade::core::health::drainRecovered();
+    cascade::core::health::RecoveryReadings now;
+    now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads());
+    now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned();
+    now.ringDroppedSamples = pipeline_.ringDroppedSamples();
+    now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions());
+    recoveryWatch_.poll(now);
+}
+
+void Engine::healthWatchSamples(const std::string& kind) {
+    healthWatchKind_ = kind;
+    healthProbe_ = cascade::core::SpectrumFrame{};
+    // The newest frame the pipeline holds right now, if any, is the baseline.
+    healthWatchSeq_ = pipeline_.getLatestFrame(healthProbe_) ? healthProbe_.seq : 0;
+    healthWatching_ = true;
+}
+
+void Engine::exitCausePoll() {
+    if (!exitCausePending_) { return; }
+    // Nothing to read from, now: the switch was turned off, or this run may not
+    // touch the disk at all (a bounded run with no reports folder). Final.
+    if (!healthLedger_->allowed() || cascade::core::diagCrashDir().empty()) {
+        exitCauseFinish(cascade::core::unknownExit(
+            healthLedger_->allowed() ? "this run may not read the reports folder"
+                                     : "Diagnostics were switched off before it could be read"));
+        return;
+    }
+    // The listing is read on a worker (telemetryStartup); until it has answered,
+    // keep waiting - a mutex test, no disk.
+    if (!exitHistory_.ready()) { return; }
+    const cascade::core::DiagHistory h = exitHistory_.snapshot();
+    if (h.pending) { return; }
+    exitCauseFinish(cascade::core::classifyPreviousExit(
+        h.reports, static_cast<std::int64_t>(exitCausePrevStart_),
+        static_cast<std::int64_t>(telemetrySessionStartedEpoch_)));
+}
+
+void Engine::exitCauseFinish(const cascade::core::ExitVerdict& v) {
+    exitCausePending_ = false;
+    // One line, whatever the answer, so a log read later says how the session
+    // before it ended and why that is the answer ("unknown" says why too).
+    cascade::core::diagLogf("%s", cascade::core::previousExitLogLine(v).c_str());
+    // The count is moved from `unknown` to the class; for `unknown` itself it is
+    // already there. Either way the total has not changed.
+    telemetryExits_.refine(v.cls);
 }
 
 // THE RECEIVER'S HALF OF THE CONFIG RESTORE (engine stage 3a): every line of
@@ -7113,6 +7723,45 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     pipeline_.audio().setVolume(volume_);
     dbMin_ = cfg.dbMin;
     dbMax_ = cfg.dbMax;
+    // The audio buffer (0.99.73): a fixed value is applied at once, before the
+    // first prime has had time to matter; AUTOMATIC leaves the 120 ms start.
+    setAudioBufferMs(cfg.audioBufferMs);
+    // THE DEPTH AUTOMATIC REACHED LAST TIME (audioBufferAutoMs): an AUTOMATIC session starts there
+    // - never below the 120 ms it would start at, never above 960 - so a slow computer does not
+    // pay the same bad minutes at every launch. A fixed setting ignores it (and keeps it for the
+    // file). It only ever starts DEEPER: a restore on an engine whose session has already gone
+    // deeper than the file says leaves that alone, as AUTOMATIC -> AUTOMATIC does above. A restored
+    // depth is not a raise - no health count - but since 0.99.83 it is SAID, in the Sinks rail and
+    // the log: the Milan report on 0.99.81 was a launch that silently restored 960 ms, which reads
+    // as "the audio is a second behind the spectrum for no reason", and neither the user nor the
+    // report could tell a restored deep lead from a fresh 120 ms start.
+    {
+        const int remembered = cascade::sink::validAudioBufferSetting(cfg.audioBufferAutoMs)
+                                   ? cfg.audioBufferAutoMs
+                                   : 0;
+        if (audioBufferMs_ == 0) {
+            const int depth = std::clamp(remembered,
+                                         cascade::sink::audioLeadMs(cascade::sink::AudioOut::kPrimeFrames),
+                                         960);
+            if (remembered != 0 && depth > audioLeadNowMs()) {
+                pipeline_.audio().setLeadFrames(cascade::sink::audioLeadFrames(depth));
+                for (const auto& entry : patchDests_) {
+                    if (entry.second && entry.second->leadMs() > 0) { entry.second->setLeadMs(depth); }
+                }
+                cascade::core::diagLogf(
+                    "audio: buffer restored to %d ms (the depth automatic reached when it last ran)",
+                    depth);
+                audioLeadNote_ = AudioLeadNote::kRestored;
+                audioLeadNoteMs_ = depth;
+                audioLeadNoteCount_ = 0;
+                audioLeadQuietMinutes_ = 0;   // the quiet run starts over at the restored lead
+                patchQuietMinutes_.clear();
+            }
+            if (remembered > audioBufferAutoMs_) { audioBufferAutoMs_ = remembered; }
+        } else {
+            audioBufferAutoMs_ = remembered;
+        }
+    }
     squelchDb_ = cfg.squelchDb;
     pipeline_.setSquelchDb(squelchDb_);
     // THE BIAS TEE IS SEEDED HERE, not inside the device branch below, so
@@ -7132,6 +7781,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // is the user's own typing and belongs to them, not to the session that
     // happened to open a radio.
     cascade::core::formatUtf8(plutoUri_, sizeof(plutoUri_), "%s", cfg.plutoUri.c_str());
+    // The rtl_tcp server's address, seeded for the same reason and before the
+    // same scanNative(): its row's args are "rtltcp=" plus this box.
+    cascade::core::formatUtf8(rtlTcpAddr_, sizeof(rtlTcpAddr_), "%s", cfg.rtlTcpAddr.c_str());
 
     // P7 settings. All are pure DSP switches with no failure mode, and the
     // loader has already clamped every one of them into range.
@@ -7247,9 +7899,20 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // identity key) is moved to the key it is looked up by now
     // (gui::soundCardConverterKey); nothing else is touched.
     converters_ = cascade::gui::migrateSoundCardConverterKeys(cascade::core::sanitiseConverters(cfg.converters));
+    // The crystal correction (0.99.56), BEFORE the source restore below: the
+    // restored radio's install applies its own value (applyPpmForSource).
+    ppmCorrectionOn_ = cfg.ppmCorrection;
+    ppmValues_ = cascade::core::sanitisePpmValues(cfg.ppm);
     // Each Airspy's gain mode, gains and decimation, put back by
     // adoptDeviceMirrors on that radio's own open, like the bias tee.
     airspyMemory_ = cfg.airspy;
+    // Each radio's Auto gain switch, put back by adoptDeviceMirrors on that
+    // radio's own open (0.99.73). Seeded here, before any open, so a saved
+    // radio that does not open this launch keeps its entry for the next save.
+    autoGainMemory_ = cfg.autoGainByRadio;
+    // Each radio's manual gain (0.99.75), put back by adoptDeviceMirrors on that radio's
+    // own open - seeded here for the same reason as the switch above.
+    manualGainMemory_ = cfg.manualGainByRadio;
 
     // Source restore. The generator is always safe (it is already active);
     // a file is restored only if the path still opens; a Soapy device only
@@ -7271,8 +7934,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         restoreKeepLabel_.clear();
         sourceSel_ = kSoundCardRow;
         launchSoundCardOpen(/*restore=*/true, soundCard_);
-        cascade::core::diagLogf("source: restoring the sound card %s (%s)", soundCard_.device.c_str(),
-                                soundCard_.hostApi.c_str());
+        cascade::core::diagLogf("source: restoring the sound card (%s)",
+                                cascade::source::loggableSoundCardDescription(soundCard_).c_str());
     } else if (cfg.sourceKind == "file") {
         auto file = std::make_unique<cascade::source::IqFileSource>();
         if (file->open(cfg.iqFilePath)) {
@@ -7382,7 +8045,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             const double radioHz = radioHzForSource(kind, args, cfg.centerHz);
             if (radioHz > 0.0 || !cascade::core::converterActive(converterForKey(
                                      cascade::core::converterRadioKey(kind, args)))) {
-                dev->setCenterFrequencyHz(radioHz);
+                // Through the radio's crystal correction too (0.99.56).
+                dev->setCenterFrequencyHz(
+                    ppmPreTellHz(kind, args, dev->hasFrequencyCorrection(), radioHz));
             }
             device_ = dev.get();
             soapyView_ = dynamic_cast<cascade::source::SoapySource*>(device_);
@@ -7403,6 +8068,12 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             ++sourceGen_;  // same invariant as the file branch above
             installSource(std::move(dev));
             sourceKind_ = kind;
+            // THE SAVED RADIO OPENED (0.99.64, core/health_events.hpp): counted
+            // like any other open. This runs BEFORE the application has read
+            // whether usage reporting is on, and the ledger holds what it is
+            // given until it has (telemetryStartup).
+            cascade::core::health::noteRadioOpen(kind);
+            healthWatchSamples(kind);
             applyConverterForSource();
             // Point the combo at the restored device if this machine still
             // enumerates it; -1 otherwise (preview falls back to live name).
@@ -7425,6 +8096,11 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                                     deviceModel_.c_str(), kind.c_str(),
                                     pipeline_.activeSource().sampleRateHz());
         } else {
+            // THE SAVED RADIO WOULD NOT OPEN, counted anonymously (0.99.64,
+            // core/health_events.hpp): the driver kind and a reason class,
+            // nothing of the message - which quotes the device arguments back.
+            // The most common failure there is, and the first thing this run does.
+            cascade::core::health::noteRadioFail(kind, sourceError_);
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes
@@ -7563,11 +8239,21 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.converters = converters_;
     // Every Airspy's gain mode, gains and decimation, open now or not.
     cfg.airspy = airspyMemory_;
+    // Each radio's Auto gain switch (0.99.73) and manual gain (0.99.75): kept in the radio's own map, open now or not.
+    // The audio buffer: the chosen value (0 = AUTOMATIC) and the depth automatic reached (0.99.73).
+    cfg.audioBufferMs = audioBufferMs_;
+    cfg.audioBufferAutoMs = audioBufferAutoMs_;
+    // The crystal correction (0.99.56): the switch and every radio's value.
+    cfg.ppmCorrection = ppmCorrectionOn_;
+    cfg.ppm = ppmValues_;
+    cfg.autoGainByRadio = autoGainMemory_;
+    cfg.manualGainByRadio = manualGainMemory_;
     // WHAT IS IN THE BOX, not what opened. A Pluto that is on the bench has
     // its address in nativeArgs as well; this field is the typing, and it has
     // to survive a launch in which the board never answered so it can be
     // corrected next time rather than retyped from nothing.
     cfg.plutoUri = plutoUri_;
+    cfg.rtlTcpAddr = rtlTcpAddr_;
     // THE FILE THIS SESSION PLAYED, or the one it could not find. Normally
     // iqOpenPath_, which is the last recording that actually opened; when the
     // saved source was a file and the restore could not open it, the same
@@ -8068,11 +8754,31 @@ void Engine::pumpWorkers() {
     pumpAddAll();
 }
 
+void Engine::pollSdrPlayTrouble() {
+    const cascade::source::SdrPlayServiceTrouble trouble =
+        cascade::source::sdrPlayServiceTrouble(cascade::source::processSdrPlayApi());
+    if (trouble == sdrPlayTroubleSeen_) { return; }
+    sdrPlayTroubleSeen_ = trouble;
+    // THE TWO TROUBLES THAT ARE A RECOVERY, counted on the change to them: a scan whose worker was let go because the service never
+    // answered, and a session the process gave up for good. (An Open that was refused is a radio failure and is counted as one where the
+    // radio is opened.)
+    if (trouble == cascade::source::SdrPlayServiceTrouble::EnumerationHung) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::SdrEnum);
+    } else if (trouble == cascade::source::SdrPlayServiceTrouble::SessionLost) {
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::SdrLost);
+    }
+}
+
 void Engine::pumpAudio() {
     // The diagnostics context a crash or a hang report prints, and the diagnostics bundle carries (window port group 14).
     pumpDiagContext();
     pollAudioOpen();
     pollAudioHealth();
+    // The usage record's counts that need a look once a pass (the output's first play, a radio's first samples, the recoveries
+    // nothing else may count), and the evidence of how the previous session ended.
+    healthPoll();
+    pollSdrPlayTrouble();
+    exitCausePoll();
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.

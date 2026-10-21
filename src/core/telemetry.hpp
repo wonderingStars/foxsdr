@@ -350,6 +350,10 @@ private:
 
 // What a send does with the ledger when it finishes: subtract `carried` if,
 // and only if, the record was accepted.
+// THE PROCESS'S ONE STALL LEDGER (0.99.84 merge): the window's hang watchdog classifies a display stall and the engine's usage
+// journal counts it; they live on opposite sides of the fence, so neither owns it - the same shape as health::globalLedger().
+std::shared_ptr<StallLedger> globalStallLedger();
+
 TelemetryReporter::SendDone settleOnAccept(std::shared_ptr<StallLedger> ledger,
                                            std::uint64_t carried);
 

@@ -302,6 +302,8 @@ public:
     // The Diagnostics switch (see the rule in the file header). Off: nothing new
     // is counted; what is already kept stays and is still sent.
     void setAllowed(bool allowed);
+    // The switch as last set (true until told otherwise).
+    bool allowed() const;
 
     // True once reporting has been decided either way (arm or disarm).
     bool decided() const;

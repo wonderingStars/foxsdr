@@ -37,7 +37,9 @@
 #endif
 
 #include "core/ppm_correction.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
 
@@ -233,89 +235,135 @@ void isolate() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE BELOW GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_converter_app_paths.cpp does:
+    // inline and stepped, on the pass's own thread with the pass out of the way when it free-runs.
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
     static void setPpm(AppWindow& a, bool on, const std::string& key, double v) {
-        a.ppmCorrectionOn_ = on;
-        a.ppmValues_[key] = v;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).ppmCorrectionOn_ = on;
+            rawEngine(a.engine_).ppmValues_[key] = v;
+        });
     }
-    static void setOn(AppWindow& a, bool on) { a.ppmCorrectionOn_ = on; }
-    static void change(AppWindow& a, bool on, double v) { a.changePpm(on, v); }
+    static void setOn(AppWindow& a, bool on) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).ppmCorrectionOn_ = on; });
+    }
+    // The Source section's switch and value, as the window sends them (FOXAPP_OP_SET_PPM), applied by the engine at once.
+    static void change(AppWindow& a, bool on, double v) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).changePpm(on, v); });
+    }
     static double stored(AppWindow& a, const std::string& key) {
-        const auto it = a.ppmValues_.find(key);
-        return it == a.ppmValues_.end() ? 0.0 : it->second;
+        return passseam::read<double>(rawEngine(a.engine_), [&] {
+            const auto& m = rawEngine(a.engine_).ppmValues_;
+            const auto it = m.find(key);
+            return it == m.end() ? 0.0 : it->second;
+        });
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.deviceOpenPending_) {
-            a.pollSourceAsync();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.scanNative();
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].args == args) {
-                a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-                return waitOpen(a);
+        int row = -1;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
+            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+                    row = AppWindow::kNativeRowBase + static_cast<int>(i);
+                    break;
+                }
             }
-        }
-        return false;
+            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+        });
+        return row >= 0 && waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { a.selectSource(0); }
-    static void tune(AppWindow& a, double hz) { a.applyRetuneNow(hz); }
-    static void setVfo(AppWindow& a, double hz) { a.pipeline_.setVfoOffsetHz(hz); }
-    static double airCentre(AppWindow& a) { return a.pipeline_.activeSource().centerFrequencyHz(); }
-    static double counter(AppWindow& a) { return a.currentAbsoluteHz(); }
-    static double softwarePpm(AppWindow& a) { return a.pipeline_.softwarePpm(); }
-    static std::string tuneNote(AppWindow& a) { return a.tuneMismatchNote_; }
-    static void clearNote(AppWindow& a) { a.tuneMismatchNote_.clear(); }
-    static std::string card(AppWindow& a) { return a.ppmCardLine(); }
-    static std::string diag(AppWindow& a) { return a.ppmDiagText(); }
-    static cc::PpmMethod method(AppWindow& a) { return a.ppmMethodNow(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
-    static cascade::core::AppConfig saved(AppWindow& a) { return a.currentConfig(); }
+    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
+    static void tune(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).applyRetuneNow(hz); }); }
+    static void setVfo(AppWindow& a, double hz) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.setVfoOffsetHz(hz); });
+    }
+    static double airCentre(AppWindow& a) {
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().centerFrequencyHz(); });
+    }
+    static double counter(AppWindow& a) {
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); });
+    }
+    static double softwarePpm(AppWindow& a) {
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.softwarePpm(); });
+    }
+    static std::string tuneNote(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).tuneMismatchNote_; });
+    }
+    static void clearNote(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).tuneMismatchNote_.clear(); }); }
+    // THE RECEIVER CARD'S LINE, as the window makes it: from the facts the engine publishes (fact.ppm.*), read through the window's own
+    // session - with no frame, the engine publishes and the window looks first.
+    static std::string card(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        a.refreshUiState();
+        return a.ppmCardLine();
+    }
+    static std::string diag(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).ppmDiagText(); });
+    }
+    static cc::PpmMethod method(AppWindow& a) {
+        return passseam::read<cc::PpmMethod>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).ppmMethodNow(); });
+    }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static cascade::core::AppConfig saved(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        return a.currentConfig();
+    }
 
-    static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device,
-                                                     double freqHz) {
+    static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device, double freqHz) {
         namespace pc = cascade::core::patch;
-        a.patchSeeded_ = true;
-        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
-            n->device = device;
-            n->freqHz = freqHz;
-            n->centreChosen = true;
-            n->rateHz = 2.4e6;
-            n->on = true;
-        }
-        return id;
+        a.patchSeeded_ = true;  // no starter patch: this test builds its own
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+                n->device = device;
+                n->freqHz = freqHz;
+                n->centreChosen = true;
+                n->rateHz = 2.4e6;
+                n->on = true;
+            }
+            return id;
+        });
     }
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = true;
+            rawEngine(a.engine_).patchWasOpen_ = true;
+        });
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.patchRadios_.count(id) == 0) {
-            a.patchReconcile();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) == 0; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        for (int i = 0; i < 5; ++i) { a.patchReconcile(); }
+        for (int i = 0; i < 5; ++i) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); }); }
         return true;
     }
     static void reconcile(AppWindow& a, int frames) {
-        for (int i = 0; i < frames; ++i) { a.patchReconcile(); }
+        for (int i = 0; i < frames; ++i) { passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); }); }
     }
     static double patchAir(AppWindow& a, cascade::core::patch::NodeId id) {
-        const auto it = a.patchRadios_.find(id);
-        return it == a.patchRadios_.end() ? std::nan("") : it->second->centreHz();
+        return passseam::read<double>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).patchRadios_.find(id);
+            return it == rawEngine(a.engine_).patchRadios_.end() ? std::nan("") : it->second->centreHz();
+        });
     }
     static void stopPatch(AppWindow& a) {
-        a.patchRunning_ = false;
-        a.patchStopAll(true);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = false;
+            rawEngine(a.engine_).patchStopAll(true);
+        });
         waitOpen(a);
     }
 };

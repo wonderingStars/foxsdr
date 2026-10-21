@@ -256,21 +256,25 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         int count;          // occurrences of `Recovered::<word>` in that file
     };
     const std::vector<Site> sites = {
-        {"Audio", "src/gui/app_window.cpp", 1},      {"Reopen", "src/gui/app_window.cpp", 1},
+        // 0.99.84 merge: the sites master had in AppWindow that are the engine's now (the output's recovery, the radio's reopen, the audio
+        // buffer's raise, the SDRplay service's two troubles) are in src/engine/engine.cpp; the two that are still the window's (the
+        // settings write that failed, the saved patch that lost connections) stay in app_window.cpp.
+        {"Audio", "src/engine/engine.cpp", 1},      {"Reopen", "src/engine/engine.cpp", 1},
         {"CfgSave", "src/gui/app_window.cpp", 1},    {"PatchLoad", "src/gui/app_window.cpp", 1},
-        {"SdrEnum", "src/gui/app_window.cpp", 1},    {"SdrLost", "src/gui/app_window.cpp", 1},
-        {"AudioLead", "src/gui/app_window.cpp", 1},
+        {"SdrEnum", "src/engine/engine.cpp", 1},     {"SdrLost", "src/engine/engine.cpp", 1},
+        {"AudioLead", "src/engine/engine.cpp", 1},
         {"EnumChild", "src/source/soapy_enum_proc.cpp", 1},
         {"PluginApi", "src/core/plugin_ui.cpp", 1},  {"WebRoute", "src/net/web_server.cpp", 1},
     };
-    // The four counters a poll reads: named in the window's poll, where the readings are made.
-    const std::string window = readFile(root / "src" / "gui" / "app_window.cpp");
+    // The four counters a poll reads: named in the poll, where the readings are made - the engine's pass since the extraction (the window
+    // no longer holds a pipeline to read them from).
+    const std::string window = readFile(root / "src" / "engine" / "engine.cpp");
     for (const char* reading : {"now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads())",
                                 "now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned()",
                                 "now.ringDroppedSamples = pipeline_.ringDroppedSamples()",
                                 "now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions())",
                                 "recoveryWatch_.poll(now)", "cascade::core::health::drainRecovered()"}) {
-        if (window.find(reading) == std::string::npos) { std::printf("FAIL the window's poll lacks %s\n", reading); }
+        if (window.find(reading) == std::string::npos) { std::printf("FAIL the engine's poll lacks %s\n", reading); }
         CHECK(window.find(reading) != std::string::npos);
     }
     const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc"};

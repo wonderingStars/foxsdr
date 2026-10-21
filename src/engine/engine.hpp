@@ -57,6 +57,7 @@
 #include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
+#include "core/ppm_correction.hpp"
 #include "core/plugin_directive.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
@@ -66,6 +67,10 @@
 #include "core/recorder.hpp"
 #include "core/retune_coalescer.hpp"
 #include "core/scanner.hpp"
+#include "core/diag_history.hpp"
+#include "core/foreign_modules.hpp"
+#include "core/exit_cause.hpp"
+#include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 #include "core/transmitter.hpp"
 #include "engine/audio_open.hpp"
@@ -87,6 +92,7 @@
 #include "source/pluto_source.hpp"
 #include "source/pluto_tx.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "source/rtl_tcp_source.hpp"
 #include "source/rx888_source.hpp"
 #include "source/sdrplay_source.hpp"
 #include "source/soapy_source.hpp"
@@ -453,6 +459,9 @@ private:
     bool startIqRecording();
     void openIqFile(const std::string& path);
     void openPlutoAt(const std::string& args);
+    // The rtl_tcp row's Open key (SELECT_SOURCE "open-rtltcp:rtltcp=<addr>"): the Pluto's recipe, step for step.
+    void openRtlTcpAt(const std::string& args);
+    void openRtlTcpFromBox();
     void tuneToBookmark(const cascade::core::Bookmark& b);
     std::uint64_t addBookmarkHere(const std::string& name);  // the new bookmark's id
     cascade::core::Scanner::Params scannerParams() const;
@@ -804,8 +813,10 @@ private:
     // they had two copies of this before, and they had already drifted.
     // `args` is what the device was opened with; the RTL-SDR's bias tee rule
     // needs it to know WHICH dongle this is.
+    // `restoreRemembered` false (a recovery reopen after a driver fault) leaves the remembered manual gain and Auto gain alone: the
+    // caller applies the state the user had a moment ago.
     void adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::string& kind,
-                            const std::string& args, double requestRateHz);
+                            const std::string& args, double requestRateHz, bool restoreRemembered = true);
 
     // Makes the DSP chain follow activeSource().sampleRateHz() (rate-follow).
     // A pipeline refusal — fractional channel rate — keeps the old chain and
@@ -852,6 +863,26 @@ private:
     double lastAudioProbeSec_ = 0.0;
     int audioRecoveries_ = 0;
     std::string audioHealthNote_;
+    // THE AUDIO BUFFER (0.99.73 / 0.99.83, master): 0 = AUTOMATIC (starts at 120 ms, deepens itself when this computer falls behind
+    // and eases back after a quiet quarter hour - closeAudioMinute), else a fixed lead that never steps. audioBufferAutoMs_ is the
+    // depth AUTOMATIC reached, remembered for the next launch (AppConfig::audioBufferAutoMs). The note says what automatic last did.
+    int audioBufferMs_ = 0;
+    int audioBufferAutoMs_ = 0;
+    enum class AudioLeadNote { kNone, kRaised, kRestored, kLowered };
+    AudioLeadNote audioLeadNote_ = AudioLeadNote::kNone;
+    int audioLeadNoteMs_ = 0;
+    int audioLeadNoteCount_ = 0;
+    int audioLeadQuietMinutes_ = 0;                                    // consecutive quiet, played minutes (the way back down)
+    std::map<cascade::core::patch::NodeId, std::uint64_t> patchStarvedAtMinute_;  // each patch speaker's mark at its last minute
+    std::map<cascade::core::patch::NodeId, int> patchQuietMinutes_;
+    // Closes the minute (starved callbacks, the log line, the step up or down), for the receiver's sink and each patch speaker.
+    void closeAudioMinute(std::size_t ringFramesNow);
+    // The audio buffer setting (FOXAPP_OP_SET_AUDIO_BUFFER and the restore): an invalid value is AUTOMATIC.
+    void setAudioBufferMs(int ms);
+    // The lead the sink demands now, in milliseconds (what a patch speaker made afterwards is seeded with).
+    int audioLeadNowMs();
+    // The sentence the Sinks rail shows about what automatic last did ("kind ms count"; empty when nothing), as a fact.
+    std::string audioLeadNoteFact() const;
     // THE DEVICE OPEN, OFF THIS THREAD. Field report "hang ntdll.dll @
     // InitializeWaveHandles" (0.96.4): picking an output device put the GUI
     // thread inside waveOutOpen for 57 seconds. See engine/audio_open.hpp for the
@@ -1275,6 +1306,69 @@ private:
     // radio (core/airspy_settings.hpp); put back by adoptDeviceMirrors.
     std::map<std::string, cascade::core::AirspySetting> airspyMemory_;
 
+    // EACH RADIO'S AUTO GAIN SWITCH AND MANUAL GAIN (0.99.73 / 0.99.75, master): kept per radio under the bias tee's key (driver and
+    // serial; the whole args for a radio with no serial), put back by adoptDeviceMirrors on that radio's own open, written by
+    // changeAutoGain and rememberManualGain, persisted as AppConfig::autoGainByRadio / manualGainByRadio. Not an Airspy's: its gains
+    // are part of its gain mode (airspyMemory_), and a second record would be a second witness that could disagree.
+    // THE CRYSTAL CORRECTION (0.99.56, core/ppm_correction.hpp; engine_ppm.cpp): ONE switch for the application and a value per radio
+    // (under core::ppmRadioKey), applied to the open radio - in the radio when it corrects its own crystal, otherwise by retuning.
+    bool ppmCorrectionOn_ = false;
+    std::map<std::string, double> ppmValues_;
+    // What the open radio last ACCEPTED as its own correction (InRadio only), 0 after every install - a radio opens with none.
+    double ppmRadioApplied_ = 0.0;
+    // Why the open radio refused its own correction; "" when it did not.
+    std::string ppmError_;
+    // THE TWO TUNES MADE BEFORE A RADIO IS INSTALLED - the startup restore's and an RSP's pre-Init tune (launchDeviceOpen) - are told the
+    // corrected frequency here, and the memo of that tune is left for applyPpmForSource to hand to the view, so the install moves nothing.
+    struct PpmPending {
+        std::string key;
+        cascade::core::PpmMemo memo;
+    };
+    std::optional<PpmPending> ppmPending_;
+    std::string ppmRadioKeyNow() const;
+    // The correction in force for a radio key / a patch device key: its value while the switch is on, 0 otherwise.
+    double ppmForKey(const std::string& key) const;
+    double ppmForPatchDevice(const std::string& deviceKey) const;
+    cascade::core::PpmMethod ppmMethodNow();
+    // Puts the correction in force on the radio just installed (applyConverterForSource: every install, swap and close ends there).
+    void applyPpmForSource();
+    // Radio frequency in, the frequency to tell the radio out (see ppmPending_); the radio itself unchanged when it corrects its own
+    // crystal or has no correction.
+    double ppmPreTellHz(const std::string& kind, const std::string& args, bool radioCorrects, double radioHz);
+    // FOXAPP_OP_SET_PPM: the switch and this radio's value; retunes so the station stays and the radio follows.
+    void changePpm(bool on, double ppm);
+    // The RECEIVER card's "PPM +1.5" value (number only) while the switch is on and the radio takes a correction; "" otherwise.
+    std::string ppmCardValueText();
+    // The diagnostics block's "ppm:" value ("off", "not applicable", "+1.5 in the radio", "+1.5 by retuning").
+    std::string ppmDiagText();
+    // What the Source section's controls draw from (fact.ppm.*).
+    struct PpmFacts {
+        bool on = false;
+        std::string method;       // "na" | "radio" | "retune"
+        double stored = 0.0;      // this radio's value (0 = none)
+        bool wholeRadio = false;  // the radio takes whole ppm only
+        int wholeValue = 0;
+        std::string error;
+        std::string cardValue;
+        std::string model;
+        std::string serial;
+        std::string key;
+    };
+    PpmFacts ppmFacts();
+
+    std::map<std::string, bool> autoGainMemory_;
+    std::map<std::string, std::vector<std::pair<std::string, double>>> manualGainMemory_;
+    // The manual numbers a radio had when Auto gain went ON, kept so that going OFF gives the stages their manual values back.
+    std::vector<std::pair<std::string, float>> manualGainsBeforeAgc_;
+    // The Auto gain box's own call (the SET_DEVICE_AGC op and the web control): asks the radio, mirrors an accepted change into
+    // deviceAgc_, remembers it for this radio, and makes the gains follow the switch. False on a refusal (sourceError_ says why).
+    bool changeAutoGain(bool want);
+    // The radio's stage `stage`, as the radio holds it now, into manualGainMemory_ (not an Airspy's, not while the radio gains itself).
+    void rememberManualGain(std::size_t stage);
+    void rememberAutoGain(cascade::source::DeviceSource& dev, const std::string& args, bool on);
+    // Puts the remembered manual gain back on `dev` after an ordinary open (adoptDeviceMirrors).
+    void restoreManualGain(cascade::source::DeviceSource& dev, const std::string& args);
+
     // THE BIAS TEE. Present only when the OPEN device is one of the native
     // drivers that has one and can say so (see withBiasTee in
     // engine/bias_tee.hpp for which, and for why this is not a DeviceSource
@@ -1456,6 +1550,9 @@ private:
     // timeout and no wait - a user who has never owned one can select it,
     // read what it wants, and select something else.
     char plutoUri_[192] = "ip:192.168.2.1";
+    // WHERE THE RTL_TCP SERVER IS (0.99.70): the Pluto's box in every respect (an address, not a row; nothing contacted until Open; seeded
+    // from AppConfig::rtlTcpAddr and written back by fillConfig; committed as typed by FOXAPP_OP_SET_RTLTCP_ADDR). Its row's args are "rtltcp=" + this.
+    char rtlTcpAddr_[192] = "127.0.0.1:1234";
 
     // WHAT THE SOURCE SECTION SAYS ABOUT THE SDRPLAY API WHEN THERE IS NO RSP
     // ROW TO SHOW. Composed by scanNative() from the driver's own pure
@@ -1641,8 +1738,44 @@ private:
     cascade::core::HeartbeatSender telemetryHeartbeat_;
     bool telemetryEnabled_ = false;
     std::string telemetryInstallId_;
+    std::string telemetryFirstRun_;      // see AppConfig::telemetryFirstRun
+    std::string telemetryFirstVersion_;
     std::uint64_t telemetryLaunches_ = 0;
     std::uint64_t telemetryCrashes_ = 0;
+    // HOW THE UNCLEAN EXITS ENDED (0.99.69, core/exit_cause.hpp). Moves with telemetryCrashes_ at every instant: an unclean exit found at
+    // start-up is `unknown` at once and is refined to its class when the evidence has been read (exitCausePoll).
+    cascade::core::ExitCounts telemetryExits_;
+    // When THIS session began (epoch seconds), journalled for the next start-up to use as the lower edge of "the previous session's
+    // reports"; and, while an unclean exit found at this start-up is still waiting for its evidence, when the session that ended began.
+    std::uint64_t telemetrySessionStartedEpoch_ = 0;
+    std::uint64_t exitCausePrevStart_ = 0;
+    bool exitCausePending_ = false;
+    // The previous session's reports and log, read on a worker (never a disk read on the pass's thread); the evidence an exit is
+    // classified from. The window keeps a cache of its own for the diagnostics bundle.
+    cascade::core::DiagHistoryCache exitHistory_;
+    // Looks, once per pass while an exit is waiting, for the evidence.
+    void exitCausePoll();
+    // Writes the verdict's one log line, refines the counters and stops waiting.
+    void exitCauseFinish(const cascade::core::ExitVerdict& v);
+    // DISPLAY STALLS the window's hang watchdog classified, and THE FAILURES THAT ARE NOT CRASHES (0.99.64): the process's two ledgers,
+    // armed and disarmed here by the usage switch, files beside config.json (core/telemetry.hpp StallLedger; core/health_events.hpp).
+    std::shared_ptr<cascade::core::StallLedger> stallLedger_ = cascade::core::globalStallLedger();
+    std::string telemetryLedgerPath_;   // beside config.json; empty = memory only
+    std::shared_ptr<cascade::core::health::HealthLedger> healthLedger_ = cascade::core::health::globalLedger();
+    std::string healthLedgerPath_;
+    // The samples watch healthPoll() keeps for the radio just installed: its driver kind, the newest spectrum frame the pipeline held
+    // when it was installed (anything newer came from this radio), and the cursor the poll reads frames with. Off once seen to deliver.
+    bool healthWatching_ = false;
+    std::string healthWatchKind_;
+    std::uint64_t healthWatchSeq_ = 0;
+    cascade::core::SpectrumFrame healthProbe_;
+    bool healthSoundNoted_ = false;     // the output has played this session
+    // What moved in the counters healthPoll() reads for the recoveries a signal thread or a vendor call's worker meets.
+    cascade::core::health::RecoveryWatch recoveryWatch_;
+    // Once per pass: the output's first play, the watched radio's first samples, and the recoveries nothing else may count.
+    void healthPoll();
+    // Starts the samples watch for the radio just installed (kind: its driver key).
+    void healthWatchSamples(const std::string& kind);
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
     // Time in the current mode. A plain "since" mark cannot be used here: the
@@ -1657,13 +1790,25 @@ private:
     void telemetryNotePanel(const char* name);
     // Reads the previous session out of the config, counts a crash if it
     // never finished, and sends its report. Start-up only.
-    void telemetryStartup(const cascade::core::AppConfig& cfg);
+    // `configDir`: where config.json lives (the usage record's ledgers and send marker sit beside it); empty = memory only.
+    void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir = std::string());
     // Builds this session's report into `cfg` for the next start-up to send.
     void telemetryJournal(cascade::core::AppConfig& cfg);
     // Rebuilds the report context out of state the application already has -
     // mode, source, rate, radio model, loaded plugins with versions. Nothing
     // here is re-derived.
     void refreshDiagContext();
+    // Renders the context on every way out of a function that changes what it says (a source installed, a rate followed, the patch
+    // page's radios started or stopped): a fault in the first moment after such a change is reported with the NEW state, not the
+    // old one the 1 Hz pass had last seen (0.99.62 - three reports said `source: siggen`, `device-open: no` beside a log line
+    // saying a radio had opened).
+    struct DiagContextOnExit {
+        Engine& e;
+        ~DiagContextOnExit() { e.refreshDiagContext(); }
+    };
+    // The other software's DLLs in this process (0.99.69): what the watch has seen at start and since. Started by the first pass,
+    // polled by every one (it writes a line for each module that arrives after the start scan).
+    cascade::core::ForeignModuleWatch foreignModules_;
     // THE PASS RENDERS IT (window port group 14, part c): once at the end of applyConfig and then, from pumpAudio, at most
     // once a second - and only when what the context is made of (mode, source, rate, radio model, loaded plugins with
     // versions) has changed, so a settled pass allocates nothing. The window no longer calls refreshDiagContext: the
@@ -1822,6 +1967,11 @@ private:
         std::unique_ptr<cascade::source::IqSource> src;
         std::string label;
         std::string error;
+        // The crystal correction the worker applied before the first tune (0.99.56): in the radio (radioPpm) or by retuning
+        // (softwarePpm, with the memo of that first tune so the view reads it back exactly).
+        double radioPpm = 0.0;
+        double softwarePpm = 0.0;
+        cascade::core::PpmMemo ppmMemo{};
     };
     std::map<cascade::core::patch::NodeId, std::future<PatchRadioOpen>> patchRadioPending_;
     std::map<cascade::core::patch::NodeId, std::string> patchRadioPendingAs_;
@@ -2494,6 +2644,10 @@ public:
     void reportPluginTestResult(int frame) const;
     void pumpWorkers();
     void pumpAudio();
+    // THE SDRPLAY SERVICE'S TROUBLE, counted on the change to it (0.99.55 / 0.99.64; master's AppWindow::pollSdrPlayService). Only the COUNTING
+    // is here: the service card, its restart key and the note are the window's (ledger SDRPLAY-SERVICE, stubbed).
+    void pollSdrPlayTrouble();
+    cascade::source::SdrPlayServiceTrouble sdrPlayTroubleSeen_ = cascade::source::SdrPlayServiceTrouble::None;
     void pump();
 
     // --- THE CONTROL THREAD (stage 3b, docs/engine-stage3.md section 10) -----

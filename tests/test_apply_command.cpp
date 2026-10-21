@@ -659,6 +659,13 @@ struct AppWindowTestAccess {
     static bool txMonitor(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitMonitor_; }); }
     static std::string txArgs(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).transmitArgs_; }); }
     static std::string plutoUri(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).plutoUri_; }); }
+    static std::string rtlTcpAddr(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).rtlTcpAddr_; }); }
+    static int audioBufferMs(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).audioBufferMs_; }); }
+    static bool ppmOn(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).ppmCorrectionOn_; }); }
+    static std::size_t ppmValueCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).ppmValues_.size(); }); }
+    static double ppmValueFor(AppWindow& a, const std::string& key) {
+        return rd(a, [&] { const auto& m = rawEngine(a.engine_).ppmValues_; const auto it = m.find(key); return it == m.end() ? 0.0 : it->second; });
+    }
     // The patch decoders' pictures the engine keeps (API 0.3 8.12, part 3), and the graph they are pruned against.
     static cascade::core::patch::NodeId addPatchNode(AppWindow& a) {
         return rd(a, [&] { return rawEngine(a.engine_).patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe"); });
@@ -1211,6 +1218,42 @@ void sourceOps(AppWindow& a) {
         CHECK(A::plutoUri(a) == before);
     }
 
+    covering(FOXAPP_OP_SET_RTLTCP_ADDR);
+    {
+        // The rtl_tcp address box (0.99.70), committed as typed: the Pluto box's twin.
+        const std::string before = A::rtlTcpAddr(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RTLTCP_ADDR, "shack.local:1235"))));
+        CHECK(A::rtlTcpAddr(a) == "shack.local:1235");
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RTLTCP_ADDR, before))));
+        CHECK(A::rtlTcpAddr(a) == before);
+    }
+
+    covering(FOXAPP_OP_SET_AUDIO_BUFFER);
+    {
+        // The Sinks rail's audio buffer (0.99.73): 0 is AUTOMATIC, the four fixed depths are kept, anything else is refused and changes nothing.
+        const int before = A::audioBufferMs(a);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AUDIO_BUFFER, 480))));
+        CHECK(A::audioBufferMs(a) == 480);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AUDIO_BUFFER, 333)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::audioBufferMs(a) == 480);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AUDIO_BUFFER, before))));
+        CHECK(A::audioBufferMs(a) == before);
+    }
+
+    covering(FOXAPP_OP_SET_PPM);
+    {
+        // The crystal correction (0.99.56): the switch is global, the value is kept for the open radio (here the signal generator,
+        // which has no crystal, so nothing is sent anywhere); an out-of-range value is clamped, 0 is no entry.
+        const bool onBefore = A::ppmOn(a);
+        const std::size_t countBefore = A::ppmValueCount(a);
+        CHECK(ok(A::apply(a, numInt(FOXAPP_OP_SET_PPM, 1.5, 1))));
+        CHECK(A::ppmOn(a));
+        CHECK(ok(A::apply(a, numInt(FOXAPP_OP_SET_PPM, 0.0, 0))));
+        CHECK(!A::ppmOn(a));
+        CHECK(A::ppmValueCount(a) == countBefore);  // 0 is kept as no entry
+        CHECK(ok(A::apply(a, numInt(FOXAPP_OP_SET_PPM, 0.0, onBefore ? 1 : 0))));
+    }
+
     covering(FOXAPI_OP_SELECT_SOURCE);
     {
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "rtlsdr:serial=0001"))));
@@ -1257,6 +1300,15 @@ void sourceOps(AppWindow& a) {
             std::lock_guard<std::mutex> lk(FakeRadio::argsMutex());
             CHECK(FakeRadio::lastArgs() == "uri=ip:192.0.2.7");
         }
+        // The rtl_tcp panel's Open: the typed address reaches the driver, and is the address kept.
+        CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "open-rtltcp:rtltcp=192.0.2.9:1234"))));
+        CHECK(A::waitOpen(a));
+        CHECK(A::kind(a) == "rtltcp");
+        {
+            std::lock_guard<std::mutex> lk(FakeRadio::argsMutex());
+            CHECK(FakeRadio::lastArgs() == "rtltcp=192.0.2.9:1234");
+        }
+        CHECK(A::rtlTcpAddr(a) == "192.0.2.9:1234");
         // The sound card panel's Open.
         A::setSoundCardForm(a);
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "row:soundcard"))));

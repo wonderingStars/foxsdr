@@ -142,6 +142,20 @@ std::optional<double> Engine::carriedAirCentre() {
 void Engine::applyConverterForSource() {
     pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
     converterHeldAir_.reset();   // a station held for the radio just replaced
+    // THIS radio's crystal correction too (0.99.56, engine_ppm.cpp): every install site calls this, before any tune, which is exactly
+    // where the correction has to be in force.
+    applyPpmForSource();
+    // THE SOURCE IS NOW WHOLLY INSTALLED, and this is the one step every
+    // install, swap and close of it ends with: installSource() and the kind,
+    // device and model assignments around it have all run, so the report context
+    // is rendered HERE, from a state that agrees with itself (0.99.62). It used
+    // to wait for the next once-a-second refresh, and a fault in the first read
+    // of a radio the user had just opened - the most fault-prone moment of its
+    // life - was written out describing the radio before it: three 0.99.59
+    // reports said `source: siggen` and `device-open: no` beside a log line
+    // saying a radio had opened. tests/test_diag_context_app.cpp holds that every
+    // installSource() is followed by this call.
+    refreshDiagContext();
     // (The LO field re-seeds from the radio now installed: the window sees the stored converter and the radio key move in the
     // state it reads - the pump move's step P2 took the host hook out.)
 }
@@ -343,7 +357,8 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
             // Where it fell, never the frequency (PRIVACY.md).
             cascade::core::diagLogf("source: converter change: the %s cannot follow the air "
                                     "frequency (%s); it stays where it was",
-                                    pipeline_.activeSource().name(),
+                                    sourceKind_ == "soundcard" ? "sound card"
+                                                               : pipeline_.activeSource().name(),
                                     !(radioHz > 0.0) ? "0 Hz or below at the radio"
                                     : radioHz < rLo   ? "below its range"
                                                       : "above its range");

@@ -988,6 +988,16 @@ std::string ForeignModuleWatch::contextValue() const {
     return impl_->value;
 }
 
+std::uint64_t ForeignModuleWatch::contextHash() const {
+    std::lock_guard<std::mutex> lk(impl_->m);
+    std::uint64_t h = 1469598103934665603ull;
+    for (const char c : impl_->value) {
+        h ^= static_cast<unsigned char>(c);
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
 bool ForeignModuleWatch::scanned() const {
     std::lock_guard<std::mutex> lk(impl_->m);
     return impl_->scanned;
