@@ -487,7 +487,7 @@ Verification (this tree, after C7):
       - test_engine_api_transmit: fails its throughput assertion (`issued.size() > 1000`: 533 to 780 new tickets); the same binary built from the
         branch BEFORE the merge (b4584aa) run three times directly reads 625, 744, 810 - below the line as well - and passed once under ctest, so the
         assertion straddles its threshold on this machine regardless of the merge. Not attributed to the merge.
-      - test_engine_api_merge: THE ONE THAT IS NOT EXPLAINED. Before the merge: 106 s on 24 threads, 0 differ. After: about 465 s, 783-851 differ
+      - test_engine_api_merge: EXPLAINED AND FIXED IN SECTION 10 (real-time threads from master's 0.99.73 starving the control threads). Before the merge: 106 s on 24 threads, 0 differ. After: about 465 s, 783-851 differ
         (every difference a keep-alive that lapsed - "the interface holding the key stopped answering" - so the engine's passes are slower under
         TSan than the test's timers allow). Not caused by pumpDiagContext / healthPoll / pollSdrPlayTrouble / exitCausePoll (removing the four per-pass
         calls: 471 s, 851 differ). UNVERIFIED which cluster: a TSan build of C0 (the raw merge, before the re-expressions) does not get that far - the same test stops on an
@@ -503,3 +503,78 @@ Verification (this tree, after C7):
 Not verified: every item of the ledger marked carried without a named test; Linux and Wayland behaviour of the carried glfw patch; the stubbed
 features by definition; rtl_tcp and the audio-buffer combo were not compared visually (their tests, test_audio_lead_app and test_apply_command,
 run and pass).
+
+## 10. The test_engine_api_merge slowdown: real-time threads starving the engines' own control threads
+
+Found by the push-gate pass (the second pass's first task), 2026-10-21. Method: scratch TSan builds of b4584aa (the pre-merge control), C0 (2c5d14f)
+and the tip (2399ae2) in WSL (Ubuntu, GCC 15, `-DCASCADE_SANITIZE=thread`, 24 engines on 32 processors), run through ctest with the leg's own
+TSAN_OPTIONS (symbolize=1: see "traps" below).
+
+Measured, `test_engine_api_merge`, wall time / user CPU / differences:
+
+  b4584aa (control)        106 s   3,160 s CPU    0 differ   (12 runs: 11 x 0, 1 x 1 - the flake below)
+  tip 2399ae2              459 s  14,120 s CPU  793 differ,  19 with a missing result
+  C0 2c5d14f (the merge)   470 s  14,420 s CPU   (halted by a PortAudio race at the end: below)
+  tip, CAP_SYS_NICE dropped (`setpriv --bounding-set=-sys_nice`)   107 s   3,169 s CPU   0 differ
+  tip + the fix            106-108 s in 24 runs: 21 x 0 differ, 3 x 1 differ (the flake below; 11 of the 24 ran a test copy that also logged a
+                           setUp latch that did not take - it never fired, and none of those 11 differed)
+  C0 + the fix             104 s and 106 s, 0 differ
+
+THE MECHANISM. src/core/thread_priority.cpp (master 0.99.73, "protect audio on slower machines"; the file is NOT in b4584aa; it arrived with
+the merge, C0, through src/core/pipeline.cpp's dspThreadMain and sourceThreadMain, which git merged without a conflict). On Linux the DSP thread
+and the source thread of every Pipeline call pthread_setschedparam(SCHED_RR, priority 1). An ordinary user is refused (EPERM) and the thread
+is left alone - the case on GitHub's runners and on a Linux user's machine - but a privileged process is granted it, and the WSL TSan leg runs as
+root. `ps -L` on the running test: 41 threads in class RR, priority 1, each at about 100 % CPU (under ThreadSanitizer the DSP chain runs flat out);
+none at b4584aa. 24 engines put 48 real-time threads on 32 processors, and every ordinary thread - each engine's control thread, the transmitter's
+thread, the test's workers - gets what the real-time throttle leaves (95 % of each second for real-time work). A control pass that does not run for
+over a second is a lapsed keep-alive (src/core/tx_key_rules.cpp:251, "the interface holding the key stopped answering", the 1 s local limit), which
+is why every one of the 783-851 differences was one; the sweep takes 4.3x the wall time and 4.5x the CPU because everything outside the real-time
+threads is waiting for them. Nothing in the key's rules, the session heartbeat path, steadyMs or the control pass changed (src/core/tx_key_rules.cpp
+and fox_engine_api.cpp's pass are identical to b4584aa's apart from one validate() line), and the four per-pass polls the first pass suspected
+were innocent: they cost nothing next to this.
+
+IT IS MASTER'S PRODUCT BEHAVIOUR AND IT IS KEPT: a real-time DSP thread is what 0.99.73 is for, one engine on a machine with a free processor does
+not starve its control thread, and the keep-alive lapsing is the safe direction (a lapse drops the key). What was wrong was the test rig: it asks the
+operating system for real-time scheduling 48 times over in one process, which no user's machine does.
+
+THE FIX (3 files and a test). `ThreadPriorityScope::setDisabledForTest(bool)` (core/thread_priority.hpp/.cpp): on every platform the scope asks for
+nothing and says "none: switched off for a test"; `engine_api_test::hermetic()` (tests/engine_api_test_env.hpp), which every engine-API test calls
+first, switches it on. RED first: tests/test_engine_api_hermetic.cpp (new; in the TSan selection) runs `hermetic()`, starts a Pipeline, and requires
+its two thread outcomes to be "none: ..." and, on Linux, that no thread of the process is SCHED_FIFO/SCHED_RR (/proc/self/task/*/stat field 41):
+RED on the unfixed tip as root ("sched-rr", "sched-rr", 2 real-time threads), GREEN after. tests/test_dsp_priority.cpp gained section 2b: the
+seam asks for nothing and is off again afterwards. The priority request itself is still tested, unchanged, by test_dsp_priority's other sections.
+
+SEPARATE FINDINGS OF THE SAME PASS (neither caused by the merge):
+  * THE C0 TSan RACE was not the slowdown. It is PortAudio's ALSA backend: `stream->isActive = 0` in OnExit (the callback thread's last act,
+    pa_linux_alsa.c:3415) against `return stream->isActive` in IsStreamActive (:3165), reached through Pa_IsStreamActive from
+    AudioOut::streamAlive() on the engine's control thread (C0: fillPublishedState, a b4584aa call; the tip: also refreshDiagContext, which the
+    merge added, at teardown). A plain unsynchronised status flag, harmless on its own, and the only race of the leg that survives the fix: once in
+    9 runs at the tip (it halts the process: halt_on_error=1), once in 1 at C0, none in 12 at b4584aa. tools/sanitize/tsan.supp: `race:IsStreamActive`,
+    by the function that reads it (the RealStop precedent), with the report and the reasoning beside it.
+  * THE ONE DIFFERENCE IN ABOUT EIGHT RUNS is old: b4584aa shows it too (1 run in 12; the fixed tip 3 in 24 - not distinguishable at these counts). It is
+    always the same shape - ONE side's state is empty where the other's is marked, in either direction ("one a pass: ended=0 marks={}" at b4584aa and
+    twice at the tip; "merged: marks={}" once) - which reads as that side's setUp latch not having taken (setUp checks the submit status, never the
+    latch's result). Which load-dependent rule refused it is UNVERIFIED: an instrumented copy of the test that logs a latch result other than OK did not
+    catch one in 11 runs. The test reports it as a difference; it is not the regression, and the push should not be read as promising 0 on every run.
+  * test_engine_api_transmit's throughput line (`issued.size() > 1000`) fails about half the runs at b4584aa too (1 pass, 2 fail in 3 ctest runs here).
+  * test_audio_lead_app (and its _stepped variant) failed on this Windows checkout, not on the merge: section 12 scans src/engine/engine.cpp for a
+    function's end as "\n}\n" after a BINARY read, and this working copy holds CRLF (autocrlf=true; the index is LF, and the files the tool layer
+    wrote were LF until a later git operation rewrote engine.cpp). It now reads the file as LF. Red before (3 checks failed, section 12), green after.
+
+TRAPS (add to section 8):
+  9. TSAN_OPTIONS=symbolize=0 HIDES THE SUPPRESSIONS: a race:/called_from_lib: line is matched by function or library name, which an unsymbolised
+     stack does not have, so every suppressed race halts the run. The merge pass's "C0 stops on an unsymbolised race before the sweep prints" was
+     that, plus the one real PortAudio race above; its direct-run experiments (symbolize=0) cannot be compared with the leg's. Run through ctest.
+  10. `git archive` on this machine (autocrlf=true) writes CRLF: a scratch build then fails to parse tools/sanitize/tsan.supp ("failed to parse
+     suppressions", exit 66) and tools/*.sh (`set: -: invalid option`). `sed -i 's/\r$//'` on those two before building.
+  11. A WSL shell started from Git Bash rewrites a leading-slash argument (`wsl bash -lc '/mnt/c/...'` becomes `C:/Program Files/Git/mnt/c/...`):
+      set MSYS_NO_PATHCONV=1. And a process started with `&` inside `wsl -e` dies with the shell; use the tool's own background mode.
+
+VERIFICATION OF THE FIX (Windows, Release, this tree after the fix): `ctest -L headless -j 8` 523 tests; red: the 54 merge_pending placeholders, test_i18n (6.3),
+and test_audio_lead_app / _stepped (fixed afterwards, 2 of 2 green). test_engine_api_merge 15.6 s, test_engine_api_transmit 98 s, test_remote_control_pull,
+test_transmit_key_race, test_remote_key_release (and their _stepped/_free variants), test_dsp_priority and the new test_engine_api_hermetic pass.
+WSL TSan, the touched sets (test_engine_api_conformance, _03, _merge, _transmit, test_remote_control_pull, test_transmit_key_race, test_remote_key_release,
+test_dsp_priority, test_engine_api_hermetic): all pass except test_engine_api_transmit (its throughput line, above) and one test_engine_api_merge run
+halted by the PortAudio race above, before its suppression. test_engine_api_rds_real, test_engine_publish_alloc and test_plugin_status_report are not
+in the TSan selection. NOT VERIFIED: the full TSan leg (`ctest -L tsan`, 108 tests) was not re-run end to end; the suppression was never seen
+to fire (the race it names appears about one run in ten and did not recur in the 11 runs after it was added).
