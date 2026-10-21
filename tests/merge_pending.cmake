@@ -38,7 +38,7 @@ cascade_merge_pending(RAIL-CHROME      # 0.99.44 interface size, 0.99.50 rail fo
     test_app_rail test_rail_fold test_rail_fold_app test_status_fold test_status_fold_app test_deck_knobs_app)
 cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table
     test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
-    test_plugin_update_cleanup_app)
+    test_plugin_update_cleanup_app test_plugin_store_view test_fitted_modules_no_disk)
 cascade_merge_pending(PLUGIN-RESCAN    # 0.99.63 / 0.99.73 a rescan that reloads nothing when nothing changed, a reload that logs its steps
     test_plugin_rescan_skip)
 cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: fields the host draws for a plugin
@@ -46,7 +46,11 @@ cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: f
 cascade_merge_pending(PLUGIN-ROW-KEYS  # 0.99.77 a row in a plugin's panel as a key
     test_programme_audio_app)
 cascade_merge_pending(TX-PLUGIN        # 0.99.74 a plugin may key the transmitter once granted and armed
-    test_tx_audio_app)
+    test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app)
+cascade_merge_pending_part(TX-PLUGIN transmit_page_plugin_key
+    "tests/test_transmit_page.cpp section 10: the wiring of a plugin's transmit key in the window (applyPluginTransmitKey, setPluginKey, pluginMayKey, txArming_.arm, armTransmitPlugins/disarmTransmitPlugins). Restore master's section (git show origin/master:tests/test_transmit_page.cpp) when the feature is re-expressed.")
+cascade_merge_pending_part(IMPORT-DIALOG excuse_cap_pickfile
+    "tests/test_excuse_cap.cpp: the third native-wait call site, pickFile (the BROWSE key's modal file dialog, 0.99.74, used by the plugin settings' BROWSE FILES and the bookmark Import dialog). The expected count of runShellOpen(watchdogShellHooks(), call sites is 2 today and goes back to master's 3 with the dialog.")
 cascade_merge_pending(TESTER-LINK      # 0.99.45 / 0.99.52 beta-tester portal link
     test_tester_link_app test_link_request_poll)
 cascade_merge_pending(PATCH-PRESETS    # 0.99.49 whole-patch presets

@@ -556,10 +556,18 @@ int main() {
         // THREE call sites, each a native wait a person paces: shellOpen (the shell),
         // launchInstaller (the elevation prompt) and, since 0.99.74, pickFile (the
         // BROWSE key's modal file dialog). A fourth is a new reason to read this list.
-        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 3u);
-        // The application-paced sites are still plain pauses: the audio and
-        // microphone opens and the display grace.
-        CHECK(countOf(win, "watchdog_.pause()") >= 3u);
+        // (CARVED, 2026-10-21, the 0.99.84 merge - ledger IMPORT-DIALOG / PLUGIN-SETTINGS-UI, placeholder
+        // merge_pending_part_excuse_cap_pickfile: the third site is pickFile, the BROWSE key's modal file dialog (0.99.74), which the window
+        // does not have yet. Today's two are held exactly; master's text asked for 3u, and the number goes back to 3 with the dialog.)
+        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 2u);
+        // The application-paced sites are still plain pauses: the audio and microphone opens (the ENGINE's since the extraction -
+        // WaitWatchdogPause, src/engine) and the display grace (the window's).
+        std::size_t plainPauses = countOf(win, "watchdog_.pause()");
+        for (const fs::directory_entry& e : fs::directory_iterator(src / "engine")) {
+            if (e.path().extension() != ".cpp") { continue; }
+            plainPauses += countOf(liveCode(readFile(e.path())), "WaitWatchdogPause");
+        }
+        CHECK(plainPauses >= 3u);
     }
 
     return testSummary("test_excuse_cap");

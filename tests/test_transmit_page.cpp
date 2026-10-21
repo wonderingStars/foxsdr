@@ -800,72 +800,12 @@ int main() {
     // =====================================================================
     // 10. ...AND THE PLUGIN'S KEY IS WIRED WHERE THE HAND'S TWO ARE
     //
-    //     The same argument as section 8, for the third key. It is asked in
-    //     the frame loop, beside the PTT and the LATCH and between the page
-    //     being drawn and the tick that acts on it; the one place that
-    //     decides is pluginMayKey; and the ARM keys reach the window through
-    //     one door (armTransmitPlugins) - never from the page body writing
-    //     the transmitter directly.
+    //     (CARVED OUT, 2026-10-21, the 0.99.84 merge - ledger TX-PLUGIN, placeholder merge_pending_part_transmit_page_plugin_key: this section
+    //     scans the window for the wiring of a PLUGIN'S key - applyPluginTransmitKey, Transmitter::setPluginKey, pluginMayKey, txArming_.arm,
+    //     armTransmitPlugins/disarmTransmitPlugins - which the window does not have: a plugin cannot key a radio in this tree (the safe state).
+    //     Master's text of the section is in git history (git show origin/master:tests/test_transmit_page.cpp, "10. ...AND THE PLUGIN'S KEY")
+    //     and comes back with the feature, rewritten for the engine's door.)
     // =====================================================================
-    {
-        const std::filesystem::path src =
-            std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
-        const std::string text = readFile(src);
-        CHECK(!text.empty());
-
-        const std::vector<std::size_t> pttSets = liveHits(text, "transmitter_.setPttHeld(");
-        const std::vector<std::size_t> ticks = liveHits(text, "transmitter_.tick();");
-        const std::vector<std::size_t> applyCalls = liveHits(text, "applyPluginTransmitKey(key);");
-        const std::vector<std::size_t> afterCalls = liveHits(text, "afterTransmitTick();");
-        const std::vector<std::size_t> keySets = liveHits(text, "transmitter_.setPluginKey(");
-        const std::vector<std::size_t> mayKey = liveHits(text, "cc::pluginMayKey(");
-        const std::vector<std::size_t> armCalls = liveHits(text, "txArming_.arm(");
-        std::printf("plugin wiring: apply x%zu, after x%zu, setPluginKey x%zu, pluginMayKey x%zu, "
-                    "arm x%zu\n",
-                    applyCalls.size(), afterCalls.size(), keySets.size(), mayKey.size(),
-                    armCalls.size());
-        CHECK(applyCalls.size() == 1u);
-        CHECK(keySets.size() == 1u);   // ONE place writes the plugin's key into the transmitter
-        CHECK(mayKey.size() == 1u);    // ONE place decides
-        CHECK(armCalls.size() == 1u);  // ONE door opens the window
-        CHECK(pttSets.size() == 1u && ticks.size() == 1u);
-
-        // The call sites that define the function bodies.
-        const std::size_t applyDef = text.find("void AppWindow::applyPluginTransmitKey(");
-        const std::size_t afterDef = text.find("void AppWindow::afterTransmitTick()");
-        const std::size_t armDef = text.find("AppWindow::armTransmitPlugins(int minutes)");
-        const std::size_t pageBody = text.find("void AppWindow::drawTransmitPage()");
-        const std::size_t pageEnd =
-            pageBody == std::string::npos ? std::string::npos
-                                          : text.find("\nvoid AppWindow::", pageBody + 1);
-        CHECK(applyDef != std::string::npos && afterDef != std::string::npos &&
-              armDef != std::string::npos && pageBody != std::string::npos &&
-              pageEnd != std::string::npos);
-        if (applyCalls.size() == 1u && afterCalls.size() >= 1u && pttSets.size() == 1u &&
-            ticks.size() == 1u && keySets.size() == 1u && mayKey.size() == 1u &&
-            armCalls.size() == 1u && applyDef != std::string::npos &&
-            afterDef != std::string::npos && armDef != std::string::npos &&
-            pageEnd != std::string::npos) {
-            // In the frame loop, in drawUi's order: the hand's key, THEN the plugin's, THEN the tick
-            // that acts on both, THEN what the tick did.
-            CHECK(pttSets[0] < applyCalls[0]);
-            CHECK(applyCalls[0] < ticks[0]);
-            CHECK(ticks[0] < afterCalls[0]);
-            // The write and the decision are inside the function that makes them, nowhere else...
-            CHECK(keySets[0] > applyDef && mayKey[0] > applyDef);
-            CHECK(keySets[0] < afterDef && mayKey[0] < afterDef);
-            // ...the window is opened only inside armTransmitPlugins...
-            CHECK(armCalls[0] > armDef);
-            // ...and the page body reaches the window only through the doors, never the transmitter.
-            CHECK(!(keySets[0] > pageBody && keySets[0] < pageEnd));
-            const std::string page = text.substr(pageBody, pageEnd - pageBody);
-            CHECK(page.find("armTransmitPlugins(") != std::string::npos);
-            CHECK(page.find("disarmTransmitPlugins(") != std::string::npos);
-            CHECK(page.find("setPluginKey") == std::string::npos);
-            CHECK(page.find("txArming_.arm(") == std::string::npos);
-            CHECK(page.find("kTxHandInputCount") != std::string::npos);  // the input keys are the hand's
-        }
-    }
 
     return testSummary("test_transmit_page");
 }

@@ -730,7 +730,9 @@ endif()
 # time, and the deck-knobs test shows frames of 50 ms or more there. It prints each run's
 # start and duration unbuffered, so a run stopped by this bound still says which one was
 # in hand.
-set_tests_properties(test_tx_audio_plate_app PROPERTIES TIMEOUT 600)
+if(TEST test_tx_audio_plate_app)   # (pending while TX-PLUGIN is: tests/merge_pending.cmake)
+    set_tests_properties(test_tx_audio_plate_app PROPERTIES TIMEOUT 600)
+endif()
 # The exit-cause test starts the real application eleven times (a staged run per
 # class and per case with nothing to read, then two real kills and the start that
 # reads them) and leaves a second between each kill and the next start, because a
