@@ -4045,6 +4045,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
 
     if (ps.bandwidthHz > 0.0) {
         const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+        const double bwBefore = vfoBandwidthHz_;
         vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
         pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
         // -1 WHEN THE PRESET ASKED FOR SOMETHING THE LIST DOES NOT CARRY, and
@@ -4052,6 +4053,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         // one is 12.5 kHz. Pointing the combo there made it letter a bandwidth
         // the receiver was not running and, on the next click, apply it.
         bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+        if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("decoder preset"); }
     }
 
     // WHERE the frequency goes differs by decoder kind, and getting it wrong
@@ -5394,12 +5396,14 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     }
     // Same clamp as the config restore: [3 kHz, 90% of channel rate].
     const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+    const double bwBefore = vfoBandwidthHz_;
     vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
     pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
     // -1 for a bookmark saved at a bandwidth the list does not carry (one
     // taken while a preset had the VFO at 40 kHz, say): the combo letters the
     // real figure and ticks nothing.
     bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+    if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("bookmark"); }
 }
 
 std::uint64_t Engine::addBookmarkHere(const std::string& name) {
@@ -5529,6 +5533,23 @@ void Engine::commitModeIndex(int index) {
     modeIndex_ = index;
     pipeline_.setDemodMode(kModeMap[index]);
     refreshDiagContext();
+}
+
+// THE LINE THAT WAS MISSING. Three 0.99.59 reports said the bandwidth control did nothing, and the log could not say whether it had ever
+// been used: a mode change wrote "mode: AM, bandwidth 10000" and a bandwidth change wrote nothing at all. Bandwidth only, never a
+// frequency (see setModeIndex).
+void Engine::logBandwidthChange(const char* how) {
+    cascade::core::diagLogf("bandwidth: %.0f Hz in %s (%s)", vfoBandwidthHz_, kModeNames[modeIndex_], how);
+}
+
+void Engine::setBandwidthIndex(int index) {
+    if (index < 0 || index >= kBwCount) { return; }
+    const double before = vfoBandwidthHz_;
+    bandwidthIndex_ = index;
+    vfoBandwidthHz_ = kBwHz[index];
+    pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+    // A pick of the step already in force changes nothing and says nothing.
+    if (vfoBandwidthHz_ != before) { logBandwidthChange("bandwidth list"); }
 }
 
 void Engine::setModeIndex(int index) {
@@ -6343,9 +6364,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // [3 kHz, 90% of the channel rate]; -1 for a width the steps do
             // not carry, so the combo letters the real figure and ticks none.
             const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+            const double bwBefore = vfoBandwidthHz_;
             vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
             bandwidthIndex_ = bandwidthStepIndex(vfoBandwidthHz_);
+            if (vfoBandwidthHz_ != bwBefore) { logBandwidthChange("remote request"); }
             if (vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             res.applied[0] = vfoBandwidthHz_;
             return res;
@@ -6355,17 +6378,24 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (c.ival[0] < 0 || c.ival[0] >= kBwCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such bandwidth step");
             }
-            bandwidthIndex_ = static_cast<int>(c.ival[0]);
-            vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
-            pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            setBandwidthIndex(static_cast<int>(c.ival[0]));
             res.applied[0] = vfoBandwidthHz_;
+            return res;
+        case FOXAPP_OP_BANDWIDTH_DRAG_END:
+            // The drag has SETTLED (the window sends this when the mouse is let go): one line for the width it ended on, if it moved it.
+            if (vfoBandwidthDragged_) {
+                vfoBandwidthDragged_ = false;
+                logBandwidthChange("dragged on the spectrum");
+            }
             return res;
         case FOXAPP_OP_SET_BANDWIDTH_DRAG: {
             // A band edge dragged on the spectrum: clamped like SET_BANDWIDTH,
             // but the combo's step is left where it was (as it always was).
             const double bwHi = kVfoBwMaxChanFrac * pipeline_.channelRateHz();
+            const double dragBefore = vfoBandwidthHz_;
             vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
+            if (vfoBandwidthHz_ != dragBefore) { vfoBandwidthDragged_ = true; }   // logged once, when the drag settles (BANDWIDTH_DRAG_END)
             if (vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             res.applied[0] = vfoBandwidthHz_;
             return res;

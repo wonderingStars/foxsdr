@@ -44,6 +44,7 @@ struct GLFWwindow;
 #include "core/freq_converter.hpp"
 #include "core/patch_device_label.hpp"
 #include "core/patch_plan.hpp"
+#include "gui/meter_styles_math.hpp"
 #include "gui/patch_view_math.hpp"
 #include "gui/patch_scope_math.hpp"
 #include "gui/input_script.hpp"
@@ -1722,6 +1723,22 @@ private:
     // where the config arrives and nowhere else. Defaults to the plate the
     // deck has always had.
     cascade::gui::TunerStyle tunerStyle_ = cascade::gui::TunerStyle::Nixie;
+
+    // WHICH FACE EACH BENCH METER WEARS (0.99.48; an Italian user on 0.99.42: "is it possible to customise the VU meter, choosing between 3
+    // or 4 different VU meters?"), picked by right-clicking the meter itself (drawMeterStyleMenu). Each meter keeps its OWN style - the two
+    // are never linked - and each carries its own peak-hold catch, which only the LED ladder and Peak styles read
+    // (gui/meter_styles_math.hpp). Defaults to the face every meter has always worn. Window-only state: AppConfig carries the names.
+    cascade::gui::MeterStyle meterStyleVolume_ = cascade::gui::MeterStyle::Classic;
+    cascade::gui::MeterStyle meterStyleRate_ = cascade::gui::MeterStyle::Classic;
+    cascade::gui::MeterPeakHold meterPeakHoldVolume_;
+    cascade::gui::MeterPeakHold meterPeakHoldRate_;
+    // A bench meter's right-click menu: the four styles, ticking the one `style` currently holds. Shared by both meters - each calls it with
+    // its OWN style field, so the two menus can never write into each other's setting.
+    void drawMeterStyleMenu(cascade::gui::MeterStyle& style);
+    // The gesture that opens it, and the tooltip that says it exists: right-click anywhere in [tl, br) (the meter's own census rectangle)
+    // opens `popupId`, which draws drawMeterStyleMenu(style). One function so the rate meter and the volume meter cannot answer the same
+    // gesture two different ways.
+    void drawMeterContextMenu(const ImVec2& tl, const ImVec2& br, const char* popupId, cascade::gui::MeterStyle& style);
 
     // --- THE INTERFACE THEME (2026-09-25; gui/theme.hpp) ----------------------
     // The look chosen in Display, by its foxsdr-ui/1 key (AppConfig::uiTheme).

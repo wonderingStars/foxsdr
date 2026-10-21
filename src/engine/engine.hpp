@@ -726,6 +726,11 @@ private:
     void setModeIndex(int index);
     // The one assignment of modeIndex_ (the demodulator follows it, and the diagnostics context is rendered); see its definition.
     void commitModeIndex(int index);
+    // THE BANDWIDTH LIST'S pick and its log line (0.99.61): "bandwidth: N Hz in MODE (how)", one per CHANGE, none for a pick of the step
+    // already in force. vfoBandwidthDragged_: a drag on the spectrum moved it (the line is written when the drag settles).
+    void setBandwidthIndex(int index);
+    void logBandwidthChange(const char* how);
+    bool vfoBandwidthDragged_ = false;
     // THE USER'S OWN MUTE, kept apart from the plugin mute (mutedBy_ and the
     // rest). They are different things with different lifetimes: a plugin's
     // mute is recomputed from the tuning every frame in updateAudioMute, and

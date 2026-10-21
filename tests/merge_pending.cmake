@@ -62,10 +62,6 @@ cascade_merge_pending(NEW-RADIOS      # 0.99.49 AOR, 0.99.66 HydraSDR, 0.99.70 r
     test_hydrasdr_app)
 cascade_merge_pending_part(PLUGIN-RUN audio_lead_plugin_wake
     "tests/test_audio_lead_app.cpp: a manual tune gives an AUTO audio-output decoder an independent wake signal before it has an instance (pluginUseOf / updatePluginLifecycle, 0.99.73). Restore master's block (git show origin/master:tests/test_audio_lead_app.cpp, 'A manual tune must give an AUTO audio-output decoder') when the plugin run modes are carried.")
-cascade_merge_pending(BANDWIDTH        # 0.99.61 the Bandwidth control narrows what you hear
-    test_bandwidth_app)
-cascade_merge_pending(METER-STYLES     # 0.99.48 bench meter styles
-    test_meter_style_app)
 
 # Only the names that exist as files here are kept (a name that is not a test is a typo that would be a quiet gap).
 set(_cascade_pending_kept)

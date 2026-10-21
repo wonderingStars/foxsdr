@@ -4860,7 +4860,10 @@ void AppWindow::drawToolbar() {
         cascade::gui::census::rect("deck:meter.rate", meter1X, my, meter1X + kMeterW, my + meterH);
         cascade::gui::drawBenchMeter(dl, ImVec2(meter1X, my), kMeterW, meterH,
                                      tr("SAMPLE RATE"), static_cast<float>(rate / 10.0e6),
-                                     haveRate, rateTxt, "MS/s");
+                                     haveRate, rateTxt, "MS/s", meterStyleRate_, &meterPeakHoldRate_);
+        // RIGHT-CLICK PICKS THIS METER'S OWN STYLE (an Italian user on 0.99.42): the two meters never share one, so this one's popup and
+        // field are entirely its own - see drawMeterContextMenu's header.
+        drawMeterContextMenu(ImVec2(meter1X, my), ImVec2(meter1X + kMeterW, my + meterH), "##ratemeter_menu", meterStyleRate_);
 
         // VOLUME: what is actually coming out of the speakers (0.99.11, at
         // the owner's request - this meter used to read FRAME TIME, which is
@@ -4909,7 +4912,8 @@ void AppWindow::drawToolbar() {
                                    my + meterH);
         cascade::gui::drawBenchMeter(dl, ImVec2(meter2X, my), kMeterW, meterH,
                                      tr("VOLUME"), volumeNeedle_, haveAudio, volTxt,
-                                     "dB");
+                                     "dB", meterStyleVolume_, &meterPeakHoldVolume_);
+        drawMeterContextMenu(ImVec2(meter2X, my), ImVec2(meter2X + kMeterW, my + meterH), "##volmeter_menu", meterStyleVolume_);
     }
 
     // Beside the frequency, because the banner is ABOUT the frequency: it
@@ -6577,6 +6581,34 @@ void AppWindow::drawCounterMenu() {
     ImGui::Separator();
     if (ImGui::MenuItem(trId("Enlarge every reading"), nullptr, readingsScale_ > 1.0f)) {
         readingsScale_ = readingsScale_ > 1.0f ? 1.0f : kEnlargedReadings;
+    }
+}
+
+// A BENCH METER'S RIGHT-CLICK MENU (an Italian user on 0.99.42: "is it possible to customise the VU meter, choosing between 3 or 4
+// different VU meters?"). The same four-item picker the counter's own "Counter face" submenu uses, standalone rather than nested - a
+// meter carries nothing else worth a right-click, so there is no parent menu to nest it in. Picking an item applies at once: the
+// selection itself is the whole of the "handler", and the debounced save notices through configsEqual (currentConfig()/applyConfig()
+// carry the two fields; see tests/test_meter_style_app.cpp for the AppWindowTestAccess proof that a pick marks the config dirty).
+void AppWindow::drawMeterStyleMenu(cascade::gui::MeterStyle& style) {
+    for (int k = 0; k < cascade::gui::kMeterStyleCount; ++k) {
+        const cascade::gui::MeterStyle st = cascade::gui::meterStyleFromName(cascade::gui::kMeterStyleNames[k]);
+        const std::string item = std::string(tr(cascade::gui::kMeterStyleLabels[k])) + "###meter_style_" + cascade::gui::kMeterStyleNames[k];
+        if (ImGui::MenuItem(item.c_str(), nullptr, style == st)) { style = st; }
+    }
+}
+
+// THE GESTURE, on the counter's own "the rest of the plate answers the right-click too" pattern (drawCounterMenu's call site): hovering the
+// meter's own rectangle and a right click opens the popup; the popup draws the menu above. A left hover with nothing pressed gets the
+// tooltip instead, so a user who has never right-clicked a meter still finds out the gesture exists.
+void AppWindow::drawMeterContextMenu(const ImVec2& tl, const ImVec2& br, const char* popupId, cascade::gui::MeterStyle& style) {
+    const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(tl, br);
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { ImGui::OpenPopup(popupId); }
+    if (ImGui::BeginPopup(popupId)) {
+        drawMeterStyleMenu(style);
+        ImGui::EndPopup();
+    }
+    if (hovered && !ImGui::IsPopupOpen(popupId)) {
+        ImGui::SetTooltip("%s", tr("Right-click to change the meter style"));
     }
 }
 
@@ -8465,6 +8497,8 @@ void AppWindow::drawCenterPanels() {
         if (!ImGui::IsMouseDown(0)) {
             vfoDrag_ = VfoDrag::None;
             band.dragging = false;
+            // The drag has SETTLED: the engine writes one line for the width it ended on (if the drag moved it).
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_BANDWIDTH_DRAG_END, 0));
         } else {
             // xToHz is deliberately unclamped, so dragging past the panel
             // edge keeps working; the offset/bandwidth clamps below are what
@@ -21170,6 +21204,10 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     // answer Nixie for one anyway - two guards for a user-editable file, and
     // neither of them in the draw loop.
     tunerStyle_ = cascade::gui::tunerStyleFromName(cfg.tunerDisplayStyle);
+    // THE BENCH METERS' FACES, the same way (ConfigStore has already rejected a name nothing knows, and meterStyleFromName would answer
+    // Classic for one anyway).
+    meterStyleVolume_ = cascade::gui::meterStyleFromName(cfg.meterStyleVolume);
+    meterStyleRate_ = cascade::gui::meterStyleFromName(cfg.meterStyleRate);
     // The theme, through its key (unknown = today, as the loader already
     // ensured), and the counter's own settings exactly as saved - a theme's
     // preset sizes apply when it is PICKED, never over a saved choice.
@@ -21351,6 +21389,8 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.bandPlanSize = kBandPlanSizeKeys[std::clamp(bandPlanSizeIndex_, 0, 2)];
     cfg.bandPlanPalette = kBandPlanPaletteKeys[std::clamp(bandPlanPaletteIndex_, 0, 2)];
     cfg.tunerDisplayStyle = cascade::gui::tunerStyleName(tunerStyle_);
+    cfg.meterStyleVolume = cascade::gui::meterStyleName(meterStyleVolume_);
+    cfg.meterStyleRate = cascade::gui::meterStyleName(meterStyleRate_);
     cfg.uiTheme = uiThemeKey_;
     cfg.counterScale = counterScale_;
     cfg.counterSwitches = counterSwitches_;

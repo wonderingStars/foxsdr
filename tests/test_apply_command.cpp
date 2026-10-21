@@ -1254,6 +1254,13 @@ void sourceOps(AppWindow& a) {
         CHECK(ok(A::apply(a, numInt(FOXAPP_OP_SET_PPM, 0.0, onBefore ? 1 : 0))));
     }
 
+    covering(FOXAPP_OP_BANDWIDTH_DRAG_END);
+    {
+        // The drag on the spectrum's band edge has settled (0.99.61): one log line for the width it ended on, only if the drag moved it.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_BANDWIDTH_DRAG_END, 0))));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_BANDWIDTH_DRAG_END, 0))));   // nothing moved since: nothing said, nothing refused
+    }
+
     covering(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK);
     {
         // The bounded-run seam (0.99.68): the window sends FOXSDR_HOLD_AUDIO_LOCK's milliseconds; 0 is "no seam" and is what is set here,
