@@ -52,7 +52,10 @@
 #include "core/bias_tee_memory.hpp"
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
+#include "core/app_commands.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -369,83 +372,113 @@ void isolate() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_converter_app_paths.cpp does.
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.deviceOpenPending_) {
-            a.pollSourceAsync();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.scanNative();
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].args == args) {
-                a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-                return waitOpen(a);
+        int row = -1;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
+            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+                    row = AppWindow::kNativeRowBase + static_cast<int>(i);
+                    break;
+                }
             }
-        }
-        return false;
+            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+        });
+        return row >= 0 && waitOpen(a);
     }
     static bool selectSoapy(AppWindow& a, const std::string& args) {
-        a.soapyDevices_.clear();
-        a.soapyDevices_.push_back({"B200", args});
-        a.selectSource(a.soapyRowBase());
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).soapyDevices_.clear();
+            rawEngine(a.engine_).soapyDevices_.push_back({"B200", args});
+            rawEngine(a.engine_).selectSource(rawEngine(a.engine_).soapyRowBase());
+        });
         return waitOpen(a);
     }
-    static void reopen(AppWindow& a) { a.reopenAfterDriverFault(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
-    static cascade::core::AppConfig saved(AppWindow& a) { return a.currentConfig(); }
+    static void reopen(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).reopenAfterDriverFault(); }); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static cascade::core::AppConfig saved(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        return a.currentConfig();
+    }
 
-    // The window's state: the box, whether it is offered, and the memory.
-    static bool agc(const AppWindow& a) { return a.deviceAgc_; }
-    static bool agcSupported(const AppWindow& a) { return a.deviceAgcSupported_; }
-    static const std::map<std::string, bool>& memory(const AppWindow& a) {
-        return a.autoGainMemory_;
+    // The engine's state: the box, whether it is offered, and the memory (COPIES, made on the pass).
+    static bool agc(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAgc_; }); }
+    static bool agcSupported(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAgcSupported_; });
+    }
+    static std::map<std::string, bool> memory(AppWindow& a) {
+        return passseam::read<std::map<std::string, bool>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).autoGainMemory_; });
     }
     static void remember(AppWindow& a, const std::string& key, bool on) {
-        a.autoGainMemory_[key] = on;
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).autoGainMemory_[key] = on; });
     }
-    // The box's own path.
-    static bool toggle(AppWindow& a, bool want) { return a.changeAutoGain(want); }
+    // The box's own path (the SET_DEVICE_AGC op's handler).
+    static bool toggle(AppWindow& a, bool want) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).changeAutoGain(want); });
+    }
 
-    // The gain mirrors (what the Source section's sliders and the top bar's GAIN dial show), and
-    // the user's hand on a slider: the radio is asked and the mirror takes the READBACK, as the
-    // slider's own code does.
-    static std::vector<std::string> gainNames(const AppWindow& a) { return a.deviceGainNames_; }
-    static std::vector<float> gainMirror(const AppWindow& a) { return a.deviceGainsDb_; }
+    // The gain mirrors (what the Source section's sliders and the top bar's GAIN dial show), and the user's hand on a slider: the radio is
+    // asked and the mirror takes the READBACK, as the slider's own code does.
+    static std::vector<std::string> gainNames(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainNames_; });
+    }
+    static std::vector<float> gainMirror(AppWindow& a) {
+        return passseam::read<std::vector<float>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainsDb_; });
+    }
+    // THE HAND ON A SLIDER THAT REMEMBERS NOTHING: the radio is asked and the mirror takes the readback (no manual memory is written).
     static bool setManual(AppWindow& a, std::size_t i, double db) {
-        if (a.device_ == nullptr || i >= a.deviceGainNames_.size()) { return false; }
-        if (!a.device_->setGainDb(a.deviceGainNames_[i], db)) { return false; }
-        a.deviceGainsDb_[i] = static_cast<float>(a.device_->gainDb(a.deviceGainNames_[i]));
-        return true;
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            cascade::engine::Engine& e = rawEngine(a.engine_);
+            if (e.device_ == nullptr || i >= e.deviceGainNames_.size()) { return false; }
+            if (!e.device_->setGainDb(e.deviceGainNames_[i], db)) { return false; }
+            e.deviceGainsDb_[i] = static_cast<float>(e.device_->gainDb(e.deviceGainNames_[i]));
+            return true;
+        });
     }
-    static void clearError(AppWindow& a) { a.sourceError_.clear(); }
-    static std::string error(const AppWindow& a) { return a.sourceError_; }
+    static void clearError(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).sourceError_.clear(); }); }
+    static std::string error(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+    }
 
-    // THE MANUAL GAIN MEMORY (0.99.75). `userGain` is the path the Source section's sliders and the
-    // top bar's GAIN dial both take to the radio; `controlGain` is a browser's gain control
-    // (applyControlRequest); `autoGainMemory` above and this are seeded the way applyConfig seeds them.
+    // THE MANUAL GAIN MEMORY (0.99.75). `userGain` is the path the Source section's sliders and the top bar's GAIN dial both take to the
+    // radio - in the branch a FOXAPI_OP_SET_GAIN command, which the engine answers with the readback and remembers; `controlGain` is a
+    // browser's gain control, the same command by name.
     using GainList = std::vector<std::pair<std::string, double>>;
-    static const std::map<std::string, GainList>& manualMemory(const AppWindow& a) {
-        return a.manualGainMemory_;
+    static std::map<std::string, GainList> manualMemory(AppWindow& a) {
+        return passseam::read<std::map<std::string, GainList>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).manualGainMemory_; });
     }
     static void rememberManual(AppWindow& a, const std::string& key, GainList g) {
-        a.manualGainMemory_[key] = std::move(g);
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).manualGainMemory_[key] = std::move(g); });
     }
     static bool userGain(AppWindow& a, std::size_t stage, double db) {
-        return a.applyUserGain(stage, db);
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            cascade::engine::Engine& e = rawEngine(a.engine_);
+            if (e.device_ == nullptr || stage >= e.deviceGainNames_.size()) { return false; }
+            const cascade::core::cmd::QueuedCommand q =
+                cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, e.deviceGainNames_[stage], 0, 0, db);
+            const FoxCommandResult r = e.applyCommand(q.c, q.longText);
+            return r.status == FOXAPI_OK && (r.flags & FOXAPI_RESULT_REFUSED) == 0u;
+        });
     }
     static void controlGain(AppWindow& a, const std::string& name, double db) {
-        cascade::net::ControlRequest r;
-        r.gainName = name;
-        r.gainDb = db;
-        a.applyControlRequest(r);
+        passseam::on(rawEngine(a.engine_), [&] {
+            const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(FOXAPI_OP_SET_GAIN, name, 0, 0, db);
+            (void)rawEngine(a.engine_).applyCommand(q.c, q.longText);
+        });
     }
 };
 
@@ -698,7 +731,7 @@ void testRecoveryReopen() {
 
 // The radio holds (lna, pga) AND the window's mirror says the same - the dial and the sliders
 // are showing what the radio really has.
-bool holds(const cascade::gui::AppWindow& app, std::size_t r, double lna, double pga) {
+bool holds(cascade::gui::AppWindow& app, std::size_t r, double lna, double pga) {
     const Record rec = made(r);
     const std::vector<float> m = Access::gainMirror(app);
     const auto at = [&rec](const char* n) {
@@ -921,8 +954,8 @@ std::vector<std::string> manualRestoredLines() {
     return out;
 }
 
-bool manualMemoryIs(const cascade::gui::AppWindow& app, const std::string& key, const ManualList& want) {
-    const auto& m = Access::manualMemory(app);
+bool manualMemoryIs(cascade::gui::AppWindow& app, const std::string& key, const ManualList& want) {
+    const auto m = Access::manualMemory(app);
     const auto it = m.find(key);
     if (it == m.end()) {
         std::printf("    no manual gain entry for %s\n", key.c_str());
@@ -1202,9 +1235,10 @@ void testManualCaps() {
         CHECK(Access::gainNames(app).size() == 20u);
         for (std::size_t i = 0; i < 20u; ++i) { CHECK(Access::userGain(app, i, static_cast<double>(i + 1u))); }
         // S00..S15 are in; S16..S19 are not.
-        const auto it = Access::manualMemory(app).find(kKeyA);
-        CHECK(it != Access::manualMemory(app).end());
-        if (it != Access::manualMemory(app).end()) {
+        const auto memory = Access::manualMemory(app);   // a COPY, made on the pass: the iterator below must not outlive a temporary
+        const auto it = memory.find(kKeyA);
+        CHECK(it != memory.end());
+        if (it != memory.end()) {
             CHECK(it->second.size() == 16u);
             CHECK(!it->second.empty() && it->second.front() == std::make_pair(std::string("S00"), 1.0));
             CHECK(!it->second.empty() && it->second.back() == std::make_pair(std::string("S15"), 16.0));

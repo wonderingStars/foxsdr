@@ -48,7 +48,9 @@
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/telemetry.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "sink/audio_out.hpp"
 #include "source/device_source.hpp"
 #include "source/rtlsdr_source.hpp"
@@ -373,19 +375,25 @@ std::string readFile(const fs::path& p) {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_converter_app_paths.cpp does. What is
+    // still the WINDOW's - the settings writer, the update check and the installer launch - is called on the test's thread as before.
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeRadio;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
-        AppWindow::testHooks_.soundCardBackend = &makeCard;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeRadio;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.soundCardBackend = &makeCard;
     }
     // The Source section's Open on the Sound card row, settled as the frame loop settles it.
     static bool openCard(AppWindow& a, const cascade::source::SoundCardSettings& s) {
-        a.sourceSel_ = AppWindow::kSoundCardRow;
-        a.soundCard_ = s;
-        a.launchSoundCardOpen(false, s);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).sourceSel_ = AppWindow::kSoundCardRow;
+            rawEngine(a.engine_).soundCard_ = s;
+            rawEngine(a.engine_).launchSoundCardOpen(false, s);
+        });
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.soundCardOpenPending_ || a.soundCardScanPending_) {
-            a.pollSoundCard();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).soundCardOpenPending_ || rawEngine(a.engine_).soundCardScanPending_;
+        })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSoundCard(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
@@ -393,76 +401,96 @@ struct AppWindowTestAccess {
     }
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.deviceOpenPending_) {
-            a.pollSourceAsync();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.scanNative();
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].args == args) {
-                a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-                return waitOpen(a);
+        int row = -1;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
+            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+                    row = AppWindow::kNativeRowBase + static_cast<int>(i);
+                    break;
+                }
             }
-        }
-        return false;
+            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+        });
+        return row >= 0 && waitOpen(a);
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
-    static bool watching(AppWindow& a) { return a.healthWatching_; }
-    static void poll(AppWindow& a) { a.healthPoll(); }
-    static void start(AppWindow& a) { a.startReceiver(); }
-    static void stop(AppWindow& a) { a.stopReceiver("test_health_app"); }
-    static cascade::sink::AudioOut& audio(AppWindow& a) { return a.pipeline_.audio(); }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static bool watching(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).healthWatching_; });
+    }
+    static void poll(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).healthPoll(); }); }
+    static void start(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).startReceiver(); }); }
+    static void stop(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopReceiver("test_health_app"); }); }
+    static cascade::sink::AudioOut& audio(AppWindow& a) { return rawEngine(a.engine_).pipeline_.audio(); }
 
     // The patch page's radio.
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;
-        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
-            n->device = device;
-            n->freqHz = 100.0e6;
-            n->rateHz = 2.4e6;
-            n->on = true;
-        }
-        return id;
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+                n->device = device;
+                n->freqHz = 100.0e6;
+                n->rateHz = 2.4e6;
+                n->on = true;
+            }
+            return id;
+        });
     }
     // One reconcile per frame until the radio runs or its open has failed.
     static bool patchUntilSettled(AppWindow& a, cascade::core::patch::NodeId id) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = true;
+            rawEngine(a.engine_).patchWasOpen_ = true;
+        });
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.patchRadios_.count(id) == 0 && a.patchRadioError_.count(id) == 0) {
-            a.patchReconcile();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).patchRadios_.count(id) == 0 && rawEngine(a.engine_).patchRadioError_.count(id) == 0;
+        })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static void stopPatch(AppWindow& a) {
-        a.patchRunning_ = false;
-        a.patchStopAll(true);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = false;
+            rawEngine(a.engine_).patchStopAll(true);
+        });
         waitOpen(a);
     }
 
     // The scan (both halves, as the Source list's Refresh asks).
     static bool scanBoth(AppWindow& a) {
-        a.scanNative();
-        a.scanSoapy();
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
+            rawEngine(a.engine_).scanSoapy();
+        });
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.soapyScanPending_) {
-            a.pollSourceAsync();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).soapyScanPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(90)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return true;
     }
-    static bool listed(AppWindow& a) { return !a.soapyDevices_.empty() || !a.nativeDevices_.empty(); }
+    static bool listed(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return !rawEngine(a.engine_).soapyDevices_.empty() || !rawEngine(a.engine_).nativeDevices_.empty();
+        });
+    }
 
-    // The update check.
+    // The update check (the window's).
     static bool check(AppWindow& a) {
         a.updateCheckEnabled_ = true;
         a.startUpdateCheck();
@@ -476,12 +504,12 @@ struct AppWindowTestAccess {
     }
     static bool launch(AppWindow& a, const std::string& path) { return a.launchInstaller(path); }
 
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
+    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
 
     // --- what the program recovered from (0.99.65) ---
-    static void reopenAfterFault(AppWindow& a) { a.reopenAfterDriverFault(); }
-    // A settings save, through the window's own writer made to refuse (a read-only profile, a full
-    // disk, a file another program holds) or to accept; waits for the worker the way the frame loop does.
+    static void reopenAfterFault(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).reopenAfterDriverFault(); }); }
+    // A settings save, through the window's own writer made to refuse (a read-only profile, a full disk, a file another program holds) or
+    // to accept; waits for the worker the way the frame loop does.
     static bool save(AppWindow& a, bool accepted) {
         a.configWriter_.bind([accepted](const std::string&, const std::string&, std::string& error) {
             if (!accepted) { error = "the disk refused it"; }
@@ -499,16 +527,23 @@ struct AppWindowTestAccess {
     }
     // The audio watchdog's reopen (or the user's own pick), with the open made to succeed or fail.
     static void audioOpen(AppWindow& a, bool byWatchdog, bool opens) {
-        a.audioOpen_.bind([opens](int) { return opens; }, [] {}, [] {});
-        (void)a.requestAudioOpen(-1, byWatchdog);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).audioOpen_.bind([opens](int) { return opens; }, [] {}, [] {});
+            (void)rawEngine(a.engine_).requestAudioOpen(-1, byWatchdog);
+        });
     }
-    static int audioRecoveries(AppWindow& a) { return a.audioRecoveries_; }
-    static void sdrPlayPoll(AppWindow& a) { a.pollSdrPlayService(); }
-    static std::uint64_t ringDropped(AppWindow& a) { return a.pipeline_.ringDroppedSamples(); }
-    // A minute of audio closes (the once-a-minute poll's own body, without the clock),
-    // and the Sinks rail's AUDIO BUFFER setting.
-    static void closeAudioMinute(AppWindow& a) { a.closeAudioMinute(a.pipeline_.audio().ringFrames()); }
-    static void setAudioBuffer(AppWindow& a, int ms) { a.setAudioBufferMs(ms); }
+    static int audioRecoveries(AppWindow& a) {
+        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecoveries_; });
+    }
+    static void sdrPlayPoll(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSdrPlayTrouble(); }); }
+    static std::uint64_t ringDropped(AppWindow& a) {
+        return passseam::read<std::uint64_t>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.ringDroppedSamples(); });
+    }
+    // A minute of audio closes (the once-a-minute poll's own body, without the clock), and the Sinks rail's AUDIO BUFFER setting.
+    static void closeAudioMinute(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).closeAudioMinute(rawEngine(a.engine_).pipeline_.audio().ringFrames()); });
+    }
+    static void setAudioBuffer(AppWindow& a, int ms) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setAudioBufferMs(ms); }); }
 };
 
 }  // namespace cascade::gui

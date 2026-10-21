@@ -34,7 +34,9 @@
 #endif
 
 #include "core/diag_report.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace {
@@ -70,24 +72,33 @@ void isolate() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static std::string bundle(AppWindow& a) { return a.currentDiagnosticsBundle(); }
-    static void setVolume(AppWindow& a, float v) { a.volume_ = v; }
-    static void setUserMuted(AppWindow& a, bool m) { a.userMuted_ = m; }
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp). THE BUNDLE'S CONTEXT IS THE ENGINE'S BLOCK, as its
+    // pass rendered it (at most a second old): a test that changes what the block describes asks the engine to render it, as its pass
+    // does when the inputs move - Engine::refreshDiagContext - and then takes the bundle from the window.
+    static std::string bundle(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).refreshDiagContext(); });
+        return a.currentDiagnosticsBundle();
+    }
+    static void setVolume(AppWindow& a, float v) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).volume_ = v; }); }
+    static void setUserMuted(AppWindow& a, bool m) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).userMuted_ = m; }); }
     static void setSquelch(AppWindow& a, float db) {
-        a.squelchDb_ = db;
-        a.pipeline_.setSquelchDb(db);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).squelchDb_ = db;
+            rawEngine(a.engine_).pipeline_.setSquelchDb(db);
+        });
     }
     static void setPluginMute(AppWindow& a, const std::vector<std::string>& names) {
-        a.mutedBy_ = names;
-        // Diagnostics report effective suppression, rather than a stored
-        // subject while a decoded programme plays over the quiet carrier.
-        a.pipeline_.setDemodAudioMuted(!names.empty());
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).mutedBy_ = names;
+            // Diagnostics report effective suppression, rather than a stored
+            // subject while a decoded programme plays over the quiet carrier.
+            rawEngine(a.engine_).pipeline_.setDemodAudioMuted(!names.empty());
+        });
     }
-    static void setPpmOn(AppWindow& a, bool on) { a.ppmCorrectionOn_ = on; }
-    // The context the ONCE-A-SECOND REFRESH renders - the one a crash report
-    // would carry - read back before anything else overwrites it.
+    static void setPpmOn(AppWindow& a, bool on) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).ppmCorrectionOn_ = on; }); }
+    // The context the engine's render writes - the one a crash report would carry - read back before anything else overwrites it.
     static std::string refreshedContext(AppWindow& a) {
-        a.refreshDiagContext();
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).refreshDiagContext(); });
         return cascade::core::diagContextBlock();
     }
 };

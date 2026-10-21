@@ -263,6 +263,9 @@ void EngineShell::seamInstallSource(std::unique_ptr<cascade::source::IqSource> s
     auto held = std::make_shared<std::unique_ptr<cascade::source::IqSource>>(std::move(source));
     e.postToPass([&e, held] {
         e.installSource(std::move(*held));  // the app's one swap door
+        // EVERY INSTALL SITE ENDS WITH THE CONVERTER STEP (Engine::applyConverterForSource, which also renders the diagnostics context and
+        // puts the crystal correction in force): this seam is one, and tests/test_diag_context_app.cpp holds that none forgets it.
+        e.applyConverterForSource();
         e.followInputRate();
     });
     (void)e.runPassNow();

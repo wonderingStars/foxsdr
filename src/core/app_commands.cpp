@@ -147,6 +147,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_SET_RTLTCP_ADDR, "APP_SET_RTLTCP_ADDR", true},
     {FOXAPP_OP_SET_AUDIO_BUFFER, "APP_SET_AUDIO_BUFFER", true},
     {FOXAPP_OP_SET_PPM, "APP_SET_PPM", true},
+    {FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, "APP_TEST_HOLD_AUDIO_LOCK", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

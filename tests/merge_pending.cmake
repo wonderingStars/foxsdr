@@ -14,6 +14,18 @@
 set(CASCADE_MERGE_PENDING_TESTS)
 set(CASCADE_MERGE_PENDING_FEATURE_OF)
 
+set(CASCADE_MERGE_PENDING_PARTS)
+set(CASCADE_MERGE_PENDING_PART_FEATURE_OF)
+set(CASCADE_MERGE_PENDING_PART_TEXT_OF)
+# cascade_merge_pending_part(<ledger id> <name> <what is owed>): a PART of a test that was converted (the rest of it runs) which belongs to
+# a feature that is not carried yet. The part is carved out of the converted test's source behind a note naming <name>; the red placeholder
+# merge_pending_part_<name> keeps it counted.
+macro(cascade_merge_pending_part feature name text)
+    list(APPEND CASCADE_MERGE_PENDING_PARTS ${name})
+    set(CASCADE_MERGE_PENDING_PART_FEATURE_OF_${name} "${feature}")
+    set(CASCADE_MERGE_PENDING_PART_TEXT_OF_${name} "${text}")
+endmacro()
+
 # cascade_merge_pending(<ledger id> <tests...>): the tests belong to the feature the ledger names under that id.
 macro(cascade_merge_pending feature)
     foreach(_t ${ARGN})
@@ -43,13 +55,13 @@ cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no di
     test_gui_file_jobs test_record_finish_async test_record_start test_failure_files test_failure_recording
     test_iq_open_async test_bookmark_save_async test_patch_dest_async)
 cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, health ledger, slow frames, previous-session bundle
-    test_health_app test_slow_frames_app test_diag_context_app test_diag_audio_app test_diag_history)
+    test_slow_frames_app)
 cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain
-    test_autogain_app test_one_chip_app test_source_row_app)
+    test_one_chip_app test_source_row_app)
 cascade_merge_pending(NEW-RADIOS      # 0.99.49 AOR, 0.99.66 HydraSDR, 0.99.70 rtl_tcp: the window's rows, boxes and Open keys
     test_hydrasdr_app)
-cascade_merge_pending(AUDIO-LEAD       # 0.99.73 / 0.99.83 the audio buffer that deepens and steps back down
-    test_audio_lead_app)
+cascade_merge_pending_part(PLUGIN-RUN audio_lead_plugin_wake
+    "tests/test_audio_lead_app.cpp: a manual tune gives an AUTO audio-output decoder an independent wake signal before it has an instance (pluginUseOf / updatePluginLifecycle, 0.99.73). Restore master's block (git show origin/master:tests/test_audio_lead_app.cpp, 'A manual tune must give an AUTO audio-output decoder') when the plugin run modes are carried.")
 cascade_merge_pending(BANDWIDTH        # 0.99.61 the Bandwidth control narrows what you hear
     test_bandwidth_app)
 cascade_merge_pending(METER-STYLES     # 0.99.48 bench meter styles
@@ -80,5 +92,12 @@ macro(cascade_merge_pending_register)
             COMMAND ${CMAKE_COMMAND} -DTEST=${_t} -DFEATURE=${CASCADE_MERGE_PENDING_FEATURE_OF_${_t}}
                     -P ${CMAKE_CURRENT_SOURCE_DIR}/merge_pending_fail.cmake)
         set_tests_properties(merge_pending_${_t} PROPERTIES LABELS "merge-pending" TIMEOUT 30)
+    endforeach()
+    foreach(_p ${CASCADE_MERGE_PENDING_PARTS})
+        add_test(NAME merge_pending_part_${_p}
+            COMMAND ${CMAKE_COMMAND} -DPART=${_p} -DFEATURE=${CASCADE_MERGE_PENDING_PART_FEATURE_OF_${_p}}
+                    "-DTEXT=${CASCADE_MERGE_PENDING_PART_TEXT_OF_${_p}}"
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/merge_pending_part_fail.cmake)
+        set_tests_properties(merge_pending_part_${_p} PROPERTIES LABELS "merge-pending" TIMEOUT 30)
     endforeach()
 endmacro()

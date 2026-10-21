@@ -53,6 +53,7 @@
 #include "gui/page_resize_id.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
+#include "source/sdrplay_service.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 // Generated window-icon pixels. Reached by a path relative to this file
@@ -1279,6 +1280,11 @@ int AppWindow::run(int frames) {
         // runs only, like every hook here.
         if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
             foreignModuleTestPath_ = fm;
+        }
+        // TEST SEAM (0.99.68): a held audio mutex at the next control request's stop, see Engine::holdAudioLockMs_. Sent as a command: the
+        // engine's fields are the pass's.
+        if (const char* hold = std::getenv("FOXSDR_HOLD_AUDIO_LOCK"); hold != nullptr && *hold != '\0') {
+            uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, std::atoi(hold)));
         }
         // The deck's bias tee stand-in (engine/bias_tee.hpp, biasStandInFor):
         // bounded runs only, for the same reason as the script below.
@@ -3872,10 +3878,11 @@ void AppWindow::drawStatusColumn() {
         const double ringMs = shownAudio.ringMs;
         const double capMs = shownAudio.capMs;
         cascade::core::formatUtf8(l1, tr("ring %.0f of %.0f ms"), ringMs, capMs);
-        StatusLine lines[3] = {
+        StatusLine lines[4] = {
             {under == 0 ? tr("no callback has starved yet") : tr("starved callbacks, since start"),
              under == 0 ? kFaint : cascade::gui::theme::kAlarm},
             {l1.c_str(), kFaint},
+            {nullptr, kFaint},
             {nullptr, kFaint}};
         int n = 2;
         if (audioFromPlugin) {
@@ -3890,6 +3897,12 @@ void AppWindow::drawStatusColumn() {
             cascade::core::formatUtf8(l2, tr("plugin gaps %llu, %llu frames"), gaps, gapFrames);
             lines[n++] = {l2.c_str(), gaps == 0 ? kFaint : cascade::gui::theme::kAlarm};
         }
+        // WHAT AUTOMATIC MODE LAST DID to the buffer (0.99.73; raised, restored at launch or lowered again since 0.99.83), said once it has
+        // done something: the same sentence the Sinks rail carries (audioLeadNotice, from the engine's fact.audio.leadNote - read here
+        // too, because the rail may not be the bank on show). Absent, and so the card exactly as it was, until then.
+        (void)railLists();
+        const std::string leadNote = audioLeadNotice();
+        if (!leadNote.empty()) { lines[n++] = {leadNote.c_str(), cascade::gui::theme::kAmber}; }
         card(tr("AUDIO - UNDERRUNS"), cascade::gui::theme::kAmber, v.c_str(), lines, n);
     }
 
@@ -7153,7 +7166,7 @@ bool AppWindow::launchInstaller(const std::string& path) {
     // machine 28 s after launch. core/hang_watchdog.hpp's rule 2b names this
     // exact case ("a native modal dialog ... MUST take one too"); see
     // gui/shell_open.hpp for why a pause and not a helper thread.
-    return cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
+    const bool started = cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
         // ShellExecute rather than CreateProcess: the installer asks for
         // elevation through its manifest, and only the shell will show that
         // prompt. The return is the documented "> 32 means it started"
@@ -7164,6 +7177,10 @@ bool AppWindow::launchInstaller(const std::string& path) {
                                              SW_SHOWNORMAL);
         return reinterpret_cast<std::intptr_t>(rc) > 32;
     });
+    // An installer that could not be started is COUNTED, anonymously (0.99.64, core/health_events.hpp) - the user pressed the button and
+    // nothing ran.
+    if (!started) { cascade::core::health::noteUpdateRunFailed(); }
+    return started;
 #else
     // The installer is a Windows setup program; there is nothing to launch
     // elsewhere, and saying so is better than appearing to succeed.
@@ -20789,9 +20806,15 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     if (!diagCrashDir_.empty()) {
         cascade::core::sentinelSetEnabled(diagnosticsEnabled_);
     }
-    // FIXME(2026-10-21, 0.99.84 merge, ledger HEALTH-DIAG): master also records here whether the log file was on at the session's
-    // start (diagLogHasSessionStart_) and starts the early read of the previous session's log (startDiagHistoryRead) - the
-    // diagnostics bundle's "previous session" sections (0.99.62); the window has no history cache yet.
+    // THE FIRST CALL IS THE START OF THE SESSION (run() makes it before anything else is logged): whether the log file was on then is
+    // whether this session's start line is in it, which is what tells this session from the one before. A switch turned on part-way
+    // through leaves that line out of the file.
+    if (!diagStartApplied_) {
+        diagStartApplied_ = true;
+        diagLogHasSessionStart_ = on;
+    }
+    // The early read of the previous session's log (and nothing at all when off).
+    if (diagnosticsEnabled_) { startDiagHistoryRead(); }
     // THE ENGINE'S OWN WATCHDOG (the pump move's step P5) is a second hang detector with a report directory of its own: "off means
     // off" has to reach it, or a session switched off would keep writing the pass's hang reports.
     engine_.setControlWatchdogReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
@@ -20959,6 +20982,73 @@ void AppWindow::drawDiagnosticsOffer() {
     ImGui::End();
 }
 
+void AppWindow::startDiagHistoryRead() {
+    // The early read: the previous session's log is only ever in the files, and this session's own lines can rotate them. Does nothing -
+    // and reads nothing - while diagnostics are off.
+    (void)diagHistoryForBundle(false);
+}
+
+cascade::core::DiagHistory AppWindow::diagHistoryForBundle(bool freshHistory) {
+    // OFF MEANS OFF: with the switch off, or in a run that may not touch the disk (a bounded --frames run keeps an empty diagCrashDir_),
+    // the bundle gets neither section and no read is started. tests/test_diag_history.cpp holds that readsStarted() stays at zero.
+    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) { return cascade::core::DiagHistory{}; }
+
+    // The reports are asked for again when the answer is older than this. A freeze report is written by the watchdog thread of THIS
+    // session, so a list read at start-up would not have it; five seconds is far inside the time it takes a person to open the report
+    // page, and the page's own once-a-second rebuild must not start a read every time.
+    constexpr std::int64_t kHistoryMaxAgeMs = 5000;
+    const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count();
+    diagHistory_.refresh(cascade::core::diagLogDir(), cascade::core::diagCrashDir(), nowMs,
+                         freshHistory ? 0 : kHistoryMaxAgeMs);
+    // A person's own click waits - boundedly, and only for a worker - so what they copy has the answer in it; nothing else waits at all.
+    if (freshHistory) { (void)diagHistory_.waitIdle(std::chrono::milliseconds(750)); }
+
+    cascade::core::DiagHistory h = diagHistory_.snapshot();
+    // The previous session is whatever precedes the NEWEST start line in the files, which is this session's only if this session's lines
+    // are in them. A log file that is not being written (a folder that could not be made, or diagnostics switched on part-way through the
+    // session) cannot say.
+    if (!h.pending && !cascade::core::DiagLog::instance().fileEnabled()) {
+        h.previous = cascade::core::PreviousSessionLog{};
+        h.previous.reason = "the log file is not being written, so this session cannot be told "
+                            "from the one before it";
+    } else if (!h.pending && !diagLogHasSessionStart_) {
+        h.previous = cascade::core::PreviousSessionLog{};
+        h.previous.reason = "diagnostics were switched on part-way through this session, so its "
+                            "start is not in the log files and the session before it cannot be "
+                            "told apart";
+    }
+    return h;
+}
+
+std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
+    // EVERY FIELD HERE ALREADY EXISTS somewhere. A bundle that re-derived the version, the plugin list or the radio model would be a
+    // second source of truth for exactly the facts a support conversation turns on, and the two would eventually disagree - which is what
+    // this used to do: it rebuilt the engine's context field by field, and the bundle then WROTE that copy over the one the crash handler
+    // prints. The context is now the ENGINE's block, as its pass rendered it (at most a second old, and re-rendered the moment anything it
+    // describes changes), taken as it is; the two counters are the engine's facts (fact.diag.launches and fact.diag.crashes, LOCAL).
+    cascade::core::DiagBundleInput in;
+    in.contextBlock = cascade::core::diagContextBlock();
+    in.logLines = cascade::core::DiagLog::instance().ringSnapshot();
+    in.logLinesTotal = cascade::core::DiagLog::instance().linesWritten();
+    in.logPath = cascade::core::DiagLog::instance().filePath();
+    in.crashDir = cascade::core::diagCrashDir();
+    in.lastRunUnclean = lastRunUnclean_;
+    in.launches = std::strtoull(uiFact("fact.diag.launches").c_str(), nullptr, 10);
+    in.crashes = std::strtoull(uiFact("fact.diag.crashes").c_str(), nullptr, 10);
+    // Asked now, of the Service Control Manager - read-only, a millisecond, and only when a bundle is made (0.99.55).
+    in.sdrPlayService = cascade::source::sdrPlayServiceSummary(cascade::source::querySdrPlayService());
+    // The end of the previous session's log and the reports on this machine (0.99.62). Not included, and not read, while diagnostics are
+    // off.
+    in.history = diagHistoryForBundle(freshHistory);
+    // THE SLOW-FRAME TABLE OF THIS SESSION (0.99.64, core/frame_timing.hpp): one line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0`
+    // or `none`. Added after the builder rather than inside it - the report format is changed elsewhere - and not in the context block a
+    // crash report is written from.
+    return cascade::core::withSlowFramesField(cascade::core::buildDiagnosticsBundle(in),
+                                              cascade::core::slowFramesText(cascade::core::slowFrameCounts()));
+}
+
 void AppWindow::copyDiagnosticsBundle() {
     // EVERY FIELD HERE ALREADY EXISTS somewhere. A bundle that re-derived the
     // version, the plugin list or the radio model would be a second source of
@@ -20969,17 +21059,9 @@ void AppWindow::copyDiagnosticsBundle() {
     // its pass rendered it (at most a second old, and re-rendered the moment
     // anything it describes changes), taken as it is; the two counters are the
     // engine's facts (fact.diag.launches and fact.diag.crashes, LOCAL).
-    cascade::core::DiagBundleInput in;
-    in.contextBlock = cascade::core::diagContextBlock();
-    in.logLines = cascade::core::DiagLog::instance().ringSnapshot();
-    in.logLinesTotal = cascade::core::DiagLog::instance().linesWritten();
-    in.logPath = cascade::core::DiagLog::instance().filePath();
-    in.crashDir = cascade::core::diagCrashDir();
-    in.lastRunUnclean = lastRunUnclean_;
-    in.launches = std::strtoull(uiFact("fact.diag.launches").c_str(), nullptr, 10);
-    in.crashes = std::strtoull(uiFact("fact.diag.crashes").c_str(), nullptr, 10);
-
-    const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
+    // (A person's own click: the report list is read again and waited for, boundedly - currentDiagnosticsBundle.)
+    const std::string bundle = currentDiagnosticsBundle(/*freshHistory=*/true);
+    const std::string crashDirForSave = cascade::core::diagCrashDir();
     ImGui::SetClipboardText(bundle.c_str());
 
     // ...and on disk as well as on the clipboard, because a clipboard does not
@@ -20987,10 +21069,10 @@ void AppWindow::copyDiagnosticsBundle() {
     // diagBundleStatus_ is drawn and nothing else (the bundle above is what
     // is sent), so it is translated as it is written.
     diagBundleStatus_ = tr("Copied to the clipboard.");
-    if (!in.crashDir.empty()) {
+    if (!crashDirForSave.empty()) {
         std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(in.crashDir), ec);
-        const std::string path = in.crashDir + "/diagnostics.txt";
+        std::filesystem::create_directories(std::filesystem::path(crashDirForSave), ec);
+        const std::string path = crashDirForSave + "/diagnostics.txt";
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (out) {
             out << bundle;

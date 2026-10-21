@@ -1254,6 +1254,13 @@ void sourceOps(AppWindow& a) {
         CHECK(ok(A::apply(a, numInt(FOXAPP_OP_SET_PPM, 0.0, onBefore ? 1 : 0))));
     }
 
+    covering(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK);
+    {
+        // The bounded-run seam (0.99.68): the window sends FOXSDR_HOLD_AUDIO_LOCK's milliseconds; 0 is "no seam" and is what is set here,
+        // so nothing is held in this run (tests/test_stop_ends_recordings.cpp drives the real hold through the real application).
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, 0))));
+    }
+
     covering(FOXAPI_OP_SELECT_SOURCE);
     {
         CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "rtlsdr:serial=0001"))));

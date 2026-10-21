@@ -1169,6 +1169,12 @@ void Engine::pollSourceAsync() {
         // runtime by every frame that draws them (API 0.3 8.10). Only a WHOLE scan that found nothing is
         // evidence of "no radio hardware"; a scan beside an open radio left drivers out on purpose.
         takeScanDiagnostics(!soapyScanPartial_ && soapyDevices_.empty());
+        // A SCAN THAT FOUND NO RADIO AT ALL, counted anonymously (0.99.64, core/health_events.hpp): the whole-bus scan, not one that left some
+        // drivers out beside an open radio, and with the native list empty too. The ledger keeps one a session, so a Refresh that finds
+        // nothing again is not a second.
+        if (!soapyScanPartial_ && soapyDevices_.empty() && nativeDevices_.empty()) {
+            cascade::core::health::noteScanNone();
+        }
         if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and
@@ -3000,6 +3006,10 @@ void Engine::rescanPlugins() {
     cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(cascade::core::breadcrumb::kReloadingPlugins);
     ++pluginScans_;  // (API 0.3 8.8: hashed into the lists' fingerprint, so a rescan rebuilds the block)
 
+    // THE REPORT CONTEXT LISTS THE LOADED PLUGINS, and this function changes them on every path out of it - including the early return
+    // below, taken after every plugin has been unloaded - so the block is rendered on the way out rather than at one of the exits (0.99.62).
+    DiagContextOnExit refreshOnExit{*this};
+
     // The plugin windows the user has OPEN ride through the rescan: their
     // identities are the plugin's name and its window's title, so a plugin
     // that survives the rescan keeps its window on screen and one that does
@@ -3079,6 +3089,14 @@ void Engine::rescanPlugins() {
     }
     pluginBlocked_ = cascade::core::PluginRepo::blockedPlugins(pluginInventory_.plugins,
                                                                pluginInventory_.policies);
+    // PLUGINS REFUSED BEFORE THEY ARE LOADED are counted like those refused at load (0.99.64, core/health_events.hpp): retired by the
+    // catalogue's floor, or built for another ABI - the reason class only, never which plugin. The ledger keeps one of each per session,
+    // so every rescan may say it again.
+    for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {
+        cascade::core::health::notePluginLoadRefused(b.reason == cascade::core::PluginBlockReason::AbiMismatch
+                                                         ? cascade::core::health::LoadClass::Abi
+                                                         : cascade::core::health::LoadClass::Retired);
+    }
 
     std::string quarantineError;
     if (!quarantineBlockedPlugins(quarantineError)) {
@@ -3999,8 +4017,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         };
         const int idx = kAbiToIndex[ps.demodMode];
         if (idx >= 0) {
-            modeIndex_ = idx;
-            pipeline_.setDemodMode(kModeMap[idx]);
+            commitModeIndex(idx);
             bandwidthIndex_ = kModeDefaultBw[idx];
             vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
             pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
@@ -5207,7 +5224,26 @@ void Engine::startReceiver() {
     faultSeen_ = false;
 }
 
-void Engine::stopReceiver() {
+void Engine::holdAudioLockForTest() {
+    // The seam of FOXSDR_HOLD_AUDIO_LOCK (0.99.68, bounded runs only, see holdAudioLockMs_ in the header): a thread of this process takes
+    // the audio mutex - the one the DSP thread holds across a block - and keeps it for that many milliseconds, standing in for a plugin that
+    // stretched a block. Once, and logged only when the mutex really is held, so the test can tell a hold that happened from one that did
+    // not.
+    holdAudioLockDone_ = true;
+    holdAudioLockThread_ = std::thread([this] {
+        pipeline_.holdLockForTest(cascade::core::Pipeline::LockForTest::Audio, holdAudioLockMs_, &holdAudioLockAcquired_);
+    });
+    for (int i = 0; i < 250 && !holdAudioLockAcquired_.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (holdAudioLockAcquired_.load(std::memory_order_acquire)) {
+        cascade::core::diagLogf("test: holding the audio lock for %d ms", holdAudioLockMs_);
+    } else {
+        cascade::core::diagLogf("test: the audio lock could not be taken");
+    }
+}
+
+void Engine::stopReceiver(const char* who) {
     // Play-stop while recording stops the recording cleanly (spec): taps
     // uninstalled and both WAVs finalized BEFORE the DSP threads join, so a
     // take can never outlive the sample flow it was taping. Only when the
@@ -5215,10 +5251,31 @@ void Engine::stopReceiver() {
     // stops nothing leaves an armed take alone. Silent, as it always was: the
     // user pressed Stop, and "the recording ended because you stopped" is
     // not news.
-    if (pipeline_.running() || pipeline_.faulted()) {
-        stopIqRecording();
-        stopAudioRecording();
-    }
+    //
+    // ONLY A TAKE THAT IS RUNNING IS ENDED (0.99.68). Each recording stop swaps the pipeline's recorder pointer under audioMutex_, the mutex
+    // the DSP thread holds across a whole block, so with nothing recording a stop still queued twice behind the block in progress - and a
+    // plugin-heavy block runs for hundreds of milliseconds. The 0.99.65 fast-fail's log: a 740 ms frame, 701 ms of it in recorder, four
+    // seconds in, nothing recording, eight seconds before the death. An idle recorder has no tap to take out and no file to finish, so that
+    // wait is not spent. The stop still waits once, inside pipeline_.stop(), for the block in progress to end - that wait is the join's.
+    const bool running = pipeline_.running() || pipeline_.faulted();
+    const bool iq = running && iqRecorder_.recording();
+    const bool audio = running && audioRecorder_.recording();
+    // The two recording stops timed, for the log line below: the quantity the 0.99.65 report showed as 701 ms. tests/test_stop_ends_
+    // recordings.cpp asserts on it.
+    const auto recordersFrom = std::chrono::steady_clock::now();
+    if (iq) { stopIqRecording(); }
+    if (audio) { stopAudioRecording(); }
+    const long long recordersMs = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - recordersFrom).count());
+    // WHO ASKED, in the log (0.99.68): that same report's log showed the stop's cost and nothing of its cause. One line, before the stop
+    // itself, so it is there even if the stop is the last thing the session does. It ends with what the recorders' part of the stop cost.
+    cascade::core::diagLogf("receiver: stop requested by %s; %s (recorders %lld ms)", who,
+                            !running        ? "the receiver was not running"
+                            : (iq && audio) ? "ending the I/Q and audio recordings"
+                            : iq            ? "ending the I/Q recording"
+                            : audio         ? "ending the audio recording"
+                                            : "no recording to end",
+                            recordersMs);
     // Unconditional, as applyControlRequest's own stop always was (the dome,
     // the key and POWER only ever call this on a running receiver): on a
     // faulted pipeline, run flag already down, it still joins the threads
@@ -5331,8 +5388,7 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     tuneAbsoluteHz(b.freqHz);
     for (int m = 0; m < 8; ++m) {
         if (b.mode == kModeNames[m]) {
-            modeIndex_ = m;
-            pipeline_.setDemodMode(kModeMap[m]);
+            commitModeIndex(m);
             break;
         }
     }
@@ -5466,10 +5522,18 @@ std::vector<cascade::gui::RunnableDecoder> Engine::runnableDecoders() const {
     return runnable;
 }
 
-void Engine::setModeIndex(int index) {
+// THE ONE PLACE modeIndex_ IS ASSIGNED (0.99.62): the diagnostics context names the mode, so the write and the block's render are one
+// step - a new writer that went round this would leave a crash report describing the wrong mode (tests/test_diag_context_app.cpp).
+void Engine::commitModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
     modeIndex_ = index;
     pipeline_.setDemodMode(kModeMap[index]);
+    refreshDiagContext();
+}
+
+void Engine::setModeIndex(int index) {
+    if (index < 0 || index >= 8) { return; }
+    commitModeIndex(index);
     bandwidthIndex_ = kModeDefaultBw[index];
     vfoBandwidthHz_ = kBwHz[bandwidthIndex_];
     pipeline_.setVfoBandwidthHz(vfoBandwidthHz_);
@@ -6166,7 +6230,9 @@ void Engine::drainLocalCommands() {
         // every device_ change, including one made earlier in this batch) is
         // dropped: it was drawn for that radio, never for this one.
         if (lc.sourceGen != sourceGen_ && isDeviceScoped(lc.q.c.op)) { continue; }
+        commandFromWindow_ = true;
         (void)applyCommand(lc.q.c, lc.q.longText);
+        commandFromWindow_ = false;
     }
 }
 
@@ -6204,7 +6270,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 // the dome, a key binding, a browser, a remote session - a
                 // stop opens any key and marks a latch's principal.
                 api_->endKeyFromEngine("the receiver was stopped");
-                stopReceiver();
+                // THE TEST SEAM OF FOXSDR_HOLD_AUDIO_LOCK, taken HERE so that the stop below runs while the audio mutex is held - for a control
+                // request's stop only (the web remote's and a plugin's), as it always was.
+                if (!commandFromWindow_ && holdAudioLockMs_ > 0 && !holdAudioLockDone_ && pipeline_.running()) { holdAudioLockForTest(); }
+                stopReceiver(commandFromWindow_ ? "the window (the STOP dome, the Start/Stop key or the scope's POWER key)"
+                                                : "a control request (the web remote or a plugin)");
             }
             res.applied[0] = pipeline_.running() ? 1.0 : 0.0;
             return res;
@@ -7305,6 +7375,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (!cascade::sink::validAudioBufferSetting(c.ival[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "no such buffer"); }
             setAudioBufferMs(c.ival[0]);
             return res;
+        case FOXAPP_OP_TEST_HOLD_AUDIO_LOCK:
+            // FOXSDR_HOLD_AUDIO_LOCK (bounded runs only; the window reads the variable and sends it): see holdAudioLockMs_.
+            holdAudioLockMs_ = static_cast<int>(c.ival[0]);
+            return res;
         case FOXAPP_OP_SET_PPM:
             // The Source section's PPM controls (0.99.56): ival[0] the switch, num[0] this radio's value (sanitised, 0 = none).
             changePpm(c.ival[0] != 0, c.num[0]);
@@ -7886,8 +7960,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
 
     for (int i = 0; i < 8; ++i) {
         if (cfg.mode == kModeNames[i]) {
-            modeIndex_ = i;
-            pipeline_.setDemodMode(kModeMap[i]);
+            commitModeIndex(i);
             break;  // an unknown mode name keeps the construction default
         }
     }
@@ -8478,6 +8551,9 @@ void Engine::teardown() {
     // The patch's radios first, as in run()'s teardown - idempotent too.
     patchStopAll(false);
     detachAndUnloadPlugins();
+
+    // The seam's thread, if the test asked for one (see holdAudioLockMs_): joined before anything it touches goes away.
+    if (holdAudioLockThread_.joinable()) { holdAudioLockThread_.join(); }
 
     // Safety net (run()'s teardown already does this on the normal path):
     // the recorder members are destroyed before pipeline_ (reverse

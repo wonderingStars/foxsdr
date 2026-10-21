@@ -53,7 +53,9 @@
 #include "core/health_events.hpp"
 #include "core/patch_audio.hpp"
 #include "core/telemetry.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "sink/audio_out.hpp"
 #include "test_check.hpp"
 
@@ -163,29 +165,41 @@ public:
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static cascade::sink::AudioOut& audio(AppWindow& a) { return a.pipeline_.audio(); }
-    static void closeMinute(AppWindow& a) { a.closeAudioMinute(a.pipeline_.audio().ringFrames()); }
-    static void setBuffer(AppWindow& a, int ms) { a.setAudioBufferMs(ms); }
-    static void startReceiver(AppWindow& a) { a.pipeline_.start(); }
-    static void tune(AppWindow& a, double hz) { a.tuneAbsoluteHz(hz); }
-    static double tunedHz(AppWindow& a) { return a.currentAbsoluteHz(); }
-    static cascade::core::PluginUse use(AppWindow& a, const cascade::core::LoadedPlugin& p,
-                                         const std::string& playingKey = {}) {
-        return a.pluginUseOf(p, playingKey, 0);
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_converter_app_paths.cpp does.
+    static cascade::sink::AudioOut& audio(AppWindow& a) { return rawEngine(a.engine_).pipeline_.audio(); }
+    static void closeMinute(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).closeAudioMinute(rawEngine(a.engine_).pipeline_.audio().ringFrames()); });
     }
-    static void lifecycle(AppWindow& a) { a.updatePluginLifecycle(); }
-    static int leadNow(AppWindow& a) { return a.audioLeadNowMs(); }
-    static std::string notice(AppWindow& a) { return a.audioLeadNotice(); }
-    // The status the browser is served (/api/status): built by the window's own snapshot.
-    static cascade::net::RadioStatus status(AppWindow& a) {
-        a.publishWebSnapshot();
-        return a.webStatus_;
+    static void setBuffer(AppWindow& a, int ms) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setAudioBufferMs(ms); }); }
+    static void startReceiver(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pipeline_.start(); }); }
+    static void tune(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).tuneAbsoluteHz(hz); }); }
+    static double tunedHz(AppWindow& a) {
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).currentAbsoluteHz(); });
     }
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    static int leadNow(AppWindow& a) {
+        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioLeadNowMs(); });
+    }
+    // The Sinks rail's note, as the window makes it: from the fact the engine publishes (fact.audio.leadNote), read through the window's
+    // own session - with no frame, the engine publishes and the window looks first.
+    static std::string notice(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        a.refreshUiState();
+        (void)a.railLists();
+        return a.audioLeadNotice();
+    }
+    // The status the browser is served (/api/status) is composed from the published state: this is the number in it.
+    static int statusLeadMs(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); });
+        return rawEngine(a.engine_).snapshot()->readFull()->state.app.audioLeadMs;
+    }
+    static cascade::core::AppConfig config(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        return a.currentConfig();
+    }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
     static void addSpeaker(AppWindow& a, cascade::core::patch::NodeId id,
                            std::shared_ptr<cascade::core::patch::AudioDest> d) {
-        a.patchDests_.emplace_back(id, std::move(d));
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchDests_.emplace_back(id, std::move(d)); });
     }
 };
 
@@ -254,22 +268,11 @@ const char* kRaisedTo240By3 =
 int main() {
     isolate();
 
-    // A manual tune must give an AUTO audio-output decoder an independent wake
-    // signal before it has an instance to report as the playing plugin.
-    {
-        cascade::gui::AppWindow app;
-        cascade::core::LoadedPlugin p;
-        p.path = "audio-probe.dll";
-        CascadeAudioOutApi audioApi{};
-        p.audioOut = &audioApi;
-        CHECK(!Access::use(app, p).playingAudio);
-        Access::startReceiver(app);
-        Access::tune(app, Access::tunedHz(app) + 1000.0);
-        CHECK(Access::use(app, p).playingAudio);
-        Access::lifecycle(app);  // consume the one-shot tune signal
-        CHECK(!Access::use(app, p).playingAudio);
-        CHECK(Access::use(app, p, cascade::core::pluginKey(p)).playingAudio);
-    }
+    // (CARVED OUT, 2026-10-21, the 0.99.84 merge - ledger PLUGIN-RUN, placeholder merge_pending_part_audio_lead_plugin_wake: master's
+    // check that "a manual tune must give an AUTO audio-output decoder an independent wake signal before it has an instance to report as
+    // the playing plugin" is about the plugin run modes (0.99.73, AppWindow::pluginUseOf / updatePluginLifecycle), which are not re-expressed
+    // on the engine yet. Master's text of the block is in git history (tests/test_audio_lead_app.cpp at origin/master) and is restored
+    // when PLUGIN-RUN lands.)
 
     // The ledger the window counts into, armed with a file of its own, so that
     // "the next usage record" can be read the way the next start-up reads it.
@@ -293,7 +296,7 @@ int main() {
         CHECK(out.targetFrames() == 7680u);
         CHECK(Access::notice(app).empty());
         CHECK(Access::config(app).audioBufferMs == 0);
-        CHECK(Access::status(app).audioLeadMs == 120);        // /api/status says so too
+        CHECK(Access::statusLeadMs(app) == 120);        // /api/status says so too
 
         // --- 2. TWO STARVED CALLBACKS IN A MINUTE: nothing happens -------------------
         starve(out, 2);
@@ -325,7 +328,7 @@ int main() {
         // ...BUT THE DEPTH IT REACHED IS REMEMBERED, under a key of its own, for the next launch (a
         // computer that fell behind this often is slow every time).
         CHECK(Access::config(app).audioBufferAutoMs == 240);
-        CHECK(Access::status(app).audioLeadMs == 240);        // the browser's number moved with it
+        CHECK(Access::statusLeadMs(app) == 240);        // the browser's number moved with it
 
         // --- 4. THE NEXT BAD MINUTE: 480 ms; the sentence is the latest ---------------
         starve(out, 5);
@@ -545,7 +548,7 @@ int main() {
               "Audio buffer restored to 480 ms: the depth this computer needed when it last ran.");
         CHECK(logLinesWith("audio: buffer restored to 480 ms") == 1);
         CHECK(logLinesWith("audio: buffer raised") == raisedLinesBefore);
-        CHECK(Access::status(third).audioLeadMs == 480);
+        CHECK(Access::statusLeadMs(third) == 480);
         // From there it can still deepen, and what it keeps is the new depth.
         starve(Access::audio(third), 3);
         Access::closeMinute(third);
@@ -665,17 +668,20 @@ int main() {
     // print the one sentence. Read off the source: drawing needs a window.
     {
         // CODE, NOT COMMENTS: a call commented out must not satisfy a scan for the call.
+        // (The poll is the ENGINE's since the extraction - src/engine/engine.cpp; the card and the rail are the window's.)
+        const std::string eng =
+            stripComments(readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp"));
+        const std::size_t poll = eng.find("void Engine::pollAudioHealth()");
+        const std::size_t end = poll == std::string::npos ? poll : eng.find("\n}\n", poll);
+        CHECK(poll != std::string::npos && end != std::string::npos && end > poll);
+        const std::string body = (poll == std::string::npos || end == std::string::npos) ? std::string() : eng.substr(poll, end - poll);
         const std::string src =
             stripComments(readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp"));
-        const std::size_t poll = src.find("void AppWindow::pollAudioHealth()");
-        const std::size_t end = src.find("void AppWindow::closeAudioMinute(", poll);
-        CHECK(poll != std::string::npos && end != std::string::npos && end > poll);
-        const std::string body = src.substr(poll, end - poll);
         const std::size_t minute = body.find("now - lastAudioLogSec_ >= 60.0");
         const std::size_t close = body.find("closeAudioMinute(", minute);
         CHECK(minute != std::string::npos && close != std::string::npos);
         // ...inside that block, before the next statement of the poll (the 1 Hz probe).
-        CHECK(close < body.find("now - lastAudioProbeSec_ < 1.0"));
+        CHECK(minute != std::string::npos && close < body.find("now - lastAudioProbeSec_ < 1.0"));
         // The card and the rail both ask for the sentence.
         std::size_t uses = 0;
         for (std::size_t at = 0; (at = src.find("audioLeadNotice()", at)) != std::string::npos; at += 10) {
@@ -696,11 +702,12 @@ int main() {
         CHECK(section.find("trId(\"Audio buffer\")") != std::string::npos);
         CHECK(section.find("tr(\"AUTOMATIC\")") != std::string::npos);
         CHECK(section.find("{0, 120, 240, 480, 960}") != std::string::npos);
-        CHECK(section.find("setAudioBufferMs(choice)") != std::string::npos);
+        // (the pick is a command now: FOXAPP_OP_SET_AUDIO_BUFFER, which the engine applies with setAudioBufferMs)
+        CHECK(section.find("makeInt(FOXAPP_OP_SET_AUDIO_BUFFER, choice)") != std::string::npos);
 
         // A patch speaker made from the patch page starts with the receiver's buffer.
         const std::string patch = stripComments(
-            readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window_patch_radios.cpp"));
+            readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine_patch_radios.cpp"));
         std::size_t made = 0;
         for (std::size_t at = 0; (at = patch.find("makeDeviceDest(", at)) != std::string::npos; at += 10) {
             const std::size_t eol = patch.find(';', at);

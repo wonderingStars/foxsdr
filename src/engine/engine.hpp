@@ -695,7 +695,21 @@ private:
     // pipeline_.start() to startReceiver, every pipeline_.setSource() to
     // installSource, and drives the stop, the faults and the same-rate
     // switch through the real application.
-    void stopReceiver();
+    // `who` is said in the log (0.99.68): the stop's cost with nothing to end was one report's whole story and its cause was nowhere in it.
+    void stopReceiver(const char* who);
+    // THE TEST SEAM OF FOXSDR_HOLD_AUDIO_LOCK (0.99.68, bounded runs only; FOXAPP_OP_TEST_HOLD_AUDIO_LOCK sets the milliseconds): the
+    // first stop of a running receiver that a CONTROL REQUEST (the web remote or a plugin - not the window) makes first has holdAudioLockThread_
+    // take the pipeline's audio mutex for that long (Pipeline::holdLockForTest), standing in for a plugin that stretched a DSP block that the
+    // stop arrives in the middle of; the log says so once it is held. tests/test_stop_ends_recordings.cpp reads how long a stop with nothing
+    // recording then spent on the recorders, from the line stopReceiver writes. Zero: no seam. Joined in teardown.
+    void holdAudioLockForTest();
+    int holdAudioLockMs_ = 0;
+    bool holdAudioLockDone_ = false;
+    std::atomic<bool> holdAudioLockAcquired_{false};
+    std::thread holdAudioLockThread_;
+    // Where the command being applied came from: the WINDOW's queue (drainLocalCommands) or a control request (the engine API's sessions,
+    // the web remote, a plugin - the default). The one place the difference is visible is the stop's log line.
+    bool commandFromWindow_ = false;
     void startReceiver();
     void endTakesOnFault();
     void installSource(std::unique_ptr<cascade::source::IqSource> src);
@@ -710,6 +724,8 @@ private:
     // reason: a mode key must set the demodulator, its default bandwidth and
     // the log line identically to a click on the button beside it.
     void setModeIndex(int index);
+    // The one assignment of modeIndex_ (the demodulator follows it, and the diagnostics context is rendered); see its definition.
+    void commitModeIndex(int index);
     // THE USER'S OWN MUTE, kept apart from the plugin mute (mutedBy_ and the
     // rest). They are different things with different lifetimes: a plugin's
     // mute is recomputed from the tuning every frame in updateAudioMute, and

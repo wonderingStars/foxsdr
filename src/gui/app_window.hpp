@@ -31,6 +31,7 @@ struct GLFWwindow;
 #include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
+#include "core/diag_history.hpp"
 #include "core/freq_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_host.hpp"
@@ -1985,6 +1986,22 @@ private:
     // runs there is no user interface left to ask with. This is the ask.
     void drawDiagnosticsOffer();
     void copyDiagnosticsBundle();
+    // THE WHOLE BUNDLE (what Copy diagnostics puts on the clipboard and what a problem report attaches): the engine's rendered context
+    // block, the log, the counters, the SDRplay service's state, the previous session's log and the reports on this machine, and this
+    // session's slow-frame table. `freshHistory` asks for the report list to be read again and waited for (boundedly, on a worker) -
+    // a person's own click; the problem-report page's once-a-second rebuild leaves it false and takes what has been read.
+    std::string currentDiagnosticsBundle(bool freshHistory = false);
+    // THE SESSIONS BEFORE THIS ONE for the bundle (core/diag_history.hpp): the end of the previous session's log and the reports on this
+    // machine. Read on a worker, never on the frame; with diagnostics off - or a run that may not touch the disk - it returns an answer with
+    // `included` false and starts NOTHING. startDiagHistoryRead() is the early read (applyDiagnosticsEnabled: run() start, and the moment
+    // diagnostics are switched on), so the previous session is read before this session's log can rotate it away.
+    cascade::core::DiagHistory diagHistoryForBundle(bool freshHistory);
+    void startDiagHistoryRead();
+    cascade::core::DiagHistoryCache diagHistory_;
+    // applyDiagnosticsEnabled's first call is the start of the session; whether the switch was on then is whether the log file holds
+    // this session's start line (see diagHistoryForBundle).
+    bool diagStartApplied_ = false;
+    bool diagLogHasSessionStart_ = false;
     std::string diagBundleStatus_;
     bool diagnosticsEnabled_ = true;
     bool diagnosticsMinidump_ = false;

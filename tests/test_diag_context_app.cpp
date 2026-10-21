@@ -63,7 +63,10 @@
 #endif
 
 #include "core/diag_report.hpp"
+#include "core/app_commands.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "net/web_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -205,98 +208,131 @@ void isolate() {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp), as tests/test_converter_app_paths.cpp does.
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
-    // What run() does once before the first frame - and nothing after it.
-    static void firstRefresh(AppWindow& a) { a.refreshDiagContext(); }
+    // What the engine does once before the first pass - and nothing after it (Engine::refreshDiagContext renders the block; the pass's
+    // own check - pumpDiagContext - is gated and hashed, and is what the cost test below does not measure).
+    static void firstRefresh(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).refreshDiagContext(); }); }
 
-    // --- the window's own state, read directly ---
-    static std::string source(const AppWindow& a) { return a.sourceKind_; }
-    static bool deviceOpen(const AppWindow& a) { return a.device_ != nullptr; }
-    static std::string model(const AppWindow& a) { return a.deviceModel_; }
-    static double rate(AppWindow& a) { return a.pipeline_.activeSource().sampleRateHz(); }
-    static int modeIndex(const AppWindow& a) { return a.modeIndex_; }
-    static std::vector<std::string> patchKinds(const AppWindow& a) {
-        std::vector<std::string> kinds;
-        for (const auto& [id, radio] : a.patchRadios_) {
-            (void)radio;
-            const cascade::core::patch::Node* n = a.patchGraph_.find(id);
-            const std::string key = n != nullptr ? n->device : std::string("?");
-            const std::size_t bar = key.find('|');
-            kinds.push_back(bar == std::string::npos ? key : key.substr(0, bar));
-        }
-        std::sort(kinds.begin(), kinds.end());
-        return kinds;
+    // --- the engine's own state, read on the pass (COPIES) ---
+    static std::string source(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; });
+    }
+    static bool deviceOpen(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
+    }
+    static std::string model(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceModel_; });
+    }
+    static double rate(AppWindow& a) {
+        return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).pipeline_.activeSource().sampleRateHz(); });
+    }
+    static int modeIndex(AppWindow& a) {
+        return passseam::read<int>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).modeIndex_; });
+    }
+    static std::vector<std::string> patchKinds(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+            std::vector<std::string> kinds;
+            for (const auto& [id, radio] : rawEngine(a.engine_).patchRadios_) {
+                (void)radio;
+                const cascade::core::patch::Node* n = rawEngine(a.engine_).patchGraph_.find(id);
+                const std::string key = n != nullptr ? n->device : std::string("?");
+                const std::size_t bar = key.find('|');
+                kinds.push_back(bar == std::string::npos ? key : key.substr(0, bar));
+            }
+            std::sort(kinds.begin(), kinds.end());
+            return kinds;
+        });
     }
 
     // --- events ---
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.deviceOpenPending_) {
-            a.pollSourceAsync();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.scanNative();
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].args == args) {
-                a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-                return waitOpen(a);
+        int row = -1;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
+            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+                if (rawEngine(a.engine_).nativeDevices_[i].args == args) {
+                    row = AppWindow::kNativeRowBase + static_cast<int>(i);
+                    break;
+                }
             }
-        }
-        return false;
+            if (row >= 0) { rawEngine(a.engine_).selectSource(row); }
+        });
+        return row >= 0 && waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { a.selectSource(0); }
+    static void selectGenerator(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).selectSource(0); }); }
+    // THE BROWSER'S ROUTES are commands now (FOXAPI_OP_SET_SAMPLE_RATE / FOXAPI_OP_SET_MODE), applied by the engine.
     static void setRateByRemote(AppWindow& a, double hz) {
-        cascade::net::ControlRequest r;
-        r.sampleRateHz = hz;
-        a.applyControlRequest(r);
+        passseam::on(rawEngine(a.engine_), [&] {
+            const FoxCommand c = cascade::core::cmd::makeNum(FOXAPI_OP_SET_SAMPLE_RATE, hz);
+            (void)rawEngine(a.engine_).applyCommand(c, std::string());
+        });
     }
-    static void setModeByButton(AppWindow& a, int index) { a.setModeIndex(index); }
+    static void setModeByButton(AppWindow& a, int index) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).setModeIndex(index); }); }
     static void setModeByRemote(AppWindow& a, cascade::dsp::DemodMode m) {
-        cascade::net::ControlRequest r;
-        r.mode = m;
-        a.applyControlRequest(r);
+        // FOXAPI_DEMOD_* is the mode keys' order, 1-based (the engine's kModeMap order); AM is the only mode this test asks for.
+        const std::int64_t code = m == cascade::dsp::DemodMode::AM ? FOXAPI_DEMOD_AM : FOXAPI_DEMOD_NFM;
+        passseam::on(rawEngine(a.engine_), [&] {
+            const FoxCommand c = cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, code);
+            (void)rawEngine(a.engine_).applyCommand(c, std::string());
+        });
     }
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
-    static void tuneBookmark(AppWindow& a, const cascade::core::Bookmark& b) { a.tuneToBookmark(b); }
+    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
+    static void tuneBookmark(AppWindow& a, const cascade::core::Bookmark& b) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).tuneToBookmark(b); });
+    }
 
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;
-        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
-            n->device = device;
-            n->freqHz = 100.0e6;
-            n->centreChosen = true;
-            n->rateHz = 2.4e6;
-            n->on = true;
-        }
-        return id;
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+                n->device = device;
+                n->freqHz = 100.0e6;
+                n->centreChosen = true;
+                n->rateHz = 2.4e6;
+                n->on = true;
+            }
+            return id;
+        });
     }
     static bool runPatchUntilOpen(AppWindow& a, cascade::core::patch::NodeId id) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = true;
+            rawEngine(a.engine_).patchWasOpen_ = true;
+        });
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.patchRadios_.count(id) == 0) {
-            a.patchReconcile();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) == 0; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static void switchNodeOff(AppWindow& a, cascade::core::patch::NodeId id) {
-        if (cascade::core::patch::Node* n = a.patchGraph_.mutableNode(id)) { n->on = false; }
-        a.patchReconcile();
+        passseam::on(rawEngine(a.engine_), [&] {
+            if (cascade::core::patch::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) { n->on = false; }
+            rawEngine(a.engine_).patchReconcile();
+        });
     }
     static void stopPatch(AppWindow& a) {
-        a.patchRunning_ = false;
-        a.patchStopAll(true);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = false;
+            rawEngine(a.engine_).patchStopAll(true);
+        });
         waitOpen(a);
     }
 };
@@ -508,8 +544,10 @@ void testCost() {
 
 void testStructure() {
     std::printf("the writers funnel through one function each\n");
-    const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui";
-    std::string appWindow = readText(src / "app_window.cpp");
+    // (The writers are the ENGINE's since the extraction: src/engine holds what app_window*.cpp did, file for file - engine.cpp,
+    // engine_converter.cpp, engine_patch_radios.cpp.)
+    const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src" / "engine";
+    std::string appWindow = readText(src / "engine.cpp");
     CHECK(!appWindow.empty());
 
     // Every install, swap and close of the source ENDS with applyConverterForSource()
@@ -528,7 +566,7 @@ void testStructure() {
             // The definition, and any mention in a comment, are not call sites.
             const std::size_t lineStart = text.rfind('\n', at) + 1;
             const std::string before = text.substr(lineStart, at - lineStart);
-            if (before.find("AppWindow::") != std::string::npos ||
+            if (before.find("Engine::") != std::string::npos ||
                 before.find("//") != std::string::npos) {
                 continue;
             }
@@ -544,12 +582,12 @@ void testStructure() {
     }
     std::printf("  %zu installSource() call sites\n", installSites);
     CHECK(installSites >= 10);
-    CHECK(functionBody(readText(src / "app_window_converter.cpp"),
-                       "void AppWindow::applyConverterForSource(")
+    CHECK(functionBody(readText(src / "engine_converter.cpp"),
+                       "void Engine::applyConverterForSource(")
               .find("refreshDiagContext();") != std::string::npos);
 
     // modeIndex_ likewise, in commitModeIndex().
-    const std::string commit = functionBody(appWindow, "void AppWindow::commitModeIndex(");
+    const std::string commit = functionBody(appWindow, "void Engine::commitModeIndex(");
     CHECK(!commit.empty());
     CHECK(commit.find("refreshDiagContext();") != std::string::npos);
     for (const fs::directory_entry& e : fs::directory_iterator(src)) {
@@ -570,24 +608,25 @@ void testStructure() {
     // The rate funnel, the plugin rescan (every exit: it returns early when the
     // quarantine fails, after the plugins have been unloaded) and the patch
     // page's two entry points.
-    CHECK(functionBody(appWindow, "void AppWindow::followInputRate(")
+    CHECK(functionBody(appWindow, "void Engine::followInputRate(")
               .find("DiagContextOnExit") != std::string::npos);
-    CHECK(functionBody(appWindow, "void AppWindow::rescanPlugins(")
+    CHECK(functionBody(appWindow, "void Engine::rescanPlugins(")
               .find("DiagContextOnExit") != std::string::npos);
-    const std::string patch = readText(src / "app_window_patch_radios.cpp");
-    CHECK(functionBody(patch, "void AppWindow::patchReconcile(")
+    const std::string patch = readText(src / "engine_patch_radios.cpp");
+    CHECK(functionBody(patch, "void Engine::patchReconcile(")
               .find("DiagContextOnExit") != std::string::npos);
-    CHECK(functionBody(patch, "void AppWindow::patchStopAll(")
+    CHECK(functionBody(patch, "void Engine::patchStopAll(")
               .find("DiagContextOnExit") != std::string::npos);
 
-    // The frame loop refreshes EVERY frame - the net under anything a future
-    // writer forgets - and no longer one frame in sixty.
-    const std::size_t swap = appWindow.find("++rendered;");
-    CHECK(swap != std::string::npos);
-    const std::string afterSwap =
-        swap == std::string::npos ? std::string() : appWindow.substr(swap, 1600);
-    CHECK(afterSwap.find("refreshDiagContext();") != std::string::npos);
-    CHECK(afterSwap.find("% 60") == std::string::npos);
+    // THE ENGINE'S PASS checks EVERY pass - the net under anything a future writer forgets (pumpDiagContext: gated to once a second and
+    // hashed, so an unchanged block writes nothing) - and not one pass in sixty.
+    const std::string pass = functionBody(appWindow, "void Engine::pumpAudio(");
+    CHECK(!pass.empty());
+    CHECK(pass.find("pumpDiagContext();") != std::string::npos);
+    const std::string pumpCtx = functionBody(appWindow, "void Engine::pumpDiagContext(");
+    CHECK(!pumpCtx.empty());
+    CHECK(pumpCtx.find("refreshDiagContext();") != std::string::npos);
+    CHECK(pass.find("% 60") == std::string::npos && pumpCtx.find("% 60") == std::string::npos);
 }
 
 }  // namespace
