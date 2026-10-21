@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
+#include "core/maidenhead.hpp"
+#include "core/plugin_run.hpp"
 #include "core/utf8_text.hpp"
 // The web API's own bounds, reused rather than restated: a value a browser is
 // refused is refused to a plugin too, for the same stated reason, and the two
@@ -92,6 +95,30 @@ void setMember(std::vector<std::string>& v, const std::string& k, bool on) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// Pressable panel rows (0.99.77)
+// ---------------------------------------------------------------------------
+
+std::uint32_t panelRowKeyId(const CascadePanelRow& row) {
+    // ONLY A TABLE ROW, AND ONLY WITH THE FLAG: a heading and a separator are never keys, and id
+    // bits without CASCADE_ROW_FLAG_KEY are not read - a plugin that wrote junk into the bits above
+    // the three emphasis flags before 0.99.77 must not find its rows pressable now.
+    if (row.kind != CASCADE_ROW_CELLS || (row.flags & CASCADE_ROW_FLAG_KEY) == 0u) { return 0u; }
+    return CASCADE_ROW_KEY_ID(row.flags);
+}
+
+std::uint32_t panelRowPressable(const CascadePanelRow& row,
+                                const std::vector<HostCommand>& registered) {
+    const std::uint32_t id = panelRowKeyId(row);
+    if (id == 0u) { return 0u; }
+    // ONLY AN ID THE PLUGIN REGISTERED: pressCommand refuses any other, so a key drawn for one
+    // would take the click and do nothing - a control that lies about having done something.
+    for (const HostCommand& c : registered) {
+        if (c.id == id) { return id; }
+    }
+    return 0u;
+}
+
+// ---------------------------------------------------------------------------
 // Real-time marker
 // ---------------------------------------------------------------------------
 
@@ -171,7 +198,8 @@ PluginApiCore::PluginApiCore(std::shared_ptr<ReceiverSnapshot> snapshot)
     : snapshot_(snapshot != nullptr ? std::move(snapshot) : std::make_shared<ReceiverSnapshot>()),
       clock_(std::make_shared<StreamClock>()) {}
 
-PluginApiClient& PluginApiCore::client(const std::string& key, const std::string& name) {
+PluginApiClient& PluginApiCore::client(const std::string& key, const std::string& name,
+                                       std::uint32_t capabilities) {
     std::lock_guard<std::mutex> lk(mutex_);
     for (const std::unique_ptr<PluginApiClient>& c : clients_) {
         if (c->key == key) {
@@ -180,14 +208,17 @@ PluginApiClient& PluginApiCore::client(const std::string& key, const std::string
             // plugin thread reads `name` without a lock (the settings store is
             // keyed on it), so it has to be immutable once published. A build
             // that renames itself under an unchanged file name keeps its old
-            // settings bucket until the next launch, which is harmless.
+            // settings bucket until the next launch, which is harmless. Same
+            // rule for `capabilities`.
             (void)name;
+            (void)capabilities;
             return *c;
         }
     }
     auto c = std::make_unique<PluginApiClient>();
     c->key = key;
     c->name = name;
+    c->capabilities = capabilities;
     c->index = clients_.size();
     ClientState st;
     st.markers.reserve(CASCADE_MAX_MARKERS_PER_PLUGIN);
@@ -239,6 +270,16 @@ void PluginApiCore::setLiveSet(const std::vector<std::string>& keys) {
     }
 }
 
+void PluginApiCore::setLive(const std::string& key, bool live) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        if (c->key != key) { continue; }
+        const bool was = c->live.exchange(live, std::memory_order_acq_rel);
+        if (was && !live) { clearClientLocked(c->index); }
+        return;
+    }
+}
+
 void PluginApiCore::setAttached(bool attached) {
     attached_.store(attached, std::memory_order_release);
 }
@@ -247,7 +288,9 @@ void PluginApiCore::refreshGrantsLocked(PluginApiClient& c) {
     std::uint32_t g = 0;
     if (contains(tuneGranted_, c.key)) { g |= CASCADE_STATE_TUNE_GRANTED; }
     if (contains(settingsGranted_, c.key)) { g |= CASCADE_STATE_SETTINGS_GRANTED; }
-    if (contains(stopped_, c.key)) { g |= CASCADE_STATE_STOPPED; }
+    if (contains(txGranted_, c.key)) { g |= CASCADE_STATE_TX_GRANTED; }
+    // BY ID, like the host's own stop set: a stop survives the plugin's update.
+    if (contains(stopped_, pluginRunId(c.key))) { g |= CASCADE_STATE_STOPPED; }
     c.grants.store(g, std::memory_order_release);
 }
 
@@ -263,14 +306,48 @@ void PluginApiCore::setSettingsGranted(const std::string& key, bool granted) {
     for (const std::unique_ptr<PluginApiClient>& c : clients_) { refreshGrantsLocked(*c); }
 }
 
+void PluginApiCore::setTxGranted(const std::string& key, bool granted) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    setMember(txGranted_, key, granted);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) { refreshGrantsLocked(*c); }
+}
+
+bool PluginApiCore::txGranted(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return contains(txGranted_, key);
+}
+
+void PluginApiCore::publishTxState(bool armed, const std::string& keyedKey) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        std::uint32_t bits = 0;
+        // ONLY A PLUGIN THAT DECLARED THE CAPABILITY IS TOLD, like receiverLocator: the
+        // operator's arming window and the moments the transmitter is keyed are not
+        // something every module that merely attached has any business learning.
+        if ((c->capabilities & CASCADE_CAP_TX_AUDIO) != 0u) {
+            if (armed) { bits |= CASCADE_STATE_TX_ARMED; }
+            if (!keyedKey.empty() && c->key == keyedKey) { bits |= CASCADE_STATE_TRANSMITTING; }
+        }
+        c->txState.store(bits, std::memory_order_release);
+    }
+}
+
 void PluginApiCore::setStopped(const std::vector<std::string>& keys) {
     std::lock_guard<std::mutex> lk(mutex_);
-    stopped_ = keys;
+    // Reduced to ids (file names are accepted and reduced), so the match below
+    // does not depend on the version in a file name.
+    stopped_.clear();
+    for (const std::string& k : keys) {
+        const std::string id = pluginRunId(k);
+        if (!id.empty() && std::find(stopped_.begin(), stopped_.end(), id) == stopped_.end()) {
+            stopped_.push_back(id);
+        }
+    }
     for (const std::unique_ptr<PluginApiClient>& c : clients_) {
         refreshGrantsLocked(*c);
         // A stopped plugin's marks and commands leave the screen at once, not
         // at the next rebuild: stopping is the user saying "not this one".
-        if (contains(stopped_, c->key)) { clearClientLocked(c->index); }
+        if (contains(stopped_, pluginRunId(c->key))) { clearClientLocked(c->index); }
     }
 }
 
@@ -278,6 +355,7 @@ void PluginApiCore::clearGrants() {
     std::lock_guard<std::mutex> lk(mutex_);
     tuneGranted_.clear();
     settingsGranted_.clear();
+    txGranted_.clear();
     for (const std::unique_ptr<PluginApiClient>& c : clients_) { refreshGrantsLocked(*c); }
 }
 
@@ -293,7 +371,8 @@ bool PluginApiCore::tuneGranted(const std::string& key) const {
 
 bool PluginApiCore::isStopped(const std::string& key) const {
     std::lock_guard<std::mutex> lk(mutex_);
-    return contains(stopped_, key);
+    // The stop set is ids (setStopped reduces file names), so the key is reduced the same way (0.99.73): a stop outlives an update of the module.
+    return contains(stopped_, pluginRunId(key));
 }
 
 void PluginApiCore::noteTuneRequester(const std::string& key) {
@@ -529,7 +608,29 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
                                      CascadeReceiverState* out) const {
     const std::int32_t g = gate(c);
     if (g != CASCADE_API_OK) { return g; }
-    if (out == nullptr || out->structSize < sizeof(CascadeReceiverState)) {
+    // BACKWARD-COMPATIBILITY FLOOR, not "must equal our own sizeof": the
+    // header's struct-growth rule (see the comment above CascadeReceiverState
+    // in plugin_abi.h) is that the host writes min(its own sizeof,
+    // out->structSize) bytes, so a plugin built against an OLDER, SMALLER
+    // CascadeReceiverState (before receiverLocator was appended in 0.99.43)
+    // must still get CASCADE_API_OK and a correctly truncated copy - it is
+    // never entitled to fields past the end of the struct it allocated, but
+    // it must not be refused outright just because this host's struct grew.
+    //
+    // THE FLOOR IS THE OLD STRUCT'S OWN SIZE, NOT sizeof(uint32_t). Every
+    // pre-0.99.43 plugin's CascadeReceiverState is EXACTLY
+    // offsetof(CascadeReceiverState, receiverLocator) bytes (192 on every
+    // target this ships to) - that is the whole, real, level-1 struct such a
+    // plugin actually allocates, and it is what "old plugin, not garbage"
+    // means. A structSize below that was never a valid struct any real
+    // plugin - old or new - ever had; accepting it as if it were a genuine
+    // truncated read would turn a caller's bug (an uninitialised or corrupt
+    // structSize) into a silent short read instead of the refusal that names
+    // it. The floor is checked structurally with offsetof rather than a
+    // literal 192 so it tracks the struct if a field before receiverLocator
+    // is ever reordered.
+    if (out == nullptr ||
+        out->structSize < offsetof(CascadeReceiverState, receiverLocator)) {
         return CASCADE_API_BAD_ARGUMENT;
     }
     PublishedState p;
@@ -547,6 +648,26 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     if (f.signalDb > f.squelchDb) { flags |= CASCADE_STATE_SQUELCH_OPEN; }
     if ((f.flags & FOXAPI_RX_STEREO_ACTIVE) != 0u) { flags |= CASCADE_STATE_STEREO; }
     flags |= c.grants.load(std::memory_order_acquire);
+    // The arming window and the key, for a TX_AUDIO plugin only (publishTxState).
+    flags |= c.txState.load(std::memory_order_acquire);
+    // IN EVERY STATE THIS HOST FILLS, for every client, with no capability or grant
+    // behind it (0.99.75): the host lists a track flagged CASCADE_TRACK_FLAG_NO_POSITION
+    // (PluginUi::unplacedTracks) instead of dropping it, and a plugin may publish one
+    // only when it sees this bit. A host that did not set it would be telling the ADS-B
+    // plugin to go on hiding every aircraft it has heard and not yet placed.
+    flags |= CASCADE_STATE_LISTS_UNPLACED_TRACKS;
+    // AND THE ESTIMATES (0.99.78): a track flagged CASCADE_TRACK_FLAG_ESTIMATED is kept for
+    // kTrackDropMsAircraftEstimated (180 s) instead of 60 s and drawn and listed as an estimate
+    // (trackPresentation, the map's marker ring, estimatedRowNote), so an ADS-B plugin may carry a
+    // fringe aircraft between its bursts instead of letting it blink off the map.
+    flags |= CASCADE_STATE_HOLDS_ESTIMATED_TRACKS;
+    // LIKEWISE (0.99.77): the host draws a panel row that carries CASCADE_ROW_FLAG_KEY as a key
+    // and delivers its press through poll_command (drawRowTable, PluginApiCore::pressCommand), and
+    // a plugin shows "press to choose" wording, and registers the commands only its row keys need,
+    // only when it sees this bit. A host that did not set it would be telling the IBOC plugin to
+    // go on offering HD1 to HD8 as text.
+    flags |= CASCADE_STATE_ROW_KEYS;
+    flags |= CASCADE_STATE_IMAGE_INPUT;
     s.flags = flags;
     s.seq = p.app.abiSeq;
     s.tuneSeq = p.app.abiTuneSeq;
@@ -567,6 +688,26 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
     s.gainCount = std::min<std::uint32_t>(p.app.abiGainCount, kMaxPublishedGains);
     std::memcpy(s.deviceName, f.deviceName, sizeof(s.deviceName));
     s.deviceName[CASCADE_DEVICE_NAME_CHARS - 1] = '\0';
+    // receiverLocator: appended field, see the header's struct-growth note.
+    // Computed here rather than stored pre-formatted, because it is O(1)
+    // arithmetic and this keeps exactly one place (maidenheadGrid6) that
+    // knows the Maidenhead rules.
+    //
+    // GATED ON CASCADE_CAP_RECEIVER_LOCATOR, per client - not on whether a
+    // position happens to be set. A plugin that never declared the bit reads
+    // an empty locator and an unset flag whatever the receiver's position is,
+    // exactly as if there were none: the field exists to answer a plugin that
+    // asked for it, not to broadcast the user's location to every module that
+    // merely attached (see the header's note on CASCADE_CAP_RECEIVER_LOCATOR).
+    s.receiverLocator[0] = '\0';
+    if (p.app.rxPositionSet && (c.capabilities & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        char grid[7];
+        if (cascade::core::maidenheadGrid6(p.app.rxLatDeg, p.app.rxLonDeg, grid)) {
+            std::memcpy(s.receiverLocator, grid, sizeof(grid));
+            flags |= CASCADE_STATE_LOCATOR_KNOWN;
+            s.flags = flags;
+        }
+    }
     // Only as many bytes as BOTH sides know about - see the header's note on
     // in/out structs. Today they are equal; the min is for the day they are
     // not.
@@ -902,6 +1043,60 @@ std::int32_t PluginApiCore::settingsSet(const PluginApiClient& c, const char* ke
     kv[key] = std::move(v);
     ++settingsGeneration_;
     return CASCADE_API_OK;
+}
+
+std::int32_t PluginApiCore::settingsUiSet(const std::string& pluginName, const char* key,
+                                          const char* value) {
+    if (!validSettingKey(key)) { return CASCADE_API_BAD_ARGUMENT; }
+    std::string v;
+    if (value != nullptr) {
+        const std::size_t n = boundedLen(value, CASCADE_SETTING_VALUE_BYTES);
+        if (n >= CASCADE_SETTING_VALUE_BYTES) { return CASCADE_API_OUT_OF_RANGE; }
+        if (!validUtf8(value, n)) { return CASCADE_API_BAD_ARGUMENT; }
+        v.assign(value, n);
+    }
+    std::lock_guard<std::mutex> lk(settingsMutex_);
+    if (value == nullptr) {
+        const auto pit = settings_.find(pluginName);
+        if (pit == settings_.end() || pit->second.erase(key) == 0u) {
+            return CASCADE_API_NOT_FOUND;
+        }
+        if (pit->second.empty()) { settings_.erase(pit); }
+        ++settingsGeneration_;
+        std::uint64_t& s = settingsUiSeq_[pluginName];
+        s = (s == 0u ? 2u : s + 1u);
+        return CASCADE_API_OK;
+    }
+    std::map<std::string, std::string>& kv = settings_[pluginName];
+    const auto it = kv.find(key);
+    if (it == kv.end() && kv.size() >= CASCADE_MAX_SETTINGS_PER_PLUGIN) {
+        return CASCADE_API_LIMIT;
+    }
+    if (it != kv.end() && it->second == v) { return CASCADE_API_OK; }  // no change, no bump
+    kv[key] = std::move(v);
+    ++settingsGeneration_;
+    std::uint64_t& s = settingsUiSeq_[pluginName];
+    s = (s == 0u ? 2u : s + 1u);
+    return CASCADE_API_OK;
+}
+
+std::int32_t PluginApiCore::settingsUiGet(const std::string& pluginName, const char* key,
+                                          std::string& out) const {
+    out.clear();
+    if (!validSettingKey(key)) { return CASCADE_API_BAD_ARGUMENT; }
+    std::lock_guard<std::mutex> lk(settingsMutex_);
+    const auto pit = settings_.find(pluginName);
+    if (pit == settings_.end()) { return CASCADE_API_NOT_FOUND; }
+    const auto kit = pit->second.find(key);
+    if (kit == pit->second.end()) { return CASCADE_API_NOT_FOUND; }
+    out = kit->second;
+    return CASCADE_API_OK;
+}
+
+std::uint64_t PluginApiCore::settingsUiSeq(const std::string& pluginName) const {
+    std::lock_guard<std::mutex> lk(settingsMutex_);
+    const auto it = settingsUiSeq_.find(pluginName);
+    return it == settingsUiSeq_.end() ? 1u : it->second;
 }
 
 std::int32_t PluginApiCore::log(const PluginApiClient& c, std::uint32_t level,

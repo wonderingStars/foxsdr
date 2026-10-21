@@ -6,6 +6,7 @@
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "source/rsp_rows.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -77,22 +78,32 @@ public:
         for (auto it = undo_.rbegin(); it != undo_.rend(); ++it) { (*it)(); }
         undo_.clear();
     }
+    // The whole undo as one callable, for SdrPlaySource::undoRefusedLocked -
+    // which may run it now, keep it for a late answer, or drop it.
+    std::function<void()> take() {
+        auto list = std::make_shared<std::vector<std::function<void()>>>(std::move(undo_));
+        undo_.clear();
+        return [list]() {
+            for (auto it = list->rbegin(); it != list->rend(); ++it) { (*it)(); }
+        };
+    }
 
 private:
     std::vector<std::function<void()>> undo_;
 };
 
-// ...EXCEPT after an abandoned control: a worker of ours is still inside the
-// vendor's Update and may be reading the block, the device is dead for good,
-// and nothing will ever be sent for it again - so the fields that control was
-// sent with are left as they are rather than written under that thread. That
-// is the LAST write the block gets for this device. Every setter's first line
-// is refuseIfVendorUnreachableLocked, ahead of its "nothing changed" shortcut
-// and ahead of any write (the review of 6e308c3: until then a setter after the
-// abandonment still wrote its field and only then met the refusal in
-// updateLocked), so from the abandonment on the block really is left alone.
-void undoRefused(BlockRollback& rb, bool controlAbandoned) {
-    if (!controlAbandoned) { rb.undo(); }
+// WHAT A LATE WORKER HANDS BACK (0.99.50): the vendor's answer and when it
+// came, so the log can say how late - the one number the 0.99.46 RSPdx-R2
+// report could not give, because nothing ever looked.
+struct ControlAnswer {
+    abi::ErrT err = abi::Fail;
+    std::int64_t returnedNs = 0;
+};
+
+std::int64_t steadyNowNsForControl() {
+    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
 }
 
 // What the receiver says once the service has answered
@@ -283,6 +294,114 @@ const sdrplay_abi::Api& processSdrPlayApi() {
     return api;
 }
 
+namespace {
+// The test override for sdrPlayApiPresent() - a mutex rather than an atomic
+// because std::optional<bool> is not trivially atomic, and this is read/
+// written far too rarely (once per test, once per real open) to matter.
+std::mutex& apiPresentOverrideMutex() {
+    static std::mutex m;
+    return m;
+}
+std::optional<bool>& apiPresentOverrideSlot() {
+    static std::optional<bool> v;
+    return v;
+}
+}  // namespace
+
+bool sdrPlayApiPresent() {
+    {
+        std::lock_guard<std::mutex> lk(apiPresentOverrideMutex());
+        if (apiPresentOverrideSlot().has_value()) { return *apiPresentOverrideSlot(); }
+    }
+    return processSdrPlayApi().resolved;
+}
+
+void setSdrPlayApiPresentForTest(std::optional<bool> present) {
+    std::lock_guard<std::mutex> lk(apiPresentOverrideMutex());
+    apiPresentOverrideSlot() = present;
+}
+
+// --- one chip, one route --------------------------------------------------
+
+SdrPlayApiState sdrPlayApiStateOf(const abi::Api& api) {
+    SdrPlayApiState s;
+    s.installed = api.resolved;
+    // ATOMICS ONLY: an abandoned worker may be parked inside sdrplay_api_Open
+    // holding sessionMutex, and this is asked from the GUI thread and from
+    // every patch radio's worker.
+    s.sessionLost = api.sessionLostFlag.load(std::memory_order_acquire);
+    s.workerAbandoned =
+        sdrPlayServiceTrouble(api) == SdrPlayServiceTrouble::EnumerationHung;
+    return s;
+}
+
+namespace {
+std::mutex& apiStateOverrideMutex() {
+    static std::mutex m;
+    return m;
+}
+std::optional<SdrPlayApiState>& apiStateOverrideSlot() {
+    static std::optional<SdrPlayApiState> v;
+    return v;
+}
+std::mutex& publishedRowsMutex() {
+    static std::mutex m;
+    return m;
+}
+std::vector<NativeDeviceInfo>& publishedRowsSlot() {
+    static std::vector<NativeDeviceInfo> v;
+    return v;
+}
+bool& publishedRowsFlag() {
+    static bool published = false;
+    return published;
+}
+}  // namespace
+
+SdrPlayApiState sdrPlayApiState() {
+    {
+        std::lock_guard<std::mutex> lk(apiStateOverrideMutex());
+        if (apiStateOverrideSlot().has_value()) { return *apiStateOverrideSlot(); }
+    }
+    SdrPlayApiState s = sdrPlayApiStateOf(processSdrPlayApi());
+    s.installed = sdrPlayApiPresent();
+    return s;
+}
+
+void setSdrPlayApiStateForTest(std::optional<SdrPlayApiState> state) {
+    std::lock_guard<std::mutex> lk(apiStateOverrideMutex());
+    apiStateOverrideSlot() = state;
+}
+
+void sdrPlayPublishNativeRows(std::vector<NativeDeviceInfo> rows) {
+    std::lock_guard<std::mutex> lk(publishedRowsMutex());
+    publishedRowsSlot() = std::move(rows);
+    publishedRowsFlag() = true;
+}
+
+std::vector<NativeDeviceInfo> sdrPlayPublishedNativeRows() {
+    std::lock_guard<std::mutex> lk(publishedRowsMutex());
+    return publishedRowsSlot();
+}
+
+bool sdrPlayNativeRowsPublished() {
+    std::lock_guard<std::mutex> lk(publishedRowsMutex());
+    return publishedRowsFlag();
+}
+
+std::string soapyMiricsRefusal(const std::string& soapyArgs) {
+    // A driver outside the Mirics family is nobody's chip, and must not load
+    // the vendor library just to be told so.
+    if (!isMiricsSoapyArgs(soapyArgs)) { return std::string(); }
+    const MiricsSoapyRefusal why = miricsSoapyRouteRefusal(
+        soapyArgs, sdrPlayApiState(), sdrPlayPublishedNativeRows(), kNativeMiricsOpenUnsafeWithApi);
+    if (why == MiricsSoapyRefusal::None) { return std::string(); }
+    // The DRIVER, never the args: a Mirics radio's args carry its serial.
+    core::diagWarnf("source: refused to open a SoapySDR %s device - %s",
+                    soapyDriverNameOf(soapyArgs).c_str(), miricsSoapyRefusalSentence(why));
+    return std::string(miricsSoapyRefusalSentence(why));
+}
+
 // USER COPY, in the user's language: it is drawn under the Source row and
 // given as the reason a device would not open. With English in force tr()
 // answers the English these sentences always were.
@@ -346,17 +465,29 @@ namespace {
 
 // Open the API once per process per table, check the version, and hand out a
 // reference count. See sdrplay_abi::Api for why the count lives in the table.
-bool sessionAcquire(const abi::Api& api, std::string& error) {
+//
+// `serviceAdvice`, when given, receives the SDRplay API Service sentence
+// (translated, for the screen) when Open itself failed - and nothing
+// otherwise. Kept apart from `error` because `error` is what the callers log,
+// and a log line is kLineBytes long: the service's state gets its own line,
+// once per change, from noteSdrPlayServiceStatus.
+bool sessionAcquire(const abi::Api& api, std::string& error, std::string* serviceAdvice = nullptr) {
+    if (serviceAdvice != nullptr) { serviceAdvice->clear(); }
     if (!api.resolved) {
         error = sdrPlayApiAdvice(false, 0.0f);
         return false;
     }
-    std::lock_guard<std::mutex> lk(api.sessionMutex);
+    std::unique_lock<std::mutex> lk(api.sessionMutex);
     // A LOST SESSION IS NOT HANDED OUT AGAIN - see markSessionLost. Checked
     // before the count, because the count is exactly what keeps the stale
     // session "open": an orphaned reference is never released.
     if (api.sessionLost) {
         error = sdrPlaySessionLostSentence();
+        return false;
+    }
+    // Held, not refused for good, while a control is waiting (0.99.50).
+    if (api.controlsInFlight > 0) {
+        error = sdrPlayControlPendingSentence();
         return false;
     }
     if (api.sessions > 0) {
@@ -367,6 +498,16 @@ bool sessionAcquire(const abi::Api& api, std::string& error) {
     if (err != abi::Success) {
         error = "the SDRplay service did not answer: " + errText(api, err) +
                 ". Check that the SDRplay API service is running.";
+        api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::OpenFailed),
+                                 std::memory_order_release);
+        // ...AND WHAT WINDOWS SAYS THE SERVICE IS DOING (0.99.55). Asked
+        // AFTER the session mutex is let go - the Service Control Manager is
+        // local and fast, but it is not ours, and nothing else should queue
+        // behind it. This runs on the enumeration's bounded worker or on
+        // open()'s caller, never on a stream callback.
+        lk.unlock();
+        const SdrPlayServiceStatus service = querySdrPlayServiceAndNote();
+        if (serviceAdvice != nullptr) { *serviceAdvice = sdrPlayServiceAdvice(service); }
         return false;
     }
     float ver = 0.0f;
@@ -383,6 +524,9 @@ bool sessionAcquire(const abi::Api& api, std::string& error) {
     }
     api.version = ver;
     api.sessions = 1;
+    // The service answered: whatever it last failed for is over.
+    api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::None),
+                             std::memory_order_release);
     return true;
 }
 
@@ -411,12 +555,19 @@ void sessionRelease(const abi::Api& api) {
 // ReleaseDevice. Latched on the table, so it is process-wide in the field and
 // per-fake in the tests, and logged once.
 void markSessionLost(const abi::Api& api, const char* why) {
+    // THE LOCK-FREE LATCH FIRST (one chip, one route): the SoapySDR modules'
+    // refusal reads it without the session mutex, and it must hold from this
+    // instant even if taking that mutex below has to wait behind a worker
+    // parked inside sdrplay_api_Open.
+    api.sessionLostFlag.store(true, std::memory_order_release);
     bool first = false;
     {
         std::lock_guard<std::mutex> lk(api.sessionMutex);
         first = !api.sessionLost;
         api.sessionLost = true;
     }
+    api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::SessionLost),
+                             std::memory_order_release);
     if (first) {
         core::diagWarnf("source: SDRplay API session lost - %s; no further SDRplay API calls are "
                         "made until FoxSDR is restarted",
@@ -424,9 +575,33 @@ void markSessionLost(const abi::Api& api, const char* why) {
     }
 }
 
+// THE SESSION MUTEX IS HELD ACROSS VENDOR CALLS THAT TAKE NO TIMEOUT
+// (sessionAcquire across sdrplay_api_Open, sessionRelease across
+// sdrplay_api_Close), and an enumeration worker that kEnumerateWait abandons
+// is parked inside one of them with the mutex STILL HELD - for good, if the
+// service never answers. So no thread that must stay responsive - the GUI's
+// scan, every setter - may BLOCK on it. This is the one way to ask for it:
+// try, wait at most `bound` for a holder that is merely slow, and hand back an
+// unlocked lock when there is none, which the caller answers from somewhere
+// else (a hold-off, an atomic, "not known"). The 0.99.81 freeze was a plain
+// lock_guard here; see tests/test_sdrplay_source.cpp section 12e.
+std::unique_lock<std::mutex> tryLockSession(const abi::Api& api, std::chrono::milliseconds bound) {
+    std::unique_lock<std::mutex> lk(api.sessionMutex, std::try_to_lock);
+    const auto deadline = std::chrono::steady_clock::now() + bound;
+    while (!lk.owns_lock() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        (void) lk.try_lock();
+    }
+    return lk;
+}
+
+// FROM THE LATCH, NOT THE MUTEX. markSessionLost sets sessionLostFlag before it
+// takes the mutex to set `sessionLost`, and nothing else ever sets either, so
+// the flag is the field's superset the instant it matters. This is asked by
+// every control on the GUI thread (refuseIfVendorUnreachableLocked) and by
+// every scan, so it must never queue behind a worker parked in Open.
 bool sessionIsLost(const abi::Api& api) {
-    std::lock_guard<std::mutex> lk(api.sessionMutex);
-    return api.sessionLost;
+    return api.sessionLostFlag.load(std::memory_order_acquire);
 }
 
 }  // namespace
@@ -519,25 +694,52 @@ abi::BwMHzT sdrPlayBwForRate(double r) {
 }
 
 bool sdrPlayRatePlan(double outputRateHz, SdrPlayRatePlan& out) {
-    // THE FRONT END DOES NOT RUN BELOW 2 MS/s, so every rate below that is a
-    // decimation of something faster, and WHICH something depends on the rate.
-    // The reference's own table (SoapySDRPlay3
-    // getInputSampleRateAndDecimation): the binary fractions of 2 MS/s come
-    // from a 6 MHz LOW-IF front end decimated by powers of two, and the audio
-    // rates (96k, 192k, 384k, 768k) come from a ZERO-IF front end running at
-    // the rate times the decimation. Mixing the two up is how a receiver ends
-    // up 1.62 MHz off frequency.
+    // EVERY PLAN IS ZERO-IF, AND ITS OUTPUT RATE IS fsHz / decM - the only
+    // arithmetic the SDRplay API specification gives (v3.15, sdrplay_api_Init:
+    // of the processing chain's stages only Decimate is said to change the
+    // rate). The ADC is never run below 2 MS/s, the API's own default fsHz.
+    //
+    // WHY NOT THE 6 MHz LOW-IF FRONT END ANY MORE (0.99.44, GitHub issue 5).
+    // Through 0.99.43 the binary fractions of 2 MS/s were taken, as
+    // SoapySDRPlay3's getInputSampleRateAndDecimation takes them, from a
+    // 6 MHz ADC at the 1.62 MHz low IF, on the reference's assumption that
+    // the service down-converts AND divides by three. Two RSP2 field logs say
+    // it delivered the ADC rate: 359978976 samples in 178561 blocks of 2016
+    // in a minute (0.99.27) and 168956928 samples in 83808 blocks of 2016 in
+    // the 28.2 s before the stream stopped (0.99.43) - 6.0 MS/s each time,
+    // while FoxSDR called the radio 2 MS/s and built its chain for that. The
+    // specification says nothing about what low-IF delivers, and no RSP here
+    // can say it either; zero-IF leaves no room for the disagreement. What it
+    // costs is the low-IF mode's freedom from a centre spike, which the API's
+    // DC correction (on, see applyKnownStateLocked) exists to remove.
+    // tests/test_sdrplay_source.cpp holds every plan to fsHz / decM.
     const long long r = static_cast<long long>(std::llround(outputRateHz));
     out = SdrPlayRatePlan{};
     out.bwType = sdrPlayBwForRate(static_cast<double>(r));
 
     switch (r) {
-        case 62500: out.ifType = abi::IF_1_620; out.decM = 32; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 125000: out.ifType = abi::IF_1_620; out.decM = 16; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 250000: out.ifType = abi::IF_1_620; out.decM = 8; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 500000: out.ifType = abi::IF_1_620; out.decM = 4; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 1000000: out.ifType = abi::IF_1_620; out.decM = 2; out.decEnable = 1; out.fsHz = 6000000.0; return true;
-        case 2000000: out.ifType = abi::IF_1_620; out.decM = 1; out.decEnable = 0; out.fsHz = 6000000.0; return true;
+        case 62500:
+        case 125000:
+        case 250000:
+        case 500000:
+        case 1000000: {
+            // A 2 MS/s zero-IF front end decimated by a power of two, with
+            // the wide-band decimation filter the reference pairs with every
+            // zero-IF decimation (the audio rates below).
+            out.ifType = abi::IF_Zero;
+            out.decM = static_cast<unsigned int>(2000000 / r);  // 32, 16, 8, 4, 2
+            out.decEnable = 1;
+            out.wideBandSignal = 1;
+            out.fsHz = 2000000.0;
+            return true;
+        }
+        case 2000000:
+            // The API's own default: 2 MHz zero-IF, nothing decimated.
+            out.ifType = abi::IF_Zero;
+            out.decM = 1;
+            out.decEnable = 0;
+            out.fsHz = 2000000.0;
+            return true;
         case 96000:
         case 192000:
         case 384000:
@@ -593,6 +795,14 @@ void armEnumerationHoldOff(std::chrono::steady_clock::time_point now) {
     holdOffUntil() = now + kEnumerateHoldOff;
 }
 
+// Back to the state every process starts in. The tests' reset, and the
+// service restart's (sdrPlayApplyServiceRestart): a hold-off armed against the
+// service that was just restarted guards nothing.
+void clearEnumerationHoldOff() {
+    std::lock_guard<std::mutex> lk(holdOffMutex());
+    holdOffUntil() = std::chrono::steady_clock::time_point{};
+}
+
 // The vendor half: everything that can block forever. Runs on the caller's
 // thread when the service is healthy and on an abandoned worker when it is
 // not, which is why it takes nothing by reference except the table itself -
@@ -601,14 +811,18 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayVendor(const abi::Api& api, std::s
     std::vector<NativeDeviceInfo> out;
     skip.clear();
     std::string error;
-    if (!sessionAcquire(api, error)) {
+    std::string serviceAdvice;
+    if (!sessionAcquire(api, error, &serviceAdvice)) {
         core::diagLogf("source: SDRplay enumeration skipped - %s", error.c_str());
         // ...AND THE SCREEN GETS THE SAME SENTENCE THE LOG JUST GOT. Kept
         // verbatim rather than re-derived in the panel: the too-old case
         // knows a version number that only this call learned, and nothing
         // above this line can find it out again without opening the API a
         // second time. See sdrPlayLastEnumerationSkip.
-        skip = error;
+        //
+        // Plus, when Open itself failed, what Windows says the service is
+        // doing (0.99.55) - the log has that on a line of its own.
+        skip = serviceAdvice.empty() ? error : (error + " " + serviceAdvice);
         return out;
     }
 
@@ -688,17 +902,31 @@ const char* sdrPlayServiceHungSentence() {
 }
 
 const char* sdrPlayControlHungSentence() {
-    // As above: the number is kControlWait, spelled out and pinned, because a
-    // formatted sentence and a changed constant drift apart in silence.
-    static_assert(SdrPlaySource::kControlWait == std::chrono::milliseconds(1000),
-                  "the sentence below quotes one second");
+    // As above: the number is kControlGrace, spelled out and pinned, because
+    // a formatted sentence and a changed constant drift apart in silence. It
+    // was kControlWait's one second until 0.99.50; a control is now given up
+    // only once the grace for a late answer has run out, so the grace is what
+    // the sentence has to quote.
+    static_assert(SdrPlaySource::kControlGrace == std::chrono::milliseconds(10000),
+                  "the sentence below quotes ten seconds");
     // "...THEN RESTART FoxSDR", not "then open the radio again" (0.99.36):
     // an abandoned control marks the process's session lost (0.99.28), and a
     // lost session refuses every open until FoxSDR restarts - so the old
     // instruction closed the dead radio, failed to open it, and left the user
     // on the signal generator for having followed it.
-    return "the SDRplay service did not answer within 1 s - restart the SDRplay API service, "
+    return "the SDRplay service did not answer within 10 s - restart the SDRplay API service, "
            "then restart FoxSDR";
+}
+
+const char* sdrPlayControlPendingSentence() {
+    static_assert(SdrPlaySource::kControlGrace == std::chrono::milliseconds(10000),
+                  "the sentence below quotes ten seconds");
+    return "the SDRplay service has not yet answered the last change - FoxSDR is waiting up to "
+           "10 s for it; try again in a moment";
+}
+
+void SdrPlaySource::setControlGraceForTest(std::chrono::milliseconds g) {
+    controlGraceMs_.store(g.count(), std::memory_order_relaxed);
 }
 
 const char* sdrPlayStreamStalledSentence() {
@@ -720,9 +948,81 @@ bool sdrPlayEnumerationHeldOff() {
     return enumerationHeldOffAt(std::chrono::steady_clock::now());
 }
 
-void sdrPlayClearEnumerationHoldOffForTest() {
-    std::lock_guard<std::mutex> lk(holdOffMutex());
-    holdOffUntil() = std::chrono::steady_clock::time_point{};
+void sdrPlayClearEnumerationHoldOffForTest() { clearEnumerationHoldOff(); }
+
+// --- the service behind the API (0.99.55) ---------------------------------
+
+SdrPlayServiceTrouble sdrPlayServiceTrouble(const abi::Api& api) {
+    const int t = api.serviceTrouble.load(std::memory_order_acquire);
+    switch (t) {
+        case static_cast<int>(SdrPlayServiceTrouble::OpenFailed): return SdrPlayServiceTrouble::OpenFailed;
+        case static_cast<int>(SdrPlayServiceTrouble::EnumerationHung):
+            return SdrPlayServiceTrouble::EnumerationHung;
+        case static_cast<int>(SdrPlayServiceTrouble::SessionLost): return SdrPlayServiceTrouble::SessionLost;
+        default: break;
+    }
+    return SdrPlayServiceTrouble::None;
+}
+
+bool sdrPlayRestartKeyShown(bool windows, const SdrPlayServiceStatus& service,
+                            SdrPlayServiceTrouble trouble, SdrPlayRestartPhase phase) {
+    if (!windows || !sdrPlayServiceFound(service)) { return false; }
+    return trouble != SdrPlayServiceTrouble::None || phase == SdrPlayRestartPhase::Running;
+}
+
+SdrPlayAfterRestart sdrPlayAfterServiceRestart(bool serviceRunning, bool sessionStateKnown,
+                                               int sessions, bool sessionLost,
+                                               int controlsInFlight) {
+    // The service first: until Windows says it is running, there is nothing
+    // to reopen and nothing a FoxSDR restart would fix.
+    if (!serviceRunning) { return SdrPlayAfterRestart::ServiceNotRunning; }
+    // A LOST SESSION IS NEVER REOPENED IN THIS PROCESS. The latch exists
+    // because a thread of ours may still be parked inside the vendor DLL for
+    // the orphaned device, and a restarted service does not bring it back
+    // (see markSessionLost). Restarting FoxSDR is the only clean slate.
+    if (sessionLost) { return SdrPlayAfterRestart::RestartFoxSdr; }
+    // A state we could not read without waiting, a session still counted
+    // (an abandoned scan's worker may hold it) or a control still waiting for
+    // its answer: none of those is provably clear, so the same answer.
+    if (!sessionStateKnown || sessions > 0 || controlsInFlight > 0) {
+        return SdrPlayAfterRestart::RestartFoxSdr;
+    }
+    return SdrPlayAfterRestart::ReopenInProcess;
+}
+
+SdrPlayAfterRestart sdrPlayApplyServiceRestart(const abi::Api& api, bool serviceRunning) {
+    bool known = false;
+    int sessions = 0;
+    bool lost = false;
+    int inFlight = 0;
+    {
+        std::unique_lock<std::mutex> lk(api.sessionMutex, std::try_to_lock);
+        if (lk.owns_lock()) {
+            known = true;
+            sessions = api.sessions;
+            lost = api.sessionLost;
+            inFlight = api.controlsInFlight;
+        }
+    }
+    const SdrPlayAfterRestart what =
+        sdrPlayAfterServiceRestart(serviceRunning, known, sessions, lost, inFlight);
+    if (what == SdrPlayAfterRestart::ReopenInProcess) {
+        // The next scan asks the API again instead of repeating what the dead
+        // service last said, or waiting out a hold-off armed against it.
+        setEnumerationSkip(std::string());
+        clearEnumerationHoldOff();
+        api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::None),
+                                 std::memory_order_release);
+    }
+    return what;
+}
+
+float sdrPlayApiVersion(const abi::Api& api) {
+    // NO WAIT AT ALL: this is read by AppWindow::scanNative on the GUI thread
+    // to compose the panel's advice, and the answer it gives when the mutex is
+    // taken - 0, "never asked" - is one that advice already handles.
+    std::unique_lock<std::mutex> lk = tryLockSession(api, std::chrono::milliseconds(0));
+    return lk.owns_lock() ? api.version : 0.0f;
 }
 
 std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
@@ -734,12 +1034,48 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
         setEnumerationSkip(sdrPlaySessionLostSentence());
         return {};
     }
+    // ...AND A CONTROL STILL WAITING FOR ITS ANSWER (0.99.50): a worker of
+    // ours is inside the service, so a scan now would queue behind it on the
+    // GUI thread. Held, without a vendor call, until the answer or the grace.
+    //
+    // ASKED WITHOUT BLOCKING (the 0.99.81 patch-view freeze). The mutex that guards the count is
+    // also held by whoever is inside sdrplay_api_Open, and the worker this
+    // function abandons is exactly that: a scan after it used to queue here,
+    // on the GUI thread, behind a thread nobody will ever wake. So a holder
+    // that is merely slow gets kSessionPeekWait; one that is KNOWN to be the
+    // abandoned worker (the trouble record is atomic, for this reason) gets
+    // none, and the hold-off answers in its place. No new worker either way:
+    // it would only queue behind the first, one leaked thread per scan.
+    const auto now = std::chrono::steady_clock::now();
+    {
+        const bool wedged = sdrPlayServiceTrouble(api) == SdrPlayServiceTrouble::EnumerationHung;
+        std::unique_lock<std::mutex> lk =
+            tryLockSession(api, wedged ? std::chrono::milliseconds(0)
+                                       : SdrPlaySource::kSessionPeekWait);
+        if (!lk.owns_lock()) {
+            if (wedged) {
+                // The hold-off has run out but the worker is still in Open:
+                // put it back, so the scans after the first minute are as
+                // free as the ones before it instead of each paying a probe.
+                if (!enumerationHeldOffAt(now)) { armEnumerationHoldOff(now); }
+                setEnumerationSkip(sdrPlayServiceHungSentence());
+            } else {
+                // Someone else's vendor call is still in progress; not an
+                // answer, and not a failure - the next scan asks again.
+                setEnumerationSkip(sdrPlayControlPendingSentence());
+            }
+            return {};
+        }
+        if (api.controlsInFlight > 0) {
+            setEnumerationSkip(sdrPlayControlPendingSentence());
+            return {};
+        }
+    }
 
     // THE HOLD-OFF NEXT, and it touches the API not at all. A service that
     // wedged a moment ago is still wedged, and the source combo scans every
     // time it opens - so without this, each of those would spend another
     // kEnumerateWait of GUI thread and abandon another worker inside it.
-    const auto now = std::chrono::steady_clock::now();
     if (enumerationHeldOffAt(now)) {
         // The sentence is re-asserted rather than left standing, because a
         // Soapy scan or another driver's enumeration may have written over it
@@ -775,6 +1111,10 @@ std::vector<NativeDeviceInfo> enumerateSdrPlayWith(const abi::Api& api) {
         // the hold-off below arranges.
         worker.detach();
         armEnumerationHoldOff(now);
+        // Recorded for the RESTART SDRPLAY SERVICE key (0.99.55) - atomically,
+        // because the worker just abandoned may be holding the session mutex.
+        api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::EnumerationHung),
+                                 std::memory_order_release);
         core::diagWarnf("source: SDRplay enumeration abandoned - %s",
                         sdrPlayServiceHungSentence());
         core::diagLogf("source: SDRplay scans are held off for %lld s",
@@ -863,6 +1203,14 @@ bool SdrPlaySource::noteIfServiceDead(abi::ErrT err, const char* what) {
     return true;
 }
 
+bool SdrPlaySource::teardownMustSkipVendorLocked() const {
+    if (vendorUnreachableLocked()) { return true; }
+    // Only for an OPEN radio, as refuseIfVendorUnreachableLocked asks it: a
+    // never-opened source has nothing to tear down and must not load the
+    // vendor DLL just to find that out.
+    return openMirror_.load(std::memory_order_relaxed) && sessionIsLost(api());
+}
+
 bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
     // THE SESSION TOO, not only this object's own flags (the third review of
     // fix/rsp-fallback): with radio B streaming and radio A answered
@@ -873,11 +1221,16 @@ bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
     // process table from one would load the vendor DLL just to find that out.
     // Such a refusal falls through to the service sentence below, which names
     // the restart that works.
+    // A LATE ANSWER FIRST (0.99.50): one that has arrived gives the radio back
+    // before this setter is judged, and a grace that has run out gives it up.
+    reapLateControlLocked();
     const bool sessionLost = openMirror_.load(std::memory_order_relaxed) && sessionIsLost(api());
     if (!vendorUnreachableLocked() && !sessionLost) { return false; }
     // The same three sentences, in the same order of precedence, that
-    // stopStreamingLocked names the three causes with.
-    const char* why = controlAbandoned_ ? sdrPlayControlHungSentence()
+    // stopStreamingLocked names the three causes with - after the one that
+    // says nothing has been given up yet.
+    const char* why = lateControl_       ? sdrPlayControlPendingSentence()
+                      : controlAbandoned_ ? sdrPlayControlHungSentence()
                       : streamStalled_.load(std::memory_order_acquire)
                           ? sdrPlayStreamStalledSentence()
                           : kServiceStoppedAnsweringSentence;
@@ -977,7 +1330,8 @@ void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
     if (dropped) { link.cbOverflows.fetch_add(1, std::memory_order_relaxed); }
 }
 
-std::string SdrPlaySource::healthLineLocked(Link& link) {
+std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning) {
+    if (rateWarning != nullptr) { rateWarning->clear(); }
     // CLOSED FIRST, then emptied: a block the callback lands in between opens
     // the next window and is counted in one of the two, never lost and never
     // counted twice.
@@ -992,6 +1346,30 @@ std::string SdrPlaySource::healthLineLocked(Link& link) {
     const StreamHealth mine = h;
     h = StreamHealth{};
     if (start == 0 || reads == 0) { return std::string(); }
+
+    // WHAT THE SERVICE DELIVERED AGAINST WHAT THE RADIO WAS SET FOR (0.99.44).
+    // Measured from the window's first block to its last one carrying
+    // samples, so a stall at the end of the window (the 0.99.43 report's five
+    // seconds before its Uninit) does not dilute it. At least a second of it,
+    // and a quarter off before it is said: a healthy radio's blocks land
+    // within milliseconds of their schedule, and the disagreement this exists
+    // for was a factor of three.
+    const double setRate = link.setRateHz.load(std::memory_order_relaxed);
+    const bool rateChanged = link.rateChangedInWindow.exchange(false, std::memory_order_relaxed);
+    if (rateWarning != nullptr && setRate > 0.0 && !rateChanged && last > start) {
+        const double spanS = static_cast<double>(last - start) / 1e9;
+        if (spanS >= 1.0) {
+            const double delivered = static_cast<double>(samples) / spanS;
+            if (std::fabs(delivered / setRate - 1.0) > 0.25) {
+                char wbuf[160];
+                std::snprintf(wbuf, sizeof(wbuf),
+                              "source: SDRplay delivered %.0f S/s over %.1f s, but FoxSDR set it "
+                              "for %.0f S/s",
+                              delivered, spanS, setRate);
+                *rateWarning = wbuf;
+            }
+        }
+    }
 
     const std::int64_t now = steadyNowNs();
     if (last != 0 && now > last) {
@@ -1025,6 +1403,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
     const std::int64_t start = link.cbWindowStartNs.load(std::memory_order_acquire);
     if (start == 0) { return; }
     std::string line;
+    std::string rateWarning;
     bool warn = false;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
@@ -1033,7 +1412,11 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         if (steadyNowNs() - start < windowNs) { return; }
         warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
         const bool first = !link.healthEverWritten;
-        line = healthLineLocked(link);
+        line = healthLineLocked(link, &rateWarning);
+        // A wrong rate is said whether or not the window is otherwise worth
+        // a line: it is the one thing in it that invalidates everything the
+        // chain built.
+        if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
         if (line.empty()) { return; }
         // A line ALWAYS for the first window after a start, so a healthy radio
         // leaves one proving it; after that only for a window with something
@@ -1188,8 +1571,32 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             // THE ACKNOWLEDGEMENT IS NOT OPTIONAL. The service keeps
             // re-reporting an overload until it is acknowledged, so an
             // application that only logs the event gets a log full of it and
-            // a service that never moves on. Every other argument comes out of
-            // the Link, so this is safe even on a stranded one.
+            // a service that never moves on.
+            //
+            // NOT SENT FROM HERE (the repair-round review, 2026-09-28). This
+            // callback runs on the SERVICE'S OWN THREAD, and calling
+            // sdrplay_api_Update straight from it - as this code, and the
+            // vendor's own sdrplay_api_example.c, both do - is a second entry
+            // into the same vendor call that every GUI-thread control goes
+            // through updateLocked's single bounded worker for, from a
+            // thread we neither own nor can bound. DEFENSIVE, not a
+            // confirmed-bug fix: SDRplay API Specification v3.15 says
+            // nothing about calling Update from inside an event callback
+            // (it is simply silent on cross-thread use), and there is no
+            // evidence this exact race explains the field reports'
+            // sdrplay_api_Fail - see
+            // scratchpad/bugs0928/sdrplay/mirics-windex.md for what the
+            // field reports' own failure point actually points to instead.
+            // What justifies moving it anyway is internal consistency: this
+            // codebase's whole SDRplay driver assumes nothing of ours enters
+            // that DLL except through one bounded, mutex-serialised path,
+            // and the event callback was the one place that did not follow
+            // its own rule. So only the TUNER is latched here;
+            // drainPendingOverloadAcks(), called from read() on the
+            // pipeline's source thread, issues the actual Update through
+            // ackOverloadLocked() - bounded, and serialised against every
+            // other control by devMutex_ (TRIED, never waited for, so
+            // read() cannot be held up behind a control already in flight).
             //
             // ADDRESSED TO THE TUNER THE SERVICE NAMED, which is the tuner the
             // overload is about. link.tuner is the one active at Init, and an
@@ -1198,11 +1605,14 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             // 0.99.34 an overload on Tuner 2 after such a swap was acknowledged
             // for Tuner 1, so the real one was never cleared. link.tuner is
             // only the fallback for a service that names neither tuner.
-            const abi::TunerSelectT ackTuner =
-                (tuner == abi::Tuner_A || tuner == abi::Tuner_B) ? tuner : link.tuner;
-            if (link.api != nullptr && link.api->Update != nullptr && link.dev != nullptr) {
-                link.api->Update(link.dev, ackTuner, abi::Update_Ctrl_OverloadMsgAck,
-                                 abi::Update_Ext1_None);
+            {
+                const abi::TunerSelectT ackTuner =
+                    (tuner == abi::Tuner_A || tuner == abi::Tuner_B) ? tuner : link.tuner;
+                if (ackTuner == abi::Tuner_B) {
+                    link.pendingOverloadAckB.store(true, std::memory_order_release);
+                } else {
+                    link.pendingOverloadAckA.store(true, std::memory_order_release);
+                }
             }
             break;
         }
@@ -1239,9 +1649,10 @@ abi::RxChannelParamsT* SdrPlaySource::chParamsLocked() const {
     return (device_.tuner == abi::Tuner_B) ? deviceParams_->rxChannelB : deviceParams_->rxChannelA;
 }
 
-bool SdrPlaySource::acquireSessionLocked(std::string& error) {
+bool SdrPlaySource::acquireSessionLocked(std::string& error, std::string* serviceAdvice) {
+    if (serviceAdvice != nullptr) { serviceAdvice->clear(); }
     if (sessionHeld_) { return true; }
-    if (!sessionAcquire(api(), error)) { return false; }
+    if (!sessionAcquire(api(), error, serviceAdvice)) { return false; }
     sessionHeld_ = true;
     float ver = 0.0f;
     {
@@ -1338,7 +1749,37 @@ bool SdrPlaySource::selectByArgsLocked(const std::string& args) {
         device_.rspDuoSampleFreq = 0.0;
     } else {
         device_.rspDuoMode = abi::RspDuoMode_Unknown;
-        device_.tuner = abi::Tuner_Neither;
+        // A SINGLE-TUNER RSP HAS ONE TUNER, AND IT IS TUNER A (the 0.99.59
+        // RSPdx-R2 report). Through 0.99.60 this said Tuner_Neither, and
+        // updateLocked() puts device_.tuner into the `tuner` argument of EVERY
+        // sdrplay_api_Update - so every live control of every model but the
+        // RSPduo asked the service to apply a change to NO tuner. The report's
+        // log line shows it ("tuner 0"), followed by a first control that was
+        // never answered and a service found stopped.
+        //
+        // The vendor's own code never does this for a single-tuner model: the
+        // example program in the SDRplay API Specification 3.15 (section 4,
+        // pp34-36) assigns `tuner` and `rspDuoMode` only for an RSPduo, selects
+        // every other device exactly as sdrplay_api_GetDevices listed it and
+        // passes `chosenDevice->tuner` to every sdrplay_api_Update; SDRplay's
+        // RSPdxR2 ExtIO and SoapySDRPlay3 do the same, and the ExtIO chooses
+        // rxChannelA by `tuner == sdrplay_api_Tuner_A`. The specification
+        // calls the field the tuner "to be used" (sdrplay_api_DeviceT) and the
+        // Update argument the tuner "to apply the update to"; Tuner_Neither is
+        // neither.
+        //
+        // The listed value is kept when it is Tuner_A - which is what the
+        // vendor's own clients are handed - and Tuner_A is used when the
+        // service lists anything else, which for a model with one tuner can
+        // only mean "the one there is". What the service said is logged when
+        // it was not Tuner_A, so a field log shows which of the two this was.
+        if (device_.tuner != abi::Tuner_A) {
+            core::diagLogf(
+                "source: SDRplay listed tuner %d for a single-tuner RSP - using Tuner A, the "
+                "only tuner it has",
+                static_cast<int>(device_.tuner));
+            device_.tuner = abi::Tuner_A;
+        }
     }
 
     const abi::ErrT serr = a.SelectDevice(&device_);
@@ -1454,9 +1895,23 @@ bool SdrPlaySource::open(const std::string& args) {
     streamStalled_.store(false, std::memory_order_release);
 
     std::string error;
-    if (!acquireSessionLocked(error)) {
-        setError(error);
-        core::diagWarnf("source: SDRplay open failed - %s", error.c_str());
+    std::string serviceAdvice;
+    if (!acquireSessionLocked(error, &serviceAdvice)) {
+        // The panel gets the service's state as well (0.99.55); the log line
+        // below keeps the driver's own sentence, and the state is logged on a
+        // line of its own, once per change (noteSdrPlayServiceStatus).
+        setError(serviceAdvice.empty() ? error : (error + " " + serviceAdvice));
+        if (error == sdrPlaySessionLostSentence()) {
+            // SHORTER THAN THE SENTENCE, as start()'s refusal is (0.99.44,
+            // GitHub issue 5): prefixed, the sentence is wider than a log line
+            // (DiagLog::kLineBytes), and the 0.99.43 report's copy of it ended
+            // "...until it is restarted - restart " - the instruction cut off.
+            // The panel still gets the whole sentence through lastError().
+            core::diagWarnf("source: SDRplay open refused - the SDRplay session was lost earlier; "
+                            "restart the SDRplay API service, then FoxSDR");
+        } else {
+            core::diagWarnf("source: SDRplay open failed - %s", error.c_str());
+        }
         return false;
     }
 
@@ -1500,11 +1955,18 @@ bool SdrPlaySource::open(const std::string& args) {
 void SdrPlaySource::closeDevice() {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (initialised_) { stopStreamingLocked(); }
+    // Never pending past a stop; said anyway, so a close can never leave a
+    // worker's grace running on a device that no longer exists (0.99.50).
+    reapLateControlLocked();
+    giveUpLateControlLocked("the radio was closed while a control was still inside "
+                            "sdrplay_api_Update");
     // THE SAME RULE AS THE TEARDOWN ABOVE, AND FOR THE SAME REASON:
     // sdrplay_api_ReleaseDevice and sdrplay_api_Close are two more calls into
     // a DLL that is holding a thread of ours, and the 0.96.4 stack is what one
     // such call looks like from the outside.
-    const bool unreachable = vendorUnreachableLocked();
+    // The wider question (0.99.44): a session another radio lost is as
+    // finished for this one's ReleaseDevice and Close as its own would be.
+    const bool unreachable = teardownMustSkipVendorLocked();
     if (selected_) {
         const abi::Api& a = api();
         if (unreachable) {
@@ -1565,6 +2027,15 @@ bool SdrPlaySource::startStreamingLocked() {
     link_->streamStartNs.store(0, std::memory_order_relaxed);
     link_->emptySinceNs.store(0, std::memory_order_relaxed);
     link_->lastEmptyReadNs.store(0, std::memory_order_relaxed);
+    // A STALE ACK MUST NOT SURVIVE INTO A NEW SESSION (round 3, measured): an
+    // overload that fired and was never drained (no read() between it and
+    // stop()) left these flags set, and the very first read() of the NEXT
+    // start() sent an acknowledgement for an overload that never happened
+    // this time. Harmless to the service (an extra OverloadMsgAck with
+    // nothing overloaded is a no-op there), but a spurious vendor call this
+    // driver's whole design tries to avoid making without a reason.
+    link_->pendingOverloadAckA.store(false, std::memory_order_relaxed);
+    link_->pendingOverloadAckB.store(false, std::memory_order_relaxed);
 
     abi::CallbackFnsT cbs{};
     cbs.StreamACbFn = &SdrPlaySource::streamCallbackA;
@@ -1584,6 +2055,10 @@ bool SdrPlaySource::startStreamingLocked() {
     }
     // A service that never delivers a first block is caught from here.
     link_->streamStartNs.store(steadyNowNs(), std::memory_order_relaxed);
+    // What the health window will hold the delivered rate to (0.99.44).
+    link_->rateChangedInWindow.store(false, std::memory_order_relaxed);
+    link_->setRateHz.store(sampleRateHz_.load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
     initialised_ = true;
     running_.store(true, std::memory_order_relaxed);
     return true;
@@ -1593,6 +2068,14 @@ void SdrPlaySource::stopStreamingLocked() {
     // Whatever the event callback left unlogged goes in before the stop's own
     // lines, in the order it happened.
     drainEventLogs(*link_);
+    // A LATE ANSWER THAT HAS ARRIVED gives the radio back and this is an
+    // ordinary stop; one still awaited is given up here, because the Uninit
+    // below would queue behind the worker (the 0.96.4 hang report) - and the
+    // unreachable branch then strands the Link exactly as after an
+    // abandonment (0.99.50).
+    reapLateControlLocked();
+    giveUpLateControlLocked("the radio was stopped while a control was still inside "
+                            "sdrplay_api_Update");
     if (!initialised_) {
         link_->accepting.store(false, std::memory_order_relaxed);
         running_.store(false, std::memory_order_relaxed);
@@ -1618,31 +2101,82 @@ void SdrPlaySource::stopStreamingLocked() {
     // a callback that arrives drops its block, the Link is STRANDED, the
     // device handle stays in it for the thread that may still be inside, and
     // this returns. See the file header for what that costs.
-    if (vendorUnreachableLocked()) {
+    // ...AND NOR DOES ONE WHOSE SESSION ANOTHER RADIO HAS LOST (0.99.44): see
+    // teardownMustSkipVendorLocked.
+    if (teardownMustSkipVendorLocked()) {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
+        // The tail is kept short enough for the longest reason to fit a log
+        // line (DiagLog::kLineBytes): "...left to the worker still inside the
+        // API; this process cannot use it again" cut the abandoned-control
+        // variant off by four bytes.
         core::diagWarnf(
-            "source: SDRplay stopped without Uninit - %s, so the radio is left to the worker "
-            "still inside the API; this process cannot use it again",
+            "source: SDRplay stopped without Uninit - %s; this process cannot use the radio "
+            "again",
             controlAbandoned_ ? "a control was abandoned inside the vendor DLL"
             : streamStalled_.load(std::memory_order_acquire)
                 ? "the stream stopped delivering samples"
-                : "the service stopped answering");
+            : serviceGone_ ? "the service stopped answering"
+                           : "the SDRplay session was lost by another radio");
         strandLink(link_);
         std::string line;
+        std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            line = healthLineLocked(*link_);
+            line = healthLineLocked(*link_, &rateWarning);
         }
         if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+        if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
     }
 
-    // UNBOUNDED BY CONSTRUCTION. sdrplay_api_Uninit takes no timeout and
-    // offers no cancellation; the API's contract is that it returns with the
-    // callbacks stopped. There is no argument we can pass to shorten it and no
-    // handle we can close to interrupt it.
-    const abi::ErrT err = a.Uninit(device_.dev);
+    // BOUNDED THE SAME WAY EVERY OTHER LIVE CALL INTO THIS VENDOR DLL IS
+    // (updateLocked, ackOverloadLocked): sdrplay_api_Uninit takes no timeout
+    // and offers no cancellation of its own, so ours is on the WAIT, not the
+    // call - run on a worker and abandoned at kControlWait, exactly like
+    // sdrplay_api_Update. The 2026-09-28 RSP2 report is this call blocking
+    // the GUI thread for about ten seconds before answering
+    // sdrplay_api_ServiceNotResponding: every other vendor call this driver
+    // makes was already held to kControlWait, and this was the one still made
+    // directly.
+    auto stopResult = std::make_shared<std::promise<abi::ErrT>>();
+    std::future<abi::ErrT> stopDone = stopResult->get_future();
+    const abi::Api* const stopTable = &a;
+    void* const stopDev = device_.dev;
+    std::thread stopWorker(
+        [stopTable, stopResult, stopDev]() { stopResult->set_value(stopTable->Uninit(stopDev)); });
+
+    if (stopDone.wait_for(kControlWait) != std::future_status::ready) {
+        // ABANDONED, exactly as updateLocked: a thread of ours is inside the
+        // vendor DLL for good, so treat the whole session as gone rather than
+        // wait on it further. There is no handle we can close to bring it
+        // back, and the Link is stranded for whatever is still inside -
+        // nothing has told the service to stop calling our callbacks.
+        stopWorker.detach();
+        controlAbandoned_ = true;
+        markSessionLost(a, "a worker was abandoned inside sdrplay_api_Uninit");
+        core::diagWarnf(
+            "source: SDRplay stop abandoned - the service did not answer within %lld ms; the "
+            "radio is released",
+            static_cast<long long>(kControlWait.count()));
+        link_->accepting.store(false, std::memory_order_relaxed);
+        strandLink(link_);
+        initialised_ = false;
+        running_.store(false, std::memory_order_relaxed);
+        std::string abandonedLine;
+        std::string abandonedRateWarning;
+        {
+            std::lock_guard<std::mutex> hl(link_->healthMutex);
+            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning);
+        }
+        if (!abandonedLine.empty()) { core::diagLogf("%s", abandonedLine.c_str()); }
+        if (!abandonedRateWarning.empty()) { core::diagWarnf("%s", abandonedRateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
+        return;
+    }
+    stopWorker.join();
+    const abi::ErrT err = stopDone.get();
     if (err != abi::Success && err != abi::NotInitialised) {
         core::diagWarnf("source: SDRplay Uninit failed - %s", errText(a, err).c_str());
         // THE SAME RULE updateLocked ALREADY FOLLOWS FOR ITS OWN FAILURES
@@ -1684,11 +2218,16 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string refusedLine;
+        std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            refusedLine = healthLineLocked(*link_);
+            refusedLine = healthLineLocked(*link_, &rateWarning);
         }
         if (!refusedLine.empty()) { core::diagLogf("%s", refusedLine.c_str()); }
+        // The 0.99.43 report's own window would have said it here: 168956928
+        // samples in the 28.2 s before the stall, against 2 MS/s set.
+        if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
+        link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
     }
     initialised_ = false;
@@ -1718,11 +2257,14 @@ void SdrPlaySource::stopStreamingLocked() {
     // The stream-health line for whatever the window holds, so a session that
     // was too short to trip the window still leaves its numbers.
     std::string line;
+    std::string rateWarning;
     {
         std::lock_guard<std::mutex> hl(link_->healthMutex);
-        line = healthLineLocked(*link_);
+        line = healthLineLocked(*link_, &rateWarning);
     }
     if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+    if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
+    link_->setRateHz.store(0.0, std::memory_order_relaxed);
 }
 
 bool SdrPlaySource::start() {
@@ -1773,6 +2315,20 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
     // here, on the pipeline's source thread, whose lateness the ring absorbs.
     drainEventLogs(*link_);
     maybeWriteHealth(*link_);
+    // A control waiting for a late answer (0.99.50): acted on from here as
+    // well as from the next control, so a user who touches nothing still gets
+    // the radio back - or the fault - when it is due.
+    drainLateControl();
+    // ...AND THE OVERLOAD ACKNOWLEDGEMENT ITSELF (2026-09-28): also not the
+    // service thread's to send - see eventCallback's PowerOverloadChange
+    // case. This takes devMutex_ (the common case, no ack pending, is two
+    // relaxed atomic loads and nothing else), so it runs after the lock-free
+    // ring read below would rather than before, except that an ack must not
+    // wait behind a slow ring read either - ordering here does not matter to
+    // correctness (the flags persist until drained), so it goes first,
+    // beside the other two things the service's callbacks left for this
+    // thread to finish.
+    drainPendingOverloadAcks();
     std::size_t got = link_->ring.read(dst, n);
     if (got > 0) {
         link_->emptySinceNs.store(0, std::memory_order_relaxed);  // the empty run is over
@@ -1802,6 +2358,271 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
 
 // --- updates --------------------------------------------------------------
 
+// --- the late answer (kControlGrace, 0.99.50) -----------------------------
+
+struct SdrPlaySource::LateControl {
+    std::future<ControlAnswer> answer;
+    std::string what;
+    abi::ReasonForUpdateT reason = abi::Update_None;
+    abi::ReasonForUpdateExt1T ext1 = abi::Update_Ext1_None;
+    std::int64_t issuedNs = 0;
+    const abi::Api* table = nullptr;
+    // The setter's BlockRollback, handed over by undoRefusedLocked: applied
+    // on a late REFUSAL, discarded on a late success or a give-up.
+    std::function<void()> undo;
+};
+
+void SdrPlaySource::beginLateControlLocked(std::shared_ptr<LateControl> late) {
+    // controlAbandoned_ is what keeps every other call of ours out of the DLL
+    // while the worker is in it: every setter, start(), the teardown and the
+    // overload acknowledgement already refuse on it. The grace does not
+    // loosen that rule; it only stops treating "not yet" as "never".
+    controlAbandoned_ = true;
+    const abi::Api* table = late->table;
+    const std::string what = late->what;
+    lateControl_ = std::move(late);
+    lateControlPending_.store(true, std::memory_order_release);
+    if (table != nullptr) {
+        std::lock_guard<std::mutex> lk(table->sessionMutex);
+        ++table->controlsInFlight;
+    }
+    const long long grace = controlGraceMs_.load(std::memory_order_relaxed);
+    setError(what + " not confirmed yet: " + sdrPlayControlPendingSentence());
+    if (grace > kControlWait.count()) {
+        core::diagWarnf(
+            "source: SDRplay %s not answered within %lld ms - waiting up to %lld ms in all for "
+            "the service; other controls are held until it answers",
+            what.c_str(), static_cast<long long>(kControlWait.count()), grace);
+    }
+    // THE ONE FACT THE 0.99.46 REPORT COULD NOT SETTLE, recorded where it
+    // happens: whether an ADC overload was waiting to be acknowledged behind
+    // this control. The acknowledgement is deferred while devMutex_ is held
+    // (drainPendingOverloadAcks), so if the service were to finish nothing
+    // until an overload is acknowledged - which the specification neither
+    // says nor rules out - the two would wait on each other until the grace
+    // ran out. One line decides it in the next report.
+    const bool ackWaiting = link_->pendingOverloadAckA.load(std::memory_order_acquire) ||
+                            link_->pendingOverloadAckB.load(std::memory_order_acquire);
+    const unsigned long long overloads = link_->overloads.load(std::memory_order_relaxed);
+    if (ackWaiting || overloads > 0) {
+        core::diagLogf("source: SDRplay %llu ADC overload event(s) so far; an acknowledgement is %s",
+                       overloads, ackWaiting ? "waiting behind this control" : "not waiting");
+    }
+    // A grace no longer than the caller's own wait (a test's zero) gives up
+    // here and now - the pre-0.99.50 behaviour, through the same path.
+    reapLateControlLocked();
+}
+
+void SdrPlaySource::endLateControlLocked() {
+    if (!lateControl_) { return; }
+    const abi::Api* table = lateControl_->table;
+    if (table != nullptr) {
+        std::lock_guard<std::mutex> lk(table->sessionMutex);
+        if (table->controlsInFlight > 0) { --table->controlsInFlight; }
+    }
+    lateControl_.reset();
+    lateControlPending_.store(false, std::memory_order_release);
+}
+
+void SdrPlaySource::giveUpLateControlLocked(const char* why) {
+    if (!lateControl_) { return; }
+    const bool graceRanOut = lateControlGraceRanOut_;
+    lateControlGraceRanOut_ = false;
+    const abi::Api* table = lateControl_->table;
+    const std::string what = lateControl_->what;
+    // controlAbandoned_ STAYS true: the worker is in the DLL for good as far
+    // as this process is concerned, and everything the file header says about
+    // an abandoned control now applies.
+    endLateControlLocked();
+    if (table != nullptr) { markSessionLost(*table, why); }
+    const long long grace =
+        std::max<long long>(controlGraceMs_.load(std::memory_order_relaxed), kControlWait.count());
+    noteFaultOn(*link_, what.c_str(), sdrPlayControlHungSentence());
+    if (graceRanOut) {
+        core::diagWarnf(
+            "source: SDRplay %s abandoned - the service did not answer within %lld ms; the radio "
+            "is released",
+            what.c_str(), grace);
+    } else {
+        core::diagWarnf(
+            "source: SDRplay %s still unanswered when the radio was stopped - it is given up; the "
+            "radio is released",
+            what.c_str());
+    }
+    core::diagLogf(
+        "source: SDRplay controls are refused for this device from here - a worker is still "
+        "inside sdrplay_api_Update");
+}
+
+void SdrPlaySource::reapLateControlLocked() {
+    if (!lateControl_) { return; }
+    LateControl& late = *lateControl_;
+    const std::int64_t now = steadyNowNsForControl();
+
+    if (late.answer.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+        const std::int64_t graceNs =
+            controlGraceMs_.load(std::memory_order_relaxed) * 1000000LL;
+        if (now - late.issuedNs >= graceNs) {
+            lateControlGraceRanOut_ = true;
+            giveUpLateControlLocked("a control was abandoned inside sdrplay_api_Update");
+        }
+        return;
+    }
+
+    // THE ANSWER ARRIVED. The worker has left the DLL, so the block is ours
+    // to write again and a vendor call no longer queues behind anything.
+    const ControlAnswer answer = late.answer.get();
+    const std::string what = late.what;
+    const abi::ReasonForUpdateT reason = late.reason;
+    const abi::ReasonForUpdateExt1T ext1 = late.ext1;
+    std::function<void()> undo = std::move(late.undo);
+    const long long lateMs = (answer.returnedNs > late.issuedNs)
+                                 ? static_cast<long long>((answer.returnedNs - late.issuedNs) / 1000000)
+                                 : 0LL;
+    const abi::Api& a = api();
+    endLateControlLocked();
+    controlAbandoned_ = false;
+    core::diagWarnf("source: SDRplay %s answered after %lld ms - %s", what.c_str(), lateMs,
+                    errText(a, answer.err).c_str());
+
+    if (answer.err == abi::Success) {
+        syncMirrorsAfterLateSuccessLocked(reason, ext1);
+        // The stall clock starts again from here: a control that stopped and
+        // restarted the stream was silent by design (see kControlGrace).
+        link_->emptySinceNs.store(0, std::memory_order_relaxed);
+        link_->lastEmptyReadNs.store(0, std::memory_order_relaxed);
+        if (initialised_) { link_->streamStartNs.store(now, std::memory_order_relaxed); }
+        bool faultedNow = false;
+        {
+            std::lock_guard<std::mutex> ek(link_->errorMutex);
+            faultedNow = link_->faulted;
+            if (!faultedNow) { link_->lastError.clear(); }
+        }
+        core::diagLogf("source: SDRplay %s took effect late; the radio is usable again",
+                       what.c_str());
+        return;
+    }
+    // A LATE sdrplay_api_ServiceNotResponding is a service that took its time
+    // to say it is gone. Named as that, not as a hang.
+    if (noteIfServiceDead(answer.err, what.c_str())) { return; }
+    // ANY OTHER LATE REFUSAL: the service is alive and said no. The call is
+    // over, so the block is put back to where the radio is, as a prompt
+    // refusal's is, and the radio is kept.
+    if (undo) { undo(); }
+    setError(what + " failed: " + errText(a, answer.err));
+}
+
+void SdrPlaySource::undoRefusedLocked(std::function<void()> undo) {
+    // A WORKER OF OURS MAY STILL BE READING THE BLOCK: the change it carries
+    // stays where it is, and the undo waits for its answer.
+    if (lateControl_) {
+        if (!lateControl_->undo) { lateControl_->undo = std::move(undo); }
+        return;
+    }
+    // ...AND AFTER A GIVE-UP, nothing: the device is dead for good and nothing
+    // will be sent for it again, so the fields that control was sent with are
+    // left as they are rather than written under that thread. Every setter's
+    // first line is refuseIfVendorUnreachableLocked, ahead of any write, so
+    // from then on the block really is left alone.
+    if (controlAbandoned_) { return; }
+    if (undo) { undo(); }
+}
+
+void SdrPlaySource::syncMirrorsAfterLateSuccessLocked(abi::ReasonForUpdateT reason,
+                                                     abi::ReasonForUpdateExt1T ext1) {
+    abi::RxChannelParamsT* ch = chParamsLocked();
+    abi::DevParamsT* dp = (deviceParams_ != nullptr) ? deviceParams_->devParams : nullptr;
+    if (ch == nullptr) { return; }
+    const auto has = [reason](abi::ReasonForUpdateT r) { return (reason & r) != 0; };
+    const auto hasExt = [ext1](abi::ReasonForUpdateExt1T r) { return (ext1 & r) != 0; };
+
+    if (has(abi::Update_Tuner_Frf)) {
+        centerFrequencyHz_.store(ch->tunerParams.rfFreq.rfHz, std::memory_order_relaxed);
+    }
+    if (has(abi::Update_Tuner_Gr)) {
+        lnaState_.store(ch->tunerParams.gain.LNAstate, std::memory_order_relaxed);
+        if (!autoGain_.load(std::memory_order_relaxed)) {
+            ifReductionDb_.store(ch->tunerParams.gain.gRdB, std::memory_order_relaxed);
+        }
+    }
+    if (has(abi::Update_Ctrl_Agc)) {
+        autoGain_.store(ch->ctrlParams.agc.enable != abi::AGC_DISABLE, std::memory_order_relaxed);
+        agcSetPoint_.store(ch->ctrlParams.agc.setPoint_dBfs, std::memory_order_relaxed);
+    }
+    if (dp != nullptr && (has(abi::Update_Dev_Fs) || has(abi::Update_Ctrl_Decimation))) {
+        const unsigned int m = ch->ctrlParams.decimation.enable != 0
+                                   ? std::max<unsigned int>(1u, ch->ctrlParams.decimation.decimationFactor)
+                                   : 1u;
+        const double out = dp->fsFreq.fsHz / static_cast<double>(m);
+        sampleRateHz_.store(out, std::memory_order_relaxed);
+        if (initialised_) {
+            link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
+            link_->setRateHz.store(out, std::memory_order_relaxed);
+        }
+    }
+    if (has(abi::Update_Rsp1a_BiasTControl)) {
+        biasT_.store(ch->rsp1aTunerParams.biasTEnable != 0, std::memory_order_relaxed);
+    }
+    if (has(abi::Update_Rsp2_BiasTControl)) {
+        biasT_.store(ch->rsp2TunerParams.biasTEnable != 0, std::memory_order_relaxed);
+    }
+    if (has(abi::Update_RspDuo_BiasTControl)) {
+        biasT_.store(ch->rspDuoTunerParams.biasTEnable != 0, std::memory_order_relaxed);
+    }
+    if (has(abi::Update_Rsp2_RfNotchControl)) {
+        rfNotch_.store(ch->rsp2TunerParams.rfNotchEnable != 0, std::memory_order_relaxed);
+    }
+    if (has(abi::Update_RspDuo_RfNotchControl)) {
+        rfNotch_.store(ch->rspDuoTunerParams.rfNotchEnable != 0, std::memory_order_relaxed);
+    }
+    if (has(abi::Update_RspDuo_RfDabNotchControl)) {
+        dabNotch_.store(ch->rspDuoTunerParams.rfDabNotchEnable != 0, std::memory_order_relaxed);
+    }
+    if (dp != nullptr) {
+        if (has(abi::Update_Rsp1a_RfNotchControl)) {
+            rfNotch_.store(dp->rsp1aParams.rfNotchEnable != 0, std::memory_order_relaxed);
+        }
+        if (has(abi::Update_Rsp1a_RfDabNotchControl)) {
+            dabNotch_.store(dp->rsp1aParams.rfDabNotchEnable != 0, std::memory_order_relaxed);
+        }
+        if (hasExt(abi::Update_RspDx_BiasTControl)) {
+            biasT_.store(dp->rspDxParams.biasTEnable != 0, std::memory_order_relaxed);
+        }
+        if (hasExt(abi::Update_RspDx_RfNotchControl)) {
+            rfNotch_.store(dp->rspDxParams.rfNotchEnable != 0, std::memory_order_relaxed);
+        }
+        if (hasExt(abi::Update_RspDx_RfDabNotchControl)) {
+            dabNotch_.store(dp->rspDxParams.rfDabNotchEnable != 0, std::memory_order_relaxed);
+        }
+        if (hasExt(abi::Update_RspDx_HdrEnable)) {
+            hdrMode_.store(dp->rspDxParams.hdrEnable != 0, std::memory_order_relaxed);
+        }
+        if (hasExt(abi::Update_RspDx_AntennaControl)) {
+            std::lock_guard<std::mutex> nlk(nameMutex_);
+            antenna_ = (dp->rspDxParams.antennaSel == abi::RspDx_ANTENNA_B)   ? "Antenna B"
+                       : (dp->rspDxParams.antennaSel == abi::RspDx_ANTENNA_C) ? "Antenna C"
+                                                                              : "Antenna A";
+        }
+    }
+    if (has(abi::Update_Rsp2_AntennaControl) || has(abi::Update_Rsp2_AmPortSelect)) {
+        std::lock_guard<std::mutex> nlk(nameMutex_);
+        antenna_ = (ch->rsp2TunerParams.amPortSel == abi::Rsp2_AMPORT_1) ? "Hi-Z"
+                   : (ch->rsp2TunerParams.antennaSel == abi::Rsp2_ANTENNA_B) ? "Antenna B"
+                                                                              : "Antenna A";
+    }
+}
+
+void SdrPlaySource::drainLateControl() {
+    if (!lateControlPending_.load(std::memory_order_acquire)) { return; }
+    // TRIED, never waited for - the rule drainPendingOverloadAcks and
+    // checkForStallFromRead already follow on this thread. While a control is
+    // waiting, every setter refuses at once, so the lock is free within a read
+    // or two.
+    std::unique_lock<std::mutex> lk(devMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return; }
+    reapLateControlLocked();
+}
+
 bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpdateExt1T ext1,
                                  const char* what) {
     if (reason == abi::Update_None && ext1 == abi::Update_Ext1_None) { return true; }
@@ -1816,7 +2637,8 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     // vendor DLL with no way to recall it, and a panel whose sliders keep
     // working would park one per click.
     if (controlAbandoned_) {
-        setError(std::string(what) + " refused: " + sdrPlayControlHungSentence());
+        setError(std::string(what) + " refused: " +
+                 (lateControl_ ? sdrPlayControlPendingSentence() : sdrPlayControlHungSentence()));
         return false;
     }
     // ...AND NEITHER DOES A STREAM THAT HAS BEEN DECLARED STALLED (0.99.36):
@@ -1851,41 +2673,41 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     // table itself is process-scope and never unloaded (and a test's fake
     // outlives the worker it abandons deliberately), but the local reference
     // naming it dies with this frame and an abandoned worker does not.
-    auto result = std::make_shared<std::promise<abi::ErrT>>();
-    std::future<abi::ErrT> done = result->get_future();
+    auto result = std::make_shared<std::promise<ControlAnswer>>();
+    std::future<ControlAnswer> done = result->get_future();
     const abi::Api* const table = &a;
     void* const dev = device_.dev;
     const abi::TunerSelectT tuner = device_.tuner;
+    const std::int64_t issuedNs = steadyNowNsForControl();
     std::thread worker([table, result, dev, tuner, reason, ext1]() {
-        result->set_value(table->Update(dev, tuner, reason, ext1));
+        ControlAnswer answer;
+        answer.err = table->Update(dev, tuner, reason, ext1);
+        answer.returnedNs = steadyNowNsForControl();
+        result->set_value(answer);
     });
 
     if (done.wait_for(kControlWait) != std::future_status::ready) {
-        // ABANDONED. Not joined, not killed, not signalled: the thread is
+        // NOT ANSWERED IN THE CALLER'S BUDGET - AND NOT YET GIVEN UP (0.99.50).
+        // Detached, not joined, not killed, not signalled: the thread is
         // inside the vendor DLL and there is no handle we can close to bring
         // it back. It holds everything it needs, so it can finish - or not -
-        // harmlessly.
+        // harmlessly. What changed is that its answer is now LISTENED FOR, for
+        // up to kControlGrace: see beginLateControlLocked. Until then
+        // controlAbandoned_ keeps every other call of ours out of the DLL.
         worker.detach();
-        controlAbandoned_ = true;
-        // A thread of ours is inside the vendor DLL for good, so the process's
-        // session is finished too - not only this device's controls.
-        markSessionLost(a, "a control was abandoned inside sdrplay_api_Update");
-        // A DEAD RECEIVER, through the same path a returned
-        // ServiceNotResponding takes, so Pipeline's source thread latches the
-        // fault and stops rather than reading a service that is gone.
-        noteFaultOn(*link_, what, sdrPlayControlHungSentence());
-        core::diagWarnf(
-            "source: SDRplay %s abandoned - the service did not answer within %lld ms; the radio "
-            "is released",
-            what, static_cast<long long>(kControlWait.count()));
-        core::diagLogf(
-            "source: SDRplay controls are refused for this device from here - a worker is still "
-            "inside sdrplay_api_Update");
+        auto late = std::make_shared<LateControl>();
+        late->answer = std::move(done);
+        late->what = what;
+        late->reason = reason;
+        late->ext1 = ext1;
+        late->issuedNs = issuedNs;
+        late->table = table;
+        beginLateControlLocked(std::move(late));
         return false;
     }
 
     worker.join();
-    const abi::ErrT err = done.get();
+    const abi::ErrT err = done.get().err;
     if (err != abi::Success) {
         setError(std::string(what) + " failed: " + errText(a, err));
         core::diagWarnf("source: SDRplay %s failed - %s", what, errText(a, err).c_str());
@@ -1918,6 +2740,100 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     core::diagWarnf("source: SDRplay %s - no acknowledgement within %lld ms", what,
                     static_cast<long long>(kUpdateWait.count()));
     return true;
+}
+
+// THE OVERLOAD ACKNOWLEDGEMENT'S OWN BOUNDED CALL (the repair-round review,
+// 2026-09-28). Structurally the same worker-and-timeout shape as
+// updateLocked immediately above - a thread of ours must never sit inside
+// sdrplay_api_Update unbounded, whichever caller sent it there - but kept
+// separate rather than folded into updateLocked because it takes an
+// EXPLICIT tuner (an RSPduo's overload names its own tuner, independent of
+// device_.tuner - the 0.99.34 fix) and there is no acknowledgement flag to
+// wait for afterwards: OverloadMsgAck sets none of grChanged/rfChanged/
+// fsChanged, so updateLocked's tail would just spin until kUpdateWait for
+// nothing. Silent on the ordinary refusal paths (not initialised, already
+// abandoned, already stalled) rather than calling setError: this runs off
+// the service's own event, not a user action, and overwriting whatever
+// error the panel is already showing with "overload acknowledgement
+// refused" would only be noise on a device already known to be in trouble.
+void SdrPlaySource::ackOverloadLocked(abi::TunerSelectT tuner) {
+    if (!initialised_) { return; }
+    if (controlAbandoned_ || streamStalled_.load(std::memory_order_acquire)) { return; }
+    // Nor into a service that has answered (14), this radio's or another's
+    // (0.99.44): an acknowledgement is a vendor call like any other.
+    if (teardownMustSkipVendorLocked()) { return; }
+
+    const abi::Api& a = api();
+    auto result = std::make_shared<std::promise<ControlAnswer>>();
+    std::future<ControlAnswer> done = result->get_future();
+    const abi::Api* const table = &a;
+    void* const dev = device_.dev;
+    const std::int64_t issuedNs = steadyNowNsForControl();
+    std::thread worker([table, result, dev, tuner]() {
+        ControlAnswer answer;
+        answer.err =
+            table->Update(dev, tuner, abi::Update_Ctrl_OverloadMsgAck, abi::Update_Ext1_None);
+        answer.returnedNs = steadyNowNsForControl();
+        result->set_value(answer);
+    });
+
+    if (done.wait_for(kControlWait) != std::future_status::ready) {
+        // NOT ANSWERED IN kControlWait, exactly as updateLocked, and treated
+        // the same way since 0.99.50: listened for until kControlGrace, and
+        // only then given up.
+        worker.detach();
+        auto late = std::make_shared<LateControl>();
+        late->answer = std::move(done);
+        late->what = "overload acknowledgement";
+        late->reason = abi::Update_Ctrl_OverloadMsgAck;
+        late->ext1 = abi::Update_Ext1_None;
+        late->issuedNs = issuedNs;
+        late->table = table;
+        beginLateControlLocked(std::move(late));
+        return;
+    }
+
+    worker.join();
+    const abi::ErrT err = done.get().err;
+    if (err != abi::Success) {
+        core::diagWarnf("source: SDRplay overload acknowledgement failed - %s",
+                        errText(a, err).c_str());
+        noteIfServiceDead(err, "overload acknowledgement");
+    }
+}
+
+void SdrPlaySource::drainPendingOverloadAcks() {
+    // Read without the lock first - the common case (no overload pending) is
+    // then two relaxed loads and nothing else, off the pipeline's source
+    // thread on every single read() call.
+    const bool wantA = link_->pendingOverloadAckA.load(std::memory_order_acquire);
+    const bool wantB = link_->pendingOverloadAckB.load(std::memory_order_acquire);
+    if (!wantA && !wantB) { return; }
+    // TRY, NEVER WAIT (round 3 of the same review - measured: a blocking
+    // lock here made read() take 2453 ms behind a single slow GUI-thread
+    // control, because devMutex_ is held for that control's WHOLE bounded
+    // wait, not just the vendor call itself). read() is the pipeline's
+    // source thread - the driver's own rule everywhere else in this file is
+    // that nothing on that thread waits on a GUI-thread control in flight
+    // (see checkForStallFromRead's comment), and an acknowledgement is no
+    // exception. If devMutex_ is busy, the flags are left set exactly as
+    // they were and retried on the NEXT read() - a few milliseconds later,
+    // not a correctness issue, since the service keeps re-reporting an
+    // un-acknowledged overload until it succeeds.
+    std::unique_lock<std::mutex> lk(devMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return; }
+    // WHILE A CONTROL IS WAITING FOR ITS LATE ANSWER (0.99.50) the flags are
+    // LEFT SET: the acknowledgement is a vendor call and is refused like any
+    // other then, and clearing the flag for a refused one would lose it for
+    // good. It goes out on the first read() after the radio is given back.
+    reapLateControlLocked();
+    if (lateControl_) { return; }
+    if (wantA && link_->pendingOverloadAckA.exchange(false, std::memory_order_acq_rel)) {
+        ackOverloadLocked(abi::Tuner_A);
+    }
+    if (wantB && link_->pendingOverloadAckB.exchange(false, std::memory_order_acq_rel)) {
+        ackOverloadLocked(abi::Tuner_B);
+    }
 }
 
 // --- frequency ------------------------------------------------------------
@@ -1969,7 +2885,7 @@ bool SdrPlaySource::setCenterFrequencyHz(double hz) {
     rb.save(ch->tunerParams.rfFreq.rfHz);
     ch->tunerParams.rfFreq.rfHz = hz;
     if (!updateLocked(abi::Update_Tuner_Frf, abi::Update_Ext1_None, "retune")) {
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
     centerFrequencyHz_.store(hz, std::memory_order_relaxed);
@@ -2043,10 +2959,14 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
     // be three separate disturbances to a live stream for what the API is
     // perfectly happy to do at once.
     if (!updateLocked(reason, abi::Update_Ext1_None, "sample rate change")) {
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
     sampleRateHz_.store(best, std::memory_order_relaxed);
+    if (initialised_) {
+        link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
+        link_->setRateHz.store(best, std::memory_order_relaxed);
+    }
     return true;
 }
 
@@ -2096,7 +3016,7 @@ bool SdrPlaySource::setGainDb(const std::string& name, double db) {
             rb.save(ch->tunerParams.gain.gRdB);
             ch->tunerParams.gain.gRdB = reduction;
             if (!updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "IF gain change")) {
-                undoRefused(rb, controlAbandoned_);
+                undoRefusedLocked(rb.take());
                 return false;
             }
         }
@@ -2112,7 +3032,7 @@ bool SdrPlaySource::setGainDb(const std::string& name, double db) {
             rb.save(ch->tunerParams.gain.LNAstate);
             ch->tunerParams.gain.LNAstate = static_cast<unsigned char>(state);
             if (!updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "LNA state change")) {
-                undoRefused(rb, controlAbandoned_);
+                undoRefusedLocked(rb.take());
                 return false;
             }
         }
@@ -2140,7 +3060,7 @@ bool SdrPlaySource::setAutoGain(bool on) {
         ch->ctrlParams.agc.enable = want;
         ch->ctrlParams.agc.setPoint_dBfs = agcSetPoint_.load(std::memory_order_relaxed);
         if (!updateLocked(abi::Update_Ctrl_Agc, abi::Update_Ext1_None, "AGC change")) {
-            undoRefused(rb, controlAbandoned_);
+            undoRefusedLocked(rb.take());
             return false;
         }
     }
@@ -2155,7 +3075,7 @@ bool SdrPlaySource::setAutoGain(bool on) {
         rb.save(ch->tunerParams.gain.gRdB);
         ch->tunerParams.gain.gRdB = ifReductionDb_.load(std::memory_order_relaxed);
         if (!updateLocked(abi::Update_Tuner_Gr, abi::Update_Ext1_None, "IF gain restore")) {
-            undoRefused(rb, controlAbandoned_);
+            undoRefusedLocked(rb.take());
             // HALF OF THIS WAS TAKEN (the review of 6e308c3). The AGC is off -
             // that Update was accepted, and autoGain() says so - but the radio
             // kept the reduction the loop left, so gainDb("IF") reports THAT
@@ -2183,7 +3103,7 @@ bool SdrPlaySource::setAgcSetPointDbfs(int dbfs) {
     if (autoGain_.load(std::memory_order_relaxed) &&
         !updateLocked(abi::Update_Ctrl_Agc, abi::Update_Ext1_None, "AGC set point change")) {
         // The mirror is written only once the radio took it (0.99.36).
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
     agcSetPoint_.store(clamped, std::memory_order_relaxed);
@@ -2279,7 +3199,7 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
         // The RSPdx's controls are ALL in the extension-1 word, which is why
         // this is the one Update in the driver whose first reason is None.
         if (!updateLocked(abi::Update_None, abi::Update_RspDx_AntennaControl, "antenna change")) {
-            undoRefused(rb, controlAbandoned_);
+            undoRefusedLocked(rb.take());
             return false;
         }
     } else if (hw == abi::kRsp2) {
@@ -2289,7 +3209,7 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
             ch->rsp2TunerParams.amPortSel = abi::Rsp2_AMPORT_1;
             if (!updateLocked(abi::Update_Rsp2_AmPortSelect, abi::Update_Ext1_None,
                               "antenna change")) {
-                undoRefused(rb, controlAbandoned_);
+                undoRefusedLocked(rb.take());
                 return false;
             }
         } else {
@@ -2302,7 +3222,7 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
                 ch->rsp2TunerParams.amPortSel = abi::Rsp2_AMPORT_2;
                 if (!updateLocked(abi::Update_Rsp2_AmPortSelect, abi::Update_Ext1_None,
                                   "antenna change")) {
-                    undoRefused(rbPort, controlAbandoned_);
+                    undoRefusedLocked(rbPort.take());
                     return false;
                 }
                 cameOffHiZ = true;
@@ -2316,7 +3236,7 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
                 (name == "Antenna B") ? abi::Rsp2_ANTENNA_B : abi::Rsp2_ANTENNA_A;
             if (!updateLocked(abi::Update_Rsp2_AntennaControl, abi::Update_Ext1_None,
                               "antenna change")) {
-                undoRefused(rb, controlAbandoned_);
+                undoRefusedLocked(rb.take());
                 if (cameOffHiZ) {
                     // ...AND THE RADIO IS NO LONGER ON Hi-Z (the review of
                     // 6e308c3): it is on port 2 with the switch where it was,
@@ -2425,7 +3345,7 @@ bool SdrPlaySource::setBiasT(bool on) {
             return false;
     }
     if (!updateLocked(reason, ext1, "bias tee change")) {
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
     biasT_.store(on, std::memory_order_relaxed);
@@ -2498,7 +3418,7 @@ bool SdrPlaySource::setRfNotch(bool on) {
             return false;
     }
     if (!updateLocked(reason, ext1, "FM notch change")) {
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
     rfNotch_.store(on, std::memory_order_relaxed);
@@ -2563,7 +3483,7 @@ bool SdrPlaySource::setDabNotch(bool on) {
             return false;
     }
     if (!updateLocked(reason, ext1, "DAB notch change")) {
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
     dabNotch_.store(on, std::memory_order_relaxed);
@@ -2590,7 +3510,7 @@ bool SdrPlaySource::setHdrMode(bool on) {
     rb.save(deviceParams_->devParams->rspDxParams.hdrEnable);
     deviceParams_->devParams->rspDxParams.hdrEnable = on ? 1 : 0;
     if (!updateLocked(abi::Update_None, abi::Update_RspDx_HdrEnable, "HDR mode change")) {
-        undoRefused(rb, controlAbandoned_);
+        undoRefusedLocked(rb.take());
         return false;
     }
 
@@ -2643,6 +3563,11 @@ void SdrPlaySource::checkForStallFromRead() {
     // vendorUnreachableLocked() as an atomic too.
     if (!link_->accepting.load(std::memory_order_relaxed)) { return; }
     if (streamStalled_.load(std::memory_order_acquire)) { return; }
+    // A CONTROL IS WAITING FOR ITS ANSWER (0.99.50): the specification says an
+    // Update may stop the stream, change the values and start it again, so
+    // silence now is not evidence of a dead service. kControlGrace bounds it
+    // instead, and the clocks restart when the answer comes.
+    if (lateControlPending_.load(std::memory_order_acquire)) { return; }
     const std::int64_t start = link_->streamStartNs.load(std::memory_order_relaxed);
     if (start == 0) { return; }
     const std::int64_t now = steadyNowNs();

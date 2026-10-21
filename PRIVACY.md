@@ -20,6 +20,18 @@ version - which is shown to you in the application, so you can decide whether
 an update is worth the interruption rather than being told only that one
 exists.
 
+**The answer may also carry a short message from the FoxSDR team** (since
+0.99.79): a few lines written when something is wrong with the software or the
+service, which the application shows at the top of its menu column whether or
+not there is an update, until you press **Seen**. **Nothing new is sent to
+receive it** - the request above is unchanged, one line with the version
+running. The ids of the messages you have marked Seen are kept in your
+`config.json`, on this computer, so that a message does not come back; they are
+never sent anywhere, and the service cannot tell which messages anyone has
+read. An id for a message the service has stopped sending is forgotten at the
+next check. With the update check switched off nothing is asked and no message
+is shown, and a copy from the Microsoft Store never receives one.
+
 **Nothing is downloaded or installed unless you press the button.** When you
 do, the installer is fetched over https and its SHA-256 is checked against the
 digest the server published *before* the file is given a name anything could
@@ -27,6 +39,21 @@ run. A download that does not match is deleted.
 
 Turn it off under **Settings -> Updates**. With it off the application never
 contacts the update service, and never learns that a new version exists.
+
+**A copy installed from the Microsoft Store asks the Microsoft Store instead,
+never foxsdr.com** (since 0.99.53). Once per launch, when **Settings ->
+Updates -> Ask the Microsoft Store for updates at startup** is ticked, FoxSDR
+asks Windows' own Store service
+(`Windows.Services.Store.StoreContext.GetAppAndOptionalStorePackageUpdatesAsync`)
+whether it has a newer package for this copy. Nothing of FoxSDR's is sent in
+that request - no version string, no identifier, nothing: Windows identifies
+the app to Microsoft by the package identity it already holds, as it does for
+the Store's own background updates. The answer (whether an update exists, and
+whether it is marked mandatory) stays in the application. Nothing is
+downloaded or installed unless you press **Install from the Microsoft Store**
+*and* confirm the dialog Windows shows; the download and install are then
+Microsoft's, under Microsoft's privacy statement. Untick the box and the
+Store is not asked.
 
 Why it defaults to on: version 0.55.0 fixed a fault that stopped every earlier
 build from detecting any radio at all. Of the 49 people who had downloaded one
@@ -44,29 +71,114 @@ exactly as many.
   every five minutes** — the install identifier, the version, and nothing
   else — so we can count how many copies are running at a given moment.
   It is governed by the same switch: reporting off means no beats, ever.
+- **Each usage report is sent once.** To remember that it has, FoxSDR leaves
+  an empty file named `telemetry-sent-` plus 16 hexadecimal characters beside
+  `config.json`. The characters are a checksum of the report already
+  described here; the file holds nothing, and the next report replaces it.
+  A second small file, `telemetry-stalls`, appears there only if the display
+  has frozen on you: it holds your install identifier and a count (see
+  **Display stalls, in full** below) and is removed when you turn reporting off.
+  A third, `telemetry-health` (since 0.99.64), holds your install identifier and
+  the failure counts that have not yet been sent (see **Failures that are not
+  crashes, in full** below) and is removed in the same way.
 - **No personal data is collected**, and no IP address or location is recorded.
 - **Crash and freeze reports are written to your machine, and — if you leave
   Diagnostics on — the report *text* is sent on the next start.** Not from
   inside the crash: the program that just failed cannot safely open a network
   connection, so the report waits on disk until the next time you open FoxSDR.
-  Exactly what it contains is listed field by field below. **A full memory dump
+  Exactly what it contains is listed field by field below. Since 0.99.69 that
+  includes the **file names** of other programs' components that are loaded into
+  FoxSDR - an overlay or a hook another program put there - never a folder or a
+  version; a file name can say that a piece of software is installed on your
+  computer, so it is stated here. **A full memory dump
   is never sent, under any setting**, and switching Diagnostics off stops the
   sending as completely as it stops the writing.
 - **Nothing about what you listen to is ever collected** — no frequencies, no
-  positions, no decoded messages. Not when reporting is on, not ever.
+  positions, no decoded messages. Not when reporting is on, not ever. This is
+  about FoxSDR's *own* reporting (usage, crash, feature and bug reports); a
+  fitted plugin is separate code with its own network access and its own
+  choices, and **Plugins and your receiver's position** below covers what one
+  can read and do with it.
 - **The update check is ON by default, and you can turn it off.** Once per
   launch the application asks foxsdr.com whether a newer version exists. It
   sends **the version you are running and nothing else** — no identifier, no
   install id, no cookie kept — and it is not the usage report; the two share
   nothing. Nothing is downloaded or installed without you pressing a button.
-- The application makes one other network request, to fetch the plugin
-  catalogue from GitHub (raw.githubusercontent.com): the first time you
-  open the plugin store window in a session, and whenever you press
-  **CHECK NOW** in it. Nothing is fetched at startup.
+  The answer may carry a short message from the FoxSDR team (since 0.99.79),
+  shown until you press **Seen**; the ids of the messages you marked Seen stay in
+  `config.json` on this computer, and nothing new is sent to receive one.
+  A copy from the Microsoft Store asks the **Microsoft Store** instead, once
+  per launch when its box is ticked, and never foxsdr.com; nothing of ours is
+  sent (see **The update check** above).
+- The application makes two other network requests, both part of fetching the
+  plugin catalogue: to GitHub (raw.githubusercontent.com) for the public list,
+  the first time you open the plugin store window in a session and whenever
+  you press **CHECK NOW** in it — nothing is fetched at startup — and, since
+  FoxSDR 0.99.47, to foxsdr.com for a short regional list of plugins offered
+  only in some countries. A plugin on that list downloads from foxsdr.com
+  instead of GitHub. foxsdr.com decides what to answer from the two-letter
+  country code Cloudflare works out from your connection's address, and it
+  stores neither the code nor the address and records nothing about the
+  request. Neither request carries an identifier, and the foxsdr.com request
+  is not made when you have pointed the store at a different catalogue.
+- **Since 0.99.74 you can add other people's plugin catalogues ("plugin
+  sites"), and each one you add is one more address this application
+  contacts.** Only you add one: **SITES** in the plugin store's top bar, an
+  address you paste, and a box you have to tick that says the site is not
+  reviewed by FoxSDR. Nothing is added, and nothing contacted, by FoxSDR on its
+  own. Each site is read at the same two moments as the public list above (the
+  first time you open the store in a session, and whenever you press **CHECK
+  NOW**), after it, with a few seconds to answer. The request carries the
+  address and path you gave and nothing else from FoxSDR — no identifier, no
+  cookie, and a client name (`cascade-plugin-repo/1.0`) that is the same for
+  every copy — so the site sees your IP address, as any web server does. The
+  public list comes from raw.githubusercontent.com; a site is wherever its
+  address says. A site's plugin files and pictures are fetched only from the same host
+  as its catalogue, and only when you press **GET** or **UPDATE** on one of its
+  plugins or open its page. Each site's catalogue is kept, unchanged, as
+  `catalogue-<16 characters>.json` (with `.json.time`) in the plugins folder,
+  named from a hash of its address, read back at start-up and deleted when you
+  press **REMOVE** on the site; the addresses themselves are in the
+  configuration file (`pluginSites`). The failure counts below (`plug_cat`,
+  `plug_inst`) are the public catalogue's: a site that cannot be reached, or one
+  of its plugins that fails to install, is not counted.
+- **Since 0.99.72 the plugin store shows a picture of a plugin at work, and
+  keeps the last catalogue it read.**
+  - *The pictures.* When — and only when — you open one plugin's page in the
+    store, FoxSDR fetches that plugin's pictures, one after another, from the
+    address the catalogue gives for each (on raw.githubusercontent.com, the
+    same place as the public list). The request carries **nothing but that
+    address** — no identifier, no cookie, nothing about you or your machine —
+    and is made only over https. The list of plugins does not fetch any
+    picture. Each picture is limited to 4 MiB and checked against the digest
+    the catalogue publishes before it is used; one that does not match is
+    thrown away. A picture is kept on your machine as
+    `store-cache\<digest>.png` in the plugins folder, so the next time its
+    page opens it is read from there and nothing is requested; a picture the
+    catalogue stops listing is deleted the next time the catalogue is read.
+    A plugin that comes from the regional list shows no pictures, so that
+    list never makes FoxSDR contact another address.
+  - *The kept catalogue.* After every successful read of the public
+    catalogue FoxSDR writes it, unchanged, to `catalogue.json` in the plugins
+    folder (beside `installed.json`), with the time of the read in
+    `catalogue.json.time`. Nothing is sent: it is read back at start-up so
+    the store opens with the list it had last time, and is shown with its
+    date when the catalogue cannot be reached. A file that does not read as a
+    catalogue is ignored. The regional list is never kept. Delete the two
+    files and the next read writes them again.
 - The Satellites plugin, when it is fitted and tracking, fetches orbital
   element sets from CelesTrak about every twelve hours, falling back to a
   copy at foxsdr.com/tle/all.tle when CelesTrak does not answer. The request
   carries no identifier.
+- **The Airband section's airport lookup makes no network request.** The
+  airport frequency table (the FAA's for the United States, OurAirports' for
+  everywhere else) is built into FoxSDR. "Nearest airports" compares your
+  receiver position with that table on your machine. How long each frequency
+  has been heard is written beside it in `bookmarks.json`, on your machine,
+  and is never sent.
+- **A plugin can read your receiver's approximate position only if it says so
+  when fitted**, and the Fitted modules / Plugin store windows show which ones
+  do. See **Plugins and your receiver's position** below.
 - **A feature request is sent only when you press SEND on the REQUEST A
   FEATURE page.** It carries the text you typed, an optional contact line, and
   which build you are running - never an identifier, never a frequency, never
@@ -87,19 +199,311 @@ One report per launch, describing the session that just finished:
 |---|---|---|
 | Install identifier | `4f9c…` (32 random hex characters) | Tells 100 users apart from one user launching 100 times. Generated at random on your machine on first run, and **deleted when you turn reporting off**, so a later change of mind cannot be joined back to it; not derived from your hardware, network or name. |
 | Application version | `0.48.0` | Whether people update, and whether an auto-updater is needed. |
-| Operating system | `Windows 10.0.22631` | Which platforms are actually used, and whether a Linux build is worth building. |
+| Operating system | `Windows 10.0.22631` | Which platforms are actually used, Windows or Linux, and which OS versions still matter. |
 | Architecture | `x64` | As above. |
+| How it was installed | `installer` | One of `store` (Microsoft Store), `installer` (the Windows installer), `appimage`, `tarball` (the two Linux downloads) or `android`. Read from the running program, not recorded at install time. It cannot tell foxsdr.com from GitHub, because they serve the same files. |
+| First run | `2026-09-29` | The day - never the time - your install identifier was created, in UTC. **Deleted with the identifier** when you turn reporting off. Tells new users from long-standing ones. Empty on copies whose identifier is older than FoxSDR 0.99.47. |
+| First version | `0.99.47` | The version that created the identifier - which download you started from. Deleted with it, like the first run. |
 | Launch count | `12` | Whether the software gets used more than once. |
-| Crash count | `1` | How often it fails. |
+| Crash count | `1` | How often it fails. It counts every session that ended without shutting down - a crash, but also a window ended from Task Manager, a power cut - so it is the sum of the four rows below plus any from before FoxSDR 0.99.69. |
+| Unclean exits: died | `1` | Since 0.99.69. How many of those endings were a fault in FoxSDR: it crashed, or its window had stopped drawing and was then ended. A bare number, never reset, like the crash count. |
+| Unclean exits: killed | `0` | Since 0.99.69. How many were ended from outside while FoxSDR was working normally - Task Manager, `taskkill`, an installer, a closed console window. A bare number. |
+| Unclean exits: ended by the system | `0` | Since 0.99.69. How many were Windows closing the session (a log off or a shutdown). A bare number. |
+| Unclean exits: unknown | `0` | Since 0.99.69. How many left nothing to tell them by (Diagnostics off, or a power cut). Every unclean exit is in exactly one of these four, so the four add up to the exits counted since 0.99.69. A bare number. |
+| Display stalls | `0` | How many times the window froze because the display driver was waiting, not FoxSDR (a monitor switched off, a graphics-driver reset, a remote session reconnecting) - a bare number, with no stack, no driver name and no time of day, and zero for almost everyone. |
+| Failure counts | `radio_fail.rtlsdr.busy=2` | How many times something quietly did not work, as counts of a **fixed list of kinds** (see **Failures that are not crashes, in full** below): a radio that would not open (the driver and one of eight reasons), no sound output, an update or a plugin install that failed, a plugin refused at load, a recording that could not start - and how many radios and outputs *did* open, so that a failure has something to be compared with. From 0.99.65 the same field also carries how many frames of the window took a quarter of a second or more and which part of the frame the time went in (`slow.rail.250ms=3`), and how many times FoxSDR met a fault at one of a fixed list of places and carried on (`recovered.audio=1`). Words from that list and numbers, never a device name, a serial number, a path, a frequency or any message text. Empty for most people. The field and the failure counts in it: since 0.99.64. Slow frames and recoveries in it: since 0.99.65. |
 | Session length | `3600` seconds | Whether sessions are minutes or hours. |
 | SDR model | `uhd b200` | Which radios to prioritise. **Serial numbers are stripped** before sending. |
 | Demodulators used | `WFM: 3000s` | Which modes justify further work. |
 | Panels opened | `map, decoded` | Which features are used. |
-| Installed plugins | `ADS-B 1.0.0` | Which decoders justify further work. |
+| Installed plugins | `ADS-B 1.0.0` | Which decoders justify further work. A plugin you installed from a plugin site you added (since 0.99.74) is a fitted plugin like any other: its name and version appear here, and the address of the site does not. |
 
 That is the complete list. The payload is asserted field-by-field by an
-automated test (`tests/test_telemetry.cpp`), so a new field cannot be added
-without that test failing and this document being updated with it.
+automated test (`tests/test_telemetry.cpp`), in **both** directions, and the
+same test reads this table: a field added to the report without a row here
+fails it, and so does a row here that the report does not send. A new field
+cannot be added without that test failing and this document being updated with
+it.
+
+**Display stalls, in full (since 0.99.62).** A freeze that FoxSDR's freeze detector decides was
+the display driver waiting (see `kind: stall` under *Crash and freeze reports*)
+is kept on your machine and never uploaded. What the usage report carries about
+those is the number of them, and nothing else. To make sure a freeze you end
+from the taskbar is still counted, the number is kept in a small file named
+`telemetry-stalls` beside `config.json`, holding your install identifier and that
+one number; it exists only once there has been a stall to count. After the
+report that carries a number has been accepted by the server the number is taken
+off; if the report could not be sent it stays and goes with the next one.
+Switching usage reporting off removes the file, and a file left by an earlier
+identifier is ignored. The detector is part of **Diagnostics**: with Diagnostics
+off nothing is detected, so nothing is counted.
+
+**How an unclean exit ended, in full (since 0.99.69).** The crash count has always
+counted every session that never wrote its "closed normally" mark, and that is
+four different things: FoxSDR failing, somebody ending it from outside, Windows
+closing the session, and an ending nothing can explain. The usage report now
+carries four more bare numbers (`exits_died`, `exits_killed`, `exits_ended`,
+`exits_unknown`) that say which. They are lifetime counters kept in `config.json`
+beside the crash count, never reset, and from 0.99.69 on every unclean exit
+adds one to the crash count and one to exactly one of them. Nothing from the
+failure itself is added: no report text, no exit code, no module name, no time.
+The class is chosen on your machine, at the next start, from what **Diagnostics**
+has already written there - the report the program's own crash handler wrote, or
+the report the watcher process (the "sentinel", see below) wrote when the program
+ended - by its kind and by the fixed sentence its reason begins with:
+
+- **died** when the previous session left a crash report from FoxSDR itself; a
+  sentinel report of a crash exit code, of a window that had stopped drawing, or
+  of an ending before the first frame with a crash exit code; or a freeze report
+  with nothing after it.
+- **killed** when it left a sentinel report of an ending from outside while the
+  window was drawing (Task Manager, `taskkill`, a closed console window); of an
+  ending before the first frame with an exit code that is not a crash; or a
+  display-stall report with nothing after it.
+- **ended by the system** when it left a sentinel report that Windows was closing
+  the session.
+- **unknown** when it left none of those: Diagnostics off, a power cut, a previous
+  run that did not record when it began, or no report.
+
+With Diagnostics off nothing is read and every unclean exit is `unknown`. The
+start time of the session is kept in `config.json` (`telemetrySessionStarted`) so
+that only reports written since the previous session began are looked at; it is
+not sent. The same sentence is written to the diagnostic log at start-up
+(`previous session ended: killed (...)`), and nowhere else.
+
+### Failures that are not crashes, in full (since 0.99.64)
+
+**Why.** Version 0.55.0 fixed a fault that stopped every earlier build from
+detecting any radio at all - and 46 of the 49 people who had one never came
+back, because the application did not crash: it simply did not work, and nothing
+told us. A crash report cannot see that. So the usage report also carries *how
+many times* something quietly failed, and nothing about what, where or on what.
+
+**What is sent.** One extra field, `health`: a short text of `kind=count` pairs
+from the **fixed list below**, for example
+`radio_open.rtlsdr=1,radio_data.rtlsdr=1,radio_fail.rtlsdr.busy=2,sound_ok.wasapi=1`
+(an RTL-SDR that opened once and delivered samples, failed to open twice because
+another program had it, and sound that played through WASAPI). It is the empty
+text when nothing failed. The field arrived in 0.99.64 with the failure counts;
+slow frames and recoveries (the last two events below) ride in it from 0.99.65, so
+a report from 0.99.64 or earlier says nothing about them either way.
+
+**It cannot carry anything else.** FoxSDR builds each kind from a fixed table and
+sends nothing that is not in it; the receiving server throws away anything that
+is not in the same table, and refuses to keep more than 24 different failure kinds
+(8 of them radio failures), 8 different slow-frame kinds, 8 different recoveries,
+a count above 999, or a text longer than 832 characters.
+Where a reason is read off what a driver said ("the radio is already in use by
+another program"), FoxSDR reads it, picks one of the eight words below and
+**throws the sentence away**: no message, device name, serial number, USB
+address, file name, folder, frequency or position is ever kept or sent. A test
+holds the code, the server and this page to the same list, in both directions: a
+word cannot be added to one without the others.
+
+**When it is counted.** Only while **Usage reporting** is on **and Diagnostics is
+on** - the same rule as the display stalls - and nothing is counted on the
+signal-processing or audio threads: each count is made where the decision is,
+when a radio is opened, a sound output is opened, a download finishes. The saved
+radio is the first thing FoxSDR opens, before it has read your settings; a
+failure then is held in memory until it has, and dropped if reporting is off.
+Some kinds are counted once a session however often they repeat (marked below).
+
+**Where it is kept until it is sent.** In a small file named `telemetry-health`
+beside `config.json`: your install identifier on the first line, then one
+`kind=count` per line, and nothing else. It is written by a short thread of its
+own so that the window never waits for the disk, and it is on disk almost at
+once - so a failure in a session that then crashes, or is ended from the
+taskbar, is still reported. It is removed when it holds nothing, and when you
+switch usage reporting off (a file left by an earlier identifier is ignored). The
+report sent at start-up describes the *previous* session, so it carries what
+earlier sessions left in the file, and what this run counts goes with the next
+report: a failure of this version is never filed under the last one. What a
+report carried is taken off only once the server has accepted it; if it could
+not be sent, the counts wait for the next one.
+
+**Slow frames (since 0.99.65).** The window is drawn in frames, about 8
+milliseconds each on a healthy machine. FoxSDR times each frame and the parts of
+it with two clock readings a part (no text, no allocation, no disk), and a frame
+that takes **250 milliseconds or more** is counted once: under the part of the
+frame that took most of it (the scope table below - FoxSDR's own parts of the
+window, such as `rail` or `spectrum`, never anything of yours) and under how slow
+it was (`250ms` for 250 ms to under a second, `1s` for one second to under five,
+`5s` for five seconds or more). So `slow.rail.250ms=3` is three stutters in the
+rail's part of the frame. Time you spent answering a Windows prompt, or dragging
+or resizing the window, is taken out and never counted: `user-wait` is the one
+part of the frame that is **not** a word of the list. A frame while the window was
+minimised or a display change was settling is not counted. It is counted on the
+window's own thread, which hands the file write to the thread of its own (never the
+signal-processing or audio threads), and a record carries at most the **eight
+worst** kinds - the longer slowness first, then the higher count; what does not
+fit stays in the file for the next record.
+
+**What FoxSDR recovered from (since 0.99.65).** Where the program meets a fault
+and carries on without telling you - the sound output died and was restarted, a
+radio driver faulted and the radio was reopened, a settings file could not be
+written - it counts that it did, with one fixed word for the place (the table
+below). It never records what went wrong, on which device, or with what message.
+A recovery that can repeat by itself is counted once a session (marked), the
+others each time; a record carries at most eight different ones.
+
+**Events.** `<driver>`, `<api>`, `<why>`, `<class>`, `<scope>`, `<tier>` and
+`<what>` are words from the tables that follow.
+
+| Event | Counted when |
+|---|---|
+| `scan_none` | A scan of the radios found none at all - nothing from FoxSDR's own USB listing and nothing from SoapySDR. Once a session. |
+| `radio_open.<driver>` | A radio opened: the saved radio at start-up, one chosen in the Source list, one on the patch page. |
+| `radio_data.<driver>` | An opened radio's samples reached the display (the first spectrum picture made from them). |
+| `radio_fail.<driver>.<why>` | A radio would not open. |
+| `sound_ok.<api>` | The speakers played at some point in the session. Once a session. |
+| `sound_fail.<api>.<why>` | The sound output could not be opened. Once a session for each kind. |
+| `upd_check` | An update check did not complete (foxsdr.com, or the Microsoft Store for a Store copy). |
+| `upd_dl` | An update download did not complete. |
+| `upd_verify` | An update downloaded and did not match its published checksum, and was discarded. |
+| `upd_run` | The installer could not be started, or the Microsoft Store's install request failed. |
+| `plug_cat` | The plugin catalogue could not be fetched or read. The public catalogue only: a plugin site (since 0.99.74) that cannot be reached is not counted. |
+| `plug_inst.<class>` | A plugin install failed. The public catalogue's plugins only: a failed install of a plugin from a plugin site is not counted. |
+| `plug_load.<class>` | A plugin was refused at load. Once a session for each kind. |
+| `rec_fail` | A recording could not be started: its file could not be opened. |
+| `slow.<scope>.<tier>` | Since 0.99.65. A frame of the window took 250 ms or more: one count for each such frame, under the part of the frame that took most of it and the tier it reached. Not once a session - how many is the question. |
+| `recovered.<what>` | Since 0.99.65. FoxSDR met a fault at the place the word names and carried on. |
+
+**Drivers.** The kind of radio driver, the same word the diagnostics already use.
+A name FoxSDR does not know is `other`.
+
+| Word | Which |
+|---|---|
+| `rtlsdr` | RTL-SDR dongles, through FoxSDR's own driver |
+| `hackrf` | HackRF |
+| `airspy` | Airspy R2 / Mini |
+| `airspyhf` | Airspy HF+ |
+| `sdrplay` | SDRplay RSP, through the SDRplay API |
+| `mirisdr` | Mirics-based dongles |
+| `rx888` | RX888 |
+| `pluto` | ADALM-Pluto |
+| `aor` | AOR digital I/Q interface |
+| `hydrasdr` | HydraSDR RFOne |
+| `rtltcp` | a remote RTL-SDR, through an rtl_tcp server on a network (since 0.99.70) |
+| `soapy` | anything opened through a SoapySDR module |
+| `soundcard` | a sound card used as the radio's input |
+| `other` | none of the above |
+
+**Why a radio would not open.** Read off what the driver said, then the text is
+dropped. Anything not recognised is `other`.
+
+| Word | Meaning |
+|---|---|
+| `busy` | another program has it |
+| `driver` | the driver, the vendor's API or its service is missing or not running |
+| `bind` | present but not reachable: not bound to WinUSB, or no permission on the device |
+| `absent` | not there (any more): unplugged, or no radio at that address |
+| `timeout` | it did not answer |
+| `vendor` | the vendor's driver reported an error of its own |
+| `rate` | it would not run at the sample rate asked |
+| `other` | none of the above |
+
+**Audio host APIs.** The sound system's kind - never the name of the output
+device, which is often a person's name. `none` means FoxSDR did not get as far as
+one.
+
+| Word | Which |
+|---|---|
+| `mme` | Windows MME |
+| `dsound` | Windows DirectSound |
+| `wasapi` | Windows WASAPI |
+| `wdmks` | Windows WDM-KS |
+| `asio` | ASIO |
+| `alsa` | ALSA |
+| `jack` | JACK |
+| `oss` | OSS |
+| `coreaudio` | Core Audio |
+| `none` | no host API reached (no default output, PortAudio did not start) |
+| `other` | none of the above |
+
+**Why the sound output would not open.** From the sound system's own error code,
+not its text.
+
+| Word | Meaning |
+|---|---|
+| `nodevice` | no output device, or not the one asked for |
+| `busy` | the device is in use or unavailable |
+| `format` | the device would not take the rate or channel layout |
+| `host` | the operating system's audio layer reported an error |
+| `other` | none of the above |
+
+**Plugin install failures.**
+
+| Word | Meaning |
+|---|---|
+| `net` | the download did not complete |
+| `hash` | the file did not match its published checksum and was discarded |
+| `write` | the disk refused it (the folder, the temporary file, the final move) |
+| `other` | refused before any download (not built for this FoxSDR, an unsafe file name) |
+
+**Plugin refusals.**
+
+| Word | Meaning |
+|---|---|
+| `abi` | built for a different plugin interface version than this FoxSDR (its description says so, or it declines this version) |
+| `retired` | older than the catalogue's minimum supported version |
+| `load` | could not be loaded as a module, or its description was refused |
+
+A file in the plugins folder that is not a plugin at all is not counted.
+
+**Slow-frame scopes.** The parts of a frame, FoxSDR's own names for them, spelt as
+the application spells them. A scope's time is its own: time in a part opened
+inside it belongs to the inner one. `user-wait` - time a person set the pace of -
+is not in this table because it is never counted.
+
+| Word | The part of the frame |
+|---|---|
+| `events` | the operating system's message pump |
+| `frame-start` | a pending theme, language or scale change, and the start of the frame |
+| `pre-draw` | key bindings and the requests of the web server and plugins |
+| `plugin-panels` | the plugins' own windows |
+| `toolbar` | the cabinet and the top bar |
+| `rail` | the menu column |
+| `spectrum` | the receiver's centre: spectrum and waterfall |
+| `patch` | the patch page |
+| `status` | the status column |
+| `dialogs` | dialogs and menus |
+| `polls` | the once-a-frame checks of radios, sound, updates, the catalogue and the like |
+| `saves` | saving bookmarks, markers and the settings file |
+| `render` | building and drawing the picture |
+| `present` | handing the picture to the display, which on a synchronised display is mostly waiting for it |
+| `recorder` | starting, stopping and arming a recording |
+| `plugins-reload` | unloading every plugin and loading them again |
+| `startup` | the first 30 frames of a run, which are known to be long |
+| `other` | everything not inside any of the above |
+
+**Slow-frame tiers.** How slow, as the widest of three bands the frame reached.
+
+| Word | The frame took |
+|---|---|
+| `250ms` | 250 milliseconds to under one second |
+| `1s` | one second to under five |
+| `5s` | five seconds or more |
+
+**Recovered from.** The places, one word each. A fault that is not at one of
+these places is not counted at all. "Once a session" marks a place that can repeat
+by itself, so a count of 1 means "this session had it".
+
+| Word | FoxSDR met this and carried on |
+|---|---|
+| `audio` | the sound output stopped and the watchdog restarted it. Once a session. |
+| `reopen` | a SoapySDR radio's driver faulted and FoxSDR reopened the radio by itself. Once a session. |
+| `srcthread` | a radio driver's read never returned when the receiver was stopped, and FoxSDR let the thread go rather than freeze the window. |
+| `vendorcall` | a call into a SoapySDR vendor module did not return in time and was let go. |
+| `ringdrop` | the radio delivered samples faster than they were taken off and some were dropped. Once a session. |
+| `dspexc` | the signal-processing thread threw an error that was caught, and the receiver stopped rather than the program. |
+| `cfgsave` | the settings file could not be written. Once a session. |
+| `enumchild` | the helper that lists SoapySDR radios died and was contained. Once a session. |
+| `pluginapi` | a plugin's call into FoxSDR threw an error and was answered with a default. Once a session. |
+| `webroute` | a web-interface handler threw an error and the server answered with a failure. Once a session. |
+| `patchload` | a saved patch loaded with connections left out. |
+| `sdrenum` | the SDRplay service did not answer a scan, and the scan was let go. Once a session. |
+| `sdrlost` | the SDRplay API session was lost and SDRplay is shut for the rest of the session. Once a session. |
+| `audiolead` | the audio buffer was made deeper, by itself, because this computer fell behind: a minute in which the sound card ran out of audio three times or more. Once a session. |
 
 ### The "still running" beat
 
@@ -119,6 +523,108 @@ the beat exists solely to answer that one question honestly. Beats are stored
 apart from the session reports, so none of the usage figures change meaning.
 This payload is held to exactly these three fields by the same automated test
 as the launch report, and the same switch stops it: reporting off, no beats.
+
+## Beta tester usage — what is sent when a tester code is set
+
+This is a **separate, independent** switch from usage reporting above — a
+different credential, a different purpose, and turning one on or off has no
+effect on the other. It exists only for people who have joined the tester
+list on foxsdr.com and been given a tester code or a tester link: pasting
+that code into Beta tester (System) is what turns this on, and it is tied to
+that one tester's own entry so the owner can tell which features they said
+they would cover they actually used. **With no code entered, nothing on this
+page is collected or sent, ever.**
+
+**The link, and the confirmation prompt.** The tester portal's "Link FoxSDR"
+button opens `foxsdr://beta?t=<app token>` in your browser, which Windows
+hands to FoxSDR. The `foxsdr:` scheme is registered by the installer, not by
+the application itself — for the ordinary, machine-wide install (the default;
+it asks for administrator approval) it is registered **for the machine**,
+so it works no matter which Windows account opens the link; only a
+`/CURRENTUSER` install registers it for your own account alone
+(`installer/cascade.iss`'s `[Registry]` section, `Root: HKA`). A Store install
+declares the same activation in its manifest. **Nothing is stored the moment
+the link is opened.** FoxSDR first asks the site who the token belongs to —
+one network request, `GET /api/beta/app-token/me`, naming nothing but the
+token itself — and only once that answers does it show an in-window prompt
+naming that tester — *"Link this FoxSDR to beta tester NAME?"*, or, if one is
+already linked, *"This FoxSDR is linked to OLDNAME. Replace with NAME?"* —
+with **Link** and **Not now** buttons. Only pressing **Link** writes anything
+to your configuration file; a token the site does not recognise shows an
+error and stores nothing. This two-step design exists because a link opened
+by *any* web page (not only the real portal) could otherwise bind your copy
+to someone else's tester entry with no warning — showing the name first, and
+requiring your own click, is what a silent bind would be missing. If FoxSDR
+is not already running, the same file it would otherwise hand to a running
+copy is read back and the same network request and the same prompt happen at
+start-up instead — nothing is stored, and nothing is bound, before you see
+the prompt and press Link, but the one lookup request happens first, not
+after.
+
+Testers who set up sharing by pasting the older 32-character code keep
+working exactly as before: on the next launch, FoxSDR quietly exchanges that
+code for the newer 40-character kind behind the scenes (the site recognises
+it as the same tester every time this runs, so nothing changes if it happens
+more than once), and the old code is then forgotten. Nothing about what is
+collected or sent changes because of this exchange; it only changes the
+shape of the one credential involved. If the exchange cannot reach the site,
+your existing code keeps working and the exchange is retried at the next
+launch; if the site says the code is no longer valid, it is cleared.
+
+The hidden `--link-tester` command-line switch reveals the same paste box
+this section always had, for a tester whose browser cannot hand FoxSDR a
+`foxsdr://` link (Linux, today, or a blocked/dismissed browser prompt) — it
+takes the code the portal's "Link FoxSDR" button displays and goes through
+the exact same confirm-by-name prompt above. It does nothing on its own: run
+with no code to paste, it shows an empty box and nothing more.
+
+One report per session, saved when the session ends and **sent at the next
+launch** — the same timing usage reporting's own launch report uses, and for
+the same reason: a network call on the way out can hang the application while
+you are trying to close it, so nothing here ever tries to send on the way out.
+The code itself is shown on screen only masked (the first four and last four
+characters, e.g. `4f9c…c2a1`) and the field that enters it hides what is typed
+into it, the same way a password field does:
+
+| Field | Example | Why |
+|---|---|---|
+| Tester code | `4f9c…c2a1` (shown masked; sent in full) | Your own tester-portal credential — either shape, the pasted 32-character code or the 40-character one a confirmed link produces — so the report can be linked to your entry. Never logged, never included in a diagnostics bundle or a crash report, and shown on screen only masked. |
+| Application version | `0.99.x` | Which build the session ran. |
+| Platform | `windows` | Which platform the session ran on. |
+| Architecture | `x64` | As above. |
+| Session start | `2026-09-28T12:34:56Z` | When the session began - the site stores this as when your tester entry was last used, so it is the one field here that updates something about your entry rather than only being logged. |
+| Session length | `42` minutes | How long the session ran. |
+| Features used | `spectrum, modes, bookmarks` | Which of the named beta areas you actually exercised this session, from a fixed list the site defines. |
+| Plugins used | `pocsag 1.2.0, 6 minutes` | Which installed decoders ran, their version, and how long each was actually fed samples — never merely installed. A decoder this build cannot match to the published catalogue (a side-loaded or hand-built plugin) is reported under the fixed id `sideloaded` with no version, rather than under a name invented for it. A plugin installed from a plugin site you added (since 0.99.74) has an install record, so it is reported by its id and version like any other fitted plugin; the address of the site is not reported. |
+| Radio kinds used | `rtlsdr` | Which radio hardware kinds were opened this session — never a serial number, never args. |
+
+Exactly the same exclusions as usage reporting above apply here: **no
+frequency, no decoded content, no position.** Your IP address is used only to
+limit how often reports are accepted from one address and is not stored
+alongside anything a report contains. The payload is asserted field-by-field
+by an automated test (`tests/test_tester_usage.cpp`), so a new field cannot be
+added without that test failing and this document being updated with it.
+
+If the site answers that the code is no longer valid, sending stops
+immediately and the app says so on screen; the code itself is kept so it can
+be corrected rather than being silently cleared. Up to three reports that
+could not be sent (a network failure, or the site asking to try later) are
+kept and retried at the next launch; older ones are dropped first. A report
+queued under a code that is later replaced or removed is discarded rather
+than sent under the new one (or under none) — it would otherwise land on the
+wrong tester's entry, or on nobody's. The one exception is an older pasted
+code replaced by a link that FoxSDR has itself confirmed, earlier in the same
+session, belongs to the same tester: those reports are kept under the link,
+and the prompt says in advance which of the two will happen.
+
+Removing the code, or pressing **Unlink** once a link has been confirmed,
+deletes it from your configuration file, discards anything still queued to
+send, and stops everything above immediately — nothing further is collected
+from that point, and the SYSTEM > Beta tester section disappears again
+unless `--link-tester` was used to reveal it. Unlike an invalid pasted code
+(kept on screen so you can fix it), a link the site later says is no longer
+valid is cleared outright — nothing is left to fix in place, and a fresh
+link from the portal is what produces a new one.
 
 ## Crash and freeze reports — what they contain
 
@@ -148,12 +654,23 @@ A report contains these fields and no others:
 | `sample-rate` | `2400000` | Faults that only appear at high rates. **This is the sample rate, not a tuned frequency** — see below. |
 | `device-open` | `yes` | Whether a radio was in use. |
 | `sdr-model` | `uhd b200` | Which radio. **Serial numbers are stripped**, exactly as in the usage report. |
+| `ppm` | `+1.5 by retuning` | Whether the radio's crystal correction is switched on, its value in parts per million and how it is applied (`in the radio` or `by retuning`); `off` when it is not. A property of the radio's crystal, **not a frequency** - it says nothing about what you listen to. Since 0.99.56. |
 | `plugin` | `ADS-B 1.1.0` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
 | `log-path`, `crash-dir` | `%LOCALAPPDATA%\FoxSDR\logs/foxsdr.log` | So you know where the rest of it is. Since 0.99.33 the base directory is written as `%LOCALAPPDATA%` (`$HOME` or `$XDG_STATE_HOME` on Linux) rather than the real path, so your account name is not in it; a folder elsewhere is shown with the account name replaced by `<user>`. |
 | `last-run-unclean` | `yes` | Whether the previous session ended without shutting down. |
 | `launches`, `crashes` | `12`, `1` | The same two counters the usage report already keeps. |
 | `log-lines-total` | `4011` | How much of the log the report is *not* carrying. |
-| the log | the last 256 lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. When an I/Q file fails to reopen the log records that it did not reopen; the file name stays on screen, where you already know it. Since 0.89.0 the log also records what the radio driver said (`soapy:` lines) and what its libraries printed to the standard error stream (`vendor:` lines), with serial numbers stripped and the digits of any line mentioning a frequency masked — see the `log` row under *What is sent when a report is uploaded* for the exact rule. Since 0.99.33 the bundle's log is scrubbed by exactly that rule, the same as an uploaded report's, because a bundle is made to be pasted somewhere. |
+| `sdrplay-service` | `stopped, manual start (SDRplayAPIService)` | Since 0.99.55: what Windows says the SDRplay API Service is doing — its state, its startup type and the name Windows knows it by — or `not installed`, or `not applicable` off Windows. SDRplay radios only work while that service runs, and it is the first thing to ask about when one will not open. It is read from the Windows Service Control Manager without administrator rights and says nothing about you or your radio. |
+| `audio-output` | `open, MME, 2 channels` | Since 0.99.61: whether a sound output is open and serving its stream, through which Windows audio driver model (`MME`, `Windows WASAPI`...) and in what layout; `opening`, `stopped - the stream died and is being reopened` or `none - no output device has opened` otherwise, and `, restarted N times` after the watchdog has had to reopen it. **The device's own name is never written** — Windows hands the application labels such as `Headset (Alice's AirPods Pro)`, which are often a person's name. The first thing to ask when someone reports no sound from a radio that is plainly receiving. |
+| `volume` | `80%` | Since 0.99.61: the volume control. A volume of nothing is silence from a healthy receiver. |
+| `audio-muted` | `no`, `you`, `a decoder plugin` | Since 0.99.61: whether the audio is muted and WHO muted it — `you` (the Mute key), `a decoder plugin` (an I/Q decoder holds the audio down while the receiver is on one of its presets), `transmit key`, or several joined with `+`. A plugin is described and **not named**, because its name would say which band the receiver was tuned to. |
+| `squelch` | `-50 dB, closed (signal -63 dB)` | Since 0.99.61: the squelch threshold, whether the gate is open, and the signal level the gate is judging when the receiver has measured one. Decibels against full scale: a **level, not a frequency** — it says nothing about what you listen to. A gate that stays closed is complete silence from a healthy receiver. |
+| `patch-radios` | `none`, `1 (rtlsdr)`, `2 (rtlsdr, soapy)` | Since 0.99.62: how many radios the patch page has running, and the **driver kind** of each - `rtlsdr`, `soapy`, `sdrplay`, `iqfile` (a recording) or `siggen` (the generator) - or `none`. **Kinds only**: never a radio's name, its serial number, the address or arguments it was opened with, the name of a recording, or a frequency - the line is built from the part of the patch node's device key before its first vertical bar, reduced to lower-case letters and digits, so the part after it is never read. `source` describes the receiver, whose radio the patch page may have been handed, so a fault on a patch radio's thread otherwise reads as a fault with no radio at all (a 0.99.59 report of one said `source: siggen` and `device-open: no`). It is in the report file on your machine and in the bundle; it is **not** one of the fields the automatic crash report sends (see *What is sent when a report is uploaded*). |
+| `foreign-modules` | `NahimicOSD.dll, RTSSHooks64.dll`, or `(none)` | Since 0.99.69: the **file names** of other programs' components that are loaded into FoxSDR - every loaded module that is neither Windows' own, nor part of FoxSDR (its program folder, its plugins, the C++ runtime), nor an SDR vendor's driver files that FoxSDR loads on purpose - alphabetical, each once, at most about 480 characters and then `+N more`. **A file name and nothing else: never a folder, a version or anything else about the file.** **This discloses the names of other software's DLLs** - an audio driver's on-screen overlay, a frame-rate counter, an antivirus or input tool's hook - and a file name can say that a piece of software is installed on your computer, so it is stated here; files in the Windows folder are left out so that the list is short and means something. Each name is reduced to ASCII letters, digits and a few punctuation marks (any other character is written `?`) and cut at 63 characters. It exists because two reports of FoxSDR ending inside the graphics driver's hand-off - where programs that inject themselves into every process hook in - carried no way to tell what else was in the process. `(none)` when nothing is, and a fixed sentence when FoxSDR cannot say: `(not scanned yet)` in the first moments of a run, `(not applicable)` on Linux, `(not recorded)` for a process that does not look. The log carries it too, as two kinds of line (the `log` row below). It is in the report file on your machine, in the bundle, **and in the automatic crash report** (as `foreignModules`; see *What is sent when a report is uploaded*). |
+| `slow-frames` | `none`, `recorder 2/0/0, plugins-reload 0/1/0` | Since 0.99.64: how many times, since the program started, a frame of the window took 250 ms or more to draw, and **which part of the frame took most of it**. Each entry is a scope from a fixed list of lower-case words (`events`, `frame-start`, `pre-draw`, `plugin-panels`, `toolbar`, `rail`, `spectrum`, `patch`, `status`, `dialogs`, `polls`, `saves`, `render`, `present`, `recorder`, `plugins-reload`, `startup`, `other`) followed by three counts: frames of 250 ms up to 1 s, of 1 s up to 5 s, and of 5 s or more; a frame is counted once, in the highest of the three it reached, and scopes with no count are left out. **Counts and fixed words only**: never the name of a plugin, a file or a folder, a frequency, a device or a time of day. Frames that were slow because the window was minimised or hidden, because the display was being changed, because you were dragging the window, because Windows was asking you something or because the computer was asleep are not counted. The log carries the same facts as one line per scope at most every 30 seconds (`frame: 412 ms, 388 ms of it in rail`) and one summary line when the program exits, under the log's own rules above. It is in the bundle; it is **not** in the report file a crash or a freeze writes and **not** one of the fields the automatic crash report sends. |
+| the log | the last 256 lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. Since 0.99.61 it also says when a sound output opens or is refused (`audio: output opened - MME, 2 channels, 48000 S/s, system default`): the driver model, the layout and the rate, **never the name of your sound device**. When an I/Q file fails to reopen the log records that it did not reopen; the file name stays on screen, where you already know it. Since 0.99.78 the start of the window is in it, one line per step, each beginning `window:`: which window systems this build of the window library supports, whether `DISPLAY` and `WAYLAND_DISPLAY` are set (**set or not set - never their values**, which can name a computer or a session), the session type when it is one of `x11`, `wayland`, `tty`, `mir` or `unspecified`, which window system was chosen, the window library's own error messages (with the display's name left out of "Failed to open display"), and the graphics driver's own vendor, renderer and version strings (`window: GL vendor NVIDIA Corporation; renderer NVIDIA GeForce RTX 4090/PCIe/SSE2; version 4.6.0 NVIDIA 610.88`) - the make and model of the graphics adapter and its driver, which a graphics fault cannot be told apart without, and nothing about you. Since 0.89.0 the log also records what the radio driver said (`soapy:` lines) and what its libraries printed to the standard error stream (`vendor:` lines), with serial numbers stripped and the digits of any line mentioning a frequency masked — see the `log` row under *What is sent when a report is uploaded* for the exact rule. Since 0.99.33 the bundle's log is scrubbed by exactly that rule, the same as an uploaded report's, because a bundle is made to be pasted somewhere. Since 0.99.59 that rule also replaces every network address and computer name with `<host>`, keeping the port after it, and the number of a serial port with `#` (`COM#`, `/dev/ttyUSB#`) - see the same row for where it looks. Since 0.99.69 it also says which other programs' components are loaded into FoxSDR, as file names only: once, when the window is up, `modules: 2 foreign - NahimicOSD.dll, RTSSHooks64.dll` (or `modules: none foreign`), and `module arrived: NahimicOSD.dll (12.3 s)` - the seconds since FoxSDR started - when one is loaded later. Nothing is written when one is unloaded, a name is written once a session, and a session writes at most 32 arrival lines. These are the same names as the `foreign-modules` row above, and nothing else about them. Since 0.99.70 the rtl_tcp source (a remote RTL-SDR) writes `rtltcp: opened R820T on port 1234 - 29 tuner gain steps` when it connects: the tuner the server reported and the **port**, and never the address you typed or the server's name - the address is on the screen and in your settings file, and nowhere in the log. |
+| the previous session's log | the last 80 lines of the session before this one, scrubbed | Since 0.99.62, under a heading of its own after the log: the end of the log of the session BEFORE this one, read from the log files on your machine (`foxsdr.log`, `foxsdr.1.log` and `foxsdr.2.log`, in the folder the Diagnostics section shows). At most 80 lines and 12 KiB, the newest kept; sessions are told apart by the line FoxSDR writes when it starts, which names its version and build. It exists because a window that froze, was ended from the taskbar and was then restarted is gone from the log of the session you report from. **Every line goes through the same scrub as the log above** - serial numbers, account names in paths, network addresses and computer names, quoted names, and every number on a line that mentions a frequency - and the heading says in words when there is no earlier session, or when it cannot be found (for instance when Diagnostics was switched on part-way through this session). **With Diagnostics off nothing is read and neither this row nor the next is added**, not even a heading. Only ever in the bundle you copy or choose to attach; never in the automatic crash report. |
+| the reports on this machine | one line per report, the newest ten | Since 0.99.62, under a heading of its own: for each of the newest ten `crash-*` and `hang-*` files in the reports folder, its kind (`crash`, `hang` or `stall`), how long ago it was written, the version that wrote it, how long that session had been running, how long the interface was stalled (a freeze) or the reason and code (a crash), its grouping signature, and what became of sending it - `sent`, `duplicate`, `local-only`, `backoff`, `rate-limited`, `failed`, `abandoned`, `too-large`, `expired`, `refused`, or `none` when nothing has swept it. It is the answer to "did the watchdog fire, and did the report reach you". **No stack, no log lines, no module list, no context block, no file name and no path**: nothing is read from a report beyond those fields, and a memory dump or a saved copy of this bundle in the same folder is never opened. Each line is passed through the same scrub as the log. Since 0.99.69, for a report that was marked `local-only` the list is followed by one fixed sentence per reason saying why it stays on your computer (a display-driver stall, or FoxSDR being ended from outside while it worked normally, neither of which is a fault in FoxSDR; neither is ever sent) and that the file is in the reports folder - sentences the program wrote, never text from the report. Only ever in the bundle you copy or choose to attach; never in the automatic crash report. |
 
 A crash or freeze report written by the application itself carries the same
 context block as the table above — the same bytes, so the two cannot drift —
@@ -194,7 +711,16 @@ That
 small process can also write a report of its own, into the same folder and with
 the same fields, and only when diagnostics are switched on: it is handed the
 folder by the session that started it and is told nothing at all when the
-setting is off. These used to be either a dead application or nothing at all;
+setting is off. Since 0.99.62 the session writes its own report of that
+death only when the small process's report does not already cover it, so one
+death is one report rather than up to three, and the small process's own
+report says on the end of its `reason` line the things the session's used to:
+which search it was asked for (every driver, one named driver, or the list of
+drivers), which try it was, and that the application survived it - for example
+`access violation - enumeration child, driver=uhd, attempt 1 (contained)`, the
+driver being the same installed driver's short name as above. That is the same
+`reason` field, so nothing is added to what is sent. These used to be either a
+dead application or nothing at all;
 none of them adds a field, and all are governed by the same switch in
 **Settings → Diagnostics** as every other report on this page.
 
@@ -202,17 +728,39 @@ none of them adds a field, and all are governed by the same switch in
 
 | Field | Example | Why |
 |---|---|---|
-| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver or the window system rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session, or on Linux a window the compositor is not showing. Those are kept on your machine and never sent. |
+| `kind` | `hang` or `stall` | As above. `stall` means the wait was inside the display driver or the window system rather than inside FoxSDR - a monitor switched off, a resolution change, a remote session, or on Linux a window the compositor is not showing. Those are kept on your machine and never sent; only a bare count of them is in the usage report (*Display stalls*, above). |
 | `note` | `the gui thread did not complete a frame within the threshold` | The same distinction in one sentence, so a report says what it is without anyone having to know the codes. |
 | `stalled-ms` | `7213` | How long the interface had been unresponsive. |
 | `threshold-ms` | `5000` | What it was measured against, so the number above can be judged. |
 | `signature` | `7C04…` | As above. |
 | `threads` | `9` | How many stacks follow. |
+| `frame-scope` | `rail` | Since 0.99.64. Which part of drawing the window was under way when it stopped, as one word from a fixed list of nineteen: `events`, `frame-start`, `pre-draw`, `plugin-panels`, `toolbar`, `rail`, `spectrum`, `patch`, `status`, `dialogs`, `polls`, `saves`, `render`, `present`, `recorder`, `plugins-reload`, `startup`, `user-wait`, `other`. It names a part of the program, never a plugin, a file, a radio or a frequency. |
+| `reload-phase` | `unload` | Since 0.99.84. When `frame-scope` says `plugins-reload`: which step of reloading the plugins was under way, as one of a fixed list of eight step names - `check`, `decoders`, `patch`, `panels and map`, `unload`, `inventory`, `load`, `restart` - and `none` for every freeze outside a reload. It names a step of the program, never a plugin, a file, a radio or a frequency. |
+
+Both kinds of report also end their application-context lines with two more, after
+the plugin list, so a stall in drawing the window can be told from one in the window
+system: `window-state: visible, not minimised, focused, updated 142 s before this
+report` and `window-system: wayland`. The first is three yes/no facts about FoxSDR's
+own window (shown or hidden, minimised, has keyboard focus) as the program last saw
+them, and how many whole seconds ago that was; the second is which window system the
+program is running under, one of `wayland`, `x11`, `win32`, `cocoa`, `null` or
+`unknown`. Nothing about what is on screen, where the window is, which other programs
+are running, or what you are listening to. They are not part of what a report sends:
+the upload reads only the fields listed under it.
 
 After that header both add the call stacks — every thread for a freeze, the
 faulting one for a crash — and the list of loaded modules with their build
 identifiers. Those are addresses inside program code and identifiers of
 compiled files. They describe FoxSDR, not you.
+
+Since 0.99.63 a freeze report also names a frame inside a module that was loaded
+after that list was last refreshed - a graphics driver the system reloaded, a
+vendor DLL, a shell extension - by the module's file name (never a path) and the
+distance into it, as it names every other frame. Before, such a frame was a bare
+address. The module is not added to the list. A file name can say that a piece of
+software is installed on your computer, so it is stated here; it is the same kind
+of name the list and the frames above already carry for drivers loaded at
+start-up.
 
 Since 0.89.0 both also carry a short **process** block, after the stack in a
 crash report and before the stacks in a freeze report:
@@ -235,6 +783,109 @@ against a report from a real fault in a real child process; the freeze header by
 `tests/test_diag_hang.cpp`, against a report from a real stall. The first of
 those also asserts the absence of the things below.
 
+**A sentinel report (since 0.99.64).** Some endings nothing inside FoxSDR can
+report: a fast-fail that skips every handler, a stack overflow, a window frozen
+so hard that the freeze watchdog is stuck too, a death before the handlers are
+armed, a window that froze and was then ended from the taskbar. In an
+interactive session, with Diagnostics on, FoxSDR starts a second copy of its own
+program, with no window, that does nothing but wait for the first to end - the
+*sentinel*. It is given a handle that lets it wait for FoxSDR and read how it
+ended (its exit code and when it started and stopped - not its memory, and no
+dump), and a small shared page of numbers that FoxSDR keeps up to date: which
+stage it is in (starting, building the application, creating the window, waiting
+for the first frame, running, or one step of shutting down), whether a radio is
+being opened or plugins are being loaded, how many frames it has drawn and when
+it last drew one, which part of drawing the window is under way (a number for
+one of the nineteen words listed under `frame-scope` above), whether the window
+is being dragged or resized or a menu is open, and whether Windows has said the
+session is closing. **The page
+has no room for text, so it can never hold a name, a path, a frequency or an
+address.** When FoxSDR ends, the sentinel writes ONE report in the same folder
+and format as the others - and none at all when FoxSDR ended normally, or already
+wrote a report of this ending itself. The sentinel sends nothing: its report is
+sent, like every other, at the next start, under the same switch and the same
+limits. With Diagnostics off it is not started, and it is ended if you switch
+Diagnostics off during a session. FoxSDR's log says once, in one line, when it
+starts one (with the sentinel's process number, an operating-system number that
+means nothing once it has ended) and once if it ends before FoxSDR does. A
+sentinel report carries exactly these lines and no others:
+
+| Line | Example | Why |
+|---|---|---|
+| `kind` | `crash` | The same kind as a crash report, so nothing that reads reports changes. |
+| `reason` | `sentinel: crash exit code, no report from the process - fast-fail (abort or failed integrity check); phase running; silent 0 s` | One fixed sentence per class (the second table below), then what the exit code means, the stage FoxSDR was in, while it was running the part of drawing the window that was under way (`; in rail` - one of the words listed under `frame-scope` above), and how many whole seconds its drawing had been silent. The exit code's meaning, the stage, the part and the number come from closed lists - `access violation`, `fast-fail`, `heap corruption`, `stack overflow`, `unknown exit code` (or, on Linux since 0.99.78, `exit code 3 (the process ended itself)` or `killed by signal 11 (SIGSEGV)` - the number is the only part that varies, the signal's name comes from a list of twelve - and, when the process wrote nothing down, `exit status not available on this platform (no exit record; not its parent)`), and the stages above - never from text on your machine. |
+| `code` | `0xC0000409` | The exit code Windows recorded for the process, as a number. **On Linux (since 0.99.78)** the watcher is not the process's parent and cannot ask the kernel how it ended, so FoxSDR writes that down itself into the same 64-byte page of numbers as it ends - the status of an exit, or the number of a signal - and the code is that number behind a fixed tag: `0x50580103` is an exit with status 3, `0x5058020B` a signal numbered 11 (the first four hex digits are always `5058`, the next two say exit or signal, the last two are the number). `unknown` when nothing was written, which is what an ending by `SIGKILL` (the out-of-memory killer, `kill -9`) leaves. A code, not content. |
+| `address` | `ucrtbase.dll+0x7F6FE` | **Only when Windows' own record of the crash names it (since 0.99.66, Windows only; the paragraph after the second table).** The file name of the module the crash happened in - never its folder - and the distance into it in hex, written as the crash reports above write their address. Left out altogether when Windows' record is not there. |
+| `address-source` | `Windows' crash record of this process (Application Error event 1000), not a stack` | Present exactly when `address` is, and always this one fixed sentence: it says the address is Windows' own record and not a stack FoxSDR read. Not part of what is sent. |
+| `modules` (`base`, `size`, `pdb`, `build`) | `  cascade.exe base=0x00007FF6… size=0x25000 pdb=cascade.pdb build=651FD5EB…` | **Only with `address`, and only when the address is inside FoxSDR's own program file (since 0.99.66, Windows only).** The one line of the module list that every crash report already carries for that file; `--- modules ---` is a block of just this line: the file's name (never its folder), where the sentinel's copy of the program was loaded and how large it is, the name of its debugging-symbols file and the identifier of that compiled file. It is what lets the reader find the matching symbols for the address. A fault in any other module (a graphics driver, a radio's driver) gets no such line. |
+| `signature` | `A31F…` | Groups repeats of one kind of ending together: derived from the class, the exit code, the stage and the part of drawing the window - and, when `address` is present, from that module and distance as well - never from the time and never from anything about you. |
+| `version`, `commit`, `os`, `arch` | `0.99.64`, `Windows 10.0.22631` | As in every report. |
+| `receiver` | `not known to the sentinel` | A fixed sentence in place of the receiver lines (mode, source, radio, plugins): the sentinel cannot read them, and says so instead of leaving them blank. |
+| `foreign-modules` | `NahimicOSD.dll, RTSSHooks64.dll`, or `(not recorded)` | Since 0.99.69: the same list of **file names** as the line of that name in the first table of this page - the other programs' components that were loaded into FoxSDR; never a folder or a version; a file name can say that a piece of software is installed on your computer, so it is stated here - but rebuilt from FoxSDR's own log, because the sentinel reads none of FoxSDR's memory: it takes the `modules:` line and the `module arrived:` lines FoxSDR wrote to its log file (from the whole of that session, not only the last 256 lines) and re-checks every name. `(not recorded)` when the log has neither - Diagnostics was switched on part-way through the session, or the log has been rotated past them. |
+| `uptime-sec` | `2731` | How many seconds FoxSDR had been running. |
+| `fault-thread-own` | `unknown` | Always `unknown`: the sentinel sees no stack. |
+| the log | the last 256 lines | The end of this session's log, read back from the log file - the same lines a crash report carries from memory, scrubbed by exactly the same rule when it is uploaded. When two copies of FoxSDR run at once they share one log file, so the tail is the end of that shared file. |
+
+Which endings are **sent** and which are **kept on your machine**, by the
+sentence the `reason` begins with:
+
+| Class | The reason begins | What is done with it |
+|---|---|---|
+| `crash` | `sentinel: crash exit code, no report from the process` | sent |
+| `frozen` | `sentinel: window had stopped drawing when it ended` | sent |
+| `startup` | `sentinel: ended before the first frame` | sent |
+| `outside` | `sentinel: ended from outside, window was drawing` | kept here |
+| `session` | `sentinel: ended as the session closed` | kept here |
+
+**Windows' own record of a crash (since 0.99.66, Windows only).** When FoxSDR ends
+with a Windows crash code that nothing inside it could report - the first two
+classes in the table above - the sentinel also reads the one thing Windows itself
+wrote about that ending. Windows Error Reporting records every application crash in
+the Application event log (an "Application Error" entry, number 1000): the program,
+the module the crash was in, and the distance into it. **FoxSDR reads Windows' own
+record of FoxSDR's own crash, through Windows' documented event-log interface, as
+you and without administrator rights, and keeps only three things from it: the
+module's file name (never its folder), the distance into it, and the crash code**
+(which the report already carries as `code`). The entry is used only if it names
+this very run of FoxSDR - its process number and the time it started, both - so an
+entry about another program, another copy of FoxSDR or an earlier run is never
+used. The entry also holds the full path of FoxSDR (which can contain your account
+name), the module's full path and other details; none of that is read into
+anything FoxSDR keeps or sends. What is kept is checked: the file name must be a
+plain file name of at most 63 letters, digits and the characters `.` `_` `-` `+`,
+the distance must be hex digits, and anything else is dropped. A file name can say
+that a piece of software is installed on your computer, so it is stated here; it is
+the same kind of name the module list and the frames above already carry for
+drivers. If Windows wrote no such entry (Windows Error Reporting is switched off by
+a policy, the log is disabled or full, the program ended another way), if the entry
+cannot be read, or if it does not appear within eight tenths of a second, the
+report is written exactly as it was before, with neither line. It is not looked for
+at all after an ending from outside, a closing session or a freeze. FoxSDR changes
+no Windows setting for this, and nothing of the kind exists on Linux. When the
+address is inside FoxSDR's own program file, the report also carries one line for
+that file in a `--- modules ---` block, so the address can be matched to the
+symbols of that exact build: **it is FoxSDR's own file and FoxSDR's own build
+identifier, the same line every crash report already carries for it** (the
+sentinel is a second copy of the same file, so its identifier is the program's).
+The load address and size on that line are those of the sentinel's copy and stay on
+your machine; only the build identifier is sent, in the `buildId` field every crash
+report already has. A report with no address has no such block. The report is
+written first and replaced by the one with the address only if the entry turns up.
+When the report is sent, the address travels in the `module` and `offset` fields
+that every crash report already has (the table of what is sent, below);
+`address-source` is not sent.
+
+An ending from outside while the window was drawing (you ended FoxSDR from Task
+Manager, or from a script), an ending from outside while you were holding the
+window - dragging or resizing it, with a menu open, or reading a prompt of
+Windows' own, when it draws nothing and nothing is wrong (the stage then reads
+`held by the user`) - and an ending as Windows closed your session are
+**never uploaded**: they are not faults in FoxSDR, and a healthy FoxSDR that you
+end that way must not use up the five reports a day a crash needs. They stay in
+the reports folder and in the *reports on this machine* list of the bundle, with
+the class in the reason. Nothing new is personal in any of it: codes, fixed
+words, whole seconds, and the log lines a crash report already carries.
+
 **A full memory dump is off by default.** If you switch it on
 (Settings → Diagnostics) a `.dmp` file is written *beside* the text report. A
 memory dump is a copy of the program's memory and can contain file names, window
@@ -253,20 +904,20 @@ One request per report, on the **next** start after the failure, to
 | Field | Example | Why |
 |---|---|---|
 | `schema` | `1` | Which version of this list the request follows. |
-| `kind` | `crash` or `hang` | Which of the two documents it is. A freeze whose `kind` is `stall` - the display driver was waiting, not FoxSDR - is never uploaded at all; it stays on your machine. |
+| `kind` | `crash` or `hang` | Which of the two documents it is. A freeze whose `kind` is `stall` - the display driver was waiting, not FoxSDR - is never uploaded at all; it stays on your machine, and only how many there were reaches the usage report. |
 | `version` | `0.62.0` | Which release. |
 | `commit` | `98a9d7d617a7` | Which build. Only the commit names a build; the offsets below are meaningless against the wrong one. |
 | `buildId` | `651FD5EB…C528` | Which *link*. Two builds of one version have different code at the same offsets. This identifies the compiled file, not you or your machine. |
-| `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. |
+| `module`, `offset` | `cascade.exe`, `1179648` | Where it failed, as a file name and a distance into that file. Not an address in your memory. For a sentinel report (above) these are empty, except since 0.99.66 when Windows' own record of the crash named the module: then they are that module's file name and the distance into it, nothing more. |
 | `signature` | `A31F…` (16 hex digits) | Groups repeats of one bug. Derived from the fault kind, the faulting module and the offset — never from the time and never from anything about you. |
 | `os`, `arch` | `Windows 10.0.22631`, `x64` | Whether a fault is specific to a Windows version. |
-| `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. Empty for a freeze report, which has no such line. |
+| `reason` | `access violation`, or `fault in a third-party SDR module, absorbed…` | The report's own reason line, verbatim. This is what separates a fault the application **survived** (a driver fault absorbed by the vendor-call guard) from one that killed it — without it the two are indistinguishable rows. A freeze report has no such line: until 0.99.64 this was empty for a freeze, and since 0.99.64 it is the fixed sentence `freeze: the frame was in ` followed by the report's `frame-scope` word (above) - and only when that word is one of the nineteen on the list; anything else is dropped, not sent. Since 0.99.64 it can also be a **sentinel** reason (*A sentinel report*, above): a fixed sentence beginning `sentinel: `, then the meaning of the exit code, the stage, the part of drawing the window and the seconds of silence - again from closed lists. The two classes kept on the machine are never uploaded. |
 | `code` | `0xC0000005` | The Windows exception code, verbatim from the report. A code, not content. Empty for a freeze report. |
 | `installId` | `4f9c…`, **or empty** | The same anonymous identifier the usage report uses, so the receiving end can stop one machine flooding it. **If usage reporting is off there is no identifier and this is sent empty** — a crash report never creates one. |
 | `plugins` | `[{name, version, buildId}]` | Plugins are third-party code running inside the application, and which one was loaded has already been the answer to real faults. |
-| `context` | `mode`, `source`, `sampleRate`, `deviceOpen`, `sdrModel`, `uptimeSec`, `faultThreadOwn` | What the receiver was doing. **`sampleRate` is the sample rate, not a tuned frequency.** Serial numbers are stripped from `sdrModel`, exactly as in the usage report. `uptimeSec` (since 0.89.0) is how many seconds the application had been running — a fault forty seconds in and one three hours in are different bugs. `faultThreadOwn` is `"true"` when the thread that faulted was running FoxSDR's own code, `"false"` when it was a thread a radio driver created and ran entirely in its own code, and empty for a freeze report or a stack that could not be walked. Neither says anything about you. |
-| `log` | the last log lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. Since 0.89.0 this also includes what the **radio driver** said (lines beginning `soapy:`) and what the driver's libraries printed to the standard error stream (lines beginning `vendor:`), because a radio going quiet is diagnosed from those lines and from nothing else. They are recorded as the driver wrote them, with two exceptions applied before anything is kept: a serial number after the word "serial" is replaced by `<stripped>`, and every digit on a line that mentions a frequency, tuning or hertz is replaced by `#`, so a driver's own "setting center frequency" line cannot carry what you were listening to. At most twenty such lines a second are kept; the rest are counted and the count is logged. **Since 0.99.33 every line is scrubbed again as the report is put together, whoever wrote it** — FoxSDR's own lines as well as the driver's: serial numbers (after the word "serial", after `SN:` or `S/N:`, after SoapySDR's ` :: ` in a device label) and the last part of a Windows USB device id (`USB\VID_…&PID_…\<this>`) become `<stripped>`; the account name in a file path becomes `<user>`; anything in single quotes — the names you give patch nodes and speakers — becomes `'<name>'`; and on any line that mentions hertz, a frequency, tuning, a centre, the VFO, a range, an offset, a carrier, a preset, transmitting or keying, every number becomes `#` unless it is marked as a sample rate, a time, a level, a size or a count, is a version, an id or an error code, or is part of a name such as `R820T`. Lines in which the USB driver lists the devices plugged into your computer are left out, with one line saying how many. |
-| `threads` | `[{id, frames:[{module, buildId, offset}]}]` | The call stacks, as file names and offsets. Addresses inside program code; they describe FoxSDR, not you. |
+| `context` | `mode`, `source`, `sampleRate`, `deviceOpen`, `sdrModel`, `uptimeSec`, `faultThreadOwn`, `foreignModules`, `reloadPhase` | What the receiver was doing. **`sampleRate` is the sample rate, not a tuned frequency.** Serial numbers are stripped from `sdrModel`, exactly as in the usage report. `uptimeSec` (since 0.89.0) is how many seconds the application had been running — a fault forty seconds in and one three hours in are different bugs. `faultThreadOwn` is `"true"` when the thread that faulted was running FoxSDR's own code, `"false"` when it was a thread a radio driver created and ran entirely in its own code, and empty for a freeze report or a stack that could not be walked. Neither says anything about you. `foreignModules` (since 0.99.69) is the report's `foreign-modules` line: the **file names** of other programs' components that were loaded into FoxSDR - an overlay or a hook another program put there - alphabetical, nothing but names (never a folder, a version or any other fact about the file), `(none)` when there were none, and empty when the report does not say. **It discloses the names of other software's DLLs**, which can show what software is installed on your computer; the *bundle* table above says what is counted and why. It is checked again as the request is built: anything in it that is not a plain file name is dropped. `reloadPhase` (since 0.99.84) is the freeze report's `reload-phase` word (above): which step of reloading the plugins the freeze was captured in - and only when that word is one of the eight on that fixed list; `none`, every crash report, and anything else send it empty. A step of the program, never a plugin, a file, a radio or a frequency. |
+| `log` | the last log lines | State changes — source opened, rate set, plugin started — never signal content, and **never the name or path of a file you opened**. Since 0.89.0 this also includes what the **radio driver** said (lines beginning `soapy:`) and what the driver's libraries printed to the standard error stream (lines beginning `vendor:`), because a radio going quiet is diagnosed from those lines and from nothing else. They are recorded as the driver wrote them, with two exceptions applied before anything is kept: a serial number after the word "serial" is replaced by `<stripped>`, and every digit on a line that mentions a frequency, tuning or hertz is replaced by `#`, so a driver's own "setting center frequency" line cannot carry what you were listening to. At most twenty such lines a second are kept; the rest are counted and the count is logged. **Since 0.99.33 every line is scrubbed again as the report is put together, whoever wrote it** — FoxSDR's own lines as well as the driver's: serial numbers (after the word "serial", after `SN:` or `S/N:`, after SoapySDR's ` :: ` in a device label) and the last part of a Windows USB device id (`USB\VID_…&PID_…\<this>`) become `<stripped>`; the account name in a file path becomes `<user>`; anything in single quotes — the names you give patch nodes and speakers — becomes `'<name>'`; and on any line that mentions hertz, a frequency, tuning, a centre, the VFO, a range, an offset, a carrier, a preset, transmitting or keying, every number becomes `#` unless it is marked as a sample rate, a time, a level, a size or a count, is a version, an id or an error code, or is part of a name such as `R820T`. Since 0.99.44 the names of the plugins the same report already lists under `plugins` (such as `406 MHz Beacons 1.0.0`) are left as they are wherever a line mentions them - a plugin's name is not something you tuned to - and every other number on that line is judged by the rule above. **Since 0.99.59 network addresses and computer names are scrubbed too**: every IPv4 or IPv6 address becomes `<host>`, and so does a computer or host name where FoxSDR and the network radio drivers write one - after a URL scheme such as `tcp://`, `rtsp://` or `https://` (a user name and password with it), after `ip:`, `host=`, `hostname=`, `remote=`, `rtltcp=`, `server=`, `uri=`, `addr=` or `address=`, after "at", "to" or "from" when it is plainly a host name, in double quotes after the word "host", under a local-network suffix such as `.local` or `.lan`, and at the start of a Windows network path (`\\<host>\share`). The port number after an address is kept, because it says which service was asked, not who asked; so is this computer's own loopback address (`127.0.0.1`, `0.0.0.0`, `::1`, `localhost`), which names nobody. Since 0.99.59 the number of a serial port is masked as well: `COM5` is sent as `COM#` and `/dev/ttyUSB0` as `/dev/ttyUSB#` - a report needs to know that a port was tried, opened or refused, not which number your computer gave it. A version number is not mistaken for an address: a four-part version such as `1.99.58.0` is kept when it is joined to a name or follows the word "version", "package", "firmware" or "build". Lines in which the USB driver lists the devices plugged into your computer are left out, with one line saying how many. |
+| `threads` | `[{id, frames:[{module, buildId, offset}]}]` | The call stacks, as file names and offsets. Addresses inside program code; they describe FoxSDR, not you. Since 0.99.63 a frame inside a module loaded after start-up (a graphics driver the system reloaded, a vendor DLL, a shell extension) carries that file's name, never a path, and an offset; before, it carried an empty module and an address inside the process. |
 
 That is the complete list. It is asserted **in both directions** by
 `tests/test_crash_upload.cpp`: a field added to the request fails the test just
@@ -360,16 +1011,40 @@ Directly under REQUEST A FEATURE is a **REPORT A BUG / DISLIKE** key, the
 same size, on the same terms. Its page asks first what you are reporting -
 **Something is broken (bug)** or **Something I dislike** - with neither
 chosen until you choose one, then has the same text box, the same optional
-"Email or callsign" line and the same SEND key. Nothing is sent until you
-press SEND, nothing is queued or retried, and the typed text and contact line
-live in memory only: never in `config.json`, never in the diagnostics log,
-which records only which kind was sent, how many characters it carried and
-what the server answered (`problem report (bug): sent, 42 characters, HTTP
-200`, or the failure in the same shape).
+"Email or callsign" line, an **"Attach the diagnostics log"** box, and the
+same SEND key. Nothing is sent until you press SEND, and the typed text and
+contact line live in memory only: never in `config.json`. Nothing you typed
+is ever queued, kept across a restart, or retried on its own - the ONE
+exception, and it never touches your words, is described further down: if
+you attached the log and the site refuses it, FoxSDR resends the same report
+without it, once, immediately. The diagnostics log line records only which
+kind was sent, how many characters the message carried and what the server
+answered (`problem report (bug): sent, 42 characters, HTTP 200`, or the
+failure in the same shape) - it never records the words you typed, whether
+or not you attached the log itself.
 
-It is **not** a crash or freeze report. A report typed here carries no stack,
-no log, no loaded-plugin list and no identifier; if FoxSDR crashed, the crash
-report described above is a separate thing with its own switch.
+Earlier versions of this page said the report carried no log - it never did,
+but people kept believing it did, and telling us so made bugs harder to fix,
+not easier. Since 2026-09-28 you can choose to attach it: **ticked by default
+when you report a bug, unticked for a dislike**, and yours to change either
+way. A **"Show what will be sent"** toggle shows the exact text - the same
+words the SYSTEM > Diagnostics **Copy diagnostics** button copies - before you
+press SEND, so nothing about it is a surprise. That text is the bundle
+described in full under *Crash and freeze reports — what they contain*
+above (the `log-path`/`crash-dir` row there is what says exactly how your
+account name is handled in it), and is additionally capped here at 65536
+bytes - a log longer than that keeps its header and its newest lines, and
+says plainly that older lines were dropped.
+
+It is **not** a crash or freeze report. A report typed here carries no stack
+and no crash report; if FoxSDR crashed, the crash report described above is a
+separate thing with its own switch. The diagnostics log, when you choose to
+attach it, is the same context a crash report carries (version, commit,
+operating system, mode, the loaded plugins, whether a device was open) plus
+your recent log lines, the end of the previous session's log and one line per
+crash or freeze report on your machine (the last two rows of the bundle's table
+above; with Diagnostics off the bundle has neither) - never a frequency, never a
+hardware serial, never the install identifier telemetry uses.
 
 ### What is sent when you report a bug or a dislike
 
@@ -382,17 +1057,46 @@ SEND:
 | `kind` | `bug` or `dislike` | Which of the two you chose at the top of the page: something that does not work, or something that works as designed and that you would rather it did not. |
 | `text` | `The waterfall freezes when I change the sample rate` | What you typed, trimmed of leading and trailing blank space. Between 10 and 100000 characters. |
 | `contact` | `g4xyz@example.com`, or empty | An email address or callsign, ENTIRELY OPTIONAL, so we can ask a follow-up question. Up to 120 characters. Kept on screen after a successful send. |
-| `version` | `0.99.20` | Which release, so a bug already fixed is not chased again. |
+| `version` | `0.99.44` | Which release, so a bug already fixed is not chased again. |
 | `platform` | `windows`, `linux` or `android` | Which build sent it. |
 | `arch` | `x64` or `arm64` | As above. |
+| `diagnostics` | the same text **Copy diagnostics** produces, or ABSENT | OPTIONAL. Present only when you left "Attach the diagnostics log" ticked when you pressed SEND - absent, not an empty string, otherwise. It is exactly the bundle above (*Crash and freeze reports*), with the same `<user>` handling that table's `log-path`/`crash-dir` row describes, additionally capped here at 65536 bytes (the newest lines kept, the oldest dropped, and said so). Never anything the diagnostics bundle does not already contain: no install identifier, no plugin list beyond what that bundle lists - with ONE addition you choose separately: when you have run the SDRplay diagnostic and ticked "Attach the SDRplay diagnostic too", that file follows the bundle inside this same field (described under *The SDRplay diagnostic* below), within the same 65536 bytes. |
+| `attachments` | a list of one `{class, version, text}`, or ABSENT | OPTIONAL, since 0.99.69. Present only when the message you typed or pasted CONTAINS a FoxSDR crash, freeze or sentinel report - the text a report file in the reports folder holds, which starts `kind: crash`, `kind: hang` or `kind: stall` and has a `signature:` line and a `--- context ---` block - and absent, not an empty list, otherwise. It exists because people paste such a report into the box by hand, and this lets the site file it as one. It adds **nothing you are not already sending**: `text` above carries the same words unchanged, and the attachment is a copy of the part of them that is the report. `class` says which kind it is, one of `crash`, `hang`, `stall`, `sentinel:crash`, `sentinel:frozen`, `sentinel:startup`, `sentinel:outside` or `sentinel:session`; `version` is the `version:` line of the report's own context block (the build that WROTE it, which may not be the one you are running); `text` is the report from its `kind:` line, with line endings made uniform and at most 65536 bytes (a longer paste is cut at a line and says so). FoxSDR tells you on the page, before you press SEND, when it has recognised one ("A report was recognised and attached as ..."). Nothing is recognised by reading a file: only the text in the box is looked at. |
 
-That is the complete list: a feature request's six fields plus `kind`. No
-install identifier, no hardware, no log, no config, no frequency, no
-location, no plugin list. It is asserted **in both directions** by
+That is the complete list: a feature request's six fields plus `kind`, plus
+the two optional fields above, `diagnostics` and `attachments`. No install identifier, no
+hardware serial, no config beyond what the diagnostics log already lists when
+attached, no frequency, no location. It is asserted **in both directions** by
 `tests/test_problem_report.cpp`, which also reads this table and requires the
 two lists to match. The server answers, rate-limits and waits exactly as it
-does for a feature request (above), and keeps the same record plus the kind:
-never your IP address.
+does for a feature request (above), and keeps the same record plus the kind
+and, when you attached them, the log and the recognised report: never your IP
+address.
+
+**If the site does not yet know the `diagnostics` or `attachments` field** (an
+older release, or a moment before this contract's own change reaches it), it
+refuses the whole request rather than silently ignoring the field. FoxSDR
+notices that exact refusal and tries again, once, immediately, with both left
+out - and says so plainly on the page when the log was one of them - rather than
+leaving your bug report unsent over a field the site does not yet accept. The
+words of a recognised report are in `text` either way, so nothing is lost.
+
+### The SDRplay diagnostic
+
+**SYSTEM > Diagnostics > Run SDRplay diagnostic** (or `cascade --sdrplay-probe
+<file>`) steps an SDRplay RSP through its sample rates, bands, LNA states,
+antennas and IF modes once, times every call to the SDRplay API, and writes
+one text file on YOUR machine, in the reports folder. Nothing is sent by
+running it. The file holds the FoxSDR version, the operating system, the API
+version, the radio's model and hardware number, **a hash of its serial number
+(never the serial itself)**, the settings the API reported, the timing and
+answer of every API call, how many samples arrived, and the service's own
+events (gain changes, overloads). No frequency you tuned to, nothing
+received, and paths go through the same `<user>` masking as the bundle. It
+leaves the machine only if you tick **"Attach the SDRplay diagnostic too"** on
+the report page, inside the `diagnostics` field above, and "Show what will be
+sent" shows it first. The bias tee is switched on during the test only if you
+tick it AND answer a second question that says it powers the antenna socket.
 
 ## What is never sent
 
@@ -423,7 +1127,9 @@ These are design constraints, not current policy:
   length ("(a typed device path, 27 chars)"), so a path with your user name in
   it cannot ride into a report. `tests/test_gps_reader.cpp` asserts both
   against the log ring and `tests/test_gps_app.cpp` against the log file the
-  real application wrote.
+  real application wrote. Since 0.99.59 a report or a diagnostics bundle
+  carries even the port name without its number ("COM#", "/dev/ttyUSB#"); the
+  log on your own computer keeps it.
 - **Your IP address or any location derived from it.** A network request
   necessarily reaches the server from an address, because that is how the
   internet works; nothing records or stores it, the receiving endpoint reads no
@@ -431,6 +1137,60 @@ These are design constraints, not current policy:
 - **Hardware serial numbers.** The SDR model is useful; the serial identifies
   your individual radio, and is removed.
 - Your name, your machine's name, your user account, or any file path.
+- **Patch presets.** The patch page's named presets and its "(previous
+  patch)" slot — their names and the patches in them — are stored only in
+  `config.json` on your own machine, and nothing about them is sent anywhere.
+
+## Plugins and your receiver's position
+
+Everything above is about what FoxSDR itself sends. A fitted plugin is
+separate, third-party code that runs inside the application with every
+privilege the application has (see the plugin ABI's own licence notice and
+the Plugin store's "Declared by the maker, not enforced" notice) - it is not
+sandboxed, and this section is about what one CAN reach, not a guarantee of
+what any particular one DOES with it.
+
+- **Only a plugin that declares it can read your receiver's position, and
+  only that one gets to.** The plugin interface added a separate permission
+  bit for this (`CASCADE_CAP_RECEIVER_LOCATOR`, FoxSDR 0.99.43) precisely so
+  that a plugin which only wants to decode a signal, or only wants to move the
+  tuning dial, is never handed it - it has to ask, in its own published
+  description, before the host will ever give it one. Which fitted plugins
+  ask is shown as **"Can read your receiver's locator"** on that plugin's own
+  card in the Fitted modules window and the Plugin store, wherever its other
+  permissions (such as moving the receiver) are shown.
+- **What it gets is a 6-character Maidenhead grid square, not a point.** That
+  is a rectangle roughly 5 minutes of longitude by 2.5 minutes of latitude -
+  a few kilometres across at temperate latitudes, not an address and not a
+  precise fix. It reflects wherever the receiver's position was last set -
+  a GPS fix, "Set RX here" on the map, or a position you typed in - and is
+  empty whenever none has been set.
+- **What a plugin does with it is up to the plugin**, exactly like anything
+  else it decodes or computes: some may keep it entirely on your machine,
+  and some report it onward. The plugin this permission was added for is a
+  PSK Reporter-style FT8 reporting plugin, whose whole purpose is to publish
+  your callsign, grid square and what you decoded to a public spotting
+  service (pskreporter.info) - which is exactly how that kind of reporting
+  works, and exactly why the permission is visible rather than silent.
+  **Nothing is sent anywhere by it until you both fill in a callsign and turn
+  reporting on** - a plugin field left at its default never becomes a network
+  request, per the plugin ABI's own rule for exactly this shape of setting.
+- **A plugin that can transmit** (`CASCADE_CAP_TX_AUDIO`, FoxSDR 0.99.74) is
+  shown as **"Can transmit through FoxSDR"** in the same two places. It can key
+  your transmitter only if you pressed **GRANT TRANSMIT** on its page **and**
+  armed the TRANSMIT page for 5, 15 or 60 minutes (see Transmitting). The grant
+  is stored in `config.json` on your own machine by the plugin's file name and is
+  never sent anywhere; the arming window is never stored at all. The diagnostic
+  log records the keying: `tx: armed 15 min`, `tx: plugin <name> keyed`,
+  `tx: plugin <name> unkeyed (<why>)`, `tx: disarmed (<why>)` - the plugin's
+  declared name, a reason from a fixed list and a number of minutes, **never a
+  frequency**. Those lines are scrubbed like every other log line when a bundle
+  or a report is put together.
+- **FoxSDR's own reporting (above) never carries it.** The usage, crash,
+  feature and bug reports have no field for it and never will; this section
+  is only about what a plugin's OWN code may read and do, through the
+  interface every plugin uses, separate from anything this application
+  reports about itself.
 
 ## Turning it off
 
@@ -440,9 +1200,13 @@ identifier, so if you ever turn it back on you get a new one that cannot be
 linked to the old one. It also stops the five-minute "still running" beat,
 which is armed only while the identifier exists.
 
-The other two transmissions have their own switches, described in their own
-sections above: **Settings → Diagnostics** for crash and freeze reports, and
-**Settings → Updates** for the version check.
+The other transmissions have their own switches, described in their own
+sections above: **Settings → Diagnostics** for crash and freeze reports,
+**Settings → Updates** for the version check, and **Settings → Beta tester**
+for the tester usage report — remove the code there and nothing further is
+collected. Unlike usage reporting, beta tester usage starts OFF and stays off
+until a code is entered; there is nothing to turn off on a machine where one
+never was.
 
 Nothing else in the application is affected: no feature depends on any of
 them being on, and nothing nags you about having turned one off.
@@ -454,10 +1218,29 @@ project, which aggregates the counters above. The source is in
 `telemetry-worker/` in this repository so you can read what the receiving end
 does with it.
 
+Beta tester usage goes to `https://foxsdr.com/api/tester-usage` instead, on
+the site itself rather than the anonymous-counters Worker, because it is
+linked to your tester entry there rather than aggregated anonymously. Opening
+a tester link or using `--link-tester` additionally reaches
+`https://foxsdr.com/api/beta/app-token/me` (to look up the name shown in the
+confirmation prompt) and, once, `https://foxsdr.com/api/beta/app-token` (to
+exchange an older pasted code for the newer kind) — both carry the token
+being asked about and nothing else. The one-shot file a tester link writes to
+hand the token to an already-running FoxSDR (`link-request`, beside
+`config.json`) never leaves your machine and is deleted the moment it is
+read.
+
 ## Data protection
 
-The reports contain no personal data, so there is nothing to request access
-to, correct or erase — there is no record anywhere that can be connected to
-you. If you would like the install identifier removed from future reports,
-turn usage reporting off; if you would like it removed from past ones, contact
-us with the identifier and it will be deleted.
+The usage and crash reports contain no personal data, so there is nothing to
+request access to, correct or erase — there is no record anywhere that can be
+connected to you. If you would like the install identifier removed from
+future reports, turn usage reporting off; if you would like it removed from
+past ones, contact us with the identifier and it will be deleted.
+
+Beta tester usage is **not** anonymous — it is linked, by the code you
+pasted, to your own entry on the tester list, and foxsdr.com's own privacy
+notice for that list covers what is kept and for how long. Removing the code
+from Beta tester stops any further report; to have past ones associated with
+your entry removed, ask through the tester portal the same way you would ask
+to be removed from the list itself.

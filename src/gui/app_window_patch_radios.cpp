@@ -38,7 +38,7 @@
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "core/mp3_writer.hpp"
-#include "core/patch_audio.hpp"
+#include "core/patch_audio_rate.hpp"
 #include "core/patch_devices.hpp"
 #include "engine/rate_follow_status.hpp"
 #include "gui/scope_face.hpp"

@@ -8,6 +8,9 @@
 //   GetLocalTime / GetCurrentProcessId      TEB and shared-page reads
 //   RtlCaptureStackBackTrace or
 //   RtlLookupFunctionEntry + RtlVirtualUnwind
+//   VirtualQuery + NtQueryVirtualMemory, only for an address in a module the
+//     table was not refreshed for (adoptModuleContaining, diag_report.cpp):
+//     reads of the address space's own bookkeeping, no loader lock, no heap
 //   Sleep, only while ANOTHER thread's report is being written
 //   memcpy, and integer rendering written by hand
 //
@@ -40,14 +43,18 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/ubsan_exempt.hpp"
 
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <chrono>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <thread>
 
@@ -94,6 +101,32 @@ char g_ringBuf[DiagLog::kRingLines * DiagLog::kLineBytes + 1] = {};
 // only because acquireFaultPath admits exactly one writer at a time.
 char g_reportPath[kPathBytes] = {};
 char g_dumpPath[kPathBytes] = {};
+
+// WHAT THIS PROCESS IS, appended to every `reason:` line (CrashHandlerConfig::
+// reasonSuffix). Filled on the healthy path by installCrashHandlers and only
+// ever READ from the fault path, as plain bytes. 128 including the terminator.
+constexpr std::size_t kReasonSuffixBytes = 128;
+char g_reasonSuffix[kReasonSuffixBytes] = {};
+
+// WHAT THE SIGNATURE HASHES when the faulting address resolves to no module
+// (CrashHandlerConfig::unresolvedSignatureTag); empty means "?". Same storage
+// rules as the suffix.
+constexpr std::size_t kSignatureTagBytes = 96;
+char g_unresolvedTag[kSignatureTagBytes] = {};
+
+#if defined(_WIN32)
+// HEALTHY PATH ONLY: `src` as printable ASCII, cut to what fits. (The Linux
+// handler keeps its own copy of the storage and of this, in
+// crash_handler_posix.cpp.)
+void copyPrintable(char* dst, std::size_t cap, const std::string& src) {
+    std::size_t at = 0;
+    for (; at < src.size() && at + 1 < cap; ++at) {
+        const unsigned char c = static_cast<unsigned char>(src[at]);
+        dst[at] = (c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?';
+    }
+    dst[at] = '\0';
+}
+#endif
 
 #if defined(_WIN32)
 // ---------------------------------------------------------------------------
@@ -448,6 +481,10 @@ void writeContextBlock(const Emit& e) {
     int len = 0;
     const char* block = diagContextRaw(len);
     e.raw(block, static_cast<std::size_t>(len));
+    // The window's last-known state and its age, rendered with no allocation and no
+    // formatting call (core/diag_report.hpp): the same line a freeze report carries.
+    char stateLine[192];
+    e.raw(stateLine, renderWindowStateLine(stateLine, sizeof(stateLine)));
 }
 
 void writeModules(const Emit& e) {
@@ -712,11 +749,23 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     if (e.h == INVALID_HANDLE_VALUE) { return; }
     g_openReport = e.h;
 
+    // A MODULE MAPPED SINCE THE TABLE WAS LAST REFRESHED is named here, before
+    // the address is resolved: the signature, the `address:` line and the
+    // frames below would otherwise be bare numbers for the very code that most
+    // needs a name (a vendor DLL a probe mapped itself - the 2026-10-01 ASIO
+    // driver). See adoptModuleContaining for why this is allowed on this path.
+    // A no-op for an address the table already covers, and for address 0.
+    adoptModuleContaining(faultAddr);
+
     DiagModule fm;
     std::uintptr_t foff = 0;
     const bool resolved = resolveAddress(faultAddr, fm, foff);
     char sig[17];
     const char* sigModule = resolved ? fm.name : "?";
+    // A fault in no module at all hashes the process's own tag when it has one
+    // (the enumeration child's walk or driver), not the "?" every such fault
+    // shares: see CrashHandlerConfig::unresolvedSignatureTag.
+    if (!resolved && g_unresolvedTag[0] != '\0') { sigModule = g_unresolvedTag; }
     if (child != nullptr && child->signatureTag != nullptr && child->signatureTag[0] != '\0') {
         sigModule = child->signatureTag;
     }
@@ -730,6 +779,10 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     e.str("kind: crash\n");
     e.str("reason: ");
     e.str(reason);
+    // What this process is (CrashHandlerConfig::reasonSuffix): empty in every
+    // process but the enumeration child, where it names the driver and the
+    // attempt. Bytes copied in on the healthy path; nothing is formatted here.
+    e.str(g_reasonSuffix);
     e.str("\ncode: 0x");
     e.hex(code, 8);
     e.str("\naddress: ");
@@ -751,6 +804,11 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     // of what this process knows, and they are worth more than a stack of the
     // observer.
     const int nFrames = (child != nullptr) ? 0 : captureFramesGuarded(ep, true);
+    // The same naming for every frame the walk found: a late-mapped DLL is
+    // usually the top of the stack, not its only appearance.
+    for (int i = 0; i < nFrames; ++i) {
+        adoptModuleContaining(static_cast<std::uintptr_t>(g_frames[i]));
+    }
     if (nFrames == 0) {
         // SAID, not left as an empty section. A stack section with no frames
         // and no explanation reads as "this fault had no stack", which is
@@ -925,7 +983,17 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
 // cannot be taken. Returns only when this thread holds it.
 void enterFatal(const char* what, unsigned long code, std::uintptr_t addr) {
     const FaultPathEntry entry = acquireFaultPath(kOtherThreadWaitMs);
-    if (entry == FaultPathEntry::Acquired) { return; }
+    if (entry == FaultPathEntry::Acquired) {
+        // The faulting address is named BEFORE anything is written with it:
+        // the line the enumeration child writes to its parent's pipe
+        // (faultLine) and the stderr line both print it as module+offset, and
+        // for code mapped since the table was last refreshed they used to
+        // print a bare address - "cascade: fatal exception 0xC0000005 at
+        // 0x00007FFF52E84E94" in the 0.99.57 field log. Only the thread that
+        // holds the fault path may add to the table. See adoptModuleContaining.
+        adoptModuleContaining(addr);
+        return;
+    }
     handlerCannotRun(entry == FaultPathEntry::SameThread, what, code, addr);
 }
 
@@ -1038,6 +1106,13 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
     g_minidump = cfg.minidump;
     g_exitAfterReport = cfg.exitAfterReport;
 
+    // THE REASON'S TAIL and THE SIGNATURE'S STAND-IN for an unresolved fault,
+    // rendered by the caller and copied into fixed storage here, on the healthy
+    // path: printable ASCII, cut to what fits. Replaced (and so cleared) by
+    // every install, like the rest of the configuration.
+    copyPrintable(g_reasonSuffix, kReasonSuffixBytes, cfg.reasonSuffix);
+    copyPrintable(g_unresolvedTag, kSignatureTagBytes, cfg.unresolvedSignatureTag);
+
     // REMEMBERED EVEN WHEN DISABLED, and NOT created: a session that starts
     // with diagnostics switched off must leave no directory behind, but the
     // Settings toggle has to have somewhere to put a report if the user turns
@@ -1084,6 +1159,10 @@ void installCrashHandlers(const CrashHandlerConfig& cfg) {
     // The module snapshot the fault path searches. Refreshed again by the
     // application after anything that loads code; this is just the floor.
     if (moduleCount() == 0) { refreshModuleTable(); }
+    // The one ntdll entry point the fault path needs to NAME a module mapped
+    // after that snapshot (adoptModuleContaining), looked up here because
+    // GetProcAddress from a handler is a call into the loader.
+    prepareModuleAdoption();
     // Our own image, for the process block's fault-thread-own line. A module
     // handle IS its base address; read here on the healthy path.
     g_selfBase = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
@@ -1166,6 +1245,112 @@ std::string activeCrashDir() {
 #else
     return std::string();
 #endif
+}
+
+namespace {
+
+// The process-id field of "crash-<stamp>-<pid>-<seq>.txt", or false when `name`
+// is not shaped like a crash report's. Read from the RIGHT, because the stamp
+// in front of it is two fields on Windows (YYYYMMDD-HHMMSS) and one on Linux
+// (epoch seconds) while the last two fields mean the same on both.
+bool reportNamePid(const std::string& name, unsigned long long& pid) {
+    static const std::string kHead = "crash-";
+    static const std::string kTail = ".txt";
+    if (name.size() <= kHead.size() + kTail.size()) { return false; }
+    if (name.compare(0, kHead.size(), kHead) != 0) { return false; }
+    if (name.compare(name.size() - kTail.size(), kTail.size(), kTail) != 0) { return false; }
+    const std::string stem = name.substr(0, name.size() - kTail.size());
+    const std::size_t seqDash = stem.rfind('-');
+    if (seqDash == std::string::npos || seqDash + 1 >= stem.size()) { return false; }
+    const std::size_t pidDash = stem.rfind('-', seqDash - 1);
+    if (pidDash == std::string::npos || pidDash + 1 >= seqDash) { return false; }
+    // Digits and nothing else in either field, or this is somebody's file.
+    for (std::size_t i = pidDash + 1; i < stem.size(); ++i) {
+        if (i == seqDash) { continue; }
+        if (stem[i] < '0' || stem[i] > '9') { return false; }
+    }
+    pid = std::strtoull(stem.substr(pidDash + 1, seqDash - pidDash - 1).c_str(), nullptr, 10);
+    return true;
+}
+
+// Is the head of this report a whole crash report that is NOT an absorbed
+// vendor fault? Only the header is read: kind, reason and signature are the
+// first lines the writer emits, and the first thing the writer emits before it
+// does anything that could stop it.
+bool isWholeFatalReportHead(const std::string& head) {
+    bool sawKind = false;
+    bool sawSignature = false;
+    bool absorbed = false;
+    std::size_t pos = 0;
+    while (pos < head.size()) {
+        std::size_t eol = head.find('\n', pos);
+        const bool complete = eol != std::string::npos;
+        if (!complete) { eol = head.size(); }
+        std::string line = head.substr(pos, eol - pos);
+        if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+        pos = eol + 1;
+        if (line.rfind("--- ", 0) == 0) { break; }
+        if (line == "kind: crash") {
+            sawKind = true;
+        } else if (line.rfind("reason: ", 0) == 0) {
+            const std::string reason = line.substr(8);
+            // A fault the process SURVIVED is not the report of a death: an
+            // absorbed vendor fault, or its report of a child process's death.
+            absorbed = reasonStartsWith(reason.c_str(), kAbsorbedFaultReasonPrefix) ||
+                       reasonStartsWith(reason.c_str(), kChildDeathReasonPrefix) ||
+                       reasonStartsWith(reason.c_str(), "child process fault (contained)");
+        } else if (complete && line.rfind("signature: ", 0) == 0) {
+            const std::string sig = line.substr(11);
+            bool hex = sig.size() == 16;
+            for (const char c : sig) {
+                const bool digit = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') ||
+                                   (c >= 'a' && c <= 'f');
+                if (!digit) { hex = false; }
+            }
+            sawSignature = hex;
+        }
+    }
+    return sawKind && sawSignature && !absorbed;
+}
+
+}  // namespace
+
+bool crashReportWrittenByProcess(const std::string& crashDir, unsigned long pid,
+                                 std::chrono::system_clock::time_point notBefore) {
+    if (crashDir.empty() || pid == 0) { return false; }
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    // File times are on their own clock; this is the portable way to put one
+    // on the system clock (C++20's clock_cast is not in every standard library
+    // this builds against yet).
+    const auto fileNow = fs::file_time_type::clock::now();
+    const auto sysNow = std::chrono::system_clock::now();
+    // Slack for file systems that keep coarse timestamps (FAT: two seconds).
+    constexpr auto kSlack = std::chrono::seconds(2);
+
+    fs::directory_iterator it(fs::path(crashDir), ec);
+    const fs::directory_iterator end;
+    for (; !ec && it != end; it.increment(ec)) {
+        unsigned long long namePid = 0;
+        if (!reportNamePid(it->path().filename().string(), namePid)) { continue; }
+        if (namePid != static_cast<unsigned long long>(pid)) { continue; }
+
+        std::error_code tec;
+        const auto written = it->last_write_time(tec);
+        if (tec) { continue; }
+        const auto writtenSys =
+            sysNow + std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                         written - fileNow);
+        if (writtenSys + kSlack < notBefore) { continue; }
+
+        std::ifstream in(it->path(), std::ios::binary);
+        if (!in) { continue; }
+        char buf[4096];
+        in.read(buf, sizeof(buf));
+        const std::string head(buf, static_cast<std::size_t>(in.gcount()));
+        if (isWholeFatalReportHead(head)) { return true; }
+    }
+    return false;
 }
 
 void reportAbsorbedFault(const char* reason, unsigned long code, const void* faultAddress,
@@ -1299,7 +1484,11 @@ void pokePureVirtual(PureBase* b) { b->nowhere(); }
 
 }  // namespace
 
-void raiseTestFault(TestFaultKind kind) {
+// CASCADE_UBSAN_EXEMPT: the access violation below IS undefined behaviour, raised
+// on purpose to prove the handler writes its report. UndefinedBehaviorSanitizer's
+// null check would report it first and end the process before the fault happens
+// (core/ubsan_exempt.hpp). Nothing else in this file is exempt.
+CASCADE_UBSAN_EXEMPT void raiseTestFault(TestFaultKind kind) {
     switch (kind) {
         case TestFaultKind::AccessViolation: {
             // volatile so the store is really emitted rather than folded into

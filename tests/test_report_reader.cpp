@@ -28,6 +28,7 @@
 
 #include "core/diag_report.hpp"
 #include "core/report_reader.hpp"
+#include "elf_line_fixture.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -494,6 +495,141 @@ int main() {
         { std::ofstream((root / "oddname" / id2 / "odd.debug").string()) << "d"; }
         CHECK(!archive.elfSymbolPath("plug.so", id2).empty());
         fs::remove_all(root, ec);
+    }
+
+    // --- ELF frames end to end, through the REAL addr2line -------------------
+    //
+    // tests/elf_line_fixture.hpp builds two tiny ELF files whose answers are
+    // known in advance: one shaped like a symbol-table-only split-debug file
+    // (what every archived cascade.debug was until the Linux build compiled
+    // with -g) and one with DWARF line tables. The reader has no DWARF parser;
+    // it drives addr2line, so these are run through whatever addr2line this
+    // machine has - which is the only way to learn that the command line, the
+    // parse, the archive layout and the wording all agree with the tool.
+    //
+    // A machine with no addr2line cannot run the resolution half. On Windows
+    // that is a stated SKIP (a developer box may not have binutils); on Linux
+    // it is a FAILURE, because the CI job installs build-essential and a
+    // skipped test proves nothing.
+    {
+        const fs::path root = scratchDir("elfline");
+        const std::string idDwarf = "1111111111111111111111111111111111111111";
+        const std::string idSym = "2222222222222222222222222222222222222222";
+        const auto stage = [&root](const std::string& id, bool dwarf) {
+            const fs::path dir = root / "fixture.so.debug" / id;
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            const elffixture::Bytes b = elffixture::buildElf(dwarf);
+            std::ofstream out((dir / "fixture.so.debug").string(), std::ios::binary);
+            out.write(reinterpret_cast<const char*>(b.data()),
+                      static_cast<std::streamsize>(b.size()));
+            out.close();
+            return !out.fail() && !ec;
+        };
+        CHECK(stage(idDwarf, true));
+        CHECK(stage(idSym, false));
+
+        SymbolArchive archive(root.string());
+        CHECK(archive.exists());
+        CHECK(archive.elfSymbolPath("fixture.so", idDwarf).find("fixture.so.debug") !=
+              std::string::npos);
+
+        const SymbolResult probe = archive.resolve("fixture.so", idDwarf, 0x1004);
+        const bool haveTool = probe.note.find("no addr2line is available") == std::string::npos;
+#if defined(_WIN32)
+        if (!haveTool) {
+            std::printf("SKIPPED: no addr2line on this machine - the ELF resolution checks "
+                        "did not run (set FOXSDR_ADDR2LINE or put binutils on PATH)\n");
+        }
+#else
+        CHECK(haveTool);
+#endif
+        if (haveTool) {
+            // With line tables: function, file and line, and no note.
+            const SymbolResult a = archive.resolve("fixture.so", idDwarf, 0x1004);
+            CHECK(a.resolved);
+            CHECK(a.function == "fixtureAlpha");
+            CHECK(a.file.find("fixture.cpp") != std::string::npos);
+            CHECK(a.line == 10);
+            CHECK(a.note.empty());
+            CHECK(archive.resolve("fixture.so", idDwarf, 0x1010).line == 11);
+            const SymbolResult b = archive.resolve("fixture.so", idDwarf, 0x1034);
+            CHECK(b.function == "fixtureBeta");
+            CHECK(b.file.find("helper.h") != std::string::npos);
+            CHECK(b.line == 7);
+            // An offset past the end of the last function is not guessed at.
+            const SymbolResult outside = archive.resolve("fixture.so", idDwarf, 0x900);
+            CHECK(!outside.resolved);
+            CHECK(outside.note.find("outside every function") != std::string::npos);
+
+            // Without them: the function is still named, and the missing line
+            // is a stated fact rather than an empty field.
+            const SymbolResult s = archive.resolve("fixture.so", idSym, 0x1004);
+            CHECK(s.resolved);
+            CHECK(s.function == "fixtureAlpha");
+            CHECK(s.file.empty());
+            CHECK(s.line == 0);
+
+            const auto renderFor = [&archive](const std::string& id) {
+                std::string err;
+                const std::vector<ReaderReport> rs = parseReportFeed(
+                    feedOf({makeReport("ELFSIG", "fixture.so", id, 0x1004, "0.99.61",
+                                       "2026-10-01T09:00:00Z")}),
+                    err, nullptr);
+                const std::vector<ReportGroup> groups = groupReports(rs, archive);
+                return renderGroupsText(groups, 1, 0, archive);
+            };
+            const std::string withLines = renderFor(idDwarf);
+            CHECK(withLines.find("fixture.so!fixtureAlpha  ") != std::string::npos);
+            CHECK(withLines.find("fixture.cpp:10") != std::string::npos);
+            CHECK(withLines.find("function only") == std::string::npos);
+
+            const std::string noLines = renderFor(idSym);
+            CHECK(noLines.find("fixture.so!fixtureAlpha") != std::string::npos);
+            // Said in words, on the fault line AND on the stack frame, so a
+            // reader never mistakes a symbol-table-only answer for a complete
+            // one.
+            CHECK(noLines.find("fixtureAlpha  (function only: no source line in the "
+                               "archived symbols)") != std::string::npos);
+            CHECK(noLines.find("fixture.cpp:") == std::string::npos);
+        }
+
+        // THE TOOL ABSENT: said in words, naming the file that could not be
+        // read, never a crash and never a half-answer. Simulated for real - the
+        // override is cleared and PATH points at an empty directory - so the
+        // probe is genuinely run and genuinely fails.
+        {
+            const auto setEnv = [](const char* name, const std::string& value) {
+#if defined(_WIN32)
+                ::_putenv_s(name, value.c_str());
+#else
+                ::setenv(name, value.c_str(), 1);
+#endif
+            };
+            const char* oldPathRaw = std::getenv("PATH");
+            const char* oldOverrideRaw = std::getenv("FOXSDR_ADDR2LINE");
+            const std::string oldPath = oldPathRaw != nullptr ? oldPathRaw : "";
+            const bool hadOverride = oldOverrideRaw != nullptr;
+            const std::string oldOverride = hadOverride ? oldOverrideRaw : "";
+            const fs::path emptyDir = root / "empty-path";
+            std::error_code ec;
+            fs::create_directories(emptyDir, ec);
+            setEnv("FOXSDR_ADDR2LINE", "");
+            setEnv("PATH", emptyDir.string());
+
+            SymbolArchive blind(root.string());
+            const SymbolResult none = blind.resolve("fixture.so", idDwarf, 0x1004);
+
+            setEnv("PATH", oldPath);
+            setEnv("FOXSDR_ADDR2LINE", hadOverride ? oldOverride : std::string());
+            CHECK(!none.resolved);
+            CHECK(none.note.find("no addr2line is available") != std::string::npos);
+            CHECK(none.note.find(idDwarf) != std::string::npos);
+            CHECK(none.function.empty());
+        }
+
+        std::error_code rmEc;
+        fs::remove_all(root, rmEc);
     }
 
     // OPT-IN, END TO END: CASCADE_TEST_ELF_RESOLVE=1 resolves a real offset

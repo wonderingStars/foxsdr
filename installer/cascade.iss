@@ -179,6 +179,31 @@ Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon
 
+[Registry]
+; THE foxsdr: PROTOCOL - the beta-tester portal's "Link FoxSDR" button opens
+; foxsdr://beta?t=<token>, and this is what makes Windows hand that URL to
+; cascade.exe (see core/tester_link.hpp's parseBetaLinkUrl and main.cpp's
+; activation handling). Nothing registered a protocol before this
+; (AppxManifest.xml's own "NO FILE TYPE ASSOCIATION AND NO PROTOCOL" comment,
+; and this file had no [Registry] section at all - PORTAL-LINK-VERDICT.md's
+; own citations, now out of date).
+;
+; Root: HKA (verified against jrsoftware.org's [Registry] documentation
+; before use, per PORTAL-LINK-VERDICT.md finding 7's instruction to check
+; rather than assume): HKA resolves to HKLM for an admin ("machine-wide")
+; install and to HKCU for a /CURRENTUSER ("per-user") install - exactly the
+; scope this installer actually used, rather than HKCU unconditionally,
+; which would register the handler for the ADMIN ACCOUNT that approved the
+; UAC prompt on a machine-wide install rather than the account that actually
+; uses the machine day to day (finding 7's own example).
+;
+; uninsdeletekey on the top key removes the whole "foxsdr" subtree on
+; uninstall, the same way every other [Registry] entry in this codebase would
+; clean up after itself, if this were not the first one.
+Root: HKA; Subkey: "Software\Classes\foxsdr"; ValueType: string; ValueName: ""; ValueData: "URL:FoxSDR Beta Link"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\foxsdr"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\foxsdr\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
+
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
 

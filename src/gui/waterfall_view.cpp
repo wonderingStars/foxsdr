@@ -21,6 +21,7 @@
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_census.hpp"
 
 // glfw3.h pulls in GL/gl.h on Windows. Everything used here is OpenGL 1.1
 // (glGenTextures / glTexImage2D / glTexSubImage2D / ...), which links straight
@@ -480,7 +481,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // one. It was the literal 48, and 48 is exactly four lines of the 12 px
     // this strip was laid out at; written this way it travels with the type
     // instead of quietly becoming three lines the next time the type grows.
-    if (stripH < fonts::kTinySize * 4.0f) {
+    if (stripH < fonts::tinyPx() * 4.0f) {
         return 0.0f;
     }
     // How many labels the strip has ROOM for, not a fixed number: the panel
@@ -489,7 +490,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
     // (the literal was 38 px, which is that rule at 12 px lettering); a fixed
     // count either crowds the short panel or leaves the tall one with two
     // lonely figures.
-    const float perLabel = fonts::kTinySize * 3.0f + 2.0f;
+    const float perLabel = fonts::tinyPx() * 3.0f + 2.0f;
     const int maxLabels = std::max(2, std::min(8, static_cast<int>(stripH / perLabel)));
     const double step = WaterfallView::timeLabelStep(ages.span, maxLabels);
     const TimeTicks ticks = timeTicks(ages.newest, ages.oldest, step);
@@ -499,7 +500,7 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
 
     ImFont* lf = fonts::ui();
     ImFont* cf = fonts::legend();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     // THE FIGURES TAKE THE FULL PHOSPHOR, the heading keeps the dim one.
     // theme.hpp's rule, applied to this gutter: "AGO" is a caption at rest and
     // may be engraved into its plate, but "2m30" is a reading, and every one
@@ -668,13 +669,17 @@ float drawTimeStrip(ImDrawList* dl, const ImVec2& tl, float w, float h, double n
 // the caller rules the picture at the boundary, so the reader can see where
 // the key stops applying instead of being told it never does.
 float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float dbFloor,
-                      float dbCeiling, int coveredRows, int historyRows) {
+                      float dbCeiling, int coveredRows, int historyRows, bool manualRange) {
     ImFont* uf = fonts::ui();
     ImFont* cf = fonts::legend();
     ImFont* nf = fonts::reading();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
 
     const char* title = tr("STRENGTH KEY - dB");
+    // MANUAL (0.99.76): the floor and ceiling below are the user's own, set from the right-click
+    // menu. Amber, at the right of the title line - the colour this plate gives a reading ABOUT
+    // the picture ("TOP n LINES" below) as against part of the scale.
+    const char* manualCap = tr("MANUAL");
     const char* pairCap = tr("FLOOR / CEILING");
     char pairText[48];
     std::snprintf(pairText, sizeof(pairText), "%.0f / %.0f",
@@ -693,6 +698,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
 
     const float gap = 10.0f;
     float inner = textWidth(cf, px, title);
+    if (manualRange) { inner += gap + textWidth(uf, px, manualCap); }
     inner = std::max(inner, textWidth(cf, px, pairCap) + gap + textWidth(nf, px, pairText));
     if (partial) {
         inner = std::max(inner, textWidth(cf, px, coverCap) + gap + textWidth(uf, px, coverText.c_str()));
@@ -714,6 +720,16 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
 
     dl->AddText(cf, px, ImVec2(bTL.x + kChromePad, bTL.y + kChromePad),
                 theme::kInkMuted, title);
+    if (manualRange) {
+        const float mw = textWidth(uf, px, manualCap);
+        dl->AddText(uf, px, ImVec2(bBR.x - kChromePad - mw, bTL.y + kChromePad), theme::kAmber,
+                    manualCap);
+        census::note("wf:key:manual");
+    }
+    // What the key said on the last frame it was drawn: the floor and ceiling it names and
+    // whether it called them MANUAL (x0, y0, x1 = 1). The census keeps the last rect of a name,
+    // so a test reads the key as it stands at the end of a run - after a Reset, not before it.
+    census::rect("wf:key:state", dbFloor, dbCeiling, manualRange ? 1.0f : 0.0f, 0.0f);
 
     // The ramp, one screen column at a time. The half-pixel overlap keeps
     // float column edges from leaving hairline gaps through the bar.
@@ -828,7 +844,7 @@ float drawStrengthKey(ImDrawList* dl, const ImVec2& tl, float w, float h, float 
 // part of that axis.
 void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
     ImFont* cf = fonts::legend();
-    const float px = fonts::kTinySize;
+    const float px = fonts::tinyPx();
     const char* cap = tr("RANGE CHANGED");
     const float tw = textWidth(cf, px, cap);
     addBenchRail(dl, x0, x1, y);
@@ -865,7 +881,9 @@ void drawRangeBoundary(ImDrawList* dl, float x0, float x1, float y) {
 // rate clause, which is genuinely unmeasured, and keeps the span, which is
 // not.
 void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float leftInset,
-                   float linesPerSecond, double heldSeconds, const char* decoding) {
+                   float linesPerSecond, double heldSeconds, const char* decoding,
+                   ImVec4& plateOut) {
+    plateOut = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
     std::string rateText;
     if (linesPerSecond > 0.0f) {
         // A rate of 4.2 line/s is a real reading and rounds to "4"; below ten
@@ -897,8 +915,8 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     }
 
     ImFont* sf = fonts::ui();
-    const float spx = fonts::kTinySize;
-    const float dpx = fonts::kLegendSize;
+    const float spx = fonts::tinyPx();
+    const float dpx = fonts::legendPx();
     const float sw = textWidth(sf, spx, scrollText.c_str());
     const float dw = haveDecode ? textWidth(sf, dpx, decoding) : 0.0f;
 
@@ -916,6 +934,7 @@ void drawFootLines(ImDrawList* dl, const ImVec2& tl, float w, float h, float lef
     const ImVec2 fTL(x0, y1 - boxH);
     const ImVec2 fBR(x0 + boxW, y1);
     addGlassPlate(dl, fTL, fBR);
+    plateOut = ImVec4(fTL.x, fTL.y, fBR.x, fBR.y);
 
     float y = fTL.y + kChromePad;
     if (!scrollText.empty()) {
@@ -1337,6 +1356,7 @@ void WaterfallView::draw(float width, float height, double u0, double u1,
     // widget, and every annotation below is placed from the widget's own
     // top-left corner.
     const ImVec2 tl = ImGui::GetCursorScreenPos();
+    footPlate_ = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);  // until this draw says otherwise
     draw(width, height, u0, u1);
     if (width_ <= 0 || height_ <= 0 || width <= 0.0f || height <= 0.0f) {
         return;  // inert view: the plain draw reserved nothing, so neither do we
@@ -1362,7 +1382,7 @@ void WaterfallView::draw(float width, float height, double u0, double u1,
         // ceiling to label the ramp with, and a key captioned with invented
         // bounds would misread every colour under it.
         keyBottom = drawStrengthKey(dl, tl, width, height, dbMin_, dbMax_, rangeRows(),
-                                    filled_);
+                                    filled_, chrome.manualRange);
     }
     // The rail at the row where the mapping changed, whenever that row is on
     // screen and clear of the key's own plate. Clear of it because the plate
@@ -1380,7 +1400,7 @@ void WaterfallView::draw(float width, float height, double u0, double u1,
     // an average rate. Zero when fewer than two lines have arrived, which
     // drops the clause rather than reporting "0s VISIBLE" of a real picture.
     drawFootLines(dl, tl, width, height, stripW, chrome.linesPerSecond,
-                  age.valid ? age.span : 0.0, chrome.decoding);
+                  age.valid ? age.span : 0.0, chrome.decoding, footPlate_);
     dl->PopClipRect();
 
     // The frame last, over the outer edge of the picture and outside the clip

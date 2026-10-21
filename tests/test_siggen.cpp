@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/siggen.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <thread>
 #include <vector>
 
 #include "test_check.hpp"
@@ -245,6 +248,53 @@ int main() {
         std::vector<std::complex<float>> x(8);
         gen.generate(x.data(), x.size());
         CHECK(meanPower(x) == 0.0);  // the ignored setTone calls added nothing
+    }
+
+    // --- configured while another thread generates --------------------------
+    //
+    // Pipeline::sigGen() has always been documented "configure tones before/while
+    // running": the source thread calls generate() on the same SigGen the caller
+    // retunes. That was unsynchronised (the header called it "benign concurrency"),
+    // which ThreadSanitizer reported in the first Linux run (37355910809,
+    // test_rate_follow: setNoiseFloorDb against generate). SigGen now serialises
+    // its configuration and generate() with one mutex. What this proves in a plain
+    // build is only that the output stays sane under the traffic - on x86 the old
+    // race had no visible effect, which is why it needed a thread sanitizer to be
+    // found - and the thread sanitizer job runs this test (tests/tsan.cmake) to
+    // prove the rest.
+    {
+        SigGen gen(fs);
+        gen.setTone(0, 100000.0, 0.0f);
+        std::atomic<bool> go{true};
+        std::atomic<long> blocks{0};
+        std::atomic<long> bad{0};
+        std::thread reader([&] {
+            std::vector<std::complex<float>> x(512);
+            while (go.load()) {
+                gen.generate(x.data(), x.size());
+                for (const std::complex<float>& s : x) {
+                    // Two unit tones and a faint noise floor: nothing here may reach 2.5.
+                    if (!std::isfinite(s.real()) || !std::isfinite(s.imag()) ||
+                        std::abs(s) > 2.5f) {
+                        ++bad;
+                    }
+                }
+                ++blocks;
+            }
+        });
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (blocks.load() == 0 && std::chrono::steady_clock::now() < until) {
+            std::this_thread::yield();
+        }
+        for (int i = 0; i < 20000; ++i) {
+            gen.setTone(1, (i & 1) != 0 ? 250000.0 : -250000.0, (i & 2) != 0 ? -6.0f : 0.0f);
+            if (i % 7 == 0) { gen.clearTone(1); }
+            gen.setNoiseFloorDb((i & 4) != 0 ? -60.0f : -300.0f);
+        }
+        go.store(false);
+        reader.join();
+        CHECK(blocks.load() > 0);
+        CHECK(bad.load() == 0);
     }
 
     return testSummary("test_siggen");

@@ -15,14 +15,26 @@
 // already looking at. So the keys are on the rail now, and the fitted window
 // keeps its own copies: two ways to the same call, not two states.
 //
-// WHY THERE IS NO AUTOMATIC STOP HERE. The same report offered one: "stop
-// decoders that are no longer being used... if I tune off of ACARS
+// WHY THERE IS STILL NO AUTOMATIC STOP ON TUNING. The same report offered one:
+// "stop decoders that are no longer being used... if I tune off of ACARS
 // frequencies, stop the ACARS decoder". A decoder is not finished with the
 // moment the VFO moves - tuning away to check a signal, or running one decoder
 // on the audio while another reads the raw band, are ordinary things to do -
-// and a decoder that switched itself off would be a bug report of its own. The
-// decision belongs to the user, so this file gives them a key rather than a
-// guess; an opt-in automatic stop can be built on top of it later.
+// and a decoder that switched itself off because of where the radio is pointed
+// would be a bug report of its own.
+//
+// WHAT CHANGED IN 0.99.73 IS THE QUESTION BEING ASKED. This file used to record
+// the decision NOT to stop a decoder on its own, because the only automatic stop
+// then thinkable was a guess about the radio. The rule now is about the SCREEN,
+// not the radio (core/plugin_run.hpp): a plugin set to AUTO runs while something
+// is using it - one of its windows or its map is open, the radar scope shows, a
+// patch node names it, it holds the speakers, the Decoder output window is open
+// and it is a text decoder, a browser is watching it, its output is wired to a
+// Text sink - and goes dormant 30 seconds after the last of those ends. Where the
+// radio is tuned is not among them, and a plugin the user pinned ("keep running",
+// a START or a preset press) never goes dormant. So an IDLE decoder is not a
+// running one and not a fault: it costs nothing, the key on its row reads START,
+// and a press pins it, exactly as it does for a stopped one.
 //
 // PURE FIRST, DRAWN SECOND: every decision here is a function of plain values,
 // so tests/test_running_view.cpp can drive the whole truth table without an
@@ -49,6 +61,9 @@ struct RunnableDecoder {
     std::string key;  // module file name; what setPluginStopped takes
     bool stopped = false;
     bool feeding = false;
+    // AUTO and dormant (0.99.73): nothing is using it, so it has no instance. Not stopped by
+    // the user and not failing to be fed - and so never running.
+    bool idle = false;
 };
 
 // RUNNING MEANS BEING FED, WITH THE RECEIVER ON. Not "loaded", not "switched
@@ -90,8 +105,9 @@ inline std::vector<RunnableDecoder> runningDecoders(const std::vector<RunnableDe
 // (the receiver is stopped, or it wants a rate the radio is not giving) still
 // offers STOP - it is armed, it will start the moment the receiver does, and
 // the user deciding they do not want it should not have to start the radio
-// first to say so.
-inline bool rowOffersStop(const RunnableDecoder& d) { return !d.stopped; }
+// first to say so. A stopped decoder offers START, and so does an IDLE one: it
+// is not running, and START pins it ("keep running").
+inline bool rowOffersStop(const RunnableDecoder& d) { return !d.stopped && !d.idle; }
 
 inline const char* rowKeyLabel(const RunnableDecoder& d) {
     return rowOffersStop(d) ? cascade::i18n::trId("STOP") : cascade::i18n::trId("START");

@@ -47,6 +47,7 @@
 #include <unistd.h>
 #endif
 
+#include "core/diag_log.hpp"
 #include "core/freq_converter.hpp"
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
@@ -523,6 +524,32 @@ using Access = cascade::gui::AppWindowTestAccess;
 
 namespace {
 
+// --- A SOUND CARD'S NAME IS NEVER LOGGED ---------------------------------------------
+//
+// The operating system's name for an audio input is often a label a person
+// chose ("Headset (Alice's AirPods Pro)"), and the log rides into crash
+// reports, freeze reports and the diagnostics bundle. 0.99.43 made the open
+// line describe a card by host API, format and rate only; the lines for a
+// card that did not open, a dead ALSA card, and a card lent to the patch
+// page and handed back still printed its name until 0.99.59. `phrase`, when
+// given, is a line the test expects the path to have logged, so a check
+// that passes because nothing was logged at all cannot pass.
+void expectNoCardNameLogged(const char* phrase) {
+    const std::vector<std::string> ring = cascade::core::DiagLog::instance().ringSnapshot();
+    bool said = phrase == nullptr;
+    for (const std::string& l : ring) {
+        if (phrase != nullptr && l.find(phrase) != std::string::npos) { said = true; }
+        for (const char* name : {"Fake Audio", "USB Audio CODEC", "HDA Intel"}) {
+            if (l.find(name) != std::string::npos) {
+                std::printf("    NAMES THE CARD (%s): %s\n", name, l.c_str());
+                CHECK(l.find(name) == std::string::npos);
+            }
+        }
+    }
+    if (!said) { std::printf("    nothing logged \"%s\"\n", phrase); }
+    CHECK(said);
+}
+
 // --- B: the combo's rows -------------------------------------------------------------
 
 // --- OPEN 2: the panel asks for the list through a COMMAND --------------------
@@ -970,6 +997,8 @@ void testLentCardIsSaved() {
     CHECK(after.soundCard.device == kCardA);
     CHECK(after.soundCard.rateHz == 48000.0);
     g_cards.refuse = false;
+    expectNoCardNameLogged("is handed to the patch page");
+    expectNoCardNameLogged("handing Sound card");
 }
 
 // Item 3: "Receives X to Y." is the AIR range, through the card's converter.
@@ -1147,6 +1176,7 @@ void testAlsaDeadCardAsksForARestart() {
     // The config goes on naming the card.
     CHECK(Access::saved(app).sourceKind == "soundcard");
     CHECK(Access::saved(app).soundCard.device == kUsbHw1);
+    expectNoCardNameLogged("has stopped; not reopened by its ALSA index");
     resetCards();
 }
 
@@ -1180,6 +1210,7 @@ void testReleasedAndBothRefused() {
     CHECK(Access::kind(app) == "soundcard");
     CHECK(!Access::lamp(app));
     CHECK(Access::keepKind(app).empty());
+    expectNoCardNameLogged("did not open with new settings, nor as it was");
 }
 
 // Item 7 R4, R5 (probe P5): the generator picked while a released card
@@ -1232,6 +1263,7 @@ void testFailedOtherCardKeepsTheSection() {
     CHECK(Access::section(app).format == SoundCardFormat::RealMono);
     CHECK(!Access::err(app).empty());
     g_cards.refuse = false;
+    expectNoCardNameLogged("did not open");
 }
 
 // Item 7 R16: the converter belongs to the RUNNING card, whatever the
@@ -1303,6 +1335,8 @@ int main() {
     testDeadRepickIgnoresSectionEdits();
     // Engine stage 3b-pre, OPEN 2.
     testSoundCardsWantedIsACommand();
+    // Whatever else the run logged, about any card.
+    expectNoCardNameLogged(nullptr);
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

@@ -5,9 +5,15 @@
 
 #include <portaudio.h>
 
+#include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "sink/pa_init.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace cascade::sink {
 
@@ -20,6 +26,8 @@ static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "underrun counter must be lock-free for the audio callback");
 static_assert(std::atomic<bool>::is_always_lock_free,
               "primed latch must be lock-free for the audio callback");
+static_assert(std::atomic<std::size_t>::is_always_lock_free,
+              "lead must be lock-free for the audio callback");
 
 namespace {
 
@@ -34,7 +42,42 @@ int paOutCallback(const void* /*input*/, void* output, unsigned long frameCount,
     return paContinue;  // stream runs until close(); starvation plays silence
 }
 
+// WHAT A PORTAUDIO REFUSAL MEANS, as one of the five classes the health count
+// has (core/health_events.hpp, 0.99.64). By the error CODE, never its text: the
+// code is the same on every host API and in every language.
+cascade::core::health::SoundReason soundReasonFor(PaError err) {
+    using cascade::core::health::SoundReason;
+    switch (err) {
+        case paDeviceUnavailable: return SoundReason::Busy;
+        case paInvalidDevice: return SoundReason::NoDevice;
+        case paInvalidSampleRate:
+        case paInvalidChannelCount:
+        case paSampleFormatNotSupported:
+        case paBadIODeviceCombination:
+        case paIncompatibleHostApiSpecificStreamInfo: return SoundReason::Format;
+        case paUnanticipatedHostError: return SoundReason::Host;
+        default: break;
+    }
+    return SoundReason::Other;
+}
+
 }  // namespace
+
+bool openRequestUsable(double sampleRateHz, int channels) {
+    // Strictly above zero and below 2^32: ALSA holds the rate in an unsigned int,
+    // and a NaN fails both comparisons so it is refused without being named.
+    constexpr double kMaxRateHz = 4294967295.0;
+    if (!(sampleRateHz > 0.0 && sampleRateHz < kMaxRateHz)) { return false; }
+    return channels == 1 || channels == 2;
+}
+
+double usableSuggestedLatency(double deviceDefaultLowLatencySec) {
+    // The negated range test also catches NaN, which compares false to both ends.
+    if (!(deviceDefaultLowLatencySec >= 0.0 && deviceDefaultLowLatencySec <= 10.0)) {
+        return 0.1;
+    }
+    return deviceDefaultLowLatencySec;
+}
 
 AudioOut::AudioOut() : ring_(kRingCapacity) {
     // Through the one shared, locked initialiser (sink/pa_init.hpp):
@@ -76,13 +119,71 @@ std::vector<AudioDevice> AudioOut::listOutputDevices() {
 }
 
 bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
-    if (!paOk_ || !(sampleRateHz > 0.0)) { return false; }
-    if (channels != 1 && channels != 2) { return false; }
-    // Held for the WHOLE open, Pa_OpenStream included. On Windows that is
-    // waveOutOpen, which has no timeout - so everything that takes this lock
-    // with try_lock is answering "an open is in progress" rather than waiting
-    // for a driver.
-    std::lock_guard<std::mutex> lk(apiMutex_);
+    OpenNote note;
+    bool ok = false;
+    {
+        // Held for the WHOLE open, Pa_OpenStream included. On Windows that is
+        // waveOutOpen, which has no timeout - so everything that takes this
+        // lock with try_lock is answering "an open is in progress" rather than
+        // waiting for a driver.
+        std::lock_guard<std::mutex> lk(apiMutex_);
+        ok = openLocked(deviceIndex, sampleRateHz, channels, note);
+    }
+    // SAID AFTER THE LOCK IS RELEASED (see OpenNote). One line per attempt that
+    // has something new to say, success or refusal. Until this existed NO line
+    // anywhere recorded which kind of output was opened or whether it opened,
+    // so a report of "no audio from my speakers" could not tell a stream that
+    // was never open from one that was open and being fed silence: both write
+    // nothing (the starvation digest is silent unless a callback starved, and
+    // nothing starves a stream fed zeros or one whose callback never runs).
+    if (!note.line.empty()) {
+        if (note.warn) {
+            cascade::core::diagWarnf("%s", note.line.c_str());
+        } else {
+            cascade::core::diagLogf("%s", note.line.c_str());
+        }
+    }
+    // THE ANONYMOUS COUNT OF A REFUSED OUTPUT (0.99.64): the host API and one of
+    // five reasons, nothing the OS said. Here, after the lock is released and
+    // off the realtime path: every refusal counts, because the health ledger
+    // itself keeps a repeated one (the watchdog's once-a-second retry) to one a
+    // session.
+    if (note.failed) {
+        cascade::core::health::noteSoundFail(note.api, note.reason);
+    }
+    return ok;
+}
+
+bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, OpenNote& note) {
+    // The one way out of every failing path: the reason, in words, said once
+    // per distinct reason and then at most once a minute (see lastRefusal_).
+    // The wording avoids "range", "offset" and the like on purpose: a line that
+    // sounds like it is about tuning has its numbers masked by the log scrub
+    // (core::scrubUploadLine), which would blank the very counts a reader needs.
+    auto refuse = [&](const std::string& why, cascade::core::health::SoundReason reason,
+                      cascade::core::health::AudioApi api = cascade::core::health::AudioApi::None) {
+        note.failed = true;
+        note.reason = reason;
+        note.api = api;
+        const auto now = std::chrono::steady_clock::now();
+        if (why != lastRefusal_ || now - lastRefusalSaid_ >= std::chrono::seconds(60)) {
+            lastRefusal_ = why;
+            lastRefusalSaid_ = now;
+            note.line = "audio: output could not be opened - " + why;
+            note.warn = true;
+        }
+        return false;
+    };
+
+    using cascade::core::health::SoundReason;
+    if (!paOk_) { return refuse("PortAudio did not start", SoundReason::NoDevice); }
+    // Not just "positive": see openRequestUsable. Infinity and a rate past what
+    // ALSA's unsigned int holds used to pass the old `> 0` test and go on into
+    // the host API's integer period arithmetic.
+    if (!openRequestUsable(sampleRateHz, channels)) {
+        return refuse("the request itself was unusable (a rate or a channel count)",
+                      SoundReason::Format);
+    }
     // Re-open semantics: switching device or rate through open() closes the
     // old stream first. closeLocked() is idempotent, so this is safe when
     // nothing is open yet.
@@ -91,11 +192,30 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     const PaDeviceIndex dev = (deviceIndex < 0)
                                   ? Pa_GetDefaultOutputDevice()
                                   : static_cast<PaDeviceIndex>(deviceIndex);
+    if (deviceIndex < 0 && dev == paNoDevice) {
+        return refuse("no default output device", SoundReason::NoDevice);
+    }
     if (dev == paNoDevice || dev < 0 || dev >= Pa_GetDeviceCount()) {
-        return false;
+        return refuse("no such output device", SoundReason::NoDevice);
     }
     const PaDeviceInfo* info = Pa_GetDeviceInfo(dev);
-    if (info == nullptr || info->maxOutputChannels < channels) { return false; }
+    if (info == nullptr) { return refuse("no such output device", SoundReason::NoDevice); }
+    // The HOST API names a driver model ("MME", "Windows WASAPI"), never a
+    // person's device, so it is the one identity this log may carry. The
+    // device's own NAME is deliberately never written: the operating system
+    // hands back labels like "Headset (Alice's AirPods Pro)", and this line
+    // goes into a bundle people paste into public bug reports (the same rule
+    // as source::loggableSoundCardDescription).
+    const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+    const std::string apiName =
+        (api != nullptr && api->name != nullptr) ? std::string(api->name) : std::string("unknown host API");
+    const cascade::core::health::AudioApi healthApi =
+        cascade::core::health::audioApiFromName(apiName);
+    if (info->maxOutputChannels < channels) {
+        return refuse(apiName + " device has " + std::to_string(info->maxOutputChannels) +
+                          " output channel(s) and " + std::to_string(channels) + " are needed",
+                      SoundReason::Format, healthApi);
+    }
 
     // Drain anything left from a previous session so a reopen starts silent
     // instead of replaying stale audio. Safe single-threaded consumption:
@@ -112,7 +232,10 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     out.sampleFormat = paFloat32;
     // Low-latency hint: an SDR should respond to tuning without an audible
     // lag. PortAudio rounds this up to whatever the host API can honor.
-    out.suggestedLatency = info->defaultLowOutputLatency;
+    // A device record whose default is not a sane number (see
+    // usableSuggestedLatency) gets a conventional hint instead of a value the
+    // host API would turn into a frame count by overflow.
+    out.suggestedLatency = usableSuggestedLatency(info->defaultLowOutputLatency);
     out.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;
@@ -125,14 +248,32 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
         // paNoFlag keeps PortAudio's default out-of-range clipping enabled: a
         // demod transient beyond ±1.0 gets clamped instead of wrapping into
         // full-scale noise on some host APIs.
-        if (Pa_OpenStream(&stream, nullptr, &out, sampleRateHz,
-                          paFramesPerBufferUnspecified, paNoFlag, &paOutCallback,
-                          this) != paNoError) {
-            return false;
+        // WHY a refusal is worded from PortAudio's own error text: it is the
+        // difference between "the device is in use" and "the format is not
+        // supported", which is what the next question would be. A host-API
+        // fault carries the operating system's own sentence as well.
+        auto portAudioWhy = [&](PaError err) {
+            std::string why = apiName + " refused the stream: " + Pa_GetErrorText(err);
+            if (err == paUnanticipatedHostError) {
+                const PaHostErrorInfo* h = Pa_GetLastHostErrorInfo();
+                if (h != nullptr && h->errorText != nullptr && h->errorText[0] != '\0') {
+                    why += " (";
+                    why += h->errorText;
+                    why += ")";
+                }
+            }
+            return why;
+        };
+        const PaError openErr =
+            Pa_OpenStream(&stream, nullptr, &out, sampleRateHz, paFramesPerBufferUnspecified,
+                          paNoFlag, &paOutCallback, this);
+        if (openErr != paNoError) {
+            return refuse(portAudioWhy(openErr), soundReasonFor(openErr), healthApi);
         }
-        if (Pa_StartStream(stream) != paNoError) {
+        const PaError startErr = Pa_StartStream(stream);
+        if (startErr != paNoError) {
             Pa_CloseStream(stream);
-            return false;
+            return refuse(portAudioWhy(startErr), soundReasonFor(startErr), healthApi);
         }
     }
     stream_ = stream;
@@ -149,6 +290,25 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
     // caller's fallback path re-opens mono and the producer reads channels()
     // to decide what to push.
     channels_ = channels;
+    openedHostApi_ = apiName;
+
+    // THE LINE THAT ANSWERS "was an output opened at all": the host API, the
+    // layout, the rate, whether it followed the system default or a chosen
+    // device, and the latency PortAudio actually granted (a hint rounded up to
+    // what the host API can honour). A success also ends a run of refusals, so
+    // the next refusal after it is a new fact and is said.
+    const PaStreamInfo* si = Pa_GetStreamInfo(stream);
+    char latency[32] = "";
+    if (si != nullptr) {
+        std::snprintf(latency, sizeof(latency), ", latency %.0f ms", si->outputLatency * 1000.0);
+    }
+    char line[192];
+    std::snprintf(line, sizeof(line), "audio: output opened - %s, %d channel%s, %.0f S/s, %s%s",
+                  apiName.c_str(), channels, channels == 1 ? "" : "s", sampleRateHz,
+                  deviceIndex < 0 ? "system default" : "a chosen device", latency);
+    note.line = line;
+    note.warn = false;
+    lastRefusal_.clear();
     return true;
 }
 
@@ -186,6 +346,12 @@ void AudioOut::refreshOpenedDeviceName(std::string& lastGood) const {
     std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
     if (!lk.owns_lock() || openedName_.empty()) { return; }
     lastGood.assign(openedName_);
+}
+
+std::string AudioOut::openedHostApi() const {
+    std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
+    if (!lk.owns_lock()) { return std::string(); }
+    return openedHostApi_;
 }
 
 bool AudioOut::streamAlive() const {
@@ -282,12 +448,40 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
         static_cast<std::size_t>(ao->channels_.load(std::memory_order_relaxed) == 2 ? 2 : 1);
     const std::size_t n = frames * chan;
 
+    if (ao->trimPending_.exchange(false, std::memory_order_acq_rel)) {
+        // Only this callback consumes the ring. Drop complete stereo frames
+        // from the OLD end, retaining at most the new lead plus the matcher's
+        // margin. A fixed stack buffer keeps the realtime path allocation-free;
+        // the ring bounds this loop even if the producer is writing at once.
+        const std::size_t target =
+            (ao->leadFrames_.load(std::memory_order_relaxed) + kTargetMarginFrames) * chan;
+        const std::size_t queued = ao->ring_.size();
+        std::size_t discard = queued > target ? queued - target : 0;
+        discard -= discard % chan;
+        if (discard != 0) {
+            float scratch[256];
+            while (discard != 0) {
+                const std::size_t take = std::min(discard, sizeof(scratch) / sizeof(scratch[0]));
+                const std::size_t got = ao->ring_.read(scratch, take);
+                if (got == 0) { break; }
+                discard -= got;
+            }
+            ao->primed_.store(false, std::memory_order_relaxed);
+        }
+    }
+
     if (!ao->primed_.load(std::memory_order_relaxed)) {
         // Charged as a priming callback whether or not this is the one that
         // crosses the threshold — the count is "how many callbacks ran while
         // building the lead", and the last of them is one of those too.
         ao->primingCallbacks_.fetch_add(1, std::memory_order_relaxed);
-        if (ao->ring_.size() < kPrimeFrames * chan) {
+        // THE LEAD IS READ HERE, on every unprimed block, from the atomic the
+        // window's once-a-minute poll writes (setLeadFrames): the callback never
+        // sees a half-written value and never waits for one. It is a runtime
+        // value since 0.99.73 - a computer that cannot keep up at 120 ms is
+        // given more, and this is where the sink starts to honour it.
+        const std::size_t lead = ao->leadFrames_.load(std::memory_order_relaxed);
+        if (ao->ring_.size() < lead * chan) {
             // Still short of the lead: silence, and NOT an underrun — nothing
             // has failed to arrive, because playback was never promised yet.
             std::memset(dst, 0, n * sizeof(float));
@@ -334,6 +528,55 @@ std::size_t AudioOut::ringFrames() const {
 std::size_t AudioOut::ringCapacityFrames() const {
     const std::size_t chan = static_cast<std::size_t>(channels() == 2 ? 2 : 1);
     return ring_.capacity() / chan;
+}
+
+void AudioOut::setLeadFrames(std::size_t frames) {
+    // Never below today's 120 ms (a smaller lead is the stutter the whole feature
+    // exists to avoid) and never above what the ring can hold with the matcher's
+    // margin and headroom to spare (kMaxLeadFrames, 960 ms). Called from the
+    // window's thread, never the callback: one relaxed store.
+    if (frames < kPrimeFrames) { frames = kPrimeFrames; }
+    if (frames > kMaxLeadFrames) { frames = kMaxLeadFrames; }
+    const std::size_t before = leadFrames_.exchange(frames, std::memory_order_relaxed);
+    if (frames < before) { trimPending_.store(true, std::memory_order_release); }
+}
+
+bool validAudioBufferSetting(int ms) {
+    if (ms == 0) { return true; }   // AUTOMATIC
+    for (const int step : kAudioLeadStepsMs) {
+        if (ms == step) { return true; }
+    }
+    return false;
+}
+
+int nextAudioLead(std::uint64_t underrunsLastMinute, int currentLeadMs, int configuredMs) {
+    // A fixed setting never steps, whatever the minute was.
+    if (configuredMs != 0) { return currentLeadMs; }
+    // Fewer than three is a stutter, not a computer that fell behind. The way
+    // down is not here: one bad-enough minute raises, and only a quarter hour
+    // of quiet ones lowers (audioLeadAfterQuietMinutes below).
+    if (underrunsLastMinute < static_cast<std::uint64_t>(kAudioLeadStarvedPerMinute)) {
+        return currentLeadMs;
+    }
+    // One rung up, the first above where the lead is now. At (or above) the top
+    // there is none, and the lead is left exactly as it is.
+    for (const int step : kAudioLeadStepsMs) {
+        if (step > currentLeadMs) { return step; }
+    }
+    return currentLeadMs;
+}
+
+int audioLeadAfterQuietMinutes(int quietMinutes, int currentLeadMs, int configuredMs) {
+    // A fixed setting never steps, down included.
+    if (configuredMs != 0) { return currentLeadMs; }
+    if (quietMinutes < kAudioLeadQuietMinutesToStepDown) { return currentLeadMs; }
+    // One rung down, the highest below where the lead is now. At (or below)
+    // the 120 ms start there is none, and the lead is left exactly as it is.
+    int down = currentLeadMs;
+    for (const int step : kAudioLeadStepsMs) {
+        if (step < currentLeadMs) { down = step; }
+    }
+    return down;
 }
 
 }  // namespace cascade::sink

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/demod.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
@@ -44,53 +45,70 @@ constexpr double kTwoPi = 6.283185307179586476925286766559;
 //   - filter-then-shift at RF: needs an asymmetric COMPLEX-tap band-pass;
 //     FirDecimator taps are real.
 // Weaver instead uses two Nco mixes around a REAL-tap low-pass:
-//   1. mix by -B/2 (USB) or +B/2 (LSB): the wanted sideband, which occupies
-//      [0,+B] (USB) or [-B,0] (LSB) of the centered channel, now straddles DC
-//      symmetrically as [-B/2,+B/2];
-//   2. low-pass at ~B/2: a real-tap FIR has a passband symmetric about DC, so
-//      it keeps exactly the wanted sideband and rejects the opposite one
-//      (which now sits in [-3B/2,-B/2] resp. [+B/2,+3B/2]);
+//   1. mix by -f0 (USB) or +f0 (LSB): the wanted sideband, which occupies
+//      [lo,hi] (USB) or [-hi,-lo] (LSB) of the centered channel, now straddles
+//      DC symmetrically as [-c,+c], c = (hi-lo)/2, f0 = (hi+lo)/2;
+//   2. low-pass at c: a real-tap FIR has a passband symmetric about DC, so it
+//      keeps exactly the wanted sideband and rejects the opposite one (an
+//      opposite-sideband component at audio frequency x >= 0 lands at
+//      -(f0+x), which is at least f0 = c + lo from DC);
 //   3. mix back by the opposite BFO and take Re{}: every wanted component
 //      returns to its original audio frequency, the rejected sideband is gone.
 // The FIR group delay only adds a constant audio phase offset (inaudible);
 // frequencies are restored exactly because the two BFOs cancel.
+//
+// WHY THE BFO IS NOT B/2 (0.99.82). The wanted and the opposite sideband meet
+// AT THE CARRIER, and after the down-mix they meet at -f0 on the low-pass's
+// skirt. With f0 = B/2 and the cutoff pushed out to 0.7 B (the design up to
+// 0.99.81) the skirt sat 600 Hz INSIDE the opposite sideband: an opposite-
+// sideband tone at 100 Hz came out at 0 dB, 500 Hz at -3 dB, 1 kHz at -32 dB,
+// and only above ~1.25 kHz was it the 50 dB and more the tests were written
+// for (they probed 1 kHz and 1.5 kHz only). The low half of a voice, where
+// most of its energy is, was therefore heard from BOTH sidebands: a DSB
+// receiver below 1 kHz. The skirt has to lie wholly on the WANTED side of the
+// carrier, which means giving up the audio below the transition: the carrier-
+// side -6 dB edge is half the transition width, as in any SSB filter (300 Hz
+// by convention), and the opposite sideband is stopped from DC outward rather
+// than from 1 kHz outward.
+//
+// B IS A SETTING (setSsbBandwidthHz), DEFAULT 3 kHz. Until 0.99.60 it was a
+// constant, so the receiver's Bandwidth control reached the SSB modes only
+// through the channel filter - which did not narrow anything (see dsp/vfo.hpp)
+// - and a user who picked 6 kHz or 10 kHz in USB heard exactly the same 3 kHz
+// of audio. The numbers below are the 3 kHz design; every other width scales
+// them in proportion.
 constexpr double kSsbAudioBandwidthHz = 3000.0;  // B: voice SSB channel width
-constexpr double kSsbBfoHz = kSsbAudioBandwidthHz / 2.0;  // Weaver BFO = B/2
-// Low-pass -6 dB cutoff in the shifted domain. 2100 Hz rather than the ideal
-// B/2 = 1500 Hz: the windowed-sinc transition is centered on the cutoff, and
-// pushing the cutoff up keeps the passband flat out to the B/2 band edge while
-// the stopband still starts before the nearest strong opposite-sideband
-// content (a mirror-image tone at audio frequency f lands at f + B/2 away
-// from DC, i.e. 3 kHz for the 1.5 kHz worst case the tests pin).
-constexpr double kSsbCutoffHz = 2100.0;
+// The audio top: the sideband's -6 dB point is this multiple of B (3.6 kHz at
+// the default), the figure the demodulator has always documented.
+constexpr double kSsbUpperEdgeFactor = 1.2;
 // Full transition width budget in Hz; sets the tap count via the standard
-// Hamming windowed-sinc estimate (transition ~ 3.3/N of the sample rate).
-constexpr double kSsbTransitionHz = 1000.0;
+// Hamming windowed-sinc estimate (transition ~ 3.3/N of the sample rate). Half
+// of it is the carrier-side -6 dB edge (300 Hz) and the opposite sideband is
+// down by the window's full stopband from DC outward. It scales DOWN with B
+// below the 3 kHz default (a 1 kHz sideband cannot afford a 300 Hz hole) but
+// never up: a wider sideband keeps the same 300 Hz edge, because the low audio
+// of a wide-SSB listener is what they chose the width for - and because the
+// pipeline's untouched default B (150 kHz, clamped to 0.3 of the channel rate)
+// would otherwise put the hole at several kHz and eat a 700 Hz CW tone.
+constexpr double kSsbTransitionHz = 600.0;
+// The widths setSsbBandwidthHz accepts: 1 kHz is about the narrowest the tap
+// cap (2047) can still build with its transition intact, and 0.3 x the channel
+// rate is where the shifted band (B/2 + the 0.7 B cutoff) stops fitting.
+constexpr double kSsbMinBandwidthHz = 1000.0;
+constexpr double kSsbMaxRateFraction = 0.3;
 // CW sidetone: a carrier on the VFO center beats at this audio pitch.
 constexpr double kCwToneHz = 700.0;
 
 // --- FM deemphasis -----------------------------------------------------------
-// Broadcast FM pre-emphasizes highs with an RC network — 75 us in the Americas,
-// 50 us elsewhere, which is what setDeemphasisUs picks between — and the
-// receiver undoes it with the matching one-pole low-pass H(s) = 1/(1 + s*tau).
-// Discretized by pole matching (impulse invariance): the analog pole at
-// s = -1/tau maps to z = p = exp(-T/tau) with T = 1/rate, and the numerator is
-// scaled so DC gain is exactly 1:
-//     H(z) = (1 - p) / (1 - p*z^-1)
-// Pole matching over bilinear because it preserves both the time constant and
-// the DC gain exactly with no frequency prewarping decision; the deemphasis
-// corner (1/(2*pi*tau) ~ 2.1 kHz) sits far below Nyquist at any WFM channel
-// rate, where the two mappings agree closely anyway.
-// Default de-emphasis: 50 us. That is the standard everywhere except the
-// Americas and South Korea, so it is the correct global default; the setter
-// below makes it a user choice rather than a compile-time assumption.
+// The one-pole network, its derivation and its 50 us default live in
+// dsp/deemphasis.hpp (0.99.69: the airband monitor's FM strips run the same
+// filter, so it is one class rather than two copies of the arithmetic).
 //
-// ONE network, shared by NFM. Nothing in the derivation above depends on the
-// channel being wide, and the receiver's De-emph control offers the same two
-// constants for both FM modes — but process() used to apply the filter in its
-// WFM case alone, which is what left that control inert on the narrowband mode
-// a pager, APRS or weather-satellite listener is tuned to.
-constexpr double kDefaultDeemphTauSec = 50e-6;
+// ONE network, shared by NFM. Nothing in the derivation depends on the channel
+// being wide, and the receiver's De-emph control offers the same two constants
+// for both FM modes — but process() used to apply the filter in its WFM case
+// alone, which is what left that control inert on the narrowband mode a pager,
+// APRS or weather-satellite listener is tuned to.
 
 // --- AM DC blocker -------------------------------------------------------
 // The envelope of an AM carrier is (carrier amplitude) + modulation: the
@@ -107,67 +125,96 @@ constexpr double kAmDcCutoffHz = 30.0;
 // stopband lobe is ~-53 dB, 13 dB beyond the 40 dB opposite-sideband-rejection
 // target, at roughly half the tap count the Blackman-Harris window would
 // spend for margin nobody can hear on SSB. Tap count scales with the rate so
-// the transition width in Hz is rate-independent.
-std::vector<float> designSsbTaps(double rate) {
+// the transition width in Hz is rate-independent. The BFO comes from the same
+// computation (ssbShape) because the two are one design: the cutoff and the
+// mix frequency together place the skirt.
+struct SsbShape {
+    std::size_t taps;   // odd FIR length
+    double cutoffHz;    // c: low-pass -6 dB point in the shifted domain
+    double bfoHz;       // f0: the two mixes' frequency
+};
+
+SsbShape ssbShape(double rate, double bandwidthHz) {
+    // The carrier-side transition scales with B/3000 below the default and is
+    // held at kSsbTransitionHz above it (see there).
+    const double scale = std::min(1.0, bandwidthHz / kSsbAudioBandwidthHz);
     std::size_t n =
-        static_cast<std::size_t>(std::ceil(3.3 * rate / kSsbTransitionHz));
+        static_cast<std::size_t>(std::ceil(3.3 * rate / (kSsbTransitionHz * scale)));
     if (n < 63) { n = 63; }        // floor: keep >40 dB feasible at low rates
     if (n > 2047) { n = 2047; }    // cap: bound CPU at very high channel rates
     if (n % 2 == 0) { ++n; }       // windowedSincLowpass requires odd length
-    double cutoff = kSsbCutoffHz / rate;
+    // The transition the filter REALLY has once the tap count is rounded and
+    // capped: its half is the carrier-side edge, so a capped (narrow B, high
+    // rate) filter widens the audio hole rather than leaking the other side.
+    const double transition = 3.3 * rate / static_cast<double>(n);
+    const double lo = 0.5 * transition;
+    const double hi = kSsbUpperEdgeFactor * bandwidthHz;
+    return {n, 0.5 * (hi - lo), 0.5 * (hi + lo)};
+}
+
+std::vector<float> designSsbTaps(double rate, double bandwidthHz) {
+    const SsbShape s = ssbShape(rate, bandwidthHz);
+    double cutoff = s.cutoffHz / rate;
     // Degenerate very-low-rate guard: keep the design inside the (0, 0.5)
     // precondition instead of asserting deep in the filter designer.
     if (cutoff > 0.45) { cutoff = 0.45; }
-    return windowedSincLowpass(n, cutoff, WindowType::Hamming);
+    return windowedSincLowpass(s.taps, cutoff, WindowType::Hamming);
 }
 
 }  // namespace
 
 Demodulator::Demodulator(double channelRateHz)
-    : rate_(channelRateHz), ssbFilter_(designSsbTaps(channelRateHz), 1) {
+    : rate_(channelRateHz),
+      deemph_(channelRateHz),   // 50 us, the global default
+      ssbBfoHz_(ssbShape(channelRateHz, kSsbAudioBandwidthHz).bfoHz),
+      ssbFilter_(designSsbTaps(channelRateHz, kSsbAudioBandwidthHz), 1) {
     assert(rate_ > 0.0);
-    deemphTauSec_ = kDefaultDeemphTauSec;
-    deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
     dcPole_ = std::exp(-kTwoPi * kAmDcCutoffHz / rate_);
     setMode(DemodMode::NFM);
 }
 
 void Demodulator::setDeemphasisUs(double us) {
-    // Reject nonsense rather than poisoning the filter with a NaN pole; 0 (and
-    // anything non-finite/negative treated as 0) means "no de-emphasis", which
-    // the process loop implements as a pole of exactly 0 — a pass-through,
-    // since y = (1-p)*x + p*y collapses to y = x at p = 0.
-    if (!(us > 0.0) || !std::isfinite(us)) {
-        deemphTauSec_ = 0.0;
-        deemphPole_ = 0.0;
-        deemphState_ = 0.0;
-        return;
+    // Nonsense (and 0) means "no de-emphasis", and the filter clears its memory
+    // either way: see dsp/deemphasis.hpp.
+    deemph_.setTimeUs(us);
+}
+
+void Demodulator::setSsbBandwidthHz(double bandwidthHz) {
+    // A non-finite request lands on the default, so a bad value can never
+    // poison the filter design.
+    double bw = std::isfinite(bandwidthHz) ? bandwidthHz : kSsbAudioBandwidthHz;
+    bw = std::min(std::max(bw, kSsbMinBandwidthHz), kSsbMaxRateFraction * rate_);
+    if (bw == ssbBandwidthHz_) { return; }  // idempotent: no gratuitous reset
+    ssbBandwidthHz_ = bw;
+    ssbBfoHz_ = ssbShape(rate_, bw).bfoHz;
+    ssbFilter_ = FirDecimator(designSsbTaps(rate_, bw), 1);
+    // The BFOs follow B. Only the sideband modes run the Weaver chain, so only
+    // they are restarted (a documented clean start, like a mode change); AM, FM
+    // and the rest keep their state untouched and pick the new width up at the
+    // next setMode into a sideband mode.
+    if (mode_ == DemodMode::USB || mode_ == DemodMode::LSB || mode_ == DemodMode::CW) {
+        setMode(mode_);
     }
-    deemphTauSec_ = us * 1.0e-6;
-    deemphPole_ = std::exp(-1.0 / (rate_ * deemphTauSec_));
-    // Clear the filter memory: carrying a state charged at the old time
-    // constant produces an audible thump on the switch.
-    deemphState_ = 0.0;
 }
 
 void Demodulator::setMode(DemodMode m) {
     mode_ = m;
-    const double bfo = kSsbBfoHz / rate_;
+    const double bfo = ssbBfoHz_ / rate_;  // Weaver BFO = f0, see ssbShape
     switch (m) {
         case DemodMode::USB:
-            // Wanted sideband [0,+B]: shift DOWN by B/2 to center it on DC.
+            // Wanted sideband [lo,hi]: shift DOWN by f0 to center it on DC.
             shiftDown_.setFrequency(-bfo);
             shiftUp_.setFrequency(+bfo);
             break;
         case DemodMode::LSB:
-            // Mirror image: wanted sideband [-B,0] shifts UP by B/2.
+            // Mirror image: wanted sideband [-hi,-lo] shifts UP by f0.
             shiftDown_.setFrequency(+bfo);
             shiftUp_.setFrequency(-bfo);
             break;
         case DemodMode::CW:
             // USB with the input pre-shifted up by the sidetone pitch so a
             // carrier at DC beats at kCwToneHz. Both shifts are folded into
-            // the first mix (+tone then -B/2 commute into one Nco); the
+            // the first mix (+tone then -f0 commute into one Nco); the
             // up-mix is unchanged, so audio = 700 + (carrier offset).
             shiftDown_.setFrequency(kCwToneHz / rate_ - bfo);
             shiftUp_.setFrequency(+bfo);
@@ -184,7 +231,7 @@ void Demodulator::setMode(DemodMode m) {
 
 void Demodulator::reset() {
     quad_.reset();
-    deemphState_ = 0.0;
+    deemph_.reset();
     dcPrevIn_ = 0.0;
     dcPrevOut_ = 0.0;
     shiftDown_.reset();
@@ -207,16 +254,9 @@ std::size_t Demodulator::process(const std::complex<float>* in, std::size_t n,
             // alike, and persists — did nothing whatsoever in NFM. Owners that
             // de-emphasise downstream instead set 0 us (the pipeline does, for
             // WFM, where StereoFm applies the network after the stereo matrix):
-            // a pole of exactly 0 makes g == 1 and the loop below an exact
+            // a pole of exactly 0 makes g == 1 and the loop an exact
             // pass-through, so no signal is ever de-emphasised twice.
-            const double p = deemphPole_;
-            const double g = 1.0 - p;
-            double s = deemphState_;
-            for (std::size_t i = 0; i < n; ++i) {
-                s = g * static_cast<double>(out[i]) + p * s;
-                out[i] = static_cast<float>(s);
-            }
-            deemphState_ = s;
+            deemph_.process(out, n);
             break;
         }
 

@@ -34,9 +34,21 @@ namespace cascade::gui {
 // What a face is told beyond the plugin's state: whether the event the state
 // describes has been looked at yet (the window was open when it arrived), and
 // the wall clock in seconds for anything that blinks or holds.
+//
+// THE CHART (field report 932444a354dee32f, 0.99.81): the fax face may also be
+// handed the texture of the picture its OWN plugin is decoding - the host
+// already keeps one per image decoder for the picture window - so the paper
+// coming out of the recorder's slot can carry the chart itself instead of
+// blank ruling, and one window shows both the machine and what it is
+// printing. The texture is a cue, not a contract: 0 means "no picture yet"
+// (or a plugin without an image decoder) and the face draws exactly what it
+// always drew. Only the fax face reads it today; the picture window remains
+// the full-size view.
 struct InstrumentCue {
     bool unread = false;   // state.seq has advanced since this window was last drawn
     double nowSec = 0.0;   // ImGui::GetTime()
+    ImTextureID chartTex = 0;    // the plugin's own decoded picture, or 0
+    bool chartComplete = false;  // the decoder called the picture finished
 };
 
 // Draws the face for `in.kind` between `tl` and `br` on `dl`. Returns the

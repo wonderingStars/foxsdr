@@ -8,7 +8,17 @@
 //   Vfo (decimate to a ~200 kHz channel; see setInputRateHz for the policy)
 //   -> Demodulator -> [WFM: RdsDecoder tap, StereoFm matrix] -> Agc
 //   -> Squelch -> RationalResampler x2 (channel rate -> 48 kHz)
-//   -> Notch -> AutoNotch -> NoiseReduction -> AudioOut (mono or stereo).
+//   -> Notch -> AutoNotch -> NoiseReduction -> peak Limiter (dsp/limiter.hpp)
+//   -> AudioOut (mono or stereo) and Recorder.
+//
+// THE LIMITER, immediately below the hard mute / patch / plugin takeover and
+// immediately above the mono downmix (pipeline.cpp), is the identity for
+// anything the Agc already keeps near its target and only engages for the
+// sliver of amplitude that would otherwise reach the int16 quantizer or the
+// sound device's own hard clip — see the comment at the call site and
+// tests/test_audio_clip.cpp for why the Agc alone cannot guarantee that on
+// its own for a high-crest-factor signal (wideband noise let in by a widened
+// channel filter is exactly that shape).
 //
 // WFM DE-EMPHASIS OWNERSHIP (the one non-obvious wiring decision here).
 // Both the stereo decoder and RDS need the composite (MPX) WITHOUT
@@ -53,8 +63,8 @@
 // Threading model (per PLAN.md): DSP blocks stay plain objects; the threads
 // and the ring live only here. The GUI never blocks on DSP — it polls
 // getLatestFrame(), which hands over at most one frame copy under a mutex.
-// Audio-chain parameter setters serialize against the DSP thread under one
-// internal mutex and take effect at the next block.
+// Audio-chain parameter setters take effect at the next block. They do NOT wait
+// for the DSP thread: see "SETTERS POST, THEY DO NOT WAIT" below.
 //
 // AND THE PARAMETER GETTERS TAKE NO LOCK AT ALL, which is not an optimisation.
 //
@@ -84,6 +94,36 @@
 // they still serialize against the DSP thread and still take effect at the next
 // block. What changes is only that READING a parameter can no longer wait for
 // one.
+//
+// SETTERS POST, THEY DO NOT WAIT. A setter cannot read an atomic: it has to
+// change the chain, and the chain is guarded by the very mutex above. Field
+// reports "hang ntdll.dll @ cascade::core::Pipeline::resetRds" (a retune from the
+// toolbar readout) and "... Pipeline::setDeemphasisUs" (a plugin preset that woke
+// ~28 decoders at once), both 0.99.81, are the GUI thread parked over five
+// seconds in a mutex wait inside a setter: processAudioBlock() holds audioMutex_
+// across every I/Q decoder plugin's process(), so with thirty decoders on a
+// machine that cannot keep up the DSP thread is inside the lock nearly all of the
+// time, and std::mutex is not fair - the DSP thread's next lock() beats the
+// waiting GUI thread's again and again.
+//
+// So a setter builds a small command (the value is captured BY VALUE), appends it
+// to cmdQueue_ under cmdMutex_ - a lock held for a vector push or swap, never for
+// DSP work - and only then TRIES audioMutex_ without waiting. If it gets it (no
+// block in flight) it applies the queue itself, in order, exactly as the old
+// blocking setter did. If it does not, the DSP thread applies the queue at the top
+// of its next block, under the lock it already holds. Either way the call returns
+// in microseconds, the change reaches the chain between two blocks (never inside
+// one: no torn parameter set), and commands apply in the order they were posted.
+//
+// What a caller can still observe: a getter read straight after a setter returns
+// the value just set for every parameter whose mirror is verbatim (offset, mode,
+// de-emphasis, the on/off switches - stored with the post). The few that the live
+// object CLAMPS (noise-reduction strength, the notch's frequency and Q) show the
+// previous value until the command has run, at most one block later when the DSP
+// thread is running; that is the same "what is actually in use" the getter has
+// always meant. NOT posted, because their contract is that the call has FINISHED
+// when it returns: the recorder pointers (a caller destroys the recorder next) and
+// the rate switch (it joins the DSP thread by design).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -117,6 +157,7 @@
 // other carries complex.
 #include "core/scope_tap.hpp"
 #include "sink/audio_out.hpp"
+#include "sink/drift_matcher.hpp"
 #include "core/freq_converter.hpp"
 #include "source/converter_view.hpp"
 #include "source/iq_source.hpp"
@@ -202,6 +243,27 @@ public:
     int abandonedSourceThreads() const {
         return srcThreadsAbandoned_.load(std::memory_order_relaxed);
     }
+    // Diagnostics, and the usage record's `recovered.dspexc`: how many times the
+    // DSP thread threw an exception that dspThreadMain caught (the pipeline then
+    // stops itself and says so; see noteThreadFault). 0 on every healthy path. Only
+    // a counter: the window's own poll turns a rise into the count, so nothing
+    // here counts from the signal thread (core/health_events.hpp).
+    int dspThreadExceptions() const {
+        return dspExceptions_.load(std::memory_order_relaxed);
+    }
+    // What the DSP thread's request for scheduling priority came to the last time
+    // that thread started (0.99.73, core/thread_priority.hpp): "mmcss",
+    // "above-normal", "sched-rr" or "none: <reason>"; empty until a DSP thread
+    // has started. The same words are in the log (`dsp: thread priority ...`).
+    // sourceThreadPriority() is the same for the thread that fills the I/Q ring.
+    std::string dspThreadPriority() const;
+    std::string sourceThreadPriority() const;
+    // Diagnostics/tests (0.99.73): the correction the DriftMatcher is asking for
+    // right now, in ppm - positive while it plays more audio than arrives to
+    // deepen the sink's ring towards AudioOut::targetFrames(), negative while the
+    // ring is deeper than that. What a test reads to see that the pipeline hands
+    // the matcher the SINK's target and not a constant.
+    double driftCorrectionPpm();
     // Diagnostics/tests: samples the source thread read but the ring had no
     // room for (SpscRing::write accepts only what fits). Never reset, so a
     // caller measures a window by taking a difference. Before this counter
@@ -297,10 +359,20 @@ public:
     void setConverter(const ConverterSetting& s);
     ConverterSetting converter();
 
+    // --- The crystal correction by retuning (0.99.56) ------------------------
+    // See core/ppm_correction.hpp. GUI/control thread. The same rules as the
+    // converter: setSource() puts it back to 0 on every swap, the caller
+    // applies the new radio's own value after the swap (and only for a radio
+    // that cannot correct its own crystal), and changing it does not retune.
+    // `memo`: a tune already made at this correction (ConverterView::setPpm).
+    void setSoftwarePpm(double ppm, const PpmMemo& memo = {});
+    double softwarePpm();
+
     // --- Audio chain control (P3) -------------------------------------------
-    // All of these are callable from any thread while the pipeline runs: they
-    // serialize against the DSP thread's per-block processing under one
-    // internal mutex and take effect at the next audio block (~0.5 ms).
+    // All of these are callable from any thread while the pipeline runs. They
+    // never wait for the DSP thread: the change is queued and applied between two
+    // audio blocks (~0.5 ms later on a machine that keeps up) - see "SETTERS POST,
+    // THEY DO NOT WAIT" at the top of this file.
 
     // Selects the demodulator (default WFM). Also resets the AGC: a mode
     // switch changes the audio level regime, and carrying the old gain over
@@ -330,6 +402,20 @@ public:
     // this is a lock-free snapshot safe from any thread; -200 until the first
     // block after start().
     float signalPowerDb() const;
+
+    // Whether the squelch gate is OPEN - the gate's own state, not a
+    // comparison of the S-meter with the threshold. They differ exactly where
+    // it matters: the gate opens above the threshold but closes only 3 dB
+    // below it and holds for 100 ms, so the S-meter sitting just under the
+    // threshold can still be passing audio. A closed gate is a complete
+    // silence downstream: the audio chain keeps FEEDING the sink (zeros, at the
+    // normal rate), so nothing starves, nothing is logged, and every other
+    // light on the receiver - spectrum, waterfall, S-meter - stays live. It is
+    // the state a "no audio" report most needs and, before this, the one
+    // nothing recorded. Published once per DSP block into an atomic: a
+    // lock-free snapshot safe from any thread, false until the first block
+    // after start().
+    bool squelchOpen() const;
 
     // --- Broadcast-FM stereo (P7) --------------------------------------------
     // User switch, not a capability report: false forces mono (StereoFm's own
@@ -393,10 +479,8 @@ public:
 
     // --- Hard mute of the audio OUTPUT ---------------------------------------
     // Replaces the finished 48 kHz audio with digital silence, at the last
-    // point before it fans out. Set by the GUI when a data decoder is running
-    // on its own frequency (see plugin_ui.hpp's mute policy); the pipeline
-    // itself has no opinion about when that is, and deliberately so - it knows
-    // nothing about plugins, presets or what the user last clicked.
+    // point before it fans out. Set by the GUI for the user's Mute key and
+    // transmit monitoring; data-decoder carrier suppression is separate below.
     //
     // WHY HERE AND NOT AT THE SINK. The sink is one of four consumers of this
     // signal: the local device, the rolling tap (which is what the web
@@ -421,6 +505,12 @@ public:
     // a mutex the audio callback could contend for.
     void setAudioMuted(bool muted);
     bool audioMuted() const;
+    // A data decoder suppresses the demodulated carrier, while a plugin's
+    // decoded programme remains audible. User and transmit mute stay above.
+    void setDemodAudioMuted(bool muted);
+    // Whether carrier suppression currently silences the finished output.
+    // Decoded plugin or patch audio can still replace the quiet carrier.
+    bool pluginAudioMuted() const;
 
     // The audio sink, exposed for GUI wiring: volume, device enumeration, and
     // re-open on device change. The device the constructor opens (when
@@ -454,7 +544,7 @@ public:
     // sink (see audio_ below) and touches nothing else of this object.
     //
     // WHAT IT DELIBERATELY LEAVES OUT is the channel mirror. audioChannels_ is
-    // read by the DSP thread under audioMutex_ and belongs to this object, not
+    // read by the DSP thread once per block and belongs to this object, not
     // to the worker, so the caller republishes it with publishAudioChannels()
     // on the frame it collects the result. The cost of that deferral is at
     // most one audio block pushed in the previous layout during a device
@@ -465,7 +555,8 @@ public:
     // Mirrors the sink's current channel layout for the DSP thread. Called
     // from the GUI thread when an asynchronous open completes; `ok` false
     // means the open failed and the layout falls back to mono, exactly as the
-    // synchronous path does.
+    // synchronous path does. One atomic store - no lock, so it cannot queue the
+    // frame that collects the open behind a DSP block.
     void publishAudioChannels(bool ok);
 
     // --- Runtime input-rate follow (rate-follow) ------------------------------
@@ -506,8 +597,8 @@ public:
     //      overflow by design and never blocks the source)
     //   2. dspThread_ joined        (after this NO thread touches the
     //      estimator or the audio chain, so rebuilding them is race-free)
-    //   3. chain rebuilt under audioMutex_ (audioTap()/setters may arrive
-    //      from other threads while the DSP thread is down)
+    //   3. chain rebuilt under audioMutex_ (the setters may arrive from other
+    //      threads while the DSP thread is down)
     //   4. dspRun_ set, DSP thread respawned
     // Holding controlMutex_ across the whole switch is what makes a
     // stop()-during-switch impossible by construction: stop(), start(),
@@ -575,6 +666,12 @@ public:
     // a sleep it guessed at. Never called by the application.
     enum class LockForTest { Audio, Control };
     void holdLockForTest(LockForTest which, int holdMs, std::atomic<bool>* acquired);
+    // True while a posted setter change has not yet run (see "SETTERS POST, THEY DO
+    // NOT WAIT"). A test that held the lock and posted through it waits for this to
+    // fall before it reads the chain's own, clamped figures back.
+    bool commandsPendingForTest() const {
+        return cmdPending_.load(std::memory_order_acquire);
+    }
     // Total audio samples produced by the chain, counted BEFORE
     // AudioOut::write so the count advances with or without a device.
     std::uint64_t audioSamplesProduced() const;
@@ -597,9 +694,9 @@ public:
     //
     // A THIRD AND FOURTH TAP, and the reasons they are not the two above are
     // in core/scope_tap.hpp and beside each push site in the .cpp. In short:
-    // audioTap is 85 ms long and is read under the mutex the DSP thread holds
-    // across a whole block, and the scope's longest sweep is half a second
-    // and is read by the render thread once a frame.
+    // audioTap is 85 ms long and is a locked copy (tapMutex_), and the
+    // scope's longest sweep is half a second and is read by the render thread
+    // once a frame.
     //
     // WHAT EACH ONE CARRIES:
     //
@@ -651,6 +748,10 @@ public:
     // so the caller may immediately stop()/destroy the recorder. Install
     // order for a new take is therefore Recorder::start() FIRST, then
     // set*Recorder(); teardown is set*Recorder(nullptr) FIRST, then stop().
+    // (The GUI opens the file on a worker so a slow disk cannot freeze the
+    // window, and arms the recorder with Recorder::begin() on the GUI thread
+    // once the file is open: begin() is the "start" of this contract, and the
+    // tap still comes after it. See Recorder's "Slow disks".)
     // writeIq/writeAudio ignore wrong-kind and stopped recorders by their
     // own contract, so the DSP hot path needs only the null checks.
     void setIqRecorder(Recorder* r);
@@ -676,8 +777,27 @@ private:
     // entirely different shared_ptr, which is what lets stop() abandon a
     // stuck thread without that thread ever mistaking a NEW session's flags
     // for permission to keep running.
+    //
+    // `priority` is where this generation writes how its priority request came
+    // out (see sourceThreadPriority()): a shared_ptr captured by value, like the
+    // token, so that a thread the session abandoned and that wakes up late
+    // writes into memory it owns a share of and not into a Pipeline that has
+    // gone.
+    struct PriorityNote {
+        std::mutex m;
+        std::string text;
+        void set(const std::string& s) {
+            std::lock_guard<std::mutex> lk(m);
+            text = s;
+        }
+        std::string get() {
+            std::lock_guard<std::mutex> lk(m);
+            return text;
+        }
+    };
     void sourceThreadMain(double chainRateHz,
-                          std::shared_ptr<std::atomic<bool>> stopToken);
+                          std::shared_ptr<std::atomic<bool>> stopToken,
+                          std::shared_ptr<PriorityNote> priority);
     void dspThreadMain();
     void sourceThreadBody(double chainRateHz, const std::atomic<bool>& stopToken);
     void dspThreadBody();
@@ -715,6 +835,21 @@ private:
     // runs it before any thread exists); touches only demod_, so it is safe to
     // call before stereo_ has been built.
     void applyDemodDeemphasisLocked();
+    // Turns the user's bandwidth (vfoBandwidthHz_) into what the two blocks
+    // that enforce it are told, for the CURRENT mode: the channel filter's own
+    // bandwidth and, for the sideband modes, the demodulator's sideband width.
+    // One rule in one place, called from every point that changes the mode, the
+    // bandwidth or the rate (and so rebuilds either block). Caller holds
+    // audioMutex_ (the constructor runs it before any thread exists).
+    //
+    // AM, DSB, FM, RAW: the channel filter IS the bandwidth, symmetric about
+    // the tuned frequency. USB, LSB, CW: the wanted sideband lies on ONE side of
+    // the carrier and the demodulator selects it, so the bandwidth is the
+    // sideband's width (Demodulator::setSsbBandwidthHz) and the channel filter
+    // - symmetric, so it needs the sideband's reach on both sides - is left
+    // kSidebandChannelFactor times as wide, wide enough never to touch the
+    // audio and narrow enough to keep the neighbouring channels out.
+    void applyChannelBandwidthLocked();
 
     // PUBLISHES EVERY PER-FRAME GETTER'S MIRROR from the live objects. Caller
     // holds audioMutex_ (the constructor runs it before any thread exists).
@@ -730,6 +865,23 @@ private:
     // lives under controlMutex_, not audioMutex_, and setInputRateHz publishes
     // it at the one line that commits the new rate.
     void publishParamMirrorsLocked();
+
+    // --- Setters post, they do not wait (see the header comment) -------------
+    // A change to the audio chain: runs under audioMutex_, on whichever thread
+    // holds it, against the LIVE objects at that moment - so it captures values,
+    // never pointers into the chain (the chain can be rebuilt between the post
+    // and the run).
+    using Command = std::function<void()>;
+    // Queues `apply`, runs `mirrorNow` (optional: stores the VERBATIM mirror
+    // values so a getter read right after the setter returns sees the new value),
+    // then applies the whole queue itself if audioMutex_ is free, and otherwise
+    // leaves it to the DSP thread's next block. Never waits for audioMutex_.
+    void post(Command apply, Command mirrorNow = {});
+    // Caller holds audioMutex_. Runs everything queued, in order, until the queue
+    // is empty, then publishes the mirrors from the live objects - under
+    // cmdMutex_ and only on an empty queue, so a later post's verbatim mirror
+    // cannot be overwritten by an older value from the live chain.
+    void drainCommandsLocked();
 
     Config cfg_;
     // Built-in generator source: always alive (a member, not a unique_ptr)
@@ -777,6 +929,18 @@ private:
     // setters/getters above. One mutex, never held together with frameMutex_
     // or controlMutex_ on the DSP thread, so no ordering to get wrong.
     mutable std::mutex audioMutex_;
+    // THE SETTERS' QUEUE. cmdMutex_ guards cmdQueue_ and nothing else, and is held
+    // only for a push, a swap or a mirror store - never across a DSP block and
+    // never while waiting for another lock. LOCK ORDER: controlMutex_ ->
+    // audioMutex_ -> cmdMutex_ (the DSP thread's drain), and a setter takes
+    // cmdMutex_ and then only TRIES audioMutex_ (never waits), so the reverse
+    // direction cannot deadlock. cmdScratch_ is the drain's working vector, kept
+    // so the DSP thread swaps buffers instead of allocating; guarded by
+    // audioMutex_.
+    std::mutex cmdMutex_;
+    std::vector<Command> cmdQueue_;
+    std::vector<Command> cmdScratch_;
+    std::atomic<bool> cmdPending_{false};
     // Rate-dependent chain parameters, all guarded by audioMutex_ alongside
     // the blocks they configure. vfoDecim_ is the CURRENT decimation (the
     // header constant it replaced assumed a fixed 2 MS/s input). The two
@@ -846,9 +1010,11 @@ private:
 
     std::shared_ptr<cascade::sink::AudioOut> audio_;  // device opened only
                                                       // when cfg_.audioEnabled
-    // Channel layout the sink was last opened with (1 or 2), mirrored under
-    // audioMutex_ so the DSP thread never races a GUI device switch.
-    int audioChannels_ = 1;
+    // Channel layout the sink was last opened with (1 or 2), mirrored for the DSP
+    // thread so it never races a GUI device switch. Atomic rather than under
+    // audioMutex_: the GUI publishes it on the frame an async open completes, and
+    // a lock there queued that frame behind a DSP block.
+    std::atomic<int> audioChannels_{1};
     // FM discriminator scale: rad/sample -> ~0.5 full scale at +/-75 kHz
     // deviation (see pipeline.cpp for the derivation).
     float fmScale_ = 1.0f;
@@ -867,6 +1033,11 @@ private:
     std::vector<float> outL_;                    // resampled 48 kHz audio
     std::vector<float> outR_;
     std::vector<float> outIlv_;                  // interleaved 48 kHz for the sink
+    // Holds the sink's lead against the radio's clock (sink/drift_matcher.hpp):
+    // only the sound card's copy is resampled - the taps, the scope and the
+    // recorder keep the radio's own timing. Guarded by audioMutex_.
+    cascade::sink::DriftMatcher driftMatcher_;
+    std::vector<float> matchedOut_;              // driftMatcher_'s output
     std::vector<float> monoOut_;                 // (L+R)/2 for tap + recorder
     // A plugin's audio (CASCADE_CAP_AUDIO_OUT), already at kAudioRateHz, and
     // the crossfade that hands the speakers over. DSP thread only.
@@ -881,6 +1052,22 @@ private:
     float pluginLastR_ = 0.0f;
     // Rolling pre-AudioOut tap window (interleaved L,R; kAudioTapSize FRAMES)
     // + producer-side counters (test support).
+    //
+    // GUARDED BY tapMutex_, NOT audioMutex_. audioTap()/audioTapStereo() used to
+    // take audioMutex_, which processAudioBlock holds across a WHOLE block, so
+    // the GUI thread - AppWindow::publishWebAudio reads the tap every frame that
+    // has new audio while the browser remote is on - queued behind the entire
+    // DSP block (measured: 1507 ms inside publishWebAudio with the mutex held
+    // for 1500 ms by the test seam that stands in for a plugin stretching a
+    // block). tapMutex_ is held only for the copy of one block's frames
+    // into the window, and for a reader's copy out of it: microseconds.
+    //
+    // LOCK ORDER: on the DSP thread audioMutex_ is taken first and tapMutex_
+    // nests inside it for just that copy; the readers take tapMutex_ ALONE.
+    // Nothing ever waits for audioMutex_ while holding tapMutex_, so the two
+    // cannot deadlock. Keep it that way: never take audioMutex_ (or anything
+    // that does) under tapMutex_.
+    mutable std::mutex tapMutex_;
     std::vector<float> tapBuf_;
     std::size_t tapWrite_ = 0;   // in frames
     std::size_t tapFilled_ = 0;  // in frames
@@ -904,6 +1091,7 @@ private:
     ScopeTap<std::complex<float>> scopeIq_{kScopeIqTapSamples};
     ScopeTap<float> scopeMpx_{kScopeMpxTapSamples};
     std::atomic<float> signalDb_{-200.0f};
+    std::atomic<bool> squelchOpen_{false};
     std::atomic<std::uint64_t> audioSamples_{0};
     // UI snapshots, published once per block like signalDb_.
     std::atomic<bool> pilotLocked_{false};
@@ -915,6 +1103,8 @@ private:
     // whole block, and a GUI thread that had to take it to set one bool would
     // stall behind a block of DSP for a per-frame update.
     std::atomic<bool> audioMuted_{false};
+    std::atomic<bool> demodAudioMuted_{false};
+    std::atomic<bool> programmeAudio_{false};
     std::atomic<double> autoNotchHz_{0.0};
 
     // THE PER-FRAME GETTERS' MIRRORS. See the header comment: the GUI polls
@@ -962,6 +1152,12 @@ private:
     std::atomic<bool> dspRun_{false};
     std::thread srcThread_;
     std::thread dspThread_;
+    // How each thread's priority request came out (dspThreadPriority(),
+    // sourceThreadPriority()). Both are shared_ptrs because the source thread's
+    // generation holds its own share (spawnSourceThread); the DSP thread is
+    // always joined, so its note is only ever touched while the Pipeline lives.
+    std::shared_ptr<PriorityNote> dspPriority_ = std::make_shared<PriorityNote>();
+    std::shared_ptr<PriorityNote> srcPriority_ = std::make_shared<PriorityNote>();
 
     // Per-generation shutdown state for the source thread — zombie-safety
     // for stop()'s bounded join (field report 4214EAE4; see stop() and
@@ -983,6 +1179,8 @@ private:
     // timing alone - and "zero for healthy sessions" is the assertion
     // that keeps kSourceJoinWait honest.
     std::atomic<int> srcThreadsAbandoned_{0};
+    // See dspThreadExceptions(). Written only by the DSP thread's catch blocks.
+    std::atomic<int> dspExceptions_{0};
     // See ringDroppedSamples(). Written only by the source thread.
     std::atomic<std::uint64_t> ringDropped_{0};
 

@@ -43,7 +43,9 @@ BandRibbonGeometry bandRibbonGeometry(BandPlanSizeTier size, float scale) {
     // to ui() at kUiSize — spelled out explicitly here so "small" is a real
     // number this function owns rather than an ambient default.
     constexpr float kSmallRibbonPx = 6.0f;
-    constexpr float kSmallLabelPx = cascade::gui::fonts::kUiSize;
+    // NOT constexpr: fonts::uiPx() reads the live interface-scale factor
+    // (gui/ui_scale.hpp), which is process state, not a compile-time value.
+    const float kSmallLabelPx = cascade::gui::fonts::uiPx();
     constexpr float kSmallLabelMinPx = 46.0f;
 
     float mul = 1.0f;

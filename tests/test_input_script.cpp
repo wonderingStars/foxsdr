@@ -87,6 +87,43 @@ int main() {
         CHECK(p.steps.size() == 2u && p.steps[1].y == 1.5f);
     }
 
+    // [4b] A TOUCHPAD'S OTHER TWO GESTURES (0.99.49): a sideways two-finger
+    // scroll (the horizontal wheel) and a pinch, which arrives as Ctrl+wheel -
+    // what the patch canvas pans and zooms on. Zero is refused as above.
+    {
+        const ScriptParse p = parseInputScript("5 wheelh 2\n6 ctrlwheel -1.5\n7 wheelh 0\n8 ctrlwheel\n");
+        CHECK(p.bad == 2);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::WheelH &&
+              p.steps[0].x == 2.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].verb == ScriptStep::Verb::CtrlWheel &&
+              p.steps[1].y == -1.5f);
+    }
+
+    // [4b2] SHIFT+WHEEL (0.99.82), the gesture that slides the passband on the
+    // spectrum and the waterfall: notches as given; zero or missing refused.
+    {
+        const ScriptParse p = parseInputScript(
+            "5 shiftwheel 3\n6 shiftwheel -1.5\n7 shiftwheel 0\n8 shiftwheel\n");
+        CHECK(p.bad == 2);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::ShiftWheel &&
+              p.steps[0].y == 3.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].y == -1.5f);
+    }
+
+    // [4c] SLEEP holds the loop for real time (a long press is a duration):
+    // 1..5000 ms; zero, past the bound, or missing is refused.
+    {
+        const ScriptParse p =
+            parseInputScript("5 sleep 500\n6 sleep 0\n7 sleep 6000\n8 sleep\n9 sleep 1\n");
+        CHECK(p.bad == 3);
+        CHECK(p.steps.size() == 2u);
+        CHECK(p.steps.size() == 2u && p.steps[0].verb == ScriptStep::Verb::Sleep &&
+              p.steps[0].x == 500.0f);
+        CHECK(p.steps.size() == 2u && p.steps[1].x == 1.0f);
+    }
+
     // [5] A TEXT STEP TYPES THE REST OF THE LINE VERBATIM, '#' included. The
     // comment strip used to run before the verb was read, so "Channel #12"
     // typed "Channel " and parsed as a perfectly good step - a wrong string

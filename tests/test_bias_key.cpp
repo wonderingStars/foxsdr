@@ -142,23 +142,33 @@ void testPlace() {
                 "every bar width\n");
     using cascade::gui::CounterLayout;
     const cascade::gui::FreqRect k = cascade::gui::deckBiasKeyArea();
+    // The 12-px readability bar is held by the key's own pixel floor (0.99.74), which is what
+    // keeps "readable" below true now that the bar's floor scale (0.57) would give 11.4.
+    CHECK(cascade::gui::kDeckBiasKeyMinPx >= 12.0f);
+    CHECK((k.y1 - k.y0) * 0.57f < 12.0f);  // ...so the floor is what is doing it
     int checked = 0;
     for (const CounterLayout layout : {CounterLayout{1, true}, CounterLayout{1, false},
                                        CounterLayout{2, false}, CounterLayout{2, true}}) {
         for (float barW = static_cast<float>(cascade::gui::kDeckMinWindowW) - 50.0f;
              barW <= 2400.0f; barW += 1.0f) {
-            const float s = cascade::gui::deckScale(barW, layout, 0.62f);
+            // 0.57: the floor app_window.cpp's kBarMinScale has had since 0.99.74 (0.62
+            // before: the GAIN and SQUELCH dials made the cluster wider, and the floor that
+            // keeps it inside the narrowest window fell with it).
+            const float s = cascade::gui::deckScale(barW, layout, 0.57f);
             const float barH = cascade::gui::deckBarH(layout) * s;
             // As drawn: deck units times the scale, except the pixel-sized
-            // parts of the lamp row (4 px and the caption, never under 9 px).
+            // parts of the lamp row (4 px and the caption, never under 9 px) and the key
+            // itself, which is never under kDeckBiasKeyMinPx (12 px): its 20 units are 11.4 px
+            // at the new floor, and the key is drawn taller than the scale gives it, downwards.
             const float capPx = std::max(9.0f, 14.0f * s);
             const float lampWordsFoot = (86.0f + 7.0f) * s + 4.0f + capPx;
-            const float kx0 = k.x0 * s, ky0 = k.y0 * s, kx1 = k.x1 * s, ky1 = k.y1 * s;
+            const float keyH = std::max((k.y1 - k.y0) * s, cascade::gui::kDeckBiasKeyMinPx);
+            const float kx0 = k.x0 * s, ky0 = k.y0 * s, kx1 = k.x1 * s, ky1 = ky0 + keyH;
             const bool clearOfWords = ky0 >= lampWordsFoot + 2.0f;
             const bool clearOfRail = ky1 <= barH - 3.0f - 2.0f;
             const bool clearOfTransport = kx0 >= (74.0f + 46.0f) * s + 2.0f;
             const bool insideCompartment = kx1 <= cascade::gui::kDeckMasterDividerX * s - 2.0f;
-            const bool readable = (k.y1 - k.y0) * s >= 12.0f;
+            const bool readable = keyH >= 12.0f;
             const bool ok =
                 clearOfWords && clearOfRail && clearOfTransport && insideCompartment && readable;
             if (!ok) {

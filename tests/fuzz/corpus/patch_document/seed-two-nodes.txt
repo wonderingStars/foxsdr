@@ -1,0 +1,5 @@
+foxsdr-patch 6
+view 0 0 1
+node 1 0 0 40 40 220 120 100000000 0 - - 0 1 -50 1 Radio one
+node 2 1 0 300 40 200 100 0 0 - - 0 1 -50 1 Channel
+wire 1 0 2 0

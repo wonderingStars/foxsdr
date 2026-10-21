@@ -4,6 +4,7 @@
 #include "core/diag_log.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_log_bridge.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/soapy_modules.hpp"
 #include "source/vendor_guard.hpp"
 
@@ -18,6 +19,7 @@
 #include <SoapySDR/Types.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -82,6 +84,14 @@ constexpr std::chrono::milliseconds kControlLockWait{1500};
 // hands in at most 3 s, because the first abandonment condemns the device and
 // every later call on the same path is skipped rather than attempted.
 constexpr std::chrono::milliseconds kVendorCallWait{1500};
+
+// THE GUI THREAD'S WORST CASE IN start() (hang reports 40002A91C26F3C07 and
+// 9B804643C56308CF): the lock wait, then one activateStream waited for
+// kVendorCallWait before it becomes the late call (see activateLocked). It
+// must end inside the hang watchdog's 5000 ms (HangWatchdog::
+// kDefaultThresholdMs): 1500 + 1500 < 5000.
+static_assert(kControlLockWait + kVendorCallWait < std::chrono::milliseconds(5000),
+              "start() must give the GUI thread back inside the hang watchdog's threshold");
 
 const char* const kNoDeviceName = "SoapySDR: (no device)";
 
@@ -249,27 +259,45 @@ struct VendorJob {
     int ret = 0;
     bool threw = false;
     std::string message;
+    // The one argument and the one readback a late-capable call carries (the
+    // retune's frequency asked and frequency read back), so its body stays a
+    // captureless function like every other.
+    double arg = 0.0;
+    double got = 0.0;
 
     std::mutex m;
     std::condition_variable cv;
     bool done = false;
     bool faulted = false;  // the vendor guard absorbed a structured exception
+    // When the driver let go, for the late call's "answered after" line.
+    std::chrono::steady_clock::time_point returnedAt{};
 };
 
 enum class JobOutcome {
     Completed,  // the driver answered; ret/threw/message are readable
     Faulted,    // a structured exception was absorbed inside the driver
     Abandoned,  // it never came back - the caller must condemn the device
+    // startVendorJob only - runAbandonableVendorCall never answers these:
+    Pending,  // not back within the wait; the worker is detached and the
+              // job's latch still says when it returns
+    NotRun,   // no thread could be started, so nothing entered the driver
 };
 
-JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexcept {
+// The worker and the bounded wait, shared by the escape paths (which condemn
+// a call that is not back - runAbandonableVendorCall below) and the
+// late-capable control calls (which listen for its answer - see
+// SoapySource::LateCall).
+JobOutcome startVendorJob(const std::shared_ptr<VendorJob>& job,
+                          std::chrono::milliseconds wait) noexcept {
     std::thread worker;
     try {
         worker = std::thread([job]() noexcept {
             const bool completed = guardedVendorCall([&job]() noexcept { job->body(*job); });
+            const auto at = std::chrono::steady_clock::now();
             {
                 std::lock_guard<std::mutex> lk(job->m);
                 job->faulted = !completed;
+                job->returnedAt = at;
                 job->done = true;
             }
             job->cv.notify_all();
@@ -279,26 +307,20 @@ JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexc
             // would trade a fixed freeze for a shutdown crash.
         });
     } catch (...) {
-        // No thread, so NOTHING RAN. Reported as abandoned rather than run
-        // inline: a machine that cannot start a thread is in no state to be
-        // handed the call that froze the interface in the first place, and the
-        // caller's verdict (condemn, release, tell the user) is survivable
-        // where a freeze is not.
-        return JobOutcome::Abandoned;
+        return JobOutcome::NotRun;
     }
     bool done = false;
     bool faulted = false;
     try {
         std::unique_lock<std::mutex> lk(job->m);
-        done = job->cv.wait_for(lk, kVendorCallWait, [&job] { return job->done; });
+        done = job->cv.wait_for(lk, wait, [&job] { return job->done; });
         faulted = job->faulted;
     } catch (...) {
         done = false;  // an unwaitable latch is treated as a call that hung
     }
     if (!done) {
         worker.detach();
-        s_abandonedCalls.fetch_add(1, std::memory_order_relaxed);
-        return JobOutcome::Abandoned;
+        return JobOutcome::Pending;
     }
     // Fast: the worker sets done as its last act, so this joins a thread that
     // is already on its way out. It is a real join, not a wait - the OS thread
@@ -306,6 +328,27 @@ JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexc
     // under.
     worker.join();
     return faulted ? JobOutcome::Faulted : JobOutcome::Completed;
+}
+
+JobOutcome runAbandonableVendorCall(const std::shared_ptr<VendorJob>& job) noexcept {
+    switch (startVendorJob(job, kVendorCallWait)) {
+        case JobOutcome::Completed:
+            return JobOutcome::Completed;
+        case JobOutcome::Faulted:
+            return JobOutcome::Faulted;
+        case JobOutcome::NotRun:
+            // No thread, so NOTHING RAN. Reported as abandoned rather than run
+            // inline: a machine that cannot start a thread is in no state to
+            // be handed the call that froze the interface in the first place,
+            // and the caller's verdict (condemn, release, tell the user) is
+            // survivable where a freeze is not.
+            return JobOutcome::Abandoned;
+        case JobOutcome::Pending:
+        case JobOutcome::Abandoned:
+        default:
+            s_abandonedCalls.fetch_add(1, std::memory_order_relaxed);
+            return JobOutcome::Abandoned;
+    }
 }
 
 // The caller-side half: build a job for one call on this link. Null on
@@ -323,10 +366,187 @@ std::shared_ptr<VendorJob> makeVendorJob(const std::shared_ptr<SoapySource::Devi
     }
 }
 
+// The two late-capable bodies. Each keeps its try/catch inside, like every
+// body here, and reports through the job.
+void retuneBody(VendorJob& j) noexcept {
+    try {
+        j.link->dev->setFrequency(SOAPY_SDR_RX, kChannel, j.arg);
+        // Readback, not echo: the synthesiser lands where its step size
+        // allows, and the display tracks the hardware.
+        j.got = j.link->dev->getFrequency(SOAPY_SDR_RX, kChannel);
+    } catch (const std::exception& e) {
+        j.threw = true;
+        j.message = describe(e, "setFrequency failed");
+    } catch (...) {
+        j.threw = true;
+        j.message = "setFrequency failed: non-standard exception";
+    }
+}
+
+void activateBody(VendorJob& j) noexcept {
+    try {
+        j.ret = j.link->dev->activateStream(j.link->stream);
+    } catch (const std::exception& e) {
+        j.threw = true;
+        j.message = describe(e, "activateStream failed");
+    } catch (...) {
+        j.threw = true;
+        j.message = "activateStream failed: non-standard exception";
+    }
+}
+
+// What the user is told while a late call is out, and by every entry refused
+// behind it. tests/test_soapy_source.cpp reads "not answered" in it.
+std::string lateSentence(const char* what, std::chrono::milliseconds grace) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "%s: the radio's driver has not answered yet - FoxSDR waits up to %lld s "
+                  "for it and holds other changes until it does",
+                  what, static_cast<long long>((grace.count() + 999) / 1000));
+    return buf;
+}
+
+long long msBetween(std::chrono::steady_clock::time_point a,
+                    std::chrono::steady_clock::time_point b) {
+    return b > a ? static_cast<long long>(
+                       std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count())
+                 : 0LL;
+}
+
 }  // namespace
+
+// THE LATE CALL. See setCenterFrequencyHz() in the header for the contract
+// and kLateCallGrace for the number. Only ever touched under link_->mutex.
+struct SoapySource::LateCall {
+    enum class Kind { Retune, Activate };
+    std::shared_ptr<VendorJob> job;
+    Kind kind = Kind::Retune;
+    const char* what = "";  // always a string literal, so it outlives everything
+    std::chrono::steady_clock::time_point issued{};
+};
 
 SoapySource::~SoapySource() {
     closeDevice();
+}
+
+bool SoapySource::lateCallHoldsDriverLocked(long timeoutUs) noexcept {
+    if (!late_) { return false; }
+    VendorJob& j = *late_->job;
+    bool done = false;
+    try {
+        std::unique_lock<std::mutex> lk(j.m);
+        done = timeoutUs > 0
+                   ? j.cv.wait_for(lk, std::chrono::microseconds(timeoutUs), [&j] { return j.done; })
+                   : j.done;
+    } catch (...) {
+        done = false;
+    }
+    if (done) {
+        reapLateCallLocked();
+        return false;
+    }
+    if (std::chrono::steady_clock::now() - late_->issued >= lateGrace_) {
+        giveUpLateCallLocked(/*graceRanOut=*/true);
+    }
+    return true;
+}
+
+void SoapySource::settleLateCallLocked() noexcept {
+    if (!late_) { return; }
+    bool done = false;
+    try {
+        std::lock_guard<std::mutex> lk(late_->job->m);
+        done = late_->job->done;
+    } catch (...) {
+        done = false;
+    }
+    if (done) {
+        reapLateCallLocked();
+    } else {
+        giveUpLateCallLocked(/*graceRanOut=*/false);
+    }
+}
+
+void SoapySource::reapLateCallLocked() noexcept {
+    const std::shared_ptr<LateCall> late = std::move(late_);
+    late_.reset();
+    if (!late) { return; }
+    // The worker set done as its last write under j.m and touches none of
+    // these fields again, so they are read here without the lock.
+    VendorJob& j = *late->job;
+    const long long ms = msBetween(late->issued, j.returnedAt);
+    if (j.faulted) {
+        if (late->kind == LateCall::Kind::Activate) {
+            running_.store(false, std::memory_order_relaxed);
+        }
+        noteVendorFault(late->what);
+        return;
+    }
+    try {
+        if (late->kind == LateCall::Kind::Retune) {
+            if (j.threw) {
+                core::diagWarnf("soapy: %s answered after %lld ms - %s", late->what, ms,
+                                j.message.c_str());
+                setError(j.message);
+                return;
+            }
+            centerFrequencyHz_.store(j.got, std::memory_order_relaxed);
+            core::diagWarnf("soapy: %s answered after %lld ms - now at %.0f Hz", late->what, ms,
+                            j.got);
+        } else {
+            if (j.threw || j.ret != 0) {
+                // THE FIELD CASE: SoapySDRPlay3's activateStream answering
+                // sdrplay_api_AlreadyInitialised as NOT_SUPPORTED, seconds
+                // late. The stream never started, and the reader has to be
+                // told so the way it is told a stream died: faulted(), with
+                // the driver's words. Not a vendor fault and not dead - the
+                // driver answered, and teardown releases it normally.
+                const std::string msg =
+                    j.threw ? j.message
+                            : std::string("activateStream failed: ") + SoapySDR::errToStr(j.ret);
+                core::diagWarnf("soapy: %s answered after %lld ms - %s", late->what, ms,
+                                msg.c_str());
+                running_.store(false, std::memory_order_relaxed);
+                std::lock_guard<std::mutex> lk(errorMutex_);
+                lastError_ = msg;
+                faulted_ = true;
+                return;
+            }
+            core::diagWarnf("soapy: %s answered after %lld ms - the stream is running",
+                            late->what, ms);
+        }
+    } catch (...) {
+    }
+    // The "not answered yet" sentence goes with the wait it described; any
+    // fault or condemnation that arrived meanwhile keeps its own words.
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    if (!faulted_ && !deviceDead_) { lastError_.clear(); }
+}
+
+void SoapySource::giveUpLateCallLocked(bool graceRanOut) noexcept {
+    const std::shared_ptr<LateCall> late = std::move(late_);
+    late_.reset();
+    if (!late) { return; }
+    // Counted with the escape paths' abandonments: from here it is one of
+    // them - a call left running inside the module for good.
+    s_abandonedCalls.fetch_add(1, std::memory_order_relaxed);
+    if (late->kind == LateCall::Kind::Activate) {
+        running_.store(false, std::memory_order_relaxed);
+    }
+    if (graceRanOut) {
+        abandonWedgedDriverLocked(late->what, static_cast<long long>(lateGrace_.count()));
+    } else {
+        core::diagWarnf("soapy: %s was still unanswered when the radio was stopped",
+                        late->what);
+        abandonWedgedDriverLocked(late->what,
+                                  msBetween(late->issued, std::chrono::steady_clock::now()));
+    }
+}
+
+void SoapySource::refuseForLateCallLocked() {
+    // Given up just now: the condemnation's own words stand.
+    if (!late_ || deviceDead()) { return; }
+    setError(lateSentence(late_->what, lateGrace_));
 }
 
 bool SoapySource::runtimeAvailable() {
@@ -520,7 +740,135 @@ std::string lowerCopy(std::string s) {
     return s;
 }
 
+// See SoapySource::setModulesLoadedHook.
+std::atomic<void (*)()> g_modulesLoadedHook{nullptr};
+
+void runModulesLoadedHook() {
+    if (void (*hook)() = g_modulesLoadedHook.load(std::memory_order_acquire)) { hook(); }
+}
+
+// WHETHER AN ARGS STRING NAMES SOAPYSDR'S "audio" DRIVER - SoapyAudio, which
+// lists sound cards through RtAudio and, on Windows, loads every ASIO driver on
+// the machine to do it. "driver" is matched as a key and "audio" as the whole
+// value, ignoring case and the spaces round them; "driver=audiofoo" is another
+// driver. Hand-parsed because open() has not yet proved SoapySDR.dll is there,
+// and SoapySDR::KwargsFromString is a call into it.
+bool namesSoundCardDriver(const std::string& args) {
+    const auto trimmedLower = [](const std::string& s) {
+        std::size_t a = 0;
+        std::size_t b = s.size();
+        while (a < b && (s[a] == ' ' || s[a] == '\t')) { ++a; }
+        while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t')) { --b; }
+        return lowerCopy(s.substr(a, b - a));
+    };
+    std::size_t pos = 0;
+    while (pos <= args.size()) {
+        std::size_t end = args.find(',', pos);
+        if (end == std::string::npos) { end = args.size(); }
+        const std::string field = args.substr(pos, end - pos);
+        const std::size_t eq = field.find('=');
+        if (eq != std::string::npos && trimmedLower(field.substr(0, eq)) == "driver" &&
+            trimmedLower(field.substr(eq + 1)) == "audio") {
+            return true;
+        }
+        if (end == args.size()) { break; }
+        pos = end + 1;
+    }
+    return false;
+}
+
 }  // namespace
+
+void SoapySource::setModulesLoadedHook(void (*hook)()) {
+    g_modulesLoadedHook.store(hook, std::memory_order_release);
+}
+
+std::vector<std::string> SoapySource::unloadModulesRegistering(
+    const std::vector<std::string>& drivers, std::chrono::milliseconds wait) {
+    if (drivers.empty() || !runtimeAvailable()) { return {}; }
+    // Owned by the worker as well as by this frame: a module that hangs in
+    // its unload keeps the worker, and this frame stops waiting for it.
+    struct Job {
+        std::vector<std::string> drivers;
+        std::vector<std::string> unloaded;
+        std::vector<std::string> failed;
+        std::mutex m;
+        std::condition_variable cv;
+        bool done = false;
+        bool faulted = false;
+    };
+    std::shared_ptr<Job> job;
+    std::thread worker;
+    try {
+        job = std::make_shared<Job>();
+        job->drivers = drivers;
+        worker = std::thread([job]() noexcept {
+            std::vector<std::string> unloaded;
+            std::vector<std::string> failed;
+            const bool completed = guardedVendorCall([&job, &unloaded, &failed]() noexcept {
+                try {
+                    for (const std::string& path : SoapySDR::listModules()) {
+                        bool registers = false;
+                        for (const auto& entry : SoapySDR::getLoaderResult(path)) {
+                            // Only a registration that took (an empty error):
+                            // a module whose entry was refused never had its
+                            // find function run.
+                            if (entry.second.empty() &&
+                                std::find(job->drivers.begin(), job->drivers.end(),
+                                          entry.first) != job->drivers.end()) {
+                                registers = true;
+                            }
+                        }
+                        if (!registers) { continue; }
+                        const std::string err = SoapySDR::unloadModule(path);
+                        if (err.empty()) {
+                            unloaded.push_back(path);
+                        } else {
+                            failed.push_back(path + ": " + err);
+                        }
+                    }
+                } catch (...) {
+                }
+            });
+            {
+                std::lock_guard<std::mutex> lk(job->m);
+                job->unloaded = std::move(unloaded);
+                job->failed = std::move(failed);
+                job->faulted = !completed;
+                job->done = true;
+            }
+            job->cv.notify_all();
+        });
+    } catch (...) {
+        core::diagWarnf("soapy: no thread for unloading the %s module - left loaded",
+                        drivers.front().c_str());
+        return {};
+    }
+    bool done = false;
+    {
+        std::unique_lock<std::mutex> lk(job->m);
+        done = job->cv.wait_for(lk, wait, [&job] { return job->done; });
+    }
+    if (!done) {
+        worker.detach();
+        core::diagWarnf("soapy: unloading the %s module did not finish within %lld ms - left to it",
+                        drivers.front().c_str(), static_cast<long long>(wait.count()));
+        return {};
+    }
+    worker.join();
+    if (job->faulted) {
+        core::diagWarnf("soapy: unloading the %s module faulted (code 0x%08X) - contained",
+                        drivers.front().c_str(),
+                        static_cast<unsigned>(vendorGuardLastFaultCode()));
+    }
+    for (const std::string& f : job->failed) {
+        core::diagWarnf("soapy: unloading a module failed: %s", f.c_str());
+    }
+    for (const std::string& p : job->unloaded) {
+        core::diagLogf("soapy: unloaded %s before the process ends", p.c_str());
+    }
+    return job->unloaded;
+}
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
     const std::vector<std::string>& skip,
@@ -551,6 +899,7 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
                 // What SoapySDR::Device::enumerate() does first (its one-shot
                 // automaticLoadModules); loadModules() skips what is loaded.
                 SoapySDR::loadModules();
+                runModulesLoadedHook();
                 // ONE THREAD PER DRIVER, all at once, in the registry's order -
                 // SoapySDR's own walk, reproduced so that it can be told what
                 // to leave out and can say what it is doing.
@@ -679,13 +1028,35 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& 
         [](void* p) noexcept {
             auto* w = static_cast<Walk*>(p);
             try {
-                // WITH the driver key, only that module's find function runs;
-                // without it, every one of them does. Same call either way, so
-                // the guard, the catch and the row building below are shared.
-                SoapySDR::Kwargs ask;
-                if (!w->driver->empty()) { ask["driver"] = *w->driver; }
-                for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate(ask)) {
-                    w->out->push_back(rowFromKwargs(kw));
+                // Loaded FIRST, explicitly, so the hook runs between the load
+                // and the probe. Device::enumerate() would load them itself
+                // (its one-shot automaticLoadModules), and loadModules()
+                // skips what is already loaded.
+                SoapySDR::loadModules();
+                runModulesLoadedHook();
+                if (w->driver->empty()) {
+                    for (const SoapySDR::Kwargs& kw : SoapySDR::Device::enumerate()) {
+                        w->out->push_back(rowFromKwargs(kw));
+                    }
+                    return;
+                }
+                // ONE DRIVER IS ASKED EXACTLY AS THE WHOLE-BUS WALK ASKS IT:
+                // its find function, with EMPTY kwargs. Not
+                // Device::enumerate("driver=<name>"), which hands the driver
+                // key itself to the find function (SoapySDR Factory.cpp) - and
+                // to a module that reads that as "the user named me", which
+                // SoapyRedPitaya does ("TODO perform a test connection"), it
+                // means "list me unprobed". That made a phantom "redpitaya"
+                // row at its built-in 192.168.1.100 on every scan beside an
+                // open radio, and picking it froze the interface (hang report
+                // 40002A91C26F3C07). A driver must list the same devices
+                // whichever walk asked it.
+                for (const auto& entry : SoapySDR::Registry::listFindFunctions()) {
+                    if (entry.first != *w->driver) { continue; }
+                    for (SoapySDR::Kwargs kw : entry.second(SoapySDR::Kwargs())) {
+                        kw["driver"] = entry.first;
+                        w->out->push_back(rowFromKwargs(kw));
+                    }
                 }
             } catch (...) {
                 // "Never throws; empty on none/no modules": a probe failure in
@@ -758,6 +1129,38 @@ bool SoapySource::open(const std::string& args) {
         setError(kAbandonedMessage);
         return false;
     }
+    // ONE CHIP, ONE ROUTE. The SoapySDR `sdrplay` and `miri` modules reach the
+    // same silicon as this product's native SDRplay and Mirics drivers, inside
+    // this process, and nothing they do is visible to those drivers - so the
+    // decision the native routes already obey is made HERE, before the module
+    // is asked to make anything: after the SDRplay API session is lost or a
+    // worker was abandoned inside it, no such device is opened for the rest of
+    // the process; and a Mirics device is not opened for a radio the SDRplay
+    // API manages. This is the one place every receiver, patch, restore and
+    // fallback open of a SoapySDR device passes through (rsp_rows.hpp holds
+    // the rule and the field reports behind it). Empty for every other driver,
+    // which it never even looks up. After the release above, like every other
+    // refusal here: the previous device is already unmade.
+    {
+        const std::string refused = soapyMiricsRefusal(args);
+        if (!refused.empty()) {
+            setError(refused);
+            return false;
+        }
+    }
+    // A SOUND CARD IS NOT A RADIO, and asking for one here would run the
+    // "audio" driver's find function in THIS process - the ASIO walk the device
+    // scan keeps out of its child (neverAskedDrivers, soapy_enum_proc.cpp). The
+    // Source list never offers such a row and a saved Source is refused before
+    // it gets here (gui/app_window.cpp, isAudioDriver); a patch radio opens by
+    // the args its saved patch carries, and reaches this call directly. Refused
+    // after the release above, like every failed open, so nothing stays open.
+    if (namesSoundCardDriver(args)) {
+        setError(
+            "SoapySDR's audio driver lists sound cards, not radios, and is never "
+            "opened here - use the Sound card source for a sound card.");
+        return false;
+    }
     if (!runtimeAvailable()) {
         setError(
             "SoapySDR runtime not found (SoapySDR.dll). Reinstall, or use the "
@@ -803,6 +1206,7 @@ bool SoapySource::open(const std::string& args) {
         std::string antenna;
         std::vector<double> rates;
         bool autoGainSupported = false;
+        bool freqCorrectionSupported = false;
     } o{this, &args};
 
     const bool completed = guardedVendorCall([&o]() noexcept {
@@ -882,6 +1286,15 @@ bool SoapySource::open(const std::string& args) {
             } catch (...) {
                 o.autoGainSupported = false;
             }
+            // The crystal correction (0.99.56): asked here, once, for the
+            // same reason as the gain mode - the Source section asks every
+            // frame which way this radio's correction is applied.
+            try {
+                o.freqCorrectionSupported =
+                    s->link_->dev->hasFrequencyCorrection(SOAPY_SDR_RX, kChannel);
+            } catch (...) {
+                o.freqCorrectionSupported = false;
+            }
             try {
                 o.antennas = s->link_->dev->listAntennas(SOAPY_SDR_RX, kChannel);
                 o.antenna = s->link_->dev->getAntenna(SOAPY_SDR_RX, kChannel);
@@ -947,6 +1360,7 @@ bool SoapySource::open(const std::string& args) {
                 if (rates_.empty()) { rates_ = {1.0e6, 2.0e6, 4.0e6, 8.0e6}; }
                 autoGainSupported_ = o.autoGainSupported;
                 autoGain_ = false;
+                freqCorrectionSupported_ = o.freqCorrectionSupported;
                 driverKey_ = driverKeyFromArgs(args);
             }
             {
@@ -1151,6 +1565,7 @@ void SoapySource::clearDeviceInfo() noexcept {
     rates_.clear();
     autoGainSupported_ = false;
     autoGain_ = false;
+    freqCorrectionSupported_ = false;
     driverKey_ = "soapy";
 }
 
@@ -1172,7 +1587,8 @@ int SoapySource::openDeviceCount() {
     return s_openDevices.load(std::memory_order_relaxed);
 }
 
-void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
+void SoapySource::abandonWedgedDriverLocked(const char* what, long long waitedMs) noexcept {
+    if (waitedMs < 0) { waitedMs = static_cast<long long>(kVendorCallWait.count()); }
     // THE LINK IS CONDEMNED FIRST, before anything that can fail. From this
     // store on, the handles are frozen (clearDeviceStateLocked stops nulling
     // them), the dead latches survive teardown, and open() refuses - so the
@@ -1187,7 +1603,7 @@ void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
     core::diagWarnf(
         "soapy: %s did not return within %lld ms - abandoning it rather than "
         "freezing the interface; restart FoxSDR to use this radio again",
-        what, static_cast<long long>(kVendorCallWait.count()));
+        what, waitedMs);
     std::lock_guard<std::mutex> lk(errorMutex_);
     // Latches before the message, as in noteVendorFault: a string we could not
     // allocate must not cost the latches that actually protect the device.
@@ -1222,6 +1638,10 @@ void SoapySource::abandonWedgedDriverLocked(const char* what) noexcept {
 // of the three uploaded from 0.62.0 is a fault raised INSIDE teardown, so this
 // is exactly the path where the module is provably mid-collapse.
 void SoapySource::teardownLocked() noexcept {
+    // A LATE CALL FIRST: taken if it has answered, given up if not (which
+    // condemns the link, so everything below leaves the driver alone). Never
+    // waited for - a close costs what it always did.
+    settleLateCallLocked();
     // Whether the RADIO went back to the system, which only a completed
     // unmake achieves. Every other way out of this function - the dead-device
     // policy's silent drop, a fault, a call left running - leaves the module
@@ -1393,6 +1813,10 @@ bool SoapySource::start() {
     if (running_.load(std::memory_order_relaxed)) {
         return true;  // idempotent per the IqSource contract
     }
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
+        return false;
+    }
     if (deviceDead()) {
         // lastError() already carries the fault's own message, which is far
         // more use than "the device is dead" written over the top of it.
@@ -1401,7 +1825,8 @@ bool SoapySource::start() {
 
     // CRASH [1] OF THE THREE UPLOADED FROM 0.62.0 lands here: the user pressed
     // Play and activateStream faulted through SoapySDR -> rtlsdrSupport ->
-    // rtlsdr -> libusb. On our own call frame, so the guard sees it.
+    // rtlsdr -> libusb. Guarded on the worker that makes the call, so the
+    // guard sees it there.
     //
     // On a fault this returns FALSE with faulted() now true. Pipeline::start
     // ignores this return by design ("a failed start is not fatal to the
@@ -1411,8 +1836,18 @@ bool SoapySource::start() {
     // stopped: ...". So the user sees the driver crash instead of the
     // application disappearing, through the path that already existed for an
     // unplugged radio.
-    if (!activateLocked("starting the stream")) {
+    //
+    // ON A WORKER, AND LATE-CAPABLE - see activateLocked (hang reports
+    // 40002A91C26F3C07 and 9B804643C56308CF). A start the driver has not
+    // answered within kVendorCallWait is PENDING: true, running, reads answer
+    // 0, and the answer is taken when it comes (see LateCall).
+    bool pending = false;
+    if (!activateLocked("starting the stream", &pending)) {
         return false;
+    }
+    if (pending) {
+        running_.store(true, std::memory_order_relaxed);
+        return true;
     }
     // CONDEMNED MID-START? The same race as open()'s commit: an escape
     // path timed out against the lock this call holds and latched the
@@ -1503,6 +1938,10 @@ void SoapySource::stop() {
 }
 
 void SoapySource::stopLocked() {
+    // A late call is settled before anything else, as in teardownLocked(): a
+    // late START that has answered decides whether there is a stream to stop
+    // at all, and one still out is given up rather than waited for.
+    settleLateCallLocked();
     if (!running_.load(std::memory_order_relaxed)) {
         return;  // idempotent, and a safe no-op before open
     }
@@ -1525,38 +1964,84 @@ void SoapySource::stopLocked() {
     (void)deactivateLocked("stopping the stream");
 }
 
-bool SoapySource::activateLocked(const char* what) {
-    struct Activate {
-        SoapySource* self;
-        int ret = 0;
-        bool threw = false;
-        std::string message;
-    } a{this};
-
-    const bool completed = guardedVendorCall([&a]() noexcept {
-        try {
-            a.ret = a.self->link_->dev->activateStream(a.self->link_->stream);
-        } catch (const std::exception& e) {
-            a.threw = true;
-            a.message = describe(e, "activateStream failed");
-        } catch (...) {
-            a.threw = true;
-            a.message = "activateStream failed: non-standard exception";
+bool SoapySource::activateLocked(const char* what, bool* pending) {
+    if (pending != nullptr) { *pending = false; }
+    // ONE ACTIVATION PATH, for start() and a sample-rate change's restart: on
+    // a worker, the caller waiting kVendorCallWait, and LATE-CAPABLE.
+    //
+    // Two field hangs are this call made inline on the GUI thread. Hang report
+    // 40002A91C26F3C07 (0.99.58): AppWindow::finishDeviceOpen ->
+    // Pipeline::setSource -> start() into SoapyRedPitaya, whose activateStream
+    // is a TCP connect to its default 192.168.1.100:1001 and a five-second
+    // select() - nothing answered, ever. Hang report 9B804643C56308CF
+    // (0.99.56): SoapySDRPlay3's activateStream is sdrplay_api_Init, which
+    // answered sdrplay_api_AlreadyInitialised FIVE SECONDS later after the
+    // SDRplay service had been restarted.
+    //
+    // So not back within kVendorCallWait is not a failure and does not condemn
+    // the radio: the activation is PENDING (true, with *pending set; the
+    // caller's stream counts as running and reads answer 0) and becomes the
+    // LATE CALL, whose answer is taken when it comes - a refusal becomes
+    // faulted() with the driver's words. A driver that never answers (the Red
+    // Pitaya) is given up after kLateCallGrace, or at once by stop()/close,
+    // exactly as an escape path gives up a wedged call. Either way the GUI
+    // thread is back within kControlLockWait + kVendorCallWait (static_assert
+    // above), inside the hang watchdog's threshold.
+    //
+    // CRASH [1] OF THE THREE UPLOADED FROM 0.62.0 is a fault in this call
+    // (SoapySDR -> rtlsdrSupport -> rtlsdr -> libusb): guarded on the worker
+    // that makes it, so the guard sees it there.
+    const auto activation = makeVendorJob(link_, &activateBody);
+    if (!activation) {
+        setError(std::string(what) + " was not attempted: out of memory");
+        return false;
+    }
+    const auto issued = std::chrono::steady_clock::now();
+    switch (startVendorJob(activation, kVendorCallWait)) {
+        case JobOutcome::Completed:
+            break;
+        case JobOutcome::Faulted:
+            noteVendorFault(what);
+            return false;
+        case JobOutcome::NotRun:
+            setError(std::string(what) +
+                     " was not attempted: no thread could be started for it");
+            return false;
+        case JobOutcome::Pending:
+        case JobOutcome::Abandoned:
+        default: {
+            auto late = std::make_shared<LateCall>();
+            late->job = activation;
+            late->kind = LateCall::Kind::Activate;
+            late->what = what;  // every caller passes a string literal
+            late->issued = issued;
+            late_ = std::move(late);
+            // CONDEMNED WHILE IT WAITED (an escape path lost the race for the
+            // lock this call holds): the verdict stands, and the call still
+            // inside the driver is given up with it.
+            if (deviceDead()) {
+                giveUpLateCallLocked(/*graceRanOut=*/false);
+                return false;
+            }
+            core::diagWarnf(
+                "soapy: %s not answered within %lld ms - waiting up to %lld ms in all for the "
+                "driver; other changes are held until it answers",
+                what, static_cast<long long>(kVendorCallWait.count()),
+                static_cast<long long>(lateGrace_.count()));
+            refuseForLateCallLocked();  // the "not answered yet" sentence
+            if (pending != nullptr) { *pending = true; }
+            return true;
         }
-    });
-    if (!completed) {
-        noteVendorFault(what);
+    }
+    if (activation->threw) {
+        setError(std::move(activation->message));
         return false;
     }
-    if (a.threw) {
-        setError(std::move(a.message));
-        return false;
-    }
-    if (a.ret != 0) {
+    if (activation->ret != 0) {
         // errToStr is a pure code->string lookup: no device handle, no
         // hardware, nothing a vendor module can reach. Deliberately outside
         // the guarded body, where allocating a message is safe.
-        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(a.ret));
+        setError(std::string("activateStream failed: ") + SoapySDR::errToStr(activation->ret));
         return false;
     }
     return true;
@@ -1648,6 +2133,18 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // nothing to wait on: return the retry signal immediately.
         return 0;
     }
+    // A LATE CALL STILL IN THE DRIVER: no read beside it. Waited for for one
+    // read quantum - the same bound a healthy readStream is given, so the
+    // source loop is paced rather than spun - and taken here if it answers,
+    // which is how a late answer reaches a radio nobody is touching.
+    if (lateCallHoldsDriverLocked(kReadTimeoutUs)) {
+        return 0;
+    }
+    // ...and an answer just taken may be a start the driver refused, which
+    // latched faulted() after the pre-lock test above ran.
+    if (faulted()) {
+        return 0;
+    }
     // CONDEMNED WHILE THIS CALL WAS QUEUED FOR THE LOCK, which the latch test
     // above cannot see: it ran before the wait, and the thread that held the
     // lock may have spent that wait abandoning a wedged driver. Every setter
@@ -1680,6 +2177,32 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     try {
         const int ret = link_->dev->readStream(link_->stream, buffs, n, flags, timeNs,
                                                kReadTimeoutUs);
+        // THE COUNT IS THE MODULE'S WORD, AND IT IS BOUNDED BY OURS. The buffer
+        // holds n samples and SoapySDR's contract is that the answer is at most
+        // n. A module that answers more has already written past the end of
+        // the caller's buffer; taking the number at face value then made it
+        // worse - sanitizeNonFinite below would scan, and rewrite, elements
+        // past the end, and every caller processes `got` samples out of a
+        // buffer sized for n. So an over-long answer is a broken contract:
+        // none of it is read or used, the device is faulted through the path
+        // a driver that throws takes (the pipeline stops with the reason and
+        // the radio is not read again), and 0 is returned - not n, because
+        // the first n samples came from a module whose state is suspect.
+        // Hardening only: nothing here claims to explain any field crash.
+        if (ret > 0 && static_cast<std::size_t>(ret) > n) {
+            noteRead(SOAPY_SDR_STREAM_ERROR, 0u);
+            core::diagWarnf(
+                "soapy: readStream returned %d samples for a request of %zu - the module wrote "
+                "past the caller's buffer; the device is faulted and will not be read again",
+                ret, n);
+            std::lock_guard<std::mutex> lk(errorMutex_);
+            lastError_ =
+                "the radio's driver returned more samples than it was asked for, so its output "
+                "cannot be trusted and FoxSDR stopped reading it - reconnect the radio and pick "
+                "the source again, or restart FoxSDR";
+            faulted_ = true;
+            return 0;
+        }
         noteRead(ret, ret > 0 ? static_cast<std::size_t>(ret) : 0u);
         if (ret > 0) {
             const std::size_t got = static_cast<std::size_t>(ret);
@@ -1824,6 +2347,12 @@ bool SoapySource::setSampleRateHz(double hz) {
         setError("setSampleRateHz() requires a positive rate");
         return false;
     }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
+        return false;
+    }
     if (deviceDead()) { return false; }
 
     // ALREADY THERE: nothing to do, and above all no stream restart to pay
@@ -1942,8 +2471,12 @@ bool SoapySource::setSampleRateHz(double hz) {
         return false;
     }
     sampleRateHz_.store(r.got, std::memory_order_relaxed);
+    // A restart the driver has not answered yet is PENDING (see
+    // activateLocked): the stream stays running, reads answer 0 until the
+    // answer is taken, and a late refusal stops it as faulted().
+    bool restartPending = false;
     if (wasRunning) {
-        if (!activateLocked("restarting the stream after a sample-rate change")) {
+        if (!activateLocked("restarting the stream after a sample-rate change", &restartPending)) {
             // The rate DID change - the readback above is the device's clock
             // now, and sampleRateHz() has to say so or the DSP chain runs at
             // the wrong number the moment someone presses Play. The stream is
@@ -1966,8 +2499,8 @@ bool SoapySource::setSampleRateHz(double hz) {
                              std::chrono::steady_clock::now() - t0)
                              .count();
     if (wasRunning) {
-        core::diagLogf("source: sample rate %.0f -> %.0f S/s (stream restarted, %lld ms)",
-                       before, r.got, ms);
+        core::diagLogf("source: sample rate %.0f -> %.0f S/s (stream %s, %lld ms)", before, r.got,
+                       restartPending ? "restart pending the driver's answer" : "restarted", ms);
     } else {
         core::diagLogf("source: sample rate %.0f -> %.0f S/s (stream idle)", before, r.got);
     }
@@ -1985,33 +2518,60 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
         setError("setCenterFrequencyHz() called with no device open");
         return false;
     }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
+        return false;
+    }
     if (deviceDead()) { return false; }
 
     // CRASH [2] OF THE THREE, and the most frequent of them: three reports from
-    // one user, RTL-SDR Blog V4, who simply changed frequency.
-    struct Tune {
-        SoapySource* self;
-        double want;
-        double got = 0.0;
-        bool threw = false;
-        std::string message;
-    } t{this, hz};
-
-    const bool completed = guardedVendorCall([&t]() noexcept {
-        try {
-            t.self->link_->dev->setFrequency(SOAPY_SDR_RX, kChannel, t.want);
-            // Same readback rationale as the sample rate: the synthesizer lands
-            // where its step size allows, and the display tracks the hardware.
-            t.got = t.self->link_->dev->getFrequency(SOAPY_SDR_RX, kChannel);
-        } catch (const std::exception& e) {
-            t.threw = true;
-            t.message = describe(e, "setFrequency failed");
-        } catch (...) {
-            t.threw = true;
-            t.message = "setFrequency failed: non-standard exception";
+    // one user, RTL-SDR Blog V4, who simply changed frequency. Guarded on the
+    // worker that makes the call (retuneBody).
+    //
+    // HANG [1] OF 0.99.56 (6F550354218029F0): an SDRplay RSP1A through
+    // SoapySDRPlay3, the SDRplay API service restarted under the live stream,
+    // and this call made on the GUI thread - sdrplay_api_Update, then up to 500
+    // sleeps for a callback that no longer came - froze the window until the
+    // driver gave up and returned. So it runs on a worker, the caller waits
+    // kVendorCallWait, and an answer not back by then is LATE, not lost: the
+    // device is not condemned, the next entries are refused without waiting,
+    // and the readback lands in centerFrequencyHz() when it comes (LateCall).
+    const auto job = makeVendorJob(link_, &retuneBody);
+    if (!job) {
+        setError("the retune was not attempted: out of memory");
+        return false;
+    }
+    job->arg = hz;
+    const auto issued = std::chrono::steady_clock::now();
+    const JobOutcome outcome = startVendorJob(job, kVendorCallWait);
+    if (outcome == JobOutcome::NotRun) {
+        setError("the retune was not attempted: no thread could be started for it");
+        return false;
+    }
+    if (outcome == JobOutcome::Pending || outcome == JobOutcome::Abandoned) {
+        auto late = std::make_shared<LateCall>();
+        late->job = job;
+        late->kind = LateCall::Kind::Retune;
+        late->what = "retuning the device";
+        late->issued = issued;
+        late_ = std::move(late);
+        // Condemned while it waited (an escape path lost the race for the
+        // lock this call holds): the call still inside is given up with it.
+        if (deviceDead()) {
+            giveUpLateCallLocked(/*graceRanOut=*/false);
+            return false;
         }
-    });
-    if (!completed) {
+        core::diagWarnf(
+            "soapy: retuning the device not answered within %lld ms - waiting up to %lld ms in "
+            "all for the driver; other changes are held until it answers",
+            static_cast<long long>(kVendorCallWait.count()),
+            static_cast<long long>(lateGrace_.count()));
+        refuseForLateCallLocked();  // the "not answered yet" sentence
+        return false;
+    }
+    if (outcome == JobOutcome::Faulted) {
         // centerFrequencyHz_ IS DELIBERATELY LEFT ALONE. The requested value is
         // not written in, and neither is a readback that never completed: after
         // a fault the synthesiser's real state is unknown, and the least wrong
@@ -2022,6 +2582,74 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
         // faulted() puts "Device stopped: ..." on screen next to it - which is
         // what stops the readout being quietly wrong.
         noteVendorFault("retuning the device");
+        return false;
+    }
+    if (job->threw) {
+        setError(std::move(job->message));
+        return false;
+    }
+    centerFrequencyHz_.store(job->got, std::memory_order_relaxed);
+    return true;
+}
+
+bool SoapySource::hasFrequencyCorrection() const {
+    std::lock_guard<std::mutex> lk(infoMutex_);
+    return freqCorrectionSupported_;
+}
+
+bool SoapySource::setFrequencyCorrectionPpm(double ppm) {
+    // Bounded, soft-failure - see start() above.
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
+    if (link_->dev == nullptr) {
+        setError("setFrequencyCorrectionPpm() called with no device open");
+        return false;
+    }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    if (!hasFrequencyCorrection()) {
+        setError("this radio's driver has no frequency correction of its own");
+        return false;
+    }
+
+    struct Trim {
+        SoapySource* self;
+        double ppm;
+        double centre;
+        double got = 0.0;
+        bool threw = false;
+        std::string message;
+    } t{this, ppm, centerFrequencyHz_.load(std::memory_order_relaxed)};
+
+    const bool completed = guardedVendorCall([&t]() noexcept {
+        try {
+            t.self->link_->dev->setFrequencyCorrection(SOAPY_SDR_RX, kChannel, t.ppm);
+            // RETUNED TO WHERE IT ALREADY IS: SoapyRTLSDR applies a new
+            // correction at once, but a driver may only fold it in at its
+            // next setFrequency, and a correction that waits for the user's
+            // next tune is a live change that did not happen.
+            if (t.centre > 0.0) {
+                t.self->link_->dev->setFrequency(SOAPY_SDR_RX, kChannel, t.centre);
+            }
+            t.got = t.self->link_->dev->getFrequency(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            t.threw = true;
+            t.message = describe(e, "setFrequencyCorrection failed");
+        } catch (...) {
+            t.threw = true;
+            t.message = "setFrequencyCorrection failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        noteVendorFault("setting the frequency correction");
         return false;
     }
     if (t.threw) {
@@ -2104,6 +2732,12 @@ std::vector<std::string> SoapySource::listGainNames() {
     if (link_->dev == nullptr) {
         return {};  // no device, no gain stages - not an error
     }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
+        return {};
+    }
     if (deviceDead()) { return {}; }
     std::vector<std::string> out;
     const bool completed = guardedVendorCall([this, &out]() noexcept {
@@ -2129,6 +2763,12 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
     }
     if (link_->dev == nullptr) {
         setError("setGainDb() called with no device open");
+        return false;
+    }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
         return false;
     }
     if (deviceDead()) { return false; }
@@ -2193,6 +2833,12 @@ bool SoapySource::setAutoGain(bool on) {
     }
     if (link_->dev == nullptr) {
         setError("setAutoGain() called with no device open");
+        return false;
+    }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
         return false;
     }
     if (deviceDead()) { return false; }
@@ -2261,6 +2907,12 @@ std::vector<std::string> SoapySource::listAntennas() {
     if (link_->dev == nullptr) {
         return {};  // no device, no ports - not an error
     }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
+        return {};
+    }
     if (deviceDead()) { return {}; }
 
     struct Ports {
@@ -2301,6 +2953,12 @@ bool SoapySource::setAntenna(const std::string& name) {
     }
     if (link_->dev == nullptr) {
         setError("setAntenna() called with no device open");
+        return false;
+    }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
         return false;
     }
     if (deviceDead()) { return false; }
@@ -2365,6 +3023,12 @@ std::string SoapySource::antennaReadback() {
         return {};
     }
     if (link_->dev == nullptr) {
+        return {};
+    }
+    // A LATE CALL IS OUT (see LateCall): nothing else enters the driver
+    // beside it, and the refusal costs no wait.
+    if (lateCallHoldsDriverLocked(0)) {
+        refuseForLateCallLocked();
         return {};
     }
     if (deviceDead()) { return {}; }

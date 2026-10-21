@@ -45,20 +45,20 @@ namespace {
 // size, muted ink. Returns the width used.
 float engrave(ImDrawList* dl, const ImVec2& at, const char* s) {
     ImFont* f = fonts::legend();
-    dl->AddText(f, fonts::kTinySize, ImVec2(at.x, at.y + 1.0f), theme::kVoid, s);
-    dl->AddText(f, fonts::kTinySize, at, theme::kInkMuted, s);
-    return f->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, s).x;
+    dl->AddText(f, fonts::tinyPx(), ImVec2(at.x, at.y + 1.0f), theme::kVoid, s);
+    dl->AddText(f, fonts::tinyPx(), at, theme::kInkMuted, s);
+    return f->CalcTextSizeA(fonts::tinyPx(), FLT_MAX, 0.0f, s).x;
 }
 
 // A live word on glass, in the ui face, phosphor.
 void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float maxW) {
     ImFont* f = fonts::ui();
-    dl->AddText(f, fonts::kUiSize, at, theme::kPhosphor, s, nullptr, maxW);
+    dl->AddText(f, fonts::uiPx(), at, theme::kPhosphor, s, nullptr, maxW);
 }
 
 // A live figure on glass, in the reading face.
 void figure(ImDrawList* dl, const ImVec2& at, const char* s) {
-    dl->AddText(fonts::reading(), fonts::kReadingSize, at, theme::kPhosphor, s);
+    dl->AddText(fonts::reading(), fonts::readingPx(), at, theme::kPhosphor, s);
 }
 
 }  // namespace
@@ -92,7 +92,7 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kPhosphor, lock, tr("LOCK"));
     lx -= lampPitch;
     drawBenchLamp(dl, ImVec2(lx, ly), lampR, theme::kAmber, lowBatt, tr("BATT"));
-    y = ly + lampR + fonts::kTinySize + 10.0f;
+    y = ly + lampR + fonts::tinyPx() + 10.0f;
 
     // The glass: every filled slot, labelled by its number, texts down the
     // left and figures down the right. This is the face a kind gets before
@@ -103,7 +103,7 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     if (gbr.y - gtl.y < 30.0f) { return y - tl.y; }
     drawFreqDrumWell(dl, gtl, gbr);
     dl->PushClipRect(gtl, gbr, true);
-    const float lineH = fonts::kUiSize + 4.0f;
+    const float lineH = fonts::uiPx() + 4.0f;
     float ty = gtl.y + 8.0f;
     if (!in.have) {
         engrave(dl, ImVec2(gtl.x + 10.0f, ty), tr("NO READING YET"));
@@ -130,7 +130,7 @@ float drawGenericFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         }
         std::string seq;
         cascade::core::formatUtf8(seq, tr("EVENT %u"), static_cast<unsigned>(in.state.seq));
-        engrave(dl, ImVec2(gtl.x + 8.0f, gbr.y - fonts::kTinySize - 6.0f), seq.c_str());
+        engrave(dl, ImVec2(gtl.x + 8.0f, gbr.y - fonts::tinyPx() - 6.0f), seq.c_str());
     }
     dl->PopClipRect();
     return gbr.y + 10.0f - tl.y;

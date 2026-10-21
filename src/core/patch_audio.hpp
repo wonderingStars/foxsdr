@@ -22,20 +22,29 @@
 // (the sets own it by shared_ptr and die on the GUI thread; see
 // patch_runner.hpp), so a file is never closed under a write.
 //
+// WHAT THE GUI THREAD DOES NOT DO (0.99.64): open a file. Construction is
+// instant; the WAV's open and the MP3's folder and open are a worker's (see
+// makeWavDestAsync below). What it still does is finalise a WAV when its set is
+// retired - the header patch and the close in ~WavDest - which is a known
+// remaining file-system call on that thread (docs/DIAGNOSTICS.md).
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
+#include "core/patch_audio_rate.hpp"
+#include "core/recorder.hpp"
+
 namespace cascade::core::patch {
 
-// The rate every destination is written at: the product's audio rate, and one
-// MPEG-1 Layer III supports.
-inline constexpr double kOutRateHz = 48000.0;
+// (kOutRateHz, the rate every destination is written at, is in core/patch_audio_rate.hpp: a number the window draws, and this header
+// includes the recorder, which the interface may not.)
 
 class AudioDest {
 public:
@@ -49,6 +58,18 @@ public:
 
     // Non-empty once the destination has stopped taking sound, with why.
     virtual std::string error() const = 0;
+
+    // A SOUND DEVICE'S BUFFER (0.99.73). A speaker has its own sink::AudioOut and
+    // its own DriftMatcher, so the receiver's mechanism for a computer that falls
+    // behind - a lead that deepens, a matcher that steers to it - belongs to each
+    // of them and not to the receiver alone. Files have no lead: the defaults say
+    // "not a sound card", and AppWindow's once-a-minute poll skips them.
+    //   starvedCallbacks()  starved callbacks since the destination was made
+    //   leadMs()            the lead in force, in milliseconds; 0 = not a device
+    //   setLeadMs(ms)       the poll deepens it (never from the callback)
+    virtual std::uint64_t starvedCallbacks() const { return 0; }
+    virtual int leadMs() const { return 0; }
+    virtual void setLeadMs(int /*ms*/) {}
 
     // For the face's meter and counter, readable from any thread.
     float peak() const { return peak_.load(std::memory_order_relaxed); }
@@ -77,14 +98,51 @@ std::string fileSafeName(const std::string& name);
 // "patch-<node>-<fileSafeName(name)>".
 std::string patchFilePrefix(unsigned node, const std::string& name);
 
-// Each returns null with a reason in `error` when the destination cannot be
-// made. MP3 is null on a build without Windows' encoder - the caller then
-// makes a WAV and says so.
+// THE SLOW-DISK SEAMS (0.99.64): the two blocking steps of making a file
+// destination, replaceable so a test can stage a slow disk. Never set by the
+// application.
+struct DestSeams {
+    // How a WAV's file is opened; empty is Recorder::openFile.
+    Recorder::Opener wavOpener;
+    // How the MP3's folder is made; empty is create_directories + is_directory.
+    std::function<bool(const std::string& directory)> makeDirectory;
+    // (0.99.65) A write to the MP3 that FAILS, as a full disk fails it: when set and
+    // it returns true, the encoder's write for that block counts as refused. Empty in
+    // the application. There is no unprivileged way to fill a volume under a test, and
+    // Media Foundation owns the file handle, so this is the seam.
+    std::function<bool()> mp3WriteFails;
+};
+
+// FILES ARE OPENED OFF THE CALLING THREAD (0.99.64). A speaker's file used to be
+// made by the GUI thread - the recordings folder, the file, the header - and a
+// folder that was slow to answer froze the window for as long as it took (see
+// docs/DIAGNOSTICS.md, "The window does no disk work"). So:
+//
+//   makeWavDestAsync  NEVER BLOCKS. The destination exists at once and takes
+//                     sound at once; its file is opened by a worker, the sound
+//                     offered meanwhile is held (up to 20 s) and written ahead of
+//                     the first block that arrives after the file is open, and a
+//                     file that cannot be opened is reported by error() in the
+//                     words Recorder::start gave. THE ONE THE APPLICATION USES.
+//   makeWavDest       the same, then waits for the file: null with the reason in
+//                     `error`, as it always did. For callers that can wait.
+//   makeMp3Dest       NEVER TOUCHES THE DISK: the recordings folder and the file
+//                     are made by the destination's own worker; a folder that
+//                     cannot be made is reported by error(). Null only on a build
+//                     without Windows' encoder - the caller then makes a WAV and
+//                     says so.
+std::shared_ptr<AudioDest> makeWavDestAsync(const std::string& directory,
+                                            const std::string& prefix, std::string& error,
+                                            const DestSeams* seams = nullptr);
 std::shared_ptr<AudioDest> makeWavDest(const std::string& directory, const std::string& prefix,
-                                       std::string& error);
+                                       std::string& error, const DestSeams* seams = nullptr);
 std::shared_ptr<AudioDest> makeMp3Dest(const std::string& directory, const std::string& prefix,
-                                       std::string& error);
-// `deviceName` empty means the default output device.
-std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error);
+                                       std::string& error, const DestSeams* seams = nullptr);
+// `deviceName` empty means the default output device. `leadMs` is the buffer the
+// speaker starts with (0 = the sink's default, 120 ms): the caller passes the
+// receiver's, so a fixed setting - or a lead the receiver has already had to
+// deepen - is not lost on a speaker made afterwards.
+std::shared_ptr<AudioDest> makeDeviceDest(const std::string& deviceName, std::string& error,
+                                          int leadMs = 0);
 
 }  // namespace cascade::core::patch

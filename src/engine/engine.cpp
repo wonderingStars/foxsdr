@@ -1738,10 +1738,12 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
     if (kind == "soundcard") { return std::make_unique<cascade::source::SoundCardSource>(); }
     if (kind == "hackrf") { return std::make_unique<cascade::source::HackRfSource>(); }
     if (kind == "airspy") { return std::make_unique<cascade::source::AirspySource>(); }
+    if (kind == "hydrasdr") { return std::make_unique<cascade::source::HydraSdrSource>(); }
     if (kind == "airspyhf") { return std::make_unique<cascade::source::AirspyHfSource>(); }
     if (kind == "sdrplay") { return std::make_unique<cascade::source::SdrPlaySource>(); }
     if (kind == "mirisdr") { return std::make_unique<cascade::source::MiriSdrSource>(); }
     if (kind == "rx888") { return std::make_unique<cascade::source::Rx888Source>(); }
+    if (kind == "aor") { return std::make_unique<cascade::source::AorSource>(); }
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
@@ -1752,7 +1754,7 @@ void Engine::scanNative() {
     // and tests/test_main_view that showing the patch view lists none.
     cascade::core::diagLogf("source: listing native radios");
     // NO GATE, and that is the whole point of having our own transport. All
-    // six USB enumerations read SetupAPI device properties and
+    // seven USB enumerations read SetupAPI device properties and
     // never open a device, never send a transfer, never reset anything -
     // usb_device.hpp rule 1, which exists precisely because the SoapySDR
     // vendor probe breaks it and killed a running capture doing so (the
@@ -1790,11 +1792,15 @@ void Engine::scanNative() {
         // selection is followed exactly as after a real scan, so a test can
         // move rows under it.
         nativeDevices_ = testHooks_.nativeScan();
+        // Published like a real scan's, so a test that drives the Soapy
+        // Mirics rule through the window sees the rows it listed.
+        cascade::source::sdrPlayPublishNativeRows(nativeDevices_);
         nativeRowLabels_.clear();
         for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
             nativeRowLabels_.push_back(d.label);
         }
         nativeUnbound_.clear();
+        dropRefusedMiricsSoapyRows();
         followSourceRowAfterRescan(rowsBefore);
         return;
     }
@@ -1803,6 +1809,9 @@ void Engine::scanNative() {
         nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspy()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateHydraSdr()) {
         nativeDevices_.push_back(std::move(d));
     }
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAirspyHf()) {
@@ -1819,6 +1828,14 @@ void Engine::scanNative() {
     // anywhere saying why - the same failure the unbound-device sentence
     // below exists to stop.
     for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateRx888()) {
+        nativeDevices_.push_back(std::move(d));
+    }
+    // AOR DIGITAL-I/Q INTERFACES (08D0:A001). Listed from the bus alone, like
+    // every row above: the control serial port is paired - by asking the
+    // receiver VR - only when the row is OPENED, never here (rule 1, and a
+    // scan that wrote to serial ports would be writing to whatever else is on
+    // an FTDI cable).
+    for (cascade::source::NativeDeviceInfo& d : cascade::source::enumerateAor()) {
         nativeDevices_.push_back(std::move(d));
     }
     // THE ONE ENUMERATION THAT IS NOT A USB WALK AND IS STILL SAFE HERE.
@@ -1862,33 +1879,55 @@ void Engine::scanNative() {
     }
     sdrPlayRowsFound_ = nativeDevices_.size() > beforeSdrPlay;
 
-    // ONE RADIO, ONE ROW (0.99.9, at the owner's word). An RSP reachable both
-    // natively and through the SDRplay API was offered TWICE, under two names,
-    // with nothing saying which to pick - and picking the native one gets the
-    // less capable of the two, because the API drives front-end hardware this
-    // application cannot. source/rsp_rows.hpp holds the rule and says why the
-    // hiding is as narrow as it is: a row hidden in error is a radio the user
-    // cannot select at all.
+    // ONE RADIO, ONE ROW (0.99.9, at the owner's word; revised 2026-09-28
+    // twice). An RSP reachable both natively and through the SDRplay API was
+    // offered TWICE, under two names, with nothing saying which to pick - and
+    // picking the native one gets the less capable of the two at best, and
+    // (the two RSP1A field reports on 0.99.42) a guaranteed-failing open at
+    // worst, once the API is installed - ON WINDOWS. source/rsp_rows.hpp
+    // holds the rule and the platform switch (kNativeMiricsOpenUnsafeWithApi):
+    // on Windows, hidden whenever the API is present on this machine, full
+    // stop, regardless of whether THIS scan's enumeration listed anything -
+    // a service that is merely slow to answer looks identical to one that is
+    // down, and the row must not flicker back into a state that can only
+    // fail. On Linux, the original narrower rule (hidden only when the API
+    // actually lists the same radio) still applies - usbfs does not enforce
+    // the Windows-specific reason native access is unsafe there, so a Linux
+    // user's native row may genuinely work while the daemon is stopped.
+    // ONE CHIP, ONE ROUTE: the list AS IT STANDS BEFORE THE DUPLICATES GO is
+    // the only record of which radios the SDRplay API manages, and a SoapySDR
+    // open is made on a worker that cannot see this window's state. Handed to
+    // source/ here so SoapySource::open can ask the same question the hiding
+    // below answers (see source/rsp_rows.hpp).
+    cascade::source::sdrPlayPublishNativeRows(nativeDevices_);
+    const bool sdrPlayApiInstalled = cascade::source::sdrPlayApiPresent();
+    const bool sdrPlayOrphaned = cascade::source::anyRspOrphanedByHiding(
+        nativeDevices_, sdrPlayApiInstalled, cascade::source::kNativeMiricsOpenUnsafeWithApi);
     {
         const std::size_t before = nativeDevices_.size();
-        nativeDevices_ = cascade::source::withoutDuplicateRsps(nativeDevices_);
+        nativeDevices_ = cascade::source::withoutDuplicateRsps(
+            nativeDevices_, sdrPlayApiInstalled, cascade::source::kNativeMiricsOpenUnsafeWithApi);
         const std::size_t hidden = before - nativeDevices_.size();
         if (hidden > 0) {
             // LOGGED, because a row that vanishes without explanation is the
             // fault report this is trying to prevent, arriving from the other
             // direction.
             cascade::core::diagLogf(
-                "source: %zu native SDRplay row(s) hidden - the SDRplay API already lists "
-                "that radio, and it is the fuller driver of the two",
-                hidden);
+                "source: %zu native SDRplay row(s) hidden - the SDRplay API is installed%s",
+                hidden,
+                sdrPlayOrphaned ? " but did not list at least one of them this scan" : "");
         }
     }
-    // ...AND WHAT TO SAY WHEN THERE IS NO RSP ROW BECAUSE THERE IS NO API.
-    // Composed here rather than in the draw, because the draw runs sixty
-    // times a second and this reads the process's load result. The sentence
-    // itself comes from the driver (sdrPlayPanelAdvice), which is pure and
-    // pinned by a test: it is the only instruction an RSP owner gets, and a
-    // rewording that drops "3.x" or "sdrplay.com" sends them nowhere.
+    // ...AND WHAT TO SAY WHERE A HIDDEN ROW WOULD HAVE BEEN, OR WHEN THERE IS
+    // NO RSP ROW BECAUSE THERE IS NO API. Composed here rather than in the
+    // draw, because the draw runs sixty times a second and this reads the
+    // process's load result.
+    //
+    // THE PRIORITY ORDER IS sdrPlaySourceAdvice()'s, not repeated here: a lost
+    // session, a held-off enumeration, or an API too old always wins; "did not
+    // list this radio" only wins when the API answered cleanly and simply does
+    // not have this exact radio. The sentence comes from the driver, which is
+    // pure and pinned by a test: it is the only instruction an RSP owner gets.
     //
     // THROUGH THE ENUMERATION'S OWN REASON, because the two fields below
     // cannot describe an API THAT IS INSTALLED BUT TOO OLD. `version` is
@@ -1899,13 +1938,10 @@ void Engine::scanNative() {
     // just recorded it; sdrPlayPanelAdvice prefers that and falls back to the
     // load result, which is what this used to do on its own.
     const cascade::source::sdrplay_abi::Api& sdrApi = cascade::source::processSdrPlayApi();
-    float sdrVersion = 0.0f;
-    {
-        std::lock_guard<std::mutex> lk(sdrApi.sessionMutex);
-        sdrVersion = sdrApi.version;
-    }
-    sdrPlayAdvice_ = cascade::source::sdrPlayPanelAdvice(
-        sdrApi.resolved, sdrVersion, cascade::source::sdrPlayLastEnumerationSkip());
+    const float sdrVersion = cascade::source::sdrPlayApiVersion(sdrApi);
+    sdrPlayAdvice_ = cascade::source::sdrPlaySourceAdvice(
+        sdrPlayOrphaned, sdrPlayRowsFound_, sdrApi.resolved, sdrVersion,
+        cascade::source::sdrPlayLastEnumerationSkip());
     sdrPlayApiDetail_ = sdrApi.loadDetail;
 
     // THE PLUTO, WHICH IS NOT A DISCOVERY AT ALL. A network cannot be walked,
@@ -1970,6 +2006,9 @@ void Engine::scanNative() {
     for (const cascade::usb::UsbId& id : cascade::source::airspyUsbIds()) {
         ids.push_back(id);
     }
+    for (const cascade::usb::UsbId& id : cascade::source::hydraSdrUsbIds()) {
+        ids.push_back(id);
+    }
     for (const cascade::usb::UsbId& id : cascade::source::airspyHfUsbIds()) {
         ids.push_back(id);
     }
@@ -1979,9 +2018,45 @@ void Engine::scanNative() {
     for (const cascade::usb::UsbId& id : cascade::source::rx888UsbIds()) {
         ids.push_back(id);
     }
+    // An AOR I/Q interface on Windows arrives bound to AOR's own AorAlpha.sys,
+    // which is exactly "present and unreachable" - see the sentence below.
+    for (const cascade::usb::UsbId& id : cascade::source::aorUsbIds()) {
+        ids.push_back(id);
+    }
     nativeUnbound_ = cascade::usb::enumerateUnbound(ids);
 
+    // The API's state or the managed radios may have changed since the last
+    // Soapy scan: a lost session, or an RSP the API now lists. The selection
+    // is followed by what it is, below, so a row that goes does not move it.
+    dropRefusedMiricsSoapyRows();
     followSourceRowAfterRescan(rowsBefore);
+}
+
+void Engine::dropRefusedMiricsSoapyRows() {
+    // Only a list that holds a Mirics-family row needs the API's state, and
+    // asking it loads the vendor library: a machine with no such row never does.
+    bool any = false;
+    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
+        if (cascade::source::isMiricsSoapyArgs(d.args)) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) { return; }
+    const std::size_t before = soapyDevices_.size();
+    soapyDevices_ = cascade::source::withoutRefusedMiricsSoapyRows(
+        soapyDevices_, cascade::source::sdrPlayApiState(),
+        cascade::source::sdrPlayPublishedNativeRows(), cascade::source::kNativeMiricsOpenUnsafeWithApi,
+        soapyView_ != nullptr ? deviceArgs_ : std::string());
+    const std::size_t hidden = before - soapyDevices_.size();
+    if (hidden > 0) {
+        // LOGGED, like the native rows hidden beside it: a row that vanishes
+        // without explanation is the report this prevents from the other side.
+        cascade::core::diagLogf(
+            "source: %zu SoapySDR SDRplay/Mirics row(s) hidden - another route to the same chip "
+            "owns it, or the SDRplay API session was lost",
+            hidden);
+    }
 }
 
 std::string Engine::sourceIdForRow(int row) const {
@@ -3932,6 +4007,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         e.audioPrimingCallbacks = sink.primingCallbacks();
         e.audioRingMs = 1000.0 * static_cast<double>(ringFrames) / rateHz;
         e.audioRingCapacityMs = 1000.0 * static_cast<double>(ringCapacityFrames) / rateHz;
+        e.audioLeadMs = cascade::sink::audioLeadMs(sink.leadFrames());
         r.audioRateHz = rateHz;
         r.audioRingFrames = ringFrames;
         r.audioRingCapacityFrames = ringCapacityFrames;
@@ -6678,7 +6754,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = transmitPowerDb_;
             return res;
         case FOXAPI_OP_TX_SET_INPUT: {
-            if (c.ival[0] < 0 || c.ival[0] >= cascade::core::kTxInputCount) {
+            if (c.ival[0] < 0 || c.ival[0] >= cascade::core::kTxHandInputCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such input");
             }
             if (micOpen_.inFlight()) { return refuse(FOXAPI_BUSY, "the microphone is still opening"); }
@@ -7024,6 +7100,7 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
 // the window keeps its view state (docs/engine-stage3.md). `cfg` is the
 // start-up state (core::startupState), not the file as saved.
 void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
+    loadedCfg_ = cfg;  // see loadedCfg_ in engine.hpp
     // The device scan's UHD rule (gui::soapyDriversWithNoHardware): the switch,
     // and the Soapy args the file named whether or not that radio opens this
     // launch - a USRP that is switched off or unreachable today is still one
@@ -8082,7 +8159,7 @@ Engine::StatusText Engine::statusText() const {
 }
 
 void Engine::publishConfig() {
-    cascade::core::AppConfig c;
+    cascade::core::AppConfig c = loadedCfg_;
     fillConfig(c);
     std::lock_guard<std::mutex> lk(configSnapMutex_);
     configSnap_ = std::move(c);

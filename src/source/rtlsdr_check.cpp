@@ -14,22 +14,30 @@
 // is usable from a script as well as readable by a person.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "source/sample_pattern.hpp"
 
 namespace {
 
 constexpr double kCheckSeconds = 3.0;
 constexpr double kCheckFreqHz = 100000000.0;
 constexpr double kCheckRateHz = 2400000.0;
+// The first samples are kept, contiguous, for the fixed-pattern check: eight
+// repeats of the longest period looked for.
+constexpr std::size_t kPatternSamples = 32768;
+constexpr std::size_t kMaxPatternPeriod = 4096;
 
 }  // namespace
 
@@ -95,6 +103,8 @@ int rtlsdrCheckMain(int argc, char** argv) {
         return 1;
     }
     std::vector<std::complex<float>> buf(65536);
+    std::vector<std::complex<float>> head;
+    head.reserve(kPatternSamples);
     std::size_t total = 0;
     double sumMag = 0.0;
     double peak = 0.0;
@@ -106,6 +116,10 @@ int rtlsdrCheckMain(int argc, char** argv) {
             const double m = std::abs(buf[i]);
             sumMag += m;
             if (m > peak) { peak = m; }
+        }
+        if (head.size() < kPatternSamples) {
+            const std::size_t take = std::min(got, kPatternSamples - head.size());
+            head.insert(head.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(take));
         }
         total += got;
         if (src.faulted()) {
@@ -143,6 +157,31 @@ int rtlsdrCheckMain(int argc, char** argv) {
     }
     if (static_cast<double>(total) < expected * 0.5) {
         std::printf("FAIL less than half the expected samples arrived\n");
+        return 1;
+    }
+    // The fourth way, found 2026-10-06 on the bench: the samples arrive at the
+    // rate, at a plausible level, with no error - and are the same few thousand
+    // samples over and over, at every frequency. A stream from the air never
+    // matches itself exactly at any lag (source/sample_pattern.hpp); one that
+    // does is a digital pattern from a tuner or converter that has stopped
+    // delivering RF, and the only known remedy is to power the dongle again.
+    const std::size_t period =
+        cascade::source::exactRepeatPeriod(head.data(), head.size(), kMaxPatternPeriod);
+    if (period != 0) {
+        std::printf("FAIL the samples repeat exactly every %zu samples - a fixed digital pattern,\n"
+                    "     not a radio signal. The tuner or converter is not delivering RF.\n",
+                    period);
+        bool saidPll = false;
+        for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (line.find("PLL") != std::string::npos) {
+                std::printf("     the driver's lock check: %s\n", line.c_str());
+                saidPll = true;
+            }
+        }
+        if (!saidPll) {
+            std::printf("     The driver's lock check reported the tuner locked on every tune.\n");
+        }
+        std::printf("     Unplug the dongle, plug it back in and run this again.\n");
         return 1;
     }
     std::printf("PASS\n");

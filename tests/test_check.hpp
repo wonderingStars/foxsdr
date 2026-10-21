@@ -9,12 +9,19 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 
-inline int g_checksFailed = 0;
-inline int g_checksRun = 0;
-inline int g_checksSkipped = 0;
+// ATOMIC, because a CHECK is called from worker threads as well as from main()
+// (a fake driver's callback, a launcher the code under test runs on its own
+// thread), and two plain `++g_checksRun` on two threads are a data race. Found by
+// ThreadSanitizer in the first Linux run (37355910809, test_sdrplay_service); the
+// same global is written by every test that checks from a thread. They count and
+// compare like the ints they replace; printing one needs .load().
+inline std::atomic<int> g_checksFailed{0};
+inline std::atomic<int> g_checksRun{0};
+inline std::atomic<int> g_checksSkipped{0};
 
 #define CHECK(cond)                                                     \
     do {                                                                \
@@ -57,10 +64,10 @@ inline int testSummary(const char* name) {
     // Skipped is reported only when nonzero, so the ~120 tests that never
     // call SKIP_LINUX keep the exact summary line they have always printed.
     if (g_checksSkipped > 0) {
-        std::printf("%s: %d checks, %d failed, %d skipped\n", name, g_checksRun, g_checksFailed,
-                    g_checksSkipped);
+        std::printf("%s: %d checks, %d failed, %d skipped\n", name, g_checksRun.load(),
+                    g_checksFailed.load(), g_checksSkipped.load());
     } else {
-        std::printf("%s: %d checks, %d failed\n", name, g_checksRun, g_checksFailed);
+        std::printf("%s: %d checks, %d failed\n", name, g_checksRun.load(), g_checksFailed.load());
     }
-    return g_checksFailed ? 1 : 0;
+    return g_checksFailed.load() != 0 ? 1 : 0;
 }

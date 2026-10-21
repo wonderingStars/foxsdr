@@ -47,6 +47,7 @@
 #include <vector>
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/pipeline.hpp"
 #include "core/plugin_runner.hpp"
 #include "sdrplay_fake_api.hpp"
@@ -341,11 +342,16 @@ void testAStartAfterTheServiceStoppedAnsweringNeverEntersInit() {
     fake.stopService();
 }
 
-// --- 4. the EVENT callback leaves its log lines for read() --------------------
+// --- 4. the EVENT callback leaves its log lines - AND ITS ACKNOWLEDGEMENT -
+//        for read() -----------------------------------------------------------
 //
 // The same rule on the service's other callback. An overload event used to be
-// logged from inside it; now it is counted, acknowledged (that Update is the
-// vendor's own documented pattern and stays) and left for the next read().
+// logged AND acknowledged from inside it; both are now left for the next
+// read() (2026-09-28: the acknowledgement itself moved too, not only the log
+// line - see sdrplay_source.hpp's Link::pendingOverloadAckA/B. The vendor
+// call sdrplay_api_Update is still the documented pattern; what changed is
+// which thread is allowed to make it - never the service's own callback
+// thread, unserialised against a GUI-thread control's bounded worker).
 void testTheEventCallbackNeverWaitsOnTheDiagnosticLog() {
     cascade::core::DiagLog::instance().resetForTest();
     FakeSdrPlayApi fake;
@@ -371,13 +377,17 @@ void testTheEventCallbackNeverWaitsOnTheDiagnosticLog() {
     std::printf("overload event returned in %lld ms with the log held for 300 ms\n", firedMs);
     CHECK(firedMs >= 0 && firedMs < 100);
     CHECK(src.overloadEvents() == 1);
-    CHECK(fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck,
+    // NEITHER the acknowledgement NOR the log line has happened yet - both
+    // wait for read(), which is what proves the event callback itself did
+    // nothing but latch a flag.
+    CHECK(!fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck,
                                                   abi::Update_Ext1_None)));
-    // Not logged by the service's thread...
     CHECK(!ringHas("ADC OVERLOAD"));
-    // ...but by the next read(), which is the pipeline's.
+    // ...both delivered by the next read(), which is the pipeline's.
     std::complex<float> buf[16];
     (void) src.read(buf, 16);
+    CHECK(fake.called(FakeSdrPlayApi::updateCall(abi::Update_Ctrl_OverloadMsgAck,
+                                                 abi::Update_Ext1_None)));
     CHECK(ringHas("source: SDRplay ADC OVERLOAD - reduce the gain or add attenuation"));
 
     src.stop();
@@ -625,6 +635,80 @@ void testAStallIsStillNamedWhenTheReaderIsSlow() {
     CHECK(fake.countStarting("Uninit") == 0);
 }
 
+// --- 9. stop()'s OWN Uninit is bounded, even as the FIRST vendor call -------
+//
+// THE 0.99.43 RSP2 REPORT (2026-09-28): the patch view was closed, then
+// nothing touched the vendor at all for ten seconds until
+//
+//   warn source: SDRplay Uninit failed - sdrplay_api_ServiceNotResponding (14)
+//
+// followed by "gui thread recovered after a stall". Every OTHER call this
+// driver makes into the vendor DLL already runs on a worker bounded by
+// kControlWait (updateLocked, ackOverloadLocked) - stopStreamingLocked's own
+// sdrplay_api_Uninit was the one still made directly, so a service that took
+// ten seconds to answer 14 held the GUI thread for all ten. This is that call
+// with nothing having gone wrong before it (no abandoned control, no wedged-
+// teardown queue) - only Uninit itself refusing to come back - which is
+// exactly what the report's log shows and what testATeardownAfterAnAbandoned
+// ControlNeverEntersTheVendorDll (test_sdrplay_source.cpp) does not cover.
+void testStopsOwnUninitIsBoundedAsTheFirstCall() {
+    cascade::core::DiagLog::instance().resetForTest();
+    // On the heap and never destroyed: the Uninit that hangs is abandoned inside the
+    // fake, and the driver's answer to that is to leak (core/leak_on_purpose.hpp).
+    FakeSdrPlayApi* fake = cascade::core::leakOnPurpose(new FakeSdrPlayApi());
+    fake->addDevice("1706012347", abi::kRsp2);
+    SdrPlaySource* src = cascade::core::leakOnPurpose(new SdrPlaySource());
+    src->setApiForTest(&fake->table);
+    CHECK(src->open(""));
+    CHECK(src->start());
+    CHECK(!src->faulted());
+
+    const unsigned long long strandedBefore = SdrPlaySource::linksStranded();
+    fake->hangInUninit.store(true);
+
+    // stop() RUNS ON ITS OWN THREAD so this test can report rather than hang
+    // when the bound is missing - it stands in for the GUI thread exactly as
+    // the sibling abandoned-control tests do.
+    std::atomic<bool> returned{false};
+    std::atomic<long long> elapsedMs{-1};
+    std::thread caller([&]() {
+        const auto t0 = Clock::now();
+        src->stop();
+        elapsedMs.store(
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count());
+        returned.store(true);
+    });
+
+    // Generous, and deliberately shorter than the field's ten seconds: what is
+    // being ruled out is a call that does not come back at all.
+    for (int i = 0; i < 400 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // THE DEFECT, IN ONE LINE: before the bound this fails, because stop() is
+    // still inside sdrplay_api_Uninit and will be until the fake releases it.
+    CHECK(returned.load());
+    CHECK(fake->insideUninit.load());
+
+    if (returned.load()) {
+        const long long ms = elapsedMs.load();
+        CHECK(ms >= 900);   // it really waited the bound, not returned early
+        CHECK(ms < 3000);   // ...and came back well inside it
+        CHECK(!src->running());
+        CHECK(ringHas("SDRplay stop abandoned"));
+        CHECK(SdrPlaySource::linksStranded() == strandedBefore + 1);
+    } else {
+        std::printf("     stop() never returned - the checks that depend on it were not run\n");
+    }
+
+    // Let the abandoned worker leave before this process does.
+    fake->releaseUninitHang.store(true);
+    for (int i = 0; i < 500 && !fake->leftUninit.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(fake->leftUninit.load());
+    if (caller.joinable()) { caller.join(); }
+}
+
 }  // namespace
 
 int main() {
@@ -637,5 +721,6 @@ int main() {
     testAProcessFreezeIsNotAStall();
     testTheStallClockStartsAfterInit();
     testAStallIsStillNamedWhenTheReaderIsSlow();
+    testStopsOwnUninitIsBoundedAsTheFirstCall();
     return testSummary("test_sdrplay_stall");
 }

@@ -449,6 +449,23 @@ public:
     double viewCentreLatDeg() const { return centreLat_; }
     double viewCentreLonDeg() const { return centreLon_; }
 
+    // WHETHER A POINT IS INSIDE THE MAP AS LAST DRAWN, with no margin: what the
+    // user is looking at. The flight list's "On screen only" switch asks this of
+    // every row, so zoomed in on an airfield or an air show the list follows
+    // the picture instead of naming every aircraft the receiver has heard.
+    //
+    // It uses the geometry of the LAST frame draw() finished - the view's
+    // centre and span as they stand, with the pixel size and the projection
+    // that frame was drawn in - because the list is submitted before the map in
+    // the same frame and can only ever know the previous one. A frame behind is
+    // invisible: the list is a count of names, not a pixel position.
+    //
+    // TRUE BEFORE ANY FRAME HAS BEEN DRAWN, since there is nothing to filter
+    // against yet and a list that opened empty would look like a fault. A NaN or
+    // infinite coordinate is never on screen. The arithmetic is
+    // mapPointOnScreen in track_metrics.hpp, which is toScreen's own.
+    bool isOnScreen(double latDeg, double lonDeg) const;
+
     // Centres the view on everything currently plotted. A map that opens on
     // the Atlantic while every target is over England is a map the user has to
     // fight before it is useful.
@@ -498,6 +515,11 @@ private:
     double centreLat_ = 54.0;   // somewhere sane before anything is plotted
     double centreLon_ = -2.0;
     double spanDeg_ = 20.0;
+    // The last drawn frame's size in pixels and projection, for isOnScreen.
+    // Zero until draw() has finished a frame, which is how "never drawn" is told.
+    float frameWidthPx_ = 0.0f;
+    float frameHeightPx_ = 0.0f;
+    bool frameMercator_ = false;
 
     bool hasHome_ = false;
     double homeLat_ = 0.0;
@@ -562,5 +584,21 @@ private:
     std::string selectedId_;
     bool followInterrupt_ = false;
 };
+
+// HOW MANY PLACED ROWS A MAP PAGE'S TARGET LIST HAS (moved here from
+// app_window.cpp in 0.99.75 so a test can reach it), and it is asked in three
+// places - the toolbar's count, the list's own heading, and its empty state - which
+// must agree to the row. A track is listed when the host still considers it live
+// (the same rule the map applies) and, with "On screen only" ticked, when the map
+// as last drawn has it inside its edges. Nothing here is exempt: a selected or
+// followed target that has scrolled off the map is not listed either, because the
+// list shows what the map shows.
+//
+// A TARGET HEARD WITHOUT A POSITION IS NOT COUNTED HERE, switch or no switch: it has
+// no place on the map, so it is never "on screen" and it is not a placed row. Those
+// are counted by core::visibleUnplacedTrackCount and listed after the placed rows.
+std::size_t listedTrackCount(const MapView& view,
+                             const std::vector<cascade::core::HostTrack>& tracks,
+                             bool onScreenOnly);
 
 }  // namespace cascade::gui

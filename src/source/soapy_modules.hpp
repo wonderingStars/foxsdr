@@ -94,6 +94,15 @@ std::vector<VendorRoot> resolveVendorRoots(
 std::string pluginPathWith(const std::string& existing, const std::vector<VendorRoot>& roots,
                            char separator);
 
+// The folders of these installs that the diagnostic log must NOT call "another
+// program's" (0.99.69, core/foreign_modules.hpp): each root's module folder and its bin
+// folder, in order. A vendor's module and the DLLs it depends on (rtlsdr.dll,
+// libusb-1.0.dll, which live in bin) are SDR code this application loads on purpose,
+// not an overlay another program injected, and an install that listed only its module
+// folder would put its own driver DLLs in the "foreign" list the moment a radio opened.
+// ensureVendorModulesVisible hands exactly these to core::registerOwnModuleFolder.
+std::vector<std::string> ownFoldersOf(const std::vector<VendorRoot>& roots);
+
 // Finds the vendor installs on this machine, extends SOAPY_SDR_PLUGIN_PATH to
 // cover them, and registers their bin directories for DLL resolution.
 //

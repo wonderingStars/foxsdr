@@ -25,6 +25,7 @@
 #include <cstring>
 
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"  // ImHashStr: the hash ImGui keys every widget on
 #include "test_check.hpp"
@@ -291,6 +292,97 @@ void testSameLineFittedText() {
     ImGui::End();
 }
 
+// B2 (Opus review, round 4): fittedButton/sameLineFittedText measured against
+// ImGui::GetFontSize() - already POST-FontScaleMain - and then pushed the
+// fitted result straight into PushFont, which reapplies FontScaleMain AGAIN.
+// At the interface size S that is S^2: a button captioned "AUDIO" at 200%
+// rendered so oversized only "AUI" fit inside its own frame. Fixed by routing
+// every such push through pushSizeForRenderedFit (text_fit.hpp), which
+// divides the fitted size back out by the same factor ImGui is about to
+// reapply.
+void testFittedSizeDoesNotDoubleScaleWithInterfaceSize() {
+    std::printf("  fittedButton/sameLineFittedText: the size ImGui actually "
+               "renders at matches the fit, not the fit squared, at S>1\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    const float savedFontScaleMain = ImGui::GetStyle().FontScaleMain;
+    cascade::gui::uiscale::setMonitorDpi(96);
+
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 900.0f));
+    ImGui::SetNextWindowSize(ImVec2(500.0f, 200.0f));
+    ImGui::Begin("b2-test", nullptr, ImGuiWindowFlags_NoDecoration);
+    ImFont* f = ImGui::GetFont();
+    const char* label = "AUDIO SPECTRUM VECTOR VERY LONG CAPTION";
+    const float steps[3] = {1.0f, 1.5f, 2.0f};
+    for (float S : steps) {
+        cascade::gui::uiscale::setChoice(S == 1.0f ? "auto" : std::to_string(static_cast<int>(S * 100.0f)));
+        CHECK_NEAR(cascade::gui::uiscale::factor(), S, 0.001f);
+        // What applyPendingUiScale keeps in step with uiscale::factor() in
+        // the real app (AppWindow::applyPendingUiScale / applyUiScaleFromBase
+        // in app_window.cpp) - this test harness never runs that frame loop,
+        // so it is set here by hand to reproduce the same live state.
+        ImGui::GetStyle().FontScaleMain = S;
+
+        // THE AMBIENT SIZE, freshly computed at the CURRENT FontScaleMain -
+        // ImGui only recomputes GetFontSize() on a Push/PopFont or Begin/End,
+        // not the instant the style field above is written, so this PushFont
+        // is what makes it fresh (exactly as it would be in production: a
+        // real frame's own Begin/PushFont sequence has already made it fresh
+        // by the time fittedButton reads it). kStandInBase is arbitrary -
+        // only the RATIO to what comes back matters here.
+        constexpr float kStandInBase = 17.0f;
+        ImGui::PushFont(f, kStandInBase);
+        const float ambientPx = ImGui::GetFontSize();
+        ImGui::PopFont();
+        CHECK_NEAR(ambientPx, kStandInBase * S, 0.51f);  // ImGui rounds to the pixel (IM_ROUND)
+
+        // THE CONTRACT ITSELF: pushSizeForRenderedFit's whole job is that
+        // ImGui, after reapplying FontScaleMain to whatever is pushed,
+        // renders at exactly the ORIGINAL fitted size - proven here with a
+        // real PushFont/GetFontSize/PopFont round trip, not by re-deriving
+        // the same arithmetic a second time. Tolerance is ImGui's own
+        // whole-pixel rounding (IM_ROUND in UpdateCurrentFontSize), not
+        // slack for this fix - a factor-of-S error would miss by ~S times
+        // fittedPx, far outside one pixel.
+        const float fittedPx = ambientPx * 0.55f;  // a stand-in "already fitted" size
+        const float pushArg = cascade::gui::pushSizeForRenderedFit(fittedPx);
+        ImGui::PushFont(f, pushArg);
+        CHECK_NEAR(ImGui::GetFontSize(), fittedPx, 0.51f);
+        ImGui::PopFont();
+        // Proven to go RED: pushing the fitted size UNDIVIDED (the bug) would
+        // have ImGui reapply FontScaleMain on top of a value that already
+        // includes it once - at S=1 that is harmless (x1), at S>1 it is not.
+        if (S > 1.0f) {
+            ImGui::PushFont(f, fittedPx);
+            CHECK(std::fabs(ImGui::GetFontSize() - fittedPx) > 1.0f);
+            ImGui::PopFont();
+        }
+
+        // END TO END, through the real function, with a label much too wide
+        // for an 84 px key (the scope's own key width, uiscale::px(84) since
+        // this round). fittedButton's return value is a click result (always
+        // false in this headless harness) so it proves nothing on its own -
+        // what it DOES prove is that the call runs to completion with no
+        // assert/crash from the divide (a zero or NaN factor would show up
+        // here first) and that the BUTTON's own geometry - which ImGui sizes
+        // from the `size` argument regardless of font, so it cannot by itself
+        // reveal the S^2 bug - still comes out at exactly the box width asked
+        // for; the CalcTextSizeA round trip above is what actually
+        // distinguishes fixed from broken.
+        const float boxW = cascade::gui::uiscale::px(84.0f);
+        ImGui::PushID(static_cast<int>(S * 100.0f));
+        cascade::gui::fittedButton(label, ImVec2(boxW, 0.0f));
+        CHECK_NEAR(ImGui::GetItemRectMax().x - ImGui::GetItemRectMin().x, boxW, 0.5f);
+        ImGui::PopID();
+    }
+
+    ImGui::End();
+    ImGui::GetStyle().FontScaleMain = savedFontScaleMain;
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    CHECK(cascade::gui::uiscale::factor() == 1.0f);
+}
+
 // The helpers inside a real window of known width, so the decision is made
 // against ImGui's own measurements.
 void testLabelPlacement() {
@@ -369,6 +461,7 @@ int main() {
         testCentredFloor();
         testChipPlacementRealFace();
         testSameLineFittedText();
+        testFittedSizeDoesNotDoubleScaleWithInterfaceSize();
         ImGui::Render();
     } else {
         std::printf("fonts::load() failed - the typeface half was not run\n");

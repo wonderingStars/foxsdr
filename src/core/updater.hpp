@@ -31,6 +31,8 @@
 #include <functional>
 #include <future>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace cascade::core {
@@ -43,6 +45,32 @@ struct ReleaseNote {
     bool critical = false;
 };
 
+// A SHORT MESSAGE FROM THE TEAM (0.99.79), shown whether or not there is an update.
+//
+// WHY. The website's "broadcast" - a few lines the owner writes when something is wrong
+// or he is away - used to ride inside the release notes of an update, so an installed
+// copy showed it only in the update banner, which is drawn only when a newer build
+// exists. The owner's request (2026-10-14): "the broadcast system for the software should
+// send the broadcast out even if there isn't an update; it should post to the user, then
+// they click Seen and it doesn't show up again". From site 2.77.0 the answer carries the
+// broadcasts as their own `messages` array, for a caller on 0.99.79 or newer, and this is
+// one element of it.
+struct TeamMessage {
+    std::string id;                  // the server's id for this message; what "Seen" remembers
+    std::string date;                // as published, informational only
+    std::vector<std::string> lines;  // at least one
+    bool important = false;          // the owner's "Important" tick: drawn in the alert colour
+};
+
+// What a parsed manifest may carry of team messages, so the parser and its tests share
+// the numbers. A hostile or broken answer cannot make the window draw a wall of text or
+// make the settings file grow without bound.
+inline constexpr std::size_t kMaxTeamMessages = 10;          // the first ten are kept
+inline constexpr std::size_t kMaxTeamMessageLines = 20;      // per message
+inline constexpr std::size_t kMaxTeamMessageLineBytes = 1000;
+inline constexpr std::size_t kMaxTeamMessageDateBytes = 32;
+inline constexpr std::size_t kMaxTeamMessageIdBytes = 40;
+
 // The answer to "is there a newer build".
 struct UpdateInfo {
     bool newer = false;       // strictly newer than what is running
@@ -52,6 +80,9 @@ struct UpdateInfo {
     std::string sha256;       // what the download must hash to
     std::uint64_t sizeBytes = 0;
     std::vector<ReleaseNote> notes;  // newest first, only what this build has not seen
+    // Messages from the team, newest first. Present whether or not `newer`: that is the
+    // point of them (0.99.79).
+    std::vector<TeamMessage> messages;
 };
 
 // Orders two version strings: -1 older, 0 same, +1 newer.
@@ -77,6 +108,16 @@ int compareVersions(const std::string& a, const std::string& b);
 // than a list of banned characters, because ".." contains no banned character.
 bool wellFormedVersion(const std::string& v);
 
+// Is this a team message's id (0.99.79)? 1 to kMaxTeamMessageIdBytes characters, each a
+// letter, a digit, '_' or '-', and nothing else - the server's ids are 8 random letters
+// and digits.
+//
+// THE ID IS WRITTEN INTO config.json (the "Seen" list) AND SHOWN NOWHERE, so it is
+// bounded rather than trusted: it is data from a service that is answered over the
+// network, and a settings file must not take whatever that service sends. No path,
+// quote or space can get in, and a message with an id that fails this is dropped whole.
+bool wellFormedMessageId(const std::string& id);
+
 // Parses the /api/update document. Pure, so the whole decision is testable
 // without a network: a malformed or hostile answer must not be able to make
 // the application download anything.
@@ -86,6 +127,11 @@ bool wellFormedVersion(const std::string& v);
 //   - a sha256 that is not 64 hex characters
 //   - a version that does not parse
 // because each of those is the field that makes the download safe.
+//
+// The team messages (`messages`, 0.99.79) are the other kind of field: kept or dropped
+// ONE ENTRY AT A TIME, bounded in number, lines and bytes, and never a reason to refuse
+// the manifest. They are parsed whether or not the version offered is newer. (They ride the
+// same answer, so a manifest refused for its download fields carries no messages either.)
 bool parseUpdateManifest(const std::string& json, const std::string& currentVersion,
                          UpdateInfo& out, std::string& error);
 
@@ -100,6 +146,23 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
 // Where the check goes. Overridable with FOXSDR_UPDATE_URL so a test can point
 // at a local stub, and so the endpoint can move without orphaning binaries.
 std::string updateEndpoint();
+
+// THE TEST SEAM (0.99.79). FOXSDR_FAKE_UPDATE_MANIFEST=<path to a file> makes
+// checkForUpdate read that file instead of asking the network - no URL is built and
+// PluginRepo::fetchText is not called - and parse it with parseUpdateManifest. It writes
+// one log line that says so ("update: FOXSDR_FAKE_UPDATE_MANIFEST set - canned answer,
+// foxsdr.com was not asked"), never the path or what was in the file. A file that cannot
+// be read is an ordinary failed check ("the canned update manifest could not be read").
+// It exists so a --frames run can show the whole team-message path: fetchText refuses
+// anything that is not https, so a stub on a loopback port cannot stand in for foxsdr.com.
+//
+// SAFE AS AN ENVIRONMENT HOOK for the same reason FOXSDR_FAKE_STORE_UPDATE
+// (core/store_update.hpp) is: the most it can do is make a copy believe the service said
+// something. The answer still goes through parseUpdateManifest, so it cannot make the
+// application download anything the real answer could not, and it sends nothing.
+//
+// True when it is set and not empty; read from the environment on each call.
+bool updateManifestFakeSet();
 
 // Downloads the installer named by `info`, verifies its sha256, and leaves it
 // in a temp directory. Returns the path through `outPath`.
@@ -151,9 +214,17 @@ struct UpdateCheckOutcome {
 // a detached drainer, which takes the result and throws it away. The check
 // touches no static state after its network call returns, so a drainer still
 // running at process exit is simply ended with the process.
-class UpdateCheckTask {
+//
+// A TEMPLATE SINCE 0.99.53, because the Microsoft Store check and its install
+// request (core/store_update.hpp) are the same problem with a different
+// outcome type: a blocking call nothing can cancel, whose owner must be able
+// to quit without waiting for it. One implementation and one pair of named
+// waits (tests/test_shutdown_budget.cpp finds them here by name), rather than
+// a second copy that could drift from this one.
+template <typename Outcome>
+class AbandonableTask {
 public:
-    using Work = std::function<UpdateCheckOutcome()>;
+    using Work = std::function<Outcome()>;
 
     // How long reap() - and so the destructor - waits before abandoning.
     static constexpr std::chrono::milliseconds kQuitGrace{250};
@@ -161,13 +232,19 @@ public:
     // literal duration (tests/test_shutdown_budget.cpp scans for those).
     static constexpr std::chrono::milliseconds kNoWait{0};
 
-    UpdateCheckTask() = default;
-    ~UpdateCheckTask();
-    UpdateCheckTask(const UpdateCheckTask&) = delete;
-    UpdateCheckTask& operator=(const UpdateCheckTask&) = delete;
+    AbandonableTask() = default;
+    // A member future of std::async blocks in its destructor, so the
+    // destructor reaps first: the future is either taken or handed to a
+    // drainer by the time the member itself is destroyed.
+    ~AbandonableTask() { (void)reap(); }
+    AbandonableTask(const AbandonableTask&) = delete;
+    AbandonableTask& operator=(const AbandonableTask&) = delete;
 
-    // Starts `work` on its own thread. Ignored while a check is in flight.
-    void start(Work work);
+    // Starts `work` on its own thread. Ignored while a task is in flight.
+    void start(Work work) {
+        if (future_.valid() || !work) { return; }
+        future_ = std::async(std::launch::async, std::move(work));
+    }
 
     // True from start() until poll() has handed the outcome over, or reap()
     // has let it go.
@@ -175,17 +252,42 @@ public:
 
     // True ONCE, when the work has finished: `out` then holds its outcome.
     // Never blocks.
-    bool poll(UpdateCheckOutcome& out);
+    bool poll(Outcome& out) {
+        if (!future_.valid()) { return false; }
+        if (future_.wait_for(kNoWait) != std::future_status::ready) { return false; }
+        out = future_.get();
+        return true;
+    }
 
     // Waits up to `grace` for the work; if it is still running, abandons it to
     // a detached drainer. Returns true when the work had finished (or nothing
     // was running), false when it was abandoned. Either way running() is false
     // afterwards and nothing this object owns is waited on again.
-    bool reap(std::chrono::milliseconds grace = kQuitGrace);
+    bool reap(std::chrono::milliseconds grace = kQuitGrace) {
+        if (!future_.valid()) { return true; }
+        if (future_.wait_for(grace) == std::future_status::ready) {
+            (void)future_.get();
+            return true;
+        }
+        // Still inside the blocking call. The drainer owns the future now, so
+        // its blocking destructor runs on a thread nobody is waiting for; the
+        // outcome it takes is discarded, because nobody is left to show it to.
+        // An exception out of a detached thread is std::terminate, so the
+        // drainer swallows one: there is no caller left for it to reach.
+        std::thread([f = std::move(future_)]() mutable {
+            try {
+                (void)f.get();
+            } catch (...) {
+            }
+        }).detach();
+        return false;
+    }
 
 private:
-    std::future<UpdateCheckOutcome> future_;
+    std::future<Outcome> future_;
 };
+
+using UpdateCheckTask = AbandonableTask<UpdateCheckOutcome>;
 
 }  // namespace cascade::core
 

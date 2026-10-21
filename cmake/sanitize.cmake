@@ -28,16 +28,13 @@
 #                                           with address, which it cannot share
 #                                           a process with; undefined may join)
 #
-# ENGINE/STAGE4 BRANCH (ported from origin/master, extracted ahead of the full merge,
-# for the threaded engine tests): this file is master's, unchanged below this note.
-# What differs here is only what it is attached to. The branch has no cascade_lib - it
-# has cascade_engine, and cascade_gui on top of it - so CMakeLists.txt links
-# cascade_sanitize PUBLIC into cascade_engine, which every test and the window inherit.
-# The `fuzzer` option is accepted but there is no tests/fuzz here and no CASCADE_FUZZ yet
-# (master-only), so it has nothing to build on this branch; `thread` is the one in use.
+# ENGINE/STAGE4 BRANCH: this file is master's. What differs on this branch is only what
+# it is attached to. There is no cascade_lib - there is cascade_engine, and cascade_gui
+# (the window) on top of it - so CMakeLists.txt links cascade_sanitize PUBLIC into
+# cascade_engine, which every test, the shell, the interface and the application inherit.
 #
-# WHAT IT INSTRUMENTS: cascade_engine and everything that links it (the window,
-# the application, the report reader and every test), plus the vendored static
+# WHAT IT INSTRUMENTS: cascade_engine and everything that links it (the window, the
+# application, the report reader and every test), plus the vendored static
 # libraries that end up inside those executables (imgui, glfw, portaudio,
 # pffft). On MSVC the vendored C++ must match: the standard library's container
 # annotations are checked at link time and a mixed set fails with LNK2038.

@@ -98,63 +98,13 @@ void testCoordApertureHoldsItsFigure() {
                 textW(rf, px, "."), cascade::gui::coordCellWidth('.'));
 }
 
-// --- the shared kind-tag chip --------------------------------------------------
+// --- (the shared kind-tag chip is gone) --------------------------------------------
 //
-// One component, drawn on the plugin store's cards and on the fitted-modules
-// rows. It was two different literals in those two files - 84 px and 74 - and
-// neither held "NOT DECLARED" once the engraving grew.
-void testKindTagChipHoldsEveryTag() {
-    ImFont* uf = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
-    const float chip = cascade::gui::moduleKindTagWidth();
-
-    // Every word moduleKindTag() can return. Kept in step with that switch by
-    // hand, which is the point: a tag added there and forgotten here is a chip
-    // that overflows in whichever state nobody happens to be looking at.
-    const char* const tags[] = {"NOT KNOWN", "NOT DECLARED", "DECODER", "MAP",
-                                "PANEL",     "CONTROL",      "MODULE"};
-    for (const char* t : tags) {
-        const float w = textW(uf, px, t);
-        CHECK(chip >= w);
-        // The chip is a plate with the word cut into it, so it needs metal
-        // either side rather than just enough room for the letterforms.
-        CHECK(chip >= w + 8.0f);
-    }
-
-    // And it is a chip, not a column: something is badly wrong if it has grown
-    // wide enough to be mistaken for the module's name beside it.
-    CHECK(chip < 400.0f);
-
-    std::printf("  kind tag chip %.2f px, widest tag \"NOT DECLARED\" %.2f px at %.0f px\n",
-                chip, textW(uf, px, "NOT DECLARED"), px);
-}
-
-// EVERY TAG THE PRODUCTION SWITCH ACTUALLY RETURNS, asked of moduleKindTag()
-// itself rather than of the list above - so the list cannot silently fall out
-// of step with the code it is meant to cover.
-void testEveryTagTheSwitchReturnsFits() {
-    ImFont* uf = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
-    const float chip = cascade::gui::moduleKindTagWidth();
-
-    // The states that produce the two "not known" tags: a catalogue row nobody
-    // has fitted, and a fitted file the host refused.
-    cascade::gui::ModulePlate p;
-    p.haveCapabilities = false;
-    p.fitted = false;
-    p.loaded = false;
-    CHECK(chip >= textW(uf, px, cascade::gui::moduleKindTag(p)) + 8.0f);
-    p.fitted = true;
-    CHECK(chip >= textW(uf, px, cascade::gui::moduleKindTag(p)) + 8.0f);
-
-    // ...and every capability bit, one at a time, which walks the rest of the
-    // switch without this test having to know which word each one produces.
-    p.haveCapabilities = true;
-    for (int bit = 0; bit < 32; ++bit) {
-        p.capabilities = 1u << static_cast<unsigned>(bit);
-        CHECK(chip >= textW(uf, px, cascade::gui::moduleKindTag(p)) + 8.0f);
-    }
-}
+// 0.99.72: the plugin store's card and the fitted-modules row no longer carry a kind
+// chip (the owner's redesign: a glyph, a name, a version and one key), so
+// moduleKindTagWidth() and moduleKindTag() were removed with it and the two tests that
+// measured their words went with them. The new words' fit is checked in every language
+// by test_plugin_store_view (testEveryLanguageNewWords).
 
 // --- the whole thing scales ----------------------------------------------------
 //
@@ -242,8 +192,6 @@ int main() {
         // will bake a size it has not seen.
         ImGui::NewFrame();
         testCoordApertureHoldsItsFigure();
-        testKindTagChipHoldsEveryTag();
-        testEveryTagTheSwitchReturnsFits();
         testMeasurementsTrackTheDeclaredSizes();
         ImGui::Render();
         // Outside the frame: a language change swaps the atlas's faces.

@@ -7,19 +7,26 @@
 // rather than left to inspection.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
+#include "core/config.hpp"
+#include "core/package_identity.hpp"
 #include "core/telemetry.hpp"
 #include "test_check.hpp"
 
@@ -113,7 +120,15 @@ void testPayloadContainsOnlyTheAgreedFields() {
     r.os = osDescription();
     r.arch = archDescription();
     r.launches = 12;
-    r.crashes = 1;
+    r.crashes = 7;
+    // How the unclean exits ended (0.99.69): four counts that add up.
+    r.exits.died = 2;
+    r.exits.killed = 3;
+    r.exits.ended = 1;
+    r.exits.unknown = 1;
+    r.channel = "installer";
+    r.firstRun = "2026-09-29";
+    r.firstVersion = "0.99.46";
     r.session.seconds = 3600;
     r.session.modeSeconds["WFM"] = 3000;
     r.session.modeSeconds["RAW"] = 600;
@@ -127,20 +142,155 @@ void testPayloadContainsOnlyTheAgreedFields() {
     // and they have to come and change the privacy notice too - which is
     // exactly the conversation that should happen.
     const std::set<std::string> allowed = {
-        "id", "v", "os", "arch", "launches", "crashes",
-        "sessionSec", "sdr", "modes", "panels", "plugins"};
+        "id", "v", "os", "arch", "launches", "crashes", "exits_died", "exits_killed", "exits_ended",
+        "exits_unknown", "stalls", "health", "ch", "first", "fv", "sessionSec", "sdr", "modes",
+        "panels", "plugins"};
     std::set<std::string> actual;
     for (auto it = j.begin(); it != j.end(); ++it) { actual.insert(it.key()); }
     CHECK(actual == allowed);
 
     CHECK(j["v"] == "0.48.0");
     CHECK(j["launches"] == 12);
-    CHECK(j["crashes"] == 1);
+    CHECK(j["crashes"] == 7);
+    // THE SPLIT RIDES BESIDE THE SUM, as bare numbers under their own names, and the
+    // four add up to what a client that has only ever run this version would send.
+    CHECK(j["exits_died"] == 2);
+    CHECK(j["exits_killed"] == 3);
+    CHECK(j["exits_ended"] == 1);
+    CHECK(j["exits_unknown"] == 1);
+    CHECK(j["exits_died"].is_number_unsigned() && j["exits_unknown"].is_number_unsigned());
+    CHECK(j["exits_died"].get<std::uint64_t>() + j["exits_killed"].get<std::uint64_t>() +
+              j["exits_ended"].get<std::uint64_t>() + j["exits_unknown"].get<std::uint64_t>() ==
+          j["crashes"].get<std::uint64_t>());
+    CHECK(j["ch"] == "installer");
+    CHECK(j["first"] == "2026-09-29");
+    CHECK(j["fv"] == "0.99.46");
     CHECK(j["modes"]["WFM"] == 3000);
     CHECK(j["panels"].size() == 2);
 
     // And the serial has not crept back in through the whole-document route.
     CHECK(r.toJson().find("EDR04ZDB2") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// PRIVACY.md, held to the payload in BOTH directions.
+//
+// testPayloadContainsOnlyTheAgreedFields above compares the payload to a list
+// that lives in this file, so a field added to the payload and to that list
+// passed without PRIVACY.md ever being opened - and PRIVACY.md's own sentence
+// ("a new field cannot be added without that test failing and this document
+// being updated with it") was only half true. The crash upload, the feature
+// request and the problem report each read the document; the usage record did
+// not. This is the missing half.
+//
+// The document's table names fields in words ("Launch count"), not by their
+// JSON key, so the mapping from key to row label is held HERE. That is what
+// makes the comparison two-way: a payload key with no row fails, a row with no
+// payload key fails, and a key added to this table but not to the document
+// fails.
+// ---------------------------------------------------------------------------
+const std::map<std::string, std::string>& usageFieldLabels() {
+    static const std::map<std::string, std::string> kLabels = {
+        {"id", "Install identifier"},
+        {"v", "Application version"},
+        {"os", "Operating system"},
+        {"arch", "Architecture"},
+        {"ch", "How it was installed"},
+        {"first", "First run"},
+        {"fv", "First version"},
+        {"launches", "Launch count"},
+        {"crashes", "Crash count"},
+        {"exits_died", "Unclean exits: died"},
+        {"exits_killed", "Unclean exits: killed"},
+        {"exits_ended", "Unclean exits: ended by the system"},
+        {"exits_unknown", "Unclean exits: unknown"},
+        {"stalls", "Display stalls"},
+        {"health", "Failure counts"},
+        {"sessionSec", "Session length"},
+        {"sdr", "SDR model"},
+        {"modes", "Demodulators used"},
+        {"panels", "Panels opened"},
+        {"plugins", "Installed plugins"},
+    };
+    return kLabels;
+}
+
+// The first column of the usage report's table in PRIVACY.md - the rows between
+// its heading and the next one (the "still running" beat has a table of its
+// own, and is held by testBeatPayloadContainsOnlyTheAgreedFields).
+std::set<std::string> documentedUsageRows(bool* found) {
+    std::set<std::string> rows;
+    std::ifstream in(std::filesystem::path(CASCADE_SOURCE_DIR) / "PRIVACY.md", std::ios::binary);
+    const std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string heading = "## What is sent when usage reporting is enabled";
+    const std::size_t start = doc.find(heading);
+    *found = start != std::string::npos;
+    if (!*found) { return rows; }
+    std::size_t end = doc.find("\n#", start + heading.size());
+    if (end == std::string::npos) { end = doc.size(); }
+    std::istringstream lines(doc.substr(start, end - start));
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.rfind("| ", 0) != 0) { continue; }
+        const std::size_t bar = line.find(" |", 2);
+        if (bar == std::string::npos) { continue; }
+        const std::string cell = line.substr(2, bar - 2);
+        if (cell == "Field") { continue; }   // the header row
+        rows.insert(cell);
+    }
+    return rows;
+}
+
+void testPrivacyDocumentsEveryUsagePayloadField() {
+    TelemetryReport r;
+    r.installId = newInstallId();
+    r.appVersion = "0.48.0";
+    const nlohmann::json j = nlohmann::json::parse(r.toJson());
+
+    std::set<std::string> payloadKeys;
+    for (auto it = j.begin(); it != j.end(); ++it) { payloadKeys.insert(it.key()); }
+    std::set<std::string> mappedKeys, mappedLabels;
+    for (const auto& kv : usageFieldLabels()) {
+        mappedKeys.insert(kv.first);
+        mappedLabels.insert(kv.second);
+    }
+
+    bool found = false;
+    const std::set<std::string> documented = documentedUsageRows(&found);
+    CHECK(found);
+
+    // Payload -> document: every key the report sends has a row.
+    for (const std::string& k : payloadKeys) {
+        if (mappedKeys.count(k) == 0) {
+            std::printf("FAIL the payload sends \"%s\" and this test has no PRIVACY.md row for it\n",
+                        k.c_str());
+        }
+        CHECK(mappedKeys.count(k) == 1);
+    }
+    // Document -> payload: every row has a key the report really sends.
+    for (const std::string& row : documented) {
+        if (mappedLabels.count(row) == 0) {
+            std::printf("FAIL PRIVACY.md documents \"%s\" and no payload field maps to it\n",
+                        row.c_str());
+        }
+        CHECK(mappedLabels.count(row) == 1);
+    }
+    // And the two lists this test holds agree with the payload and the
+    // document exactly, so an entry cannot linger after its field is gone.
+    for (const std::string& k : mappedKeys) {
+        if (payloadKeys.count(k) == 0) {
+            std::printf("FAIL the table maps \"%s\" but the payload no longer sends it\n", k.c_str());
+        }
+        CHECK(payloadKeys.count(k) == 1);
+    }
+    for (const std::string& label : mappedLabels) {
+        if (documented.count(label) == 0) {
+            std::printf("FAIL PRIVACY.md has no row \"%s\"\n", label.c_str());
+        }
+        CHECK(documented.count(label) == 1);
+    }
+    CHECK(payloadKeys == mappedKeys);
+    CHECK(documented == mappedLabels);
 }
 
 void testPluginNamesCannotBreakTheReport() {
@@ -461,6 +611,206 @@ void testCertificateVerificationIsOnPosix() {
 }
 #endif  // !_WIN32
 
+// A private scratch folder per run: the PID keeps two concurrent ctest runs
+// (parallel worktrees) from claiming each other's markers.
+std::filesystem::path claimScratch(const char* tag) {
+#if defined(_WIN32)
+    const unsigned long pid = ::GetCurrentProcessId();
+#else
+    const unsigned long pid = static_cast<unsigned long>(::getpid());
+#endif
+    const std::filesystem::path d = std::filesystem::temp_directory_path() /
+                                    ("foxsdr_claim_" + std::string(tag) + "_" + std::to_string(pid));
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d);
+    return d;
+}
+
+std::string u8(const std::filesystem::path& p) {
+    const std::u8string s = p.u8string();
+    return std::string(s.begin(), s.end());
+}
+
+// THE BUG THIS GUARDS: the same pending report sent on every launch until a
+// save replaced it - one install's report arrived fifteen times.
+void testReportIsSentOncePerReport() {
+    const std::filesystem::path d = claimScratch("once");
+    const std::string a = "{\"id\":\"a\",\"sessionSec\":33693}";
+    const std::string b = "{\"id\":\"a\",\"sessionSec\":3012}";
+
+    CHECK(claimReportSend(u8(d), a));    // first launch: sends
+    CHECK(!claimReportSend(u8(d), a));   // relaunch with the same report: does not
+    CHECK(!claimReportSend(u8(d), a));   // nor the one after
+    CHECK(std::filesystem::exists(d / reportSendMarkerName(a)));
+
+    // A NEW report is its own claim, and it clears the old marker so the
+    // folder never collects one file per session.
+    CHECK(claimReportSend(u8(d), b));
+    CHECK(std::filesystem::exists(d / reportSendMarkerName(b)));
+    CHECK(!std::filesystem::exists(d / reportSendMarkerName(a)));
+    CHECK(!claimReportSend(u8(d), b));
+
+    // The name depends on the content, not merely its length.
+    CHECK(reportSendMarkerName(a) != reportSendMarkerName(b));
+    CHECK(reportSendMarkerName(a) == reportSendMarkerName(a));
+    CHECK(reportSendMarkerName(a).rfind("telemetry-sent-", 0) == 0);
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// Copies started together all read the report before any of them writes, so
+// clearing it would not help; the claim must let EXACTLY one of them win.
+void testConcurrentClaimsLetExactlyOneSend() {
+    const std::filesystem::path d = claimScratch("race");
+    const std::string dir = u8(d);
+    const std::string report = "{\"id\":\"race\",\"sessionSec\":42}";
+    constexpr int kCopies = 16;
+    std::atomic<int> ready{0};
+    std::atomic<bool> go{false};
+    std::atomic<int> winners{0};
+    std::vector<std::thread> copies;
+    for (int i = 0; i < kCopies; ++i) {
+        copies.emplace_back([&]() {
+            ++ready;
+            while (!go.load()) { std::this_thread::yield(); }
+            if (claimReportSend(dir, report)) { ++winners; }
+        });
+    }
+    while (ready.load() < kCopies) { std::this_thread::yield(); }
+    go.store(true);
+    for (std::thread& t : copies) { t.join(); }
+    CHECK(winners.load() == 1);
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// Anything that stops the claim from working at all must fall back to SENDING:
+// a duplicate is recoverable on the dashboard, silence forever is not.
+void testClaimFailsOpen() {
+    const std::filesystem::path d = claimScratch("open");
+    const std::filesystem::path missing = d / "no-such-folder";
+    CHECK(claimReportSend(u8(missing), "{\"x\":1}"));
+    CHECK(claimReportSend(u8(missing), "{\"x\":1}"));   // still no marker, still sends
+    CHECK(!std::filesystem::exists(missing));
+    CHECK(claimReportSend("", "{\"x\":1}"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// The config folder is under the user's profile, which is not ASCII for
+// everybody: the path goes in as UTF-8 and must land in the right folder.
+void testClaimHonoursANonAsciiFolder() {
+    const std::filesystem::path d = claimScratch("utf8");
+    const std::filesystem::path uni = d / std::filesystem::path(u8"Jørgen-été");
+    std::filesystem::create_directories(uni);
+    const std::string report = "{\"id\":\"utf8\"}";
+    CHECK(claimReportSend(u8(uni), report));
+    CHECK(std::filesystem::exists(uni / reportSendMarkerName(report)));
+    CHECK(!claimReportSend(u8(uni), report));
+
+    std::error_code ec;
+    std::filesystem::remove_all(d, ec);
+}
+
+// WHERE IT CAME FROM, read from the running program. On Windows the only two
+// downloads are the Store package and the installer; the Store case is the
+// package identity the rest of the app already uses.
+void testInstallChannelFollowsThePackage() {
+#if defined(__ANDROID__)
+    CHECK(installChannel() == "android");
+#elif defined(_WIN32)
+    clearPackageIdentityForTest();
+    CHECK(installChannel() == "installer");
+    PackageIdentity pkg;
+    pkg.packaged = true;
+    pkg.fullName = "FoxSDR_1.99.46.0_x64__8wekyb3d8bbwe";
+    setPackageIdentityForTest(pkg);
+    CHECK(installChannel() == "store");
+    clearPackageIdentityForTest();
+    CHECK(installChannel() == "installer");
+#else
+    ::unsetenv("APPIMAGE");
+    CHECK(installChannel() == "tarball");
+    ::setenv("APPIMAGE", "/home/x/FoxSDR.AppImage", 1);
+    CHECK(installChannel() == "appimage");
+    ::setenv("APPIMAGE", "", 1);
+    CHECK(installChannel() == "tarball");
+    ::unsetenv("APPIMAGE");
+#endif
+}
+
+// A day, never a time - and only exactly a day or a version string is ever
+// kept or sent.
+void testFirstRunFieldsHaveOneShape() {
+    const std::string today = utcDateToday();
+    CHECK(today.size() == 10);
+    CHECK(validFirstRunDate(today));
+    CHECK(validFirstRunDate("2026-09-29"));
+    CHECK(!validFirstRunDate(""));
+    CHECK(!validFirstRunDate("2026-09-29T10:05:00Z"));   // a time is refused
+    CHECK(!validFirstRunDate("2026-13-01"));
+    CHECK(!validFirstRunDate("2026-00-10"));
+    CHECK(!validFirstRunDate("2026-09-32"));
+    CHECK(!validFirstRunDate("2025-12-31"));             // before the field existed
+    CHECK(!validFirstRunDate("steve@x.com"));
+    CHECK(validFirstVersion("0.99.46"));
+    CHECK(validFirstVersion("0.98.1-android.4"));
+    CHECK(validFirstVersion("0.57.0-nightly.20260819.b97092e"));
+    CHECK(!validFirstVersion(""));
+    CHECK(!validFirstVersion("Steven Fox"));              // a space: not a version
+    CHECK(!validFirstVersion(std::string(49, '1')));
+}
+
+// The config keeps the fields across a save, and drops them when they are not
+// exactly the right shape, or when there is no install id for them to belong to.
+void testFirstRunFieldsSurviveASaveAndRefuseAnythingElse() {
+    namespace fs = std::filesystem;
+#if defined(_WIN32)
+    const unsigned long pid = ::GetCurrentProcessId();
+#else
+    const unsigned long pid = static_cast<unsigned long>(::getpid());
+#endif
+    const fs::path tmp = fs::temp_directory_path() / ("foxsdr_firstrun_" + std::to_string(pid) + ".json");
+    std::string werr, error;
+    std::error_code ec;
+
+    AppConfig good;
+    good.telemetryEnabled = true;
+    good.telemetryInstallId = std::string(32, 'a');
+    good.telemetryFirstRun = "2026-09-29";
+    good.telemetryFirstVersion = "0.99.46";
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(good), werr));
+    AppConfig back;
+    CHECK(ConfigStore::load(tmp.string(), back, error));
+    CHECK(back.telemetryFirstRun == "2026-09-29");
+    CHECK(back.telemetryFirstVersion == "0.99.46");
+
+    AppConfig bad = good;
+    bad.telemetryFirstRun = "2026-09-29 10:05:33";
+    bad.telemetryFirstVersion = "my name is Steve";
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(bad), werr));
+    AppConfig backBad;
+    CHECK(ConfigStore::load(tmp.string(), backBad, error));
+    CHECK(backBad.telemetryFirstRun.empty());
+    CHECK(backBad.telemetryFirstVersion.empty());
+    CHECK(backBad.telemetryInstallId == good.telemetryInstallId);   // the id itself is untouched
+
+    AppConfig orphan = good;
+    orphan.telemetryInstallId.clear();
+    orphan.telemetryEnabled = false;
+    CHECK(ConfigStore::writeFile(tmp.string(), ConfigStore::serialize(orphan), werr));
+    AppConfig backOrphan;
+    CHECK(ConfigStore::load(tmp.string(), backOrphan, error));
+    CHECK(backOrphan.telemetryFirstRun.empty());
+    CHECK(backOrphan.telemetryFirstVersion.empty());
+
+    fs::remove(tmp, ec);
+}
+
 }  // namespace
 
 int main() {
@@ -468,6 +818,7 @@ int main() {
     testDeviceSerialIsStripped();
     testInstallIdIsRandomAndValidated();
     testPayloadContainsOnlyTheAgreedFields();
+    testPrivacyDocumentsEveryUsagePayloadField();
     testPluginNamesCannotBreakTheReport();
     testModeSecondsAccrueAcrossFrames();
     testPanelsReachThePayload();
@@ -475,6 +826,13 @@ int main() {
     testBeatPayloadContainsOnlyTheAgreedFields();
     testBeatScheduleFiresImmediatelyThenAtInterval();
     testBeatRefusesToArmWithoutARealId();
+    testReportIsSentOncePerReport();
+    testConcurrentClaimsLetExactlyOneSend();
+    testClaimFailsOpen();
+    testClaimHonoursANonAsciiFolder();
+    testInstallChannelFollowsThePackage();
+    testFirstRunFieldsHaveOneShape();
+    testFirstRunFieldsSurviveASaveAndRefuseAnythingElse();
 #if !defined(_WIN32)
     testTelemetryEndpointOverridePosix();
     testTelemetryHttpUrlNeverConnects();

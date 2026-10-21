@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/mp3_writer.hpp"
+#include "core/record_finish.hpp"
 #include "test_check.hpp"
 
 #ifdef _WIN32
@@ -188,7 +189,11 @@ int main() {
                 CHECK(d->samples() == 96000u);
                 CHECK(d->describe().rfind("MP3  patch-5-Two_m_", 0) == 0);
                 d.reset();
-                CHECK(true);
+                // THE FILE IS FINALISED BY THE WORKER, NOT BY THE DESTRUCTOR (0.99.65: a
+                // speaker retired on the GUI thread must not wait for the encoder's close).
+                // What the application's quit does is drain the same counter, bounded.
+                CHECK(cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(10)));
             }
             const std::vector<fs::path> files = filesIn(dir);
             CHECK(files.size() == 1u);

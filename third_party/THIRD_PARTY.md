@@ -3,10 +3,17 @@
 Every library the application links is vendored here, pinned to the exact
 revision the app was built and tested against, so an upstream change can never
 break or alter this build. Sources are verbatim upstream copies — **no vendored
-file has been modified**, with ONE documented exception: Dear ImGui carries two
-fenced patches, its word wrap for Chinese and Japanese and a colour table pushed
-for every popup-like window (`imgui/FOXSDR-PATCHES.md`). Each subdirectory keeps
-its upstream license file.
+file has been modified**, with THREE documented exceptions: Dear ImGui carries three
+fenced patches, its word wrap for Chinese and Japanese, a colour table pushed
+for every popup-like window, and a cache that skips its GLFW backend's per-frame
+mouse-passthrough call when the value has not changed
+(`imgui/FOXSDR-PATCHES.md`), and GLFW carries one, a cherry-pick of an upstream
+fix to the order its Wayland backend shuts down in (`glfw/FOXSDR-PATCHES.md`),
+and PortAudio carries one, a one-line refusal of an ALSA device that reports zero
+periods, which would otherwise be divided by (`portaudio/FOXSDR-PATCHES.md`).
+(The Noto Sans Condensed fonts are not verbatim either: they are subsetted, and
+their own section below says so.) Each subdirectory keeps its upstream license
+file.
 
 Those license files, plus SoapySDR's, are reproduced verbatim in
 `installer/THIRD-PARTY-LICENSES.txt`, the aggregate notice shipped with the
@@ -34,6 +41,7 @@ support SoapySDR exists to provide. It therefore stays external by design.
 | nlohmann/json | https://github.com/nlohmann/json | tag `v3.12.0` (release asset `json.hpp` = `single_include/nlohmann/json.hpp`) | `https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp` | `aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63` | MIT (`nlohmann_json/LICENSE.MIT`) | `third_party/nlohmann_json/` |
 | pffft | https://bitbucket.org/jpommier/pffft | tag `v1.0.0` (bitbucket changeset `02fe7715a5bf`) — the exact revision the vcpkg `pffft` 1.0.0 port pins | `https://bitbucket.org/jpommier/pffft/get/v1.0.0.tar.gz` | `9adeb18ac7bb52e9fb921c31c0c6a4e9ae150cc6fcb20a899d4b3a2275176ded` | FFTPACK/BSD-style (`pffft/LICENSE.txt`) | `third_party/pffft/` |
 | cpp-httplib | https://github.com/yhirose/cpp-httplib | tag `v0.53.1` (single header `httplib.h`) | `https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.53.1/httplib.h` | `bc69d53636a8757cb24a1deb9880bf7e2fdae3a80bbc759e145b8c80913cbfa3` | MIT (`cpp_httplib/LICENSE`) | `third_party/cpp_httplib/` |
+| stb_image | https://github.com/nothings/stb | file `stb_image.h` v2.30 (2024-05-31), as served from the repository's `master` branch on 2026-10-08 (no tag exists; the version is the one named on the file's first line) | `https://raw.githubusercontent.com/nothings/stb/master/stb_image.h` (fetched 2026-10-08 with curl; 283010 bytes) | `594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3` | public domain or MIT, at your option (both texts are at the end of the header) | `third_party/stb/` |
 | Saira Condensed | https://github.com/google/fonts | commit `eda91bff215c766697fcbbcf836a6425e5c167ac` (`ofl/sairacondensed/`, Medium and SemiBold statics) | `https://raw.githubusercontent.com/google/fonts/eda91bff215c766697fcbbcf836a6425e5c167ac/ofl/sairacondensed/SairaCondensed-{Medium,SemiBold}.ttf` | Medium `a02d8fe45b8b7d952cb0dd341683b02ddc1b55dbd0ed89d9d438868be614b66f`, SemiBold `30f8ed4d078211003a9715c80c51ce031bab5c9a17e8771182e4c4599205634b` | SIL OFL 1.1, reserved name "Saira" (`fonts/OFL-SairaCondensed.txt`) | `third_party/fonts/` |
 | Nova Mono | https://github.com/google/fonts | commit `90abd17b4f97671435798b6147b698aa9087612f` (`ofl/novamono/`) | `https://raw.githubusercontent.com/google/fonts/90abd17b4f97671435798b6147b698aa9087612f/ofl/novamono/NovaMono.ttf` | `648eadb6648c0801b186d3dcef60ee6aa84a791b1e09c726935c0712508b4807` | SIL OFL 1.1, reserved name "NovaMono" (`fonts/OFL-NovaMono.txt`) | `third_party/fonts/` |
 | Noto Sans Condensed (Medium, SemiBold) | https://github.com/notofonts/notofonts.github.io (release of https://github.com/notofonts/latin-greek-cyrillic) | commit `28b15b4b43b7bed62b5cf6e6b0b5ff5846270535` (Noto Sans v2.015, tag `NotoSans-v2.015` upstream), `fonts/NotoSans/unhinted/ttf/` | `https://raw.githubusercontent.com/notofonts/notofonts.github.io/28b15b4b43b7bed62b5cf6e6b0b5ff5846270535/fonts/NotoSans/unhinted/ttf/NotoSans-Condensed{Medium,SemiBold}.ttf`; licence `https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/NotoSans-v2.015/OFL.txt` | upstream Medium `f77b058861b9e63d18782e46787f6570a7968aacdf299cbd481a998658a71876`, SemiBold `b41ecd0838ecd17b706432a01c0d63f8bf977d851cc2cf37242324233edb9294`; vendored SUBSETS Medium `7db3cd58a5cbf6129c3cb73ee0fc97255d6449837a53987acca21ce8068bbca0`, SemiBold `caa8702bf3bb10a771d267cf322acb7f1cdcd995bee15dce587000a72976ebeb` | SIL OFL 1.1, NO reserved font name (`fonts/OFL-NotoSans.txt`, sha256 `cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a`) | `third_party/fonts/` |
@@ -52,7 +60,7 @@ vcpkg fetches the full repo archive instead, so its hash is not comparable.)
 ## Per-library notes
 
 ### Dear ImGui (`third_party/imgui/`)
-**Patched in two places.** First (0.99.28): `ImFontCalcWordWrapPositionEx` in
+**Patched in three places.** First (0.99.28): `ImFontCalcWordWrapPositionEx` in
 `imgui_draw.cpp` breaks Chinese and Japanese lines between characters and
 keeps closing marks off the start of a line. Every changed line is fenced by
 `FOXSDR PATCH (cjk-wrap)` comments; what it does, why, and how to re-apply it
@@ -65,7 +73,16 @@ every popup, menu, combo list, modal and tooltip, so a theme can letter its
 menus in their own ink. Fenced by `FOXSDR PATCH (popup-colours)`; an empty
 table - FoxSDR's default bench - pushes nothing. `tests/test_theme.cpp` reads
 the colours a live tooltip, popup and modal draw with and goes red without it.
-The archive hash in the table is of the UNPATCHED upstream archive.
+**And in a third place** (2026-09-28): `backends/imgui_impl_glfw.cpp` and
+`backends/imgui_impl_glfw.h` remember the last `GLFW_MOUSE_PASSTHROUGH` value set
+on each window and skip the `glfwSetWindowAttrib` call when it has not changed,
+where upstream makes it for every viewport on every frame (field report `hang
+win32u.dll @ _glfwSetWindowMousePassthroughWin32`, 0.99.26; repaired in 0.99.44
+so that a destroyed window's record cannot be inherited by a new window at the
+same address). Fenced by `FOXSDR PATCH (mouse-passthrough-cache)`;
+`tests/test_mouse_passthrough_cache.cpp` counts the calls and requires one for a
+steady frame loop. The archive hash in the table is of the UNPATCHED upstream
+archive.
 
 Vendored subset per spec: the core sources (`imgui*.cpp/h`, `imconfig.h`,
 `imstb_*.h`), the two backends the app uses
@@ -95,13 +112,31 @@ master branch, so there is nothing on that side to compare a docking archive
 against. The SHA256 above is of the archive actually fetched.
 
 ### GLFW (`third_party/glfw/`)
-Full pristine 3.4 tree. Built via `add_subdirectory` with
+Full 3.4 tree, **plus one fenced patch**: upstream's post-3.4 commit
+`162896e5b9` ("Wayland: free modules at end of terminate function",
+glfw/glfw issue #2744), which stops `glfwTerminate` on Wayland unloading the
+EGL, libdecor, wayland-egl, xkbcommon and wayland-cursor libraries before
+`wl_display_disconnect` — the crash FoxSDR 0.99.59 reported on exit
+(`libwayland-client.so.0` under `_glfwTerminateWayland`). It touches two files,
+`src/wl_init.c` and `src/egl_context.c`, each change fenced by `FOXSDR PATCH
+(wayland-terminate-order)`; `grep -rn "FOXSDR PATCH" third_party/glfw/src`
+finds it, and `glfw/FOXSDR-PATCHES.md` has the what, the why and how to drop
+it. Every other file is the pristine 3.4 archive (the archive hash above is of
+that unpatched archive); the Windows and macOS backends are not touched.
+`tests/test_glfw_wayland_terminate.cpp` holds the order in place. GLFW's Zlib
+licence asks that an altered source version be plainly marked as such
+(`glfw/LICENSE.md`, condition 2); those fences and `glfw/FOXSDR-PATCHES.md` are
+the mark. Built via `add_subdirectory` with
 `GLFW_BUILD_DOCS/TESTS/EXAMPLES=OFF`, `GLFW_INSTALL=OFF`. Static library
 (vcpkg's x64-windows build was a DLL; static linkage is a deliberate
 deployment simplification — same code, same version).
 
 ### PortAudio (`third_party/portaudio/`)
-Full pristine tree at the pinned commit. Built via `add_subdirectory`, static
+Full tree at the pinned commit, **plus one fenced patch** (`FOXSDR PATCH
+(alsa-zero-periods)` in `src/hostapi/alsa/pa_linux_alsa.c`, Linux only; what,
+why and how to drop it in `portaudio/FOXSDR-PATCHES.md`, held in place by
+`tests/test_portaudio_alsa_periods.cpp`); every other file is the pristine
+archive (the hash above is of that unpatched archive). Built via `add_subdirectory`, static
 (`portaudio_static` target). **Host APIs compiled on Windows: WASAPI and WMME
 only.** ASIO is OFF (requires the proprietary Steinberg SDK), DirectSound is
 OFF, WDM/KS is OFF (including `PA_USE_WDMKS_DEVICE_INFO`). Note: the vcpkg
@@ -165,6 +200,9 @@ exists because a vendored header can be present and correctly hashed while
 still failing to compile under `/W4 /permissive-`, missing an import library,
 or having no working socket layer on this platform — none of which is visible
 from the file on disk.
+
+### stb_image (`third_party/stb/stb_image.h`)
+A single header, vendored byte for byte as fetched (the SHA256 in the table above is of the file as vendored; its first line reads `stb_image - v2.30 - public domain image loader`). It decodes the PNG pictures the plugin store's page for one plugin shows (0.99.72): the application had no image decoder, because map tiles reach it as raw pixels from a basemap plugin. It is compiled in ONE translation unit, `src/core/png_decode.cpp`, with `STBI_ONLY_PNG` (no other reader is built) and `STBI_NO_STDIO` (the caller hands it bytes); the failure strings are left on so the store can say why a picture would not decode. `decodePng()` checks the PNG signature and reads the header with `stbi_info_from_memory` BEFORE it decodes, so a header that claims a huge size never allocates; `tests/test_png_decode.cpp` pins that. The header's own licence offers the choice of MIT or the Unlicense; both texts are reproduced in `installer/THIRD-PARTY-LICENSES.txt`.
 
 ### Saira Condensed and Nova Mono (`third_party/fonts/`)
 The application's three typefaces — Saira Condensed Medium and SemiBold for

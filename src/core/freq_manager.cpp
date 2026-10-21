@@ -11,6 +11,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/file_read.hpp"
+#include "core/write_fault.hpp"
+
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -70,15 +73,28 @@ bool FreqManager::load(const std::string& path, std::string& error) {
         return true;  // first run: no bookmarks, and nothing went wrong
     }
 
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "bookmarks: cannot open \"" + path + "\" for reading";
-        return false;
+    // READ THROUGH readTextFile (core/file_read.hpp, 0.99.65): a directory where the file should be
+    // - and a read that fails - is answered here, on every platform. The stream this read used to
+    // hand to the JSON parser threw out of its buffer on Linux ("Is a directory") and ended the
+    // program, whatever allow_exceptions said.
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+            error = "bookmarks: \"" + path + "\" is a directory, not a file";
+            return false;
+        case ReadResult::CannotOpen:
+            error = "bookmarks: cannot open \"" + path + "\" for reading";
+            return false;
+        case ReadResult::ReadError:
+            error = "bookmarks: \"" + path + "\" could not be read";
+            return false;
     }
 
     // allow_exceptions=false: a corrupt file is an expected condition here,
     // not an exceptional one; parse errors surface as a discarded value.
-    const json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+    const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded()) {
         error = "bookmarks: \"" + path + "\" is not valid JSON";
         return false;
@@ -133,7 +149,11 @@ bool FreqManager::load(const std::string& path, std::string& error) {
         {
             const auto fav = e.find("favourite");
             if (fav != e.end() && fav->is_boolean()) { b.favourite = fav->get<bool>(); }
+            const auto scan = e.find("scan");
+            if (scan != e.end() && scan->is_boolean()) { b.scan = scan->get<bool>(); }
         }
+        getDouble(e, "heardSeconds", b.heardSeconds);
+        if (!std::isfinite(b.heardSeconds) || b.heardSeconds < 0.0) { b.heardSeconds = 0.0; }
         if (!std::isfinite(b.bandwidthHz) || b.bandwidthHz <= 0.0) {
             // The demod chain divides by bandwidth; repair with the struct
             // default rather than inventing an epsilon floor.
@@ -153,6 +173,35 @@ bool FreqManager::load(const std::string& path, std::string& error) {
 }
 
 bool FreqManager::save(const std::string& path, std::string& error) const {
+    return writeFile(path, serialize(), error);
+}
+
+std::string FreqManager::serialize() const {
+    json arr = json::array();
+    for (const Bookmark& b : list_) {
+        json e;
+        e["name"] = b.name;
+        e["freqHz"] = b.freqHz;
+        e["mode"] = b.mode;
+        e["bandwidthHz"] = b.bandwidthHz;
+        if (!b.group.empty()) { e["group"] = b.group; }
+        if (b.favourite) { e["favourite"] = true; }
+        if (b.scan) { e["scan"] = true; }
+        if (b.heardSeconds > 0.0) { e["heardSeconds"] = b.heardSeconds; }
+        arr.push_back(std::move(e));
+    }
+    json j;
+    j["schemaVersion"] = 1;
+    j["bookmarks"] = std::move(arr);
+    // error_handler_t::replace, like every dump() in this tree: this text
+    // includes user-entered or remote strings, and a byte that is not valid
+    // UTF-8 must cost one replacement character, never a throw out of a save
+    // path. tests/test_json_dump_policy.cpp holds every site to this.
+    return j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+}
+
+bool FreqManager::writeFile(const std::string& path, const std::string& text,
+                            std::string& error) {
     error.clear();
     const fs::path target(path);
 
@@ -168,27 +217,6 @@ bool FreqManager::save(const std::string& path, std::string& error) const {
             return false;
         }
     }
-
-    json arr = json::array();
-    for (const Bookmark& b : list_) {
-        json e;
-        e["name"] = b.name;
-        e["freqHz"] = b.freqHz;
-        e["mode"] = b.mode;
-        e["bandwidthHz"] = b.bandwidthHz;
-        if (!b.group.empty()) { e["group"] = b.group; }
-        if (b.favourite) { e["favourite"] = true; }
-        arr.push_back(std::move(e));
-    }
-    json j;
-    j["schemaVersion"] = 1;
-    j["bookmarks"] = std::move(arr);
-    // error_handler_t::replace, like every dump() in this tree: this text
-    // includes user-entered or remote strings, and a byte that is not valid
-    // UTF-8 must cost one replacement character, never a throw out of a save
-    // path. tests/test_json_dump_policy.cpp holds every site to this.
-    const std::string text =
-        j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 
     // ATOMIC WRITE — the ConfigStore approach verbatim. The temp file lives
     // in the target's own directory so the final rename is a same-volume
@@ -211,6 +239,7 @@ bool FreqManager::save(const std::string& path, std::string& error) const {
         }
         f.write(text.data(), static_cast<std::streamsize>(text.size()));
         f.flush();
+        writeFaultPoint("bookmarks", f);  // test seam: a write that fails part way
         if (!f) {
             f.close();
             fs::remove(tmp, ec);  // best effort; the write already failed
@@ -294,25 +323,44 @@ bool FreqManager::updateAt(std::size_t index, const Bookmark& b) {
     if (index >= list_.size()) {
         return false;
     }
-    // Erase-then-reinsert rather than assign-then-sort: it reuses the one
-    // insertion path that maintains the invariant, so there is exactly one
-    // place where ordering can be right or wrong.
+    // A FREQUENCY THAT DID NOT MOVE KEEPS THE ROW'S PLACE. Erase-then-reinsert
+    // lands a row AFTER its peers on the same frequency (insertSorted's
+    // upper_bound), so an edit of any other field - the airband monitor's
+    // heard-time flush every 20 s, a tick toggled, a star - used to send the
+    // row behind the other rows on its frequency. Two ticked rows on one
+    // frequency ("High" AM, "HighNfm" NFM) are one channel, named and moded by
+    // the FIRST of them: the flush swapped them, the monitor saw a different
+    // set and restarted on the other row (CI's arm64 run 37462575079). The
+    // order among equal frequencies is the file's order, and only an edit that
+    // moves the frequency may change it. A non-finite frequency never takes
+    // this path (inf == inf would, NaN != NaN would not): it is re-inserted as
+    // it always was.
     // The edited entry keeps its identity; the id the caller's copy carries
     // is not trusted (it may be a different entry's, or 0).
     Bookmark kept = b;
     kept.id = list_[index].id;
+    if (std::isfinite(b.freqHz) && b.freqHz == list_[index].freqHz) {
+        list_[index] = kept;
+        ++version_;   // insertSorted bumps it on the other path; an edit in place is a change too
+        return true;
+    }
+    // The frequency moved: erase-then-reinsert rather than assign-then-sort,
+    // so the one insertion path that maintains the invariant is the only place
+    // where ordering can be right or wrong.
     list_.erase(list_.begin() + static_cast<std::ptrdiff_t>(index));
     insertSorted(std::move(kept));
     return true;
 }
 
 std::size_t FreqManager::addMany(std::vector<Bookmark> items) {
-    // What is already here, by (frequency, name), so a re-import is a no-op.
-    // Hashing the pair as a string keeps this O(n) for the lookups.
+    // What is already here, by (frequency, name, group), so a re-import is a
+    // no-op. The group is part of it since 2026-10: two airports both have an
+    // "EMERG 121.5", and the second airport's must not vanish because the
+    // first's is already in the list. Hashed as one string, O(n) to look up.
     const auto key = [](const Bookmark& b) {
         char f[40];
         std::snprintf(f, sizeof(f), "%.3f|", b.freqHz);
-        return std::string(f) + b.name;
+        return std::string(f) + b.name + '\x1f' + b.group;
     };
     std::unordered_set<std::string> have;
     have.reserve(list_.size() + items.size());

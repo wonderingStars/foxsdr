@@ -15,16 +15,32 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#include <windows.h>
+#define TEST_GETPID _getpid
+#else
+#include <unistd.h>
+#define TEST_GETPID getpid
+#endif
 
 #include "test_check.hpp"
 
+using cascade::core::TeamMessage;
 using cascade::core::UpdateInfo;
 
 namespace {
+
+namespace fs = std::filesystem;
 
 // A well-formed manifest, which each test then breaks in exactly one way.
 std::string manifest(const std::string& version = "0.56.0",
@@ -49,6 +65,38 @@ std::string jsonEscaped(const std::string& s) {
         out.push_back(c);
     }
     return out;
+}
+
+// The checksum every well-formed manifest here carries.
+constexpr const char* kSha = "393e5fd91b7b2292611c52af7e9f2db1e2c730d78f1639adefceaf0fb5cca0ea";
+
+// A manifest at `version` whose "messages" value is `messagesJson`, verbatim. The download
+// fields are the ordinary, well-formed ones: a manifest whose url or checksum is bad is
+// refused whole, and these tests are about what becomes of the MESSAGES of one that is not.
+std::string withMessages(const std::string& messagesJson, const std::string& version = "0.56.0") {
+    return std::string("{\"ok\":true,\"version\":\"") + version + "\"," +
+           "\"url\":\"https://foxsdr.com/download/foxsdr-setup-" + version + ".exe\"," +
+           "\"sha256\":\"" + kSha + "\",\"size\":3274221,\"notes\":[]," +
+           "\"messages\":" + messagesJson + "}";
+}
+
+// One message object, as the site writes it.
+std::string msg(const std::string& id, const std::vector<std::string>& lines,
+                bool important = false, const std::string& date = "2026-10-14") {
+    std::string out = "{\"id\":\"" + id + "\",\"date\":\"" + date + "\",\"lines\":[";
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (i != 0) { out += ","; }
+        out += "\"" + jsonEscaped(lines[i]) + "\"";
+    }
+    out += std::string("],\"important\":") + (important ? "true" : "false") + "}";
+    return out;
+}
+
+// The ids of what was kept, in order.
+std::vector<std::string> idsOf(const UpdateInfo& info) {
+    std::vector<std::string> ids;
+    for (const TeamMessage& m : info.messages) { ids.push_back(m.id); }
+    return ids;
 }
 
 // The version names the installer file on disk, and that file is then run, so
@@ -292,6 +340,69 @@ void testRubbishDoesNotCrashIt() {
     }
 }
 
+// A FIELD OF THE WRONG TYPE is a refusal, never an exception.
+//
+// parseUpdateManifest runs on a worker thread (UpdateCheckTask) and the GUI
+// thread collects the result with future::get(), which rethrows whatever left
+// the worker - on the one thread that must not be taken down by a web server's
+// answer. nlohmann's value(key, default) does not return the default for a
+// present-but-wrong-typed field, it THROWS (type_error 302), so a service that
+// answered {"version": 5} or {"url": null} used to end the process. Found by
+// the update_manifest fuzz target (tests/fuzz); the inputs below are in its
+// regression corpus too.
+void testWrongTypedFieldsAreRefusedNotThrown() {
+    const char* wrong[] = {
+        "{\"version\":5}",
+        "{\"version\":null}",
+        "{\"version\":[\"0.56.0\"]}",
+        "{\"version\":\"0.56.0\",\"url\":null,\"sha256\":null}",
+        "{\"version\":\"0.56.0\",\"url\":7,\"sha256\":\"x\"}",
+        "{\"version\":\"0.56.0\",\"url\":\"https://foxsdr.com/download/x.exe\",\"sha256\":{}}",
+    };
+    for (const char* s : wrong) {
+        UpdateInfo info;
+        std::string err;
+        bool threw = false;
+        bool ok = true;
+        try {
+            ok = cascade::core::parseUpdateManifest(s, "0.50.0", info, err);
+        } catch (...) {
+            threw = true;
+        }
+        if (threw) { std::printf("FAIL parseUpdateManifest threw on: %s\n", s); }
+        CHECK(!threw);
+        CHECK(!ok);
+        CHECK(!err.empty());
+    }
+
+    // In the notes, a wrong-typed field is as good as an absent one: that note
+    // loses what it cannot say and the manifest - whose version and checksum are
+    // still actionable - is kept, as a malformed note already was.
+    const std::string m =
+        "{\"version\":\"0.56.0\","
+        "\"url\":\"https://foxsdr.com/download/x.exe\","
+        "\"sha256\":\"393e5fd91b7b2292611c52af7e9f2db1e2c730d78f1639adefceaf0fb5cca0ea\","
+        "\"notes\":[{\"version\":1,\"date\":2,\"critical\":\"yes\",\"notes\":[\"no version\"]},"
+        "{\"version\":\"0.56.0\",\"date\":null,\"critical\":null,\"notes\":[\"kept\"]}]}";
+    UpdateInfo info;
+    std::string err;
+    bool threw = false;
+    bool ok = false;
+    try {
+        ok = cascade::core::parseUpdateManifest(m, "0.50.0", info, err);
+    } catch (...) {
+        threw = true;
+    }
+    CHECK(!threw);
+    CHECK(ok);
+    CHECK(info.notes.size() == 1);
+    if (info.notes.size() == 1) {
+        CHECK(info.notes[0].version == "0.56.0");
+        CHECK(info.notes[0].date.empty());
+        CHECK(!info.notes[0].critical);
+    }
+}
+
 void testNotesSurviveAndMalformedOnesAreDropped() {
     // A note with no text is not shown as an empty bullet; a whole manifest is
     // not thrown away because one note was malformed, because the version and
@@ -480,6 +591,393 @@ void testACheckThatFinishesIsHandedOver() {
     CHECK(task.reap());
 }
 
+// --- TEAM MESSAGES (0.99.79) --------------------------------------------------------
+//
+// The owner (2026-10-14): "the broadcast system for the software should send the broadcast
+// out even if there isn't an update; it should post to the user, then they click Seen and
+// it doesn't show up again". Until 0.99.79 a broadcast rode inside the release notes and
+// was shown only by the banner of an update that exists. The site now sends it as its own
+// `messages` array, and these are the parser's half of that: every field, the case that
+// motivated it (no update), and the answers that must be dropped without costing the
+// manifest or the messages beside them.
+
+void testTeamMessagesAreParsed() {
+    const std::string m = withMessages(
+        "[" + msg("k3f9x2ab", {"Server maintenance tonight.", "Back by 9."}, true, "2026-10-14") +
+        "," + msg("q7w1z0cd", {"On holiday until the 20th."}, false, "2026-10-12") + "]");
+    UpdateInfo info;
+    std::string err;
+    CHECK(cascade::core::parseUpdateManifest(m, "0.99.79", info, err));
+    CHECK(err.empty());
+    CHECK(info.messages.size() == 2u);
+    if (info.messages.size() == 2u) {
+        const TeamMessage& a = info.messages[0];
+        const std::vector<std::string> aLines = {"Server maintenance tonight.", "Back by 9."};
+        CHECK(a.id == "k3f9x2ab");
+        CHECK(a.date == "2026-10-14");
+        CHECK(a.lines == aLines);
+        CHECK(a.important);
+        // Order is the server's (newest first) and is kept.
+        const TeamMessage& b = info.messages[1];
+        const std::vector<std::string> bLines = {"On holiday until the 20th."};
+        CHECK(b.id == "q7w1z0cd");
+        CHECK(b.date == "2026-10-12");
+        CHECK(b.lines == bLines);
+        CHECK(!b.important);
+    }
+
+    // A service older than site 2.77.0 sends no such field, and an empty array is none:
+    // both are an ordinary manifest.
+    CHECK(cascade::core::parseUpdateManifest(manifest(), "0.50.0", info, err));
+    CHECK(info.messages.empty());
+    CHECK(cascade::core::parseUpdateManifest(withMessages("[]"), "0.99.79", info, err));
+    CHECK(info.messages.empty());
+}
+
+void testAMessageIsParsedWhenThereIsNoUpdate() {
+    // THE MOTIVATING BOUNDARY. A copy on the newest version is told "no update", and the
+    // message must come through anyway - that is the whole request. Older than the running
+    // build, the same build, and newer: the messages are the same in all three.
+    const std::string one = "[" + msg("k3f9x2ab", {"Away until the 20th."}) + "]";
+    struct Case {
+        const char* offered;
+        bool newer;
+    };
+    const Case cases[] = {{"0.56.0", false}, {"0.99.79", false}, {"99.0.0", true}};
+    for (const Case& c : cases) {
+        UpdateInfo info;
+        std::string err;
+        CHECK(cascade::core::parseUpdateManifest(withMessages(one, c.offered), "0.99.79", info,
+                                                 err));
+        if (info.newer != c.newer) {
+            std::printf("FAIL offered %s against 0.99.79: newer=%d\n", c.offered,
+                        info.newer ? 1 : 0);
+        }
+        CHECK(info.newer == c.newer);
+        CHECK(info.messages.size() == 1u);
+        // An "important" message is not a "critical" update: the two are separate, and a
+        // message must not make an up-to-date copy read as one that needs replacing.
+        CHECK(!info.critical);
+    }
+
+    // ...and an important one on a copy with nothing to update does not make it critical.
+    UpdateInfo info;
+    std::string err;
+    CHECK(cascade::core::parseUpdateManifest(
+        withMessages("[" + msg("imp1", {"Do not update yet."}, true) + "]", "0.99.79"),
+        "0.99.79", info, err));
+    CHECK(info.messages.size() == 1u && info.messages[0].important);
+    CHECK(!info.newer);
+    CHECK(!info.critical);
+}
+
+void testMalformedMessagesAreDroppedAndTheirNeighboursKept() {
+    // Each of these is dropped ALONE - the manifest and the good messages around them
+    // survive, the policy malformed notes already follow.
+    const std::string longId(41, 'a');
+    const std::string m = withMessages(
+        "[" + msg("ok1", {"first"}) +                                  //
+        ",{\"date\":\"2026-10-14\",\"lines\":[\"no id\"]}" +           // no id
+        ",{\"id\":\"emptylines\",\"lines\":[]}" +                      // empty lines
+        ",{\"id\":\"nolines\"}" +                                      // no lines at all
+        ",{\"id\":\"blank\",\"lines\":[\"\",\"\"]}" +                  // only blank lines
+        ",{\"id\":\"nonstr\",\"lines\":[1,null,{},[]]}" +              // no string among them
+        ",{\"id\":\"a/b\",\"lines\":[\"slash\"]}" +                    // id with a slash
+        ",{\"id\":\"a.b\",\"lines\":[\"dot\"]}" +                      // id with a dot
+        ",{\"id\":\"..\",\"lines\":[\"dots\"]}" +                      // the parent directory
+        ",{\"id\":\"a b\",\"lines\":[\"space\"]}" +                    // id with a space
+        ",{\"id\":\"\",\"lines\":[\"empty id\"]}" +                    // empty id
+        ",{\"id\":\"" + longId + "\",\"lines\":[\"long id\"]}" +       // 41 characters
+        ",\"not an object\",7,null,[]," +                              // not objects
+        "{\"id\":\"mixed\",\"lines\":[\"one\",5,null,\"\",\"two\"]}," + // strings kept
+        msg("ok2", {"second"}) + "]");
+    UpdateInfo info;
+    std::string err;
+    bool threw = false;
+    bool ok = false;
+    try {
+        ok = cascade::core::parseUpdateManifest(m, "0.99.79", info, err);
+    } catch (...) {
+        threw = true;
+    }
+    CHECK(!threw);
+    CHECK(ok);
+    const std::vector<std::string> wantIds = {"ok1", "mixed", "ok2"};
+    if (idsOf(info) != wantIds) {
+        std::printf("FAIL kept %zu messages, ids:", info.messages.size());
+        for (const std::string& id : idsOf(info)) { std::printf(" %s", id.c_str()); }
+        std::printf("\n");
+    }
+    CHECK(idsOf(info) == wantIds);
+    if (info.messages.size() == 3u) {
+        // Only the strings of a mixed list, and not the blank one.
+        const std::vector<std::string> mixed = {"one", "two"};
+        CHECK(info.messages[1].lines == mixed);
+    }
+}
+
+void testTeamMessageBounds() {
+    using cascade::core::kMaxTeamMessageDateBytes;
+    using cascade::core::kMaxTeamMessageLineBytes;
+    using cascade::core::kMaxTeamMessageLines;
+    using cascade::core::kMaxTeamMessages;
+    CHECK(kMaxTeamMessages == 10u);
+    CHECK(kMaxTeamMessageLines == 20u);
+    CHECK(kMaxTeamMessageLineBytes == 1000u);
+    CHECK(kMaxTeamMessageDateBytes == 32u);
+
+    UpdateInfo info;
+    std::string err;
+
+    // ELEVEN messages keep TEN, the first ten.
+    {
+        std::string arr = "[";
+        for (int i = 0; i < 11; ++i) {
+            if (i != 0) { arr += ","; }
+            arr += msg("m" + std::to_string(i), {"line"});
+        }
+        arr += "]";
+        CHECK(cascade::core::parseUpdateManifest(withMessages(arr), "0.99.79", info, err));
+        CHECK(info.messages.size() == kMaxTeamMessages);
+        if (info.messages.size() == kMaxTeamMessages) {
+            CHECK(info.messages.front().id == "m0");
+            CHECK(info.messages.back().id == "m9");
+        }
+    }
+    // The ten are the first ten USABLE ones: a malformed entry does not use up a place.
+    {
+        std::string arr = "[{\"id\":\"bad/1\",\"lines\":[\"x\"]},{\"id\":\"bad2\",\"lines\":[]}";
+        for (int i = 0; i < 10; ++i) { arr += "," + msg("g" + std::to_string(i), {"line"}); }
+        arr += "]";
+        CHECK(cascade::core::parseUpdateManifest(withMessages(arr), "0.99.79", info, err));
+        CHECK(info.messages.size() == kMaxTeamMessages);
+        if (info.messages.size() == kMaxTeamMessages) { CHECK(info.messages.back().id == "g9"); }
+    }
+
+    // TWENTY-FIVE lines keep TWENTY, the first twenty.
+    {
+        std::vector<std::string> lines;
+        for (int i = 0; i < 25; ++i) { lines.push_back("line " + std::to_string(i)); }
+        CHECK(cascade::core::parseUpdateManifest(
+            withMessages("[" + msg("many", lines) + "]"), "0.99.79", info, err));
+        CHECK(info.messages.size() == 1u);
+        if (info.messages.size() == 1u) {
+            CHECK(info.messages[0].lines.size() == kMaxTeamMessageLines);
+            if (info.messages[0].lines.size() == kMaxTeamMessageLines) {
+                CHECK(info.messages[0].lines.front() == "line 0");
+                CHECK(info.messages[0].lines.back() == "line 19");
+            }
+        }
+    }
+
+    // A LINE IS CLIPPED TO 1000 BYTES, on a UTF-8 boundary.
+    {
+        const std::string exact(1000, 'x');
+        const std::string over(3000, 'y');
+        // 998 ASCII bytes + a two-byte letter: exactly 1000, nothing to clip.
+        const std::string twoByteFits = std::string(998, 'a') + "\xC3\xA9";
+        // 999 ASCII bytes + a three-byte euro sign: 1002 bytes, and byte 1000 is in the
+        // middle of the euro, so the whole character goes and 999 bytes remain.
+        const std::string euroStraddles = std::string(999, 'b') + "\xE2\x82\xAC";
+        // A line of two-byte letters, 1200 bytes: clipped to 1000 (500 letters) and not 999.
+        std::string accents;
+        for (int i = 0; i < 600; ++i) { accents += "\xC3\xA9"; }
+        CHECK(cascade::core::parseUpdateManifest(
+            withMessages("[" + msg("clip", {exact, over, twoByteFits, euroStraddles, accents}) +
+                         "]"),
+            "0.99.79", info, err));
+        CHECK(info.messages.size() == 1u);
+        if (info.messages.size() == 1u && info.messages[0].lines.size() == 5u) {
+            const std::vector<std::string>& l = info.messages[0].lines;
+            CHECK(l[0] == exact);
+            CHECK(l[1].size() == kMaxTeamMessageLineBytes);
+            CHECK(l[1] == std::string(1000, 'y'));
+            CHECK(l[2] == twoByteFits);
+            CHECK(l[3] == std::string(999, 'b'));
+            CHECK(l[4].size() == 1000u);
+            // No lead byte without its continuation: the clip never leaves half a letter.
+            CHECK(l[4].size() % 2 == 0 && l[4].compare(l[4].size() - 2, 2, "\xC3\xA9") == 0);
+        } else {
+            std::printf("FAIL the clipped message did not come back with five lines\n");
+            CHECK(false);
+        }
+    }
+
+    // THE DATE is informational and clipped to 32 bytes.
+    {
+        const std::string longDate(60, '2');
+        CHECK(cascade::core::parseUpdateManifest(
+            withMessages("[" + msg("dated", {"line"}, false, longDate) + "]"), "0.99.79", info,
+            err));
+        CHECK(info.messages.size() == 1u);
+        if (info.messages.size() == 1u) {
+            CHECK(info.messages[0].date == std::string(kMaxTeamMessageDateBytes, '2'));
+        }
+    }
+}
+
+void testWrongTypedMessageFieldsAreNotAnError() {
+    // The manifest is parsed on the check's worker thread and collected with future::get(),
+    // which rethrows: nothing in "messages" may throw, whatever type it is.
+    const char* const shapes[] = {
+        "5", "\"text\"", "null", "true", "{\"id\":\"a\",\"lines\":[\"b\"]}",
+        "[{\"id\":5,\"lines\":[\"x\"]}]",
+        "[{\"id\":null,\"lines\":[\"x\"]}]",
+        "[{\"id\":[\"a\"],\"lines\":[\"x\"]}]",
+        "[{\"id\":\"a\",\"lines\":\"x\"}]",
+        "[{\"id\":\"a\",\"lines\":{\"0\":\"x\"}}]",
+        "[{\"id\":\"a\",\"lines\":null}]",
+    };
+    for (const char* s : shapes) {
+        UpdateInfo info;
+        std::string err;
+        bool threw = false;
+        bool ok = false;
+        try {
+            ok = cascade::core::parseUpdateManifest(withMessages(s), "0.99.79", info, err);
+        } catch (...) {
+            threw = true;
+        }
+        if (threw) { std::printf("FAIL parseUpdateManifest threw on messages: %s\n", s); }
+        CHECK(!threw);
+        // The manifest's download fields are good, so the manifest stands...
+        CHECK(ok);
+        // ...and none of those is a message.
+        if (!info.messages.empty()) { std::printf("FAIL kept a message out of: %s\n", s); }
+        CHECK(info.messages.empty());
+    }
+
+    // A wrong-typed OPTIONAL field costs only itself: the message is kept without it.
+    UpdateInfo info;
+    std::string err;
+    bool threw = false;
+    bool ok = false;
+    try {
+        ok = cascade::core::parseUpdateManifest(
+            withMessages("[{\"id\":\"a\",\"date\":5,\"important\":\"yes\",\"lines\":[\"kept\"]},"
+                         "{\"id\":\"b\",\"date\":null,\"important\":null,\"lines\":[\"kept\"]}]"),
+            "0.99.79", info, err);
+    } catch (...) {
+        threw = true;
+    }
+    CHECK(!threw);
+    CHECK(ok);
+    CHECK(info.messages.size() == 2u);
+    for (const TeamMessage& t : info.messages) {
+        CHECK(t.date.empty());
+        CHECK(!t.important);
+    }
+}
+
+void testMessageIdGrammar() {
+    using cascade::core::wellFormedMessageId;
+    CHECK(wellFormedMessageId("k3f9x2ab"));  // what the server's randomID(8) makes
+    CHECK(wellFormedMessageId("a"));
+    CHECK(wellFormedMessageId("A-Z_0-9"));
+    CHECK(wellFormedMessageId(std::string(40, 'a')));  // exactly at the bound
+
+    const std::string hostile[] = {
+        "",                       // nothing at all
+        "..",                     // the parent directory
+        ".",                      //
+        "a/b",                    // a separator
+        "a\\b",                   //
+        "a.b",                    // a dot
+        "a b",                    // a space
+        "a\"b",                   // a quote, which would break the JSON it is written into
+        "a\nb",                   // a control character
+        "caf\xC3\xA9",            // a letter outside ASCII
+        std::string(41, 'a'),     // one over the bound
+        std::string("a\0b", 3),   // an embedded NUL
+    };
+    for (const std::string& id : hostile) {
+        if (wellFormedMessageId(id)) {
+            std::printf("FAIL wellFormedMessageId accepted \"%s\" (%zu bytes)\n", id.c_str(),
+                        id.size());
+        }
+        CHECK(!wellFormedMessageId(id));
+    }
+}
+
+void setEnvVar(const char* name, const std::string& value) {
+#ifdef _WIN32
+    ::SetEnvironmentVariableA(name, value.empty() ? nullptr : value.c_str());
+    _putenv_s(name, value.c_str());
+#else
+    if (value.empty()) {
+        ::unsetenv(name);
+    } else {
+        ::setenv(name, value.c_str(), 1);
+    }
+#endif
+}
+
+void testTheCannedManifestSeam() {
+    // FOXSDR_FAKE_UPDATE_MANIFEST makes checkForUpdate read a file instead of the network
+    // (the application's --frames runs cannot reach foxsdr.com: fetchText refuses anything
+    // that is not https). The endpoint below is a `.invalid` name that can never resolve, and
+    // the empty one is refused before any request: an answer that comes back is, by
+    // construction, the file's.
+    const fs::path dir = fs::temp_directory_path() / ("cascade-updater-fake-" +
+                                                      std::to_string(TEST_GETPID()));
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const fs::path file = dir / "manifest.json";
+    {
+        std::ofstream f(file, std::ios::binary | std::ios::trunc);
+        f << withMessages("[" + msg("k3f9x2ab", {"Canned."}, true) + "]", "0.56.0");
+    }
+
+    // Unset or empty: off.
+    setEnvVar("FOXSDR_FAKE_UPDATE_MANIFEST", "");
+    CHECK(!cascade::core::updateManifestFakeSet());
+    UpdateInfo info;
+    std::string err;
+    // Off, an empty endpoint is the ordinary refusal - nothing was read from anywhere.
+    CHECK(!cascade::core::checkForUpdate("", "0.99.79", "", info, err));
+    CHECK(err == "no update endpoint configured");
+
+    // Set: on, and the file's manifest is the answer.
+    setEnvVar("FOXSDR_FAKE_UPDATE_MANIFEST", file.string());
+    CHECK(cascade::core::updateManifestFakeSet());
+    CHECK(cascade::core::checkForUpdate("https://foxsdr.invalid/api/update", "0.99.79", "", info,
+                                        err));
+    CHECK(err.empty());
+    CHECK(!info.newer);  // 0.56.0 against 0.99.79
+    CHECK(info.messages.size() == 1u);
+    if (info.messages.size() == 1u) {
+        CHECK(info.messages[0].id == "k3f9x2ab");
+        CHECK(info.messages[0].important);
+    }
+    // No URL is built at all, so not even an empty endpoint matters.
+    info = UpdateInfo{};
+    CHECK(cascade::core::checkForUpdate("", "0.99.79", "", info, err));
+    CHECK(info.messages.size() == 1u);
+
+    // A file that is not there is an ordinary FAILED check, with its own words.
+    setEnvVar("FOXSDR_FAKE_UPDATE_MANIFEST", (dir / "absent.json").string());
+    CHECK(cascade::core::updateManifestFakeSet());
+    CHECK(!cascade::core::checkForUpdate("https://foxsdr.invalid/api/update", "0.99.79", "",
+                                         info, err));
+    CHECK(err == "the canned update manifest could not be read");
+    CHECK(info.messages.empty());
+
+    // A file that is not a manifest fails the way the real answer would.
+    const fs::path junk = dir / "junk.json";
+    {
+        std::ofstream f(junk, std::ios::binary | std::ios::trunc);
+        f << "this is not json";
+    }
+    setEnvVar("FOXSDR_FAKE_UPDATE_MANIFEST", junk.string());
+    CHECK(!cascade::core::checkForUpdate("https://foxsdr.invalid/api/update", "0.99.79", "",
+                                         info, err));
+    CHECK(err.find("not JSON") != std::string::npos);
+
+    setEnvVar("FOXSDR_FAKE_UPDATE_MANIFEST", "");
+    CHECK(!cascade::core::updateManifestFakeSet());
+    fs::remove_all(dir, ec);
+}
+
 void testEndpointIsHttpsAndOnTheProjectsDomain() {
     const std::string url = cascade::core::updateEndpoint();
     CHECK(url.rfind("https://", 0) == 0);
@@ -500,11 +998,19 @@ int main() {
     testLegitimateVersionsStillGetThrough();
     testDownloadRefusesAHostileVersion();
     testRubbishDoesNotCrashIt();
+    testWrongTypedFieldsAreRefusedNotThrown();
     testNotesSurviveAndMalformedOnesAreDropped();
     testDownloadRefusesWithoutAnUpdate();
     testDownloadHonoursACancelFlag();
     testACheckThatFinishesIsHandedOver();
     testAStalledCheckDoesNotHoldTeardown();
+    testTeamMessagesAreParsed();
+    testAMessageIsParsedWhenThereIsNoUpdate();
+    testMalformedMessagesAreDroppedAndTheirNeighboursKept();
+    testTeamMessageBounds();
+    testWrongTypedMessageFieldsAreNotAnError();
+    testMessageIdGrammar();
+    testTheCannedManifestSeam();
     testEndpointIsHttpsAndOnTheProjectsDomain();
     return testSummary("test_updater");
 }

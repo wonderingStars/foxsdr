@@ -128,6 +128,8 @@ CatServer::~CatServer() { stop(); }
 
 void CatServer::setStatusProvider(StatusProvider fn) { status_ = std::move(fn); }
 
+void CatServer::setUsageCallback(std::function<void()> fn) { usageCallback_ = std::move(fn); }
+
 bool CatServer::start(std::uint16_t port, bool bindAll, std::string& error) {
     error.clear();
     if (running_.load(std::memory_order_relaxed)) {
@@ -333,6 +335,9 @@ void CatServer::acceptLoop() {
             std::lock_guard<std::mutex> lk(clientsMu_);
             clientSocks_.push_back(c);
         }
+        // TESTER USAGE: "CAT control" was used - a client actually connected,
+        // not merely that the server was switched on.
+        if (usageCallback_) { usageCallback_(); }
         // Detached: a client thread owns its socket and nothing joins it.
         // stop() reaches these threads through clientSocks_ instead, and the
         // decrement below is deliberately the LAST thing this thread does with

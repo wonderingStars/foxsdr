@@ -29,6 +29,9 @@
 #include "source/soapy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
+#include "core/leak_on_purpose.hpp"
+#include "core/telemetry.hpp"
 #include "source/soapy_enum_proc.hpp"
 
 #include <SoapySDR/Device.hpp>
@@ -266,7 +269,13 @@ SoapySDR::KwargsList findStall(const SoapySDR::Kwargs& args) {
     return SoapySDR::KwargsList{k};
 }
 
-SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) { return new StallingDevice(); }
+// A stalling device is abandoned by design (SoapySource's dead-device policy leaks
+// the handle of a radio whose driver will not answer), and these tests let its
+// parked call go afterwards, so nothing would reach it any more: marked, or
+// LeakSanitizer reports it (core/leak_on_purpose.hpp).
+SoapySDR::Device* makeStall(const SoapySDR::Kwargs&) {
+    return cascade::core::leakOnPurpose(new StallingDevice());
+}
 
 // A device that answers reads from a script: a positive count delivers that
 // many zero samples, anything else is returned to the caller as the driver's
@@ -351,6 +360,17 @@ bool g_wedgeReleased = false;               // guarded by g_wedgeMutex
 
 std::atomic<bool> g_wedgeDeactivate{false};  // set before open(), not during
 std::atomic<bool> g_wedgeCloseStream{false};
+// THE LATE ANSWERS (0.99.59). SoapySDRPlay3's setFrequency on a live stream
+// calls sdrplay_api_Update and then waits up to 500 x sleep_for(1 ms) for the
+// service's callback; its activateStream is sdrplay_api_Init. With the SDRplay
+// API service restarted under a live stream, both took seconds on the GUI
+// thread and then RETURNED (hang reports 6F550354218029F0, 9B804643C56308CF,
+// 0.99.56) - Init with sdrplay_api_AlreadyInitialised, which SoapySDRPlay
+// answers as SOAPY_SDR_NOT_SUPPORTED. These wedge the same way as the two
+// above, and the activation answers g_activateRet once let go.
+std::atomic<bool> g_wedgeSetFrequency{false};
+std::atomic<bool> g_wedgeActivate{false};
+std::atomic<int> g_activateRet{0};
 std::atomic<bool> g_inWedgedCall{false};     // the driver really was entered
 std::atomic<int> g_wedgedCallsReturned{0};
 std::atomic<int> g_closeStreamCalls{0};
@@ -373,6 +393,9 @@ void resetWedge() {
     }
     g_wedgeDeactivate.store(false, std::memory_order_relaxed);
     g_wedgeCloseStream.store(false, std::memory_order_relaxed);
+    g_wedgeSetFrequency.store(false, std::memory_order_relaxed);
+    g_wedgeActivate.store(false, std::memory_order_relaxed);
+    g_activateRet.store(0, std::memory_order_relaxed);
     g_inWedgedCall.store(false, std::memory_order_relaxed);
     g_wedgedCallsReturned.store(0, std::memory_order_relaxed);
     g_closeStreamCalls.store(0, std::memory_order_relaxed);
@@ -420,6 +443,13 @@ public:
     }
     int activateStream(SoapySDR::Stream*, const int, const long long,
                        const size_t) override {
+        if (g_wedgeActivate.load(std::memory_order_relaxed)) {
+            // Read BEFORE the wedge's return is counted: once the count the
+            // test polls has moved, nothing of this file may be touched.
+            const int ret = g_activateRet.load(std::memory_order_relaxed);
+            wedgeUntilReleased();
+            return ret;
+        }
         return 0;
     }
     int deactivateStream(SoapySDR::Stream*, const int, const long long) override {
@@ -429,7 +459,10 @@ public:
     double getSampleRate(const int, const size_t) const override { return 2.4e6; }
     void setFrequency(const int, const size_t, const double f,
                       const SoapySDR::Kwargs&) override {
+        // The frequency is programmed first, as SoapySDRPlay3 writes rfHz
+        // before it asks the service and waits.
         freq_ = f;
+        if (g_wedgeSetFrequency.load(std::memory_order_relaxed)) { wedgeUntilReleased(); }
     }
     double getFrequency(const int, const size_t) const override { return freq_; }
     int readStream(SoapySDR::Stream*, void* const* buffs, const size_t numElems,
@@ -453,7 +486,32 @@ SoapySDR::KwargsList findWedge(const SoapySDR::Kwargs& args) {
     return SoapySDR::KwargsList{k};
 }
 
-SoapySDR::Device* makeWedge(const SoapySDR::Kwargs&) { return new WedgingDevice(); }
+// Abandoned by design, like the stalling device above (core/leak_on_purpose.hpp).
+SoapySDR::Device* makeWedge(const SoapySDR::Kwargs&) {
+    return cascade::core::leakOnPurpose(new WedgingDevice());
+}
+
+// ---------------------------------------------------------------------------
+// A DRIVER THAT LISTS WHATEVER IT IS NAMED IN, which is SoapyRedPitaya's find
+// function reduced to its one rule (pothosware/SoapyRedPitaya, findSoapyRedPitaya):
+// asked with driver=<its own name> it hands the caller's kwargs straight back
+// ("TODO perform a test connection to validate device presence"); asked with
+// empty kwargs - the whole-bus walk - it finds nothing. Hang report
+// 40002A91C26F3C07 (0.99.58) is a user picking the row that rule made, during
+// a scan beside an open LimeSDR, and freezing the interface in its connect.
+// ---------------------------------------------------------------------------
+std::atomic<int> g_echoFinds{0};  // the find function really was asked
+
+SoapySDR::KwargsList findEcho(const SoapySDR::Kwargs& args) {
+    g_echoFinds.fetch_add(1, std::memory_order_relaxed);
+    const auto driver = args.find("driver");
+    if (driver != args.end() && driver->second == "fakeecho") {
+        return SoapySDR::KwargsList{args};
+    }
+    return {};
+}
+
+SoapySDR::Device* makeEcho(const SoapySDR::Kwargs&) { return new WedgingDevice(); }
 
 // True once the abandoned driver call has come back out of the vendor module,
 // or false if it never does. Bounded so a broken release cannot hang the suite.
@@ -673,6 +731,23 @@ SoapySDR::KwargsList findRateOrder(const SoapySDR::Kwargs& args) {
 
 SoapySDR::Device* makeRateOrder(const SoapySDR::Kwargs&) { return new RateOrderDevice(); }
 
+// A STAND-IN FOR SOAPYAUDIO'S "audio" DRIVER that counts every time it is asked
+// - to find or to make anything. The real one lists sound cards through
+// RtAudio, whose ASIO back end loads every ASIO driver on the machine; on the
+// 2026-10-01 field machine one of them faulted (crash reports
+// 4138700E14D784C6, 3C2F1A0F27A8FD35).
+std::atomic<int> g_audioAsked{0};
+
+SoapySDR::KwargsList findAudioTrap(const SoapySDR::Kwargs&) {
+    ++g_audioAsked;
+    return {};
+}
+
+SoapySDR::Device* makeAudioTrap(const SoapySDR::Kwargs&) {
+    ++g_audioAsked;
+    return nullptr;
+}
+
 // True when the NEWEST line in the diagnostics ring carries `text`. The ring
 // is what a crash report is flushed from, so "newest" is exactly the line the
 // next report of this shape would show last before the fault.
@@ -685,6 +760,30 @@ bool lastDiagLine(const char* text) {
     const bool hit = ring.back().find(text) != std::string::npos;
     if (!hit) { std::printf("  newest diag line: \"%s\"\n", ring.back().c_str()); }
     return hit;
+}
+
+// True when ANY line in the diagnostics ring carries `text` - for a line that
+// is written on another thread (a late answer reaped by a read) and may be
+// followed by others before the test looks.
+bool diagRingHas(const char* text) {
+    for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+        if (line.find(text) != std::string::npos) { return true; }
+    }
+    return false;
+}
+
+// Reads until `done` holds or `ms` has passed, as the pipeline's source loop
+// would - a late answer is reaped by the read loop when nothing else asks.
+template <class Pred>
+bool readUntil(SoapySource& src, Pred done, long long ms) {
+    std::vector<std::complex<float>> buf(256);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > deadline) { return false; }
+        (void)src.read(buf.data(), buf.size());
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
 }
 
 // The recorded sequence as one line, for the failure printout.
@@ -852,6 +951,37 @@ int main() {
         // clean (covered again in bulk below).
     }
 
+    // --- a SoapySDR sound card is never opened (2026-10-04) ------------------
+    //
+    // The device scan never asks SoapySDR's "audio" driver
+    // (source/soapy_enum_proc.cpp, neverAsked), and the application drops every
+    // driver=audio row from the Source list and refuses a saved one on open
+    // (gui/app_window.cpp, isAudioDriver) - but a PATCH radio names its device
+    // by args from a saved patch and opens it here directly. Device::make runs
+    // the named driver's find function, so a patch from a build that listed
+    // sound cards would have asked the ASIO-walking driver in the application's
+    // own process. open() refuses it, in words that say what to use instead,
+    // before the driver is asked anything. Sound cards are the "Sound card"
+    // source.
+    {
+        g_audioAsked = 0;
+        SoapySDR::Registry reg("audio", &findAudioTrap, &makeAudioTrap, SOAPY_SDR_ABI_VERSION);
+        SoapySource src;
+        const bool opened = src.open("driver=audio,device_id=0");
+        std::printf("audio open: %s, asked=%d, lastError=\"%s\"\n", opened ? "true" : "false",
+                    g_audioAsked.load(), src.lastError());
+        CHECK(!opened);
+        CHECK(g_audioAsked.load() == 0);  // the driver was not asked to find or make
+        CHECK(std::strstr(src.lastError(), "sound card") != nullptr);
+        CHECK(!src.isOpen());
+        // The same refusal however the key is spelled and spaced.
+        CHECK(!src.open(" Driver = Audio , device_id=1"));
+        CHECK(g_audioAsked.load() == 0);
+        // A driver that merely begins with the name is not the sound card's.
+        CHECK(!src.open("driver=audiofoo"));
+        CHECK(std::strstr(src.lastError(), "sound card") == nullptr);
+    }
+
     // --- 100x construct/destruct: nothing observable leaks or crashes -------
     {
         // No open() in this loop, so no device/module state accumulates; a
@@ -875,6 +1005,52 @@ int main() {
         // enumerate() still works after the churn (no global state broken).
         const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerate();
         std::printf("soapy devices after churn: %zu\n", devices.size());
+    }
+
+    // --- one driver asked alone lists what the whole bus would list ---------
+    //
+    // The per-driver child (--driver=<name>: the scan beside an open radio,
+    // and the sweep after a whole-bus death) used to ask
+    // Device::enumerate("driver=<name>"), and SoapySDR hands that kwarg to the
+    // find function itself. A module that reads it as "the user named me"
+    // then lists a device it never probed - the phantom "redpitaya" row of
+    // hang report 40002A91C26F3C07. Red-green: restoring the driver-keyed ask
+    // in enumerateInProcess(driver) makes the fakeecho row reappear here.
+    // Above the first abandonment on purpose: see the note on the open-device
+    // count block below.
+    {
+        std::printf("--- one driver asked alone: no phantom rows ---\n");
+        SoapySDR::Registry echo("fakeecho", &findEcho, &makeEcho, SOAPY_SDR_ABI_VERSION);
+        SoapySDR::Registry wedge("fakewedge", &findWedge, &makeWedge, SOAPY_SDR_ABI_VERSION);
+        CHECK(!SoapySource::anyDeviceOpen());  // or the walk is refused and proves nothing
+
+        g_echoFinds.store(0, std::memory_order_relaxed);
+        const std::vector<SoapyDeviceInfo> alone = SoapySource::enumerateInProcess("fakeecho");
+        std::printf("  fakeecho asked alone: %zu row(s)%s%s\n", alone.size(),
+                    alone.empty() ? "" : ", first args=", alone.empty() ? "" : alone.front().args.c_str());
+        // It really was asked - an empty list from a walk that never reached
+        // the module would pass the next check for the wrong reason.
+        CHECK(g_echoFinds.load(std::memory_order_relaxed) == 1);
+        CHECK(alone.empty());
+
+        // The whole-bus walk agrees: nothing from fakeecho there either.
+        bool echoOnBus = false;
+        for (const SoapyDeviceInfo& d : SoapySource::enumerateInProcess()) {
+            if (d.args.find("fakeecho") != std::string::npos) { echoOnBus = true; }
+        }
+        CHECK(!echoOnBus);
+
+        // HAPPY PATH: a driver that finds a device with empty kwargs still
+        // lists it when asked alone, under its own driver key - the sweep
+        // after a whole-bus death must still find the radios.
+        const std::vector<SoapyDeviceInfo> real = SoapySource::enumerateInProcess("fakewedge");
+        std::vector<std::string> realArgs;
+        for (const SoapyDeviceInfo& d : real) { realArgs.push_back(d.args + " | " + d.label); }
+        CHECK(realArgs == (std::vector<std::string>{
+                              "driver=fakewedge, label=fake wedging source | fake wedging source"}));
+
+        // A name no module registered lists nothing and does not throw.
+        CHECK(SoapySource::enumerateInProcess("no-such-driver").empty());
     }
 
     // --- a device that delivers non-finite samples ---------------------------
@@ -1336,6 +1512,16 @@ int main() {
         resetWedge();
         g_wedgeDeactivate.store(true, std::memory_order_relaxed);
         const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+        // THE USAGE RECORD (0.99.65): the window's poll reads this very counter and counts a rise as
+        // `recovered.vendorcall` (core/health_events.hpp, RecoveryWatch). The real trigger: this wedged
+        // deactivateStream, abandoned by the real escape path.
+        auto healthLedger = cascade::core::health::globalLedger();
+        healthLedger->reset();
+        healthLedger->arm("", cascade::core::newInstallId(), false);
+        cascade::core::health::RecoveryWatch healthWatch;
+        cascade::core::health::RecoveryReadings healthReadings;
+        healthReadings.vendorCallsAbandoned = abandonedBefore;
+        healthWatch.poll(healthReadings);                     // the baseline
 
         // On the heap, so the source can be DESTROYED while the driver call is
         // still parked inside the fake - the case that turns this fix into a
@@ -1348,6 +1534,11 @@ int main() {
         src->stop();
         const long long stopMs = msSince(t0);
         std::printf("  stop() returned after %lld ms (driver still inside)\n", stopMs);
+        healthReadings.vendorCallsAbandoned = SoapySource::driverCallsAbandoned();
+        healthWatch.poll(healthReadings);
+        CHECK(healthLedger->counts() ==
+              (cascade::core::health::Counts{{"recovered.vendorcall", 1}}));
+        healthLedger->reset();
         // The wedge holds for 20 s. Anything near that is stop() waiting it
         // out, which is the freeze itself.
         CHECK(stopMs < 3000);
@@ -1510,6 +1701,367 @@ int main() {
         releaseWedge();
         CHECK(waitForWedgedReturn(1));
         std::printf("  the abandoned teardown call returned\n");
+    }
+
+    // --- a wedged activateStream must not freeze the interface -------------
+    //
+    // HANG REPORT 40002A91C26F3C07 (0.99.58), symbolised: AppWindow::run ->
+    // drawUi -> pollSourceAsync -> finishDeviceOpen -> Pipeline::setSource ->
+    // SoapySource::start -> activateLocked -> RedPitaya.dll -> WS2_32, on the
+    // GUI thread. SoapyRedPitaya's activateStream connects to its default
+    // 192.168.1.100:1001 and select()s five seconds per socket; start() made
+    // that call inline and the window froze. The escape paths were already
+    // abandonable; the call that brings a stream UP was not. Red-green:
+    // making start() call the driver inline again leaves it inside the 20 s
+    // wedge, and the elapsed-time check below fails.
+    {
+        std::printf("--- wedged activateStream: start() must abandon it ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeActivate.store(true, std::memory_order_relaxed);
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+
+        // On the heap, destroyed while the call is still parked in the driver,
+        // as in the deactivate block: the abandoned activate must own what it
+        // touches rather than reach back into the source.
+        auto src = std::make_unique<SoapySource>();
+        // Args of its own: SoapySDR::Device::make caches devices by kwargs, and
+        // the blocks above left theirs deliberately un-made.
+        CHECK(src->open("driver=fakewedge, serial=activate"));
+        // The late call's grace, short enough to wait out here (see below).
+        src->setLateCallGraceForTest(std::chrono::milliseconds(2500));
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool started = src->start();
+        const long long startMs = msSince(t0);
+        std::printf("  start() returned %s after %lld ms (driver still inside)\n",
+                    started ? "true" : "false", startMs);
+        // Inside the hang watchdog's 5000 ms frame threshold, which is what
+        // the field report tripped; the wedge itself holds for 20 s.
+        CHECK(startMs < 4500);
+        CHECK(g_inWedgedCall.load(std::memory_order_acquire));
+        CHECK(g_wedgedCallsReturned.load(std::memory_order_acquire) == 0);
+
+        // MERGED WITH THE SDRPLAY LATE-CALL FIX (hang report 9B804643C56308CF,
+        // where sdrplay_api_Init answered five seconds late and the answer was
+        // needed): an activate not back within kVendorCallWait is PENDING,
+        // not condemned. So start() answers true with nothing abandoned yet
+        // (this block's first version expected false and an abandonment at
+        // 3 s; that rule could not tell a slow SDRplay from a dead Red Pitaya).
+        CHECK(started);
+        CHECK(!src->deviceDead());
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        // The lock is not left held behind the parked call...
+        const auto t1 = std::chrono::steady_clock::now();
+        (void)src->listGainNames();
+        CHECK(msSince(t1) < 500);
+        // ...and no read reaches readStream beside it.
+        std::complex<float> buf[64];
+        CHECK(src->read(buf, 64) == 0u);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == 0);
+
+        // A RED PITAYA THAT NEVER ANSWERS is given up by the read loop once the
+        // late call's grace has run (kLateCallGrace, 20 s; shortened above so
+        // the test can wait it out), exactly as an escape path gives up a
+        // wedged call.
+        const auto t2 = std::chrono::steady_clock::now();
+        CHECK(readUntil(*src, [&] { return src->deviceDead(); }, 6000));
+        std::printf("  given up %lld ms after start() returned\n", msSince(t2));
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        CHECK(g_wedgedCallsReturned.load(std::memory_order_acquire) == 0);
+
+        // Refused, condemned, and said in the escape paths' own words.
+        CHECK(!src->running());
+        CHECK(src->faulted());
+        CHECK(src->deviceDead());
+        CHECK(src->deadReason() == SoapySource::DeadReason::Abandoned);
+        std::printf("  lastError=\"%s\"\n", src->lastError());
+        CHECK(std::strstr(src->lastError(), "abandoned") != nullptr);
+
+        // The lock is still not held behind the parked call...
+        const auto t3 = std::chrono::steady_clock::now();
+        (void)src->listGainNames();
+        CHECK(msSince(t3) < 500);
+        // ...and nothing calls into the driver again: a second start refuses
+        // without entering it, and no read reaches readStream.
+        CHECK(!src->start());
+        CHECK(src->read(buf, 64) == 0u);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == 0);
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+
+        src.reset();
+        CHECK(g_wedgedCallsReturned.load(std::memory_order_acquire) == 0);
+        CHECK(g_deviceDestroyed.load(std::memory_order_acquire) == 0);
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        std::printf("  the abandoned activate returned after the source was destroyed\n");
+    }
+
+    // --- a retune the driver answers LATE: no freeze, and the answer kept ---
+    //
+    // HANG REPORT 6F550354218029F0 (0.99.56, SDRplay RSP1A through
+    // SoapySDRPlay in the patch page). The SDRplay API service was restarted
+    // under the live stream; the next retune went into SoapySDRPlay3's
+    // setFrequency on the GUI thread - sdrplay_api_Update, then up to 500
+    // sleeps waiting for a callback that no longer came - and the window froze
+    // until it gave up ("RF center frequency update timeout.", then "gui thread
+    // recovered after a stall"). The call DID return. So the bound must not
+    // condemn the radio the way an escape path does: the caller stops waiting,
+    // the answer is listened for, and when it comes the radio is usable again.
+    {
+        std::printf("--- a late retune: bounded, not condemned, answer recovered ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+
+        const int openBefore = SoapySource::openDeviceCount();
+        SoapySource src;
+        CHECK(src.open("driver=fakewedge, serial=lateretune"));
+        CHECK(src.start());
+        g_wedgeSetFrequency.store(true, std::memory_order_relaxed);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool tuned = src.setCenterFrequencyHz(101.5e6);
+        const long long tuneMs = msSince(t0);
+        std::printf("  setCenterFrequencyHz() returned %s after %lld ms (driver still inside)\n",
+                    tuned ? "true" : "false", tuneMs);
+        // The wedge holds for 20 s; the unfixed retune waits all of it on the
+        // calling thread, which is the frozen window.
+        CHECK(tuneMs < 3000);
+        CHECK(g_inWedgedCall.load(std::memory_order_acquire));
+        CHECK(!tuned);
+        // NOT CONDEMNED: a driver that is slow to answer is not a dead radio.
+        CHECK(!src.deviceDead());
+        CHECK(!src.faulted());
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        std::printf("  lastError=\"%s\"\n", src.lastError());
+        CHECK(std::strstr(src.lastError(), "not answered") != nullptr);
+
+        // HELD, WITHOUT WAITING: the call is still inside the driver, so
+        // nothing else may enter it - and asking must not cost the caller
+        // the lock bound either, or every frame pays it.
+        const auto t1 = std::chrono::steady_clock::now();
+        CHECK(!src.setCenterFrequencyHz(102.0e6));
+        const long long heldMs = msSince(t1);
+        std::printf("  a second retune while the first is out took %lld ms\n", heldMs);
+        CHECK(heldMs < 500);
+        const int readsBefore = g_readStreamCalls.load(std::memory_order_acquire);
+        std::vector<std::complex<float>> buf(256);
+        CHECK(src.read(buf.data(), buf.size()) == 0u);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == readsBefore);
+
+        // The service answers. Nothing but the read loop asks, as when the
+        // user touches nothing.
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        CHECK(readUntil(src, [&] { return src.centerFrequencyHz() == 101.5e6; }, 3000));
+        std::printf("  centre after the late answer: %.0f Hz\n", src.centerFrequencyHz());
+        CHECK(src.centerFrequencyHz() == 101.5e6);
+        CHECK(!src.deviceDead());
+        CHECK(!src.faulted());
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        CHECK(diagRingHas("retuning the device answered after"));
+        // ...and the "not answered yet" sentence goes with the wait it described.
+        CHECK(std::strstr(src.lastError(), "not answered") == nullptr);
+
+        // USABLE AGAIN: an ordinary retune, samples, and an ordinary close
+        // that gives the radio back.
+        g_wedgeSetFrequency.store(false, std::memory_order_relaxed);
+        CHECK(src.setCenterFrequencyHz(102.0e6));
+        CHECK(src.centerFrequencyHz() == 102.0e6);
+        CHECK(src.read(buf.data(), buf.size()) == buf.size());
+        src.closeDevice();
+        CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 1);
+        // RELEASED, by the one path that counts a radio given back (a
+        // completed unmake). Not g_deviceDestroyed: every fakewedge open in
+        // this file resolves to the same kwargs, so SoapySDR's make cache
+        // hands back one instance that earlier blocks deliberately leaked.
+        CHECK(SoapySource::openDeviceCount() == openBefore);
+    }
+
+    // --- a stream start the driver answers LATE, with a refusal ------------
+    //
+    // HANG REPORT 9B804643C56308CF, two minutes after the one above in the
+    // same session. The patch's START opened the RSP again and called
+    // activateStream - sdrplay_api_Init - on the GUI thread; it answered
+    // sdrplay_api_AlreadyInitialised five seconds later, and the teardown of
+    // the radio that would not start then spent its own bounded wait, past the
+    // watchdog's threshold. A start that is not answered in the caller's
+    // budget is pending, not failed: the stream reports itself started, reads
+    // nothing, and the late refusal arrives as the fault it is.
+    {
+        std::printf("--- a late stream start answered with a refusal ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        g_wedgeActivate.store(true, std::memory_order_relaxed);
+        g_activateRet.store(SOAPY_SDR_NOT_SUPPORTED, std::memory_order_relaxed);
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+
+        const int openBefore = SoapySource::openDeviceCount();
+        SoapySource src;
+        CHECK(src.open("driver=fakewedge, serial=lateactivate"));
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool started = src.start();
+        const long long startMs = msSince(t0);
+        std::printf("  start() returned %s after %lld ms (driver still inside)\n",
+                    started ? "true" : "false", startMs);
+        CHECK(startMs < 3000);
+        CHECK(g_inWedgedCall.load(std::memory_order_acquire));
+        CHECK(started);
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        std::vector<std::complex<float>> buf(256);
+        CHECK(src.read(buf.data(), buf.size()) == 0u);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == 0);
+
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        CHECK(readUntil(src, [&] { return src.faulted(); }, 3000));
+        std::printf("  after the late refusal: faulted=%d running=%d lastError=\"%s\"\n",
+                    src.faulted() ? 1 : 0, src.running() ? 1 : 0, src.lastError());
+        CHECK(src.faulted());
+        CHECK(!src.running());
+        // The driver ANSWERED - a refusal, not a fault and not a wedge.
+        CHECK(!src.deviceDead());
+        CHECK(src.deadReason() == SoapySource::DeadReason::None);
+        CHECK(std::strstr(src.lastError(), "activateStream failed") != nullptr);
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == 0);
+
+        // The radio is RELEASED by an ordinary close, at once.
+        const auto t1 = std::chrono::steady_clock::now();
+        src.closeDevice();
+        const long long closeMs = msSince(t1);
+        std::printf("  closeDevice() after the refusal took %lld ms\n", closeMs);
+        CHECK(closeMs < 500);
+        CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 1);
+        CHECK(SoapySource::openDeviceCount() == openBefore);
+    }
+
+    // --- a sample-rate restart the driver answers LATE ---------------------
+    //
+    // A live rate change deactivates, sets the rate and ACTIVATES again - the
+    // same activateStream as start(), through the same activateLocked, so it
+    // has the same late-call rule: the GUI thread is given back inside
+    // kVendorCallWait, the radio is not condemned, and the answer is taken
+    // by the read loop. Red-green: an inline activate in the restart leaves
+    // setSampleRateHz() inside the 20 s wedge and the elapsed-time check fails.
+    {
+        std::printf("--- a late sample-rate restart: bounded, answer taken ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+        const int openBefore = SoapySource::openDeviceCount();
+        SoapySource src;
+        CHECK(src.open("driver=fakewedge, serial=laterate"));
+        CHECK(src.start());
+        g_wedgeActivate.store(true, std::memory_order_relaxed);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool changed = src.setSampleRateHz(2.0e6);
+        const long long rateMs = msSince(t0);
+        std::printf("  setSampleRateHz() returned %s after %lld ms (driver still inside)\n",
+                    changed ? "true" : "false", rateMs);
+        CHECK(rateMs < 3000);
+        CHECK(g_inWedgedCall.load(std::memory_order_acquire));
+        CHECK(changed);
+        CHECK(src.running());
+        CHECK(!src.deviceDead());
+        CHECK(!src.faulted());
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        const int readsBefore = g_readStreamCalls.load(std::memory_order_acquire);
+        std::vector<std::complex<float>> buf(256);
+        CHECK(src.read(buf.data(), buf.size()) == 0u);
+        CHECK(g_readStreamCalls.load(std::memory_order_acquire) == readsBefore);
+
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+        CHECK(readUntil(src, [&] {
+            return diagRingHas("restarting the stream after a sample-rate change answered after");
+        }, 3000));
+        CHECK(!src.deviceDead());
+        CHECK(!src.faulted());
+        CHECK(src.running());
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore);
+        g_wedgeActivate.store(false, std::memory_order_relaxed);
+        CHECK(src.read(buf.data(), buf.size()) == buf.size());
+        src.closeDevice();
+        CHECK(SoapySource::openDeviceCount() == openBefore);
+    }
+
+    // --- a late call that never answers is given up after the grace -------
+    //
+    // "Later" is not "never" without a limit: past the grace the call is
+    // treated exactly as an escape path treats a wedged one - counted,
+    // condemned, and the radio left alone for good.
+    {
+        std::printf("--- a late retune past its grace: given up, condemned ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+        SoapySource src;
+        src.setLateCallGraceForTest(std::chrono::milliseconds(2500));
+        CHECK(src.open("driver=fakewedge, serial=lategrace"));
+        CHECK(src.start());
+        g_wedgeSetFrequency.store(true, std::memory_order_relaxed);
+        CHECK(!src.setCenterFrequencyHz(103.0e6));
+        CHECK(!src.deviceDead());
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(readUntil(src, [&] { return src.deviceDead(); }, 6000));
+        const long long gaveUpMs = msSince(t0);
+        std::printf("  given up %lld ms after the caller stopped waiting\n", gaveUpMs);
+        // Not before the grace: the caller's own 1.5 s wait is inside it.
+        CHECK(gaveUpMs >= 500);
+        CHECK(src.deviceDead());
+        CHECK(src.deadReason() == SoapySource::DeadReason::Abandoned);
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        CHECK(std::strstr(src.lastError(), "abandoned") != nullptr);
+        CHECK(src.centerFrequencyHz() != 103.0e6);
+        // The condemned radio is never called again: a close is immediate and
+        // does not reach closeStream.
+        const auto t1 = std::chrono::steady_clock::now();
+        src.closeDevice();
+        CHECK(msSince(t1) < 500);
+        CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 0);
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
+    }
+
+    // --- a stop while a late call is out gives it up at once ---------------
+    //
+    // Stop and close are the user's escape paths and their cost is budgeted
+    // (tests/test_shutdown_budget.cpp): a late call is never waited for there.
+    {
+        std::printf("--- stop() with a late retune out: no extra wait ---\n");
+        SoapySDR::Registry reg("fakewedge", &findWedge, &makeWedge,
+                               SOAPY_SDR_ABI_VERSION);
+        resetWedge();
+        const unsigned long long abandonedBefore = SoapySource::driverCallsAbandoned();
+        SoapySource src;
+        CHECK(src.open("driver=fakewedge, serial=latestop"));
+        CHECK(src.start());
+        g_wedgeSetFrequency.store(true, std::memory_order_relaxed);
+        CHECK(!src.setCenterFrequencyHz(104.0e6));
+        CHECK(!src.deviceDead());
+        const auto t0 = std::chrono::steady_clock::now();
+        src.stop();
+        const long long stopMs = msSince(t0);
+        std::printf("  stop() returned after %lld ms\n", stopMs);
+        CHECK(stopMs < 500);
+        CHECK(!src.running());
+        CHECK(src.deviceDead());
+        CHECK(src.deadReason() == SoapySource::DeadReason::Abandoned);
+        CHECK(SoapySource::driverCallsAbandoned() == abandonedBefore + 1);
+        src.closeDevice();
+        CHECK(g_closeStreamCalls.load(std::memory_order_acquire) == 0);
+        releaseWedge();
+        CHECK(waitForWedgedReturn(1));
     }
 
     // --- an abandoned radio must go on being COUNTED as open ---------------

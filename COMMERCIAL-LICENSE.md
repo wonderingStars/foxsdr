@@ -51,7 +51,7 @@ during your licence term, and email support.
 | **Retail Partner** | A shop that sells radios and includes FoxSDR with them: a download link or card in the box, a USB stick, or preinstalled on a computer it sells. Unmodified, and under the FoxSDR name. | **Free** |
 | **Internal Business Use** | A company using FoxSDR in its own work — test and measurement, spectrum monitoring, EMC, security research, engineering. Licensed per named user. | £295 per seat per year<br>£245 per seat at 10+ seats<br>50+ seats: contact us |
 | **Service Delivery** | Using FoxSDR to deliver a paid service to your customers — monitoring, surveying, consultancy. Licensed per named user. | £595 per seat per year |
-| **OEM / Bundled** | You make hardware and ship FoxSDR with it, or preinstalled on a device, optionally under your own product name. | From £1,500 per year,<br>or a per-unit royalty from £1/unit |
+| **OEM / Bundled** | You make hardware and ship FoxSDR with it, or preinstalled on a device, optionally under your own product name. | From £5 per unit, negotiable |
 | **Redistribution / Derived Product** | You build and sell a product based on FoxSDR, or redistribute it commercially under your own name. | From £12,000 per year |
 
 *Prices are in GBP and exclude VAT. Rates for the OEM and Redistribution tiers

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "pocsag",
+      "name": "POCSAG pager decoder",
+      "version": "1.2.0",
+      "author": "Example Author",
+      "licence": "MIT",
+      "summary": "Decodes pager traffic.",
+      "description": "A longer description.",
+      "homepage": "https://example.invalid/pocsag",
+      "legalNotice": "Check local law.",
+      "minSupportedVersion": "1.0.0",
+      "abiVersion": 3,
+      "platforms": [
+        {
+          "os": "windows",
+          "arch": "x64",
+          "file": "pocsag-1.2.0-abi3-win-x64.dll",
+          "url": "https://example.invalid/dl/pocsag-1.2.0-abi3-win-x64.dll",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "sizeBytes": 123456
+        },
+        {
+          "os": "linux",
+          "arch": "x64",
+          "file": "pocsag-1.2.0-abi3-linux-x64.so",
+          "url": "https://example.invalid/dl/pocsag-1.2.0-abi3-linux-x64.so",
+          "sha256": "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210",
+          "sizeBytes": 1
+        }
+      ]
+    },
+    {
+      "id": "announced",
+      "name": "Announced, not built yet",
+      "version": "0.0.1",
+      "abiVersion": 3
+    },
+    {
+      "id": "otherhost",
+      "name": "No build for this host",
+      "version": "2.0.0",
+      "abiVersion": 3,
+      "platforms": [
+        {
+          "os": "plan9",
+          "arch": "sparc",
+          "file": "elsewhere.dll",
+          "url": "https://example.invalid/elsewhere.dll",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      ]
+    }
+  ]
+}

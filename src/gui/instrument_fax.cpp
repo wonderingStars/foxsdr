@@ -48,14 +48,17 @@
 // decoder measured, a counter that counts real lines, and a needle that
 // points at a real error.
 //
-// AND THE PICTURE IS NOT HERE EITHER, for a reason worth stating rather than
-// engraving on the panel: a radiofax plugin delivers its chart through
-// CASCADE_CAP_IMAGE_DECODER and the host shows it in its own picture window.
-// So this face is built to be useful WITHOUT the pixels, which is what a
-// recorder's own panel is for: the tuning meter tells you whether the chart
-// arriving will be readable at all, the phase lamps tell you where in the
-// ten-minute transmission you are, and the counter and the paper feeding out
-// of the slot tell you how much of it has landed.
+// AND THE PICTURE: on the paper, where a recorder prints it, since a field
+// report asked for the chart and the machine in one window (932444a354dee32f).
+// The host hands the face its own plugin's decoded picture as a texture
+// (InstrumentCue::chartTex) and the strip coming out of the slot carries it;
+// the full-size reading copy stays in the picture window. The face is still
+// built to be useful WITHOUT the pixels - no picture yet, or a plugin with no
+// image decoder, draws the blank sheet and creeping ruling as before - which
+// is what a recorder's own panel is for: the tuning meter tells you whether
+// the chart arriving will be readable at all, the phase lamps tell you where
+// in the ten-minute transmission you are, and the counter and the paper
+// feeding out of the slot tell you how much of it has landed.
 //
 // The arithmetic - the phase word to a lamp, the needle's travel, how far the
 // paper has fed, how the deck divides at whatever size the window has been
@@ -72,6 +75,7 @@
 
 #include "core/i18n.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/instrument_fax_math.hpp"
 #include "gui/scope_face.hpp"
 #include "gui/theme.hpp"
@@ -142,7 +146,7 @@ void drawSelectorCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 // Returns the x it ended at, so the next group can be laid beside it.
 float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                    const char* caption, const fx::Selector& sel) {
-    const float capPx = fonts::kTinySize * 0.82f;
+    const float capPx = fonts::tinyPx() * 0.82f;
     engrave(dl, tl, caption, capPx);
     const float y = tl.y + capPx + 4.0f;
     float x = tl.x;
@@ -162,7 +166,7 @@ float drawSelector(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
 // would make them look identical.
 void drawLineCounter(ImDrawList* dl, const ImVec2& tl, float cellW, float cellH,
                      int digits, bool have, double lines) {
-    const float capPx = fonts::kTinySize * 0.82f;
+    const float capPx = fonts::tinyPx() * 0.82f;
     engrave(dl, tl, tr("LINES"), capPx);
     const float y = tl.y + capPx + 4.0f;
     // THE DRUMS ARE BUTTED, THE SELECTORS ARE SPACED, and that is the whole
@@ -207,7 +211,7 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
     if (width < 56.0f || height < 46.0f) { return; }
     ImFont* cf = fonts::legend();
     ImFont* vf = fonts::ui();
-    const float tiny = fonts::kTinySize;
+    const float tiny = fonts::tinyPx();
     const char* cap = tr("TUNING");
     const char* val = (valueLine != nullptr) ? valueLine : "";
     const float cpx = fitPx(cf, tiny, cap, width - 4.0f);
@@ -313,8 +317,17 @@ void drawTuningMeter(ImDrawList* dl, const ImVec2& tl, float width, float height
 // count of lines the decoder has actually laid down. WITH NO LINES THERE IS
 // NO PAPER - an empty slot, which is exactly what the machine looks like
 // before a transmission starts.
+//
+// AND SINCE THE FIELD ASKED (932444a354dee32f), THE PAPER PRINTS THE CHART:
+// when the host hands over the plugin's own decoded picture (cue.chartTex),
+// the strip carries it - first lines at the lip, the sheet lengthening
+// downward as new ones land, which is the picture window's orientation at
+// recorder scale - tinted to the paper so it reads as print, not as a
+// photograph pasted on the panel. Without a picture (none decoded yet, or a
+// plugin with no image decoder) the strip is the blank sheet and creeping
+// ruling it always was, so the face still works without the pixels.
 void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have,
-                   double lines) {
+                   double lines, ImTextureID chartTex) {
     const float w = br.x - tl.x;
     const float h = br.y - tl.y;
     if (w < 40.0f || h < 22.0f) { return; }
@@ -377,22 +390,37 @@ void drawPaperSlot(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, bool have
     const ImU32 paperLip = theme::tone(0xF6, 0xF1, 0xE2, 255, kFace, kInk);
     const ImU32 paperRoll = theme::tone(0xDE, 0xD6, 0xBE, 255, kFace, kInk);
     dl->AddRectFilledMultiColor(pTL, pBR, paperLip, paperLip, paperRoll, paperRoll);
+    if (chartTex != 0) {
+        // The print. The whole received picture mapped onto the strip: its
+        // height IS the received lines (the decoder publishes the chart as it
+        // grows), so the strip and the picture lengthen together and no
+        // separate scroll arithmetic can disagree with the counter. Tinted by
+        // the paper lip tone, so the decoder's white becomes this machine's
+        // paper and its black stays ink.
+        dl->PushClipRect(pTL, pBR, true);
+        dl->AddImage(chartTex, pTL, pBR, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), paperLip);
+        dl->PopClipRect();
+    }
     const float shade = std::min(6.0f, len * 0.4f);
     dl->AddRectFilledMultiColor(pTL, ImVec2(pBR.x, pTL.y + shade),
                                 theme::shadow(120), theme::shadow(120),
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
 
-    // The ruling, sliding down as lines arrive. One rule per fifty lines is
-    // the same interval the plugin's own log reports at, so a rule crossing
-    // the lip and a row appearing in the memory below are the same event.
-    dl->PushClipRect(pTL, pBR, true);
-    const float pitch = 7.0f;
-    const float off = fx::ruleOffset(lines, pitch, 50.0);
-    for (float y = pTL.y + off; y < pBR.y; y += pitch) {
-        dl->AddLine(ImVec2(pTL.x + 4.0f, y), ImVec2(pBR.x - 4.0f, y),
-                    theme::tone(0x6E, 0x65, 0x52, 64, kFace, kInk), 1.0f);
+    // The ruling, sliding down as lines arrive - only on a BLANK sheet: a
+    // printed chart is its own feed indication, and rules through a weather
+    // map would read as damage. One rule per fifty lines is the same interval
+    // the plugin's own log reports at, so a rule crossing the lip and a row
+    // appearing in the memory below are the same event.
+    if (chartTex == 0) {
+        dl->PushClipRect(pTL, pBR, true);
+        const float pitch = 7.0f;
+        const float off = fx::ruleOffset(lines, pitch, 50.0);
+        for (float y = pTL.y + off; y < pBR.y; y += pitch) {
+            dl->AddLine(ImVec2(pTL.x + 4.0f, y), ImVec2(pBR.x - 4.0f, y),
+                        theme::tone(0x6E, 0x65, 0x52, 64, kFace, kInk), 1.0f);
+        }
+        dl->PopClipRect();
     }
-    dl->PopClipRect();
 
     // The sheet's own edges: a hairline of shade down each side, which is
     // what stops a pale rectangle from looking painted on the panel.
@@ -471,7 +499,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
     if (L.groupCaption && leftW > 60.0f) {
         addBenchGroupCaption(dl, ImVec2(ix0, iy), leftW, tr("RECEPTION"));
-        iy += fonts::kTinySize + 6.0f;
+        iy += fonts::tinyPx() + 6.0f;
     }
 
     // The phase ladder. Exactly one lamp lights, and only for a word this
@@ -485,14 +513,14 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         const int cols = fx::kPhaseCount + statusCols;
         const float pitch = leftW / static_cast<float>(cols);
         const float lampR = std::min(7.0f, pitch * 0.16f);
-        float capPx = std::max(9.0f, std::min(fonts::kTinySize, pitch * 0.30f));
+        float capPx = std::max(9.0f, std::min(fonts::tinyPx(), pitch * 0.30f));
         // THE WIDEST WORD MUST FIT ITS PITCH. pitch * 0.30 was a proportion
         // fitted to a condensed face; in Georgia (0.84.0) PHASING at that
         // size ran into PICTURE on either side. Measure the longest phase
         // name at the chosen size and take the size down, never below the
         // nine-pixel floor, until it sits inside the pitch with clear metal.
         {
-            ImGui::PushFont(fonts::ui(), capPx);
+            ImGui::PushFont(fonts::ui(), capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
             float widest = 0.0f;
             for (int i = 0; i < fx::kPhaseCount; ++i) {
                 widest = std::max(widest, ImGui::CalcTextSize(tr(fx::phaseName(i))).x);
@@ -505,7 +533,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             }
         }
         const float rowH = lampR * 2.0f + capPx * 1.40f + 4.0f;
-        ImGui::PushFont(fonts::ui(), capPx);
+        ImGui::PushFont(fonts::ui(), capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
         for (int i = 0; i < fx::kPhaseCount; ++i) {
             const ImVec2 c(ix0 + pitch * (static_cast<float>(i) + 0.5f), iy + lampR + 2.0f);
             // PICTURE is the phosphor one: it is the only position on the
@@ -546,8 +574,8 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         }
         if (statusCols > 0) {
             const float lampR = 6.0f;
-            const float capPx = fonts::kTinySize * 0.82f;
-            ImGui::PushFont(fonts::ui(), capPx);
+            const float capPx = fonts::tinyPx() * 0.82f;
+            ImGui::PushFont(fonts::ui(), capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
             drawBenchLamp(dl, ImVec2(wBR.x + 32.0f, iy + lampR + 2.0f), lampR,
                           theme::kGold, cue.unread, tr("NEW"));
             drawBenchLamp(dl, ImVec2(wBR.x + 88.0f, iy + lampR + 2.0f), lampR,
@@ -560,7 +588,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // The selectors and the counter, along the bottom of the deck.
     const float rowH = iyEnd - iy;
     if (rowH >= 26.0f && leftW > 60.0f) {
-        const float capPx = fonts::kTinySize * 0.82f;
+        const float capPx = fonts::tinyPx() * 0.82f;
         const float cellH = std::min(24.0f, rowH - capPx - 4.0f);
         if (cellH >= 12.0f) {
             const fx::Selector iocSel = fx::iocSelector(ioc, have);
@@ -588,7 +616,7 @@ float drawFaxFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // --- the paper slot ------------------------------------------------------
     if (L.paperH > 0.0f) {
         drawPaperSlot(dl, ImVec2(bx0, dBR.y + 6.0f), ImVec2(bx1, dBR.y + 6.0f + L.paperH),
-                      haveLines, lines);
+                      haveLines, lines, cue.chartTex);
         return dBR.y + 6.0f + L.paperH + 8.0f - tl.y;
     }
     return dBR.y + 8.0f - tl.y;

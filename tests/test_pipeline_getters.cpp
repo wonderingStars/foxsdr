@@ -88,6 +88,7 @@ std::vector<Getter> auditedGetters(Pipeline& p) {
         // one of them a mutex would reopen the same hole.
         {"signalPowerDb", [&p] { (void)p.signalPowerDb(); }},
         {"audioMuted", [&p] { (void)p.audioMuted(); }},
+        {"pluginAudioMuted", [&p] { (void)p.pluginAudioMuted(); }},
         {"pilotLocked", [&p] { (void)p.pilotLocked(); }},
         {"pilotLevel", [&p] { (void)p.pilotLevel(); }},
         {"stereoActive", [&p] { (void)p.stereoActive(); }},
@@ -95,6 +96,31 @@ std::vector<Getter> auditedGetters(Pipeline& p) {
         {"autoNotchFrequencyHz", [&p] { (void)p.autoNotchFrequencyHz(); }},
         {"running", [&p] { (void)p.running(); }},
         {"faulted", [&p] { (void)p.faulted(); }},
+    };
+}
+
+// The browser remote's audio feed (AppWindow::publishWebAudio) reads the
+// 4096-frame tap on the GUI thread every frame that has new audio. It used to
+// take audioMutex_ for the copy, so the frame waited out a whole DSP block
+// (measured at 1507 ms inside publishWebAudio with a block stretched to
+// 1500 ms); the tap now has a lock of its own that the DSP thread holds only
+// while it writes a block's frames into it.
+//
+// EACH ONE UNDER ITS OWN HOLD. In the list above one staged hold serves every
+// getter in turn, so the first one that still queues eats all of it and every
+// later one is timed after the lock has gone - it would pass whatever it did.
+// A tap that took the DSP mutex again would be hidden behind the other.
+std::vector<Getter> auditedTaps(Pipeline& p) {
+    return {
+        {"audioTap", [&p] {
+             float mono[64];
+             (void)p.audioTap(mono, 64);
+         }},
+        {"audioTapStereo", [&p] {
+             float left[64];
+             float right[64];
+             (void)p.audioTapStereo(left, right, 64);
+         }},
     };
 }
 
@@ -133,6 +159,18 @@ void checkGettersDoNotBlock() {
         }
         std::printf("audioMutex held: slowest getter %s at %.3f ms\n", worstName, worst);
     });
+
+    // THE AUDIO TAPS, one hold apiece (see auditedTaps).
+    for (const Getter& g : auditedTaps(p)) {
+        underHeldLock(p, Pipeline::LockForTest::Audio, [&g] {
+            const double ms = timeMs(g.call);
+            if (ms > kMaxGetterMs) {
+                std::printf("FAIL tap %s waited %.1f ms for the DSP mutex\n", g.name, ms);
+            }
+            std::printf("audioMutex held: %s at %.3f ms\n", g.name, ms);
+            CHECK(ms <= kMaxGetterMs);
+        });
+    }
 
     // THE CONTROL-PLANE MUTEX, which start()/stop()/setSource() hold for as
     // long as a vendor driver takes to give a source thread back. inputRateHz()

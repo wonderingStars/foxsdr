@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -139,6 +140,73 @@ inline std::string tuneRefusedMessage(double requestHz, bool hasRange, double ra
     return msg;
 }
 
+// --- A frequency offered to a list, not tuned (0.99.66) --------------------
+//
+// The Airband section's add row takes a frequency the radio will be asked for
+// later, so it is judged by the rule tuneRefusedMessage applies to a tune that
+// was refused: the RADIO's frequency (a converter's LO already taken out,
+// core::radioFromAir) must be above 0 Hz and, when the radio publishes a range,
+// inside it, ends included. A radio that published none (the generator, an
+// I/Q file, a driver that cannot say) refuses nothing it cannot know about.
+inline bool radioCanTune(double radioHz, bool hasRange, double rangeLoHz, double rangeHiHz) {
+    if (!std::isfinite(radioHz) || !(radioHz > 0.0)) { return false; }
+    if (!hasRange || !(rangeHiHz > rangeLoHz)) { return true; }
+    return radioHz >= rangeLoHz && radioHz <= rangeHiHz;
+}
+
+// A FREQUENCY TYPED IN MHz, as a person writes it: "121.5", "121.500", " 121,5 ".
+// A comma is a decimal point (a European keyboard); nothing else is accepted, so
+// "121.5x" and "1e3" are refused rather than guessed at. The answer is a WHOLE
+// NUMBER OF HERTZ (0.99.66 review): 128.050 times 1e6 is 128050000.00000001 in a
+// double, and the monitor's one-channel-per-frequency rule compares frequencies
+// exactly, so the typed row would have played beside the airport's or the CSV's
+// 128050000 as a second strip. Positive (a figure that rounds to 0 Hz is refused)
+// and no more than the largest frequency the counter shows (9999.999999 MHz).
+inline bool parseMhz(const char* text, double& outHz) {
+    std::string t;
+    for (const char* p = text; *p != '\0'; ++p) {
+        if (*p == ' ' || *p == '\t') { continue; }
+        t += (*p == ',') ? '.' : *p;
+    }
+    if (t.empty()) { return false; }
+    for (const char c : t) {
+        if (!((c >= '0' && c <= '9') || c == '.')) { return false; }
+    }
+    char* end = nullptr;
+    const double mhz = std::strtod(t.c_str(), &end);
+    if (end == t.c_str() || *end != '\0' || !std::isfinite(mhz) || !(mhz > 0.0)) { return false; }
+    const double hz = std::round(mhz * 1.0e6);
+    if (!(hz > 0.0) || hz > 9999999999.0) { return false; }
+    outHz = hz;
+    return true;
+}
+
+// --- The Airband section's preset field (0.99.66) --------------------------------
+//
+// The field holds the name of the group the section's Add, Import, Export CSV and
+// Remove preset act on. What they act on is the field TRIMMED (ASCII spaces, tabs
+// and line breaks only, so a name in any script is never cut), "Manual" when
+// nothing is left.
+inline std::string trimPresetName(const std::string& s) {
+    const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    std::size_t lo = 0;
+    std::size_t hi = s.size();
+    while (lo < hi && blank(s[lo])) { ++lo; }
+    while (hi > lo && blank(s[hi - 1])) { --hi; }
+    return s.substr(lo, hi - lo);
+}
+
+// WHAT CHOOSING A GROUP IN THE LIST PUTS IN THE FIELD: the group's name trimmed
+// exactly as the keys will read it, so the buttons act on the list that is
+// showing. `capacity` is the field's size in bytes, its terminator included. A name
+// that does not fit (its trimmed length must be below `capacity`) gives "" - the
+// field is cleared and nothing is copied cut short, so a long name is never half of
+// itself - and so does a group whose name is only spaces.
+inline std::string presetFieldText(const std::string& group, std::size_t capacity) {
+    const std::string t = trimPresetName(group);
+    return t.size() < capacity ? t : std::string();
+}
+
 // --- Auto-preset on start: "we want the user to have to do nothing" --------
 //
 // The owner's own words for this one. A decoder that publishes presets knows
@@ -214,6 +282,8 @@ inline int autoPresetIndexOnStart(const std::vector<CascadePreset>& presets,
                                    double deviceCentreHz, double vfoOffsetHz,
                                    double deviceRateHz) {
     if (presets.empty()) { return -1; }
+    // Reception templates must repair mode/bandwidth even on a listed channel.
+    if ((presets.front().flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) { return 0; }
     for (const CascadePreset& ps : presets) {
         if (detail::presetAlreadyTunedTo(ps, deviceCentreHz, vfoOffsetHz, deviceRateHz)) {
             return -1;
@@ -264,9 +334,12 @@ inline bool autoPresetTriggersOnWindowClick(bool clicked, bool wasShownBeforeCli
 // window of its own opens the Decoder output window. A text decoder WITH a
 // window of its own (FLEX's pager, the teleprinter) keeps opening just that -
 // its face is where its output is read - and a module that decodes nothing to
-// text never opens it.
-inline bool presetOpensDecoderOutput(bool isTextDecoder, bool hasOwnWindow) {
-    return isTextDecoder && !hasOwnWindow;
+// text never opens it. A settings-only page may instead request the shared
+// text window explicitly with CASCADE_PRESET_SHOW_TEXT_OUTPUT.
+inline bool presetOpensDecoderOutput(bool isTextDecoder, bool hasOwnWindow,
+                                    std::uint32_t presetFlags = 0u) {
+    return isTextDecoder &&
+           (!hasOwnWindow || (presetFlags & CASCADE_PRESET_SHOW_TEXT_OUTPUT) != 0u);
 }
 
 // --- Preset bars: one key per valid preset, on the plugin's OWN window -----
@@ -835,13 +908,16 @@ inline TunerCellPaint tunerCellPaint(TunerStyle style) {
 // --- The deck's fixed cluster, and the two meters at the bar's right --------
 //
 // kDeckCoreW is the width of the fixed cluster on the top bar - transport
-// button through the volume dial - in the deck's reference units at scale 1.
+// button through the last dial - in the deck's reference units at scale 1.
 // It is the number the bar shrinks against on a narrow window and the number
 // the meters must clear on a wide one; app_window.cpp reads it as kCoreW and
-// places the dial from the same figure. Kept here, with no ImGui dependency,
+// places the dials from the same figure. Kept here, with no ImGui dependency,
 // so the meters rule below can be checked against it without an open frame.
-// 958 with the tuning knob on the deck; 888 since 0.90.0 removed it.
-inline constexpr float kDeckCoreW = 888.0f;
+// 958 with the tuning knob on the deck; 888 since 0.90.0 removed it; 999 since
+// 0.99.74 put the GAIN and SQUELCH dials in front of VOLUME: the figure is the
+// last dial's tick arc plus its edge pad, rounded up to a whole unit, and the
+// static_assert beside deckVolumeCx below holds it to exactly that arithmetic.
+inline constexpr float kDeckCoreW = 999.0f;
 
 // The narrowest client area run() lets the OS window reach. The bar's floor
 // scale (kBarMinScale in app_window.cpp) is a promise about the volume dial
@@ -883,8 +959,18 @@ inline constexpr float meter1XOnBar(float barW) { return meter2XOnBar(barW) - kM
 // cluster by kMeterCoreClearance": nothing more, because the slack the old
 // rule carried (110 units beyond the two meters) is what kept them off the
 // deck at the default window.
+//
+// A THOUSANDTH OF A UNIT OF TOLERANCE (0.99.74), the one deckMetersFit has always
+// had. deckScale shrinks the deck until the meters JUST fit, so the cluster as
+// drawn (coreW * scale) lands exactly on the first meter's clearance, and a
+// float product that comes out a hair over 734.00000 instead of 734 would say
+// "no meters" here while the bar draws them - and the mute banner, asked for
+// the middle by this rule, would be handed the strip the meters stand in. Until
+// 0.99.74 only the enlarged counters were ever drawn at that exact edge (the
+// sweep in tests/test_mute_banner.cpp found it at 2x, bar 1030); every counter
+// is, now that the first-launch bar shows the meters by shrinking the deck.
 inline constexpr bool metersFitOnBar(float barW, float coreW) {
-    return meter1XOnBar(barW) >= coreW + kMeterCoreClearance;
+    return meter1XOnBar(barW) >= coreW + kMeterCoreClearance - 1.0e-3f;
 }
 
 // THE MUTE BANNER'S STRIP. The banner takes the bar's open middle - from the
@@ -930,6 +1016,12 @@ inline constexpr float kDeckMasterDividerX = 384.0f;
 inline constexpr float kDeckBiasKeyX = 150.0f;
 inline constexpr float kDeckBiasKeyY = 122.0f;
 inline constexpr float kDeckBiasKeySize = 20.0f;
+// THE KEY IS NEVER DRAWN UNDER 12 PIXELS (0.99.74), whatever the deck's scale: at the bar's
+// old floor (0.62) its 20 units were 12.4 px; the floor fell to 0.57 when the GAIN and
+// SQUELCH dials widened the cluster, and 20 units would have been 11.4 px at the smallest
+// window. The key grows by the difference downwards (clear of the rail at every scale:
+// tests/test_bias_key.cpp measures it).
+inline constexpr float kDeckBiasKeyMinPx = 12.0f;
 inline constexpr float kDeckBiasCaptionGap = 8.0f;
 inline constexpr float kDeckBiasRightX = kDeckMasterDividerX - 6.0f;
 static_assert(kDeckBiasKeyY + kDeckBiasKeySize + 10.0f <= kDeckBarH,
@@ -945,7 +1037,61 @@ inline FreqRect deckBiasKeyArea() {
 inline float deckCounterDividerX(const CounterLayout& c) {
     return kDeckMasterDividerX + 12.0f + counterPlateW(c) + 12.0f;
 }
-inline float deckVolumeCx(const CounterLayout& c) { return deckCounterDividerX(c) + 61.0f; }
+
+// --- THE KNOB ROW: GAIN, SQUELCH, VOLUME (0.99.74) --------------------------------------------
+//
+// The tester, 2026-10-12: "Add a gain knob, just like the Volume knob at the top of the screen
+// ... This area is also empty space" and "Add a Squelch knob ... I would put these knobs in the
+// order of gain, squelch and volume just as that is the order the signal goes through the
+// system." Three dials of ONE size, side by side past the counter's divider, each with its
+// engraved caption above, its reading below and - under the first two - an AUTO key.
+//
+// ONE RADIUS FOR ALL THREE, 22 units, where the volume dial alone was 26. Three at 26 would need a
+// pitch of about 80 for their tick arcs (35.9 units out each side) not to meet, 16 more units for
+// each gap, in a cluster that already leaves the meters only ~30 units spare at the bar a fresh
+// install opens with (deckScale now shrinks the deck to keep them there). At 22 the pitch is 72:
+// the tick arcs (1.38 radii out, 30.4 units) end 11.2 units short of the next dial's, and the
+// captions are fitted to the pitch (app_window.cpp) and not the other way about.
+//
+// THE FIRST DIAL STANDS 46 UNITS PAST THE DIVIDER (the volume dial stood 61 past it): its tick
+// arc ends 15.6 units from the groove, and the cluster's tail (kDeckKnobEdgePad) is the old 6.
+inline constexpr float kDeckKnobR = 22.0f;
+inline constexpr float kDeckKnobPitch = 72.0f;
+inline constexpr float kDeckKnobTickR = 1.38f;    // the tick arc's outer radius, in dial radii
+inline constexpr float kDeckKnobFirstX = 46.0f;   // the first dial's centre past the counter's divider
+inline constexpr float kDeckKnobEdgePad = 6.0f;   // the last dial's tick arc to the cluster's end
+// Down the bar, in deck units (scale 1): the caption's top, the dials' centre line, the reading's
+// top, and the AUTO key's top and height. The caption is a 14 px face from 33; the dial's tick arc
+// (its 0-degree tick stands 30.4 above the centre line) starts under it at 49.6; the dial ends at
+// 102; the reading is 104 down and, at the largest the readings size asks for (16 px at 1.4x is
+// 22.4), ends at 126.4; the AUTO key is 127..144 and the lamp strip under it 146..148, with the
+// bar's foot rail (160 less its 3 px) 9 units on. The volume dial stood at 82 with its caption at
+// 42 and its reading at 118; the whole row moved up by 2 to 9 units to make room for the key.
+inline constexpr float kDeckKnobCaptionY = 33.0f;
+inline constexpr float kDeckKnobCy = 80.0f;
+inline constexpr float kDeckKnobReadingY = 104.0f;
+inline constexpr float kDeckAutoKeyY = 127.0f;
+inline constexpr float kDeckAutoKeyH = 17.0f;
+inline constexpr float kDeckAutoKeyW = 2.0f * kDeckKnobR;  // as wide as the dial it is under
+static_assert(kDeckKnobCy - kDeckKnobTickR * kDeckKnobR >= kDeckKnobCaptionY + 14.0f + 2.0f,
+              "the dials' tick arcs must stand clear of their captions at full size");
+static_assert(kDeckAutoKeyY + kDeckAutoKeyH + 10.0f <= kDeckBarH,
+              "the AUTO keys must stand clear of the deck's foot rail");
+static_assert(kDeckAutoKeyY >= kDeckKnobReadingY + 22.4f,
+              "the AUTO keys must stand clear of the readings at their largest size");
+static_assert(kDeckKnobReadingY >= kDeckKnobCy + kDeckKnobR,
+              "the readings must stand under the dials");
+
+inline float deckGainCx(const CounterLayout& c) { return deckCounterDividerX(c) + kDeckKnobFirstX; }
+inline float deckSquelchCx(const CounterLayout& c) { return deckGainCx(c) + kDeckKnobPitch; }
+inline float deckVolumeCx(const CounterLayout& c) { return deckSquelchCx(c) + kDeckKnobPitch; }
+// Where the cluster ends for the 1x counter, from the last dial's tick arc: kDeckCoreW is this
+// rounded up to a whole unit, and the assert keeps the two from drifting apart.
+inline constexpr float kDeckKnobRowEndX = kDeckMasterDividerX + 12.0f + kFreqPlateW + 12.0f +
+                                          kDeckKnobFirstX + 2.0f * kDeckKnobPitch +
+                                          kDeckKnobTickR * kDeckKnobR + kDeckKnobEdgePad;
+static_assert(kDeckCoreW >= kDeckKnobRowEndX && kDeckCoreW - kDeckKnobRowEndX < 1.0f,
+              "kDeckCoreW must be the last dial's tick arc plus its edge pad, rounded up");
 inline float deckCoreW(const CounterLayout& c) {
     return kDeckCoreW + (counterPlateW(c) - kFreqPlateW);
 }
@@ -962,18 +1108,23 @@ inline float deckBarH(const CounterLayout& c) {
 inline constexpr float kDeckMeterReserve =
     kMeterCoreClearance + 2.0f * kMeterW + kMeterGap + kMeterRightMargin;
 
-// THE BAR'S SCALE for a layout. Today's rule, exactly, for the 1x counter: the
-// bar shrinks only when the window is narrower than the cluster, and the
-// meters are dropped where they do not fit. THE ENLARGED COUNTER MAY NOT COST
-// THE METERS: its cluster is wider, and at 1280 x 720 the meters would no
-// longer fit beside it, so the whole deck is drawn smaller - figures, dial,
-// lamps and all, never below minScale - until they do. At a window wide
-// enough for both (a bar of about 1400 or more) it is drawn at full size.
+// THE BAR'S SCALE for a layout. The bar shrinks when the window is narrower
+// than the cluster, and the meters are dropped where they do not fit. NO
+// COUNTER MAY COST THE METERS: the enlarged one's cluster is wider, and at
+// 1280 x 720 the meters would no longer fit beside it, so the whole deck is
+// drawn smaller - figures, dials, lamps and all, never below minScale - until
+// they do. SINCE 0.99.74 THAT IS EVERY COUNTER, not only the enlarged one: the
+// GAIN and SQUELCH dials made today's cluster 999 units wide, and the meters
+// need 314 more, which is 1313 against the 1232 a fresh install opens with. The
+// meters were a complaint once (0.89.0: "on first launch you don't see the
+// sample rate or the frame time meters"), so the deck gives up 8% of its size
+// at that window instead of the meters. At a window wide enough for both (a
+// bar of about 1313 for the 1x counter) it is drawn at full size.
 inline float deckScale(float availW, const CounterLayout& c, float minScale) {
     const float coreW = deckCoreW(c);
     float s = 1.0f;
     if (availW > 0.0f && availW < coreW) { s = std::max(minScale, availW / coreW); }
-    if (c.scale >= 2 && availW > 0.0f) {
+    if (availW > 0.0f) {
         const float room = (availW - kDeckMeterReserve) / coreW;
         if (room < s) { s = std::max(minScale, room); }
     }
@@ -987,10 +1138,18 @@ inline float deckScale(float availW, const CounterLayout& c, float minScale) {
     if (tall > kDeckBarH) { s = std::min(s, kDeckBarH / tall); }
     return s;
 }
-// Whether the meters are drawn: today's rule for the 1x counter; for the 2x one
-// the cluster is measured at the scale it is drawn at.
+// Whether the meters are drawn: the cluster is always measured at the scale
+// it is actually drawn at - both the reference (deckCoreW(c) == kDeckCoreW
+// for the 1x counter, so this is an identity there at scale == 1, exactly
+// today's rule) and the interface-scale factor folded into `scale` by
+// drawToolbar. UNIFIED FROM TWO BRANCHES (2026-09-28): the 1x-counter branch
+// used to compare against the UNSCALED kDeckCoreW regardless of `scale`,
+// which was harmless while `scale` only ever meant "this narrow a window"
+// (deckScale never exceeds 1) but would have let the meters overlap the
+// cluster the moment `scale` could also mean "this large an interface"
+// (uiscale::factor() can exceed 1) - meaning meters shown while the cluster
+// itself had already grown into their space.
 inline bool deckMetersFit(float barW, const CounterLayout& c, float scale) {
-    if (c.scale < 2) { return metersFitOnBar(barW, kDeckCoreW); }
     return meter1XOnBar(barW) >= deckCoreW(c) * scale + kMeterCoreClearance - 1.0e-3f;
 }
 
@@ -1120,10 +1279,18 @@ inline MuteBannerLayout layoutMuteBanner(float barW, float scale, float coreW, b
     // 1 - across the top, right of the cluster, clear of the meter faces.
     // 2 - the master cluster's head: past the transport (74 + 46 units, and
     // clear metal), short of the divider, above the MASTER caption.
+    //
+    // THE METERS' TOP EDGE IS 28 UNITS DOWN, NOT 28 PIXELS (0.99.74): drawToolbar
+    // draws the meter faces at 28 * scale, which is 28 px at scale 1 only. The strip
+    // ends 2 px above that, so it ends higher when the deck is drawn smaller - and
+    // the deck is drawn smaller at the very bar a fresh install opens with now (0.92
+    // for today's counter, 0.77 for the enlarged ones), where a strip that still
+    // ended at 26 px put the banner's key across the faces by up to two pixels
+    // (tests/test_theme_census.cpp, Bench Classic XL at 1280 x 720).
     const Place places[2] = {
         {1, clusterEnd, 3.0f,
          metersShown ? barW - kMeterRightMargin : barW - kMuteBannerEdgeClearance,
-         metersShown ? kMeterTopPx - 2.0f : 62.0f * scale},
+         metersShown ? kMeterTopPx * scale - 2.0f : 62.0f * scale},
         {2, 130.0f * scale, 4.0f * scale, (kDeckMasterDividerX - 6.0f) * scale, 48.0f * scale},
     };
     bool have = false;
@@ -1565,8 +1732,8 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 
 // --- The saved radio outlives a restore that could not open it -------------
 
-// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are eight of
-// them, read by the config restore, the web remote's device match,
+// ONE PLACE DECIDES WHICH SOURCE KINDS ARE NATIVE DRIVERS. There are nine of
+// them (the rtl_tcp client, "rtltcp", is the second one reached over a network), read by the config restore, the web remote's device match,
 // makeDeviceSource's construction and the remembered-source rule below, and a
 // list of string literals copied per call site is one chance per copy for an
 // Airspy to become quietly unrestorable while everything else keeps working.
@@ -1584,7 +1751,8 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 // WinUSB" is asking a different question and must not use this list.
 inline bool isNativeSourceKind(const std::string& kind) {
     return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf" ||
-           kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto";
+           kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto" ||
+           kind == "aor" || kind == "hydrasdr" || kind == "rtltcp";
 }
 
 // WHAT TO CALL A RECORDING ON SCREEN: its own name, not the path it lives at.
@@ -1791,6 +1959,12 @@ inline CascadePreset userPresetToCascade(const cascade::core::UserPreset& u) {
 inline std::vector<CascadePreset> autoPresetCandidates(
     const std::vector<cascade::core::UserPreset>& user,
     const std::vector<CascadePreset>& plugin) {
+    // An opt-in reception template configures the channel the user has already
+    // chosen; saved frequency buttons remain explicit user actions.
+    if (!plugin.empty() &&
+        (plugin.front().flags & CASCADE_PRESET_KEEP_TUNED_ON_START) != 0u) {
+        return plugin;
+    }
     std::vector<CascadePreset> out;
     out.reserve(user.size() + plugin.size());
     for (const cascade::core::UserPreset& u : user) { out.push_back(userPresetToCascade(u)); }

@@ -80,7 +80,9 @@
 #include "engine/tune_control.hpp"
 #include "source/airspy_source.hpp"
 #include "source/airspyhf_source.hpp"
+#include "source/aor_source.hpp"
 #include "source/hackrf_source.hpp"
+#include "source/hydrasdr_source.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/pluto_source.hpp"
 #include "source/pluto_tx.hpp"
@@ -792,6 +794,8 @@ private:
     // The end of every native scan: the selection found again by what it
     // names (rowsBefore = sourceRowKeys() before the list changed).
     void followSourceRowAfterRescan(const std::vector<cascade::gui::SourceRowKey>& rowsBefore);
+    // Drops the Soapy rows another route to the same chip owns, or that a lost SDRplay API session refuses (0.99.43+, master).
+    void dropRefusedMiricsSoapyRows();
 
     // Fills every panel mirror (rates, gains and their ranges, AGC, antenna)
     // from an open DeviceSource, priming the hardware where the panel has to
@@ -1918,6 +1922,11 @@ private:
     EngineStatusText statusText_;
     mutable std::mutex configSnapMutex_;
     cascade::core::AppConfig configSnap_;
+    // THE CONFIG AS LOADED (0.99.84 merge, 2026-10-21): publishConfig starts from it, so a field no half of this tree writes yet - the
+    // ones master's 0.99.43-0.99.84 added and the merge has not re-expressed (docs/engine-merge-0.99.84.md: PPM, patch presets, plugin
+    // sites, the per-radio gain memory ...) - goes back into the file as it was read instead of as a default. Every field a half DOES
+    // write is overwritten by it. Written by applyConfig (the control thread's own call), read by publishConfig on the same thread.
+    cascade::core::AppConfig loadedCfg_;
     // TESTS ONLY (an engine created through the table with testHooks=1): the
     // fault test.fault stands in for (published as FAULTED until RUN 1), and
     // the dummy load TX_OPEN "test:tx:dummy" installs. Empty / null in the

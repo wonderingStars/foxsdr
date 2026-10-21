@@ -1,0 +1,1 @@
+{"schemaVersion": 1, "plugins": [{"id": "x", "name": "x", "version": "1", "platforms": [{"os": "windows", "arch": "x64", "file": "x.dll", "url": "http://example.invalid/x.dll", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}]}]}

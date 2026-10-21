@@ -39,11 +39,35 @@ public:
     // False if the rate is fixed (file) or the device refused it.
     virtual bool setSampleRateHz(double hz) = 0;
 
+    // AS setSampleRateHz, but for a caller asking for THIS rate deliberately -
+    // a plugin preset, or a rate the user (or a browser/API request) picked by
+    // hand - rather than a generic default an open asks for or a remembered
+    // setting being restored (0.99.44 repair). Every source but AirspySource
+    // has only one way to reach a given rate, so the default just forwards;
+    // AirspySource overrides it because a raised decimation gives it several,
+    // and only a deliberate request should be allowed to search across them
+    // (see its own header for why).
+    virtual bool setSampleRateHzExplicit(double hz) { return setSampleRateHz(hz); }
+
     // Center frequency is nominal for sources with no physical tuner (the
     // generator, files): they store and report it so the display stays
     // coherent, and return true.
     virtual double centerFrequencyHz() const = 0;
     virtual bool setCenterFrequencyHz(double hz) = 0;
+
+    // THE RADIO'S OWN CRYSTAL CORRECTION (0.99.56, core/ppm_correction.hpp),
+    // for a driver that can trim its own reference. hasFrequencyCorrection()
+    // is a cached answer - safe from a per-frame draw, never a driver call.
+    // setFrequencyCorrectionPpm() takes the correction in ppm (positive = the
+    // crystal runs fast) and must leave the radio ON the frequency it reports
+    // (the driver retunes as needed); false with lastError() when refused.
+    // Default: no correction of its own - the application then corrects the
+    // centre frequency by retuning (core::PpmMethod::Retune).
+    virtual bool hasFrequencyCorrection() const { return false; }
+    virtual bool setFrequencyCorrectionPpm(double ppm) {
+        (void)ppm;
+        return false;
+    }
 
     // Pull up to n samples into dst; returns the count delivered. 0 means
     // "nothing available yet" for self-paced sources (caller retries) and is

@@ -24,8 +24,18 @@
 # BUILD_DIR defaults to "build" (relative to the repo root, or an absolute
 # path) and must already contain a built `cascade` (cmake --build build).
 #
+# ARCHITECTURE. The script detects the host architecture with `uname -m` and
+# picks a matching appimagetool build and output name - it does not take an
+# --arch flag, because it packages whatever `cascade` was already built for
+# on THIS machine (cross-packaging a foreign arch's binary would silently
+# produce an AppImage that reports the wrong ARCH to itself). Only x86_64 and
+# aarch64 are known to this script; anything else is refused rather than
+# guessed at.
+#
 # OUTPUT
-#   dist/FoxSDR-<version>-x86_64.AppImage
+#   dist/FoxSDR-<version>-x86_64.AppImage   (on an x86_64 host)
+#   dist/FoxSDR-<version>-aarch64.AppImage  (on an aarch64 host, e.g. a
+#                                            Raspberry Pi or an Arm CI runner)
 #
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -euo pipefail
@@ -73,13 +83,30 @@ install -m 0755 "$SCRIPT_DIR/AppRun" "$APPDIR/AppRun"
 # --- appimagetool, pinned by version and verified by sha256 before it is
 # trusted to run at all - this is code that packages a release, so a
 # tampered-with or mismatched download must be refused rather than executed.
+# Each architecture ships as its own separate appimagetool binary upstream
+# (AppImage/appimagetool release assets), so the URL, the pinned hash, the
+# cache filename and the output filename all key off `uname -m`.
 APPIMAGETOOL_VERSION="1.9.1"
-APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
-APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
-APPIMAGETOOL_CACHE="$DIST_DIR/appimagetool-x86_64.AppImage"
+HOST_ARCH="$(uname -m)"
+case "$HOST_ARCH" in
+    x86_64)
+        APPIMAGE_ARCH="x86_64"
+        APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+        ;;
+    aarch64|arm64)
+        APPIMAGE_ARCH="aarch64"
+        APPIMAGETOOL_SHA256="f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"
+        ;;
+    *)
+        echo "build-appimage.sh: unsupported host architecture '$HOST_ARCH' - only x86_64 and aarch64 are known to this script" >&2
+        exit 1
+        ;;
+esac
+APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${APPIMAGE_ARCH}.AppImage"
+APPIMAGETOOL_CACHE="$DIST_DIR/appimagetool-${APPIMAGE_ARCH}.AppImage"
 
 if [ ! -x "$APPIMAGETOOL_CACHE" ] || ! echo "$APPIMAGETOOL_SHA256  $APPIMAGETOOL_CACHE" | sha256sum -c - >/dev/null 2>&1; then
-    echo "build-appimage.sh: fetching appimagetool $APPIMAGETOOL_VERSION"
+    echo "build-appimage.sh: fetching appimagetool $APPIMAGETOOL_VERSION ($APPIMAGE_ARCH)"
     curl -fL -o "$APPIMAGETOOL_CACHE.tmp" "$APPIMAGETOOL_URL"
     if ! echo "$APPIMAGETOOL_SHA256  $APPIMAGETOOL_CACHE.tmp" | sha256sum -c -; then
         echo "build-appimage.sh: appimagetool download did not match the pinned sha256 - refusing to use it" >&2
@@ -90,12 +117,12 @@ if [ ! -x "$APPIMAGETOOL_CACHE" ] || ! echo "$APPIMAGETOOL_SHA256  $APPIMAGETOOL
     chmod +x "$APPIMAGETOOL_CACHE"
 fi
 
-OUTPUT="$DIST_DIR/FoxSDR-${VERSION}-x86_64.AppImage"
+OUTPUT="$DIST_DIR/FoxSDR-${VERSION}-${APPIMAGE_ARCH}.AppImage"
 rm -f "$OUTPUT"
 
 # FUSE is not available in WSL (or many CI containers), so appimagetool is
 # told to extract-and-run itself rather than mount its own AppImage.
-APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$APPIMAGETOOL_CACHE" "$APPDIR" "$OUTPUT"
+APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$APPIMAGE_ARCH" "$APPIMAGETOOL_CACHE" "$APPDIR" "$OUTPUT"
 
 echo "build-appimage.sh: wrote $OUTPUT"
 echo "build-appimage.sh: to run the result on a machine with no FUSE:"

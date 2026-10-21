@@ -459,7 +459,8 @@ void countersMoveByGroup() {
         {"decoders", [](PublishedState& p) { p.rx.decodersFitted = 3; }, "seq"},
         {"key", [](PublishedState& p) { p.rx.flags |= FOXAPI_RX_TX_KEYED; }, "seq tx"},
         {"tx power", [](PublishedState& p) { p.rx.txPowerDb = -10.0; }, "seq tx"},
-        {"an extension figure (position)", [](PublishedState& p) { p.app.rxLatDeg = 53.8; }, ""},
+        // master 0.99.4x: the position is what receiverLocator is computed from, so it moves the level-1 overall counter (abiSeq) and nothing else.
+        {"an extension figure (position)", [](PublishedState& p) { p.app.rxLatDeg = 53.8; }, "abiSeq"},
         // API 0.3 8.2, the status column's members: the sink's words and the
         // two texts move the audio group; the counters are measurements.
         {"the sink's state words (ever opened)",
@@ -838,6 +839,7 @@ PublishedState everyFieldDistinct() {
     e.audioPrimingCallbacks = 88;
     e.audioRingMs = 45.5;
     e.audioRingCapacityMs = 250.0;
+    e.audioLeadMs = 240;
     e.audioPluginGaps = 3;
     e.audioPluginGapFrames = 960;
     e.iqBytes = 123456789;
@@ -915,7 +917,7 @@ const char* const kRows[] = {
     "rdsPi", "rdsPsValid", "rdsPs", "rdsRadioText", "rdsPty", "rdsTp", "rdsTa", "rdsGroups",
     "rdsErrors", "sourceKind", "soapyArgs", "antenna", "antennas", "devices", "gains", "agcSupported",
     "agc", "sourceBusy", "sourceError", "iqRecording", "audioMutedBy", "audioUnderruns",
-    "audioPrimingCallbacks", "audioRingMs", "audioRingCapacityMs", "audioSource", "audioPluginGaps",
+    "audioPrimingCallbacks", "audioRingMs", "audioRingCapacityMs", "audioLeadMs", "audioSource", "audioPluginGaps",
     "audioPluginGapFrames", "audioRecording", "iqBytes", "audioBytes", "recordDir", "recordError",
     "recordNotice", "bookmarks", "scannerActive", "scannerState", "scanStartHz", "scanStopHz",
     "scanStepHz", "decoded", "tracks", "rxPositionSet", "rxLatDeg", "rxLonDeg", "plugins",
@@ -1021,6 +1023,7 @@ void composeMapsEveryField() {
     ROW(o.audioPrimingCallbacks == 88u);
     ROW(o.audioRingMs == 45.5);
     ROW(o.audioRingCapacityMs == 250.0);
+    ROW(o.audioLeadMs == 240);
     ROW(o.audioSource == "DAB");
     ROW(o.audioPluginGaps == 3u);
     ROW(o.audioPluginGapFrames == 960u);
@@ -1374,9 +1377,11 @@ void walkingOnePluginFlags() {
     };
     for (int b = 0; b < 32; ++b) {
         const std::uint32_t bit = 1u << b;
-        std::uint32_t want = 0;
+        // The flags this host sets in EVERY state for every client, with no capability or grant behind them (master 0.99.75-0.99.81).
+        std::uint32_t want = CASCADE_STATE_LISTS_UNPLACED_TRACKS | CASCADE_STATE_HOLDS_ESTIMATED_TRACKS | CASCADE_STATE_ROW_KEYS |
+                             CASCADE_STATE_IMAGE_INPUT;
         for (const Want& w : map) {
-            if (w.bit == bit) { want = w.want; }
+            if (w.bit == bit) { want |= w.want; }
         }
         PublishedState s{};
         s.rx.flags = bit;

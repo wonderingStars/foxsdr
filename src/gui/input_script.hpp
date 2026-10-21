@@ -13,6 +13,11 @@
 // ONLY IN A BOUNDED --frames RUN (see AppWindow::run), off unless
 // FOXSDR_INPUT_SCRIPT names a file, like every other test hook here.
 //
+// AND NOTHING OUTSIDE REACHES IT (2026-10-01): while a script runs, the real
+// mouse and keyboard are dropped from ImGui's queue (applyInputScript), so a
+// click on a test window that opened under someone's pointer cannot land in
+// the middle of a scripted gesture.
+//
 // The format, one step per line; '#' starts a comment, except in a text
 // step, which types the whole rest of its line - '#' included:
 //
@@ -20,9 +25,17 @@
 //   <frame> screen <x> <y>    pointer to ImGui screen coordinates
 //   <frame> down | up         left button
 //   <frame> rdown | rup       right button (the counter's menu, 2026-09-25)
+//   <frame> wheel <n>         the wheel, n notches (> 0 away from the user)
+//   <frame> wheelh <n>        the horizontal wheel (> 0 scrolls left)
+//   <frame> ctrlwheel <n>     the wheel with Ctrl held (a touchpad pinch)
+//   <frame> shiftwheel <n>    the wheel with Shift held (slides the passband, 0.99.82)
 //   <frame> key <name>        tap a key: enter, delete, backspace, escape,
 //                             tab, ctrl+a
 //   <frame> text <chars...>   type the rest of the line
+//   <frame> sleep <ms>        hold the frame loop for 1..5000 ms of real time,
+//                             so a step after it is really that much later -
+//                             a long press is a duration, and a bounded run's
+//                             frames are not a clock (2026-09-30)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_GUI_INPUT_SCRIPT_HPP
@@ -35,7 +48,7 @@
 namespace cascade::gui {
 
 struct ScriptStep {
-    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp };
+    enum class Verb { World, Screen, Down, Up, Key, Text, Wheel, RightDown, RightUp, WheelH, CtrlWheel, ShiftWheel, Sleep };
     long frame = 0;
     Verb verb = Verb::World;
     float x = 0.0f;
@@ -103,6 +116,26 @@ inline ScriptParse parseInputScript(const std::string& text) {
             // scrolling down a list gives (0.99.19).
             st.verb = ScriptStep::Verb::Wheel;
             ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
+        } else if (verb == "wheelh") {
+            // "wheelh 2": the HORIZONTAL wheel - a sideways two-finger
+            // touchpad scroll (0.99.49); > 0 scrolls left, as ImGui has it.
+            st.verb = ScriptStep::Verb::WheelH;
+            ok = static_cast<bool>(s >> st.x) && st.x != 0.0f;
+        } else if (verb == "ctrlwheel") {
+            // "ctrlwheel 1": the wheel with Ctrl held - a touchpad pinch on
+            // Windows arrives as exactly this (0.99.49).
+            st.verb = ScriptStep::Verb::CtrlWheel;
+            ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
+        } else if (verb == "shiftwheel") {
+            // "shiftwheel 1": the wheel with Shift held - on the spectrum and
+            // the waterfall, the gesture that slides the passband along the
+            // band instead of zooming (a request from a Linux user, 2026-10-18).
+            st.verb = ScriptStep::Verb::ShiftWheel;
+            ok = static_cast<bool>(s >> st.y) && st.y != 0.0f;
+        } else if (verb == "sleep") {
+            // Milliseconds in x; bounded so a typo cannot hang a test run.
+            st.verb = ScriptStep::Verb::Sleep;
+            ok = static_cast<bool>(s >> st.x) && st.x >= 1.0f && st.x <= 5000.0f;
         } else if (verb == "text") {
             // THE REST OF THE RAW LINE, not of the comment-stripped body: a
             // '#' is something to type here ("Channel #12"), and cutting the

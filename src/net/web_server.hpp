@@ -182,7 +182,7 @@ struct RadioStatus {
     };
 
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"hydrasdr"|"rtltcp"
     std::string sourceKind = "siggen";
     std::string soapyArgs;               // args of the open device, if any
     std::string antenna;                 // RX port the DRIVER reports
@@ -218,6 +218,11 @@ struct RadioStatus {
     std::uint64_t audioPrimingCallbacks = 0;
     double audioRingMs = 0.0;
     double audioRingCapacityMs = 0.0;
+    // The lead the sink demands before it plays, in milliseconds (0.99.73): 120
+    // to start with, deepened to 240, 480 or 960 when this computer falls behind,
+    // or the fixed buffer the person chose in the Sinks rail. The same figure the
+    // rail shows beside AUTOMATIC. 0 means an older build sent nothing.
+    int audioLeadMs = 0;
     // WHAT THE STREAM IS CARRYING, when it is not the receiver's own audio.
     // A plugin holding CASCADE_CAP_AUDIO_OUT REPLACES the demodulated audio
     // above the sink, so a listener on this stream hears the decoder and not
@@ -469,6 +474,12 @@ public:
     // Overrides the wall clock, for tests that need session expiry and login
     // throttling to be deterministic. Must be set before start().
     bool setClock(Clock fn);
+
+    // Fired once per request served, on whatever thread served it - see
+    // core::TesterUsageRecorder, which is what the GUI hands this for. Must
+    // be set before start(); the callback must be safe to call from any
+    // thread and must never block.
+    bool setUsageCallback(std::function<void()> fn);
 
     // Evaluates the bind policy and, if it allows, binds and starts serving.
     //

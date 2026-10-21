@@ -88,6 +88,25 @@ public:
     void setConverter(const cascade::core::ConverterSetting& s);
     cascade::core::ConverterSetting converter() const { return view_.converter(); }
 
+    // THE CRYSTAL CORRECTION (0.99.56, core/ppm_correction.hpp), the same
+    // per-radio value the receiver uses for this device, applied the same way:
+    //   radioCorrects()   the radio trims its own crystal (a native RTL-SDR, a
+    //                     SoapySDR device reporting hasFrequencyCorrection);
+    //                     setRadioPpm() sends it the value, radioPpm() is what
+    //                     it last accepted - noteRadioPpm() records one the
+    //                     opening worker sent before this object existed.
+    //   otherwise         setSoftwarePpm() corrects the centre frequency by
+    //                     retuning, in the view (like setConverter it does not
+    //                     retune by itself; `memo` is the worker's own first
+    //                     tune at this correction, so its readback is exact).
+    // GUI thread, like every other control call here.
+    bool radioCorrects() const;
+    bool setRadioPpm(double ppm);
+    void noteRadioPpm(double ppm) { radioPpm_ = ppm; }
+    double radioPpm() const { return radioPpm_; }
+    void setSoftwarePpm(double ppm, const cascade::core::PpmMemo& memo = {});
+    double softwarePpm() const { return view_.ppm(); }
+
     // The runner holding this radio's strips. publish() and reap() from the
     // GUI thread; the reader thread is its DSP thread.
     Runner& runner();
@@ -116,6 +135,7 @@ private:
     cascade::source::ConverterView view_;
     std::thread thread_;
     bool started_ = false;
+    double radioPpm_ = 0.0;
 };
 
 }  // namespace cascade::core::patch

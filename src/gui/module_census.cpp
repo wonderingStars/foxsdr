@@ -18,6 +18,16 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
     // caller wants the capability WORD for those, and censusModules reads it.
     if (!p.loaded) { return false; }
 
+    // CASCADE_CAP_RECEIVER_LOCATOR (0.99.43) is a PURE PERMISSION BIT - no
+    // table, no create/destroy, nothing borrowed from the plugin's image - so
+    // it cannot go in the {bit, table} list below at all; it is read straight
+    // off the capability word instead, the one thing every loaded record
+    // carries whether or not it has a table for anything.
+    if ((capMask & CASCADE_CAP_RECEIVER_LOCATOR) != 0u &&
+        (p.capabilities & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        return true;
+    }
+
     // ONE ENTRY PER BIT THIS ABI DEFINES, so the mapping is total over
     // CASCADE_CAP_ALL_KNOWN and a bit cannot be silently answered "no". A new
     // capability added to plugin_abi.h without a line here would be a module
@@ -31,6 +41,7 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_DECODER, p.decoder},
         {CASCADE_CAP_IQ_DECODER, p.iqDecoder},
         {CASCADE_CAP_IMAGE_DECODER, p.imageDecoder},
+        {CASCADE_CAP_IMAGE_INPUT, p.imageInput},
         {CASCADE_CAP_TRACK_SOURCE, p.trackSource},
         {CASCADE_CAP_PANEL, p.panel},
         {CASCADE_CAP_INSTRUMENT, p.instrument},
@@ -47,6 +58,11 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
         {CASCADE_CAP_AUDIO_OUT, p.audioOut},
         // Host API level 1: transforms the demodulated audio in place.
         {CASCADE_CAP_AUDIO_PROCESSOR, p.audioProcessor},
+        // Fields the host draws for the user (0.99.43).
+        {CASCADE_CAP_SETTINGS_UI, p.settingsUi},
+        // Audio to transmit (host API level 2, 0.99.74). Rides on a decoder instance like
+        // the audio-out table, and for the same reason needs its own line.
+        {CASCADE_CAP_TX_AUDIO, p.txAudio},
     };
     for (const Entry& e : table) {
         if ((capMask & e.bit) != 0u && e.table != nullptr) { return true; }
@@ -55,7 +71,7 @@ bool moduleProvides(const LoadedPlugin& p, std::uint32_t capMask) {
 }
 
 void countModule(ModuleCensus& c, const std::string& named, bool loaded, std::uint32_t capabilities, bool provides,
-                 bool stopped, std::uint32_t capMask) {
+                 bool stopped, std::uint32_t capMask, bool idle) {
     if (!loaded) {
         // THE CAPABILITY WORD, not the table, on a record that did not
         // load: every borrowed pointer is nulled on the way out and the
@@ -74,11 +90,16 @@ void countModule(ModuleCensus& c, const std::string& named, bool loaded, std::ui
         if (c.stoppedName.empty()) { c.stoppedName = named; }
         return;
     }
+    if (idle) {
+        ++c.idle;
+        if (c.idleName.empty()) { c.idleName = named; }
+        return;
+    }
     ++c.live;
 }
 
 ModuleCensus censusModules(const std::vector<LoadedPlugin>& plugins, std::uint32_t capMask,
-                           const ModuleStoppedFn& isStopped) {
+                           const ModuleStoppedFn& isStopped, const ModuleIdleFn& isIdle) {
     ModuleCensus c;
     for (const LoadedPlugin& p : plugins) {
         const std::string file = cascade::core::pluginKey(p);
@@ -91,7 +112,11 @@ ModuleCensus censusModules(const std::vector<LoadedPlugin>& plugins, std::uint32
         // count nothing rather than counting it live.
         const bool provides = p.loaded && moduleProvides(p, capMask) && static_cast<bool>(isStopped);
         const bool stopped = provides && isStopped(file);
-        countModule(c, named, p.loaded, p.capabilities, provides, stopped, capMask);
+        // DORMANT IS NOT LIVE (0.99.73): the module is fitted, working as designed, and holds no
+        // instance because nothing is using it. Counting it live would make a surface whose own
+        // list is empty report a module that "did not start".
+        const bool idle = provides && !stopped && isIdle && isIdle(file);
+        countModule(c, named, p.loaded, p.capabilities, provides, stopped, capMask, idle);
     }
     return c;
 }
@@ -142,7 +167,7 @@ std::string trackSourceAbsenceNote(const ModuleCensus& c, const char* subject,
             s = buf;
         }
         s += tr(" A stopped module stays fitted and is given no track source until you "
-                "start it again - the key is on its own plate in the Fitted modules window.");
+                "start it again - the key is on its row in the Fitted modules window.");
         return s;
     }
     if (c.refused > 0) {
@@ -212,8 +237,8 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
             s = buf;
         }
         s += tr(" A stopped module stays fitted and is fed no signal until you start it "
-                "again - the Fitted modules window letters it STOPPED BY YOU and the key "
-                "is on its plate.");
+                "again - the Fitted modules window letters it STOPPED and the key "
+                "is on its row.");
         return s;
     }
     if (c.refused > 0) {
@@ -235,6 +260,28 @@ std::string decoderAbsenceNote(const ModuleCensus& c) {
         s += tr(" It is on the disk already, so there is nothing to fetch: the Fitted "
                 "modules window letters it REFUSED and prints the host's own reason, "
                 "verbatim.");
+        return s;
+    }
+    if (c.idle > 0) {
+        // NOT A FAULT, AND SAID TO BE NONE (0.99.73). The decoder is fitted and set to start
+        // when it is used; nothing is using it, so it is not running. The remedy is a window,
+        // not a download and not a repair.
+        std::string s;
+        if (c.idle == 1 && !c.idleName.empty()) {
+            cascade::core::formatUtf8(buf,
+                          tr("Nothing is decoding: \"%s\" carries a decoder and it is idle."),
+                          c.idleName.c_str());
+            s = buf;
+        } else {
+            cascade::core::formatUtf8(buf,
+                          c.idle == 1 ? tr("Nothing is decoding: %d fitted decoder is idle.")
+                                      : tr("Nothing is decoding: %d fitted decoders are idle."),
+                          c.idle);
+            s = buf;
+        }
+        s += tr(" An idle decoder is not in use, so it is not running, and that is not a fault: "
+                "it starts by itself when you open the Decoder output window or its own "
+                "window, and the Fitted modules window letters it IDLE with a START key.");
         return s;
     }
     if (c.live > 0) {

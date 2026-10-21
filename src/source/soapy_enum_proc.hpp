@@ -65,13 +65,53 @@
 // it keeps the fast quiet death and writes no report at all: diagnostics off
 // means off, in the child exactly as in the parent.
 //
+// ONE REPORT PER CHILD DEATH (2026-10-04), and it is the child's whenever the
+// child wrote one. Until then a death could leave THREE: the child's own (the
+// stack and the module list), the parent's whole-bus report of it (no stack;
+// the drivers still probing), and - after a second whole-bus death - the
+// parent's per-driver report from the sweep (no stack; the driver). One user's
+// deterministic ASIO fault made six files in one scan and, after the client's
+// 24-hour de-duplication, three uploads: three of the five a machine may send
+// a day, for a fault the application survived, and on the dashboard three
+// unrelated groups. A real crash later that day could then be rate-limited
+// away.
+//
+// So the parent files its own report only for a death the child's handler did
+// not report. It asks the crash directory (core::crashReportWrittenByProcess):
+// the child's report is named with the child's process id, which the spawn
+// exposes as EnumResult::childPid, and is on disk before the parent sees the
+// exit, because the handler writes and then terminates. What the child's
+// handler can never see keeps the parent's stackless report exactly as it was:
+// a heap corruption (0xC0000374), a vendor TerminateProcess, a child that died
+// before it armed - and a child that absorbed a fault earlier and then died
+// by one of those routes, whose earlier file is not the report of its death.
+// (The timeout kill never produced a parent report and still does not: only a
+// ChildDied outcome is reported.)
+//
+// THE FACTS ONLY THE PARENT'S REPORTS CARRIED travel in the child's. The
+// child knows its own arguments, so it renders - on the healthy path, before it
+// arms - the tail of its reason line (enumerateChildReasonSuffix): "
+// - enumeration child, driver=uhd, attempt 1 (contained)". The attempt is
+// handed down on the command line (--attempt=N), because only the parent knows
+// it. The `reason` is the one field the uploader already sends verbatim, so
+// nothing new leaves the machine. The "still probing when it died" shortlist
+// is the one thing the child cannot put in its reason (it is not known until
+// the fault), so it travels in the child's LOG instead: the probe log the child
+// writes to the parent is written to the child's own log ring as well
+// (runEnumerateHelper), and the ring is in the report and is uploaded - a probe
+// that began and never ended is the same shortlist, read off the log, and
+// the stack names the faulting module besides. The alternatives were worse:
+// the parent appending to a file another process wrote (a second writer on a
+// report the next start will read, with a new way to leave it half-written if
+// the parent itself dies mid-append), or keeping the parent's report and so
+// the second upload.
+//
 // WHAT IS STILL ONLY AN EXIT CODE, stated plainly: the fault this whole file
 // exists for is raised on a thread UHD spawned, and a report for it is
 // written by the child's own handler only if that filter runs. When the child
-// dies without one - killed by the timeout, or by a fault no user-mode filter
-// sees - the parent still files its own ChildDied report, which carries the
-// exit code and the PARENT'S stack, not the fault's. The two are told apart
-// by the reason line.
+// dies without one - by a fault no user-mode filter sees - the parent still
+// files its own ChildDied report, which carries the exit code and not a
+// stack at all. The two are told apart by the reason line.
 //
 // THE CHILD CANNOT OUTLIVE THE PARENT. It is started inside a job object with
 // KILL_ON_JOB_CLOSE, because the timeout below only protects anyone while
@@ -114,6 +154,9 @@
 #ifndef CASCADE_SOURCE_SOAPY_ENUM_PROC_HPP
 #define CASCADE_SOURCE_SOAPY_ENUM_PROC_HPP
 
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -131,6 +174,54 @@ enum class EnumOutcome {
 
 // For logs and test output. Never nullptr.
 const char* enumOutcomeName(EnumOutcome outcome) noexcept;
+
+// HOW A HELPER'S END IS READ (0.99.76). The exit codes the parent meets, and the
+// ones this file defines:
+//
+//   0                         the helper answered and ended cleanly.
+//   74  (kEnumChildExitPipeClosed)
+//                             the helper could not write to the parent: the pipe
+//                             had no reader left (EPIPE). sysexits.h's EX_IOERR.
+//   141 (kEnumChildExitSigpipe)
+//                             POSIX only, 128 + SIGPIPE(13): the same thing for a
+//                             helper that did not ignore SIGPIPE. Nothing on
+//                             Windows exits with it. The helper has ignored SIGPIPE
+//                             since 0.99.76 (armEnumerateHelperProcess), so only an
+//                             older helper, or a vendor module that put the default
+//                             disposition back, dies this way now.
+//   0xC0000005 and friends    Windows: the exception code the helper's filter
+//                             terminated with. POSIX: 128 + the signal (139 SIGSEGV,
+//                             134 SIGABRT). A real death: contained, reported.
+//   0xE0454E55                Windows: the parent's own timeout kill (never read as
+//                             an exit code; the outcome is ChildTimedOut).
+//
+// Field reports 862234B08B9FC33D and 30BCD594C128766D (0.99.73, Linux): six
+// "crashes" from one session in one second, every one exit 0x8D = 141, the last
+// of them blaming the rtlsdr driver alone - which then went on the session's
+// do-not-ask list, so a working RTL-SDR was left out of every later scan. A
+// helper that ends because nobody is reading its pipe has not crashed and has
+// not shown its driver to be bad.
+inline constexpr int kEnumChildExitPipeClosed = 74;
+inline constexpr int kEnumChildExitSigpipe = 141;
+
+// What a helper's end means. A pure function of the exit code the parent read and
+// whether the parent had already given up on the child (`parentGaveUp`: its
+// budget ran out and it killed the child), so the reading is tested without a
+// child.
+enum class ChildEnd {
+    Clean,       // exit 0
+    Died,        // anything else, while the parent was still listening: a death
+    PipeClosed,  // kEnumChildExitPipeClosed or kEnumChildExitSigpipe: not a death
+    TimedOut,    // the parent gave up first; whatever the status says, it is the kill's
+};
+ChildEnd classifyChildEnd(unsigned long exitCode, bool parentGaveUp) noexcept;
+
+// THE HELPER'S WRITE TO THE PARENT: `size` bytes of `data` to `out`, flushed.
+// False when and only when the write failed because the reader is gone (EPIPE);
+// the caller's question is only whether anyone is listening, so any other
+// failure answers true. With SIGPIPE ignored this is how a helper learns it is
+// talking to nobody.
+bool writeToParent(std::FILE* out, const char* data, std::size_t size);
 
 struct EnumResult {
     std::vector<SoapyDeviceInfo> devices;
@@ -173,6 +264,15 @@ struct EnumResult {
     // retry is what produced this answer.
     int attempts = 0;
 
+    // THE MOST RECENT CHILD'S PROCESS ID, and when it was started (0 and the
+    // epoch when none was). The crash handler names its report with the process
+    // id, so these are how the parent asks the crash directory "did that child
+    // write a report of its own death" (core::crashReportWrittenByProcess,
+    // which also wants the start time: process ids are reused, and the crash
+    // directory keeps reports for weeks). Set at the spawn, before the wait.
+    unsigned long childPid = 0;
+    std::chrono::system_clock::time_point childSpawnedAt{};
+
     // HOW MANY CHILDREN DIED, and with what, EVEN WHEN THE ANSWER IS Ok.
     //
     // Without these, a successful retry erases the evidence: `outcome` is Ok
@@ -186,6 +286,14 @@ struct EnumResult {
     // separate parent processes, every parent surviving.
     int childDeaths = 0;
     unsigned long deathExitCode = 0;  // the most recent death's code
+
+    // THE MOST RECENT CHILD ENDED ON A CLOSED PIPE (0.99.76) - classifyChildEnd
+    // says PipeClosed - and `closedPipeEnds` is how many of `childDeaths` did, kept
+    // through a retry like it. Such an end is counted as a death, retried, and
+    // swept like one; it is not filed as a crash, and it does not put its driver on
+    // the session's do-not-ask list. See kEnumChildExitPipeClosed.
+    bool endedOnClosedPipe = false;
+    int closedPipeEnds = 0;
 
     // THE PER-DRIVER SWEEP: set when the whole-bus probe died on every attempt
     // and each driver was then asked in a child of its own. Field report
@@ -230,6 +338,21 @@ struct EnumResult {
     // heap corruption is detected at the next allocation, which can be on
     // another driver's thread than the one that did the damage.
     std::vector<std::string> inFlightDrivers;
+
+    // WHEN THE MOST RECENT CHILD THAT DIED WENT, as far as its own output can
+    // say (2026-10-01, crash 3C2F1A0F27A8FD35). `probesBegan`: at least one
+    // probe's begin line reached the parent - so an empty inFlightDrivers
+    // means every probe had FINISHED, not that none had begun.
+    // `answeredBeforeDeath`: its whole answer line was on the pipe before it
+    // died, so the walk was over and the answer is good. The field child died
+    // in a vendor module's DLL detach as it exited, after answering; the
+    // parent threw that answer away, re-probed, swept, and reported "no
+    // driver's probe had begun (it died while the driver modules were
+    // loading)". A complete answer is now USED (the outcome is Ok, the death
+    // still counted in childDeaths and filed once), and the reason says when
+    // the child died.
+    bool probesBegan = false;
+    bool answeredBeforeDeath = false;
 
     // WHAT THE CHILD'S OWN CRASH HANDLER SAID IT DIED OF, for the most recent
     // child that died or was killed - the core::kFaultLinePrefix lines it
@@ -360,6 +483,17 @@ struct EnumOptions {
 // and no per-driver child is started for it. A death is deterministic by the
 // time it reaches that list (it took the whole bus twice and then its own
 // child), so re-asking it on every Refresh only costs a crash each time.
+//
+// THE SOAPYSDR "audio" DRIVER IS NEVER ASKED, by any walk - the whole bus
+// (through the child's --skip), the sweep, the walk beside an open radio and
+// the in-process fallback (2026-10-01, crash reports 4138700E14D784C6 and
+// 3C2F1A0F27A8FD35). SoapyAudio lists sound cards through RtAudio, whose ASIO
+// back end loads every ASIO driver on the machine; a Native Instruments one
+// ("Audio Kontrol 1") killed every child that asked it. And nothing it can
+// list is ever offered: every driver=audio row is dropped from the Source
+// list and refused on open (gui/app_window.cpp, isAudioDriver) and skipped
+// by --soapy-check and --rds-check; sound cards have been FoxSDR's own
+// sound-card source since 0.99.38. Asking it was all risk and no answer.
 EnumResult enumerateIsolated(const EnumOptions& options = EnumOptions{});
 
 // A driver whose own enumeration child died in this process's lifetime, and
@@ -436,7 +570,50 @@ std::string enumerateHelperPath();
 //
 // The directory is created here if it does not exist; it is only ever the one
 // the parent already had armed.
-void armEnumerateHelperProcess(const char* crashDir);
+//
+// POSIX: SIGPIPE is IGNORED here, first and whatever the directory (0.99.76), so
+// a write to a descriptor nobody reads - the pipe to the parent, the stderr it
+// inherited, a socket a vendor module opened - fails with EPIPE where it used to
+// kill the helper with exit 141. What the helper got before depended on its
+// parent: an ignored signal stays ignored across fork and exec, and
+// httplib::Server's constructor (third_party/cpp_httplib, run by
+// WebServer::start) ignores SIGPIPE for the whole process - so a helper started
+// after the web server was constructed already had it ignored, and one started
+// before did not.
+//
+// `reasonSuffix` (null or empty: none) is what this process says on the end of
+// the `reason:` line of its own report - see enumerateChildReasonSuffix. It is
+// rendered by the caller on the healthy path and installed with the handlers
+// (CrashHandlerConfig::reasonSuffix); it is ignored when `crashDir` is empty,
+// because a process that writes no report has no reason line to put it on.
+//
+// `unresolvedSignatureTag` (null or empty: none) is what its report's signature
+// hashes in place of a module name when the fault is in no module at all -
+// childFaultSignatureTag of the walk. A fault in a module groups by that module
+// and offset, so one fault is one signature whichever walk met it; one in
+// private memory has no module, and without a tag every driver's such fault
+// shared one signature (and so one upload a day), where the parent's own report
+// of the same death used to keep them apart.
+void armEnumerateHelperProcess(const char* crashDir, const char* reasonSuffix = nullptr,
+                               const char* unresolvedSignatureTag = nullptr);
+
+// WHAT THE CHILD'S OWN REPORT SAYS ABOUT THE CHILD, the tail of its `reason:`
+// line (2026-10-04): which walk it was asked for, which attempt it was, and
+// that the application survived it. For example
+//
+//   " - enumeration child, whole bus, attempt 2 (contained)"
+//   " - enumeration child, driver=uhd, attempt 1 (contained)"
+//   " - enumeration child, driver list, attempt 1 (contained)"
+//
+// `listDrivers` wins over `driver`; an empty or null `driver` is the whole bus;
+// `attempt` of 0 or less leaves the attempt out (a child started by hand, or by
+// a parent that predates the flag). The driver name is third-party text, so it
+// is passed through the same alphabet as every other name in a report line and
+// cut to 16 characters - the site keeps 200 characters of a reason, the longest
+// fatal reason this product writes is about 90 and an absorbed fault's is 134,
+// and the tail has to fit behind either. A pure function, so the wording and
+// the budget are tested without a child.
+std::string enumerateChildReasonSuffix(bool listDrivers, const char* driver, int attempt);
 
 // THE CHILD SIDE. Runs the vendor walk in this process and writes one line of
 // JSON to stdout:
@@ -444,7 +621,9 @@ void armEnumerateHelperProcess(const char* crashDir);
 //   {"schema":1,"runtime":true,"guardedCalls":1,"capture":false,
 //    "devices":[{"label":..,"args":..}]}
 //
-// Returns 0 on success. Called only from main() when the hidden
+// Returns 0 on success, and kEnumChildExitPipeClosed when no one was reading
+// the pipe to the parent (the walk is finished first, so that the module that
+// must say goodbye still does). Called only from main() when the hidden
 // --enumerate-json flag is present, before ANY of the application's start-up
 // work: no config is read, no window is opened, no telemetry marker is
 // touched. `crashDir` is the one thing the parent hands down - see CRASH
@@ -460,8 +639,29 @@ void armEnumerateHelperProcess(const char* crashDir);
 // and no devices, which is how the parent knows what to sweep. `skip` is a
 // comma-separated list of drivers the whole-bus walk leaves out (null or
 // empty: none) - the session's faulted drivers, see enumerateIsolated.
+// `attempt` is which try the parent says this is (--attempt=N; 0: not told) and
+// goes, with the walk above, into the tail of this child's own reason line.
 int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = nullptr,
-                       bool listDrivers = false, const char* skip = nullptr);
+                       bool listDrivers = false, const char* skip = nullptr, int attempt = 0);
+
+// HOW THE HELPER ENDS, once runEnumerateHelper has returned: stdio flushed,
+// then the process terminated with `exitCode` WITHOUT the CRT's exit path -
+// no atexit handlers, no static destructors and, above all, no
+// DLL_PROCESS_DETACH into the vendor modules the walk loaded (Linux: _Exit,
+// so no destructors of the loaded .so files either). The answer is on the
+// pipe by then; nothing a vendor module does on unload can add to it, and on
+// 2026-10-01 (0.99.57, crash 3C2F1A0F27A8FD35) one did take it away: an ASIO
+// driver SoapyAudio had initialised faulted in its detach, below
+// __scrt_common_main_seh, ucrtbase's exit and ntdll's loader shutdown, and
+// the child that had answered died 0xC0000005. Called only by main().
+//
+// ONE EXCEPTION, before the end: the module that registered "sdrplay" is
+// unloaded (SoapySource::unloadModulesRegistering, vendor-guarded, bounded at
+// 2 s), because SoapySDRPlay3 closes the SDRplay API - sdrplay_api_Close, the
+// call the API wants last - only in a singleton destroyed at module unload,
+// and a client that vanishes without it may wedge the SDRplay API service
+// for every later client (2026-10-01, SDRplay field audit).
+[[noreturn]] void endEnumerateHelperProcess(int exitCode);
 
 // The child's ONE serialisation step, as a named function: everything between
 // "the walk produced these devices" and "this is the line on stdout". It

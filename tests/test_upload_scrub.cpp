@@ -95,6 +95,8 @@ const std::vector<std::string>& forbidden() {
         // real 0.99.31 report, and the unrelated devices they inventory
         "7e59240920a2", "3032363330303934343834393433", "077233483938", "98f1ccd",
         "vid_0db0", "vid_045e", "vid_046d",
+        // a Pluto's address and host name, and a network driver's peer
+        "192.168.2.1", "shack-pluto", "192.168.1.77",
     };
     return v;
 }
@@ -125,6 +127,8 @@ const std::vector<std::string>& required() {
         "/dev/bus/usb/001/004 busy (-16)",
         "ID_SERIAL_SHORT=<stripped>",
         "Generic RTL2832U OEM :: <stripped>",
+        // the Pluto's port and daemon version survive its address
+        "at <host>:30431 - iiod 0.25", "at ip:<host> refused a tune", "tcp://<host>:55132",
     };
     return v;
 }
@@ -203,6 +207,15 @@ void writeTheRealLines() {
     diagWarnf("usbfs: %s busy (-16); udev ID_SERIAL_SHORT=%s", "/dev/bus/usb/001/004", "00000417");
     diagLogf("soapy: opened label=%s", "Generic RTL2832U OEM :: 00000417");
     diagWarnf("exception 0x%08X absorbed in %s", 0xC0000005u, "SoapyUHD.dll");
+    // src/source/pluto_source.cpp up to 0.99.58: the address the user typed,
+    // on the open line (fields shortened to stay inside the ring's width).
+    diagLogf("pluto: opened %s at %s:%u - iiod %s, firmware \"%s\", serial %s; phy %s",
+             "ADALM-Pluto", "192.168.2.1", 30431u, "0.25", "v0.38", "1044", "ad9361-phy");
+    // src/gui/app_window.cpp noteTuneRefused, with a Pluto's source name.
+    diagLogf("source: the %s refused a tune %s", "Pluto: ADALM-Pluto at ip:shack-pluto.local",
+             "below its range");
+    // A network driver's own line, in the shape SoapyRemote writes a URL.
+    DiagLog::instance().write("info", "soapy: SoapyRemote: tcp://192.168.1.77:55132 replied");
     diagLogf("%s", kPlainB);
 }
 
@@ -435,6 +448,20 @@ void unitRules() {
     expectScrub("patch: radio 'Bob's rig' switched on", "patch: radio '<name>' switched on");
     expectScrub("patch: radio 'Loft Air", "patch: radio '<name>");
 
+    // A DEVICE LABEL THE OPERATING SYSTEM HANDED BACK, in parentheses, not
+    // quotes - a Bluetooth headset or a paired phone used as a microphone,
+    // where the make and model that follow the possessive are the useful
+    // part of the line and the person's name is not (2026-09-28 review; the
+    // first is the exact PortAudio label the review's leak probe used).
+    expectScrub("source: opened the sound card Headset (Alice's AirPods Pro) (wasapi) at 48000 Hz, stereo",
+                "source: opened the sound card Headset (<name>'s AirPods Pro) (wasapi) at # Hz, stereo");
+    expectScrub("source: found input device Microphone (Bob's iPhone)",
+                "source: found input device Microphone (<name>'s iPhone)");
+    // A possessive OUTSIDE parentheses is prose, not a device label, and is
+    // left alone - the existing "the tuner's PLL" case above already proves
+    // this for a non-possessive apostrophe; this is the possessive case.
+    expectScrub("note: it's connected", "note: it's connected");
+
     // USB INSTANCE IDS: the three real lines, one at a time, keep the kind of
     // device and lose the instance segment...
     expectScrub("vendor: libusb: info [get_guid] no DeviceInterfaceGUID registered for "
@@ -488,6 +515,134 @@ void unitRules() {
     expectScrub("soapy: label=Generic RTL2832U OEM :: 00000417, driver=rtlsdr",
                 "soapy: label=Generic RTL2832U OEM :: <stripped>, driver=rtlsdr");
     expectScrub("usbfs: /dev/bus/usb/001/004 busy (-16)", "usbfs: /dev/bus/usb/001/004 busy (-16)");
+}
+
+// NETWORK ADDRESSES AND HOST NAMES (0.99.59). PRIVACY.md has always said a
+// report never carries "your IP address" or "your machine name", but no rule
+// enforced it: the Pluto's open line printed the address the user typed
+// ("pluto: opened ADALM-Pluto at 192.168.2.1:30431 ..."), its source name
+// ("Pluto: ADALM-Pluto at ip:pluto.local") reached tune lines, and a
+// network driver's own lines (SoapyRemote, rtl_tcp, SpyServer) carry
+// addresses and URLs. An IPv4 or IPv6 literal anywhere, and a host name in
+// the places FoxSDR and those drivers write one, become <host>; the port
+// stays, and so does every version string the report needs.
+void networkAddresses() {
+    // IPv4 LITERALS, anywhere on the line, the port kept.
+    expectScrub("pluto: opened ADALM-Pluto at 192.168.2.1:30431 - iiod 0.25, firmware \"v0.38\"",
+                "pluto: opened ADALM-Pluto at <host>:30431 - iiod 0.25, firmware \"v0.38\"");
+    expectScrub("soapy: rtl_tcp connected 10.20.30.40", "soapy: rtl_tcp connected <host>");
+    expectScrub("vendor: peer (172.16.254.1) closed", "vendor: peer (<host>) closed");
+    // ...on a line that also names a frequency the number rule still runs.
+    expectScrub("pluto: at 192.168.2.1:30431 tuned to 433920000",
+                "pluto: at <host>:# tuned to #");
+
+    // HOST NAMES after the keys FoxSDR and the network drivers write them
+    // with - a single label (a machine name) as well as a dotted one.
+    expectScrub("source: the Pluto: ADALM-Pluto at ip:192.168.2.1 refused a tune below its range",
+                "source: the Pluto: ADALM-Pluto at ip:<host> refused a tune below its range");
+    expectScrub("Pluto: ADALM-Pluto at ip:pluto.local", "Pluto: ADALM-Pluto at ip:<host>");
+    expectScrub("Pluto TX: ADALM-Pluto at ip:STEVE-PC", "Pluto TX: ADALM-Pluto at ip:<host>");
+    expectScrub("soapy: opened driver=remote,remote=shack-pi.local:55132,remote:driver=rtlsdr",
+                "soapy: opened driver=remote,remote=<host>:55132,remote:driver=rtlsdr");
+    expectScrub("soapy: args host=SHACK-PC, port=5555", "soapy: args host=<host>, port=5555");
+    expectScrub("soapy: hostname=radio-room ok", "soapy: hostname=<host> ok");
+    expectScrub("soapy: rtltcp=192.168.1.20:1234", "soapy: rtltcp=<host>:1234");
+    expectScrub("pluto: uri=ip:192.168.2.1", "pluto: uri=ip:<host>");
+    expectScrub("vendor: addr=sdr.example.org", "vendor: addr=<host>");
+    expectScrub("vendor: server=spy.example.net:5555", "vendor: server=<host>:5555");
+    // ...after a URL scheme, a user name and password with it, the path kept.
+    expectScrub("soapy: SoapyRemote: tcp://192.168.1.77:55132 replied",
+                "soapy: SoapyRemote: tcp://<host>:55132 replied");
+    expectScrub("vendor: rtsp://admin:secret@cam.example.com:554/stream1",
+                "vendor: rtsp://<host>:554/stream1");
+    expectScrub("vendor: GET http://shack-pi/api/status", "vendor: GET http://<host>/api/status");
+    expectScrub("vendor: https://[fe80::1]:8443/x", "vendor: https://<host>:8443/x");
+    // ...after " at ", " to " and " from ", when it is plainly a host: a
+    // dotted name, or a name with a port after it.
+    expectScrub("could not reach the Pluto at sdr.example.org:30431 - refused",
+                "could not reach the Pluto at <host>:30431 - refused");
+    expectScrub("nothing at shack-pi:30431 answered as an IIO daemon: closed",
+                "nothing at <host>:# answered as an IIO daemon: closed");
+    expectScrub("vendor: Connecting to spy.example.net:5555...", "vendor: Connecting to <host>:5555...");
+    expectScrub("vendor: reply from pluto.local.", "vendor: reply from <host>.");
+    // ...in double quotes, as a dotted name, or after the word "host".
+    expectScrub("could not find \"pluto.local\" on the network",
+                "could not find \"<host>\" on the network");
+    expectScrub("could not find the host \"STEVE-PC\" on the network",
+                "could not find the host \"<host>\" on the network");
+    // ...a local-network name anywhere at all...
+    expectScrub("vendor: resolved shack-pi.lan first", "vendor: resolved <host> first");
+    // ...and the machine in a Windows network path.
+    expectScrub("plugins: \\\\NAS-01\\radio\\plugins (this is not a Store package)",
+                "plugins: \\\\<host>\\radio\\plugins (this is not a Store package)");
+
+    // IPv6 LITERALS, bracketed with a port and a zone, compressed, full,
+    // and with an IPv4 tail.
+    expectScrub("vendor: connected to [fe80::1ff:fe23:4567:890a%12]:1234",
+                "vendor: connected to [<host>]:1234");
+    expectScrub("vendor: peer 2001:db8::8a2e:370:7334 refused", "vendor: peer <host> refused");
+    expectScrub("vendor: peer 2001:0db8:85a3:0000:0000:8a2e:0370:7334 gone",
+                "vendor: peer <host> gone");
+    expectScrub("vendor: mapped ::ffff:192.168.1.5 ok", "vendor: mapped <host> ok");
+
+    // THIS MACHINE TALKING TO ITSELF names nobody, and says whether a
+    // listener was bound to every interface or to loopback only: kept.
+    for (const char* plain : {
+             "web: listening on 0.0.0.0:8080",
+             "web: bound 127.0.0.1:8080",
+             "vendor: [::1]:1234 refused",
+             "pluto: uri=ip:localhost",
+         }) {
+        expectScrub(plain, plain);
+    }
+
+    // WHAT MUST NOT CHANGE: versions in every shape a log line prints one
+    // (the starting line, a package version after its word, the Store
+    // package's full name, the OS build), times, rates, tuner and error
+    // numbers, a USB VID:PID, an out-of-range dotted quad, module names
+    // after " at ", C++ scope operators, file names, and prose.
+    for (const char* plain : {
+             "12:34:56.789 info FoxSDR 0.99.58 (80e2998) starting",
+             "store update: package version 1.99.58.0 is installed",
+             "plugins: C:\\Program Files\\WindowsApps\\x (this is a Store package: "
+             "hedgerowlabs.FoxSDR_1.99.58.0_x64__8wekyb3d8bbwe)",
+             "os: Windows 10.0.22631.4317",
+             "firmware 1.2.3.4 on board id 0",
+             "beyond 255: 300.168.1.1 and 1.2.3.256 stay, 1.2.3 too",
+             "rtlsdr: opened at 2400000 S/s, tuner 0, read failed (-5)",
+             "libusb: USB\\VID_0BDA&PID_2838 0bda:2838 at 12:34:56",
+             "exception 0xC0000005 absorbed in SoapyUHD.dll at cascade.exe+0x1A2B",
+             "soapy: SoapySDR::Device::make() failed at cascade::core::open",
+             "bookmarks: loaded plugins.json from settings.ini to bands.csv",
+             "source: switched to WFM at 48000 S/s - nothing at all to do",
+             "source: the RTL-SDR answered a tune somewhere else (at the edge of its range, +3 ppm)",
+             "aor: opened AOR AR-DV1 - VR \"AR-DV1\", control on COM, I/Q at 1.125 MS/s",
+         }) {
+        expectScrub(plain, plain);
+    }
+}
+
+// SERIAL PORT NAMES (0.99.59): the number Windows gave a port, or the
+// number on a Linux tty node, is masked in uploads - "COM5" becomes "COM#".
+// A diagnosis needs to know a port was tried, opened or refused, and in what
+// order; which number this machine happened to give it identifies nothing
+// the report needs.
+void serialPortNames() {
+    expectScrub("aor: control port COM5: VR -> \"AR-DV1\" (AR-DV1)",
+                "aor: control port COM#: VR -> \"AR-DV1\" (AR-DV1)");
+    expectScrub("aor: open abandoned: More than one AOR receiver answered (COM5, COM17).",
+                "aor: open abandoned: More than one AOR receiver answered (COM#, COM#).");
+    expectScrub("gps: \\\\.\\COM12 could not be opened: Access is denied.",
+                "gps: \\\\.\\COM# could not be opened: Access is denied.");
+    expectScrub("gps: listening on /dev/ttyUSB0 at 9600", "gps: listening on /dev/ttyUSB# at 9600");
+    expectScrub("gps: /dev/ttyACM12 gone", "gps: /dev/ttyACM# gone");
+    for (const char* plain : {
+             "telecom3 and COMMAND 3 and the COM port",
+             "usbfs: /dev/bus/usb/001/004 busy (-16)",
+             "gps: (a typed device path, 27 chars) could not be opened",
+         }) {
+        expectScrub(plain, plain);
+    }
 }
 
 // Sets (or, with nullptr, clears) an environment variable in the copy the
@@ -587,11 +742,97 @@ void bundleHeaderPaths() {
     setEnv(var, saved != nullptr ? keep.c_str() : nullptr);
 }
 
+// A PLUGIN'S NAME IS NOT A FREQUENCY (GitHub issue 5's bundle, 0.99.43). The
+// header of that bundle read "plugin: 406 MHz Beacons 1.0.0" and every log
+// line naming the same plugin read "plugin: loaded # MHz Beacons #": the name
+// carries "MHz", so rule 8 masked every number on the line, the version with
+// it. The header is the same inventory, unscrubbed, a few lines up - masking
+// it in the log protected nothing and cost the report its plugin versions.
+// The names the report itself lists are kept wherever they appear; every
+// other number on such a line is still masked.
+void pluginNamesSurviveTheScrub() {
+    const std::string loaded = "15:41:13.441 info plugin: loaded 406 MHz Beacons 1.0.0";
+    const std::string other = "15:41:13.441 info plugin: loaded GOES HRIT / LRIT 0.2.0";
+    // A real frequency on a line that also names the plugin: still masked.
+    const std::string tuned = "15:41:20.000 info plugin: 406 MHz Beacons 1.0.0 - receiver asked "
+                              "for 406.028000 MHz";
+    const std::string plainTune = "15:41:21.000 info source: asked for 406.028000 MHz";
+    const std::vector<std::string> plugins = {"406 MHz Beacons 1.0.0", "GOES HRIT / LRIT 0.2.0"};
+
+    // Path 3, the diagnostics bundle, exactly as the report page builds it.
+    {
+        cascade::core::DiagBundleInput in;
+        cascade::core::DiagContext dctx;
+        dctx.version = "0.99.44";
+        dctx.plugins = plugins;
+        in.contextBlock = cascade::core::renderDiagContext(dctx);
+        in.logLines = {loaded, other, tuned, plainTune};
+        const std::string bundle = cascade::core::buildDiagnosticsBundle(in);
+        const std::string log = bundle.substr(bundle.find("--- log ---\n"));
+        std::printf("bundle log section:\n%s", log.c_str());
+        CHECK(log.find(loaded + "\n") != std::string::npos);
+        CHECK(log.find(other + "\n") != std::string::npos);
+        CHECK(log.find("# MHz Beacons #") == std::string::npos);
+        CHECK(log.find("406.028") == std::string::npos);
+        CHECK(log.find("15:41:20.000 info plugin: 406 MHz Beacons 1.0.0 - receiver asked for # MHz") !=
+              std::string::npos);
+        CHECK(log.find("15:41:21.000 info source: asked for # MHz") != std::string::npos);
+    }
+    // Paths 1 and 2, the crash and freeze uploads: the report's own
+    // "plugin:" context lines are the inventory.
+    {
+        std::string header = crashHeader();
+        const std::string adsb = "plugin: ADS-B 1.8.0\n";
+        header.replace(header.find(adsb), adsb.size(),
+                       "plugin: 406 MHz Beacons 1.0.0\nplugin: GOES HRIT / LRIT 0.2.0\n");
+        const std::string text = header + "--- log (last 4 of 4 lines) ---\n" + loaded + "\n" +
+                                 other + "\n" + tuned + "\n" + plainTune + "\n";
+        bool parsed = false;
+        const std::vector<std::string> up = uploadedLog(text, parsed);
+        CHECK(parsed);
+        const std::string joined = [&] {
+            std::string s;
+            for (const std::string& l : up) { s += l + "\n"; }
+            return s;
+        }();
+        std::printf("crash upload log:\n%s", joined.c_str());
+        CHECK(joined.find(loaded + "\n") != std::string::npos);
+        CHECK(joined.find(other + "\n") != std::string::npos);
+        CHECK(joined.find("406.028") == std::string::npos);
+    }
+    // And a list that names nothing changes nothing: rule 8 as it was.
+    CHECK(cascade::core::scrubUploadLog({loaded}).front() ==
+          "15:41:13.441 info plugin: loaded # MHz Beacons #");
+
+    // 0.99.44 REPAIR: the kept name is the ONLY thing on the line that reads
+    // like a frequency ("406 MHz"), and there is a genuine, unrelated bare
+    // number elsewhere on the same line with no OTHER frequency word beside
+    // it. Before the fix, tokenising the name away before judging whether the
+    // line "mentions a frequency" made this line look like it mentioned none
+    // at all, so the bare number escaped masking entirely - the exact
+    // opposite of what the scrubber exists to do. The name must still come
+    // back unmasked; the unrelated number must not.
+    {
+        const std::string bareNumberBesideKeptName =
+            "15:41:23.000 info plugin: 406 MHz Beacons 1.0.0 - decoded a burst, count 144800000";
+        const std::string got =
+            cascade::core::scrubUploadLog({bareNumberBesideKeptName}, plugins).front();
+        std::printf("bare number beside a kept name: %s\n", got.c_str());
+        CHECK(got.find("406 MHz Beacons 1.0.0") != std::string::npos);
+        CHECK(got.find("144800000") == std::string::npos);
+        CHECK(got ==
+              "15:41:23.000 info plugin: 406 MHz Beacons 1.0.0 - decoded a burst, count #");
+    }
+}
+
 }  // namespace
 
 int main() {
     unitRules();
+    networkAddresses();
+    serialPortNames();
     bundleHeaderPaths();
+    pluginNamesSurviveTheScrub();
 
     writeTheRealLines();
 

@@ -22,6 +22,7 @@
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 
 namespace cascade::gui::patch {
 using cascade::i18n::tr;
@@ -135,12 +136,22 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     // Handled first so the grid, the wires and the nodes are all this frame's
     // answer. Doing it afterwards draws one frame of the old view on every
     // scroll, which reads as the canvas lagging the mouse.
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) { ui.panning = true; }
+    //
+    // A PAN IS HELD BY THE BUTTON THAT STARTED IT: the middle button anywhere
+    // on the canvas, as it always was, or - since 0.99.49, for a touchpad with
+    // no middle button - the LEFT button pressed on empty canvas (the pointer
+    // section below starts that one, from pressTarget's answer).
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        ui.panning = true;
+        ui.panButton = ImGuiMouseButton_Middle;
+    }
     if (ui.panning) {
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-            ui.view.pan.x += io.MouseDelta.x;
-            ui.view.pan.y += io.MouseDelta.y;
-            ui.dirty = true;
+        if (ImGui::IsMouseDown(ui.panButton)) {
+            if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
+                ui.view = panBy(ui.view, Vec2{io.MouseDelta.x, io.MouseDelta.y});
+                ui.dirty = true;
+            }
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         } else {
             ui.panning = false;
         }
@@ -158,32 +169,58 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     // have made the patch jump whenever the page was moved or resized.
     View v{Vec2{origin.x + ui.view.pan.x, origin.y + ui.view.pan.y}, ui.view.zoom};
 
-    if (hovered && io.MouseWheel != 0.0f) {
-        v = zoomAbout(v, vv(io.MousePos), io.MouseWheel > 0.0f ? 1.12f : 1.0f / 1.12f);
+    // THE WHEEL PANS, AND CTRL+WHEEL ZOOMS (0.99.49; a plain wheel zoomed
+    // until then). A two-finger touchpad scroll arrives as the wheel, both
+    // axes of it, and on a laptop it is the natural way to move round a patch;
+    // a touchpad pinch arrives as Ctrl+wheel. See gui::patch::wheelView.
+    if (hovered && (io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f)) {
+        WheelInput wheel;
+        wheel.x = io.MouseWheelH;
+        wheel.y = io.MouseWheel;
+        wheel.ctrl = io.KeyCtrl;
+        wheel.shift = io.KeyShift;
+        v = wheelView(v, vv(io.MousePos), wheel);
         ui.view.zoom = v.zoom;
         ui.view.pan = Vec2{v.pan.x - origin.x, v.pan.y - origin.y};
         ui.dirty = true;
     }
+
+    // THE INTERFACE SIZE COMPOSES WITH THE PATCH'S OWN ZOOM AT DRAW TIME
+    // ONLY: `v` above is the canvas's raw pan/zoom state - the value
+    // persisted, and the value zoomAbout reads and writes above - and must
+    // stay exactly that, or the interface scale would get silently baked
+    // into a saved patch the first time the user scroll-wheel-zooms it (the
+    // risk round 2 flagged and the reason this was deferred then). `dv` is a
+    // SEPARATE view for drawing and hit-testing, recomputed every frame from
+    // the CURRENT interface factor and stored nowhere: a node's plate, its
+    // ports, its wires and its face controls (app_window.cpp's
+    // drawPatchFaces, which composes the same factor onto the same
+    // patchUi_.view.zoom) all grow together, closing the gap an Opus review
+    // found (M4): the face's TEXT already grew via FontScaleMain while the
+    // PLATE stayed at `zoom` alone, so "RADIO  Radio" ran half off its own
+    // header and "Signal generator" wrapped inside a box that never grew to
+    // fit it.
+    const View dv{v.pan, v.zoom * cascade::gui::uiscale::factor()};
 
     // --- the grid -------------------------------------------------------------
     // Drawn in world units so it scrolls and scales with the patch. A grid
     // fixed to the screen instead makes a canvas feel like the nodes are
     // sliding over wallpaper rather than being somewhere.
     {
-        const float step = kGridWorld * v.zoom;
+        const float step = kGridWorld * dv.zoom;
         if (step >= 6.0f) {  // below this it is just a wash of lines
-            const float x0 = origin.x - std::fmod(origin.x - v.pan.x, step);
+            const float x0 = origin.x - std::fmod(origin.x - dv.pan.x, step);
             for (float x = x0; x < br.x; x += step) {
                 dl->AddLine(ImVec2{x, origin.y}, ImVec2{x, br.y}, theme::kEnamelDark);
             }
-            const float y0 = origin.y - std::fmod(origin.y - v.pan.y, step);
+            const float y0 = origin.y - std::fmod(origin.y - dv.pan.y, step);
             for (float y = y0; y < br.y; y += step) {
                 dl->AddLine(ImVec2{origin.x, y}, ImVec2{br.x, y}, theme::kEnamelDark);
             }
         }
     }
 
-    const Vec2 mouseWorld = screenToWorld(v, vv(io.MousePos));
+    const Vec2 mouseWorld = screenToWorld(dv, vv(io.MousePos));
 
     // --- the wires ------------------------------------------------------------
     // Under the nodes, always. A wire crossing a node's face would read as
@@ -196,9 +233,9 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         const Node* src = g.find(w.from);
         const ImU32 col = portColour(src->outputs[w.fromPort]);
         const bool sel = ui.wireSelected && ui.selectedWire == w;
-        dl->AddBezierCubic(iv(worldToScreen(v, e.from)), iv(worldToScreen(v, c1)),
-                           iv(worldToScreen(v, c2)), iv(worldToScreen(v, e.to)),
-                           sel ? theme::kIvory : col, (sel ? 3.0f : 1.8f) * v.zoom, 0);
+        dl->AddBezierCubic(iv(worldToScreen(dv, e.from)), iv(worldToScreen(dv, c1)),
+                           iv(worldToScreen(dv, c2)), iv(worldToScreen(dv, e.to)),
+                           sel ? theme::kIvory : col, (sel ? 3.0f : 1.8f) * dv.zoom, 0);
     }
 
     // The wire being dragged, following the pointer.
@@ -213,16 +250,16 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
             // the moment of release.
             if (ui.wireFrom.input) {
                 wireCurve(mouseWorld, a, c1, c2);
-                dl->AddBezierCubic(iv(worldToScreen(v, mouseWorld)),
-                                   iv(worldToScreen(v, c1)), iv(worldToScreen(v, c2)),
-                                   iv(worldToScreen(v, a)), theme::kInkMuted,
-                                   1.6f * v.zoom, 0);
+                dl->AddBezierCubic(iv(worldToScreen(dv, mouseWorld)),
+                                   iv(worldToScreen(dv, c1)), iv(worldToScreen(dv, c2)),
+                                   iv(worldToScreen(dv, a)), theme::kInkMuted,
+                                   1.6f * dv.zoom, 0);
             } else {
                 wireCurve(a, mouseWorld, c1, c2);
-                dl->AddBezierCubic(iv(worldToScreen(v, a)), iv(worldToScreen(v, c1)),
-                                   iv(worldToScreen(v, c2)),
-                                   iv(worldToScreen(v, mouseWorld)), theme::kInkMuted,
-                                   1.6f * v.zoom, 0);
+                dl->AddBezierCubic(iv(worldToScreen(dv, a)), iv(worldToScreen(dv, c1)),
+                                   iv(worldToScreen(dv, c2)),
+                                   iv(worldToScreen(dv, mouseWorld)), theme::kInkMuted,
+                                   1.6f * dv.zoom, 0);
             }
         }
     }
@@ -232,8 +269,8 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
     for (const Node& n : g.nodes()) {
         const Vec2 tl{n.x, n.y};
         const Vec2 size2 = nodeSize(n);
-        const ImVec2 a = iv(worldToScreen(v, tl));
-        const ImVec2 b = iv(worldToScreen(v, Vec2{tl.x + size2.x, tl.y + size2.y}));
+        const ImVec2 a = iv(worldToScreen(dv, tl));
+        const ImVec2 b = iv(worldToScreen(dv, Vec2{tl.x + size2.x, tl.y + size2.y}));
         drawNodePlate(dl, a, b, ui.selected == n.id);
         if (core::patch::hasBlockingProblem(plan, n.id)) {
             // The EDGE, not the plate. The plate is brass because the node
@@ -243,17 +280,22 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         2.0f * ui.view.zoom);
         }
 
-        // The caption, engraved into the brass.
-        const float cap = 11.0f * v.zoom;
+        // The caption, engraved into the brass. The 11.0f base grows with the
+        // interface-scale factor (gui/ui_scale.hpp) the same way every other
+        // caption in the application does; dv.zoom is this CANVAS's own,
+        // separate, mouse-wheel zoom, and the two multiply together rather
+        // than one replacing the other - a user can have a small interface
+        // and a zoomed-in patch, or the reverse.
+        const float cap = 11.0f * dv.zoom;
         if (cap >= 5.0f) {
             char title[96];
             cascade::core::formatUtf8(title, sizeof(title), "%s  %s", kindCaption(n.kind), n.name.c_str());
             // Clipped short of the close key, so a long name never runs
             // under it.
             const Rect ck = closeKeyRect(n);
-            const ImVec2 ck0 = iv(worldToScreen(v, Vec2{ck.x0, ck.y0}));
+            const ImVec2 ck0 = iv(worldToScreen(dv, Vec2{ck.x0, ck.y0}));
             dl->PushClipRect(a, ImVec2{ck0.x - 2.0f, b.y}, true);
-            dl->AddText(font, cap, ImVec2{a.x + 7.0f * v.zoom, a.y + 5.0f * v.zoom},
+            dl->AddText(font, cap, ImVec2{a.x + 7.0f * dv.zoom, a.y + 5.0f * dv.zoom},
                         theme::kEngraved, title);
             dl->PopClipRect();
         }
@@ -261,34 +303,34 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         // THE CLOSE KEY, engraved like the caption and ivory under the
         // pointer - the bench's "this is live" cue, not a warning colour,
         // because closing a node is an ordinary act, not a fault.
-        if (v.zoom >= 0.5f) {
+        if (dv.zoom >= 0.5f) {
             const Rect ck = closeKeyRect(n);
-            const ImVec2 c0 = iv(worldToScreen(v, Vec2{ck.x0, ck.y0}));
-            const ImVec2 c1 = iv(worldToScreen(v, Vec2{ck.x1, ck.y1}));
-            const bool over = pointInCloseKey(n, screenToWorld(v, vv(io.MousePos)));
+            const ImVec2 c0 = iv(worldToScreen(dv, Vec2{ck.x0, ck.y0}));
+            const ImVec2 c1 = iv(worldToScreen(dv, Vec2{ck.x1, ck.y1}));
+            const bool over = pointInCloseKey(n, screenToWorld(dv, vv(io.MousePos)));
             const ImU32 col = over ? theme::kIvory : theme::kEngraved;
-            const float in = 3.5f * v.zoom;
+            const float in = 3.5f * dv.zoom;
             dl->AddLine(ImVec2{c0.x + in, c0.y + in}, ImVec2{c1.x - in, c1.y - in}, col,
-                        1.4f * v.zoom);
+                        1.4f * dv.zoom);
             dl->AddLine(ImVec2{c1.x - in, c0.y + in}, ImVec2{c0.x + in, c1.y - in}, col,
-                        1.4f * v.zoom);
+                        1.4f * dv.zoom);
         }
 
         // THE GRIP: three short diagonals in the bottom-right corner, where
         // pointInResizeGrip() looks for it.
-        if (v.zoom >= 0.5f) {
+        if (dv.zoom >= 0.5f) {
             for (int k = 1; k <= 3; ++k) {
-                const float d = 3.5f * static_cast<float>(k) * v.zoom;
-                dl->AddLine(ImVec2{b.x - d - 2.0f * v.zoom, b.y - 2.0f * v.zoom},
-                            ImVec2{b.x - 2.0f * v.zoom, b.y - d - 2.0f * v.zoom},
+                const float d = 3.5f * static_cast<float>(k) * dv.zoom;
+                dl->AddLine(ImVec2{b.x - d - 2.0f * dv.zoom, b.y - 2.0f * dv.zoom},
+                            ImVec2{b.x - 2.0f * dv.zoom, b.y - d - 2.0f * dv.zoom},
                             theme::kBrassTint, 1.0f);
             }
         }
 
         // The well under it: the node's live face. Empty when nothing has been
         // measured or decoded - a figure nobody computed is worse than none.
-        const ImVec2 wa{a.x + 6.0f * v.zoom, a.y + (kHeaderHeight - 2.0f) * v.zoom};
-        const ImVec2 wb{b.x - 6.0f * v.zoom, b.y - 6.0f * v.zoom};
+        const ImVec2 wa{a.x + 6.0f * dv.zoom, a.y + (kHeaderHeight - 2.0f) * dv.zoom};
+        const ImVec2 wb{b.x - 6.0f * dv.zoom, b.y - 6.0f * dv.zoom};
         if (wb.x > wa.x && wb.y > wa.y) {
             dl->AddRectFilled(wa, wb, theme::kWell, theme::kKeyRounding);
 
@@ -299,9 +341,9 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
             // that a caption may be engraved and a live figure may not.
             for (const NodeReading& r : readings) {
                 if (r.node != n.id) { continue; }
-                const float fs = 13.0f * v.zoom;
+                const float fs = 13.0f * dv.zoom;
                 if (fs < 6.0f) { break; }
-                const ImVec2 at{wa.x + 5.0f * v.zoom, wa.y + 3.0f * v.zoom};
+                const ImVec2 at{wa.x + 5.0f * dv.zoom, wa.y + 3.0f * dv.zoom};
                 if (r.hasDb) {
                     char txt[24];
                     std::snprintf(txt, sizeof(txt), "%.0f dB", static_cast<double>(r.db));
@@ -318,7 +360,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
                         dl->PushClipRect(wa, wb, true);
                         dl->AddText(font, fs * 0.92f,
                                     ImVec2{at.x, at.y + fs * 1.35f}, theme::kPhosphor,
-                                    r.text.c_str(), nullptr, (wb.x - at.x) - 4.0f * v.zoom);
+                                    r.text.c_str(), nullptr, (wb.x - at.x) - 4.0f * dv.zoom);
                         dl->PopClipRect();
                     }
                 }
@@ -327,64 +369,86 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
         }
 
         // The ports, on the edges where the hit test looks for them.
-        const float r = 4.0f * v.zoom;
+        const float r = 4.0f * dv.zoom;
         for (PortIndex i = 0; i < static_cast<PortIndex>(n.inputs.size()); ++i) {
-            const ImVec2 p = iv(worldToScreen(v, inputPortPos(n, i)));
+            const ImVec2 p = iv(worldToScreen(dv, inputPortPos(n, i)));
             dl->AddCircleFilled(p, r, portColour(n.inputs[i]), 12);
             dl->AddCircle(p, r, theme::kEnamelDark, 12, 1.0f);
         }
         for (PortIndex i = 0; i < static_cast<PortIndex>(n.outputs.size()); ++i) {
-            const ImVec2 p = iv(worldToScreen(v, outputPortPos(n, i)));
+            const ImVec2 p = iv(worldToScreen(dv, outputPortPos(n, i)));
             dl->AddCircleFilled(p, r, portColour(n.outputs[i]), 12);
             dl->AddCircle(p, r, theme::kEnamelDark, 12, 1.0f);
         }
     }
 
     // --- the pointer ----------------------------------------------------------
+    // WHAT THE PRESS LANDED ON decides what the drag does, in one place
+    // (gui::patch::pressTarget) - so "a drag that starts on a node does not
+    // pan" is a property the tests can hold, not an accident of ordering here.
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const PortHit port = portAt(g, mouseWorld);
-        if (port.found) {
-            ui.wiring = true;
-            ui.wireFrom = port;
-        } else {
-            const NodeId hit = nodeAt(g, mouseWorld);
-            if (hit != kNoNode) {
-                const Node* n = g.find(hit);
-                if (pointInCloseKey(*n, mouseWorld)) {
-                    // Closing takes the node's wires with it (removeNode).
-                    g.removeNode(hit);
-                    if (ui.selected == hit) { ui.selected = kNoNode; }
-                    ui.wireSelected = false;
-                    ui.dirty = true;
-                } else {
+        const PressOn on = pressTarget(g, mouseWorld, dv.zoom, kWireGrabPx);
+        const NodeId hit = nodeAt(g, mouseWorld);
+        const Node* n = hit != kNoNode ? g.find(hit) : nullptr;
+        switch (on) {
+            case PressOn::Port:
+                ui.wiring = true;
+                ui.wireFrom = portAt(g, mouseWorld);
+                break;
+            case PressOn::CloseKey:
+                // Closing takes the node's wires with it (removeNode).
+                g.removeNode(hit);
+                if (ui.selected == hit) { ui.selected = kNoNode; }
+                ui.wireSelected = false;
+                ui.dirty = true;
+                break;
+            case PressOn::Grip:
+                if (n != nullptr) {
                     ui.selected = hit;
                     ui.wireSelected = false;
-                    if (pointInResizeGrip(*n, mouseWorld)) {
-                        // `grab` is the pointer's offset from the CORNER, so
-                        // the corner does not jump to the pointer.
-                        const Vec2 s = nodeSize(*n);
-                        ui.resizeNode = hit;
-                        ui.grab = Vec2{mouseWorld.x - (n->x + s.x), mouseWorld.y - (n->y + s.y)};
-                    } else if (pointInHeader(*n, mouseWorld)) {
-                        ui.dragNode = hit;
-                        ui.grab = Vec2{mouseWorld.x - n->x, mouseWorld.y - n->y};
-                    }
+                    // `grab` is the pointer's offset from the CORNER, so the
+                    // corner does not jump to the pointer.
+                    const Vec2 s = nodeSize(*n);
+                    ui.resizeNode = hit;
+                    ui.grab = Vec2{mouseWorld.x - (n->x + s.x), mouseWorld.y - (n->y + s.y)};
                 }
-            } else {
-                // Empty canvas: a click near a wire selects it, otherwise the
-                // selection clears.
+                break;
+            case PressOn::Header:
+                if (n != nullptr) {
+                    ui.selected = hit;
+                    ui.wireSelected = false;
+                    ui.dragNode = hit;
+                    ui.grab = Vec2{mouseWorld.x - n->x, mouseWorld.y - n->y};
+                }
+                break;
+            case PressOn::Body:
+                ui.selected = hit;
+                ui.wireSelected = false;
+                break;
+            case PressOn::Wire:
+                // Near a wire: selects it.
                 ui.selected = kNoNode;
                 ui.wireSelected = false;
                 for (const Wire& w : g.wires()) {
                     const WireEnds e = wireEnds(g, w);
                     if (!e.found) { continue; }
-                    if (distanceToWire(e.from, e.to, mouseWorld) * v.zoom <= kWireGrabPx) {
+                    if (distanceToWire(e.from, e.to, mouseWorld) * dv.zoom <= kWireGrabPx) {
                         ui.selectedWire = w;
                         ui.wireSelected = true;
                         break;
                     }
                 }
-            }
+                break;
+            case PressOn::Empty:
+                // Empty canvas: the selection clears, and holding the button
+                // down drags the view (pressPans).
+                ui.selected = kNoNode;
+                ui.wireSelected = false;
+                break;
+        }
+        if (pressPans(on)) {
+            ui.panning = true;
+            ui.panButton = ImGuiMouseButton_Left;
         }
     }
 
@@ -459,7 +523,7 @@ void drawPatchCanvas(Graph& g, Interaction& ui, const core::patch::Plan& plan,
 
     // --- the refusal ----------------------------------------------------------
     if (ui.refusal != Connect::Ok && ImGui::GetTime() - ui.refusedAt < kRefusalHoldSec) {
-        const ImVec2 at = iv(worldToScreen(v, ui.refusedNear));
+        const ImVec2 at = iv(worldToScreen(dv, ui.refusedNear));
         const char* msg = refusalText(ui.refusal);
         const ImVec2 sz = ImGui::CalcTextSize(msg);
         const ImVec2 pad{6.0f, 3.0f};

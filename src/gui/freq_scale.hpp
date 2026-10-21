@@ -52,6 +52,15 @@ public:
     // View := full span. (Also the state setSpan resets to.)
     void resetView();
 
+    // Pans the view, and only as far as it must, so that [bandLowHz, bandHighHz] is inside
+    // it with marginFrac of the view span to spare at the edge it was leaving (marginFrac is
+    // clamped to [0, 0.25]). A band too wide to fit with the margin is centred instead.
+    // The view's width is never changed and it never leaves the full span, so a band at the
+    // end of the baseband is brought as near the edge as the baseband allows. Returns whether
+    // the view moved. Non-finite edges, a band that ends before it starts and an inert scale
+    // no-op.
+    bool keepInView(double bandLowHz, double bandHighHz, double marginFrac);
+
     double viewLowHz() const { return viewLow_; }
     double viewHighHz() const { return viewHigh_; }
 
@@ -103,7 +112,17 @@ public:
     //
     // Null pointers, cap <= 0, non-positive/non-finite widthPx, or an inert
     // scale return 0.
-    int ticks(double widthPx, double* tickHz, char (*labels)[16], int cap) const;
+    //
+    // `labelScale` is the interface-scale factor (gui/ui_scale.hpp), defaulted
+    // to 1.0 so every existing caller - including every test that pins this
+    // against the type sizes fonts.hpp currently declares - is unchanged. A
+    // real call site (app_window.cpp's drawChrome) passes the LIVE factor: the
+    // axis label is drawn at fonts::tinyPx(), which grows with the same
+    // number, and the tick pitch has to grow with it or a scaled-up axis
+    // starts overprinting its own labels (see kMinTickSpacingPx's own history
+    // of chasing three earlier font-size raises in freq_scale.cpp).
+    int ticks(double widthPx, double* tickHz, char (*labels)[16], int cap,
+             double labelScale = 1.0) const;
 
 private:
     double fullLow_ = 0.0;   // center - rate/2

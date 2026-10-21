@@ -13,6 +13,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/track_detail_view.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -48,6 +49,34 @@ std::string allText(const std::vector<TrackDetailLine>& lines) {
         s += '\n';
     }
     return s;
+}
+
+// A track-info plugin that knows one aircraft: what a registry lookup is, with
+// nothing about a position in it.
+void* infoCreate() { return reinterpret_cast<void*>(1); }
+std::int32_t infoGet(void*, const char* id, std::uint32_t, CascadeTrackInfo* out) {
+    if (id == nullptr || std::strcmp(id, "400A1B") != 0) { return CASCADE_INFO_MISSING; }
+    out->registration = "G-TEST";
+    out->typeCode = "B738";
+    out->typeName = "Boeing 737-800";
+    out->manufacturer = "Boeing";
+    out->operatorName = "Test Airways";
+    out->country = "United Kingdom";
+    return CASCADE_INFO_READY;
+}
+void infoRelease(void*, const CascadeTrackInfo*) {}
+std::int32_t infoPollText(void*, char*, std::size_t) { return 0; }
+void infoDestroy(void*) {}
+
+CascadeTrackInfoApi makeInfoApi() {
+    CascadeTrackInfoApi a{};
+    a.structSize = static_cast<std::uint32_t>(sizeof(CascadeTrackInfoApi));
+    a.create = &infoCreate;
+    a.get_info = &infoGet;
+    a.release_info = &infoRelease;
+    a.poll_text = &infoPollText;
+    a.destroy = &infoDestroy;
+    return a;
 }
 
 }  // namespace
@@ -95,6 +124,58 @@ int main() {
         const std::string text = allText(cascade::gui::buildTrackDetailLines(in));
         CHECK(text.find(" ft") != std::string::npos);
         CHECK(text.find(" kt") != std::string::npos);
+    }
+
+    // [4] A TARGET HEARD WITHOUT A POSITION (0.99.75) goes through the same adapter and
+    // comes out saying so: no coordinates, no range, and the registry lookup works for
+    // it exactly as it does for a placed one (the cache is asked by id and kind, and
+    // nothing about it needs a position).
+    {
+        const double kNaN = std::nan("");
+        HostTrack heard = track(CASCADE_TRACK_AIRCRAFT, "400A1B", 10668.0, kNaN);
+        heard.t.latDeg = kNaN;
+        heard.t.lonDeg = kNaN;
+        heard.t.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+
+        const CascadeTrackInfoApi infoApi = makeInfoApi();
+        cascade::gui::TrackInfoCache cache;
+        cache.attach(&infoApi);
+        CHECK(cache.active());
+        const TrackDetailInput in =
+            cascade::gui::makeTrackDetailInput(heard, &cache, true, 51.0, 0.0);
+        CHECK(!in.hasPosition);
+        CHECK(in.infoActive);
+        CHECK(in.infoKnown);
+        CHECK(in.registration == "G-TEST");
+        const std::string text = allText(cascade::gui::buildTrackDetailLines(in));
+        std::printf("--- heard-without-a-position block ---\n%s", text.c_str());
+        CHECK(text.find("reg     G-TEST") != std::string::npos);
+        CHECK(text.find("pos     no position yet") != std::string::npos);
+        CHECK(text.find("nan") == std::string::npos);
+        CHECK(text.find("range") == std::string::npos);
+        CHECK(text.find("alt     10668 m") != std::string::npos);
+
+        // The same aircraft once it has a position: the adapter says so, and the block
+        // gives the coordinates and the range back.
+        HostTrack placed = heard;
+        placed.t.latDeg = 51.5;
+        placed.t.lonDeg = -1.0;
+        placed.t.flags = 0;
+        const TrackDetailInput in2 =
+            cascade::gui::makeTrackDetailInput(placed, &cache, true, 51.0, 0.0);
+        CHECK(in2.hasPosition);
+        const std::string text2 = allText(cascade::gui::buildTrackDetailLines(in2));
+        CHECK(text2.find("pos     51.50000, -1.00000") != std::string::npos);
+        CHECK(text2.find("range   ") != std::string::npos);
+        // A flagged track whose numbers a buggy plugin filled in is still unplaced,
+        // and so is one with a NaN coordinate and no flag.
+        HostTrack buggy = placed;
+        buggy.t.flags = CASCADE_TRACK_FLAG_NO_POSITION;
+        CHECK(!cascade::gui::makeTrackDetailInput(buggy, nullptr, false, 0.0, 0.0).hasPosition);
+        HostTrack nanOnly = placed;
+        nanOnly.t.lonDeg = kNaN;
+        CHECK(!cascade::gui::makeTrackDetailInput(nanOnly, nullptr, false, 0.0, 0.0).hasPosition);
+        cache.detach();
     }
 
     return testSummary("test_track_detail_kind");

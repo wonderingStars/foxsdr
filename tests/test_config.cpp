@@ -32,6 +32,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 
+#include <limits>  // the manual gain memory's non-finite stages
+
 #include "core/plugin_repo.hpp"  // defaultIndexUrl(), the default catalogue URL
 // kSerialBaudRates and kMaxSerialPortNameChars: the GPS port block asserts
 // against the port layer's own list and limit, so a change there is a change
@@ -59,6 +61,7 @@
 // line MEANS lives here, and the round trip that matters to a user is
 // "table -> lines -> file -> lines -> table", which needs both halves.
 #include "gui/key_bindings.hpp"
+#include "gui/meter_styles_math.hpp"
 // The demod scope's ladders. The config carries three indices into them, and
 // the checks below name the ladder lengths rather than the numbers they
 // currently happen to be - an extra time base or gain step must not silently
@@ -115,20 +118,32 @@ AppConfig junkConfig() {
     c.nativeArgs = "garbage";
     // A bias tee memory the file never mentioned must not survive a load.
     c.biasTee["garbage|serial=1"] = true;
+    // An auto gain memory the file never mentioned must not survive a load.
+    c.autoGainByRadio["garbage|serial=1"] = true;
+    // A manual gain memory the file never mentioned must not survive a load.
+    c.manualGainByRadio["garbage|serial=1"] = {{"GARBAGE", 99.0}};
     // A converter the file never mentioned must not survive a load.
     c.converters["garbage"] = {cascade::core::ConverterMode::Up, 99.0e6, true};
+    // A crystal correction the file never mentioned must not survive a load.
+    c.ppmCorrection = true;
+    c.ppm["garbage|serial=1"] = 5.0;
     // Junk that is NOT empty, because empty is what the loader substitutes
     // its default for - a load that forgot this field entirely would leave
     // the caller's value here and pass a test that used "".
     c.plutoUri = "garbage";
+    c.rtlTcpAddr = "garbage";
     c.iqFilePath = "garbage";
     c.centerHz = -1.0;
     c.mode = "garbage";
     c.bandwidthHz = -2.0;
     c.squelchDb = 999.0f;
+    c.squelchAuto = true;  // AUTOMATIC squelch (0.99.74): away from its default (off)
     c.volume = 42.0f;
+    c.audioBufferMs = 777;   // not one of the four buffers: a load that forgets the field keeps it
+    c.audioBufferAutoMs = 777;  // likewise for the depth AUTOMATIC remembered
     c.dbMin = 5.0f;
     c.dbMax = -5.0f;
+    c.waterfallRangeMode = "garbage";   // neither spelling: a load that forgets the field keeps it
     c.splitRatio = 77.0f;
     c.vfoOffsetHz = 1e18;
     c.sampleRateHz = -3.0;
@@ -152,6 +167,11 @@ AppConfig junkConfig() {
     // Not a style name the painter knows, so a load path that forgets the
     // assignment leaves this junk in place instead of the default face.
     c.tunerDisplayStyle = "bogus";
+    // Each bench meter's own style: neither a name the painter knows, so a
+    // load path that forgets either assignment leaves this junk in place
+    // instead of the default face - the tunerDisplayStyle rule, twice.
+    c.meterStyleVolume = "bogus";
+    c.meterStyleRate = "bogus";
     // The theme and the counter's own settings: a name no preset has, a scale
     // and a readings size out of range, and the switches away from their
     // default - so a load path that forgets any of them leaves junk behind.
@@ -159,6 +179,10 @@ AppConfig junkConfig() {
     c.counterScale = 99;
     c.counterSwitches = false;
     c.readingsScale = -5.0f;
+    // Not "auto" and not one of the six offered steps: a load path that
+    // forgets to sanitize this leaves junk behind, the same rule as uiTheme
+    // and tunerDisplayStyle above.
+    c.interfaceScale = "bogus";
     // Language and country: away from "auto" and "" (not chosen), and not
     // the round-trip fixture's values either, so a load path that forgot
     // either field leaves this junk behind and fails.
@@ -168,6 +192,15 @@ AppConfig junkConfig() {
     // a load path that forgets to assign them would have to overwrite.
     c.mapTrails = false;
     c.mapTrailAltitudeColours = false;
+    // The map list's "On screen only" switch defaults OFF (0.99.74), so true
+    // is the away-from-default value here.
+    c.mapListOnScreenOnly = true;
+    // Both bookmark spectrum switches default ON too, the same away-from-
+    // default rule.
+    c.bookmarkMarkers = false;
+    c.bookmarkStackNames = false;
+    c.spectrumTraceMode = "peak";
+    c.spectrumAverageMs = 250;
     // Away from its default AND out of range, the same rule every other
     // clamped field here follows.
     c.mapTrailStyle = 99;
@@ -207,6 +240,9 @@ AppConfig junkConfig() {
     // The main view (0.99.40), not one of the two names the loader accepts,
     // so a load path that forgets it leaves junk rather than the default.
     c.mainView = "garbage";
+    // The Display section open (0.99.74): away from its folded default, so a
+    // load path that forgets the field leaves it open rather than folded.
+    c.displayOpen = true;
     // Map geometry, away from the "nothing saved" default and out of range, so
     // a load path that forgets to assign it is caught.
     c.mapWindowWidth = -5;
@@ -233,6 +269,10 @@ AppConfig junkConfig() {
     // P9 fields, both away from their defaults (and the URL empty-adjacent
     // junk, so a load path that forgets to assign it is caught).
     c.pluginCatalogueUrl = "garbage";
+    // A plugin site that must never survive a load: a config that names none has
+    // none, and a leftover here would have the store read - and offer the plugins
+    // of - an address the user never added (0.99.74).
+    c.pluginSites = {"junk-site"};
     c.pluginBrowserOpen = true;
     // The fitted modules window: open, and with a rectangle that is away from
     // the "nothing saved" default AND out of range, so a load path that
@@ -243,6 +283,13 @@ AppConfig junkConfig() {
     c.fittedModulesY = 999999;
     c.fittedModulesWidth = -5;
     c.fittedModulesHeight = 999999;
+    // The plugin store window's rectangle (0.99.72), under the same rule: away
+    // from "nothing saved" and out of range, so a load path that forgets one
+    // of the four is caught here.
+    c.pluginStoreX = -999999;
+    c.pluginStoreY = 999999;
+    c.pluginStoreWidth = -5;
+    c.pluginStoreHeight = 999999;
     // P10: away from its default AND out of range, so a load path that forgets
     // to assign it is caught by the same rule as every other field.
     c.pluginLastUpdateCheck = -999;
@@ -250,10 +297,16 @@ AppConfig junkConfig() {
     // tune permission has granted none, and a leftover here would mean a
     // plugin could move the receiver on the strength of stale memory.
     c.pluginTuneAllowed = {"junk-grant"};
+    // And the transmit grant (0.99.74): a config that does not mention it has granted none, and a
+    // leftover here would let a plugin key the radio on the strength of stale memory.
+    c.pluginTransmitAllowed = {"junk-tx-grant"};
     // A stop that must never survive a load either: a config that does not
     // mention stopped plugins has stopped none, and a leftover here would
     // silence a decoder the user never switched off.
     c.pluginsStopped = {"junk-stop.dll"};
+    // And a run state: a config that says nothing about how plugins run has set none (every plugin
+    // AUTO), and a leftover here would pin or stop a plugin the user never touched (0.99.73).
+    c.pluginRun = {{"junk-run", "stopped"}};
     // A closed window that must not survive either: a config that says
     // nothing about closed windows has closed none, and a leftover here would
     // hide a panel the user never shut.
@@ -267,6 +320,10 @@ AppConfig junkConfig() {
     // nothing about key bindings has rebound none, so every action keeps its
     // shipped chord. A leftover here would move a key the user never touched.
     c.keyBindings = {"mute=Ctrl+Junk"};
+    // And a message marked Seen that must not survive either (0.99.79): a config that says
+    // nothing about team messages has seen none, and a leftover here would hide a message
+    // from someone who never pressed Seen on it.
+    c.messagesSeen = {"junkmsg"};
     // P11 web server: every field away from its default, and the two that
     // matter set to the DANGEROUS value — web access on, bound to every
     // interface — so any load path that forgets to assign them is caught by a
@@ -286,21 +343,31 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     // be compared here or the round-trip test would not cover it at all.
     CHECK(a.patch == b.patch);
     CHECK(a.mainView == b.mainView);
+    CHECK(a.displayOpen == b.displayOpen);
     CHECK(a.sourceKind == b.sourceKind);
     CHECK(a.soapyArgs == b.soapyArgs);
     CHECK(a.nativeArgs == b.nativeArgs);
     CHECK(a.biasTee == b.biasTee);
+    CHECK(a.autoGainByRadio == b.autoGainByRadio);
+    CHECK(a.manualGainByRadio == b.manualGainByRadio);
     CHECK(a.converters == b.converters);
+    CHECK(a.ppmCorrection == b.ppmCorrection);
+    CHECK(a.ppm == b.ppm);
     CHECK(a.airspy == b.airspy);
     CHECK(a.plutoUri == b.plutoUri);
+    CHECK(a.rtlTcpAddr == b.rtlTcpAddr);
     CHECK(a.iqFilePath == b.iqFilePath);
     CHECK(a.centerHz == b.centerHz);
     CHECK(a.mode == b.mode);
     CHECK(a.bandwidthHz == b.bandwidthHz);
     CHECK(a.squelchDb == b.squelchDb);
+    CHECK(a.squelchAuto == b.squelchAuto);
     CHECK(a.volume == b.volume);
+    CHECK(a.audioBufferMs == b.audioBufferMs);
+    CHECK(a.audioBufferAutoMs == b.audioBufferAutoMs);
     CHECK(a.dbMin == b.dbMin);
     CHECK(a.dbMax == b.dbMax);
+    CHECK(a.waterfallRangeMode == b.waterfallRangeMode);
     CHECK(a.splitRatio == b.splitRatio);
     CHECK(a.vfoOffsetHz == b.vfoOffsetHz);
     CHECK(a.sampleRateHz == b.sampleRateHz);
@@ -316,14 +383,22 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.bandPlanSize == b.bandPlanSize);
     CHECK(a.bandPlanPalette == b.bandPlanPalette);
     CHECK(a.tunerDisplayStyle == b.tunerDisplayStyle);
+    CHECK(a.meterStyleVolume == b.meterStyleVolume);
+    CHECK(a.meterStyleRate == b.meterStyleRate);
     CHECK(a.uiTheme == b.uiTheme);
     CHECK(a.counterScale == b.counterScale);
     CHECK(a.counterSwitches == b.counterSwitches);
     CHECK(a.readingsScale == b.readingsScale);
+    CHECK(a.interfaceScale == b.interfaceScale);
     CHECK(a.language == b.language);
     CHECK(a.country == b.country);
     CHECK(a.mapTrails == b.mapTrails);
     CHECK(a.mapTrailAltitudeColours == b.mapTrailAltitudeColours);
+    CHECK(a.mapListOnScreenOnly == b.mapListOnScreenOnly);
+    CHECK(a.bookmarkMarkers == b.bookmarkMarkers);
+    CHECK(a.bookmarkStackNames == b.bookmarkStackNames);
+    CHECK(a.spectrumTraceMode == b.spectrumTraceMode);
+    CHECK(a.spectrumAverageMs == b.spectrumAverageMs);
     CHECK(a.mapTrailStyle == b.mapTrailStyle);
     CHECK(a.aircraftIconPx == b.aircraftIconPx);
     CHECK(a.mapTrailWidthPx == b.mapTrailWidthPx);
@@ -359,18 +434,26 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.gpsPort == b.gpsPort);
     CHECK(a.gpsBaud == b.gpsBaud);
     CHECK(a.pluginCatalogueUrl == b.pluginCatalogueUrl);
+    CHECK(a.pluginSites == b.pluginSites);
     CHECK(a.pluginBrowserOpen == b.pluginBrowserOpen);
     CHECK(a.fittedModulesOpen == b.fittedModulesOpen);
     CHECK(a.fittedModulesX == b.fittedModulesX);
     CHECK(a.fittedModulesY == b.fittedModulesY);
     CHECK(a.fittedModulesWidth == b.fittedModulesWidth);
     CHECK(a.fittedModulesHeight == b.fittedModulesHeight);
+    CHECK(a.pluginStoreX == b.pluginStoreX);
+    CHECK(a.pluginStoreY == b.pluginStoreY);
+    CHECK(a.pluginStoreWidth == b.pluginStoreWidth);
+    CHECK(a.pluginStoreHeight == b.pluginStoreHeight);
     CHECK(a.pluginLastUpdateCheck == b.pluginLastUpdateCheck);
     CHECK(a.pluginTuneAllowed == b.pluginTuneAllowed);
+    CHECK(a.pluginTransmitAllowed == b.pluginTransmitAllowed);
     CHECK(a.pluginsStopped == b.pluginsStopped);
+    CHECK(a.pluginRun == b.pluginRun);
     CHECK(a.closedWindows == b.closedWindows);
     CHECK(a.pluginMuteOverride == b.pluginMuteOverride);
     CHECK(a.keyBindings == b.keyBindings);
+    CHECK(a.messagesSeen == b.messagesSeen);
     CHECK(a.webEnabled == b.webEnabled);
     CHECK(a.webBindAddress == b.webBindAddress);
     CHECK(a.webPort == b.webPort);
@@ -433,15 +516,31 @@ int main() {
         // the owner asked for the last one chosen to come back.
         in.mainView = "receiver";
         in.pluginBrowserOpen = true;
+        // The plugin sites are WHAT the store lists, not whether it is open: they come
+        // through the start-up state untouched (0.99.74).
+        in.pluginSites = {"https://hobbyist.example/hdradio/index.json"};
         in.fittedModulesOpen = true;
         in.fittedModulesX = 40;
         in.fittedModulesY = 50;
         in.fittedModulesWidth = 900;
         in.fittedModulesHeight = 700;
-        in.mapPages = {{"ADS-B", 10, 20, 800, 600, true},
+        in.pluginStoreX = 60;
+        in.pluginStoreY = 70;
+        in.pluginStoreWidth = 1100;
+        in.pluginStoreHeight = 800;
+        in.mapPages ={{"ADS-B", 10, 20, 800, 600, true},
                        {"Satellites", 30, 40, 640, 480, false}};
         in.volume = 0.25f;
+        // A radio's remembered Auto gain (0.99.73) is HOW it opens, not
+        // whether a window shows: it comes through the start-up state untouched.
+        in.autoGainByRadio["rtlsdr|serial=00000042"] = true;
+        in.autoGainByRadio["hackrf|serial=abc"] = false;
+        // ...and so is a radio's remembered manual gain (0.99.75).
+        in.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
         const AppConfig out = cascade::core::startupState(in);
+        CHECK(out.autoGainByRadio.size() == 2);
+        CHECK(out.autoGainByRadio == in.autoGainByRadio);
+        CHECK(out.manualGainByRadio == in.manualGainByRadio);
         CHECK(!out.scopeMode);
         // The demod scope is a WINDOW, so it obeys the same rule the radar
         // scope and the two plugin windows do: what was showing is recorded
@@ -465,6 +564,7 @@ int main() {
         CHECK(out.transmitPowerDb == -12.5);
         CHECK(out.transmitSplit);
         CHECK(!out.pluginBrowserOpen);
+        CHECK(out.pluginSites == in.pluginSites);
         CHECK(!out.fittedModulesOpen);
         CHECK(out.mapPages.size() == 2);
         for (const AppConfig::MapPage& pg : out.mapPages) { CHECK(!pg.open); }
@@ -476,6 +576,11 @@ int main() {
         CHECK(out.fittedModulesY == 50);
         CHECK(out.fittedModulesWidth == 900);
         CHECK(out.fittedModulesHeight == 700);
+        // The store's rectangle comes back too: where it sat, not whether it was open.
+        CHECK(out.pluginStoreX == 60);
+        CHECK(out.pluginStoreY == 70);
+        CHECK(out.pluginStoreWidth == 1100);
+        CHECK(out.pluginStoreHeight == 800);
         CHECK(out.mapPages.size() == 2 && out.mapPages[0].plugin == "ADS-B" &&
               out.mapPages[0].x == 10 && out.mapPages[0].y == 20 &&
               out.mapPages[0].width == 800 && out.mapPages[0].height == 600);
@@ -495,6 +600,15 @@ int main() {
         // Idempotent, and a default config is already in its start-up state.
         checkEqual(cascade::core::startupState(out), out);
         checkEqual(cascade::core::startupState(AppConfig{}), AppConfig{});
+        // AUTOMATIC squelch (0.99.74) is a setting and not a window: a start-up keeps it as saved,
+        // either way (a restart that forgot it would put the AUTO key back to dark).
+        {
+            AppConfig s;
+            s.squelchAuto = true;
+            CHECK(cascade::core::startupState(s).squelchAuto);
+            s.squelchAuto = false;
+            CHECK(!cascade::core::startupState(s).squelchAuto);
+        }
     }
 
     // --- mainView: the patch is the main view, and the last choice returns ---
@@ -540,6 +654,127 @@ int main() {
         CHECK(out.mainView == "patch");
     }
 
+    // --- displayOpen: the Display section starts folded and is remembered ----
+    //
+    // A tester (0.99.74): "When I open FoxSDR and go to the VIEW tab, the
+    // DISPLAY menu is always expanded. Can you have this default to closed or
+    // remember the last status." Folded on a fresh install and for a file that
+    // never heard of the field; whichever the user left it as after that; and
+    // a layout preference rather than a window, so startupState keeps it.
+    {
+        CHECK(!AppConfig{}.displayOpen);
+        CHECK(!cascade::core::startupState(AppConfig{}).displayOpen);
+        AppConfig in;
+        in.displayOpen = true;
+        CHECK(cascade::core::startupState(in).displayOpen);
+        const std::string path = p("display_open.json");
+        std::string err;
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(readAll(path).find("\"displayOpen\": true") != std::string::npos);
+        AppConfig out = junkConfig();
+        out.displayOpen = false;  // so a load that ignores the file is seen
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.displayOpen);
+        // Folded again: the file says so, over a junk object that says open.
+        in.displayOpen = false;
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(readAll(path).find("\"displayOpen\": false") != std::string::npos);
+        out = junkConfig();
+        CHECK(out.displayOpen);  // the control: the junk really is open
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+        // A file from before 0.99.74 says nothing about it: folded, the
+        // default, and not the junk's open.
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+        // The wrong type (booleans are strict): the default again.
+        CHECK(writeText(path, "{\"displayOpen\": \"yes\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+        CHECK(writeText(path, "{\"displayOpen\": 1}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.displayOpen);
+    }
+
+    // THE PLUGIN STORE WINDOW'S RECTANGLE (0.99.72): written whole, read back whole, and discarded whole
+    // when any one number of it is out of range - the Fitted modules window's rule, and a rectangle a
+    // run saves is where the next run opens it. The junk-config test above cannot see a field that is
+    // never written (the junk is out of range, so the loaded value is the default either way): this
+    // one round-trips a GOOD rectangle.
+    {
+        const std::string path = p("store_rect.json");
+        std::string err;
+        AppConfig in;
+        in.pluginStoreX = 86;
+        in.pluginStoreY = 49;
+        in.pluginStoreWidth = 1430;
+        in.pluginStoreHeight = 927;
+        in.fittedModulesX = 40;
+        in.fittedModulesY = 50;
+        in.fittedModulesWidth = 900;
+        in.fittedModulesHeight = 700;
+        CHECK(ConfigStore::save(path, in, err));
+        const std::string text = readAll(path);
+        CHECK(text.find("\"pluginStoreX\": 86") != std::string::npos);
+        CHECK(text.find("\"pluginStoreY\": 49") != std::string::npos);
+        CHECK(text.find("\"pluginStoreWidth\": 1430") != std::string::npos);
+        CHECK(text.find("\"pluginStoreHeight\": 927") != std::string::npos);
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginStoreX == 86);
+        CHECK(out.pluginStoreY == 49);
+        CHECK(out.pluginStoreWidth == 1430);
+        CHECK(out.pluginStoreHeight == 927);
+        // ...the two windows' rectangles are two records, neither disturbing the other.
+        CHECK(out.fittedModulesX == 40 && out.fittedModulesWidth == 900);
+        // ONE BAD NUMBER DISCARDS THE RECTANGLE (a half-rejected one is a rectangle nobody chose), and
+        // leaves the Fitted modules window's alone.
+        CHECK(writeText(path,
+                        "{\"pluginStoreX\": 86, \"pluginStoreY\": 49, \"pluginStoreWidth\": -5, "
+                        "\"pluginStoreHeight\": 927, \"fittedModulesX\": 40, \"fittedModulesY\": 50, "
+                        "\"fittedModulesWidth\": 900, \"fittedModulesHeight\": 700}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginStoreX == 0 && out.pluginStoreY == 0);
+        CHECK(out.pluginStoreWidth == 0 && out.pluginStoreHeight == 0);
+        CHECK(out.fittedModulesWidth == 900);
+        // A config from before 0.99.72 says nothing: "nothing saved", which the window reads as "open at
+        // the default size, inside the main window".
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginStoreWidth == 0 && out.pluginStoreHeight == 0);
+        CHECK(AppConfig{}.pluginStoreWidth == 0);
+    }
+
+    // --- the spectrum's trace mode is normalised and clamped on load ----------
+    // (2026-09-30, core/trace_hold.hpp): the file is user-editable, and an
+    // unknown mode or a length outside 50..10000 ms must not reach the draw.
+    {
+        const std::string path = p("trace_mode.json");
+        std::string err;
+        AppConfig out = junkConfig();
+        CHECK(writeText(path, "{\"spectrumTraceMode\": \"sideways\", \"spectrumAverageMs\": 999999}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.spectrumTraceMode == "normal");
+        CHECK(out.spectrumAverageMs == 10000);
+        CHECK(writeText(path, "{\"spectrumTraceMode\": \"peak\", \"spectrumAverageMs\": 3}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.spectrumTraceMode == "peak");
+        CHECK(out.spectrumAverageMs == 50);
+        // A file from before them: normal, one second.
+        CHECK(writeText(path, "{\"volume\": 0.5}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.spectrumTraceMode == "normal");
+        CHECK(out.spectrumAverageMs == 1000);
+    }
+
     // --- roundtrip every field through a path needing new directories -------
     {
         AppConfig in;
@@ -555,6 +790,18 @@ int main() {
         // THE BIAS TEE, PER RADIO: an on and an off, two families.
         in.biasTee["rtlsdr|serial=00000042"] = true;
         in.biasTee["hackrf|serial=abc"] = false;
+        // EACH RADIO'S AUTO GAIN SWITCH (0.99.73): an on and an off for two
+        // radios, and an "on" for a radio known only by position (unlike the
+        // bias tee's, nothing refuses it).
+        in.autoGainByRadio["rtlsdr|serial=00000042"] = true;
+        in.autoGainByRadio["hackrf|serial=abc"] = false;
+        in.autoGainByRadio["rtlsdr|index=0"] = true;
+        // EACH RADIO'S MANUAL GAIN (0.99.75): the owner's B200 at 76 dB, a dongle with two
+        // stages (kept sorted by stage name, which is the order a file hands them back in),
+        // and a gain with a fraction.
+        in.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
+        in.manualGainByRadio["rtlsdr|serial=00000042"] = {{"LNA", 33.0}, {"VGA", -4.7}};
+        in.manualGainByRadio["hackrf|serial=abc"] = {{"AMP", 14.0}, {"LNA", 16.0}, {"VGA", 20.5}};
         // THE CONVERTERS, one of each shape: the tester's 125 MHz up-converter
         // on a dongle, an inverting down-converter set explicitly on the
         // generator, and one switched OFF that keeps the LO it was given.
@@ -571,6 +818,11 @@ int main() {
                                               false};
         in.converters["rx888|serial=lnb"] = {cascade::core::ConverterMode::Down, 10489123457.0,
                                              true};
+        // THE CRYSTAL CORRECTION (0.99.56): the switch on, and a value for
+        // two radios, one each side of zero.
+        in.ppmCorrection = true;
+        in.ppm["rtlsdr|serial=00000001"] = 2.5;
+        in.ppm["hackrf|serial=abc"] = -12.3;
         // THE AIRSPYS (0.99.41): one in each gain mode, every field off its
         // default, and a decimation on each.
         {
@@ -597,14 +849,19 @@ int main() {
             in.airspy["airspy|index=0"] = sen;
         }
         in.plutoUri = "ip:pluto.local";
+        in.rtlTcpAddr = "192.168.1.20:1235";
         in.iqFilePath = "C:/iq/capture_2msps.wav";
         in.centerHz = 433920000.0;
         in.mode = "USB";
         in.bandwidthHz = 2700.0;
         in.squelchDb = -63.5f;
+        in.squelchAuto = true;   // AUTOMATIC squelch (0.99.74): the default is off, so on is what survives
         in.volume = 0.85f;
+        in.audioBufferMs = 480;   // the Sinks rail's AUDIO BUFFER (0.99.73): a fixed 480 ms
+        in.audioBufferAutoMs = 960;  // ...and the depth AUTOMATIC had reached (kept, ignored while fixed)
         in.dbMin = -97.0f;
         in.dbMax = -12.5f;  // -97 < -22.5: survives the span rule
+        in.waterfallRangeMode = "manual";   // not the default ("auto"); the pair above is its window
         in.splitRatio = 0.62f;
         in.vfoOffsetHz = -125000.0;
         in.sampleRateHz = 2400000.0;
@@ -631,6 +888,12 @@ int main() {
         // what came back rather than either end's fallback - and proves the
         // unknown-name guard did not "correct" a style the user actually chose.
         in.tunerDisplayStyle = "neon";
+        // Each bench meter's own style: real names, neither the default
+        // ("classic") nor junkConfig()'s ("bogus") nor each other, so the
+        // roundtrip proves the FILE is what came back and that the two
+        // fields did not get swapped or merged into one key.
+        in.meterStyleVolume = "led";
+        in.meterStyleRate = "peak";
         // A real theme that is neither the default nor junk, the counter at
         // 2x with its switches away, and a dyadic readings size (exact through
         // float -> text -> float) inside the range and off its default.
@@ -638,6 +901,8 @@ int main() {
         in.counterScale = 2;
         in.counterSwitches = false;
         in.readingsScale = 1.5f;
+        // A real step, neither the default ("auto") nor junkConfig()'s value.
+        in.interfaceScale = "150";
         // Neither default ("auto", "") nor junkConfig()'s value, so the
         // roundtrip proves the file is what came back.
         in.language = "pt-BR";
@@ -654,9 +919,21 @@ int main() {
         // could not tell those apart.)
         in.mapTrails = false;
         in.mapTrailAltitudeColours = true;
+        // Defaults OFF, so true is the only away-from-default value: what
+        // proves the SAVE half is that load() resets to defaults first, so a
+        // save() that never wrote the key brings back false and fails here.
+        in.mapListOnScreenOnly = true;
         in.mapTrailStyle = 1;  // Ribbon, which is not the default
         in.aircraftIconPx = 40;  // legal, and neither the default (48) nor junk
         in.mapTrailWidthPx = 12;  // legal, not the default (4)
+        // The bookmark spectrum switches - asymmetric for the same reason
+        // the trail switches above are: both false is indistinguishable from
+        // a save that wrote one key twice.
+        in.bookmarkMarkers = false;
+        in.bookmarkStackNames = true;
+        // Neither the default mode nor the default length.
+        in.spectrumTraceMode = "average";
+        in.spectrumAverageMs = 2500;
         // The radar scope. The range is a LEGAL ladder value that is neither
         // the default (200) nor what junkConfig() holds (12345, which snaps to
         // 400), so the roundtrip proves the FILE is what came back rather than
@@ -703,6 +980,9 @@ int main() {
         // nor junkConfig()'s value, so the roundtrip proves the FILE is what
         // came back rather than either end's fallback.
         in.pluginCatalogueUrl = "https://plugins.example.invalid/team/index.json";
+        // The plugin sites (0.99.74), in the order they are read in: an https address and a
+        // local path, so a save that kept only one kind is caught.
+        in.pluginSites = {"https://hobbyist.example/hdradio/index.json", "C:\\sites\\extra.json"};
         in.pluginBrowserOpen = true;
         // The fitted modules window, open and with a rectangle nobody would
         // arrive at by accident — a NEGATIVE x, because a second monitor to
@@ -721,10 +1001,14 @@ int main() {
         // what the permission check reads, and a name silently dropped by the
         // save is a permission the user gave and did not get back.
         in.pluginTuneAllowed = {"Satellite Tracker", "ADS-B"};
+        // The transmit grant (0.99.74), different names again so a save that crossed the lists shows.
+        in.pluginTransmitAllowed = {"winlink-1.0.0-abi3-win-x64.dll"};
         // Stopped plugins, likewise in an order the roundtrip must preserve,
         // and deliberately different names from the grants above so a save
         // that crossed the two lists would show up here.
         in.pluginsStopped = {"sstv-decoder.dll", "ais-decoder.dll"};
+        // How each plugin runs (0.99.73), by id, with all three words present.
+        in.pluginRun = {{"pocsag-decoder", "always"}, {"ais-decoder", "stopped"}, {"adsb", "auto"}};
         // Windows the user shut, in ImGui's identity form rather than a
         // plugin file name, so a save that confused this list with the plugin
         // lists either side of it would be visible here. This is what makes a
@@ -738,6 +1022,9 @@ int main() {
         // And the rebound keys, a fifth list of strings kept beside four lists
         // of names: a save that crossed any two of the five would show here.
         in.keyBindings = {"mute=Ctrl+Shift+M", "record=None"};
+        // And the team messages marked Seen (0.99.79), ids of their own, so a save that
+        // crossed this list with any of the six above would show here.
+        in.messagesSeen = {"k3f9x2ab", "q7w1z0cd"};
         // P11: values distinguishable from both the defaults and junkConfig().
         in.webEnabled = true;
         in.webBindAddress = "192.168.1.20";
@@ -797,6 +1084,7 @@ int main() {
                         "\"centerHz\":\"high\","     // string for double
                         "\"mode\":7,"                // number for string
                         "\"squelchDb\":true,"        // bool is NOT a number
+                        "\"squelchAuto\":\"yes\","   // string for bool: strict, stays off
                         "\"splitRatio\":[0.5],"      // array for float
                         "\"vfoOffsetHz\":null,"      // null for double
                         "\"bandwidthHz\":200000.0,"  // valid, must load
@@ -824,6 +1112,8 @@ int main() {
         CHECK(out.centerHz == d.centerHz);
         CHECK(out.mode == d.mode);
         CHECK(out.squelchDb == d.squelchDb);
+        CHECK(out.squelchAuto == d.squelchAuto);  // junkConfig() had it on: a wrong type loads as off
+        CHECK(!out.squelchAuto);
         CHECK(out.splitRatio == d.splitRatio);
         CHECK(out.vfoOffsetHz == d.vfoOffsetHz);
         CHECK(out.bandwidthHz == 200000.0);
@@ -953,8 +1243,18 @@ int main() {
         CHECK(out.dbMin == -110.0f);
         CHECK(out.dbMax == 0.0f);
 
-        // exactly 10 dB: contract is strict (dbMin < dbMax - 10), so reset
+        // exactly 10 dB is KEPT (0.99.76). This line used to expect a reset - "the contract is
+        // strict, dbMin < dbMax - 10" - but the Display sliders, the web control and now the
+        // right-click menu all enforce "at least 10 dB" (core/display_range.hpp,
+        // kMinRangeSpanDb), so a user who left the two ends exactly 10 apart had them thrown
+        // away at the next start. Anything thinner is still refused, below.
         CHECK(writeText(path, "{\"dbMin\":-80.0,\"dbMax\":-70.0}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.dbMin == -80.0f);
+        CHECK(out.dbMax == -70.0f);
+
+        // a hair under 10 dB is refused, both ends reset
+        CHECK(writeText(path, "{\"dbMin\":-80.0,\"dbMax\":-70.5}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.dbMin == -110.0f);
         CHECK(out.dbMax == 0.0f);
@@ -1065,6 +1365,37 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.plutoUri == "ip:192.168.2.1");
 
+        // THE RTL_TCP SERVER'S ADDRESS, the Pluto's rule for the same reasons:
+        // typed, kept whether or not the server answered, and an empty or
+        // missing one falls back to the server's own default (this machine,
+        // port 1234) rather than coming up as a blank box.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlTcpAddr\":\"10.0.0.7:1235\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlTcpAddr == "10.0.0.7:1235");
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlTcpAddr == "127.0.0.1:1234");
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"rtlTcpAddr\":\"\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.rtlTcpAddr == "127.0.0.1:1234");
+        // The kind is a whitelisted source, args are a network address like
+        // the Pluto's, and a near miss resets rather than landing on another.
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"sourceKind\":\"rtltcp\","
+                        "\"nativeArgs\":\"rtltcp=192.168.1.20:1234\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.sourceKind == "rtltcp");
+        CHECK(out.nativeArgs == "rtltcp=192.168.1.20:1234");
+        for (const char* nearMiss : {"rtl_tcp", "rtl-tcp", "RTLTCP", "rtltcp "}) {
+            CHECK(writeText(path, std::string("{\"schemaVersion\":1,\"sourceKind\":\"") + nearMiss +
+                                      "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.sourceKind == "siggen");
+        }
+
         // THE BIAS TEE SURVIVES A RESTART, and it is the one persisted
         // setting in this file that puts POWER on a connector rather than
         // changing what is heard. It is saved because a mast-head amplifier
@@ -1149,6 +1480,224 @@ int main() {
             CHECK(out.biasTee.size() == 64);
         }
 
+        // EACH RADIO'S AUTO GAIN SWITCH (0.99.73, AppConfig::autoGainByRadio).
+        // A config that has never seen the key has none: every radio opens on
+        // manual gain, as it did before the memory. (junkConfig set an entry, so
+        // a loader that forgot the key would leave it behind.)
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.empty());
+        // Two radios, an on and an off, both read back; and one for a radio
+        // known only by position, which the bias tee's rules would refuse.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"autoGainByRadio\":{"
+                              "\"rtlsdr|serial=00000042\":true,\"hackrf|serial=abc\":false,"
+                              "\"rtlsdr|index=0\":true}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.size() == 3);
+        CHECK(out.autoGainByRadio.count("rtlsdr|serial=00000042") == 1 &&
+              out.autoGainByRadio.at("rtlsdr|serial=00000042"));
+        CHECK(out.autoGainByRadio.count("hackrf|serial=abc") == 1 &&
+              !out.autoGainByRadio.at("hackrf|serial=abc"));
+        CHECK(out.autoGainByRadio.count("rtlsdr|index=0") == 1 &&
+              out.autoGainByRadio.at("rtlsdr|index=0"));
+        // A MALFORMED ENTRY IS DROPPED AND THE REST ARE KEPT: values that are
+        // not a bool (a number, a string, null, an object), a key with no
+        // "<kind>|" in front and one with an empty kind.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"autoGainByRadio\":{"
+                              "\"airspy|serial=n\":1,\"airspy|serial=s\":\"true\","
+                              "\"airspy|serial=z\":null,\"airspy|serial=o\":{\"on\":true},"
+                              "\"nobar\":true,\"|serial=nokind\":true,"
+                              "\"hackrf|serial=keep\":true}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.size() == 1);
+        CHECK(out.autoGainByRadio.count("hackrf|serial=keep") == 1 &&
+              out.autoGainByRadio.at("hackrf|serial=keep"));
+        // Not an object at all: nothing remembered, and the rest of the file
+        // still loads.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"hackrf\","
+                              "\"autoGainByRadio\":[true,false]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.autoGainByRadio.empty());
+        CHECK(out.sourceKind == "hackrf");
+        // THE CAP: a file with 65 radios loads 64, the bias tee memory's bound.
+        {
+            std::string text = "{\"schemaVersion\":1,\"autoGainByRadio\":{";
+            for (int i = 0; i < 65; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"rtlsdr|serial=" + std::to_string(1000 + i) + "\":true";
+            }
+            text += "}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            std::printf("  a 65-radio auto gain memory loads %zu\n", out.autoGainByRadio.size());
+            CHECK(out.autoGainByRadio.size() == 64);
+        }
+        // AND IT IS WRITTEN: save then load keeps both values, and the file
+        // names the key.
+        {
+            AppConfig in;
+            in.autoGainByRadio["rtlsdr|serial=1"] = true;
+            in.autoGainByRadio["hackrf|serial=2"] = false;
+            CHECK(ConfigStore::save(path, in, err));
+            CHECK(readAll(path).find("\"autoGainByRadio\"") != std::string::npos);
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.autoGainByRadio == in.autoGainByRadio);
+        }
+
+        // EACH RADIO'S MANUAL GAIN (0.99.75, AppConfig::manualGainByRadio). A config that
+        // has never seen the key has none (junkConfig set one, so a loader that forgot the
+        // key would leave it behind).
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"rtlsdr\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.empty());
+        // Two radios, one with two stages the file lists out of order: they come back
+        // sorted by stage name, integers and fractions alike.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"manualGainByRadio\":{"
+                              "\"soapy|driver=uhd,serial=31E0000\":{\"PGA\":76},"
+                              "\"rtlsdr|serial=00000042\":{\"VGA\":-4.7,\"LNA\":33.5}}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.size() == 2);
+        {
+            const std::vector<std::pair<std::string, double>> b200 = {{"PGA", 76.0}};
+            const std::vector<std::pair<std::string, double>> dongle = {{"LNA", 33.5},
+                                                                        {"VGA", -4.7}};
+            CHECK(out.manualGainByRadio.count("soapy|driver=uhd,serial=31E0000") == 1 &&
+                  out.manualGainByRadio.at("soapy|driver=uhd,serial=31E0000") == b200);
+            CHECK(out.manualGainByRadio.count("rtlsdr|serial=00000042") == 1 &&
+                  out.manualGainByRadio.at("rtlsdr|serial=00000042") == dongle);
+        }
+        // A MALFORMED ENTRY IS DROPPED AND THE REST ARE KEPT, a level deeper than the
+        // switches': a radio whose value is a number, a string, null or an array; a key
+        // with no "<kind>|" and one with an empty kind; inside a radio, a stage that is a
+        // string, a bool, null, an object or has no name (each skipped, the good stage
+        // beside them kept); and a radio left with nothing (all bad, or none) is not kept.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"manualGainByRadio\":{"
+                              "\"a|1\":5,\"a|2\":\"x\",\"a|3\":null,\"a|4\":[1],"
+                              "\"nobar\":{\"PGA\":1},\"|serial=nokind\":{\"PGA\":1},"
+                              "\"b|1\":{\"PGA\":\"76\",\"LNA\":true,\"VGA\":null,"
+                              "\"MIX\":{\"x\":1},\"\":3,\"OK\":12.5},"
+                              "\"c|1\":{\"PGA\":\"x\"},\"d|1\":{},"
+                              "\"keep|serial=k\":{\"PGA\":40}}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.size() == 2);
+        {
+            const std::vector<std::pair<std::string, double>> ok = {{"OK", 12.5}};
+            const std::vector<std::pair<std::string, double>> keep = {{"PGA", 40.0}};
+            CHECK(out.manualGainByRadio.count("b|1") == 1 && out.manualGainByRadio.at("b|1") == ok);
+            CHECK(out.manualGainByRadio.count("keep|serial=k") == 1 &&
+                  out.manualGainByRadio.at("keep|serial=k") == keep);
+        }
+        // Not an object at all: nothing remembered, and the rest of the file still loads.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"sourceKind\":\"hackrf\","
+                              "\"manualGainByRadio\":[1,2]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.manualGainByRadio.empty());
+        CHECK(out.sourceKind == "hackrf");
+        // THE CAPS: 65 radios load 64 (the bias tee memory's bound), and 17 stages of one
+        // radio load 16 - the first sixteen by name.
+        {
+            std::string text = "{\"schemaVersion\":1,\"manualGainByRadio\":{";
+            for (int i = 0; i < 65; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"rtlsdr|serial=" + std::to_string(1000 + i) + "\":{\"LNA\":10}";
+            }
+            text += "}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            std::printf("  a 65-radio manual gain memory loads %zu\n", out.manualGainByRadio.size());
+            CHECK(out.manualGainByRadio.size() == 64);
+
+            text = "{\"schemaVersion\":1,\"manualGainByRadio\":{\"soapy|many\":{";
+            for (int i = 0; i < 17; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"S" + std::string(i < 10 ? "0" : "") + std::to_string(i) + "\":" +
+                        std::to_string(i);
+            }
+            text += "}}}\n";
+            out = junkConfig();
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.manualGainByRadio.size() == 1);
+            const auto many = out.manualGainByRadio.find("soapy|many");
+            std::printf("  a 17-stage radio loads %zu stages\n",
+                        many == out.manualGainByRadio.end() ? std::size_t{0} : many->second.size());
+            CHECK(many != out.manualGainByRadio.end() && many->second.size() == 16);
+            CHECK(many != out.manualGainByRadio.end() && many->second.size() == 16 &&
+                  many->second.front().first == "S00" && many->second.back().first == "S15");
+        }
+        // AND IT IS WRITTEN: save then load keeps every stage of every radio, and the file
+        // names the key. A stage that is not a finite number is not written, and a radio
+        // left with nothing is not either (JSON has no NaN: it would come back as null).
+        {
+            AppConfig in;
+            in.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
+            in.manualGainByRadio["rtlsdr|serial=1"] = {{"LNA", 33.0}, {"VGA", -4.7}};
+            CHECK(ConfigStore::save(path, in, err));
+            CHECK(readAll(path).find("\"manualGainByRadio\"") != std::string::npos);
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.manualGainByRadio == in.manualGainByRadio);
+
+            AppConfig odd;
+            odd.manualGainByRadio["x|1"] = {{"LNA", 5.0},
+                                            {"PGA", std::numeric_limits<double>::quiet_NaN()},
+                                            {"VGA", std::numeric_limits<double>::infinity()}};
+            odd.manualGainByRadio["y|1"] = {{"PGA", std::numeric_limits<double>::quiet_NaN()}};
+            CHECK(ConfigStore::save(path, odd, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.manualGainByRadio.size() == 1);
+            const std::vector<std::pair<std::string, double>> lnaOnly = {{"LNA", 5.0}};
+            CHECK(out.manualGainByRadio.count("x|1") == 1 && out.manualGainByRadio.at("x|1") == lnaOnly);
+        }
+
+        // AUTOMATIC SQUELCH (0.99.74, AppConfig::squelchAuto). A config that has never
+        // seen the key has it OFF (junkConfig set it on, so a loader that forgot the key
+        // would leave it behind); a real true loads on; anything that is not a boolean is
+        // refused and stays off; and it is WRITTEN, by name, so the next start has it.
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"squelchDb\":-70}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.squelchAuto);
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"squelchDb\":-70,\"squelchAuto\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.squelchAuto);
+        CHECK(out.squelchDb == -70.0f);
+        for (const char* wrong : {"1", "\"true\"", "null", "[true]", "{}"}) {
+            out = junkConfig();
+            CHECK(writeText(path, std::string("{\"schemaVersion\":1,\"squelchAuto\":") + wrong + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(!out.squelchAuto);
+        }
+        {
+            AppConfig in;
+            in.squelchAuto = true;
+            CHECK(ConfigStore::save(path, in, err));
+            CHECK(readAll(path).find("\"squelchAuto\": true") != std::string::npos ||
+                  readAll(path).find("\"squelchAuto\":true") != std::string::npos);
+            out = junkConfig();
+            out.squelchAuto = false;
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.squelchAuto);
+            in.squelchAuto = false;
+            CHECK(ConfigStore::save(path, in, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(!out.squelchAuto);
+        }
+
         // THE CONVERTERS (0.99.36), per radio. A config that predates them
         // has none - every radio, the generator and a file start with no
         // converter - and anything the file cannot mean reads as OFF.
@@ -1219,6 +1768,37 @@ int main() {
         CHECK(out.sourceKind == "soapy");
         CHECK(out.soapyArgs == "driver=rtlsdr");
         CHECK(out.nativeArgs.empty());
+
+        // THE CRYSTAL CORRECTION (0.99.56). A config written before it has
+        // neither field and loads OFF with no values - exactly the behaviour
+        // before it existed. (junkConfig set both, so a loader that forgot
+        // them would leave them set.)
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.ppmCorrection);
+        CHECK(out.ppm.empty());
+        // Strict bool; per-radio values element-wise tolerant: a string is
+        // skipped, the range is clamped, the step rounded, a 0 and an empty
+        // key dropped.
+        out = junkConfig();
+        CHECK(writeText(path,
+                        "{\"schemaVersion\":1,\"ppmCorrection\":\"yes\",\"ppm\":{"
+                        "\"a|serial=1\":\"5\",\"b|serial=1\":999,\"c|serial=1\":1.26,"
+                        "\"d|serial=1\":0,\"\":3,\"e|serial=1\":-7}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.ppmCorrection);
+        CHECK(out.ppm.size() == 3u);
+        CHECK(out.ppm.count("a|serial=1") == 0);
+        CHECK(out.ppm.count("b|serial=1") == 1 && out.ppm.at("b|serial=1") == 200.0);
+        CHECK(out.ppm.count("c|serial=1") == 1 && out.ppm.at("c|serial=1") == 1.3);
+        CHECK(out.ppm.count("d|serial=1") == 0);
+        CHECK(out.ppm.count("e|serial=1") == 1 && out.ppm.at("e|serial=1") == -7.0);
+        out = junkConfig();
+        CHECK(writeText(path, "{\"schemaVersion\":1,\"ppmCorrection\":true,\"ppm\":[1,2]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.ppmCorrection);
+        CHECK(out.ppm.empty());  // not an object: nothing remembered
     }
 
     // --- a config saved after a FAILED RESTORE still names the radio ---------
@@ -1321,6 +1901,29 @@ int main() {
         CHECK(next.plutoUri == "ip:192.168.2.1");
         CHECK(next.sampleRateHz == 4000000.0);
 
+        // A SAVED RTL_TCP SERVER, the same sequence: a server on a network is
+        // as likely as a Pluto to be absent on any given launch, and its args
+        // are an address too.
+        const cascade::gui::RememberedSource tcpKeep =
+            cascade::gui::rememberedSourceAfterFailedOpen("rtltcp", "", "rtltcp=192.168.1.20:1234",
+                                                          "", 2048000.0);
+        CHECK(tcpKeep.valid());
+        AppConfig savedTcp;
+        savedTcp.schemaVersion = 1;
+        const cascade::gui::SavedSource srcT =
+            cascade::gui::sourceToSave("siggen", "", "", "", 2000000.0, tcpKeep);
+        savedTcp.sourceKind = srcT.kind;
+        savedTcp.soapyArgs = srcT.soapyArgs;
+        savedTcp.nativeArgs = srcT.nativeArgs;
+        savedTcp.sampleRateHz = srcT.sampleRateHz;
+        savedTcp.rtlTcpAddr = "192.168.1.20:1234";
+        CHECK(ConfigStore::save(path, savedTcp, err));
+        CHECK(ConfigStore::load(path, next, err));
+        CHECK(next.sourceKind == "rtltcp");
+        CHECK(next.nativeArgs == "rtltcp=192.168.1.20:1234");
+        CHECK(next.rtlTcpAddr == "192.168.1.20:1234");
+        CHECK(next.sampleRateHz == 2048000.0);
+
         // A SAVED SOAPY DEVICE, same sequence, and the kind that must survive
         // is "soapy" rather than a native driver key.
         const cascade::gui::RememberedSource soapyKeep =
@@ -1415,6 +2018,107 @@ int main() {
         CHECK(next.soapyArgs.empty());
     }
 
+    // --- the audio buffer (0.99.73): 0 or one of the four steps, nothing between ----
+    {
+        const std::string path = p("audio_buffer.json");
+        AppConfig out;
+        std::string err;
+        // The default is AUTOMATIC, and a file that never mentions it is automatic.
+        CHECK(AppConfig{}.audioBufferMs == 0);
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.audioBufferMs == 0);
+        // Each legal value survives.
+        for (const int ok : {0, 120, 240, 480, 960}) {
+            CHECK(writeText(path, "{\"audioBufferMs\":" + std::to_string(ok) + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.audioBufferMs == ok);
+        }
+        // Anything else is AUTOMATIC again - not the nearest step, not clamped: a
+        // hand-edited 5000 must not become a five second delay, and 300 is not
+        // "nearly 240". Wrong-typed values keep the default like every other field.
+        for (const char* bad : {"-1", "1", "100", "121", "300", "1000", "5000", "2147483647",
+                                "1.5", "\"480\"", "null", "true", "[240]"}) {
+            CHECK(writeText(path, std::string("{\"audioBufferMs\":") + bad + "}\n"));
+            AppConfig fresh = junkConfig();   // starts at 777: a load that leaves it fails below
+            CHECK(ConfigStore::load(path, fresh, err));
+            if (fresh.audioBufferMs != 0) {
+                std::printf("FAIL audioBufferMs %s loaded as %d\n", bad, fresh.audioBufferMs);
+            }
+            CHECK(fresh.audioBufferMs == 0);
+        }
+        // It is written under its own name, and only once.
+        AppConfig in;
+        in.audioBufferMs = 240;
+        const std::string text = ConfigStore::serialize(in);
+        CHECK(text.find("\"audioBufferMs\": 240") != std::string::npos ||
+              text.find("\"audioBufferMs\":240") != std::string::npos);
+        // THE SAVE DEBOUNCE HAS TO SEE IT: a combo pick calls no save of its own, so
+        // configsEqual is the only thing that writes it before a clean exit.
+        const AppConfig base;
+        CHECK(cascade::gui::configsEqual(base, base));
+        for (const int ms : {120, 240, 480, 960}) {
+            AppConfig other = base;
+            other.audioBufferMs = ms;
+            CHECK(!cascade::gui::configsEqual(base, other));
+            CHECK(!cascade::gui::configsEqual(other, base));
+        }
+    }
+
+    // --- the depth AUTOMATIC reached, remembered across launches (0.99.73 follow-up) ---------------
+    //
+    // audioBufferAutoMs: the same legal set as audioBufferMs and the same repair (anything else is 0,
+    // "it never had to deepen"), written under its own name, and seen by the save debounce - the raise
+    // that fills it happens in the frame loop and calls no save of its own.
+    {
+        const std::string path = p("audio_buffer_auto.json");
+        AppConfig out;
+        std::string err;
+        CHECK(AppConfig{}.audioBufferAutoMs == 0);
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.audioBufferAutoMs == 0);
+        for (const int ok : {0, 120, 240, 480, 960}) {
+            CHECK(writeText(path, "{\"audioBufferAutoMs\":" + std::to_string(ok) + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.audioBufferAutoMs == ok);
+        }
+        for (const char* bad : {"-1", "1", "100", "121", "300", "1000", "5000", "2147483647", "1.5", "\"480\"",
+                                "null", "true", "[240]"}) {
+            CHECK(writeText(path, std::string("{\"audioBufferAutoMs\":") + bad + "}\n"));
+            AppConfig fresh = junkConfig();
+            fresh.audioBufferAutoMs = 777;  // a load that forgets the field would keep this
+            CHECK(ConfigStore::load(path, fresh, err));
+            if (fresh.audioBufferAutoMs != 0) {
+                std::printf("FAIL audioBufferAutoMs %s loaded as %d\n", bad, fresh.audioBufferAutoMs);
+            }
+            CHECK(fresh.audioBufferAutoMs == 0);
+        }
+        // The two settings are independent: a fixed buffer beside a remembered depth round-trips as both.
+        AppConfig in;
+        in.audioBufferMs = 240;
+        in.audioBufferAutoMs = 480;
+        const std::string text = ConfigStore::serialize(in);
+        CHECK(text.find("\"audioBufferAutoMs\": 480") != std::string::npos ||
+              text.find("\"audioBufferAutoMs\":480") != std::string::npos);
+        CHECK(text.find("\"audioBufferMs\": 240") != std::string::npos ||
+              text.find("\"audioBufferMs\":240") != std::string::npos);
+        const std::string rt = p("audio_buffer_auto_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.audioBufferMs == 240);
+        CHECK(back.audioBufferAutoMs == 480);
+        // THE SAVE DEBOUNCE HAS TO SEE IT.
+        const AppConfig base;
+        for (const int ms : {120, 240, 480, 960}) {
+            AppConfig other = base;
+            other.audioBufferAutoMs = ms;
+            CHECK(!cascade::gui::configsEqual(base, other));
+            CHECK(!cascade::gui::configsEqual(other, base));
+        }
+    }
+
     // --- P7 clamps (documented in config.hpp) --------------------------------
     {
         const std::string path = p("clamps_p7.json");
@@ -1472,6 +2176,9 @@ int main() {
         CHECK(d.bandPlanPalette == "classic");
         // The frequency counter opens on the face it has always had.
         CHECK(d.tunerDisplayStyle == "nixie");
+        // Both bench meters open on the face they have always had too.
+        CHECK(d.meterStyleVolume == "classic");
+        CHECK(d.meterStyleRate == "classic");
     }
 
     // --- bandPlanSize / bandPlanPalette: a closed three-way choice each,
@@ -1595,6 +2302,32 @@ int main() {
             AppConfig biasOff = biasOn;
             biasOff.biasTee["rtlsdr|serial=00000042"] = false;
             CHECK(!cascade::gui::configsEqual(biasOn, biasOff));
+            // The per-radio Auto gain memory (0.99.73), both ways, and a flip
+            // of an existing entry: ticking the box calls no save of its own.
+            AppConfig agcOn = base;
+            agcOn.autoGainByRadio["rtlsdr|serial=00000042"] = true;
+            CHECK(!cascade::gui::configsEqual(base, agcOn));
+            CHECK(!cascade::gui::configsEqual(agcOn, base));
+            AppConfig agcOff = agcOn;
+            agcOff.autoGainByRadio["rtlsdr|serial=00000042"] = false;
+            CHECK(!cascade::gui::configsEqual(agcOn, agcOff));
+            CHECK(!cascade::gui::configsEqual(agcOff, agcOn));
+            // The per-radio manual gain memory (0.99.75), every way it can change: a radio
+            // appearing, a stage appearing on it, and a stage's number moving. The sliders,
+            // the GAIN dial and the scope's knob call no save of their own.
+            AppConfig gainOn = base;
+            gainOn.manualGainByRadio["soapy|driver=uhd,serial=31E0000"] = {{"PGA", 76.0}};
+            CHECK(!cascade::gui::configsEqual(base, gainOn));
+            CHECK(!cascade::gui::configsEqual(gainOn, base));
+            AppConfig gainMoved = gainOn;
+            gainMoved.manualGainByRadio["soapy|driver=uhd,serial=31E0000"][0].second = 60.0;
+            CHECK(!cascade::gui::configsEqual(gainOn, gainMoved));
+            CHECK(!cascade::gui::configsEqual(gainMoved, gainOn));
+            AppConfig gainStage = gainOn;
+            gainStage.manualGainByRadio["soapy|driver=uhd,serial=31E0000"].push_back({"VGA", 5.0});
+            CHECK(!cascade::gui::configsEqual(gainOn, gainStage));
+            CHECK(!cascade::gui::configsEqual(gainStage, gainOn));
+            CHECK(cascade::gui::configsEqual(gainOn, gainOn));
 
             // The transmitter's settings, the rail bank, the rebound keys and
             // the update-check switch: every one of them is changed by a click
@@ -1608,6 +2341,9 @@ int main() {
                 void (*apply)(AppConfig&);
             };
             const Change changes[] = {
+                // AUTOMATIC squelch (0.99.74): the AUTO key under the SQUELCH knob saves
+                // nothing itself, so the debounce has to see the switch here.
+                {"squelchAuto", [](AppConfig& c) { c.squelchAuto = true; }},
                 {"transmitMode", [](AppConfig& c) { c.transmitMode = 3; }},
                 {"transmitInput", [](AppConfig& c) { c.transmitInput = 0; }},
                 {"transmitPowerDb", [](AppConfig& c) { c.transmitPowerDb = -40.0; }},
@@ -1616,23 +2352,60 @@ int main() {
                 {"transmitToneHz", [](AppConfig& c) { c.transmitToneHz = 1750.0; }},
                 {"transmitMonitor", [](AppConfig& c) { c.transmitMonitor = true; }},
                 {"transmitArgs", [](AppConfig& c) { c.transmitArgs = "driver=plutosdr"; }},
+                // The plugin TRANSMIT grant (0.99.74): given by a key on a plugin's plate, which
+                // saves nothing itself - a grant that took effect and was not saved is a grant
+                // the next launch silently does not have.
+                {"pluginTransmitAllowed",
+                 [](AppConfig& c) { c.pluginTransmitAllowed = {"winlink-1.0.0.dll"}; }},
+                // The rtl_tcp server's address (0.99.70): typed into the Source
+                // section's box, which calls no save of its own - so a field
+                // missing here is an address that reaches the file only by
+                // accident (the Pluto's own plutoUri is the other half).
+                {"plutoUri", [](AppConfig& c) { c.plutoUri = "ip:10.1.1.1"; }},
+                {"rtlTcpAddr", [](AppConfig& c) { c.rtlTcpAddr = "10.1.1.2:1235"; }},
                 {"railBank", [](AppConfig& c) { c.railBank = 4; }},
                 // The main view (0.99.40): switched by a key that saves
                 // nothing itself.
                 {"mainView", [](AppConfig& c) { c.mainView = "receiver"; }},
+                // The Display section opened or folded (0.99.74): a click on
+                // its header, which saves nothing itself.
+                {"displayOpen", [](AppConfig& c) { c.displayOpen = true; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+                // A team message marked Seen (0.99.79): a press on the card's Seen key.
+                // The press asks for a save of its own, but the prune that follows a
+                // check does not, and the periodic writer is what catches that one.
+                {"messagesSeen", [](AppConfig& c) { c.messagesSeen = {"k3f9x2ab"}; }},
                 // Look for network USRPs (2026-09-25): a Source-section tick
                 // that calls no save of its own.
                 {"lookForNetworkUsrps", [](AppConfig& c) { c.lookForNetworkUsrps = true; }},
+                // "Don't show this again" on the RADIO SETUP page (2026-10-06):
+                // a tick on a page that calls no save of its own.
+                {"radioSetupDontShow", [](AppConfig& c) { c.radioSetupDontShow = true; }},
                 // The converters (0.99.36): set in the Source section, which
                 // calls no save of its own - a new one, and a changed LO, a
                 // changed inversion and a switch-off of an existing one.
+                // The crystal correction (0.99.56): the switch and a value,
+                // both set in the Source section, which saves nothing itself.
+                {"ppmCorrection", [](AppConfig& c) { c.ppmCorrection = true; }},
+                {"ppm", [](AppConfig& c) { c.ppm["rtlsdr|serial=1"] = 2.5; }},
                 {"converters (new)",
                  [](AppConfig& c) {
                      c.converters["rtlsdr|serial=1"] = {cascade::core::ConverterMode::Up, 125.0e6,
                                                         false};
                  }},
+                // Each bench meter's own style (2026-09-29): picked by
+                // right-clicking the meter, which saves nothing itself.
+                {"meterStyleVolume", [](AppConfig& c) { c.meterStyleVolume = "led"; }},
+                {"meterStyleRate", [](AppConfig& c) { c.meterStyleRate = "peak"; }},
+                // Bookmark spectrum markers and their stacking (0.99.54):
+                // both switched in the Bookmarks section, which saves
+                // nothing itself.
+                {"bookmarkMarkers", [](AppConfig& c) { c.bookmarkMarkers = false; }},
+                {"bookmarkStackNames", [](AppConfig& c) { c.bookmarkStackNames = false; }},
+                // The map list's "On screen only" switch (0.99.74): a tick on
+                // the map page's toolbar that calls no save of its own.
+                {"mapListOnScreenOnly", [](AppConfig& c) { c.mapListOnScreenOnly = true; }},
             };
             for (const Change& ch : changes) {
                 AppConfig other = base;
@@ -1662,6 +2435,80 @@ int main() {
                     CHECK(!cascade::gui::configsEqual(*o, withConv));
                 }
             }
+        }
+    }
+
+    // --- each bench meter's own style (an Italian user on 0.99.42: "is it
+    // possible to customise the VU meter, choosing between 3 or 4 different
+    // VU meters?") -------------------------------------------------------------
+    //
+    // Four faces, stored by name, ONE FIELD PER METER: the DEFAULT is the
+    // arc-and-needle face every meter has always drawn, so nobody's deck
+    // changes under them on upgrade, and the SAMPLE RATE meter's choice can
+    // never leak into the VOLUME meter's or back.
+    {
+        const std::string path = p("meter_style.json");
+        AppConfig out;
+        std::string err;
+
+        // ABSENT: an upgraded install that has never heard of either key
+        // keeps the face both meters had.
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.meterStyleVolume == "classic");
+        CHECK(out.meterStyleRate == "classic");
+
+        // EACH REAL NAME SURVIVES THE FILE, for EACH field independently -
+        // the roundtrip only ever carries one combination, and a loader that
+        // mixed the two keys up (or read one for the other) would pass it.
+        for (const char* name : {"classic", "needle", "led", "peak"}) {
+            CHECK(writeText(path, std::string("{\"meterStyleVolume\":\"") + name + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.meterStyleVolume == name);
+            CHECK(out.meterStyleRate == "classic");  // untouched key: default
+            // And the painter agrees the stored name names a style: a value
+            // the file accepts but the painter reads as the default would be
+            // a setting that saves and then does nothing.
+            CHECK(std::string(cascade::gui::meterStyleName(
+                      cascade::gui::meterStyleFromName(out.meterStyleVolume))) == name);
+        }
+        for (const char* name : {"classic", "needle", "led", "peak"}) {
+            CHECK(writeText(path, std::string("{\"meterStyleRate\":\"") + name + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.meterStyleRate == name);
+            CHECK(out.meterStyleVolume == "classic");  // untouched key: default
+            CHECK(std::string(cascade::gui::meterStyleName(
+                      cascade::gui::meterStyleFromName(out.meterStyleRate))) == name);
+        }
+
+        // AN UNKNOWN NAME IS THE DEFAULT, NOT A REFUSAL AND NOT A GAP - the
+        // tunerDisplayStyle rule, for both fields. Wrong TYPE too - getString
+        // leaves the default for a non-string, and the clamp must not turn
+        // that into something else.
+        for (const char* bad : {"\"\"", "\"Needle\"", "\"LED\"", "\"peak \"", "7", "null",
+                                "[\"peak\"]"}) {
+            CHECK(writeText(path, std::string("{\"meterStyleVolume\":") + bad +
+                                      ",\"meterStyleRate\":" + bad + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.meterStyleVolume == "classic");
+            CHECK(out.meterStyleRate == "classic");
+        }
+
+        // BOTH FIELDS ARE INDEPENDENTLY SAVED. A save that wrote one key
+        // twice, or the wrong field into each, would be indistinguishable
+        // from a correct one if the two were ever given the SAME value -
+        // this round trip gives them different real names precisely so a mix-
+        // up fails here rather than passing by coincidence.
+        {
+            AppConfig in;
+            in.meterStyleVolume = "peak";
+            in.meterStyleRate = "led";
+            std::string werr;
+            CHECK(ConfigStore::save(path, in, werr));
+            AppConfig back;
+            CHECK(ConfigStore::load(path, back, err));
+            CHECK(back.meterStyleVolume == "peak");
+            CHECK(back.meterStyleRate == "led");
         }
     }
 
@@ -1748,6 +2595,21 @@ int main() {
         CHECK(writeText(path, "{\"counterSwitches\":false}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(!out.counterSwitches);
+
+        // THE INTERFACE SIZE: "auto" or one of the six offered steps survives
+        // the file; anything else - a step this build does not offer, a
+        // stray type, empty text - is "auto", never a refusal.
+        CHECK(d.interfaceScale == "auto");
+        for (const char* step : {"auto", "100", "125", "150", "175", "200", "250"}) {
+            CHECK(writeText(path, std::string("{\"interfaceScale\":\"") + step + "\"}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.interfaceScale == step);
+        }
+        for (const char* bad : {"\"\"", "\"110\"", "\"Auto\"", "\"100%\"", "7", "null"}) {
+            CHECK(writeText(path, std::string("{\"interfaceScale\":") + bad + "}\n"));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.interfaceScale == "auto");
+        }
 
         // THE SAVE DEBOUNCE HAS TO SEE ALL FOUR: each is changed by a click
         // (the Display picker, or the counter's own right-click menu) that
@@ -1865,6 +2727,118 @@ int main() {
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.mapTrails);
         CHECK(out.mapTrailAltitudeColours);
+    }
+
+    // --- the map list's "On screen only" switch (documented in config.hpp,
+    // 0.99.74) ---------------------------------------------------------------
+    //
+    // A tester (2026-10-12): "add a filter or switch to list only the aircraft
+    // currently viewable on the screen". A PREFERENCE, not a "whether": it
+    // defaults OFF (the list has always shown every aircraft), it is saved, it
+    // is restored, and startupState() leaves it alone.
+    {
+        const std::string path = p("map_list_on_screen.json");
+        AppConfig out;
+        std::string err;
+
+        // DEFAULT OFF: an install that has never heard of the key lists every
+        // aircraft, exactly as before.
+        CHECK(!AppConfig{}.mapListOnScreenOnly);
+
+        // READ FROM THE FILE, which for a bool defaulting false can only be
+        // proved by writing true. RED WHEN the getBool is dropped.
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(out.mapListOnScreenOnly);
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapListOnScreenOnly);
+
+        // A FILE THAT PREDATES IT - the ordinary upgrade - gets the default,
+        // even into an object that held true before the load.
+        out.mapListOnScreenOnly = true;
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapListOnScreenOnly);
+
+        // A value of the wrong type is ignored (getBool's rule) and the default
+        // stands, rather than a number being read as a tick.
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":\"yes\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.mapListOnScreenOnly);
+
+        // INDEPENDENT of the trail switches it sits beside: neither key is wired
+        // to the other's field.
+        CHECK(writeText(path, "{\"mapListOnScreenOnly\":true,\"mapTrails\":false,"
+                              "\"mapTrailAltitudeColours\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.mapListOnScreenOnly);
+        CHECK(!out.mapTrails);
+        CHECK(out.mapTrailAltitudeColours);
+
+        // STARTUP STATE LEAVES IT: it is how the list behaves, not whether a
+        // window is open, so it must survive the start-up clearing in both
+        // directions.
+        AppConfig on;
+        on.mapListOnScreenOnly = true;
+        CHECK(cascade::core::startupState(on).mapListOnScreenOnly);
+        AppConfig off;
+        off.mapListOnScreenOnly = false;
+        CHECK(!cascade::core::startupState(off).mapListOnScreenOnly);
+    }
+
+    // --- the two bookmark spectrum switches (documented in config.hpp,
+    // 0.99.54) --------------------------------------------------------------
+    //
+    // bookmarkMarkers had NO config field at all before this - AppWindow's
+    // bookmarkMarkers_ was a plain member, so "On the spectrum" reset to on
+    // at every launch no matter what the user last chose. bookmarkStackNames
+    // is new outright ("Stack close names": an Italian user asked to read
+    // both of two bookmarks whose names would otherwise touch). Same shape
+    // of test as the map trail switches just above, on purpose - it is the
+    // same fault.
+    {
+        const std::string path = p("bookmark_markers.json");
+        AppConfig out;
+        std::string err;
+
+        // BOTH DEFAULT ON: the markers were already the shipped behaviour and
+        // stacking is what was asked for, so a config that has never heard of
+        // either key should get both.
+        const AppConfig d;
+        CHECK(d.bookmarkMarkers);
+        CHECK(d.bookmarkStackNames);
+
+        // READ FROM THE FILE - the only way to prove a bool defaulting true
+        // came off disk rather than out of the struct's own default. RED WHEN
+        // either getBool is dropped.
+        CHECK(writeText(path, "{\"bookmarkMarkers\":false,"
+                              "\"bookmarkStackNames\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(err.empty());
+        CHECK(!out.bookmarkMarkers);
+        CHECK(!out.bookmarkStackNames);
+
+        // INDEPENDENT of one another: "no markers at all" and "one row
+        // instead of three" are different questions, and a save that wired
+        // one key to both fields must not pass.
+        CHECK(writeText(path, "{\"bookmarkMarkers\":true,"
+                              "\"bookmarkStackNames\":false}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bookmarkMarkers);
+        CHECK(!out.bookmarkStackNames);
+        CHECK(writeText(path, "{\"bookmarkMarkers\":false,"
+                              "\"bookmarkStackNames\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.bookmarkMarkers);
+        CHECK(out.bookmarkStackNames);
+
+        // A file that predates them - the ordinary upgrade - gets both.
+        CHECK(writeText(path, "{\"mode\":\"AM\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.bookmarkMarkers);
+        CHECK(out.bookmarkStackNames);
     }
 
     // --- the radar scope's mode and range (documented in config.hpp) ----------
@@ -2897,6 +3871,94 @@ int main() {
         CHECK(back.pluginBrowserOpen);
     }
 
+    // --- plugin sites (0.99.74, documented in config.hpp) ----------------------
+    //
+    // Other people's index.json, added by the user in the store. The loader holds each
+    // address to PluginRepo::normaliseSiteUrl - the store's ADD asks the same function - and
+    // drops what it refuses, a repeat, the official address and the override of it, and
+    // anything past the eighth; the rest keep their order.
+    {
+        const std::string path = p("plugin_sites.json");
+        const AppConfig d;
+        std::string err;
+        CHECK(d.pluginSites.empty());
+        CHECK(AppConfig::kMaxPluginSites == 8u);
+
+        // Absent: none (the junk a previous config left does not survive).
+        CHECK(writeText(path, "{}\n"));
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginSites.empty());
+
+        // https and local-path addresses are kept, trimmed, in the order given.
+        CHECK(writeText(path,
+                        "{\"pluginSites\":[\"  https://a.example/i.json \",\"C:/sites/x.json\","
+                        "\"/srv/y.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites ==
+               std::vector<std::string>{"https://a.example/i.json", "C:/sites/x.json", "/srv/y.json"}));
+
+        // What the validator refuses is dropped, entry by entry: http and other schemes, userinfo,
+        // empties, entries that are not strings. The good one beside them survives.
+        CHECK(writeText(path,
+                        "{\"pluginSites\":[\"http://a.example/i.json\",\"ftp://a.example/i\","
+                        "\"file:///C:/i.json\",\"https://u@a.example/i.json\",\"\",\"   \",7,null,[\"x\"],"
+                        "\"https://ok.example/i.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites == std::vector<std::string>{"https://ok.example/i.json"}));
+
+        // Repeats are dropped, also after trimming; the first keeps its place.
+        CHECK(writeText(path,
+                        "{\"pluginSites\":[\"https://a.example/i.json\",\"https://b.example/i.json\","
+                        "\" https://a.example/i.json\",\"https://b.example/i.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites ==
+               std::vector<std::string>{"https://a.example/i.json", "https://b.example/i.json"}));
+
+        // The official address is not a site (it would list every plugin twice, all hidden as the
+        // same id) - and neither is the override of it.
+        CHECK(writeText(path,
+                        "{\"pluginCatalogueUrl\":\"https://mirror.example/i.json\",\"pluginSites\":[\"" +
+                            cascade::core::PluginRepo::defaultIndexUrl() +
+                            "\",\"https://mirror.example/i.json\",\"https://a.example/i.json\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK((out.pluginSites == std::vector<std::string>{"https://a.example/i.json"}));
+
+        // At most eight, the first eight, in order.
+        {
+            std::string text = "{\"pluginSites\":[";
+            for (int i = 0; i < 12; ++i) {
+                if (i > 0) { text += ","; }
+                text += "\"https://s" + std::to_string(i) + ".example/i.json\"";
+            }
+            text += "]}\n";
+            CHECK(writeText(path, text));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginSites.size() == AppConfig::kMaxPluginSites);
+            if (out.pluginSites.size() == AppConfig::kMaxPluginSites) {
+                CHECK(out.pluginSites.front() == "https://s0.example/i.json");
+                CHECK(out.pluginSites.back() == "https://s7.example/i.json");
+            }
+        }
+
+        // Not an array: none.
+        CHECK(writeText(path, "{\"pluginSites\":\"https://a.example/i.json\"}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginSites.empty());
+
+        // The list is written as an array of strings and comes back as it went.
+        AppConfig in;
+        in.pluginSites = {"https://hobbyist.example/hdradio/index.json", "C:\\sites\\extra.json"};
+        const std::string rt = p("plugin_sites_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginSites == in.pluginSites);
+        CHECK(ConfigStore::serialize(in).find("\"pluginSites\"") != std::string::npos);
+        // ...and the default config writes an empty one, not the junk of another.
+        CHECK(ConfigStore::serialize(AppConfig{}).find("\"pluginSites\": []") != std::string::npos);
+    }
+
     // --- the fitted modules window (documented in config.hpp) -----------------
     //
     // THE BUG THIS BLOCK EXISTS FOR: the store window above remembered whether
@@ -3218,6 +4280,102 @@ int main() {
         CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
     }
 
+    // --- How each plugin runs (0.99.73) ----------------------------------------
+    //
+    // plugin id -> "auto" | "always" | "stopped". Sanitised ENTRY BY ENTRY: one bad line costs
+    // nothing else. A decision about a plugin must survive the plugin being absent for a while, so
+    // an id that matches nothing installed is kept; and it is kept by ID, so an update (a new file
+    // name) leaves it alone. The old file-name list is still READ, for the application to migrate
+    // once, and is separate.
+    {
+        const std::string path = p("plugin_run.json");
+        const AppConfig d;
+        using Run = std::map<std::string, std::string>;
+
+        // EVERY PLUGIN IS AUTO BY DEFAULT: a fresh install, a missing field and a wrong-typed field
+        // all mean no plugin has been pinned or stopped.
+        CHECK(d.pluginRun.empty());
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginRun\":[\"adsb\"]}\n"));  // an array, not an object
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.empty());
+        out = junkConfig();
+        CHECK(writeText(path, "{\"pluginRun\":\"always\"}\n"));  // a string
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.empty());
+
+        // An ordinary object loads verbatim.
+        CHECK(writeText(path, "{\"pluginRun\":{\"adsb\":\"always\",\"ais\":\"stopped\",\"dmr\":\"auto\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun == Run({{"adsb", "always"}, {"ais", "stopped"}, {"dmr", "auto"}}));
+
+        // A VALUE THAT IS NOT ONE OF THE THREE WORDS is dropped, and so is one that is not a string -
+        // the rest survive.
+        CHECK(writeText(path,
+                        "{\"pluginRun\":{\"adsb\":\"always\",\"a\":\"ALWAYS\",\"b\":\"running\",\"c\":\"\","
+                        "\"d\":7,\"e\":null,\"f\":true,\"ais\":\"stopped\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun == Run({{"adsb", "always"}, {"ais", "stopped"}}));
+
+        // An EMPTY id names no plugin and one longer than 128 bytes is not a plugin id.
+        CHECK(writeText(path, "{\"pluginRun\":{\"\":\"stopped\",\"" + std::string(129, 'x') +
+                                  "\":\"always\",\"" + std::string(128, 'y') +
+                                  "\":\"always\",\"adsb\":\"stopped\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginRun.size() == 2u);
+        CHECK(out.pluginRun.count("") == 0u);
+        CHECK(out.pluginRun.count(std::string(129, 'x')) == 0u);
+        CHECK(out.pluginRun.count(std::string(128, 'y')) == 1u);
+        CHECK(out.pluginRun.count("adsb") == 1u);
+
+        // The cap, for the reason the lists beside it have one.
+        {
+            std::string big = "{\"pluginRun\":{";
+            for (std::size_t i = 0; i < AppConfig::kMaxTuneGrants + 50u; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"p" + std::to_string(i) + "\":\"always\"";
+            }
+            big += "}}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginRun.size() == AppConfig::kMaxTuneGrants);
+        }
+
+        // THE OLD LIST IS STILL READ, beside the new map, for the one-time migration; neither
+        // replaces the other at this layer.
+        CHECK(writeText(path,
+                        "{\"pluginsStopped\":[\"sstv-decoder-1.0.0-abi3-win-x64.dll\"],"
+                        "\"pluginRun\":{\"adsb\":\"always\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.pluginsStopped.size() == 1u);
+        CHECK(out.pluginRun == Run({{"adsb", "always"}}));
+
+        // THE ROUND TRIP: a decision made in one session is still there in the next, and the other
+        // lists neither feed it nor are fed by it.
+        AppConfig in;
+        in.pluginRun = {{"pocsag-decoder", "always"}, {"ais-decoder", "stopped"}};
+        in.pluginTuneAllowed = {"tracker.dll"};
+        const std::string rt = p("plugin_run_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginRun == in.pluginRun);
+        CHECK(back.pluginTuneAllowed == std::vector<std::string>({"tracker.dll"}));
+        CHECK(back.pluginsStopped.empty());
+        // ...and an empty map round-trips as an empty map, not as a leftover.
+        AppConfig none;
+        CHECK(ConfigStore::save(rt, none, err));
+        back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.pluginRun.empty());
+    }
+
     // --- Plugins whose mute setting is not the default -----------------------
     //
     // The THIRD list of module file names, sanitised by the same function, and
@@ -3284,6 +4442,72 @@ int main() {
         CHECK(back.pluginMuteOverride == Names({"sstv-decoder-1.0.0-abi3-win-x64.dll"}));
         CHECK(back.pluginsStopped == Names({"ais-decoder-1.0.1-abi3-win-x64.dll"}));
         CHECK(back.pluginTuneAllowed == Names({"tracker.dll"}));
+    }
+
+    // --- Team messages marked Seen (0.99.79) ----------------------------------
+    //
+    // "They click Seen and it doesn't show up again" is this list surviving a restart. A
+    // list that did not come back would show the same message at every launch; a list that
+    // came back with something nobody pressed would hide a message from a person who never
+    // saw it; one that grew without bound would be a settings file that a service's ids
+    // could fill. So: absent means none, the usable entries survive, and the cap keeps the
+    // NEWEST (the list is oldest first), unlike the grant lists, whose cap keeps the first.
+    {
+        const std::string path = p("messages_seen.json");
+        const AppConfig d;
+        using Names = std::vector<std::string>;
+        CHECK(d.messagesSeen.empty());
+
+        AppConfig out = junkConfig();
+        std::string err;
+        CHECK(writeText(path, "{\"volume\":0.5}\n"));  // field absent entirely
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen.empty());
+
+        out = junkConfig();
+        CHECK(writeText(path, "{\"messagesSeen\":\"k3f9x2ab\"}\n"));  // not an array
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen.empty());
+
+        CHECK(writeText(path, "{\"messagesSeen\":[\"k3f9x2ab\",\"q7w1z0cd\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen == Names({"k3f9x2ab", "q7w1z0cd"}));
+
+        // Empties, repeats and entries that are not strings are noise a hand-edit left; the
+        // first copy of a repeat keeps its place.
+        CHECK(writeText(
+            path, "{\"messagesSeen\":[\"m1\",\"\",\"m1\",7,null,\"m2\",\"m1\"]}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.messagesSeen == Names({"m1", "m2"}));
+
+        // FIFTY-ONE ids keep fifty, and the one that goes is the OLDEST.
+        {
+            std::string big = "{\"messagesSeen\":[";
+            for (std::size_t i = 0; i <= AppConfig::kMaxMessagesSeen; ++i) {
+                if (i != 0) { big += ","; }
+                big += "\"id" + std::to_string(i) + "\"";
+            }
+            big += "]}\n";
+            CHECK(writeText(path, big));
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(AppConfig::kMaxMessagesSeen == 50u);
+            CHECK(out.messagesSeen.size() == AppConfig::kMaxMessagesSeen);
+            if (out.messagesSeen.size() == AppConfig::kMaxMessagesSeen) {
+                CHECK(out.messagesSeen.front() == "id1");
+                CHECK(out.messagesSeen.back() == "id50");
+            }
+        }
+
+        // THE ROUND TRIP, and the list is its own list: it must not turn up in the keys.
+        AppConfig in;
+        in.messagesSeen = {"k3f9x2ab", "q7w1z0cd"};
+        in.keyBindings = {"mute=Ctrl+Shift+M"};
+        const std::string rt = p("messages_seen_rt.json");
+        CHECK(ConfigStore::save(rt, in, err));
+        AppConfig back = junkConfig();
+        CHECK(ConfigStore::load(rt, back, err));
+        CHECK(back.messagesSeen == Names({"k3f9x2ab", "q7w1z0cd"}));
+        CHECK(back.keyBindings == Names({"mute=Ctrl+Shift+M"}));
     }
 
     // --- keyboard shortcuts ---------------------------------------------------
@@ -3537,6 +4761,97 @@ int main() {
         checkEqual(out, AppConfig{});
     }
 
+    // --- THE PLUGIN'S TRANSMIT GRANT IS SAVED; THE ARMING WINDOW NEVER IS ---
+    //
+    // 0.99.74 (CASCADE_CAP_TX_AUDIO). A plugin may now key the radio, under two conditions the
+    // OPERATOR controls: a per-plugin GRANT (a decision about a piece of software, kept in the
+    // config like the tune and settings grants) and an ARMING WINDOW opened on the TRANSMIT page for
+    // 5, 15 or 60 minutes (a decision about NOW, which must never survive a restart - a window that
+    // did would be a transmitter that came back able to be keyed by whatever the plugin did first).
+    // So the grant is a field and the window has no field, and a file that carries one anyway
+    // changes nothing, exactly as the PTT and the latch above.
+    {
+        const std::string dir = g_root;
+        std::string err;
+
+        // Off by default, and a wrong type is off.
+        CHECK(AppConfig{}.pluginTransmitAllowed.empty());
+        {
+            const std::string path = dir + "/tx_grant_default.json";
+            {
+                std::ofstream f(path, std::ios::binary);
+                f << "{\"schemaVersion\":1,\"pluginTransmitAllowed\":\"Winlink\"}";  // not an array
+            }
+            AppConfig out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTransmitAllowed.empty());
+        }
+        // Sanitised like the other two lists: non-strings, empties and duplicates dropped, order kept.
+        {
+            const std::string path = dir + "/tx_grant_sanitise.json";
+            {
+                std::ofstream f(path, std::ios::binary);
+                f << "{\"schemaVersion\":1,\"pluginTransmitAllowed\":"
+                     "[\"a-1.0.0.dll\",7,null,\"\",\"b-2.0.0.dll\",\"a-1.0.0.dll\"]}";
+            }
+            AppConfig out;
+            CHECK(ConfigStore::load(path, out, err));
+            const std::vector<std::string> want = {"a-1.0.0.dll", "b-2.0.0.dll"};
+            CHECK(out.pluginTransmitAllowed == want);
+        }
+        // The grant round-trips, and is NOT confused with the other two grants.
+        {
+            AppConfig in;
+            in.pluginTransmitAllowed = {"winlink-1.0.0.dll"};
+            in.pluginTuneAllowed = {"satellites-1.0.0.dll"};
+            in.pluginSettingsAllowed = {"scanner-1.0.0.dll"};
+            const std::string path = dir + "/tx_grant_roundtrip.json";
+            CHECK(ConfigStore::save(path, in, err));
+            AppConfig out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTransmitAllowed == in.pluginTransmitAllowed);
+            CHECK(out.pluginTuneAllowed == in.pluginTuneAllowed);
+            CHECK(out.pluginSettingsAllowed == in.pluginSettingsAllowed);
+            // A start-up leaves the grant alone: it is a setting, and nothing in it keys anything.
+            CHECK(cascade::core::startupState(in).pluginTransmitAllowed == in.pluginTransmitAllowed);
+        }
+        // THE WINDOW: a file that names one (every spelling a future build or a hand might try)
+        // changes nothing, and the file a save writes back has no word for it.
+        {
+            const std::string path = dir + "/tx_armed.json";
+            {
+                std::ofstream f(path, std::ios::binary);
+                f << "{\"schemaVersion\":1,"
+                     "\"pluginTransmitAllowed\":[\"winlink-1.0.0.dll\"],"
+                     "\"pluginTransmitArmed\":true,"
+                     "\"transmitArmed\":true,"
+                     "\"transmitArmMinutes\":60,"
+                     "\"pluginsArmed\":true,"
+                     "\"armedUntil\":4102444800,"
+                     "\"txArmed\":true,"
+                     "\"pluginKeyed\":true}";
+            }
+            AppConfig out;
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.pluginTransmitAllowed.size() == 1u);  // the grant it does understand
+            const std::string back = dir + "/tx_armed_back.json";
+            CHECK(ConfigStore::save(back, out, err));
+            std::string lower = readAll(back);
+            for (char& ch : lower) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+            CHECK(lower.find("plugintransmitallowed") != std::string::npos);
+            CHECK(lower.find("arm") == std::string::npos);      // armed, arming, armedUntil, ...
+            CHECK(lower.find("pluginkeyed") == std::string::npos);
+            CHECK(lower.find("keyed") == std::string::npos);
+            // Every key the SAVED file has, listed: not one of them is about an arming window.
+            const AppConfig defaults;
+            const std::string defText = dir + "/tx_defaults.json";
+            CHECK(ConfigStore::save(defText, defaults, err));
+            std::string dl = readAll(defText);
+            for (char& ch : dl) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+            CHECK(dl.find("arm") == std::string::npos);
+        }
+    }
+
     // --- A CONFIG FILE CANNOT KEY THE RADIO ---------------------------------
     //
     // THE ONE CHECK IN THIS FILE THAT IS NOT ABOUT A SETTING. The transmit
@@ -3721,6 +5036,163 @@ int main() {
         AppConfig typed;
         CHECK(ConfigStore::load(bad, typed, err));
         CHECK(!typed.lookForNetworkUsrps);
+    }
+
+    // --- "Don't show this again" on the RADIO SETUP page (2026-10-06) ---------
+    //
+    // OFF unless the person ticked it: every config written before this build -
+    // every install that has never seen the page - must get the page. On
+    // survives a round trip, and a value of the wrong type is the default (a
+    // hand-edited "yes" must not silence a page that exists to help).
+    {
+        CHECK(!AppConfig{}.radioSetupDontShow);
+        std::string err;
+        const std::string none = p("radiosetup_absent.json");
+        CHECK(writeText(none, "{}\n"));
+        AppConfig blank = junkConfig();
+        blank.radioSetupDontShow = true;
+        CHECK(ConfigStore::load(none, blank, err));
+        CHECK(!blank.radioSetupDontShow);
+
+        AppConfig in;
+        in.radioSetupDontShow = true;
+        const std::string path = p("radiosetup_roundtrip.json");
+        CHECK(ConfigStore::save(path, in, err));
+        AppConfig out;
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.radioSetupDontShow);
+        // ...and the tick is the only thing that changed.
+        in.radioSetupDontShow = false;
+        CHECK(ConfigStore::save(path, in, err));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(!out.radioSetupDontShow);
+
+        const std::string bad = p("radiosetup_badtype.json");
+        CHECK(writeText(bad, "{\"radioSetupDontShow\": \"yes\"}\n"));
+        AppConfig typed;
+        CHECK(ConfigStore::load(bad, typed, err));
+        CHECK(!typed.radioSetupDontShow);
+    }
+
+    // --- the window the spectrum and the waterfall are drawn through (0.99.76) -----------------
+    //
+    // The owner, answering a dislike ("the spectrum and the waterfall are very milky"): "allow the
+    // users to set it themselves to what they prefer by right clicking on it". The choice is two
+    // keys - waterfallRangeMode, new, and dbMin / dbMax, which are the Display section's Min dB and
+    // Max dB and have been in the file since the first release. The file is user-editable and
+    // old: a missing, wrong-typed or unknown mode is read from the pair, so a range somebody set
+    // before there was a mode is still theirs, and a hand-edit cannot produce a third spelling.
+    {
+        std::string err;
+        const std::string path = p("range_mode.json");
+        CHECK(AppConfig{}.waterfallRangeMode == "auto");
+
+        // Nothing in the file: Automatic and the program's own pair, whatever the caller held.
+        CHECK(writeText(path, "{}\n"));
+        AppConfig out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+        CHECK(out.dbMin == -110.0f && out.dbMax == 0.0f);
+
+        // A 0.99.75 file whose user had moved Min dB / Max dB: that range is theirs.
+        CHECK(writeText(path, "{\"dbMin\":-95.0,\"dbMax\":-20.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "manual");
+        CHECK(out.dbMin == -95.0f && out.dbMax == -20.0f);
+
+        // ...and one that left them at the defaults stays Automatic.
+        CHECK(writeText(path, "{\"dbMin\":-110.0,\"dbMax\":0.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+
+        // The word wins over the pair, both ways: Automatic keeps the pair Manual returns to.
+        CHECK(writeText(path, "{\"waterfallRangeMode\":\"auto\",\"dbMin\":-95.0,\"dbMax\":-20.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+        CHECK(out.dbMin == -95.0f && out.dbMax == -20.0f);
+        CHECK(writeText(path, "{\"waterfallRangeMode\":\"manual\"}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "manual");
+        CHECK(out.dbMin == -110.0f && out.dbMax == 0.0f);
+
+        // A word nobody wrote, or a value that is not a word, is read from the pair.
+        for (const char* bad : {"\"sideways\"", "\"MANUAL\"", "\"\"", "7", "true", "null", "[]"}) {
+            CHECK(writeText(path, std::string("{\"waterfallRangeMode\":") + bad +
+                                      ",\"dbMin\":-95.0,\"dbMax\":-20.0}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            if (out.waterfallRangeMode != "manual") {
+                std::printf("FAIL mode %s with a range of its own loaded as \"%s\"\n", bad,
+                            out.waterfallRangeMode.c_str());
+            }
+            CHECK(out.waterfallRangeMode == "manual");
+            CHECK(writeText(path, std::string("{\"waterfallRangeMode\":") + bad + "}\n"));
+            out = junkConfig();
+            CHECK(ConfigStore::load(path, out, err));
+            CHECK(out.waterfallRangeMode == "auto");
+        }
+
+        // A pair the loader refuses is reset (both ends), and the mode is then read from what is
+        // left: a thin pair with no word is Automatic, not Manual on a window nobody chose.
+        CHECK(writeText(path, "{\"dbMin\":-20.0,\"dbMax\":-15.0}\n"));
+        out = junkConfig();
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.waterfallRangeMode == "auto");
+        CHECK(out.dbMin == -110.0f && out.dbMax == 0.0f);
+
+        // It is written under its own name, in one of its two spellings, and comes back.
+        for (const char* mode : {"manual", "auto"}) {
+            AppConfig in;
+            in.waterfallRangeMode = mode;
+            in.dbMin = -70.0f;
+            in.dbMax = -30.0f;
+            const std::string text = ConfigStore::serialize(in);
+            CHECK(text.find(std::string("\"waterfallRangeMode\": \"") + mode + "\"") !=
+                      std::string::npos ||
+                  text.find(std::string("\"waterfallRangeMode\":\"") + mode + "\"") != std::string::npos);
+            const std::string rt = p("range_mode_roundtrip.json");
+            CHECK(ConfigStore::save(rt, in, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(rt, out, err));
+            CHECK(out.waterfallRangeMode == mode);
+            CHECK(out.dbMin == -70.0f && out.dbMax == -30.0f);
+        }
+
+        // Exactly 10 dB apart survives a save and a load, which is what "at least 10" means.
+        {
+            AppConfig in;
+            in.waterfallRangeMode = "manual";
+            in.dbMin = -50.0f;
+            in.dbMax = -40.0f;
+            const std::string rt = p("range_mode_tight.json");
+            CHECK(ConfigStore::save(rt, in, err));
+            out = junkConfig();
+            CHECK(ConfigStore::load(rt, out, err));
+            CHECK(out.waterfallRangeMode == "manual");
+            CHECK(out.dbMin == -50.0f && out.dbMax == -40.0f);
+        }
+
+        // THE SAVE DEBOUNCE HAS TO SEE EACH OF THE THREE: the menu's radio keys and sliders call
+        // no save of their own, so configsEqual is the only thing that writes the file before a
+        // clean exit.
+        const AppConfig base;
+        CHECK(cascade::gui::configsEqual(base, base));  // control
+        AppConfig mode = base;
+        mode.waterfallRangeMode = "manual";
+        CHECK(!cascade::gui::configsEqual(base, mode));
+        CHECK(!cascade::gui::configsEqual(mode, base));
+        AppConfig floorMoved = base;
+        floorMoved.dbMin = -90.0f;
+        CHECK(!cascade::gui::configsEqual(base, floorMoved));
+        CHECK(!cascade::gui::configsEqual(floorMoved, base));
+        AppConfig ceilingMoved = base;
+        ceilingMoved.dbMax = -10.0f;
+        CHECK(!cascade::gui::configsEqual(base, ceilingMoved));
+        CHECK(!cascade::gui::configsEqual(ceilingMoved, base));
     }
 
     const int rc = testSummary("test_config");

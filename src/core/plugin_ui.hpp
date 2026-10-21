@@ -32,6 +32,7 @@
 #ifndef CASCADE_CORE_PLUGIN_UI_HPP
 #define CASCADE_CORE_PLUGIN_UI_HPP
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -477,6 +478,9 @@ public:
     // The level-1 API is told too (PluginApiCore::setStopped), so a stopped
     // plugin's marks and commands leave the screen at once and its queued
     // requests are refused rather than applied.
+    //
+    // KEYED ON THE PLUGIN'S ID (core/plugin_run.hpp): what is handed in may be
+    // file names or ids, and a stop outlives an update of the module.
     void setStopped(std::vector<std::string> keys) {
         api_->setStopped(keys);
         stopped_.set(std::move(keys));
@@ -484,6 +488,31 @@ public:
     bool isStopped(const std::string& pluginKey) const {
         return stopped_.contains(pluginKey);
     }
+
+    // --- Per-plugin start and stop (0.99.73) -----------------------------------
+    //
+    // A FITTED PLUGIN RUNS ONLY WHILE IT IS USED (core/plugin_run.hpp), and these
+    // make that real for ONE plugin without the wholesale rebuild: startPlugin
+    // attaches its host client and creates its track source, panel and
+    // instrument instances; stopPlugin destroys exactly those, takes its
+    // targets, trails and rows off the map and the lists, and puts its level-1
+    // client to sleep (its marks and commands leave the screen). Every other
+    // plugin's instances, panels, instruments and altitude history are left as
+    // they are. rebuild() stays for the wholesale cases.
+    //
+    // THE DORMANT SET works as the stop set does for rebuild() - a dormant
+    // plugin is given nothing - and survives clear(). startPlugin takes its
+    // plugin out of it and stopPlugin puts it in, so a later rebuild() keeps the
+    // state the per-plugin calls left. Keyed on id, like the stop set.
+    //
+    // startPlugin returns false, and creates nothing, for a plugin that did not
+    // load, is STOPPED, or already has instances here.
+    bool startPlugin(const LoadedPlugin& lp);
+    void stopPlugin(const std::string& pluginKey);
+    void setDormant(std::vector<std::string> keys) { dormant_.set(std::move(keys)); }
+    bool isDormant(const std::string& pluginKey) const { return dormant_.contains(pluginKey); }
+    // Whether this plugin (by module file name) has any UI instance now.
+    bool hasInstances(const std::string& pluginKey) const;
 
     // --- HOST API LEVEL 1 ---------------------------------------------------
     //
@@ -508,6 +537,16 @@ public:
         return api_->settingsGranted(pluginKey);
     }
 
+    // THE TRANSMIT GRANT (host API level 2) - the third per-plugin permission, and
+    // the one that is worth nothing on its own: the operator's arming window has to
+    // be open as well (core/tx_audio.hpp). Keyed on tuneKey(), off by default,
+    // cleared by clear() and re-applied by the owner from its config, like the other
+    // two.
+    void setTxAllowed(const std::string& pluginKey, bool allowed) {
+        api_->setTxGranted(pluginKey, allowed);
+    }
+    bool txAllowed(const std::string& pluginKey) const { return api_->txGranted(pluginKey); }
+
     // Destroys every instance. Must run BEFORE the plugin host unloads the
     // modules, for the same reason PluginRunner::clear must.
     void clear();
@@ -515,7 +554,18 @@ public:
     // Per-frame. Refreshes tracks, paths and panel rows from the plugins.
     void poll();
 
+    // The targets the map can draw: every one has a position. Everything that
+    // draws, fits, follows, hit-tests, plots coverage or serialises a position
+    // reads THIS, so a target without one cannot reach it.
     const std::vector<HostTrack>& tracks() const { return tracks_; }
+    // The targets a source hears and cannot place yet (0.99.75,
+    // CASCADE_TRACK_FLAG_NO_POSITION, or coordinates that are not finite), kept
+    // APART from tracks() so that none of the above can see one. Listed in the
+    // target list after the placed rows; every one has the flag set and NaN
+    // coordinates, whatever the plugin sent. Subject to the same staleness rule
+    // (trackPresentation) as a placed target of its kind, and to the same
+    // per-plugin cap, which counts both lists together.
+    const std::vector<HostTrack>& unplacedTracks() const { return unplaced_; }
     const std::vector<HostPath>& paths() const { return paths_; }
     const std::vector<HostPanel>& panels() const { return panels_; }
     const std::vector<HostInstrument>& instruments() const { return instruments_; }
@@ -597,21 +647,27 @@ public:
     std::int32_t tuneRequestFromPlugin(const std::string& plugin, double centreHz);
 
 private:
+    // `key` on all three is the module file name (tuneKey), which is what
+    // stopPlugin() takes out by - the display name is the plugin's own to
+    // choose and two modules may share one.
     struct TrackInstance {
         const CascadeTrackSourceApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;
     };
     struct PanelInstance {
         const CascadePanelApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;
         std::size_t panelIndex = 0;  // into panels_
     };
     struct InstrumentInstance {
         const CascadeInstrumentApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;
         std::size_t index = 0;  // into instruments_
     };
 
@@ -655,6 +711,10 @@ private:
     static constexpr std::uint32_t kMaxPathPoints = 20000;
 
     void destroyInstances();
+    // Attaches and creates what ONE plugin declares - the body rebuild() runs
+    // for each plugin, and what startPlugin() runs for one. Appends to the
+    // instance vectors; demonstration instruments stay last.
+    void buildPluginLocked(const LoadedPlugin& lp);
 
     std::vector<TrackInstance> trackInstances_;
     std::vector<PanelInstance> panelInstances_;
@@ -669,6 +729,7 @@ private:
     // out a reference every frame instead of building a vector per call.
     std::vector<std::string> trackPluginNames_;
     std::vector<HostTrack> tracks_;
+    std::vector<HostTrack> unplaced_;
     std::vector<HostPath> paths_;
     std::vector<HostPanel> panels_;
 
@@ -685,6 +746,8 @@ private:
     // The stop set rebuild() skips by: this object's own copy, set on its thread (by setStopped, or by a directive).
     // tuneRequestFromPlugin does NOT read it - a plugin's thread asks the core's.
     PluginStopSet stopped_;
+    // The plugins put to sleep (AUTO and not wanted); see setDormant().
+    PluginStopSet dormant_;
     // Shared with every bridge, and (since step P3) with the engine that created it. See api(). The tune grant, the
     // requesters and the last refusal are the core's.
     std::shared_ptr<PluginApiCore> api_ = std::make_shared<PluginApiCore>();

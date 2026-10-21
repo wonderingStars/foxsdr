@@ -1,0 +1,1 @@
+{"schemaVersion": 1, "plugins": [{"id": "radar-sweep", "name": "Radar sweep", "version": "1.0.0", "abiVersion": 3, "platforms": [{"os": "windows", "arch": "x64", "file": "radar-sweep-1.0.0-abi3-win-x64.dll", "url": "https://example.invalid/regional/gb/radar-sweep-1.0.0-abi3-win-x64.dll", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}]}]}

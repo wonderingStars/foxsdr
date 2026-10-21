@@ -291,9 +291,9 @@ float drawToneAlertFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     float y = addBenchPlate(dl, tl, br, in.title.c_str());
 
     const float sc = ta::typeScale(w, h);
-    const float capPx = std::max(ta::kMinTextPx, fonts::kTinySize * sc);
-    const float readPx = std::max(ta::kMinTextPx + 2.0f, fonts::kReadingSize * sc);
-    const float uiPx = std::max(ta::kMinTextPx, fonts::kUiSize * sc);
+    const float capPx = std::max(ta::kMinTextPx, fonts::tinyPx() * sc);
+    const float readPx = std::max(ta::kMinTextPx + 2.0f, fonts::readingPx() * sc);
+    const float uiPx = std::max(ta::kMinTextPx, fonts::uiPx() * sc);
 
     // The maker's legend along the bottom of the case, and the event counter
     // beside it. Both are cut into the enamel; neither is a measurement.

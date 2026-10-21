@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #include "test_check.hpp"
@@ -525,6 +526,60 @@ int main() {
         std::printf("vfo 10 MS/s: worst alias %.1f dB (tone %.0f Hz)\n",
                     20.0 * std::log10(std::max(worst, 1e-12)), worstAt);
         CHECK(worst < 5.62e-5);  // -85 dB
+    }
+
+    // --- A bandwidth that is not a finite number ------------------------------
+    //
+    // fuzz_channel_chain hands the Vfo any 64-bit pattern as a bandwidth (corpus
+    // seed-raw-bandwidth.bin is a NaN), and the first sanitizer run on Linux
+    // (Clang, float-cast-overflow) stopped on it. std::clamp(NaN, lo, hi) is NaN:
+    // every comparison with it is false, so neither bound applies. The NaN then
+    // went into the design, where tapsForTransition cast 92 / (22 * NaN) to an
+    // unsigned count (undefined behaviour) and windowedSincLowpass was given a NaN
+    // cutoff, so the channel filter turned every sample into NaN. A bandwidth the
+    // clamp cannot place is the narrowest one, and an infinite one the widest; both
+    // must be EXACTLY the filter that clamped value designs. Counted as mismatches
+    // rather than by the largest error: std::max(0.0, NaN) is 0.0.
+    {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        const double narrowest = 0.01 * kChanRate;
+        const double widest = 0.9 * kChanRate;
+        // DC through the mixer at offset 0: a settled filter passes it at unity.
+        const std::vector<std::complex<float>> x(40000, std::complex<float>(1.0f, 0.0f));
+
+        const auto settled = [&](double bandwidth) {
+            Vfo v(kFs, kDecim, bandwidth);
+            return runChunked(v, x, 4096);
+        };
+        const auto mismatches = [](const std::vector<std::complex<float>>& a,
+                                   const std::vector<std::complex<float>>& b) {
+            std::size_t bad = 0;
+            if (a.size() != b.size()) { return a.size() + b.size(); }
+            for (std::size_t i = 0; i < a.size(); ++i) {
+                if (!(std::abs(a[i] - b[i]) <= 0.0f)) { ++bad; }
+            }
+            return bad;
+        };
+
+        const std::vector<std::complex<float>> atNarrowest = settled(narrowest);
+        const std::vector<std::complex<float>> atWidest = settled(widest);
+        CHECK(!atNarrowest.empty());
+        CHECK(!atWidest.empty());
+        // The reference itself is a working filter: finite, and unity at DC.
+        CHECK(std::isfinite(atNarrowest.back().real()));
+        CHECK_NEAR(atNarrowest.back().real(), 1.0, 0.05);
+
+        const std::vector<std::complex<float>> fromNan = settled(nan);
+        CHECK(mismatches(fromNan, atNarrowest) == 0u);
+        CHECK(settled(-nan) == fromNan);
+        CHECK(mismatches(settled(-inf), atNarrowest) == 0u);
+        CHECK(mismatches(settled(inf), atWidest) == 0u);
+
+        // And the same through setBandwidthHz(), the path a live retune takes.
+        Vfo retuned(kFs, kDecim, 50.0e3);
+        retuned.setBandwidthHz(nan);
+        CHECK(mismatches(runChunked(retuned, x, 4096), atNarrowest) == 0u);
     }
 
     return testSummary("test_vfo");

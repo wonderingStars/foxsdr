@@ -461,20 +461,44 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.nativeArgs == b.nativeArgs &&
            // A tick in the Source section that calls no save of its own.
            a.lookForNetworkUsrps == b.lookForNetworkUsrps &&
+           // The RADIO SETUP page's "Don't show this again" tick: a click that
+           // calls no save of its own.
+           a.radioSetupDontShow == b.radioSetupDontShow &&
            // The per-radio bias tee memory: switched by the checkbox and the
            // deck's key, neither of which saves on its own.
            a.biasTee == b.biasTee &&
            // The per-radio converters: set in the Source section, which calls
            // no save of its own.
            a.converters == b.converters &&
+           // The crystal correction's switch and per-radio values: set in the
+           // Source section, which calls no save of its own.
+           a.ppmCorrection == b.ppmCorrection && a.ppm == b.ppm &&
            // Each Airspy's gain mode, gains and decimation: set in the Source
            // section, which calls no save of its own.
            a.airspy == b.airspy &&
-           a.plutoUri == b.plutoUri && a.soapyAntenna == b.soapyAntenna &&
+           // Each radio's Auto gain switch (0.99.73): ticked in the Source
+           // section, which calls no save of its own.
+           a.autoGainByRadio == b.autoGainByRadio &&
+           // Each radio's manual gain (0.99.75): moved by the Source section's
+           // sliders, the top bar's GAIN dial and the scope's knob, none of which
+           // saves on its own.
+           a.manualGainByRadio == b.manualGainByRadio &&
+           a.plutoUri == b.plutoUri && a.rtlTcpAddr == b.rtlTcpAddr &&
+           a.soapyAntenna == b.soapyAntenna &&
            a.iqFilePath == b.iqFilePath && a.centerHz == b.centerHz &&
            a.mode == b.mode && a.bandwidthHz == b.bandwidthHz &&
            a.squelchDb == b.squelchDb && a.volume == b.volume &&
+           // AUTOMATIC squelch (0.99.74): the AUTO key under the SQUELCH knob
+           // saves nothing itself.
+           a.squelchAuto == b.squelchAuto &&
+           // The Sinks rail's AUDIO BUFFER (0.99.73): a combo whose pick saves
+           // nothing by itself, so the debounce has to see it here.
+           a.audioBufferMs == b.audioBufferMs && a.audioBufferAutoMs == b.audioBufferAutoMs &&
            a.dbMin == b.dbMin && a.dbMax == b.dbMax &&
+           // Automatic or Manual (0.99.76): chosen by two radio keys in the right-click menu
+           // that save nothing themselves, so the debounce has to see the word change. The
+           // pair above is the floor and ceiling Manual uses.
+           a.waterfallRangeMode == b.waterfallRangeMode &&
            a.splitRatio == b.splitRatio && a.vfoOffsetHz == b.vfoOffsetHz &&
            a.sampleRateHz == b.sampleRateHz &&
            a.stereoEnabled == b.stereoEnabled &&
@@ -484,26 +508,50 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.notchQ == b.notchQ && a.autoNotch == b.autoNotch &&
            a.bandPlanOverlay == b.bandPlanOverlay &&
            a.patch == b.patch &&
+           // The patch presets: saved, renamed, deleted and loaded from the
+           // page's PRESETS panel, none of which saves on its own.
+           a.patchPresets == b.patchPresets &&
+           a.patchPresetPrevious == b.patchPresetPrevious &&
            // The main view (0.99.40): switched by a key that saves nothing.
            a.mainView == b.mainView &&
+           // The rail folded to its strip (0.99.49): the key calls no save.
+           a.railCollapsed == b.railCollapsed &&
+           // The status column folded to its strip (0.99.74): same.
+           a.statusCollapsed == b.statusCollapsed &&
+           // The Display section opened or folded (0.99.74): its header calls
+           // no save, so the debounce has to see the flag change.
+           a.displayOpen == b.displayOpen &&
            a.bandPlanSelection == b.bandPlanSelection &&
            // Language and country: chosen in a combo on the SYSTEM bank.
            a.language == b.language && a.country == b.country &&
            a.bandPlanSize == b.bandPlanSize && a.bandPlanPalette == b.bandPlanPalette &&
-           // The frequency display style: picked in the VIEW bank, so without
+           // The frequency display style: picked in the Display section (the
+           // SYSTEM bank since 0.99.74, the VIEW bank before), so without
            // it here a choice would reach the file only when something else
            // changed in the same session.
            a.tunerDisplayStyle == b.tunerDisplayStyle &&
+           // Each bench meter's own style: picked by right-clicking the
+           // meter, which saves nothing itself - without it here a choice
+           // would reach the file only when something else changed in the
+           // same session, the tunerDisplayStyle field's own reason for
+           // being in this function.
+           a.meterStyleVolume == b.meterStyleVolume && a.meterStyleRate == b.meterStyleRate &&
            // The theme and the counter's own settings: each changed by a click
            // (Display, or the counter's right-click menu) that saves nothing
            // itself, so the debounce must see them.
            a.uiTheme == b.uiTheme && a.counterScale == b.counterScale &&
            a.counterSwitches == b.counterSwitches && a.readingsScale == b.readingsScale &&
+           // The interface size: changed by the Display combo or Ctrl+=/-/0,
+           // neither of which saves anything itself either.
+           a.interfaceScale == b.interfaceScale &&
            a.mapTrails == b.mapTrails &&
            a.mapTrailAltitudeColours == b.mapTrailAltitudeColours &&
            a.mapTrailStyle == b.mapTrailStyle &&
            a.aircraftIconPx == b.aircraftIconPx &&
            a.mapTrailWidthPx == b.mapTrailWidthPx &&
+           // The map list's "On screen only" tick: a click that calls no save
+           // of its own.
+           a.mapListOnScreenOnly == b.mapListOnScreenOnly &&
            // The scope's mode and range. Both are user switches that change
            // only on a click or a wheel notch, so they belong here: without
            // them, leaving the application in scope mode - or on a range other
@@ -534,6 +582,9 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // choice would reach the file only when something else changed.
            a.gpsPort == b.gpsPort && a.gpsBaud == b.gpsBaud &&
            a.pluginCatalogueUrl == b.pluginCatalogueUrl &&
+           // The plugin sites (0.99.74): added and removed in the store's SITES panel, so
+           // without this a change would reach the file only when something else changed.
+           a.pluginSites == b.pluginSites &&
            a.pluginBrowserOpen == b.pluginBrowserOpen &&
            // The fitted modules window, open flag AND rectangle, because
            // this comparison is what decides
@@ -545,14 +596,24 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.fittedModulesY == b.fittedModulesY &&
            a.fittedModulesWidth == b.fittedModulesWidth &&
            a.fittedModulesHeight == b.fittedModulesHeight &&
+           // ...and the plugin store's rectangle (0.99.72), for the same reason.
+           a.pluginStoreX == b.pluginStoreX &&
+           a.pluginStoreY == b.pluginStoreY &&
+           a.pluginStoreWidth == b.pluginStoreWidth &&
+           a.pluginStoreHeight == b.pluginStoreHeight &&
            a.pluginLastUpdateCheck == b.pluginLastUpdateCheck &&
            a.pluginTuneAllowed == b.pluginTuneAllowed &&
            // Host API level 1: without these a plugin's stored setting, or a
            // settings grant, would reach the file only when something else
            // happened to change in the same session.
            a.pluginSettingsAllowed == b.pluginSettingsAllowed &&
+           // And the transmit grant (0.99.74): a grant that took effect and was not
+           // saved is a grant the next launch silently does not have.
+           a.pluginTransmitAllowed == b.pluginTransmitAllowed &&
            a.pluginSettings == b.pluginSettings &&
            a.pluginsStopped == b.pluginsStopped &&
+           // How each plugin runs (0.99.73): a "keep running" tick must reach the file.
+           a.pluginRun == b.pluginRun &&
            a.pluginMuteOverride == b.pluginMuteOverride &&
            a.userPresets == b.userPresets &&
            // Without this a close is remembered in memory and never written:
@@ -582,8 +643,29 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            // in the first seconds would look like a clean exit.
            a.telemetryEnabled == b.telemetryEnabled &&
            a.telemetryInstallId == b.telemetryInstallId &&
+           a.telemetryFirstRun == b.telemetryFirstRun &&
+           a.telemetryFirstVersion == b.telemetryFirstVersion &&
            a.telemetryLaunches == b.telemetryLaunches &&
            a.telemetryCrashes == b.telemetryCrashes &&
+           // The classes of those unclean exits (0.99.69): the unknown that start-up
+           // counts is moved to its class a moment later, once the evidence has been
+           // read, and that move has to be written like the count it came from. The
+           // session's start is not here - it is constant for the session and rides on
+           // the forced save at the top of the frame loop.
+           a.telemetryExitsDied == b.telemetryExitsDied &&
+           a.telemetryExitsKilled == b.telemetryExitsKilled &&
+           a.telemetryExitsEnded == b.telemetryExitsEnded &&
+           a.telemetryExitsUnknown == b.telemetryExitsUnknown &&
+           // Tester usage: only the token, on telemetryInstallId's own rule -
+           // it changes on a click (pasting or removing a code) and nothing
+           // else makes this field's row of the file stale. testerUsageCurrent
+           // rewrites itself every save like telemetryPending does,
+           // testerTokenInvalid flips on a network answer rather than a
+           // click, and testerUsagePending is the retry queue - none of the
+           // three would ever settle if compared here, so all three ride
+           // along on whatever save the token (or another field) triggers,
+           // and on the two unconditional exit saves.
+           a.testerToken == b.testerToken &&
            // Diagnostics: both are user switches that change only on a click,
            // so they belong here - without them, turning capture off would
            // not survive a restart unless something else happened to trigger
@@ -603,7 +685,20 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.transmitSplitHz == b.transmitSplitHz && a.transmitToneHz == b.transmitToneHz &&
            a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
            a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
-           a.updateCheckEnabled == b.updateCheckEnabled;
+           a.updateCheckEnabled == b.updateCheckEnabled &&
+           // The team messages marked Seen (0.99.79): the Seen key asks for a save of its
+           // own, but the prune that follows an update check (pollUpdateAsync) does not -
+           // and a press whose save is lost to a crash must still reach the file from here.
+           a.messagesSeen == b.messagesSeen &&
+           // The bookmark spectrum markers and their stacking (0.99.54):
+           // both are switched in the Bookmarks section, which calls no
+           // save of its own - without them here bookmarkMarkers_ reset to
+           // on at every launch regardless of what the user last chose.
+           a.bookmarkMarkers == b.bookmarkMarkers &&
+           a.bookmarkStackNames == b.bookmarkStackNames &&
+           // The spectrum's trace mode, set from its right-click menu.
+           a.spectrumTraceMode == b.spectrumTraceMode &&
+           a.spectrumAverageMs == b.spectrumAverageMs;
 }
 
 namespace {
@@ -1436,7 +1531,7 @@ int AppWindow::run(int frames) {
                 bookmarkImportByEnv_ = true;
                 if (const char* p = std::getenv("FOXSDR_BOOKMARK_IMPORT"); p != nullptr && *p != '\0') {
                     cascade::core::formatUtf8(bookmarkImportPath_, sizeof(bookmarkImportPath_), "%s", p);
-                    railBank_ = static_cast<int>(cascade::gui::RailBank::View);
+                    railBank_ = static_cast<int>(cascade::gui::RailBank::Tools);
                     bookmarkOpenByEnv_ = true;
                     bookmarkScrollByEnv_ = true;
                 }
@@ -5796,7 +5891,7 @@ void AppWindow::drawMenuColumn() {
         case cascade::gui::RailBank::Decode:
             drawDecodeBank();
             break;
-        case cascade::gui::RailBank::View:
+        case cascade::gui::RailBank::Tools:
             // --- VIEW: how what was decoded is shown. The radar scope is a
             // way of LOOKING at the traffic the decoders produce, which is
             // why it sits beside Display rather than among the decoders.
@@ -6663,9 +6758,11 @@ void AppWindow::startUpdateCheck() {
         cascade::core::updateCheckDisposition(cascade::core::runningInPackage(),
                                               updateCheckEnabled_);
     if (disposition == cascade::core::UpdateCheckDisposition::OffByChoice) { return; }
-    if (disposition == cascade::core::UpdateCheckDisposition::StorePackage) {
+    if (disposition == cascade::core::UpdateCheckDisposition::AskStore) {
+        // FIXME(2026-10-21, 0.99.84 merge, ledger UPDATES): master's 0.99.53 asks the Microsoft Store here (core/store_update.hpp);
+        // the Store task and its banner are not wired into this window yet, so a packaged copy asks nobody, as before 0.99.53.
         updateStarted_ = true;
-        cascade::core::diagLogf("%s", cascade::core::updateCheckStandDownLine());
+        cascade::core::diagLogf("%s", "update check: running from a Store package - the Store check is not wired in this tree yet");
         return;
     }
     updateStarted_ = true;
@@ -12911,7 +13008,8 @@ void AppWindow::drawPluginStoreWindow() {
             // The ENGINE plans the run (OPEN 5); this says only what it
             // cannot know - the ADD ALL tick, and which one module's own
             // notice tick is on (the selected row's, as the model asks it).
-            const int sel = pluginStoreDeck_->selected;
+            // (master's 0.99.72 store has no row selection: the open PAGE is the one module a tick can belong to.)
+            const int sel = storeModuleIndexById(model, pluginStoreDeck_->pageId);
             const std::string acknowledged =
                 (pluginStoreDeck_->legalAck && sel >= 0 && sel < static_cast<int>(model.modules.size()))
                     ? model.modules[static_cast<std::size_t>(sel)].id
@@ -12928,7 +13026,7 @@ void AppWindow::drawPluginStoreWindow() {
             // read the same way the model built it: it belongs to the
             // SELECTED module and to no other, so a fit asked for on any other
             // row is asked for unacknowledged.
-            const bool ack = fitIdx == pluginStoreDeck_->selected && pluginStoreDeck_->legalAck;
+            const bool ack = fitIdx == storeModuleIndexById(model, pluginStoreDeck_->pageId) && pluginStoreDeck_->legalAck;
             uiSubmit(cmd::makeText(FOXAPI_OP_STORE_INSTALL, model.modules[static_cast<std::size_t>(fitIdx)].id,
                                    ack ? 1 : 0));
         }
@@ -16710,7 +16808,7 @@ cascade::gui::StoreListCache& AppWindow::storeLists(bool full) {
     // other row is asked as unacknowledged, so a module with a notice stays blocked until it is the one on the
     // plate (a tick given to the plugin the user just read about must not unblock another's FIT key).
     for (std::size_t i = 0; i < m.modules.size(); ++i) {
-        cascade::gui::setStoreBlockedReason(m.modules[i], deck.legalAck && static_cast<int>(i) == deck.selected);
+        cascade::gui::setStoreBlockedReason(m.modules[i], deck.legalAck && m.modules[i].id == deck.pageId);
     }
     // THE PROGRESS, LIVE: the transfer's own figure, which moves with no list moving. 0 while the server has not
     // sent a length; drawn only while something is busy.
@@ -17124,7 +17222,7 @@ void AppWindow::drawTransmitPage() {
     // the microphone, and a second press could only queue a second open.
     const bool micOpening = (st.txFlags & FOXAPI_TX_INPUT_OPENING) != 0u;
     ImGui::BeginDisabled(micOpening);
-    for (int i = 0; i < cascade::core::kTxInputCount; ++i) {
+    for (int i = 0; i < cascade::core::kTxHandInputCount; ++i) {
         ImGui::SameLine();
         const bool on = (static_cast<int>(st.txInput) == i);
         const cascade::core::TxInput in = cascade::core::txInputFromIndex(i);
@@ -18789,7 +18887,7 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
             break;
         case KeyAction::BankSignal: setRailBank(0); break;
         case KeyAction::BankDecode: setRailBank(1); break;
-        case KeyAction::BankView: setRailBank(2); break;
+        case KeyAction::BankTools: setRailBank(2); break;
         case KeyAction::BankExtend: setRailBank(3); break;
         case KeyAction::BankSystem: setRailBank(4); break;
         case KeyAction::OpenSettings:
@@ -19871,7 +19969,8 @@ void AppWindow::drawUpdatesSection() {
     if (packaged) {
         // No checkbox: there is nothing here for the user to decide. A tick
         // that changed nothing would be worse than no tick at all.
-        ImGui::TextWrapped("%s", tr(cascade::core::updateCheckStandDownSentence()));
+        // FIXME(2026-10-21, 0.99.84 merge, ledger UPDATES): master's Settings row has a tick here (the Store is asked); not yet wired.
+        ImGui::TextWrapped("%s", "this copy came from the Microsoft Store, which delivers its updates");
         ImGui::TextDisabled(tr("this build: %s"), cascade::versionString());
         ImGui::TextDisabled(tr("package: %s"), cascade::core::packageIdentity().fullName.c_str());
         return;

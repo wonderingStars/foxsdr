@@ -129,6 +129,12 @@ struct PluginApiClient {
     std::string key;    // module file name: grants, stop, markers, commands
     std::string name;   // descriptor name: the settings store
     std::size_t index = 0;
+    // LoadedPlugin::capabilities as the descriptor declared it, set once at
+    // construction and never rewritten (same rule as `name` above) - plain,
+    // not atomic, for the same reason: the object is only ever reachable
+    // after it is fully built. getState() reads this to decide whether THIS
+    // client's plugin may see receiverLocator (CASCADE_CAP_RECEIVER_LOCATOR).
+    std::uint32_t capabilities = 0;
 
     // False until the host attaches the plugin and again once it is stopped,
     // removed or the host is shutting down. Every call through a client that
@@ -142,6 +148,11 @@ struct PluginApiClient {
     // host offers the grant key only where it would mean something.
     std::atomic<bool> askedSettings{false};
     std::atomic<bool> askedTune{false};
+    // CASCADE_STATE_TX_ARMED | CASCADE_STATE_TRANSMITTING for THIS plugin, published by
+    // the GUI thread once a frame (PluginApiCore::publishTxState) and read lock-free
+    // by get_state. Kept apart from `grants` because it is a state and not a grant: it
+    // changes with the operator's arming window and the key, and is never persisted.
+    std::atomic<std::uint32_t> txState{0};
 };
 
 // One queued receiver-control request. Plain data: the queue is a fixed ring.
@@ -190,6 +201,19 @@ struct HostCommand {
     std::string label;
 };
 
+// A PRESSABLE PANEL ROW (0.99.77, CASCADE_ROW_FLAG_KEY): the command id the row is a key for,
+// or 0 when it is drawn as text. Two steps, kept apart so the drawing can tell "not a key" from
+// "a key bound to nothing":
+//   panelRowKeyId     what the row ASKS for - 0 unless it is a table row (CASCADE_ROW_CELLS)
+//                     carrying CASCADE_ROW_FLAG_KEY with a non-zero id in bits 8..15. A heading
+//                     or a separator is never a key, and id bits without the flag are not read.
+//   panelRowPressable what the host will DO - the id, only when the plugin registered it with
+//                     add_command (PluginApiCore::pressCommand refuses any other, so a key drawn
+//                     for an unregistered id would be a key that does nothing).
+std::uint32_t panelRowKeyId(const CascadePanelRow& row);
+std::uint32_t panelRowPressable(const CascadePanelRow& row,
+                                const std::vector<HostCommand>& registered);
+
 // The whole settings store: plugin NAME -> key -> value.
 using PluginSettingsMap = std::map<std::string, std::map<std::string, std::string>>;
 
@@ -217,8 +241,12 @@ public:
 
     // ===== Host side (the GUI / control thread) ==============================
 
-    // Find-or-create the client for a module. GUI thread.
-    PluginApiClient& client(const std::string& key, const std::string& name);
+    // Find-or-create the client for a module. GUI thread. `capabilities` is
+    // the descriptor's declared bits (LoadedPlugin::capabilities); stored only
+    // on FIRST creation, exactly like `name` - a client that already exists
+    // for this key keeps whatever it was first created with.
+    PluginApiClient& client(const std::string& key, const std::string& name,
+                           std::uint32_t capabilities = 0);
     std::size_t clientCount() const;
 
     // The set of modules attached by the latest rebuild: those become live,
@@ -227,19 +255,28 @@ public:
     // nothing on the screen and nothing waiting to act. Clients staying live
     // never see a transient DETACHED.
     void setLiveSet(const std::vector<std::string>& keys);
+    // ONE module's live flag, for the per-plugin start and stop (0.99.73): a
+    // module put to sleep loses its marks, commands, pending presses and queued
+    // requests exactly as one left out of setLiveSet does, and every other
+    // client is left as it is. An unknown key changes nothing.
+    void setLive(const std::string& key, bool live);
 
     // False when the owner is being destroyed: every client answers DETACHED
     // from then on, whatever its own flag says.
     void setAttached(bool attached);
     bool attached() const { return attached_.load(std::memory_order_acquire); }
 
-    // Grants and the stop set, keyed on module file name.
+    // Grants keyed on module file name; the stop set on the plugin's id (the
+    // file names it is handed are reduced to ids, core/plugin_run.hpp).
     void setTuneGranted(const std::string& key, bool granted);
     void setSettingsGranted(const std::string& key, bool granted);
+    // CASCADE_CAP_TX_AUDIO (host API level 2): the TRANSMIT grant, third of the
+    // three, keyed on module file name like the other two.
+    void setTxGranted(const std::string& key, bool granted);
     void setStopped(const std::vector<std::string>& keys);
-    // Both grants off for every module (the stop set is kept). PluginUi's
+    // Every grant off for every module (the stop set is kept). PluginUi's
     // clear() calls this beside clearing its tune grants; the owner re-applies
-    // both from its config after the rescan.
+    // all three from its config after the rescan.
     void clearGrants();
     bool settingsGranted(const std::string& key) const;
     // The tune grant and the stop set, asked by key, from any thread (the legacy request_tune path asks both from a plugin's
@@ -274,6 +311,12 @@ public:
     void takeCentreRetunes(std::vector<CentreRetune>& out);
     // Whether a drained request may still be applied NOW (the module is live, not stopped, and still holds the tune grant).
     bool centreRetuneStillAllowed(const CentreRetune& r) const;
+    bool txGranted(const std::string& key) const;
+    // What get_state's CASCADE_STATE_TX_ARMED and _TRANSMITTING say, per plugin: the
+    // arming window is open (every plugin that declared CASCADE_CAP_TX_AUDIO is told),
+    // and the transmitter is keyed for `keyedKey` (that plugin alone; "" for nobody).
+    // GUI thread, once a frame; takes the lock only for the bounded walk of the clients.
+    void publishTxState(bool armed, const std::string& keyedKey);
     // Module keys that have asked for a SETTINGS-grant function.
     std::vector<std::string> settingsRequesters() const;
     // ALLOCATION-FREE GENERATIONS of the two answers above that build a vector per call, for a reader that asks
@@ -344,6 +387,30 @@ public:
                              std::size_t cap) const;
     std::int32_t settingsSet(const PluginApiClient& c, const char* key, const char* value);
 
+    // CASCADE_CAP_SETTINGS_UI (0.99.43): the value the HOST's own drawn field
+    // wrote, on the user's behalf - same store as settingsSet (validated the
+    // same way), but this ALSO advances the per-plugin counter settings_seq
+    // reads, whereas the plugin's own settingsSet deliberately does not. GUI
+    // thread (the field is edited on it). `pluginName` is c.name, i.e. the
+    // descriptor name settingsGet/settingsSet already key on.
+    std::int32_t settingsUiSet(const std::string& pluginName, const char* key,
+                               const char* value);
+    // The counter itself. Any thread; starts at 1 ("never edited by the host
+    // UI yet"), like every other seq counter in this ABI reserving 0 for
+    // "never read". Unknown plugin name reads as 1 too - nothing has changed
+    // for a plugin the host has never drawn a field for.
+    std::uint64_t settingsUiSeq(const std::string& pluginName) const;
+    // What the host's drawn field SHOWS: the stored value for `key` under
+    // `pluginName`, copied into `out`. CASCADE_API_OK when stored,
+    // CASCADE_API_NOT_FOUND when never set (the caller then shows the spec's
+    // defaultValue - the same rule the header gives the plugin), and
+    // CASCADE_API_BAD_ARGUMENT for a key the store could never hold. Host
+    // side: no client and no gate, because the field is drawn whether or not
+    // the plugin is attached. Any thread; one lock and one copy. `out` is
+    // cleared on every non-OK answer.
+    std::int32_t settingsUiGet(const std::string& pluginName, const char* key,
+                               std::string& out) const;
+
     std::int32_t log(const PluginApiClient& c, std::uint32_t level, const char* text);
 
     std::int32_t addCommand(const PluginApiClient& c, std::uint32_t id, const char* label);
@@ -393,6 +460,7 @@ private:
     std::vector<ClientState> state_;
     std::vector<std::string> tuneGranted_;
     std::vector<std::string> settingsGranted_;
+    std::vector<std::string> txGranted_;
     std::vector<std::string> stopped_;
     std::array<PluginControl, kControlQueue> controls_{};
     std::size_t controlHead_ = 0;
@@ -416,6 +484,9 @@ private:
     mutable std::mutex settingsMutex_;
     PluginSettingsMap settings_;
     std::uint64_t settingsGeneration_ = 0;
+    // Per-plugin: CASCADE_CAP_SETTINGS_UI's settings_seq. Guarded by
+    // settingsMutex_, same as settings_ itself.
+    mutable std::map<std::string, std::uint64_t> settingsUiSeq_;
 };
 
 }  // namespace cascade::core

@@ -1,0 +1,4 @@
+foxsdr-patch 1
+node 1 0 0 10 10
+node 2 1 0 100 10
+wire 1 0 2 0

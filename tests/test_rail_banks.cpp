@@ -30,7 +30,7 @@ int main() {
     {
         int banks = kRailBankCount;  // a variable, or MSVC calls the check constant
         CHECK(banks == 5);
-        const RailBank order[] = {RailBank::SignalPath, RailBank::Decode, RailBank::View,
+        const RailBank order[] = {RailBank::SignalPath, RailBank::Decode, RailBank::Tools,
                                   RailBank::Extend, RailBank::System};
         for (int i = 0; i < kRailBankCount; ++i) {
             CHECK(static_cast<int>(order[i]) == i);
@@ -43,6 +43,20 @@ int main() {
         CHECK(std::strcmp(railBankCaption(RailBank::SignalPath), "SIGNAL PATH") == 0);
         CHECK(std::strcmp(railBankLabel(RailBank::SignalPath), "SIGNAL") == 0);
         CHECK(std::strcmp(railBankLabel(RailBank::System), "SYSTEM") == 0);
+        // THE THIRD BANK IS TOOLS, NOT VIEW (0.99.74, a tester: "the various
+        // scopes, the scanner and the airband are not really VIEW related").
+        // Index 2 is what the config, the census and F3 all go by, so the name
+        // changed and the number did not; the key and the caption over the
+        // sections say the same word.
+        CHECK(static_cast<int>(RailBank::Tools) == 2);
+        CHECK(std::strcmp(railBankLabel(railBankFromIndex(2)), "TOOLS") == 0);
+        CHECK(std::strcmp(railBankCaption(railBankFromIndex(2)), "TOOLS") == 0);
+        CHECK(railBankForFunctionKey(2) == static_cast<int>(RailBank::Tools));  // F3
+        for (int i = 0; i < kRailBankCount; ++i) {
+            const RailBank b = railBankFromIndex(i);
+            CHECK(std::strcmp(railBankLabel(b), "VIEW") != 0);
+            CHECK(std::strcmp(railBankCaption(b), "VIEW") != 0);
+        }
         // Keys past the fifth, and no key at all, select nothing.
         CHECK(railBankForFunctionKey(5) == -1);
         CHECK(railBankForFunctionKey(-1) == -1);

@@ -42,11 +42,12 @@
 //   THE TWO WINDOWS AGREEING. makeModulePlate() feeds the SHARED data plate,
 //   whose own state word is the coarser half of this window's. The last group
 //   checks they never contradict: STARTED against FED, STOPPED against
-//   STOPPED BY YOU, REFUSED against REFUSED.
+//   STOPPED, REFUSED against REFUSED.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -60,14 +61,22 @@ using cascade::core::LoadedPlugin;
 using cascade::gui::countStates;
 using cascade::gui::FittedCounts;
 using cascade::gui::FittedModule;
+using cascade::gui::fittedOrphanSentence;
 using cascade::gui::fittedState;
 using cascade::gui::FittedState;
 using cascade::gui::fittedStateSentence;
 using cascade::gui::fittedStateWord;
 using cascade::gui::makeFittedModule;
 using cascade::gui::makeModulePlate;
+using cascade::gui::FittedModulesDeck;
+using cascade::gui::fittedDateText;
+using cascade::gui::fittedRowNote;
+using cascade::gui::FittedRowNote;
+using cascade::gui::fittedVerdictLine;
+using cascade::gui::fittedVisibleRows;
 using cascade::gui::ModulePlate;
-using cascade::gui::moduleStateWord;
+using cascade::gui::moduleMachineText;
+using cascade::gui::modulePageFacts;
 
 namespace {
 
@@ -87,7 +96,7 @@ bool has(const std::string& hay, const char* needle) {
 // another fails HERE rather than passing an assertion on the field that did not
 // change. Six named fields, no indexing.
 bool sameCounts(const FittedCounts& a, const FittedCounts& b) {
-    return a.fed == b.fed && a.notFed == b.notFed && a.noSignal == b.noSignal &&
+    return a.fed == b.fed && a.idle == b.idle && a.notFed == b.notFed && a.noSignal == b.noSignal &&
            a.stopped == b.stopped && a.refused == b.refused && a.total == b.total;
 }
 
@@ -231,16 +240,19 @@ void testStateWords() {
     const std::string noSignal = fittedStateWord(FittedState::NoSignal);
     const std::string stopped = fittedStateWord(FittedState::Stopped);
     const std::string refused = fittedStateWord(FittedState::Refused);
+    const std::string idle = fittedStateWord(FittedState::Idle);
 
+    CHECK(idle == "IDLE");  // 0.99.73: AUTO and not in use - the word on the row and on its chip
     CHECK(fed == "FED");
-    CHECK(notFed == "NOT FED");
+    // The row (and the page's state word) letter this state as the CHIP that counts it does.
+    CHECK(notFed == "NOT DECODING");
     CHECK(noSignal == "TAKES NO SIGNAL");
-    CHECK(stopped == "STOPPED BY YOU");
+    CHECK(stopped == "STOPPED");  // the chip's word; "you stopped it" is the verdict sentence's
     CHECK(refused == "REFUSED");
 
     // Five states must letter as five DIFFERENT words, or the row cannot be
     // read back to the state that produced it.
-    const std::vector<std::string> words = {fed, notFed, noSignal, stopped, refused};
+    const std::vector<std::string> words = {fed, notFed, noSignal, stopped, refused, idle};
     std::vector<std::string> sorted = words;
     std::sort(sorted.begin(), sorted.end());
     CHECK(std::unique(sorted.begin(), sorted.end()) == sorted.end());
@@ -248,7 +260,7 @@ void testStateWords() {
 
     // A module that takes no signal must never be lettered as one that is
     // failing to decode - the exact conflation the header records correcting.
-    CHECK(!has(noSignal, "NOT FED"));
+    CHECK(!has(noSignal, "NOT DECODING"));
     CHECK(!has(noSignal, "DECOD"));
 }
 
@@ -488,12 +500,21 @@ void testPlateAdapter() {
     CHECK(sp.haveSizeBytes);
     CHECK(sp.sizeBytes == 191488u);
 
-    // ABI IS NEVER RECORDED FROM A HOST RECORD. LoadedPlugin carries no
-    // abiVersion, and haveAbi false is the plate's "not recorded" - which must
-    // never be read as a mismatch. True for every record, loaded or not.
+    // ABI IS NOT IN A HOST RECORD. LoadedPlugin carries no abiVersion, so a record with no install
+    // record behind it has haveAbi false - the plate's "not recorded", which must never be read as a
+    // mismatch. True for every record, loaded or not.
     CHECK(!makeModulePlate(live).haveAbi);
     CHECK(!makeModulePlate(halted).haveAbi);
     CHECK(!makeModulePlate(unread).haveAbi);
+    // ...but the INSTALL RECORD's ABI (0.99.72) is carried when there is one, compared with this build's.
+    FittedModule recorded = module(true, false, kDecoderBit, true);
+    recorded.abiVersion = 3;
+    const ModulePlate ap = makeModulePlate(recorded);
+    CHECK(ap.haveAbi);
+    CHECK(ap.abiVersion == 3u);
+    CHECK(ap.hostAbiVersion == static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION));
+    CHECK(modulePageFacts(ap)[3].key == "PLUGIN ABI");
+    CHECK(modulePageFacts(ap)[3].value == "3, matches this build");
 
     // NO CATALOGUE FIELDS ARE INVENTED. A host record carries no summary, no
     // homepage, no legal notice, no platform list and no retirement floor, and
@@ -540,7 +561,23 @@ void testRecordAdapter() {
     CHECK(!m.fed);
     CHECK(m.idleDetail == "no instance: rate mismatch");
     CHECK(m.tuneAllowed);
-    CHECK(m.sizeBytes == 0u);  // never measured by this adapter
+    // A record the scan never measured says "not measured" - 0 - and the plate
+    // reads that as no size at all, never as a clean zero.
+    CHECK(m.sizeBytes == 0u);
+    CHECK(!makeModulePlate(m).haveSizeBytes);
+
+    // THE SIZE IS THE RECORD'S, NOT THE FILE'S. The window used to stat the file
+    // for it on every frame, on the thread that draws; the scan now measures once
+    // and the adapter only carries the figure. The path below names no file, and
+    // the size still arrives - which a stat could not have given it.
+    p.path = "C:/this/folder/does/not/exist/adsb-1.2.0.dll";
+    p.fileBytes = 191488;
+    const FittedModule sized = makeFittedModule(p, false, false, "", false);
+    CHECK(sized.sizeBytes == 191488u);
+    CHECK(makeModulePlate(sized).haveSizeBytes);
+    CHECK(makeModulePlate(sized).sizeBytes == 191488u);
+    p.path = "C:/Program Files/FoxSDR/plugins/adsb-1.2.0.dll";
+    p.fileBytes = 0;
 
     // TUNE CAPABILITY COMES FROM THE TABLE POINTER, NOT THE BIT. The host
     // clears a table it could not accept, so a module that declared the bit and
@@ -578,40 +615,576 @@ void testRecordAdapter() {
 // 7. The two windows may be coarser than each other, never contradictory
 // ---------------------------------------------------------------------------
 void testWindowsAgree() {
+    // THE PAGE'S ON THIS MACHINE FACT (moduleMachineText) is the coarser half of this window's state.
     struct Case {
         FittedModule m;
         bool running;
         FittedState state;
-        const char* plateWord;
+        const char* machineText;
     };
     std::vector<Case> cases;
     cases.push_back({module(true, false, kDecoderBit, true), true, FittedState::Fed,
-                     "STARTED"});
+                     "fitted and started"});
     cases.push_back({module(true, false, kDecoderBit, false), true, FittedState::NotFed,
-                     "STARTED"});
+                     "fitted and started"});
     cases.push_back({module(true, false, CASCADE_CAP_BASEMAP, false), true,
-                     FittedState::NoSignal, "TAKES NO SIGNAL"});
+                     FittedState::NoSignal, "fitted, takes no signal"});
     cases.push_back({module(true, true, kDecoderBit, true), true, FittedState::Stopped,
-                     "STOPPED"});
+                     "fitted, stopped"});
     FittedModule refused = module(false, false, 0u, false);
     refused.name.clear();
     refused.error = "refused";
-    cases.push_back({refused, true, FittedState::Refused, "REFUSED"});
+    cases.push_back({refused, true, FittedState::Refused, "fitted, refused"});
 
     for (const Case& c : cases) {
         CHECK(fittedState(c.m, c.running) == c.state);
-        CHECK(std::string(moduleStateWord(makeModulePlate(c.m))) == c.plateWord);
+        CHECK(moduleMachineText(makeModulePlate(c.m)) == c.machineText);
     }
-    // FED and NOT FED are the finer half of STARTED: the plate must not claim
-    // either, since it is handed neither the runner's table nor the receiver.
+    // FED and NOT FED are the finer half of "fitted and started": the page must not claim either,
+    // since it is handed neither the runner's table nor the receiver.
     const ModulePlate fedPlate = makeModulePlate(cases[0].m);
-    CHECK(std::string(moduleStateWord(fedPlate)) != "FED");
-    CHECK(std::string(moduleStateWord(fedPlate)) != "NOT FED");
+    CHECK(moduleMachineText(fedPlate).find("FED") == std::string::npos);
+    CHECK(moduleMachineText(fedPlate).find("fed") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// 8. the row's note: the reach warning, the refusal, the orphan - and silence
+// ---------------------------------------------------------------------------
+void testRowNote() {
+    // "PUBLISHES TO THE HOST ONLY" GETS NOTHING under the name: a warning on every row is no warning.
+    FittedModule quiet = module(true, false, kDecoderBit | CASCADE_CAP_PANEL, true);
+    CHECK(fittedRowNote(quiet, true).text.empty());
+    CHECK(fittedRowNote(module(true, false, CASCADE_CAP_TRACK_SOURCE, false), true).text.empty());
+    // A module that reaches outward carries the reach warning, in amber (warning), not as a refusal.
+    FittedModule asks = module(true, false, kDecoderBit | CASCADE_CAP_HOST_CLIENT, true);
+    FittedRowNote n = fittedRowNote(asks, true);
+    CHECK(n.text == "asks to move the receiver");
+    CHECK(n.warning);
+    CHECK(!n.refusal);
+    asks.tuneAllowed = true;
+    CHECK(fittedRowNote(asks, true).text == "granted: may move the receiver");
+    n = fittedRowNote(module(true, false, CASCADE_CAP_BASEMAP, false), true);
+    CHECK(n.text == "may fetch from a server it chose");
+    CHECK(n.warning);
+    n = fittedRowNote(module(true, false, CASCADE_CAP_TRACK_INFO, false), false);
+    CHECK(n.text == "may fetch from a server it chose");
+
+    // A REFUSED MODULE'S LINE IS THE HOST'S REASON, VERBATIM, MUTED (a refusal, not a warning).
+    FittedModule refused = module(false, false, 0u, false);
+    refused.name.clear();
+    refused.error = "ABI mismatch: expected 3, plugin reports 2";
+    n = fittedRowNote(refused, true);
+    CHECK(n.text == refused.error);
+    CHECK(n.refusal);
+    CHECK(!n.warning);
+    // ...and with no reason recorded, the sentence that says so.
+    refused.error.clear();
+    CHECK(has(fittedRowNote(refused, true).text, "recorded no reason"));
+
+    // AN ORPHAN'S says first that it was not installed from the store, the host's words after it.
+    FittedModule orphan = module(false, false, 0u, false);
+    orphan.name.clear();
+    orphan.error = "plugin reports ABI version 2, expected 3";
+    orphan.orphaned = true;
+    n = fittedRowNote(orphan, true);
+    CHECK(n.text == fittedOrphanSentence(orphan));
+    CHECK(has(n.text, "Not installed from the plugin store"));
+
+    // A stopped or unfed module with no outward reach says nothing under its name: the state word does.
+    CHECK(fittedRowNote(module(true, true, kDecoderBit, true), true).text.empty());
+    CHECK(fittedRowNote(module(true, false, kDecoderBit, false), false).text.empty());
+}
+
+// ---------------------------------------------------------------------------
+// 9. the verdict line, the rows the chips leave, and the fitted date
+// ---------------------------------------------------------------------------
+void testVerdictAndRows() {
+    // THE ONE MUTED LINE: the receiver's sentence, a dot, and where the scan looked.
+    CHECK(fittedVerdictLine(true, "C:/Users/x/AppData/Local/foxsdr/plugins") ==
+          "The receiver is running, so a module with a matched decoder is being fed.  \xc2\xb7  read from "
+          "C:/Users/x/AppData/Local/foxsdr/plugins");
+    const std::string stopped = fittedVerdictLine(false, "/home/x/plugins");
+    CHECK(has(stopped, "The receiver is stopped, so NOTHING is being fed to any module"));
+    CHECK(has(stopped, "  \xc2\xb7  read from /home/x/plugins"));
+    // A scan that has not happened says so rather than naming an empty folder.
+    CHECK(has(fittedVerdictLine(true, ""), "No directory has been scanned yet."));
+    CHECK(!has(fittedVerdictLine(true, ""), "read from"));
+
+    // THE ROWS: sorted by name (the file name for a module nobody read), filtered by the five chips and the search.
+    std::vector<FittedModule> mods;
+    FittedModule b = module(true, false, kDecoderBit, true);
+    b.name = "Bravo";
+    b.file = "bravo-1.0.0.dll";
+    FittedModule a = module(true, false, CASCADE_CAP_BASEMAP, false);
+    a.name = "alpha";
+    a.file = "alpha-1.0.0.dll";
+    FittedModule c = module(true, true, kDecoderBit, true);
+    c.name = "Charlie";
+    c.file = "charlie-1.0.0.dll";
+    FittedModule z = module(false, false, 0u, false);
+    z.name.clear();
+    z.file = "zeta-0.0.1.dll";
+    z.error = "refused";
+    mods = {b, a, c, z};
+    FittedModulesDeck deck;
+    std::vector<int> rows = fittedVisibleRows(mods, true, deck);
+    CHECK((rows == std::vector<int>{1, 0, 2, 3}));  // alpha, Bravo, Charlie, zeta
+    // Each chip is a toggle: off hides exactly its own state.
+    deck.showFed = false;
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 2, 3}));
+    deck.showFed = true;
+    deck.showNoSignal = false;
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{0, 2, 3}));
+    deck.showNoSignal = true;
+    deck.showStopped = false;
+    deck.showRefused = false;
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 0}));
+    deck.showStopped = true;
+    deck.showRefused = true;
+    // The receiver stopped moves Fed into Not fed, and the "NOT DECODING" chip (showIdle) holds it.
+    deck.showIdle = false;
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 0, 2, 3}));
+    CHECK((fittedVisibleRows(mods, false, deck) == std::vector<int>{1, 2, 3}));
+    deck.showIdle = true;
+    // THE SEARCH: name, file or version, any case.
+    std::snprintf(deck.search, sizeof deck.search, "%s", "CHARLIE");
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{2}));
+    std::snprintf(deck.search, sizeof deck.search, "%s", "zeta-0.0.1");
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{3}));
+    std::snprintf(deck.search, sizeof deck.search, "%s", "nothing like this");
+    CHECK(fittedVisibleRows(mods, true, deck).empty());
+
+    // FITTED <DATE>, only when the install record says when - never 1970.
+    FittedModule dated = module(true, false, kDecoderBit, true);
+    CHECK(fittedDateText(dated).empty());
+    dated.fittedAtUnix = 1790000000;  // October 2026
+    const std::string fd = fittedDateText(dated);
+    CHECK(fd.rfind("fitted 20", 0) == 0);
+    CHECK(fd.size() == std::string("fitted 2026-10-02").size());
+}
+
+// ---------------------------------------------------------------------------
+// 10. THE PAGE'S ON THIS MACHINE FACTS, for a module the catalogue does not know
+// ---------------------------------------------------------------------------
+void testPageFactsForAFittedModule() {
+    FittedModule m = module(true, false, kDecoderBit | CASCADE_CAP_BASEMAP, true);
+    m.sizeBytes = 191488;
+    m.abiVersion = 3;
+    const std::vector<cascade::gui::PageFact> f = modulePageFacts(makeModulePlate(m));
+    std::vector<std::string> keys;
+    for (const auto& x : f) { keys.push_back(x.key); }
+    // Fitted: ON THIS MACHINE and FILE follow the catalogue-shaped facts; none is invented.
+    CHECK((keys == std::vector<std::string>{"MAKER", "LICENCE", "VERSION", "PLUGIN ABI", "DOWNLOAD",
+                                            "BUILDS FOR", "REACHES", "HOMEPAGE", "SHA-256", "PUBLISHED",
+                                            "ON THIS MACHINE", "FILE"}));
+    CHECK(f[0].value == "A Maker");
+    CHECK(f[3].value == "3, matches this build");
+    CHECK(f[4].value == "191 kB");
+    CHECK(f[5].hatched);   // a host record names no builds
+    CHECK(f[6].value == "Audio decoder, Map imagery");
+    CHECK(f[7].hatched && f[8].hatched && f[9].hatched);
+    CHECK(f[10].value == "fitted and started");
+    CHECK(f[11].value == "thing-1.0.0.dll");
+}
+
+// ---------------------------------------------------------------------------
+// 11. the five chips' captions are the five states' words
+// ---------------------------------------------------------------------------
+void testChipCounts() {
+    // The counts behind the chips ARE countStates, one counter per state: a basemap is not "NOT DECODING".
+    std::vector<FittedModule> mods = {module(true, false, kDecoderBit, true), module(true, false, kIqBit, false),
+                                      module(true, false, CASCADE_CAP_BASEMAP, false),
+                                      module(true, true, kDecoderBit, true), module(false, false, 0u, false)};
+    const FittedCounts c = countStates(mods, true);
+    CHECK(c.fed == 1 && c.notFed == 1 && c.noSignal == 1 && c.stopped == 1 && c.refused == 1);
+    // The window's rows are exactly the sum of what the chips count.
+    FittedModulesDeck deck;
+    CHECK(fittedVisibleRows(mods, true, deck).size() == static_cast<std::size_t>(c.total));
+}
+
+// ORPHANED FILES (0.99.69): the one line a row carries, and what it must not do.
+// The classification itself is core's and is tested on real files in
+// test_plugin_cleanup; what is pinned here is the window's half of it - the
+// host's words come through verbatim after the plugin-index sentence (they carry
+// numbers a paraphrase would lose, as the refusal sentence's do), a file that is
+// not an orphan has no such line, and the flag changes no state.
+void testOrphans() {
+    FittedModule refused = module(false, false, 0u, false);
+    refused.name.clear();
+    refused.error = "plugin reports ABI version 2, expected 3";
+
+    // Not an orphan unless the application says so: a built record, a refused one,
+    // a running one.
+    CHECK(!refused.orphaned);
+    CHECK(!module(true, false, kDecoderBit, true).orphaned);
+    CHECK(fittedOrphanSentence(refused).empty());
+    CHECK(fittedOrphanSentence(module(true, false, kDecoderBit, true)).empty());
+    LoadedPlugin lp;
+    lp.path = "/p/thing-1.0.0.dll";
+    CHECK(!makeFittedModule(lp, false, false, "", false).orphaned);
+
+    // An orphan: the plugin-store sentence, then the host's words EXACTLY.
+    refused.orphaned = true;
+    CHECK(fittedOrphanSentence(refused) ==
+          "Not installed from the plugin store and not running: plugin reports ABI version 2, "
+          "expected 3");
+    // ...and with no reason recorded, no colon and nothing invented.
+    FittedModule silent = refused;
+    silent.error.clear();
+    CHECK(fittedOrphanSentence(silent) == "Not installed from the plugin store and not running.");
+    // One line: the host's own text is not edited into several.
+    CHECK(fittedOrphanSentence(refused).find('\n') == std::string::npos);
+
+    // The flag is about REMOVAL; it is not a sixth state. A refused file stays REFUSED,
+    // and the counts do not move.
+    CHECK(fittedState(refused, true) == FittedState::Refused);
+    std::vector<FittedModule> two = {refused, module(true, false, kDecoderBit, true)};
+    CHECK(sameCounts(countStates(two, true), counts(1, 0, 0, 0, 1, 2)));
+}
+
+// ---------------------------------------------------------------------------
+// 12. IDLE (0.99.73): a module set to AUTO that nothing is using. Not a fault.
+// ---------------------------------------------------------------------------
+//
+// THE PRECEDENCE, transcribed from the owner's sentence and not from the code:
+//     REFUSED > STOPPED > TAKES NO SIGNAL > FED > IDLE > NOT DECODING
+// swept over every combination of the six inputs and a mask of each kind, so a guard moved one
+// place in fittedState() changes at least one row.
+FittedState expectedWithIdle(bool loaded, bool stopped, std::uint32_t caps, bool fed, bool idle,
+                             bool receiverRunning) {
+    const bool signalBearing = (caps & (kDecoderBit | kIqBit | kImageBit)) != 0u;
+    if (!loaded) { return FittedState::Refused; }
+    if (stopped) { return FittedState::Stopped; }
+    if (!signalBearing) { return FittedState::NoSignal; }
+    if (fed && receiverRunning) { return FittedState::Fed; }
+    if (idle) { return FittedState::Idle; }
+    return FittedState::NotFed;
+}
+
+void testIdleState() {
+    const std::uint32_t masks[] = {0u, CASCADE_CAP_BASEMAP, kDecoderBit, kIqBit, kImageBit,
+                                   CASCADE_CAP_TRACK_SOURCE | CASCADE_CAP_PANEL,
+                                   kDecoderBit | CASCADE_CAP_TRACK_SOURCE, CASCADE_CAP_ALL_KNOWN};
+    int rows = 0;
+    for (std::uint32_t caps : masks) {
+        for (int bits = 0; bits < 32; ++bits) {
+            const bool loaded = (bits & 1) != 0;
+            const bool stopped = (bits & 2) != 0;
+            const bool fed = (bits & 4) != 0;
+            const bool running = (bits & 8) != 0;
+            const bool idle = (bits & 16) != 0;
+            FittedModule m = module(loaded, stopped, caps, fed);
+            m.idle = idle;
+            if (!loaded) { m.error = "wrong ABI: expected 3, plugin reports 2"; }
+            CHECK(fittedState(m, running) == expectedWithIdle(loaded, stopped, caps, fed, idle, running));
+            ++rows;
+        }
+    }
+    CHECK(rows == 8 * 32);
+
+    // The named cases the sweep covers, written out with their reasons.
+    FittedModule idle = module(true, false, kDecoderBit, false);
+    idle.idle = true;
+    CHECK(fittedState(idle, true) == FittedState::Idle);
+    // ...whether or not the receiver is running: a sleeping module is idle, not "fed nothing because
+    // the receiver is stopped" - it has no instance to feed either way.
+    CHECK(fittedState(idle, false) == FittedState::Idle);
+    // NOT NOT DECODING: the same module without the idle flag is the fault the flag is not.
+    FittedModule broken = module(true, false, kDecoderBit, false);
+    CHECK(fittedState(broken, true) == FittedState::NotFed);
+    // FED beats IDLE (a record cannot be both, and the working answer wins).
+    FittedModule both = module(true, false, kDecoderBit, true);
+    both.idle = true;
+    CHECK(fittedState(both, true) == FittedState::Fed);
+    // TAKES NO SIGNAL beats IDLE: a track-source module that is asleep still takes no signal.
+    FittedModule tracker = module(true, false, CASCADE_CAP_TRACK_SOURCE, false);
+    tracker.idle = true;
+    CHECK(fittedState(tracker, true) == FittedState::NoSignal);
+    // STOPPED and REFUSED both beat IDLE.
+    FittedModule stopped = module(true, true, kDecoderBit, false);
+    stopped.idle = true;
+    CHECK(fittedState(stopped, true) == FittedState::Stopped);
+    FittedModule refused = module(false, false, kDecoderBit, false);
+    refused.idle = true;
+    CHECK(fittedState(refused, true) == FittedState::Refused);
+
+    // THE SENTENCE says what it is and what to do, and does not blame anything.
+    const std::string s = fittedStateSentence(idle, true);
+    CHECK(has(s, "idle"));
+    CHECK(has(s, "30 seconds"));
+    CHECK(has(s, "KEEP RUNNING"));
+    CHECK(!has(s, "not being fed"));
+    CHECK(!has(s, "failed"));
+    CHECK(fittedStateSentence(idle, false) == s);  // the receiver's state does not change it
+    CHECK(s != fittedStateSentence(broken, true));
+
+    // THE KEY WORD: START for a module that is not running - idle as well as stopped - and STOP for
+    // one that is, so a press on an idle row pins it and a press on a running one stops it.
+    CHECK(cascade::gui::fittedOffersStart(idle));
+    CHECK(std::string(cascade::gui::fittedKeyWord(idle)) == "START");
+    CHECK(cascade::gui::fittedOffersStart(stopped));
+    CHECK(std::string(cascade::gui::fittedKeyWord(stopped)) == "START");
+    CHECK(!cascade::gui::fittedOffersStart(broken));
+    CHECK(std::string(cascade::gui::fittedKeyWord(broken)) == "STOP");
+    const FittedModule running = module(true, false, kDecoderBit, true);
+    CHECK(!cascade::gui::fittedOffersStart(running));
+    CHECK(std::string(cascade::gui::fittedKeyWord(running)) == "STOP");
+}
+
+void testIdleChipAndRows() {
+    FittedModule idleA = module(true, false, kDecoderBit, false);
+    idleA.idle = true;
+    idleA.name = "Alpha";
+    idleA.file = "alpha-1.0.0.dll";
+    FittedModule idleB = module(true, false, kIqBit, false);
+    idleB.idle = true;
+    idleB.name = "Bravo";
+    idleB.file = "bravo-1.0.0.dll";
+    FittedModule fed = module(true, false, kDecoderBit, true);
+    fed.name = "Charlie";
+    fed.file = "charlie-1.0.0.dll";
+    FittedModule broken = module(true, false, kDecoderBit, false);
+    broken.name = "Delta";
+    broken.file = "delta-1.0.0.dll";
+    std::vector<FittedModule> mods = {idleA, idleB, fed, broken};
+
+    // IDLE IS COUNTED BY ITSELF and added to nothing: it is not NOT DECODING.
+    const FittedCounts c = countStates(mods, true);
+    CHECK(c.idle == 2);
+    CHECK(c.fed == 1);
+    CHECK(c.notFed == 1);
+    CHECK(c.noSignal == 0 && c.stopped == 0 && c.refused == 0);
+    CHECK(c.fed + c.idle + c.notFed + c.noSignal + c.stopped + c.refused == c.total);
+    CHECK(c.total == 4);
+    // Only idle modules: the chip that letters decoders failing to decode reads zero.
+    const FittedCounts onlyIdle = countStates({idleA, idleB}, true);
+    CHECK(onlyIdle.idle == 2 && onlyIdle.notFed == 0 && onlyIdle.total == 2);
+    // The receiver stopped moves the FED one into NOT DECODING and the idle ones nowhere.
+    const FittedCounts rxStopped = countStates(mods, false);
+    CHECK(rxStopped.idle == 2 && rxStopped.fed == 0 && rxStopped.notFed == 2);
+
+    // THE CHIP'S TOGGLE decides whether idle rows are listed, and only them.
+    FittedModulesDeck deck;
+    CHECK(fittedVisibleRows(mods, true, deck).size() == 4u);
+    deck.showIdleDormant = false;
+    const std::vector<int> shown = fittedVisibleRows(mods, true, deck);
+    CHECK(shown.size() == 2u);
+    for (int i : shown) { CHECK(!mods[static_cast<std::size_t>(i)].idle); }
+    deck.showIdleDormant = true;
+    deck.showIdle = false;  // the NOT DECODING chip: hides Delta only
+    CHECK(fittedVisibleRows(mods, true, deck).size() == 3u);
+
+    // The record adapter carries the two new facts, and defaults to a module that is running and AUTO.
+    LoadedPlugin lp;
+    lp.path = "/p/thing-1.0.0.dll";
+    lp.name = "Thing";
+    lp.loaded = true;
+    lp.capabilities = kDecoderBit;
+    const FittedModule plain = makeFittedModule(lp, false, false, "", false);
+    CHECK(!plain.idle);
+    CHECK(!plain.keepRunning);
+    const FittedModule built = makeFittedModule(lp, false, false, "", false, true, true);
+    CHECK(built.idle);
+    CHECK(built.keepRunning);
+    CHECK(fittedState(built, true) == FittedState::Idle);
+}
+
+// ---------------------------------------------------------------------------
+// 12. THE LIST UNDER THE STORE'S HEADINGS (0.99.77)
+// ---------------------------------------------------------------------------
+//
+// A US tester, through the owner (2026-10-13): "I really like how the store groups plugins by
+// function (Aircraft, Marine, Satellites and Weather, etc). That really makes it easier to browse.
+// Implement this sorting on the Plugins panel ... if you install them all, the list is quite long,
+// intermixed and kind-of alphabetical."
+//
+// The expectations below are written from that sentence and the store's own order (AIRCRAFT, MARINE,
+// SATELLITES AND WEATHER, METERS AND PAGING, VOICE AND DATA, MAPS AND TOOLS, OTHER), not read off the
+// code: a module the catalogue has no category for goes LAST, under OTHER.
+FittedModule catalogued(const char* file, const char* name, const char* category) {
+    FittedModule m = module(true, false, kDecoderBit, false);
+    m.file = file;
+    m.name = name;
+    m.category = category;
+    return m;
+}
+
+std::vector<FittedModule> sevenModules() {
+    return {
+        catalogued("alpha-1.0.0.dll", "Alpha", "broadcast"),           // 0  VOICE AND DATA
+        catalogued("bravo-1.0.0.dll", "bravo", "aircraft"),            // 1  AIRCRAFT
+        catalogued("charlie-1.0.0.dll", "Charlie", ""),                // 2  side-loaded: OTHER
+        catalogued("delta-1.0.0.dll", "Delta", "marine"),              // 3  MARINE
+        catalogued("echo-1.0.0.dll", "Echo", "aircraft"),              // 4  AIRCRAFT
+        catalogued("foxtrot-1.0.0.dll", "Foxtrot", "regional-radar"),  // 5  a category this build does not know: OTHER
+        catalogued("golf-1.0.0.dll", "Golf", "satellites-weather"),    // 6  SATELLITES AND WEATHER
+    };
+}
+
+void testRowsGroupedByCategory() {
+    using cascade::gui::StoreCategory;
+    std::vector<FittedModule> mods = sevenModules();
+    FittedModulesDeck deck;
+
+    // (group, then name, then index): Aircraft bravo, Echo - Marine Delta - Satellites Golf - Voice Alpha -
+    // Other Charlie, Foxtrot. Under the old name-only sort this was 0,1,2,3,4,5,6.
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 4, 3, 6, 0, 2, 5}));
+
+    // THE CHIPS AND THE SEARCH STILL FILTER FIRST, and the order of what is left is the same order.
+    deck.showNoSignal = false;  // none of these is a no-signal module: nothing leaves
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 4, 3, 6, 0, 2, 5}));
+    deck.showNoSignal = true;
+    std::snprintf(deck.search, sizeof deck.search, "%s", "o");  // bravo, Echo, Foxtrot and Golf have an o
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 4, 6, 5}));
+    deck.search[0] = '\0';
+
+    // A NAME TIE inside one group falls back to the index, so the order is total and stable.
+    mods.push_back(catalogued("bravo-2.0.0.dll", "BRAVO", "aircraft"));  // 7: same name as 1, other case
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{1, 7, 4, 3, 6, 0, 2, 5}));
+    mods.pop_back();
+
+    // FLAT WHEN NO MODULE HAS A CATEGORY: exactly the name sort the window always had.
+    for (FittedModule& m : mods) { m.category.clear(); }
+    CHECK((fittedVisibleRows(mods, true, deck) == std::vector<int>{0, 1, 2, 3, 4, 5, 6}));
+}
+
+void testGroupBreaks() {
+    using cascade::gui::fittedGroupBreaks;
+    using cascade::gui::fittedGroupOf;
+    using cascade::gui::fittedIsGrouped;
+    using cascade::gui::FittedGroupBreak;
+    using cascade::gui::StoreCategory;
+    std::vector<FittedModule> mods = sevenModules();
+    FittedModulesDeck deck;
+
+    // The group a module's catalogue category puts it in is the STORE'S answer for that category.
+    CHECK(fittedGroupOf(mods[1]) == StoreCategory::Aircraft);
+    CHECK(fittedGroupOf(mods[3]) == StoreCategory::Marine);
+    CHECK(fittedGroupOf(mods[6]) == StoreCategory::SatellitesWeather);
+    CHECK(fittedGroupOf(mods[0]) == StoreCategory::VoiceData);
+    CHECK(fittedGroupOf(mods[2]) == StoreCategory::Other);  // no category
+    CHECK(fittedGroupOf(mods[5]) == StoreCategory::Other);  // a category this build does not know
+    FittedModule maps = catalogued("m.dll", "M", "maps-tools");
+    FittedModule meters = catalogued("p.dll", "P", "meters-paging");
+    CHECK(fittedGroupOf(maps) == StoreCategory::MapsTools);
+    CHECK(fittedGroupOf(meters) == StoreCategory::MetersPaging);
+
+    // A heading starts a group: one at every row whose group differs from the row before it, the first
+    // row included. Rows 1,4 | 3 | 6 | 0 | 2,5 are at positions 0,2,3,4,5 of the shown order.
+    CHECK(fittedIsGrouped(mods));
+    std::vector<int> rows = fittedVisibleRows(mods, true, deck);
+    std::vector<FittedGroupBreak> br = fittedGroupBreaks(mods, rows);
+    CHECK(br.size() == 5u);
+    if (br.size() == 5u) {
+        CHECK(br[0].at == 0u && br[0].group == StoreCategory::Aircraft);
+        CHECK(br[1].at == 2u && br[1].group == StoreCategory::Marine);
+        CHECK(br[2].at == 3u && br[2].group == StoreCategory::SatellitesWeather);
+        CHECK(br[3].at == 4u && br[3].group == StoreCategory::VoiceData);
+        CHECK(br[4].at == 5u && br[4].group == StoreCategory::Other);
+    }
+
+    // A GROUP WITH NO ROW LEFT HAS NO HEADING: the search "c" leaves Charlie (OTHER) and Echo (AIRCRAFT).
+    std::snprintf(deck.search, sizeof deck.search, "%s", "c");
+    rows = fittedVisibleRows(mods, true, deck);
+    br = fittedGroupBreaks(mods, rows);
+    CHECK((rows == std::vector<int>{4, 2}));
+    CHECK(br.size() == 2u);
+    if (br.size() == 2u) {
+        CHECK(br[0].at == 0u && br[0].group == StoreCategory::Aircraft);
+        CHECK(br[1].at == 1u && br[1].group == StoreCategory::Other);
+    }
+    // ...and no row at all has no heading at all.
+    std::snprintf(deck.search, sizeof deck.search, "%s", "nothing like this");
+    CHECK(fittedGroupBreaks(mods, fittedVisibleRows(mods, true, deck)).empty());
+    deck.search[0] = '\0';
+
+    // WHETHER THE LIST IS GROUPED IS A FACT OF THE WHOLE LIST, not of what the filter left: a search
+    // that happens to leave only side-loaded modules still shows their OTHER heading, so headings do
+    // not come and go as a tester types.
+    std::snprintf(deck.search, sizeof deck.search, "%s", "charlie");
+    rows = fittedVisibleRows(mods, true, deck);
+    br = fittedGroupBreaks(mods, rows);
+    CHECK((rows == std::vector<int>{2}));
+    CHECK(br.size() == 1u);
+    if (br.size() == 1u) { CHECK(br[0].at == 0u && br[0].group == StoreCategory::Other); }
+    deck.search[0] = '\0';
+
+    // FLAT WHEN NO MODULE HAS A CATEGORY - a fresh install that never read a catalogue: no heading.
+    for (FittedModule& m : mods) { m.category.clear(); }
+    CHECK(!fittedIsGrouped(mods));
+    CHECK(fittedGroupBreaks(mods, fittedVisibleRows(mods, true, deck)).empty());
+    // ONE catalogued module among side-loaded ones is enough to group them (it gets its heading, the rest OTHER).
+    mods[3].category = "marine";
+    CHECK(fittedIsGrouped(mods));
+    br = fittedGroupBreaks(mods, fittedVisibleRows(mods, true, deck));
+    CHECK(br.size() == 2u);
+    if (br.size() == 2u) {
+        CHECK(br[0].at == 0u && br[0].group == StoreCategory::Marine);
+        CHECK(br[1].at == 1u && br[1].group == StoreCategory::Other);
+    }
+    // No modules: nothing grouped, nothing to head.
+    CHECK(!fittedIsGrouped({}));
+    CHECK(fittedGroupBreaks({}, {}).empty());
+}
+
+// WHICH WINDOW A DOUBLE-CLICK OPENS. The owner (2026-10-13): "when you open the plugins Fitted modules
+// window, when I double click on the plugin it should show the plugin window". A plugin with a panel
+// opens its panel; failing that its picture window; failing that its instrument; failing that its
+// map page; and a plugin with none of those has only its module page.
+void testOwnWindow() {
+    using cascade::gui::fittedOpensOwnWindow;
+    using cascade::gui::fittedOwnWindowOf;
+    using cascade::gui::FittedOwnWindow;
+    static CascadePanelApi kPanel{};
+    static CascadeImageDecoderApi kImage{};
+    static CascadeInstrumentApi kInstrument{};
+    static CascadeTrackSourceApi kTrack{};
+
+    LoadedPlugin p;
+    p.path = "/p/thing-1.0.0.dll";
+    p.name = "Thing";
+    p.loaded = true;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::None);  // a plain decoder has no window of its own
+    p.trackSource = &kTrack;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Map);
+    p.instrument = &kInstrument;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Instrument);
+    p.imageDecoder = &kImage;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Picture);
+    p.panel = &kPanel;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::Panel);
+    // THE RECORD CARRIES IT, from the pointers the host kept and not the declared bits.
+    CHECK(makeFittedModule(p, false, false, "", false).ownWindow == FittedOwnWindow::Panel);
+    LoadedPlugin bitOnly;
+    bitOnly.path = "/p/bit-1.0.0.dll";
+    bitOnly.loaded = true;
+    bitOnly.capabilities = CASCADE_CAP_PANEL | CASCADE_CAP_IMAGE_DECODER;  // declared, table cleared by the host
+    CHECK(makeFittedModule(bitOnly, false, false, "", false).ownWindow == FittedOwnWindow::None);
+    // A REFUSED module never opens anything, whatever pointers a stale record holds.
+    p.loaded = false;
+    CHECK(fittedOwnWindowOf(p) == FittedOwnWindow::None);
+    p.loaded = true;
+
+    // The double-click opens a window only for a module that is loaded, has one, and is not stopped (a
+    // stopped plugin has no instances, so no window could draw: it gets its module page, which says so).
+    FittedModule m = makeFittedModule(p, false, false, "", false);
+    CHECK(fittedOpensOwnWindow(m));
+    m.stopped = true;
+    CHECK(!fittedOpensOwnWindow(m));
+    m.stopped = false;
+    m.loaded = false;
+    CHECK(!fittedOpensOwnWindow(m));
+    m.loaded = true;
+    m.ownWindow = FittedOwnWindow::None;
+    CHECK(!fittedOpensOwnWindow(m));
 }
 
 }  // namespace
 
 int main() {
+    testRowsGroupedByCategory();
+    testGroupBreaks();
+    testOwnWindow();
     testStateSweep();
     testImpossibleInputs();
     testStateWords();
@@ -620,5 +1193,12 @@ int main() {
     testPlateAdapter();
     testRecordAdapter();
     testWindowsAgree();
+    testOrphans();
+    testRowNote();
+    testVerdictAndRows();
+    testPageFactsForAFittedModule();
+    testChipCounts();
+    testIdleState();
+    testIdleChipAndRows();
     return testSummary("test_plugins_view");
 }

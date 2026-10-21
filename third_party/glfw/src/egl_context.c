@@ -250,6 +250,12 @@ static void makeContextCurrentEGL(_GLFWwindow* window)
                             getEGLErrorString(eglGetError()));
             return;
         }
+
+#if defined(_GLFW_WAYLAND)
+        // NOTE: Disable EGL vsync so we can substitute our own that includes a timeout
+        if (_glfw.platform.platformID == GLFW_PLATFORM_WAYLAND)
+            eglSwapInterval(_glfw.egl.display, 0);
+#endif // _GLFW_WAYLAND
     }
     else
     {
@@ -283,6 +289,15 @@ static void swapBuffersEGL(_GLFWwindow* window)
         // NOTE: Swapping buffers on a hidden window on Wayland makes it visible
         if (!window->wl.visible)
             return;
+
+        // NOTE: We wait for a frame manually so we can add a timeout,
+        //       as the EGL implementation will wait indefinitely
+        if (window->wl.egl.interval > 0)
+        {
+            window->context.Flush();
+            if (!_glfwWaitForEGLFrameWayland(window))
+                return;
+        }
     }
 #endif
 
@@ -291,6 +306,16 @@ static void swapBuffersEGL(_GLFWwindow* window)
 
 static void swapIntervalEGL(int interval)
 {
+#if defined(_GLFW_WAYLAND)
+    if (_glfw.platform.platformID == GLFW_PLATFORM_WAYLAND)
+    {
+        _GLFWwindow* window = _glfwPlatformGetTls(&_glfw.contextSlot);
+        assert(window != NULL);
+        window->wl.egl.interval = interval;
+        return;
+    }
+#endif
+
     eglSwapInterval(_glfw.egl.display, interval);
 }
 
@@ -546,7 +571,12 @@ void _glfwTerminateEGL(void)
         _glfw.egl.display = EGL_NO_DISPLAY;
     }
 
-    if (_glfw.egl.handle)
+    // FOXSDR PATCH (wayland-terminate-order): upstream glfw commit 162896e5b9
+    // (glfw issue 2744). On Wayland the EGL library must stay mapped until
+    // _glfwTerminateWayland has called wl_display_disconnect, which frees it
+    // (see wl_init.c); unloading it here left queued events pointing into
+    // unmapped memory. See third_party/glfw/FOXSDR-PATCHES.md.
+    if (_glfw.egl.handle && _glfw.platform.platformID != GLFW_PLATFORM_WAYLAND)
     {
         _glfwPlatformFreeModule(_glfw.egl.handle);
         _glfw.egl.handle = NULL;

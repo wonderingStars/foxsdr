@@ -49,6 +49,7 @@
 #define CASCADE_GUI_FONTS_HPP
 
 #include <cstddef>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -125,6 +126,28 @@ inline constexpr float kTinySize = 14.0f;     // the smallest engraving that
 // 21 px is the pre-0.84.0 kUiSize - the figure this application ran at for
 // five releases - so it is a proven size on Georgia rather than a guess.
 inline constexpr float kPanelSize = 21.0f;
+
+// --- scaled sizes, for the interface-scale factor (gui/ui_scale.hpp) --------
+//
+// THE FOUR CONSTANTS ABOVE, AND kPanelSize, ARE THE BASE (S=1) SIZES and stay
+// exactly as they are — every test that pins a rail, an axis or a card
+// against them keeps proving what it always proved. These five functions are
+// what a REAL draw call site asks for instead: the base size times the live
+// interface-scale factor, which is bit-exact 1.0f on a 96 dpi monitor with no
+// user override, so a call site that switches from fonts::kUiSize to
+// fonts::uiPx() changes nothing at S=1 and grows crisply (a genuine
+// re-rasterisation, not a blur — ImGui 1.92 draws a loaded face at any
+// requested size for no atlas cost) at any other S.
+//
+// A test file measuring the PRODUCT's fixed layout keeps using the k*Size
+// constants directly, deliberately: it is pinning the S=1 case, or building
+// its own explicit S for a scale-parameterised variant (tests/test_app_rail.cpp,
+// tests/test_spectrum_waterfall_type.cpp).
+float uiPx();
+float legendPx();
+float readingPx();
+float tinyPx();
+float panelPx();
 
 // --- the faces ---------------------------------------------------------------
 //
@@ -233,9 +256,74 @@ Chain planChain(const std::string& languageCode);
 // Whether `languageCode`'s catalogue can be drawn on this machine: always, for
 // a language the compiled-in faces cover; for a CJK one, when a system face
 // with its characters exists. Installed as i18n's drawable predicate by
-// load(). Reads font files the first time a CJK language is asked about (the
-// answer is kept; the bytes are not, unless the face is put in the atlas).
+// load(). Reads font files the first time a CJK language is asked about; the
+// answer is kept, and so are the bytes of the face that answered yes (they are
+// what the atlas is given if that face is ever put in a chain, so the file is
+// read once, not twice) - until applyPending() has merged the language names'
+// faces, which lets go the ones the names did not pin.
+//
+// THIS IS THE EXACT, BLOCKING ANSWER, and it is for callers that must have it:
+// the i18n rules ("is the saved language drawable"), unavailableReason() and
+// the atlas planner. While the system-font scan below is running it waits for
+// the scan to finish; before any scan has been started it reads just the files
+// of THAT language's standard, on the calling thread.
+//
+// THE RESIDUAL, STATED PLAINLY. Two questions the language section asks on its
+// first frame go through i18n's drawable predicate, which is this function, so
+// they wait: "Automatic (...)" asks about the operating system's language, and
+// the country's suggested-language key about the chosen country's language. A
+// user whose Windows language or chosen country's language is Chinese, Japanese
+// or Korean while the interface is in another language therefore waits for the
+// scan ONCE, on the section's first frame, for about the length of four bulk
+// file reads: 668 ms measured with every read made to take 150 ms
+// (tests/test_font_scan.cpp prints it), against a freeze threshold of 5 s, which
+// it reaches only if a disk takes about a second for each 20 MB file. The
+// previous code read those same four files on that thread in the next frame,
+// byte by byte and twice over. The list's own rows never wait (canDrawNow).
 bool canDraw(const std::string& languageCode);
+
+// --- The system-font scan, off the GUI thread (0.99.74) ------------------------
+//
+// ASKING WHICH LANGUAGES THIS MACHINE CAN DRAW MEANS READING FONT FILES, and
+// they are large: Microsoft YaHei, JhengHei, Yu Gothic and Malgun Gothic are
+// 14 to 21 MB each. Doing that inside the language list's first frame froze the
+// window for seconds on a laptop with a slow disk (field hangs CE8EBCD986C97CEB,
+// 0.99.70, stopped in fonts::readFile, and D28A155E1A128889, 0.99.71, a 13.6 s
+// frame stopped in i18n::codePoints, both in the frame-start step).
+//
+// So the list does not read them. requestLanguageNames() starts ONE worker
+// thread that looks for the first usable file of each CJK standard - the very
+// same walk canDraw() does - and keeps the bytes of the files that answered yes.
+// The GUI thread never waits for it unless it asks the exact question:
+//
+//   canDrawNow()  never blocks: Yes or No once the answer is known, Checking
+//                 while the worker is still looking.
+//   applyPending() adds the language names' faces to the atlas on the first
+//                 frame after the worker is done, not before.
+//
+// The price is stated plainly: for the first frame or few that the list is open
+// on a machine with a slow disk, native names such as 日本語 are drawn in boxes
+// (the rows are enabled; a pick waits for the scan through canDraw() and is
+// refused afterwards if the machine cannot draw it). A multi-second freeze was
+// judged worse.
+enum class Drawable {
+    Yes,       // the machine can draw it
+    No,        // it cannot
+    Checking,  // the system-font scan has not answered yet; ask again next frame
+};
+Drawable canDrawNow(const std::string& languageCode);
+
+// Blocks until a started scan has finished, then adopts its answers. A scan
+// that was never started is not started by this (requestLanguageNames() and
+// canDrawNow() start it). What canDraw() does while a scan runs, and what the
+// tests do to get a settled state.
+void waitForSystemFontScan();
+
+// Stops the scan thread (it finishes the file it is reading, then exits) and
+// joins it. Called from AppWindow's teardown before ImGui is destroyed; a
+// static backstop does the same at exit, so a joinable thread can never reach
+// std::terminate.
+void shutdown();
 
 // Why not, as an English sentence that is also a translation key (draw it
 // through tr()); "" when canDraw() is true.
@@ -253,7 +341,9 @@ void setPreferredPair(const std::string& pair);
 
 // Record that the language list is on screen: applyPending() adds, behind the
 // chain in force, the system faces the drawable languages' own names need
-// ("日本語", "한국어") - once, and only for names the chain cannot draw.
+// ("日本語", "한국어") - once, and only for names the chain cannot draw. Starts
+// the system-font scan (above); the faces arrive on the first applyPending()
+// after the scan has finished, not in the next one.
 void requestLanguageNames();
 
 // Between frames: make the atlas match what was recorded. Returns true when
@@ -264,6 +354,34 @@ bool applyPending();
 // role's chain in order, by label (a names face marked " (names)").
 const std::string& pairInUse();
 std::vector<std::string> uiChainLabels();
+
+// --- Test seams (never called by the application) ------------------------------
+//
+// Sleep this long (milliseconds) inside every font-file read that finds a file,
+// on whichever thread reads it: a slow disk in a unit test. 0 turns it off.
+void setReadDelayForTests(unsigned ms);
+
+// How many times each font file was actually OPENED since the process started
+// (or since resetScanForTests()), by path. A file read twice is a file with 2.
+std::map<std::string, int> fileReadCountsForTests();
+
+// The bytes of `path` as the application's own file reader returns them (the
+// bulk read, through the pinned and kept caches); empty when the file is
+// missing, empty or unreadable.
+std::vector<unsigned char> readFileForTests(const std::string& path);
+
+// How many font files are held in memory only because a scan found them usable
+// (read, looked at, and not yet put in a chain). Zero once the language names'
+// faces have been merged: the ones the names did not need are let go then.
+std::size_t keptBytesForTests();
+
+// Back to the state before any scan: stops and joins the worker, forgets the
+// scan's answers and kept bytes, the file-open counts, and every pinned system
+// file the English chain does not use (Georgia stays: the chain points into it).
+// Call it only right after load(), when the atlas has just been rebuilt from
+// English and so holds no pointer into any CJK file, never with a face of one in
+// use.
+void resetScanForTests();
 
 }  // namespace cascade::gui::fonts
 

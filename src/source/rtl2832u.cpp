@@ -3,12 +3,29 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/rtl2832u.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <thread>
+
+#include "core/diag_log.hpp"
 
 namespace cascade::source {
 
 namespace {
+
+// THE TUNER BUS'S RETRY (see the header). Measured on the bench R820T with
+// every CPU busy (2026-09-30): a control transfer took 40-75 ms whether it
+// succeeded or was refused, and with the repeater switched back on every
+// refused transfer was accepted at the second attempt, which began within
+// about 200 ms of the first. Four retries is margin, not need. No retry
+// starts once kI2cRetryWindow has passed since the first attempt: it is
+// shorter than the 500 ms control timeout, so a transfer that timed out (a
+// radio that has stopped answering) is never retried, and a teardown that
+// meets a refusing tuner spends at most this window plus one more attempt.
+constexpr int kI2cRetries = 4;
+constexpr std::chrono::milliseconds kI2cRetryGap{1};
+constexpr std::chrono::milliseconds kI2cRetryWindow{400};
 
 // 2^22, the resampler's and the DDC's fixed-point scale. Written once so the
 // two arithmetics below cannot drift apart.
@@ -129,12 +146,51 @@ bool Rtl2832u::setI2cRepeater(bool on) {
     return demodWriteReg(1, 0x01, on ? 0x18 : 0x10, 1);
 }
 
+bool Rtl2832u::i2cTransfer(bool out, std::uint8_t slave, std::uint8_t* data, std::uint8_t len) {
+    // A refusal that a retry recovers leaves no trace in the error state: the
+    // caller asked for one transfer and got it.
+    const std::string errorBefore = lastError_;
+    const bool failedBefore = failed_;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int attempt = 0;; ++attempt) {
+        const bool ok = out ? writeArray(RtlBlock::I2c, slave, data, len)
+                            : readArray(RtlBlock::I2c, slave, data, len);
+        if (ok) {
+            if (attempt > 0) {
+                lastError_ = errorBefore;
+                failed_ = failedBefore;
+                if (i2cRecovered_++ == 0) {
+                    // Once per open: which attempt succeeded is the evidence
+                    // that separates a marginal bus from a dying one.
+                    core::diagLogf("source: the tuner refused an I2C %s and accepted it on "
+                                   "attempt %d; later recoveries are counted, not logged",
+                                   out ? "write" : "read", attempt + 1);
+                }
+            }
+            return true;
+        }
+        if (attempt >= kI2cRetries ||
+            std::chrono::steady_clock::now() - t0 >= kI2cRetryWindow) {
+            return false;
+        }
+        std::this_thread::sleep_for(kI2cRetryGap);
+        // THE REPEATER, SWITCHED BACK ON before the retry. Every tuner
+        // transfer happens inside the caller's repeater bracket, and after a
+        // refused one the bracket is not enough: retried blind, the bench
+        // dongle still failed three runs in five under load; with this write,
+        // every retry landed. Harmless when the repeater was still on.
+        setI2cRepeater(true);
+    }
+}
+
 bool Rtl2832u::i2cWrite(std::uint8_t slave, const std::uint8_t* data, std::uint8_t len) {
-    return writeArray(RtlBlock::I2c, slave, data, len);
+    // writeArray never writes through `data`; the cast only lets reads and
+    // writes share one retry loop.
+    return i2cTransfer(true, slave, const_cast<std::uint8_t*>(data), len);
 }
 
 bool Rtl2832u::i2cRead(std::uint8_t slave, std::uint8_t* data, std::uint8_t len) {
-    return readArray(RtlBlock::I2c, slave, data, len);
+    return i2cTransfer(false, slave, data, len);
 }
 
 int Rtl2832u::i2cReadReg(std::uint8_t slave, std::uint8_t reg) {
@@ -142,8 +198,8 @@ int Rtl2832u::i2cReadReg(std::uint8_t slave, std::uint8_t reg) {
     // two block transfers because that is all the RTL2832U's I2C block
     // offers.
     std::uint8_t value = 0;
-    if (!writeArray(RtlBlock::I2c, slave, &reg, 1)) { return -1; }
-    if (!readArray(RtlBlock::I2c, slave, &value, 1)) { return -1; }
+    if (!i2cWrite(slave, &reg, 1)) { return -1; }
+    if (!i2cRead(slave, &value, 1)) { return -1; }
     return value;
 }
 

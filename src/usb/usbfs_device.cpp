@@ -30,7 +30,12 @@
 //     /sys/bus/usb/devices/*/{idVendor,idProduct,serial,product,manufacturer,
 //     bcdDevice,busnum,devnum} - plain text files sysfs already has, no
 //     /dev/bus/usb node is opened and no ioctl is sent to produce the list.
-//  2. THE CALLER OWNS THE THREADS. Nothing here spawns anything. A bulk read
+//  2. THE CALLER OWNS THE THREADS. Nothing here spawns anything - with ONE
+//     exception, the sysfs listing: an attribute read has no timeout and
+//     blocks for as long as the device is mid-reset or its driver is wedged
+//     (hang signature 40ABD0BB073D899C, a frozen GUI thread), so the walk
+//     reads on a worker that the caller waits on with a bound and abandons.
+//     See readSysfsUsbNodes() and bounded_walk.hpp. A bulk read
 //     is one URB submitted with USBDEVFS_SUBMITURB and reaped with
 //     USBDEVFS_REAPURBNDELAY on whichever thread calls readBulk(); a control
 //     transfer is the single synchronous ioctl USBDEVFS_CONTROL, which the
@@ -67,6 +72,8 @@
 #include "usb/usb_device.hpp"
 #include "usb/usbfs_device.hpp"
 
+#include "core/diag_log.hpp"
+
 #if !defined(__linux__)
 #error "usbfs_device.cpp is Linux-only; CMakeLists.txt must not compile it elsewhere"
 #endif
@@ -77,6 +84,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 
 #include <dirent.h>
@@ -150,7 +158,8 @@ namespace {
 
 // One text file under a sysfs node, trimmed, or empty if it does not exist -
 // which is the ordinary case for `serial` on most of these dongles, not an
-// error.
+// error. NO BOUND OF ITS OWN - fopen/fread on a wedged device block for good -
+// so it is only ever reached through readSysfsNode, on the bounded walk's worker.
 std::string readSysfsAttr(const std::string& dir, const char* name) {
     const std::string path = dir + "/" + name;
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -182,41 +191,89 @@ bool parseUnsigned(const std::string& s, unsigned& out) {
 
 }  // namespace
 
-std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir) {
-    std::vector<SysfsUsbNode> out;
+namespace {
+
+// One node's attributes, read with no bound of its own: ONLY ever called on
+// the bounded walk's worker (see readSysfsUsbNodes). `path` is the node's
+// directory; its last component is the node's name.
+SysfsUsbNode readSysfsNode(const std::string& path) {
+    SysfsUsbNode node;
+    const std::size_t slash = path.rfind('/');
+    node.name = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    std::uint16_t vid = 0;
+    std::uint16_t pid = 0;
+    node.hasIds = parseHex16(readSysfsAttr(path, "idVendor"), vid) &&
+                  parseHex16(readSysfsAttr(path, "idProduct"), pid);
+    node.vid = vid;
+    node.pid = pid;
+    node.serial = readSysfsAttr(path, "serial");
+    node.product = readSysfsAttr(path, "product");
+    node.manufacturer = readSysfsAttr(path, "manufacturer");
+    std::uint16_t bcd = 0;
+    if (parseHex16(readSysfsAttr(path, "bcdDevice"), bcd)) { node.bcdDevice = bcd; }
+    unsigned busnum = 0;
+    unsigned devnum = 0;
+    node.hasBusDev = parseUnsigned(readSysfsAttr(path, "busnum"), busnum) &&
+                     parseUnsigned(readSysfsAttr(path, "devnum"), devnum);
+    node.busnum = busnum;
+    node.devnum = devnum;
+    return node;
+}
+
+// Nodes whose attribute read is still blocked on an abandoned worker, for the
+// life of the process. Leaked on purpose: an abandoned worker can outlive
+// static destruction, and it must find this alive when its read returns.
+std::shared_ptr<WedgeRegistry> wedgedNodes() {
+    static const std::shared_ptr<WedgeRegistry>* const registry =
+        new std::shared_ptr<WedgeRegistry>(std::make_shared<WedgeRegistry>());
+    return *registry;
+}
+
+}  // namespace
+
+std::size_t sysfsWedgedNodeCount() { return wedgedNodes()->size(); }
+
+std::vector<SysfsUsbNode> readSysfsUsbNodes(const std::string& sysfsDevicesDir,
+                                            const WalkBudget& budget) {
     DIR* dir = ::opendir(sysfsDevicesDir.c_str());
     // A MISSING DIRECTORY IS AN EMPTY BUS, NOT AN ERROR: a container or a VM
     // with no USB subsystem exposed (this build machine, measured) has no
     // /sys/bus/usb/devices at all, and "no radio hardware found" is the
     // right answer for that, not a crash.
-    if (dir == nullptr) { return out; }
+    if (dir == nullptr) { return std::vector<SysfsUsbNode>(); }
+    std::vector<std::string> paths;
     for (struct dirent* e = ::readdir(dir); e != nullptr; e = ::readdir(dir)) {
         const std::string name = e->d_name;
         if (name == "." || name == "..") { continue; }
-        const std::string path = sysfsDevicesDir + "/" + name;
-        SysfsUsbNode node;
-        node.name = name;
-        std::uint16_t vid = 0;
-        std::uint16_t pid = 0;
-        node.hasIds = parseHex16(readSysfsAttr(path, "idVendor"), vid) &&
-                      parseHex16(readSysfsAttr(path, "idProduct"), pid);
-        node.vid = vid;
-        node.pid = pid;
-        node.serial = readSysfsAttr(path, "serial");
-        node.product = readSysfsAttr(path, "product");
-        node.manufacturer = readSysfsAttr(path, "manufacturer");
-        std::uint16_t bcd = 0;
-        if (parseHex16(readSysfsAttr(path, "bcdDevice"), bcd)) { node.bcdDevice = bcd; }
-        unsigned busnum = 0;
-        unsigned devnum = 0;
-        node.hasBusDev = parseUnsigned(readSysfsAttr(path, "busnum"), busnum) &&
-                         parseUnsigned(readSysfsAttr(path, "devnum"), devnum);
-        node.busnum = busnum;
-        node.devnum = devnum;
-        out.push_back(std::move(node));
+        paths.push_back(sysfsDevicesDir + "/" + name);
     }
     ::closedir(dir);
-    return out;
+
+    // THE ATTRIBUTE READS ARE NEVER MADE ON THE CALLING THREAD. A sysfs read
+    // goes into the USB core and blocks, uninterruptibly, while the device is
+    // mid-reset or its driver is wedged; this runs on the GUI thread (see
+    // AppWindow::scanNative), where five seconds of that is a hang report
+    // (signature 40ABD0BB073D899C). The walk waits on a worker for at most
+    // `budget`, abandons what is stuck, and skips that node - and every later
+    // walk skips it too until the stuck read returns - so a wedged device
+    // costs one stall and a leaked thread, and the other radios still list.
+    // The directory listing above stays inline: it reads names from the
+    // kernel's directory cache and touches no device.
+    BoundedWalkResult<SysfsUsbNode> walk = boundedWalk<SysfsUsbNode>(
+        paths, [](const std::string& path) { return readSysfsNode(path); }, wedgedNodes(),
+        budget);
+    for (const std::string& path : walk.wedged) {
+        core::diagLogf(
+            "usb: reading %s did not return within %lld ms - that device is left out of "
+            "the list until the read does",
+            path.c_str(), static_cast<long long>(budget.stall.count()));
+    }
+    if (!walk.complete && walk.wedged.empty()) {
+        core::diagLogf("usb: listing %s stopped at its %lld ms limit - some devices may be "
+                       "missing from this scan",
+                       sysfsDevicesDir.c_str(), static_cast<long long>(budget.total.count()));
+    }
+    return std::move(walk.results);
 }
 
 std::vector<UsbDeviceInfo> sysfsUsbNodesToDevices(const std::vector<SysfsUsbNode>& nodes,
@@ -318,6 +375,7 @@ public:
 
     ~UsbfsDevice() override {
         endBulkStream();
+        endIsoStream();
         if (fd_ >= 0) {
             unsigned int iface = kSdrInterface;
             ::ioctl(fd_, USBDEVFS_RELEASEINTERFACE, &iface);
@@ -437,12 +495,7 @@ public:
                     setError(errnoText("reaping a bulk read", errno));
                     return -1;
                 }
-                for (auto& slot : ring_) {
-                    if (slot && &slot->urb == done) {
-                        slot->pending = false;
-                        break;
-                    }
-                }
+                markReaped(done);
             }
             if (!req.pending) { break; }
         }
@@ -489,9 +542,7 @@ public:
                 if (pr <= 0) { continue; }  // re-check the deadline; EINTR falls the same way
                 struct usbdevfs_urb* done = nullptr;
                 if (::ioctl(fd_, USBDEVFS_REAPURBNDELAY, &done) != 0) { continue; }
-                for (auto& s : ring_) {
-                    if (s && &s->urb == done) { s->pending = false; }
-                }
+                markReaped(done);
                 if (!slot->pending) { break; }
             }
             if (slot->pending) { break; }  // out of time; stop polling, go leak
@@ -530,6 +581,230 @@ public:
         return false;
     }
 
+    // --- bulk OUT -----------------------------------------------------------
+
+    int writeBulk(std::uint8_t endpoint, const std::uint8_t* data, std::size_t len,
+                  unsigned timeoutMs) override {
+        if (fd_ < 0) {
+            setError("bulk write on a closed device");
+            return -1;
+        }
+        if (len > 0x7FFFFFFFu) {
+            setError("bulk write too long");
+            return -1;
+        }
+        // USBDEVFS_BULK is synchronous and carries its own timeout in
+        // milliseconds, which the kernel enforces and cancels on (Linux usbfs
+        // documentation) - the bounded wait of rule 3 with no poll loop.
+        struct usbdevfs_bulktransfer bt{};
+        bt.ep = endpoint;
+        bt.len = static_cast<unsigned int>(len);
+        bt.timeout = timeoutMs;
+        bt.data = const_cast<std::uint8_t*>(data);
+        const int r = ::ioctl(fd_, USBDEVFS_BULK, &bt);
+        if (r < 0) {
+            const int err = errno;
+            if (err == ETIMEDOUT) {
+                setError("a bulk write did not complete within its timeout");
+            } else if (err == ENODEV) {
+                setError("the radio is no longer present");
+            } else {
+                setError(errnoText("a bulk write", err));
+            }
+            return -1;
+        }
+        return r;
+    }
+
+    // --- isochronous IN -----------------------------------------------------
+
+    bool beginIsoStream(std::uint8_t endpoint, std::size_t packetBytes,
+                        std::size_t packetsPerTransfer, std::size_t transferCount) override {
+        if (isoStreaming_) { return true; }
+        if (fd_ < 0) {
+            setError("beginIsoStream() on a closed device");
+            return false;
+        }
+        // usbfs refuses an isochronous URB of more than 128 packets
+        // (USBDEVFS_SUBMITURB answers EINVAL; Linux usbfs documentation).
+        if (packetsPerTransfer == 0 || packetsPerTransfer > kMaxIsoPackets) {
+            setError("beginIsoStream() needs between 1 and 128 packets per transfer");
+            return false;
+        }
+        if (transferCount == 0 || transferCount > kMaxRingSize) {
+            setError("beginIsoStream() needs between 1 and 32 transfers");
+            return false;
+        }
+        // THE SLOT SIZE COMES FROM THE DEVICE when it can: read() on a usbfs
+        // node returns the device descriptor followed by the configuration
+        // descriptors (Linux usbfs documentation), and the endpoint's own
+        // wMaxPacketSize says what one microframe may carry.
+        std::size_t slot = packetBytes;
+        std::uint8_t desc[4096];
+        const ssize_t got = ::pread(fd_, desc, sizeof(desc), 0);
+        if (got > 0) {
+            std::size_t fromDevice = 0;
+            if (!isoEndpointBytesPerInterval(desc, static_cast<std::size_t>(got), kSdrInterface,
+                                             endpoint, fromDevice)) {
+                char msg[160];
+                std::snprintf(msg, sizeof(msg),
+                              "endpoint 0x%02X is not an isochronous IN endpoint on interface %u, "
+                              "alternate setting 0",
+                              static_cast<unsigned>(endpoint), kSdrInterface);
+                setError(msg);
+                return false;
+            }
+            slot = fromDevice;
+        }
+        if (slot == 0) {
+            setError("beginIsoStream() needs a packet size");
+            return false;
+        }
+
+        isoEndpoint_ = endpoint;
+        isoSlotBytes_ = slot;
+        isoPackets_ = packetsPerTransfer;
+        isoRing_.clear();
+        isoRing_.resize(transferCount);
+        for (std::size_t i = 0; i < transferCount; ++i) {
+            auto r = std::make_unique<IsoRequest>();
+            r->buffer.assign(slot * packetsPerTransfer, 0);
+            // usbdevfs_urb ends in a flexible array of packet descriptors,
+            // so it is allocated with room for them; calloc's alignment is
+            // enough for the struct.
+            const std::size_t urbBytes = sizeof(struct usbdevfs_urb) +
+                                         packetsPerTransfer * sizeof(struct usbdevfs_iso_packet_desc);
+            r->urb = static_cast<struct usbdevfs_urb*>(std::calloc(1, urbBytes));
+            if (r->urb == nullptr) {
+                setError("out of memory allocating isochronous transfers");
+                isoRing_.clear();
+                return false;
+            }
+            r->urbBytes = urbBytes;
+            isoRing_[i] = std::move(r);
+        }
+        isoHead_ = 0;
+        isoStreaming_ = true;
+        for (auto& r : isoRing_) {
+            if (!queueIso(*r)) {
+                endIsoStream();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    IsoRead readIso(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs,
+                    IsoTransferStats& stats) override {
+        stats = IsoTransferStats{};
+        if (!isoStreaming_) {
+            setError("readIso() with no stream");
+            return IsoRead::Failed;
+        }
+        IsoRequest& req = *isoRing_[isoHead_];
+        if (!req.pending) {
+            if (!queueIso(req)) { return IsoRead::Failed; }
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (req.pending) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) { return IsoRead::Timeout; }
+            const long remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+            struct pollfd pfd{};
+            pfd.fd = fd_;
+            pfd.events = POLLOUT;  // usbfs: a completed URB is ready to reap
+            const int pr = ::poll(&pfd, 1, static_cast<int>(std::min<long>(remainingMs, 60000)));
+            if (pr < 0) {
+                if (errno == EINTR) { continue; }
+                setError(errnoText("polling an isochronous read", errno));
+                return IsoRead::Failed;
+            }
+            if (pr == 0) { continue; }
+            for (;;) {
+                struct usbdevfs_urb* done = nullptr;
+                if (::ioctl(fd_, USBDEVFS_REAPURBNDELAY, &done) != 0) {
+                    if (errno == EAGAIN) { break; }
+                    setError(errnoText("reaping an isochronous read", errno));
+                    return IsoRead::Failed;
+                }
+                markReaped(done);
+            }
+        }
+        // An isochronous URB completes with status 0, or -EXDEV when only
+        // some of its packets were transferred (Linux usbfs documentation) -
+        // the per-packet status says which, and that is not a failure of the
+        // pipe. Anything else (ENODEV unplugged, ESHUTDOWN, EPIPE) is.
+        if (req.urb->status != 0 && req.urb->status != -EXDEV) {
+            setError(errnoText("an isochronous read", -req.urb->status));
+            return IsoRead::Failed;
+        }
+        IsoPacket packets[kMaxIsoPackets];
+        std::size_t offset = 0;
+        const std::size_t n = std::min<std::size_t>(
+            static_cast<std::size_t>(req.urb->number_of_packets), kMaxIsoPackets);
+        for (std::size_t k = 0; k < n; ++k) {
+            const struct usbdevfs_iso_packet_desc& d = req.urb->iso_frame_desc[k];
+            packets[k].offset = offset;
+            packets[k].length = d.actual_length;
+            packets[k].status = static_cast<int>(d.status);
+            offset += d.length;  // slots are laid out at the REQUESTED lengths
+        }
+        concatIsoPackets(req.buffer.data(), req.buffer.size(), packets, n, isoSlotBytes_, dst, cap,
+                         stats);
+        isoHead_ = (isoHead_ + 1) % isoRing_.size();
+        if (!queueIso(req)) { return IsoRead::Failed; }
+        return IsoRead::Completed;
+    }
+
+    void endIsoStream() override {
+        if (!isoStreaming_ && isoRing_.empty()) { return; }
+        isoStreaming_ = false;
+        for (auto& r : isoRing_) {
+            if (r && r->pending) { ::ioctl(fd_, USBDEVFS_DISCARDURB, r->urb); }
+        }
+        // ONE deadline for the whole ring, as endBulkStream().
+        const auto deadline = std::chrono::steady_clock::now() + kAbortDrainWait;
+        bool allDrained = true;
+        for (;;) {
+            bool anyPending = false;
+            for (auto& r : isoRing_) { anyPending = anyPending || (r && r->pending); }
+            if (!anyPending) { break; }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                allDrained = false;
+                break;
+            }
+            const long remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+            struct pollfd pfd{};
+            pfd.fd = fd_;
+            pfd.events = POLLOUT;
+            if (::poll(&pfd, 1, static_cast<int>(std::max<long>(remainingMs, 0))) <= 0) { continue; }
+            struct usbdevfs_urb* done = nullptr;
+            while (::ioctl(fd_, USBDEVFS_REAPURBNDELAY, &done) == 0) { markReaped(done); }
+        }
+        if (allDrained) {
+            isoRing_.clear();
+        } else {
+            // THE LEAK, on purpose, exactly as endBulkStream(): a URB the
+            // kernel still holds may still write into its buffer and its
+            // descriptor table.
+            // Released, not moved into a member: a member would be freed with
+            // the device moments later.
+            for (auto& r : isoRing_) { (void)r.release(); }
+            isoRing_.clear();
+            setError("a discarded isochronous read did not complete within the drain bound; its "
+                     "buffer is deliberately leaked rather than freed under the device");
+        }
+        isoEndpoint_ = 0;
+        isoHead_ = 0;
+    }
+
+    bool isoStreaming() const override { return isoStreaming_; }
+    std::size_t isoPacketBytes() const override { return isoSlotBytes_; }
+    std::size_t isoTransferBytes() const override { return isoSlotBytes_ * isoPackets_; }
+
     const std::string& path() const override { return path_; }
     const std::string& lastError() const override { return lastError_; }
 
@@ -544,7 +819,61 @@ private:
         struct usbdevfs_urb urb{};
     };
 
+    // One isochronous transfer: its buffer and its URB, which is allocated
+    // with the packet-descriptor table on the end.
+    struct IsoRequest {
+        IsoRequest() = default;
+        ~IsoRequest() { std::free(urb); }  // never runs for a leaked one
+        IsoRequest(const IsoRequest&) = delete;
+        IsoRequest& operator=(const IsoRequest&) = delete;
+        std::vector<std::uint8_t> buffer;
+        struct usbdevfs_urb* urb = nullptr;
+        std::size_t urbBytes = 0;
+        bool pending = false;
+    };
+
+    // usbfs's own ceiling on packets in one isochronous URB.
+    static constexpr std::size_t kMaxIsoPackets = 128;
+
     void setError(std::string msg) { lastError_ = std::move(msg); }
+
+    // A reaped URB may belong to either ring: both are reaped from one fd.
+    void markReaped(struct usbdevfs_urb* done) {
+        for (auto& slot : ring_) {
+            if (slot && &slot->urb == done) {
+                slot->pending = false;
+                return;
+            }
+        }
+        for (auto& r : isoRing_) {
+            if (r && r->urb == done) {
+                r->pending = false;
+                return;
+            }
+        }
+    }
+
+    bool queueIso(IsoRequest& req) {
+        std::memset(req.urb, 0, req.urbBytes);
+        req.urb->type = USBDEVFS_URB_TYPE_ISO;
+        req.urb->endpoint = isoEndpoint_;
+        // ISO_ASAP: schedule in the next free frame rather than at a start
+        // frame we would have to compute (Linux usbfs documentation).
+        req.urb->flags = USBDEVFS_URB_ISO_ASAP;
+        req.urb->buffer = req.buffer.data();
+        req.urb->buffer_length = static_cast<int>(req.buffer.size());
+        req.urb->number_of_packets = static_cast<int>(isoPackets_);
+        for (std::size_t k = 0; k < isoPackets_; ++k) {
+            req.urb->iso_frame_desc[k].length = static_cast<unsigned int>(isoSlotBytes_);
+        }
+        if (::ioctl(fd_, USBDEVFS_SUBMITURB, req.urb) != 0) {
+            setError(errnoText("queueing an isochronous read", errno));
+            req.pending = false;
+            return false;
+        }
+        req.pending = true;
+        return true;
+    }
 
     bool queue(Request& req) {
         std::memset(&req.urb, 0, sizeof(req.urb));
@@ -615,6 +944,13 @@ private:
     std::size_t head_ = 0;
     std::vector<std::unique_ptr<Request>> ring_;
     std::vector<std::unique_ptr<Request>> leaked_;
+
+    std::uint8_t isoEndpoint_ = 0;
+    bool isoStreaming_ = false;
+    std::size_t isoSlotBytes_ = 0;
+    std::size_t isoPackets_ = 0;
+    std::size_t isoHead_ = 0;
+    std::vector<std::unique_ptr<IsoRequest>> isoRing_;
 };
 
 }  // namespace
@@ -634,7 +970,7 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
             error = "permission denied opening " + path +
                     " - see installer/linux/99-foxsdr-sdr.rules and installer/linux/README.md";
         } else if (err == EBUSY) {
-            error = "the radio is already in use by another program";
+            error = kInUseError;
         } else {
             error = errnoText(("opening " + path).c_str(), err);
         }
@@ -667,8 +1003,7 @@ std::unique_ptr<UsbDevice> openWinUsb(const std::string& path, std::string& erro
         const int err = errno;
         error = errnoText("claiming the radio's USB interface", err);
         if (err == EBUSY) {
-            error = "the radio is already in use by another program or its kernel driver "
-                    "could not be detached";
+            error = std::string(kInUseError) + " or its kernel driver could not be detached";
         }
         ::close(fd);
         return nullptr;

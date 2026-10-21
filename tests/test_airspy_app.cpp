@@ -291,6 +291,17 @@ int main() {
         CHECK(Access::gainValues(app).size() == 3 && Access::gainValues(app)[0] == 5.0f);
         CHECK(memOf(Access::config(app)).lna == 5);
         CHECK(memOf(Access::config(app)).mode == "free");
+        // AN AIRSPY'S GAINS ARE NOT IN THE PER-RADIO MANUAL GAIN MEMORY (0.99.75,
+        // AppConfig::manualGainByRadio): they are part of its gain mode, remembered above,
+        // and a second record here would be a second witness that could disagree.
+        CHECK(Access::config(app).manualGainByRadio.empty());
+        // ...which that request cannot show: it switched the radio's mode, so the stage list was
+        // still the old mode's when the request was handled and the stage was not found in it by
+        // name. The SAME request again finds LNA in Free mode's list, which is where any other
+        // radio's gain would be written to the memory.
+        Access::control(app, r);
+        CHECK(Access::gainValues(app).size() == 3 && Access::gainValues(app)[0] == 5.0f);
+        CHECK(Access::config(app).manualGainByRadio.empty());
 
         // --- the Source panel's own Airspy slider: SET_GAIN, not
         //     NO_READBACK (engine/stage3b-pre M2). setGainDb rounds to the
@@ -451,7 +462,16 @@ int main() {
             CHECK(Access::chainRate(app) == 1.25e6);
             CHECK(Access::sourceError(app).empty());
         }
-        // The worker path: the list pick asks for the rate the chain runs at.
+        // The worker path: the list pick asks for the rate the chain runs at
+        // (the generic 2 MS/s every device open asks for - app_window.cpp's
+        // kSoapyRateHz[kSoapyRateDefaultIndex]). THIS IS NOT A DELIBERATE
+        // rate request (0.99.44 repair) - a raised decimation must stay
+        // exactly where the user left it across a generic default-rate ask,
+        // so the radio stays trapped inside /8 here, same as before 8ba18c4.
+        // (An 0.99.43 attempt made the plain path search every decimation
+        // too, which is what let this generic ask silently walk the
+        // remembered /8 to /1 - the very next gain or mode touch would then
+        // have saved /1 over the user's own /8; see the test below.)
         Access::selectGenerator(app);
         CHECK(Access::selectAirspy(app));
         have = Access::haveRadio(app);
@@ -468,6 +488,21 @@ int main() {
             // Before the fix it named the undecimated 2.5.
             CHECK(Access::sourceError(app).find("2.5 MS/s") == std::string::npos);
             CHECK(Access::sourceError(app).find("1.25 MS/s") != std::string::npos);
+        }
+
+        // --- 0.99.44 REPAIR: a list pick followed by a gain change must
+        //     keep the remembered /8 (RED on 5ba3a04, where the list pick
+        //     above had already dropped the live radio to decimation 1 - so
+        //     this very next gain touch, which remembers the radio's CURRENT
+        //     decimation, saved /1 over the user's own /8 permanently). -----
+        CHECK(Access::mode(app, Mode::Sensitivity));
+        have = Access::haveRadio(app);
+        CHECK(have);
+        if (have) {
+            std::printf("  after a gain touch: radio /%u, memory /%u\n", Access::radioDecimation(app),
+                        memOf(Access::config(app)).decimation);
+            CHECK(Access::radioDecimation(app) == 8);
+            CHECK(memOf(Access::config(app)).decimation == 8);
         }
     }
 

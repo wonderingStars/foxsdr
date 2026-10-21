@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/soapy_modules.hpp"
 
+#include "core/foreign_modules.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -168,6 +170,15 @@ std::string pluginPathWith(const std::string& existing, const std::vector<Vendor
     return out;
 }
 
+std::vector<std::string> ownFoldersOf(const std::vector<VendorRoot>& roots) {
+    std::vector<std::string> out;
+    for (const VendorRoot& v : roots) {
+        out.push_back(v.moduleDir);
+        out.push_back(v.binDir);
+    }
+    return out;
+}
+
 const std::vector<VendorRoot>& ensureVendorModulesVisible(const std::string& abi) {
     static std::vector<VendorRoot> adopted;
     static std::once_flag once;
@@ -178,6 +189,16 @@ const std::vector<VendorRoot>& ensureVendorModulesVisible(const std::string& abi
         };
         adopted = resolveVendorRoots(candidateVendorRoots(envOrEmpty), abi, exists);
         if (adopted.empty()) { return; }
+
+        // BEFORE anything of theirs is loaded (the first enumeration is what loads them): the
+        // diagnostic log names the OTHER software's DLLs in this process, and a vendor's
+        // module and the DLLs it depends on are SDR code this application loads on purpose -
+        // not an overlay another program injected - so they are not on that list
+        // (core/foreign_modules.hpp, "WHAT IS OURS"). Both folders (ownFoldersOf), because
+        // rtlsdr.dll and libusb-1.0.dll live in the bin folder and are loaded for the module.
+        for (const std::string& folder : ownFoldersOf(adopted)) {
+            core::registerOwnModuleFolder(folder);
+        }
 
 #ifdef _WIN32
         const char sep = ';';

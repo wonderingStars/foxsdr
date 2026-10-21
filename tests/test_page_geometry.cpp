@@ -30,7 +30,9 @@ int main() {
     using cascade::gui::kPageMinW;
     using cascade::gui::kPageInsideMargin;
     using cascade::gui::pageNeedsReset;
+    using cascade::gui::kPageInsideStagger;
     using cascade::gui::pageOpenInside;
+    using cascade::gui::pageOpenInsideStaggered;
 
     // --- 1. Under the floor clamps up, on both axes. ------------------------
     {
@@ -203,6 +205,92 @@ int main() {
         CHECK(h == kPageMinH);
         // Pinned to the viewport's own corner rather than centred off the left
         // edge of it, which would put the title strip out of reach.
+        CHECK(x == 10.0f);
+        CHECK(y == 20.0f);
+    }
+
+    // -----------------------------------------------------------------------
+    // pageOpenInsideStaggered - the same, for pages that open one after another
+    //
+    // THE FAULT: the Decoder output window and the plugin picture windows hung
+    // off the main window's right edge (+166 px, stepped by a slot) to be
+    // operating-system windows of their own, with no look at any screen. On a
+    // main window that reached the screen's edge they were off it, ImGui's
+    // clamp left 19 px of brass showing, and a French tester pressing POCSAG
+    // or DMR saw "a partial vertical bar" (report df5aff7da93dc88c, 0.99.71).
+    // -----------------------------------------------------------------------
+    {
+        // SLOT 0 IS pageOpenInside, exactly: the Decoder output window.
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+        float bx = 0.0f, by = 0.0f, bw = 0.0f, bh = 0.0f;
+        pageOpenInside(0.0f, 0.0f, 1600.0f, 1000.0f, 720.0f, 520.0f, bx, by, bw, bh);
+        pageOpenInsideStaggered(0.0f, 0.0f, 1600.0f, 1000.0f, 720.0f, 520.0f, 0, x, y, w, h);
+        CHECK(x == bx && y == by && w == bw && h == bh);
+        CHECK(x == 440.0f);
+        CHECK(y == 240.0f);
+        // ...and a negative slot is no slot, rather than a step up and to the left.
+        pageOpenInsideStaggered(0.0f, 0.0f, 1600.0f, 1000.0f, 720.0f, 520.0f, -3, x, y, w, h);
+        CHECK(x == bx && y == by);
+    }
+    {
+        // EACH SLOT IS ONE STEP DOWN AND RIGHT of the one before, size unchanged,
+        // so a picture window opened with the Decoder output window does not hide
+        // its rail.
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+        for (int slot = 1; slot <= 3; ++slot) {
+            pageOpenInsideStaggered(0.0f, 0.0f, 1600.0f, 1000.0f, 720.0f, 520.0f, slot, x, y, w, h);
+            CHECK(w == 720.0f);
+            CHECK(h == 520.0f);
+            CHECK(x == 440.0f + kPageInsideStagger * static_cast<float>(slot));
+            CHECK(y == 240.0f + kPageInsideStagger * static_cast<float>(slot));
+            CHECK(x + w <= 1600.0f);
+            CHECK(y + h <= 1000.0f);
+        }
+    }
+    {
+        // A SLOT PAST WHAT FITS IS HELD AT THE CORNER, not hung off the edge: the
+        // whole page stays inside the viewport (the claim the old anchor could
+        // not make), a stack the user can see and drag apart.
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+        pageOpenInsideStaggered(0.0f, 0.0f, 1600.0f, 1000.0f, 720.0f, 520.0f, 40, x, y, w, h);
+        CHECK(w == 720.0f);
+        CHECK(h == 520.0f);
+        CHECK(x == 1600.0f - 720.0f);
+        CHECK(y == 1000.0f - 520.0f);
+        CHECK(x + w <= 1600.0f);
+        CHECK(y + h <= 1000.0f);
+    }
+    {
+        // A VIEWPORT AWAY FROM THE ORIGIN, as the main window is on a second
+        // monitor: the step is from the viewport, and the whole page is inside it.
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+        pageOpenInsideStaggered(2560.0f, 100.0f, 1000.0f, 700.0f, 720.0f, 520.0f, 1, x, y, w, h);
+        CHECK(x == 2560.0f + 140.0f + kPageInsideStagger);
+        CHECK(y == 100.0f + 90.0f + kPageInsideStagger);
+        CHECK(x >= 2560.0f && y >= 100.0f);
+        CHECK(x + w <= 2560.0f + 1000.0f);
+        CHECK(y + h <= 100.0f + 700.0f);
+    }
+    {
+        // THE SMALLEST MAIN WINDOW (700 x 450): the page is shrunk to fit, and the
+        // slot's step is taken out of what is left of the margin, never past it.
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+        pageOpenInsideStaggered(0.0f, 0.0f, 700.0f, 450.0f, 720.0f, 520.0f, 2, x, y, w, h);
+        CHECK(w == 700.0f - kPageInsideMargin * 2.0f);
+        CHECK(h == 450.0f - kPageInsideMargin * 2.0f);
+        CHECK(x >= 0.0f && y >= 0.0f);
+        CHECK(x + w <= 700.0f);
+        CHECK(y + h <= 450.0f);
+        CHECK(w >= kPageMinW);
+        CHECK(h >= kPageMinH);
+    }
+    {
+        // A VIEWPORT UNDER THE DRAG FLOOR: a slot does not push the page off
+        // the corner it is pinned to.
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+        pageOpenInsideStaggered(10.0f, 20.0f, 120.0f, 80.0f, 720.0f, 520.0f, 3, x, y, w, h);
+        CHECK(w == kPageMinW);
+        CHECK(h == kPageMinH);
         CHECK(x == 10.0f);
         CHECK(y == 20.0f);
     }

@@ -42,16 +42,20 @@
  *
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <string>
 
 #include "core/i18n.hpp"
 #include "gui/app_window.hpp"
 #include "gui/fonts.hpp"
 #include "gui/scope_face.hpp"
+#include "gui/source_row_status.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -123,7 +127,9 @@ const char* const kChips[] = {
     // produces a chip wider than these two.
     "1 PORT", "12 PORTS",
     // Diagnostics, with the memory dump switched on.
-    "ON+DMP"};
+    "ON+DMP",
+    // Source, while a running patch has the radio (gui::sourceChipWithPatch).
+    "ON PATCH"};
 
 // EVERY LABEL THE MAIN WINDOW'S RAIL LETTERS. The first group is fixed text in
 // app_window.cpp; the last three are built at run time from a PLUGIN'S OWN
@@ -460,6 +466,16 @@ void testEveryLanguageBankWordsAndSourceChip() {
                         label, labelAtFloor, right - left);
             ++badChips;
         }
+        // ...and the chip the same row wears while a running patch has the
+        // radio (gui::sourceChipWithPatch): a translated word, whole, beside
+        // the row's label at its floor.
+        const std::string patchChip = cascade::gui::sourceChipWithPatch(chip, {"NESDR SMArt v5"});
+        const float patchRight = cascade::gui::railLabelRight(rowW, rowH, chipWidth(patchChip.c_str()));
+        if (patchChip != cascade::i18n::tr("ON PATCH") || left + labelAtFloor > patchRight) {
+            std::printf("      %s: Source chip \"%s\" leaves label \"%s\" %.1f of %.1f px\n",
+                        l.code.c_str(), patchChip.c_str(), label, patchRight - left, labelAtFloor);
+            ++badChips;
+        }
     }
     useLanguage("en");
     std::printf("    %d cut bank words, %d bad Source chips, %d languages not drawable here\n", cutWords,
@@ -470,6 +486,268 @@ void testEveryLanguageBankWordsAndSourceChip() {
     CHECK(cascade::gui::sourceChipText("Signal generator") == "Signal gen");
     CHECK(cascade::gui::sourceChipText("SoapySDR: B200") == "B200");
     CHECK(cascade::gui::sourceChipText("RTL-SDR Blog V4 (00000001)") == "RTL-SDR Bl");
+}
+
+// --- 7. THE RAIL GROWS WITH THE INTERFACE SCALE, AND STAYS FITTED --------------
+//
+// gui/ui_scale.hpp's S multiplies every font size and every hard-coded rail
+// pixel in gui/app_window.cpp and gui/scope_view.cpp's drawRailChip. This is
+// the check that a constant left OUT of that sweep cannot pass silently: it
+// sets the GLOBAL scale factor (the same one AppWindow::run's real draw code
+// reads every frame) to 1.5 and 2.0, draws a real chip through the real
+// drawRailChip - not a transcription of its constants - and requires the
+// reserve to still land exactly where the chip is actually drawn, AND the
+// widest shipped label to still fit beside the widest chip in a column grown
+// by the same S. A constant that stayed a bare pixel literal instead of going
+// through uiscale::px() would leave the drawn chip and the reserve disagreeing
+// by a growing number of pixels as S rises - caught here, not on a tester's
+// screenshot.
+//
+// PROVEN TO GO RED: temporarily editing kRailKeyInset's one call site in
+// benchSection back to the bare (unscaled) constant made this fail at S=1.5
+// with the drawn key's rect no longer matching railKeySize/railPlateLeft's
+// scaled answer (see docs/ui-scale.md's verification section for the exact
+// diff and the restored, passing state).
+void testRailScalesWithInterfaceSize() {
+    std::printf("  the rail grows with the interface scale and stays fitted\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+
+    for (const float wantScale : {1.5f, 2.0f}) {
+        cascade::gui::uiscale::setMonitorDpi(96);
+        cascade::gui::uiscale::setChoice(std::to_string(static_cast<int>(wantScale * 100.0f)));
+        const float s = cascade::gui::uiscale::factor();
+        CHECK_NEAR(s, wantScale, 0.001);
+
+        const float labelPx = cascade::gui::fonts::uiPx();
+        CHECK_NEAR(labelPx, cascade::gui::fonts::kUiSize * s, 0.001);
+        const float rowH = cascade::gui::railRowHeight(labelPx, s);
+        // The row grew at least as much as the label did - it can never be
+        // squeezed below the type it letters, scaled or not.
+        CHECK(rowH >= labelPx + 2.0f * cascade::gui::kRailRowPadY * s - 0.001f);
+
+        // The chip, drawn for real, through the real function - exactly
+        // testChipReserveMatchesTheDrawnChip above, at this scale.
+        const char* const widest = "4000 TGT";
+        ImGui::NewFrame();
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const int before = dl->VtxBuffer.Size;
+        const float rowW = 500.0f * s;  // a plausible scaled row; value itself
+                                        // does not matter, only self-consistency
+        cascade::gui::drawRailChip(dl, ImVec2(0.0f, 0.0f), ImVec2(rowW, rowH), widest,
+                                   cascade::gui::theme::kPhosphor, true);
+        float leftmost = FLT_MAX;
+        for (int i = before; i < dl->VtxBuffer.Size; ++i) {
+            leftmost = std::min(leftmost, dl->VtxBuffer[i].pos.x);
+        }
+        ImGui::Render();
+        CHECK(dl->VtxBuffer.Size > before);
+        const float chipW = cascade::gui::fonts::legend()
+                                ->CalcTextSizeA(cascade::gui::fonts::tinyPx(), FLT_MAX, 0.0f, widest)
+                                .x;
+        const float reserved = rowW - cascade::gui::railChipReserve(rowH, chipW, s);
+        if (!(leftmost >= reserved - 1.5f && leftmost <= reserved + 1.5f)) {
+            std::printf("      S=%.2f: chip drawn from x=%.2f, reserve says %.2f\n",
+                        static_cast<double>(s), static_cast<double>(leftmost),
+                        static_cast<double>(reserved));
+        }
+        CHECK(leftmost >= reserved - 1.5f);
+        CHECK(leftmost <= reserved + 1.5f);
+
+        // The widest shipped label still fits beside the widest chip, in a
+        // column grown by the same S - the S=1 check in
+        // testEveryRailLabelFits, repeated at scale. childPadX/scrollbarW are
+        // read from the CURRENT (S=1, un-scaled-by-this-test) ImGui style,
+        // which is the STRICTER case: the real application also scales those
+        // through ScaleAllSizes, giving the real row more room than this test
+        // grants it, so a pass here is a pass there too.
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float scaledMenuWidth = cascade::gui::uiscale::px(cascade::gui::kMenuWidth);
+        const float scaledPlatePad = cascade::gui::uiscale::px(cascade::gui::kRailPlatePad);
+        const float railW =
+            cascade::gui::railRowWidth(scaledMenuWidth, scaledPlatePad, st.WindowPadding.x,
+                                       st.ScrollbarSize);
+        const float left = cascade::gui::railLabelLeft(0.0f, rowH, s);
+        const float right = cascade::gui::railLabelRight(railW, rowH, chipW, s);
+        CHECK(right > left + 40.0f * s);
+        const char* const longestLabel = "CAT control (rigctld)";
+        const float labelW = cascade::gui::fonts::ui()
+                                 ->CalcTextSizeA(labelPx, FLT_MAX, 0.0f, longestLabel)
+                                 .x;
+        if (left + labelW > right) {
+            std::printf("      S=%.2f: \"%s\" needs %.2f px and has %.2f\n",
+                        static_cast<double>(s), longestLabel, static_cast<double>(labelW),
+                        static_cast<double>(right - left));
+        }
+        CHECK(left + labelW <= right);
+    }
+
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    CHECK(cascade::gui::uiscale::factor() == 1.0f);  // back to what every other test here assumes
+}
+
+// --- 5c. EVERY BENCH PLATE'S TITLE SCALES WITH THE INTERFACE SIZE -------------
+//
+// gui/scope_view.cpp's addBenchPlate titles the rail's own plate, the STATUS
+// column and the patch view - one function, so this one test stands in for
+// all three surfaces. It is the fix a round-3 review asked for after
+// "FoxSDR 0.99.42" (drawn by the sibling function drawRailChrome, off the
+// SAME cabinet margin) and the STATUS column stayed 100%-sized at S=2 while
+// everything around them had grown: addBenchPlate's title font size used to
+// be clamped at the UNSCALED fonts::kLegendSize no matter how big the plate
+// itself was drawn.
+//
+// PROVEN TO GO RED: reverting fonts::legendPx() back to fonts::kLegendSize
+// in addBenchPlate's title sizing (scope_view.cpp) makes this fail - the
+// returned bodyTop stops growing with S because the title line no longer
+// does. Restored before this commit; see docs/ui-scale.md's verification
+// section for the exact before/after.
+void testBenchPlateTitleScalesWithInterfaceSize() {
+    std::printf("  every bench plate's title (rail, status column, patch view) scales with S\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    cascade::gui::uiscale::setMonitorDpi(96);
+
+    float bodyTopAt[3] = {0.0f, 0.0f, 0.0f};
+    const float scales[3] = {1.0f, 1.5f, 2.0f};
+    const char* const title = "STATUS";
+    // A generous, fixed plate so the title is never the thing limiting the
+    // fit at any of the three scales - what is measured is whether the title
+    // ITSELF grows, not whether a small plate clips it.
+    const ImVec2 plateTL(0.0f, 0.0f);
+    const ImVec2 plateBR(600.0f, 400.0f);
+
+    for (int i = 0; i < 3; ++i) {
+        cascade::gui::uiscale::setChoice(scales[i] == 1.0f ? "auto" : std::to_string(static_cast<int>(scales[i] * 100.0f)));
+        CHECK_NEAR(cascade::gui::uiscale::factor(), scales[i], 0.001);
+
+        ImGui::NewFrame();
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const int before = dl->VtxBuffer.Size;
+        bodyTopAt[i] = cascade::gui::addBenchPlate(dl, plateTL, plateBR, title);
+        ImGui::Render();
+        CHECK(dl->VtxBuffer.Size > before);
+    }
+
+    std::printf("      bodyTop: %.2f (S=1.0) -> %.2f (S=1.5) -> %.2f (S=2.0)\n",
+               static_cast<double>(bodyTopAt[0]), static_cast<double>(bodyTopAt[1]),
+               static_cast<double>(bodyTopAt[2]));
+    // bodyTop is (title font height) + (a handful of gaps that already scale
+    // with S independently of the title). At the CORRECT fix the whole sum
+    // scales together: 35.00 -> 52.50 -> 70.00, exactly 1.5x and 2.0x. With
+    // the title clamped at the unscaled base size (the bug this test is
+    // built to catch - fonts::kLegendSize instead of fonts::legendPx() in
+    // scope_view.cpp's addBenchPlate) only the gaps around a FROZEN title
+    // move: 35.00 -> 45.00 -> 55.00, ratios of 1.286 and 1.571 - short of
+    // proportional, but not by nothing, which is why a loose "grew at all"
+    // check would have passed both. 1.4 and 1.8 sit strictly between the two
+    // measured cases and were checked against both directly (see
+    // docs/ui-scale.md's verification section for the exact numbers).
+    CHECK(bodyTopAt[1] > bodyTopAt[0] * 1.4f);
+    CHECK(bodyTopAt[2] > bodyTopAt[0] * 1.8f);
+
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    CHECK(cascade::gui::uiscale::factor() == 1.0f);
+}
+
+// --- 5c. THE FOLD KEY LEAVES THE TITLE WHOLE (0.99.49) ---------------------------
+//
+// The rail's "<<" key sits at the right end of the FUNCTION SELECT plate's
+// title row (gui::railFoldKeyRect). The title is centred on the plate and
+// fitted to the plate's whole width by addBenchPlate, so a long translation
+// could run under the key. Measured here the way addBenchPlate lays it out -
+// the same face, size, tracking and fit - in every language the build
+// carries, at the interface sizes the rail is drawn at.
+void testFoldKeyClearsTheTitle() {
+    std::printf("  every language: the FUNCTION SELECT title stays clear of the fold key\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    cascade::gui::uiscale::setMonitorDpi(96);
+    int clashes = 0;
+    int checked = 0;
+    for (const char* choice : {"auto", "150", "200"}) {
+        cascade::gui::uiscale::setChoice(choice);
+        const float s = cascade::gui::uiscale::factor();
+        const float colW = cascade::gui::kMenuWidth * s;
+        const cascade::gui::RailFoldKeyRect key =
+            cascade::gui::railFoldKeyRect(0.0f, 0.0f, colW, false, s);
+        // Inside the plate, and a key rather than a speck.
+        CHECK(key.x0 > colW * 0.5f && key.x1 <= colW - cascade::gui::kRailPlatePad * s + 0.01f);
+        for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+            if (!useLanguage(l.code)) { continue; }
+            ImFont* f = cascade::gui::fonts::legend();
+            const char* title = cascade::i18n::tr("FUNCTION SELECT");
+            constexpr float kTitleTrack = 0.20f;  // addBenchPlate's
+            const float px = cascade::gui::fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                                        kTitleTrack, colW - 16.0f * s);
+            const float tw = cascade::gui::trackedWidth(f, px, title, px * kTitleTrack);
+            const float x0 = std::max(colW * 0.5f - tw * 0.5f, 8.0f * s);
+            ++checked;
+            if (x0 + tw > key.x0 - 2.0f * s) {
+                std::printf("      %s at S=%.1f: \"%s\" ends at %.1f, the key starts at %.1f\n",
+                            l.code.c_str(), static_cast<double>(s), title,
+                            static_cast<double>(x0 + tw), static_cast<double>(key.x0));
+                ++clashes;
+            }
+        }
+    }
+    useLanguage("en");
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    std::printf("    %d titles measured, %d under the key\n", checked, clashes);
+    CHECK(checked > 30);
+    CHECK(clashes == 0);
+}
+
+// --- 5d. THE STATUS COLUMN'S FOLD KEY LEAVES ITS TITLE WHOLE (0.99.74) -------------
+//
+// The same measurement for the right-hand panel, with the key at the LEFT end
+// of the STATUS plate's title row (gui::statusFoldKeyRect): the centred title
+// must begin to the right of the key's far edge, in every language and at the
+// interface sizes the column is drawn at. The column is 230 px against the
+// rail's 384, so there is far less room to spare, and "СОСТОЯНИЕ" is nine
+// capitals where "STATUS" is six.
+void testStatusFoldKeyClearsTheTitle() {
+    std::printf("  every language: the STATUS title stays clear of its fold key\n");
+    const std::string savedChoice = cascade::gui::uiscale::choice();
+    const unsigned savedDpi = cascade::gui::uiscale::monitorDpi();
+    cascade::gui::uiscale::setMonitorDpi(96);
+    int clashes = 0;
+    int checked = 0;
+    for (const char* choice : {"auto", "150", "200"}) {
+        cascade::gui::uiscale::setChoice(choice);
+        const float s = cascade::gui::uiscale::factor();
+        const float colW = cascade::gui::kStatusW * s;
+        const cascade::gui::RailFoldKeyRect key =
+            cascade::gui::statusFoldKeyRect(0.0f, 0.0f, colW, false, s);
+        // Inside the plate's inset, in its left half, and a key rather than a speck.
+        CHECK(key.x0 >= cascade::gui::kRailPlatePad * s - 0.01f && key.x1 < colW * 0.5f);
+        for (const cascade::i18n::Language& l : cascade::i18n::languages()) {
+            if (!useLanguage(l.code)) { continue; }
+            ImFont* f = cascade::gui::fonts::legend();
+            const char* title = cascade::i18n::tr("STATUS");
+            constexpr float kTitleTrack = 0.20f;  // addBenchPlate's
+            const float px = cascade::gui::fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                                        kTitleTrack, colW - 16.0f * s);
+            const float tw = cascade::gui::trackedWidth(f, px, title, px * kTitleTrack);
+            const float x0 = std::max(colW * 0.5f - tw * 0.5f, 8.0f * s);
+            ++checked;
+            if (x0 < key.x1 + 2.0f * s) {
+                std::printf("      %s at S=%.1f: \"%s\" starts at %.1f, the key ends at %.1f\n",
+                            l.code.c_str(), static_cast<double>(s), title,
+                            static_cast<double>(x0), static_cast<double>(key.x1));
+                ++clashes;
+            }
+        }
+    }
+    useLanguage("en");
+    cascade::gui::uiscale::setMonitorDpi(savedDpi);
+    cascade::gui::uiscale::setChoice(savedChoice);
+    std::printf("    %d titles measured, %d under the key\n", checked, clashes);
+    CHECK(checked > 30);
+    CHECK(clashes == 0);
 }
 
 // --- 6. the Serial ports row's chip names what it counts ---------------------
@@ -515,6 +793,10 @@ int main() {
     testBankKeyLabelsFit();
     testSerialPortsChipNamesItsCount();
     testEveryLanguageBankWordsAndSourceChip();
+    testRailScalesWithInterfaceSize();
+    testBenchPlateTitleScalesWithInterfaceSize();
+    testFoldKeyClearsTheTitle();
+    testStatusFoldKeyClearsTheTitle();
 
     ImGui::DestroyContext();
     return testSummary("test_app_rail");

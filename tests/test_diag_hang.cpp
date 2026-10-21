@@ -37,7 +37,10 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
+#include "core/phase_clock.hpp"
+#include "core/plugin_reload_phases.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -194,8 +197,13 @@ int main() {
         beatFor(w, 1600);
         CHECK(w.reportsWritten() == 0u);
 
-        // Now stall. 3x the threshold, plus the poll interval.
-        std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+        // Now stall. 3x the threshold, plus the poll interval. The stall is INSIDE
+        // A PART OF THE FRAME (0.99.64): this thread opens the scope `rail`, as
+        // the window's thread does while it draws the rail, and stops there.
+        {
+            cascade::core::FrameScopeGuard inRail(cascade::core::FrameScope::Rail);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+        }
         CHECK(w.reportsWritten() == 1u);
 
         // Exactly one, not one per poll: a wedged application must not fill
@@ -210,6 +218,17 @@ int main() {
         CHECK(text.find("kind: hang") != std::string::npos);
         CHECK(text.find("stalled-ms: ") != std::string::npos);
         CHECK(text.find("signature: ") != std::string::npos);
+        // WHERE THE FRAME WAS, read by the watchdog's thread off the stalled one:
+        // the report names the scope that thread was parked in, in the header,
+        // before the context block.
+        CHECK(text.find("\nframe-scope: rail\n") != std::string::npos);
+        CHECK(text.find("\nframe-scope: ") < text.find("--- context ---"));
+        // AND WHICH STEP OF A PLUGIN RELOAD (0.99.84): none here - this stall
+        // held no publishing PhaseClock - and the line is written anyway, so
+        // the set comparison below can stay exact both ways. The stall that IS
+        // inside a reload step is asserted after the recovery block.
+        CHECK(text.find("\nreload-phase: none\n") != std::string::npos);
+        CHECK(text.find("\nreload-phase: ") < text.find("--- context ---"));
 
         // THE INVENTORY, BOTH DIRECTIONS. Present-and-correct was already
         // asserted above; this asserts EXHAUSTIVE. PRIVACY.md lists what a
@@ -284,6 +303,31 @@ int main() {
         CHECK(w.running());
         std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
         CHECK(w.reportsWritten() == 2u);
+        // The second stall was in no scope at all, and its report says so: the
+        // line is the scope at THAT stall, not the last one anybody opened.
+        CHECK(readFile(fs::path(w.lastReportPath())).find("\nframe-scope: other\n") !=
+              std::string::npos);
+
+        // A third stall, inside a STEP OF A PLUGIN RELOAD (0.99.84): the scope
+        // and the step a reload holds open, exactly as AppWindow::rescanPlugins
+        // holds them, and the report names both - which is the evidence field
+        // report 7591C65EFB69DD94 lacked: thirty seconds of `plugins-reload`
+        // and nothing saying which of its waits.
+        beatFor(w, 1600);
+        CHECK(w.running());
+        {
+            FrameScopeGuard inReload(FrameScope::PluginsReload);
+            PhaseClock reload{PhaseClock::Publish{}};
+            reload.begin(kReloadPhaseUnload);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2400 + HangWatchdog::kPollMs));
+            reload.end();
+        }
+        CHECK(w.reportsWritten() == 3u);
+        {
+            const std::string third = readFile(fs::path(w.lastReportPath()));
+            CHECK(third.find("\nframe-scope: plugins-reload\n") != std::string::npos);
+            CHECK(third.find("\nreload-phase: unload\n") != std::string::npos);
+        }
 
         w.stop();
         CHECK(!w.running());
@@ -580,6 +624,15 @@ int main() {
         CHECK(sample.find("mode: ") != std::string::npos);
         CHECK(sample.find("source: ") != std::string::npos);
         CHECK(sample.find("commit: ") != std::string::npos);
+        // ...and so did the window's state, published by the REAL frame loop: this run
+        // rendered 60 frames before it wedged, so the line names a state rather than
+        // `unknown`, and its age is the wedge (tests/test_diag_window_state.cpp holds the
+        // wording against a watchdog on its own).
+        {
+            const std::size_t ws = sample.find("\nwindow-state: ");
+            CHECK(ws != std::string::npos);
+            CHECK(sample.compare(ws + 1, 20, "window-state: unknow") != 0);
+        }
 
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
     }

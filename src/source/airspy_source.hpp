@@ -79,6 +79,58 @@
 
 namespace cascade::source {
 
+// --- the device profile ---------------------------------------------------
+
+// WHAT DIFFERS BETWEEN TWO RADIOS THAT SPEAK THIS PROTOCOL, and nothing else.
+//
+// The HydraSDR RFOne (hydrasdr_source.hpp) is an Airspy R2 on the wire: the same
+// vendor requests under the same numbers, the same twelve-bit packed stream, the
+// same gain registers and tables. It differs in a handful of constants - USB
+// ids, the width of SET_FREQ's payload, which request switches the bias tee,
+// its tuning range, and whether it has receive ports to choose between - and a
+// second 2,800-line driver for those would be two copies to keep in step. So
+// this class is parameterised by one of these, and the Airspy's own is the
+// default: `AirspySource()` is byte for byte the driver it always was, and
+// tests/test_airspy_source.cpp is the proof.
+//
+// A profile is a static object (airspyProfile(), hydraSdrProfile()), never
+// built at run time, so a reference to it outlives every reader thread.
+enum class BiasTeeVia : std::uint8_t {
+    GpioWrite,       // libairspy: GPIO_WRITE to port 1 pin 13 (airspy_protocol.hpp kBiasTPortPin)
+    RfBiasRequest,   // the HydraSDR host: SET_RF_BIAS_CMD, the state in the index word
+};
+
+struct DeviceProfile {
+    const char* driverKey;      // DeviceSource::driverKey(), and the prefix of every log line
+    const char* productName;    // the word in every sentence about it: "Airspy", "HydraSDR"
+    const char* genericModel;   // what modelFrom answers when nothing names the board
+    const char* namePrefix;     // name() is this followed by the label: "Airspy: " or ""
+    const char* noDeviceName;   // name() with nothing open
+    std::uint16_t usbVid;
+    std::uint16_t usbPid;
+    std::size_t freqPayloadBytes;   // SET_FREQ's payload: 4 (uint32) or 8 (uint64)
+    double minFrequencyHz;
+    double maxFrequencyHz;
+    BiasTeeVia biasTee;
+    // The receive ports, by the names the radio's own software gives them. One
+    // entry means one port and no request to choose: an Airspy's "RX".
+    const char* const* ports;
+    std::size_t portCount;
+    // A firmware version string must begin with this (empty: no check). The
+    // HydraSDR host refuses a device that does not say HydraSDR.
+    const char* firmwarePrefix;
+    // What GET_SAMPLERATES gets replaced with when the firmware does not answer
+    // it. libairspy has one; the HydraSDR host has none, and a profile without
+    // one refuses to open a radio that cannot say what rates it runs at.
+    const std::uint32_t* fallbackRatesHz;
+    std::size_t fallbackRateCount;
+    // Which board a bus description or a firmware string names.
+    std::string (*modelFrom)(const std::string& text);
+};
+
+// The Airspy R2 / Mini's.
+const DeviceProfile& airspyProfile();
+
 // --- enumeration ----------------------------------------------------------
 
 // Every Airspy bound to WinUSB, as the Source section wants them. NEVER OPENS
@@ -96,6 +148,13 @@ std::vector<NativeDeviceInfo> enumerateAirspy();
 // args string it produces is the string open() has to take back.
 std::vector<NativeDeviceInfo> airspyDevicesFrom(
     const std::vector<cascade::usb::UsbDeviceInfo>& devices);
+
+// The same, for any profile: the rows for the devices that carry ITS usb id,
+// each labelled with the model its description names and opened by serial (or
+// by place in the walk when it has none). airspyDevicesFrom is this with the
+// Airspy's; hydraSdrDevicesFrom is this with the HydraSDR's.
+std::vector<NativeDeviceInfo> devicesFromProfile(
+    const DeviceProfile& profile, const std::vector<cascade::usb::UsbDeviceInfo>& devices);
 
 // The VID/PID list enumerateAirspy() asks the transport for. One entry: the
 // whole family shares 0x1D50:0x60A1.
@@ -178,7 +237,7 @@ public:
     // after a re-arm before the budget above is refilled.
     static constexpr std::chrono::milliseconds kRearmForgiveAfter{2000};
 
-    AirspySource() = default;
+    AirspySource() : AirspySource(airspyProfile()) {}
     ~AirspySource() override;
 
     // Owns a device handle and a thread; copying either would be a
@@ -200,7 +259,7 @@ public:
 
     // --- DeviceSource ----------------------------------------------------
 
-    const char* driverKey() const override { return "airspy"; }
+    const char* driverKey() const override { return profile_.driverKey; }
 
     // Takes a NativeDeviceInfo::args string: "serial=<hex>" picks a device by
     // the serial SetupAPI reported (case-insensitive, and a suffix match, so
@@ -327,12 +386,19 @@ public:
         return hardwareRateHz_.load(std::memory_order_relaxed);
     }
 
-    // One RX port. The bias tee is NOT an antenna: it is power on the same
-    // connector, and putting it in this list would make it selectable by
-    // something that thinks it is choosing where to listen. See setBiasT.
-    std::vector<std::string> antennas() const override { return {"RX"}; }
+    // The receive ports: an Airspy has one, "RX"; a HydraSDR RFOne has three,
+    // "ANT", "CABLE1" and "CABLE2", which SET_RF_PORT chooses between (the
+    // profile's list; hydrasdr_protocol.hpp). The bias tee is NOT an antenna: it
+    // is power on the same connector, and putting it in this list would make it
+    // selectable by something that thinks it is choosing where to listen. See
+    // setBiasT.
+    //
+    // With one port there is nothing to send: setAntenna answers for the name
+    // alone, as it always has. With several, a change is ONE control transfer
+    // and the readback is the port the radio acknowledged.
+    std::vector<std::string> antennas() const override;
     bool setAntenna(const std::string& name) override;
-    std::string antenna() const override { return "RX"; }
+    std::string antenna() const override;
 
     // WHAT THE DEVICE SAID, ascending, in Hz - and these are COMPLEX rates
     // (airspy_protocol.hpp has the three places in the reference that prove
@@ -383,6 +449,18 @@ public:
     // then reports what was actually programmed, which is the DeviceSource
     // contract and what stops a panel showing 8 MS/s a radio never had.
     //
+    // SEARCHES ONLY THE CURRENT DECIMATION (0.99.44 repair). This is the
+    // generic path every IqSource shares - a Source-list pick's fixed default
+    // rate, a fault-recovery reopen at the previous rate, a saved config being
+    // restored - and none of those is a caller asking for a SPECIFIC rate on
+    // purpose. Searching every decimation here (0.99.43's attempt) fired on
+    // exactly those generic asks too: a radio remembered at decimation 8 that
+    // a plain open's 2 MS/s default nudged to decimation 1, so the very next
+    // gain or mode change (which remembers the radio's CURRENT decimation,
+    // gui/airspy_panel.hpp's airspyRemember) silently overwrote the saved /8.
+    // A caller that wants a rate no matter the decimation calls
+    // setSampleRateHzExplicit instead - see its own comment.
+    //
     // ON A RUNNING STREAM the change is made with the radio QUIET: receiver
     // off, reader stopped, bulk ring torn down, the pipe reset (libairspy
     // clears the halt itself at airspy.c:1147 before every SET_SAMPLERATE),
@@ -392,6 +470,18 @@ public:
     // process on the driver's own reader thread; there is no reason to learn
     // it twice.
     bool setSampleRateHz(double hz) override;
+
+    // AS ABOVE, but the caller is asking for THIS rate deliberately - a
+    // plugin preset (the ADS-B decoder's 2.4 MS/s floor) or a rate the user
+    // picked by hand (the Rate combo, a browser/API request) - so it is
+    // allowed to search every (native rate, decimation) pair this radio can
+    // produce (decimationChoicesLocked), not just the current one. A beta
+    // report found ADS-B decoding nothing on an R2/Mini once decimation had
+    // been raised for something else: at decimation 8 an R2's own ceiling is
+    // 1.25 MS/s, a long way under the plugin's 2 MS/s floor, and 2.5 MS/s
+    // (only reachable at decimation 1) was never a candidate under the plain
+    // method above. See the .cpp for the full at-or-above / tie-break rule.
+    bool setSampleRateHzExplicit(double hz) override;
 
     double centerFrequencyHz() const override {
         return centerFrequencyHz_.load(std::memory_order_relaxed);
@@ -488,13 +578,27 @@ public:
     // taken under the device mutex, and called from nowhere in the product.
     bool linkHoldsDeviceForTest() const;
 
+protected:
+    // For a radio that speaks this protocol and is not an Airspy: the subclass
+    // hands in its profile (a static object, see DeviceProfile). Public use is
+    // AirspySource() with the Airspy's.
+    explicit AirspySource(const DeviceProfile& profile);
+
+    const DeviceProfile& profile() const { return profile_; }
+
 private:
     // Everything the reader thread touches, in one object behind a shared_ptr
     // it captures BY VALUE - see the file header. An abandoned reader outlives
     // the AirspySource that started it, and a thread reading freed members
     // would be a worse defect than the hang the bound exists to prevent.
     struct ReaderLink {
-        explicit ReaderLink(std::size_t ringCapacity) : ring(ringCapacity) {}
+        ReaderLink(std::size_t ringCapacity, const char* driverTag)
+            : ring(ringCapacity), tag(driverTag) {}
+
+        // The profile's driver key: the reader's own log lines are written in
+        // its words, and it must not reach back into the (possibly gone)
+        // source for them. A static string, so it outlives the link.
+        const char* const tag;
 
         std::atomic<bool> run{false};
 
@@ -541,10 +645,13 @@ private:
         std::atomic<std::uint64_t> dropped{0};
     };
 
+    // WHICH RADIO THIS IS, fixed at construction and never changed.
+    const DeviceProfile& profile_;
+
     // NEVER REASSIGNED, hence const: an abandoned reader holds its own copy of
     // this pointer, so a source that swapped in a fresh link could have a new
     // device behind a thread still pumping the old one.
-    const std::shared_ptr<ReaderLink> link_ = std::make_shared<ReaderLink>(kRingCapacitySamples());
+    const std::shared_ptr<ReaderLink> link_;
 
     // The ring holds several whole transfers plus headroom, rounded to the
     // power of two SpscRing requires. One packed transfer is 49152 complex
@@ -583,7 +690,18 @@ private:
     bool applyGainModeLocked(GainMode mode);
     // The decimation factors every listed rate divides into whole hertz.
     std::vector<unsigned> decimationChoicesLocked() const;
+    // Shared by setSampleRateHz and setSampleRateHzExplicit - assumes
+    // devMutex_ held. `crossDecimation` false restricts the search to the
+    // CURRENT decimation (the plain method's contract); true searches every
+    // (native rate, decimation) pair (the explicit method's).
+    bool setSampleRateHzLocked(double hz, bool crossDecimation);
     bool programBiasTLocked(bool on);
+    // SET_RF_PORT (profiles with several ports only): an IN, the port in the
+    // index word, one byte answered - 1 for success.
+    bool programRfPortLocked(std::size_t index, const char* what);
+    // "setFoo() called with no <product> open" - the one sentence every setter
+    // gives when nothing is open, in the profile's own word for the radio.
+    std::string noDeviceSentence(const char* function) const;
 
     // Receiver off, clear the halt, RX, queue the bulk ring, spawn the reader
     // - libairspy's order (see start()). Assumes devMutex_ held and the
@@ -662,9 +780,12 @@ private:
     std::atomic<double> hardwareRateHz_{0.0};
     std::atomic<bool> biasT_{false};
     std::atomic<bool> packing_{false};
+    // The index into the profile's ports of the one the radio last
+    // acknowledged; 0 for a radio with one.
+    std::atomic<std::size_t> portIndex_{0};
 
     mutable std::mutex nameMutex_;
-    std::string name_ = "Airspy: (no device)";
+    std::string name_;
 
     // Identity and the rate list, read once at open under devMutex_.
     std::uint8_t boardId_ = 0;

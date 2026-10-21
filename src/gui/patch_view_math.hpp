@@ -197,6 +197,27 @@ inline Vec2 screenToWorld(const View& v, Vec2 s) {
     return Vec2{(s.x - v.pan.x) / v.zoom, (s.y - v.pan.y) / v.zoom};
 }
 
+// THE ONE TRANSFORM DRAWING AND PLACEMENT BOTH GO THROUGH (an Opus review,
+// round 5, findings 3-4). `v` is the patch's own PERSISTED view - pan and
+// zoom exactly as zoomAbout reads and writes them, and exactly as they are
+// serialised into a saved patch, deliberately never touched by the interface
+// size (round 2: baking S into a saved zoom would make a patch re-open at a
+// different apparent zoom on a different monitor). `uiFactor` is that
+// interface-size S, composed onto the zoom AT DRAW TIME ONLY - the result is
+// never written back into `v`. gui/app_window.cpp's drawPatchFaces has kept
+// this composition correct since round 4 (its own local `drawZoom`); rounds
+// 3-16-era bugs happened at the OTHER call sites that convert between world
+// and screen space without it - a part dropped from the parts bin
+// (newPartPosition, fed the raw view while the canvas was PAINTED at
+// zoom*S - a node placed as if the canvas were unscaled then rendered
+// through the scaled transform, landing off-canvas exactly the way 0.99.16
+// did with the desktop/canvas confusion) and the input-script `World` verb
+// (mapped world->screen with the raw zoom, so a scripted click and the pixel
+// it actually lands on disagreed at S != 1). Both must build their View
+// through this function rather than composing zoom*uiFactor by hand, so a
+// third call site can never drift from the two that already agree.
+inline View drawView(const View& v, float uiFactor) { return View{v.pan, v.zoom * uiFactor}; }
+
 // Zoom about a fixed SCREEN point, so the thing under the pointer stays under
 // the pointer. Zooming about the origin instead is the version that makes a
 // canvas feel like it is fighting you.
@@ -241,6 +262,113 @@ inline View zoomAbout(const View& v, Vec2 screenAnchor, float factor) {
     const Vec2 w = screenToWorld(v, screenAnchor);
     out.pan.x = screenAnchor.x - w.x * out.zoom;
     out.pan.y = screenAnchor.y - w.y * out.zoom;
+    return out;
+}
+
+// --- moving round the canvas (0.99.49 beta feedback) ---------------------------
+//
+// A LAPTOP HAS NO MIDDLE BUTTON. The canvas zoomed on the wheel and panned
+// ONLY with a middle-button drag, so a tester on a small laptop's touchpad
+// could not move round a patch at all. Three more ways in, each pure here so
+// the arithmetic is pinned without a window:
+//
+//   - a LEFT drag that starts on EMPTY canvas pans (pressTarget/pressPans
+//     decide what a press landed on - a node, a port or a wire keeps the drag
+//     it always had);
+//   - the wheel: a two-finger touchpad scroll arrives as MouseWheel (vertical)
+//     plus MouseWheelH (horizontal), so a PLAIN wheel now PANS, Shift turns a
+//     vertical wheel horizontal, and Ctrl+wheel - which is also what a
+//     touchpad pinch sends on Windows - zooms about the pointer (wheelView);
+//   - "+", "-" and "Fit" keys on the canvas (zoomStepView, fitView).
+//
+// Every View here is the CANVAS-RELATIVE one the page keeps (pan (0,0) puts
+// the world origin at the canvas's top-left corner) unless it says otherwise,
+// and zoom is the persisted zoom, without the interface size.
+
+// A drag of the view by `delta` screen pixels: the world moves with the
+// pointer, so the point that was under it stays under it.
+inline View panBy(const View& v, Vec2 delta) {
+    View out = v;
+    out.pan.x += delta.x;
+    out.pan.y += delta.y;
+    return out;
+}
+
+// One wheel event, as ImGui reports it.
+struct WheelInput {
+    float x = 0.0f;       // io.MouseWheelH: > 0 scrolls left
+    float y = 0.0f;       // io.MouseWheel:  > 0 scrolls up
+    bool ctrl = false;    // io.KeyCtrl
+    bool shift = false;   // io.KeyShift
+};
+
+// Screen pixels a plain wheel notch moves the view, and the factor a Ctrl
+// notch zooms by (the old plain-wheel factor, unchanged).
+inline constexpr float kWheelPanPx = 48.0f;
+inline constexpr float kWheelZoomStep = 1.12f;
+// A touchpad's single event can carry many notches; one event never zooms by
+// more than this many.
+inline constexpr float kWheelMaxNotches = 4.0f;
+
+// The view after one wheel event with the pointer at `anchor` (in the SAME
+// space as v.pan). Ctrl zooms about the anchor by kWheelZoomStep per notch -
+// fractional notches (a touchpad) zoom by a fraction; otherwise the view pans
+// kWheelPanPx per notch, "scroll up" moving the patch down the way a page
+// scrolls, and Shift sends a vertical wheel sideways.
+inline View wheelView(const View& v, Vec2 anchor, const WheelInput& w) {
+    if (w.ctrl) {
+        // Zoom on the VERTICAL wheel only: a sideways swipe with Ctrl held
+        // has no obvious meaning, and guessing one would zoom by accident.
+        if (w.y == 0.0f) { return v; }
+        const float notches = std::clamp(w.y, -kWheelMaxNotches, kWheelMaxNotches);
+        return zoomAbout(v, anchor, std::pow(kWheelZoomStep, notches));
+    }
+    float dx = w.x;
+    float dy = w.y;
+    if (w.shift && dx == 0.0f) {
+        dx = dy;
+        dy = 0.0f;
+    }
+    return panBy(v, Vec2{dx * kWheelPanPx, dy * kWheelPanPx});
+}
+
+// The "+" and "-" keys: one step about the CENTRE of a canvas w x h.
+inline constexpr float kKeyZoomStep = 1.25f;
+inline View zoomStepView(const View& v, float canvasW, float canvasH, bool in) {
+    return zoomAbout(v, Vec2{canvasW * 0.5f, canvasH * 0.5f},
+                     in ? kKeyZoomStep : 1.0f / kKeyZoomStep);
+}
+
+// The "Fit" key: every node in view, centred, with kFitMarginPx of canvas
+// round them, on a canvas canvasW x canvasH screen pixels drawn at interface
+// size `uiFactor` (drawView). Never zoomed in past 1:1 - one small node does
+// not need to fill the screen - nor out past kMinZoom; a patch too big even
+// then is centred. An EMPTY patch goes back to the home view.
+inline constexpr float kFitMarginPx = 24.0f;
+inline constexpr float kFitMaxZoom = 1.0f;
+inline View fitView(const Graph& g, float canvasW, float canvasH, float uiFactor) {
+    if (g.nodes().empty()) { return View{}; }
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+    bool first = true;
+    for (const Node& n : g.nodes()) {
+        const Vec2 s = nodeSize(n);
+        x0 = first ? n.x : std::min(x0, n.x);
+        y0 = first ? n.y : std::min(y0, n.y);
+        x1 = first ? n.x + s.x : std::max(x1, n.x + s.x);
+        y1 = first ? n.y + s.y : std::max(y1, n.y + s.y);
+        first = false;
+    }
+    const float s = uiFactor > 0.0f ? uiFactor : 1.0f;
+    const float roomW = std::max(1.0f, canvasW - 2.0f * kFitMarginPx);
+    const float roomH = std::max(1.0f, canvasH - 2.0f * kFitMarginPx);
+    // The DRAWN zoom that fits, turned back into the persisted one: the
+    // interface size is composed on at draw time only (drawView).
+    const float fits = std::min(roomW / std::max(1.0f, x1 - x0), roomH / std::max(1.0f, y1 - y0));
+    View out;
+    out.zoom = std::clamp(fits / s, kMinZoom, kFitMaxZoom);
+    const float dz = out.zoom * s;
+    out.pan.x = canvasW * 0.5f - (x0 + x1) * 0.5f * dz;
+    out.pan.y = canvasH * 0.5f - (y0 + y1) * 0.5f * dz;
     return out;
 }
 
@@ -402,7 +530,11 @@ struct Interaction {
     bool wiring = false;
     PortHit wireFrom;
 
+    // A view drag in progress, and the button holding it: ImGuiMouseButton_
+    // Middle anywhere on the canvas, or _Left pressed on empty canvas (0.99.49
+    // - a touchpad has no middle button). An int so this header needs no ImGui.
     bool panning = false;
+    int panButton = 2;
 
     // Set whenever the canvas changes the graph or the view. The owner
     // re-serialises on it and clears it, so the document is rebuilt when
@@ -435,6 +567,83 @@ inline WireEnds wireEnds(const Graph& g, const cascade::core::patch::Wire& w) {
     if (w.fromPort >= a->outputs.size() || w.toPort >= b->inputs.size()) { return WireEnds{}; }
     return WireEnds{outputPortPos(*a, w.fromPort), inputPortPos(*b, w.toPort), true};
 }
+
+// --- the patch page's layout (0.99.49 beta feedback) --------------------------
+//
+// THE INFORMATION PANEL TOOK A FULL-HEIGHT COLUMN FROM THE CANVAS. On a small
+// laptop the patch page's right-hand inspector - "This patch can run", "Nothing
+// selected", the help text - was a 236 px column the whole height of the page,
+// beside a canvas that was already the narrowest thing on the screen, while the
+// top right of the page, beside the parts bin, sat empty. So:
+//
+//   - the INFORMATION PANE moves up there: the top band's right-hand part,
+//     beside the transport, parts and decoder rows, at a fixed height with its
+//     own scroll (patchInfoPaneWidth);
+//   - the CANVAS takes the whole width below it whenever nothing is selected;
+//   - a selected node's EDITING CONTROLS do not fit a band three rows tall, so
+//     they stay in a column at the canvas's right - the inspector drawer -
+//     shown only while a node is selected, and foldable to a strip
+//     (patchInspectorWidth), so they are always one press away.
+inline constexpr float kPatchInfoShare = 0.42f;   // of the page's width
+inline constexpr float kPatchInfoMinW = 300.0f;   // logical px, times S
+inline constexpr float kPatchInfoMaxW = 560.0f;
+inline constexpr float kPatchInfoMinH = 96.0f;
+inline constexpr float kPatchInspectorW = 236.0f;       // the old column's width
+inline constexpr float kPatchInspectorFoldedW = 30.0f;  // the strip it folds to
+inline constexpr float kPatchPaneGap = 8.0f;
+inline constexpr float kPatchCanvasMinW = 160.0f;
+
+// The information pane's width on a page `pageW` wide at interface size `s`:
+// a share of the page, held between its floor and ceiling, and never more than
+// half the page, so the rows beside it keep the other half.
+inline float patchInfoPaneWidth(float pageW, float s) {
+    if (pageW <= 0.0f) { return 0.0f; }
+    const float want = std::clamp(pageW * kPatchInfoShare, kPatchInfoMinW * s, kPatchInfoMaxW * s);
+    return std::min(want, pageW * 0.5f);
+}
+
+// The inspector drawer's width: none while nothing is selected, the strip
+// while folded, the full column otherwise.
+inline float patchInspectorWidth(bool nodeSelected, bool folded, float s) {
+    if (!nodeSelected) { return 0.0f; }
+    return (folded ? kPatchInspectorFoldedW : kPatchInspectorW) * s;
+}
+
+// What the canvas keeps of `pageW` beside a drawer `inspectorW` wide.
+inline float patchCanvasWidth(float pageW, float inspectorW) {
+    const float beside = inspectorW > 0.0f ? inspectorW + kPatchPaneGap : 0.0f;
+    return std::max(kPatchCanvasMinW, pageW - beside);
+}
+
+// --- what a press landed on (0.99.49; see "moving round the canvas") -------
+
+// WHAT A LEFT PRESS LANDED ON, in the order the canvas answers it: a port
+// (its grab radius beats the node under it), then a node's close key, its
+// resize grip, its title bar, the rest of its face; then a wire within
+// `wireGrabPx` SCREEN pixels at draw zoom `drawZoom`; else empty canvas.
+enum class PressOn { Port, CloseKey, Grip, Header, Body, Wire, Empty };
+
+inline PressOn pressTarget(const Graph& g, Vec2 world, float drawZoom, float wireGrabPx) {
+    if (portAt(g, world).found) { return PressOn::Port; }
+    if (const NodeId hit = nodeAt(g, world); hit != kNoNode) {
+        const Node& n = *g.find(hit);
+        if (pointInCloseKey(n, world)) { return PressOn::CloseKey; }
+        if (pointInResizeGrip(n, world)) { return PressOn::Grip; }
+        if (pointInHeader(n, world)) { return PressOn::Header; }
+        return PressOn::Body;
+    }
+    for (const cascade::core::patch::Wire& w : g.wires()) {
+        const WireEnds e = wireEnds(g, w);
+        if (e.found && distanceToWire(e.from, e.to, world) * drawZoom <= wireGrabPx) {
+            return PressOn::Wire;
+        }
+    }
+    return PressOn::Empty;
+}
+
+// Only a press on empty canvas pans: a node, a port and a wire keep the drag
+// they always had.
+inline bool pressPans(PressOn on) { return on == PressOn::Empty; }
 
 }  // namespace cascade::gui::patch
 

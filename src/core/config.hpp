@@ -19,22 +19,41 @@
 // Range sanitization on load (bad values are repaired, not rejected — a
 // hand-edited file should degrade gracefully, never brick the GUI):
 //   - volume      clamped to [0, 1]        (sink contract)
+//   - audioBufferMs  0 | 120 | 240 | 480 | 960; anything else -> 0 (automatic).
+//                 A value between the steps is not "nearly 240": the sink's
+//                 lead only has those four (sink/audio_out.hpp), and a hand-
+//                 edited 5000 must not become a 5 s delay.
+//   - audioBufferAutoMs  the same set, the same rule: the depth AUTOMATIC had
+//                 deepened to when the application last ran (0 = it had not).
 //   - splitRatio  clamped to [0.1, 0.9]    (either panel collapsing to zero
 //                                           height makes the divider
 //                                           ungrabbable — the user could
 //                                           never recover by mouse)
-//   - dbMin/dbMax must satisfy dbMin < dbMax - 10; otherwise BOTH reset to
-//     defaults (the display maps dB to pixels via 1/(dbMax-dbMin); a
-//     degenerate or inverted span is a divide-by-zero, and clamping only one
-//     end would invent a range the user never chose)
+//   - dbMin/dbMax must be at least 10 dB apart (core/display_range.hpp,
+//     spanIsEnough; exactly 10 is legal, as it is for every writer of the
+//     pair - it used to be "more than 10", which threw away a pair the
+//     sliders allowed); otherwise BOTH reset to defaults (the display maps
+//     dB to pixels via 1/(dbMax-dbMin); a degenerate or inverted span is a
+//     divide-by-zero, and clamping only one end would invent a range the
+//     user never chose)
+//   - waterfallRangeMode  "auto" | "manual"; read AFTER the repair above. A
+//     file without it, or with a word that is not one of the two, is "manual"
+//     if the pair is anything but -110/0 (before the key existed the pair WAS
+//     the window, so a range somebody set is theirs) and "auto" otherwise
 //   - sourceKind  must be "siggen" | "file" | "soapy" | "rtlsdr" | "hackrf" |
 //     "airspy" | "airspyhf" | "sdrplay" | "mirisdr" | "rx888" | "pluto" |
-//     "soundcard" (a sound card's input, settings in `soundCard` below);
+//     "soundcard" (a sound card's input, settings in `soundCard` below) |
+//     "aor" (the native AOR digital-I/Q driver, source/aor_source.hpp) |
+//     "hydrasdr" (the HydraSDR RFOne, source/hydrasdr_source.hpp, an Airspy
+//     driver given the RFOne's profile) |
+//     "rtltcp" (a client for an rtl_tcp server, source/rtl_tcp_source.hpp,
+//     its address in `rtlTcpAddr` below);
 //     anything else resets to "siggen" (the only source that can never fail
-//     to exist). The last eight are the native drivers, which reach their
+//     to exist). The last nine are the native drivers, which reach their
 //     radio without any SoapySDR install at all - six of them over our own
 //     WinUSB transport, "sdrplay" through the vendor API the user installed,
-//     and "pluto" over TCP to the board's own iiod daemon.
+//     "pluto" over TCP to the board's own iiod daemon and "rtltcp" over TCP
+//     to an rtl_tcp server.
 //     EVERY ONE IS ITS OWN KEY AND NOT A FAMILY NAME: they are different USB
 //     ids (or no USB at all), different hardware and different bands, and a
 //     config that named one must never open another. "airspy" and "airspyhf"
@@ -60,6 +79,10 @@
 //     download URL inside the fetched index is re-checked there too. Validating
 //     the string here as well would only add a second, weaker copy of a rule
 //     that has exactly one enforcement point today.
+//   - pluginSites: each entry must pass PluginRepo::normaliseSiteUrl (https with
+//     a usable host, or a local path); entries that do not, duplicates, the
+//     official address and the override above are dropped, and the list is capped
+//     at kMaxPluginSites, order kept. A non-array is an empty list.
 //   - pluginLastUpdateCheck: a negative value resets to 0 ("never"). A time
 //     before the epoch is either a hand-edit or a clock that went backwards,
 //     and "never checked" is the only honest reading of either.
@@ -76,6 +99,16 @@
 //     file could not express (an empty name) or states twice (a duplicate) is
 //     noise from a hand-edit, and a stopped plugin that is not installed right
 //     now must stay stopped for when it comes back.
+//     SINCE 0.99.73 THIS LIST IS READ ONCE AND NEVER WRITTEN AGAIN: the application
+//     migrates each entry, by plugin id, into pluginRun as "stopped" at the first
+//     start after the update, and saves an empty list from then on.
+//   - pluginRun: an object of plugin id -> "auto" | "always" | "stopped". A
+//     non-object resets to empty (every plugin AUTO, which is what a fresh install
+//     has). An entry whose key is empty or longer than 128 bytes, or whose value is
+//     not one of the three words, is dropped one entry at a time; the rest survive.
+//     At most kMaxTuneGrants entries are kept (the first by key). An id that
+//     matches no installed plugin is KEPT, like a stop: a decision about a plugin
+//     must survive the plugin being removed for a while.
 //   - pluginMuteOverride: the same rules again, from the same code. It lists
 //     the plugins whose "mute audio while running" setting DIFFERS from the
 //     default their capabilities imply, so a duplicate would be a preference
@@ -87,7 +120,12 @@
 //     build does not know, a missing '=' or a chord it cannot read are each
 //     dropped there, one line at a time, so one bad line never costs the user
 //     the good ones beside it.
+//   - messagesSeen (0.99.79): a non-array resets to empty (nothing marked Seen,
+//     which is what a fresh install has). Empty and repeated ids are dropped, and
+//     the list is capped at kMaxMessagesSeen KEEPING THE LAST ones - it is oldest
+//     first, so unlike the lists above (whose cap keeps the first) the oldest go.
 //
+
 // Save semantics: ATOMIC. The JSON is written to a temp file in the target's
 // directory, then renamed over the target, so a crash, full disk, or locked
 // target leaves either the complete old config or the complete new one on
@@ -109,6 +147,7 @@
 // build ends up quietly pointing at the wrong host.
 #include "core/airspy_settings.hpp"
 #include "core/freq_converter.hpp"
+#include "core/patch_presets.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/user_presets.hpp"
 
@@ -117,7 +156,7 @@ namespace cascade::core {
 struct AppConfig {
     int schemaVersion = 1;
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
-    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"
+    // "sdrplay"|"mirisdr"|"rx888"|"pluto"|"soundcard"|"aor"|"hydrasdr"|"rtltcp"
     std::string sourceKind = "siggen";
     // RX antenna port for a Soapy device, e.g. "TX/RX" or "RX2" on a B200.
     // Empty means "whatever the driver defaults to", which is what every
@@ -136,6 +175,14 @@ struct AppConfig {
     // is on. Field report F204602B5329B268: UHD's probe killed the scan's
     // child on a machine whose only radio was an SDRplay.
     bool lookForNetworkUsrps = false;
+    // "DON'T SHOW THIS AGAIN" on the RADIO SETUP page (2026-10-06,
+    // core/radio_setup.hpp). The page opens by itself, once a launch, for a
+    // person whose machine shows no radio the program can use; this is the
+    // tick that stops it. OFF by default, so every config written before this
+    // build - every install that has never seen the page - gets it. It stops
+    // only the page raising itself: the key in the Source section still opens
+    // it, and the check still runs and logs.
+    bool radioSetupDontShow = false;
     // ARGS OF THE LAST NATIVE DEVICE, and a SEPARATE FIELD from soapyArgs on
     // purpose rather than one shared slot with sourceKind deciding which
     // grammar it holds.
@@ -193,6 +240,17 @@ struct AppConfig {
     // that entry off, entries with no radio are dropped and the list is capped
     // at core::kMaxConverterRadios (core::sanitiseConverters).
     std::map<std::string, ConverterSetting> converters;
+    // THE CRYSTAL CORRECTION (0.99.56, core/ppm_correction.hpp): ONE switch
+    // for the application ("ppmCorrection", default false - off is exactly the
+    // behaviour before it existed) and a value PER RADIO, because a crystal's
+    // error belongs to one radio: radio key (core::ppmRadioKey - "<driver>|
+    // serial=<serial>", or "<kind>|<args>" for a radio with no serial) -> ppm,
+    // positive when the crystal runs fast. Stored as the object "ppm". EMPTY BY
+    // DEFAULT; on load a value that is not a number is skipped, the rest are
+    // clamped to +/-200 and rounded to 0.1, a 0 is dropped (it is what a
+    // missing entry means) and the map is capped (core::sanitisePpmValues).
+    bool ppmCorrection = false;
+    std::map<std::string, double> ppm;
     // EACH AIRSPY R2 / MINI's GAIN MODE, GAINS AND DECIMATION (0.99.41),
     // remembered per radio under the bias tee's key ("airspy|serial=<serial>")
     // - see core/airspy_settings.hpp. Stored as the object "airspy", each
@@ -202,6 +260,53 @@ struct AppConfig {
     // no decimation) until the user changes something on it; every value is
     // clamped on load (core::sanitiseAirspySettings).
     std::map<std::string, AirspySetting> airspy;
+    // EACH RADIO'S AUTOMATIC GAIN SWITCH (0.99.73), remembered per radio under
+    // the bias tee's key (core::biasTeeRadioKey - "<driver>|serial=<serial>", or
+    // "<driver>|<args>" for a radio with no serial) -> whether the Source
+    // section's "Auto gain" box was ticked when the user last changed it and the
+    // radio accepted the change. Stored as the object "autoGainByRadio". The
+    // owner's words: "remember last state of auto gain ... so it always does
+    // that". Before this every radio but the Airspy was forced back to manual
+    // gain at every open, so a radio left on auto gain came back on manual gain
+    // after every restart. An "off" is remembered as well as an "on" (a radio
+    // set back to manual stays manual); nothing is removed at open, so the map
+    // keeps the radios that are not plugged in. Unlike the bias tee there is no
+    // serial gate on an "on": auto gain puts nothing on a connector, and a radio
+    // known only by position that comes back ticked is visibly ticked. The
+    // Airspys are not in it (their AGC switches are part of the gain mode
+    // AppConfig::airspy already holds). EMPTY BY DEFAULT, which is today's
+    // behaviour: every radio opens on manual gain. Element-wise tolerant on
+    // load: an entry that is not a bool, or whose key is not "<kind>|<args>", is
+    // skipped, and the map is capped at core::kBiasTeeMemoryCap.
+    std::map<std::string, bool> autoGainByRadio;
+    // EACH RADIO'S MANUAL GAIN (0.99.75), remembered per radio under the same key as
+    // the two memories above (core::biasTeeRadioKey) -> the stages the user has set
+    // and what the radio held after it took each one, as (stage name, dB) pairs
+    // SORTED BY STAGE NAME (so a file round-trips to the same vector: a JSON object
+    // comes back in key order). Stored as the object "manualGainByRadio":
+    // { "<key>": { "<stage>": dB, ... } }. The owner runs a B200 at 76 dB, and every
+    // open pushed a mid-dial 30 dB into each stage of a Soapy radio (adoptDeviceMirrors:
+    // kSoapyGainDefaultDb) and nothing remembered the number the hand had chosen, so
+    // every start began 46 dB down.
+    //
+    // WRITTEN when the USER changes a stage and the radio accepts it - the Source
+    // section's sliders, the top bar's GAIN dial, the scope face's GAIN knob and a
+    // browser's gain control - with the radio's READBACK (it quantises), and never by
+    // the open's own 30 dB push, never by the restore itself and never while auto gain
+    // is on (a radio gaining itself reports its own choice, not the user's). PUT BACK
+    // at open, on an ordinary open and not a recovery reopen, after the push and the
+    // mirror readback and before the remembered auto gain is re-applied, for the stages
+    // the radio still reports, clamped to each stage's own range; the mirror is then
+    // read back so the dial shows what the radio took. Not for an Airspy: its gains
+    // are part of its gain mode, which AppConfig::airspy already remembers.
+    //
+    // EMPTY BY DEFAULT, which is today's behaviour. Element-wise tolerant on load: a
+    // radio whose value is not an object or whose key is not "<kind>|<args>" is
+    // skipped, a stage whose value is not a finite number is skipped (and a stage
+    // with no name), the first kMaxManualGainStages stages of a radio are kept, and at
+    // most core::kBiasTeeMemoryCap radios. A radio left with no stage is dropped.
+    static constexpr std::size_t kMaxManualGainStages = 16;
+    std::map<std::string, std::vector<std::pair<std::string, double>>> manualGainByRadio;
     // WHERE THE PLUTO IS, and it is a field of its own because it is the one
     // radio FoxSDR cannot find by looking.
     //
@@ -219,6 +324,14 @@ struct AppConfig {
     // The default is the address the board's own USB Ethernet gadget serves
     // out of the box, which is what an ADALM-Pluto on a cable answers at.
     std::string plutoUri = "ip:192.168.2.1";
+    // WHERE THE RTL_TCP SERVER IS, "host" or "host:port" (an IPv6 literal in
+    // brackets when it carries a port) - the Pluto's field in every respect:
+    // typed rather than discovered, kept whether or not the server answered so
+    // a wrong address comes back to be corrected, and carried as
+    // "rtltcp=<this>" in nativeArgs once a server really opens. The default is
+    // the server's own, on this machine at its default port. An empty value on
+    // load falls back to it.
+    std::string rtlTcpAddr = "127.0.0.1:1234";
     std::string iqFilePath;
     // THE SOUND CARD SOURCE's settings (sourceKind "soundcard"), kept whether
     // or not it is the source in use - the same rule as iqFilePath and
@@ -243,8 +356,46 @@ struct AppConfig {
     std::string mode = "WFM";
     double bandwidthHz = 150000.0;
     float squelchDb = -120.0f;
+    // AUTOMATIC SQUELCH (0.99.74, the top bar's SQUELCH knob and its AUTO key): while true
+    // the threshold is not the user's but follows the measured noise floor - 8 dB above it
+    // (core/noise_floor_tracker.hpp) - and squelchDb above records where it last stood, so a
+    // restart begins from it until the first measurement. Off by default, and switched off by
+    // a hand on the knob, the Radio section's slider, the squelch keys or the web control.
+    // ONE FLAG FOR BOTH SQUELCHES: while the Airband monitor listens the same dial and key act
+    // on the monitor's own squelch (not saved) and AUTO is the monitor's "Above the noise"
+    // rule, median channel level plus 8 dB, re-applied while it is lit; the Airband section's
+    // slider and key switch it off too.
+    bool squelchAuto = false;
     float volume = 0.5f;
+    // THE AUDIO BUFFER (0.99.73, the Sinks rail): how much sound is held back
+    // before it plays. 0 is AUTOMATIC - 120 ms, deepened by itself through 240,
+    // 480 and 960 ms when this computer falls behind (sink::nextAudioLead) and,
+    // since 0.99.83, eased back one rung per quarter hour of quiet minutes
+    // (sink::audioLeadAfterQuietMinutes); 120, 240, 480 or 960 is a FIXED buffer
+    // that never steps. Anything else on load becomes 0.
+    int audioBufferMs = 0;
+    // THE DEPTH AUTOMATIC HAD REACHED (0.99.73, a follow-up to the item above): written when a
+    // minute's starved callbacks deepened the buffer - and lowered again, since 0.99.83, when a
+    // quiet quarter hour stepped the buffer back down (at the 120 ms floor it is 0 once more) - so
+    // that the next launch starts there instead
+    // of paying the same three bad minutes again on a computer that is slow every time. Read only
+    // while audioBufferMs is 0 (a fixed setting ignores it), and only ever to START deeper:
+    // never below the 120 ms default, never above 960. Choosing AUTOMATIC by hand, from a fixed
+    // value, forgets it - that is the person asking for a fresh start. Same legal set as
+    // audioBufferMs; 0 means "AUTOMATIC has never had to deepen".
+    int audioBufferAutoMs = 0;
     float dbMin = -110.0f, dbMax = 0.0f;
+    // WHICH WINDOW THE SPECTRUM AND THE WATERFALL ARE DRAWN THROUGH (0.99.76; see
+    // core/display_range.hpp): "auto" - the program's own, -110 to 0 dB on the receiver and a
+    // window fitted to the signal on a patch Spectrum part - or "manual", where dbMin and dbMax
+    // above are the user's floor and ceiling on all of them. dbMin/dbMax are KEPT under "auto" as
+    // the pair Manual returns to, so choosing Automatic and Manual again loses nothing.
+    //
+    // A DIALOGUE WITH EVERY OLD FILE: before this key the pair was the window (the Display
+    // section's Min dB and Max dB), so a file with no mode and a pair other than -110/0 loads as
+    // "manual" - a range somebody set is theirs. An unknown word is read the same way; the loader
+    // normalises to one of the two spellings.
+    std::string waterfallRangeMode = "auto";
     float splitRatio = 0.4f;
     double vfoOffsetHz = 300000.0;
     double sampleRateHz = 2000000.0;
@@ -285,6 +436,15 @@ struct AppConfig {
     // exist because of a real hang report and neither of which is worth
     // reimplementing for a second document.
     std::string patch;
+    // THE PATCH PAGE'S NAMED PRESETS: whole patches saved under a name, each
+    // text exactly what patch_io writes - see core/patch_presets.hpp for the
+    // rules. Sanitized on load by sanitisePatchPresets, entry by entry: a
+    // malformed entry, a bad name, an oversized text or one parse() does not
+    // read is dropped with a line in the log, and the rest survive.
+    // patchPresetPrevious is the reserved "(previous patch)" slot - the patch
+    // the last preset load replaced - under the same text rules.
+    std::vector<PatchPreset> patchPresets;
+    std::string patchPresetPrevious;
     // WHICH FACE THE MAIN WINDOW SHOWS (0.99.40, the owner: "display the patch
     // panel as the main"): "patch" - the patch canvas fills the area the
     // spectrum and waterfall use - or "receiver", the spectrum and waterfall.
@@ -297,6 +457,27 @@ struct AppConfig {
     // a patch still only runs from its own START key. The loader keeps only
     // the two names; anything else opens on "patch".
     std::string mainView = "patch";
+    // THE FUNCTION SELECT RAIL FOLDED TO A STRIP (0.99.49 beta feedback, a
+    // small laptop): the "<<" key in the rail's title row folds it, ">>" on
+    // the strip opens it. A layout preference, not a window, so startupState
+    // keeps it like mainView.
+    bool railCollapsed = false;
+    // THE STATUS COLUMN FOLDED TO A STRIP (0.99.74 beta feedback): "Just like
+    // you added the << and >> to expand and collapse the Function Select panel
+    // on the left side, can you do this for the right side Status panel?" The
+    // ">>" key in the column's title row folds it, "<<" on the strip opens it.
+    // Like railCollapsed, a layout preference and not a window, so startupState
+    // keeps it.
+    bool statusCollapsed = false;
+    // THE DISPLAY SECTION OPEN (0.99.74, a tester: "When I open FoxSDR and go
+    // to the VIEW tab, the DISPLAY menu is always expanded. Can you have this
+    // default to closed or remember the last status"). False - folded - on a
+    // fresh install and for a config from before 0.99.74, and whatever the
+    // user last left it as after that: opening or folding the section's header
+    // in the SYSTEM bank changes it. A layout preference like railCollapsed,
+    // not a window, so startupState keeps it. The section's other open/closed
+    // states are still per session; this is the one the tester asked for.
+    bool displayOpen = false;
     std::string bandPlanSelection = "world";
 
     // Ribbon size and segment-colour palette for the overlay above (issue #1:
@@ -324,6 +505,20 @@ struct AppConfig {
     // where the cells are painted.
     std::string tunerDisplayStyle = "nixie";
 
+    // WHICH FACE EACH BENCH METER WEARS, picked by right-clicking the meter
+    // itself (an Italian user on 0.99.42: "is it possible to customise the
+    // VU meter, choosing between 3 or 4 different VU meters?"): "classic"
+    // (the arc-and-needle face drawn since 0.87.0), "needle" (a moving-coil
+    // VU with a filled red zone), "led" (a segmented bar) or "peak" (a
+    // PPM-style bar). The two meters - SAMPLE RATE and VOLUME - keep
+    // separate settings, on the tunerDisplayStyle rule above: DEFAULTS TO
+    // THE EXISTING FACE, and an unknown value loads as that default rather
+    // than as nothing, because the file is user-editable and a typo must
+    // leave the deck looking like itself. The vocabulary lives with the
+    // painter, in gui/meter_styles_math.hpp (meterStyleFromName).
+    std::string meterStyleVolume = "classic";
+    std::string meterStyleRate = "classic";
+
     // --- the interface theme (2026-09-25) ------------------------------------
     // WHICH OF THE SIX LOOKS the application wears: "today" (the bench as it
     // has been), "classic-xl", "night", "glass", "daylight" or "field" - the
@@ -340,6 +535,17 @@ struct AppConfig {
     int counterScale = 1;
     bool counterSwitches = true;
     float readingsScale = 1.0f;
+
+    // --- the interface SIZE (2026-09-28, gui/ui_scale.hpp) -------------------
+    // "auto" (the default: follows the monitor's own Windows/X11/Wayland
+    // display scaling, continuously) or one of "100"/"125"/"150"/"175"/"200"/
+    // "250" - a fixed percent, chosen in Display or by Ctrl+=/Ctrl+-/Ctrl+0,
+    // that overrides what the monitor reports. A tester on a 4K panel: "the
+    // fonts are too small, I tried other settings in the View tab but
+    // couldn't make it bigger" - this is that setting. Unknown text (an older
+    // build's value, a hand edit) loads as "auto" on the tunerDisplayStyle
+    // rule, never as a refusal to start.
+    std::string interfaceScale = "auto";
 
     // --- Language and country (core/i18n.hpp, core/countries.hpp) -----------
     // The interface language as the user chose it: "auto" follows the
@@ -385,6 +591,37 @@ struct AppConfig {
     bool mapTrails = true;
     bool mapTrailAltitudeColours = true;
 
+    // --- Bookmark spectrum markers (0.99.54) -----------------------------------
+    // Two switches in the Bookmarks section, the same "was never saved"
+    // fault the two trail switches above once had:
+    //
+    //   bookmarkMarkers     draw bookmarks on the spectrum at all ("On the
+    //                       spectrum"). Was a plain member with no config
+    //                       field before this - it reset to on at every
+    //                       launch no matter what the user last chose.
+    //   bookmarkStackNames  a name that clashes with one already placed
+    //                       tries the row below instead of being hidden, up
+    //                       to three rows ("Stack close names" - an Italian
+    //                       user asked to read both of two close bookmarks'
+    //                       names). Off is the one-row behaviour this had
+    //                       before stacking existed.
+    //
+    // BOTH DEFAULT ON: the feature both switches gate was already the
+    // shipped behaviour (markers on, one row) or was asked for (stacking),
+    // so an install that has never heard of either key gets what it already
+    // had, or what was requested, never a silently narrower spectrum.
+    bool bookmarkMarkers = true;
+    bool bookmarkStackNames = true;
+
+    // THE SPECTRUM'S TRACE MODE (a user's request, 2026-09-30; see
+    // core/trace_hold.hpp): "normal", "peak" or "average" - the bold held
+    // trace drawn over the live one - and the average's length in ms. One
+    // setting for every spectrum (the receiver's and each patch Spectrum
+    // part). An unknown mode loads as normal; the length is clamped to
+    // 50..10000 ms on load.
+    std::string spectrumTraceMode = "normal";
+    int spectrumAverageMs = 1000;
+
     // HOW a trail is drawn, not whether: 0 = line, 1 = ribbon. An integer with
     // named values rather than a bool, because a third style costs one entry
     // here instead of a second flag that can contradict the first - two bools
@@ -406,6 +643,20 @@ struct AppConfig {
     // width", 0.99.26). 4 as standard; the loader clamps to 1..96 and the
     // views cap it at the icon's wingspan (gui::clampTrailWidthPx).
     int mapTrailWidthPx = 4;
+
+    // THE MAP PAGE'S "On screen only" SWITCH (0.99.74): list only the aircraft
+    // inside the map as it is currently drawn, instead of every aircraft the
+    // receiver has heard. A tester (2026-10-12) asked for it so that, "zoomed in
+    // on my local little airport", the list shows only that area - and at an air
+    // show, where he had been turning the radio gain down to shrink the
+    // reception area and shed the commercial traffic.
+    //
+    // OFF BY DEFAULT: the list has always shown every live aircraft, and an
+    // install that has never heard of this key keeps it. It is a PREFERENCE
+    // about what the list shows, not a "whether" a window is open, so
+    // startupState() leaves it alone, and it is app-wide like the trail switches
+    // above rather than per page.
+    bool mapListOnScreenOnly = false;
 
     // --- The ADS-B radar scope ------------------------------------------------
     // A plan-position indicator - the receiver at the centre, range rings and
@@ -440,7 +691,7 @@ struct AppConfig {
     int scopeRangeNm = 200;
 
     // --- The DEMOD SCOPE page (0.94.0) ----------------------------------------
-    // The oscilloscope in the VIEW bank: the demodulated audio, its spectrum,
+    // The oscilloscope in the TOOLS bank: the demodulated audio, its spectrum,
     // and the channel I/Q, on a ten-by-eight graticule.
     //
     // demodScopeOpen  IS SAVED AND NOT RESTORED, exactly like scopeMode above
@@ -498,10 +749,13 @@ struct AppConfig {
     std::string transmitArgs;
 
     // railBank   which of the FUNCTION SELECT rail's five banks was showing -
-    //            SIGNAL PATH, DECODE, VIEW, EXTEND, SYSTEM, as 0..4 in that
+    //            SIGNAL PATH, DECODE, TOOLS, EXTEND, SYSTEM, as 0..4 in that
     //            order (core/view_settings.hpp owns the list). Restored so the
     //            rail opens where it was left. It is the ONLY part of the
-    //            rail's state that survives a launch, and the comment here
+    //            rail's state that survives a launch - bar the fold
+    //            (railCollapsed) and the Display section's own open state
+    //            (displayOpen), each saved by hand because ImGui's is not - and
+    //            the comment here
     //            used to say it worked "exactly as a section's own
     //            open/closed state does" - which was never true: the layout is
     //            code-driven and ImGui's own ini file is disabled outright
@@ -672,6 +926,26 @@ struct AppConfig {
     // fetchIndex and is refused there, which is where that decision belongs.
     std::string pluginCatalogueUrl = PluginRepo::defaultIndexUrl();
 
+    // PLUGIN SITES (0.99.74): the addresses of other people's index.json that the
+    // store lists beside the catalogue above, each marked as coming from
+    // somewhere else (docs/THIRD-PARTY-SITES.md; the rules are the PLUGIN SITES
+    // block of plugin_repo.hpp). pluginCatalogueUrl is untouched by this: it stays
+    // the OVERRIDE of the official source, and these are additional sources.
+    //
+    // Added only by the user, in the store's SITES panel, after the box saying the
+    // site is not reviewed by FoxSDR is ticked; nothing ever adds one by itself.
+    // Each is read when the store is, never at startup.
+    //
+    // Sanitised on load (sanitisePluginSites): each trimmed and checked by the one
+    // validator, PluginRepo::normaliseSiteUrl (an https:// address with a usable
+    // host, or a local path with no "://" exactly as the official field allows, so
+    // a test can use files); one that is not is dropped, as are duplicates, the
+    // official address itself (and the override above), and anything past
+    // kMaxPluginSites. Order is kept: it is the order the sites are read in, and
+    // the earlier site wins an id both list.
+    static constexpr std::size_t kMaxPluginSites = 8;
+    std::vector<std::string> pluginSites;
+
     // Whether the plugin store window was open at the last exit. Recorded,
     // and since 0.79.1 NOT restored - the application starts on the bench
     // alone (see startupState below). Nothing in this product touches the
@@ -702,6 +976,17 @@ struct AppConfig {
     int fittedModulesY = 0;
     int fittedModulesWidth = 0;
     int fittedModulesHeight = 0;
+
+    // Where the PLUGIN STORE window sat at the last exit (0.99.72): its rectangle,
+    // restored the way the fitted modules window's is. Its open flag is
+    // pluginBrowserOpen above, likewise recorded and not restored. The rule is
+    // the fitted rectangle's verbatim: zero width means "nothing saved", the
+    // position is only honoured when a size was saved with it, and an
+    // out-of-range component discards the whole rectangle.
+    int pluginStoreX = 0;
+    int pluginStoreY = 0;
+    int pluginStoreWidth = 0;
+    int pluginStoreHeight = 0;
 
     // --- Plugin version policy (P10) ------------------------------------------
     // When a plugin catalogue was last successfully seen, in seconds since the
@@ -783,7 +1068,21 @@ struct AppConfig {
     // file cannot grow the config without bound.
     std::vector<std::string> closedWindows;
 
+    // READ FOR MIGRATION ONLY (0.99.73): the file-name list above, which lost a
+    // stop whenever the plugin updated (the file name carries the version). The
+    // application turns each entry into pluginRun[<id>] = "stopped" when it
+    // starts, and saves this list empty.
     std::vector<std::string> pluginsStopped;
+
+    // --- How each plugin runs (0.99.73) ----------------------------------------
+    // Plugin id (the module file name without its extension and its version,
+    // core::pluginRunId) -> "auto", "always" or "stopped" (core::PluginRun).
+    // AUTO runs the plugin while something wants it (a window, a map, the radar
+    // scope, a patch, ...) and puts it to sleep 30 seconds after the last want;
+    // ALWAYS is "keep running" - what every plugin used to do; STOPPED is the old
+    // stop. An id with no entry is AUTO, and the application writes no entry for
+    // AUTO. Keyed on the id, not on the file name, so an update keeps the choice.
+    std::map<std::string, std::string> pluginRun;
 
     // --- Plugins whose MUTE setting is not the default -------------------------
     // Module FILE NAMES again, and a list of OVERRIDES rather than of settings:
@@ -820,6 +1119,22 @@ struct AppConfig {
     // Empty by default - the secure state - and sanitized on load exactly like
     // pluginTuneAllowed, by the same function.
     std::vector<std::string> pluginSettingsAllowed;
+
+    // --- Host API level 2 (0.99.74): the TRANSMIT grant --------------------------
+    // Module FILE NAMES the user has allowed to hand the host audio to transmit
+    // (plugin_abi.h, CASCADE_CAP_TX_AUDIO). The third grant list, kept separate from
+    // the other two for the reason they are separate from each other: a grant that
+    // meant "follow Doppler" must never come to mean more. Empty by default and
+    // sanitized on load by the same function as pluginTuneAllowed.
+    //
+    // THE GRANT IS SAVED AND THE ARMING WINDOW IS NOT, and that asymmetry is the
+    // design. The grant is a decision about a piece of software; the window is the
+    // operator saying "now, for the next five, fifteen or sixty minutes", and a
+    // window that survived a restart would be a transmitter that came back able to be
+    // keyed by whatever the plugin did first. There is no field for it here, no code
+    // that reads one, and tests/test_config.cpp loads a file that carries one anyway
+    // and checks that it changes nothing - the same proof the PTT and the latch have.
+    std::vector<std::string> pluginTransmitAllowed;
 
     // --- Host API level 1 (0.99.31): each plugin's own settings ---------------
     // What plugins stored through CascadeHostApi::settings_set, kept here so
@@ -905,6 +1220,21 @@ struct AppConfig {
     // and the two share nothing.
     bool updateCheckEnabled = true;
 
+    // The ids of the team messages (core/updater.hpp, TeamMessage) whose "Seen" key was
+    // pressed, oldest first (0.99.79). "They click Seen and it doesn't show up again" is
+    // this list: a message whose id is in it is not drawn.
+    //
+    // LOCAL ONLY, NEVER SENT: it rides in this file and nowhere else - the update check
+    // still sends the running version and nothing more, so the site cannot tell which
+    // messages anyone has read.
+    //
+    // PRUNED TO WHAT THE LAST SUCCESSFUL CHECK STILL CARRIED (AppWindow::pollUpdateAsync),
+    // so the list cannot grow for ever and a message the owner withdraws and later sends
+    // again is shown again - a withdrawn message is gone, not "read". At most
+    // kMaxMessagesSeen are kept, the newest, because the server shows ten at most.
+    std::vector<std::string> messagesSeen;
+    static constexpr std::size_t kMaxMessagesSeen = 50;
+
     // --- Anonymous usage reporting (see PRIVACY.md) -------------------------
     //
     // ON by default; the user turns it off (product decision, 2026-08-18).
@@ -929,6 +1259,33 @@ struct AppConfig {
     std::uint64_t telemetryLaunches = 0;
     std::uint64_t telemetryCrashes = 0;
 
+    // HOW THOSE UNCLEAN EXITS ENDED (0.99.69, core/exit_cause.hpp): four more
+    // lifetime counters beside `telemetryCrashes`, never reset, and moved together
+    // with it - from the first start of 0.99.69 on, every unclean exit adds one to
+    // `telemetryCrashes` and one to exactly one of these, so their sum is the number
+    // of unclean exits counted since then. Not back-filled: `telemetryCrashes` minus
+    // the sum is how many came before the classes existed. A missing key reads 0.
+    std::uint64_t telemetryExitsDied = 0;
+    std::uint64_t telemetryExitsKilled = 0;
+    std::uint64_t telemetryExitsEnded = 0;
+    std::uint64_t telemetryExitsUnknown = 0;
+
+    // When the session that last wrote this file BEGAN, seconds since the epoch
+    // (0.99.69). It is the lower edge of "the reports that belong to the session
+    // that has just ended" (core/exit_cause.hpp): reports pile up in one folder for
+    // weeks, and without a start there is no telling the previous session's ending
+    // from an older one's. Local only, never sent. 0 when no session has written it
+    // - a file an earlier build saved - and then an unclean exit is `unknown`.
+    std::uint64_t telemetrySessionStarted = 0;
+
+    // When this install id was created (UTC day, "2026-09-29") and the
+    // version that created it. Written once, with the id, and deleted with
+    // it - so they mean "first run with reporting on". Empty on installs that
+    // predate the fields (0.99.47): never back-filled with a guess. Validated
+    // on load like the id itself (core::validFirstRunDate/validFirstVersion).
+    std::string telemetryFirstRun;
+    std::string telemetryFirstVersion;
+
     // False while the application is running, true once it has shut down
     // cleanly. A start-up that finds this ALREADY false knows the previous
     // session ended in a crash — which is the only way to count crashes
@@ -940,6 +1297,62 @@ struct AppConfig {
     // call on the shutdown path can hang the application while the user is
     // trying to close it. Cleared once sent.
     std::string telemetryPending;
+
+    // --- Beta tester usage (see PRIVACY.md, core/tester_usage.hpp) ----------
+    //
+    // OFF until a tester pastes their own tester-portal code. Independent of
+    // telemetryEnabled above - a tester who never opts into the anonymous
+    // report can still opt into this one, and the two switches control
+    // completely different transmissions to completely different purposes.
+    //
+    // The token is the tester's own management credential (the site mints it
+    // with the same shape core::validInstallId checks, 32 lowercase hex
+    // characters) - validated the same way telemetryInstallId is: a
+    // hand-edited value that is not exactly that shape is discarded on load
+    // rather than sent anywhere.
+    std::string testerToken;
+
+    // Set when the site last answered a report with 401 - the code is no
+    // longer valid. Sending stops, but the code itself is KEPT so the tester
+    // can see what they typed and fix it; entering ANY new text into the
+    // field clears this (gui/app_window.cpp's drawTesterUsageSection).
+    bool testerTokenInvalid = false;
+
+    // THE CURRENT SESSION'S REPORT, overwritten on every save exactly like
+    // telemetryPending above - it always reflects the session as it stands
+    // right now, so whatever is on disk when the process ends (cleanly or
+    // not) is the best available account of it. Read at the NEXT start-up as
+    // "the previous session's finished report" and folded into
+    // testerUsagePending below.
+    std::string testerUsageCurrent;
+
+    // FINISHED-SESSION REPORTS THAT FAILED TO SEND, oldest first, JSON text
+    // exactly as TesterUsageReport::toJson() produced it - the retry queue a
+    // 429 or a network error leaves behind. Bounded to
+    // core::TesterUsageQueue::kMax (3): a report added past the cap drops the
+    // OLDEST, because the most recent sessions are the ones most worth the
+    // site still hearing about.
+    std::vector<std::string> testerUsagePending;
+
+    // --- Beta tester APP TOKEN / portal link (see core/tester_link.hpp) -----
+    //
+    // A SECOND, DISTINCT credential from testerToken above: 40 lowercase hex
+    // characters (core::validAppToken), never 32, so the two can never be
+    // confused. Minted for this ONE install via the portal's "Link FoxSDR"
+    // button (foxsdr://beta?t=<token>) or the hidden --link-tester paste box,
+    // and stored here ONLY after the tester has seen their own name and
+    // pressed Link (gui/app_window.cpp's drawTesterLinkPrompt) - never
+    // written silently. Non-empty is what makes SYSTEM > Beta tester visible
+    // at all when testerToken above is empty (see AppWindow::
+    // testerSectionVisible), and is preferred over testerToken wherever both
+    // are somehow present (AppWindow::activeTesterToken).
+    std::string testerAppToken;
+
+    // The tester's own display name, as the site's /api/beta/app-token/me
+    // (or the migration exchange's own response) last returned it - shown in
+    // "Linked to NAME" and in a replace-confirmation prompt. Never sent
+    // anywhere; purely a label this app was told once.
+    std::string testerAppTokenName;
 
     // --- Local fault capture (see PRIVACY.md and docs/DIAGNOSTICS.md) -------
     //

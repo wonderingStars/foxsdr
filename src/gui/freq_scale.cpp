@@ -142,6 +142,33 @@ void FreqScale::resetView() {
     viewHigh_ = fullHigh_;
 }
 
+bool FreqScale::keepInView(double bandLowHz, double bandHighHz, double marginFrac) {
+    if (!(rate_ > 0.0) || !std::isfinite(bandLowHz) || !std::isfinite(bandHighHz) ||
+        !std::isfinite(marginFrac) || bandHighHz < bandLowHz) {
+        return false;
+    }
+    const double span = viewHigh_ - viewLow_;
+    const double margin = std::clamp(marginFrac, 0.0, 0.25) * span;
+    double lo = viewLow_;
+    if (bandHighHz - bandLowHz + 2.0 * margin > span) {
+        // Nothing to spare either side: put the middle of the band in the middle of the view.
+        lo = 0.5 * (bandLowHz + bandHighHz) - 0.5 * span;
+    } else if (bandLowHz < viewLow_ + margin) {
+        lo = bandLowHz - margin;
+    } else if (bandHighHz > viewHigh_ - margin) {
+        lo = bandHighHz + margin - span;
+    } else {
+        return false;
+    }
+    // Inside the full span, the width kept: the same pins pan() makes.
+    if (lo + span > fullHigh_) { lo = fullHigh_ - span; }
+    if (lo < fullLow_) { lo = fullLow_; }
+    if (lo == viewLow_) { return false; }
+    viewLow_ = lo;
+    viewHigh_ = lo + span;
+    return true;
+}
+
 void FreqScale::visibleBinRange(int fftSize, double& firstBin, double& lastBin) const {
     if (fftSize <= 0) {
         firstBin = 0.0;
@@ -164,14 +191,17 @@ void FreqScale::visibleBinRange(int fftSize, double& firstBin, double& lastBin) 
     lastBin = (viewHigh_ - fullLow_) * binsPerHz;
 }
 
-int FreqScale::ticks(double widthPx, double* tickHz, char (*labels)[16], int cap) const {
+int FreqScale::ticks(double widthPx, double* tickHz, char (*labels)[16], int cap,
+                     double labelScale) const {
     if (tickHz == nullptr || labels == nullptr || cap <= 0) { return 0; }
     if (!std::isfinite(widthPx) || !(widthPx > 0.0)) { return 0; }
     const double span = viewHigh_ - viewLow_;
     if (!(span > 0.0)) { return 0; }
+    if (!std::isfinite(labelScale) || !(labelScale > 0.0)) { labelScale = 1.0; }
 
     int stepExp = 0;
-    const double step = niceStepAtLeast(span * kMinTickSpacingPx / widthPx, stepExp);
+    const double step =
+        niceStepAtLeast(span * kMinTickSpacingPx * labelScale / widthPx, stepExp);
 
     // First/last step multiples inside the view. ceil/floor decide from a
     // rounded quotient, so re-check against the actual products — a tick one

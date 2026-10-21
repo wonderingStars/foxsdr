@@ -281,6 +281,10 @@ int main() {
         // Satellites) never opens it, windowless or not.
         CHECK(!presetOpensDecoderOutput(false, true));
         CHECK(!presetOpensDecoderOutput(false, false));
+        CHECK(presetOpensDecoderOutput(true, true, CASCADE_PRESET_SHOW_TEXT_OUTPUT));
+        CHECK(presetOpensDecoderOutput(true, false, CASCADE_PRESET_SHOW_TEXT_OUTPUT));
+        CHECK(!presetOpensDecoderOutput(false, true, CASCADE_PRESET_SHOW_TEXT_OUTPUT));
+        CHECK(!presetOpensDecoderOutput(false, false, CASCADE_PRESET_SHOW_TEXT_OUTPUT));
     }
 
     return testSummary("test_preset_bar");

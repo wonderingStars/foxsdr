@@ -74,8 +74,23 @@ public:
     // class has always used, unchanged tap for tap.
     static constexpr double kStagedMinInputRateHz = 4.0e6;
 
+    // A bandwidth BELOW this fraction of the channel rate is "narrow", and a
+    // narrow request gets one extra stage: an ordinary windowed-sinc low-pass at
+    // the channel rate whose transition band is sized from the BANDWIDTH
+    // (kNarrowTransitionFraction of it), not from the distance to the channel
+    // Nyquist. Without it the filter's skirt is ~100 kHz wide at EVERY
+    // bandwidth, so 3 kHz and 10 kHz were the same filter and a station 30 kHz
+    // from the tuned frequency was heard (0.99.59 field reports, 2.4 and
+    // 2.048 MS/s). At or above the fraction nothing changes, tap for tap.
+    static constexpr double kNarrowBelowChannelFraction = 0.25;
+    // The narrow filter is flat to bw/2 and its transition (flat to the 92 dB
+    // floor, give or take) is this fraction of bw wide. See narrowTaps in
+    // vfo.cpp for the arithmetic and for what the length costs per sample.
+    static constexpr double kNarrowTransitionFraction = 0.5;
+
     // How many filter stages the channel filter has (1 below
-    // kStagedMinInputRateHz, or when the decimation is prime).
+    // kStagedMinInputRateHz, or when the decimation is prime; one more for a
+    // narrow bandwidth).
     std::size_t stageCount() const noexcept { return stages_.size(); }
 
 private:

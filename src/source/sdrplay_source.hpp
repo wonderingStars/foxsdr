@@ -102,6 +102,13 @@
 // sdrplay_api_ServiceNotResponding now reports it through noteIfServiceDead,
 // not only the one that first needed it.
 //
+// ...AND "NOT YET" IS NO LONGER "NEVER" (0.99.50, the RSPdx-R2 report). The
+// rule above still holds while a worker is inside the DLL, but a control that
+// misses kControlWait is now LISTENED FOR until kControlGrace before the radio
+// is given up, and a successful late answer gives it back. The specification
+// sets no time limit on sdrplay_api_Update and says it may stop and restart
+// the stream; see kControlGrace.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
@@ -111,14 +118,17 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "dsp/spsc_ring.hpp"
 #include "source/device_source.hpp"
 #include "source/sdrplay_api_decl.hpp"
+#include "source/sdrplay_service.hpp"
 
 namespace cascade::source {
 
@@ -135,6 +145,82 @@ namespace cascade::source {
 // stray sdrplay_api.dll beside some other application cannot pre-empt the real
 // install.
 const sdrplay_abi::Api& processSdrPlayApi();
+
+// WHETHER THE SDRPLAY API IS INSTALLED ON THIS MACHINE - the DLL was found and
+// every entry point resolved. Free-standing rather than a one-line caller of
+// processSdrPlayApi().resolved because the native Mirics driver (0.99.42's
+// RSP1A/RSPdx field reports) needs the same answer without taking on a
+// dependency on the whole SdrPlaySource type: an RSP's silicon is reachable
+// both ways, and mirisdr_source.cpp asks this ONE question before ever
+// touching the bus. Cheap after the first call - processSdrPlayApi() resolves
+// the DLL once per process and every rsp_rows/enumerateSdrPlay caller has
+// almost always already paid that cost by the time a device is opened.
+bool sdrPlayApiPresent();
+
+// Overrides the answer above for a test - no LoadLibrary, no real DLL needed.
+// std::nullopt restores the real answer (processSdrPlayApi().resolved).
+void setSdrPlayApiPresentForTest(std::optional<bool> present);
+
+// --- ONE CHIP, ONE ROUTE: what the process knows about the API's health -------
+//
+// An RSP1/RSP1A/RSP2 is a Mirics chip, and FoxSDR can reach one four ways: its
+// native SDRplay driver (through the API), its native Mirics driver, and
+// SoapySDR's `sdrplay` and `miri` modules. The two SoapySDR modules run inside
+// this process exactly as the API does - SoapySDRPlay3 calls the same vendor
+// library, SoapyMiri drives the same silicon - so none of the four can be
+// allowed to ignore what the others have learned. Two field reports (0.99.59,
+// one Linux RSP1A): a SoapyMiri read() faulting on a radio the SDRplay service
+// also owned, and a heap corruption seconds after the patch page opened the
+// radio through SoapySDRPlay3 AFTER the native driver had declared the API
+// session lost ("no further SDRplay API calls are made until FoxSDR is
+// restarted" - and the Soapy module simply made them).
+//
+// This is the part of that rule that is a fact about the PROCESS, readable
+// without a call, a lock or a wait (see Api::sessionLostFlag). The decision
+// made from it is pure and lives in rsp_rows.hpp (miricsSoapyRouteRefusal).
+struct SdrPlayApiState {
+    bool installed = false;        // the API is on this machine (sdrPlayApiPresent)
+    bool sessionLost = false;      // markSessionLost: this process's session is finished
+    bool workerAbandoned = false;  // an enumeration worker was abandoned inside the API and
+                                   // nothing since has shown the service answering again
+};
+
+// The state of one table, atomics only - NEVER the session mutex, which an
+// abandoned worker may hold. `installed` is the table's own `resolved`.
+SdrPlayApiState sdrPlayApiStateOf(const sdrplay_abi::Api& api);
+
+// The process's: the test override when one is set, otherwise
+// sdrPlayApiPresent() plus the process table's latches. Loads the vendor
+// library on first use (one failed LoadLibrary where there is none), so ask it
+// only about a driver that is in the Mirics family.
+SdrPlayApiState sdrPlayApiState();
+
+// Overrides the answer above for a test. std::nullopt restores the real one.
+void setSdrPlayApiStateForTest(std::optional<SdrPlayApiState> state);
+
+// THE NATIVE SCAN AS IT STOOD BEFORE THE DUPLICATE RSP ROWS WERE HIDDEN - the
+// API's own rows plus every native Mirics row, including the ones the Source
+// list no longer shows. That list is the only record of WHICH radios the API
+// manages, and it lives in the GUI; a SoapySDR open is made on a worker that
+// cannot see it. Published by AppWindow::scanNative, read by
+// soapyMiricsRefusal below. Process-scope and last-writer-wins, like the
+// enumeration's skip reason.
+void sdrPlayPublishNativeRows(std::vector<NativeDeviceInfo> rows);
+std::vector<NativeDeviceInfo> sdrPlayPublishedNativeRows();
+// Whether any scan has published since the process started. Until one has, the
+// rows are unknown - not "empty" - and a caller that is about to open a
+// SoapySDR Mirics device on its own (a saved patch) scans first.
+bool sdrPlayNativeRowsPublished();
+
+// THE ONE QUESTION EVERY SOAPY OPEN ASKS BEFORE IT MAKES A DEVICE: "may this
+// SoapySDR device be opened, given everything the other routes to the same
+// chip know?" Empty when it may (including for every driver outside the
+// Mirics family, which it never even looks up); otherwise the sentence the
+// user is shown as the reason the radio would not open. Gathers the state and
+// hands it to the pure decision (rsp_rows.hpp), so SoapySource::open - the one
+// place every receiver, patch, restore and fallback open of a SoapySDR device
+// passes through - cannot be bypassed by a new call site.
+std::string soapyMiricsRefusal(const std::string& soapyArgs);
 
 // The documented 64-bit install path, exposed so the log and the tests can
 // both name the same string.
@@ -236,6 +322,12 @@ const char* sdrPlayServiceHungSentence();
 // inside the vendor DLL for good. See SdrPlaySource::kControlWait.
 const char* sdrPlayControlHungSentence();
 
+// WHAT A CONTROL, A SCAN AND AN OPEN SAY WHILE AN EARLIER CONTROL IS STILL
+// WAITING FOR THE SERVICE'S ANSWER (SdrPlaySource::kControlGrace, 0.99.50).
+// Not a failure sentence: nothing has been given up yet, so it names no
+// restart. One string, pinned by a test, like the ones above.
+const char* sdrPlayControlPendingSentence();
+
 // WHAT A SCAN AND AN OPEN SAY ONCE THE PROCESS'S SESSION IS LOST (0.99.28).
 // After a worker is abandoned inside the vendor DLL or the service answers
 // sdrplay_api_ServiceNotResponding, the device's session is orphaned and can
@@ -252,6 +344,62 @@ const char* sdrPlaySessionLostSentence();
 // seconds during which FoxSDR still called itself running and said nothing.
 // See SdrPlaySource::kStreamStallLimit. One string, pinned by a test.
 const char* sdrPlayStreamStalledSentence();
+
+// --- the service behind the API (0.99.55) ----------------------------------
+//
+// WHY THE LAST ATTEMPT TO REACH THE SDRPLAY SERVICE FAILED, as recorded on the
+// table (sdrplay_abi::Api::serviceTrouble). None once an Open succeeds. It is
+// what the Source section's RESTART SDRPLAY SERVICE key is shown for - the
+// three ways the service can be "not answering" as the user sees it.
+enum class SdrPlayServiceTrouble {
+    None = 0,
+    OpenFailed = 1,       // sdrplay_api_Open refused (the 0.99.52 RSP2 Pro report)
+    EnumerationHung = 2,  // a scan's worker was abandoned (kEnumerateWait)
+    SessionLost = 3       // markSessionLost: this process's session is finished
+};
+
+SdrPlayServiceTrouble sdrPlayServiceTrouble(const sdrplay_abi::Api& api);
+
+// WHETHER THE KEY IS SHOWN. Pure: on Windows only, only for a service Windows
+// actually found (a restart must name it), and only while there is trouble to
+// fix or a restart is still in progress (so its outcome stays in view).
+bool sdrPlayRestartKeyShown(bool windows, const SdrPlayServiceStatus& service,
+                            SdrPlayServiceTrouble trouble, SdrPlayRestartPhase phase);
+
+// WHAT TO DO ONCE THE SERVICE HAS BEEN RESTARTED - the decision the key's
+// completion turns on, pure so every branch is testable without a window.
+//
+//   ServiceNotRunning  Windows still does not report it running: say its
+//                      state (sdrPlayServiceAdvice) and do nothing else.
+//   ReopenInProcess    this process never got a session (sessions == 0, not
+//                      lost, no control waiting, and the session state could
+//                      be read without waiting): rescan and reopen the saved
+//                      radio now, no FoxSDR restart.
+//   RestartFoxSdr      anything else - above all a LOST session, where a
+//                      worker of ours may still be parked inside the vendor
+//                      DLL (see markSessionLost and the file header). The
+//                      latch stays set; the user is told to restart FoxSDR.
+enum class SdrPlayAfterRestart { ServiceNotRunning, ReopenInProcess, RestartFoxSdr };
+
+SdrPlayAfterRestart sdrPlayAfterServiceRestart(bool serviceRunning, bool sessionStateKnown,
+                                               int sessions, bool sessionLost,
+                                               int controlsInFlight);
+
+// The same decision applied to a table: reads its session state WITHOUT
+// WAITING (a try_lock - an abandoned enumeration worker may hold the session
+// mutex inside sdrplay_api_Open, and the GUI thread must not queue behind
+// it), and for ReopenInProcess clears the enumeration's skip reason, its
+// hold-off and the trouble record so the next scan asks the API again.
+// NEVER clears sessionLost.
+SdrPlayAfterRestart sdrPlayApplyServiceRestart(const sdrplay_abi::Api& api, bool serviceRunning);
+
+// WHAT THE LAST SESSION HANDSHAKE LEARNED OF THE API'S VERSION, or 0 when none
+// has - which is also the answer when the session mutex is taken. NEVER WAITS:
+// an abandoned enumeration worker may be parked inside sdrplay_api_Open holding
+// that mutex for good, and this is called by AppWindow::scanNative on the GUI
+// thread (the 0.99.81 patch-view freeze, a plain lock here). 0 is "never
+// asked" to sdrPlaySourceAdvice, which then says nothing about the version.
+float sdrPlayApiVersion(const sdrplay_abi::Api& api);
 
 // True while the hold-off above is still running, i.e. the last enumeration
 // abandoned a wedged service and the next ones are skipping it.
@@ -304,10 +452,12 @@ std::vector<std::string> sdrPlayAntennas(unsigned char hwVer, sdrplay_abi::RspDu
 // setGainDb clamps to this and reports what it programmed.
 int sdrPlayLnaStateCount(unsigned char hwVer);
 
-// The output rates this driver offers, ascending. Everything at or below
-// 2 MS/s is reached by decimating a 6 MHz low-IF or a higher zero-IF rate -
-// the RSP's own front end does not run below 2 MS/s - and everything above is
-// the ADC rate itself.
+// The output rates this driver offers, ascending. Everything below 2 MS/s is
+// reached by decimating a zero-IF ADC rate of at least 2 MS/s (2 MS/s itself
+// for the binary fractions, 3.072 MS/s for the audio rates), 2 MS/s is the
+// API's own default ADC rate undecimated, and everything above is the ADC rate
+// itself. No plan uses the low-IF front end since 0.99.44 - see
+// sdrPlayRatePlan in the .cpp for the field logs that retired it.
 std::vector<double> sdrPlaySupportedRatesHz();
 
 // How one output rate is actually produced: the rate to program into
@@ -353,6 +503,16 @@ public:
     // zero. Spent on the PIPELINE's source thread, never the GUI's.
     static constexpr std::chrono::milliseconds kReadWait{20};
 
+    // How long a scan gives a session-mutex holder that is not known to be
+    // wedged before it answers "busy" instead: an ordinary Open answers in
+    // milliseconds, so this is generous for a healthy service and still a
+    // short stall for a sick one. Spent only on the enumeration path - no
+    // teardown call enumerates - and never as a blocking lock: the peek is a
+    // try_lock poll (tryLockSession in sdrplay_source.cpp), added when the
+    // 0.99.81 scanNative freeze showed a wedged vendor Open parking the
+    // session mutex for good.
+    static constexpr std::chrono::milliseconds kSessionPeekWait{250};
+
     // HOW LONG A LIVE CONTROL WAITS FOR sdrplay_api_Update ITSELF.
     //
     // WHY THIS HAD TO EXIST (a third hang report, the same RSP1A, this one on
@@ -369,25 +529,67 @@ public:
     // graphics-looking report for a service fault.
     //
     // So this is the scan's treatment applied to every live control:
-    // updateLocked runs sdrplay_api_Update on a worker, waits this long, and
-    // on expiry ABANDONS it - detached, never joined, never spoken to again -
-    // marks the device dead and refuses every later control for it.
+    // updateLocked runs sdrplay_api_Update on a worker and waits this long
+    // for it ON THE CALLER'S THREAD. On expiry the caller is released and the
+    // worker is left to answer late - see kControlGrace for what happens then.
     //
-    // ONE SECOND. A healthy Update only QUEUES the request and returns - the
-    // service reports completion separately through the changed flags that
-    // kUpdateWait below waits for - so on a working install it is a
-    // milliseconds-scale call, and SoapySDRPlay3 makes it inline with no
-    // bound at all. A second therefore leaves better than an order of
-    // magnitude for a service that is slow but alive, while the worst a
-    // control can now cost the GUI thread is kControlWait + kUpdateWait =
-    // 1500 ms, comfortably inside HangWatchdog::kDefaultThresholdMs's 5000
-    // and well short of the five seconds that produced the report.
+    // ONE SECOND IS THE GUI'S BUDGET, NOT THE SERVICE'S. Until 0.99.50 this
+    // comment said "a healthy Update only QUEUES the request and returns",
+    // and the one second was justified by that. SDRplay API Specification
+    // 3.15 says no such thing: sdrplay_api_Update (section 3.17, p27) carries
+    // no time bound at all, and "if required it will stop the stream, change
+    // the values and then start the stream again, otherwise it will make the
+    // changes directly". The 0.99.46 RSPdx-R2 report is what that cost: an
+    // LNA change given up at one second while the service - on the report's
+    // own stream-health arithmetic - was still delivering, i.e. still working
+    // on it, 1.28 s after it was sent. What one second IS good for is the
+    // thread that waits: the worst a control can cost the GUI thread stays
+    // kControlWait + kUpdateWait = 1500 ms, comfortably inside
+    // HangWatchdog::kDefaultThresholdMs's 5000.
     //
     // The cost on the healthy path is one std::thread per live control, which
     // is tens of microseconds against a call that crosses into a Windows
     // service; and it is paid only while STREAMING, because updateLocked
     // sends nothing when the parameter block is not yet live.
     static constexpr std::chrono::milliseconds kControlWait{1000};
+
+    // Not a wait: HOW LONG A CONTROL THE SERVICE HAS NOT YET ANSWERED IS
+    // GIVEN TO ANSWER LATE, counted from when it was sent (0.99.50).
+    //
+    // WHY. Through 0.99.49 a control not answered within kControlWait was
+    // ABANDONED on the spot: the device dead, the process's session lost, and
+    // the user told to restart the service and FoxSDR - even if the call came
+    // back successfully a moment later, which nothing ever looked at. Now the
+    // worker is left in the DLL for up to this long, and NOTHING of ours
+    // enters the DLL meanwhile - no control (refused at once with
+    // sdrPlayControlPendingSentence()), no scan or open (Api::controlsInFlight),
+    // no overload acknowledgement, and no teardown: a stop() in the grace is
+    // treated exactly as a stop after an abandonment, the 0.96.4 hang report's
+    // rule. When the answer arrives (seen by the next read() on the
+    // pipeline's source thread, or by the next control):
+    //
+    //   - Success: the radio is given back, the readbacks follow the block;
+    //   - any other refusal: the call is over and the service alive, so the
+    //     block is put back (BlockRollback) and the radio kept;
+    //   - sdrplay_api_ServiceNotResponding: the service is gone, and said so.
+    //
+    // If it has not arrived when this runs out, the radio is given up exactly
+    // as it was at kControlWait before. Nothing WAITS on this - it is a
+    // deadline read by the reader and the next control - so the GUI's budget
+    // and the teardown's are unchanged.
+    //
+    // TEN SECONDS. The specification gives no bound. The longest a service in
+    // the field reports has taken to answer at all is the 0.96.2 report's
+    // five seconds (an answer of ServiceNotResponding, which this now names
+    // correctly instead of calling it a hang); twice that is the margin.
+    // While a control is waiting the stall rule (kStreamStallLimit) stands
+    // aside, because an Update that stops and restarts the stream is silent
+    // by design.
+    static constexpr std::chrono::milliseconds kControlGrace{10000};
+    // TESTS ONLY: a shorter grace. Zero (or anything up to kControlWait)
+    // gives the radio up at kControlWait, the pre-0.99.50 behaviour, for the
+    // tests that are about what happens once it has been given up.
+    void setControlGraceForTest(std::chrono::milliseconds g);
 
     // How long a live parameter change waits for the service to CONFIRM it.
     // sdrplay_api_Update returns as soon as the request is queued; the
@@ -454,9 +656,10 @@ public:
     // A successful open has connected to the service, checked the API
     // version, taken the device lock, read the device list, SELECTED the
     // device (which is what makes it ours and takes it away from SDRuno), got
-    // the parameter block, and put the radio in a KNOWN STATE: 2 MS/s out of
-    // the 6 MHz front end at the 1.62 MHz IF (which is how the API's own
-    // reference produces 2 MS/s - the RSP's ADC does not run there), 100 MHz,
+    // the parameter block, and put the radio in a KNOWN STATE: 2 MS/s zero-IF
+    // with nothing decimated (the API's own default ADC rate; until 0.99.44
+    // this was the 6 MHz front end at the 1.62 MHz IF, which two RSP2 field
+    // logs show delivering 6 MS/s), 100 MHz,
     // 1.536 MHz channel filter, IF gain reduction 40 dB, LNA state 0, AGC off,
     // DC and IQ correction on, bias tee off, notches off. Nothing streams
     // until start().
@@ -751,6 +954,61 @@ private:
         // (0.99.32, the same rule): one bit per kind of line, see kEventLog*.
         std::atomic<unsigned int> pendingEventLogs{0};
 
+        // THE OVERLOAD ACKNOWLEDGEMENT, THE SAME RULE ONE LEVEL FURTHER
+        // (the repair-round review, 2026-09-28): the event callback runs on
+        // the SERVICE'S OWN THREAD, and it used to call sdrplay_api_Update
+        // directly from there to acknowledge an overload - a second entry
+        // into the same vendor call every OTHER control on this object goes
+        // through updateLocked's single bounded worker for, from a thread we
+        // do not own and cannot bound.
+        //
+        // THIS IS A DEFENSIVE CHOICE, NOT A SPEC VIOLATION BEING FIXED - the
+        // vendor's SDRplay API Specification v3.15 says nothing about
+        // calling sdrplay_api_Update from inside an event callback, and the
+        // vendor's OWN example (sdrplay_api_example.c) does exactly that:
+        // its EventCallback's PowerOverloadChange case calls
+        // sdrplay_api_Update(..., Update_Ctrl_OverloadMsgAck, ...) directly,
+        // concurrently with whatever Tuner_Gr updates the rest of the
+        // example issues elsewhere. So the vendor's own reference code takes
+        // the same risk this file used to. What changed here is not "the
+        // spec requires serialisation" - it does not say either way - but
+        // that THIS codebase's whole SDRplay driver is already built on the
+        // rule that nothing of ours enters that DLL except through one
+        // bounded, mutex-serialised path, and the event callback was the one
+        // exception to a rule everything else here follows. Bringing it into
+        // line is defensive hardening against an unproven risk (this file's
+        // own bounded-wait philosophy applied consistently), not a fix for a
+        // confirmed defect - there is no evidence, from the field reports or
+        // otherwise, that this exact race caused anything.
+        //
+        // So the callback only LATCHES which tuner needs acknowledging;
+        // drainPendingOverloadAcks() (called from read(), the same thread
+        // drainEventLogs already runs on, never the callback's) issues the
+        // actual Update through ackOverloadLocked(), which TRIES devMutex_
+        // (never waits for it - read() must not queue behind a GUI-thread
+        // control in flight; a busy mutex leaves these flags set for the
+        // next read() to retry) and is bounded exactly like every other
+        // control once it has the lock.
+        //
+        // CLEARED IN startStreamingLocked() (round 3, measured): a stop()
+        // between an overload firing and the next read() left the flag set,
+        // and the NEXT session's first read() sent an acknowledgement for an
+        // overload that never happened this time.
+        std::atomic<bool> pendingOverloadAckA{false};
+        std::atomic<bool> pendingOverloadAckB{false};
+
+        // THE RATE THE RADIO WAS SET FOR, as sampleRateHz() reports it,
+        // copied here by startStreamingLocked and by an accepted rate change
+        // (0.99.44, GitHub issue 5). The health window compares what the
+        // service actually delivered against it and says so when the two are
+        // far apart: the 0.99.27 and 0.99.43 RSP2 logs each show 6.0 MS/s
+        // arriving at a radio FoxSDR called 2 MS/s, and neither said it in
+        // words. 0 means "not streaming".
+        std::atomic<double> setRateHz{0.0};
+        // Raised by a live rate change: the window it lands in holds samples
+        // at two rates, so that one window is not judged.
+        std::atomic<bool> rateChangedInWindow{false};
+
         mutable std::mutex healthMutex;
         StreamHealth health;
         bool healthEverWritten = false;
@@ -790,7 +1048,9 @@ private:
 
     // The *Locked helpers assume devMutex_ is held.
     const sdrplay_abi::Api& api() const;
-    bool acquireSessionLocked(std::string& error);
+    // `serviceAdvice`: see sessionAcquire in the .cpp - the SDRplay API
+    // Service sentence when Open itself failed, empty otherwise.
+    bool acquireSessionLocked(std::string& error, std::string* serviceAdvice = nullptr);
     void releaseSessionLocked();
 
     bool selectByArgsLocked(const std::string& args);
@@ -802,6 +1062,57 @@ private:
     // warning, not a failure.
     bool updateLocked(sdrplay_abi::ReasonForUpdateT reason,
                       sdrplay_abi::ReasonForUpdateExt1T ext1, const char* what);
+    // --- the late answer (kControlGrace, 0.99.50) -------------------------
+    //
+    // One control at most can be waiting: while it is, controlAbandoned_ is
+    // true, so every other vendor call is refused before it is made and no
+    // second worker can join the first. Defined in the .cpp.
+    struct LateControl;
+    std::shared_ptr<LateControl> lateControl_;  // devMutex_
+    // Mirrors lateControl_ != nullptr for the two readers that must not take
+    // devMutex_ to ask: read()'s drain and checkForStallFromRead.
+    std::atomic<bool> lateControlPending_{false};
+    std::atomic<long long> controlGraceMs_{kControlGrace.count()};
+    // Set by reapLateControlLocked just before a give-up for an expired grace,
+    // so the log says "did not answer within N ms" only when that is true
+    // (a stop or close inside the grace says so instead). devMutex_.
+    bool lateControlGraceRanOut_ = false;
+
+    // Called with the future of a worker that did not answer within
+    // kControlWait: records it and leaves it to answer. `table` is the one it
+    // was called through; `undo` is set later by undoRefusedLocked.
+    void beginLateControlLocked(std::shared_ptr<LateControl> late);
+    // THE ONE PLACE A LATE ANSWER IS LOOKED AT, at the head of every entry
+    // that takes devMutex_ (and from read() when the lock is free): acts on an
+    // answer that has arrived, gives the radio up when the grace has run out,
+    // and otherwise does nothing.
+    void reapLateControlLocked();
+    // Gives up on a control that has not answered, for good - the grace ran
+    // out, or the radio is being stopped or closed with the worker still in.
+    void giveUpLateControlLocked(const char* why);
+    // Forgets the late control and returns the process table's count.
+    void endLateControlLocked();
+    // After a late Success: the readback mirrors follow what the block now
+    // holds for the reasons that control carried, because the setter that
+    // sent it returned false before it could store them.
+    void syncMirrorsAfterLateSuccessLocked(sdrplay_abi::ReasonForUpdateT reason,
+                                           sdrplay_abi::ReasonForUpdateExt1T ext1);
+    // A setter's refused Update: put the block back - unless a worker of
+    // ours may still be reading it, in which case the undo is kept for the
+    // late answer to apply (a refusal) or discard (a success), or dropped
+    // after a give-up.
+    void undoRefusedLocked(std::function<void()> undo);
+    // read(): the late answer, TRIED under devMutex_ and never waited for.
+    void drainLateControl();
+
+    // The overload acknowledgement, bounded exactly like updateLocked (a
+    // worker, kControlWait, abandon on timeout) but for an EXPLICIT tuner
+    // rather than device_.tuner - an RSPduo's overload can be on either
+    // tuner independently of which one Init selected (the 0.99.34 fix this
+    // preserves). No acknowledgement flag to wait for afterwards: unlike a
+    // retune or a rate change, OverloadMsgAck sets none of grChanged/
+    // rfChanged/fsChanged.
+    void ackOverloadLocked(sdrplay_abi::TunerSelectT tuner);
     bool startStreamingLocked();
     void stopStreamingLocked();
     // Release and re-select the same device on the other tuner, restoring the
@@ -831,6 +1142,17 @@ private:
     bool vendorUnreachableLocked() const {
         return controlAbandoned_ || serviceGone_ || streamStalled_.load(std::memory_order_acquire);
     }
+
+    // ...AND THE TEARDOWN'S QUESTION, which is wider: this device's own flags
+    // OR THE PROCESS'S SESSION, lost by any radio (0.99.44, GitHub issue 5).
+    // stop(), closeDevice() and the overload acknowledgement ask this one.
+    // Until 0.99.44 they asked vendorUnreachableLocked() alone, so a second
+    // radio still streaming when the first lost the session went into
+    // Uninit, ReleaseDevice and Close on the dead service - each of which the
+    // 0.99.43 report shows taking five seconds on the GUI thread to answer
+    // ServiceNotResponding. start(), open(), the scan and every setter
+    // already asked the session. devMutex_ held.
+    bool teardownMustSkipVendorLocked() const;
 
     // THE FIRST LINE OF EVERY SETTER (the review of 6e308c3). True - with
     // lastError "<what> refused: <the sentence for why>" - when the vendor DLL
@@ -865,13 +1187,25 @@ private:
     void clearError();
 
     void setName(std::string n);
-    static std::string healthLineLocked(Link& link);   // link.healthMutex held
+    // link.healthMutex held. `rateWarning`, when given, receives the line
+    // that says the window's samples arrived at a rate far from the one the
+    // radio was set for (empty when they did not) - see Link::setRateHz.
+    static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr);
     // Service thread: atomics only. Never a lock, never the log.
     static void noteBlock(Link& link, std::size_t samples, bool dropped);
     // The pipeline's source thread (read()): closes a window that has run
     // out and writes its line, and logs what the event callback left.
     static void maybeWriteHealth(Link& link);
     static void drainEventLogs(Link& link);
+    // The pipeline's source thread (read()): issues any overload
+    // acknowledgement the event callback latched (Link::pendingOverloadAckA/
+    // B), through ackOverloadLocked - the one bounded, serialised path every
+    // other control uses. TRIES devMutex_ and never waits for it (round 3 of
+    // the same review - measured a blocking lock here costing read() 2453 ms
+    // behind one slow GUI-thread control): read() must never queue behind a
+    // control in flight, the same rule checkForStallFromRead already follows.
+    // A busy mutex leaves the flags set for the next read() to retry.
+    void drainPendingOverloadAcks();
 
     // The bits of Link::pendingEventLogs.
     static constexpr unsigned int kEventLogOverload = 1u;

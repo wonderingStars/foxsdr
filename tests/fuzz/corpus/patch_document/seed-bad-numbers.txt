@@ -1,0 +1,5 @@
+foxsdr-patch 6
+view nan inf -1
+node 1 99 0 1 1 1 1 1 1 - - 1 1 1 1 x
+node 18446744073709551615 0 0 1e39 -1e39 -5 0 1e300 -1 %zz - 9e99 2 -1e9 3 y
+wire 1 99 7 0

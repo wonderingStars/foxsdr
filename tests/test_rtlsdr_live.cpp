@@ -17,9 +17,11 @@
 // machine, not a defect, and it is named as such.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -27,7 +29,9 @@
 
 #include "core/diag_log.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "source/sample_pattern.hpp"
 #include "test_check.hpp"
+#include "usb/usb_device.hpp"
 
 using cascade::source::NativeDeviceInfo;
 using cascade::source::RtlSdrSource;
@@ -45,6 +49,10 @@ constexpr double kStreamSeconds = 5.0;
 // generous for a USB device measured with a wall clock over five seconds and
 // tight enough that a stream running at the wrong rate cannot pass.
 constexpr double kRateTolerance = 0.02;
+// The first samples of a stream are kept, contiguous, for the fixed-pattern
+// check below: enough for eight repeats of the longest period looked for.
+constexpr std::size_t kPatternSamples = 32768;
+constexpr std::size_t kMaxPatternPeriod = 4096;
 
 struct StreamResult {
     std::size_t samples = 0;
@@ -52,6 +60,7 @@ struct StreamResult {
     double meanMag = 0.0;
     double peakMag = 0.0;
     bool faulted = false;
+    std::vector<std::complex<float>> head;  // the first kPatternSamples, in order
 };
 
 // Reads for `seconds` and reports what came back. Deliberately does NOT sleep
@@ -69,6 +78,10 @@ StreamResult streamFor(RtlSdrSource& src, double seconds) {
             const double m = std::abs(buf[i]);
             sum += m;
             if (m > r.peakMag) { r.peakMag = m; }
+        }
+        if (r.head.size() < kPatternSamples) {
+            const std::size_t take = std::min(got, kPatternSamples - r.head.size());
+            r.head.insert(r.head.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(take));
         }
         r.samples += got;
         if (src.faulted()) {
@@ -89,11 +102,22 @@ StreamResult streamFor(RtlSdrSource& src, double seconds) {
 bool oneCycle(const std::string& args, int cycle) {
     RtlSdrSource src;
     if (!src.open(args)) {
-        std::printf("  cycle %d: the dongle would not open (%s).\n"
-                    "  The transport opens a radio EXCLUSIVELY, so this is what a second\n"
-                    "  program holding it looks like - contention on this bench, not a\n"
-                    "  defect in this driver. Re-run with nothing else using the dongle.\n",
-                    cycle, src.lastError());
+        // ONLY "IN USE" IS CONTENTION. Every other open failure is this
+        // driver failing on real silicon, which is what this file exists to
+        // catch - until 2026-09-30 it skipped on those too, and reported a
+        // tuner that would not initialise as "0 checks, 0 failed".
+        if (cascade::usb::errorSaysInUse(src.lastError())) {
+            std::printf("  cycle %d: the dongle would not open (%s).\n"
+                        "  The transport opens a radio EXCLUSIVELY, so this is another\n"
+                        "  program holding it - contention on this bench, not a defect in\n"
+                        "  this driver. Re-run with nothing else using the dongle.\n",
+                        cycle, src.lastError());
+        } else {
+            std::printf("  cycle %d: the dongle would not open, and not because it is in use: "
+                        "%s\n",
+                        cycle, src.lastError());
+            CHECK(false);
+        }
         return false;
     }
     std::printf("  cycle %d: opened %s, tuner %s\n", cycle, src.name(),
@@ -149,6 +173,39 @@ bool oneCycle(const std::string& args, int cycle) {
     CHECK(a.meanMag < 0.95);
     CHECK(a.peakMag > 0.0);
 
+    // NOT A FIXED PATTERN. On 2026-10-06 this dongle stopped receiving and
+    // delivered the same 1880 samples over and over at every frequency, and
+    // every check above passed on it for a day: the count was exact, the
+    // level was plausible, the stream health was perfect. A real stream never
+    // matches itself bit for bit at any lag (source/sample_pattern.hpp); one
+    // that does is a digital pattern, and the failure must say so and say what
+    // the driver's own lock check made of the tuner, so the cause is named
+    // instead of the symptom.
+    {
+        CHECK(a.head.size() >= 2 * kMaxPatternPeriod);
+        const std::size_t period =
+            cascade::source::exactRepeatPeriod(a.head.data(), a.head.size(), kMaxPatternPeriod);
+        if (period != 0) {
+            std::printf("  cycle %d: the first %zu samples REPEAT EXACTLY every %zu samples -\n"
+                        "  a fixed digital pattern, not a radio signal. The tuner or converter is\n"
+                        "  not delivering RF; unplug the dongle, plug it back in and run again.\n",
+                        cycle, a.head.size(), period);
+            bool saidPll = false;
+            for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (line.find("PLL") != std::string::npos) {
+                    std::printf("  cycle %d: the driver's lock check: %s\n", cycle, line.c_str());
+                    saidPll = true;
+                }
+            }
+            if (!saidPll) {
+                std::printf("  cycle %d: the driver's lock check reported the tuner locked on "
+                            "every tune.\n",
+                            cycle);
+            }
+        }
+        CHECK(period == 0);
+    }
+
     // THE RATE CHANGE ON A LIVE STREAM, which is where the Soapy path used to
     // kill the process. 1.0 MS/s is not one of the standard rates, so it is
     // coerced to the nearest - 1.024 MS/s - and the count is judged against
@@ -170,7 +227,10 @@ bool oneCycle(const std::string& args, int cycle) {
     CHECK(b.meanMag > 0.001);
 
     // A retune and the gain controls, live.
-    CHECK(src.setCenterFrequencyHz(1090000000.0));
+    if (!src.setCenterFrequencyHz(1090000000.0)) {
+        std::printf("  cycle %d: retune to 1090 MHz FAILED: %s\n", cycle, src.lastError());
+        CHECK(false);
+    }
     CHECK_NEAR(src.centerFrequencyHz(), 1090000000.0, 1.0);
     CHECK(src.setGainDb("LNA", 16.6));
     CHECK_NEAR(src.gainDb("LNA"), 16.6, 0.05);
@@ -231,12 +291,13 @@ int main() {
 
     // ...and the console check itself, run rather than assumed. It is what a
     // user with a silent radio will be asked to run, so it has to work on the
-    // day it is wired in. Skipped - and said - when the dongle was in use
-    // above, because an exit code from a run that could not open a radio says
-    // nothing about the check.
+    // day it is wired in. Skipped - and said - when the dongle did not open
+    // above (in use, which passes, or a failure, which has already failed),
+    // because an exit code from a run that could not open a radio says nothing
+    // about the check.
     if (!opened) {
-        std::printf("rtlsdrCheckMain NOT RUN: the dongle was in use by something else on this\n"
-                    "machine, so nothing above measured this driver either.\n");
+        std::printf("rtlsdrCheckMain NOT RUN: the dongle did not open above (the reason is\n"
+                    "printed there), so an exit code from it would say nothing.\n");
         return testSummary("test_rtlsdr_live");
     }
     std::printf("---- rtlsdrCheckMain ----\n");

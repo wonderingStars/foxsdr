@@ -1,0 +1,1409 @@
+// The sentinel, against REAL PROCESSES that really die (0.99.64).
+//
+// This test program plays three parts, chosen by its command line:
+//
+//   (none)       the test: starts stand-in applications, kills them or lets them die,
+//                and reads what the sentinel wrote;
+//   --app ...    a STAND-IN FOR THE APPLICATION: the real breadcrumb, the real
+//                sentinel start (core/sentinel.hpp), the real log and - for one
+//                scenario - the real in-process crash handler, driven through the
+//                phases AppWindow really has, so that none of this needs a window;
+//   --sentinel   THE SENTINEL: runSentinelMain, the same code cascade.exe runs for
+//                `cascade --sentinel`, started by the stand-in exactly as the
+//                application starts it (this executable is its own helper, the
+//                pattern test_soapy_enum_proc.cpp uses).
+//
+// What the real cascade.exe does is in test_sentinel_app.cpp.
+//
+// EVERY DEATH HERE IS A REAL ONE, and none can put a dialog on the desktop: the
+// stand-in sets SEM_NOGPFAULTERRORBOX before anything else, and its unhandled
+// exception filter ends the process quietly with the exception's code (the same
+// way the enumeration helper does) - so an access violation and a stack overflow
+// are real faults whose only trace is the exit code. A fast-fail and a heap
+// corruption cannot reach any filter by definition; the first is a real
+// __fastfail, the second (as the enumeration tests have always done it) is
+// TerminateProcess with the code the heap manager would have used.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "core/breadcrumb.hpp"
+#include "core/crash_handler.hpp"
+#include "core/crash_upload.hpp"
+#include "core/diag_log.hpp"
+#include "core/diag_report.hpp"
+#include "core/exit_record.hpp"
+#include "core/hang_watchdog.hpp"
+#include "core/report_reader.hpp"
+#include "core/sentinel.hpp"
+#include "test_check.hpp"
+
+#if defined(_WIN32)
+#include <intrin.h>
+#include <windows.h>
+
+#include <werapi.h>
+
+#include "os_event_oracle.hpp"
+#pragma comment(lib, "wer.lib")
+#else
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+namespace fs = std::filesystem;
+using namespace cascade::core;
+using breadcrumb::Phase;
+
+namespace {
+
+std::string readFile(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+bool contains(const std::string& hay, const std::string& needle) {
+    return hay.find(needle) != std::string::npos;
+}
+
+std::size_t countOf(const std::string& hay, const std::string& needle) {
+    std::size_t n = 0;
+    for (std::size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + 1)) { ++n; }
+    return n;
+}
+
+// The N of "...; silent N s" at the end of a sentinel reason, or -1.
+long silentSecondsOf(const std::string& reason) {
+    const std::size_t at = reason.rfind("; silent ");
+    return at == std::string::npos ? -1 : std::strtol(reason.c_str() + at + 9, nullptr, 10);
+}
+
+// ===========================================================================
+// THE STAND-IN FOR THE APPLICATION
+// ===========================================================================
+#if defined(_WIN32)
+LONG WINAPI quietDeath(EXCEPTION_POINTERS* ep) {
+    const DWORD code = (ep != nullptr && ep->ExceptionRecord != nullptr)
+                           ? ep->ExceptionRecord->ExceptionCode
+                           : 0xE0000001ul;
+    ::TerminateProcess(::GetCurrentProcess(), code);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#pragma warning(push)
+#pragma warning(disable : 4717)  // recursive on all control paths: that is the point
+int recurse(volatile int depth) {
+    volatile char pad[4096];
+    pad[0] = static_cast<char>(depth);
+    return recurse(depth + 1) + pad[0];
+}
+#pragma warning(pop)
+#endif
+
+void sleepMs(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+
+void say(const char* fmt, unsigned long v) {
+    std::printf(fmt, v);
+    std::fflush(stdout);
+}
+
+[[noreturn]] void hold() {
+    for (;;) { sleepMs(1000); }
+}
+
+// A frame loop of `beats` heartbeats, ten milliseconds apart, polling the watcher
+// as the real loop does every few seconds (here every frame, so the test is fast).
+void drawFrames(int beats) {
+    for (int i = 0; i < beats; ++i) {
+        breadcrumb::beat();
+        sentinelPoll();
+        sleepMs(10);
+    }
+}
+
+void toRunning(int beats) {
+    breadcrumb::setPhase(Phase::CreatingWindow);
+    breadcrumb::setPhase(Phase::AwaitingFirstFrame);
+    drawFrames(beats);
+}
+
+std::string argValue(int argc, char** argv, const char* name, const char* fallback = "") {
+    const std::string key = std::string("--") + name + "=";
+    for (int i = 2; i < argc; ++i) {
+        if (std::strncmp(argv[i], key.c_str(), key.size()) == 0) { return argv[i] + key.size(); }
+    }
+    return fallback;
+}
+
+int standIn(int argc, char** argv) {
+#if defined(_WIN32)
+    // FIRST: no Windows Error Reporting dialog, whatever happens next. The error mode
+    // is what every other crash test sets (and is all an exception that reaches the
+    // filter below needs); a real __fastfail skips every filter and goes straight to
+    // Windows Error Reporting, which with only that mode still starts WerFault.exe
+    // quietly - measured on this machine: two silent instances, no window - so the
+    // process also asks Windows, in the SDK's own words, that "fault reporting UI
+    // should not be shown" (WER_FAULT_REPORTING_NO_UI), on any machine.
+    //
+    // EXCEPT FOR THE ONE SCENARIO THAT NEEDS WINDOWS' CRASH RECORD (0.99.66): a process
+    // that sets SEM_NOGPFAULTERRORBOX gets NO Application Error event, measured on
+    // Windows 11 22631 for a fast-fail and for an access violation (docs/DIAGNOSTICS.md,
+    // "Where in the process it ended"), and the sentinel's new read would find nothing.
+    // "failfast-wer" sets the UI flag alone, which was measured to write the event and
+    // to show no window.
+    if (argValue(argc, argv, "scenario") != "failfast-wer") {
+        ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    }
+    ::WerSetFlags(WER_FAULT_REPORTING_NO_UI);
+    ::SetUnhandledExceptionFilter(&quietDeath);
+#endif
+    const fs::path dir = argValue(argc, argv, "dir");
+    const std::string scenario = argValue(argc, argv, "scenario");
+    const std::string sentinelExe = argValue(argc, argv, "sentinel-exe");
+    const bool diag = argValue(argc, argv, "diag", "on") == "on";
+    const int runMs = std::atoi(argValue(argc, argv, "run-ms", "0").c_str());
+    const fs::path crashes = dir / "crashes";
+    const fs::path logs = dir / "logs";
+    std::error_code ec;
+    fs::create_directories(crashes, ec);
+    fs::create_directories(logs, ec);
+
+    DiagLog::instance().configure(logs.string(), diag);
+    diagLogf("FoxSDR 0.99.64 (standin) starting");
+
+    if (scenario == "handled") {
+        // The REAL in-process crash handler, armed as main() arms it.
+        CrashHandlerConfig cfg;
+        cfg.crashDir = crashes.string();
+        cfg.enabled = true;
+        cfg.exitAfterReport = true;  // die at once and quietly, with the fault's own code
+        installCrashHandlers(cfg);
+    }
+
+    // LINUX (0.99.78): the application writes down how it ends, as main() arranges it before it
+    // starts the sentinel (core/exit_record.hpp) - the status of an exit(), the number of a
+    // signal that would end it. A no-op on Windows, where these scenarios are not run.
+    if (scenario == "exit3" || scenario == "exit1-startup" || scenario == "term") { installExitRecording(); }
+
+    SentinelOptions so;
+    so.crashDir = crashes.string();
+    so.logDir = logs.string();
+    so.exePath = sentinelExe;  // empty: this executable
+    sentinelConfigure(so);
+    // The sentinel follows the Diagnostics switch exactly as AppWindow drives it.
+    sentinelSetEnabled(diag);
+    say("SENTINEL %lu\n", sentinelProcessId());
+    breadcrumb::setPhase(Phase::BuildingApp);
+
+    if (scenario == "clean") {
+        toRunning(6);
+        breadcrumb::setPhase(Phase::ShutdownBegun);
+        breadcrumb::setPhase(Phase::ShutdownStoppingReceiver);
+        breadcrumb::setPhase(Phase::ShutdownUnloadingPlugins);
+        breadcrumb::setPhase(Phase::ShutdownWritingMarker);
+        breadcrumb::setPhase(Phase::ShutdownClosingWindow);
+        breadcrumb::setPhase(Phase::Finished);
+        return 0;
+    }
+    if (scenario == "run") {  // drawing, until the test ends it from outside
+        toRunning(40);
+        diagLogf("stand-in: about to be ended");
+        say("READY %lu\n", 0);
+        for (;;) { drawFrames(1); }
+    }
+    if (scenario == "frozen") {  // drew for a while, then the frame loop stopped
+        toRunning(40);              // past the 30 start-up frames: the 5 s threshold applies
+        diagLogf("stand-in: about to freeze");
+        say("READY %lu\n", 0);
+        hold();
+    }
+    if (scenario == "startup") {  // never got as far as a first frame
+        breadcrumb::setPhase(Phase::CreatingWindow);
+        diagLogf("stand-in: window being created");
+        say("READY %lu\n", 0);
+        hold();
+    }
+    if (scenario == "session") {  // Windows told the window the session is ending
+        toRunning(40);
+        breadcrumb::noteSessionEnding();
+        say("READY %lu\n", 0);
+        for (;;) { drawFrames(1); }
+    }
+    if (scenario == "radio") {  // dies while a radio is being opened
+        toRunning(40);
+        breadcrumb::setActivity(breadcrumb::kOpeningRadio, true);
+        say("READY %lu\n", 0);
+        for (;;) { drawFrames(1); }
+    }
+    if (scenario == "sentinel-killed" || scenario == "fail-start") {
+        toRunning(20);
+        say("READY %lu\n", 0);
+        // The application carries on. It draws for runMs and then ends normally.
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(runMs);
+        while (std::chrono::steady_clock::now() < until) { drawFrames(1); }
+        breadcrumb::setPhase(Phase::ShutdownClosingWindow);
+        return 0;
+    }
+    if (scenario == "exit3") {  // Linux: leaves by itself with a status, from anywhere in the program
+        toRunning(40);
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::exit(3);
+    }
+    if (scenario == "window-failed" || scenario == "exit1-unrecorded") {
+        // The field report's ending on Windows (85FF854AA2C772F9): the window could not be created
+        // and the application returned 1 itself. "window-failed" records it in the page exactly as
+        // AppWindow::run does; "exit1-unrecorded" is the same ending with nothing recorded, which is
+        // also what an application ended by `taskkill /F` looks like to the watcher.
+        breadcrumb::setPhase(Phase::CreatingWindow);
+        if (scenario == "window-failed") { breadcrumb::noteWindowFailed(); }
+        diagLogf("stand-in: window could not be created");
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::exit(1);
+    }
+    if (scenario == "exit1-startup") {  // Linux: the field report's ending - a failed glfwInit returns 1
+        breadcrumb::setPhase(Phase::CreatingWindow);
+        diagLogf("stand-in: window being created");
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::exit(1);
+    }
+    if (scenario == "term") {  // Linux: drawing, until the test sends SIGTERM
+        toRunning(40);
+        say("READY %lu\n", 0);
+        for (;;) { drawFrames(1); }
+    }
+    if (scenario == "toggle") {  // Diagnostics switched off, then on, mid-session
+        toRunning(40);
+        say("READY %lu\n", 0);
+        sleepMs(300);
+        sentinelSetEnabled(false);
+        say("OFF %lu\n", sentinelProcessId());
+        sleepMs(600);
+        if (argValue(argc, argv, "then") == "on") {
+            sentinelSetEnabled(true);
+            say("SENTINEL2 %lu\n", sentinelProcessId());
+        }
+        for (;;) { drawFrames(1); }
+    }
+    if (scenario == "late-on") {  // started with Diagnostics off, switched on mid-session
+        toRunning(40);
+        say("READY %lu\n", 0);
+        sleepMs(300);
+        sentinelSetEnabled(true);
+        say("SENTINEL2 %lu\n", sentinelProcessId());
+        for (;;) { drawFrames(1); }
+    }
+
+#if defined(_WIN32)
+    // The deaths. Each runs after a real stretch of Running, with a line in the log.
+    auto dieAfterRunning = [&](auto&& die) {
+        toRunning(40);
+        diagLogf("stand-in: about to die (%s)", scenario.c_str());
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        die();
+    };
+    if (scenario == "av" || scenario == "handled") {
+        dieAfterRunning([] {
+            volatile int* p = nullptr;
+            *p = 1;
+        });
+    }
+    if (scenario == "failfast") {
+        dieAfterRunning([] { __fastfail(7); });  // FAST_FAIL_FATAL_APP_EXIT: what abort() ends in
+    }
+    if (scenario == "failfast-wer") {
+        // The same death, with Windows Error Reporting left to write its record of it.
+        dieAfterRunning([] { __fastfail(7); });
+    }
+    if (scenario == "heap") {
+        // Windows raises this from inside the heap manager and no user-mode filter
+        // sees it; the exit code is all anyone gets (test_soapy_enum_proc.cpp's way).
+        dieAfterRunning([] { ::TerminateProcess(::GetCurrentProcess(), 0xC0000374ul); });
+    }
+    if (scenario == "overflow") {
+        dieAfterRunning([] { (void)recurse(0); });
+    }
+    if (scenario == "startup-av") {
+        breadcrumb::setPhase(Phase::CreatingWindow);
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        volatile int* p = nullptr;
+        *p = 1;
+    }
+#endif
+    std::fprintf(stderr, "stand-in: unknown scenario '%s'\n", scenario.c_str());
+    return 9;
+}
+
+#if defined(_WIN32)
+// ===========================================================================
+// THE TEST HARNESS (Windows)
+// ===========================================================================
+struct Proc {
+    HANDLE process = nullptr;
+    HANDLE readEnd = nullptr;
+    DWORD pid = 0;
+    std::string seen;
+    bool started = false;
+};
+
+// The ANSI code page, which is what every narrow string in this test (a path from
+// std::filesystem, getenv) is in.
+std::wstring wide(const std::string& s) {
+    if (s.empty()) { return std::wstring(); }
+    const int n = ::MultiByteToWideChar(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring out(static_cast<std::size_t>(n > 0 ? n : 0), L'\0');
+    if (n > 0) { ::MultiByteToWideChar(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n); }
+    return out;
+}
+
+std::string selfPath() {
+    char buf[MAX_PATH * 2] = {};
+    const DWORD n = ::GetModuleFileNameA(nullptr, buf, static_cast<DWORD>(sizeof(buf)));
+    return std::string(buf, n);
+}
+
+// Starts `exe` with `args`, its stdout on a pipe this test reads.
+Proc spawn(const std::string& exe, const std::string& args) {
+    Proc p;
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE writeEnd = nullptr;
+    if (!::CreatePipe(&p.readEnd, &writeEnd, &sa, 0)) { return p; }
+    ::SetHandleInformation(p.readEnd, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul = ::CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    std::wstring cmd = L"\"" + wide(exe) + L"\" " + wide(args);
+    cmd.push_back(L'\0');
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nul;
+    si.hStdOutput = writeEnd;
+    si.hStdError = writeEnd;
+    PROCESS_INFORMATION pi{};
+    const BOOL ok = ::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                     nullptr, nullptr, &si, &pi);
+    ::CloseHandle(writeEnd);  // the child has its own copy; this makes end-of-file arrive
+    if (nul != INVALID_HANDLE_VALUE) { ::CloseHandle(nul); }
+    if (ok) {
+        ::CloseHandle(pi.hThread);
+        p.process = pi.hProcess;
+        p.pid = pi.dwProcessId;
+        p.started = true;
+    }
+    return p;
+}
+
+Proc standInProc(const fs::path& dir, const std::string& scenario, const std::string& extra = "",
+                 const std::string& exe = std::string()) {
+    return spawn(exe.empty() ? selfPath() : exe,
+                 "--app \"--dir=" + dir.string() + "\" --scenario=" + scenario + " " + extra);
+}
+
+void pump(Proc& p) {
+    DWORD avail = 0;
+    while (p.readEnd != nullptr && ::PeekNamedPipe(p.readEnd, nullptr, 0, nullptr, &avail, nullptr) &&
+           avail > 0) {
+        char buf[4096];
+        DWORD got = 0;
+        if (!::ReadFile(p.readEnd, buf, sizeof(buf), &got, nullptr) || got == 0) { break; }
+        p.seen.append(buf, got);
+    }
+}
+
+bool waitFor(Proc& p, const std::string& needle, unsigned timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        pump(p);
+        if (contains(p.seen, needle)) { return true; }
+        if (::WaitForSingleObject(p.process, 0) == WAIT_OBJECT_0) {
+            pump(p);
+            return contains(p.seen, needle);
+        }
+        sleepMs(10);
+    }
+    return contains(p.seen, needle);
+}
+
+// "KEY <number>" as the stand-in prints it, or 0.
+unsigned long numberAfter(const Proc& p, const std::string& key) {
+    const std::size_t at = p.seen.rfind(key + " ");
+    if (at == std::string::npos) { return 0; }
+    return std::strtoul(p.seen.c_str() + at + key.size() + 1, nullptr, 10);
+}
+
+DWORD waitExit(Proc& p, unsigned timeoutMs) {
+    const DWORD w = ::WaitForSingleObject(p.process, timeoutMs);
+    if (w != WAIT_OBJECT_0) { return 0xDEAD0001ul; }
+    DWORD code = 0;
+    ::GetExitCodeProcess(p.process, &code);
+    pump(p);
+    return code;
+}
+
+void kill(Proc& p, UINT code) {
+    if (p.process != nullptr) { ::TerminateProcess(p.process, code); }
+}
+
+void closeProc(Proc& p) {
+    if (p.process != nullptr) {
+        // A test that failed half way must not leave its stand-in running.
+        if (::WaitForSingleObject(p.process, 0) != WAIT_OBJECT_0) { ::TerminateProcess(p.process, 99); }
+        ::CloseHandle(p.process);
+    }
+    if (p.readEnd != nullptr) { ::CloseHandle(p.readEnd); }
+    p = Proc{};
+}
+
+// A handle to a process we did not start, for waiting on it (the sentinel).
+HANDLE openWatch(unsigned long pid) {
+    return ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                         static_cast<DWORD>(pid));
+}
+
+bool gone(HANDLE h, unsigned timeoutMs) {
+    return h == nullptr || ::WaitForSingleObject(h, timeoutMs) == WAIT_OBJECT_0;
+}
+
+fs::path scratch(const char* tag) {
+    const char* tmp = std::getenv("TEMP");
+    const fs::path base = (tmp != nullptr && *tmp != '\0') ? fs::path(tmp) : fs::path(".");
+    const fs::path dir = base / (std::string("cascade-sentproc-") + tag + "-" +
+                                 std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    return dir;
+}
+
+// The reports in a folder named for `pid`: every crash-*-<pid>-*.txt.
+std::vector<fs::path> reportsFor(const fs::path& dir, unsigned long pid) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    const std::string mid = "-" + std::to_string(pid) + "-";
+    for (const auto& e : fs::directory_iterator(dir / "crashes", ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.rfind("crash-", 0) == 0 && n.find(mid) != std::string::npos &&
+            n.size() > 4 && n.compare(n.size() - 4, 4, ".txt") == 0) {
+            out.push_back(e.path());
+        }
+    }
+    return out;
+}
+
+std::vector<fs::path> waitForReport(const fs::path& dir, unsigned long pid, unsigned timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+        std::vector<fs::path> r = reportsFor(dir, pid);
+        if (!r.empty() || std::chrono::steady_clock::now() >= deadline) { return r; }
+        sleepMs(20);
+    }
+}
+
+std::size_t allReports(const fs::path& dir) {
+    std::size_t n = 0;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dir / "crashes", ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.size() > 4 && name.compare(name.size() - 4, 4, ".txt") == 0) { ++n; }
+    }
+    return n;
+}
+
+// What the uploader would do with each report: a sweep against a port nothing
+// listens on, so an ATTEMPT shows as "failed" and a report kept local as "local-only".
+std::string sweepStatus(const fs::path& dir, const fs::path& report) {
+    SweepParams params;
+    params.crashDir = (dir / "crashes").string();
+    params.url = "http://127.0.0.1:1/api/crash";
+    params.enabled = true;
+    params.nowEpoch = static_cast<std::uint64_t>(std::time(nullptr));
+    sweepCrashDir(params, std::make_shared<UploadCancel>());
+    const std::string text = readFile(report.string() + ".upload");
+    const std::size_t at = text.find("status: ");
+    return at == std::string::npos ? std::string("(none)")
+                                   : text.substr(at + 8, text.find('\n', at) - at - 8);
+}
+
+// One death, end to end: run the scenario, let it die (or kill it), find the one report.
+struct Death {
+    DWORD appExit = 0;
+    unsigned long appPid = 0;
+    unsigned long sentinelPid = 0;
+    bool sentinelGone = false;
+    std::vector<fs::path> reports;
+    std::string text;
+    ParsedReport parsed;
+    bool parsedOk = false;
+};
+
+// `killWith` 0: the scenario dies by itself; otherwise the test ends it with that code.
+Death liveAndDie(const fs::path& dir, const std::string& scenario, UINT killWith,
+                 unsigned settleMs = 0, const std::string& extra = std::string()) {
+    Death d;
+    Proc app = standInProc(dir, scenario, extra);
+    CHECK(app.started);
+    if (!app.started) { return d; }
+    d.appPid = app.pid;
+    CHECK(waitFor(app, "READY", 20000));
+    d.sentinelPid = numberAfter(app, "SENTINEL");
+    HANDLE watch = d.sentinelPid != 0 ? openWatch(d.sentinelPid) : nullptr;
+    if (settleMs > 0) { sleepMs(settleMs); }
+    if (killWith != 0) { kill(app, killWith); }
+    d.appExit = waitExit(app, 20000);
+    d.sentinelGone = gone(watch, 3000);
+    d.reports = waitForReport(dir, d.appPid, 3000);
+    if (watch != nullptr) { ::CloseHandle(watch); }
+    if (d.reports.size() == 1) {
+        d.text = readFile(d.reports[0]);
+        d.parsedOk = parseReportText(d.text, d.parsed);
+    }
+    closeProc(app);
+    return d;
+}
+
+#endif  // _WIN32
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc >= 2 && std::strcmp(argv[1], "--sentinel") == 0) { return runSentinelMain(argc, argv); }
+    if (argc >= 2 && std::strcmp(argv[1], "--app") == 0) { return standIn(argc, argv); }
+
+#if defined(_WIN32)
+    // =======================================================================
+    // A CLEAN EXIT: nothing written, the sentinel gone within a second, and
+    // the executable replaceable at once
+    // =======================================================================
+    {
+        const fs::path dir = scratch("clean");
+        Proc app = standInProc(dir, "clean");
+        CHECK(app.started);
+        CHECK(waitFor(app, "SENTINEL", 20000));
+        const unsigned long sentinelPid = numberAfter(app, "SENTINEL");
+        CHECK(sentinelPid != 0 && sentinelPid != app.pid);
+        HANDLE watch = openWatch(sentinelPid);
+        CHECK(watch != nullptr);
+        CHECK(waitExit(app, 20000) == 0);
+        const auto appEnded = std::chrono::steady_clock::now();
+        // THE SENTINEL SAW THE EXIT AND WENT: within a second, and with exit code 0.
+        CHECK(gone(watch, 1000));
+        const double goneMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - appEnded).count();
+        std::printf("clean exit: the sentinel was gone %.0f ms after the application ended\n", goneMs);
+        CHECK(goneMs < 1000.0);
+        DWORD sentinelExit = 0xDEAD;
+        if (watch != nullptr) { ::GetExitCodeProcess(watch, &sentinelExit); }
+        CHECK(sentinelExit == 0);
+        CHECK(allReports(dir) == 0);
+        if (watch != nullptr) { ::CloseHandle(watch); }
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // THE EXECUTABLE CAN BE REPLACED PROMPTLY: the sentinel IS the file, so a copy
+    // run as both the application and its sentinel must be deletable (the installer's
+    // first act) within a second of the application ending.
+    {
+        const fs::path dir = scratch("replace");
+        const fs::path copy = dir / "copy-of-the-app.exe";
+        std::error_code ec;
+        fs::copy_file(selfPath(), copy, fs::copy_options::overwrite_existing, ec);
+        CHECK(!ec);
+        Proc app = standInProc(dir, "clean", "", copy.string());
+        CHECK(app.started);
+        CHECK(waitFor(app, "SENTINEL", 20000));
+        const unsigned long sentinelPid = numberAfter(app, "SENTINEL");
+        CHECK(sentinelPid != 0);
+        // While it runs the file really is in use: this is what makes the test mean something.
+        CHECK(!::DeleteFileW(copy.wstring().c_str()));
+        CHECK(waitExit(app, 20000) == 0);
+        const auto appEnded = std::chrono::steady_clock::now();
+        bool deleted = false;
+        double afterMs = 0;
+        while (!deleted) {
+            deleted = ::DeleteFileW(copy.wstring().c_str()) != 0;
+            afterMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - appEnded).count();
+            if (deleted || afterMs > 3000.0) { break; }
+            sleepMs(5);
+        }
+        std::printf("replace: the executable could be deleted %.0f ms after the application ended\n", afterMs);
+        CHECK(deleted);
+        CHECK(afterMs < 1000.0);
+        closeProc(app);
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // KILLED BY ANOTHER PROCESS WHILE HEALTHY: a report kept here, never sent
+    // =======================================================================
+    {
+        // A folder with a SPACE in its name, as a profile folder often has: it must reach
+        // the watcher intact, on its command line.
+        const fs::path dir = scratch("out side");
+        const Death d = liveAndDie(dir, "run", 1);
+        CHECK(d.appExit == 1);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.reports[0].filename().string().find("-" + std::to_string(d.appPid) + "-999999.txt") != std::string::npos);
+            CHECK(d.parsedOk);
+            std::printf("outside: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonOutside, 0) == 0);
+            // Exit code 1 is what taskkill /F leaves, and also what an application that gives up
+            // returns: the words say both and do not claim another process (signature 85FF854AA2C772F9).
+            CHECK(contains(d.parsed.reason, "exit code 1 (as taskkill /F leaves it, or the application ended itself)"));
+            CHECK(!contains(d.parsed.reason, "ended by another process"));
+            CHECK(contains(d.parsed.reason, "; phase running; silent "));
+            CHECK(d.parsed.code == "0x00000001");
+            CHECK(sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(d.parsed.uptimeSec < 60);
+            // THE LOG TAIL is the stand-in's own, from the file it flushed to, same lines.
+            CHECK(contains(d.text, "stand-in: about to be ended"));
+            CHECK(contains(d.text, "FoxSDR 0.99.64 (standin) starting"));
+            CHECK(contains(d.text, "sentinel: watching this session (process " + std::to_string(d.sentinelPid) + ","));
+            // The uploader keeps it on this machine: the sweep marks it local-only, no attempt.
+            CHECK(sweepStatus(dir, d.reports[0]) == "local-only");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // A FOLDER WITH A LETTER OUTSIDE ASCII IN ITS NAME (a profile folder often has one),
+    // in the ANSI code page the folders arrive in. The watcher is handed the folder as
+    // text on its command line, so this is where a wrong conversion would show: it would
+    // be handed a folder that does not exist and write nothing. Run only where the code
+    // page is Windows-1252 and the letter (e acute, byte 0xE9) therefore means what the
+    // test says it does.
+    if (::GetACP() == 1252) {
+        const std::string tag = "caf\xE9";
+        const fs::path dir = scratch(tag.c_str());
+        const Death d = liveAndDie(dir, "run", 1);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            CHECK(d.parsed.reason.rfind(kSentinelReasonOutside, 0) == 0);
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    } else {
+        std::printf("non-ASCII folder: skipped, the active code page is %u, not 1252\n", ::GetACP());
+    }
+
+    // =======================================================================
+    // THE DEATHS THE IN-PROCESS HANDLER CANNOT SEE: one upload-eligible report each
+    // =======================================================================
+    struct Row { const char* scenario; DWORD code; const char* words; };
+    const Row deaths[] = {
+        {"failfast", 0xC0000409ul, "fast-fail (abort or failed integrity check)"},
+        {"av", 0xC0000005ul, "access violation"},
+        {"heap", 0xC0000374ul, "heap corruption"},
+        {"overflow", 0xC00000FDul, "stack overflow"},
+    };
+    for (const Row& r : deaths) {
+        const fs::path dir = scratch(r.scenario);
+        const Death d = liveAndDie(dir, r.scenario, 0);
+        std::printf("%s: application exit 0x%08lX\n", r.scenario, static_cast<unsigned long>(d.appExit));
+        CHECK(d.appExit == r.code);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("%s: %s\n", r.scenario, d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonCrash, 0) == 0);
+            CHECK(contains(d.parsed.reason, std::string(" - ") + r.words + "; phase running; silent "));
+            char code[16] = {};
+            std::snprintf(code, sizeof(code), "0x%08lX", static_cast<unsigned long>(r.code));
+            CHECK(d.parsed.code == code);
+            CHECK(!sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(contains(d.text, std::string("stand-in: about to die (") + r.scenario + ")"));
+            // UPLOAD-ELIGIBLE: the sweep ATTEMPTS it (and, with nothing listening, fails).
+            CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // A FAST-FAIL THAT WINDOWS RECORDED (0.99.66): the real stand-in dies of a real
+    // __fastfail with Windows Error Reporting left to write its record, and the REAL
+    // sentinel process reads that record from the real Application event log.
+    // =======================================================================
+    {
+        const fs::path dir = scratch("failfast-wer");
+        const Death d = liveAndDie(dir, "failfast-wer", 0);
+        std::printf("failfast-wer: application exit 0x%08lX\n", static_cast<unsigned long>(d.appExit));
+        CHECK(d.appExit == 0xC0000409ul);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("failfast-wer: %s\n", d.parsed.reason.c_str());
+            // The class and the words are what every sentinel crash report says.
+            CHECK(d.parsed.reason.rfind(kSentinelReasonCrash, 0) == 0);
+            CHECK(d.parsed.code == "0xC0000409");
+            const bool located = contains(d.text, "\naddress: ");
+            // THE INDEPENDENT WITNESS, asked only if the report has no location: did Windows
+            // write the event at all? (Waits for it only in that case.)
+            const bool witnessed = located || oracle::applicationErrorEventFor(d.appPid, 20000);
+            if (!located && !witnessed) {
+                ++g_checksSkipped;
+                std::printf("SKIP: Windows wrote no Application Error event for the stand-in within 20 s "
+                            "(Windows Error Reporting disabled by a policy, or the Application log disabled "
+                            "or full): the sentinel's read of it cannot be exercised on this machine\n");
+            } else {
+                // Windows wrote it, so the report must carry it.
+                CHECK(located);
+                if (located) {
+                    const std::string self = selfPath();
+                    const std::size_t cut = self.find_last_of("\\/");
+                    const std::string selfName = cut == std::string::npos ? self : self.substr(cut + 1);
+                    std::printf("failfast-wer: %s\n", d.parsed.module.empty() ? "(no module)" : (d.parsed.module + "+0x" + std::to_string(d.parsed.offset)).c_str());
+                    CHECK(::_stricmp(d.parsed.module.c_str(), selfName.c_str()) == 0);
+                    CHECK(d.parsed.offset > 0);
+                    // a location inside this very image (the stand-in is this executable)
+                    const auto* base = reinterpret_cast<const unsigned char*>(::GetModuleHandleW(nullptr));
+                    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+                    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+                    CHECK(d.parsed.offset < nt->OptionalHeader.SizeOfImage);
+                    CHECK(contains(d.text, std::string("\naddress-source: ") + kSentinelAddressSource + "\n"));
+                    // nothing of a path in the header the location came into
+                    const std::string header = d.text.substr(0, d.text.find("--- context ---"));
+                    CHECK(!contains(header, "AppData") && !contains(header, "C:\\") && !contains(header, "Users"));
+                    // the uploader carries the module and the offset, in the fields it always has
+                    const std::string body = uploadJson(d.parsed, "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5");
+                    CHECK(contains(body, "\"module\":\"" + d.parsed.module + "\""));
+                    CHECK(!contains(body, "address-source"));
+                    // and it is still sent: the sweep ATTEMPTS it (nothing listens, so it fails)
+                    CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+
+                    // THE LOCATION IS IN THE STAND-IN'S OWN EXECUTABLE, so the report carries that
+                    // file's module line and the parsed report has its build id - the key the
+                    // reader resolves an offset by. The expected id is read from the FILE ON DISK
+                    // (peBuildId), another route than the mapped image the sentinel read it from.
+                    std::string fileId, filePdb;
+                    CHECK(peBuildId(self, fileId, filePdb));
+                    CHECK(!fileId.empty());
+                    CHECK(contains(d.text, "\n--- modules ---\n  " + d.parsed.module + " base=0x"));
+                    CHECK(contains(d.text, " pdb=" + filePdb + " build=" + fileId + "\n"));
+                    CHECK(d.parsed.buildId == fileId);
+                    CHECK(contains(body, "\"buildId\":\"" + fileId + "\""));
+
+                    // THE READER RESOLVES IT. An archive laid out as tools/archive-symbols.ps1 lays
+                    // it out, made from this executable's own PDB, and the one call the reader
+                    // (foxsdr-reports) makes for a report: module, build id, offset.
+                    const fs::path archiveRoot = scratch("failfast-wer-archive");
+                    const fs::path pdbBeside = fs::path(self).parent_path() / filePdb;
+                    const fs::path pdbDest = archiveRoot / filePdb / fileId / filePdb;
+                    std::error_code cec;
+                    fs::create_directories(pdbDest.parent_path(), cec);
+                    cec.clear();
+                    fs::copy_file(pdbBeside, pdbDest, fs::copy_options::overwrite_existing, cec);
+                    CHECK(fs::exists(pdbBeside) && !cec);
+                    {
+                        SymbolArchive archive(archiveRoot.string());
+                        const SymbolResult s = archive.resolve(d.parsed.module, d.parsed.buildId, d.parsed.offset);
+                        std::printf("failfast-wer resolved: %s (%s:%d) note=%s\n", s.function.c_str(), s.file.c_str(),
+                                    s.line, s.note.c_str());
+                        CHECK(s.resolved);
+                        CHECK(s.function.find("standIn") != std::string::npos);
+                        CHECK(s.file.find("test_sentinel_proc.cpp") != std::string::npos);
+                        CHECK(s.line > 0);
+                        CHECK(s.note.empty());
+                    }
+                    // Before this change the report had NO build id and the reader said so and stopped;
+                    // with no archive at all it now names the build id it wants:
+                    {
+                        const SymbolArchive empty((archiveRoot / "not-here").string());
+                        const SymbolResult s = empty.resolve(d.parsed.module, d.parsed.buildId, d.parsed.offset);
+                        CHECK(!s.resolved);
+                        CHECK(s.note.find(fileId) != std::string::npos);
+                        CHECK(s.note.find("carries no build id") == std::string::npos);
+                    }
+                    std::error_code rec;
+                    if (g_checksFailed == 0) { fs::remove_all(archiveRoot, rec); }
+                }
+            }
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // A crash the in-process handler DID report: no second report.
+    {
+        const fs::path dir = scratch("handled");
+        Proc app = standInProc(dir, "handled");
+        CHECK(app.started);
+        CHECK(waitFor(app, "READY", 20000));
+        const unsigned long sentinelPid = numberAfter(app, "SENTINEL");
+        HANDLE watch = openWatch(sentinelPid);
+        const DWORD exitCode = waitExit(app, 20000);
+        CHECK(exitCode == 0xC0000005ul);
+        CHECK(gone(watch, 3000));  // the sentinel has finished deciding
+        const std::vector<fs::path> mine = reportsFor(dir, app.pid);
+        std::printf("handled: %zu report(s) for the application\n", mine.size());
+        CHECK(mine.size() == 1);
+        if (mine.size() == 1) {
+            // ...and it is the handler's, with a stack, not the sentinel's.
+            const std::string text = readFile(mine[0]);
+            CHECK(mine[0].filename().string().find("-999999") == std::string::npos);
+            CHECK(contains(text, "reason: access violation") && contains(text, "--- stack"));
+        }
+        CHECK(allReports(dir) == 1);
+        if (watch != nullptr) { ::CloseHandle(watch); }
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // FROZEN, THEN KILLED: the silent time, and the control that shows it is the silence
+    // =======================================================================
+    {
+        const fs::path dir = scratch("frozen");
+        // 5.6 s of silence against the watchdog's own 5 s: frozen, and sent.
+        const Death d = liveAndDie(dir, "frozen", 1, 5600);
+        CHECK(d.appExit == 1);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("frozen: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonFrozen, 0) == 0);
+            // 5.6 s asked for; a loaded machine can add a little, so a window, not a number.
+            CHECK(contains(d.parsed.reason, "; phase running; silent "));
+            const long silent = silentSecondsOf(d.parsed.reason);
+            CHECK(silent >= 5 && silent <= 9);
+            CHECK(!sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // THE CONTROL: the same application, ended after 1.5 s of silence, is not frozen.
+        const fs::path dir = scratch("frozen-control");
+        const Death d = liveAndDie(dir, "frozen", 1, 1500);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            CHECK(d.parsed.reason.rfind(kSentinelReasonOutside, 0) == 0);
+            const long silent = silentSecondsOf(d.parsed.reason);
+            CHECK(silent >= 1 && silent <= 3);
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // A DEATH BEFORE THE FIRST FRAME: the start-up class
+    // =======================================================================
+    {
+        const fs::path dir = scratch("startup");
+        const Death d = liveAndDie(dir, "startup", 1, 200);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("startup: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            CHECK(contains(d.parsed.reason, "; phase creating the window;"));
+            CHECK(!sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // THE WINDOW COULD NOT BE CREATED and the application returned 1 itself, recording it: the
+        // report says the application ended itself and does not say another process did.
+        const fs::path dir = scratch("window-failed");
+        const Death d = liveAndDie(dir, "window-failed", 0);
+        CHECK(d.appExit == 1);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("window-failed: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            CHECK(contains(d.parsed.reason, "the application ended itself: the window could not be created"));
+            CHECK(contains(d.parsed.reason, "see the window: lines in the log"));
+            CHECK(contains(d.parsed.reason, "; phase creating the window;"));
+            CHECK(!contains(d.parsed.reason, "another process") && !contains(d.parsed.reason, "taskkill"));
+            CHECK(d.parsed.code == "0x00000001");
+            CHECK(!sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(contains(d.text, "stand-in: window could not be created"));
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // THE SAME ENDING WITH NOTHING RECORDED (the 0.99.73 reports): exit code 1 alone is
+        // ambiguous, and the report says so instead of asserting a kill. It keeps the group the
+        // field reports were filed under.
+        const fs::path dir = scratch("exit1-unrecorded");
+        const Death d = liveAndDie(dir, "exit1-unrecorded", 0);
+        CHECK(d.appExit == 1);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("exit1-unrecorded: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            CHECK(contains(d.parsed.reason, "exit code 1 (as taskkill /F leaves it, or the application ended itself)"));
+            CHECK(!contains(d.parsed.reason, "another process"));
+            CHECK(!contains(d.parsed.reason, "the window could not be created"));
+            CHECK(d.parsed.signature == "85FF854AA2C772F9");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // ...and a real fault there is the start-up class with its code, not a crash class.
+        const fs::path dir = scratch("startup-av");
+        const Death d = liveAndDie(dir, "startup-av", 0);
+        CHECK(d.appExit == 0xC0000005ul);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            CHECK(d.parsed.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            CHECK(contains(d.parsed.reason, "access violation; phase creating the window"));
+            CHECK(d.parsed.code == "0xC0000005");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // THE SESSION CLOSING, and what else was going on
+    // =======================================================================
+    {
+        const fs::path dir = scratch("session");
+        const Death d = liveAndDie(dir, "session", 1, 100);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            std::printf("session: %s\n", d.parsed.reason.c_str());
+            CHECK(d.parsed.reason.rfind(kSentinelReasonSession, 0) == 0);
+            CHECK(sentinelReasonIsLocalOnly(d.parsed.reason));
+            CHECK(sweepStatus(dir, d.reports[0]) == "local-only");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        const fs::path dir = scratch("radio");
+        const Death d = liveAndDie(dir, "radio", 0xC0000409ul, 100);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            CHECK(contains(d.parsed.reason, "; phase opening a radio;"));
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // THE SENTINEL KILLED FIRST, and a sentinel that cannot start: the
+    // application is unaffected and says so ONCE
+    // =======================================================================
+    {
+        const fs::path dir = scratch("sentinel-killed");
+        Proc app = standInProc(dir, "sentinel-killed", "--run-ms=2500");
+        CHECK(app.started);
+        CHECK(waitFor(app, "READY", 20000));
+        const unsigned long sentinelPid = numberAfter(app, "SENTINEL");
+        CHECK(sentinelPid != 0);
+        HANDLE watch = openWatch(sentinelPid);
+        // The sentinel is ended from outside, as a user or a security product might.
+        HANDLE killer = ::OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(sentinelPid));
+        CHECK(killer != nullptr);
+        if (killer != nullptr) {
+            CHECK(::TerminateProcess(killer, 5) != 0);
+            ::CloseHandle(killer);
+        }
+        CHECK(gone(watch, 3000));
+        // The application is unaffected: it draws on and ends cleanly, by itself.
+        CHECK(waitExit(app, 20000) == 0);
+        const std::string log = readFile(dir / "logs" / "foxsdr.log");
+        CHECK(countOf(log, "sentinel: the watcher ended while the application was still running") == 1);
+        CHECK(countOf(log, "sentinel: not started") == 0);
+        CHECK(allReports(dir) == 0);
+        if (watch != nullptr) { ::CloseHandle(watch); }
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        const fs::path dir = scratch("fail-start");
+        Proc app = standInProc(dir, "fail-start", "--run-ms=1000 --sentinel-exe=" + (dir / "no-such-program.exe").string());
+        CHECK(app.started);
+        CHECK(waitFor(app, "READY", 20000));
+        CHECK(numberAfter(app, "SENTINEL") == 0);  // none started
+        CHECK(waitExit(app, 20000) == 0);          // and the application did not care
+        const std::string log = readFile(dir / "logs" / "foxsdr.log");
+        CHECK(countOf(log, "sentinel: not started") == 1);
+        CHECK(countOf(log, "an ending this session that the application cannot report itself will not be written up") == 1);
+        CHECK(allReports(dir) == 0);
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // TWO APPLICATION INSTANCES: two sentinels, each reporting only its own
+    // =======================================================================
+    {
+        const fs::path dir = scratch("two");
+        Proc a = standInProc(dir, "run");   // will be ended from outside
+        Proc b = standInProc(dir, "av");    // will die of an access violation by itself
+        CHECK(a.started && b.started);
+        CHECK(waitFor(a, "READY", 20000));
+        CHECK(waitFor(b, "READY", 20000));
+        const unsigned long sa = numberAfter(a, "SENTINEL");
+        const unsigned long sb = numberAfter(b, "SENTINEL");
+        CHECK(sa != 0 && sb != 0 && sa != sb);
+        HANDLE wa = openWatch(sa);
+        HANDLE wb = openWatch(sb);
+        CHECK(waitExit(b, 20000) == 0xC0000005ul);
+        CHECK(gone(wb, 3000));
+        // B's sentinel has finished; A's is still waiting, and has written nothing.
+        CHECK(::WaitForSingleObject(wa, 0) == WAIT_TIMEOUT);
+        CHECK(reportsFor(dir, a.pid).empty());
+        const std::vector<fs::path> rb = reportsFor(dir, b.pid);
+        CHECK(rb.size() == 1);
+        kill(a, 1);
+        CHECK(waitExit(a, 20000) == 1);
+        CHECK(gone(wa, 3000));
+        const std::vector<fs::path> ra = waitForReport(dir, a.pid, 3000);
+        CHECK(ra.size() == 1);
+        CHECK(allReports(dir) == 2);
+        if (ra.size() == 1 && rb.size() == 1) {
+            ParsedReport pa, pb;
+            CHECK(parseReportText(readFile(ra[0]), pa) && parseReportText(readFile(rb[0]), pb));
+            CHECK(pa.reason.rfind(kSentinelReasonOutside, 0) == 0);  // A: ended from outside
+            CHECK(pb.reason.rfind(kSentinelReasonCrash, 0) == 0);    // B: a crash code
+            CHECK(contains(pb.reason, "access violation"));
+            CHECK(pa.signature != pb.signature);
+        }
+        if (wa != nullptr) { ::CloseHandle(wa); }
+        if (wb != nullptr) { ::CloseHandle(wb); }
+        closeProc(a);
+        closeProc(b);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // THE DIAGNOSTICS SWITCH: off means no sentinel and no report
+    // =======================================================================
+    {
+        // Started with Diagnostics OFF: no process at all, and nothing is written.
+        const fs::path dir = scratch("diag-off");
+        const Death d = liveAndDie(dir, "run", 0xC0000409ul, 100, "--diag=off");
+        CHECK(d.sentinelPid == 0);
+        CHECK(d.reports.empty());
+        CHECK(allReports(dir) == 0);
+        CHECK(!fs::exists(dir / "logs" / "foxsdr.log"));  // and no log either, as ever
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // Switched OFF mid-session: the sentinel is ended, and a later death is not reported.
+        const fs::path dir = scratch("toggle-off");
+        Proc app = standInProc(dir, "toggle");
+        CHECK(app.started);
+        CHECK(waitFor(app, "READY", 20000));
+        const unsigned long sentinelPid = numberAfter(app, "SENTINEL");
+        HANDLE watch = openWatch(sentinelPid);
+        CHECK(sentinelPid != 0 && watch != nullptr);
+        CHECK(waitFor(app, "OFF", 20000));
+        CHECK(gone(watch, 3000));  // the watcher was ended by the switch
+        sleepMs(300);
+        kill(app, 0xC0000409ul);
+        waitExit(app, 20000);
+        sleepMs(500);
+        CHECK(allReports(dir) == 0);
+        if (watch != nullptr) { ::CloseHandle(watch); }
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // ...and switched back ON: a new sentinel, which reports the death - and its
+        // phase is RUNNING, because the page has been kept from the start.
+        const fs::path dir = scratch("toggle-on");
+        Proc app = standInProc(dir, "toggle", "--then=on");
+        CHECK(app.started);
+        CHECK(waitFor(app, "SENTINEL2", 20000));
+        const unsigned long first = numberAfter(app, "SENTINEL");
+        const unsigned long second = numberAfter(app, "SENTINEL2");
+        CHECK(first != 0 && second != 0 && first != second);
+        sleepMs(300);
+        kill(app, 1);
+        waitExit(app, 20000);
+        const std::vector<fs::path> r = waitForReport(dir, app.pid, 3000);
+        CHECK(r.size() == 1);
+        if (r.size() == 1) {
+            ParsedReport p;
+            CHECK(parseReportText(readFile(r[0]), p));
+            CHECK(contains(p.reason, "; phase running;"));
+            CHECK(p.reason.rfind(kSentinelReasonOutside, 0) == 0);
+        }
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+    {
+        // Started with Diagnostics off and switched on part-way: the sentinel starts then.
+        const fs::path dir = scratch("late-on");
+        Proc app = standInProc(dir, "late-on", "--diag=off");
+        CHECK(app.started);
+        CHECK(waitFor(app, "SENTINEL2", 20000));
+        CHECK(numberAfter(app, "SENTINEL") == 0 && numberAfter(app, "SENTINEL2") != 0);
+        sleepMs(300);
+        kill(app, 1);
+        waitExit(app, 20000);
+        const std::vector<fs::path> r = waitForReport(dir, app.pid, 3000);
+        CHECK(r.size() == 1);
+        if (r.size() == 1) {
+            ParsedReport p;
+            CHECK(parseReportText(readFile(r[0]), p));
+            CHECK(contains(p.reason, "; phase running;"));
+        }
+        closeProc(app);
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // WHAT STARTING IT COSTS THE APPLICATION: CreateProcess, and nothing it waits for
+    // =======================================================================
+    {
+        // This test process plays the application: it names itself as the sentinel's
+        // executable (main() above runs runSentinelMain for `--sentinel`).
+        const fs::path dir = scratch("cost");
+        SentinelOptions so;
+        so.crashDir = (dir / "crashes").string();
+        so.logDir = (dir / "logs").string();
+        std::error_code ec;
+        fs::create_directories(so.crashDir, ec);
+        fs::create_directories(so.logDir, ec);
+        sentinelConfigure(so);
+        std::vector<double> ms;
+        for (int i = 0; i < 25; ++i) {
+            const bool up = sentinelSetEnabled(true);
+            CHECK(up);
+            ms.push_back(sentinelLastStartMs());
+            sentinelSetEnabled(false);
+        }
+        std::sort(ms.begin(), ms.end());
+        std::printf("start-up cost: sentinelSetEnabled(true) took min %.1f, median %.1f, max %.1f ms over %zu starts\n",
+                    ms.front(), ms[ms.size() / 2], ms.back(), ms.size());
+        CHECK(ms[ms.size() / 2] < 100.0);
+        CHECK(allReports(dir) == 0);  // each was ended by the switch: nothing written
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+#else
+    // =======================================================================
+    // LINUX. Written on a machine that cannot run it - see docs/DIAGNOSTICS.md.
+    // =======================================================================
+    {
+        char tmpl[] = "/tmp/cascade-sentproc-XXXXXX";
+        const char* made = ::mkdtemp(tmpl);
+        CHECK(made != nullptr);
+        const fs::path dir = made != nullptr ? fs::path(made) : fs::path("/tmp/cascade-sentproc-fallback");
+        const std::string self = fs::read_symlink("/proc/self/exe").string();
+
+        auto start = [&](const char* scenario, int& outFd) {
+            int fds[2] = {-1, -1};
+            if (::pipe(fds) != 0) { return static_cast<pid_t>(-1); }
+            const pid_t pid = ::fork();
+            if (pid == 0) {
+                ::dup2(fds[1], 1);
+                ::close(fds[0]);
+                ::close(fds[1]);
+                const std::string dirArg = "--dir=" + dir.string();
+                const std::string scArg = std::string("--scenario=") + scenario;
+                ::execl(self.c_str(), self.c_str(), "--app", dirArg.c_str(), scArg.c_str(),
+                        static_cast<char*>(nullptr));
+                ::_exit(127);
+            }
+            ::close(fds[1]);
+            outFd = fds[0];
+            return pid;
+        };
+        auto readUntil = [](int fd, const char* needle, int timeoutMs) {
+            std::string seen;
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            while (std::chrono::steady_clock::now() < until && !contains(seen, needle)) {
+                char buf[256];
+                const ssize_t n = ::read(fd, buf, sizeof(buf));
+                if (n <= 0) { break; }
+                seen.append(buf, static_cast<std::size_t>(n));
+            }
+            return seen;
+        };
+        auto reportsOf = [&](pid_t pid) {
+            std::vector<fs::path> out;
+            std::error_code ec;
+            for (const auto& e : fs::directory_iterator(dir / "crashes", ec)) {
+                const std::string n = e.path().filename().string();
+                if (n.find("-" + std::to_string(pid) + "-999999.txt") != std::string::npos) { out.push_back(e.path()); }
+            }
+            return out;
+        };
+        auto waitReports = [&](pid_t pid) {
+            for (int i = 0; i < 300; ++i) {
+                const auto r = reportsOf(pid);
+                if (!r.empty()) { return r; }
+                sleepMs(10);
+            }
+            return reportsOf(pid);
+        };
+
+        // Clean: no report.
+        {
+            int fd = -1;
+            const pid_t app = start("clean", fd);
+            CHECK(app > 0);
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            sleepMs(500);
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            CHECK(reportsOf(app).empty());
+            ::close(fd);
+        }
+        // SIGKILLed while drawing: a local-only report that says the cause is not available.
+        {
+            int fd = -1;
+            const pid_t app = start("run", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            ::kill(app, SIGKILL);
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonOutside, 0) == 0);
+                CHECK(contains(p.reason, "exit status not available on this platform"));
+                // 0.99.78: and now the words say which sources were asked, so nobody mistakes
+                // "no record" for "not looked for". SIGKILL cannot be caught: nothing is written.
+                CHECK(contains(p.reason, "(no exit record; not its parent)"));
+                CHECK(p.code == "unknown");
+            }
+            ::close(fd);
+        }
+        // 0.99.78: THE PROCESS SAYS HOW IT ENDED. The watcher is its child and cannot ask the
+        // kernel; the status of an exit() and the number of a signal are written into the shared
+        // page by the application (core/exit_record.hpp) and read by the watcher after the pipe
+        // closes.
+        //
+        // The field report's ending: out at the window, with exit status 1.
+        {
+            int fd = -1;
+            const pid_t app = start("exit1-startup", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonStartup, 0) == 0);
+                CHECK(contains(p.reason, "exit code 1 (the process ended itself)"));
+                CHECK(contains(p.reason, "phase creating the window"));
+                CHECK(!contains(p.reason, "not available on this platform"));
+                CHECK(p.code == "0x50580101");
+            }
+            ::close(fd);
+        }
+        // Left by itself while drawing, with status 3: a crash class, sent.
+        {
+            int fd = -1;
+            const pid_t app = start("exit3", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 3);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonCrash, 0) == 0);
+                CHECK(contains(p.reason, "exit code 3 (the process ended itself)"));
+                CHECK(p.code == "0x50580103");
+            }
+            ::close(fd);
+        }
+        // SIGTERM while drawing: the handler records it and the process STILL ends by that signal
+        // (the shell and the kernel see the same status as before), and the report is the
+        // local-only ending from outside.
+        {
+            int fd = -1;
+            const pid_t app = start("term", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            ::kill(app, SIGTERM);
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonOutside, 0) == 0);
+                CHECK(contains(p.reason, "killed by signal 15 (SIGTERM)"));
+                CHECK(p.code == "0x5058020F");
+            }
+            ::close(fd);
+        }
+        // SIGKILLed before the first frame: sent.
+        {
+            int fd = -1;
+            const pid_t app = start("startup", fd);
+            CHECK(app > 0);
+            CHECK(contains(readUntil(fd, "READY", 20000), "READY"));
+            ::kill(app, SIGKILL);
+            int status = 0;
+            ::waitpid(app, &status, 0);
+            const auto r = waitReports(app);
+            CHECK(r.size() == 1);
+            if (r.size() == 1) {
+                ParsedReport p;
+                CHECK(parseReportText(readFile(r[0]), p));
+                CHECK(p.reason.rfind(kSentinelReasonStartup, 0) == 0);
+            }
+            ::close(fd);
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+#endif
+    return testSummary("test_sentinel_proc");
+}

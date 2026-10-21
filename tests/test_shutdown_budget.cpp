@@ -339,6 +339,11 @@ std::vector<DiscoveredWait> discoverBoundedWaits(const fs::path& srcRoot) {
 //                    + usb kAbortDrainWait 250                         = 2750 ms
 //   PlutoSource      kReaderJoinWait 2500 (the bounded join in
 //                    stopStreamingLocked), and NOTHING ELSE               = 2500 ms
+//   RtlTcpSource     kReaderJoinWait 2500 (the same bounded join, in
+//                    closeDevice() - stop() is a flag flip and waits for
+//                    nothing), and NOTHING ELSE: the close shutdown()s the
+//                    socket first, so the join normally takes milliseconds;
+//                    2500 is the bound if the reader is stranded         = 2500 ms
 //
 // THE PLUTO'S COLUMN IS THE ONE THAT WAS DECIDED RATHER THAN MEASURED, and
 // what was decided is worth recording because it is the only place in this
@@ -454,9 +459,56 @@ const KnownWait kKnownWaits[] = {
      "like app_window.cpp's kQuitGrace"},
     {"src/core/updater.hpp", "kNoWait", 0,
      "zero by construction - UpdateCheckTask::poll()'s once-a-frame ready-poll, not a wait"},
+    {"src/source/soapy_enum_proc.cpp", "kModuleCloseWait", 0,
+     "spent only inside the enumeration CHILD process (endEnumerateHelperProcess), unloading "
+     "the SDRplay module so its sdrplay_api_Close runs before the child ends; the application "
+     "never calls it and its shutdown never waits on a child"},
+    // THE ONE-REPORT-PER-DEATH LOOKUP (2026-10-04). crashReportWrittenByProcess
+    // is asked by the parent after an enumeration child has already exited, and
+    // its 2000 ms is not a wait of any kind: it is the tolerance added to a file's
+    // last-write time before comparing it with the spawn time, for file systems
+    // with coarse timestamps (FAT keeps two seconds). Nothing sleeps or blocks on
+    // it, and a shutdown neither enumerates nor waits on a child.
+    {"src/core/crash_handler.cpp", "kSlack", 0,
+     "not a wait at all - the timestamp tolerance (FAT's two seconds) that "
+     "crashReportWrittenByProcess adds to a report's last-write time before comparing it with "
+     "the spawn time; nothing sleeps or blocks on it, and it runs after an enumeration child "
+     "has already exited"},
+    // THE SENTINEL (0.99.64). Its one bounded wait is spent in ITS OWN PROCESS, after the
+    // application has ended: runSentinelMain arms a detached thread that ends the sentinel
+    // one second after the application's exit, so the executable (which the sentinel is a
+    // running copy of) can be replaced by an installer even if the disk stalls. The
+    // application never calls it and never waits for the sentinel - not at exit, not when
+    // Diagnostics is switched off (TerminateProcess/SIGKILL, neither waited for), not in
+    // sentinelPoll() (a zero-timeout handle test, once in about 300 frames). The sentinel's
+    // other wait - the application's process handle, or the pipe on Linux - is unbounded on
+    // purpose and is not a chrono constant: it is the thing the process exists to do.
+    {"src/core/sentinel.hpp", "kSentinelExitDeadline", 0,
+     "spent only inside the sentinel process (armSentinelExitDeadline, from runSentinelMain, "
+     "after the application has already ended); the application never waits for the sentinel, "
+     "so its shutdown path never spends it"},
+    // THE SENTINEL'S READ OF WINDOWS' CRASH RECORD (0.99.66). The bound on one lookup of the
+    // Application Error event (core/os_crash_record.hpp, findOsCrashRecord): spent only inside
+    // the sentinel process, only after the application has already ended and only for an ending
+    // with a crash exit code, and inside kSentinelExitDeadline, which cuts the process off
+    // whatever the read is doing. The application never calls it.
+    {"src/core/sentinel.hpp", "kSentinelOsRecordBudget", 0,
+     "spent only inside the sentinel process (finishSentinelWatch, after the application has "
+     "already ended, and only for a crash exit code), within kSentinelExitDeadline; the "
+     "application never reads Windows' crash record, so its shutdown path never spends it"},
+    // ...and the pause between two of its asks. Not a wait the application ever makes: the
+    // lookup runs on a worker thread of the sentinel process, after the application has ended.
+    {"src/core/os_crash_record.hpp", "kOsCrashRetryInterval", 0,
+     "the pause between two asks of the Application event log, spent only on the lookup's own "
+     "worker thread inside the sentinel process, after the application has already ended; the "
+     "application never calls the lookup, so its shutdown path never spends it"},
     {"src/source/soapy_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the length of the window the read loop tallies before it writes "
      "its stream-health line; nothing ever sleeps or blocks on it"},
+    {"src/source/soapy_source.hpp", "kLateCallGrace", 0,
+     "not a wait at all - the age past which a late retune or stream start is given up by "
+     "the next entry or the read loop; nothing blocks on it, and the shutdown path "
+     "(stop()/teardown) gives a late call up at once rather than waiting for it"},
 
     // THE NATIVE HACKRF DRIVER, WHICH THE APPLICATION DOES NOW OPEN (0.91.0).
     // The rows are still zero and the reason is the mutual exclusion argued
@@ -513,6 +565,19 @@ const KnownWait kKnownWaits[] = {
      "RtlSdrSource::read() polling its ring for samples. Spent on the PIPELINE's source "
      "thread, which the teardown already waits for through kSourceJoinWait's 3000 ms - never "
      "on the GUI teardown thread"},
+    {"src/source/rtlsdr_source.cpp", "kReaderStandAside", 0,
+     "the RTL-SDR reader's pause while a control call waits for the device lock, spent on "
+     "the reader's own thread and only while that call waits; it SHORTENS the teardown's "
+     "wait for the lock rather than adding to it, and the reader re-checks its run token "
+     "after every pause, so the join is unaffected"},
+    {"src/source/rtl2832u.cpp", "kI2cRetryWindow", 0,
+     "how long a refused tuner I2C transfer may keep being retried, spent inside a call that "
+     "already holds the RTL-SDR device lock (teardown's tuner standby among them) - covered "
+     "by kDeviceLockWait exactly as kControlTimeout is, and shorter than one control timeout "
+     "so a transfer that timed out is never retried"},
+    {"src/source/rtl2832u.cpp", "kI2cRetryGap", 0,
+     "the pause between two attempts at a refused tuner I2C transfer, inside kI2cRetryWindow "
+     "and so inside the same device-lock-held call"},
     {"src/source/rtlsdr_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the RTL-SDR reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
@@ -611,6 +676,13 @@ const KnownWait kKnownWaits[] = {
      "SdrPlaySource::read()'s wait for the service's callback to fill the ring, spent on the "
      "pipeline's source thread, which the teardown already waits for through kSourceJoinWait's "
      "3000 ms - never on the GUI teardown thread"},
+    {"src/source/sdrplay_source.hpp", "kSessionPeekWait", 0,
+     "the bounded peek enumerateSdrPlayWith grants a session-mutex holder that is merely slow "
+     "(a healthy Open mid-flight) before giving the scan up with the control-pending sentence - "
+     "a 1 ms try_lock poll, never a blocking lock, added when the 0.99.81 scanNative freeze "
+     "showed a wedged vendor Open parking that mutex for good. Spent only on the enumeration "
+     "path (a scan from the GUI or its worker); nothing on the teardown path enumerates, so the "
+     "shutdown never spends it"},
     {"src/source/sdrplay_source.hpp", "kControlWait", 0,
      "how long a live control waits for sdrplay_api_Update ITSELF before ABANDONING the worker "
      "it ran the call on (the 0.96.2 hang report, bounded in 0.96.3). Spent on the GUI thread by "
@@ -624,6 +696,46 @@ const KnownWait kKnownWaits[] = {
      "thread the teardown runs on, so the frame it belongs to has already finished. It composes "
      "with kUpdateWait below rather than replacing it: 1000 + 500 is the worst a single control "
      "can cost that thread, which is what has to stay under the watchdog's frame threshold"},
+    // THE SDRPLAY DIAGNOSTIC PROBE (0.99.50). All four are spent inside the
+    // probe's OWN process (`cascade --sdrplay-probe`), which the GUI starts
+    // and never waits for - not in a frame, not at shutdown (SdrPlayProbeChild
+    // never waits or kills). A GUI teardown therefore pays none of them.
+    {"src/source/sdrplay_probe.hpp", "kProbeCallLimit", 0,
+     "how long the probe's own thread waits on one SDRplay API call before recording it HUNG "
+     "and ending the run. Spent in the probe's child process, which the GUI never waits for"},
+    {"src/source/sdrplay_probe.hpp", "kProbeSlowCall", 0,
+     "not a wait at all - the threshold above which a probe call is reported SLOW"},
+    {"src/source/sdrplay_probe.hpp", "kProbeStreamPerRate", 0,
+     "how long the probe streams at each sample rate and IF mode, in its own child process; "
+     "the GUI never waits for it"},
+    {"src/source/sdrplay_probe.hpp", "kProbeStreamPerStep", 0,
+     "how long the probe streams after each frequency, LNA, antenna and bias-tee change, in "
+     "its own child process; the GUI never waits for it"},
+    // RESTART SDRPLAY SERVICE (0.99.55). Both are spent on the restart's own
+    // worker thread; ~SdrPlayServiceRestart tells that worker to give up and
+    // never waits for it (it may be inside ShellExecuteExW with the UAC prompt
+    // up), so neither is on the GUI thread or in the teardown.
+    {"src/source/sdrplay_service.hpp", "kSdrPlayRestartLimit", 0,
+     "how long the restart's WORKER waits for the elevated cmd.exe (net stop / taskkill / net "
+     "start) to exit before reporting it timed out. The GUI polls a flag each frame and the "
+     "destructor does not join a running worker"},
+    {"src/source/sdrplay_service.hpp", "kSdrPlayRestartPoll", 0,
+     "how often that worker looks up from WaitForSingleObject to see whether it has been told "
+     "to give up. Spent only on the worker"},
+    // THE RADIO SETUP PROBE (2026-10-06). A deadline compared against a clock by
+    // Probe::poll() once a frame, never a wait: nothing sleeps or blocks on it.
+    // The probe's worker is detached and owns its own state, ~Probe joins
+    // nothing, so a probe stuck inside SetupAPI costs the teardown nothing.
+    {"src/core/radio_setup.hpp", "kProbeBudget", 0,
+     "not a wait at all - how long the GUI keeps polling a radio-setup probe before it stops "
+     "waiting and calls the check unreadable. A comparison against steady_clock inside "
+     "Probe::poll(); the worker is detached and ~Probe never joins it"},
+    {"src/source/sdrplay_source.hpp", "kControlGrace", 0,
+     "not a wait at all (0.99.50) - how long a control that was not answered within "
+     "kControlWait is LISTENED FOR before the radio is given up. A deadline compared against a "
+     "clock by read() and the next control; nothing sleeps or blocks on it. A stop() or "
+     "closeDevice() inside it gives the control up on the spot and makes no vendor call, the "
+     "same zero-cost teardown as after an abandonment"},
     {"src/source/sdrplay_source.hpp", "kUpdateWait", 0,
      "how long a live parameter change waits for the service to ACKNOWLEDGE it through the next "
      "stream callback's changed flags (SoapySDRPlay3's updateTimeout, same 500 ms). Spent on the "
@@ -741,6 +853,49 @@ const KnownWait kKnownWaits[] = {
      "how often that wait looks at the transport's device list. Same path, same reason: open "
      "only, never teardown"},
 
+    // THE NATIVE AOR DIGITAL-I/Q DRIVER. Same argument as every native row
+    // above and the same answer: its teardown column is the STOP bulk write
+    // (kCommandWriteWait 500, plus one usb kAbortDrainWait 250 on WinUSB if
+    // that write's cancellation has to be waited for) + kReaderJoinWait 1000
+    // + the iso ring's usb kAbortDrainWait 250 = 2000 ms, spent INSTEAD OF
+    // the Soapy pair's 3000 rather than as well as it. closeDevice() adds
+    // nothing: the control serial port is closed with a handle close, not a
+    // command.
+    {"src/source/aor_source.hpp", "kIsoReadWait", 0,
+     "how long the AOR reader thread blocks for one isochronous transfer. Spent on the "
+     "reader's OWN thread; it bounds how long that thread takes to notice it has been asked to "
+     "stop, not a wait the teardown performs"},
+    {"src/source/aor_source.hpp", "kReadWait", 0,
+     "AorSource::read()'s wait for samples, spent on the pipeline's source thread, which the "
+     "teardown already waits for through kSourceJoinWait - never on the GUI teardown thread"},
+    {"src/source/aor_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in AorSource::stopStreamingLocked(), the middle 1000 ms of the 2000 ms "
+     "AOR column. Zero because an AOR teardown REPLACES the Soapy one rather than adding to it"},
+    {"src/source/aor_source.hpp", "kCommandWriteWait", 0,
+     "the bound on the six-byte START/STOP bulk write. ONE is on the teardown path - STOP in "
+     "stopStreamingLocked() - and it is the first 500 ms of the 2000 ms AOR column, covered by "
+     "the 3000 ms Soapy column already charged"},
+    {"src/source/aor_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the AOR reader's tally window before it writes its stream-health "
+     "line, matching SoapySource's; nothing sleeps or blocks on it"},
+    {"src/source/aor_source.hpp", "kProbeWindow", 0,
+     "how long open() listens for aligned samples after the probe's START, to decide whether "
+     "the FX2 firmware is running. OPEN path only, on the device-open worker; never teardown"},
+    {"src/source/aor_source.hpp", "kFirmwareSettle", 0,
+     "the least open() waits after releasing the FX2 CPU (AOR's own 'sleep 1'). OPEN path "
+     "only - firmware is never loaded during a shutdown"},
+    {"src/source/aor_source.hpp", "kFirmwareReenumerateBudget", 0,
+     "the most open() waits for the AOR I/Q interface to come back after its firmware load. "
+     "OPEN path only, never teardown"},
+    {"src/source/aor_source.hpp", "kFirmwarePollInterval", 0,
+     "how often that wait looks at the transport's device list. Open only, never teardown"},
+
+    // THE AOR DIGITAL-I/Q DRIVER'S RECEIVER-CONTROL LINK (a serial port).
+    {"src/source/aor_control.hpp", "kReplyWait", 0,
+     "how long the AOR control session waits for a reply line after EX or VR. Spent only while "
+     "OPENING (pairing the serial port and the start-up sequence, on the device-open worker); "
+     "tuning and teardown send commands without waiting for a reply"},
+
     // THE NATIVE ADALM-PLUTO DRIVER, WHICH IS REACHED OVER TCP RATHER THAN
     // USB - so none of the transport's bounds apply to it and its whole
     // column is one join. Same argument as the blocks above and the same
@@ -754,13 +909,16 @@ const KnownWait kKnownWaits[] = {
     // frees the buffer when the connection drops either way - so the rows
     // stay zero and kShutdownBoundedWaitsMs stays 7000.
     {"src/source/iiod_client.hpp", "kConnectWait", 0,
-     "the bound on connecting to a Pluto's iiod daemon. Spent by open() and by the second "
-     "connection start() makes for the samples - both on the OPEN path. A shutdown connects "
-     "to nothing"},
+     "the bound on connecting to a Pluto's iiod daemon - and, through the same socket code, to "
+     "an rtl_tcp server (RtlTcpSource uses it too). Spent by open() - and by the second "
+     "connection a Pluto's start() makes for the samples - all on the OPEN path, on the thread "
+     "that called open(). An rtl_tcp start() makes no connection at all (the socket lives from "
+     "open() to closeDevice()), and a shutdown connects to nothing"},
     {"src/source/iiod_client.hpp", "kReplyWait", 0,
-     "the socket's send and receive bound once connected. NONE of these is on the teardown "
-     "path any more: stopStreamingLocked sends nothing after the join, and the reader's own "
-     "receives are spent on the reader's thread, which the join below already covers"},
+     "the socket's send and receive bound once connected (the Pluto's and the rtl_tcp "
+     "client's). NONE of these is on the teardown path any more: stopStreamingLocked sends "
+     "nothing after the join, and the reader's own receives are spent on the reader's thread, "
+     "which the join below already covers"},
     {"src/source/pluto_source.hpp", "kReaderJoinWait", 0,
      "the bounded join in PlutoSource::stopStreamingLocked(), and the WHOLE of the 2500 ms "
      "Pluto column. Longer than iiod::kReplyWait deliberately - the reader's longest "
@@ -775,6 +933,28 @@ const KnownWait kKnownWaits[] = {
     {"src/source/pluto_source.hpp", "kStreamHealthWindow", 0,
      "not a wait at all - the Pluto reader's tally window before it writes its stream-health "
      "line, matching SoapySource's; nothing sleeps or blocks on it"},
+
+    // THE RTL_TCP CLIENT (0.99.70), A SECOND NETWORK DRIVER BUILT THE PLUTO'S WAY: one reader
+    // thread on a socket, a bounded join, and no command sent on the way out. The reader and the
+    // socket live from open() to closeDevice(); stop() only stops KEEPING samples (the reader
+    // goes on draining the socket) and returns at once, so the join is on the CLOSE path alone,
+    // where closeDevice() first shutdown()s the socket so a parked reader wakes. Its connect and
+    // socket bounds are iiod::kConnectWait and iiod::kReplyWait above, so its whole column is
+    // the one join - 2500 ms, spent INSTEAD OF the Soapy pair's 3000, never as well as it.
+    {"src/source/rtl_tcp_source.hpp", "kReaderJoinWait", 0,
+     "the bounded join in RtlTcpSource::stopReaderLocked() (closeDevice's path; stop() joins "
+     "nothing), and the WHOLE of the 2500 ms rtl_tcp column - the Pluto's argument word for "
+     "word: longer than iiod::kReplyWait, because the reader's longest legitimate stall is "
+     "one socket receive. It is reached only if the reader ignores the shutdown() the close "
+     "sends first - normally the join is instant. Zero because an rtl_tcp teardown REPLACES "
+     "the Soapy one rather than adding to it (one source is installed at a time)"},
+    {"src/source/rtl_tcp_source.hpp", "kReadWait", 0,
+     "RtlTcpSource::read()'s wait for samples, spent on the pipeline's source thread, which "
+     "the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI "
+     "teardown thread"},
+    {"src/source/rtl_tcp_source.hpp", "kStreamHealthWindow", 0,
+     "not a wait at all - the rtl_tcp reader's tally window before it writes its "
+     "stream-health line, matching the other drivers'; nothing sleeps or blocks on it"},
 
     // THE SOUND CARD SOURCE (0.99.36). Nothing it does on stop() waits: stop()
     // sets a flag the read loop tests every 2 ms, and the stream itself is
@@ -930,7 +1110,9 @@ const KnownWait kKnownWaits[] = {
      "ConfigWriter::finishOrAbandon()'s bound, spent once by AppWindow::run() right after the "
      "clean-exit marker save is requested - the ONE drain that waits for whatever the "
      "teardown's saves coalesced down to. Not spent by the two requestAsync() calls "
-     "themselves: neither one blocks"},
+     "themselves: neither one blocks. Since 0.99.64 the bookmark list's and the markers' "
+     "last saves are drained against the SAME deadline (what the config drain leaves of "
+     "it), so this stays one kSaveBound, not three"},
     {"src/gui/config_writer.hpp", "kNoWait", 0,
      "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
      "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
@@ -941,6 +1123,86 @@ const KnownWait kKnownWaits[] = {
      "budgeted stretch, exactly like app_window.cpp's kQuitGrace and audio_open.hpp's. A "
      "session that reaches this at all already had its one deliberate chance, at "
      "kSaveBound above"},
+
+    // THE BETA-TESTER LINK-REQUEST POLL (field report "hang ntdll.dll @
+    // __std_fs_get_stats", 0.99.59). Its once-a-second exists() on the config
+    // directory ran on the GUI thread and froze it; gui/link_request_poll.hpp
+    // moves it to a worker that nothing waits for - request() and poll() never
+    // block, so there is no bound on the frame loop and nothing at all on the
+    // shutdown path except the reap below.
+    {"src/gui/link_request_poll.hpp", "kStuckAfter", 0,
+     "not a wait: the age at which a probe still out is called stuck in the log (once). "
+     "Nothing blocks for it - it is compared against a clock by takeNotice() - and the frame "
+     "loop that reads it has ended before beginShutdown() raises the threshold"},
+    {"src/gui/link_request_poll.hpp", "kNoWait", 0,
+     "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
+     "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
+     "even called on the teardown path"},
+    {"src/gui/link_request_poll.hpp", "kQuitGrace", 0,
+     "LinkRequestPoll::reap()'s grace before a probe still blocked in the filesystem is "
+     "abandoned: called from ~AppWindow after watchdog_.stop(), outside the budgeted "
+     "stretch, exactly like app_window.cpp's, audio_open.hpp's and config_writer.hpp's "
+     "kQuitGrace"},
+
+    // THE RECORDER'S FILE OPEN (a freeze inside Recorder::start's file open,
+    // 0.99.58). create_directories + fopen ran on the GUI thread when Record
+    // was pressed; gui/record_start.hpp moves them to a worker that nothing
+    // waits for - request() and poll() never block and cancel() only sets a
+    // flag - so there is no bound on the frame loop. The teardown's own
+    // stopIqRecording()/stopAudioRecording() withdraw a start that is still
+    // opening without waiting for it; the only wait is the reap below.
+    {"src/engine/record_start.hpp", "kStuckAfter", 0,
+     "not a wait: the age at which a file open still out is called stuck in the log (once). "
+     "Nothing blocks for it - it is compared against a clock by takeNotice() - and the frame "
+     "loop that reads it has ended before beginShutdown() raises the threshold"},
+    {"src/engine/record_start.hpp", "kNoWait", 0,
+     "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
+     "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
+     "even called on the teardown path"},
+    {"src/engine/record_start.hpp", "kQuitGrace", 0,
+     "RecordStart::reap()'s grace before a file open still blocked in the filesystem is "
+     "abandoned: called from ~RecordStart, i.e. from ~AppWindow after watchdog_.stop(), "
+     "outside the budgeted stretch, exactly like link_request_poll.hpp's, "
+     "config_writer.hpp's, audio_open.hpp's and app_window.cpp's kQuitGrace"},
+
+    // THE GUI THREAD'S REMAINING DISK WORK (0.99.64, docs/DIAGNOSTICS.md, "The
+    // window does no disk work"). gui/disk_job.hpp is record_start.hpp's shape for
+    // any "do this blocking thing and give me what it made": the I/Q file's header,
+    // a picture saved, the frequency list exported, F12's screenshot, the patch's
+    // recordings list. request() and poll() never block, so there is no bound on the
+    // frame loop and nothing on the shutdown path except the reap below.
+    {"src/gui/disk_job.hpp", "kStuckAfter", 0,
+     "not a wait: the age at which a job still out is called stuck in the log (once). Nothing "
+     "blocks for it - it is compared against a clock by poll() - and the frame loop that calls "
+     "poll() has ended before beginShutdown() raises the threshold"},
+    {"src/gui/disk_job.hpp", "kNoWait", 0,
+     "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. The "
+     "frame loop has ended before beginShutdown() raises the threshold, so poll() is not even "
+     "called on the teardown path"},
+    {"src/gui/disk_job.hpp", "kQuitGrace", 0,
+     "DiskJob::reap()'s grace before a job still blocked in the filesystem is abandoned: called "
+     "from ~DiskJob, i.e. from ~AppWindow after watchdog_.stop(), outside the budgeted stretch, "
+     "exactly like record_start.hpp's, link_request_poll.hpp's, config_writer.hpp's, "
+     "audio_open.hpp's and app_window.cpp's kQuitGrace. Several jobs can each spend it in "
+     "turn (six at most, one per feature - the frequency list's import joined in 0.99.65), "
+     "still after the watchdog has stopped"},
+
+    // THE BOOKMARK LIST AND THE MARKERS (0.99.64, gui/background_saver.hpp): two more
+    // ConfigWriters in all but name. Their last request is drained at exit within the
+    // SAME deadline ConfigWriter::kSaveBound already charges (AppWindow::run() takes
+    // the deadline before the config drain and gives the lists what is left of it), so
+    // the shutdown budget above is unchanged: still one kSaveBound, spent once.
+    {"src/gui/background_saver.hpp", "kStuckAfter", 0,
+     "not a wait: the age at which a write still out is called stuck in the log (once), "
+     "compared against a clock by poll() on the frame loop, which has ended before "
+     "beginShutdown() raises the threshold"},
+
+    // A PATCH SPEAKER'S WAV FILE (0.99.64, core/patch_audio.cpp) is opened by a worker,
+    // never on the GUI thread, and declares no wait of its own: its two ages
+    // (kSlowAfterS, kStuckAfterS) are plain seconds compared against a clock by
+    // describe(), deliberately not std::chrono constants, because a named chrono
+    // duration would bring the file under this scan - and with it the Mp3Dest worker's
+    // existing 20 ms poll, which is a wait on its own thread and not on the teardown.
 };
 
 const KnownWait* findKnown(const std::string& file, const std::string& name) {

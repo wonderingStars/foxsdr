@@ -116,7 +116,7 @@ constexpr theme::Tone kLcdSegSoft{0x18, 0x20, 0x14, 0x66, theme::ink::Digit};
 
 // A caption cut into the metal, in the legend face. Returns its width.
 float engrave(ImDrawList* dl, const ImVec2& at, const char* s, ImU32 ink = theme::kInkMuted,
-              float px = fonts::kTinySize) {
+              float px = fonts::tinyPx()) {
     ImFont* f = fonts::legend();
     dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
                 theme::withAlpha(theme::kVoid, 0.55f), s);
@@ -126,7 +126,7 @@ float engrave(ImDrawList* dl, const ImVec2& at, const char* s, ImU32 ink = theme
 
 // A live word on glass, in the ui face, clipped to `maxW`.
 void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float maxW,
-             float px = fonts::kUiSize, ImU32 ink = theme::kPhosphor) {
+             float px = fonts::uiPx(), ImU32 ink = theme::kPhosphor) {
     dl->AddText(fonts::ui(), px, at, ink, s, nullptr, maxW);
 }
 
@@ -258,8 +258,8 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     const float lampR = std::max(3.0f, shoulderH * 0.22f);
     const ImVec2 lampC(caseTL.x + sideInset + lampR, caseTL.y + shoulderH * 0.55f);
     drawBenchLamp(dl, lampC, lampR, theme::kAlarmHot, ringing && blink, nullptr);
-    engrave(dl, ImVec2(lampC.x + lampR + 5.0f, lampC.y - fonts::kTinySize * 0.52f), tr("MSG"),
-            theme::kCream, std::min(fonts::kTinySize, shoulderH * 0.72f));
+    engrave(dl, ImVec2(lampC.x + lampR + 5.0f, lampC.y - fonts::tinyPx() * 0.52f), tr("MSG"),
+            theme::kCream, std::min(fonts::tinyPx(), shoulderH * 0.72f));
     {
         const float gw = std::min(cs.w * 0.30f, 60.0f);
         drawGrille(dl, ImVec2(caseBR.x - sideInset - gw, caseTL.y + shoulderH * 0.28f), gw,
@@ -431,7 +431,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const ImVec2 pBR(caseBR.x - sideInset, py + ph);
             dl->AddRectFilled(pTL, pBR, kCaseCut, 2.0f);
             addBenchBevel(dl, pTL, pBR, 2.0f, false);
-            const float px = std::min(fonts::kTinySize, ph * 0.68f);
+            const float px = std::min(fonts::tinyPx(), ph * 0.68f);
             engrave(dl, ImVec2(pTL.x + 6.0f, pTL.y + (ph - px) * 0.5f - 1.0f), "FOXSDR",
                     kCasePlate, px);
             ImFont* f = fonts::legend();
@@ -468,7 +468,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // The lamps. Every one is drawn whether lit or not, so a cold panel
         // still says which lamps it has.
         {
-            ImGui::PushFont(fonts::legend(), fonts::kTinySize);
+            ImGui::PushFont(fonts::legend(), fonts::kTinySize);  // base: style.FontScaleMain applies S
             const float r = 6.0f;
             const float pitch = std::min(colW / 4.0f, 78.0f);
             float lx = colX + pitch * 0.5f;
@@ -481,7 +481,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             lx += pitch;
             drawBenchLamp(dl, ImVec2(lx, ly), r, theme::kAmber, lowBatt, tr("BATT"));
             ImGui::PopFont();
-            y = ly + r + fonts::kTinySize + 7.0f;
+            y = ly + r + fonts::tinyPx() + 7.0f;
         }
 
         // The drums: the capcode that was addressed, and how many pages have
@@ -502,7 +502,7 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             const float uCapX = colX + capW + 22.0f;
             const bool roomForUnread = uCapX + cellW * 2.0f + 8.0f < bayBR.x - 10.0f;
             if (roomForUnread) { engrave(dl, ImVec2(uCapX, y), tr("UNREAD")); }
-            y += fonts::kTinySize + 3.0f;
+            y += fonts::tinyPx() + 3.0f;
             char cap[8];
             pager::drumCells(have ? in.state.text[1] : "", cap, 7);
             drawDrumRow(dl, ImVec2(colX + 3.0f, y), cellW, rowH, cap, 7);
@@ -529,9 +529,9 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // second fell off the bottom of the bay and simply was not drawn - a
         // slot the plugin filled, silently missing, which is the failure this
         // face is least able to afford.
-        const float wordRoom = bayBR.y - y - (fonts::kTinySize + 8.0f);
+        const float wordRoom = bayBR.y - y - (fonts::tinyPx() + 8.0f);
         const float lineH =
-            std::clamp(wordRoom * 0.5f - 3.0f, fonts::kUiSize + 2.0f, 52.0f);
+            std::clamp(wordRoom * 0.5f - 3.0f, fonts::uiPx() + 2.0f, 52.0f);
         const float labelW = std::min(96.0f, colW * 0.40f);
         struct Pair {
             const char* caption;
@@ -542,8 +542,8 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             {tr("RECEIVED"), have ? in.state.text[2] : ""},
         };
         for (int i = 0; i < 2; ++i) {
-            if (y + lineH > bayBR.y - (fonts::kTinySize + 6.0f)) { break; }
-            engrave(dl, ImVec2(colX, (y + y + lineH) * 0.5f - fonts::kTinySize * 0.6f),
+            if (y + lineH > bayBR.y - (fonts::tinyPx() + 6.0f)) { break; }
+            engrave(dl, ImVec2(colX, (y + y + lineH) * 0.5f - fonts::tinyPx() * 0.6f),
                     pairs[i].caption);
             const ImVec2 wTL(colX + labelW, y - 1.0f);
             // The well is as wide as the words need and no wider: run out to
@@ -568,10 +568,10 @@ float drawPagerFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
             std::string seq;
             cascade::core::formatUtf8(seq, tr("EVENT %u"),
                           static_cast<unsigned>(in.state.seq));
-            engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f), seq.c_str(),
+            engrave(dl, ImVec2(colX, bayBR.y - fonts::tinyPx() - 6.0f), seq.c_str(),
                     theme::kInkFaint);
         } else {
-            engrave(dl, ImVec2(colX, bayBR.y - fonts::kTinySize - 6.0f),
+            engrave(dl, ImVec2(colX, bayBR.y - fonts::tinyPx() - 6.0f),
                     tr("NO PAGE RECEIVED"), theme::kInkFaint);
         }
     }

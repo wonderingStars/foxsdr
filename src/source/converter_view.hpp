@@ -22,6 +22,14 @@
 // Every other call is the radio's own, unchanged: the rate, the name, start,
 // stop, faults.
 //
+// AND THE CRYSTAL CORRECTION BY RETUNING (0.99.56, core/ppm_correction.hpp),
+// for a radio that cannot correct its own crystal. It sits BETWEEN the
+// converter and the radio, because it is the radio's crystal that is out:
+//   air -> radioFromAir -> the radio frequency wanted -> ppmRequestHz -> told
+//   readback -> ppmReadbackHz -> the radio frequency it is on -> airFromRadio
+// With setPpm(0) - every install starts there, and it is all a radio that
+// corrects itself ever gets - both steps are the identity.
+//
 // THREADING. The same contract as IqSource: GUI/control thread for the
 // setters and readbacks. mirrors() is the one thing a source thread may ask,
 // and it is an atomic for that reason - the pipeline's source thread reads
@@ -38,6 +46,7 @@
 #include <string>
 
 #include "core/freq_converter.hpp"
+#include "core/ppm_correction.hpp"
 #include "source/iq_source.hpp"
 
 namespace cascade::source {
@@ -48,6 +57,7 @@ public:
     void bind(IqSource* inner) {
         inner_ = inner;
         error_.clear();
+        memo_ = cascade::core::PpmMemo{};
     }
     IqSource* inner() const { return inner_; }
 
@@ -58,6 +68,19 @@ public:
     }
     const cascade::core::ConverterSetting& converter() const { return conv_; }
     bool mirrors() const { return mirror_.load(std::memory_order_relaxed); }
+
+    // The correction applied by retuning, in ppm; 0 = none. Does not retune:
+    // the readback is simply read through the new value, and the caller
+    // retunes to keep the station (AppWindow::changePpm). `memo` is the tune
+    // already made for this radio at this correction by someone else (the
+    // patch page's worker, which tunes the radio before this view exists);
+    // with none, the next readback is read through ppmTrueHz until a tune
+    // through this view leaves a memo of its own.
+    void setPpm(double ppm, const cascade::core::PpmMemo& memo = {}) {
+        ppm_ = ppm;
+        memo_ = ppm == 0.0 ? cascade::core::PpmMemo{} : memo;
+    }
+    double ppm() const { return ppm_; }
 
     bool start() override { return inner_ != nullptr && inner_->start(); }
     void stop() override {
@@ -74,7 +97,8 @@ public:
 
     double centerFrequencyHz() const override {
         if (inner_ == nullptr) { return 0.0; }
-        return cascade::core::airFromRadio(conv_, inner_->centerFrequencyHz());
+        return cascade::core::airFromRadio(
+            conv_, cascade::core::ppmReadbackHz(inner_->centerFrequencyHz(), ppm_, memo_));
     }
 
     bool setCenterFrequencyHz(double airHz) override {
@@ -89,7 +113,23 @@ public:
             return false;
         }
         error_.clear();
-        return inner_->setCenterFrequencyHz(cascade::core::radioFromAir(conv_, airHz));
+        const double radioHz = cascade::core::radioFromAir(conv_, airHz);
+        if (ppm_ == 0.0) { return inner_->setCenterFrequencyHz(radioHz); }
+        const double toldHz = cascade::core::ppmRequestHz(radioHz, ppm_);
+        const bool ok = inner_->setCenterFrequencyHz(toldHz);
+        // A REFUSED tune leaves the radio where the last one put it, and the
+        // memo of that one still describes it.
+        if (ok) { memo_ = cascade::core::PpmMemo{true, radioHz, toldHz}; }
+        return ok;
+    }
+
+    // The radio's own correction, passed through (a caller holding the view
+    // asks the radio, not the view, which corrects nothing of its own).
+    bool hasFrequencyCorrection() const override {
+        return inner_ != nullptr && inner_->hasFrequencyCorrection();
+    }
+    bool setFrequencyCorrectionPpm(double ppm) override {
+        return inner_ != nullptr && inner_->setFrequencyCorrectionPpm(ppm);
     }
 
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
@@ -111,6 +151,8 @@ private:
     cascade::core::ConverterSetting conv_{};
     std::atomic<bool> mirror_{false};
     std::string error_;
+    double ppm_ = 0.0;
+    cascade::core::PpmMemo memo_{};
 };
 
 }  // namespace cascade::source

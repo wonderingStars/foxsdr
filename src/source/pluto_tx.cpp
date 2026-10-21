@@ -7,6 +7,7 @@
 #include "source/pluto_tx.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "source/pluto_source.hpp"
 
 #include <algorithm>
@@ -303,7 +304,8 @@ bool PlutoTx::open(const std::string& args) {
 
     std::string daemonVersion;
     if (!control_->version(daemonVersion)) {
-        setError(std::string("nothing at ") + host + " answered as an IIO daemon: " +
+        setError(std::string("nothing at ") + host + ":" + std::to_string(port) +
+                 " answered as an IIO daemon: " +
                  control_->lastError());
         control_.reset();
         return false;
@@ -446,9 +448,9 @@ bool PlutoTx::open(const std::string& args) {
     openMirror_.store(true, std::memory_order_relaxed);
 
     core::diagLogf(
-        "tx: opened %s at %s:%u for transmit - phy %s (LO %s, gain %s), DAC %s (%s), %zu DDS "
+        "tx: opened %s on port %u for transmit - phy %s (LO %s, gain %s), DAC %s (%s), %zu DDS "
         "tone channel(s)",
-        label.c_str(), host_.c_str(), static_cast<unsigned>(port_), phyDevice_.c_str(),
+        label.c_str(), static_cast<unsigned>(port_), phyDevice_.c_str(),
         txLoChannel_.c_str(), txChannel_.c_str(), dacDevice_.c_str(), chI.scanFormat.c_str(),
         ddsChannels_.size());
     core::diagLogf("tx: the board reports transmit power %.2f to %.2f dB (0 dB is full output)%s",
@@ -806,7 +808,8 @@ void PlutoTx::stopWritingLocked(bool drain) {
                 "board may still be transmitting",
                 static_cast<long long>(kWriterJoinWait.count()));
             writer_.detach();
-            (void)stream_.release();
+            // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+            cascade::core::leakOnPurpose(stream_.release());
             link_->stream = nullptr;
             running_.store(false, std::memory_order_relaxed);
             return;

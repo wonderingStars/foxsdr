@@ -1,0 +1,24 @@
+kind: stall
+stalled-ms: 7213
+threshold-ms: 5000
+signature: FEDCBA9876543210
+threads: 2
+--- context ---
+version: 0.62.0
+commit: abc123def456
+os: Windows 10.0.22631
+arch: x64
+mode: NFM
+source: generator
+sample-rate: 1000000
+device-open: no
+sdr-model: (none)
+plugin: (none)
+--- modules ---
+  cascade.exe base=0x00007FF700000000 size=0x2C8000 pdb=cascade.pdb build=651FD5EB776649E7B91461B1EB1EB8C525
+--- thread 100 (gui, stalled) ---
+  cascade.exe+0x9999
+--- thread 200 (watchdog) ---
+  cascade.exe+0x1111
+--- log (last 1 of 7 lines) ---
+watchdog armed

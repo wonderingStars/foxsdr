@@ -169,7 +169,7 @@ inline std::string argField(const std::string& args, const std::string& name) {
 // THE ONE TABLE: gui::nativeKeyForSoapyDriver answers from it too.
 inline std::string nativeFamilyForSoapyDriver(const std::string& soapyDriver) {
     if (soapyDriver == "rtlsdr" || soapyDriver == "hackrf" || soapyDriver == "airspy" ||
-        soapyDriver == "airspyhf" || soapyDriver == "sdrplay") {
+        soapyDriver == "airspyhf" || soapyDriver == "sdrplay" || soapyDriver == "hydrasdr") {
         return soapyDriver;
     }
     if (soapyDriver == "miri") { return "mirisdr"; }

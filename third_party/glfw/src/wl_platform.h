@@ -56,6 +56,10 @@ typedef void (* PFN_wl_display_disconnect)(struct wl_display*);
 typedef int (* PFN_wl_display_roundtrip)(struct wl_display*);
 typedef int (* PFN_wl_display_get_fd)(struct wl_display*);
 typedef int (* PFN_wl_display_prepare_read)(struct wl_display*);
+typedef struct wl_event_queue* (* PFN_wl_display_create_queue)(struct wl_display*);
+typedef void (* PFN_wl_event_queue_destroy)(struct wl_event_queue*);
+typedef int (* PFN_wl_display_prepare_read_queue)(struct wl_display*,struct wl_event_queue*);
+typedef int (* PFN_wl_display_dispatch_queue_pending)(struct wl_display*,struct wl_event_queue*);
 typedef void (* PFN_wl_proxy_marshal)(struct wl_proxy*,uint32_t,...);
 typedef int (* PFN_wl_proxy_add_listener)(struct wl_proxy*,void(**)(void),void*);
 typedef void (* PFN_wl_proxy_destroy)(struct wl_proxy*);
@@ -67,6 +71,9 @@ typedef void (* PFN_wl_proxy_set_tag)(struct wl_proxy*,const char*const*);
 typedef const char* const* (* PFN_wl_proxy_get_tag)(struct wl_proxy*);
 typedef uint32_t (* PFN_wl_proxy_get_version)(struct wl_proxy*);
 typedef struct wl_proxy* (* PFN_wl_proxy_marshal_flags)(struct wl_proxy*,uint32_t,const struct wl_interface*,uint32_t,uint32_t,...);
+typedef void* (* PFN_wl_proxy_create_wrapper)(void*);
+typedef void (* PFN_wl_proxy_wrapper_destroy)(void*);
+typedef void (* PFN_wl_proxy_set_queue)(struct wl_proxy*,struct wl_event_queue*);
 #define wl_display_flush _glfw.wl.client.display_flush
 #define wl_display_cancel_read _glfw.wl.client.display_cancel_read
 #define wl_display_dispatch_pending _glfw.wl.client.display_dispatch_pending
@@ -75,6 +82,10 @@ typedef struct wl_proxy* (* PFN_wl_proxy_marshal_flags)(struct wl_proxy*,uint32_
 #define wl_display_roundtrip _glfw.wl.client.display_roundtrip
 #define wl_display_get_fd _glfw.wl.client.display_get_fd
 #define wl_display_prepare_read _glfw.wl.client.display_prepare_read
+#define wl_display_create_queue _glfw.wl.client.display_create_queue
+#define wl_display_prepare_read_queue _glfw.wl.client.display_prepare_read_queue
+#define wl_display_dispatch_queue_pending _glfw.wl.client.display_dispatch_queue_pending
+#define wl_event_queue_destroy _glfw.wl.client.event_queue_destroy
 #define wl_proxy_marshal _glfw.wl.client.proxy_marshal
 #define wl_proxy_add_listener _glfw.wl.client.proxy_add_listener
 #define wl_proxy_destroy _glfw.wl.client.proxy_destroy
@@ -86,6 +97,9 @@ typedef struct wl_proxy* (* PFN_wl_proxy_marshal_flags)(struct wl_proxy*,uint32_
 #define wl_proxy_set_tag _glfw.wl.client.proxy_set_tag
 #define wl_proxy_get_version _glfw.wl.client.proxy_get_version
 #define wl_proxy_marshal_flags _glfw.wl.client.proxy_marshal_flags
+#define wl_proxy_create_wrapper _glfw.wl.client.proxy_create_wrapper
+#define wl_proxy_wrapper_destroy _glfw.wl.client.proxy_wrapper_destroy
+#define wl_proxy_set_queue _glfw.wl.client.proxy_set_queue
 
 struct wl_shm;
 struct wl_output;
@@ -362,7 +376,11 @@ typedef struct _GLFWwindowWayland
     struct wl_callback*         callback;
 
     struct {
+        struct wl_event_queue*  queue;
         struct wl_egl_window*   window;
+        struct wl_callback*     callback;
+        struct wl_surface*      wrapper;
+        int                     interval;
     } egl;
 
     struct {
@@ -520,6 +538,10 @@ typedef struct _GLFWlibraryWayland
         PFN_wl_display_roundtrip                    display_roundtrip;
         PFN_wl_display_get_fd                       display_get_fd;
         PFN_wl_display_prepare_read                 display_prepare_read;
+        PFN_wl_display_create_queue                 display_create_queue;
+        PFN_wl_display_prepare_read_queue           display_prepare_read_queue;
+        PFN_wl_display_dispatch_queue_pending       display_dispatch_queue_pending;
+        PFN_wl_event_queue_destroy                  event_queue_destroy;
         PFN_wl_proxy_marshal                        proxy_marshal;
         PFN_wl_proxy_add_listener                   proxy_add_listener;
         PFN_wl_proxy_destroy                        proxy_destroy;
@@ -531,6 +553,9 @@ typedef struct _GLFWlibraryWayland
         PFN_wl_proxy_set_tag                        proxy_set_tag;
         PFN_wl_proxy_get_version                    proxy_get_version;
         PFN_wl_proxy_marshal_flags                  proxy_marshal_flags;
+        PFN_wl_proxy_create_wrapper                 proxy_create_wrapper;
+        PFN_wl_proxy_wrapper_destroy                proxy_wrapper_destroy;
+        PFN_wl_proxy_set_queue                      proxy_set_queue;
     } client;
 
     struct {
@@ -688,4 +713,6 @@ void _glfwUpdateBufferScaleFromOutputsWayland(_GLFWwindow* window);
 
 void _glfwAddSeatListenerWayland(struct wl_seat* seat);
 void _glfwAddDataDeviceListenerWayland(struct wl_data_device* device);
+
+GLFWbool _glfwWaitForEGLFrameWayland(_GLFWwindow* window);
 

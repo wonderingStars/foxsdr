@@ -114,8 +114,27 @@ Write-Step "Windows SDK tools: $($sdkBin.Name)"
 $exePath = Join-Path $BuildDir "cascade.exe"
 if (-not (Test-Path -LiteralPath $exePath)) { Fail "cascade.exe not found in $BuildDir" }
 
-$versionLine = (& $exePath --version) | Select-Object -First 1
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($versionLine)) {
+# NOT `& $exePath --version`. cascade.exe is becoming a WINDOWS-subsystem program (no
+# console window, 0.99.69); from PowerShell `&` then returns at once, captures nothing and
+# leaves $LASTEXITCODE meaningless, so the call that worked for every console build would
+# report "did not answer". A process whose pipes are redirected is waited for and read the
+# same way for either subsystem.
+$versionProc = New-Object System.Diagnostics.Process
+$versionProc.StartInfo.FileName = $exePath
+$versionProc.StartInfo.Arguments = "--version"
+$versionProc.StartInfo.UseShellExecute = $false
+$versionProc.StartInfo.RedirectStandardOutput = $true
+$versionProc.StartInfo.RedirectStandardError = $true
+$versionProc.StartInfo.CreateNoWindow = $true
+[void]$versionProc.Start()
+$versionOut = $versionProc.StandardOutput.ReadToEndAsync()
+[void]$versionProc.StandardError.ReadToEndAsync()
+if (-not $versionProc.WaitForExit(60000)) {
+    try { $versionProc.Kill() } catch { }
+    Fail "cascade.exe --version did not finish within 60 seconds"
+}
+$versionLine = ($versionOut.Result -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1)
+if ($versionProc.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($versionLine)) {
     Fail "cascade.exe --version did not answer"
 }
 # "FoxSDR 0.96.0"

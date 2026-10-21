@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+#include "core/i18n.hpp"  // FOX_TR_NOOP only: targetCountText names the catalogue keys
+
 namespace cascade::gui {
 
 // --- geodesy -----------------------------------------------------------------
@@ -215,8 +217,13 @@ inline constexpr float kAltLegendPad = 5.0f;
 // than no legend because the user cannot tell it is truncated. The measuring
 // function is passed in so this stays free of ImGui and testable; the caller
 // hands it ImGui::CalcTextSize with the font actually in use.
+//
+// `noAltitudeLabel` is the TRANSLATED text of the "no altitude" row that sits
+// under the six bands when some aircraft on the map reports no altitude, or
+// null when the legend is drawn without it. "no altitude" is longer than any
+// band label, so a panel measured without the row it then draws clips it.
 template <typename MeasureTextWidth>
-float altLegendWidth(MeasureTextWidth&& measureTextWidth);
+float altLegendWidth(MeasureTextWidth&& measureTextWidth, const char* noAltitudeLabel = nullptr);
 
 // The same measurement for the ORBITAL ladder, and it is not the same number:
 // "850-1200 km" is eleven characters where the widest aviation label,
@@ -458,6 +465,14 @@ struct TrackDetailInput {
     TrackKind kind = TrackKind::Aircraft;
     double latDeg = 0.0;
     double lonDeg = 0.0;
+    // false for a target the source hears but cannot place yet (0.99.75,
+    // CASCADE_TRACK_FLAG_NO_POSITION): latDeg/lonDeg are then not a position at
+    // all, and the block says so instead of printing them. True by default, which
+    // is what every caller before this field meant.
+    bool hasPosition = true;
+    // true for a position the source carried forward from its last fix (0.99.78,
+    // CASCADE_TRACK_FLAG_ESTIMATED): the block then says so under the coordinates.
+    bool estimated = false;
     // NaN means the source does not know, exactly as the ABI says.
     double altM = std::numeric_limits<double>::quiet_NaN();
     double speedMps = std::numeric_limits<double>::quiet_NaN();
@@ -486,6 +501,36 @@ struct TrackDetailInput {
 // The block, in the order it is read: who, then what the registry knows, then
 // what the radio heard.
 std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput& in);
+
+// THE HEADING OVER A TARGET LIST (0.99.75): how many rows it has, how many the
+// page holds, and - when the source hears aircraft it cannot place yet - how many
+// of those. `shown` is the placed rows listed, `total` the placed targets live,
+// `unplaced` the targets heard without a position. They differ when the list's
+// "On screen only" switch hid some (`shown` < `total`), which is when the line
+// says "N of M".
+//
+//   unplaced == 0   "%d target" / "%d targets" / "%d of %d targets", exactly the
+//                   three lines the list has always had.
+//   unplaced  > 0   the same three with the second number said:
+//                   "%d targets, %d heard without a position", its singular, and
+//                   "%d of %d targets, %d heard without a position".
+//
+// SIX WHOLE STRINGS and no suffix pasted on, for the reason the singular/plural
+// pair has always been two strings: a suffix is a clause no catalogue can reorder.
+// `translate` is the language lookup (core::tr in the application, the identity in
+// a test), applied to the whole format; the English formats are the catalogue keys,
+// marked FOX_TR_NOOP so the key tool finds them in this header.
+std::string targetCountText(std::size_t shown, std::size_t total, std::size_t unplaced,
+                            const char* (*translate)(const char*));
+
+// THE SECOND LINE OF A ROW FOR A TARGET HEARD WITHOUT A POSITION: the altitude where
+// the source reported one, then the words that stand where the distance and the
+// bearing would be. "35000 ft - no position yet"; just "no position yet" when the
+// altitude is not known either. Feet for everything but a satellite, which is
+// lettered in kilometres, as the detail block letters it (a station reports feet).
+std::string unplacedRowNote(double altM, TrackKind kind, const char* (*translate)(const char*));
+// The word beside a listed track whose position is an estimate (0.99.78).
+std::string estimatedRowNote(const char* (*translate)(const char*));
 
 // ============================================================================
 // Implementation. Header-only because every piece of it is a handful of lines
@@ -650,10 +695,12 @@ inline const AltBandStyle& altBandStyle(int index) {
     // palette cannot quietly drift out of it.
     //
     // NO RED ANYWHERE IN IT, deliberately: red is the aircraft KIND colour
-    // (which an unknown-altitude target keeps) and the emergency colour, and
-    // both of those have to win. A band that was also red would put an
-    // ordinary aircraft at circuit height in the same colour as one squawking
-    // 7700.
+    // and the emergency colour, and both of those have to win. A band that was
+    // also red would put an ordinary aircraft at circuit height in the same
+    // colour as one squawking 7700. (An aircraft that reports NO altitude used
+    // to keep that kind red, close enough to the lowest band's orange that a
+    // tester could not tell "no altitude" from "below 1,000 ft"; since 0.99.74
+    // it is the grey of noAltitudeStyle() below, which belongs to no band.)
     static const AltBandStyle kBands[kAltBandCount] = {
         {255, 122, 20, "< 1 kft"},     // circuit, final approach
         {255, 190, 30, "1-5 kft"},     // departure, arrival
@@ -665,6 +712,39 @@ inline const AltBandStyle& altBandStyle(int index) {
     if (index < 0) { index = 0; }
     if (index >= kAltBandCount) { index = kAltBandCount - 1; }
     return kBands[index];
+}
+
+// --- "no altitude" ------------------------------------------------------------
+
+// AN AIRCRAFT THAT REPORTS NO ALTITUDE IS DRAWN GREY, and that is the whole of
+// the rule. Until 0.99.74 it kept the aircraft KIND colour, which is red, and a
+// tester wrote (2026-10-12): "instead of highlighting aircraft that are not
+// transmitting the altitude in red, which is the same as <1,000 ft. Maybe color
+// this in grey or black. I would like to be able to distinguish the two." The
+// lowest band is orange, and on a busy map at a few pixels a red marker and an
+// orange one are not two colours.
+//
+// ONLY AIRCRAFT. A ship or an APRS station reporting no altitude is not an
+// aircraft whose altitude went missing - it is a thing whose altitude is not
+// part of what it transmits - so those keep the per-kind colour that tells
+// several kinds on one map apart. A satellite always reports one.
+inline bool noAltitudeUsesGrey(TrackKind kind) { return kind == TrackKind::Aircraft; }
+
+// THE GREY, and why this grey. Mid-luminance, for the reason the palette above
+// gives: the map is either a near-black empty field or a pale OSM raster, and
+// black - which the request offered as an alternative - vanishes on the first
+// of them, while the radar scope's pale 196/204/212 (a phosphor face, no tiles)
+// would wash out on the second. 150 on all three channels sits at luma 150, the
+// middle of the 90..210 window the palette test pins, and NEUTRAL, so it
+// carries no hue that could be read as a band. Its nearest band is 42.1 away in
+// CIE Lab (1976), further than the 38.8 the closest pair of bands is, and the
+// nearest alarm hue is 54.6 away. The test measures all three.
+//
+// The label is the English fallback; the drawing code translates it, because
+// this header is free of the i18n layer.
+inline const AltBandStyle& noAltitudeStyle() {
+    static const AltBandStyle kNone = {150, 150, 150, "no altitude"};
+    return kNone;
 }
 
 inline int orbitBandIndex(double altM) {
@@ -738,7 +818,8 @@ namespace detail {
 // written separately they did not.
 template <typename BandStyleAt, typename MeasureTextWidth>
 inline float legendWidth(int count, BandStyleAt&& bandStyleAt,
-                         MeasureTextWidth&& measureTextWidth) {
+                         MeasureTextWidth&& measureTextWidth,
+                         const char* extraRowLabel = nullptr) {
     // The LONGEST label decides the width, so the panel is sized by the one
     // that would otherwise overflow rather than by the one that happened to be
     // measured. All of them are measured every call: this runs once per frame
@@ -749,18 +830,105 @@ inline float legendWidth(int count, BandStyleAt&& bandStyleAt,
         const float w = measureTextWidth(bandStyleAt(i).label);
         if (w > longest) { longest = w; }
     }
+    // THE EXTRA ROW, when the legend carries one, is a label like the rest: the
+    // "no altitude" row is longer than any band ("no altitude" against
+    // "20-30 kft"), so a panel measured without it clips its own last line.
+    if (extraRowLabel != nullptr) {
+        const float w = measureTextWidth(extraRowLabel);
+        if (w > longest) { longest = w; }
+    }
     return kAltLegendPad + kAltLegendSwatch + kAltLegendPad + longest + kAltLegendPad;
 }
 }  // namespace detail
 
 template <typename MeasureTextWidth>
-inline float altLegendWidth(MeasureTextWidth&& measureTextWidth) {
-    return detail::legendWidth(kAltBandCount, altBandStyle, measureTextWidth);
+inline float altLegendWidth(MeasureTextWidth&& measureTextWidth, const char* noAltitudeLabel) {
+    return detail::legendWidth(kAltBandCount, altBandStyle, measureTextWidth, noAltitudeLabel);
+}
+
+// How many rows the ladder draws under its heading: the bands, plus the "no
+// altitude" row when some aircraft on the map has none. The plate's height is
+// this many rows, so the row cannot be drawn outside it.
+inline int altLegendRowCount(int bandCount, bool noAltitudeRow) {
+    return bandCount + (noAltitudeRow ? 1 : 0);
 }
 
 template <typename MeasureTextWidth>
 inline float orbitLegendWidth(MeasureTextWidth&& measureTextWidth) {
     return detail::legendWidth(kOrbitBandCount, orbitBandStyle, measureTextWidth);
+}
+
+// --- where the map puts a point ------------------------------------------------
+
+// Web Mercator, normalised so the whole world is 0..1 in both axes (north at 0),
+// which is the form the tile grid is defined in. Latitude is clamped to the
+// projection's own limit, so a point at 89 degrees lands where 85.05 does - the
+// same as the tiles do, and the same as the map's drawing code, which calls this.
+inline double mapMercatorY(double latDeg) {
+    const double lat = std::clamp(latDeg, -85.05112878, 85.05112878);
+    const double s = std::sin(lat * detail::kPi / 180.0);
+    return 0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * detail::kPi);
+}
+
+struct MapPixel {
+    double x, y;
+};
+
+// WHERE MapView::draw PUTS A POINT, in pixels from the top-left of the map, and
+// it is the same arithmetic as that function's toScreen - not a similar one -
+// because the list of aircraft "on screen" has to be the aircraft the map draws
+// there, and two derivations of one projection are two chances to disagree by a
+// pixel at the edge.
+//
+//   - The view is `spanDeg` of LONGITUDE across `widthPx`; the latitude that
+//     fits is derived from the aspect ratio, so a degree is the same size
+//     across and down. (Equirectangular. The ground distance of a degree is not
+//     the same in both directions away from the equator; that is the
+//     projection's known distortion, not this function's.)
+//   - With `mercator`, the vertical scale is taken from the SAME pixels per
+//     degree of longitude, which keeps the projection conformal.
+//   - A longitude takes the SHORT WAY ROUND the antimeridian: a point at +179
+//     seen from a view centred on -179 is two degrees away, not 358. One fold
+//     in each direction, exactly as toScreen does it.
+inline MapPixel mapProjectPoint(double centreLat, double centreLon, double spanDeg,
+                                double widthPx, double heightPx, bool mercator,
+                                double latDeg, double lonDeg) {
+    const double lonSpan = spanDeg;
+    const double latSpan = spanDeg * heightPx / widthPx;
+    double dx = lonDeg - centreLon;
+    if (dx > 180.0) { dx -= 360.0; }
+    if (dx < -180.0) { dx += 360.0; }
+    const double x = dx / lonSpan * widthPx + widthPx * 0.5;
+    double y;
+    if (mercator) {
+        const double pixPerWorld = widthPx * 360.0 / lonSpan;
+        y = (mapMercatorY(latDeg) - mapMercatorY(centreLat)) * pixPerWorld + heightPx * 0.5;
+    } else {
+        y = (centreLat - latDeg) / latSpan * heightPx + heightPx * 0.5;
+    }
+    return MapPixel{x, y};
+}
+
+// WHETHER A POINT IS INSIDE THE MAP YOU ARE LOOKING AT, with NO margin: the
+// edge of the drawn map is the edge. (The marker loop keeps a 40 px margin so a
+// symbol half over the edge still draws; a LIST of what is on screen should
+// match what is visibly drawn, not what is about to be.) A point exactly on an
+// edge counts as inside.
+//
+// FALSE for a NaN or infinite coordinate - a target with no position is not on
+// any screen - and for a view with no area or no span, which has nothing in it.
+inline bool mapPointOnScreen(double centreLat, double centreLon, double spanDeg,
+                             float widthPx, float heightPx, bool mercator,
+                             double latDeg, double lonDeg) {
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return false; }
+    if (!std::isfinite(centreLat) || !std::isfinite(centreLon)) { return false; }
+    if (!(spanDeg > 0.0) || !std::isfinite(spanDeg)) { return false; }
+    if (!(widthPx > 0.0f) || !(heightPx > 0.0f)) { return false; }
+    const double w = static_cast<double>(widthPx);
+    const double h = static_cast<double>(heightPx);
+    const MapPixel p =
+        mapProjectPoint(centreLat, centreLon, spanDeg, w, h, mercator, latDeg, lonDeg);
+    return p.x >= 0.0 && p.x <= w && p.y >= 0.0 && p.y <= h;
 }
 
 inline TrackSortKey trackSortKeyForMenuIndex(int index) {
@@ -877,6 +1045,45 @@ inline void CoverageMap::record(double bearingDeg, double km) {
 
     if (maxKm_[bucket] == 0.0) { ++filled_; }
     if (km > maxKm_[bucket]) { maxKm_[bucket] = km; }
+}
+
+// How far a sighting of `kind` may be and still count as coverage. 0 means the
+// kind never counts.
+//
+// A SATELLITE NEVER COUNTS. Its position is a prediction from orbital elements,
+// published whether or not anything was heard, and the Satellites plugin places
+// every satellite it tracks wherever it is, below the horizon or not: fed in,
+// they would stretch wedges out to the far side of the planet and bury the
+// antenna's real pattern.
+//
+// AIRCRAFT AND VESSELS ARE LINE OF SIGHT. The radio horizon for an aircraft at
+// 45,000 ft from a mast on a 3,000 m hill is about 800 km, and ducting over the
+// sea stretches the record receptions to roughly that, so 1,000 km is past
+// anything real. A position further out is a mis-decode (a tester's ADS-B page
+// read "best 17082 km" from a receiver near Chicago), and one of them would pin
+// that bearing's wedge, and "best", for the rest of the session.
+//
+// Everything else keeps the physical limit record() applies: a station can be
+// an HF contact on the other side of the world, and that is a real reception.
+inline constexpr double kLineOfSightCoverageKm = 1000.0;
+inline double coverageLimitKm(TrackKind kind) {
+    switch (kind) {
+        case TrackKind::Satellite: return 0.0;
+        case TrackKind::Aircraft:
+        case TrackKind::Vessel: return kLineOfSightCoverageKm;
+        case TrackKind::Other: break;
+    }
+    return 20100.0;
+}
+
+// One target's sighting, measured from the receiver, into the accumulator: the
+// whole per-track rule the app applies, in one place a test can reach.
+inline void recordCoverage(CoverageMap& cov, double rxLatDeg, double rxLonDeg,
+                           double latDeg, double lonDeg, TrackKind kind) {
+    const double km = greatCircleKm(rxLatDeg, rxLonDeg, latDeg, lonDeg);
+    // Written so a NaN distance fails it too; record() would refuse one anyway.
+    if (!(km <= coverageLimitKm(kind))) { return; }
+    cov.record(initialBearingDeg(rxLatDeg, rxLonDeg, latDeg, lonDeg), km);
 }
 
 inline double CoverageMap::maxKm(int bucket) const {
@@ -1017,8 +1224,22 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     out.push_back({detail::detailPrintf("id      %s", in.id.c_str()), true, false, false});
     out.push_back(
         {detail::detailPrintf("from    %s", in.source.c_str()), true, false, false});
-    out.push_back({detail::detailPrintf("pos     %.5f, %.5f", in.latDeg, in.lonDeg), true,
-                   false, false});
+    if (in.hasPosition) {
+        out.push_back({detail::detailPrintf("pos     %.5f, %.5f", in.latDeg, in.lonDeg), true,
+                       false, false});
+        // AN ESTIMATE (0.99.78): the coordinates are where the source's last course
+        // and speed would have taken it since the fix whose age is printed below;
+        // said under them, dimmed, so nobody reads a carried-forward point as a fix.
+        if (in.estimated) {
+            out.push_back({"        estimated from the last fix", false, false, false});
+        }
+    } else {
+        // HEARD AND NOT PLACED (0.99.75): the coordinates are NaN and printing
+        // them would put "nan, nan" in front of the user. Said in words, dimmed
+        // like every other thing the source does not know - and the range and
+        // bearing below, which have nothing to be measured to, are left out.
+        out.push_back({"pos     no position yet", false, false, false});
+    }
 
     if (!std::isnan(in.altM)) {
         // The band is NAMED as well as measured, so the colour on the map and
@@ -1085,7 +1306,7 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
     // what a link budget is computed from, the ground distance is what says how
     // near overhead it is - so an orbital target prints both, each named as
     // what it is.
-    if (in.hasHome) {
+    if (in.hasHome && in.hasPosition) {
         const double km =
             greatCircleKm(in.homeLatDeg, in.homeLonDeg, in.latDeg, in.lonDeg);
         const double brg =
@@ -1123,6 +1344,44 @@ inline std::vector<TrackDetailLine> buildTrackDetailLines(const TrackDetailInput
                                         static_cast<double>(in.ageMs) / 1000.0),
                    true, false, false});
     return out;
+}
+
+inline std::string targetCountText(std::size_t shown, std::size_t total, std::size_t unplaced,
+                                   const char* (*translate)(const char*)) {
+    const int s = static_cast<int>(shown);
+    const int t = static_cast<int>(total);
+    const int u = static_cast<int>(unplaced);
+    if (unplaced == 0u) {
+        if (shown < total) {
+            return detail::detailPrintf(translate(FOX_TR_NOOP("%d of %d targets")), s, t);
+        }
+        // Singular and plural as two whole strings, not an "s" suffix.
+        return detail::detailPrintf(shown == 1u ? translate(FOX_TR_NOOP("%d target"))
+                                                : translate(FOX_TR_NOOP("%d targets")),
+                                    s);
+    }
+    if (shown < total) {
+        return detail::detailPrintf(
+            translate(FOX_TR_NOOP("%d of %d targets, %d heard without a position")), s, t, u);
+    }
+    return detail::detailPrintf(
+        shown == 1u ? translate(FOX_TR_NOOP("%d target, %d heard without a position"))
+                    : translate(FOX_TR_NOOP("%d targets, %d heard without a position")),
+        s, u);
+}
+
+inline std::string unplacedRowNote(double altM, TrackKind kind,
+                                   const char* (*translate)(const char*)) {
+    const std::string words = translate(FOX_TR_NOOP("no position yet"));
+    if (!std::isfinite(altM)) { return words; }
+    const std::string alt = (kind == TrackKind::Satellite)
+                                ? detail::detailPrintf("%.0f km", altM / 1000.0)
+                                : detail::detailPrintf("%.0f ft", altM * detail::kMetresToFeet);
+    return alt + " - " + words;
+}
+
+inline std::string estimatedRowNote(const char* (*translate)(const char*)) {
+    return translate(FOX_TR_NOOP("estimated"));
 }
 
 }  // namespace cascade::gui

@@ -211,6 +211,12 @@ CatResult executeCatLine(const std::string& line, const RadioStatus& status) {
     }
 
     std::vector<std::string> words = splitWords(text);
+    // trimmed() strips space, tab, CR and LF; the splitter skips every isspace
+    // character, so a line of vertical tabs or form feeds is non-empty above
+    // and has no words here. It is a blank line like any other.
+    if (words.empty()) {
+        return CatResult{};
+    }
     std::string cmd = words[0];
     const auto arg = [&words](std::size_t i) -> std::string {
         return i < words.size() ? words[i] : std::string();

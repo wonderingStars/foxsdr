@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/audio_open.hpp"
@@ -74,9 +75,10 @@ void Engine::launchSoundCardOpen(bool restore, const SoundCardSettings& settings
                                      "so it is not opened again: restart FoxSDR after plugging or "
                                      "unplugging a card."),
                                   label.c_str());
-        cascade::core::diagWarnf("source: the sound card %s has stopped; not reopened by its ALSA index "
+        // The log describes the card, never names it (loggableSoundCardDescription).
+        cascade::core::diagWarnf("source: the sound card (%s) has stopped; not reopened by its ALSA index "
                                  "(restart FoxSDR)",
-                                 label.c_str());
+                                 cascade::source::loggableSoundCardDescription(soundCardLive_).c_str());
         return;
     }
     // RE-OPENING THE CARD THAT IS RUNNING - a new rate, channel or format on
@@ -100,8 +102,8 @@ void Engine::launchSoundCardOpen(bool restore, const SoundCardSettings& settings
     const bool same = release && cascade::gui::soundCardSameSettings(settings, soundCardLive_);
     if (release) {
         previous = soundCardLive_;
-        cascade::core::diagLogf("source: releasing the sound card %s (%s) to open it with new settings",
-                                previous.device.c_str(), previous.hostApi.c_str());
+        cascade::core::diagLogf("source: releasing the sound card (%s) to open it with new settings",
+                                cascade::source::loggableSoundCardDescription(previous).c_str());
         device_ = nullptr;
         soapyView_ = nullptr;
         ++sourceGen_;
@@ -179,6 +181,15 @@ void Engine::pollSoundCard() {
         soundCardListed_ = true;
     }
     const std::string label = r.wanted.device + " (" + r.wanted.hostApi + ")";
+    // A SOUND CARD INPUT THAT WOULD NOT OPEN is counted like a radio that would
+    // not (0.99.64, core/health_events.hpp): the driver kind "soundcard" and a
+    // reason class - never the card's name, which is often a person's.
+    if (!r.src) {
+        const cascade::source::SoundCardMatch where = cascade::source::matchSoundCard(
+            r.devices, r.wanted.device, r.wanted.hostApi, r.wanted.pickedFromList);
+        const bool gone = !r.wanted.device.empty() && where.at < 0 && where.candidates.empty();
+        cascade::core::health::noteRadioFail("soundcard", gone ? "the card is not connected" : r.error);
+    }
     if (!r.src && r.released) {
         // NEITHER THE NEW SETTINGS NOR THE OLD ONES OPENED. The card was
         // released for this open, so the generator is what is running; the
@@ -186,8 +197,8 @@ void Engine::pollSoundCard() {
         // the combo says it is not open, and both reasons are on screen. The
         // section shows the settings the card last RAN with - what the next
         // start will try - and nothing claims it is running.
-        cascade::core::diagWarnf("source: the sound card %s did not open with new settings, nor as it was",
-                                 label.c_str());
+        cascade::core::diagWarnf("source: the sound card (%s) did not open with new settings, nor as it was",
+                                 cascade::source::loggableSoundCardDescription(r.wanted).c_str());
         if (r.gen != sourceGen_) { return; }  // another source was chosen meanwhile
         soundCard_ = r.previous;
         restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.previous.device;
@@ -232,7 +243,8 @@ void Engine::pollSoundCard() {
             // the restore asked), and now the combo says so too.
             restoreKeepLabel_ = std::string(tr("Sound card")) + ": " + r.wanted.device;
         }
-        cascade::core::diagWarnf("source: the sound card %s did not open%s", label.c_str(),
+        cascade::core::diagWarnf("source: the sound card (%s) did not open%s",
+                                 cascade::source::loggableSoundCardDescription(r.wanted).c_str(),
                                  missing ? " - it is not in the list of inputs" : "");
         return;
     }
@@ -260,6 +272,9 @@ void Engine::pollSoundCard() {
     soundCardLive_ = soundCard_;
     installSource(std::move(r.src));
     sourceKind_ = "soundcard";
+    cascade::core::health::noteRadioOpen("soundcard");
+    // FIXME(2026-10-21, 0.99.84 merge, ledger HEALTH-DIAG): master follows this with healthWatchSamples("soundcard") - the "samples have
+    // arrived" mark of the usage record's radio-health counts; the engine has no health poll yet.
     // THIS CARD'S converter, after the install put the pipeline back to Off
     // and before anything reads the air centre below (see
     // soundCardConverter for what a card can have in front of it).
@@ -289,9 +304,12 @@ void Engine::pollSoundCard() {
         pipeline_.setVfoOffsetHz(inside);
         vfoOffsetKhz_ = static_cast<float>(inside / 1000.0);
     }
-    cascade::core::diagLogf("source: opened the sound card %s (%s) at %.0f Hz, %s%s", soundCard_.device.c_str(),
-                            soundCard_.hostApi.c_str(), soundCard_.cardRateHz,
-                            soundCard_.format == SoundCardFormat::IqStereo ? "I/Q" : "real",
+    // NEVER the card's own name here - see loggableSoundCardDescription's
+    // comment: an OS-assigned label like "Headset (Alice's AirPods Pro)" is
+    // often a person's name, and this line also feeds the diagnostics bundle
+    // a person can choose to attach to a bug report.
+    cascade::core::diagLogf("source: opened the sound card (%s)%s",
+                            cascade::source::loggableSoundCardDescription(soundCard_).c_str(),
                             r.restoredPrevious ? " - as it was; the new settings were refused" : "");
 }
 

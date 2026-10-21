@@ -2335,6 +2335,15 @@ static PaError PaAlsaStreamComponent_DetermineFramesPerBuffer( PaAlsaStreamCompo
         ENSURE_( alsa_snd_pcm_hw_params_get_periods_max( hwParams, &maxPeriods, &dir ), paUnanticipatedHostError );
         assert( maxPeriods > 1 );
 
+        /* FOXSDR PATCH (alsa-zero-periods): the assert above is compiled out of a
+         * release build (-DNDEBUG), and a device that reports a maximum of ZERO
+         * periods then clamps numPeriods to 0 below and divides by it in
+         * "bufferSize / numPeriods" - SIGFPE (FPE_INTDIV) inside Pa_OpenStream,
+         * which no caller can catch. Refuse the stream instead, the same way the
+         * "framesPerHostBuffer != 0" check in PaAlsaStream_DetermineFramesPerBuffer
+         * does. See third_party/portaudio/FOXSDR-PATCHES.md. */
+        PA_UNLESS( maxPeriods > 0, paInternalError );
+
         /* Clamp to min/max */
         numPeriods = PA_MIN(maxPeriods, PA_MAX(minPeriods, numPeriods));
 

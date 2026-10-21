@@ -5,6 +5,10 @@
 #include "core/crash_upload.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/foreign_modules.hpp"
+#include "core/frame_timing.hpp"
+#include "core/plugin_reload_phases.hpp"
+#include "core/sentinel.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -199,6 +203,8 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     enum class Section { Header, Context, Process, Modules, Stack, Log, Ignore };
     Section section = Section::Header;
     std::string addressText;
+    std::string frameScopeText;
+    std::string reloadPhaseText;
     bool sawKind = false;
 
     for (const std::string& raw : lines) {
@@ -262,6 +268,15 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 } else if (k == "code") {
                     // The exception code, e.g. 0xC0000005, verbatim.
                     out.code = v;
+                } else if (k == "frame-scope") {
+                    // A freeze report's own line (0.99.64). Kept aside until the
+                    // kind is known - see below, where it becomes the reason.
+                    frameScopeText = v;
+                } else if (k == "reload-phase") {
+                    // A freeze report's own line (0.99.84). Kept aside until the
+                    // kind is known - see below, where it is validated against
+                    // the closed list of reload step names.
+                    reloadPhaseText = v;
                 }
                 // thread, stalled-ms, threshold-ms and threads are
                 // deliberately not carried: the rest is either in the stack
@@ -286,6 +301,11 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 out.deviceOpen = (v == "yes");
             } else if (k == "sdr-model") {
                 out.sdrModel = (v == "(none)") ? std::string() : v;
+            } else if (k == "foreign-modules") {
+                // File names only (0.99.69): re-rendered from the names that are plain file
+                // names, so a hand-edited or damaged line cannot carry anything else out, and
+                // empty for every value that is not a list (`(not recorded)` and the rest).
+                out.foreignModules = normaliseForeignField(v);
             } else if (k == "plugin") {
                 if (v != "(none)" && !v.empty() && out.plugins.size() < kMaxPlugins) {
                     out.plugins.push_back(v);
@@ -339,6 +359,29 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     // bug that is not there.
     if (out.kind != "crash" && out.kind != "hang" && out.kind != "stall") { return false; }
 
+    // A FREEZE'S REASON IS WHERE THE FRAME WAS (0.99.64). A freeze report has no
+    // `reason:` line; it has `frame-scope:`, the part of the frame the window's
+    // thread was stalled in. That goes up in the field the receiving end already
+    // has for "what went wrong, in words", as one fixed sentence ending in a name
+    // from the frame timer's closed list - and ONLY such a name: a line that says
+    // anything else (a report edited by hand, a later build's scope this one does
+    // not know) is dropped, never forwarded, so this field cannot be made to
+    // carry text from the machine.
+    if (out.kind == "hang" && out.reason.empty() && !frameScopeText.empty()) {
+        FrameScope scope = FrameScope::Other;
+        if (frameScopeFromName(frameScopeText.c_str(), scope)) {
+            out.reason = std::string(kFreezeReasonPrefix) + frameScopeName(scope);
+        }
+    }
+    // THE RELOAD STEP, BY THE SAME RULE (0.99.84): a freeze report's
+    // `reload-phase:` word is carried only when it is one of the reload's own
+    // step names (core/plugin_reload_phases.hpp) - `none`, a crash report's
+    // stray line, and anything a hand or a later build wrote are all dropped,
+    // never forwarded.
+    if (out.kind == "hang" && isPluginReloadPhaseName(reloadPhaseText.c_str())) {
+        out.reloadPhase = reloadPhaseText;
+    }
+
     auto lookup = [&out](const std::string& name) -> std::string {
         for (const auto& kv : out.modules) {
             if (kv.first == name) { return kv.second; }
@@ -352,9 +395,13 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     }
 
     // A crash report names the faulting address in its header. A freeze report
-    // does not: its signature was built from the TOP FRAME OF THE FIRST THREAD
-    // captured, which is the stalled one, so that is the frame that has to name
-    // the module here or the two would group differently.
+    // does not: its `module`/`offset` are the TOP FRAME OF THE FIRST THREAD
+    // captured, which is the stalled one. Since 0.99.62 that is no longer what
+    // the freeze's SIGNATURE is built from (that is the first frame of the main
+    // executable on the stalled thread - core/diag_report.hpp, freezeSignature),
+    // and this function does not recompute a signature: the one on the file's own
+    // `signature:` line is carried as it was written, which is also what keeps a
+    // report written by an older build uploadable unchanged.
     if (!addressText.empty()) {
         std::string m;
         std::uint64_t off = 0;
@@ -437,6 +484,11 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["sampleRate"] = r.sampleRateHz;
     ctx["deviceOpen"] = r.deviceOpen;
     ctx["sdrModel"] = r.sdrModel;
+    // The FILE NAMES of the other software's DLLs that were loaded into the process
+    // (0.99.69): never a folder, never a version. Always present, empty when the report
+    // says nothing about it. Re-validated here as well as where it was parsed, because
+    // this is the one place it becomes bytes that leave the machine.
+    ctx["foreignModules"] = normaliseForeignField(r.foreignModules);
     // Seconds from process start to the fault; 0 means the report predates
     // the process block. Whether the faulting thread was one of ours, as the
     // three-way answer the writer gave: "true", "false", or "" for a freeze
@@ -446,6 +498,12 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["faultThreadOwn"] = (r.faultThreadOwn == "yes")  ? "true"
                             : (r.faultThreadOwn == "no") ? "false"
                                                          : "";
+    // Which step of a plugin reload a freeze was captured in (0.99.84): one of
+    // core/plugin_reload_phases.hpp's fixed step names, already validated where
+    // it was parsed, and empty for every other report - a crash, a freeze
+    // outside a reload, an older build's file. Always present rather than
+    // omitted-when-empty, for the reason `reason` and `code` are.
+    ctx["reloadPhase"] = r.reloadPhase;
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -458,7 +516,10 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
         // tests/test_upload_scrub.cpp for the lines that used to leak.
         // Scrubbed BEFORE the tail is taken, so device-listing lines that are
         // left out do not use up the lines the report can carry.
-        const std::vector<std::string> kept = scrubUploadLog(r.log);
+        // With the report's own plugin inventory, which this payload also
+        // carries verbatim under "plugins" - see scrubUploadLog(lines,
+        // inventory) for why a plugin named "406 MHz Beacons" keeps its name.
+        const std::vector<std::string> kept = scrubUploadLog(r.log, r.plugins);
         const std::size_t start = (kept.size() > maxLog) ? kept.size() - maxLog : 0;
         for (std::size_t i = start; i < kept.size(); ++i) { log.push_back(kept[i]); }
     }
@@ -543,7 +604,8 @@ const std::vector<std::string>& uploadFieldNames() {
 const std::vector<std::string>& uploadContextFieldNames() {
     static const std::vector<std::string> names = {"mode",     "source",    "sampleRate",
                                                    "deviceOpen", "sdrModel", "uptimeSec",
-                                                   "faultThreadOwn"};
+                                                   "faultThreadOwn", "foreignModules",
+                                                   "reloadPhase"};
     return names;
 }
 
@@ -664,6 +726,9 @@ UploadPolicyState decodePolicyState(const std::vector<std::string>& recent,
 // Transport
 // ---------------------------------------------------------------------------
 void UploadCancel::cancel() {
+    // Held across the close/stop below: take() waits for it, so the worker
+    // cannot free its client while stop() is still using it (see the header).
+    std::lock_guard<std::mutex> lk(mu_);
     cancelled_.store(true, std::memory_order_release);
     void* h = request_.exchange(nullptr, std::memory_order_acq_rel);
 #if defined(_WIN32)
@@ -703,7 +768,10 @@ bool UploadCancel::publish(void* handle) {
     return true;
 }
 
-void* UploadCancel::take() { return request_.exchange(nullptr, std::memory_order_acq_rel); }
+void* UploadCancel::take() {
+    std::lock_guard<std::mutex> lk(mu_);
+    return request_.exchange(nullptr, std::memory_order_acq_rel);
+}
 
 std::string crashUploadEndpoint() {
     // The project's own domain rather than the worker behind it: this string
@@ -1030,6 +1098,139 @@ RawPostResult postBounded(const std::string& url, const std::string& json,
     return res;
 }
 
+AuthRequestResult authRequestBounded(const std::string& method, const std::string& url,
+                                     const std::string& bearer, const std::string& body,
+                                     const std::shared_ptr<UploadCancel>& cancel) {
+    AuthRequestResult res;
+    const bool isGet = (method == "GET");
+    const bool isPost = (method == "POST");
+    if (!isGet && !isPost) { return res; }  // exactly two methods accepted
+    if (url.empty() || !cancel) { return res; }
+
+#if defined(_WIN32)
+    URL_COMPONENTSW uc{};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0};
+    wchar_t path[1024] = {0};
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 255;
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = 1023;
+    const std::wstring wurl(url.begin(), url.end());
+    if (::WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc) == 0) { return res; }
+
+    const bool secure = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+    // Same loopback-only exception as postBounded: a shipped binary can never
+    // be talked into sending a bearer credential in clear over a network.
+    if (!secure && !isLoopbackHost(host)) { return res; }
+
+    HINTERNET ses = ::WinHttpOpen(L"FoxSDR-beta/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (ses == nullptr) { return res; }
+    ::WinHttpSetTimeouts(ses, 3000, 3000, 5000, 5000);
+
+    HINTERNET con = ::WinHttpConnect(ses, host, uc.nPort, 0);
+    if (con != nullptr) {
+        const wchar_t* wmethod = isGet ? L"GET" : L"POST";
+        HINTERNET req =
+            ::WinHttpOpenRequest(con, wmethod, path, nullptr, WINHTTP_NO_REFERER,
+                                 WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0);
+        if (req != nullptr) {
+            bool closed = false;
+            if (!cancel->publish(req)) {
+                res.cancelled = true;
+                closed = true;
+            } else {
+                res.attempted = true;
+                std::wstring headers = L"Authorization: Bearer " +
+                                       std::wstring(bearer.begin(), bearer.end()) + L"\r\n";
+                if (isPost) { headers += L"Content-Type: application/json\r\n"; }
+                const char* sendBody = isPost ? body.data() : nullptr;
+                const DWORD sendLen = isPost ? static_cast<DWORD>(body.size()) : 0;
+                BOOL ok = ::WinHttpSendRequest(req, headers.c_str(),
+                                               static_cast<DWORD>(-1),
+                                               const_cast<char*>(sendBody), sendLen, sendLen, 0);
+                if (ok != 0) { ok = ::WinHttpReceiveResponse(req, nullptr); }
+                if (ok != 0) {
+                    DWORD status = 0;
+                    DWORD len = sizeof(status);
+                    if (::WinHttpQueryHeaders(
+                            req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &len,
+                            WINHTTP_NO_HEADER_INDEX) != 0) {
+                        res.status = static_cast<int>(status);
+                    }
+                    // ALWAYS captured, bounded exactly like postBounded's own
+                    // captureBody=true path - both of this helper's callers
+                    // need the body to learn a name or a minted token.
+                    std::string readBody;
+                    for (;;) {
+                        DWORD avail = 0;
+                        if (::WinHttpQueryDataAvailable(req, &avail) == 0 || avail == 0) { break; }
+                        if (readBody.size() + avail > kMaxCapturedBodyBytes) {
+                            avail = static_cast<DWORD>(kMaxCapturedBodyBytes - readBody.size());
+                            if (avail == 0) { break; }
+                        }
+                        std::vector<char> buf(avail);
+                        DWORD got = 0;
+                        if (::WinHttpReadData(req, buf.data(), avail, &got) == 0 || got == 0) {
+                            break;
+                        }
+                        readBody.append(buf.data(), got);
+                        if (readBody.size() >= kMaxCapturedBodyBytes) { break; }
+                    }
+                    res.body = std::move(readBody);
+                } else if (::GetLastError() == ERROR_WINHTTP_OPERATION_CANCELLED) {
+                    res.cancelled = true;
+                }
+                void* mine = cancel->take();
+                if (mine != nullptr) { ::WinHttpCloseHandle(static_cast<HINTERNET>(mine)); }
+                closed = true;
+            }
+            if (!closed) { ::WinHttpCloseHandle(req); }
+        }
+        ::WinHttpCloseHandle(con);
+    }
+    ::WinHttpCloseHandle(ses);
+#else
+    UrlParts parts;
+    if (!splitUrl(url, parts)) { return res; }
+    const bool secure = (parts.scheme == "https");
+    if (!secure && (parts.scheme != "http" || !isLoopbackHost(parts.host))) { return res; }
+
+    const std::unique_ptr<httplib::ClientImpl> cli =
+        secure ? std::unique_ptr<httplib::ClientImpl>(
+                     new httplib::SSLClient(parts.host, parts.port))
+               : std::unique_ptr<httplib::ClientImpl>(
+                     new httplib::ClientImpl(parts.host, parts.port));
+    if (!cli->is_valid()) { return res; }
+    cli->enable_server_certificate_verification(true);
+    cli->set_follow_location(false);
+    cli->set_connection_timeout(3, 0);
+    cli->set_read_timeout(5, 0);
+    cli->set_write_timeout(5, 0);
+
+    if (!cancel->publish(cli.get())) {
+        res.cancelled = true;
+    } else {
+        res.attempted = true;
+        const httplib::Headers headers = {{"Authorization", "Bearer " + bearer}};
+        const httplib::Result r =
+            isGet ? cli->Get(parts.target, headers)
+                  : cli->Post(parts.target, headers, body, "application/json");
+        cancel->take();
+
+        if (r) {
+            res.status = r->status;
+            res.body = r->body.substr(0, kMaxCapturedBodyBytes);
+        } else if (cancel->cancelled()) {
+            res.cancelled = true;
+        }
+    }
+#endif
+    return res;
+}
+
 UploadResult postCrashReport(const std::string& url, const std::string& json,
                              const std::shared_ptr<UploadCancel>& cancel) {
     const RawPostResult raw = postBounded(url, json, cancel, /*captureBody=*/false);
@@ -1079,9 +1280,17 @@ Sidecar readSidecar(const std::string& path) {
 
 // A status nothing will change. Everything else is retried on a later start,
 // up to kMaxAttempts.
+//
+// `local-only` IS TERMINAL SINCE 0.99.64. It used to be re-examined on every start,
+// which cost nothing while it meant a display stall (rare) and would have cost the
+// next real report its place once it also means "ended from outside": the sweep
+// looks at the newest few candidates only, and a handful of those kept on the
+// machine would have crowded an older report that is still waiting to be sent out
+// of the window for ever. The report stays on disk and in the bundle's list; only
+// the repeated looking stops.
 bool terminalStatus(const std::string& s) {
     return s == "sent" || s == "duplicate" || s == "abandoned" || s == "refused" ||
-           s == "too-large" || s == "expired";
+           s == "too-large" || s == "expired" || s == "local-only";
 }
 
 void writeSidecar(const std::string& reportPath, const std::string& status, int attempts,
@@ -1197,6 +1406,25 @@ SweepOutcome sweepCrashDir(const SweepParams& params,
                          "a display-driver presentation stall, not a fault in FoxSDR; it "
                          "stays on this machine and is not sent");
             out.notes.push_back(p.filename().string() + ": display stall, kept local");
+            continue;
+        }
+
+        // AN ENDING THE SENTINEL SAW THAT IS NOT A FAULT IN THIS APPLICATION is
+        // not sent either (0.99.64): the user ended it from Task Manager while
+        // the window was drawing, or the session was closing. Reports like these
+        // are written whenever the application is ended from outside, and a
+        // healthy session ended that way must not spend the five a day that a
+        // crash needs. They stay on the machine, in the folder and in the bundle's
+        // list, with the class in the reason; the sidecar says why they were not
+        // sent. Decided by the reason's fixed wording (core/sentinel.hpp), the
+        // same words the writer starts every such reason with.
+        if (r.kind == "crash" && sentinelReasonIsLocalOnly(r.reason)) {
+            ++out.refused;
+            writeSidecar(path, "local-only", sc.attempts, r.signature, params.nowEpoch,
+                         "the sentinel saw this session end from outside while the window was "
+                         "drawing, or as the session closed; that is not a fault in FoxSDR, so "
+                         "it stays on this machine and is not sent");
+            out.notes.push_back(p.filename().string() + ": ended from outside, kept local");
             continue;
         }
 

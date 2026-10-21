@@ -30,6 +30,8 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/foreign_modules.hpp"
+#include "core/frame_timing.hpp"
 #include "core/version.hpp"
 #include "test_check.hpp"
 
@@ -43,6 +45,67 @@ namespace fs = std::filesystem;
 using namespace cascade::core;
 
 namespace {
+
+// PRIVACY.md, parsed - the "A report contains these fields and no others"
+// table under "Crash and freeze reports — what they contain", the same
+// bundle buildDiagnosticsBundle() writes and the report page's "Attach the
+// diagnostics log" checkbox attaches. Unlike the flat single-field-per-row
+// tables test_problem_report.cpp and test_feature_request.cpp read, two rows
+// here name MORE THAN ONE field at once ("`log-path`, `crash-dir`",
+// "`launches`, `crashes`"), and every field name in this table has a hyphen
+// in it (`sample-rate`, `device-open`...) - backtickedIdents-style helpers
+// elsewhere in this suite reject anything but plain alphanumerics, so this
+// one accepts '-' too.
+std::vector<std::string> backtickedFieldNames(const std::string& cell) {
+    std::vector<std::string> out;
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t a = cell.find('`', pos);
+        if (a == std::string::npos) { break; }
+        const std::size_t b = cell.find('`', a + 1);
+        if (b == std::string::npos) { break; }
+        const std::string tok = cell.substr(a + 1, b - a - 1);
+        bool ident = !tok.empty();
+        for (char c : tok) {
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-') { ident = false; }
+        }
+        if (ident) { out.push_back(tok); }
+        pos = b + 1;
+    }
+    return out;
+}
+
+std::set<std::string> documentedDiagnosticsBundleFields() {
+    std::set<std::string> fields;
+    std::ifstream in(fs::path(CASCADE_SOURCE_DIR) / "PRIVACY.md", std::ios::binary);
+    const std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::size_t start = doc.find("A report contains these fields and no others");
+    if (start == std::string::npos) { return fields; }
+    // Bounded at the prose that follows the table, not the next "## "
+    // heading: the SAME section also holds the crash- and hang-report header
+    // tables ("A crash report:", "A hang or freeze report:"), a different
+    // inventory (crashReportFieldNames()/hangReportFieldNames()) that would
+    // otherwise be swept in here too.
+    const std::size_t end =
+        doc.find("A crash or freeze report written by the application itself", start);
+    if (end == std::string::npos) { return fields; }
+    const std::string section = doc.substr(start, end - start);
+
+    std::size_t pos = 0;
+    while (pos < section.size()) {
+        const std::size_t nl = section.find('\n', pos);
+        const std::string line =
+            section.substr(pos, (nl == std::string::npos) ? std::string::npos : nl - pos);
+        pos = (nl == std::string::npos) ? section.size() : nl + 1;
+        if (line.rfind("| `", 0) != 0) { continue; }
+        const std::size_t bar = line.find('|', 1);
+        if (bar == std::string::npos) { continue; }
+        for (const std::string& n : backtickedFieldNames(line.substr(1, bar - 1))) {
+            fields.insert(n);
+        }
+    }
+    return fields;
+}
 
 // A private directory per run. The pid keeps two concurrent test executables
 // (ctest runs them in parallel) from colliding on the same fixture, which is
@@ -1035,8 +1098,23 @@ int main() {
         ctx.sampleRateHz = 2400000.0;
         ctx.deviceOpen = true;
         ctx.sdrModel = "uhd b200";
+        ctx.ppm = "+1.5 by retuning";
+        // THE OTHER SOFTWARE'S DLLs (0.99.69): file names, as the watch hands them over.
+        ctx.foreignModules = "NahimicOSD.dll, RTSSHooks64.dll";
         ctx.plugins.push_back("ADS-B 1.1.0");
         ctx.plugins.push_back("AIS 1.0.0");
+        // THE SOUND PATH (0.99.61): the four facts a "no audio from my
+        // speakers" report turned on and the bundle did not carry.
+        ctx.audio.known = true;
+        ctx.audio.everOpened = true;
+        ctx.audio.alive = true;
+        ctx.audio.channels = 2;
+        ctx.audio.hostApi = "MME";
+        ctx.audio.volumePercent = 80;
+        ctx.audio.mutedByUser = true;
+        ctx.audio.squelchDb = -50.0;
+        ctx.audio.squelchOpen = false;
+        ctx.audio.signalDb = -63.4;
 
         DiagBundleInput in;
         in.contextBlock = renderDiagContext(ctx);
@@ -1048,9 +1126,43 @@ int main() {
         in.launches = 12;
         in.crashes = 1;
         in.logLinesTotal = 4011;
+        in.sdrPlayService = "stopped, manual start (SDRplayAPIService)";
 
-        const std::string bundle = buildDiagnosticsBundle(in);
+        // THE BUNDLE AS THE WINDOW MAKES IT (0.99.64): the builder's text with the
+        // slow-frame line added by the function AppWindow::currentDiagnosticsBundle
+        // calls (core/frame_timing.hpp). Its field is inventoried by
+        // frameBundleFieldNames(), not by bundleFieldNames() - the report format
+        // that owns the latter was being changed elsewhere - and the comparisons
+        // below take the UNION of the two lists.
+        SlowFrameCounts slowFrames;
+        slowFrames.count[static_cast<int>(FrameScope::Recorder)][0] = 2;
+        slowFrames.count[static_cast<int>(FrameScope::PluginsReload)][1] = 1;
+        const std::string builderBundle = buildDiagnosticsBundle(in);
+        const std::string bundle = withSlowFramesField(builderBundle, slowFramesText(slowFrames));
         CHECK(!bundle.empty());
+        // The line, by value, in the exact form the inventory parses, and inside
+        // the header block - before the log, where the other lines are.
+        CHECK(bundle.find("\nslow-frames: recorder 2/0/0, plugins-reload 0/1/0\n") !=
+              std::string::npos);
+        CHECK(bundle.find("\nslow-frames: ") < bundle.find("--- log ---"));
+        // A session with none says so rather than leaving the line out.
+        CHECK(withSlowFramesField(builderBundle, slowFramesText(SlowFrameCounts{}))
+                  .find("\nslow-frames: none\n") != std::string::npos);
+        // The builder itself knows nothing of it: the line is not in the context
+        // block a crash report is written from.
+        CHECK(builderBundle.find("slow-frames") == std::string::npos);
+        // THE SDRPLAY SERVICE LINE (0.99.55), by value: the one fact a
+        // "my RSP will not open" report needs first, pinned in the exact
+        // "name: value" form the inventory below parses.
+        CHECK(bundle.find("\nsdrplay-service: stopped, manual start (SDRplayAPIService)\n") !=
+              std::string::npos);
+
+        // THE OTHER SOFTWARE'S DLLs (0.99.69), by value, in the exact "name: value" form the
+        // inventory parses, inside the header block and BEFORE the plugin list (the one part
+        // of the block that is cut when it overruns its buffer).
+        CHECK(bundle.find("\nforeign-modules: NahimicOSD.dll, RTSSHooks64.dll\n") != std::string::npos);
+        CHECK(bundle.find("\nforeign-modules: ") < bundle.find("\nplugin: "));
+        CHECK(bundle.find("\nforeign-modules: ") < bundle.find("--- log ---"));
 
         // Everything the docs promise is present, by value not just by label.
         CHECK(bundle.find("version: 0.61.0") != std::string::npos);
@@ -1058,9 +1170,18 @@ int main() {
         CHECK(bundle.find("plugin: ADS-B 1.1.0") != std::string::npos);
         CHECK(bundle.find("plugin: AIS 1.0.0") != std::string::npos);
         CHECK(bundle.find("sdr-model: uhd b200") != std::string::npos);
+        CHECK(bundle.find("ppm: +1.5 by retuning") != std::string::npos);
         CHECK(bundle.find("last-run-unclean: yes") != std::string::npos);
         CHECK(bundle.find("audio stream reopened") != std::string::npos);
         CHECK(bundle.find("log-lines-total: 4011") != std::string::npos);
+        // The sound path, by value, in the exact "name: value" form the
+        // inventory below parses. None of these is a frequency, a device's
+        // name or anything the person listened to: a driver model, a count, a
+        // percentage, who muted it, and a threshold against a level.
+        CHECK(bundle.find("\naudio-output: open, MME, 2 channels\n") != std::string::npos);
+        CHECK(bundle.find("\nvolume: 80%\n") != std::string::npos);
+        CHECK(bundle.find("\naudio-muted: you\n") != std::string::npos);
+        CHECK(bundle.find("\nsquelch: -50 dB, closed (signal -63 dB)\n") != std::string::npos);
 
         // THE INVENTORY, both directions. Collect every "name: " label in the
         // header block and compare it with the declared list as a set: an
@@ -1068,6 +1189,8 @@ int main() {
         // claims but the bundle stopped emitting.
         std::set<std::string> declared(bundleFieldNames().begin(), bundleFieldNames().end());
         CHECK(!declared.empty());
+        for (const std::string& n : frameBundleFieldNames()) { declared.insert(n); }
+        CHECK(declared.count("slow-frames") == 1);
         std::set<std::string> emitted;
         std::size_t pos = 0;
         const std::size_t logStart = bundle.find("--- log ---");
@@ -1085,12 +1208,193 @@ int main() {
         emitted.erase("(header)");
         CHECK(emitted == declared);
 
+        // ...and PRIVACY.md's "A report contains these fields and no others"
+        // table names exactly the same set - the documentation-level half of
+        // the inventory the code-level check above does not touch.
+        const std::set<std::string> documented = documentedDiagnosticsBundleFields();
+        CHECK(!documented.empty());
+        CHECK(documented == declared);
+
         // The negative half of the privacy promise: a bundle is a support
         // artefact, not a listening record.
         CHECK(bundle.find("Hz\n") == std::string::npos);
         CHECK(bundle.find("centre") == std::string::npos);
         CHECK(bundle.find("center") == std::string::npos);
         CHECK(bundle.find("bookmark") == std::string::npos);
+    }
+
+    // --- The other software's DLLs say every state they can be in (0.99.69) -------
+    // A process that never looked says `(not recorded)`, the first moments of a run say
+    // `(not scanned yet)`, Linux says `(not applicable)`, none foreign is `(none)`, and
+    // a value that is not a list of plain file names - a path, a sentence - is never
+    // carried: the line says `(not recorded)` in its place.
+    {
+        auto block = [](const std::string& v) {
+            DiagContext ctx;
+            ctx.foreignModules = v;
+            setDiagContext(ctx);
+            return diagContextBlock();
+        };
+        auto has = [](const std::string& b, const char* line) {
+            return b.find(std::string("\n") + line + "\n") != std::string::npos;
+        };
+        {
+            DiagContext fresh;  // the default: nothing filled it in
+            setDiagContext(fresh);
+            CHECK(has("\n" + diagContextBlock(), "foreign-modules: (not recorded)"));
+        }
+        CHECK(has("\n" + block("(not scanned yet)"), "foreign-modules: (not scanned yet)"));
+        CHECK(has("\n" + block("(not applicable)"), "foreign-modules: (not applicable)"));
+        CHECK(has("\n" + block("(none)"), "foreign-modules: (none)"));
+        CHECK(has("\n" + block("a.dll, b.dll, +3 more"), "foreign-modules: a.dll, b.dll, +3 more"));
+        CHECK(has("\n" + block("C:\\Users\\steve\\evil.dll"), "foreign-modules: (not recorded)"));
+        CHECK(has("\n" + block("this is not a list: at all"), "foreign-modules: (not recorded)"));
+        CHECK(block("C:\\Users\\steve\\evil.dll").find("evil") == std::string::npos);
+        // A list with one bad name keeps the good one, and only that.
+        CHECK(has("\n" + block("C:\\x\\evil.dll, good.dll"), "foreign-modules: good.dll"));
+        // The line is in the block ahead of the plugin list, which is what a full buffer cuts.
+        {
+            DiagContext c;
+            c.foreignModules = "a.dll";
+            for (int i = 0; i < 32; ++i) { c.plugins.push_back("A plugin with a fairly long name " + std::to_string(i) + " 1.0.0"); }
+            setDiagContext(c);
+            const std::string b = diagContextBlock();
+            CHECK(b.find("foreign-modules: a.dll") != std::string::npos);
+            CHECK(b.find("foreign-modules: ") < b.find("plugin: "));
+        }
+        // The widest the list gets, with the plugin list at its longest: still whole.
+        {
+            std::vector<std::string> names;
+            for (int i = 0; i < 60; ++i) { names.push_back("Overlay" + std::to_string(100 + i) + "xxxxxxxxxxxxxxxxxx.dll"); }
+            DiagContext c;
+            c.foreignModules = foreignFieldText(names);
+            for (int i = 0; i < 32; ++i) { c.plugins.push_back("A plugin with a fairly long name " + std::to_string(i) + " 1.0.0"); }
+            setDiagContext(c);
+            const std::string b = diagContextBlock();
+            CHECK(b.find("foreign-modules: " + c.foreignModules + "\n") != std::string::npos);
+            CHECK(b.find("plugin: A plugin with a fairly long name 0 1.0.0") != std::string::npos);
+        }
+    }
+
+    // --- The sound path says every state a "no audio" report can be in ------
+    // The field report (0.99.58, an NESDR SMArt v5) had five minutes of log and
+    // nothing that told a closed squelch, the Mute key, a muting decoder plugin,
+    // a volume of nothing, a stream that never opened and a stream that opened
+    // and died apart - all of them are silence with a healthy-looking radio.
+    {
+        auto block = [](const DiagAudio& a) {
+            DiagContext ctx;
+            ctx.audio = a;
+            setDiagContext(ctx);
+            return diagContextBlock();
+        };
+        auto has = [](const std::string& b, const char* line) {
+            return b.find(std::string("\n") + line + "\n") != std::string::npos;
+        };
+
+        // A context nothing filled in says so, rather than reading as "fine".
+        {
+            const std::string b = block(DiagAudio{});
+            CHECK(has(b, "audio-output: (unknown)"));
+            CHECK(has(b, "volume: (unknown)"));
+            CHECK(has(b, "audio-muted: (unknown)"));
+            CHECK(has(b, "squelch: (unknown)"));
+        }
+
+        DiagAudio a;
+        a.known = true;
+        a.everOpened = true;
+        a.alive = true;
+        a.channels = 1;
+        a.hostApi = "Windows WASAPI";
+        a.volumePercent = 100;
+        a.squelchDb = -120.0;
+        a.squelchOpen = true;
+        a.signalDb = -200.0;  // nothing measured yet
+
+        // The healthy state, and a mono layout.
+        {
+            const std::string b = block(a);
+            CHECK(has(b, "audio-output: open, Windows WASAPI, 1 channel"));
+            CHECK(has(b, "volume: 100%"));
+            CHECK(has(b, "audio-muted: no"));
+            CHECK(has(b, "squelch: -120 dB, open"));  // no level to quote: not invented
+        }
+        // A stream that was restarted by the watchdog says how often.
+        {
+            DiagAudio r = a;
+            r.restarts = 1;
+            CHECK(has(block(r), "audio-output: open, Windows WASAPI, 1 channel, restarted 1 time"));
+            r.restarts = 3;
+            CHECK(has(block(r), "audio-output: open, Windows WASAPI, 1 channel, restarted 3 times"));
+        }
+        // Never opened: the one case the starvation digest cannot even run.
+        {
+            DiagAudio n = a;
+            n.everOpened = false;
+            n.alive = false;
+            CHECK(has(block(n), "audio-output: none - no output device has opened"));
+        }
+        // Opened and then died: the watchdog is reopening it.
+        {
+            DiagAudio d = a;
+            d.alive = false;
+            CHECK(has(block(d), "audio-output: stopped - the stream died and is being reopened"));
+        }
+        // A worker is inside the driver's open right now.
+        {
+            DiagAudio o = a;
+            o.opening = true;
+            CHECK(has(block(o), "audio-output: opening"));
+        }
+        // Volume.
+        {
+            DiagAudio v = a;
+            v.volumePercent = 0;
+            CHECK(has(block(v), "volume: 0%"));
+            v.volumePercent = 37;
+            CHECK(has(block(v), "volume: 37%"));
+        }
+        // WHO muted it, because "muted" alone sends the reporter to the wrong
+        // control: the Mute key, a decoder plugin parked on its preset (the
+        // Sinks panel names it; the bundle must not, because that would say
+        // which band the receiver was on), the transmit key, or several.
+        {
+            DiagAudio m = a;
+            m.mutedByUser = true;
+            CHECK(has(block(m), "audio-muted: you"));
+            m = a;
+            m.mutedByPlugin = true;
+            CHECK(has(block(m), "audio-muted: a decoder plugin"));
+            m = a;
+            m.mutedByTransmit = true;
+            CHECK(has(block(m), "audio-muted: transmit key"));
+            m = a;
+            m.mutedByUser = true;
+            m.mutedByPlugin = true;
+            CHECK(has(block(m), "audio-muted: you + a decoder plugin"));
+        }
+        // The squelch: the threshold, the gate, and the level it is judging.
+        {
+            DiagAudio s = a;
+            s.squelchDb = -40.0;
+            s.squelchOpen = false;
+            s.signalDb = -57.6;
+            CHECK(has(block(s), "squelch: -40 dB, closed (signal -58 dB)"));
+            s.squelchOpen = true;
+            s.signalDb = -22.0;
+            CHECK(has(block(s), "squelch: -40 dB, open (signal -22 dB)"));
+        }
+        // None of it is a frequency, and the device is never named.
+        {
+            DiagAudio p = a;
+            p.mutedByPlugin = true;
+            p.squelchOpen = false;
+            p.signalDb = -63.0;
+            const std::string b = block(p);
+            CHECK(b.find("Hz") == std::string::npos);
+            CHECK(b.find("MHz") == std::string::npos);
+        }
     }
 
     // --- The context block is rendered on the healthy path ------------------
@@ -1108,6 +1412,77 @@ int main() {
         CHECK(block.find("deadbeef") != std::string::npos);
         CHECK(block.find("NFM") != std::string::npos);
         CHECK(block.find("POCSAG 1.0.0") != std::string::npos);
+        // The crystal correction, off unless the application says otherwise.
+        CHECK(block.find("ppm: off") != std::string::npos);
+    }
+
+    // --- The patch page's radios: driver kinds, and nothing else ------------
+    // 0.99.62. `source` describes the receiver, whose radio the patch page may
+    // have been handed, so a fault on a patch radio's thread read as a fault
+    // with no radio at all. The line is a count and KINDS - never a serial, a
+    // path, a label or a frequency.
+    {
+        auto patch = [](std::vector<std::string> kinds) {
+            DiagContext ctx;
+            ctx.patchRadioKinds = std::move(kinds);
+            setDiagContext(ctx);
+            const std::string t = "\n" + diagContextBlock();
+            const std::string key = "\npatch-radios: ";
+            const std::size_t at = t.find(key);
+            if (at == std::string::npos) { return std::string("(missing)"); }
+            const std::size_t from = at + key.size();
+            return t.substr(from, t.find('\n', from) - from);
+        };
+        CHECK(patch({}) == "none");
+        CHECK(patch({"rtlsdr"}) == "1 (rtlsdr)");
+        CHECK(patch({"rtlsdr", "soapy"}) == "2 (rtlsdr, soapy)");
+        CHECK(patch({"soapy", "soapy", "siggen", "iqfile"}) == "4 (soapy, soapy, siggen, iqfile)");
+        // A whole device key, a serial, a capital, an empty string, a path: each
+        // is cut to the leading run of lower-case letters and digits, and what
+        // that leaves nothing of reads "other".
+        const std::string odd =
+            patch({"rtlsdr|serial=0000000A", "Serial0000000A", "", "C:\\Users\\Alice\\rec.iq",
+                   "iqfile|path=C:\\Users\\Alice\\rec.iq", "a-very-long-driver-name-indeed"});
+        CHECK(odd == "6 (rtlsdr, other, other, other, iqfile, a)");
+        CHECK(patch({"abcdefghijklmnopqrstuvwxyz0123456789"}) == "1 (abcdefghijklmnop)");
+        // At most eight are listed; the count always says how many there are.
+        CHECK(patch({"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}) ==
+              "10 (a, b, c, d, e, f, g, h, ...)");
+        // The block never carries the pieces of the keys above.
+        DiagContext ctx;
+        ctx.patchRadioKinds = {"rtlsdr|serial=0000000A", "iqfile|path=C:\\Users\\Alice\\rec.iq"};
+        setDiagContext(ctx);
+        const std::string b = diagContextBlock();
+        CHECK(b.find("0000000A") == std::string::npos);
+        CHECK(b.find("Alice") == std::string::npos);
+        CHECK(b.find("serial") == std::string::npos);
+        CHECK(b.find("rec.iq") == std::string::npos);
+    }
+
+    // --- An unchanged block writes nothing (0.99.62) ------------------------
+    // AppWindow renders the context every frame now, so the common call has
+    // nothing new to say, and a rewrite of the buffer is sixty chances a second
+    // for a fault handler on another thread to read it half written. The proof is
+    // the byte after the block's end - the terminator, which a rewrite puts
+    // back and a skipped call leaves alone.
+    {
+        DiagContext ctx;
+        ctx.mode = "USB";
+        setDiagContext(ctx);
+        int len = 0;
+        char* raw = const_cast<char*>(diagContextRaw(len));
+        CHECK(len > 0);
+        const std::string before = diagContextBlock();
+        raw[len] = 'Z';
+        setDiagContext(ctx);  // the same block
+        CHECK(raw[len] == 'Z');
+        CHECK(diagContextBlock() == before);
+        ctx.mode = "AM";  // a changed block IS written, terminator included
+        setDiagContext(ctx);
+        CHECK(diagContextBlock().find("mode: AM") != std::string::npos);
+        int len2 = 0;
+        const char* raw2 = diagContextRaw(len2);
+        CHECK(raw2[len2] == '\0');
     }
 
     // --- BUILDING A BUNDLE DOES NOT REWRITE THE CRASH HANDLER'S CONTEXT (window port group 14, part c) ---------------

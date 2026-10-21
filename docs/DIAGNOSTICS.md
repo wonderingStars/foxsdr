@@ -31,8 +31,25 @@ is the one that pays: `src/core/crash_handler.cpp` for a process that dies, and
 Both carry: exact version **and** git commit, the stack as `module+offset`, the
 loaded module list with each module's **build id**, the last 256 log lines from
 the in-memory ring, the application context (mode, source, sample rate, radio
-model with the serial stripped, loaded plugins with versions), and a **stable
-signature** for grouping.
+model with the serial stripped, the crystal correction, the sound path - output
+state, volume, who muted it and the squelch, since 0.99.61 - the radios the
+patch page has running, by driver kind, since 0.99.62, and the loaded plugins
+with versions), and a **stable signature** for grouping. Since 0.99.62 that
+context is rendered after every event that changes what it says, and on every
+frame, rather than once a second: see *The context block follows the session*
+below.
+
+Since 0.99.56 the context has a `ppm:` line: `off`, `not applicable` (switched
+on over the generator, a sound card or an I/Q file), or the value in force and
+how it is applied - `+2.6 in the radio` (the radio's own correction; a native
+RTL-SDR rounds it to whole ppm), `+2.6 in the radio (refused)`, or
+`+2.6 by retuning` (the centre frequency only). It is support's first question
+when a signal is "not where the band plan says", and it is a property of the
+radio's crystal, never a frequency. The log says the same once per open
+(`source: frequency correction +2.6 ppm applied in the radio (rtlsdr, whole
+ppm: +3)`, or `... by retuning (hackrf, centre frequency only)`), and once per
+change. The upload does not carry the line (crash_upload.cpp reads only the
+fields listed under *The reader*).
 
 Since 0.66.0 the upload also forwards the report's own `reason` and `code`
 lines verbatim (empty for a hang, whose writer has no such lines). The reason
@@ -54,7 +71,10 @@ marks a frame as ours — which is why the same step matters for **plugins**: a
 plugin frame with a map is named by the plugin's own function, and without one
 every distinct bug inside that plugin collapses into a single group, since
 every plugin stack passes through the same host dispatch on its way down. The client signature
-stays in the payload as transport identity and the client-side dedup key.
+stays in the payload as transport identity and the client-side dedup key. For a
+**freeze** (`hang` or `stall`) that signature is, since 0.99.62, hashed from the
+first frame of the stalled thread that lies in our own executable rather than
+from its top frame - see *What a freeze's signature is built from* below.
 
 ### What the native drivers write (0.91.0, 0.92.0, 0.93.0)
 
@@ -64,7 +84,8 @@ over its own WinUSB
 transport, with no SoapySDR module in the path. Two more radios are driven
 natively without that transport: an SDRplay RSP through the vendor API the
 user installed (`sdrplay`), and an ADALM-Pluto over TCP to the board's own
-daemon (`pluto`). The log lines that produces
+daemon (`pluto`); from 0.99.70 a remote RTL-SDR is reached over TCP through an
+rtl_tcp server (`rtltcp`). The log lines that produces
 are deliberately the same shape as the SoapySDR ones, so one log reads the
 same whichever way a radio was opened - the only difference is that these
 describe code this product can be held responsible for.
@@ -77,15 +98,15 @@ describe code this product can be held responsible for.
 - `source: opened RTL2838UHIDIR (rtlsdr) at 2400000 S/s` - written by the
   application when it installs the radio in the pipeline. The parenthesis is
   the DRIVER KIND (`soapy`, `rtlsdr`, `hackrf`, `airspy`, `airspyhf`,
-  `sdrplay`, `mirisdr`, `rx888`, `pluto`): two rows
+  `sdrplay`, `mirisdr`, `rx888`, `pluto`, `aor`, `hydrasdr`, `rtltcp`): two rows
   in the Source dropdown can name one physical radio, and a report has to say
   which of them was taken. Every one is its own key and none is a family
   name - `airspy` and `airspyhf` are different USB ids, different hardware and
   different bands, and `mirisdr` is not `sdrplay` even though an early RSP1 is
   a Mirics device, because one goes through the vendor service and the other
   over the bare MSi2500. Two of the keys name radios that are not on the USB
-  bus at all: `sdrplay` is reached through `sdrplay_api.dll` and `pluto` over
-  the network.
+  bus at all: `sdrplay` is reached through `sdrplay_api.dll`, and `pluto` and
+  `rtltcp` over the network.
 - `source: opening RTL2838UHIDIR natively (was SoapySDR rtlsdr)` - the
   prefer-native rule firing. A config saved before 0.91.0 says "SoapySDR,
   driver=rtlsdr" because that was the only way to reach the dongle; the
@@ -99,6 +120,72 @@ describe code this product can be held responsible for.
   abandoned and the radio is condemned` - a warning, and the native
   counterpart of SoapySource's abandonment. The remedy is the same one and is
   told to the user in the same words: restart FoxSDR to use this radio again.
+- `usb: reading /sys/bus/usb/devices/<node> did not return within 300 ms - that
+  device is left out of the list until the read does` - a warning, Linux only.
+  Listing the native radios reads a few text files per USB node under
+  `/sys/bus/usb/devices`, and the kernel can block such a read for as long as
+  the device is mid-reset or its driver is wedged; there is no timeout and no way
+  to interrupt it. Before this the read ran on the GUI thread and the hang
+  watchdog filed a report whose stack bottomed out in `readSysfsAttr`
+  (signature `40ABD0BB073D899C`, opening the patch view). Now the reads run on a
+  worker that the scan waits on for 300 ms per stalled node and 1 s in all; a
+  node that does not answer is left out of the list, the worker is abandoned
+  (a thread and a descriptor are leaked until the read returns, perhaps never),
+  and the radios around it still list. Written once per stuck node, not per
+  scan: later scans skip the node silently until the abandoned read returns,
+  when it reappears on its own. `usb: listing ... stopped at its 1000 ms limit`
+  is the same bound reached by slow nodes rather than one stuck one.
+- `source: auto gain remembered on but the radio refused it` - a warning,
+  written at an open (0.99.73) when the Auto gain box was ticked the last time
+  this radio was used (`autoGainByRadio` in `config.json`, per radio, under the
+  bias tee's key) and the radio now says it has no automatic gain or refuses
+  the switch. The radio opens on manual gain with the box unticked, as every
+  radio did before the memory existed, and the remembered "on" is kept for the
+  next open. Written once per open, never for an Airspy (its AGC switches are
+  part of its gain mode) and not for the reopen after a driver fault (that
+  restores what the user had a moment ago).
+- `source: manual gain restored after auto gain off` - written (0.99.74) when
+  automatic gain was switched OFF (the Auto gain box, the AUTO key under the GAIN
+  dial, or the web control's `agc`) and the window gave the radio its manual gains
+  back. A radio may fall to the bottom of every gain stage when it leaves
+  automatic gain (a B200 under SoapyUHD did, about 35 dB below what the Source
+  section's sliders and the GAIN dial still showed), so every stage is set again to
+  the value the user had before auto gain went on (for a radio opened already on
+  auto gain, the value the open read), a step the radio turns down is dropped
+  without a word, and every stage is then read back so the sliders and the dial
+  show what the radio really holds. Written once per switch-off, only when at
+  least one stage accepted its value; not for a radio with no gain stages and not
+  when the radio refused the switch itself.
+- `source: manual gain restored - <stage> <dB>, <stage> <dB>` - written (0.99.75)
+  at an open, after the stages' first readback and before the remembered auto
+  gain is put back, when the manual gain the user last set on this radio
+  (`manualGainByRadio` in `config.json`, per radio, under the bias tee's key, one
+  value per stage) was given back to the radio. It names each stage that took its
+  value and the number the radio READ BACK (a radio quantises, and the Source
+  section's sliders and the GAIN dial show that number). A SoapySDR radio is
+  first given a mid-dial 30 dB in every stage, as it always was, and this line
+  says what replaced it; a stage the radio no longer lists is ignored, a value is
+  clamped into the stage's own range, and a stage the radio turns down is dropped
+  without a word. Written once per open and only when at least one stage took its
+  value; never for an Airspy (its gains are part of its gain mode) and not for the
+  reopen after a driver fault (that restores what the user had a moment ago). The
+  gain is written to that memory only by the user - a slider, the GAIN dial, the
+  scope's gain knob or the web control - never by the open's own 30 dB, by this
+  restore, or while automatic gain is on.
+- `squelch: auto on (AUTO key)` / `squelch: auto off (knob)` - AUTOMATIC squelch
+  changing state (0.99.74, `squelchAuto` in `config.json`), once per change and
+  never for the state restored from the config at start. The word in brackets
+  says who: `AUTO key` is the key under the SQUELCH dial on the top bar (on or
+  off); `knob` (the dial), `slider` (the Radio section's), `keys` (the Squelch
+  up / down keys), `remote` (the web control), `Airband slider` and `Airband
+  Above the noise` (the Airband section's own two squelch controls) are a hand
+  taking the threshold back, so they only ever say `off`. The line does not
+  repeat while AUTOMATIC re-sets the threshold (every quarter second, at most):
+  the threshold itself is in the squelch line of the report's sound block, which
+  is how a report shows where it ended up. While the Airband monitor listens the
+  same flag drives the MONITOR's squelch (its "Above the noise" rule, which
+  restarts the block's channels when the value moves by 0.5 dB or more), and the
+  report's squelch line is still the receiver's.
 - The stream-health line below is written by the native drivers too, in the
   same format and on the same rules.
 - The Airspy drivers write the same shapes under their own names - the open
@@ -107,6 +194,15 @@ describe code this product can be held responsible for.
   verbatim rather than a model guessed from it. There is no `--airspy-check`:
   the Airspy equivalent of `--rtlsdr-check` was not added, because there is no
   Airspy on the bench this was written on for it to have been proven against.
+- The HydraSDR RFOne (`hydrasdr`, 0.99.66) is the Airspy driver with a
+  HydraSDR's profile, so it writes the Airspy's lines under its own key:
+  `hydrasdr: opened HydraSDR RFOne (serial ...) - board id 1, firmware
+  "HydraSDR RFOne <tag> <date>", serial ...` and the rates line. Its refusals
+  read the same way (`no HydraSDR found (is it plugged in, and bound to
+  WinUSB?)` is counted as `radio_fail.hydrasdr.bind`). It has NOT been run
+  against a real RFOne: if a report from one carries a `hydrasdr:` line, that
+  line is the first evidence there is. Its serial is stripped from an upload
+  by the same rule as an Airspy's (`HYDRASDR_SN:...`).
 - The four added in 0.93.0 write the same shapes again, plus the lines only
   they can produce:
   - `source: SDRplay API - ...` once per process, from the loader, naming the
@@ -147,14 +243,113 @@ describe code this product can be held responsible for.
       the graphics driver - because by the time the stack was walked the
       vendor call had returned. A freeze of about five seconds per click on an
       RSP, reported as `nvoglv64` or `atio6axx`, is this and not the GPU.
+  - From 0.99.61, the open line names the tuner the live controls will address,
+    and one more line can follow it. The line is `source: SDRplay opened
+    RSPdx-R2, API 3.15, tuner 1`; the 0.99.59 RSPdx-R2 report read `tuner 0`.
+    For every model except the RSPduo the driver set `Tuner_Neither` before it
+    selected the device, and every `sdrplay_api_Update` it sent afterwards -
+    each retune, antenna, gain and sample-rate change - carried that value as its
+    `tuner` argument, so every live control asked the service to apply the change
+    to **no tuner**. In that report the first control after the open was never
+    answered and the service was then found stopped; RSP1A and RSP2 owners had
+    sent matching reports earlier. The driver now keeps the tuner the service
+    listed when it is Tuner A, and uses Tuner A when it is anything else, which
+    for a radio with one tuner can only mean "the one there is". In that second
+    case it says so: `source: SDRplay listed tuner N for a single-tuner RSP -
+    using Tuner A, the only tuner it has`. That line is new information, not an
+    error: it means the service's list differs from what SDRplay's own client
+    code is handed. Its absence, with `tuner 1` in the open line, is the
+    expected case.
+    **Proven:** the old argument deviated from SDRplay's own clients and from
+    their specification. The source comment in `SdrPlaySource::selectByArgsLocked`
+    records that the example program in the API Specification 3.15 (section 4)
+    assigns `tuner` and `rspDuoMode` only for an RSPduo and passes
+    `chosenDevice->tuner` to every update, that SDRplay's RSPdxR2 ExtIO and
+    SoapySDRPlay3 do the same, and that the specification calls the update's
+    argument the tuner "to apply the update to", which `Tuner_Neither` is not.
+    **Inferred, not shown:** that this is why the service stopped answering. No
+    RSP was on the bench: `tests/test_sdrplay_source.cpp` pins, against a fake
+    service, that every update for a single-tuner model names Tuner A with the
+    exact reasons, that the open line reads `tuner 1`, and that an overload
+    acknowledgement and the control calls can no longer name different tuners.
+    If an RSP still stops answering with `tuner 1` in the open line, this was not
+    the whole cause, and **Run SDRplay diagnostic** (below) is what to ask for.
   - `rx888: opened ... (firmware loaded by FoxSDR)` when the radio was a
     Cypress bootloader and FoxSDR uploaded the image to it. An open that takes
     about five seconds and this line in the log is the NORMAL first open after
     a power cycle, not a fault.
+  - `aor: ...` lines come from the native AOR digital-I/Q driver (AR5700D;
+    AR2300, AR5001D and AR6000 with the IQ5001). It was written from AOR's
+    developer document and has NOT been tested on hardware, so a report from
+    a real receiver is new information, not a regression. The lines, in open
+    order: `aor: control port COMn: VR -> "..."` for every FTDI port asked,
+    with what it answered (the AOR is the one naming a model; the rest were
+    left alone after EX/VR); `aor: probe: armed yes/no, START
+    accepted/refused, N transfers / N bytes, aligned - firmware is running`
+    or `no alignment`, which is how the driver decides whether to load AOR's
+    FX2 firmware, because AOR's document does not say how to tell; `aor:
+    loaded N bytes of FX2 firmware` and `aor: after the firmware load the
+    interface re-enumerated` when it did load it; `aor: opened AOR AR5700D -
+    VR "...", control on COMn, I/Q at 1.125 MS/s`. `aor: open refused` or
+    `aor: open abandoned` carries the same sentence the user saw: not bound
+    to WinUSB (AOR's AorAlpha driver has the interface), firmware file not
+    installed, no or several AOR receivers answering, or no stream even after
+    the firmware load. `aor: stopped - N transfers, first 1 discarded, N
+    alignment losses` closes each stream. Alignment losses above zero on a
+    healthy USB link are worth reporting to the project.
   - The Pluto's open line names what the board reported about itself rather
     than a model from a table, including whether it is a stock AD9363 or one
     with the AD9364 unlock applied - the tuning range differs by a factor of
     ten between them and nothing else in a report would reveal which.
+  - The rtl_tcp client (`rtltcp`, 0.99.70, `src/source/rtl_tcp_source.cpp`) writes
+    these lines and no others of its own. **None of them carries the server's
+    address** - the Source section shows it, the settings file holds it, and the
+    log does not (`diag_log.cpp` would scrub one anyway, but the driver never
+    writes it, so no rule has to catch it). That includes the lines the
+    application writes that quote the source's own name (`source: the %s
+    refused a tune ...`): the name is `rtl_tcp server: R820T (network)`, the
+    tuner and no address:
+    - `rtltcp: opened R820T on port 1234 - 29 tuner gain steps` - once per
+      connection the user opens: the tuner the server's header named
+      (`R820T`, `R828D`, `E4000`, `FC0012`, `FC0013`, `FC2580` or `unknown
+      tuner`), the port, and how many tuner gain steps the server reported. A
+      report from an rtl_tcp user that has no `rtltcp: opened` line never got as
+      far as a valid header.
+    - A Stop and a Start write nothing: the connection and its reader live from
+      the open to the close, Stop only stops keeping samples and Start only
+      resumes, so there is no reconnect line and nothing is restated. (A server
+      that goes silent or away while the source is stopped still faults it, with
+      the `failed while reading samples` line below, because the reader keeps
+      draining the socket.)
+    - `rtltcp: failed while reading samples: the rtl_tcp server closed the
+      connection` - a warning, and the one that matters: the stream ended
+      mid-session. The sentence after the colon is the transport's own - `closed
+      the connection` (an orderly close: the server was stopped or its dongle
+      was unplugged), `stopped answering (receive timed out)` (the server went
+      silent for two seconds) or `receive failed (network error N)`. The same
+      line with `while sending a command` is a command that could not be sent.
+      The screen shows "the connection to the rtl_tcp server was lost while ..."
+      and nothing reconnects by itself.
+    - `rtltcp: failed while waiting for the sample reader to stop: the reader did
+      not return; FoxSDR must be restarted to use this source again` - the reader
+      thread did not return within its 2500 ms bound and is abandoned (the
+      Pluto's rule).
+    - `source: stream health - reads ..., with samples ..., timeouts ...,
+      overflows ..., errors ..., longest gap ... ms, ... samples in ... s` - the
+      shared stream-health line, from the rtl_tcp reader too. A `reads` count is
+      receives, not buffers: a network hands over however many bytes it likes.
+    Why the wording of a failed open matters: a refused connection, a server that
+    speaks something else, one that never sends a header and a connection that
+    dies mid-stream are different problems, and the open's refusals are worded
+    so the anonymous counts file them apart (`radio_fail.rtltcp.absent` for no
+    server at the address or one that does not speak rtl_tcp,
+    `radio_fail.rtltcp.timeout` for one that did not answer in time). It was run
+    against the real rtl_tcp program on 2026-10-06 (radioconda's rtl_tcp.exe
+    serving an RTL2838 with an R820T on the same computer): the opened line and,
+    when the server was stopped, the failed-while-reading line both appeared in
+    the log. It has not been run against a server on another computer or on
+    Linux: a report from one that carries an `rtltcp:` line is the first
+    evidence there is.
 
 **`cascade.exe --rtlsdr-check`** is the native counterpart of `--soapy-check`
 and answers the question the suite cannot. The register sequences are proven
@@ -168,6 +363,127 @@ sample count against what three seconds should have produced, the mean and
 peak magnitude, and the stream-health line. Exit 0 means samples arrived and
 were plausible; exit 1 names which of the checks failed, including the
 commonest cause of all - nothing bound to WinUSB, and what to do about it.
+
+A fifth failure was added after the bench's own dongle stopped receiving on
+2026-10-06 and passed every check for a day: it delivered the same 1880
+samples over and over at every frequency, at exactly the rate, at a plausible
+level, with no error. The check (and `tests/test_rtlsdr_live.cpp`) now keeps
+the first 32768 samples and asks whether the block repeats itself exactly at
+any lag up to 4096 samples (`src/source/sample_pattern.hpp`, proved in
+`tests/test_sample_pattern.cpp`). A stream from the air never does; one that
+does is a digital pattern from a tuner or converter that has stopped
+delivering RF, so the check prints the period, what the driver's own PLL lock
+check made of the tuner, and the one remedy known - unplug the dongle and plug
+it back in - and exits 1.
+
+### One chip, one route: SoapySDR's SDRplay and Mirics modules (0.99.61)
+
+An RSP1, RSP1A or RSP2 is a Mirics chip, and FoxSDR can reach one four ways: its
+native SDRplay driver (through the SDRplay API), its native Mirics driver, and
+SoapySDR's `sdrplay` and `miri` modules, which run inside the same process beside
+both. The two native routes already obeyed the SDRplay rules — the native SDRplay
+driver refuses a session it has declared lost, and the native Mirics row is
+hidden for a radio the API manages. The two SoapySDR routes obeyed nothing, and
+two crash reports from one Linux user (an RSP1A, the SDRplay API 3 installed,
+0.99.59) are the two ways that went wrong:
+
+- `crash libmiriSupport.so @ SoapySource::read` — a SIGSEGV inside SoapyMiri, after
+  the log had said `1 native SDRplay row(s) hidden - the SDRplay API is
+  installed`. The Source list had hidden the native Mirics row of the radio the
+  API manages and still offered, and opened, SoapyMiri's row for the same radio.
+- `crash libc.so.6 @ AppWindow::publishWebSnapshot()` — an `abort()` from glibc
+  on the GUI thread, seconds after the patch page opened the radio through
+  SoapySDR's `sdrplay` module, **after** the native driver had logged that the
+  SDRplay session was lost (`no further SDRplay API calls are made until FoxSDR is
+  restarted`). The SoapySDR module simply made them.
+
+**Proven:** both opens were allowed by the code — the `miri` row was listed and
+opened while the API managed the radio, and the patch page opened the `sdrplay`
+module after the native session had been marked lost. **Inferred only:** that
+the second open is what corrupted the heap. An audit made while preparing this
+fix found no race in `publishWebSnapshot` itself (that audit is not recorded in
+the code), and an `abort()` in glibc is where heap damage done earlier by any
+code would surface, so the site of the abort says nothing about the cause; the
+link rests on the order of events. Neither report is claimed fixed by anything
+beyond closing the two routes.
+
+The rule, now enforced in `SoapySource::open` and in the Source list and the
+patch page's device list:
+
+- **(a) Once the SDRplay API session is lost** — the latch the native driver's
+  `no further SDRplay API calls` line announces, readable without the session
+  mutex because an abandoned scan worker may be parked holding it — **or an
+  enumeration worker was abandoned inside the API** and nothing since has shown
+  the service answering, no SoapySDR `sdrplay`, `miri` or `mirisdr` device is
+  opened for the rest of the process.
+- **(b) A SoapySDR Mirics device (`miri`, `mirisdr`) is not offered or opened for a
+  radio the API manages**: exactly the radios whose native Mirics row the
+  duplicate rule already hides (on Windows, every native Mirics row this driver
+  recognises as an SDRplay unit while the API is installed; on Linux, one the
+  API's own enumeration lists, so a stopped service lists nothing and takes
+  nothing away). A SoapySDR row is tied to such a radio by its serial, ignoring
+  case; a row that names no serial, or a managed radio that names none, cannot be
+  told apart and is treated as the managed radio.
+
+**What is never refused**, so no working route is taken away: any other SoapySDR
+driver; `driver=sdrplay` while the API is healthy (unchanged — the prefer-native
+rule upgrades the row, and the module is still the way in where the native route
+cannot take it); and `driver=miri` on a machine with no SDRplay API installed (a
+genuine Mirics dongle), when the API lists no radio of this kind on Linux, or
+when the scan holds no SDRplay-flavoured native row. The one stated cost: with an
+RSP and a genuine Mirics stick plugged in together, a SoapySDR Mirics row that
+names no serial is refused (the stick's own native row is listed and works).
+
+The refusal sentences, which are what `open()` reports and what a patch node
+shows:
+
+- `FoxSDR will not open an SDRplay or Mirics radio through SoapySDR because the
+  SDRplay API stopped answering earlier in this session - restart the SDRplay API
+  service, then restart FoxSDR`
+- `this radio is an SDRplay RSP that the SDRplay API manages, so FoxSDR does not
+  also open it through SoapySDR's Mirics module - pick its SDRplay row instead`
+
+and the two log lines, both of which name the driver or a count and never the
+radio's args (which carry its serial):
+
+- `source: refused to open a SoapySDR <driver> device - <one of the sentences
+  above>` — a warning.
+- `source: N SoapySDR SDRplay/Mirics row(s) hidden - another route to the same
+  chip owns it, or the SDRplay API session was lost` — written when a scan
+  leaves rows out, beside the `native SDRplay row(s) hidden` line it mirrors.
+  A row that vanishes without a line is the report this prevents from the other
+  side. The row of a radio already open through SoapySDR is never dropped.
+
+One pure decision (`miricsSoapyRouteRefusal`, `src/source/rsp_rows.hpp`) is asked
+from `SoapySource::open` — the one place every receiver, patch, restore and
+fallback open of a SoapySDR device passes through, so a new call site cannot
+bypass it — and from the scan merge, after every SoapySDR scan and every native
+scan. Whether the API manages a radio is read off the native scan, so a saved
+patch that names a SoapySDR Mirics device before any native scan this session runs
+that scan first (it opens nothing and costs one bounded question to the service).
+
+**A hardening change beside it, not claimed as the cause of either crash:**
+`SoapySource::read` now treats a module that returns more samples than it was
+asked for as a broken contract. Such a module has already written past the end
+of the caller's buffer, and the old code took its count at face value — the
+sanitiser then scanned and rewrote elements past the end, and every caller
+processed that many samples out of a buffer sized for fewer. Now none of it is
+used, `read()` returns 0 and the device is marked faulted through the path a
+driver that throws takes (the pipeline stops with the reason and the radio is not
+read again), with `soapy: readStream returned N samples for a request of M - the
+module wrote past the caller's buffer; the device is faulted and will not be read
+again` as a warning. `tests/test_soapy_read_bound.cpp` drives it with a fake
+SoapySDR module that answers exactly `n` (not a violation), fewer, one more and
+four more, and requires the over-long answers to be refused without touching the
+element past the end of the buffer.
+
+**Not run on Linux, on an RSP, or against the SDRplay service.** What ran is the
+pure decision (`tests/test_one_chip_one_route.cpp`), a real `AppWindow` driven
+with fake SoapySDR modules registered under the real driver names and a test-supplied
+native list (`tests/test_one_chip_app.cpp`: the Source list, the patch page's
+list and worker, the native scan and the startup restore each ask the
+question), and the read bound above. Whether either crash stops happening is
+untested.
 
 ### What the log carries since 0.89.0 — the driver's own words
 
@@ -227,6 +543,34 @@ the panel:
   network is in the same log. A `keyed by the web remote` with no matching
   release before the log ends means the application died keyed - and then the
   driver's own lines above say whether the board was silenced on the way out.
+- **A plugin's key (0.99.74)** writes four lines, so a transmission nobody at
+  the desk made by hand is identifiable as a plugin's and the log says whose and
+  why it stopped: `tx: armed 15 min` when the operator opens the arming window
+  on the TRANSMIT page (5, 15 or 60), `tx: disarmed (<why>)` when it closes,
+  `tx: plugin <name> keyed` when the radio is keyed for that plugin, and
+  `tx: plugin <name> unkeyed (<why>)` when it is not any more. `<name>` is the
+  name the plugin declares; no frequency and no mode are in these lines (the
+  `tx: keyed - ...` line above, which follows `armed`, carries the mode and the
+  rate as it always did). The reasons a window **disarms**: `you pressed OFF`,
+  `the arming window ran out`, `the TRANSMIT page was closed`, `the transmit
+  radio was closed`, `the radio faulted`, `the transmitter stopped on its own`
+  (a fault or the frozen-window handle got there first), `the window stopped
+  responding` (the frame loop stalled for more than a second), `no plugin holds
+  the TRANSMIT grant any more`, `a configuration was loaded` (a restored grant is
+  never a restored window), and `a plugin held the key for 60 seconds, so it was
+  released` (the cap; the plugin then stays cut until the operator arms again,
+  and the cap also writes `tx: the plugin's key was cut by the 60000 ms cap`
+  **as a warning**, beside the latch's own line above).
+  The reasons a plugin is **unkeyed** are those, and also `the plugin let go
+  (active() is zero)` (the ordinary end of a transmission), `its transmit audio
+  reported a permanent error`, `a hand took the key` (the PTT, the LATCH or the
+  web remote), `the TRANSMIT grant was withdrawn` and `the radio is not
+  available`. An `unkeyed (a plugin held the key for 60 seconds ...)` or a
+  `disarmed` with a fault in it is the one to look for: the key was opened by
+  the application rather than by the plugin or the operator. A `plugin <name>
+  keyed` with no matching `unkeyed` before the log ends means the application
+  died keyed, and the driver's own lines above then say whether the board was
+  silenced on the way out.
 - `tx: the writer thread did not return within 1500 ms and was abandoned; the
   board may still be transmitting` is the one line in this product that says
   the radio's state is unknown. It is written when the bounded join in
@@ -248,11 +592,18 @@ the panel:
   only). An anonymous pipe replaces fd 2 and `STD_ERROR_HANDLE`; a reader
   thread logs each line as `vendor: <line>`. It is installed only for an
   interactive session — never `--frames`, `--selftest`, `--soapy-check` or the
-  other tools — and only when nobody is watching stderr. `cascade.exe` is a
-  console-subsystem binary, so a Start Menu launch has a console too, one
-  Windows created with nothing else attached; the test that separates that
-  from a developer's terminal is `GetConsoleProcessList` reporting more than
-  this one process. The write end is inheritable on purpose, so the
+  other tools — and only when nobody is watching stderr. Until 0.99.69
+  `cascade.exe` was a console-subsystem binary, so a Start Menu launch had a
+  console too, one Windows created with nothing else attached, and the test
+  that separated that from a developer's terminal was `GetConsoleProcessList`
+  reporting more than this one process. It is a windows-subsystem binary now
+  (`core/console_owner.hpp`): a Start Menu launch has no console, the standard
+  handles are null, and the same test still tells a terminal (the shell's console,
+  borrowed with `AttachConsole`) from nothing. (Closing a terminal, or Ctrl+C in
+  it, asks for the window's own close since 0.99.67 - `core/console_close.hpp`;
+  until then kernel32's default handler ended the process on the spot,
+  mid-frame.) The
+  write end is inheritable on purpose, so the
   device-enumeration child's stderr (which UHD's discovery errors go to) lands
   here as well. The diagnostic log itself never writes to stderr, so nothing
   it does can loop back; the crash handler's one stderr line goes to the
@@ -292,7 +643,11 @@ the panel:
   name `<user>`, single-quoted names `'<name>'`, and on a line that mentions
   a frequency every number becomes `#` unless a unit, a word or its shape
   says otherwise (S/s, ms, dB, `firmware 2.1`, `(-5)`, `0x...`, `R820T`).
-  libusb info/debug lines that list the machine's USB devices are left out,
+  Since 0.99.44 the report's own plugin inventory is passed in too, and a
+  listed plugin's name and version survive wherever they appear (0.99.43
+  turned `plugin: loaded 406 MHz Beacons 1.0.0` into `plugin: loaded # MHz
+  Beacons #`, GitHub issue 5); every other number on the line is judged as
+  before. libusb info/debug lines that list the machine's USB devices are left out,
   one line counting them. diag_log.hpp has the rule in full and
   tests/test_upload_scrub.cpp holds each part against every upload path.
 
@@ -309,8 +664,13 @@ that the payload cap and the ring are at least that).
 
 A report about a **fault in a child process** carries two more lines in that
 same block, and no stack at all (0.96.4). `child-exit-code` is what the child
-died of and `child-attempt` is which try it was; the stack section says, in
-words, that the fault was in another process and this one has nothing to show.
+died of and `child-attempt` is which try it was (the uploader reads only
+`uptime-sec` and `fault-thread-own` out of this block, so neither line is sent:
+what reaches the server of a child death is the `reason` line, the `code`, the
+`signature` and the log); the stack section says, in words, that the fault was
+in another process and this one has nothing to show. Since 0.99.62 such a
+report is written only for a death the child's own crash handler did not
+report (see *One report per death*).
 It is written that way because it had to be: the enumeration helper
 (`cascade --enumerate-json`) is expected to die occasionally by design, and the
 report filed at each death used to walk the stack of whichever worker thread
@@ -346,6 +706,149 @@ store accepts `crash` and `hang`, and a display driver's behaviour is not this
 product's fault to file. The sidecar beside it says so rather than implying the
 file was unreadable.
 
+**What does leave the machine is how many there were, and only that (since 0.99.62).** Keeping
+the report local made the frequency invisible: a user whose window freezes every
+few minutes and one whose never has looked identical from outside. So the usage
+record (PRIVACY.md, *What is sent when usage reporting is enabled*) carries one
+integer, `stalls`: how many freezes the watchdog classified `stall` and the
+server has not yet been told about. No stack, no module, no driver name, no time
+of day. It is counted by the same call that writes the `kind` line
+(`HangWatchdog::recordFreezeKind`, on the watchdog's own thread, once the kind
+is known); a `hang` is not counted at all. The classification needs the report
+to be captured, so **a stall is counted only while Diagnostics is on** - with it
+off nothing is detected, and nothing is counted.
+
+Where the running number lives is dictated by the way a stall most often ends:
+the user closes the frozen window from the taskbar, which is `TerminateProcess`,
+and nothing on the GUI thread ever runs again - so neither memory nor
+`config.json` can hold it. `core::StallLedger` keeps it in a file beside
+`config.json`, `telemetry-stalls`, holding the install id it belongs to and the
+number, and **the watchdog's thread writes it** the moment the freeze is
+classified (temp file and rename, so a kill mid-write leaves the old number or
+the new one). The GUI thread only ever reads an atomic. The next start reads it
+back, sends it in the record for the session that just ended, and subtracts
+exactly what it sent **only if the server answered 2xx** - the transport reads
+the HTTP status and nothing else. A send that fails, or never happens, leaves it
+to ride the next record. Reporting off: nothing is counted, nothing is kept, the
+file is removed, and a file left by an earlier identity is ignored rather than
+attributed to a new one. `tests/test_stall_count.cpp` holds all of this, including
+the real capture on the real watchdog thread; the Worker side is held by
+`telemetry-worker/worker.test.mjs`.
+
+**Failures that are not crashes are counted the same way (since 0.99.64).** A radio that
+would not open, no sound output, an update or a plugin install that failed:
+the application does not crash, so no report exists, and a release in which
+something quietly stops working was invisible (five once shipped that detected
+no radio at all). The usage record's `health` field carries counts of a fixed
+vocabulary (`core/health_events.hpp`; PRIVACY.md, *Failures that are not crashes,
+in full*) - never a message, a device name, a serial, a path or a frequency: the
+driver's own sentence is classified into one of eight words and dropped
+(`classifyRadioOpen`), the sound output's reason is read off PortAudio's error
+code, and a word that is not in the tables cannot be made into a token, read
+back from the file or kept by the Worker. `core::HealthLedger` is
+`StallLedger`'s arrangement for a set of counts: a file beside `config.json`
+(`telemetry-health`: the install id, then `token=count` lines), written by a
+short-lived thread of its own so no caller waits on a disk, subtracted only when
+the server answered 2xx, removed when reporting goes off. Where it differs, and
+why: (1) it has to keep the PREVIOUS session's counts apart from this run's - the
+record sent at start-up describes the previous session, and a failure of this
+build filed under the last build's version is the one mistake the feature must not
+make - so `priorCounts()` (what the file held at arm time) is what the start-up
+record carries; (2) the saved radio is opened before the application has read
+whether reporting is on, so counts made before the decision are held in memory
+(and dropped if it is off); (3) like the stalls it needs Diagnostics on as well as
+usage reporting (`setAllowed`); (4) events that repeat by themselves (the audio
+watchdog's retry, a rescan meeting the same refused plugin) count once a session.
+Nothing counts on the DSP or audio threads - `test_health_paths` scans for it.
+`tests/test_health_events.cpp` (vocabulary, ledger, documents),
+`test_health_paths.cpp` (each event through its real failure) and
+`test_health_app.cpp` (the window's wiring and the real binary, including a
+process ended after a failure) hold it.
+
+**Slow frames and recoveries ride the same record (since 0.99.65).** Two more
+families in the one `health` string, written after the failures: `slow.<scope>.<tier>`
+and `recovered.<what>`. 0.99.64 shipped the field with the failure counts only, so
+a 0.99.64 record carries neither family and its zeros in the Worker's
+`double10..12` are *unmeasured*, not zero (`telemetry-worker/README.md`, the rule for
+readers; `usage.ps1` applies it by version).
+
+*Slow frames.* `core::FrameTimer::commit` - the slow path of the frame timer, run on
+the window's thread for a frame that was already 250 ms or more - counts one
+`slow.<scope>.<tier>` for the **process's own timer only** (`mirror_`; a timer a
+test builds counts into its own table and nothing else). The scope is a name of
+`kFrameScopeNames`, hyphens included (`plugin-panels`, `plugins-reload`), and every
+one of them but `user-wait`, which is a person's time and is never counted and so is
+not a word. The tier is `250ms`, `1s` or `5s`, from `kSlowFrameTierNs`. The cost on
+the window's thread is `HealthLedger::note`: parse one token, one mutex (never held
+across I/O, so another thread's file write cannot make it wait), a small map
+update, and - when no writer is running - the creation of the writer thread that
+does the disk work (`healthWriterLoop`, detached; the caller never waits on it).
+Measured with the writer made to stall 700 ms (`testASlowFrameNeverWaitsOnTheDisk`,
+`testACommittedSlowFrameNeverWaitsOnTheDisk`): 300 notes cost 0.2 ms in all, the
+worst single one under 0.1 ms (the one that creates the writer thread); a synchronous
+write costs the stall - the same tests with `note()` made to wait on the writer
+measure 2,100 ms and 716 ms for the worst single note.
+The record carries at most **eight** distinct `slow` tokens; over eight the worst
+are kept - the higher tier first, then the higher count, then the earlier in the
+written order - and what is left out stays in the ledger for the next record
+(`health::selectForRecord`, which the start-up record's settle uses, so nothing
+is subtracted that was not sent). The tier words start with a digit (`250ms`,
+`1s`, `5s`); the token grammar - dot-separated parts of lower-case letters, digits,
+`_` and `-` - carries them and the hyphenated scope names, so nothing about the
+words had to change.
+
+*Recoveries.* A fault the program met and carried on from without telling the
+person, at one of a fixed list of places, one word each (`recovered.<what>`; the
+table in PRIVACY.md). Counted at the site on the control path, once a session where
+the place can repeat by itself and once an occurrence otherwise
+(`recoveredOncePerSession`). **Never on a DSP, source or audio thread**: where the
+fault is met on one, the thread keeps a counter or raises a flag - one relaxed atomic
+OR - and `AppWindow::healthPoll`, which the frame loop already runs, turns it into
+the count (`RecoveryWatch`, `drainRecovered`). `tests/test_health_paths.cpp`
+scans `src/dsp`, `pipeline.cpp` and the audio callback for any call into the ledger
+and holds every word to the sites listed here, in both directions. At most **eight**
+distinct `recovered` tokens in a record, the higher counts first.
+
+The sites that are counted:
+
+| Word | Site | Counted from |
+|---|---|---|
+| `audio` | `AppWindow::applyAudioOpenResult`, the watchdog's reopen that worked | the window's thread |
+| `reopen` | `AppWindow::reopenAfterDriverFault`, a SoapySDR driver fault answered by reopening the radio | the window's thread |
+| `srcthread` | `Pipeline::quiesceSourceThreadLocked`'s abandonment, read as `abandonedSourceThreads()` | the poll |
+| `vendorcall` | `SoapySource::driverCallsAbandoned()`, a vendor call let go after `kVendorCallWait` | the poll |
+| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full | the poll |
+| `dspexc` | `Pipeline::dspThreadExceptions()`, the DSP thread's catch blocks | the poll |
+| `cfgsave` | `AppWindow::pollConfigWriter`, the settings write that failed | the window's thread |
+| `enumchild` | `soapy_enum_proc.cpp`, a scan child that died and was contained | the scan's worker |
+| `pluginapi` | `plugin_ui.cpp`'s six host-API trampolines that caught an exception | a flag, then the poll |
+| `webroute` | `WebServer`'s exception handler, a route that threw | the web worker |
+| `patchload` | `AppWindow::applyConfig`, a saved patch that lost connections | the window's thread |
+| `sdrenum` | `AppWindow::pollSdrPlayService`, the SDRplay scan worker let go | the window's thread |
+| `sdrlost` | `AppWindow::pollSdrPlayService`, the SDRplay API session lost | the window's thread |
+| `audiolead` | `AppWindow::closeAudioMinute`, the once-a-minute close that deepened the audio buffer (0.99.73; see *The DSP thread asks for priority, and the audio buffer deepens itself*) | the window's thread |
+
+**Surveyed and deliberately not counted**, so the next reader does not re-do the
+survey: the person's own actions that look like recoveries (re-picking a stopped
+sound card's row, pressing the SDRplay restart key); `catch (...)` blocks that turn
+a vendor throw into a dead-device state (45 in `soapy_source.cpp` - the automatic
+reopen they lead to is `reopen`); the source thread's catch block (a USB radio pulled
+mid-capture throws from the driver, so a count would mostly count unplugging); the
+network clients that are silent by design (the usage report, the tester report,
+the crash upload, the update drain - a report cannot report its own failure); the
+Store check's and install's exceptions (already `upd_run`); an opener that threw
+(already `rec_fail`) and a plugin entry point that threw (already `plug_load`);
+path-narrowing fallbacks (`shell_open.hpp`, `patch_recordings.cpp`); the MP3
+encoder's ring (the recorder tells the person); the SDRplay source's own dropped
+sample counter (no control-path reader beside it); a settings file that could not
+be READ at start-up (the usage decision is made from that same file, so the ledger is
+never decided and nothing could be kept); and the GL context, of which there is no
+loss handling to count. A recovery that can only be counted from a signal thread
+with no control-path poll beside it is left out rather than counted there.
+
+The column budget, the Worker's rule for the new families and the compatibility
+rows are in `telemetry-worker/README.md`.
+
 Before any of that, two things stop such a report being written at all
 (`gui/present_grace.hpp`): the watchdog is paused for a bounded 10 s grace when
 a display change is seen — `WM_DISPLAYCHANGE`, counted in the window procedure,
@@ -353,7 +856,91 @@ or GLFW's own 65544 display-settings error — and paused for as long as the
 window is iconified or hidden, because a window nobody can see is not expected
 to present. Both share one counted pause, and the log says
 `display changed - presentation stalls for the next 10000 ms are not reported`
-when the grace starts.
+when the grace starts. Since 0.99.61 that pause is an application-paced one like
+the others (rule 2b below) and excuses a stall for at most 30 s: the "bounded"
+grace was only bounded by the frame loop noticing it had expired, and the
+"as long as it is minimised" pause was not bounded at all, so a loop that
+stopped while either was held was never reported. A minimised window whose loop
+keeps turning is still never reported, however long it stays minimised.
+
+### What a freeze's signature is built from (0.99.62)
+
+Until 0.99.62 a freeze report's `signature` was hashed from the report's kind
+tag (`HANG`, or `STAL` for a display stall) plus the **module and offset of frame
+0** of the stalled thread. A frozen GUI thread is almost always parked in the same
+few kernel wait stubs - `ntdll.dll`'s wait for a handle or a condition variable,
+`win32u.dll`'s message wait - and frame 0 of every one of those waits is the same
+instruction whatever the thread is waiting *for*. So freezes from completely
+different causes (the audio open, a shell call, a lock a worker holds) shared one
+signature. The upload de-duplicates by signature for 24 hours
+(`decideUpload`, `kDedupSeconds`, `src/core/crash_upload.cpp`), so a user who met
+two different freezes in a day sent the first, and the second was marked
+`duplicate` in its `.upload` sidecar and never arrived. The server was not the
+problem - it re-groups what it receives by the nearest named frame of our own code
+- the loss was on the client, before the upload.
+
+The signature now identifies **the code of ours that was waiting**
+(`core::freezeSignature`, `src/core/diag_report.cpp`): the hash is the kind tag,
+plus the module and the module-relative offset of the **first frame, nearest the
+top, of the stalled thread that lies in the main executable** - the same test
+`fault-thread-own` applies to a crash. Two properties are held by
+`tests/test_hang_signature.cpp`, against a real watchdog and real blocked
+threads: two stalls parked in the *same* kernel wait from two *different* functions
+of the program get different signatures, and the same stall twice gets the same
+one. Through the real `decideUpload` the first sends two reports and the second
+sends one.
+
+- **When no frame of the stalled thread is ours** (a thread idling in the thread
+  pool, a stack of vendor code only, a Linux non-PIE executable whose load bias of
+  0 cannot be told from "unknown") it falls back to the old key, frame 0, and still
+  gets a signature.
+- **A display stall keeps its own tag.** `STAL` and `HANG` are different hash
+  inputs, so a monitor being switched off can never share a group with a deadlock
+  even when both are keyed by the same frame. Stalls are still kept on the machine
+  and never uploaded.
+- **The form is unchanged**: 16 uppercase hex digits, the shape the dedup memory,
+  the wire contract and PRIVACY.md already describe. What leaves the machine does
+  not change, and neither do the payload's `module` and `offset`, which still name
+  frame 0 of the stalled thread; the server's re-grouping reads the stacks.
+- **The offset is build-specific.** One freeze in two builds has two signatures.
+  That has always been true of a crash signature and is correct - the offsets
+  differ, and so do the symbols needed to read them. (A frame-0 key in `ntdll.dll`
+  did survive across builds, but it grouped everything.)
+- **The nearest frame of ours can still be a shared wrapper.** If two different
+  causes both reach their wait through one function of ours - a helper every call
+  site goes through - they share that frame and so a signature. The full stacks in
+  the payload are what tells them apart; this change removes the kernel stub from
+  the key, not the possibility of a common helper.
+- **The stalled thread is walked before the header** whenever its frame 0 is not
+  already in our image (it used to be only when frame 0 was a kernel wait). The
+  signature needs the frames under the wait, and the `kind` line, which is the first
+  line of the file, is decided from the same walk. A thread whose frame 0 is already
+  ours is keyed by that frame exactly as before, with no earlier walk. The cost is the
+  one phase 1b already carried and documents in `hang_watchdog.cpp`: a wedge in that
+  one walk costs the whole report.
+- **Migration.** The uploader reads the signature from the report file's own
+  `signature:` line and never recomputes it, so a freeze report written by the
+  previous build and swept by this one is judged by its old-style signature exactly
+  as before: nothing is lost and nothing is sent twice because of it. The dedup memory
+  in the config is read as it always was (a signature and a time). After the upgrade a
+  freeze that the old build had already sent in the last 24 hours is a *new*
+  signature, so it can be sent once more - at most once per new signature, inside the
+  existing five-a-day cap - and the server, which groups by named frame (above),
+  is not asked to tell the two apart by their signatures.
+- **On Linux** the same function is used: the stack is already walked in full
+  before the header there, and the main image is module 0 of the `dl_iterate_phdr`
+  snapshot. This path has not been compiled or run by the author of this change.
+
+**Crash signatures are not changed**, and they have a narrower form of the same
+loss: the key is the code, the faulting module and the offset of the *faulting
+instruction*, so two different faults reached from different callers of ours share a
+signature only when they fault at the very same instruction of one module - the
+shared system-DLL case (an unrelated fault in the same `ntdll.dll` or `ucrtbase.dll`
+routine) - and a crash ends the process, so a second one in 24 hours also needs a
+restart. An absorbed vendor fault is the opposite constraint: it recurs
+indefinitely, and one upload a day is the behaviour that keeps it from filling the
+five-a-day allowance, so folding the caller of ours into *its* key would multiply it
+by the number of distinct call sites that reach it.
 
 ### Shell calls are made under a watchdog pause
 
@@ -363,10 +950,13 @@ elevation or SmartScreen prompt that is as long as the **user** takes.
 uptime) is the watchdog reporting a consent dialog the user was reading. Every
 shell call in the application — the update installer, the reports folder in
 both places it is offered, the privacy-policy link — now goes through
-`gui::runShellOpen`, which brackets it in a `WatchdogPause`, exactly as
+`gui::runShellOpen`, which brackets it in a watchdog pause, exactly as
 `core/hang_watchdog.hpp`'s false-positive rule 2b has always said a native
-modal dialog must. `cascade --frames N` prints the number of pauses a run took,
-so these are visible as a count and not only as a sentence.
+modal dialog must. Since 0.99.61 it is the one **user-paced** pause
+(`pauseUser`/`resumeUser`, via `AppWindow::watchdogShellHooks`) and the one pause
+that is not capped, because what it waits for is a person; see rule 2b in *The
+5-second threshold* below. `cascade --frames N` prints the number of pauses a
+run took, so these are visible as a count and not only as a sentence.
 
 **On Linux** (this port, 2026-09-15) `AppWindow::shellOpen()` no longer just
 returns `false`: it hands the target to `xdg-open` via `fork`+`execvp` — never
@@ -411,6 +1001,1142 @@ handle in-process); a driver with its own statically linked CRT reads
 and that reasoning is what puts its lines in the pipe — a bench with an
 RTL-SDR is the check.
 
+### The settings-folder poll is answered off the frame loop (0.99.61)
+
+`hang ntdll.dll @ __std_fs_get_stats` (0.99.59, Windows 10.0.19045, an RTL-SDR
+open and streaming, 880 s uptime). Resolved against the symbol archive, the GUI
+thread's stack was `main` → `AppWindow::run` → `AppWindow::drawUi` →
+`AppWindow::testerLinkPoll` → `core::claimLinkRequestFile` →
+`__std_fs_get_stats` → KERNELBASE → ntdll, and it stayed there for five seconds
+or more. `testerLinkPoll()` runs once a second in **every** session, tester or
+not, because it has to be listening before a beta-tester link click can arrive,
+and what it asked was whether `%APPDATA%\foxsdr\link-request` exists: a
+synchronous `std::filesystem::exists()` on the GUI thread, justified in a
+comment as "a stat() is cheap". It is cheap until the directory it names is slow
+to answer, and that directory is also where `config.json` is written — the
+reason 0.97.2 had already moved the config write off this thread.
+
+**What is not established is why that user's disk was slow.** The code comments
+list a redirected or network profile, a cloud-synced folder, an antivirus
+holding the directory and a spun-down disk; none of them is known for this
+user. The class was reproduced with a config path on a network share that never
+answers (an unreachable address): one frame in three seconds, a 22.5 s gap in
+the frame loop, and one hang report. Those figures are from that reproduction
+run; the test below does not assert them.
+
+A watchdog pause was not the answer, for the reason the audio open gave: a pause
+deletes the report and keeps the freeze, and a poll that fires every second
+would have the watchdog paused for the whole session. So the call moved.
+`gui::LinkRequestPoll` (`src/gui/link_request_poll.hpp`) runs it on one
+background worker and **nothing waits for it**, not even for a bound
+(`AudioOpen` holds the requesting frame for up to 1.5 s because a user is
+waiting on a device; nobody is waiting on this):
+
+- A frame that finds the poll due calls `request()`, which starts the worker and
+  returns; **every** frame calls `poll()`, which collects a finished answer and
+  returns, so a token is acted on the frame it lands rather than up to a second
+  later. The question is still asked at about 1 Hz.
+- **One worker at a time.** `request()` while a check is still out does nothing,
+  so a directory that never answers costs one parked thread, not one a second.
+- The worker owns what it touches by value and never sees the window, and a
+  throw inside it is turned into "nothing found" so that `future::get()` can
+  never rethrow on the GUI thread.
+- At quit a check still blocked in the filesystem is given 250 ms and then
+  abandoned, not joined — a join would be the same hang under another name.
+- The token is a credential: it is never logged, and neither is the directory.
+
+Two log lines are its whole record, because a poll nobody sees has no panel:
+
+- `tester link: the configuration directory has not answered a status check for
+  N s - the check is waiting on a worker thread, the window is not` — a
+  warning, written once per check, when one has been out for five seconds (N is
+  the seconds it had been out, rounded to a whole number, so normally 5).
+- `tester link: the configuration directory answered after N s` — written once,
+  when a check that was reported stuck finally comes back, with how long the
+  whole check took, rounded the same way.
+
+A report whose log carries the first line and never the second was written while
+the folder was still not answering. Seeing either line at all means the window
+kept drawing, which is the point of the change; it is also now the only evidence
+that the folder was slow.
+
+`tests/test_link_request_poll.cpp` holds it three ways. On Windows it points a
+real `AppWindow` at a config path on a share whose server never answers (an
+address in TEST-NET-1, a different one every run, because the SMB client
+remembers an unreachable server and fails the next attempt quickly), under a real
+`HangWatchdog`, and requires no report; if the machine answers the dead share
+quickly the block says so and SKIPS, and never passes by not having been slow.
+A source scan requires that no file under `src/gui` calls
+`claimLinkRequestFile` except through `link_request_poll.hpp`. And on any
+platform the same loop runs with a claimer that sleeps standing in for the slow
+disk, against `LinkRequestPoll` alone and against a real window's
+`testerLinkPoll()`, with the synchronous call of the same claimer as the control
+that proves the harness can see the fault; around them it requires that the
+answer still arrives, that only one worker is ever out, that quit does not wait
+for a wedged one, and that a slow check is said once and not once a frame.
+
+**Two open items this fix did not cover**, found while reading for it, and the
+same class of fault:
+
+- `AppWindow::drawFittedModulesWindow` called `std::filesystem::file_size` on
+  every plugin's file, every frame, while the Fitted Modules window was open (it
+  was the only way the plate got a size). **Closed in 0.99.63**: see *The Fitted
+  modules window asks the disk for nothing*, below.
+- The filesystem work inside `AppWindow::rescanPlugins` — the inventory read, the
+  directory scan and the load of every module — also runs on the GUI thread. The
+  watchdog pause around it hides a slow disk from the watchdog (rule 2b, and
+  capped at 30 s since 0.99.61), but the window still freezes for as long as the
+  disk takes, and a rescan that outlasts the cap is now reported. **Still open**:
+  see *A plugin rescan runs on the GUI thread*, below.
+
+Neither is a claim that no other synchronous filesystem call remains on that
+thread. The audit made for that change covered `src/gui` (every `std::filesystem`
+call, every stream and `fopen`): the calls that remain there are made on a user's
+press, at start-up or at exit, not per frame. Nothing outside `src/gui` was
+audited for what it does when the *GUI thread* calls it.
+
+### The Fitted modules window asks the disk for nothing (0.99.63)
+
+The call named in the open item above ran **sixty times a second for as long as
+the window was open**, once for every loaded plugin: twenty modules is twenty
+synchronous stats per frame, on the thread that draws the window, in the plugin
+folder — which for a Store package is a redirected profile — and the window is
+the one the plugin **Rescan** key lives on, so a session that rescanned plugins
+had the window open. Where the folder was slow, every frame was as slow as the
+slowest of the twenty answers; one stat of a path on an unreachable share was
+timed at 26.7 s on the machine this was written on (that is the extreme, not the
+expected figure).
+
+The size is now a property of the record. `PluginHost::scan()` takes it from the
+directory listing it is already reading (`LoadedPlugin::fileBytes`; on Windows the
+listing returns the size with the name, so no further call is made), refused
+records included, and `makeFittedModule` carries it to the plate. 0 still means
+"not measured" and is never drawn as a size. A figure that may be as old as the
+last scan is the whole fix: an installed or updated plugin rescans, and a file
+replaced by hand shows its old size until the next rescan, as it already showed
+its old version.
+
+`tests/test_plugin_host.cpp` pins the scan (two files of different sizes get their
+own, a refused file has one, a record nobody scanned says 0);
+`tests/test_plugins_view.cpp` pins the carry, with a path that names no file;
+`tests/test_fitted_modules_no_disk.cpp` is the source scan that holds the draw
+function to no `std::filesystem`, stream, `fopen` or Win32 file call at all — and
+runs against the old code first, so a scan that cannot see the call it forbids
+would fail instead of passing blind. It is a scan of the source because no test
+can run that window against a slow disk: the call site is in `AppWindow`, which
+needs a GL context. What no test shows is the freeze itself on a real slow
+folder; the cause of it was established by reading, and the figure above by
+timing one call.
+
+### A plugin rescan runs on the GUI thread, and says where its time went (0.99.63)
+
+A 0.99.58 session (a Store package, twenty plugins) logged the line that opens a
+rescan and, **119.976 s later**, the line for the first plugin it had loaded. The
+rescan holds a watchdog pause, which in 0.99.58 had no limit, so the freeze was
+not reported; the only trace was those two timestamps. This is what is established
+about it, by reading, and what is not.
+
+**What `rescanPlugins()` does, all on the GUI thread, in this order:**
+
+1. `decoders` — `PluginRunner::clear()`: every decoder instance's `destroy()`
+   (third-party code).
+2. `patch` — `Runner::flushNow()` on the patch page's runner and on every patch
+   radio's: waits, with a **spin that has no bound**, for the DSP thread (or a
+   radio's reader) to leave its current block, then destroys the decoders the
+   patch holds.
+3. `panels and map` — `PluginUi::clear()` (track-source, panel and instrument
+   `destroy()`), `BasemapCache::detach()` and `TrackInfoCache::detach()`
+   (`destroy()` of the basemap and the aircraft lookup).
+4. `unload` — `FreeLibrary` of every module: each one's `DllMain` and static
+   destructors, under the loader lock.
+5. `inventory` — the quarantined files renamed back, and **every installed file
+   re-hashed** against the record made at install, then the retired ones moved
+   aside.
+6. `load` — the folder listed and every module mapped (`LoadLibrary`, its
+   `DllMain`, the descriptor query).
+7. `restart` — the log lines, and the decoders created again.
+
+**No wait of 120 s was found on that path, in the application or in the plugins.**
+A search of both for a 120-second constant, in the ways it would be spelled, finds
+only the old CAT-shutdown story in the watchdog's comments and, in the plugin
+repository, the ADS-B decoder's 120 s eviction of a silent aircraft track (a timer
+on data, not a wait). The bounded waits that exist near the path belong to other
+paths (`PatchRadio::kStopWaitMs` 3 s per radio, on the patch's close;
+`GpsReader::kOpenAbandonWait` 1 s). On the path itself the host bounds **nothing**
+it calls: the `destroy()` calls (a plugin's own join), the `flushNow()` spin,
+`FreeLibrary`, and the file system are each as long as their owner takes. The figure is
+also *under* 120 s, by 24 ms, so it is not a single 120-second timeout begun after
+the first line was written: such a wait would have ended after 120 s plus the
+rescan's own work (3.6 s on the next, warm rescan of the same plugins).
+
+**What could have held it, in the order the code supports** (all inferred, none
+shown in that session):
+
+- *A plugin's `destroy()` joining a worker that is itself waiting.* The OpenMapTiles
+  basemap's `bm_destroy` joins four tile workers, and each worker does a network
+  fetch (bounded by the plugin to 20 s plus one 15 s read), **and file I/O on the tile
+  cache that has no bound** (`readCache` / `writeCache`, in the per-user cache
+  folder). A stalled file system — which the same session shows: the Record button
+  blocked in file creation (since moved off the frame loop: *The recording's file is
+  opened off the frame loop*, below) — holds a worker, and so holds `bm_destroy`, and so holds
+  the GUI thread. The plugin's HTTP helper also opens its session with Windows'
+  automatic proxy detection, which the per-phase timeouts it sets are not documented
+  to cover; that is stated as unverified. The instance and its four workers exist
+  for as long as the plugin is loaded (the host attaches it at every plugin
+  rebuild), and the workers have work only while a map is drawing tiles; the AIS
+  plugin's window opened four minutes earlier is one that feeds the map, and the
+  log does not say whether a map was on screen.
+- *The disk, in `inventory` or `load`*: every installed file is read and hashed, and
+  every module mapped, from a folder a scanner or a synchronised profile can hold.
+- *The loader lock*, taken by `unload` and `load`, held by another thread inside a
+  `DllMain`.
+- The `flushNow()` spin, only if the DSP thread or a radio's reader sat inside a
+  decoder's `process()` for two minutes; a patch had been running and was closed
+  ninety seconds before.
+
+**Is the window closeable while it runs? No.** The frame loop's `glfwPollEvents()`
+is its only message pump and the rescan is one call inside a frame; Windows marks
+the window "not responding" after five seconds and a click on its close button
+cannot reach the application.
+
+**What this change adds** is the evidence, not a cure. Every rescan that runs writes
+one line (one that is skipped writes the notice described under *A rescan with nothing
+to find*, below, instead):
+
+```
+plugins: reload took 3.6 s (decoders 0.0, patch 0.0, panels and map 0.3, unload 0.4, inventory 1.9, load 0.9, restart 0.1)
+```
+
+— seven laps, in that order, with the step's own seconds — and a rescan of five
+seconds or more is a **warning** that says the window did not draw for that long and
+names the slowest step. Written on every way out of the function, the early return
+included; it contains no plugin name, file or path. `tests/test_phase_clock.cpp` holds
+the clock (laps in order, a repeated name adding to its lap, the sentence turning at
+the threshold, the log level); `tests/test_plugin_rescan_log.cpp` holds the line
+through the real `AppWindow::rescanPlugins`, and that only the rescan, not the exit
+or a removal, writes it. Since 0.99.61 a rescan past `kExcuseCapMs` (30 s) is also
+**reported with every thread's stack**, which names the plugin whose worker the GUI
+thread is waiting on; the two together say which of the above it was.
+
+That claim met the field in 0.99.81 and came up short: report 7591C65EFB69DD94
+*is* the 30 s report, and it arbitrated nothing. The per-step line is only
+written when the rescan **ends** - this one had not ended, so the report's log
+stops at the `plugins: <dir>` line that opens the rescan - and the stalled
+thread's stack ended four system modules deep (ntdll wait, KERNELBASE, ucrtbase,
+MSVCP140: a condition-variable wait or a thread join), with the unwind broken
+below that; the report's own `foreign-modules` line names a Detours hook
+(`_etoured.dll`) in the process, which rewrites exactly the prologs the unwinder
+replays. **Since 0.99.84 the report itself names the step**: the rescan's
+`PhaseClock` publishes the open step's name and the watchdog writes it as
+`reload-phase:` beside `frame-scope:` (see *A freeze inside a plugin reload also
+names the reload's step*, below). The next such report picks between the fixes
+above on its own line, with no symbols and no log tail needed.
+
+**What this does not do is stop the window freezing**, and that is a design decision
+rather than a repair:
+
+- *A. Destroy on a helper, with a bound, and abandon what will not stop.* The GUI
+  thread takes each handle out of its container (cheap; the runner already moves
+  its instances out before it destroys them), hands them to one helper thread that
+  calls `destroy()` in the same order, and waits a few seconds. If the helper is
+  not done, the rescan **does not unmap anything** — a module with a thread inside
+  it cannot be unmapped — marks it "did not stop", and carries on from the frame
+  loop when the helper finishes; a module whose `destroy()` never returns stays
+  mapped for the life of the process (the satellites plugin does the same to its own
+  worker) and is **not loaded again until the program is restarted**, with a notice
+  on the Fitted modules plate saying so. The window freezes for at most the wait,
+  under the five seconds Windows takes to grey it. The cost: `destroy()` stops being
+  called on the thread that called `create()` (the ABI promises "the host's control
+  thread", not the same one, and `patch` code comments say the GUI thread is where a
+  handle may die); `BasemapCache::detach()` deletes GL textures and must keep that
+  part on the GUI thread; and `rescanPlugins()` stops being synchronous for its
+  eight call sites (the table below; an earlier version of this text said nine),
+  several of which read the new list straight after.
+- *B. A modal reload.* The same work on a worker while the GUI thread runs a small
+  loop of its own that pumps events and draws "Reloading plugins — stopping
+  <step>…". Callers stay synchronous. It keeps the window drawing and closeable
+  but not usable, it has no answer for a plugin that never stops except to wait,
+  and the work that touches ImGui, GL or window state (the map and basemap
+  detach, `syncMapPagesToSaved`, `refreshPluginRunner`) has to be split back out
+  onto the GUI thread.
+- *C. Fewer rescans.* The catalogue fetch rescanned every plugin whether or not
+  anything changed, because the retirement floors it caches only take effect on
+  a scan; skipping the teardown when nothing has changed removes the rescans a
+  session sees for no reason (the log of that session shows two, three seconds
+  apart). **Done in 0.99.63**: see the next section.
+
+Recommended: **A with C.** C is built, below, and removes the exposure in the common
+case. **A is not built, and waits for evidence.** It changes which thread
+`destroy()` runs on, for *every* plugin, to answer a freeze whose phase is not yet
+known: of the seven laps above, A bounds the ones that are a plugin's `destroy()`
+joining a worker (`decoders`, `patch`, `panels and map`), and does nothing for the
+disk in `inventory` or `load`, or for the loader in `unload`. The per-phase line
+above and the 30 s report say which it was; a change of that weight is made for the
+phase the field shows, not for the one the reading suggests. B trades a smaller
+change for a window the user still cannot use. The field showed its first such
+freeze in 0.99.81 (report 7591C65EFB69DD94) **without** a usable phase - see the
+paragraph above - which is what 0.99.84's `reload-phase:` report line exists to
+fix; A still waits, now on a report that can actually name the phase.
+
+### A rescan with nothing to find tears nothing down (0.99.63)
+
+`rescanPlugins()` has eight call sites. Seven are the user's own acts or follow a
+change to the folder, and run the whole rescan, always. **One fires with nothing
+changed**, and it is the one that ran twice, three seconds apart, in the field log.
+
+| Call site | What triggers it | Can anything have changed? | Does |
+|---|---|---|---|
+| `AppWindow` construction | the start-up scan | the first scan: no signature | full |
+| `cleanUpOldPluginVersions` | the store's clean-up key, or an update's clean-up | only called when files were just removed | full |
+| `processPendingPluginRemovals` | start-up, after the scan | only called when a queued old copy was just removed | full |
+| `pollPluginAsync`, a finished **catalogue fetch** | the store window's first open in a session, or CHECK NOW | **yes: usually nothing** - the files are as the last scan left them and the catalogue taught the manifest nothing | **skipped when unchanged** |
+| `pollPluginAsync`, a finished install or update | the user's Install / Update | a file landed | full |
+| `removeInstalledPlugin` | the Remove key | it has already unloaded everything | full |
+| the Fitted modules window's Rescan key | the user | explicit | full |
+| `removeBlockedPlugin` | Remove on a retired row | it has already unloaded everything | full |
+
+`rescanPlugins()` itself is unchanged and is what a new caller gets. The catalogue
+fetch calls `rescanPluginsIfChanged()`, which compares **one directory listing** of the
+plugins folder with the one taken for the last scan that completed
+(`core/plugin_dir_signature.hpp`). Equal: nothing is destroyed, unmapped or mapped, and
+the log says `plugins: reload skipped - nothing changed since the last scan` (no name,
+no path). Anything else - different, no completed scan to compare with, a listing that
+cannot be made - is exactly the rescan of before.
+
+**What the signature holds, and why that is the whole of what decides what loads.**
+The folder's path, and for every regular file in it (not only the modules) its name,
+size and last-write time. A rescan's result is a function of:
+
+1. *The modules*: the files in the folder. Name, size, time.
+2. *The blocked set*: `installed.json`, which is in the same folder and holds the
+   installed records and the cached catalogue policy - the retirement floors. The
+   catalogue fetch is the only thing that writes a floor, and it writes that file;
+   enforcement reads the cache, never the network, so no network or registry read
+   decides a scan. The manifest is a file in the listing like any other.
+3. *Which modules are aside*: the `.disabled` files a retirement leaves, also in the
+   listing, which the signature is taken after (so a retired module renamed aside by
+   the scan is the folder the next check finds).
+4. *The host's own constants* (the ABI, the version comparison): fixed for a build.
+5. *The loader's view outside the folder* (a runtime a module needs, on the system
+   path): **not in any listing**. It can only change what a *refused* module does, so
+   a scan that left any module refused - other than one turned off as an old copy of
+   another - is never skipped afterwards.
+
+Three more rules keep a signature from outliving the truth. It is taken *before* the
+scan loads anything (a file that changes during the scan is a difference the next
+check sees, never one it misses); it is thrown away by a manifest that changed between
+the inventory read and the listing (a floor the scan did not read must not be taken for
+one it did); and it is invalid while a scan is under way, after the plugins are taken
+down, and after a scan that ended in an enforcement error.
+
+**The catalogue fetch no longer rewrites a manifest it learned nothing from**
+(`PluginRepo::cacheCataloguePolicies`). It used to save the manifest after every
+successful fetch, byte for byte as it was, and the new last-write time looked like a
+change: with the signature alone the skip would never have fired for the one trigger it
+exists for. A usable manifest whose policies the merge left as they were is now left
+alone; a missing or unreadable one, a moved floor and a new policy are written as ever.
+
+**The disk work the check adds on the GUI thread is one directory listing.** On Windows
+the listing returns each entry with its size and last-write time, so no file is
+opened, read, hashed or asked about on its own; on a POSIX standard library an entry's
+size and time are one `stat` each, still no open. The check does not add the call to
+`PluginHost::defaultPluginDir()`, which a rescan always made, and which writes and
+removes a probe file in the executable's plugins folder when it is writable: a skipped
+rescan still pays that, once. Under the same watchdog pause as the rescan, so a folder
+slow to list is not a new freeze to report. A full rescan adds one more listing and one
+`stat` of the manifest.
+
+**What a signature cannot see**, so nobody assumes otherwise: a file replaced by one of
+the *same size and the same last-write time* (a copy that keeps times, onto a file system
+whose clock is coarser than the copy - FAT's two seconds); a module a plugin or another
+program writes into its own folder (that changes the listing, which is the safe way to
+be wrong: a rescan). A skip also leaves the decoder instances, panels and map pages
+alone, rather than rebuilding them for the current source; every source change
+rebuilds them by its own path.
+
+`tests/test_plugin_rescan_skip.cpp` holds it through the real `AppWindow` and real
+modules (`tests/fixtures/rescan_probe_plugin.cpp` writes to a file whenever it is
+mapped, unmapped, asked for a decoder and asked to destroy one, so every check is about
+what happened to a module and not about what the application says): an unchanged folder
+tears nothing down; each of a file added, removed, replaced by one of another size,
+replaced by one of the same size and a newer time, and a floor moved or lifted does the
+whole rescan (and the retired plugin is not loaded); so does a first scan, a listing that
+cannot be made, a refused module, a manifest that landed mid-scan and a takedown no scan
+followed; and an explicit rescan with nothing changed does the whole thing.
+`tests/test_plugin_repo.cpp` holds the manifest left alone.
+
+### The recording's file is opened off the frame loop (0.99.63)
+
+A freeze report from 0.99.58 (Windows 11, 151 s into the session). Resolved
+against the symbol archive, the GUI thread's stack was `main` → `AppWindow::run`
+→ `AppWindow::drawUi` → `AppWindow::drawMenuColumn` →
+`AppWindow::drawRecorderSection` → `core::Recorder::start` → the C runtime's
+file open → KERNELBASE → ntdll, and it stayed there for more than the
+watchdog's five seconds. The Record button's handler called `Recorder::start`
+on the frame that drew the button, and `start()` creates the recordings
+directory and opens the file before it returns: two synchronous filesystem
+calls that last as long as the disk takes to answer. The Record audio button,
+the Record key and the web remote's and plugins' record controls made the same
+call, so all of them froze the same way.
+
+**What is not established is why that user's disk was slow.** The usual
+suspects are a synchronised or network folder, a drive that has spun down and a
+scanner holding the path; none is known for this user. Nothing here has been
+run against a genuinely slow disk: the tests below stand a sleeping opener in
+for one.
+
+A watchdog pause was not the answer, for the reason the audio open gave: it
+deletes the report and keeps the freeze. So the open moved.
+
+- **`Recorder::start` is three steps, and only the middle one waits.**
+  `Recorder::prepare()` (the rate check, the file name, the 44 header bytes: no
+  disk), then an *opener* (`create_directories`, `fopen`, the header's write and
+  flush: all the waiting), then `Recorder::begin()` (arms the recorder: no
+  disk). `start()` is the three in a row, and two callers used it on a thread that
+  could not afford it: the `--record-check` bench, which can wait, and **the patch
+  page's Speaker WAV, which could not**. `AppWindow::patchPublishSets`
+  (`app_window_patch_radios.cpp`) made the speaker's file with `makeWavDest`
+  (`core/patch_audio.cpp`, which called `Recorder::start`) - and with the same call
+  as the fallback when the MP3 output cannot be made - on the GUI thread, from the
+  patch page's reconcile; a slow disk froze the window there exactly as the Record
+  button did. **That was the open freeze risk this change left, and it is closed
+  in 0.99.64**: the patch speaker's file is opened by a worker (*The window does no
+  disk work*, below), by the same three steps. The opener is a `std::function` the
+  recorder carries (`Recorder::bindOpener`), `Recorder::openFile` by default, which
+  is the seam a test stages a slow disk through. It reads its request and touches
+  nothing else.
+- **`gui::RecordStart` (`src/gui/record_start.hpp`) runs the opener on a
+  worker and nothing waits for it**, the shape of `LinkRequestPoll` and
+  `ConfigWriter`: a Record press calls `prepare()`, hands the request to
+  `request()` and returns; every frame calls `poll()` (after every widget, in
+  `drawUi`), which collects a finished open and returns. The window keeps
+  drawing for as long as the disk takes; the only cost of a slow disk is that
+  the recording starts late.
+- **The order contract in `pipeline.hpp` is unchanged.** The tap is still
+  installed after the start, never before: the frame that collects the open
+  calls `begin()` and only then `Pipeline::setIqRecorder` /
+  `setAudioRecorder`, in one function (`AppWindow::finishRecordStart`). The
+  worker never sees a recorder, so nothing can be written to a take that has not
+  been armed. The take's elapsed clock starts when the file is open, not when
+  the button was pressed, and a take opened late is byte for byte the take an
+  inline `start()` makes (the test compares both kinds).
+- **The user still learns the outcome, in the same words.** A start that
+  fails reports the opener's own error - the same text `Recorder::start` gave -
+  a frame or more later, in the Recorder section's red line and the web page's
+  `recordError`; a refusal that needs no disk (an unrepresentable rate) is
+  still immediate. While the file is opening the section shows **Starting IQ -
+  click to cancel** (or **Starting audio - ...**) in place of Record, and after a
+  second a line under it, `Waiting for the disk to open the file: N s`. These
+  words, and the rate-change notice below, are on-screen text and go through the
+  translation catalogues like the buttons beside them; the log lines below are
+  English, as every log line is. The REC lamp, the elapsed clock and the web
+  page's `iqRecording` / `audioRecording` stay off until the file is open, so
+  they never overclaim.
+
+The edges, and the choices made where the right behaviour was a decision rather
+than an obvious fact. Each is tested, in `tests/test_record_start.cpp`:
+
+- **A second Record while one is opening changes nothing** (the button is a
+  cancel by then; the Record key and the browser's Record are ignored). One
+  worker is ever out, so a disk that never answers costs one parked thread, and
+  two opens can never race for one file name.
+- **A Stop while it is opening withdraws it.** The "click to cancel" button,
+  the toolbar Stop on a running receiver, the web remote's `recordIq` /
+  `recordAudio` `false` and the teardown all end up in `stopIqRecording()` /
+  `stopAudioRecording()`, which now cancel a start that is still opening. The
+  worker cannot be interrupted - it is inside the filesystem - so it is let
+  finish, its file is **closed unused** and no take starts. The panel reads
+  "Cancelling ... start" until it comes back, and a Record pressed in that gap
+  is refused rather than started alongside it. **The file the withdrawn open
+  leaves behind is the zero-sample WAV that Record followed at once by Stop has
+  always left; nothing is deleted** - the conservative choice, since the open
+  had already truncated whatever shared its name.
+- **A take whose input rate changed while its file was opening is not
+  started.** The header on that file is for the old rate, and a take whose
+  header disagrees with its samples replays detuned (the reason an accepted
+  rate change ends an I/Q take that is already running). The panel says so as a
+  notice, not an error.
+- **Quit with an open still pending does not wait for it.** `~AppWindow` gives
+  each wedged open 250 ms (`RecordStart::kQuitGrace`, after the watchdog has
+  stopped, so outside the shutdown budget) and abandons it: the future is
+  handed to a detached thread, which lets the file go when the open finally
+  returns. The worker owns everything it touches by value, which is what makes
+  that safe. The abandoned thread cannot be stopped from outside; it ends when
+  the filesystem call does, or with the process.
+
+Two log lines are the whole record a report will carry of a slow disk, written
+by `AppWindow::pollRecordStarts`; neither names the directory or the file:
+
+- `recorder: the I/Q file has not opened for N s - the open is waiting on a
+  worker thread, the window is not` (or `audio`) - a warning, once per open,
+  when one has been out for five seconds.
+- `recorder: the I/Q file opened after N s` - once, when an open that was
+  reported stuck comes back.
+
+A report whose log carries the first line and never the second was written
+while the folder was still not answering.
+
+`tests/test_record_start.cpp` holds it. A source scan requires that nothing
+under `src/gui` calls a recorder's blocking `start()`, that both takes ask
+through `RecordStart`, and that the two taps are installed in one function and
+only after `begin()`. A real `HangWatchdog` (800 ms threshold) sees a 2.5 s
+open called on the heartbeating thread (the control that proves the harness
+can see the fault), and then must see nothing - no report, no gap in the frame
+loop - against `RecordStart` alone and against a real `AppWindow` driven
+through the handlers the buttons, the key and the browser use. Around those:
+the late take equals the inline take byte for byte, a late failure has the
+inline failure's words, a second Record starts nothing, Stop by each route
+leaves no take and closes the file, an exit with two opens wedged takes a
+fraction of the 2.5 s they need and both files are closed afterwards, and a
+slow open is logged once and not once a frame.
+
+What this does not show: the panel's drawing is not read by any test (only the
+state it draws from is), the web page does not show a start in progress (its
+button reads Record until the file is open, and a Record sent in the meantime
+is ignored), and no real slow disk was involved.
+
+### Slow frames: where the window's time went (0.99.64)
+
+Every freeze reported from the field in the weeks before this was something slow
+on the thread that draws the window - a recording's file being created, plugin
+file sizes read every frame, a settings folder looked in once a second, a plugin
+reload. The only detector was the hang watchdog, which fires at five seconds and
+then needs a stack walk and symbol maps to say where the thread was. A frame that
+takes 300 ms is the same bug at an earlier stage, is far more common, and left no
+trace at all. `core/frame_timing.hpp` measures it: how long each frame took and,
+for the slow ones, which part of the frame the time went in, in fixed words and
+without a stack. The aim is to find a freeze while it is still a stutter.
+
+**What is measured.** Each pass of the frame loop is timed from its top to its
+bottom with a steady clock. Inside the frame a fixed set of named **scopes** is
+timed with an RAII guard (`FrameScopeGuard`: two clock reads and an add, no
+allocation, no lock, no formatting). The time inside no scope is the scope
+`other`, so the scopes always add up to the frame. A scope's time is
+**exclusive**: time spent in a scope opened inside it belongs to the inner one,
+which is what lets the recording and the plugin reload be scopes of their own
+wherever they were called from.
+
+| Scope | What is in it |
+|---|---|
+| `events` | the operating system's message pump (`glfwPollEvents`) |
+| `frame-start` | a pending theme, language or scale (a font rebuild), both backends' new-frame work, a bounded run's scripted input (its `sleep` step lands here), `ImGui::NewFrame` |
+| `pre-draw` | the start of `drawUi`: key bindings, the web server's and the plugins' requests, the snapshots published for them, the transmitter's tick |
+| `plugin-panels` | the plugins' own windows: maps, pictures, instruments, decoder output |
+| `toolbar` | the cabinet, its rail and the top bar |
+| `rail` | the menu column |
+| `spectrum` | the receiver's centre: spectrum, waterfall, and the radar scope that replaces them |
+| `patch` | the patch page |
+| `status` | the status column |
+| `dialogs` | the dialogs and menus drawn at the top level |
+| `polls` | the once-a-frame polls of workers and files (sources, sound, updates, the catalogue, telemetry, the tester link) and the scanner and airband drivers |
+| `saves` | deferred saves: bookmarks, markers and the settings file |
+| `render` | `ImGui::Render`, the GL draw, the torn-off windows' own draw |
+| `present` | `glfwSwapBuffers` - on a vsynced window, mostly waiting for the display |
+| `recorder` | starting, stopping and arming a recording (nested: counted here whatever called it) |
+| `plugins-reload` | unloading every plugin and loading them again (nested, likewise) |
+| `startup` | the first 30 frames, see below |
+| `user-wait` | time a person set the pace of; never counted, see below |
+| `other` | everything not inside any of the above |
+
+**Tiers.** A frame is slow from **250 ms** (fifteen missed frames on a 60 Hz
+display, a hitch anybody sees), and is counted once, in the highest of three
+tiers it reached - 250 ms to under 1 s, 1 s to under 5 s, **5 s or more** (the
+hang watchdog's own threshold; `tests/test_frame_timing.cpp` holds the two
+equal) - against the scope that took the most of it: a table `[scope][tier]`.
+`recorder 2/0/0, plugins-reload 0/1/0` is two stutters in the recorder and one
+freeze of a plugin reload. Where 250 ms comes from: scripted runs of the
+unmodified window on the development desktop (vsynced frames of about 8.3 ms;
+median 8.0 ms and mean 8.3 ms a frame before this change and after it) recorded
+no slow frame in about 10,000 frames across the receiver, the rail's five banks
+and the patch page. The longest frame of nearly every run was 10 to 30 ms; two
+runs, made while other work was loading the machine, had one of about 95 ms and
+one of about 100 ms, both in `render`. A frame that is merely busy is nowhere near
+250 ms; this is a measurement of one machine, and the numbers are in the log of
+whoever reads them next (`cascade: frame timing:`, below).
+
+**Where it is written.**
+
+- The **log**: one line per scope per 30 seconds at most, so a hitch that repeats
+  every second cannot push the rest of the log out of its 256 lines; the ones it
+  did not write are counted in the next it does. `frame: 412 ms, 388 ms of it in
+  rail` - a warning from a second up. A start-up frame names its largest part:
+  `frame: 313 ms, 313 ms of it in startup; largest part: rail 308 ms`, and a
+  line that follows suppressed ones says so: `...; 2 more slow frames in it not
+  logged`. At exit, once, if anything was recorded: `frame: slow frames this
+  session - recorder 2/0/0, plugins-reload 0/1/0 (250 ms to 1 s / 1 s to 5 s / 5
+  s or more, by scope)`. Fixed words and numbers only - never a plugin's name, a
+  file, a path, a frequency or a device.
+- The **diagnostics bundle** (Copy diagnostics, and what a bug report attaches):
+  one line, `slow-frames: recorder 2/0/0, plugins-reload 0/1/0`, or `none`. It is
+  listed in PRIVACY.md's table and compared with it, both ways, by
+  `tests/test_diagnostics.cpp`. It is added to the bundle by
+  `AppWindow::currentDiagnosticsBundle` after the builder returns
+  (`withSlowFramesField`) and inventoried by `frameBundleFieldNames()`, **not**
+  in `buildDiagnosticsBundle` and `bundleFieldNames()`: that is the report
+  format, which was being changed elsewhere when this was written, and it keeps
+  the line out of the context block a crash or freeze report is written from. When
+  that work lands the line can move into the builder and the test drop its union.
+- **A freeze report names the scope.** `currentFrameScope()` is one atomic the
+  frame loop keeps current and any thread may read without a lock; the watchdog
+  reads it when it files a report and writes `frame-scope: rail` in the header
+  (both writers; inventoried in `hangReportFieldNames()`, PRIVACY.md and
+  `tests/test_diag_hang.cpp`). The GUI thread is stalled, so what the watchdog
+  thread reads is where it stopped. The uploader sends it as the freeze's
+  `reason` - `freeze: the frame was in rail` (`kFreezeReasonPrefix`) - and only
+  when the word is one of the timer's own names: a `frame-scope` line that says
+  anything else is dropped, not forwarded (`tests/test_crash_upload.cpp`). So a
+  freeze says which part of the frame held the window before anyone has found a
+  symbol map.
+- **A freeze inside a plugin reload also names the reload's step (0.99.84).**
+  Field report 7591C65EFB69DD94 was the 30 s report the rescan section below
+  waits on - and it could not arbitrate between the steps: the reload's own
+  per-step log line (`PhaseClock`) is only written when the reload *ends*, and
+  the stalled thread's stack ended in system modules under a Detours hook. The
+  reload's clock now *publishes* the name of its open step
+  (`PhaseClock::Publish`, one atomic, the same pattern as `currentFrameScope()`),
+  and the watchdog writes it as `reload-phase: unload` beside `frame-scope` -
+  `none` outside a reload. The step names are the closed list in
+  `core/plugin_reload_phases.hpp` (the log line's seven, plus `check` for
+  `rescanPluginsIfChanged`'s listing); the uploader forwards the word as
+  `context.reloadPhase`, and only when it is one of them
+  (`tests/test_crash_upload.cpp`). The teardown and removal paths publish too -
+  `detachAndUnloadPlugins` builds a publish-only clock when no caller's clock is
+  handed in, so a freeze in a quit's unload names its step without writing any
+  reload log line.
+- **So does the sentinel.** The process's own timer (and no timer a test builds)
+  writes the scope into the sentinel's breadcrumb at every change, as a number;
+  see *The sentinel*, *The breadcrumb*.
+- `slowFrameCounts()` is a snapshot of the table. The usage record does not read it:
+  the process's own timer counts each slow frame into the health ledger as it
+  commits it (`slow.<scope>.<tier>`, 0.99.65, see *Failures that are not crashes*
+  below; `user-wait` is never counted).
+- A bounded `--frames` run prints one more line at its end, like the worst frame
+  gap: `cascade: frame timing: 150 frames, mean 8.40 ms, longest 29.6 ms (in
+  frame-start), 27.1 scope switches a frame; slow frames: none; slow frames not
+  counted: 0`.
+
+**What is not counted, and why.**
+
+- **A window nobody can see, and a display being changed** - the frames
+  `PresentGrace` calls not expected to present. The driver's present call can stall
+  for seconds then and nothing in this program is wrong. The stall a display change
+  causes is in the swap that comes **before** the window procedure delivers the
+  message that says the display changed, so a slow frame is held for one frame
+  before it is counted and the next frame's first look at the window drops it.
+- **A person's time.** The hang watchdog separates its two kinds of pause by who
+  paces what is waited for, and this follows it. The **user-paced** pause (the
+  shell-open bracket: somebody reading an elevation or SmartScreen prompt) is the
+  scope `user-wait`, subtracted from the frame and from every scope. So is a
+  **modal window loop** - dragging or resizing the window, or the rail's system
+  menu - which runs inside `glfwPollEvents` and ends when the person lets go; the
+  window procedure counts the messages that start one (`WM_ENTERSIZEMOVE`,
+  `WM_ENTERMENULOOP`, `frame::modalLoopCount()`) and the frame loop moves the
+  pump's time to `user-wait` when the count moved across it. An
+  **application-paced** pause is code that is expected to finish, and it excuses
+  the **watchdog**, not the frame: a plugin reload under its `WatchdogPause` is
+  exactly the freeze this is for, so it counts as `plugins-reload`. The audio and
+  microphone opens, which wait on the window's thread for up to a bound under the
+  same kind of pause, are counted too, in the scope of the code that asked for
+  them: `polls` for the sound watchdog's reopen of a dead stream, `rail` for a
+  device picked in the Sinks section.
+- **The computer asleep.** On Windows `steady_clock` is
+  `QueryPerformanceCounter`, which keeps counting through a suspend (measured:
+  read beside `QueryUnbiasedInterruptTime` on a Windows 11 desktop the two differed
+  by exactly the time it had spent asleep). A slow frame whose two clocks differ by
+  more than a second was spanning a suspend and is dropped.
+- **Start-up is not dropped; it is its own scope.** The first 30 frames (the
+  watchdog's `kStartupFrames`) are known from the field to be able to be long - an
+  Intel GL driver compiling its shaders, a font atlas, the first plugin pages -
+  and a slow one is credited to `startup` with its largest part named. On the
+  development desktop they are not slow. What happens **before** the first frame
+  (creating the window, the plugin scan) is not a frame and is not measured here.
+
+**What the numbers can and cannot tell you.** They say which part of the frame was
+slow for how long, on the thread that draws the window: a stutter in `rail` is
+something the rail's drawing or the functions it calls waited for, and nothing
+more specific than that - not which section, which plugin, which file. `present`
+is mostly the display and the driver. `other` is time in no scope, which means a
+part of the frame has no scope yet: add one. A slow frame is a measurement of
+the **wall clock**: a machine that is busy with something else, or a thread the
+scheduler did not run, is a slow frame in whichever scope it happened in. The table
+counts frames and says nothing about the frames that were not slow, and it is for
+this session only. It does not see work on other threads - which is the point of
+moving work off the window's thread - so a recording whose file takes ten seconds
+to open on a worker is not a slow frame, and the 5 s tier is not the watchdog's
+(it excuses; this does not, except for the cases above).
+
+**What it costs.** 28 ns a guard and 0.67 µs for a whole frame of 24 guards, on the
+development desktop, with the real clock (`tests/test_frame_timing.cpp` prints the
+figures and fails above 100 µs a frame); a frame is 8 to 16 ms. The window makes 27
+scope switches a frame (26 on the patch page). Frame pacing is unchanged: the same
+scripted run, 400 frames, eleven times with this change and eleven without, had a
+median of 8.00 ms every time and a mean of 8.29 to 8.32 ms in every run but two - the
+two with the single frame of about 100 ms in `render` above, 8.5 ms.
+
+**The test hooks** (bounded `--frames` runs only, like every other hook here).
+`FOXSDR_FRAME_STALL="rail=300@45,polls=200@50"` holds the loop for the
+milliseconds inside the named scope at the frame, so every scope can be made
+slow in the real window and found. `FOXSDR_FRAME_SITUATION="hidden@40-60,display@100,modal@80"`
+plays an iconified window, a display change and a modal loop into the code the
+real events reach. `tests/test_slow_frames_app.cpp` runs the real application
+with them, a script's `sleep` (its scope is `frame-start`) and `--diag-stall`
+(after the last scope: `other`), and, in process, a real plugin reload made slow
+through the plugins folder's signature read and a shell call through the real
+watchdog bracket.
+
+### The window does no disk work (0.99.64)
+
+Four field freezes in 0.99.58 - 0.99.63 were one defect: a file-system call on the
+thread that draws the window, made against a disk that was slow to answer (a
+synchronised or network folder, a drive that had spun down, a scanner holding the
+file). The Record button, a once-a-second look in the settings folder, the Fitted
+modules window's per-frame stat, and (0.96.3) the config write: each was fixed where
+it was found. 0.99.64 went looking for the rest. The method was every
+`std::filesystem` call, stream, `fopen`, Win32 and POSIX file call and project helper
+that wraps them in `src/gui/app_window*.cpp`, read against the thirteen places the
+0.99.63 Record fix listed as still on that thread, and then run as a test
+(`tests/test_gui_disk_audit.cpp`, below), which is how the places the list did not
+mention were found.
+
+**What is established and what is not.** Every item below was read in the source and
+reproduced in a test under a real `HangWatchdog` and a frame loop with a sleeping disk
+standing in for a slow one: before the change the frame loop stalled for the whole
+disk time (worst frame gap 2.5 s against an 800 ms threshold, one hang report per
+stall) and after it the worst gap was 26 - 36 ms. **Nothing was run against a genuinely
+slow disk**, and the cause of any one user's freeze is not established by any of it.
+
+#### The thirteen, as the source says they are
+
+| # | Where | Verdict |
+|---|---|---|
+| 1 | the patch page's Speaker WAV (`patchPublishSets` -> `makeWavDest` -> `Recorder::start`) | confirmed, **moved**. It is not per frame as the list had it: a speaker's output is made when its radio starts or the output is changed, and the page checks that every frame |
+| 2 | the MP3 destination's `create_directories` / `is_directory` | confirmed, **moved** into the destination's own worker |
+| 3 | `flushBookmarkSave` / `flushMarkerSave` from `drawUi` | confirmed, **moved** |
+| 4 | the I/Q-file **Open** button (`IqFileSource::open`) | confirmed, **moved**. Not the only place a recording is opened inline: see *Still open* |
+| 5 | `patchListRecordings` | confirmed, **moved** |
+| 6 | F12 / the Screenshot key | confirmed, **moved** (the BMP, the `.windows.txt` and the torn-off windows' pictures) |
+| 7 | the plugin picture's **Save as BMP** | confirmed, **moved** |
+| 8 | **Export for SDR#** | confirmed, **moved** |
+| 9 | **Open reports folder** (two panels), `startSdrPlayProbe`, `copyDiagnosticsBundle` | confirmed, **left, under a watchdog pause** |
+| 10 | `drawSdrPlayProbeDialog`'s read on the frame the child exits | confirmed, **left, under a watchdog pause** |
+| 11 | plugin quarantine rename / remove (`restoreQuarantinedPlugins`, `quarantineBlockedPlugins`) | confirmed, **left**: reached only from `rescanPlugins`, which already holds a pause - the open design question *A plugin rescan runs on the GUI thread*, above |
+| 12 | `loadBandPlan` | confirmed, **left, under a watchdog pause**, and **worse than the list said**: not one `is_directory` but that, a directory listing (`BandPlan::available`) and the read of the plan file |
+| 13 | `diagLogf`'s `fwrite` + `fflush` under a mutex | confirmed; **not moved - a proposal, below** |
+
+#### The pattern
+
+The shapes the 0.99.58 - 0.99.63 fixes made, once, for the rest:
+
+- **`gui::DiskJob<Result>`** (`src/gui/disk_job.hpp`) is `RecordStart`'s shape for any
+  "do this blocking thing and give me what it made". `request()` starts a worker and
+  returns, `poll()` once a frame collects a finished one and returns; **neither can
+  block**. One worker at a time (a disk that never answers costs one parked thread,
+  however often the button is pressed). The worker owns its inputs by value, never
+  `this`. A throw is contained. At quit `reap()` gives a worker still in the file system
+  250 ms and then **abandons** it (detached; the result, and so the file it holds, is
+  let go by the abandoned thread). A job out for five seconds writes one warning to
+  the log, and one line when it comes back; **neither names a file or a folder**.
+- **`gui::BackgroundSaver`** (`src/gui/background_saver.hpp`) is `ConfigWriter`'s
+  shape for a small file saved when it changes: the text is taken on the GUI thread,
+  one write is ever out, a request made behind it replaces any request already held
+  (so a burst ends as the **newest** content and an older write can never land after a
+  newer one), and the exit drain waits within a bound.
+- **`app_window_disk_work.cpp`** holds the `AppWindow` members that use them, and
+  `app_window_disk_state.hpp` the state behind an opaque pointer. Both exist for a
+  reason that has nothing to do with design: `app_window.cpp` is at the edge of what an
+  MSVC object file can hold (error C1128, "number of sections exceeded object file
+  format limit"), and the first of these, written in place, took it over.
+- **The seam for a slow disk** is a hook the worker calls immediately before it
+  touches the disk (`AppWindow::diskHookForTest_`), plus the existing
+  `Recorder::bindOpener`, `IqFileSource`'s virtual `readHeaderRaw`, and
+  `core::patch::DestSeams` for the patch speakers. All empty in the application.
+
+#### What moved, and what the user sees
+
+- **A patch speaker's WAV (1).** `makeWavDestAsync` (`core/patch_audio.hpp`) returns a
+  destination at once that already takes sound; its file is opened by a worker. The
+  sound that arrives meanwhile is **kept**, up to 20 s, and written ahead of the first
+  block that arrives after the file is open, on the radio's reader thread - the thread
+  `Recorder` was built to be written from, so `begin()` still never overlaps a write.
+  A disk slower than 20 s drops the overflow and the face says so (*the file took too
+  long to open and some sound was not written*); a file that cannot be opened is
+  reported by the face in the words `Recorder::start` gave, a frame or more later; a
+  face waiting more than a second says *waiting for the disk to open it*; a speaker
+  destroyed while its open is wedged does not wait, and the file the open eventually
+  makes is closed. The radio's other strips are **not** held for the file: the set is
+  published on the first frame, so a slow disk costs the file its first seconds and
+  nothing else. `makeWavDest` (blocking, for callers that can wait) still exists.
+  The test writes a file through a 2.5 s open and compares it with the file an inline
+  start makes **byte for byte**, and runs a real radio into the speaker: every sample
+  offered is in the file.
+- **An MP3 speaker (2)** makes its folder on its own worker, just before it opens the
+  file; a folder that cannot be made is reported by the face (*cannot create the
+  recordings folder ...*), no longer by the WAV fallback (which would have failed
+  on the same folder). The WAV fallback is for a build with no encoder, which needs no
+  disk to find out.
+- **The bookmark list and the markers (3).** `flushBookmarkSave` and `flushMarkerSave`
+  take the text on the GUI thread (`FreqManager::serialize`, `FreqMarkers::serialize`)
+  and hand the blocking half (`writeFile`: folder, temp file, flush, rename) to a
+  `BackgroundSaver`. **Data safety, each tested:** the last edit before quit is on disk
+  afterwards (the exit drain, within the one `ConfigWriter::kSaveBound` deadline the
+  config's own drain already spends - the shutdown budget is unchanged); two quick
+  edits end as the second; a slow save never lets an older one land after a newer one
+  (one write at a time, in the order asked); a save that fails is reported in the
+  words it always was, a frame or more late, and the next good save clears it; the
+  window is destroyed without waiting for a wedged write. What is **not** guaranteed:
+  a write the exit drain had to abandon (the disk did not answer within the bound) is
+  logged (*final save abandoned*) and may not land.
+- **The I/Q file's Open (4).** The header is read on a worker; Open is disabled and a
+  line under it says *Waiting for the disk to open the file: N s* after a second. A
+  result that arrives after the user chose another source is dropped and its file
+  closed (the rule a sound card's open already follows). A file that will not open
+  says what the synchronous open said.
+- **The patch's recordings list (5).** The folders are listed and the headers read on
+  a worker, with a **copy** of the probe cache that comes back grown; a press made while
+  a listing is out is remembered and run when it returns.
+- **F12 (6), Save as BMP (7), Export for SDR# (8).** The GL read-back, the window list,
+  the file's name, the picture's pixels and the list's text are the GUI thread's; the
+  folder and the file are a worker's. The picture and export keys are disabled while
+  one is out and a note says *Saving...* (the one new on-screen string, in all 33
+  catalogues); the answer replaces it in the words it always had. A screenshot asked
+  for while the last is still being written is skipped and the log says so. The
+  worker itself writes the `shot: wrote <path>` line (the one a harness looks for), so a
+  screenshot taken on the last frame of a bounded run, after which nothing polls, still
+  logs it. The `.windows.txt` beside a screenshot is now written whether or not the BMP
+  succeeded.
+
+New log lines, all in English and none naming a file or a folder: `<job>: has not
+finished for N s - it is waiting on a worker thread, the window is not`, `<job>:
+finished after N s` (jobs: *I/Q file open*, *picture save*, *frequency list export*,
+*screenshot save*, *recordings list*); `bookmarks: the save has not finished ...` and
+`markers: ...` likewise; `bookmarks: final save abandoned - the disk did not answer in
+time` (and *markers*); `patch: a speaker's WAV file has not opened for N s ...`, `could
+not be opened`, `opened after N s`; `source: an I/Q file open finished after the choice
+moved on`; `shot: the previous screenshot is still being written; this one was
+skipped`.
+
+#### What was left, and why
+
+9 - 12 are one-off, user-initiated, tiny calls where a block is acceptable, **but each
+must not file a false freeze report against a healthy application**, so each now holds
+a `WatchdogPause` (an application-paced one, capped at 30 s, reported past it): the
+reports-folder calls, the SDRplay probe's start and its read, `loadBandPlan`, the
+diagnostics switch's folder and log-file work, the plugin store's clean-up and the two
+**Remove** keys' file deletes. The pause covers the call and nothing around it (the
+unload before a plugin delete is third-party code whose freeze should be reported).
+**A pause is not a fix** - it deletes the report and keeps the freeze (the argument in
+`gui/audio_open.hpp`) - which is why the entries that are still to be moved (below) are
+**deliberately not paused**: a freeze there is a defect, and the report is how it is
+found. 11 is part of the plugin rescan and is covered by its pause.
+
+#### Found by the scan, not in the list: moved in 0.99.65
+
+The 0.99.64 scan found four calls it left on the thread, deliberately **not** paused
+(see above), listed as **STILL OPEN**. Each is now on a worker, with a test that was
+red on the unmodified code (a 2.5 s sleeping seam under a real `HangWatchdog`: worst
+frame gap about 2.5 s and one hang report before; about 26 ms and none after), and has
+left the allowlist, so the scan guards it from here on.
+
+- **`Recorder::stop`** (`stopIqRecording`, `stopAudioRecording`, and `~WavDest` for a
+  patch speaker). `Recorder::stopForFinish` moves the file, its stdio buffer and the
+  byte count off the recorder **without touching the disk**; `core::RecordFinisher`
+  (`core/record_finish.hpp`) hands them to a thread of its own, which runs
+  `Recorder::finishFile` (flush, patch the header's two size fields, close). The header
+  and the samples are exactly what `stop()` gave (it is still the two in a row, for the
+  callers that can wait, and `makeWavDest`, the blocking factory, still finalises
+  inside the destructor). **Decisions:** a Record pressed while the previous take's
+  file is still being closed is **remembered, not refused and not started at once**
+  (a file name has a one-second resolution, so an open beside a file still being
+  finalised could truncate it - measured: with the check removed the second take
+  truncated the first), and starts on the frame that file is closed; a Stop in
+  between withdraws it. The panel shows the existing *Saving...* on a disabled button
+  meanwhile. **Quit** drains against the *same* deadline the config's and the lists'
+  last saves share (`drainRecordFinishes(drainDeadline)`), so the shutdown budget does
+  not grow; a finish the disk did not return within it is logged (*a take's file was
+  still being closed at exit*) and keeps the zero-length header the opener flushed.
+  **A finish that fails** (the header patch did not reach the file) says what the
+  synchronous stop said on screen - nothing - and adds one log line (*the take's file
+  could not be finalised*), never naming the file. `tests/test_record_finish_async.cpp`.
+- **`importBookmarkFile`**: a `DiskJob`; the file is read and parsed on a worker and
+  `pollDiskJobs` puts the list in. An import asked for while one is out is remembered
+  (a dropped file is not lost; the last one wins). *Waiting for the disk to open the
+  file: N s* (the sentence the Record button and the I/Q Open use) after a second. A
+  worker that throws is reported as an unreadable file instead of ending the process.
+- **A patch Radio's I/Q recording** opens through the radio-open worker every hardware
+  radio uses (`patchRadioPending_`); the node takes the file's rate when the answer
+  arrives, and the failure log line still never names the file.
+- **`~Mp3Dest` no longer joins its worker** (found by the failure-injection tests: a
+  speaker retired while its disk was slow held the frame for the rest of the disk
+  time, worst gap 1774 ms and a hang report). The worker owns its state, ends by
+  itself, and is counted with the recorders' finishes so quit gives it the same bounded
+  chance (`RecordFinisher::externalBegin/End`).
+
+**Not moved: the saved I/Q file reopened at start-up** (`applyConfig`) stays on the
+allowlist as `Startup`. It is not a move: a restore on a worker (the sound card's
+pattern) changes what the first frame shows, what a bounded `--frames` run and the
+screenshot harness see, and what an exit save made before the answer writes, and three
+tests assert the synchronous behaviour. It delays the first window on a slow share; it
+stops no frame. A decision about what start-up promises, best made together with the
+constructor's three list reads.
+
+#### Item 13: `diagLogf`, and why it was not moved
+
+**0.99.65: option 1 below is done** - the ring and the file have **two locks**. A freeze
+report's log section and *Copy diagnostics* (`ringSnapshot()`) no longer wait behind a
+file write; the test that proves it (`tests/test_diag_log_lock.cpp`) parks a write inside
+the file stage and shows the report carrying the parked line, and was red on the old
+lock (*log section ABSENT*) and green on the new (*log section present*). **What did not
+change:** every line is still flushed, a `write()` caller still waits for the disk, and
+`copyRingRaw()` is untouched. **What the file's order means now** (stated in the header
+and tested only for what is promised): each thread's own lines are in the file in the
+order that thread wrote them, nothing is lost or torn, and two threads that log at the
+same instant may land in the file in the opposite order to the ring's. Options 2 and 3
+are not done and still the owner's to decide. The paragraph below is the audit as it
+stood before the split.
+
+`DiagLog::write` (`core/diag_log.cpp`) takes `mutex_`, copies the line into the ring,
+and then, **still holding it**, does the file's `fwrite`, `fputc` and `fflush` and, when
+the file is full, the rotation (`fclose`, `remove`, `rename`, `fopen`). Any thread that
+logs - the GUI thread's `poll()`s, every worker's notice - therefore waits for the disk,
+and so does anything else that wants `mutex_`. **Who depends on the log's tail:**
+
+- A **crash report** reads the ring with `copyRingRaw()`: no lock, no allocation. It does
+  not depend on the file or on `mutex_`.
+- A **freeze report** (`hang_watchdog.cpp`, both the Windows and Linux paths) and
+  *Copy diagnostics* read it with `ringSnapshot()`, which **takes `mutex_`**. So a log
+  write stuck on the same slow profile that froze the window **holds the freeze
+  report's log section**: the report has its thread stacks (flushed per thread) and
+  then waits for the disk before it can write the log. This is the one finding about the
+  log that changes what a report carries, and it is independent of whether callers wait.
+- The **next session's** bundle reads the previous session's tail from the files
+  (`diag_history.cpp`); a run ended from the taskbar (`TerminateProcess`) has whatever
+  `fflush` had handed the operating system, which is why every line is flushed.
+
+**Why it was not changed here.** A caller that does not wait for the file has to hand the
+line to something that does, and then a hard death can lose the lines in that hand-off -
+today it cannot, on a healthy disk. That trade, and the order of lines in the file when
+two threads race, are the owner's to make. The options, in the order they should be
+done:
+
+1. **Split the lock** (ring under one mutex, file under another). `ringSnapshot()` no
+   longer waits behind a file write, which fixes the freeze report's log section without
+   touching `hang_watchdog.cpp`. Callers still wait for the disk. Cost: two threads that
+   log at the same instant may write their lines to the file in the opposite order to the
+   ring's (a ticket makes it exact, at the price of the same wait). Weakens nothing a
+   report carries. **Recommended first.**
+2. **1, and an asynchronous file writer with a bounded handshake**: the caller puts its
+   line in the ring, queues it, and waits up to a few milliseconds for the writer to have
+   flushed it; the first timeout trips a breaker so later callers do not wait until the
+   writer has caught up. On a healthy disk the line is on disk when `diagLogf` returns
+   (a hard death loses nothing); on a slow one the callers are not held and the file lags
+   the ring. Cost: a thread, rotation and `configure()` moved onto it, and a wait whose
+   bound is a number that a loaded machine can exceed (a flaky test, not a lost report).
+   Needs a hard-kill test: a child that logs and is `TerminateProcess`ed straight after
+   the call, and the parent reading the tail.
+3. **1, and a purely asynchronous writer, no handshake.** Simplest, and weakens the
+   taskbar-kill tail on a healthy disk by the writer's latency. Not recommended.
+
+Until one is chosen the GUI thread's own log calls are a known remaining wait, and the new
+workers' notices (which log from `poll()`) are rare: once a job is five seconds late and
+once when it returns.
+
+#### The structural test, and how to add to it
+
+`tests/test_gui_disk_audit.cpp` reads every `src/gui/app_window*.cpp` with comments and
+string literals blanked and finds every file-system call (the `std::filesystem` operations
+that touch a disk, streams, C stdio, the Win32 and POSIX file calls, the one-argument C
+`remove` and two-argument `rename`, and the project's own helpers named in `wrappers()`).
+Each must be **inside a lambda handed to `std::async`, `std::thread` or a job's
+`request()`** - a worker's - **or on the allowlist** (`allowed()` in the test) with the
+function it is in, the kinds of call, the reason and how it is kept from filing a false
+freeze report: `Held` (the function holds a `WatchdogPause`, checked), `HeldBy` (a named
+caller does and calls it, checked), `Startup` (before the first frame, with the watchdog
+not yet running) or `NotNeeded` (and the reason). A new unlisted call fails with a message
+that says what to do; an entry that matches nothing fails too, and so does one that claims
+a pause the function does not hold. It runs against the code it forbids first (the
+control), and was seen red by adding an unlisted `exists` to `saveBookmarks` and by
+removing the pause from `loadBandPlan`.
+
+**To add a call: do not list it - move it to a worker.** Hand the call, in a lambda that
+owns its inputs by value, to a `DiskJob` (a click that saves, opens or lists), a
+`BackgroundSaver` (a file saved when it changes) or `RecordStart` (a recording), and write
+the test beside `tests/test_gui_file_jobs.cpp`: the real handler, under a real watchdog
+and a frame loop, with a sleeping hook, red on the unmodified code. Only a one-off,
+user-initiated, tiny call belongs on the list, and it holds a pause.
+
+**What the scan cannot see:** a helper that reaches the disk and is not in `wrappers()`
+(it is lexical, one level deep: a new one goes in that list, and each entry is checked to
+exist); a lambda built into a variable and passed to a worker by name (it is flagged, so
+it is listed or written inline); anything outside `src/gui`; and `diagLogf` itself, which
+is everywhere and is item 13.
+
+`test_shutdown_budget` classifies the new bounded waits (`kQuitGrace`, `kNoWait`,
+`kStuckAfter` in `disk_job.hpp` and `background_saver.hpp`, and the two ages in
+`patch_audio.cpp`) as costing the shutdown nothing: the quit grace is spent from
+`~AppWindow` after the watchdog has stopped, and the lists' exit drain shares the
+config drain's one `kSaveBound` deadline, so the budget is unchanged. The recorders'
+finishes (0.99.65) are drained against that **same** deadline, and add no named
+duration at all (`RecordFinisher::drain` takes the deadline it is given).
+
+**The allowlist as it now stands (0.99.65):** nothing is *STILL OPEN*. Start-up: the
+constructor's three list reads, `applyConfig`'s I/Q-file restore (left, with the reason
+above) and `telemetryStartup`'s ledger removal. Developer hooks (environment variables),
+`readLocalCatalogue` (called from a worker by name), the plugin rescan (open design
+question, under a pause), and a handful of one-off user presses under a pause.
+
+### Failure injection: what each file does when the disk is not well (0.99.65)
+
+The audit above is about what the thread that draws the window waits for. This is the
+other half: what happens when the answer is *no*. `tests/test_failure_files.cpp` and
+`tests/test_failure_recording.cpp` run each case through the real code at the lowest
+level that still shows the reaction, and assert all of it - no crash, no hang (every call
+is timed), the file complete or untouched, the words returned, no temporary file left,
+and the count (`rec_fail`) once where one exists (`tests/test_health_paths.cpp`). The
+faults: a folder made read-only with `icacls` (scratch folders the test made, put back
+by a guard and an `atexit` hook, and proved by *writing* a probe file, never assumed); a
+file another program holds open (with and without sharing); a directory squatting on a
+path; a parent that is a file; a drive letter that is not there; a file truncated, cut
+mid-token or replaced by a directory; the OS handle behind a take's stream closed (what
+a full disk, a removed device and a vanished share look like above stdio). Seams, all
+function hooks, null in a shipped build: `core/write_fault.hpp` (sets a writer's stream
+bad after the bytes are written: settings, bookmarks, markers, export, BMP),
+`Recorder::setFinishHookForTest` (now passes the stream), `DestSeams::mp3WriteFails`,
+`core/file_read.hpp`'s `setReadFaultHookForTest` (a read that throws).
+
+**The same tests on Linux (0.99.65, after the first Linux run).** The first Linux build
+failed three of them, for reasons that are worth keeping: (1) **a product defect** - see
+*A folder where a file should be ended the program on Linux*, below; (2) the injection of a
+failing disk. Closing the OS handle behind a stream is a Windows technique: on POSIX a
+closed descriptor number is handed to the next open in the process, so writes through the
+stale stream could land in another file, and it does not make the writes fail. It is
+never run there. `tests/failing_disk.hpp` does it per platform: Windows closes the handle
+once the take has run healthily; Linux gives the take a `/dev/full` stream from the start (a
+real `ENOSPC` on every write that reaches the OS; the stdio buffer takes the first 256 KiB
+exactly as on Windows, and the file the take names stays the 44-byte header the opener
+flushed); anywhere else the case reports NOT REACHED. (3) A folder removed under an open
+take: Windows refuses (asserted); POSIX removes it, the file is unlinked and keeps receiving
+writes, Stop closes a file with no name - **pinned as a FINDING** of the same kind as the MP3
+speaker's, and printed as one. (4) What else leaned on Windows semantics: a read-only folder
+(`icacls` on Windows, the permission bits on POSIX, both *proved by writing a probe file*, so
+a run as root reports NOT REACHED instead of passing for the wrong reason); a file "held open
+by another program" (no POSIX equivalent - an open file can be renamed, replaced and
+unlinked - so its cases are guarded out; where the point was a refused rename, the folder's
+permission stands in; for the log file that cannot be opened, the file's own write bits do);
+the plugin file that cannot be deleted (guarded out: the only POSIX refusal is the folder's
+permission, which also stops the queue file the case is about); a drive letter that is not
+there (guarded out); the settings folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` on POSIX:
+both are set). And no case can end the process any more: each runs under a guard that turns a
+throw into a failed check with its message.
+
+**Could not be reached:** a volume that really fills (no unprivileged way; the seam stands
+in); a folder removed or renamed *under an open WAV take* on Windows (refused, asserted; on
+POSIX it is reached and pinned);
+a drive pulled mid-write (a drive letter that is not there stands in for the destination
+being gone *before* the write). **Covered by existing tests, not duplicated:** a source
+that goes away mid-take (`tests/test_stop_ends_recordings.cpp`, "a fault mid-take", the
+real application; both takes finish valid); a start refused by the disk
+(`test_record_start`, `test_health_paths`); the sound output disappearing - at the
+`audio_out` seam `tests/test_audio_out.cpp` already asserts `streamAlive()` goes false,
+the opened device's identity survives and `recoveryDeviceIndex` finds it again, and
+`tests/test_audio_open.cpp` the watchdog (the patch speaker's own *the sound output
+stopped* sentence is a one-line mapping of that, not separately tested).
+
+**A folder where a file should be ended the program on Linux (found by the first Linux run,
+fixed).** `bookmarks.json`, `markers.json` and a band plan were read by handing an
+`std::ifstream` to `json::parse` - and `ConfigStore::load` had been spared only because it
+already checked for a directory first. On Linux an `ifstream` *opens* a directory and the
+*read* then fails by **throwing** out of the stream's buffer (`std::__ios_failure`,
+"basic_filebuf::underflow error reading the file: Is a directory"); nlohmann's stream adapter
+and `istreambuf_iterator` read the buffer directly, past the stream's own error handling, so
+the exception went straight out of the loader (`allow_exceptions=false` only covers parse
+errors) and, in the constructor, ended the program. A real read error on a failing disk does
+the same. `core/file_read.hpp`: `readTextFile` answers a directory (`IsDirectory`), a file that
+will not open and a read that fails - by an error or a throw - and never throws; `slurpStream`
+reads with `istream::read`, which turns a throwing buffer into `badbit`. Every loader of these
+files now reads through it (`ConfigStore`, `FreqManager`, `FreqMarkers`, `BandPlan::parseInto`,
+and the readers that open a fixed name in a folder the user can write to: the plugin manifest
+and its `forgetFile`, the pending-removal list, an imported frequency list, and the two
+developer environment hooks). Checked and left, because they cannot throw: every `read()`,
+`getline` and `>>` (they catch), `ostream << rdbuf()` (libstdc++ catches it and sets failbit),
+the one reader that skips anything that is not a regular file before it reads (`fonts.cpp`),
+the one that sizes the file first (`readLocalCatalogue`, which a directory fails), the report,
+sentinel, crash-upload, history, health and telemetry readers (all `read()` or `getline`), and
+the Windows-only PE reader.
+No `exceptions(...)` is set on a file stream anywhere in `src/`. Verified against GCC's own
+libstdc++ with a stream whose buffer throws: `json::parse` and `istreambuf_iterator` throw,
+`slurpStream`, `read`, `getline`, `>>` and `<< rdbuf()` do not. `tests/test_file_read.cpp`
+(a throwing buffer; each loader, with a directory and with a read that throws through the seam).
+
+**Fixed in the second pass of 0.99.65** (four of the six findings the first pass pinned;
+each test was seen red on the code that had the defect, then green, then red again with the
+fix taken out):
+
+0. **A take never opens over an existing file** (was: Stop then Record inside one second
+   overwrote the take just finished - one file, holding only the second take, three runs
+   out of three). `core/unique_file.hpp`: when the name a file would get (the *second* it
+   was asked for) is taken - by the take just finished, one still being finalised, another
+   writer of this process in the same second, or a stranger's file or folder - the file
+   gets a number before its extension, `name.wav`, `name-2.wav` ... `name-99.wav`, and past
+   that the take fails in the words a refused create always had. The name is decided **on
+   the worker, where the file is opened**, by an **exclusive create** (`_O_EXCL` /
+   `O_EXCL`, i.e. `CREATE_NEW`), so there is no window between looking and opening. The
+   name used travels back in `OpenedFile::path` and is what `Recorder::path()`, a speaker's
+   `describe()` and a note read. Sites: `Recorder::openFile` (the audio and I/Q takes and a
+   patch speaker's WAV, `createUnique`); a patch speaker's MP3 (`Mp3Dest`, `reserveUnique`:
+   Media Foundation creates its own file, so the exclusive create reserves the name and the
+   encoder opens a file that is already the speaker's); the picture save and the SDR# export
+   (`reserveUnique`, on their workers). **Left as they were, on purpose:** F12's
+   `shot-<frame>.bmp` (named by the frame counter, not the clock, and addressed by name by the
+   verification harness) and the SDRplay diagnostic's `sdrplay-diagnostic-<time>.txt`
+   (written by a child process, one at a time, the key disabled while it runs).
+   `tests/test_unique_file.cpp` (including eight threads asking for one name at once),
+   `tests/test_failure_recording.cpp`, `tests/test_failure_files.cpp`.
+1. **A damaged `config.json`, `bookmarks.json` or `markers.json` is kept aside, never saved
+   over** (was: replaced by defaults on the first save, no copy kept - a settings file cut
+   off by a crash cost the whole configuration, silently). `core/damaged_file.hpp`: a file
+   that exists, is not empty and fails to load is renamed, at start-up where the load failed
+   and before anything can save, to `<name>.bad-<UTC yyyymmdd-hhmmss>` (a second in the same
+   second takes `-2`, `-3` ...), and the three newest such copies of that file are kept.
+   One log line per file kept aside, saying which of the three and how big, naming no path.
+   A missing file (a first run), an empty file and a folder squatting on the name have
+   nothing to keep. **If the rename is refused** (held by another program, a read-only
+   folder) that file's saver is told to write nothing for the session
+   (`ConfigWriter::forbidWrites`, `BackgroundSaver::forbidWrites`), the log says so once, and
+   the red line the two lists already show stays up (no write ever lands to clear it). The
+   band plan is never written by the application and is out of scope. No new on-screen
+   string. `tests/test_damaged_file.cpp`, `tests/test_failure_files.cpp`.
+2. **A read-only settings folder is not retried every two seconds for ever** (was: eight
+   attempts in twenty simulated seconds, one stderr line each). A failed write now doubles the
+   wait before the next attempt, from the debounce window up to five minutes
+   (`AppWindow::configRetryHeld`), and the first success puts it back; an hour of a folder
+   that stays read-only is about eighteen attempts. The failure is logged once per run of
+   failures (*the settings could not be saved (<cause>)*, the cause a class, never the
+   writer's sentence, which names the file), and the clean-exit save is not held by the wait
+   and tries once. The `recovered.cfgsave` count (once a session) is unchanged.
+6. **A screenshot's write failure is logged without the path, and the failed picture is
+   removed** (was: `shot: writing "<path>" failed part way through`, and the truncated BMP left
+   on disk under the name a good one would have had). `writeBmp24` reports a cause
+   (`BmpFailure`, no path in its words) and removes a file whose write failed, for the F12
+   screenshot and for Save as BMP; the export removes the file it reserved when its write
+   fails. The patch page's *radio stopped* line no longer carries a recording's fault text
+   (it named the file); `shot: wrote <path>` is **unchanged**, by design (the harness looks
+   for it) - see the report.
+
+**Findings still pinned, not fixed** (each by a test that says FINDING on its output line, so
+a fix has to change that line on purpose; they need words in the 33 catalogues or a decision
+about where to say it):
+
+3. **A take whose disk goes away is a husk, and says so only while it runs.** The stream
+   buffer (256 KiB) holds what was "accepted" - `bytesWritten()` overclaims by up to that -
+   so on a failure the whole buffer goes with the handle: the file is the 44-byte header
+   with zero sizes. The Recorder card shows STALLED while the take runs; after Stop nothing
+   on screen says it was lost (the new log line *could not be finalised* is the only trace).
+4. **An MP3 speaker whose folder is removed under it says nothing** and records into a file
+   that no longer exists (the encoder holds no lock); a write the encoder refuses is
+   reported (*the MP3 encoder refused a write*).
+5. **The log file held by another program at start-up is silently off**: the Diagnostics
+   switch stays on, no file is written, nothing says so (the ring still works).
+
 ### What a plugin playing sound writes (0.93.0)
 
 A plugin holding `CASCADE_CAP_AUDIO_OUT` **replaces** the demodulated audio
@@ -441,6 +2167,536 @@ clock and the log write all happen on the side that is allowed to do them.
   happen. The same two counters are on the **AUDIO - UNDERRUNS** card and in
   `/api/status` (`audioPluginGaps`, `audioPluginGapFrames`), beside
   `audioSource` — the name of whatever is holding the speakers.
+
+### What a "no audio" report carries (0.99.61)
+
+0.99.58, an NESDR SMArt v5, "no audio from my speakers": five minutes of log and
+not one line said whether a sound output had been opened at all. The only audio
+line the application wrote was the starvation digest from
+`AppWindow::pollAudioHealth` — `audio: N starved callbacks in the last minute (N
+priming), ring low water N ms of N ms` — which is silent unless a callback
+starved, and which is not even evaluated when no device has ever opened. Nothing
+starves a stream that is open and being fed zeros, or one whose callback never
+runs. So four different situations — never opened, opened and died, open and
+silent by choice, open and silent by accident — left one identical log, and the
+bundle held the source, the rate and the radio and nothing about the speakers.
+**What this change establishes is what the next report can say. It does not
+establish why that user's output was silent.**
+
+**The absence of an `audio: N starved callbacks` line does not mean the output
+was healthy.** A closed squelch, the Mute key, a decoder plugin holding the audio
+down and a volume of zero all feed the sink silence at the full rate; nothing
+starves and nothing is written. Read the bundle's four lines below, not the
+absence of a warning.
+
+`AudioOut::open` now writes one line per attempt that has something new to say,
+after it has released the stream lock (a log write is a disk write, and that
+lock is the one every query `try_lock`s on):
+
+- `audio: output opened - <host API>, <1|2> channel(s), <rate> S/s, <system
+  default | a chosen device>[, latency <N> ms]` — information. The latency is the
+  figure PortAudio actually granted (the hint, rounded up to what the host API can
+  honour); it is left off if PortAudio does not report one.
+- `audio: output could not be opened - <reason>` — a warning. The reasons the
+  code gives are `PortAudio did not start`; `the request itself was unusable (a
+  rate or a channel count)`; `no default output device`; `no such output device`;
+  `<host API> device has N output channel(s) and N are needed`; and `<host API>
+  refused the stream: <PortAudio's own error text>`, with the operating system's
+  sentence appended in brackets when the host API reported an unanticipated
+  error. The wording avoids "range" and "offset" on purpose: the log scrub masks
+  the digits of any line that sounds like tuning, and the counts here are what a
+  reader needs.
+- **A repeated refusal is written once, then at most once a minute.** The audio
+  watchdog retries a dead stream every second and the ring holds 256 lines, so a
+  line per retry would push the whole session out of a report in about four
+  minutes. A refusal for a different reason is always written, and so is the
+  first refusal after a success.
+- **The device's name is never written** — only the host API, which names a
+  driver model (`MME`, `Windows WASAPI`, ...) and not a person's device.
+  Operating-system labels are often a person's name (`Headset (Alice's AirPods
+  Pro)`), and this log goes into bundles that are pasted into public bug
+  reports; it is the same rule as `source::loggableSoundCardDescription`.
+
+The bundle (and the context block of a crash or freeze report, which carries the
+same bytes) has four new header fields, listed in `PRIVACY.md` and held to that
+list by `tests/test_diagnostics.cpp`:
+
+- `audio-output:` — `open, <host API>, <1 channel|2 channels>` with `, restarted
+  N time(s)` once the watchdog has had to reopen it; `opening` while a worker is
+  inside the driver's open; `stopped - the stream died and is being reopened`;
+  `none - no output device has opened`; or `(unknown)` when nothing filled it in
+  (the enumeration child's report, a headless run), so an unfilled context cannot
+  read as a healthy one.
+- `volume:` — the volume control, `N%`.
+- `audio-muted:` — `no`, or who: `you` (the Mute key), `a decoder plugin` (an I/Q
+  decoder holds the audio down while the receiver is on one of its presets and
+  no decoded programme is playing),
+  `transmit key`, or several joined with ` + `. A plugin is described and **not
+  named**, because its name would say which band the receiver was tuned to.
+- `squelch:` — the threshold, the gate's own state, and, when the receiver has
+  measured one, the level the gate is judging: `-50 dB, closed (signal -63 dB)`.
+  Whole decibels: a level, not a frequency. It is the gate's own state
+  (`Pipeline::squelchOpen`, published once per DSP block) and not a comparison of
+  the signal meter with the threshold, because the gate opens above the threshold
+  but closes only 3 dB below it and holds for 100 ms, so a meter just under the
+  threshold can still be passing audio.
+
+None of the four is uploaded: `crash_upload.cpp` does not read them, as it does
+not read `ppm:` either.
+
+**The bundle's `ppm:` line was wrong until this release.**
+`currentDiagnosticsBundle` left the context's value at its default, `off`, and
+the bundle re-renders the context from that struct, so every bundle said `ppm:
+off` whatever the setting was, over the correct line the once-a-second refresh
+had rendered. It now carries the real text.
+
+What the tests establish: `tests/test_audio_open_log.cpp` that a request for a
+device that cannot exist writes the refusal line with a reason, that twenty
+repeats of it write nothing more, that a different refusal is written, that the
+default device writes whichever line matches what this machine did, that no
+output device's name appears in the line, and that a success after a refusal is
+written; `tests/test_diagnostics.cpp` that the bundle prints every state of the
+four fields and that its header labels, the declared field list and `PRIVACY.md`'s
+table name the same set; `tests/test_diag_audio_app.cpp` that a real window hands
+the bundle its own volume, mute and squelch and that the once-a-second refresh and
+the bundle cannot describe the sound differently. What they do not stage: the
+once-a-minute repeat of a standing refusal, a device that opens and then dies, or
+a host API that reports an unanticipated error.
+
+### The DSP thread asks for priority, and the audio buffer deepens itself (0.99.73)
+
+The 12CF report: a Store user on 0.99.64, an RSP1A at 2.048 MS/s, thirty plugins
+loaded, **110 to 126 starved audio callbacks every minute** and frames of 260 to
+320 ms. The owner asked whether a larger buffer would stop the lost frames "as not
+every computer is as fast as this one". Alone it would not (a producer that is late
+is late whatever the buffer), so two things changed together. **Neither is
+established to fix that user's machine** - there is no log from it after the change -
+and the release notes say so.
+
+**Nothing set a thread priority before.** PortAudio raises its own callback thread
+(the consumer of the audio ring). The producer - `Pipeline::dspThreadMain`, the one
+entry of all four DSP spawn sites, and the thread every plugin's `process()` runs on
+- and the thread that fills the I/Q ring (`Pipeline::sourceThreadMain`) ran at
+normal priority beside the window, the plugins' own threads and whatever else the
+machine was doing. Both now ask the operating system for priority
+(`core/thread_priority.hpp`), once at thread start, and put it back when the thread
+ends:
+
+- **Windows:** the Multimedia Class Scheduler, class `Pro Audio`
+  (`AvSetMmThreadCharacteristicsW`). `avrt.dll` is loaded at run time from System32
+  and never linked, so the Linux and Android builds are the same sources and a
+  Windows without the service still starts. When that fails, the thread is raised to
+  `THREAD_PRIORITY_ABOVE_NORMAL` instead.
+- **Linux (and Android):** `pthread_setschedparam(SCHED_RR, 1)`. An ordinary user is
+  refused (`EPERM`) and the thread stays as it was; nice is not raised, which needs
+  privileges too.
+- **Anywhere else:** nothing, and the outcome says so.
+
+Two lines in the log say how it came out, one per thread start (a stop and a start
+is a new thread and a new line):
+
+- `dsp: thread priority <outcome>` - the DSP thread.
+- `dsp: source thread priority <outcome>` - the thread that fills the I/Q ring.
+
+`<outcome>` is `mmcss`, `above-normal`, `sched-rr`, or `none: <reason>`. The reason is
+a fixed phrase or an error number, never a path or an operating-system sentence:
+`no MMCSS (avrt.dll unavailable)`, `MMCSS refused (error N)` (each followed by
+`; SetThreadPriority refused (error N)` when the fallback failed too), `EPERM`,
+`error N`, `scheduling policy unreadable`, `not supported on this platform`. **A
+`none:` line is a finding, not a fault**: it is what a Linux user who has not been
+given real-time scheduling will see, and on Windows it means neither MMCSS nor a
+plain priority change was allowed. The outcomes are also readable as
+`Pipeline::dspThreadPriority()` and `sourceThreadPriority()`; nothing is published in
+`/api/status` and nothing is uploaded.
+
+**The buffer.** The sink's ring was 32768 samples (341 ms in stereo) with a fixed
+120 ms lead - the callback played nothing until 120 ms were queued, and after an
+underrun it went silent and waited for 120 ms again - and the `DriftMatcher` steered
+the fill to a fixed 160 ms. A deeper lead alone would have been bled back down to
+160 ms. Now:
+
+- The ring is 131072 samples (1.37 s in stereo, 512 KiB per sink), so no resize is
+  ever needed.
+- The **lead** is a runtime value held in each `AudioOut` (a lock-free atomic the
+  callback reads when it is not yet playing), and the matcher's **target** is the
+  sink's lead plus 40 ms, handed over with every observation
+  (`AudioOut::targetFrames()`). A patch speaker has its own sink and its own matcher,
+  so its own lead and target.
+- **The policy up** (`sink::nextAudioLead`, a pure function with its own table test):
+  when a minute closes with **three or more** starved callbacks, the lead steps up one
+  rung through 120, 240, 480, 960 ms and never above 960 ms. Fewer than three does
+  nothing. A fixed setting (`audioBufferMs` in the settings file, which the Sinks rail's
+  **Audio buffer** box writes; `0` is AUTOMATIC) never steps.
+- **The policy down** (`sink::audioLeadAfterQuietMinutes`, 0.99.83, same shape, same
+  table test). The rule used to be "nothing ever steps down: a machine that fell behind
+  once will again" - and combined with the remembered depth below, that turned one bad
+  evening into a permanent second of lag (the Milan report on 0.99.81: audio a steady
+  ~1 s behind the spectrum at every launch, with no version change and no notice). Now a
+  raised AUTOMATIC lead steps **down one rung after 15 consecutive quiet minutes** - a
+  quiet minute is one the sink **played through** (primed at the minute's close; idle
+  minutes count for nothing) **with zero starved callbacks** - and the run starts over
+  after every step, so 960 ms is 45 quiet minutes from home. A single starved callback
+  resets the run. The step writes **`audio: buffer lowered to <N> ms after 15 quiet
+  minutes`** (patch speakers the same with ` (patch speaker)`; a speaker has no primed
+  flag across the AudioDest seam, so its quiet minute is just "zero starved"), says
+  "Audio buffer lowered to 240 ms after 15 quiet minutes." on the card and in the rail,
+  lowers `audioBufferAutoMs` with the lead (0 again at the 120 ms floor) and counts
+  **nothing** - coming down is not a recovery. A fixed setting never steps down either.
+- **The remembered depth.** AUTOMATIC starts at 120 ms the first time; the depth it
+  reached is remembered across launches as `audioBufferAutoMs` in the settings file (0,
+  120, 240, 480 or 960; anything else loads as 0), written when a minute's starved
+  callbacks deepen the receiver's sink (and lowered when a quiet quarter hour steps it
+  back down) and read at start-up, where an AUTOMATIC session starts at that depth -
+  never below 120 ms or above 960, only ever deeper than the session already is. A
+  restored depth is not a raise - no health count - but since 0.99.83 it is **said**:
+  **`audio: buffer restored to <N> ms (the depth automatic reached when it last ran)`**
+  in the log and "Audio buffer restored to 480 ms: the depth this computer needed when
+  it last ran." on the card and in the rail, so a report can tell a restored deep lead
+  from a fresh 120 ms start. A fixed setting ignores it and keeps it; choosing
+  AUTOMATIC from a fixed value resets the lead to 120 ms and forgets it.
+- It is applied from the window's thread (`AppWindow::closeAudioMinute`, called by the
+  once-a-minute branch of `pollAudioHealth`), never from the callback, and takes
+  effect at the next re-prime: a ring that is already playing is not stopped, the
+  matcher simply steers it to the new target; the next underrun is followed by silence
+  until the new lead is queued - about the step's worth, once.
+- Each step writes **`audio: buffer raised to <N> ms after <N> starved callbacks in a
+  minute`** (a patch speaker's carries ` (patch speaker)` at the end), shows
+  "Audio buffer raised to 240 ms: this computer fell behind 5 times in the last
+  minute." once on the **AUDIO - UNDERRUNS** card and under the setting in the Sinks
+  rail, and is counted as the health word `recovered.audiolead` (once a session;
+  PRIVACY.md). The starvation digest above it (`audio: N starved callbacks in the last
+  minute ...`) is unchanged, and still written first.
+- `/api/status` gains **`audioLeadMs`**, the lead in force in milliseconds, beside
+  `audioRingMs` and `audioRingCapacityMs`.
+
+What the tests establish: `tests/test_audio_lead.cpp` every transition of the policy in
+both directions, the ceiling and the 120 ms floor, the quiet run and its quarter-hour
+boundary, the fixed setting and the legal settings;
+`tests/test_audio_out.cpp` that the callback honours a raised lead on the first
+prime and on the re-prime after an underrun (with fills chosen to clear 120 ms and
+not the lead under test), that a playing ring is not stopped by a raise, that the
+lead is counted in frames in stereo, and that the ring takes the deepest lead plus
+the matcher's margin; `tests/test_drift_matcher.cpp` that the target follows the lead
+(a 20-minute closed loop at a 240 ms lead settles at 280 +- 15 ms, and the same loop
+with the old fixed target settles at 160, which is the bug) and the same at 480 and
+960 ms; `tests/test_dsp_priority.cpp` that the outcome is a real one on Windows
+(`mmcss` or `above-normal`, never `none`), that the operating system's own priority
+is higher while the scope lives and what it was afterwards (on the owner's desktop,
+Windows 11 build 22631, a thread under "Pro Audio" reads 15, `THREAD_PRIORITY_TIME_CRITICAL`,
+from `GetThreadPriority` and 0 again afterwards; with MMCSS refused it reads 1 and
+0), that the fallback works with MMCSS refused, and that a real pipeline reports both
+threads and logs both lines; `tests/test_pipeline_audio_lead.cpp` that a real
+pipeline hands the drift matcher the *sink's* target - a lead raised to 960 ms
+while it plays pins the matcher's correction at its +5000 ppm cap, where the old
+fixed 160 ms target could not have exceeded about 3000; `tests/test_audio_lead_app.cpp` that a real window, fed real starved
+callbacks, deepens the buffer at three and not at two, writes the line, words the
+card and rail sentence, counts the health word once, keeps AUTOMATIC out of the
+settings file, never steps a fixed value, and that the word reaches the next usage
+record; `tests/test_health_app.cpp`, `test_health_events.cpp` and
+`test_health_paths.cpp` that the word is in the vocabulary, the survey and the
+window's one site; and `telemetry-worker/worker.test.mjs` that the Worker keeps it
+and the 0.99.67 Worker drops it.
+
+**What they do not establish.** That any particular computer stops starving: the
+simulation is the sink's own code against the matcher's, with no real device and no
+slow machine. That the card and the rail *draw* the sentence (they ask one function
+for it, and the test reads the source for both calls; nothing here draws a window).
+That MMCSS does for the DSP thread what it does for an audio-class thread of a
+program that sleeps on a device - it is a larger share of the scheduler for a thread
+that is nearly always runnable, which is not the same promise. A minute is the
+smallest unit the policy sees: a computer that starves 100 times in a second and then
+recovers is one bad minute, and one rung.
+
+### A fitted plugin runs only while it is used (0.99.73)
+
+The same 12CF report: thirty plugins loaded, and each of them fed every DSP block and
+polled every GUI frame whether anyone was looking at it or not. Fitting a plugin used
+to create its decoder at once; now a plugin is created when something **uses** it and
+put down again 30 seconds after the last use ends (`core/plugin_run.hpp`,
+`AppWindow::updatePluginLifecycle`). **Nothing here is established to fix that
+user's machine**; the release notes say what it does and does not claim.
+
+**Three run states** per plugin, kept in the settings file as `pluginRun` (plugin id ->
+`"auto"` | `"always"` | `"stopped"`; AUTO is never written), by the plugin's id - its
+file name without the extension and the `-<version>...` part - so an update does not
+lose a choice. The old `pluginsStopped` list of file names is read **once** and each
+entry becomes `pluginRun[<id>] = "stopped"`; the file is saved with the old list empty
+from then on (an older build that reads it sees nothing stopped).
+
+**What counts as a use** (`core::PluginUse`, evaluated once a frame on the window's
+thread by `AppWindow::pluginUseOf`): one of the plugin's windows is shown; its map page
+is open; the radar scope is showing and it is a track source; a running patch has a
+Decoder node naming it; it is the audio-out plugin holding the speakers; the Decoder
+output window is open and it is a text decoder; the web server has a live session and
+it is a track or image source; its decoder node is wired to a patch Text sink. **Two
+additions the owner's list did not name**, because without them two kinds of plugin
+would silently stop working: an in-chain audio processor, and a module that only
+attaches to the host, are in use as long as they are fitted (`standing duty`). The
+passive consumers - coverage accumulation, the web snapshot, aircraft-info look-ups -
+do **not** count. A START press and a preset press set ALWAYS; the tune that opening a
+window does for you does not; STOP sets STOPPED.
+
+**Two log lines**, one per transition of an AUTO plugin:
+
+- `plugin: <name> woke - <signal>` - `<signal>` is `window open`, `map page open`,
+  `radar scope showing`, `patch node running`, `playing audio`, `decoder output
+  window open`, `browser connected`, `wired to a Text sink` or `standing duty`.
+- `plugin: <name> dormant after 30 s without a use`.
+
+A plugin pinned to ALWAYS, or started by START, is not logged here: that was the user's
+own press. A stopped plugin writes nothing. The bounded run's census prints
+`plugin run: always=<n> idle=<n>` beside the existing `plugin stopped:` lines (the
+stopped ones are now ids).
+
+**A test seam**: `FOXSDR_DORMANT_AFTER_MS=<n>` (1 to 3 600 000) replaces the 30 seconds
+for the process, so a test does not wait half a minute; the log line still says "30 s".
+Not documented for users, and ignored when it is not a whole number in range.
+
+**What the per-plugin start and stop do not do**: begin a new stream epoch (a plugin
+started mid-epoch has been handed only the frames since its start; the clock counts the
+stream), touch another plugin's instance, status row or counters, or rebuild the
+runner. A wholesale rebuild (a new source, rate, centre, a rescan) is unchanged except
+that it creates only the plugins that should be running.
+
+What the tests establish: `tests/test_plugin_run.cpp` the id rule, the stop set kept by
+id, every signal alone and together, the clock (a wake on the very frame, a sleep not
+a millisecond before 30 s, a want inside the window resetting it, ALWAYS and STOPPED);
+`tests/test_plugin_runner.cpp`, `test_plugin_audio.cpp` and `test_plugin_ui.cpp` that
+`startPlugin` / `stopPlugin` create and destroy exactly one plugin's instances, leave
+the others' state, counters, status rows, pictures, speakers' claim and the epoch
+alone, and that a wholesale rebuild keeps what they left; `tests/test_plugins_view.cpp`,
+`test_running_view.cpp` and `test_module_census.cpp` that IDLE is a state, a chip, a
+sentence and a START key and is not counted as a fault anywhere;
+`tests/test_plugin_inuse_app.cpp` that the real window, with real modules (each
+writes its own attach, create, destroy and detach to a file), creates
+nothing at start, wakes a plugin within a frame of its window being opened, puts it
+down after the (shortened) interval and wakes it again, keeps START and the
+KEEP RUNNING tick across a restart, lets a preset press pin a plugin and the tune that
+opening a window does not, and migrates an old `pluginsStopped` file by id across a
+version change. What they do not: that a real plugin of any age behaves under
+being created and destroyed at a user's pace (the ones in the field were written
+expecting one `create()` per session), nor that any computer stops starving.
+
+### The context block follows the session, not the last second (0.99.62)
+
+Three crash reports from 0.99.59 carried a context block that read `source:
+siggen`, `device-open: no`, `sample-rate: 2000000` and no radio model, while the
+log tail of the same report said a radio had just opened: `source: opened miri
+(soapy) at 2000000 S/s` one second before the fault; `source: opened ADALM-Pluto
+(network) (pluto) at 30720000 S/s` immediately before one, the rate that was the
+whole cause of that crash and nowhere in its context; and `patch: radio node 4
+running SDRplay RSP1A (SoapySDR) at 2000000 S/s`. A fourth report, from a session
+whose radio had been restored from the saved configuration at start-up, had a
+correct block.
+
+**What the code did (proven, by reading it and by the test below).** A fault
+handler cannot compute anything, so the block is rendered on the healthy path and
+the handler writes out the bytes. Through 0.99.61 that render, `AppWindow::
+refreshDiagContext`, was called from exactly three places: once in `run()` before
+the first frame, by `currentDiagnosticsBundle` (Copy diagnostics and the report
+page), and once per 60 rendered frames in the frame loop - about a second at
+60 Hz. No source change, rate change, mode change, plugin rescan or patch radio
+called it. So the block was never more than about a second old, **and exactly that
+old after a radio opened**. The premise "it is refreshed at start-up but not after
+a radio is opened from the Source list" was half right: there was a refresh, a slow
+one, which is why the fourth report - fault long after a restore - was correct.
+`tests/test_diag_context_app.cpp` drives a real `AppWindow` through an interactive
+open with no frame drawn, as a fault one millisecond after the open would see it:
+on the unmodified tree the block read `source: siggen`, `device-open: no`,
+`sample-rate: 2000000` against the window's own `rtlsdr`, open, 2048000.
+
+**What is inferred, not proven.** That each of the three faults came inside that
+second: reports (a) and (b) put the open one second and "immediately" before the
+fault, which fits, and nothing else in the code produces a stale block for longer.
+Report (c) was **not stale**: `source: siggen` was true of the receiver, and the
+radio was a second signal path the block did not describe at all.
+
+**The fix.** One builder, `AppWindow::currentDiagContext`, is the only place the
+context is assembled from the window's state (the Copy diagnostics bundle used to
+carry a second copy of it, which re-renders into the same buffer and had left `ppm:`
+at its default in every bundle until 0.99.61). `refreshDiagContext` renders it and
+is now called:
+
+- on **every frame** (the net under everything below: a writer that forgets the
+  call is wrong for a frame, not for a second - and the volume, mute, squelch gate
+  and sound output, which change by other routes, are never more than a frame old);
+- at the end of `applyConverterForSource`, the step every install, swap and close of
+  the source ends with (the Source list's asynchronous open, its failure and its
+  fall-back to the generator, the swap back to the generator, the patch page
+  handing a radio back, the I/Q file, the sound card, the driver-fault reopen, and
+  the startup restore) - after `installSource` and the `sourceKind_`, `device_` and
+  `deviceModel_` assignments around it, so the block is rendered from a state that
+  agrees with itself;
+- on every way out of `followInputRate` (the Rate combo, a plugin preset and the
+  browser's rate request all end there, and so does every source change), with the
+  rate the source READS BACK, not the one asked for;
+- in `commitModeIndex`, the one place `modeIndex_` is assigned (the mode buttons
+  and keys, a plugin preset, a bookmark from the desktop and from the browser, the
+  browser's mode request, and the config restore);
+- on every way out of `rescanPlugins` (the early return after the quarantine
+  failed included, which is taken after every plugin has been unloaded);
+- on every way out of `patchReconcile` and `patchStopAll`, where the patch page's
+  radios start, are switched off or retired, and stop.
+
+It is cheap enough for that: the version, commit, OS and architecture strings are
+read once, and `setDiagContext` writes **nothing** when the block it renders is
+byte-for-byte what the buffer already holds, so the buffer a fault handler may be
+reading is not touched sixty times a second. The structural half of the test holds
+that `modeIndex_` is assigned nowhere but `commitModeIndex`, that every
+`installSource` is followed by `applyConverterForSource`, and that the frame loop
+no longer refreshes one frame in sixty.
+
+**The new line.** `patch-radios:` is `none`, or the number of radios the patch page
+has running and their **driver kinds** - `1 (rtlsdr)`, `2 (rtlsdr, soapy)` - sorted,
+one per running radio. Kinds only: it is built from the part of each patch node's
+device key before its first vertical bar (`siggen` for the generator, `iqfile` for a
+recording, whose path is never read), and the renderer keeps only the leading run of
+lower-case letters and digits of that, so a serial or a path cannot reach it. A fault
+on a patch radio's thread otherwise reads as a fault with no radio at all.
+`crash_upload.cpp` reads a fixed list of context lines (`mode`, `source`,
+`sample-rate`, `device-open`, `sdr-model`, `plugin`) and **does not carry this one**:
+the upload's `context` object is the wire contract PRIVACY.md lists, a new key in it
+would need the receiving end changed first (it has not been, and whether it would
+tolerate an unknown key is not something this repository can show) - so the line is
+in the report file on the machine and in the bundle, and not on the dashboard.
+
+**What this does not close.** The block is rendered at the end of `applyConverterForSource`,
+not before `pipeline_.setSource` starts the new source's thread, so a fault in the
+first read of a new stream can still land in the few microseconds between the thread
+starting and the render. The mid-render write of the fixed buffer is still not atomic
+against a handler on another thread (it now happens only when the text changes). The
+plugin-set hook is held structurally and by a rescan with no plugins installed, not by
+loading a real plugin into the test. And whether the three field faults are fixed by
+any of this is untested: the context describes them, it does not cause or cure them.
+
+### What the bundle says about the sessions before this one (0.99.62)
+
+A user's window froze after twenty minutes; they ended it from the taskbar,
+restarted, and sent the bundle five minutes into the next session. The bundle
+described a healthy five-minute session: the in-memory log ring holds the CURRENT
+session only, and nothing in the bundle said whether a freeze report had been
+written or uploaded. The bundle (Copy diagnostics, and the attachment of the REPORT
+A BUG page) now carries two more sections after the log, each under its own heading
+(`src/core/diag_history.{hpp,cpp}`, assembled by `buildDiagnosticsBundle`):
+
+- **`--- previous session (the end of its log) ---`**: the last lines of the session
+  before this one, read from the rotating log files (`foxsdr.2.log`, `foxsdr.1.log`,
+  `foxsdr.log`, oldest first, concatenated). Sessions are cut at the line `main()`
+  writes first, `FoxSDR <version> (<commit>) starting`, and **the newest such line is
+  this session**; the session before it is the one shown. At most **80 lines and
+  12 KiB**, the newest kept, under a `session: FoxSDR 0.99.59 (<commit>), N lines in
+  the log files, the last M follow` line. Every line goes through
+  `core::scrubUploadLog` with the report's plugin inventory, the same call the
+  current log goes through. When there is none the section says why in a sentence:
+  `none - the log files hold no session before this one`, `none - no session start
+  line is in the log files`, `none - the log folder holds no log file`, and so on.
+- **`--- reports on this machine ---`**: for the newest **ten** `crash-*.txt` and
+  `hang-*.txt` files (by the time they were written), one line:
+  `hang, 1 min ago, version 0.99.59, uptime 1200 s, stalled 7213 ms, signature
+  7C04AAAABBBBCCCC, upload sent`, or for a crash `crash, 2 h ago, version 0.99.59,
+  uptime 3600 s, access violation (0xC0000005), signature 1B2C3D4E5F607182, upload
+  none`. The kind is `crash`, `hang` or `stall`; the upload word is the sidecar's
+  `status:` - `sent`, `duplicate`, `local-only` (a stall, which is never sent),
+  `backoff`, `rate-limited`, `failed`, `abandoned`, `too-large`, `expired`,
+  `refused` - `other` for a word the uploader does not write, and `none` when there is
+  no sidecar (nothing has swept the report, or sending is off). Nothing else is read:
+  no stack, no log, no module list, no context block, no file name or path; a `.dmp`
+  or a saved `diagnostics.txt` in the same folder is never opened. Each line passes
+  through `scrubUploadLine`. This is what answers "did the watchdog fire, and did the
+  report reach us". (The uploader writes ten statuses, `rate-limited` and `refused`
+  among them, and all ten are carried.)
+
+**Off means off.** With Diagnostics off, or in a run that may not touch the disk (a
+bounded `--frames` run has no reports folder), the bundle adds neither section, not
+even a heading, and nothing is read: the only read path is `DiagHistoryCache`, whose
+`readsStarted()` stays at zero (`tests/test_diag_history.cpp`, through a real window).
+
+**It is read off the frame loop.** The reports folder is in the same tree as the
+settings folder whose synchronous `exists()` froze a window for five seconds (*The
+settings-folder poll is answered off the frame loop*), and the problem-report page
+rebuilds its attachment about once a second while its box is ticked. So
+`DiagHistoryCache` owns one worker thread at a time and the window never reads a file
+itself: the previous session is read **once**, at the start of `run()` (and when
+Diagnostics is switched on), before this session's own lines can rotate it away; the
+report list is read again when the answer is older than five seconds, and a person's
+own click on Copy diagnostics asks for a fresh one and waits for it for at most 750 ms.
+At exit a read still blocked in the filesystem is abandoned, not joined. A bundle made
+before the first read has finished says `(still being read - copy the diagnostics
+again in a moment)`.
+
+**Not in the automatic upload.** `crash_upload.cpp` reads a fixed list of fields from
+a report and none of this is in it; the bundle is only ever sent by the user's own
+action.
+
+**Known limits, stated.**
+
+- The previous session is "whatever precedes the newest start line", which is this
+  session's only if this session's start line is in the files. A session that started
+  with Diagnostics off and had it switched on part-way through has no start line there,
+  so the section says so (`none - diagnostics were switched on part-way through this
+  session ...`) rather than showing the wrong session; so does a log file that is not
+  being written.
+- Two FoxSDR windows appending to the same log interleave their lines and their start
+  lines, and the section then shows whatever the newest start line implies.
+- The log files keep three files of 1 MiB; a previous session older than that is gone,
+  and the section says there is none.
+- Not exercised against a real freeze followed by a real restart: the tests build the
+  files and reports by hand in the shapes the writers produce (`DiagLog`'s
+  `HH:MM:SS.mmm level text` lines, `crash_handler.cpp` and `hang_watchdog.cpp`'s
+  headers, `crash_upload.cpp`'s sidecar).
+
+### The bandwidth line (0.99.61)
+
+`bandwidth: N Hz in MODE (how)` — written when the receiver's width changes,
+with `MODE` one of `NFM`, `WFM`, `AM`, `DSB`, `USB`, `CW`, `LSB`, `RAW` and `how`
+one of `bandwidth list`, `dragged on the spectrum`, `decoder preset`, `bookmark`
+or `remote request`. It is support's answer to "the bandwidth control does
+nothing": three 0.99.59 users said so (an RTL-SDR Blog V4 at 2,048,000 and
+2,400,000 S/s: "changing the bandwidth changes nothing", "on AM I can listen to a
+station +/- 30 kHz away"), and the log could not say whether the control had ever
+been touched, because a mode button wrote `mode: AM, bandwidth 10000` and a
+bandwidth change wrote nothing. A pick of the step
+already in force writes nothing; a drag on the spectrum writes one line when the
+mouse is released, with the width it ended on, not one a frame; a preset, a
+bookmark or a remote request writes one only if the width actually moved. It
+never carries a frequency.
+
+It is not exhaustive. A bookmark recalled from the browser, the default width a
+decoder preset's mode sets, and the restore of the saved configuration at startup
+move the width without writing it (a mode change already reports its default
+width on the `mode:` line), so a missing `bandwidth:` line shows that the routes
+listed above were not used, not that the width never changed.
+
+### The band-plan mode line
+
+`mode follows the band plan: BAND` — written when a frequency typed into the
+counter lands in a different band of the band plan and adopts that band's
+conventional mode (`core/band_mode.hpp` has the whole convention and its two
+deliberate limits), immediately before the `mode:` line that change writes.
+`BAND` is the band's display name ("80 m Amateur"); the line never carries a
+frequency. A `mode:` line without this one in front of it was the user's own
+press on a mode key.
+
+The cause the line cannot show, and the repair: the channel filter's length was
+sized from the distance between the passband edge and the channel's Nyquist
+frequency, about 100 kHz at every setting, so at 2.4 MS/s a 3 kHz request got 103
+taps and a 10 kHz request 107 — and a windowed sinc that short is its window,
+whatever its cutoff says. Measured through the real classes
+(`tests/test_channel_bandwidth.cpp`, on generated tones): the 3 kHz filter read
+-0.1 dB at +5 kHz and -5.1 dB at +30 kHz, the 10 kHz filter -0.2 and -5.9, so the
+control moved the result by a few tenths of a decibel. A bandwidth below a
+quarter of the channel rate now gets one more stage at the channel rate whose
+transition is half the bandwidth wide (flat to half the bandwidth, -6 dB at 0.75
+times it, about -32 dB at the bandwidth and below -90 dB from 1.25 times it); at
+or above a quarter nothing changed, tap for tap. In USB, LSB and CW the control
+now sets the width of the wanted sideband (it was a fixed 3 kHz), with the
+channel filter four times that wide. Two consequences are worth knowing when
+reading a report: the signal meter and the squelch sit after the channel filter,
+so they now measure the narrower channel and a saved squelch level may need
+adjusting, and the outline drawn on the spectrum is still symmetric in the
+sideband modes. This is measured on generated signals
+(`tests/test_bandwidth_app.cpp` drives the real window's mode and bandwidth
+calls and reads the S-meter), **not on a radio**.
 
 ### What ADD ALL PLUGINS writes (0.96.0)
 
@@ -475,54 +2731,374 @@ There is deliberately no per-module *success* line: the host already writes
 that follows each install, and a second "installed" line beside it would be
 two records of one event that can disagree.
 
+### What the plugin store's kept catalogue writes (0.99.72)
+
+The store keeps the last catalogue it read (`catalogue.json` and
+`catalogue.json.time` beside `installed.json`) and shows it when the network is
+away. Four lines say what happened to it; none names a file, a path or an
+address (the reason a refresh failed can carry the catalogue address, and an
+address is never written to the log), and none is written when nothing happened.
+
+- **At start-up, `info`**, only when a kept catalogue was found and used:
+  `plugin store: kept catalogue loaded - 24 plugins`. Nothing is fetched; this
+  is a file read.
+- **At start-up, `warn`**, when a kept catalogue was found and could not be
+  used (not a catalogue this build accepts, or unreadable): `plugin store: kept
+  catalogue ignored - the kept catalogue is not usable and was ignored: plugin
+  index: not valid JSON`. The file is left where it is, neither repaired nor
+  deleted; the next good read replaces it.
+- **After a refresh that failed, `info`**, when the store has a list to keep
+  showing: `plugin store: catalogue refresh failed - showing the kept copy of
+  24 plugins` (or `the earlier copy`, when the list on screen was read earlier
+  in the same session). The reason is on screen, not here.
+- **After a refresh that worked, `info`**, one line for each (at most eight, then
+  `and N more`) item the catalogue carried that this build dropped, naming the
+  plugin and why: `plugin store: catalogue note - plugin "adsb" screenshot 1:
+  dropped: url is not https`. A catalogue author's mistake is seen nowhere else.
+
+An update that succeeds now removes the copy it replaced by itself, for that
+plugin only, under the clean-up key's rules; the lines are the clean-up's own,
+unchanged: `plugin: removed old copy adsb-1.0.0.dll`, or `plugin: old copy
+adsb-1.0.0.dll is in use - queued for the next start`.
+
+### What the plugin store writes about plugin sites (0.99.74)
+
+A user may add other people's catalogues ("plugin sites", `pluginSites` in the
+configuration file; docs/THIRD-PARTY-SITES.md). Each site is kept as
+`catalogue-<16 hex>.json` beside the official `catalogue.json` and is left out of
+the plugins folder's rescan signature like it. None of these lines names a site's
+address, a file or a path; the reason a site could not be read (which can carry the
+address) is on screen under the store's top bar, not here.
+
+- **After a read, `info`**, one line, when any site is configured: `plugin store:
+  2 plugin sites - 1 read, 1 could not be read, 3 plugins hidden` (the third number
+  is the entries the merge dropped: an id the catalogue already lists, or a file or
+  picture not on the site's own host).
+- **After a read, `info`**, at most four lines for each site (nothing when it
+  dropped nothing) in the form of the catalogue's own: `plugin store: site note -
+  plugin "hdradio" screenshot 1: dropped: url is not https`.
+- **At start-up, `warn`**, when a site's kept copy was found and could not be used:
+  `plugin store: a site's kept catalogue ignored - the kept catalogue is not usable
+  and was ignored: plugin index: not valid JSON`. The file is left where it is.
+- **When the user adds or removes a site, `info`**: `plugin store: a plugin site was
+  added (2 now)` / `plugin store: a plugin site was removed (1 left)`; and, if the
+  application refused an add the panel had let through, `plugin store: a plugin site
+  was not added - that site is already in the list` (or `the list of sites is full`,
+  `a transfer is already in progress`).
+- **At a plugin scan, `warn`**, the existing `plugin: NOT loaded <file> (<reason>)` line, with
+  a reason for a module installed from a plugin site whose binary declares the same name as
+  an official plugin's: `plugin: NOT loaded hdradio-0.1.0.dll (Not loaded: it declares the same
+  name as the official plugin "ADS-B". Version 1.2.0 in adsb-1.2.0.dll is loaded instead; this
+  file, version 9.0.0, was installed from a plugin site and is not running. It can be deleted
+  with Remove.)`. The loader decides it from the install records (`source`), whatever the
+  versions; the Fitted modules window shows the same words on the module's row.
+
+### Two files of one plugin under two names, and ImGui's ID-conflict box (0.99.77)
+
+A plugin whose declared name changed between two of its files (a US tester had the TETRA decoder's
+0.1.0 file, "TETRA", beside its 0.1.2 file, "TETRA Monitor (data only, no voice)") used to load both,
+because the host grouped modules by declared name alone. The file name without its version is the
+plugin's run id (`tetra-decoder` for both) and the host now treats two loaded modules with one run id
+as one plugin. Nothing new is written for it; the lines that were already there carry it:
+
+- **At a plugin scan, `warn`**, the existing `plugin: NOT loaded <file> (<reason>)` line for the older
+  file, whose reason names the name of the file that runs: `plugin: NOT loaded
+  tetra-decoder-0.1.0-abi3-win-x64.dll (Ignored: another copy of "TETRA Monitor (data only, no voice)"
+  is installed. Version 0.1.2 in tetra-decoder-0.1.2-abi3-win-x64.dll is loaded; ...` (the log cuts a
+  line at its width; the Fitted modules row carries the whole sentence). For a plugin site's module
+  whose file name is an official plugin's the reason reads `Not loaded: its file name is the official
+  plugin "<name>". ...`.
+- **At start-up, `info`**, one new line, `imgui: ID-conflict box off (shipped build)`, or `imgui:
+  ID-conflict box on (a debug build)` / `on (a test hook is up)`. Dear ImGui 1.92.8 draws a red
+  "Programmer error: N visible items with conflicting ID!" box over the picture by default; it is off in
+  a shipped run and on in a Debug build and in a bounded `--frames` run with `FOXSDR_UI_CENSUS` or
+  `FOXSDR_INPUT_SCRIPT` set, where the census also records `imgui:idconflict` for a frame in which ImGui
+  reports one (it does so for the item the pointer is over).
+
 ### The device-enumeration reports
 
 The "Afterwards" row above says the process dies, and for a fatal fault it
 does. The device search is the exception, because it is the one place where the
 alternative is that the most reproducible fault this product has ever had stays
-invisible. It produces three reports, all of `kind: crash`:
+invisible. It produces three kinds of report, all of `kind: crash` — and since
+0.99.62 **one death produces one of them, not several** (see *One report per
+death* below):
 
 | Reason line begins | Raised by | Written by | Stack |
 |---|---|---|---|
 | `fault in a third-party SDR module, absorbed…` | a vendor driver faulting on our own calling thread | `src/source/vendor_guard.cpp`, from its `__except` **filter** — `EXCEPTION_POINTERS` are dead by the time the handler body runs | the fault's |
-| `access violation` (or any ordinary fatal reason) | the helper process faulting in **cascade's own** code, which the guard deliberately refuses to absorb | the helper's own crash handler, installed by `armEnumerateHelperProcess` into the directory the parent passed down | the fault's |
-| `SDR device enumeration child process died…` | the helper process dying by any route the parent can only see from outside — the libusb fault on a UHD thread, a heap corruption (`0xC0000374`), or the timeout kill | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code` | none — the stack section says the fault was in another process |
+| `access violation` (or any ordinary fatal reason), ending ` - enumeration child, <walk>, attempt N (contained)` | the helper process faulting on **any thread**, in whatever module: in cascade's own code, which the guard deliberately refuses to absorb, **or in a vendor DLL** — a thread a driver created, or an ASIO driver a vendor module maps itself in the middle of a probe | the helper's own crash handler, installed by `armEnumerateHelperProcess` into the directory the parent passed down; since 0.99.59 the report carries `version`, `commit`, `os` and `arch`, which the helper had no way to render before; since 0.99.62 the reason ends with the walk, the driver and the attempt | the fault's |
+| `SDR device enumeration child process died…` | the helper process dying by a route **its own handler never sees** — a heap corruption (`0xC0000374`), a vendor `TerminateProcess`, a death before it armed — and so one the parent can only see from outside | `src/source/soapy_enum_proc.cpp`, in the parent, with the child's exit code as `code`, **and only when the child left no report of its own for that death** | none — the stack section says the fault was in another process |
 
 **Which driver (0.99.34).** SoapySDR runs every driver's find function at once,
 on a thread each, so a whole-bus helper that dies has no single driver to
 blame. The helper therefore writes a probe log to the parent as it goes
-(`cascade-probe: begin <driver>` / `end <driver>`), and the whole-bus report's
-reason ends with the drivers **still probing when it died** — a shortlist, not a
-verdict, since a heap corruption is detected at a later allocation, possibly on
-another driver's thread. The per-driver sweep that follows two whole-bus deaths
-is what names a culprit: its report reads `…died probing driver=<name>`, and
-that driver is then left out of every scan for the rest of the session (the
-Source panel says so in one line). Each report's signature hashes
+(`cascade-probe: begin <driver>` / `end <driver>`), and the parent's whole-bus
+report's reason ends with the drivers **still probing when it died** — a
+shortlist, not a verdict, since a heap corruption is detected at a later
+allocation, possibly on another driver's thread. (Since 0.99.62 the same
+begin/end lines are also written to the helper's own log ring, so the helper's
+own report carries the shortlist in its log; the parent's report, which exists
+only for the deaths that report cannot cover, still carries it in its reason.)
+The per-driver sweep that follows two whole-bus deaths is what names a culprit:
+the report of its death reads `…died probing driver=<name>` (the parent's) or
+ends `…, driver=<name>, attempt 1 (contained)` (the helper's own), and that
+driver is then left out of every scan for the rest of the session (the Source
+panel says so in one line). The **parent's** reports hash
 `enumerate-child:whole-bus` or `enumerate-child:driver=<name>` in place of the
 faulting module; before 0.99.34 it hashed `"?"`, so every contained death of one
 exit code was one crash group (`650B88A1735695DB` = `0xC0000005`,
 `91965660116CF497` = `0xC0000374`), and the per-driver report was dropped by
-the uploader's 24-hour de-duplication as a repeat of the whole-bus one.
+the uploader's 24-hour de-duplication as a repeat of the whole-bus one. The
+helper's own report hashes the faulting module and offset, as every crash
+report does — see *One report per death* for why that is the right grouping.
 
 They are filed as `kind: crash` rather than a new kind on purpose:
 `src/core/crash_upload.cpp` forwards `crash` and `hang` and **refuses anything
 else**, so a new spelling would be a report nobody ever receives.
 
-**The third one is written at every death, not only when the whole scan
-fails.** The common shape of the libusb fault is "first helper died, the retry
+**A death is reported at every death, not only when the whole scan fails.**
+The common shape of the libusb fault is "first helper died, the retry
 worked": on this bench, at roughly one child in forty, some forty of every
 forty-one occurrences end that way. Filing only when *every* attempt died would
 report about one in forty-one of them, and the other forty would exist as a
 line in `foxsdr.log` — which is never uploaded on its own. The success of the
-containment is exactly what would have made the fault invisible.
+containment is exactly what would have made the fault invisible. (The report is
+the helper's own when its handler ran, and the parent's third kind above when it
+did not.)
 
-Its `address` is `0`: the fault was in another process and this one has no
-address to offer, so it groups by reason and code rather than by module and
-offset, and the useful half is the `code`. The middle row exists so that a
-fault in *our* code on that path is not reduced to an exit code — the helper
-runs above `installCrashHandlers` in `main()` and would otherwise have no
-handler at all. When diagnostics are switched off the helper installs nothing
-and dies in microseconds, writing nowhere: off means off in the child too.
+**A helper that ends on a closed pipe is not a death to report (0.99.76).** Field
+reports `862234B08B9FC33D` and `30BCD594C128766D` (0.99.73, Linux) were six
+"crashes" from one session in one second, every one exit `0x8D` = 141 = 128 +
+`SIGPIPE`, the last of them `probing driver=rtlsdr` — after which rtlsdr was on the
+session's do-not-ask list and a working RTL-SDR was off the Source menu. Since
+0.99.76:
+
+- **The helper ignores `SIGPIPE`** (POSIX; `armEnumerateHelperProcess`, first thing,
+  whatever the crash directory). A write to a descriptor nobody reads — the pipe
+  to the parent, the stderr it inherited, a socket a vendor module opened — now
+  fails with `EPIPE` instead of killing it. Its own writes go through
+  `writeToParent`; when the pipe to the parent has no reader the walk is finished
+  (so the module that must say goodbye still does) and the helper ends with
+  **exit 74** (`kEnumChildExitPipeClosed`, sysexits.h `EX_IOERR`) instead of an
+  answer. The exit codes are listed in `source/soapy_enum_proc.hpp`.
+- **The parent reads 74, and 141 from a helper that did not ignore the signal, as
+  a closed pipe** (`classifyChildEnd`): `EnumResult::endedOnClosedPipe`. It is still
+  a child that ended without answering — the outcome is `ChildDied`, so it is
+  retried, swept and counted (`childDeaths`, and the usage record's
+  `recovered.enumchild`, as ever) — but **no report is filed** for it, from either
+  process, and **its driver is not put on the session's do-not-ask list**. Anything
+  else a helper dies of while the parent is listening is reported exactly as before,
+  and a helper the parent timed out and killed is still a timeout whatever status it
+  carried.
+- **Log lines** (`warn`, `foxsdr.log`): `soapy: enumeration child ended on a closed
+  pipe, exit 0x0000008D (attempt 1 of 2) - still probing when it died: rtlsdr,
+  plutosdr - not a crash and nothing filed; retrying` (the whole bus);
+  `soapy: the 'rtlsdr' driver's child ended on a closed pipe (exit 0x0000008D) - not a
+  crash and nothing filed; it is skipped for this scan and asked again the next` (the
+  sweep); `soapy: enumeration succeeded after 1 child(ren) ended on a closed pipe -
+  not a crash; nothing was filed`; and `soapy: enumeration failed - the last child
+  ended on a closed pipe (exit 0x..., N attempts); not a crash; no devices listed
+  this scan`. The "faulting during device discovery" sentence is now said only of
+  children that did die of something else. A helper that finds its pipe closed adds
+  `enumeration helper: the pipe to the parent has no reader - answer not written` to
+  its own log ring.
+- **What is not established.** The parent keeps the read end of the helper's stdout
+  open until it has reaped the child — on the timeout path too, where it kills the
+  helper's process group first — so the pipe that was closed in the field was not
+  that one while the parent was waiting; six deaths in one second are not timeouts,
+  and a `--driver=rtlsdr` child dying alone points at a descriptor the helper
+  inherited or opened (its stderr, or a socket in a vendor module). That an ignored
+  signal stays ignored across `fork` and `exec`, and that `httplib::Server`'s
+  constructor ignores `SIGPIPE` for the whole process, so a helper started before the
+  web server was constructed died of it and one started after did not, is read from
+  the code and not reproduced on a Linux machine.
+
+**One report per death (0.99.62).** Before this, one death could leave
+*three* reports: the helper's own (the stack and the module list), the parent's
+whole-bus report of it (no stack; the drivers still probing) and — after a
+second whole-bus death — the parent's per-driver report from the sweep (no
+stack; the driver). One machine's deterministic ASIO-driver fault produced six
+report files in one scan and, after the client's 24-hour de-duplication, three
+uploads: three of the five a machine may send in a day, for a fault the
+application survived, so that a genuine crash later the same day could be
+rate-limited away; and on the dashboard it was three unrelated groups. Now:
+
+- **The helper's report is the report, whenever the helper wrote one.** The
+  parent starts the helper itself, so it knows its process id
+  (`EnumResult::childPid`), and the helper's report is named with that id
+  (`crash-<stamp>-<pid>-<seq>.txt`) and is on disk before the parent sees the
+  exit, because the handler writes and only then terminates. The parent asks the
+  crash directory (`core::crashReportWrittenByProcess`) and files its own report
+  only when the answer is no. That answer is yes only for a file that is named
+  for that process id **whole** (not 14242 for 4242), was written **no earlier
+  than the spawn** (process ids are reused and the folder keeps reports for
+  weeks), has a whole header — `kind: crash` and a sixteen-digit `signature` —
+  because a file the handler created and never wrote to is not a report, and is
+  **not an absorbed vendor fault**, because a helper that absorbed a fault and
+  carried on has a report with its own process id too, and if it then dies by a
+  route its handler never sees, that earlier file is not the report of the death.
+  `vendor_guard.cpp` `static_assert`s its reason still begins with the prefix that
+  distinction rests on.
+- **What the helper's handler never sees keeps the parent's report exactly as it
+  was:** a heap corruption (`0xC0000374`), a vendor `TerminateProcess`, a helper
+  that died before it armed, an absorbed-then-unseen death. The timeout kill
+  never produced a parent report — only a `ChildDied` outcome is reported — and
+  still does not. With diagnostics off neither process writes a file: the helper
+  is handed no directory, so it dies quietly, and the parent's writer is
+  disabled.
+- **The facts only the parent's reports carried are in the helper's.** The
+  helper knows its own arguments, so on the healthy path, before it arms, it
+  renders the tail of its `reason:` line — ` - enumeration child, whole bus,
+  attempt 2 (contained)`, ` - enumeration child, driver=uhd, attempt 1
+  (contained)`, or `driver list` — and hands it to its crash handler to copy out
+  at fault time (`CrashHandlerConfig::reasonSuffix`: fixed storage, nothing
+  formatted on the fault path). The attempt is handed down on the command line
+  (`--attempt=N`), because only the parent knows it. This rides in the `reason`
+  line, which is already uploaded verbatim: **no new upload field**, and nothing
+  new leaves the machine. The driver is cut to 16 characters; the site keeps 200
+  of a reason and the tail has to fit behind the longest reason this product
+  writes (an absorbed fault's, 134) — pinned by a test against a real absorbed
+  fault in a real helper.
+- **The "still probing when it died" shortlist is kept in the helper's log, not
+  in its reason.** It is known only as the fault happens, and the parent reads it
+  off the pipe. The options were the parent appending a line to the file the
+  helper wrote (a second writer on a report the next start reads, with a new way
+  to leave it half-written if the parent itself dies mid-append), accepting its
+  loss, or keeping the parent's report and so the second upload. Instead the
+  helper writes each `cascade-probe: begin/end <driver>` line to its own log ring
+  as well as to the parent, and the ring is in the report and in the uploaded
+  `log`: a probe that began and never ended is the shortlist, and the stack names
+  the faulting module besides. What is lost is that the shortlist is no longer on
+  the dashboard's reason line for a death that has a stack.
+- **The signature is the fault's, so one fault is one upload.** The helper's
+  report hashes the faulting module and offset like every crash report, so the
+  same fault met by two whole-bus helpers and then by the per-driver helper is
+  one signature and one upload inside the 24-hour window (`decideUpload`,
+  `kDedupSeconds`), where it was three. Two *different* drivers faulting fault in
+  two different modules and are two signatures. A fault in **no module** (private
+  memory, a jump through a freed pointer) has no module to hash and used to share
+  one `"?"` signature per exception code — which, now that the parent's tagged
+  report is not filed, would have made two drivers' such faults one group. The
+  helper therefore hashes `enumerate-child:whole-bus`,
+  `enumerate-child:driver=<name>` or `enumerate-child:driver-list` in that case
+  only (`CrashHandlerConfig::unresolvedSignatureTag`), so those stay apart per
+  walk and per driver.
+
+`tests/test_soapy_enum_proc.cpp` pins all of it against the real binary and real
+vendor modules (`tests/fixtures/soapy_fault_module.cpp`, whose `thread` stage
+faults on a thread the find function spawns — the libusb fault's shape, and the
+one fault the vendor guard cannot absorb, so the per-driver helper dies too): one
+file for one death with a stack, the driver and the attempt; three deaths and
+three files with one signature and one upload for the deterministic case; two
+faulting drivers' four files, two signatures, two uploads; diagnostics off, no
+file; and the deaths the helper's handler never sees, one stackless parent
+report each. **What is not shown:** the POSIX spawn path and the POSIX crash
+handler's tail and tag, which cannot be built on the machine this was written on.
+
+The parent's report (the third row) has an `address` of `0`: the fault was in
+another process and this one has no address to offer, so it groups by its tag
+and code rather than by module and offset, and the useful half is the `code`. The
+middle row exists so that a
+fault on that path is not reduced to an exit code — the helper runs above
+`installCrashHandlers` in `main()` and would otherwise have no handler at all —
+and it is not limited to our own code: the handler reports whatever reaches it,
+on any thread, whichever module the address is in. When diagnostics are switched
+off the helper installs nothing and dies in microseconds, writing nowhere: off
+means off in the child too.
+
+**A DLL mapped after the module table was taken is now named (0.99.61).** The
+field case (2026-10-01, reported on 0.99.57): SoapyAudio lists sound cards through
+RtAudio, whose ASIO back end maps every ASIO driver on the machine in the middle
+of its probe, and one of them — a Native Instruments driver — killed every
+helper that asked. The helper refreshes the crash handler's module table once,
+after the vendor modules load and before any probe runs, so a DLL a probe maps
+for itself was in no table: the report's `address:` was a bare number, nine
+frames were named `-`, the module list did not mention the DLL, and the report
+hashed to the signature every unresolved access violation shares. The
+`cascade: fatal exception 0xC0000005 at 0x00007FFF52E84E94` line the helper writes
+to the parent's pipe was a bare address for the same reason. The crash handler
+now asks, at fault time, which mapped image contains the faulting address and
+each frame of the walked stack (`adoptModuleContaining`, called from
+`writeReport` and, for the pipe line, from `enterFatal`), and adds that image to
+the table: its file name, base and size. It uses `VirtualQuery` and ntdll's
+`NtQueryVirtualMemory` (the entry point is resolved at install time, because
+`GetProcAddress` in a handler is a call into the loader), takes no loader lock,
+allocates nothing and formats nothing, and reads the module's own headers behind
+a `__try`. Three limits are stated rather than hidden:
+
+- **It names the file, not the build.** The entry has no PDB name and no build
+  id, because reading the CodeView record means formatting it; a module nobody
+  archived symbols for — the vendor's, which is what arrives late — needs its
+  name, base and size, and gets exactly those. It lasts until the next
+  `refreshModuleTable()`.
+- **Only image memory is named.** Heap, a JIT page or a stack stays a bare
+  address, and nothing is invented for it (the file name is `unknown-image` if
+  the name query fails, with the base, the size and the offset still given).
+- **Windows only.** The POSIX handler is unchanged; its table is refreshed after
+  `dlopen` only.
+
+`tests/test_crash_late_module.cpp` arms the handlers, refreshes the table, *then*
+loads a DLL no table has heard of (`tests/fixtures/late_fault_dll.cpp`) and
+faults inside it, and requires the DLL's name in the `address:` line, in the
+stack, in the module list and in a signature that is no longer the shared
+unresolved one; its negative control faults in executable private memory and
+requires a bare address, no invented module, and a whole report. The same stage
+is run through the real enumeration child in `tests/test_soapy_enum_proc.cpp`. **What
+is not shown:** the Native Instruments driver itself, which was not reproduced —
+the fixture is an ordinary DLL — and that no lock is taken, which rests on the
+code's own reasoning about what `VirtualQuery` and `NtQueryVirtualMemory` read
+(the address space's bookkeeping, not loader or heap state) rather than on a
+test.
+
+**A freeze report names such a DLL too (0.99.63).** The hang watchdog
+resolved each frame of the stalled thread against the same snapshot and was never
+given the crash handler's answer, so a GUI thread stuck *inside* code mapped
+after the last refresh — a display driver a GPU reset reloads, a vendor DLL a
+probe maps, a shell extension a dialog injects — printed those frames as bare
+addresses. Two things were lost with the name. The report could not say where
+the thread was. And the display-stall rule, which reads module names off the top
+frames to tell a monitor being switched off from a deadlock in this program,
+could not see a graphics driver the table had never heard of, so the same
+freeze was filed as a **hang** rather than kept on the machine as a **stall**.
+`describeModuleContaining` (`core/diag_report.cpp`) answers with the same
+`VirtualQuery` / `NtQueryVirtualMemory` lookup, and it is deliberately **not**
+`adoptModuleContaining`: that one appends to the table, whose single writer is the
+fault path, while the watchdog thread runs beside a GUI thread that rebuilds the
+table at the end of every plugin rescan, and a racing append could drop modules
+the next crash report needs. The new function writes nothing shared — it fills a
+local entry (file name, base, size; no PDB, no build id, as above) and the
+frame line and the classification both use it, so the `kind:` the header states
+and the frames under it cannot disagree. `HangWatchdog::start` resolves the one
+ntdll entry point it needs, for the reason the crash handler does at install:
+`GetProcAddress` from the capture would be a call into the loader on a process
+that may be wedged inside it. The module list in the report is still the
+snapshot's; a late module is named on the frame line (name and offset are all a
+vendor DLL needs) and is not listed with its base. `tests/test_crash_late_module.cpp`
+holds it with a real `HangWatchdog` and a real thread parked inside the late
+fixture — the report's stalled stack must carry `late_fault_fixture.dll+0x…` — and
+a second time with the fixture copied under an NVIDIA user-mode driver's file name,
+where the report must come out `kind: stall` and not `kind: hang`. Windows only:
+the POSIX table is refreshed after `dlopen` and nothing here changes it.
+
+**The audio driver is no longer asked at all.** Since 0.99.59 the scan never asks
+SoapySDR's `audio` driver — in the whole-bus walk, the per-driver sweep, the walk
+beside an open radio or the in-process fallback — because nothing it lists is
+ever offered (a sound card is the Sound card source, which has been FoxSDR's own
+since 0.99.38), and the helper now ends with `TerminateProcess` rather than
+`ExitProcess`, which would run every loaded module's `DllMain` with
+`DLL_PROCESS_DETACH`, the place the 2026-10-01 field child died after it had
+already answered. From 0.99.61 the scan says so once per scan, whichever walk
+ran, in the voice of the `uhd` skip line:
+`soapy: not asking audio - sound cards have their own source here, and nothing it
+lists is offered`. A log tail from a machine with SoapyAudio installed used to
+carry no trace of why a sound card never appeared. `SoapySource::open` now also
+refuses `driver=audio` outright — a saved patch names its radio by args and
+opens through that call directly, and `Device::make` would run the driver's find
+function, the ASIO walk, inside the application itself — with `lastError`:
+`SoapySDR's audio driver lists sound cards, not radios, and is never opened here -
+use the Sound card source for a sound card.` The key and value are matched
+ignoring case and surrounding spaces; `driver=audiofoo` is another driver.
 
 ### The device CONTROL-path reports (0.62.3)
 
@@ -610,6 +3186,17 @@ pair.* "The GUI thread is blocked" names no bug; "the GUI thread waits on the
 CAT server's mutex while the CAT thread waits inside a socket close" is the bug,
 and it is only visible if both stacks are in the same file.
 
+### The side panels' fold keys (0.99.49, 0.99.74)
+
+Each side panel's fold key writes one line when it is pressed, so a log tail (and
+the 256 lines every crash and freeze report carries) says why a screenshot or a
+report has a panel missing: `rail: folded` or `rail: opened` for the FUNCTION
+SELECT rail on the left (0.99.49), and `status: folded` or `status: opened` for
+the STATUS column on the right (0.99.74). The state the keys leave is also in
+the configuration file (`railCollapsed`, `statusCollapsed`), and a launch that
+starts with a panel folded writes no line, because nothing was pressed: read the
+file for that. Nothing else is logged and no figure is attached.
+
 ## The 5-second threshold, and why it is not a guess
 
 The GUI paces itself off vsync, so the normal interval between heartbeats is one
@@ -622,27 +3209,91 @@ requires the measured worst gap to be under **half** the threshold. If a future
 change makes a frame legitimately slow, that test goes red before a user ever
 gets a false report.
 
-Three separate things would otherwise cry wolf, and each is suppressed for its
-own reason:
+Several separate things would otherwise cry wolf, and each is suppressed for its
+own reason. Two of the excuses — a pause the application takes, and a stall inside
+`win32u.dll` — are **time-limited** (30 s, see below); the others are not:
 
 1. **A debugger at a breakpoint.** `IsDebuggerPresent()` — a break is not a hang.
 2. **A nested Windows modal loop.** Dragging or resizing the window, or holding a
    system menu open, stops the application's own loop turning over at all, and
    can legitimately last minutes. `GetGUIThreadInfo` reports exactly this
-   (`GUI_INMOVESIZE` / `GUI_INMENUMODE` / `GUI_POPUPMENUMODE`).
-2b. **Blocking work the application enters knowingly** — `WatchdogPause`. Three
-   paths take it today, and they are named rather than left as a general
-   principle, because a mitigation with no call sites protects nothing:
-   `AppWindow::rescanPlugins()`, which unloads and re-`LoadLibrary`s every
-   installed plugin on the GUI thread; `gui::runShellOpen`, for a shell call
-   that may be sitting on an elevation prompt; and `gui::AudioOpen`'s bounded
-   wait for an output device. The audio one is the shape this rule always
-   anticipated — "a synchronous device open" — and it is bracketed AND
-   bounded, because a pause held for an open that never returns would be the
-   watchdog switched off. `cascade --frames N` prints how many
-   pauses the run took and `tests/test_diag_hang.cpp` requires at least one,
-   so a rescan that stops pausing goes red instead of silently arming a false
-   report.
+   (`GUI_INMOVESIZE` / `GUI_INMENUMODE` / `GUI_POPUPMENUMODE`). The flags are
+   exact — a person is holding the window — so this excuse has no limit.
+2c. **A stalled thread whose instruction pointer is inside `win32u.dll`.** Some
+   nested loops set none of those flags (holding a caption button, or resting
+   the pointer on the maximise button until Windows 11 offers its snap layouts,
+   parks the thread in the window manager's own message wait), and the
+   application's frame loop only ever calls the non-blocking `PeekMessage`, so a
+   thread parked in `win32u` was taken to be in a loop Windows owns. That premise
+   is true of message waits and false of the rest of `win32u.dll`, which is the
+   user-mode end of every win32k and graphics-kernel system call: a GPU
+   driver's present and fence waits, a `SendMessage` to another thread's window
+   that nobody answers, a clipboard owner that never replies. Until 0.99.61 the
+   excuse lasted as long as the thread stayed there, so a real freeze in any of
+   those was excused for ever and never reported. It is now granted for at most
+   `HangWatchdog::kExcuseCapMs` = **30 s**, counted from the first poll that
+   granted it in that stall; past it the ordinary threshold applies and the
+   report follows about five seconds later, with the frames that show where the
+   thread really is.
+2b. **Blocking work the application enters knowingly** — a watchdog pause. Five
+   call sites take one today, and they are named rather than left as a general
+   principle, because a mitigation with no call sites protects nothing. There
+   are **two kinds**, by who sets the pace of what is waited for:
+   - *Application-paced* (`HangWatchdog::pause`/`resume`, `WatchdogPause`): code
+     that is expected to finish. `AppWindow::rescanPlugins()`, which unloads and
+     re-`LoadLibrary`s every installed plugin on the GUI thread; `gui::AudioOpen`'s
+     bounded wait for an output device, and the same for the microphone
+     (`micOpen_`); and the display-change and not-being-shown pause in
+     `gui/present_grace.hpp`. The audio one is the shape this rule always
+     anticipated — "a synchronous device open" — and it is bracketed AND bounded,
+     because a pause held for an open that never returns would be the watchdog
+     switched off. Since 0.99.61 **each continuous pause excuses a stall for at
+     most 30 s**: the clock starts when the pause count goes from 0 to 1, and a
+     pause that is released and taken again gets a fresh one. The reason is that
+     the code that ends such a pause runs on the GUI thread, so a freeze inside it
+     is a freeze in the thing that would have released it — the plugin rescan
+     holds one across every plugin's `destroy()`, which for a plugin with a worker
+     thread is a join, and the "bounded" ten-second display grace is measured by
+     the very frame loop that has stopped. The field report that prompted the cap
+     is the shape this closes (0.99.59, Radar Sweep running: the application
+     stopped responding, was closed from the taskbar, and nothing from that
+     session reached the crash store); which excuse, if any, was in force in that
+     session is **not established**. The cap bounds what is
+     *excused*, never what is *beating*: a window minimised for an hour whose
+     loop keeps turning is still never reported. A pause that is still counted
+     past its cap is not leaked or double-released; it simply stops excusing.
+   - *User-paced* (`pauseUser`/`resumeUser`): a **person** sets the pace, and
+     there is exactly one such place — the shell-open bracket
+     (`AppWindow::watchdogShellHooks`, through `gui::runShellOpen`), where the
+     wait is somebody reading an elevation or SmartScreen prompt. It is **not
+     capped**: a cap would file again the false report this bracket was built to
+     stop (`hang ntdll.dll @ AppWindow::launchInstaller`, below) for any prompt
+     left open past it. While one is held a stall is excused whatever
+     application-paced pauses are held with it; when the last is released, an
+     application-paced pause still held starts a fresh 30 s from that moment, so
+     a rescan nested inside a long shell call is not reported the instant the
+     prompt closes. **What this leaves unreported, by design:** a `ShellExecute`
+     that never returns and shows no dialog is indistinguishable from a prompt
+     nobody has answered yet, and the only watch on it is the person who sees
+     the window not responding.
+
+   `cascade --frames N` prints how many pauses the run took (both kinds count)
+   and `tests/test_diag_hang.cpp` requires at least one, so a rescan that stops
+   pausing goes red instead of silently arming a false report.
+   `tests/test_excuse_cap.cpp` holds the cap itself — with a real `HangWatchdog`
+   on an 800 ms threshold and a 1.5 s cap so the suite is seconds long — against
+   a stall inside the real display grace, a plain pause, a pause shorter than the
+   cap (still excused), a long pause with a beating GUI thread (never reported),
+   a pause released and retaken, the `win32u` excuse with the module injected, a
+   user-paced pause far past the cap (not reported, and still counted), an
+   application-paced pause nested inside a user-paced one, and the stall that
+   continues after the user-paced pause is released; and, by scanning `src/`,
+   that the uncapped kind is reached from the shell-open bracket and nowhere
+   else. On Windows it also holds a real deadlock — a thread that has sent a
+   message to a window whose owner never pumps, read by the watchdog's real
+   register peek — to being reported. The 30 s figure is a judgement, not a
+   measurement: it covers a plugin rescan off a cold disk many times over, and a
+   capped stall that outlives it was not a short blocking call.
 3. **The whole machine stopping.** Sleep, hibernate, or a paused VM freezes the
    watchdog thread too. If its own poll overshot by more than the threshold, it
    cannot tell the two apart, so it re-arms and says nothing.
@@ -650,6 +3301,47 @@ own reason:
 The watchdog is stopped **last**, after the GL teardown — so a shutdown that
 wedges is reported like any other hang. That is not an oversight: the worst
 freeze this product ever shipped was inside a shutdown path.
+
+### Where the clean-exit marker is written (0.99.61)
+
+`telemetryCleanExit` is the one fact that makes the next start say "the last run
+did not end normally": it is the crash counter, the trigger for offering a
+report, and the `last-run-unclean` line of the bundle. It is `false` on disk for
+the whole life of the process and is rewritten to `true` late in
+`AppWindow::run`, so the question is only how late. The order of the steps that
+matter, as the code now has it:
+
+1. `pipeline_.stop()` — the DSP threads, the CAT server, the USB device stack.
+2. The final-state save is queued and the crash upload's in-flight request is
+   cancelled.
+3. `patchStopAll()` and `detachAndUnloadPlugins()` — every plugin's `destroy()`.
+4. **The marker**, and the bounded wait for its save (`config: final save
+   abandoned - the disk did not answer within N ms` if the disk does not answer).
+5. The GL and GLFW teardown, then `watchdog_.stop()`.
+
+Through 0.99.60 the marker sat between steps 1 and 3. A `destroy()` is
+third-party code — a worker join, a vendor close, a flush — and one that never
+returns leaves the window on screen and not responding. The user ends it from
+the taskbar (End task is `TerminateProcess`; nothing runs), and the file on disk,
+written before the stage began, already said "clean". The field report, 0.99.59 with
+Radar Sweep running: killed from the taskbar, the next start recorded no crash,
+and the bundle read `last-run-unclean: no` and `crashes: 0` over 79 launches.
+`tests/test_clean_exit_marker.cpp` (Windows only; it SKIPs by name elsewhere)
+starts the real binary with a hook, `CASCADE_DIAG_UNLOAD_STALL_MS` — bounded
+`--frames` runs only — that wedges the process at the end of the plugin unload,
+waits for the line that proves it is inside that stage, reads the config as the
+next start would, then `TerminateProcess`es it: the file must still say `false`.
+A control run lets the same stall finish and requires `true`, so a change that
+simply stopped writing the marker fails as well.
+
+The marker still precedes the GL and GLFW teardown, deliberately, and **a death
+in step 5 still counts as a clean exit**: the code says so in as many words and
+leaves it to the watchdog, stopped last as ever, to cover that stretch. (The
+marker is written by rewriting the snapshot the final-state save queued, with one
+field changed, rather than by deriving the configuration again at a moment when
+the session is half torn down — a second derivation would read a zero session
+length once GLFW is terminated.) What this leaves unproven is a real plugin's
+`destroy()` wedging: the test stands a sleep in for it.
 
 ## What a fault handler is allowed to do
 
@@ -673,7 +3365,17 @@ path:
 
 Everything the fault path needs is prepared while the process is healthy: the
 directory is created at install time, the module table is snapshotted in
-advance, the context block is pre-rendered.
+advance, the context block is pre-rendered. The one thing a snapshot cannot
+know is a module mapped *after* it was taken, and refreshing it from a handler
+means the loader lock, so on Windows (since 0.99.61) the fault path names such a
+module itself: the faulting address and each walked frame are looked up with
+`VirtualQuery` and `NtQueryVirtualMemory` — reads of the address space's own
+bookkeeping, resolved at install time because `GetProcAddress` is a loader call
+— and an image found there is appended to the table with its file name, base and
+size, using static scratch and no allocation, lock or CRT formatting. Anything
+that is not mapped image memory stays a bare address. The POSIX handler is
+unchanged and still has only what the last refresh saw. See *The
+device-enumeration reports*.
 
 **The one honest caveat.** Unwinding on x64 means asking ntdll where a
 function's unwind data is, and that reads loader data under a lock another
@@ -701,7 +3403,8 @@ of the report is written and flushed before phase 2 starts, and
 `__fastfail` (the `/GS` stack-cookie failure, `0xC0000409`) transfers straight
 to the kernel and no user-mode handler runs. Those appear as an unclean exit
 with no report — which `telemetryCleanExit` still counts, so they are visible as
-a number even when they are invisible as a report.
+a number even when they are invisible as a report. (Since 0.99.64 a watcher outside
+the process writes one: see *The sentinel*, below.)
 
 ### A finding worth keeping
 
@@ -714,6 +3417,1034 @@ process with `0xC0000409` and left **no report at all**. `abort()` is where all
 of those paths converge on whatever thread they happen on, and the UCRT raises
 `SIGABRT` before it fast-fails — so a `SIGABRT` handler is the net underneath,
 and it is load-bearing rather than belt-and-braces.
+
+## The sentinel — the ending nothing inside the process can report (0.99.64)
+
+**Measured, 2026-10.** Over seven days the installs counted at least 85 sessions
+that ended uncleanly out of 925, while about a dozen crash and freeze reports
+arrived. Most abnormal endings therefore reached us as a bare counter, with no
+cause - and some are innocent (the PC was shut down, the user ended the program
+from Task Manager), which that counter cannot tell from a crash. What the
+in-process reporting above cannot see is exactly the list the counter was
+standing in for:
+
+- a death in which no handler runs: a fast-fail (`0xC0000409`, which the
+  `__fastfail` documentation says invokes no exception handler), a heap
+  corruption (`0xC0000374`), a stack overflow, a fault *inside* the handler;
+- a window that froze and was then ended from the taskbar (the 0.99.59 report
+  above, and the freeze so total that the watchdog thread is stuck too);
+- a death during start-up, before the handlers and the watchdog are armed.
+
+The sentinel is a small watcher that notices such an ending and writes **one**
+report saying what can be known.
+
+### What it is
+
+The **same executable**, started by the application itself with
+`cascade --sentinel ...` (`runSentinelMain`, `src/core/sentinel.hpp`), not a second
+binary: the installer ships one. `main()` dispatches on that flag before anything
+else - no configuration is read or written, no crash handler is installed (it
+would write reports of its own), no instance mutex is claimed, no window,
+console, GL or radio is opened. The tool and helper modes (`--version`,
+`--selftest`, the enumeration helper, the SDRplay probe) never start one, and a
+bounded `--frames` run starts one only when a test asks
+(`CASCADE_SENTINEL_TEST=1`, honoured only with `--frames` and only when the run
+may write diagnostics at all). An interactive session starts one per application
+instance, from `main()` just before the `AppWindow` object is built, so the
+plugin load, the window and the first frame are watched.
+
+It follows the **Diagnostics switch exactly**, through the same call that arms
+every other part of diagnostics (`AppWindow::applyDiagnosticsEnabled`): with the
+switch off at start no process is started; switched off mid-session the watcher is
+ended and the breadcrumb's `reports-off` flag is raised first, so that nothing is
+written whatever happens next; switched on mid-session, one starts then. With
+Diagnostics off nothing of it exists but a page of memory in the application's
+own address space.
+
+While it waits it uses no CPU: it blocks on the application's process handle.
+Measured on the real binary after ten seconds of waiting: **0 ms of CPU, 8.7 MB
+working set (2.3 MB private)**.
+
+### What it can see, and what it cannot
+
+It reads **no memory** of the application and takes **no dump** - no debugger, no
+`ReadProcessMemory`, no minidump. It has three things and nothing else:
+
+1. **A handle to the application's process with `SYNCHRONIZE |
+   PROCESS_QUERY_LIMITED_INFORMATION`** and no other right: enough to wait for the
+   process and read its exit code and its start and exit times. It is a handle to
+   *this* process handed down by inheritance, not a lookup by process id, which
+   could name a different process if the id were reused. It is not enough to read
+   memory, suspend, debug or end the application, and nothing here needs more.
+2. **The breadcrumb**, a 64-byte page of shared memory the application writes
+   deliberately (below), mapped **read-only** in the watcher (`FILE_MAP_READ`) and
+   **unnamed** - a pagefile-backed section with no object name, so there is
+   nothing for another user or another session to open, and no name that could
+   collide across users or sessions.
+3. **Files the application already writes:** the log (read back from
+   `foxsdr.log`, `foxsdr.1.log`, `foxsdr.2.log` - every line is flushed as it is
+   written) and the reports folder.
+
+Exactly those two handles are inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), as
+inheritable *copies* made for the one spawn and closed straight after it; the
+watcher is created with `CREATE_NO_WINDOW`, no standard handles, no job. A list that
+cannot be built is a start that does not happen, because the alternative - inherit
+everything - would hand it whatever pipe another thread has open at that instant
+(the enumeration child's own comment is about the same hazard). It is told nothing
+else: its command line is the application's process id and the two handle numbers,
+and the two folders (the same folder the enumeration child is given).
+
+**The clean-exit marker is not read from the configuration.** The sentinel could
+have read it; it does not, because the configuration file is shared by every
+instance (FoxSDR has never been single-instance), so what it says cannot say which
+*process* finished. The
+application mirrors the marker's stage into the breadcrumb at the instant it writes
+the marker (`ShutdownWritingMarker` then `ShutdownClosingWindow`, after the bounded
+wait whether the save landed or was abandoned), and "clean" means exit code 0 *and*
+that stage reached - the same fact the unclean-exit counter reads, per process.
+
+### The breadcrumb
+
+`src/core/breadcrumb.hpp`. 64 bytes, one cache line, natural alignment, plain
+integers accessed through `std::atomic_ref`. **Only enumerated or numeric values;
+no string of any kind**, so it cannot hold a name, a path, a frequency or an
+address - the 8 reserved bytes are asserted zero after every writer has run, and
+the layout is pinned offset by offset in `tests/test_sentinel.cpp`.
+
+| Offset | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | 4 | `magic` | `0x43425846` ("FXBC"), written last with release |
+| 4 | 4 | `layout` | `1` |
+| 8 | 8 | `startedMs` | steady-clock ms when the block was made |
+| 16 | 8 | `beatMs` | steady-clock ms of the last frame's heartbeat (0: none yet) |
+| 24 | 8 | `frames` | heartbeats so far |
+| 32 | 8 | `phaseMs` | steady-clock ms when `phase` last changed |
+| 40 | 4 | `phase` | a `Phase` (below) |
+| 44 | 4 | `activity` | bits: `1` a radio is being opened, `2` plugins are being (re)loaded, `4` a person is holding the frame loop (a window drag or resize, an open menu) |
+| 48 | 4 | `flags` | bits: `1` Windows said the session is ending, `2` reports are off |
+| 52 | 4 | `frameScope` | which part of the frame the GUI thread is in: `core::FrameScope` + 1, `0` before any frame |
+| 56 | 8 | reserved | zero |
+
+The phases are stages the code **really has**, set at the line that begins each
+(`main()`, `AppWindow::run`): 1 *starting* (main, before the application object),
+2 *building the application* (the constructor: the band plan and the first plugin
+load), 3 *creating the window* (GLFW, GL, ImGui), 4 *waiting for the first frame*
+(window shown; receiver, watchdog and the first config save), 5 *running*, then the
+teardown's own steps, the same list its comment block walks: 6 *shutting down:
+saving* (recordings closed, transmitter and GPS stopped, final state saved), 7
+*stopping the receiver* (`pipeline_.stop()`), 8 *unloading plugins*, 9 *writing the
+exit marker*, 10 *closing the window* (GL/GLFW teardown), 11 *after shutdown*. A
+radio open and a plugin load overlap the main sequence instead of following it, so
+they are **activity bits** that refine the phase in the report (`opening a radio`,
+`reloading plugins`, and `loading plugins` while the first load runs).
+
+**Where the frame was.** `frameScope` is written by the frame timer
+(`core/frame_timing.hpp`, *Slow frames* above) at every change of scope - one more
+relaxed store in a path that already made one - and only by the process's own
+timer. While the phase is *running* the report names it: `; in rail` in the
+reason, and `:rail` at the end of what the signature is hashed from, so two
+endings in different parts of the frame are two groups. Outside *running* it is
+ignored (before the first frame there is none; after the loop has ended the last
+one written is history), and a number that is not one of the timer's nineteen is
+named as nothing: the name comes from a table, never from the page.
+
+**Who was holding it.** The third activity bit is raised by the window procedure
+on `WM_ENTERSIZEMOVE` and `WM_ENTERMENULOOP` and cleared on the matching `WM_EXIT`
+message (`gui/win_frame.cpp`) - and cleared by the next heartbeat whatever became
+of that message, because a frame drawn to the end is proof that nobody is holding
+the loop. The shell-open bracket (a prompt of the operating system's being read)
+needs no bit: the frame timer already calls it the scope `user-wait`. Either one
+makes the phase read `held by the user` and, below, keeps a long silence from
+being called a freeze.
+
+**The heartbeat is the watchdog's.** `HangWatchdog::heartbeat`, called once per
+drawn frame, now also calls `breadcrumb::beat()`, so "the window had not drawn for
+N s" to the watcher is exactly what the watchdog calls a stall. The second
+heartbeat ends *waiting for the first frame* (so a death during the first frame is
+still start-up). **Hot path, measured:** 18 ns per frame for the heartbeat, the
+activity mirror and a phase write together, **zero allocations** (a replaced
+`operator new` counts them), lock-free (`atomic_ref` on 32- and 64-bit integers is
+always lock-free here, `static_assert`ed).
+
+### What it decides
+
+When the application ends, in this order (`decideSentinel`, a pure function, every
+row and boundary in `tests/test_sentinel.cpp`):
+
+1. `reports-off` flag set -> nothing. **Off means off**, whatever else is true.
+2. A **whole report of this death by the in-process handler** exists -> nothing
+   (below).
+3. **Clean** -> nothing, and the sentinel is gone at once: exit code 0 and the
+   shutdown reached `closing the window`. (Exit code 0 *before* that stage is not
+   clean: it is reported as a crash-class ending, `exit code 0 before the shutdown
+   had finished`. A death after the marker with a crash code is still a crash.)
+4. The **session was closing** -> *session*, kept here.
+5. It ended **before the first frame** (phase before *running*) -> *startup*, sent,
+   whatever the exit code.
+6. A **crash exit code** the handler never saw -> *crash*, sent.
+7. The heartbeat had been **silent for longer than the watchdog's own threshold**,
+   and **nobody was holding the window** -> *frozen*, sent. A drag, a resize, an
+   open menu or a prompt being read stops the frame loop for as long as the
+   person likes; the watchdog excuses each (its rule 2 and its user-paced pause)
+   and so does this. A plugin reload or a radio open that never came back is not
+   excused: the application set that pace, and that silence is the freeze.
+8. Anything else -> *outside*, kept here.
+
+The "freeze threshold" is read from `HangWatchdog`'s own constants, so the two
+cannot disagree: its start-up budget (`kStartupThresholdMs`, 30 s) for the first
+`kStartupFrames` (30) heartbeats, `kDefaultThresholdMs` (5 s) after, and
+`kShutdownThresholdMs` (27 s) once the frame loop has ended - measured from the
+later of the last heartbeat and the last change of phase, because a teardown has
+no heartbeats and has instead the moment it entered its step. A freeze the
+watchdog filed (a `hang-<pid>-N.txt` written *after the last sign of life*) covers
+the freeze **and** the ending that follows it, so a frozen-then-killed window whose
+watchdog did report gets one report, not two; a freeze report from before the last
+heartbeat (the window recovered, then ended another way) covers nothing.
+
+A *crash code* is a Windows exception or NTSTATUS error as an exit code: top nibble
+`8`, `C` or `E`, other than `STATUS_CONTROL_C_EXIT` (`0xC000013A`, a request to end,
+not a fault). `1` from `taskkill /F`, `-1` from `Stop-Process`, `0` are not. The words
+each exit code gets are tabulated below.
+
+**What each class writes, and whether it uploads.** Every report is `kind: crash`
+(below: why), with a `reason` that is one **fixed sentence** per class followed by
+a closed vocabulary - ` - <what the exit code means>; phase <phase>; silent <N> s`
+- and a `signature` hashed from **class + exit code + phase** (`sentinel:<class>:<phase>`
+through `crashSignature`), so the same kind of ending groups together across builds
+and machines.
+
+| Class | The reason begins | Sent? |
+|---|---|---|
+| crash | `sentinel: crash exit code, no report from the process` | **sent** |
+| frozen | `sentinel: window had stopped drawing when it ended` | **sent** |
+| startup | `sentinel: ended before the first frame` | **sent** |
+| outside | `sentinel: ended from outside, window was drawing` | kept here |
+| session | `sentinel: ended as the session closed` | kept here |
+
+*Kept here* means the uploader never sends it, **spends nothing of the five a day
+on it**, and does not let it crowd an older report out of the sweep's window (see
+*What the uploader does*). They are still in the folder and in the bundle's
+*reports on this machine* list, with the class in the reason. The whole reason is at
+most 200 characters (what the site keeps), checked over every combination of phase,
+activity, exit code and silence in the test.
+
+**What an exit code means** (`sentinelExitWords`; the words are the whole of what a
+report says about a code, and `unknown exit code` is the answer for everything not in
+the table):
+
+| Exit code | The report says | Verified against |
+|---|---|---|
+| `0xC0000005` | `access violation` | Windows SDK 10.0.26100 `ntstatus.h`: `STATUS_ACCESS_VIOLATION` ("The instruction at 0x%08lx referenced memory at 0x%08lx...") |
+| `0xC0000409` | `fast-fail (abort or failed integrity check)` | `ntstatus.h`: `STATUS_STACK_BUFFER_OVERRUN`; and Microsoft's `__fastfail` page: "User-mode fast fail requests appear as a second chance non-continuable exception with exception code 0xC0000409 ... no exception handlers are invoked" |
+| `0xC0000374` | `heap corruption` | `ntstatus.h`: `STATUS_HEAP_CORRUPTION` ("A heap has been corrupted.") |
+| `0xC00000FD` | `stack overflow` | `ntstatus.h`: `STATUS_STACK_OVERFLOW` |
+| `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C."). Since 0.99.67 the program answers Ctrl+C, Ctrl+Break and a closing console with its own close (`core/console_close.hpp`), so this code now means the shutdown did not finish inside the 5000 ms the system allows a closing console (HandlerRoutine's Timeouts table) |
+| `1` | `exit code 1 (as taskkill /F leaves it, or the application ended itself)`; with the application's own record (below), `the application ended itself: the window could not be created - see the window: lines in the log` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager. **1 is not proof of a kill**: `AppWindow::run` returns 1 itself when `glfwInit` or `glfwCreateWindow` fails, so the exit code alone cannot tell the two apart and the words no longer say it can (0.99.73's two reports of signature `85FF854AA2C772F9` read "ended by another process" for a window that could not be created) |
+| `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
+| `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
+| `0x5058....` (since 0.99.78, Linux) | `exit code N (the process ended itself)`, `killed by signal N (SIGSEGV)`, ... | not an operating-system value: the application's own record of how it ended, tagged so that no Windows code reads as one - see *Platforms* below |
+| anything else | `unknown exit code` | - |
+
+**A window that could not be created is not a kill.** `AppWindow::run` returns 1 itself when
+`glfwInit` or `glfwCreateWindow` fails (it logs the `window:` lines first, which are flushed on every
+platform, Windows included), and on Windows 1 is also the code `taskkill /F` leaves. Before the
+application said anything the sentinel could not tell them apart and called both "ended by another
+process". Now the application sets `kFlagWindowFailed` in the breadcrumb page (`breadcrumb::noteWindowFailed`,
+one relaxed store) on both failure returns, and the watcher believes the page over the bare code when the
+phase is *creating the window* and the code is the one a `return 1` makes (Windows 1; Linux exit status 1;
+no status at all): the reason then reads `sentinel: ended before the first frame - the application ended
+itself: the window could not be created - see the window: lines in the log; phase creating the window;
+silent N s`, the signature tag gains `:window-failed` (a group of its own), and the previous-session
+classification is `died` (the program failed to start), not `killed`. Without the record - an older build,
+or a real `taskkill /F` - the code is worded as what it is, ambiguous: `exit code 1 (as taskkill /F leaves
+it, or the application ended itself)`, with the signature it always had (the signature hashes class + code +
+phase, never the reason's words, so the reword moved no existing group). A flag and not the exit record
+(`noteExit`) on purpose: on Linux an `on_exit` hook rewrites that word with the bare status as the process
+ends. The person is told too: on both failure returns `AppWindow::run` writes the same plain English text to
+stderr and, on Windows in a real session, shows a `MessageBoxA` (OK, error icon, no owner) saying no working
+OpenGL driver was found, naming the usual causes (no graphics driver installed, a remote desktop session
+without GPU support) and the log path as Settings > Diagnostics shows it (`window: error dialog shown` is
+logged first, flushed, so the log says it was up). A bounded `--frames` run never shows it and logs
+`window: error dialog suppressed for a flagged run` instead; the other tool modes (`--version`, `--selftest`,
+a bench) return before `run` and never reach it. `FOXSDR_TEST_WINDOW_FAIL=1` (honoured only with `--frames`) makes `glfwCreateWindow` fail for real on a
+machine whose window can be made, so `tests/test_window_failed_app.cpp` runs the whole chain - the real
+application, the real watcher, the real report - without showing a window.
+
+### What Windows gives a process when the session ends, and what the sentinel does about it
+
+Looked up, not assumed:
+
+- Windows sends `WM_QUERYENDSESSION` and then `WM_ENDSESSION` to the top-level
+  windows of each process ("Applications with a window and message queue receive
+  shutdown notifications through the WM_QUERYENDSESSION and WM_ENDSESSION messages",
+  *Shutting Down*). A Microsoft engineer's archived account of debugging this
+  (*Application termination when user logs off*) is that `CSRSS` then
+  `TerminateProcess`es the process; what it does for processes with no windows it
+  says it left out. **No document says what exit code that termination leaves, and
+  none was measured here** (the owner's session cannot be logged off by a test), so
+  the class is decided by something other than the code.
+- **The logoff and shutdown console events do not reach this program.**
+  `SetConsoleCtrlHandler`'s page: if a console application loads `user32.dll` or
+  `gdi32.dll`, its handler "does not get called for the CTRL_LOGOFF_EVENT and
+  CTRL_SHUTDOWN_EVENT events". `cascade.exe` links `user32.dll` (it was a
+  console-subsystem executable until 0.99.69, and borrows its parent's console when
+  that is a terminal), and so is the sentinel - which is the same file. The documented
+  alternative is a window handling `WM_ENDSESSION`, and the sentinel may hold no
+  window; the *application* has one. The other three console events - Ctrl+C,
+  Ctrl+Break and the console window closing - DO arrive, and until 0.99.66 the
+  default handler answered them with `ExitProcess(STATUS_CONTROL_C_EXIT)`, which the
+  sentinel then filed as an ending from outside (a field report of 2026-10-06: the
+  console window a Start Menu launch brought, closed by hand, 135 s into a healthy
+  session). Since 0.99.67 `core/console_close.cpp` answers them with the window's
+  own close; `tests/test_sentinel_app.cpp` sends the real program Ctrl+Break and
+  requires exit code 0 and no report. Since 0.99.69 a Start Menu launch has no
+  console to close (`core/console_owner.hpp`); the handler is for a session
+  started from a terminal.
+- So the **application's own window** says it: the existing window-procedure hook
+  (`gui/win_frame.cpp`) notes `WM_ENDSESSION` with `wParam` TRUE ("the Windows
+  session can end any time after all applications have returned from processing this
+  message") into the breadcrumb's `session ending` flag and passes the message on
+  unchanged. The sentinel adds what the operating system itself says when it wakes:
+  `GetSystemMetrics(SM_SHUTTINGDOWN)` - "Nonzero if the current session is shutting
+  down". Either one makes the ending a *session* ending, ahead of every class but
+  "nothing" and "clean". And it asks to be among the last processes ended
+  (`SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY)`: the page's "application
+  reserved last shutdown range"; all processes start at 0x280), best effort.
+
+**What is proven and what is not.** The wiring is: a real `WM_ENDSESSION` is sent to
+the real `cascade.exe`'s window, the application carries on (it is not ended by it),
+and when it is then killed the report is the *session* class and local-only
+(`tests/test_sentinel_app.cpp`). **Not shown:** that Windows really sends it at a
+log off or shutdown in this application's situation (it is documented, not
+observed), that `SM_SHUTTINGDOWN` is already set when the sentinel wakes, that the
+sentinel itself outlives the application in a closing session at all, or what exit
+code the termination leaves. If the sentinel is ended first it writes nothing, which
+is the safe direction.
+
+### One report per death
+
+The in-process handler writes its report **before** the process dies - it is
+`TerminateProcess`ed, or runs on to Windows Error Reporting, only afterwards - and
+the sentinel acts only after the process object is signalled, when no thread is left
+to write anything. So the order "handler writes, then the sentinel looks" is a
+property of the platform, not of timing: a handler cannot write late. (A handler
+killed part-way through leaves a file with no whole header, which is not a report -
+below - so the sentinel then writes the one.) The check is
+`crashReportWrittenByProcess` (above), reused, asked about the *application's*
+process id:
+
+- The sentinel's own report is named `crash-<stamp>-<application pid>-999999.txt`:
+  the application's id, so the same function finds it and asking twice is answered
+  the same; and a sequence number no in-process report reaches, so it can never
+  overwrite one.
+- **Two fixes the reuse needed.** The function was written to be asked about a
+  *child's* process id, whose own reports never begin with the parent's
+  survived-fault wording. Asked about the *application*, the folder also holds the
+  application's reports of a fault it survived - and a report of an enumeration
+  child's death (`SDR device enumeration child process died ...`) was counted as the
+  report of the application's own death and would have hidden it. It is now excluded
+  like an absorbed vendor fault (`kChildDeathReasonPrefix`, shared with
+  `soapy_enum_proc.cpp`, which now builds its reasons from that constant, and the
+  writer's default `child process fault (contained)`). A file the handler created and
+  never wrote to is still not a report (the existing whole-header rule), so a
+  process killed between the two is reported by the sentinel.
+- Freeze reports (`hang-<pid>-N.txt`, kind `hang` or `stall`) are looked for the same
+  way, by process id (Linux names them with pid 0, so any freeze report since the last
+  heartbeat counts there).
+
+### What the uploader does with it
+
+`kind: crash` is the only kind the site accepts besides `hang`, so **a new kind would
+be rejected** (`crashKinds` in the site's `crash.go`; `kind must be crash or hang`).
+The sentinel therefore uses `kind: crash` with a fixed `reason` prefix, and nothing
+new is uploaded: the payload is exactly the fields `uploadFieldNames()` lists, no
+more (asserted against a real sentinel report in `tests/test_sentinel.cpp`). What
+arrives is `reason` (the fixed sentence plus the closed vocabulary), `code`, the
+`signature`, `uptimeSec`, the log tail and the build identity; `threads` and `plugins`
+are empty and the receiver context says `not known to the sentinel`; `module` and
+`offset` are empty too - **except, since 0.99.66, on a Windows crash-class report for
+which Windows' own record of the crash named the module** (*Where in the process it
+ended*, below): then they are that module's file name and the distance into it.
+
+- **Local classes** (`outside`, `session`) are recognised by their fixed reason
+  prefix (`sentinelReasonIsLocalOnly`, shared with the writer) and get a `local-only`
+  sidecar with an accurate note; they never reach `decideUpload`, so they spend none
+  of the five a day and set no signature memory.
+- **`local-only` is now a terminal sidecar status.** The sweep examines only the
+  newest four candidates per start, and a status that was re-examined every start
+  would let five reports ended from Task Manager hide an older crash report that is
+  still waiting to be sent, for ever. (It was harmless while only display stalls had
+  it.) `tests/test_sentinel.cpp` stages exactly that - one sendable report and five
+  newer local ones - and requires the sendable one to be attempted by the second start.
+- The **site's limits** it fits: reason 200 characters, code 24, signature 200, body
+  64 KiB (a sentinel report carries a log tail and nothing else, about the size of
+  any crash report's). **What the site should learn**: that a `reason` beginning
+  `sentinel: ` is not an in-process fault and has no stack (group by the signature,
+  never by the stack-less `module`/`offset`; since 0.99.66 a crash-class one may carry
+  a `module` and `offset` that are Windows' own record of where the crash was, not a
+  stack frame - an offset into a `/GS` failure routine or the C runtime's `abort` is the
+  same for every failure in that module, so it names a module and not a function);
+  that `crash`, `frozen` and `startup`
+  count as faults of the build (the first is a crash, the second a freeze, the third a
+  failure to start - none of them survived) and the two local classes are never
+  received; that `startup` carries the exit code and the phase in the signature, so
+  the phase list above is the vocabulary to chart; and that
+  `reliabilityReasonSurvived` should *not* treat these as survived (they end the
+  process). The site's `Survived()` test looks for `(contained` and for ` - enumeration
+  child, `; neither string occurs in a sentinel reason.
+
+### Where in the process it ended: Windows' own crash record (0.99.66)
+
+**The motive.** The first sentinel report from a user (0.99.64, Windows 10.0.22631, 48 minutes in)
+read `crash exit code, no report from the process - fast-fail (abort or failed integrity check);
+phase running; in render; silent 2 s`, code `0xC0000409`. A direct `__fastfail` - a `/GS`
+stack-cookie failure, a hardened-library check, a third-party DLL such as a graphics or radio
+driver failing fast - runs no handler, so the sentinel knew the class, the code, the phase and the
+part of the frame and nothing about **where**. Windows itself records that: for every application
+crash Windows Error Reporting writes an *Application Error* event, id 1000, to the Application
+event log. Since 0.99.66 the sentinel reads it and the report says where. **Windows only**:
+`os_crash_record.hpp` has a portable half (validation, matching, the bounded lookup - which exists
+on every platform only so that its tests do) and `os_crash_record_win.cpp`, and on any other
+platform the event source is empty and nothing is ever found. Nothing equivalent was built or is
+claimed for Linux, and the non-Windows side was **not compiled** (no Linux toolchain was available
+for this change; it is a one-line stub and `#if !defined(_WIN32)` guards).
+
+#### What was observed (Windows 11 22631, 2026-10-05, an unelevated shell: token elevation 0, Medium integrity level)
+
+Written down from runs, not remembered. A tiny executable (`probe.exe`, `/GS`, `/MD`) and a DLL it
+loads (`probe_mod.dll`; the work-package prefix its real file name carried is dropped here and in
+the test fixtures) were made to die on purpose, each run in its own process with `WerSetFlags(WER_FAULT_REPORTING_NO_UI)`
+(and no window was seen: the process list was sampled for a `WerFault.exe` with a window during 10 runs, 0 seen),
+and the event read back with `Get-WinEvent` and, separately, with C++ against `wevtapi`.
+
+| Death | Event? | `ModuleName` + `FaultingOffset` | `ExceptionCode` |
+|---|---|---|---|
+| `__fastfail(7)` inline in the executable | yes | `probe.exe` + `0x15e8` | `c0000409` |
+| `/GS` stack-cookie failure, function A, in the executable | yes | `probe.exe` + `0x1e31` | `c0000409` |
+| `/GS` stack-cookie failure, a **different** function B | yes | `probe.exe` + `0x1e31` (**the same**) | `c0000409` |
+| access violation in the executable | yes | `probe.exe` + `0x165c` | `c0000005` |
+| `__fastfail(7)` in a **DLL** the executable loaded | yes | `probe_mod.dll` + `0x1335` | `c0000409` |
+| access violation in that DLL | yes | `probe_mod.dll` + `0x1350` | `c0000005` |
+| `abort()` in the C runtime (an earlier, real crash of a fuzz replay in this log) | yes | `ucrtbase.dll` + `0x7f6fe` | `c0000409` |
+| the same `__fastfail` with `SEM_NOGPFAULTERRORBOX` set (alone, and with the flag above) | **no** (2 of 2) | - | - |
+| an access violation with `SEM_NOGPFAULTERRORBOX` set | **no** | - | - |
+| `TerminateProcess(self, 0xC0000409)` | **no** | - | - |
+| a normal exit | **no** | - | - |
+| Windows Error Reporting disabled by a policy | **not measured**: reading or changing a Windows error-reporting setting was out of bounds for this work; the reader treats "no event" as "not known" whatever the cause | - | - |
+
+- **The fields, by name** (`EvtRender` XML, in this order): `AppName`, `AppVersion`, `AppTimeStamp`,
+  `ModuleName`, `ModuleVersion`, `ModuleTimeStamp`, `ExceptionCode`, `FaultingOffset`, `ProcessId`,
+  `ProcessCreationTime`, `AppPath`, `ModulePath`, `IntegratorReportId`, `PackageFullName`,
+  `PackageRelativeAppId`. `ExceptionCode` is 8 hex digits with no prefix; `FaultingOffset` is 16
+  zero-padded hex digits; `ProcessId` is `0x` and lower-case hex (the formatted message shows
+  `0x0x92F0` - it prefixes a value that already has its own); `ProcessCreationTime` is `0x` and the
+  hex of the process's creation FILETIME, **equal in 7 of 7 direct comparisons to what the process
+  reports** (to 100 ns), and the real sentinel matched more than 40 events on it. `AppPath` and `ModulePath` are full paths, `C:\Users\<account>\...` among
+  them. So the event offers a process id **and** a start time, and the executable path is never
+  needed to match it.
+- **A DLL versus the executable.** `ModuleName` is the module the faulting instruction was in: the
+  DLL's file name for a failure inside it, the executable's for one inline in it. **A `/GS` failure
+  reports the shared failure routine, not the function that overflowed** (two different overflowing
+  functions, one module and one offset), and `abort()` and the CRT's invalid-parameter exit report
+  the C runtime's: for those the *module* is the information and the offset is the same for every
+  such failure of that build. A check written inline in a vendor DLL reports its own offset.
+- **Unelevated.** Read as an ordinary user, no privilege, no group membership beyond a normal
+  session: the Application log is readable by ordinary users (the Security log is the one that is
+  not). The log also holds *other programs'* crash events, full paths included, which is why the
+  reader keeps five named fields and nothing else.
+- **When.** The event's time stamp is **214-475 ms before** the process object is signalled
+  (about 80 deaths: WerFault suspends the process, writes the event, queues its report, then ends
+  the process). **That is not when it can be read.** A watcher that asks the instant the process
+  object is signalled finds it in some runs and not in others. The real watcher (the stand-in
+  application under `tests/test_sentinel_proc.cpp`, 38 deaths with a trace, a 900 ms budget): 16
+  found at the first query (0.8-1.1 ms), 22 later, after 40, 42, 88, 92, 130, 130, 139, 184, 186, 190, 223,
+  274, 296, 332, 361, 364, 364, 368, 368, 370, 371, 373 ms (and an earlier set of 20 with a 350 ms
+  budget gave up on 3). Two other probes that poll the same API - a plain C++ loop against
+  `probe.exe`, 120 deaths under several polling patterns, and the unit test's real child - saw
+  561, 580, 602, 605, 607, 622, 689 and 752 ms in 8 runs of about 180. A PowerShell
+  reader (`System.Diagnostics.Eventing.Reader`, 50 deaths) saw it 7-101 ms after `WaitForExit` returned;
+  **that difference was not reconciled** and is reported rather than explained. The numbers used
+  are the C++ ones, which are the code path that ships.
+
+#### Where the reader goes, and why
+
+**In the sentinel, at the moment of death, after the report has been written - and not at the next
+launch.** The measurement says the event is mostly readable within 400 ms of the death and in all
+runs but a few within 800 ms, and the sentinel may live 1000 ms (`kSentinelExitDeadline`). So:
+
+1. The report is written first, **exactly as 0.99.65 wrote it** (this is the report that was
+   already guaranteed to exist), so a stalled log reader or a slow disk afterwards can cost the
+   location and never the report. (An earlier shape of this change waited first and wrote after;
+   a read that ate the deadline would have cost the whole report. It was changed before it ever
+   shipped.)
+2. Then, only for a verdict that is a crash class (*crash*, or *startup* with a crash code) **and**
+   an application start time that is known, the sentinel asks the Application log - on a worker
+   thread, for at most `kSentinelOsRecordBudget` (800 ms), again every `kOsCrashRetryInterval`
+   (25 ms) until the event shows. It is never asked for an ending from outside, a closing session
+   or a freeze, which have no such event and would only pay for the wait.
+3. If the event is found, the report is **replaced** by one that carries it: written beside the
+   report as `<name>.txt.tmp` (which the uploader and the folder list, which look for `*.txt`,
+   never see) and renamed over it, so the deadline can never leave half of either.
+
+The cost of "no event" (a machine with Windows Error Reporting disabled, a process that set
+`SEM_NOGPFAULTERRORBOX`) is that the sentinel lives up to 800 ms longer after a crash-coded death.
+Nothing else is delayed: the application is already gone, and the installer-replace case that the
+deadline protects is not a crash.
+
+**Why not the next launch?** It is the right place for an event that arrives later than the
+sentinel can wait, and this one mostly does not. Built, it would need: the report to carry the
+application's start time (a new line beyond the three values this change may keep) or a weaker
+match (the process id from the file name, the exit code and `uptime-sec` from the report, and a
+tolerance on the time), the uploader to rewrite a report (it does not today: `sweepCrashDir` reads
+a report and builds a payload, it writes only the `.upload` sidecar), and the *signature* to change
+after the fact, which the five-a-day and once-a-day-per-signature limits are keyed on. Not built. The
+cost of leaving it out is the tail: an event that takes longer than 800 ms to appear is lost, and
+the report stays what 0.99.65 wrote. **That is the decision to review.**
+
+#### What is kept, and what is matched
+
+Kept: the faulting module's **file name**, the **offset**, and the exception code (which is the
+report's existing `code` line: the event's code must equal the exit code, so nothing new is stored).
+**Matched** by process id **and** creation time **and** exit code, all three, as numbers: an event
+about another program, another instance, an earlier run of the same process id, or another
+exception is never attached (the same events were asked about with a neighbouring id, a creation
+time one tick off and a different code, in the unit test and against the real event). Validated: the
+name is a plain file name of 1-63 characters from `[A-Za-z0-9._+-]` beginning with a letter, digit
+or underscore - never a separator, a space, markup, a control character or a byte above 0x7F, and
+never `unknown` or `StackHash_...` (what Windows writes when it could not name the module); the
+offset is 1-16 hex digits below 2^32 (a larger number is a raw address, which Windows writes when no
+module holds the fault); a field named twice, missing, or not a whole `<Data Name='x'>text</Data>`
+element drops the event. The parser reads five named fields and never reads, copies or keeps
+`AppPath`, `ModulePath` or any other: a hostile `AppPath` that spells out a `<Data Name='ModuleName'>`
+cannot supply or spoil a value (it is text, with its `<` escaped).
+
+#### What the report says now, and the signature
+
+```
+kind: crash
+reason: sentinel: crash exit code, no report from the process - fast-fail (abort or failed integrity check); phase running; in render; silent 2 s
+code: 0xC0000409
+address: ucrtbase.dll+0x7F6FE
+address-source: Windows' crash record of this process (Application Error event 1000), not a stack
+signature: BE2193D0B411F7DA
+--- context ---
+...
+```
+
+`address:` is the line the in-process reports carry, which `parseReportText` reads into
+`module` and `offset` and the payload sends; `address-source:` is read by nothing and is not
+sent. A report with no location has **neither line and is byte for byte what 0.99.64 and
+0.99.65 wrote**.
+
+**The module line, for a location in our own executable.** When the module the event names is
+this program's own file (compared case-insensitively with the sentinel's own file name), the
+report also carries a `--- modules ---` block of ONE line, between the context and the process
+block, in the crash writer's own format - `  <file> base=0x<16 digits> size=0x<hex> pdb=<pdb>
+build=<id>` (`crash_handler.cpp`'s `writeModules`; `parseModuleLine` reads both):
+
+```
+--- modules ---
+  cascade.exe base=0x00007FF612340000 size=0x25000 pdb=cascade.pdb build=651FD5EB...
+```
+
+`parseReportText` then gives the report a `buildId` (it looks the module named by `address:` up
+in the table), the payload's `buildId` carries it, and `foxsdr-reports` resolves the offset
+against the archived PDB of that exact link. **Why only then, and not always:** a block written
+for every report would change every report that has no location - the byte-identical 0.99.65
+report is a promise and a test - and for a fault in a vendor DLL or the C runtime it would carry
+a build id that is not ours to name and that nothing here could resolve. The sentinel IS the
+application's executable (a second copy of the same file, started by it), so its own build id is
+the application's; it is read from the sentinel's own mapped image (`describeMainModule`, the
+same `codeViewFromImage` the crash writer's table uses) and never from the application. The file
+name in the line is the validated name from the event (so the line and the `address:` line
+always agree to the letter, whatever case the event spells), never a path; the PDB name is a plain
+file name or `(none)`; the build id is hex digits or `(none)`. `base` and `size` are the sentinel
+copy's own image values: nothing reads them, and nothing sends them (`buildId` is the only part of
+the line that goes up). *Verified end to end:* the stand-in application's real `__fastfail` is
+located in its own executable, the parsed report's `buildId` equals the id read from the executable
+FILE on disk (`peBuildId`), and `SymbolArchive::resolve(module, buildId, offset)` - the call
+`foxsdr-reports` makes - resolves the offset to `standIn` at the `__fastfail` line in
+`test_sentinel_proc.cpp`, against an archive made from the test executable's own PDB.
+
+**The application keeps Windows' crash record for its own deaths.** `SEM_NOGPFAULTERRORBOX` is set
+in exactly two places in `src`, both helper processes: `runSentinelMain` (`sentinel_host_win.cpp`)
+and the enumeration child (`soapy_enum_proc.cpp`). The application sets neither it nor
+`WerSetFlags` (its one `SetThreadErrorMode`, `plugin_host.cpp`, is thread-scoped and sets
+`SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX` only), and nothing vendored under `third_party`
+sets it. `tests/test_sentinel.cpp` reads the source and fails on a third user.
+
+**The signature when the location is known.** Recommended and implemented: the hash gains the
+module and the offset and **keeps** what it was made of - `crashSignatureRaw(code,
+"<tag>@<module>", offset)`, where `<tag>` is `sentinel:<class>:<phase>[:<scope>]` as before. A
+**refinement, never a merge**: every group splits by *where* and none joins another. Why the phase
+and the frame scope stay in it: the location says in which *module*, and often not in which
+*function* - a `/GS` failure and an `abort()` give one offset per module whoever called - so
+hashing the location alone would put every such failure of a build into one group and **lose** the
+split the phase and the part of the frame already give. And it keeps every report written by 0.99.64
+and 0.99.65 uploadable and grouped as it is: the uploader carries the `signature:` line of the
+file as written and recomputes nothing, a report with no location still hashes exactly as before
+(pinned in `tests/test_sentinel.cpp` against values computed outside the code, with a Python
+FNV-1a), and the located signature of the same module and offset is not an in-process report's
+(they are not joined).
+
+**The alternative, for a decision:** hash the location only, `crashSignatureRaw(code, module,
+offset)` - the same input the in-process handler uses. Its virtue is that the same fault found in
+two phases is one group, and a sentinel report and an in-process report of the same module and
+offset would share one. Its cost is the one above: every `/GS` failure, and every `abort()`, of one
+module in one build would be one group however many bugs it is, and the groups the 0.99.64
+signature already has (`running:render`, `running:plugin-panels`, ...) would be merged away.
+A third option, leaving the signature alone and grouping by `(signature, module)` on the site,
+needs a change on the site, which is not in this repository.
+
+#### What this does not do, and what was not verified
+
+- **A location in a module that is not our own executable has no build id** (a vendor DLL, the C
+  runtime): the module's *name* is the finding there. A location in our own executable has one
+  (*The module line*, above). The sentinel's build id is the application's only because it is a
+  copy of the same file: a test that names another executable to run as the sentinel
+  (`SentinelOptions::exePath`) changes that, and the application never does.
+- **Not verified:** Windows 10 (only 22631 was available: the event's layout there is documented
+  nowhere in this work, and an event without named data is dropped, so it would show as no
+  location, never as a wrong one); a policy-disabled Windows Error Reporting (above); a full or
+  disabled log; an event that appears later than 800 ms; the non-Windows build (not compiled);
+  the Store package; that no dialog can appear on a machine whose Windows Error Reporting UI
+  settings differ (the tests set `WER_FAULT_REPORTING_NO_UI` and none was seen).
+- **Every deliberate death leaves an entry**: each crash the tests cause leaves an `AppCrash_<exe>_...`
+  folder under `C:\ProgramData\Microsoft\Windows\WER\ReportArchive` and two *Windows Error
+  Reporting* (1001) events, on the machine that ran it. Whether Windows sends them on is the
+  machine's own setting, which was not queried.
+
+#### Where it is tested
+
+`tests/test_os_crash_record.cpp`: the validation tables; the parser against events captured above
+and hostile variants of them (a path where a name should be, separators, control characters,
+over-long and non-ASCII names, non-hex and over-wide offsets, a missing or doubled field, an event
+for another program, another process id, an earlier run, another exception); the query and its
+window; the lookup against a fixture source, its retry, and its **time bound** (a source that never
+answers costs its budget and no more); and a **real child** that really fails fast, whose event is
+read back. `tests/test_sentinel.cpp`: the report byte for byte without a location, with one, the
+signature, the inventory and `PRIVACY.md` in both directions, what the uploader makes of it, the
+last act with a fixture log (found, retried, not found, never asked, a stalled reader). 
+`tests/test_sentinel_proc.cpp`: the real stand-in dies of a real `__fastfail` and the real sentinel
+process reads the real log. The real-process tests **say SKIP, with the reason**, if this machine
+wrote no event and an independent witness (`tests/os_event_oracle.hpp`) confirms it; if the
+witness sees the event and the reader does not, that is a failure. They also **cannot use the
+`SEM_NOGPFAULTERRORBOX` that every other crash test sets** (above), and set only
+`WER_FAULT_REPORTING_NO_UI`.
+
+### How the next start sorts an unclean exit (0.99.69)
+
+The usage report's `crashes` has always been the number of sessions that never wrote the
+clean-exit marker - a fault, a task ended from outside, the system closing the session, a
+power cut - and the website could not tell them apart. From 0.99.69 the next start sorts each
+into exactly one of four lifetime counters beside it (`exits_died`, `exits_killed`,
+`exits_ended`, `exits_unknown`), and `src/core/exit_cause.hpp` is the rule. It reads only what
+this section already writes:
+
+| The previous session left | Class |
+|---|---|
+| a `kind: crash` report from the process's own handler (not an absorbed fault, not a child's death) | died |
+| a sentinel report: `crash`, `frozen`, or `startup` with a crash exit code | died |
+| a sentinel report: `outside`, or `startup` with an exit code that is not a crash (`1`, `-1`, `0xC000013A`) | killed |
+| a sentinel report: `session` | ended |
+| no ending report, a `kind: hang` report | died |
+| no ending report, a `kind: stall` report | killed |
+| nothing in the window, Diagnostics off, an unreadable folder, no recorded start | unknown |
+
+Four decisions are in that table and are stated here so that they can be reversed. **`frozen` is
+`died`**: the window had stopped drawing and then was ended, and the failure was the application's
+whoever pressed End task (the website's crash table calls the same report a freeze, a column of
+its own). **`session` is `ended` and not `killed`**: the sentinel decides it ahead of every
+other class by the session's state and not by an exit code, and this document records that no
+document or measurement says what code a logoff leaves; kept apart, a reader can add it to
+`killed` and cannot take it out of a merged class. **`startup` is split by its exit code**,
+because "before the first frame" says when and not by what. **A hang report decides only when
+nothing else ended the session**, because the sentinel files no ending of its own for a freeze
+the watchdog reported and that never recovered (`freezeReportExists`); one that recovered and was
+then ended has its ending's own report, which is looked at first.
+
+Which reports are the previous session's: those written between its start - the application
+journals it as `telemetrySessionStarted` in `config.json` - and this session's start (and five
+seconds' slack). An older build wrote no start, so its run is `unknown`. A report and a start are
+stamped in whole seconds, so a death and a restart inside **the same second** cannot be told
+apart; the sentinel's own report can also land a moment after a very fast restart. Both read as
+`unknown` or as the neighbouring session's ending, and are not corrected.
+
+The count and the class move together at every instant: the unclean exit is counted as `unknown`
+at start-up, in the same breath as `crashes`, and the evidence - the report listing
+`DiagHistoryCache` already reads on a worker - moves it to its class a moment later
+(`AppWindow::exitCausePoll`, one flag test a frame, never a disk read on the window's thread).
+A session ended before the evidence was read has left `crashes` and `unknown` moved together, so
+the four classes always add up to the unclean exits counted since 0.99.69. They are not
+back-filled: `crashes` minus their sum is how many came before. One line goes to the log when
+the class is known (`previous session ended: killed (ended from outside while the window was
+drawing: exit code 1 (as taskkill /F leaves it, or the application ended itself))`), built only from the
+sentinel's own closed vocabulary. With Diagnostics off nothing is read, the sentinel did not run,
+and every unclean exit is `unknown`. Held by `tests/test_exit_cause.cpp` (the rule, against real
+sentinel reports) and `tests/test_exit_cause_app.cpp` (the real application, staged and killed).
+### What else was in the process: the other software's DLLs (0.99.69)
+
+**Why.** The two field deaths this section was written for (0.99.64 on an RSP1 after 48 minutes, 0.99.65 on an
+RTL-SDR after 12 seconds) were fast-fails "in present" and "in render": the hand-off to the graphics driver, where
+the overlay DLLs that other programs inject into every process (an audio driver's on-screen display, a frame-rate
+counter, an input or capture tool) put themselves in the path of every swap. The only death of that shape ever seen
+on the developer's own desktop was inside `NahimicOSD.dll`. Since 0.99.66 a sentinel report names the *faulting*
+module from Windows' record; nothing said what *else* was loaded, which is the next question. Now one log line at
+start and one on each arrival name every loaded module that is neither Windows' nor ours - **file names only,
+never a folder** - and the same list is in the report's own context block. Source: `src/core/foreign_modules.{hpp,cpp}`;
+what a file name discloses is in `PRIVACY.md` (the `foreign-modules` rows), and the plain statement is there and on
+the privacy page of the site.
+
+**What counts as ours** (and the rule is short on purpose, so that the list is short):
+
+- the folder of the program file and everything beneath it (the executable, the vcpkg DLLs beside it, the bundled C++
+  runtime, a `plugins` folder);
+- the Windows folder (`GetSystemWindowsDirectoryW`, not `%SystemRoot%`, which a process can be started with another
+  value of) and everything beneath it - System32, SysWOW64, WinSxS, **and the driver store** (which is under System32), so by
+  this rule a graphics driver's own user-mode DLLs are *not* listed (the sentinel already names the faulting one) while an
+  overlay is, because it lives in the other program's own folder;
+- the SDR vendors' folders: the module folder and the `bin` folder of every install `ensureVendorModulesVisible` adopted
+  (`source/soapy_modules.cpp` registers them before anything of theirs is loaded), every folder `SOAPY_SDR_PLUGIN_PATH`
+  names, and every folder a plugin scan was pointed at (`PluginHost::scan`, because the per-user plugin folder is under
+  `%LOCALAPPDATA%`, not under the program). A vendor's own API DLL that lives outside all of these (the SDRplay API's, for
+  one) is by this rule listed once a radio has loaded it, which is information and not noise; that case was **not
+  exercised** (no radio was opened for this work);
+- the C and C++ runtime by the exact paths the loader reports for it (`vcruntime140.dll`, `msvcp140*.dll`, `ucrtbase.dll`
+  and the debug and OpenMP siblings), for a development machine that loads them from a Redist folder.
+
+Everything else is foreign. The classifier (`isForeignModule`) is **pure and compares canonical strings, not the disk**:
+`GetFinalPathNameByHandle` would open each module's file (a module on a disconnected share, or one deleted after it was
+mapped, fails or stalls), would resolve junctions to somewhere the roots do not name, and cannot be tested on the
+synthetic paths the property needs. So the `\\?\`, `\\?\UNC\` and `\??\` prefixes are dropped, slashes made backslashes,
+`.` and `..` resolved, separators collapsed and case folded the way the file system folds it (`CompareStringOrdinal`);
+a root that names a whole drive is ignored (it would turn the classifier off). The one thing a string cannot know is an
+8.3 short name, so the Windows half expands a path that carries a `~` with `GetLongPathNameW` (local drive letters only -
+it can block on a network path) before it asks, for the module and the roots alike. **Measured, not assumed:** the
+loader reports a module loaded through a short path by that short path (`C:\Users\steve\FOXSDR~2\WP35-D~1\...`), so
+the expansion is needed, and `tests/test_foreign_modules.cpp` loads a DLL that way.
+
+**The lines.** At start, once the window is up and the log file armed, written by a thread of its own (so the first frame
+does not wait for it):
+
+```
+12:34:56.789 info modules: 3 foreign - AudioDevProps2.dll, NahimicOSD.dll, ProductInfo.dll
+12:34:56.789 info modules: none foreign
+```
+
+alphabetical (ASCII case folded), each name once. The message is capped at **150 characters** - the log's line is 191
+wide including its 18-character stamp, and a line cut at that width has every number on it masked by the upload scrub
+(`scrubUploadLine`, rule 8) - and beyond it ends `, +K more`. On each arrival after that, from the frame loop:
+
+```
+12:41:02.115 info module arrived: NahimicOSD.dll (12.3 s)
+```
+
+the seconds since the process started (`GetProcessTimes`, one decimal). **Nothing is written when a module is unloaded.**
+A name is written once a session (a DLL that is loaded, freed and loaded again is one line), and a session writes at most
+**32** arrival lines, then one `module arrivals: 32 logged, the rest are listed in the report's foreign-modules line only`.
+Two more lines say when the machinery itself is limited: `module watch: the loader notification is not available,
+looking again every 10 s` (the fallback, below) and `module arrivals missed: N (more modules loaded at once than the queue
+holds)`. None of the three begins `modules: ` or `module arrived: `, which are the two prefixes a reader picks up.
+
+**The context field.** The log's tail is 256 lines, so in a long session the start line is gone from a report's own log.
+The same list is therefore in the report's `--- context ---` block, in every report that block is written for - a crash
+report, a freeze report, the bundle - as
+
+```
+foreign-modules: AudioDevProps2.dll, NahimicOSD.dll, ProductInfo.dll
+```
+
+(`(none)`, or `+K more` after at most **480** characters; `(not scanned yet)` before the start scan has finished,
+`(not applicable)` off Windows, `(not recorded)` for a process that runs no watch - the enumeration child, a headless run).
+It is rendered with the other context lines, **before the plugin list** (the part of the 4096-byte block that is cut when it
+overruns), and every value goes through one validator (`normaliseForeignField`: each name must be 1-63 characters of
+letters, digits and `. _ - + ( ) ~ @ & ! = ; { } [ ] ?` and an inner space; anything else is dropped, not repaired), the same
+one the uploader and the sentinel apply. `fileNameOnly` writes every other character as `?`, one per code point, so a name
+that cannot be put in a report is still a name.
+
+**The sentinel** reads none of the application's memory, so its report's `foreign-modules:` line is **rebuilt from the log
+file**: `readNewestSessionLogTail` now also returns every `modules:` and `module arrived:` line of the *whole* newest session
+(`SessionLogTail::moduleLines`), not only the last 256, and `foreignFieldFromLog` turns them into the list - the start
+line's names, its own `+K more`, and every arrival after it. The line is always written (like `receiver:`), `(not recorded)`
+when the log has neither. The report's signature is **unchanged**: it was never hashed over the context block.
+
+**The upload.** The report's line is sent as `context.foreignModules` (`PRIVACY.md`, *What is sent when a report is
+uploaded*), re-validated where the request is built. On the site (`crash.go`) the context map is stored generically; the
+only change is a cap of its own for that key (520 bytes, the general one is 200 and cut a list in the middle of a name, and
+the names that sort last go first) and a `<details>` on the fault page for a long value.
+
+**Arrivals: the notification, and the fallback.** `LdrRegisterDllNotification` (ntdll, in no SDK header - the entry
+points are resolved with `GetProcAddress` and the records are declared in the `.cpp` from the documented layout; present
+since Vista, used by crash reporters and security products) is registered **before** the start scan, so no module can fall
+between the two; the drain does not write a name the scan already listed. Its callback runs **inside the loader lock** in
+the thread that loaded the module, so it does only this: copy the full path (the first 299 characters - the roots are
+prefixes), the base name and `GetTickCount64()` into a preallocated slot under an SRW lock, and return. It allocates
+nothing, logs nothing and calls nothing that loads. The queue holds 128 slots; a full queue drops the new arrival and
+counts it. The frame loop's `poll()` drains it once a frame (one atomic load when nothing arrived), classifies and writes.
+`poll()` does nothing until the start scan has written its line, so an arrival line can never precede it. When the
+registration fails - the entry points are missing or ntdll refuses - the same queue is fed by a rescan of the loaded
+modules every 10 s on a thread of its own, comparing against what it saw before, and the log says so once. The destructor
+unregisters (which returns when no callback is running) and never joins: the worker owns what it touches.
+
+**What this desktop's own `cascade.exe` reported** (2026-10-06, a bounded `--frames` run against a scratch tree,
+`tests/test_foreign_modules_app.cpp`): `modules: 3 foreign - AudioDevProps2.dll, NahimicOSD.dll, ProductInfo.dll`, and the
+same three names in the sentinel report of the same session and in a freeze report of another. `NahimicOSD.dll` is
+the overlay the one death of this shape that was ever seen here was inside. The start scan returned from `start()` in 0.02 ms
+and finished (module list, classification, line) 8-20 ms later in the test process (three runs).
+
+**Where it is tested.** `tests/test_foreign_modules.cpp`: the classifier on paths that exist on no machine of ours (System32,
+SysWOW64, WinSxS, the program folder, a plugin subfolder, a DLL beside the executable, `Program Files\Nahimic\NahimicOSD.dll`,
+`\\?\`, `\??\`, mixed case, `..`, a sibling folder that merely starts the same, a share, a profile folder, the 8.3 spelling
+the string cannot judge); `fileNameOnly` never returns a separator, for inputs chosen to break that; the start line's
+format, its cap and the boundary where one name more needs `+K more`; the arrival line; the lines surviving the upload scrub
+unchanged; and, against the **real loader**, in the test process: a DLL that is under neither the test's folder nor Windows'
+is copied to a scratch folder and loaded, and exactly that name is written, once, after the start line, with its seconds;
+the unload writes nothing; a second load of the name writes nothing; a Windows DLL loaded the same way writes nothing;
+a DLL under a folder registered as ours writes nothing; 140 loads at once report the 12 the queue could not hold and stop
+the log at 32 lines and say so; the fallback finds the same arrival by rescanning; a DLL loaded through its short path
+beside the program is ours; and a hundred watches started and destroyed in a row leave a process that can still load a DLL.
+`tests/test_foreign_modules_app.cpp`: the real `cascade.exe` writes one start line within its width; a DLL the
+window's own thread maps on frame 90 (`CASCADE_FOREIGN_MODULE_TEST=<path>`, a bounded-run seam, Windows only - what an
+injected hook looks like to the loader) is written by the real frame loop's `poll()` as `module arrived: ForeignInjected.dll
+(2.7 s)`, once, after the start line; and the sentinel report of that session (ended from outside) and the freeze report of
+another carry the list, the first with the arrival. `tests/test_sentinel.cpp` (`11a`): a sentinel report of
+a session with a `modules:` line and an arrival names both; a session of 600 more lines (the start line out of the tail)
+still names them; no module line, none foreign, a `+K more`, an earlier session's line, a path in a hand-edited line and a
+lookalike line are each handled as the documents say. `tests/test_crash_upload.cpp` and `tests/test_diagnostics.cpp`: the
+payload, the bundle, the states of the line, and `PRIVACY.md` in both directions.
+
+**Not verified, and known.** Windows 10 and Windows on ARM (only 11 22631, x64 was available); a graphics-driver overlay
+that injects *during* a present rather than through `LoadLibrary` at some other time (the test loads a DLL with
+`LoadLibraryW`; an injector that maps by hand is invisible to the loader's notification and to `EnumProcessModulesEx` alike,
+and so to this); the Linux build (the non-Windows half was compiled as a separate translation unit with GCC under MinGW's
+headers, not built on Linux); the Microsoft Store package (its program folder is read-only and its plugins live under
+`%LOCALAPPDATA%`, which the plugin scan registers, but no package was run); a module whose file name has no extension (it is
+listed as written, and is *kept* only if it passes the name rule). The list says what was loaded at the start or has arrived
+since; it never shrinks, because an unload is not logged, so a report may name a DLL that had already gone.
+
+### What it costs, and the promises it keeps
+
+- **Start-up.** `sentinelSetEnabled(true)` is one `CreateProcess` and returns:
+  **0.7 ms median** (min 0.6, max 2.4) over 25 starts in a test; **2.3-3.4 ms** as
+  the real application measured it (the figure is in its own log line,
+  `sentinel: watching this session (process N, started in X ms)`, which also carries
+  the sentinel's process number - an operating-system number that means nothing once it
+  has ended). The watcher's own start-up runs beside the application, not in front of it.
+  **End to end**, the real `cascade.exe --frames 3` with and without a sentinel, twelve
+  runs of each interleaved on this machine: from the application's first log line to
+  `frame loop starting`, a median of **1185 ms without and 1190 ms with**; wall time for
+  the whole run 2021 ms and 2018 ms. The spread between runs (1047-2157 ms) is far larger
+  than the difference, so the cost is not measurable at that scale.
+- **The application never waits for it**, at exit or anywhere: its side contains one
+  non-blocking test (`WaitForSingleObject(h, 0)`, about once in 300 frames), and ending
+  it on the Diagnostics switch is `TerminateProcess`/`SIGKILL`, neither waited for. A
+  source scan in `tests/test_sentinel.cpp` requires every wait on the application's side
+  of both host files to be a zero timeout or `WNOHANG`, and `AppWindow` to talk to it in
+  exactly the places named above.
+- **If it cannot start, or dies, the application is unaffected and says so once**:
+  `sentinel: not started (<what>, error N); an ending this session that the application
+  cannot report itself will not be written up`, or `sentinel: the watcher ended while the
+  application was still running (...)` - tested by ending a real watcher from outside and
+  by naming an executable that does not exist.
+- **It leaves within a second of the application ending** so that the installer, and the
+  in-app *Install now and restart*, can replace `cascade.exe` - which the sentinel is a
+  running copy of. Measured: the real sentinel was gone **58-68 ms** after the real
+  application ended and `cascade.exe` could be **deleted 69-82 ms** after (the same
+  measurement with a stand-in: 1 ms and 7 ms), and while the application runs the delete
+  is refused, so the test cannot pass for the wrong reason. A hard deadline
+  (`kSentinelExitDeadline`, 1000 ms, armed the instant the application has ended) ends
+  the process whatever a stuck disk is doing; the cost of that is a lost report, never an
+  installer that cannot proceed. (Since 0.99.66 a crash-coded ending also waits up to 800 ms
+  for Windows' own record of the crash, *after* its report is written, inside the same
+  deadline; an ending that is not a crash does not.) The deadline and that wait are the
+  sentinel's bounded waits, classified in `tests/test_shutdown_budget.cpp` (spent in the
+  sentinel process only, zero on the
+  application's shutdown path); the wait that gives the sentinel its purpose - the
+  application's process handle - is unbounded by design.
+- **No dialog, ever**: the sentinel sets `SEM_NOGPFAULTERRORBOX` first. The tests' stand-in
+  applications do too, and ask Windows not to show fault UI (`WER_FAULT_REPORTING_NO_UI`):
+  a real `__fastfail` goes straight to Windows Error Reporting, which with only the error
+  mode started `WerFault.exe` quietly on this machine (two instances, no window; the
+  other three deaths started none).
+
+### Platforms
+
+**Windows 11** is what is described above. **Linux** is built the same way and says plainly
+what it cannot know. A watcher that is not the *parent* cannot learn a process's exit
+status, and the process tree is deliberately not restructured: the sentinel is the
+application's child, started with `fork`+`exec` in its own session (so a Ctrl-C in the
+terminal does not end it with the application) with every other descriptor closed. The
+application keeps the write end of a pipe open for its life and the sentinel blocks on
+`read`; end-of-file means the application has gone, by any route including `SIGKILL` (the
+OOM killer, `kill -9`). The breadcrumb is a `memfd` (unnamed).
+
+**How the process ended, on Linux (0.99.78).** Until 0.99.77 that was the end of what the
+watcher knew: the report's `code:` was `unknown` and its reason ended `exit status not
+available on this platform`, which is all that field report `A0E0967441A8E6B4` (0.99.75,
+an AppImage on Ubuntu 24.04, ended in the phase "creating the window") could say. What was
+looked up, not assumed: `waitid(2)`/`waitpid(2)` apply to a *child* and answer `ECHILD` for
+any other process (the man page for `waitid`, read 2026-10-13), so the watcher cannot ask;
+a pidfd can give the exit code of a task that is not one's child only from Linux 6.15
+(`PIDFD_INFO_EXIT`, from the kernel's pidfs changes as reported on the LTP list; whether a
+non-parent may read it was **not established**), and the machine in the report ran 6.8, so
+it is not used. What the watcher *can* read is what the application wrote down itself, in
+the one place that survives it - the breadcrumb page, whose last four reserved bytes are now
+the **exit record** (`ExitHow << 16 | number`; `breadcrumb::noteExit`, one relaxed store, so a
+signal handler may call it):
+
+| How it ends | Who writes the record |
+|---|---|
+| `exit()` and a return from `main` | an `on_exit` hook (glibc; another C library registers nothing and the report says no record was found) records the status |
+| a fault signal (SEGV, BUS, ILL, FPE, TRAP, ABRT) | the crash handler (`faultSignalHandler`, and `abort()` after `std::terminate` or a pure call), before it writes its report; a second fault inside the handler, and the handler that cannot run, record the `_exit(0xE2)` they end with |
+| `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGPIPE` | `installExitRecording()` (`exit_record.cpp`): a handler that records the number, restores the default disposition (`SA_RESETHAND`) and raises the signal again, so the process ends exactly as before - only for a signal whose disposition was the default; one that was ignored or handled is left alone |
+| `SIGKILL` (OOM killer, `kill -9`), `_exit()` elsewhere | **nobody can**: the record is empty, and the report says which sources were asked |
+
+The last write wins (an `exit()` after which a destructor faults is a signal). The record is
+carried through the platform-neutral `code` as a tagged value, `0x5058` + `01` (exit) or `02`
+(signal) + the status or signal number (`kPosixExitTag`; `0x50580103` is `exit(3)`,
+`0x5058020B` is signal 11), a tag no Windows exit code carries, so `sentinelExitWords`,
+`isCrashLikeExitCode`, the signature and the previous-session classification (`exit_cause.cpp`)
+need no platform switch. The reason's words:
+
+| Record | The report says | Class (while drawing / before the first frame) |
+|---|---|---|
+| exit status 0 | `exit code 0 before the shutdown had finished` (a clean exit after the shutdown reached its last stage writes nothing) | crash / startup |
+| exit status N | `exit code N (the process ended itself)` | crash / startup |
+| SEGV, BUS, ILL, FPE, TRAP, ABRT | `killed by signal N (SIGSEGV)` and so on | crash / startup |
+| HUP, INT, QUIT, TERM, PIPE (and KILL, when it is somehow recorded) | `killed by signal N (SIGTERM)` | outside, kept here (frozen if it had stopped drawing) / startup |
+| a signal with no name here | `killed by signal 34` | outside |
+| no record | `exit status not available on this platform (no exit record; not its parent)` - the old words, now naming the two sources asked | outside (frozen) / startup |
+
+Signal names are Linux's numbers (x86-64 and arm64), not `<csignal>`'s. A fault signal is
+normally reported by the in-process handler, in which case the sentinel writes nothing
+(one report per death); the record matters when that report could not be written. An
+`exit()` while drawing is a *crash* class and is sent, as Windows' exit code 0 before the
+shutdown finished already was; if that proves noisy (a session closing by an exit status) it
+is one line in `decideSentinel` to keep it on the machine.
+
+**Not verified: any of it runs on Linux.** What was done: `sentinel_host_posix.cpp`,
+`exit_record.cpp` and `crash_handler_posix.cpp` pass GCC 16.1 `-fsyntax-only -Wall -Wextra`
+against stand-in declarations of the Linux calls they make (the real headers are not on the
+Windows machine this was written on), which checks syntax and the types as *declared by those
+stand-ins*, not that the real glibc and kernel behave as assumed; the portable code in
+`sentinel.cpp` is compiled and tested on Windows only (GCC accepts its Windows branch
+too, as a second compiler and standard library), so its three `#else` branches (the
+epoch-second report name, `_exit` in the deadline, the pid-0 freeze-report name) are
+unchecked; and the Linux half of `tests/test_sentinel_proc.cpp` (a `SIGKILL` while drawing,
+a `SIGKILL` before the first frame, a clean exit, and since 0.99.78 an exit with status 1 at
+the window, an exit with status 3 while drawing and a `SIGTERM`) is **unrun** - it passed the
+same syntax-only check, with `_WIN32` flipped in a copy, against the same stand-ins.
+
+**The Microsoft Store package** (`installer/msix/README.md`) does not forbid or change
+anything here, as far as can be read: it is a full-trust (`mediumIL`) desktop app, the
+enumeration child already starts the same executable as a child, `%LOCALAPPDATA%` writes
+are not redirected for such an app on the current documentation, and the sentinel writes
+only to the folder the application gives it. **Not established:** Microsoft's packaged-app
+documentation says nothing either way about a packaged process starting another copy of its
+own executable (the page was read for it and is silent), and no signed package was run here.
+What a Store update does to the package's processes - it ends them, and the sentinel with
+them - could leave a local-only *outside* report; that is the safe direction.
+
+### If FoxSDR ends before its window appears (the `window:` lines, 0.99.78)
+
+Field report `A0E0967441A8E6B4` (0.99.75, Linux, an AppImage): audio opened, plugins scanned,
+and the process ended in the phase "creating the window" - and the log held nothing about the
+window system, because GLFW's error text and the two messages `glfwInit failed` and
+`glfwCreateWindow failed` went to standard error, which an AppImage does not keep. Every step of
+the window's start-up now writes one line to the diagnostics log, beginning `window:`. The log
+flushes each line to the operating system before the call returns (`DiagLog::appendToFileLocked`;
+pinned by `tests/test_window_platform.cpp`), so the last `window:` line on disk is the last step
+reached even if the process dies at once. In order (a real run on this desktop; the Linux ones
+differ only in the words):
+
+```
+window: supports win32; DISPLAY not set; WAYLAND_DISPLAY not set; XDG_SESSION_TYPE unset; GLFW 3.4.0 Win32 WGL Null EGL OSMesa VisualC
+window: FOXSDR_WINDOW_PLATFORM=bad is not x11, wayland or any; ignored        (only when the variable is set)
+window: GLFW initialised; platform chosen: win32
+window: window created (hidden until its frame is settled)
+window: GL vendor NVIDIA Corporation; renderer NVIDIA GeForce RTX 4090/PCIe/SSE2; version 4.6.0 NVIDIA 610.88
+window: window shown; the Dear ImGui backends are up
+```
+
+and, wherever GLFW complains (at most the first fifty, then one line saying the rest are not
+logged), `window: GLFW error 65544: ...`, and `window: glfwInit failed ...` /
+`window: glfwCreateWindow failed ...` when those fail. **Never logged:** the *value* of `DISPLAY`
+or `WAYLAND_DISPLAY` (the line says only set or not set - an SSH-forwarded `DISPLAY` names a
+computer), the name GLFW puts in "X11: Failed to open display <name>" (taken out), or an
+`XDG_SESSION_TYPE` other than `x11`, `wayland`, `tty`, `mir`, `unspecified` (`other`). Lines are
+cut to 170 characters so that the log's 192-byte line never cuts them. The sentinel's
+report carries them in its log tail, so a report of a start-up death shows how far the start-up
+got and why it stopped. The sentinel phase stays `creating the window` for the whole stretch
+(GLFW, the window, the context, Dear ImGui): the phases are an ordered, numbered list the site
+reads, and a finer phase would renumber it, so the finer step is the last `window:` line.
+
+**If FoxSDR ends before its window appears on Linux:** run it with
+`FOXSDR_WINDOW_PLATFORM=x11 ./FoxSDR-...AppImage` (or `wayland`), and send the diagnostics log
+lines beginning `window:` (and the report, if one was written). `FOXSDR_WINDOW_PLATFORM` is
+`x11`, `wayland` or `any` (the default, GLFW's own choice: for a build with both, `XDG_SESSION_TYPE`
+of `wayland` with `WAYLAND_DISPLAY` set, or `x11` with `DISPLAY` set, picks that one, and
+otherwise Wayland is tried first and then X11 - `_glfwSelectPlatform` in
+`third_party/glfw/src/platform.c`, read for this note); it is applied with `glfwInitHint(GLFW_PLATFORM, ...)` before `glfwInit`. A value that names no
+platform, or a platform this build of GLFW was not compiled with, is logged
+(`FOXSDR_WINDOW_PLATFORM=... ignored`) and the start-up goes on with GLFW's own choice. There is
+no fall-back if the platform you force cannot start: that is the point of forcing it. It is an
+environment variable and not a setting because it is needed before there is a window to set it
+in. Tested by `tests/test_window_platform.cpp` (the parser, every line's words and width, the
+presence-only rule, the flush) and `tests/test_window_platform_app.cpp` (the real application's
+lines in order before the first frame, `bad` ignored with the run still starting, `x11`
+refused on Windows, a forced platform on Linux). **Not verified:** that forcing `x11` or
+`wayland` cures the field report - its cause is not known; nothing here ran on Linux.
+
+### Known limits
+
+- **It is visible.** A session with Diagnostics on has a second `cascade.exe` in Task
+  Manager's list, with no window (a background process of about 9 MB). Ending the
+  application's whole process tree ends the sentinel with it, and an installer that
+  ends `cascade.exe` by name ends both; the sentinel may then write one `outside`
+  report, which is kept on the machine.
+- The log tail is the end of the *shared* log file: two instances interleave their lines,
+  and if Diagnostics was switched on part-way through a session the tail can begin in an
+  earlier session (the report's log heading says how many lines the session had in the
+  files).
+- A death before `main()` reaches the sentinel's start (reading the arguments and the
+  configuration: milliseconds) is not watched.
+- It decides at the moment of death from a page of numbers, so it cannot say *which*
+  plugin or radio; only that one was being loaded or opened.
+- A *frozen* class is a silence longer than the threshold at the moment the application
+  ended, with nobody holding the window (above). Two of the watchdog's excuses are not
+  mirrored: an attached debugger, and its rule 2c (a GUI thread parked in `win32u.dll`
+  outside the two modal loops the window procedure is told about). An application ended
+  in either state after a long silence is called frozen. The cost of being wrong is one
+  upload-eligible report with the silence in it, which the per-signature, five-a-day
+  limits already bound.
+- The held-window bit is told by window messages, which exist on Windows only. Linux has
+  no such loop (GLFW's own loop never hands control to the window manager), and the
+  shell-open bracket is the scope `user-wait` on both.
+
+### Where it is tested
+
+`tests/test_sentinel.cpp` (in-process: the layout, the hot path, the decision table, the
+vocabulary, the report and its field inventory against this code *and* `PRIVACY.md` in both
+directions, what the uploader makes of it, one report per death, the log tail, and since
+0.99.66 the report with and without Windows' crash record - see *Where in the process it
+ended*); `tests/test_os_crash_record.cpp` (the reader of that record: parser, validation,
+matching, time bound, and a real child that fails fast);
+`tests/test_sentinel_proc.cpp` (stand-in applications that really die: a clean exit, a
+replaceable executable, an ending from outside, a real `__fastfail`, a real access
+violation, a heap corruption, a real stack overflow, a death the in-process handler
+reported, a frozen window, a death before the first frame, a closing session, the
+sentinel killed first, one that cannot start, two instances at once, the Diagnostics switch
+in both directions, the start-up cost); `tests/test_sentinel_app.cpp` (the real `cascade.exe`:
+a clean scripted run, the replaceable file, an ending from outside with the real phase and
+heartbeat, a real `WM_ENDSESSION`, the real Diagnostics switch, stored Diagnostics off,
+Diagnostics switched on mid-session). Since 0.99.78 `tests/test_sentinel.cpp` also holds the
+Linux ending (section 14: the exit record in the page and what the reader refuses, the tagged code,
+the words, the decision for a Linux ending, the closed vocabulary's width, and the chain from the
+page to the report), `tests/test_exit_cause.cpp` the previous-session classes it gives,
+`tests/test_window_platform.cpp` and `tests/test_window_platform_app.cpp` the `window:` lines. **Not
+exercised by any test:** a real log off or
+shutdown; a real Task Manager *End task* (the exit code was measured with `taskkill /F`, not
+with it); a shutdown that wedges for the full 27 s; the Store package; Linux.
 
 ## Symbols — where the archive lives, and why that was a decision
 
@@ -826,6 +4557,167 @@ Release builds are compiled with `/Zi` and linked with `/DEBUG /OPT:REF
 /OPT:ICF`. `/Zi` is a debug-*information* switch, not an optimisation switch:
 the generated code is byte-for-byte what `/O2` produced without it.
 
+### Linux symbols: what the archive holds, and where it comes from
+
+A Linux frame is `module offset build-id`, and what it can be turned into
+depends on what is in `symbols/cascade.debug/<build id>/cascade.debug`. For a
+long time that was assumed, from the file's size alone, to be too small to hold
+line tables. It was then opened.
+
+**What it held, measured (October 2026).** The 0.99.59 file
+(`ec687d3420afc88116b06e356f0311ed13cda489`, 1,463,664 bytes) has 34 sections
+and none of them is `.debug_*`: it is a symbol table (`.symtab`, `.strtab`) with
+every code section marked NOBITS, and nothing else. A search of all 60
+`cascade.debug` files in the mirror for `.debug_`/`.zdebug_` section names found
+none; the larger ones (up to 10 MB, built by GCC 15.2 where 0.99.59 was built by
+GCC 13.3) show the same section list with different padding, not DWARF. The
+plugins' `.so.debug` files are the opposite: all 29 contain `.debug_*` section
+names, and the two opened carry `.debug_info` and `.debug_line`, because the
+plugin repository compiles with `-g`. So a Linux frame in the application could be
+named — "52 bytes before the end of `_glfwTerminateWayland`" — and never placed
+on a line, where the same frame on Windows resolves to a file and line from the
+PDB.
+
+**The step that lost it was the compiler.** CMake's Release flags for GCC and
+Clang are `-O3 -DNDEBUG`; the application's `CMakeLists.txt` added `/Zi` for
+Windows and nothing for Linux, so the binary never had DWARF to keep.
+`tools/archive-symbols-linux.sh` split whatever the binary carried, and its
+header said a normal binary "already carries its DWARF debug info inline",
+which was true of nothing it had been run on. Nothing stripped the binary
+afterwards either: the CI tarball and the AppImage copy `build/cascade` as
+linked.
+
+**What happens now.**
+
+- The Release configuration on Linux compiles C and C++ with `-g`
+  (`CMakeLists.txt`). `-g` is a debug-information switch and does not change the
+  code: GCC's manual says `-g0` negates `-g` and provides `-fcompare-debug` to
+  check that debug information changes nothing, and 12 of this repository's own
+  translation units compiled at `-O3` with and without `-g` (GCC 16, x86-64)
+  had byte-identical code and data sections. (`-fcompare-debug` itself flagged
+  one of four files tried, `src/dsp/rds.cpp`, although that file's emitted
+  sections were identical either way. Only GCC was measured; Clang is not used
+  for a shipped build.)
+- After the link, `tools/archive-symbols-linux.sh` runs
+  `objcopy --only-keep-debug --compress-debug-sections=zlib` to write
+  `cascade.debug` (plain, with a warning, if that `objcopy` refuses the
+  option), then `objcopy --strip-debug --add-gnu-debuglink=<that file>` on the
+  binary in the build tree, and archives that stripped binary as
+  `cascade/<build id>/cascade`. The order is the one binutils documents, and
+  the strip comes only after the split file exists. The build id is in a note
+  section neither step touches, so it is the same before and after. A `Debug`
+  or `RelWithDebInfo` build keeps its DWARF in the binary.
+- Only DWARF is removed (`--strip-debug`, not `--strip-all`): the function
+  symbol table stays, and `symmap.json.gz` is unchanged — regenerated from a
+  real 0.99.59 binary before and after the strip it is identical, and the
+  website's format is untouched.
+- The test executables (`tests/CMakeLists.txt`) compile with `-g0` and link with
+  `--strip-debug`. They are not shipped, there are 265 of them, and one
+  translation unit that includes nlohmann::json grew from 0.4 MB to 6.4 MB of
+  object with `-g`.
+- The script prints `(line tables: yes)` or `(line tables: NO)` and warns when
+  the archived file has no `.debug_line`; it never fails the build, like the
+  rest of it.
+
+**Size.** Nothing has been built with this change at the time of writing, so
+there is no measured figure. The plugin builds give the ratio — a plugin's
+`.so.debug` is 3 to 13 times its shipped module, and zlib halved the small one
+tried — and the PDB for the same program is about 44 MB; expect tens of
+megabytes per Linux build, two builds (x86-64 and arm64) per release. Replace
+this paragraph with the real number from the first CI artifact.
+
+**Where the Linux release symbols come from.** The release notes name the
+files `foxsdr-<version>-linux-x64.tar.gz` and `FoxSDR-<version>-x86_64.AppImage`
+(and the arm64 pair), which are exactly what the CI workflow produces, so the
+released Linux files are taken to be CI's, built on a runner that is thrown
+away. Before this change the workflow uploaded those files and nothing else, so the
+`symbols/` the build wrote on the runner was lost, and `tools/build-nightly.ps1`
+mirrors Windows PDBs only. Any Linux entry in the mirror was therefore copied
+there by hand from a build made elsewhere. A build id in a user's report finds
+its symbols only if the build the user was given is the build that was archived,
+and that must be checked rather than assumed:
+
+    readelf -n cascade | grep "Build ID"     # on the cascade inside the released tarball
+
+and compare it with the directory name under `cascade.debug/` in the mirror.
+
+Each CI job now uploads its `symbols/` as an artifact —
+`foxsdr-linux-x64-symbols` and `foxsdr-linux-arm64-symbols` — and then checks
+it (below). Mirroring is still by hand, and it must use the artifacts of the
+**same run** that produced the release files: a rebuild of the same commit is
+not guaranteed to produce the same build id. Artifacts expire, so do it when the
+release is made.
+
+1. Download both symbol artifacts and unzip them.
+2. Copy `cascade.debug/<build id>/` and `cascade/<build id>/` from each into the
+   same-named directories of the symbol mirror. Entries are keyed by build id,
+   so the two architectures and every earlier build sit side by side.
+3. Append the artifact's `index.txt` rows that the mirror's `index.txt` does not
+   already hold. Each row is terminated `\r\n` and the file has no byte-order
+   mark, as the script writes it; do not replace the mirror's file with the
+   artifact's.
+4. Check: `readelf -S -W <mirror>/cascade.debug/<build id>/cascade.debug`
+   lists `.debug_line`.
+
+**What the first CI run must show.** The "Check the symbol archive" step at the
+end of each Linux job prints the archived file's `.debug_info`/`.debug_line`
+sections, fails if `.debug_line` is missing, fails if the shipped
+`build/cascade` still has `.debug_info`, and resolves `main` through
+`addr2line -f -C -e` to a line in `main.cpp`. The same three can be run by hand
+against any archived file:
+
+    readelf -S -W symbols/cascade.debug/<id>/cascade.debug | grep debug_
+    addr2line -f -C -i -e symbols/cascade.debug/<id>/cascade.debug 0x<offset>
+    readelf -S -W <shipped cascade> | grep -c debug_       # 0
+
+`addr2line` reads the compressed sections (the binutils 2.46 build on the
+development machine did). The CI image's own binutils is the one that matters
+for the archive step: Ubuntu 24.04 ships binutils 2.42, the arm64 job runs on
+`ubuntu-24.04-arm`, and the 0.99.59 archive's compiler string is Ubuntu 24.04's
+GCC 13.3 — and the CI step above is what proves it, rather than this sentence.
+
+**Reading a Linux report.** `foxsdr-reports --archive symbols\` resolves ELF
+frames (a 40-digit lowercase build id) with `addr2line`, found through
+`FOXSDR_ADDR2LINE`, then `addr2line` on `PATH`, then `wsl addr2line`. A
+Windows machine with MSYS2's binutils works: set `FOXSDR_ADDR2LINE` to its
+`addr2line.exe` if it is not on `PATH`. A frame prints one of two ways:
+
+    cascade!<function>  <file>:<line>
+    cascade!<function>  (function only: no source line in the archived symbols)
+
+The second means the archived file names the function and has no line for that
+offset: a build made before the Linux build compiled with `-g`, or an address
+with no line entry (a PLT stub, a compiler thunk). `-i` on a hand-run
+`addr2line` also lists the functions inlined at that address. With no usable
+`addr2line` the reader says so and names the archived file, and never prints a
+half-answer.
+
+**Frames in system libraries.** glibc, libwayland-client, Mesa, libstdc++ and
+the rest can never be in our archive. They do not need to be: the report's
+`--- modules ---` block carries a GNU build id for every module the process had
+loaded, system libraries included (`diag_report.cpp` walks them with
+`dl_iterate_phdr`), and a distribution's debuginfod server indexes its debug
+packages by exactly that id. As a manual step for the person reading a report —
+nothing in FoxSDR, and not `foxsdr-reports`, contacts these servers:
+
+    export DEBUGINFOD_URLS="https://debuginfod.elfutils.org/"
+    debuginfod-find debuginfo <build id of the module, from the report>
+    addr2line -f -C -e <the path debuginfod-find printed> 0x<the frame's offset>
+
+`debuginfod-find` (elfutils) saves the file into a local cache and prints its
+path. Without elfutils the same file is
+`curl -o module.debug https://debuginfod.elfutils.org/buildid/<build id>/debuginfo`.
+`https://debuginfod.elfutils.org/` federates selected servers; the
+distributions run their own, to be chosen from the report's `systems:` line:
+`https://debuginfod.ubuntu.com/`, `https://debuginfod.debian.net/`,
+`https://debuginfod.fedoraproject.org/`, `https://debuginfod.archlinux.org/` and
+`https://debuginfod.opensuse.org/` (`DEBUGINFOD_URLS` takes several,
+space-separated). A build id no server knows is a library version that
+distribution no longer serves, or another distribution; there is nothing to fix
+on our side. The request sends a build id, which identifies a library and not a
+user, to a third party — which is why it is a person's decision and not a
+feature.
+
 ## Reading a report
 
 1. Take the `build=` value for the faulting module out of the `--- modules ---`
@@ -837,7 +4729,11 @@ the generated code is byte-for-byte what `/O2` produced without it.
 3. Point a debugger at the archive as a symbol path and resolve the
    `module+offset` frames — or, for reports that came in over the network, run
    `foxsdr-reports --archive symbols\`, which does exactly this for a whole feed
-   at once and groups it by signature. See *Phase 2* below.
+   at once and groups it by signature. See *Phase 2* below. A Linux report's
+   build id is the 40-digit lowercase GNU build id and its file is
+   `symbols/cascade.debug/<build id>/cascade.debug`; *Linux symbols* above
+   covers what it can and cannot place on a line, and how to read a frame that
+   is in a system library.
 4. `commit:` in the report names the tree to check out — exactly, unless it ends
    in `-dirty`, which says the build was made from a tree with uncommitted
    changes and that commit is only the nearest one.
@@ -901,10 +4797,30 @@ never be re-derived from a later build.
   minidump switch, and has **Copy diagnostics** — one click that puts the whole
   bundle on the clipboard *and* saves it as `crashes\diagnostics.txt`, because a
   clipboard does not survive the next copy and a support thread can take days.
+  Since 0.99.62 the bundle also carries the end of the previous session's log and
+  one line per crash or freeze report on the machine, under their own headings after
+  the log - *What the bundle says about the sessions before this one*, above.
 - After a run that did not exit cleanly (detected by the same
   `telemetryCleanExit` marker the crash counter already uses), the next start
   offers the same thing in a dialog. A crash handler can write a report but it
   cannot ask anything — by the time it runs there is no user interface left.
+  What "cleanly" covers is set by where the marker is written, and since 0.99.61
+  that is *after the plugins have been unloaded* — see *Where the clean-exit
+  marker is written* below.
+- **SDRplay diagnostic (0.99.50):** Settings → Diagnostics → **Run SDRplay
+  diagnostic**, or `cascade --sdrplay-probe <file>
+  [--sdrplay-probe-bias-tee]`. A child process drives the RSP straight
+  through the SDRplay API table (`src/source/sdrplay_probe.cpp`): open and
+  device list, every offered sample rate (3 s each, delivered against set),
+  frequency steps, every LNA state, the antennas and HDR, the bias tee (ON
+  only after a second confirmation), the six low-IF modes the specification
+  lists, then Uninit and close. Every `sdrplay_api_*` call is logged with its
+  UTC entry and exit time and waited for up to 30 s — SLOW over 1000 ms (the
+  receiver's own give-up point), HUNG at 30 s, after which no further call is
+  made. The file lands in `crashes\sdrplay-diagnostic-<date>-<time>.txt`,
+  carries a hash of the serial and never the serial, and can be attached on
+  the REPORT A BUG page inside the existing `diagnostics` field. The GUI never
+  waits for the child, in a frame or at shutdown.
 
 Nothing on that list is re-derived. The version, commit, plugin list with
 versions, source and device state all come from state the application already
@@ -929,6 +4845,10 @@ real binary with that config and requires the tree not to exist — the two
 older "off means off" tests could not see it, because they call
 `configure()`/`installCrashHandlers()` themselves and so say nothing about
 *when* `main()` calls them.
+
+**Off means off for the bundle's reach into earlier sessions too (0.99.62).** With the
+switch off the bundle gets neither the previous session's log nor the report list, not
+even a heading, and no file is read for them.
 
 The directory path is still handed to the crash handler while capture is off,
 so that switching diagnostics **on** mid-session has somewhere to write; the
@@ -982,7 +4902,10 @@ them is why the code is shaped the way it is:
    control), and with the cancel deliberately removed the same run took **9.5 s**.
    That 7.6-second gap is the whole reason the handle is published at all.
 3. **Rate-limit and deduplicate on the client.** The same signature goes at most
-   once per 24 h, and at most 5 reports per 24 h whatever their signatures. Both
+   once per 24 h, and at most 5 reports per 24 h whatever their signatures. (For a
+   freeze "the same signature" means the same first frame of our own code on the
+   stalled thread, not the same kernel wait - *What a freeze's signature is built
+   from*, above.) Both
    counters live in the config, because a crash loop *is* a sequence of runs and
    a limit held in memory would reset on every restart. A 429 that arrives
    anyway is honoured, `Retry-After` clamped into a sane range.
@@ -1041,6 +4964,17 @@ Verified end to end against the real archive: an offset in the shipped
 `src/net/cat_server.cpp:446`, with the plugin frame beside it named as
 unarchived.
 
+ELF frames (a GNU build id of 40 or 32 hex digits) go to `addr2line` against the
+archived `.debug`, on any platform, rather than to a DWARF parser of our own. A
+frame whose archived file has the function and no line for the offset prints
+`(function only: no source line in the archived symbols)` rather than looking
+like a complete answer; the JSON has an empty `file` and a `line` of 0.
+`tests/test_report_reader.cpp` runs this through the real `addr2line` against
+two small ELF files built by `tests/elf_line_fixture.hpp` — one with DWARF line
+tables, one with a symbol table only — whose answers are known in advance, and
+checks the tool-absent message with `PATH` really emptied. On Linux a missing
+`addr2line` fails that test; on Windows it is a stated skip.
+
 ### A freeze report now carries the module table
 
 `hang_watchdog.cpp` wrote thread stacks and no `--- modules ---` block, so every
@@ -1051,3 +4985,62 @@ unwind and byte-identically to `crash_handler.cpp`'s, and
 `tests/test_diag_hang.cpp` asserts it against a report from a real stall. Since
 every fault this product has actually shipped was a hang rather than a crash,
 this was the readable half missing from the half that matters most.
+
+### A freeze or crash report carries the window's last-known state
+
+Field report 6A586D4DAD464BB8 (0.99.73, a Raspberry Pi 5, Linux
+6.18.50+rpt-rpi-2712, the signal generator, WFM): the GUI thread sat in the buffer
+swap for 142 s, 257 s and 70 s inside a 1255 s session and recovered each time
+(`frame: 142056 ms, 142054 ms in present`, then `gui thread recovered after a
+stall`). The system frames are unsymbolised, so the report could not say whether
+the graphics driver stalled or the window system had stopped scheduling a window
+nobody could see. **That is a hypothesis, not a finding.** What the report now
+carries is the fact that separates them:
+
+```
+window-state: visible, not minimised, focused, updated 142 s before this report
+window-system: wayland
+```
+
+- **Where.** In the context section, after the context block (`--- context ---`
+  to `--- modules ---`), in hang, stall *and* crash reports (`hang_watchdog.cpp`
+  both writers, `crash_handler.cpp`, `crash_handler_posix.cpp`). Not in the header,
+  so `hangReportFieldNames()` and `crashReportFieldNames()` are unchanged, and not
+  in the Copy diagnostics bundle (a bundle is not a stall). The context block itself
+  is rendered on the healthy path and cannot hold an *age*, which is the point of the
+  line, so the writers append it at report time.
+- **Who publishes.** The frame loop, once a frame, right after the event pump
+  (`AppWindow::run`): `publishWindowState(visible, iconified, focused)` from
+  `GLFW_VISIBLE`, `GLFW_ICONIFIED`, `GLFW_FOCUSED`. It is the only place the
+  attributes are read for this and the GUI thread the only reader; the watchdog
+  thread and the fault handlers read one `std::atomic<uint64_t>` that holds the
+  three flags and the monotonic millisecond they were published at, and call no
+  GLFW function. `setWindowSystem` publishes the platform GLFW chose once, at
+  start-up, because the log line that names it is the first line of the log and
+  rolls out of the 256-line ring in a long session.
+- **How to read it.** `updated N s before this report` is how long the frame loop
+  has been silent. A state that stopped updating exactly when the stall began is
+  expected (the thread is in the swap); what matters is what it said last. `hidden`
+  or `minimised` while in `present` is the window system not showing the window.
+  `unknown (the frame loop has not published one)` is a stall before the first frame.
+- **Recorded, never acted on.** Nothing suppresses or skips a report on this state,
+  and no decision in the watchdog reads it: a hide event delivered while the thread
+  was already blocked in the swap has not been seen by anyone, so the state can be
+  stale in exactly the case it is wanted for. (The existing `PresentGrace` pause for a
+  minimised window is a separate, older mechanism and is unchanged.)
+- **Limit on Wayland.** GLFW 3.4 cannot see occlusion there: `GLFW_ICONIFIED` is
+  always false (`_glfwWindowIconifiedWayland` returns false, xdg-shell has no query),
+  `GLFW_VISIBLE` is true from `glfwShowWindow` for the whole session, and only
+  `GLFW_FOCUSED` (keyboard focus) varies. On Wayland a hidden window can therefore read
+  `visible, not minimised, not focused`; `not focused` plus `window-system: wayland` plus
+  a long `present` is the signature to look for, not `hidden`. The swap itself is a
+  separate matter: the vendored GLFW is 3.4, whose Wayland EGL swap leaves the wait for
+  the compositor's frame callback to the EGL driver with no timeout; upstream GLFW 3.5.1
+  has a fix (commit `fdd14e65b1`, "Wayland: Fix EGL buffer swap blocking indefinitely")
+  that this tree does not.
+
+`tests/test_diag_window_state.cpp` pins the wording against an explicit clock and
+drives the real watchdog thread through a stall (visible, hidden, never published);
+`tests/test_crash_capture.cpp` asserts the line in reports written by real faults;
+`tests/test_diag_hang.cpp`'s real-application block asserts the line from the real
+frame loop (that block starts `cascade.exe`, which shows a window).

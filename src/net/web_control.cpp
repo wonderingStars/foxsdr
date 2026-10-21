@@ -249,18 +249,22 @@ bool parseControlRequest(const std::string& body, ControlRequest& out,
         *req.sourceKind != "rtlsdr" && *req.sourceKind != "hackrf" &&
         *req.sourceKind != "airspy" && *req.sourceKind != "airspyhf" &&
         *req.sourceKind != "sdrplay" && *req.sourceKind != "mirisdr" &&
-        *req.sourceKind != "rx888" && *req.sourceKind != "pluto") {
+        *req.sourceKind != "rx888" && *req.sourceKind != "pluto" &&
+        *req.sourceKind != "aor" && *req.sourceKind != "hydrasdr" &&
+        *req.sourceKind != "rtltcp") {
         // "file" is refused ON PURPOSE — see the note in web_control.hpp. A
         // browser naming a path on the host is a file-read primitive, not a
-        // source selector. The eight native driver keys are no wider a door
+        // source selector. The native driver keys are no wider a door
         // than "soapy": the application matches the args against its own
         // enumerated list before opening anything, so a browser cannot name a
-        // device this receiver has not seen. "pluto" is the one worth saying
-        // that about twice, because its args carry a NETWORK ADDRESS - but it
-        // is matched against the enumerated row like every other kind, so the
-        // only address a browser can reach is the one already on this screen.
+        // device this receiver has not seen. "pluto" and "rtltcp" are the two
+        // worth saying that about twice, because their args carry a NETWORK
+        // ADDRESS - but each is matched against the enumerated row like every
+        // other kind, so the only address a browser can reach is the one
+        // already on this screen (and selecting that row opens nothing).
         error = "sourceKind must be \"siggen\", \"soapy\", \"rtlsdr\", \"hackrf\", "
-                "\"airspy\", \"airspyhf\", \"sdrplay\", \"mirisdr\", \"rx888\" or \"pluto\"";
+                "\"airspy\", \"airspyhf\", \"sdrplay\", \"mirisdr\", \"rx888\", \"pluto\", "
+                "\"aor\", \"hydrasdr\" or \"rtltcp\"";
         return false;
     }
 

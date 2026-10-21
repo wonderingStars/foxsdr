@@ -29,8 +29,16 @@ namespace cascade::core {
 // because an 8-bit BMP needs a 256-entry colour table and more decoders
 // mishandle that than mishandle 24-bit.
 //
-// Returns false with `error` set on any failure; never throws.
-bool writeBmp24(const HostImage& img, const std::string& path, std::string& error);
+// Returns false with `error` set on any failure; never throws. `error` names the file (it is
+// for the person who chose it, on their own screen); `cause`, when given, says WHY in a
+// class that carries no path, for a log line - a log line never names a file (0.99.65).
+//
+// A write that fails after the file was opened REMOVES it (0.99.65): a picture that did
+// not reach the disk whole is not left behind under the name a good one would have had.
+enum class BmpFailure { None, NoImage, CouldNotOpen, WriteFailed };
+const char* bmpFailureWords(BmpFailure why);
+bool writeBmp24(const HostImage& img, const std::string& path, std::string& error,
+                BmpFailure* cause = nullptr);
 
 // The same 24-bit BMP, encoded into memory instead of onto disk. Exists so the
 // web server can hand a decoded picture to a browser without staging it through

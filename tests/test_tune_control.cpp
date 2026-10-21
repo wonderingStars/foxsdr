@@ -10,7 +10,9 @@
 // unobservable outside a live retune against real (or absent) hardware.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -309,6 +311,21 @@ int main() {
 
     // --- autoPresetTriggersOnWindowClick: the DECODE-row gesture ---------------
     {
+        CascadePreset ps = audioPreset(439.9875e6, 12500.0);
+        ps.flags = CASCADE_PRESET_KEEP_TUNED_ON_START | CASCADE_PRESET_FLAT_AUDIO;
+        // Already on a declared channel must still apply the required demod settings.
+        CHECK(autoPresetIndexOnStart({ps}, 439.9875e6, 0.0, 2.4e6) == 0);
+        // A manually tuned UK channel requires no saved preset first.
+        CHECK(autoPresetIndexOnStart({ps}, 153.0e6, 350000.0, 2.4e6) == 0);
+        cascade::core::UserPreset saved{};
+        saved.frequencyHz = 100.0e6;
+        const auto candidates = cascade::gui::autoPresetCandidates({saved}, {ps});
+        CHECK(!candidates.empty());
+        CHECK(candidates.at(0).flags == ps.flags);
+        CHECK(candidates.at(0).bandwidthHz == 12500.0);
+    }
+
+    {
         // SHOWN BY CLICK: a row pressed while its window was hidden - the
         // gesture this feature exists to catch.
         CHECK(autoPresetTriggersOnWindowClick(true, false) == true);
@@ -508,12 +525,27 @@ int main() {
     // 958-unit cluster - so the meters were dropped until the window was
     // widened. RED WHEN the slack comes back: put the rule's 110 back and
     // the first assertion fails.
+    //
+    // 0.99.74 CHANGED THE ARITHMETIC, NOT THE PROMISE. The GAIN and SQUELCH dials
+    // made the cluster 999 units (888 before), so at scale 1 the meters need a bar
+    // of 1313 and the first-launch bar is 1232: the meters are kept on it by
+    // drawing the deck smaller (deckScale), 918/999 = 0.919 of its size, instead of
+    // being dropped. Every pin below that said "the first-launch bar fits at scale
+    // 1" now says "fits at the scale the deck is drawn at".
     {
         std::printf("  the two meters fit the bar a fresh install opens with\n");
-        CHECK_NEAR(kDeckCoreW, 888.0f, 1.0e-4f);
+        CHECK_NEAR(kDeckCoreW, 999.0f, 1.0e-4f);  // was 888: GAIN and SQUELCH dials, 0.99.74
         CHECK(kDeckMinWindowW == 624);
         CHECK_NEAR(kFirstLaunchBarW, 1232.0f, 1.0e-4f);
-        CHECK(metersFitOnBar(kFirstLaunchBarW, kDeckCoreW));
+        // At full size they no longer fit the first-launch bar...
+        CHECK(!metersFitOnBar(kFirstLaunchBarW, kDeckCoreW));
+        // ...and do at the scale the deck is drawn at there.
+        const cascade::gui::CounterLayout todayLayout{1, true};
+        const float firstScale = cascade::gui::deckScale(kFirstLaunchBarW, todayLayout, 0.57f);
+        CHECK_NEAR(firstScale, (kFirstLaunchBarW - cascade::gui::kDeckMeterReserve) / kDeckCoreW,
+                   1.0e-5f);
+        CHECK_NEAR(firstScale, 0.9189f, 1.0e-3f);
+        CHECK(cascade::gui::deckMetersFit(kFirstLaunchBarW, todayLayout, firstScale));
 
         // ...and not at the narrowest window run() allows, where the bar is at
         // most the client less the cabinet's minimum inset: the meters would
@@ -527,12 +559,22 @@ int main() {
         // kMeterCoreClearance; one unit narrower and they go.
         const float threshold =
             kDeckCoreW + kMeterCoreClearance + 2.0f * kMeterW + kMeterGap + kMeterRightMargin;
-        CHECK_NEAR(threshold, 1202.0f, 1.0e-4f);
+        CHECK_NEAR(threshold, 1313.0f, 1.0e-4f);  // was 1202; 999 + 314
         CHECK(metersFitOnBar(threshold, kDeckCoreW));
         CHECK(!metersFitOnBar(threshold - 1.0f, kDeckCoreW));
-        CHECK(threshold <= kFirstLaunchBarW);
+        // The first-launch bar is NARROWER than the full-size threshold now: that
+        // gap is what the scale closes.
+        CHECK(threshold > kFirstLaunchBarW);
 
-        // NO OVERLAP WITH THE VOLUME DIAL at that narrowest showing width: the
+        // THE FLOAT EDGE (0.99.74): deckScale shrinks the deck until the meters JUST fit, so the
+        // cluster as drawn lands exactly on the clearance, and a product a hair over it must
+        // still count as fitting - the mute banner asks THIS rule where the middle ends, and
+        // "no meters" here while the bar draws them handed it the strip they stand in (the sweep
+        // below found it at the enlarged counter, bar 1030). A real overlap is still refused.
+        CHECK(metersFitOnBar(1036.0f, 722.0004f));
+        CHECK(!metersFitOnBar(1036.0f, 722.002f));
+
+        // NO OVERLAP WITH THE LAST DIAL at that narrowest showing width: the
         // first meter starts at or past the cluster's end plus its clearance,
         // and the second meter keeps the right margin behind it.
         CHECK(meter1XOnBar(threshold) >= kDeckCoreW + kMeterCoreClearance);
@@ -540,8 +582,74 @@ int main() {
         CHECK_NEAR(meter2XOnBar(threshold) - meter1XOnBar(threshold), kMeterW + kMeterGap,
                    1.0e-4f);
         CHECK_NEAR(threshold - (meter2XOnBar(threshold) + kMeterW), kMeterRightMargin, 1.0e-4f);
-        // At the first-launch width the meters sit further right, never closer.
-        CHECK(meter1XOnBar(kFirstLaunchBarW) >= kDeckCoreW + kMeterCoreClearance);
+        // At the first-launch width the meters sit clear of the cluster AS DRAWN
+        // there (scaled), never closer than the clearance.
+        CHECK(meter1XOnBar(kFirstLaunchBarW) >= kDeckCoreW * firstScale + kMeterCoreClearance - 1.0e-3f);
+    }
+
+    // --- THE KNOB ROW: GAIN, SQUELCH, VOLUME (0.99.74) -------------------------------
+    // The tester: "I would put these knobs in the order of gain, squelch and volume just as that is
+    // the order the signal goes through the system." Three dials of one size, left to right, past the
+    // counter's divider, each inside the fixed cluster, the AUTO keys under the first two inside the
+    // bar - for every counter layout, because the dials follow the divider the plate pushes right.
+    {
+        using cascade::gui::CounterLayout;
+        std::printf("  the knob row: gain < squelch < volume, one size, all inside the cluster\n");
+        CHECK_NEAR(cascade::gui::kDeckKnobR, 22.0f, 1.0e-4f);      // was 26 (the volume dial alone)
+        CHECK_NEAR(cascade::gui::kDeckKnobPitch, 72.0f, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::kDeckKnobTickR, 1.38f, 1.0e-4f);  // drawBrassKnob's tick arc
+        for (const CounterLayout& c : {CounterLayout{1, true}, CounterLayout{1, false},
+                                       CounterLayout{2, false}, CounterLayout{2, true}}) {
+            const float g = cascade::gui::deckGainCx(c);
+            const float s = cascade::gui::deckSquelchCx(c);
+            const float v = cascade::gui::deckVolumeCx(c);
+            CHECK(g < s && s < v);
+            CHECK_NEAR(s - g, cascade::gui::kDeckKnobPitch, 1.0e-4f);
+            CHECK_NEAR(v - s, cascade::gui::kDeckKnobPitch, 1.0e-4f);
+            // The first dial's tick arc is clear of the counter's divider, and the plate
+            // before it; the pitch leaves the tick arcs of neighbours apart (they would
+            // touch at 2 * 1.38 * 22 = 60.7).
+            const float reach = cascade::gui::kDeckKnobTickR * cascade::gui::kDeckKnobR;
+            CHECK(g - reach >= cascade::gui::deckCounterDividerX(c) + 12.0f);
+            CHECK(cascade::gui::kDeckKnobPitch - 2.0f * reach >= 10.0f);
+            // The last dial's tick arc and its edge pad end inside the cluster, with under a
+            // unit to spare (kDeckCoreW is that sum rounded UP to a whole unit).
+            const float end = v + reach + cascade::gui::kDeckKnobEdgePad;
+            CHECK(end <= cascade::gui::deckCoreW(c) + 1.0e-3f);
+            CHECK(cascade::gui::deckCoreW(c) - end < 1.0f);
+        }
+        // The cluster is the divider at the 1x plate plus the row: 772 + 46 + 144 + 30.36 + 6.
+        CHECK_NEAR(cascade::gui::deckCounterDividerX(CounterLayout{1, true}), 772.0f, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::deckGainCx(CounterLayout{1, true}), 818.0f, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::deckSquelchCx(CounterLayout{1, true}), 890.0f, 1.0e-4f);
+        CHECK_NEAR(cascade::gui::deckVolumeCx(CounterLayout{1, true}), 962.0f, 1.0e-4f);
+        // Down the bar: caption, dial, reading, key, in that order and inside 160 with the
+        // foot rail's room (the static_asserts in tune_control.hpp hold the same at compile
+        // time; this holds the numbers a reader sees).
+        const float cy = cascade::gui::kDeckKnobCy;
+        const float r = cascade::gui::kDeckKnobR;
+        CHECK(cascade::gui::kDeckKnobCaptionY + 14.0f < cy - cascade::gui::kDeckKnobTickR * r);
+        CHECK(cy + r < cascade::gui::kDeckKnobReadingY);
+        CHECK(cascade::gui::kDeckKnobReadingY + 22.4f <= cascade::gui::kDeckAutoKeyY);
+        CHECK(cascade::gui::kDeckAutoKeyY + cascade::gui::kDeckAutoKeyH + 3.0f <= cascade::gui::kDeckBarH - 3.0f);
+        CHECK_NEAR(cascade::gui::kDeckAutoKeyW, 2.0f * r, 1.0e-4f);
+        // THE FLOOR: the cluster at the bar's smallest scale fits the narrowest window run()
+        // allows less the cabinet's 54: 0.57 * 998.36 = 569.1 <= 570. (app_window.cpp holds the
+        // same with a static_assert on its own copy of the floor.)
+        const float rowEnd = cascade::gui::deckVolumeCx(CounterLayout{1, true}) +
+                             cascade::gui::kDeckKnobTickR * r + cascade::gui::kDeckKnobEdgePad;
+        CHECK_NEAR(rowEnd, 998.36f, 1.0e-3f);
+        CHECK(rowEnd * 0.57f <= static_cast<float>(kDeckMinWindowW) - 54.0f);
+        // ...and 0.58 would not: the floor is the largest to two places that fits.
+        CHECK(rowEnd * 0.58f > static_cast<float>(kDeckMinWindowW) - 54.0f);
+        // At the narrowest bar the window allows the deck is drawn at the floor: the cluster
+        // is inside it.
+        {
+            const float bar = static_cast<float>(kDeckMinWindowW) - 54.0f;
+            const float s = cascade::gui::deckScale(bar, CounterLayout{1, true}, 0.57f);
+            CHECK(s >= 0.57f - 1.0e-6f);
+            CHECK(rowEnd * s <= bar + 1.0e-3f);
+        }
     }
 
     // --- THE COUNTER'S SIZE AND ITS SWITCHES (themes, 2026-09-25) -----------------
@@ -615,9 +723,16 @@ int main() {
         // stands inside the bar, clear of the master divider and of the volume
         // dial; the dial stays inside the cluster; the meters are ON the bar
         // and clear of the cluster; and the figures are no smaller than today's.
+        //
+        // 0.99.74: the meters now fit at the first-launch bar PARTLY THROUGH THE SHRINK for
+        // every layout, not only the enlarged ones (the GAIN and SQUELCH dials made today's
+        // cluster 999 units, 1313 with the meters against the 1232 bar), so the
+        // "figures are no smaller than today's" and "full size" pins below say what is now
+        // true: today's 1x counter is drawn at 918/999 = 0.919 of its size at that bar and at
+        // full size from 1313; the enlarged one is still larger than today's at the same window.
         for (const float barW : {kFirstLaunchBarW, 1552.0f, 1870.0f}) {
             for (const CounterLayout& c : {today, bare, big, bigSwitched}) {
-                const float s = cascade::gui::deckScale(barW, c, 0.62f);
+                const float s = cascade::gui::deckScale(barW, c, 0.57f);
                 CHECK(s > 0.0f && s <= 1.0f);
                 const float plateL = (cascade::gui::kDeckMasterDividerX + 12.0f) * s;
                 const float plateR = plateL + cascade::gui::counterPlateW(c) * s;
@@ -626,8 +741,12 @@ int main() {
                 // The bar is never drawn taller than today's 160 units: the
                 // body below keeps its height whatever the counter wears.
                 CHECK(cascade::gui::deckBarH(c) * s <= 160.0f + 1.0e-3f);
-                const float dialL = (cascade::gui::deckVolumeCx(c) - 26.0f) * s;
-                const float dialR = (cascade::gui::deckVolumeCx(c) + 26.0f) * s;
+                // The FIRST dial's tick arc is clear of the plate; the LAST one's, with its edge
+                // pad, is inside the cluster (the three dials since 0.99.74; it was one dial,
+                // 26 units out either side of deckVolumeCx).
+                const float reach = cascade::gui::kDeckKnobTickR * cascade::gui::kDeckKnobR;
+                const float dialL = (cascade::gui::deckGainCx(c) - reach) * s;
+                const float dialR = (cascade::gui::deckVolumeCx(c) + reach) * s;
                 CHECK(plateR < dialL);
                 CHECK(dialR <= cascade::gui::deckCoreW(c) * s);
                 const bool meters = cascade::gui::deckMetersFit(barW, c, s);
@@ -638,24 +757,44 @@ int main() {
                 CHECK(meters);
                 CHECK(meter1XOnBar(barW) >= cascade::gui::deckCoreW(c) * s + kMeterCoreClearance - 1.0e-3f);
                 const FreqRect t = tubeRectForCell(0.0f, 0.0f, 0, s, c);
-                CHECK(t.y1 - t.y0 >= kFreqTubeH - 1.0e-4f);
                 if (c.scale == 2) {
-                    // Larger than today's at the SAME window, and at full size
-                    // once the window has room for it.
+                    // Larger than today's at the SAME window: 1.5 times the figure today's
+                    // counter is drawn with at this bar (the old pin was 1.5 times the
+                    // unscaled 40, true while today's was drawn at full size here).
+                    const float todayS = cascade::gui::deckScale(barW, today, 0.57f);
+                    const FreqRect t1 = tubeRectForCell(0.0f, 0.0f, 0, todayS, today);
+                    CHECK(t.y1 - t.y0 >= 1.5f * (t1.y1 - t1.y0));
+                    // ...and still genuinely large, in absolute terms.
                     CHECK(t.y1 - t.y0 >= 1.5f * kFreqTubeH);
                     // (Classic XL's own layout; with its switches the plate
                     // is drawn to the bar's height instead - see deckScale.)
                     if (barW >= 1552.0f && !c.switches) { CHECK_NEAR(s, 1.0f, 1.0e-4f); }
-                } else {
+                } else if (barW >= 1313.0f) {
+                    // Room for the 999-unit cluster and both meters (1313): full size, and
+                    // figures no smaller than today's.
                     CHECK_NEAR(s, 1.0f, 1.0e-4f);
+                    CHECK(t.y1 - t.y0 >= kFreqTubeH - 1.0e-4f);
+                } else {
+                    // The first-launch bar: shrunk exactly as much as keeps both meters on it
+                    // and no more - the figures lose 8%, not a tenth.
+                    CHECK_NEAR(s, (barW - cascade::gui::kDeckMeterReserve) / kDeckCoreW, 1.0e-4f);
+                    CHECK(t.y1 - t.y0 >= 0.9f * kFreqTubeH);
                 }
             }
         }
-        // Today's bar keeps today's rule exactly, meters and all.
+        // At full size the meters rule is the unscaled one, exactly (an identity at scale 1): it
+        // fails at the first-launch bar and just under 1313, and holds from 1313.
         CHECK(cascade::gui::deckMetersFit(kFirstLaunchBarW, today, 1.0f) ==
               metersFitOnBar(kFirstLaunchBarW, kDeckCoreW));
-        CHECK(cascade::gui::deckMetersFit(1201.0f, today, 1.0f) ==
-              metersFitOnBar(1201.0f, kDeckCoreW));
+        CHECK(!cascade::gui::deckMetersFit(kFirstLaunchBarW, today, 1.0f));
+        CHECK(cascade::gui::deckMetersFit(1312.0f, today, 1.0f) ==
+              metersFitOnBar(1312.0f, kDeckCoreW));
+        CHECK(!cascade::gui::deckMetersFit(1312.0f, today, 1.0f));
+        CHECK(cascade::gui::deckMetersFit(1313.0f, today, 1.0f));
+        CHECK_NEAR(cascade::gui::deckScale(1313.0f, today, 0.57f), 1.0f, 1.0e-5f);
+        CHECK(cascade::gui::deckScale(1312.0f, today, 0.57f) < 1.0f);
+        // The floor holds: however narrow the bar, never under the floor it was given.
+        CHECK(cascade::gui::deckScale(300.0f, today, 0.57f) >= 0.57f - 1.0e-6f);
     }
 
     // --- the mute banner: the middle when there is room, under the counter otherwise
@@ -670,16 +809,19 @@ int main() {
         CHECK(muteBannerMiddleW(kFirstLaunchBarW, kDeckCoreW) < kMuteBannerMinW);
         CHECK(!muteBannerTakesTheMiddle(kFirstLaunchBarW, kDeckCoreW));
         // Just under the meters threshold there are no meters and the middle
-        // runs to the bar's edge: 1201 - 12 - 888 - 12 = 289, enough.
-        CHECK(muteBannerTakesTheMiddle(1201.0f, kDeckCoreW));
-        CHECK_NEAR(muteBannerMiddleW(1201.0f, kDeckCoreW), 289.0f, 1.0e-4f);
+        // runs to the bar's edge: 1312 - 12 - 999 - 12 = 289, enough. (The same
+        // 289 as before 0.99.74, at 1201 with the 888-unit cluster: the arithmetic
+        // is the cluster's width past the threshold, whatever the cluster is.)
+        CHECK(muteBannerTakesTheMiddle(1312.0f, kDeckCoreW));
+        CHECK_NEAR(muteBannerMiddleW(1312.0f, kDeckCoreW), 289.0f, 1.0e-4f);
         // A wide bar with the meters on it: the strip runs from the cluster
-        // plus 12 (900) to the first meter less one meter gap (barW - 318),
-        // and takes the middle again once that reaches 220 - at 1438 exactly.
-        CHECK(!muteBannerTakesTheMiddle(1437.0f, kDeckCoreW));
-        CHECK(muteBannerTakesTheMiddle(1438.0f, kDeckCoreW));
-        CHECK_NEAR(muteBannerMiddleW(1438.0f, kDeckCoreW), 220.0f, 1.0e-4f);
-        CHECK(metersFitOnBar(1438.0f, kDeckCoreW));
+        // plus 12 (1011) to the first meter less one meter gap (barW - 318),
+        // and takes the middle again once that reaches 220 - at 1549 exactly
+        // (1438 with the 888-unit cluster: 111 more).
+        CHECK(!muteBannerTakesTheMiddle(1548.0f, kDeckCoreW));
+        CHECK(muteBannerTakesTheMiddle(1549.0f, kDeckCoreW));
+        CHECK_NEAR(muteBannerMiddleW(1549.0f, kDeckCoreW), 220.0f, 1.0e-4f);
+        CHECK(metersFitOnBar(1549.0f, kDeckCoreW));
         // The narrowest window: no meters, no room in the middle.
         CHECK(!muteBannerTakesTheMiddle(static_cast<float>(kDeckMinWindowW) - 50.0f,
                                         kDeckCoreW));
@@ -733,11 +875,15 @@ int main() {
                                            CounterLayout{2, false}, CounterLayout{2, true}}) {
             for (float barW = static_cast<float>(kDeckMinWindowW) - 50.0f; barW <= 2400.0f;
                  barW += 7.0f) {
-                const float s = cascade::gui::deckScale(barW, layout, 0.62f);
+                // 0.57, the floor app_window.cpp's kBarMinScale has had since 0.99.74 (0.62
+                // before: the GAIN and SQUELCH dials made the cluster wider, and the floor
+                // that keeps it inside the narrowest window fell with it).
+                const float s = cascade::gui::deckScale(barW, layout, 0.57f);
                 const float coreW = cascade::gui::deckCoreW(layout);
                 const bool meters = cascade::gui::deckMetersFit(barW, layout, s);
                 const float plateW = cascade::gui::counterPlateW(layout);
                 const float plateH = cascade::gui::counterPlateH(layout);
+                const float gainCx = cascade::gui::deckGainCx(layout);
                 const float volCx = cascade::gui::deckVolumeCx(layout);
                 const Box bar{0.0f, 0.0f, barW, cascade::gui::deckBarH(layout) * s};
                 std::vector<Box> parts = {
@@ -745,8 +891,13 @@ int main() {
                     {150.0f * s, 50.0f * s, 378.0f * s, 140.0f * s},    // MASTER, lamps, words
                     {396.0f * s, 20.0f * s, (396.0f + plateW) * s,      // the counter plate
                      (20.0f + plateH) * s},
-                    {(volCx - 30.0f) * s, 38.0f * s, (volCx + 30.0f) * s,  // the volume dial
-                     130.0f * s},
+                    // THE KNOB ROW (0.99.74): the three dials with their captions above and
+                    // their AUTO keys and lamp strips below, one box a cell (half the pitch)
+                    // either side of the outer dials' centres.
+                    {(gainCx - 0.5f * cascade::gui::kDeckKnobPitch) * s,
+                     cascade::gui::kDeckKnobCaptionY * s,
+                     (volCx + 0.5f * cascade::gui::kDeckKnobPitch) * s,
+                     (cascade::gui::kDeckAutoKeyY + cascade::gui::kDeckAutoKeyH) * s + 4.0f},
                 };
                 {
                     // The bias tee key under the lamp row, where it would stand.
@@ -754,14 +905,25 @@ int main() {
                     parts.push_back({bk.x0 * s, bk.y0 * s, bk.x1 * s, bk.y1 * s});
                 }
                 if (meters) {
-                    parts.push_back({meter1XOnBar(barW), 28.0f, meter2XOnBar(barW) + kMeterW,
-                                     28.0f + meterH});
+                    // THE METERS AS drawToolbar DRAWS THEM: every measurement scaled with the
+                    // deck (it was drawn in bar pixels once, and this model with it), face and
+                    // gaps and margin, the top 28 units down - which is a bar pixel count only
+                    // at scale 1. At the first-launch bar the deck is drawn at 0.92 (the
+                    // enlarged counters at 0.77) and the faces stand correspondingly higher: a
+                    // banner placed above "28 px" lies across them. (0.99.74.)
+                    const float mw = kMeterW * s;
+                    const float m2x = barW - kMeterRightMargin * s - mw;
+                    const float m1x = m2x - kMeterGap * s - mw;
+                    parts.push_back({m1x, 28.0f * s, m2x + mw, 28.0f * s + (meterH - 74.0f) + 74.0f * s});
                 }
                 for (const float wordsW : {120.0f, 277.0f, 560.0f}) {
                     for (const float keyLabelW : {70.0f, 135.0f}) {
                         const int nz = sized(wordsW, keyLabelW, sz);
+                        // coreScaled TRUE FOR EVERY LAYOUT since 0.99.74: the 1x deck is drawn
+                        // smaller than full size at the first-launch bar too (the meters), so
+                        // "the cluster as drawn" is coreW * s whatever the counter.
                         const MuteBannerLayout l = layoutMuteBanner(
-                            barW, s, coreW, layout.scale >= 2, meters, sz, nz, padX, gap);
+                            barW, s, coreW, true, meters, sz, nz, padX, gap);
                         ++placed;
                         ++bySlot[l.slot];
                         const Box place{l.x0, l.y0, l.x1, l.y1};
@@ -806,27 +968,39 @@ int main() {
         // All three places are exercised, or the sweep proves less than it says.
         CHECK(bySlot[0] > 0 && bySlot[1] > 0 && bySlot[2] > 0);
 
-        // TODAY AT 1600 x 1000 (a 1552 bar): the middle, exactly where it always
-        // went - the words one item spacing past (cluster end + 12, 62).
+        // TODAY AT 1920 x 1080 (a 1870 bar): the middle, exactly where it always
+        // went - the words one item spacing past (cluster end + 12, 62). It was 1600 x 1000 (a
+        // 1552 bar) until 0.99.74: the two extra dials made the cluster 999 units, the middle
+        // between it and the meters is 111 narrower, and a one-decoder English banner (302 units
+        // with its key) needs a bar of about 1631 to be given it.
         {
             const CounterLayout today{1, true};
             const int nz = sized(200.0f, 70.0f, sz);
             const MuteBannerLayout l =
-                layoutMuteBanner(1552.0f, 1.0f, cascade::gui::deckCoreW(today), false,
-                                 metersFitOnBar(1552.0f, kDeckCoreW), sz, nz, padX, gap);
+                layoutMuteBanner(1870.0f, 1.0f, cascade::gui::deckCoreW(today), false,
+                                 metersFitOnBar(1870.0f, kDeckCoreW), sz, nz, padX, gap);
             CHECK(l.slot == 0);
             CHECK_NEAR(l.wordsX, kDeckCoreW + cascade::gui::kMuteBannerEdgeClearance + gap, 1.0e-4f);
             CHECK_NEAR(l.wordsY, 62.0f, 1.0e-4f);
             CHECK_NEAR(l.keyX, l.wordsX + 200.0f + gap, 1.0e-4f);
+            // ...and at 1600 x 1000 it is not given the middle any more, and is still whole and
+            // clear of the meters (the sweep above holds the rest).
+            const MuteBannerLayout narrower =
+                layoutMuteBanner(1552.0f, 1.0f, cascade::gui::deckCoreW(today), true,
+                                 metersFitOnBar(1552.0f, kDeckCoreW), sz, nz, padX, gap);
+            CHECK(narrower.slot != 0);
         }
         // TODAY AT FIRST LAUNCH (1232), one decoder named in English (about 200
-        // px of words, a 70-px key): not the middle, and the key at FULL size.
+        // px of words, a 70-px key): not the middle, and the key at FULL size. The deck is
+        // drawn at the scale that keeps both meters on this bar (0.919, since 0.99.74), and the
+        // banner is measured against the cluster as drawn.
         {
             const CounterLayout today{1, true};
             const int nz = sized(200.0f, 70.0f, sz);
+            const float firstScale = cascade::gui::deckScale(kFirstLaunchBarW, today, 0.57f);
             const MuteBannerLayout l = layoutMuteBanner(
-                kFirstLaunchBarW, 1.0f, cascade::gui::deckCoreW(today), false,
-                metersFitOnBar(kFirstLaunchBarW, kDeckCoreW), sz, nz, padX, gap);
+                kFirstLaunchBarW, firstScale, cascade::gui::deckCoreW(today), true,
+                cascade::gui::deckMetersFit(kFirstLaunchBarW, today, firstScale), sz, nz, padX, gap);
             CHECK(l.slot != 0);
             CHECK_NEAR(l.px, lineH, 1.0e-6f);
             CHECK(l.wordsWhole);
@@ -1185,6 +1359,10 @@ int main() {
         CHECK(isNativeSourceKind("mirisdr"));
         CHECK(isNativeSourceKind("rx888"));
         CHECK(isNativeSourceKind("pluto"));
+        // The rtl_tcp client (0.99.70): our own driver, reached over TCP.
+        CHECK(isNativeSourceKind("rtltcp"));
+        CHECK(!isNativeSourceKind("rtl_tcp"));
+        CHECK(!isNativeSourceKind("rtltcp "));
         // NOT native, and each for its own reason: two are sources that are
         // not radios, one is the vendor path, and the last three are the
         // SoapySDR module names for three of the eight above - which are
@@ -1644,6 +1822,139 @@ int main() {
             // the deck's own rule that the zeros ahead of the first
             // significant digit carry no value.
             CHECK(p.dimAlpha < p.digitAlpha);
+        }
+    }
+
+    // --- radioCanTune: the Airband add row's range rule (0.99.66) -------------
+    //
+    // The rule a refused tune is judged by, applied to a frequency offered to a
+    // list: above 0 Hz at the radio and, when the radio publishes a range,
+    // inside it - the ends included - and nothing is known about a radio that
+    // published none.
+    {
+        using cascade::gui::radioCanTune;
+        // An RTL-SDR's R820T2: 24 MHz to 1766 MHz.
+        const double lo = 24.0e6;
+        const double hi = 1766.0e6;
+        CHECK(radioCanTune(121.5e6, true, lo, hi));       // inside
+        CHECK(radioCanTune(lo, true, lo, hi));            // the ends are in
+        CHECK(radioCanTune(hi, true, lo, hi));
+        CHECK(!radioCanTune(7.1e6, true, lo, hi));        // below: the 7.1 MHz of issue 2
+        CHECK(!radioCanTune(lo - 1.0, true, lo, hi));
+        CHECK(!radioCanTune(hi + 1.0, true, lo, hi));     // above
+        CHECK(!radioCanTune(2.4e9, true, lo, hi));
+        // No published range: anything above 0 Hz, nothing else.
+        CHECK(radioCanTune(7.1e6, false, 0.0, 0.0));
+        CHECK(radioCanTune(121.5e6, false, lo, hi));      // a range given but not published
+        CHECK(radioCanTune(7.1e6, true, hi, lo));         // an upside-down range is no range
+        CHECK(radioCanTune(7.1e6, true, 100.0e6, 100.0e6));
+        // Never at or below 0 Hz, nor a number that is not one - a converter
+        // whose LO is above the air frequency asks the radio for a negative.
+        CHECK(!radioCanTune(0.0, false, 0.0, 0.0));
+        CHECK(!radioCanTune(-5.0e6, false, 0.0, 0.0));
+        CHECK(!radioCanTune(-5.0e6, true, lo, hi));
+        CHECK(!radioCanTune(std::nan(""), false, 0.0, 0.0));
+        CHECK(!radioCanTune(std::numeric_limits<double>::infinity(), false, 0.0, 0.0));
+    }
+
+    // --- parseMhz: a typed frequency is a whole number of hertz (0.99.66 review) ---
+    //
+    // 128.050 times 1e6 is 128050000.00000001 as a double. The monitor takes one
+    // channel per EXACT frequency (airbandWanted), so a row typed as 128.050 played
+    // beside an airport's or a CSV's 128050000 as a second strip. Every channel of
+    // the 25 kHz raster of the civil airband, 118.000 to 137.000 MHz, is typed in
+    // and must come back as the integer number of hertz it names.
+    {
+        using cascade::gui::parseMhz;
+        int rows = 0;
+        int notWhole = 0;
+        int different = 0;
+        char firstBad[32] = "";
+        for (int k = 0; k <= 760; ++k) {
+            const long long khz = 118000 + 25LL * k;
+            char text[32];
+            std::snprintf(text, sizeof(text), "%lld.%03lld", khz / 1000, khz % 1000);
+            const double mhz = static_cast<double>(khz) / 1000.0;
+            double hz = -1.0;
+            const bool ok = parseMhz(text, hz);
+            ++rows;
+            CHECK(ok);
+            const bool whole = std::isfinite(hz) && hz == std::floor(hz);
+            const bool same = hz == static_cast<double>(std::llround(mhz * 1.0e6)) &&
+                              hz == static_cast<double>(khz * 1000);
+            if (!whole) { ++notWhole; }
+            if (!same) { ++different; }
+            if ((!whole || !same) && firstBad[0] == '\0') { std::snprintf(firstBad, sizeof(firstBad), "%s", text); }
+        }
+        std::printf("  parseMhz over the 25 kHz raster: %d rows, %d not whole hertz, %d different from "
+                    "llround(mhz*1e6)%s%s\n",
+                    rows, notWhole, different, firstBad[0] != '\0' ? ", first " : "", firstBad);
+        CHECK(rows == 761);
+        CHECK(notWhole == 0);
+        CHECK(different == 0);
+
+        double hz = 0.0;
+        // The case the review named, and a decimal comma and spaces round it.
+        CHECK(parseMhz("128.050", hz) && hz == 128050000.0);
+        CHECK(parseMhz(" 128,050 ", hz) && hz == 128050000.0);
+        CHECK(parseMhz("121.5", hz) && hz == 121500000.0);
+        CHECK(parseMhz("121.500", hz) && hz == 121500000.0);
+        // Below the raster's step: the hertz it rounds to. 6 decimals is a hertz.
+        CHECK(parseMhz("121.500001", hz) && hz == 121500001.0);
+        CHECK(parseMhz("121.5000004", hz) && hz == 121500000.0);
+        CHECK(parseMhz("9999.999999", hz) && hz == 9999999999.0);
+
+        // What is refused, unchanged: no figure, text that is not one, nothing above the
+        // counter's largest frequency, and a figure that rounds to 0 Hz.
+        for (const char* bad : {"", " ", ".", "abc", "121.5x", "1e3", "-5", "+5", "0", "0.0", "0.0000001",
+                                "1.2.3", "10000", "9999.9999999", "121.5 MHz"}) {
+            double out = 123.0;
+            CHECK(!parseMhz(bad, out));
+            CHECK(out == 123.0);   // a refusal leaves the answer alone
+        }
+    }
+
+    // --- the preset field: what a chosen group puts in it (0.99.66 review) ---------
+    //
+    // The keys act on the field TRIMMED (airbandPresetName); choosing a group in the list
+    // copies its name there. A group stored with spaces round it, or longer than the field,
+    // used to leave Export CSV and Remove preset dead or acting on the OLD name.
+    {
+        using cascade::gui::presetFieldText;
+        using cascade::gui::trimPresetName;
+        // Fits: as it is.
+        CHECK(presetFieldText("Marine", 128) == "Marine");
+        CHECK(presetFieldText("KORD Chicago O'Hare International Airport", 128) ==
+              "KORD Chicago O'Hare International Airport");
+        // Trims: what the keys will read, not the stored spaces.
+        CHECK(presetFieldText("  Marine \t", 128) == "Marine");
+        CHECK(presetFieldText("\r\nTower Zone 2 ", 128) == "Tower Zone 2");
+        // A name in another script is not cut - only ASCII blanks are trimmed (an
+        // ideographic space, E3 80 80, is part of the name).
+        CHECK(presetFieldText("  Th\xC3\xA9\xC3\xA2tre  ", 128) == "Th\xC3\xA9\xC3\xA2tre");
+        CHECK(presetFieldText("\xE3\x80\x80X", 128) == "\xE3\x80\x80X");
+        // Nothing but blanks, or nothing: nothing to put (the keys read "Manual").
+        CHECK(presetFieldText("   ", 128).empty());
+        CHECK(presetFieldText("", 128).empty());
+        // The boundary: the field's last byte is the terminator, so 127 bytes fit 128 and
+        // 128 do not.
+        CHECK(presetFieldText(std::string(127, 'x'), 128) == std::string(127, 'x'));
+        CHECK(presetFieldText(std::string(128, 'x'), 128).empty());
+        // Too long: nothing is copied - not the first 127 bytes, not the old text.
+        CHECK(presetFieldText(std::string(300, 'y'), 128).empty());
+        // Too long as stored, short enough once trimmed: the trimmed name goes in.
+        CHECK(presetFieldText("  " + std::string(126, 'z') + "  ", 128) == std::string(126, 'z'));
+        // The same boundary at the OLD field size shows why it was enlarged: a 64-byte name
+        // did not fit 64.
+        CHECK(presetFieldText(std::string(64, 'q'), 64).empty());
+        CHECK(presetFieldText(std::string(64, 'q'), 128) == std::string(64, 'q'));
+        // What the keys read of the field is what the list showed: for every name that goes in,
+        // trimming it again changes nothing, and it is the group's own trimmed name.
+        for (const char* g : {"Marine", "  Marine ", "Tower Zone 2", "\tA\t", "Caf\xC3\xA9 "}) {
+            const std::string f = presetFieldText(g, 128);
+            CHECK(!f.empty());
+            CHECK(trimPresetName(f) == f);
+            CHECK(f == trimPresetName(g));
         }
     }
 

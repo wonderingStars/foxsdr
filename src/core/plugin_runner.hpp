@@ -7,6 +7,10 @@
 // THREADING, which is the whole difficulty here:
 //
 //   rebuild()/clear()   control thread. Creates and destroys instances.
+//   startPlugin()/stopPlugin()
+//                       control thread. Create or destroy ONE plugin's instances
+//                       under the same lock, leaving every other plugin's state and
+//                       the stream epoch as they are (0.99.73, see below).
 //   processAudio()      DSP thread, real-time. Must not block or allocate.
 //   pullPluginAudio()   DSP thread, real-time, the same thread and the same
 //                       lock as processAudio - which is what lets the ABI
@@ -52,6 +56,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_api.hpp"
 #include "core/plugin_host.hpp"
+#include "core/tx_audio.hpp"
 #include "dsp/resampler.hpp"
 
 namespace cascade::core {
@@ -161,8 +166,49 @@ public:
     // Takes the same lock rebuild() does: both run on the control thread
     // today, but a set that is read under a lock and written without one is a
     // race waiting for the first caller who forgets that.
+    //
+    // KEYED ON THE PLUGIN'S ID (core/plugin_run.hpp), so what is handed in may
+    // be file names or ids, and a stop outlives an update of the module.
     void setStopped(std::vector<std::string> keys);
     bool isStopped(const std::string& pluginKey) const;
+
+    // ----- Per-plugin start and stop (0.99.73) --------------------------------
+    //
+    // A FITTED PLUGIN RUNS ONLY WHILE IT IS USED (core/plugin_run.hpp). The
+    // owner decides, once a frame, which plugins are wanted; these two make the
+    // decision real for ONE plugin without the wholesale rebuild:
+    //
+    //   startPlugin(lp)   creates that plugin's instances, against the rates
+    //                     and centre the last rebuild() and retune() left, and
+    //                     appends their status rows. Every other plugin's
+    //                     instances, counters and status rows are untouched and
+    //                     so is the stream epoch - which means a plugin started
+    //                     mid-epoch has been handed only the frames since its
+    //                     start, while the clock counts the stream. Returns
+    //                     false, and creates nothing, when the plugin did not
+    //                     load, is STOPPED, already has instances, or no
+    //                     rebuild() has given the runner a rate yet.
+    //   stopPlugin(key)   destroys exactly that plugin's instances (with the
+    //                     lock dropped, as destroyInstances does), removes its
+    //                     status rows and its claim on the speakers, and leaves
+    //                     every other plugin as it was. Safe for a key with no
+    //                     instances.
+    //
+    // rebuild() stays for the wholesale cases: a new source, rate, centre or
+    // rescan, where every instance has to be created again anyway.
+    //
+    // THE DORMANT SET is the plugins the owner has put to sleep (AUTO and not
+    // wanted): like the stop set it is applied by rebuild() - a dormant plugin
+    // gets no instance - and survives clear(); stopPlugin() adds its plugin to
+    // it and startPlugin() takes it out, so a later rebuild() keeps the runner
+    // as the per-plugin calls left it. Keyed on id, like the stop set.
+    bool startPlugin(const LoadedPlugin& lp);
+    void stopPlugin(const std::string& pluginKey);
+    void setDormant(std::vector<std::string> keys);
+    bool isDormant(const std::string& pluginKey) const;
+    // Whether this plugin (by module file name) has any instance at all,
+    // working or failed. A dormant or stopped plugin has none.
+    bool hasInstances(const std::string& pluginKey) const;
 
     // Whether this plugin has at least one instance the runner is ACTUALLY
     // FEEDING - created, and matched to the rate the pipeline is delivering.
@@ -198,8 +244,27 @@ public:
     // wants 2 MHz of it).
     void processIq(const float* interleaved, std::size_t frames);
 
-    // DSP or control thread. The receiver moved; effective from the next
-    // process call. Cheap and safe to call when nothing has changed.
+    // The receiver moved; effective from the next process call. Cheap and safe to
+    // call when nothing has changed.
+    //
+    // NEVER WAITS FOR THE RUNNER'S LOCK. The DSP thread holds it across every I/Q
+    // decoder's process(), and with thirty decoders on a machine that cannot keep up
+    // it is inside nearly all of the time; std::mutex is not fair, so a caller that
+    // waited could lose the race for seconds (the GUI thread did, in
+    // Pipeline::resetRds, on the very next line of AppWindow::applyRetuneNow). So:
+    // retune() TRIES the lock. Got it: apply now, exactly as before. Did not: leave
+    // the centre in pendingCentreHz_ (the newest call overwrites the older, so the
+    // last tune wins) and return; the DSP thread applies it under the lock at the top
+    // of its next processIq() - which is where the ABI says retune() is called from
+    // (the DSP thread, serialised with process(), plugin_abi.h) - and
+    // startPlugin() applies it before it creates, so no instance is ever created
+    // against a centre older than the last tune.
+    //
+    // What does NOT change: the lock is still non-recursive and a plugin must still
+    // not call the host's tune service from inside create() or process() (that
+    // re-enters this lock on the thread that owns it, as it always did). Calls from
+    // destroy() are fine and unaffected: destroyInstances() drops the lock before it
+    // runs them.
     void retune(double centreHz);
 
     // ----- The stream clock (host API level 1, CascadeStreamInfo) -----------
@@ -289,6 +354,56 @@ public:
     // figures have to be drivable. Never called by the application.
     void setPlayingForTest(const std::string& name, std::uint64_t gaps = 0, std::uint64_t gapFrames = 0);
 
+    // ----- The plugin TRANSMIT path (CASCADE_CAP_TX_AUDIO, host API level 2) -----
+    //
+    // The runner's half of a plugin transmitting: it asks each TX_AUDIO instance
+    // whether it wants the transmitter, decides which ONE plugin holds it, and - only
+    // while the host has keyed the transmitter FOR that plugin - pulls its audio into
+    // the ring the Transmitter reads. It never keys anything: the key is the GUI
+    // thread's, from core/tx_audio.hpp's pluginMayKey(), and this class is told the
+    // result (setTxKeyed) and tells the GUI what the plugin wants (the link).
+    //
+    //   setTxLink      the ring and the facts shared with the Transmitter. Once.
+    //   setTxGranted   the module file names holding the TRANSMIT grant. An instance
+    //                  whose module is not in it is polled (so it can be said to have
+    //                  ASKED) and is never pulled from, whatever else is true.
+    //   setTxKeyed     the host has keyed the transmitter for the holder: pull() may be
+    //                  called. Takes the runner's lock, so when it returns false nothing
+    //                  is still being pulled and nothing more will be - which is what
+    //                  lets the caller empty the ring afterwards.
+    //   pollTxAudio    DSP thread, real-time, once per audio block, under the same
+    //                  lock and on the same thread as process()/pull() of AUDIO_OUT,
+    //                  which is what the ABI promises a plugin: never concurrent.
+    //
+    // THE HOLDER is the first plugin in load order that is granted and has active()
+    // non-zero, and it is STICKY while the transmitter is keyed: a second plugin that
+    // starts wanting the key mid-transmission does not take it over - it waits, is
+    // told so (txState), and is considered again when the key is next open.
+    void setTxLink(std::shared_ptr<TxAudioLink> link);
+    void setTxGranted(std::vector<std::string> keys);
+    void setTxKeyed(bool keyed);
+    void pollTxAudio();
+
+    // What the plate and the log are told about one plugin (by module file name).
+    struct TxPluginState {
+        bool declared = false;   // it has a TX_AUDIO instance at all
+        bool asked = false;      // its active() has been non-zero at least once
+        bool holder = false;     // it holds the transmitter now
+        bool waiting = false;    // granted and wanting the key, but another plugin holds it
+        bool stopped = false;    // its pull() returned a negative number: stopped for good
+        std::string name;        // its descriptor name
+    };
+    TxPluginState txState(const std::string& pluginKey) const;
+    // Module file names whose active() has been non-zero at least once, this session -
+    // what the TRANSMIT key on a plate is offered to. Survives a rebuild.
+    std::vector<std::string> txAskers() const;
+    // The holder's descriptor name and module file name; empty when nobody holds it.
+    std::string txHolderName() const;
+    std::string txHolderKey() const;
+    // The first granted TX_AUDIO plugin in load order, holder or not: the plugin the
+    // TRANSMIT page names beside the arming window. Empty when none is granted.
+    std::string txFirstGrantedName() const;
+
     // GUI thread. Writes the diagnostics the audio path recorded: one line per
     // takeover transition, and a once-a-minute gap digest when there is
     // anything to say.
@@ -317,7 +432,17 @@ public:
     // DSP thread takes, because the borrow must not overlap a process() call on
     // that instance. The copy therefore happens with the lock held; it is only
     // paid when an image actually changed.
+    //
+    // WHEN THE SET OF IMAGE INSTANCES CHANGES (a rebuild, or one plugin started
+    // or stopped, 0.99.73), `out` is re-seeded BY NAME: an entry whose plugin is
+    // still there keeps its picture and revision - a decoder offers a picture
+    // when it changes, so one already received would otherwise never come back -
+    // and only a plugin with no entry yet starts empty.
     void pollImages(std::vector<HostImage>& out);
+
+    // GUI thread. Delivers native-pixel input only to a live image instance
+    // with a valid picture; serialized with its lifecycle and DSP callbacks.
+    bool imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y);
 
     // GUI thread. What each loaded decoder is doing, or why it is not.
     std::vector<DecoderStatus> status() const;
@@ -361,6 +486,9 @@ private:
         const CascadeDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        // The module file name (pluginKey): which plugin owns this instance,
+        // so stopPlugin() can take out exactly its instances and no one else's.
+        std::string key;
         AudioResample resample;
         // poll_text writes no NUL and splits only on code-point boundaries,
         // so a line can arrive across two polls. Carried here between calls.
@@ -384,6 +512,7 @@ private:
         const CascadeIqDecoderApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;  // as Instance::key
         std::string partial;
         std::size_t statusIndex = 0;
         bool failed = false;
@@ -394,8 +523,12 @@ private:
     // carry which one it asked for.
     struct ImageInstance {
         const CascadeImageDecoderApi* api = nullptr;
+        const CascadeImageInputApi* input = nullptr;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
         void* handle = nullptr;
         std::string name;
+        std::string key;  // as Instance::key
         std::string partial;
         std::uint32_t inputKind = CASCADE_INPUT_AUDIO;
         AudioResample resample;  // audio-input image decoders only
@@ -444,6 +577,25 @@ private:
         std::vector<float> fifoL, fifoR;
         std::size_t fifoHead = 0;
     };
+
+    // ONE PLUGIN'S TRANSMIT CLAIM, riding on a decoder instance exactly as an
+    // AudioInstance does and for the same reason: it holds no handle of its own, so
+    // destroyInstances()/removePluginLocked() drop these BEFORE the instance whose
+    // handle they borrow.
+    struct TxInstance {
+        const CascadeTxAudioApi* api = nullptr;
+        void* handle = nullptr;  // borrowed from a decoder instance
+        std::string name;
+        std::string key;
+        bool active = false;   // the last active() reading
+        bool asked = false;    // active() has been non-zero at least once
+        bool stopped = false;  // pull() returned negative: never pulled or asked again
+    };
+    static constexpr std::size_t kNoTx = static_cast<std::size_t>(-1);
+    // Lock held; the real-time body of pollTxAudio.
+    void pollTxAudioLocked();
+    // Folds each instance's `asked` into txAsked_ (so a rebuild does not forget it).
+    void foldTxAskedLocked();
 
     // Recorded by the real-time path, written out by pollAudioDiagnostics on
     // the GUI thread. FIXED STORAGE and a fixed-size array, because the thread
@@ -502,6 +654,14 @@ private:
     // the moved-out copies, and the lock is retaken before returning, so a
     // caller sees exactly the state a function that never let go would leave.
     void destroyInstances(std::unique_lock<std::mutex>& lock);
+    // Creates every instance ONE plugin declares and appends their status rows,
+    // against audioRateHz_/iqRateHz_/centreHz_. Lock held; the body rebuild()
+    // runs for each plugin, and what startPlugin() runs for one.
+    void buildPluginLocked(const LoadedPlugin& lp);
+    // The per-plugin counterpart of destroyInstances(): moves ONE plugin's
+    // instances out (the rest stay, with their status rows re-indexed), drops
+    // the lock, destroys them, retakes it.
+    void removePluginLocked(const std::string& key, std::unique_lock<std::mutex>& lock);
     void pollLocked();
     void pollIqLocked();
     // Status text from the image decoders fed by `inputKind`, into the same
@@ -528,6 +688,7 @@ private:
         const CascadeAudioProcessorApi* api = nullptr;
         void* handle = nullptr;
         std::string name;
+        std::string key;  // as Instance::key
         std::string title;
     };
     // Frames the interleaved scratch is sized for at rebuild; a larger block
@@ -543,6 +704,9 @@ private:
     // a stop that arrives while the DSP thread is running cannot race the
     // instance vectors it decides the contents of.
     PluginStopSet stopped_;
+    // The plugins put to sleep (AUTO and not wanted), applied by rebuild() the
+    // way stopped_ is and under the same lock; see setDormant().
+    PluginStopSet dormant_;
     std::vector<Instance> instances_;
     std::vector<IqInstance> iqInstances_;
     std::vector<ImageInstance> imageInstances_;
@@ -550,6 +714,12 @@ private:
     // decide whether it has anything to feed without walking the vector.
     std::size_t audioImageCount_ = 0;
     std::size_t iqImageCount_ = 0;
+    std::vector<TxInstance> txInstances_;
+    std::size_t txHolder_ = kNoTx;  // index into txInstances_
+    std::vector<std::string> txGranted_;  // module file names holding the TRANSMIT grant
+    std::vector<std::string> txAsked_;    // module file names that have asked, kept across rebuilds
+    std::shared_ptr<TxAudioLink> txLink_;
+    std::vector<float> txPullBuf_;  // reserved at build; pull() writes into it
     std::vector<AudioInstance> audioInstances_;
     // Index into audioInstances_ of the plugin holding the speakers, or
     // kNoAudio. FIRST WINS: the search runs in rebuild order and stops at the
@@ -571,6 +741,16 @@ private:
     double audioRateHz_ = 0.0;
     double iqRateHz_ = 0.0;
     double centreHz_ = 0.0;
+    // A retune() that found mutex_ busy. Value first, then the flag (release); the
+    // DSP thread exchanges the flag under mutex_ and then reads the value, so it
+    // sees the newest centre or a newer one, never an older one than it was told.
+    // Cleared by every path that sets centreHz_ itself (a direct retune, rebuild).
+    std::atomic<double> pendingCentreHz_{0.0};
+    std::atomic<bool> pendingCentre_{false};
+    // Lock held. Moves the centre and tells the I/Q instances. The body of retune().
+    void retuneLocked(double centreHz);
+    // Lock held. Applies a centre retune() left behind, if there is one.
+    void applyPendingCentreLocked();
     std::size_t audioFed_ = 0;
     std::size_t iqFed_ = 0;
 

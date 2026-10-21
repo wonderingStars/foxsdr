@@ -151,6 +151,9 @@ struct AppStateExt {
     std::uint64_t audioPrimingCallbacks = 0;  // measurements: the sink's health
     double audioRingMs = 0.0;
     double audioRingCapacityMs = 0.0;
+    // The lead the sink demands before it plays, in milliseconds (0.99.73, master): 120 to start with, deepened to 240, 480 or 960 when this
+    // computer falls behind, or the fixed buffer the person chose. A measurement: it moves no sequence counter. 0: nothing published it.
+    int audioLeadMs = 0;
     std::uint64_t audioPluginGaps = 0;
     std::uint64_t audioPluginGapFrames = 0;
     std::uint64_t iqBytes = 0;       // the recorders' progress

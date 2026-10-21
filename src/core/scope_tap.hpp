@@ -11,13 +11,14 @@
 //   would be rejected and the picture would be a frozen 30 ms of history from
 //   whenever the window was last polled.
 //
-//   Pipeline::audioTap is a rolling window of the right KIND, but it is held
-//   under audioMutex_ - the mutex the DSP thread owns across the whole of a
-//   block - and it is 4096 frames, 85 ms at 48 kHz. The longest sweep this
-//   scope offers is 50 ms per division across ten divisions, which is half a
-//   second: six times what that tap can hold. Widening it and taking its lock
-//   once a frame from the GUI would put the render thread behind a block of
-//   DSP for a picture.
+//   Pipeline::audioTap is a rolling window of the right KIND, but it is
+//   copied under a mutex (tapMutex_, which the DSP thread takes for each
+//   block's frames; it used to be audioMutex_, which the DSP thread owns across
+//   the whole of a block) and it is 4096 frames, 85 ms at 48 kHz. The longest
+//   sweep this scope offers is 50 ms per division across ten divisions, which
+//   is half a second: six times what that tap can hold. Widening it and
+//   taking its lock once a frame from the GUI would put the render thread
+//   behind the DSP thread's copy of every block for a picture.
 //
 // So: one writer, no lock, and a reader that may be told it was too slow. The
 // DSP thread NEVER waits and never fails to write - it overwrites the oldest

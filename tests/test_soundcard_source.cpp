@@ -49,6 +49,7 @@
 #endif
 
 #include "core/config.hpp"
+#include "core/diag_log.hpp"
 #include "core/patch_devices.hpp"
 #include "core/pipeline.hpp"
 #include "dsp/demod.hpp"
@@ -1367,6 +1368,22 @@ void testHungCloseAtTheSource() {
         CHECK(reopen.finished);
         CHECK(gate->hung.load() == 1);
         CHECK(SoundCardSource::abandonedCloses() == abandonedBefore + 1);
+        // ...and the line that says so describes the card without NAMING it
+        // (0.99.59): an input's name is often a label a person chose, and
+        // this line rides into crash reports and the diagnostics bundle.
+        {
+            bool said = false;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("did not close within") == std::string::npos) { continue; }
+                said = true;
+                if (l.find("USB Audio CODEC") != std::string::npos) {
+                    std::printf("hung close: the line names the card: %s\n", l.c_str());
+                }
+                CHECK(l.find("USB Audio CODEC") == std::string::npos);
+                CHECK(l.find("Windows WASAPI") != std::string::npos);  // what it is, still said
+            }
+            CHECK(said);
+        }
         if (!reopen.finished) {
             // RED: the reopen is stuck behind the hung close. Let it go before
             // anything else touches the source.
@@ -2856,6 +2873,32 @@ void testAliveNeverBlocks() {
 // closes it BEFORE it gives back its PortAudio initialisation - the last
 // Pa_Terminate closes every open stream itself, and a close after that would
 // close it twice.
+// A device-friendly-name string is often an OS-assigned Bluetooth or
+// paired-phone label ("Headset (Alice's AirPods Pro)"), not anything this
+// application generated, and it must never reach a log line or the
+// diagnostics bundle a person can choose to attach to a bug report
+// (2026-09-28 review, B1). loggableSoundCardDescription() is what the four
+// call sites that used to print `.device` raw now print instead.
+void testLoggableDescriptionHidesTheDeviceName() {
+    SoundCardSettings s;
+    s.device = "Headset (Alice's AirPods Pro)";
+    s.hostApi = "Windows WASAPI";
+    s.cardRateHz = 48000.0;
+    s.format = SoundCardFormat::IqStereo;
+    const std::string iq = cascade::source::loggableSoundCardDescription(s);
+    CHECK(iq.find("Alice") == std::string::npos);
+    CHECK(iq.find("AirPods") == std::string::npos);
+    CHECK(iq.find("Windows WASAPI") != std::string::npos);
+    CHECK(iq.find("I/Q") != std::string::npos);
+    CHECK(iq.find("48000") != std::string::npos);
+
+    s.format = SoundCardFormat::RealMono;
+    const std::string mono = cascade::source::loggableSoundCardDescription(s);
+    CHECK(mono.find("Alice") == std::string::npos);
+    CHECK(mono.find("mono") != std::string::npos);
+    CHECK(mono != iq);  // the two formats read differently, not just the name missing
+}
+
 void testBackendClosesBeforeTerminate() {
     fakepa::scriptWindowsMachine();
     fakepa::resetUse();
@@ -3006,6 +3049,7 @@ int main() {
     testStreamListGuardModes();
     testAliveNeverBlocks();
     testBackendClosesBeforeTerminate();
+    testLoggableDescriptionHidesTheDeviceName();
     // Before anything else in this process initialises the real PortAudio.
     testPortAudioInitShared();
     testRealBackendEnumerates();

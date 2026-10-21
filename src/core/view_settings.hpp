@@ -193,7 +193,7 @@ inline int clampScopeRangeNm(int nm) { return scopeRangeNmAt(scopeRangeIndex(nm)
 // The five banks, in the order the rail's captions always had them: what the
 // samples pass through, what is made of them, how it is shown, the ways in
 // from outside, and the application talking about itself.
-enum class RailBank : int { SignalPath = 0, Decode = 1, View = 2, Extend = 3, System = 4 };
+enum class RailBank : int { SignalPath = 0, Decode = 1, Tools = 2, Extend = 3, System = 4 };
 inline constexpr int kRailBankCount = 5;
 
 // A saved bank index, clamped. The config carries an int and an old or edited

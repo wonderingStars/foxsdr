@@ -24,6 +24,7 @@
 #endif
 
 #include "core/image_write.hpp"
+#include "core/write_fault.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -100,6 +101,45 @@ int main() {
         std::string err;
         CHECK(!cascade::core::writeBmp24(bad, out.string(), err));
         CHECK(!err.empty());
+    }
+
+    // --- WHY, without a path; and a failed write leaves no file (0.99.65) ---------------
+    // A log line says why a picture was not written from the cause and never from the error text,
+    // which names the file; and a picture that did not reach the disk whole is removed.
+    {
+        using cascade::core::BmpFailure;
+        cascade::core::HostImage empty;
+        std::string err;
+        BmpFailure why = BmpFailure::WriteFailed;
+        CHECK(!cascade::core::writeBmp24(empty, out.string(), err, &why));
+        CHECK(why == BmpFailure::NoImage);
+
+        why = BmpFailure::None;
+        const std::string missing = (dir / "no-such-folder" / "img.bmp").string();
+        CHECK(!cascade::core::writeBmp24(rgbFixture(), missing, err, &why));
+        CHECK(why == BmpFailure::CouldNotOpen);
+        CHECK(err.find(missing) != std::string::npos);  // the error names the file...
+        const std::string words = cascade::core::bmpFailureWords(why);
+        CHECK(!words.empty());
+        CHECK(words.find("no-such-folder") == std::string::npos);  // ...the cause's words do not
+
+        // A write that fails part way: the file the writer opened is removed again.
+        struct Fail {
+            static void hook(const char* writer, std::ostream& os) {
+                if (std::string(writer) == "bmp") { os.setstate(std::ios::badbit); }
+            }
+        };
+        cascade::core::setWriteFaultHookForTest(&Fail::hook);
+        const fs::path torn = dir / "torn.bmp";
+        why = BmpFailure::None;
+        CHECK(!cascade::core::writeBmp24(rgbFixture(), torn.string(), err, &why));
+        cascade::core::setWriteFaultHookForTest(nullptr);
+        CHECK(why == BmpFailure::WriteFailed);
+        CHECK(!fs::exists(torn, ec));
+        CHECK(cascade::core::writeBmp24(rgbFixture(), torn.string(), err, &why));  // and it works again
+        CHECK(why == BmpFailure::None);
+        CHECK(fs::exists(torn, ec));
+        fs::remove(torn, ec);
     }
 
     // --- encodeBmp24 must produce EXACTLY what writeBmp24 writes ----------

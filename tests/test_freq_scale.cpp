@@ -471,5 +471,98 @@ int main() {
         CHECK_NEAR(inert.hzToX(1e6), 0.0, 0.0);
     }
 
+    // --- keepInView: the picture following a slid passband (0.99.82) -------------------------
+    {
+        const double nan = std::nan("");
+        // A 2 MHz baseband at 100 MHz, zoomed 20x about the point 65% along it (100.3 MHz), which
+        // stays 65% along the view: 100.235 to 100.335 MHz.
+        auto zoomed = [&]() {
+            FreqScale s;
+            s.setSpan(100e6, 2e6);
+            s.zoomAt(0.65, 20.0);
+            return s;
+        };
+        FreqScale z = zoomed();
+        CHECK_NEAR(z.viewHighHz() - z.viewLowHz(), 100e3, 1e-3);
+        CHECK_NEAR(z.viewLowHz(), 100.235e6, 1e-3);
+        const double span0 = z.viewHighHz() - z.viewLowHz();
+
+        // Already inside with room to spare: nothing moves, and it says so.
+        {
+            FreqScale s = zoomed();
+            const double lo = s.viewLowHz(), hi = s.viewHighHz();
+            const double mid = 0.5 * (lo + hi);
+            CHECK(!s.keepInView(mid - 1500.0, mid + 1500.0, 0.08));
+            CHECK_NEAR(s.viewLowHz(), lo, 0.0);
+            CHECK_NEAR(s.viewHighHz(), hi, 0.0);
+        }
+        // Past the high edge: panned just far enough that the band's top edge has the margin to
+        // spare; the width is kept.
+        {
+            FreqScale s = zoomed();
+            const double hi = s.viewHighHz();
+            const double bandHi = hi + 20e3;
+            CHECK(s.keepInView(bandHi - 3000.0, bandHi, 0.08));
+            CHECK_NEAR(s.viewHighHz(), bandHi + 0.08 * span0, 1e-3);
+            CHECK_NEAR(s.viewHighHz() - s.viewLowHz(), span0, 1e-3);
+        }
+        // Past the low edge, the same the other way.
+        {
+            FreqScale s = zoomed();
+            const double lo = s.viewLowHz();
+            const double bandLo = lo - 20e3;
+            CHECK(s.keepInView(bandLo, bandLo + 3000.0, 0.08));
+            CHECK_NEAR(s.viewLowHz(), bandLo - 0.08 * span0, 1e-3);
+            CHECK_NEAR(s.viewHighHz() - s.viewLowHz(), span0, 1e-3);
+        }
+        // Inside the view but against the frame (inside the margin) is brought in, too.
+        {
+            FreqScale s = zoomed();
+            const double hi = s.viewHighHz();
+            CHECK(s.keepInView(hi - 3000.0, hi - 100.0, 0.08));
+            CHECK_NEAR(s.viewHighHz(), hi - 100.0 + 0.08 * span0, 1e-3);
+        }
+        // At the end of the baseband the view stops at the end: the band is as near the edge as the
+        // baseband allows, and the view never leaves it.
+        {
+            FreqScale s;
+            s.setSpan(100e6, 2e6);
+            s.zoomAt(1.0, 20.0);   // the top 100 kHz: 100.9..101.0 MHz
+            const double hi0 = s.viewHighHz();
+            CHECK_NEAR(hi0, 101e6, 1e-3);
+            // Inside the margin of the frame, but the frame is the end of the baseband: no room to
+            // pan, so nothing moves.
+            CHECK(!s.keepInView(hi0 - 5000.0, hi0 - 2000.0, 0.08));
+            CHECK_NEAR(s.viewHighHz(), 101e6, 1e-3);
+            // And a band that is not in the view at all, near the bottom of the baseband.
+            FreqScale t;
+            t.setSpan(100e6, 2e6);
+            t.zoomAt(0.0, 20.0);
+            t.pan(0.5);
+            CHECK(t.keepInView(99.0e6, 99.003e6, 0.08));
+            CHECK_NEAR(t.viewLowHz(), 99e6, 1e-3);   // pinned at the low end of the baseband
+        }
+        // A band too wide for the margin is centred in the view.
+        {
+            FreqScale s = zoomed();
+            const double mid = s.viewLowHz() + 70e3;
+            CHECK(s.keepInView(mid - 48e3, mid + 48e3, 0.08));
+            CHECK_NEAR(0.5 * (s.viewLowHz() + s.viewHighHz()), mid, 1e-3);
+            CHECK_NEAR(s.viewHighHz() - s.viewLowHz(), span0, 1e-3);
+        }
+        // Rubbish in: nothing moves, nothing throws.
+        {
+            FreqScale s = zoomed();
+            const double lo = s.viewLowHz();
+            CHECK(!s.keepInView(nan, 1e6, 0.08));
+            CHECK(!s.keepInView(1e6, nan, 0.08));
+            CHECK(!s.keepInView(1e6, 0.5e6, 0.08));   // ends before it starts
+            CHECK(!s.keepInView(1e6, 2e6, nan));
+            FreqScale inert;
+            CHECK(!inert.keepInView(1e6, 2e6, 0.08));
+            CHECK_NEAR(s.viewLowHz(), lo, 0.0);
+        }
+    }
+
     return testSummary("test_freq_scale");
 }

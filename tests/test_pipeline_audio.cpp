@@ -413,10 +413,17 @@ int main() {
     // --- RDS must be forgotten on a retune -----------------------------------
     // A decoder has no idea the receiver moved; if the pipeline does not
     // reset it, the previous station's PS name stays on screen over the new
-    // one. Checked immediately after the retune, which is orders of magnitude
-    // sooner than the ~0.4 s any re-acquisition would need.
+    // one. Since the GUI setters post and return (0.99.82, so a frame never
+    // contends the DSP thread's lock), the reset lands between two DSP blocks
+    // rather than inside the setter - so this check WAITS, bounded far under
+    // the ~0.4 s any re-acquisition needs: a reset that happened shows as
+    // psValid dropping within a block or two, and one that never happened
+    // keeps the old PS name for the whole window and fails here. Reading the
+    // snapshot synchronously raced that post, and lost on a timing the suite
+    // only sometimes produced (seen 2026-10-19).
     CHECK(pipeline.rdsSnapshot().state.psValid);  // still there before the move
     pipeline.setVfoOffsetHz(60000.0);
+    CHECK(waitFor([&] { return !pipeline.rdsSnapshot().state.psValid; }, 2000));
     const cascade::core::RdsSnapshot after = pipeline.rdsSnapshot();
     std::printf("after retune: psValid=%d piValid=%d ps=\"%s\" synced=%d\n",
                 after.state.psValid ? 1 : 0, after.state.piValid ? 1 : 0,
@@ -428,11 +435,12 @@ int main() {
     CHECK(after.state.radioText.empty());
     CHECK(!pipeline.pilotLocked());  // the stereo decoder is reset with it
 
-    // A mode change is the other way a station is abandoned.
+    // A mode change is the other way a station is abandoned. Posted like the
+    // retune, so it is waited for the same way.
     pipeline.setVfoOffsetHz(0.0);
     CHECK(waitFor([&] { return pipeline.rdsSnapshot().state.psValid; }, 30000));
     pipeline.setDemodMode(cascade::dsp::DemodMode::AM);
-    CHECK(!pipeline.rdsSnapshot().state.psValid);
+    CHECK(waitFor([&] { return !pipeline.rdsSnapshot().state.psValid; }, 2000));
     CHECK(!pipeline.stereoActive());
 
     pipeline.stop();

@@ -213,7 +213,13 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                              !sameText(f.deviceName, o.deviceName, CASCADE_DEVICE_NAME_CHARS) ||
                              gainsMoved;
         const bool aAudio = first || f.volume != o.volume || changed(f.flags, o.flags, FOXAPI_RX_MUTED);
-        const bool aOther = first || changed(f.flags, o.flags, FOXAPI_RX_STEREO_ACTIVE);
+        // The stereo flag and the receiver's position are state too, though neither belongs to tune/mode/device/audio: they move
+        // the overall counter only. The position is what receiverLocator is computed from in getState(), so a "Set RX here" or a
+        // GPS fix has to advance `seq` or a plugin re-reading only on seq moving would never see its grid square appear or change
+        // (master 0.99.4x, merged into the snapshot's derivation 2026-10-21).
+        const bool aOther = first || changed(f.flags, o.flags, FOXAPI_RX_STEREO_ACTIVE) ||
+                            e.rxPositionSet != oe.rxPositionSet || e.rxLatDeg != oe.rxLatDeg ||
+                            e.rxLonDeg != oe.rxLonDeg;
         e.abiTuneSeq = oe.abiTuneSeq + (aTune ? 1u : 0u);
         e.abiModeSeq = oe.abiModeSeq + (aMode ? 1u : 0u);
         e.abiDeviceSeq = oe.abiDeviceSeq + (aDevice ? 1u : 0u);

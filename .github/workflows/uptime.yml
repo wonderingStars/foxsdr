@@ -1,0 +1,105 @@
+# Outside uptime check for the FoxSDR website and its telemetry endpoint.
+#
+# A site that is down cannot report that it is down, so this runs from GitHub's
+# machines every 15 minutes. It needs no secrets and checks nothing out. A
+# failing run fails the workflow; whether anybody is emailed about that is
+# GitHub's notification setting - see uptime-README.md before relying on it.
+#
+# Three checks, each retried for about three minutes, because the site is
+# legitimately silent for about a minute when it is redeployed:
+#   1. https://foxsdr.com/healthz answers 200 with JSON {"ok": true, "version": "..."}
+#   2. https://foxsdr.com/ answers 200
+#   3. https://telemetry.foxsdr.com/ answers 400 to a POST of invalid JSON. That is
+#      the only harmless probe: the Worker parses the body first and answers
+#      "bad json" before it writes anything, so no usage row is created.
+#
+# On failure it prints one line per failed check - which check, and the HTTP
+# status (000 means no answer at all) - and nothing the server sent.
+
+name: Uptime
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check the site and the telemetry endpoint
+        shell: bash
+        env:
+          SITE: https://foxsdr.com
+          TELEMETRY: https://telemetry.foxsdr.com/
+        run: |
+          set -u
+
+          # How long to keep trying, and how often, in seconds.
+          window="${UPTIME_WINDOW:-180}"
+          pause="${UPTIME_PAUSE:-15}"
+
+          body="$(mktemp)"
+          failure=""
+
+          # code <curl arguments>: print the HTTP status, or 000 if nothing answered.
+          code() {
+            curl --silent --output "$body" --write-out '%{http_code}' --max-time 10 "$@" || true
+          }
+
+          # Each check returns 0 when it passes. When it fails it returns 1 and
+          # leaves "<which check>: HTTP <status>" in $failure.
+          check_healthz() {
+            local c
+            c="$(code "$SITE/healthz")"
+            if [ "$c" != "200" ]; then
+              failure="healthz: HTTP $c"
+              return 1
+            fi
+            if ! python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d.get("ok") is True and isinstance(d.get("version"), str) and d["version"] != "" else 1)' "$body" 2>/dev/null; then
+              failure="healthz: HTTP 200 but the answer is not {ok: true, version: ...}"
+              return 1
+            fi
+          }
+
+          check_home() {
+            local c
+            c="$(code "$SITE/")"
+            if [ "$c" != "200" ]; then
+              failure="home page: HTTP $c"
+              return 1
+            fi
+          }
+
+          check_telemetry() {
+            local c
+            c="$(code --request POST --header 'content-type: application/json' --data 'not json' "$TELEMETRY")"
+            if [ "$c" != "400" ]; then
+              failure="telemetry: HTTP $c (a POST of invalid JSON should be answered 400)"
+              return 1
+            fi
+          }
+
+          end=$((SECONDS + window))
+          while true; do
+            failures=()
+            for check in check_healthz check_home check_telemetry; do
+              failure=""
+              "$check" || failures+=("$failure")
+            done
+            if [ "${#failures[@]}" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$end" ]; then
+              break
+            fi
+            sleep "$pause"
+          done
+
+          for f in "${failures[@]}"; do
+            echo "::error::$f"
+          done
+          exit 1

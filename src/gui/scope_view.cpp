@@ -16,6 +16,7 @@
 #include "gui/basemap_cache.hpp"
 #include "gui/coastline_data.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/text_fit.hpp"
 #include "gui/theme.hpp"
 #include "gui/track_info_cache.hpp"
@@ -260,14 +261,15 @@ double mercLat(double y) {
 //   1. an EMERGENCY takes the reserved hue and outranks everything;
 //   2. the ALTITUDE BAND when the altitude is known, which is what makes an
 //      approach and a cruise read differently at a glance;
-//   3. the aircraft kind colour when it is not - and the marker is drawn
-//      HOLLOW in that case, so "no reported altitude" and "at sea level" are
-//      not two shades of one thing.
+//   3. a neutral grey when it is not - the map says the same since 0.99.74,
+//      in its own mid grey (noAltitudeStyle), where this dark face takes a
+//      paler one - and the marker is drawn HOLLOW in that case, so "no
+//      reported altitude" and "at sea level" are not two shades of one thing.
 ImU32 targetColour(const CascadeTrack& t) {
     if ((t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) { return kAlert; }
     const int band = altitudeBandIndex(t.altM);
     if (band < 0) {
-        // NOT A RED. The map's kind colour for an aircraft is a red one hue
+        // NOT A RED. The aircraft kind colour is a red one hue
         // away from the alert red reserved for a 7500/7600/7700 squawk, and on
         // a scope face - small marks, phosphor surround, no legend beside them
         // - a reviewer could not tell the two apart. The product's own rule is
@@ -514,7 +516,7 @@ void drawScopePanel(float width, float height, const cascade::core::HostTrack* s
         rows.reserve(tracks.size());
         for (const cascade::core::HostTrack& ht : tracks) {
             if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             Row r{&ht, 0.0, 0.0};
@@ -1422,7 +1424,8 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
     dl->AddRect(tl, br, theme::kBrassDark, round, 0, theme::kHairline);
     addBenchBevel(dl, tl, br, round, true);
 
-    float y = tl.y + 7.0f;
+    const float s = cascade::gui::uiscale::factor();
+    float y = tl.y + 7.0f * s;
     if (title != nullptr && title[0] != '\0') {
         // IVORY, NOT ENGRAVED. The design's own rule is that a caption may be
         // cut into brass - about 2.3:1 - but this plate's ground is dark
@@ -1436,9 +1439,16 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // pair of capitals a fifteen-character title is the widest thing this
         // file draws. The rail's own 8 px inset is left clear at both ends so
         // the title never touches the bevel it sits inside.
+        //
+        // fonts::legendPx(), not the base kLegendSize: this one function
+        // titles the rail's own plate, the status column, the patch view and
+        // every other bench panel that calls addBenchPlate, so it is one of
+        // the highest-leverage fixes in the interface-scale sweep - fitTrackedPx
+        // still shrinks it to fit whatever room `w` is on a narrow/unscaled
+        // plate, exactly as before.
         constexpr float kTitleTrack = 0.20f;
-        const float px = fitTrackedPx(f, cascade::gui::fonts::kLegendSize, title,
-                                      kTitleTrack, w - 16.0f);
+        const float px = fitTrackedPx(f, cascade::gui::fonts::legendPx(), title,
+                                      kTitleTrack, w - 16.0f * s);
         const float track = px * kTitleTrack;
         const float tw = trackedWidth(f, px, title, track);
         // Centred, unless centring would start it left of the plate - which is
@@ -1446,16 +1456,16 @@ float addBenchPlate(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const ch
         // from the inset and cut off at the far one, so what is lost is the end
         // of the word rather than the panel next door.
         float x = (tl.x + br.x) * 0.5f - tw * 0.5f;
-        if (x < tl.x + 8.0f) { x = tl.x + 8.0f; }
-        const float titleMaxX = br.x - 8.0f;
+        if (x < tl.x + 8.0f * s) { x = tl.x + 8.0f * s; }
+        const float titleMaxX = br.x - 8.0f * s;
         addTrackedText(dl, f, px, ImVec2(x + 1.0f, y + 1.0f),
                        voidShadow(0.60f), title, track, titleMaxX);
         addTrackedText(dl, f, px, ImVec2(x, y), theme::kIvory, title, track, titleMaxX);
-        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f;
+        y += f->CalcTextSizeA(px, FLT_MAX, 0.0f, title).y + 5.0f * s;
     }
-    addBenchRail(dl, tl.x + 8.0f, br.x - 8.0f, y);
+    addBenchRail(dl, tl.x + 8.0f * s, br.x - 8.0f * s, y);
     // The measurement, handed back rather than left for the caller to guess at.
-    return y + 8.0f;
+    return y + 8.0f * s;
 }
 
 void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
@@ -1466,7 +1476,11 @@ void addBenchGroupCaption(ImDrawList* dl, const ImVec2& at, float width,
     // the end of the column, and this face's tracking is the widest on the
     // panel - a quarter of the size between every pair of letters.
     constexpr float kCapTrack = 0.24f;
-    const float px = fitTrackedPx(f, cascade::gui::fonts::kTinySize, caption, kCapTrack,
+    // fonts::tinyPx(), not the bare kTinySize (an Opus review's minor): the
+    // bare constant caps this caption at its S=1 size forever, since
+    // fitTrackedPx only ever shrinks its input, never grows it - one of the
+    // few font sites the round 1/2 sweeps missed.
+    const float px = fitTrackedPx(f, cascade::gui::fonts::tinyPx(), caption, kCapTrack,
                                   width - 8.0f);
     const float track = px * kCapTrack;
     const float tw = trackedWidth(f, px, caption, track);
@@ -1575,35 +1589,56 @@ void drawBenchKnobFace(ImDrawList* dl, const ImVec2& centre, float radius, float
 
 float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
                           float value) {
-    if (dl == nullptr || radius < 6.0f) { return -1.0f; }
+    return drawBrassKnob(dl, centre, radius, value, "##volknob", true);
+}
+
+float drawBrassKnob(ImDrawList* dl, const ImVec2& centre, float radius, float value,
+                    const char* id, bool live) {
+    if (dl == nullptr || radius < 6.0f || id == nullptr) { return -1.0f; }
     ImGui::SetCursorScreenPos(ImVec2(centre.x - radius, centre.y - radius));
-    ImGui::InvisibleButton("##volknob", ImVec2(radius * 2.0f, radius * 2.0f));
+    ImGui::InvisibleButton(id, ImVec2(radius * 2.0f, radius * 2.0f));
     float out = -1.0f;
 
     // THE SAME TWIST THE RANGE KNOB USES, for the same reason: a dial that
     // answered a vertical slide would be a dial in appearance only. Volume is
     // continuous, so unlike the range knob this one reports the angle itself
     // rather than detents.
-    static float lastAngle = 0.0f;
-    if (ImGui::IsItemActive()) {
+    //
+    // THE ANGLE THE HAND WAS LAST AT IS KEPT PER DIAL, in the window's state
+    // storage under the dial's own item id. It was one `static float` while
+    // there was one dial on the bar; with GAIN, SQUELCH and VOLUME side by side
+    // (0.99.74) three dials sharing it would each have taken the previous
+    // dial's angle as their own start, so the first frame of a drag would have
+    // jumped by the difference between them. Only the active dial reads or
+    // writes its entry, and it is refreshed on the frame the drag begins.
+    //
+    // A DIAL THAT IS NOT `live` is drawn and answers nothing: the radio has no
+    // gain stage to set, or is setting its own (automatic gain) - a knob that
+    // turned and changed nothing would be worse than one that visibly cannot.
+    if (live && ImGui::IsItemActive()) {
+        ImGuiStorage* st = ImGui::GetStateStorage();
+        const ImGuiID sid = ImGui::GetItemID();
         const ImVec2 m = ImGui::GetIO().MousePos;
         const float a =
             std::atan2(m.x - centre.x, centre.y - m.y) * 180.0f / 3.14159265f;
-        if (ImGui::IsItemActivated()) { lastAngle = a; }
+        const float lastAngle = ImGui::IsItemActivated() ? a : st->GetFloat(sid, a);
         float d = a - lastAngle;
         while (d > 180.0f) { d -= 360.0f; }
         while (d < -180.0f) { d += 360.0f; }
-        lastAngle = a;
+        st->SetFloat(sid, a);
         out = std::clamp(value + d / 270.0f, 0.0f, 1.0f);
     }
-    if (ImGui::IsItemHovered()) {
+    if (live && ImGui::IsItemHovered()) {
         const float wheel = ImGui::GetIO().MouseWheel;
         if (wheel != 0.0f) { out = std::clamp(value + wheel * 0.05f, 0.0f, 1.0f); }
     }
 
     // Nine ticks on the same 270-degree arc the pointer sweeps - the volume
     // dial's OWN decoration, because only a bounded control has a full-scale
-    // arc to mark; drawBenchKnobFace below draws none.
+    // arc to mark; drawBenchKnobFace below draws none. THE OUTER 1.38 IS
+    // kDeckKnobTickR in gui/tune_control.hpp: the top bar's cluster width (and
+    // the tick arcs' clearance of their captions) is built from it, and
+    // tests/test_tune_control.cpp pins it - change both together.
     for (int i = 0; i < 9; ++i) {
         const float deg = -135.0f + 270.0f * static_cast<float>(i) / 8.0f;
         const float a = deg * 3.14159265f / 180.0f;
@@ -1619,6 +1654,8 @@ float drawBrassVolumeKnob(ImDrawList* dl, const ImVec2& centre, float radius,
     if (f > 1.0f) { f = 1.0f; }
     const float deg = -135.0f + 270.0f * f;
     drawBenchKnobFace(dl, centre, radius, deg);
+    // A dead dial is veiled, so it reads as one before anyone turns it.
+    if (!live) { dl->AddCircleFilled(centre, radius * 1.02f, theme::shadow(95), 0); }
     return out;
 }
 
@@ -1680,9 +1717,215 @@ void drawBenchLamp(ImDrawList* dl, const ImVec2& centre, float radius, ImU32 col
     }
 }
 
+// THE FOUR FACES A BENCH METER CAN WEAR (2026-09-29, an Italian user on
+// 0.99.42: "is it possible to customise the VU meter, choosing between 3 or
+// 4 different VU meters?"). Every one of them is handed the exact same
+// `frac01`/`haveReading` this function always took - see gui/scope_face.hpp's
+// own header for why that is non-negotiable - so nothing below is a second
+// measurement, only a second (or third, or fourth) way to draw the one this
+// function has always been given.
+//
+// CLASSIC IS THE ORIGINAL BODY, MOVED HERE UNCHANGED. Pulling it into its own
+// function is what makes "unchanged" checkable: a diff against the style that
+// used to be the whole of drawBenchMeter shows no arithmetic touched, only
+// the ticks and needle it always drew.
+void drawMeterFaceClassic(ImDrawList* dl, const ImVec2& pivot, float armR,
+                          float halfSweepDeg, float frac01, bool haveReading) {
+    // Nine ticks, the last two in the alarm colour: the top of any meter's
+    // travel is where it should be uncomfortable to sit.
+    for (int i = 0; i < 9; ++i) {
+        const float t = static_cast<float>(i) / 8.0f;
+        const float deg = -halfSweepDeg + 2.0f * halfSweepDeg * t;
+        const float a = deg * 3.14159265f / 180.0f;
+        const float sx = std::sin(a);
+        const float sy = -std::cos(a);
+        const ImU32 col = (i >= 7) ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle)
+                                   : theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk);
+        dl->AddLine(ImVec2(pivot.x + sx * armR * 0.80f, pivot.y + sy * armR * 0.80f),
+                    ImVec2(pivot.x + sx * armR * 0.94f, pivot.y + sy * armR * 0.94f), col,
+                    (i % 4 == 0) ? 1.8f : 1.0f);
+    }
+
+    if (haveReading) {
+        float f = frac01;
+        if (!(f >= 0.0f)) { f = 0.0f; }
+        if (f > 1.0f) { f = 1.0f; }
+        const float deg = -halfSweepDeg + 2.0f * halfSweepDeg * f;
+        const float a = deg * 3.14159265f / 180.0f;
+        const float sx = std::sin(a);
+        const float sy = -std::cos(a);
+        dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
+                    theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle), 1.8f);
+        dl->AddCircleFilled(pivot, 3.4f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
+    } else {
+        // NO NEEDLE AT ALL. See the header: a needle at rest would be a
+        // measurement of zero, and there is no measurement.
+        dl->AddCircleFilled(pivot, 3.4f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
+    }
+}
+
+// A point on the arc both arc styles share, at radius `radius` and travel
+// fraction `t` (0..1 over the sweep) - Classic's own angle convention (0 =
+// straight up, positive = clockwise), pulled out so Needle's continuous
+// scale and filled zone cannot silently drift from where Classic's ticks
+// actually sit.
+ImVec2 meterArcPoint(const ImVec2& pivot, float radius, float halfSweepDeg, float t) {
+    const float deg = -halfSweepDeg + 2.0f * halfSweepDeg * t;
+    const float a = deg * 3.14159265f / 180.0f;
+    return ImVec2(pivot.x + std::sin(a) * radius, pivot.y - std::cos(a) * radius);
+}
+
+// ANALOGUE NEEDLE: the moving-coil VU the owner asked for beside Classic - a
+// continuous scale arc rather than nine ticks, a FILLED red zone rather than
+// two red ticks (a wedge reads at a glance; a pair of ticks does not), and a
+// bolder dark needle so the two styles are never mistaken for each other in
+// a screenshot.
+void drawMeterFaceNeedle(ImDrawList* dl, const ImVec2& pivot, float armR,
+                         float halfSweepDeg, float frac01, bool haveReading) {
+    // The scale itself, as one continuous stroke.
+    dl->PathClear();
+    constexpr int kArcSegs = 24;
+    for (int i = 0; i <= kArcSegs; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kArcSegs);
+        dl->PathLineTo(meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t));
+    }
+    dl->PathStroke(theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), 0, 1.4f);
+
+    // THE RED ZONE IS A WEDGE, not ticks - the top 18% of the travel, the
+    // same span Classic marks with its last two (of nine) ticks.
+    // A curved band is NOT convex, so it is filled as one small quad per
+    // step along the arc - one PathFillConvex over the whole band drew it
+    // as a kite at meter size.
+    constexpr float kZoneStart = 0.82f;
+    constexpr int kZoneSteps = 8;
+    const ImU32 zoneCol = theme::withAlpha(theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad), 0.55f);
+    for (int i = 0; i < kZoneSteps; ++i) {
+        const float t0 = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i) / kZoneSteps;
+        const float t1 = kZoneStart + (1.0f - kZoneStart) * static_cast<float>(i + 1) / kZoneSteps;
+        dl->AddQuadFilled(meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t0),
+                          meterArcPoint(pivot, armR * 0.94f, halfSweepDeg, t1),
+                          meterArcPoint(pivot, armR * 0.78f, halfSweepDeg, t1),
+                          meterArcPoint(pivot, armR * 0.78f, halfSweepDeg, t0), zoneCol);
+    }
+
+    if (haveReading) {
+        float f = frac01;
+        if (!(f >= 0.0f)) { f = 0.0f; }
+        if (f > 1.0f) { f = 1.0f; }
+        const ImVec2 tip = meterArcPoint(pivot, armR * 0.90f, halfSweepDeg, f);
+        // Dark ink on the cream face: an ivory needle all but vanished on it.
+        dl->AddLine(pivot, tip, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 2.6f);
+        dl->AddCircleFilled(pivot, 4.0f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
+    } else {
+        dl->AddCircleFilled(pivot, 4.0f,
+                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
+    }
+}
+
+// LED LADDER: a segmented bar, green through the ordinary run, amber in
+// caution and red at the top - gui::meterLedZone's own rule, drawn rather
+// than merely computed - with a peak-hold segment outlined bright after the
+// live reading has fallen past it, the way a real bar-graph VU's peak catch
+// works.
+void drawMeterFaceLed(ImDrawList* dl, const ImVec2& fTL, const ImVec2& fBR, float frac01,
+                      bool haveReading, MeterPeakHold* peakHold) {
+    const float faceW = fBR.x - fTL.x;
+    const float faceH = fBR.y - fTL.y;
+    const float padX = std::max(2.0f, faceW * 0.03f);
+    const float padY = std::max(3.0f, faceH * 0.18f);
+    const float gap = std::max(1.0f, faceW * 0.01f);
+    const int n = kMeterLedSegments;
+    const float totalGap = gap * static_cast<float>(n - 1);
+    const float segW = (faceW - padX * 2.0f - totalGap) / static_cast<float>(n);
+    if (segW < 1.0f) { return; }
+    const float segTop = fTL.y + padY;
+    const float segBot = fBR.y - padY;
+
+    float f = frac01;
+    if (!haveReading || !(f >= 0.0f)) { f = 0.0f; }  // no reading reads as silence
+    if (f > 1.0f) { f = 1.0f; }
+    const int lit = meterLedLitCount(f);
+    if (peakHold != nullptr) { peakHold->update(f, ImGui::GetIO().DeltaTime); }
+    const int peakSeg = (peakHold != nullptr) ? meterLedLitCount(peakHold->peak) - 1 : -1;
+
+    for (int i = 0; i < n; ++i) {
+        const float x0 = fTL.x + padX + static_cast<float>(i) * (segW + gap);
+        const float x1 = x0 + segW;
+        const MeterLedZone zone = meterLedZone(i, n);
+        const ImU32 litCol = (zone == MeterLedZone::Red)
+                                  ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad)
+                                  : (zone == MeterLedZone::Amber)
+                                        ? theme::tone(0xF0, 0xA8, 0x40, 255, ink::MeterNeedle)
+                                        : theme::tone(0x8F, 0xD9, 0xA0, 255, ink::Ok);
+        const bool on = i < lit;
+        const ImU32 col = on ? litCol : theme::withAlpha(litCol, 0.18f);
+        dl->AddRectFilled(ImVec2(x0, segTop), ImVec2(x1, segBot), col, 1.0f);
+        if (i == peakSeg && !on) {
+            dl->AddRect(ImVec2(x0, segTop), ImVec2(x1, segBot),
+                       theme::tone(0xEF, 0xE7, 0xD2, 255, ink::KnobCap), 1.0f, 0, 1.6f);
+        }
+    }
+}
+
+// PEAK METER: a horizontal PPM-style bar, coloured the same green/amber/red
+// travel the LED ladder uses rather than a second, drifting scheme, with a
+// peak-hold tick that decays at the same kMeterPeakHoldFallPerS. The numeric
+// dB figure is NOT drawn here - it is the value line every style already
+// gets below the face, from the same reading, so this style adds no second
+// copy of it to disagree with.
+void drawMeterFacePeak(ImDrawList* dl, const ImVec2& fTL, const ImVec2& fBR, float frac01,
+                       bool haveReading, MeterPeakHold* peakHold) {
+    const float faceW = fBR.x - fTL.x;
+    const float faceH = fBR.y - fTL.y;
+    const float padX = std::max(3.0f, faceW * 0.04f);
+    const float barH = std::max(6.0f, faceH * 0.42f);
+    const float barTop = fTL.y + (faceH - barH) * 0.5f;
+    const float barBot = barTop + barH;
+    const float barL = fTL.x + padX;
+    const float barR = fBR.x - padX;
+    const float barW = barR - barL;
+
+    dl->AddRectFilled(ImVec2(barL, barTop), ImVec2(barR, barBot),
+                      theme::tone(0x3B, 0x35, 0x29, 255, ink::Off), 1.0f);
+
+    float f = frac01;
+    if (!haveReading || !(f >= 0.0f)) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    if (peakHold != nullptr) { peakHold->update(f, ImGui::GetIO().DeltaTime); }
+
+    if (f > 0.0f) {
+        constexpr float kAmberAt = 7.0f / 12.0f;
+        constexpr float kRedAt = 10.0f / 12.0f;
+        const ImU32 green = theme::tone(0x8F, 0xD9, 0xA0, 255, ink::Ok);
+        const ImU32 amber = theme::tone(0xF0, 0xA8, 0x40, 255, ink::MeterNeedle);
+        const ImU32 red = theme::tone(0xB8, 0x55, 0x2F, 255, ink::Bad);
+        const float greenEnd = std::min(f, kAmberAt);
+        dl->AddRectFilled(ImVec2(barL, barTop), ImVec2(barL + barW * greenEnd, barBot), green);
+        if (f > kAmberAt) {
+            const float amberEnd = std::min(f, kRedAt);
+            dl->AddRectFilled(ImVec2(barL + barW * kAmberAt, barTop),
+                              ImVec2(barL + barW * amberEnd, barBot), amber);
+        }
+        if (f > kRedAt) {
+            dl->AddRectFilled(ImVec2(barL + barW * kRedAt, barTop), ImVec2(barL + barW * f, barBot),
+                              red);
+        }
+    }
+    dl->AddRect(ImVec2(barL, barTop), ImVec2(barR, barBot),
+               theme::tone(0x8B, 0x80, 0x69, 255, ink::Border), 1.0f, 0, 1.5f);
+
+    if (peakHold != nullptr && peakHold->peak > 0.0f) {
+        const float px = barL + barW * peakHold->peak;
+        dl->AddLine(ImVec2(px, barTop - 1.5f), ImVec2(px, barBot + 1.5f),
+                   theme::tone(0xEF, 0xE7, 0xD2, 255, ink::KnobCap), 1.6f);
+    }
+}
+
 void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
                     const char* caption, float frac01, bool haveReading,
-                    const char* valueLine, const char* unitLabel) {
+                    const char* valueLine, const char* unitLabel, MeterStyle style,
+                    MeterPeakHold* peakHold) {
     if (dl == nullptr || width < 40.0f || height < 40.0f) { return; }
 
     // THE ROOM FOR THE TEXT IS MEASURED FROM THE TEXT, and this is the fault
@@ -1698,7 +1941,14 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     // bound, which is the property that survives the next change to fonts.hpp.
     ImFont* cf = cascade::gui::fonts::legend();
     ImFont* vf = cascade::gui::fonts::ui();
-    const float tiny = cascade::gui::fonts::kTinySize;
+    // fonts::tinyPx(), not the base kTinySize: `width` arrives already scaled
+    // by the interface factor (drawToolbar passes the deck's own scaled meter
+    // width), and fitTextPx only ever shrinks its starting size to fit - never
+    // grows it - so an unscaled starting size here would leave the caption and
+    // reading looking small on an otherwise bigger meter face. Both scaling by
+    // the same factor keeps the SHRINK decision (and therefore the meter's
+    // proportions) exactly what it was at S = 1.
+    const float tiny = cascade::gui::fonts::tinyPx();
     // Fitted to the meter's own width: both lines are centred on it, so
     // anything wider is drawn over the meter standing next to it rather than
     // clipped. "22 % - 3.6 ms" under a 126 px face is the tight one.
@@ -1770,55 +2020,50 @@ void drawBenchMeter(ImDrawList* dl, const ImVec2& tl, float width, float height,
     const float armByWidth = (width * 0.5f - 3.0f) / std::max(0.01f, reach);
     const float armR = std::min(armByHeight, armByWidth);
 
-    // Nine ticks, the last two in the alarm colour: the top of any meter's
-    // travel is where it should be uncomfortable to sit.
-    for (int i = 0; i < 9; ++i) {
-        const float t = static_cast<float>(i) / 8.0f;
-        const float deg = -kHalfSweepDeg + 2.0f * kHalfSweepDeg * t;
-        const float a = deg * 3.14159265f / 180.0f;
-        const float sx = std::sin(a);
-        const float sy = -std::cos(a);
-        const ImU32 col = (i >= 7) ? theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle)
-                                   : theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk);
-        dl->AddLine(ImVec2(pivot.x + sx * armR * 0.80f, pivot.y + sy * armR * 0.80f),
-                    ImVec2(pivot.x + sx * armR * 0.94f, pivot.y + sy * armR * 0.94f), col,
-                    (i % 4 == 0) ? 1.8f : 1.0f);
+    // THE FACE ITSELF: which of the four instruments is drawn inside the
+    // tombstone. Only this dispatch changes between styles - the tombstone
+    // above and the value line below are the same face every style shares,
+    // so a style choice can never make the reading disagree with itself.
+    const bool arcStyle = (style == MeterStyle::Classic || style == MeterStyle::Needle);
+    switch (style) {
+        case MeterStyle::Needle:
+            drawMeterFaceNeedle(dl, pivot, armR, kHalfSweepDeg, frac01, haveReading);
+            break;
+        case MeterStyle::LedLadder:
+            drawMeterFaceLed(dl, fTL, fBR, frac01, haveReading, peakHold);
+            break;
+        case MeterStyle::Peak:
+            drawMeterFacePeak(dl, fTL, fBR, frac01, haveReading, peakHold);
+            break;
+        case MeterStyle::Classic:
+        default:
+            drawMeterFaceClassic(dl, pivot, armR, kHalfSweepDeg, frac01, haveReading);
+            break;
     }
 
-    if (haveReading) {
-        float f = frac01;
-        if (!(f >= 0.0f)) { f = 0.0f; }
-        if (f > 1.0f) { f = 1.0f; }
-        const float deg = -kHalfSweepDeg + 2.0f * kHalfSweepDeg * f;
-        const float a = deg * 3.14159265f / 180.0f;
-        const float sx = std::sin(a);
-        const float sy = -std::cos(a);
-        dl->AddLine(pivot, ImVec2(pivot.x + sx * armR * 0.88f, pivot.y + sy * armR * 0.88f),
-                    theme::tone(0xB8, 0x55, 0x2F, 255, ink::MeterNeedle), 1.8f);
-        dl->AddCircleFilled(pivot, 3.4f, theme::tone(0x2A, 0x25, 0x1C, 255, ink::MeterInk), 12);
-    } else {
-        // NO NEEDLE AT ALL. See the header: a needle at rest would be a
-        // measurement of zero, and there is no measurement.
-        dl->AddCircleFilled(pivot, 3.4f,
-                            theme::tone(0x9C, 0x90, 0x78, 255, ink::MeterInk, ink::MeterFace), 12);
-    }
-
-    // THE UNIT, PRINTED ON THE FACE BESIDE THE PIVOT, the way a moving-coil
-    // meter names its own scale. Beside and not above: above is where the
-    // needle sweeps through mid-scale, and a legend the pointer crosses is a
-    // legend that cannot be read at the only moment it matters.
+    // THE UNIT. On the two arc styles it sits beside the pivot, the way a
+    // moving-coil meter names its own scale on its face - beside and not
+    // above, because above is where the needle sweeps through mid-scale and a
+    // legend the pointer crosses cannot be read at the only moment it
+    // matters. The LED ladder and the peak bar have no pivot to sit beside,
+    // so it takes the face's own top-right corner instead.
     //
-    // It is drawn ONLY when the caller supplied one. A unit is a claim about
-    // what the needle measures, so an absent one stays absent rather than
-    // being guessed at from the value line.
+    // It is drawn ONLY when the caller supplied one, on every style: a unit
+    // is a claim about what is measured, so an absent one stays absent rather
+    // than being guessed at from the value line.
     if (unitLabel != nullptr && unitLabel[0] != '\0') {
         // Words, so the UI face - Nova Mono's capitals close up at this size.
         ImFont* uf = cascade::gui::fonts::ui();
         const float upx = cascade::gui::fonts::kTinySize;
         const ImVec2 us = uf->CalcTextSizeA(upx, FLT_MAX, 0.0f, unitLabel);
-        const float ux = pivot.x + armR * 0.16f;
-        if (ux + us.x < fBR.x - 3.0f) {
-            dl->AddText(uf, upx, ImVec2(ux, pivot.y - us.y - 2.0f),
+        if (arcStyle) {
+            const float ux = pivot.x + armR * 0.16f;
+            if (ux + us.x < fBR.x - 3.0f) {
+                dl->AddText(uf, upx, ImVec2(ux, pivot.y - us.y - 2.0f),
+                            theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), unitLabel);
+            }
+        } else {
+            dl->AddText(uf, upx, ImVec2(fBR.x - us.x - 3.0f, fTL.y + 2.0f),
                         theme::tone(0x3B, 0x35, 0x29, 255, ink::MeterInk), unitLabel);
         }
     }
@@ -1848,12 +2093,18 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
     if (dl == nullptr) { return; }
     const float h = headerMax.y - headerMin.y;
     const float cy = (headerMin.y + headerMax.y) * 0.5f;
+    // `h` already carries the interface-scale factor (a real call site's
+    // header height comes from railRowHeight(labelPx, scale)), so the share
+    // of it below scales for free; the FIXED pixels beside it - the floor on
+    // the radius, and the two edge gaps - are routed through px() so they do
+    // not stay a few fixed pixels beside increasingly large plates.
+    const float s = cascade::gui::uiscale::factor();
 
     // The lamp sits hard against the right edge of the plate, and the chip
     // just inboard of it - so a glance down the rail reads as a column of
     // states rather than as a list of names.
-    const float lampR = std::max(3.0f, h * 0.20f);
-    const ImVec2 lampC(headerMax.x - lampR - 6.0f, cy);
+    const float lampR = std::max(cascade::gui::uiscale::px(3.0f), h * 0.20f);
+    const ImVec2 lampC(headerMax.x - lampR - cascade::gui::uiscale::px(6.0f), cy);
     drawBenchLamp(dl, lampC, lampR, lampColour, lampLit, nullptr);
 
     if (chipText != nullptr && chipText[0] != '\0') {
@@ -1861,19 +2112,23 @@ void drawRailChip(ImDrawList* dl, const ImVec2& headerMin, const ImVec2& headerM
         // the semibold engraving face, not the monospaced one. MUTED in Nova
         // Mono at this size renders its M as a solid block; see fonts.hpp.
         ImFont* cf = cascade::gui::fonts::legend();
-        const float cpx = cascade::gui::fonts::kTinySize;
+        const float cpx = cascade::gui::fonts::tinyPx();
         const ImVec2 ts = cf->CalcTextSizeA(cpx, FLT_MAX, 0.0f, chipText);
-        const float padX = 5.0f;
-        const ImVec2 cBR(lampC.x - lampR - 7.0f, cy + ts.y * 0.5f + 2.0f);
-        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f);
+        const float padX = cascade::gui::uiscale::px(5.0f);
+        const ImVec2 cBR(lampC.x - lampR - cascade::gui::uiscale::px(7.0f), cy + ts.y * 0.5f + 2.0f * s);
+        const ImVec2 cTL(cBR.x - ts.x - padX * 2.0f, cy - ts.y * 0.5f - 2.0f * s);
         // ROOM LEFT FOR THE ROW'S OWN NAME, which the caller letters along the
         // same plate in the face it has bound. The 60 px this was written as
         // was measured against a sixteen-pixel UI face; held as a literal it
         // would let the chip creep back over the name every time the type went
         // up, and a chip painted over the word SIGNAL PATH is worse than a
-        // section with no chip. Expressed against the bound face it keeps the
-        // proportion it was drawn at whatever that face becomes.
-        const float nameRoom = ImGui::GetFontSize() * 3.75f;
+        // section with no chip. Measured against fonts::uiPx() rather than
+        // ImGui::GetFontSize() - drawRailChip runs after the row's own
+        // PushFont/PopFont pair, so the CURRENT font by the time this runs is
+        // whatever the caller left bound, not necessarily the row's label
+        // face at its scaled size - and the ratio is what keeps the proportion
+        // at whatever size that face is drawn at, base or scaled alike.
+        const float nameRoom = cascade::gui::fonts::uiPx() * 3.75f;
         if (cTL.x > headerMin.x + nameRoom) {
             // A chip is a READING about that section, so it goes on glass in
             // amber rather than being engraved into the plate. In foxsdr-ui/1
@@ -2568,7 +2823,7 @@ void ScopeView::draw(float width, float height,
     for (const cascade::core::HostTrack& ht : tracks) {
         if (ht.t.kind != CASCADE_TRACK_AIRCRAFT) { continue; }
         const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+            cascade::core::trackPresentation(ht.t);
         if (!pres.visible) { continue; }
         // FROM THE MIDDLE OF THE VIEW, which is where every ring on this face
         // is measured from. See the note where viewLat/viewLon are computed:
@@ -2878,8 +3133,16 @@ void ScopeView::draw(float width, float height,
         if (!cardinal && !numberTicks) { continue; }
         // tr(): the four cardinal letters are the same keys the hemisphere
         // letters use (i18n::hemisphereLetter); a figure passes through.
-        const char* lblText = tr(scopeBearingLabel(b).c_str());
-        const std::string lbl = lblText;
+        //
+        // THE KEY IS KEPT IN A VARIABLE, not built inside the call. tr() hands back
+        // the pointer it was given whenever nothing translates it (English, or a
+        // catalogue without the entry), so with the key a temporary the pointer
+        // outlived it: the next line then read a std::string that had already been
+        // destroyed - a stack-use-after-scope (found by AddressSanitizer, on Linux
+        // and with MSVC's, in test_scope_face and test_patch_map_credit), which
+        // usually shows the right text because the stack slot is still intact.
+        const std::string key = scopeBearingLabel(b);
+        const std::string lbl = tr(key.c_str());
         const ImVec2 sz = ImGui::CalcTextSize(lbl.c_str());
         // Centred on its own tick at a fixed inset, so the twelve labels sit on
         // one circle rather than drifting with the length of the text.

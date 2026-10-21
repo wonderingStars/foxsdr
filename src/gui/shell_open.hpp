@@ -20,6 +20,16 @@
 // shell call that shows an elevation prompt is precisely the native modal
 // dialog that header was anticipating.
 //
+// WHICH KIND OF PAUSE (0.99.61). The bracket is the watchdog's USER-PACED
+// pause, taken in AppWindow::watchdogShellHooks, and it is the only user of
+// that kind (tests/test_excuse_cap.cpp scans src/ for any other, which is why
+// the two calls are not spelled out in this file). An
+// ordinary WatchdogPause excuses a stalled GUI thread for at most
+// kExcuseCapMs, because the code it brackets is expected to finish; this wait
+// lasts as long as a person takes to read a consent prompt, so it has no cap.
+// The price is stated in hang_watchdog.hpp: a ShellExecute that never returns
+// and shows nothing is not reported.
+//
 // SO NOT A HELPER THREAD. The alternative - posting the ShellExecute to a
 // detached thread so the GUI thread never blocks - would keep the frame loop
 // turning, and would be wrong for three reasons. The shell call wants a UI

@@ -125,7 +125,7 @@ float fitPx(ImFont* font, float px, const char* text, float room) {
 void engrave(ImDrawList* dl, const ImVec2& at, const char* s, float room) {
     if (dl == nullptr || s == nullptr || s[0] == '\0') { return; }
     ImFont* f = fonts::legend();
-    const float px = fitPx(f, fonts::kTinySize, s, room);
+    const float px = fitPx(f, fonts::tinyPx(), s, room);
     dl->PushClipRect(ImVec2(at.x - 1.0f, at.y - 2.0f),
                      ImVec2(at.x + room + 1.0f, at.y + px + 6.0f), true);
     dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f), theme::withAlpha(theme::kVoid, 0.6f),
@@ -140,7 +140,7 @@ void engrave(ImDrawList* dl, const ImVec2& at, const char* s, float room) {
 void onGlass(ImDrawList* dl, const ImVec2& at, const char* s, float room, ImU32 col) {
     if (dl == nullptr || s == nullptr || s[0] == '\0' || !(room > 4.0f)) { return; }
     ImFont* f = fonts::ui();
-    const float px = fitPx(f, fonts::kUiSize, s, room);
+    const float px = fitPx(f, fonts::uiPx(), s, room);
     char cut[CASCADE_INSTRUMENT_TEXT_CHARS + 4];
     const char* draw = s;
     if (f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x > room) {
@@ -307,7 +307,7 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
     if (dl == nullptr || width < 40.0f || height < 40.0f) { return; }
     ImFont* cf = fonts::legend();
     ImFont* vf = fonts::ui();
-    const float tiny = fonts::kTinySize;
+    const float tiny = fonts::tinyPx();
     const char* cap = (caption != nullptr) ? caption : "";
     const char* val = (valueLine != nullptr && valueLine[0] != '\0') ? valueLine : "--";
     const float cpx = fitPx(cf, tiny, cap, width - 4.0f);
@@ -409,13 +409,13 @@ void drawCentreZeroMeter(ImDrawList* dl, const ImVec2& tl, float width, float he
 void drawPlateCell(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char* caption,
                    const char* value) {
     if (dl == nullptr || br.x - tl.x < 24.0f || br.y - tl.y < 20.0f) { return; }
-    const float capH = fonts::kTinySize + 2.0f;
+    const float capH = fonts::tinyPx() + 2.0f;
     engrave(dl, ImVec2(tl.x, tl.y), caption, br.x - tl.x);
     const ImVec2 gTL(tl.x, tl.y + capH);
     if (br.y - gTL.y < 12.0f) { return; }
     drawFreqDrumWell(dl, gTL, br);
     const float pad = 5.0f;
-    onGlass(dl, ImVec2(gTL.x + pad, gTL.y + (br.y - gTL.y - fonts::kUiSize) * 0.5f + 1.0f),
+    onGlass(dl, ImVec2(gTL.x + pad, gTL.y + (br.y - gTL.y - fonts::uiPx()) * 0.5f + 1.0f),
             value, br.x - gTL.x - pad * 2.0f, theme::kPhosphor);
 }
 
@@ -476,7 +476,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     {
         ImFont* f = fonts::legend();
         const char* distressWord = tr("DISTRESS");
-        const float px = fitPx(f, fonts::kTinySize, distressWord, L.lampR * 2.6f);
+        const float px = fitPx(f, fonts::tinyPx(), distressWord, L.lampR * 2.6f);
         const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, distressWord);
         const ImVec2 at(L.lampCx - sz.x * 0.5f, L.lampCy + L.lampR * 1.2f + 3.0f);
         if (at.y + sz.y < L.readY1 + 2.0f) {
@@ -496,7 +496,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                       nullptr);
         ImFont* f = fonts::legend();
         const char* newWord = tr("NEW");
-        const float px = fitPx(f, fonts::kTinySize, newWord, L.newR * 4.0f);
+        const float px = fitPx(f, fonts::tinyPx(), newWord, L.newR * 4.0f);
         const ImVec2 sz = f->CalcTextSizeA(px, FLT_MAX, 0.0f, newWord);
         const ImVec2 at(L.newCx - sz.x * 0.5f, L.newCy + L.newR + 4.0f);
         dl->AddText(f, px, ImVec2(at.x + 1.0f, at.y + 1.0f),
@@ -506,7 +506,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
 
     engrave(dl, ImVec2(L.wellX0 + 2.0f, L.readY0), tr("BEACON 15 HEX ID"),
             L.wellX1 - L.wellX0 - 4.0f);
-    const float glassTop = L.readY0 + fonts::kTinySize + 3.0f;
+    const float glassTop = L.readY0 + fonts::tinyPx() + 3.0f;
     if (L.readY1 - glassTop > 10.0f) {
         drawFreqDrumWell(dl, ImVec2(L.wellX0, glassTop), ImVec2(L.wellX1, L.readY1));
         char cells[beacon::kHexIdChars + 1];
@@ -571,7 +571,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (n >= 2) {
             const float x = L.x0 + bay + gap;
             engrave(dl, ImVec2(x, L.gaugeY0), tr("SINCE LAST BURST"), bay);
-            const ImVec2 gTL(x, L.gaugeY0 + fonts::kTinySize + 3.0f);
+            const ImVec2 gTL(x, L.gaugeY0 + fonts::tinyPx() + 3.0f);
             const ImVec2 gBR(x + bay, L.gaugeY1 - 2.0f);
             if (gBR.y - gTL.y > 14.0f) {
                 drawFreqDrumWell(dl, gTL, gBR);
@@ -579,7 +579,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                 char age[32];
                 beacon::formatAge(s.values[1], haveAge, age, sizeof age);
                 if (age[0] != '\0') {
-                    const float px = std::min(fonts::kReadingSize * 1.6f,
+                    const float px = std::min(fonts::readingPx() * 1.6f,
                                               (gBR.y - gTL.y) * 0.62f);
                     ImFont* rf = fonts::reading();
                     const ImVec2 sz = rf->CalcTextSizeA(px, FLT_MAX, 0.0f, age);
@@ -592,7 +592,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (n >= 3) {
             const float x = L.x0 + (bay + gap) * 2.0f;
             engrave(dl, ImVec2(x, L.gaugeY0), tr("BURSTS LOGGED"), bay);
-            const float dy = L.gaugeY0 + fonts::kTinySize + 6.0f;
+            const float dy = L.gaugeY0 + fonts::tinyPx() + 6.0f;
             const float dh = std::min(L.gaugeY1 - dy - 4.0f, 44.0f);
             if (dh > 12.0f) {
                 const float dw = std::min(bay - 8.0f, dh * 1.9f);
@@ -610,7 +610,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         dl->PushClipRect(ImVec2(L.x0 - 1.0f, L.legY0 - 1.0f),
                          ImVec2(L.x1 + 1.0f, L.legY1 + 1.0f), true);
         const char* whole = beacon::warningLine(0);
-        const float px = fitPx(f, fonts::kTinySize, whole, w);
+        const float px = fitPx(f, fonts::tinyPx(), whole, w);
         // ONE LINE ONLY WHILE ONE LINE IS STILL READABLE. Below twelve pixels
         // the engraving stops being a warning and becomes a texture, so the
         // legend goes to two lines instead - it may not be dropped and it may
@@ -625,7 +625,7 @@ float drawBeaconFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         } else {
             for (int half = 1; half <= 2; ++half) {
                 const char* line = beacon::warningLine(half);
-                const float lpx = fitPx(f, fonts::kTinySize * 0.9f, line, w);
+                const float lpx = fitPx(f, fonts::tinyPx() * 0.9f, line, w);
                 const ImVec2 sz = f->CalcTextSizeA(lpx, FLT_MAX, 0.0f, line);
                 const float rowH = (L.legY1 - L.legY0) * 0.5f;
                 const ImVec2 at(L.x0 + (w - sz.x) * 0.5f,

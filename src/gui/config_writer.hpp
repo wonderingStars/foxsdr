@@ -121,6 +121,8 @@ public:
     // queued behind it as a second write: only the latest survives, because
     // a burst of saves means the last state is the only one that matters.
     void requestAsync(std::string path, std::string text) {
+        // A writer told not to write writes nothing - and does not pretend it did (lastOk()).
+        if (forbidden_) { return; }
         if (inFlight()) {
             queuedPath_ = std::move(path);
             queuedText_ = std::move(text);
@@ -129,6 +131,18 @@ public:
         }
         start(std::move(path), std::move(text));
     }
+
+    // THIS WRITER MUST NOT WRITE (0.99.65). The file it saves is DAMAGED - it failed to load - and
+    // could not be kept aside (core/damaged_file.hpp), so a save would destroy the only copy of what
+    // the user had. From here every request is dropped, for the rest of the session; `reason` is
+    // what lastError() says (a sentence naming no path), and lastOk() stays false so the exit
+    // drain reports it as it reports a refused write.
+    void forbidWrites(std::string reason) {
+        forbidden_ = true;
+        lastOk_ = false;
+        lastError_ = std::move(reason);
+    }
+    bool writesForbidden() const { return forbidden_; }
 
     // Once per frame. Collects a worker that has finished and starts
     // whatever was coalesced behind it. Returns true when a result was
@@ -171,7 +185,14 @@ public:
         const auto deadline = std::chrono::steady_clock::now() + bound;
         while (future_.valid()) {
             const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline || future_.wait_for(deadline - now) != std::future_status::ready) {
+            // A bound that has already run out (0.99.64: a caller sharing one
+            // deadline between several writers gives the last of them what is
+            // left, which may be nothing) still COLLECTS a write that has
+            // finished; only one still inside the filesystem is abandoned.
+            const auto left = now < deadline ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   deadline - now)
+                                             : std::chrono::nanoseconds::zero();
+            if (future_.wait_for(left) != std::future_status::ready) {
                 abandon();
                 return false;
             }
@@ -225,6 +246,7 @@ private:
     std::string queuedPath_;
     std::string queuedText_;
     bool hasQueued_ = false;
+    bool forbidden_ = false;
     bool lastOk_ = false;
     std::string lastError_;
     unsigned completed_ = 0;

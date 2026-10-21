@@ -135,7 +135,7 @@ void drawNavFlag(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
     // in with the dark cut under it - readable over both stripes, which a plain
     // white or a plain black word is not.
     ImFont* f = fonts::legend();
-    const float px = std::min(fonts::kTinySize, h * 0.72f);
+    const float px = std::min(fonts::tinyPx(), h * 0.72f);
     if (px < 8.0f) { return; }
     const char* navWord = tr("NAV");
     const float tw = textW(f, px, navWord);
@@ -240,7 +240,7 @@ double obsKnob(ImDrawList* dl, const ImVec2& centre, float radius, double course
 // sits beneath the fixed index at the top.
 void drawCard(ImDrawList* dl, const ImVec2& c, float r, double underIndex) {
     ImFont* nf = fonts::ui();
-    const float npx = std::max(9.0f, std::min(fonts::kUiSize, r * 0.17f));
+    const float npx = std::max(9.0f, std::min(fonts::uiPx(), r * 0.17f));
     for (int step = 0; step < 72; ++step) {
         const int deg = step * 5;
         const double screen = nb::cardScreenDeg(deg, underIndex);
@@ -301,8 +301,8 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         } else {
             line = tr("NO SIGNAL");
         }
-        engrave(dl, ImVec2(tl.x + 10.0f, bodyTop + 4.0f), line.c_str(), fonts::kTinySize);
-        return bodyTop + fonts::kTinySize + 10.0f - tl.y;
+        engrave(dl, ImVec2(tl.x + 10.0f, bodyTop + 4.0f), line.c_str(), fonts::tinyPx());
+        return bodyTop + fonts::tinyPx() + 10.0f - tl.y;
     }
 
     // The OBS is the user's setting, not a measurement, so it lives with the
@@ -455,7 +455,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // which is the same reason drawBenchLamp letters an unlit lamp.
     {
         ImFont* f = fonts::legend();
-        const float px = std::max(8.0f, std::min(fonts::kTinySize, glassR * 0.15f));
+        const float px = std::max(8.0f, std::min(fonts::tinyPx(), glassR * 0.15f));
         const float s = std::max(4.0f, glassR * 0.080f);
         const float ty = caseC.y - glassR * 0.50f;
         const float fy = caseC.y + glassR * 0.50f;
@@ -513,7 +513,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         // it looks like a fault in the panel rather than a legend that did not
         // have room.
         ImFont* f = fonts::legend();
-        const float px = std::min(fonts::kTinySize, kr * 0.60f);
+        const float px = std::min(fonts::tinyPx(), kr * 0.60f);
         const float top = kc.y + kr + 2.0f;
         if (px >= 8.0f && top + px <= caseC.y + caseR - 2.0f) {
             const float tw = textW(f, px, "OBS");
@@ -534,8 +534,8 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (rBR.x - rTL.x > 60.0f && rBR.y - rTL.y > 24.0f) {
             drawFreqDrumWell(dl, rTL, rBR);
             const float cellW = (rBR.x - rTL.x) / 3.0f;
-            const float capPx = fonts::kTinySize;
-            const float figPx = std::min(fonts::kReadingSize + 6.0f,
+            const float capPx = fonts::tinyPx();
+            const float figPx = std::min(fonts::readingPx() + 6.0f,
                                          (rBR.y - rTL.y) - capPx - 10.0f);
             char rad[4] = "---";
             char inb[4] = "---";
@@ -571,7 +571,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         if (iBR.x - iTL.x > 60.0f && iBR.y - iTL.y > 20.0f) {
             drawFreqDrumWell(dl, iTL, iBR);
             const char* ident = in.have ? in.state.text[0] : "";
-            const float capPx = fonts::kTinySize;
+            const float capPx = fonts::tinyPx();
             const char* identCap = tr("IDENT");
             engrave(dl, ImVec2(iTL.x + 8.0f, iTL.y + (iBR.y - iTL.y - capPx) * 0.5f),
                     identCap, capPx);
@@ -583,7 +583,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                         capPx);
             } else {
                 ImFont* uf = fonts::ui();
-                const float px = std::min(fonts::kUiSize + 2.0f, (iBR.y - iTL.y) * 0.52f);
+                const float px = std::min(fonts::uiPx() + 2.0f, (iBR.y - iTL.y) * 0.52f);
                 dl->AddText(uf, px, ImVec2(x0, iTL.y + 3.0f), theme::kPhosphor, ident,
                             nullptr, iBR.x - x0 - 8.0f);
                 // The pattern under the letters, drawn as the marks it is. A
@@ -626,7 +626,7 @@ float drawNavBearingFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         gy += lampR * 2.0f + 4.0f + ImGui::GetTextLineHeight() + 8.0f;
 
         addBenchGroupCaption(dl, ImVec2(gx0, gy), gx1 - gx0, tr("SIGNAL"));
-        gy += fonts::kTinySize + 8.0f;
+        gy += fonts::tinyPx() + 8.0f;
 
         const float gh = bodyBottom - gy;
         if (gh >= 44.0f) {

@@ -29,6 +29,7 @@
 #include <string>
 
 #include "core/utf8_text.hpp"
+#include "gui/ui_scale.hpp"
 #include "imgui.h"
 
 namespace cascade::gui {
@@ -375,6 +376,23 @@ inline bool sameLineIfFits(float nextW) {
     return true;
 }
 
+// THE ONE PLACE THIS DIVISION HAPPENS. `fitTextPx` (and every fit helper
+// above) is measured against whatever size the caller hands it - in
+// `sameLineFittedText`/`fittedButton` below, that is `ImGui::GetFontSize()`,
+// the CURRENT rendered size, already POST-FontScaleMain. `ImGui::PushFont`'s
+// own size argument is documented as the PRE-FontScaleMain base (imgui.h:
+// "global scale factors are applied OVER the provided size"), so handing it
+// an already-scaled fitted size scales it a SECOND time - at the interface
+// size S this is S^2, which an Opus review caught as text so oversized it
+// read as clipped ("AUI", "SPE" for AUDIO/SPECTRUM at 200%, B2). Every caller
+// that fits against `GetFontSize()` and then pushes the result must go
+// through this one function, not repeat the division inline, so there is
+// exactly one place to get it right. At S=1 this is `fittedPx / 1.0f`,
+// bit-exact - the fitted size is unchanged, as it always was.
+inline float pushSizeForRenderedFit(float fittedPx) {
+    return fittedPx / cascade::gui::uiscale::factor();
+}
+
 // A SHORT LINE BESIDE THE ITEM JUST DRAWN - the reason under a dead SEND key -
 // when it fits there, at its own size or drawn smaller down to seven tenths of
 // it. Returns false, having drawn nothing, when even the smaller line does not
@@ -398,7 +416,7 @@ inline bool sameLineFittedText(const char* text) {
     ImGui::SameLine();
     // Centred on the line the full-size text would have taken.
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (px - s) * 0.5f);
-    ImGui::PushFont(f, s);
+    ImGui::PushFont(f, pushSizeForRenderedFit(s));
     ImGui::TextUnformatted(text);
     ImGui::PopFont();
     return true;
@@ -463,7 +481,7 @@ inline bool fittedButton(const char* label, const ImVec2& size = ImVec2(0.0f, 0.
     // A fixed-height row keeps its height: the frame is sized for the old
     // line, so the smaller word is centred in the same button.
     const float h = size.y > 0.0f ? size.y : ImGui::GetFrameHeight();
-    ImGui::PushFont(f, fitted);
+    ImGui::PushFont(f, pushSizeForRenderedFit(fitted));
     const bool pressed = ImGui::Button(label, ImVec2(size.x, h));
     ImGui::PopFont();
     return pressed;

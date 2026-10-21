@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "dsp/deemphasis.hpp"
 #include "dsp/fir.hpp"
 #include "dsp/nco.hpp"
 #include "dsp/quad_demod.hpp"
@@ -60,7 +61,9 @@ bool modeFromName(const std::string& name, DemodMode& out);
 //        detector's multiply is by 1, leaving Re{x}.
 //   USB/LSB  Weaver-style selection: mix the wanted sideband to straddle DC
 //        with an Nco BFO, low-pass with a real-tap FIR (symmetric passband),
-//        mix back, take the real part.
+//        mix back, take the real part. The opposite sideband is down >= 50 dB
+//        at every audio frequency; the price is that the wanted sideband's own
+//        audio below about 300 Hz is attenuated, as in any SSB filter.
 //   CW   USB with the input pre-shifted so a carrier on the VFO beats at
 //        700 Hz.
 //   RAW  Re{x} passthrough, for diagnostics.
@@ -100,7 +103,28 @@ public:
     // that for WFM, inside StereoFm — passes 0 here, so no path ever applies
     // the network twice.
     void setDeemphasisUs(double us);
-    double deemphasisUs() const { return deemphTauSec_ * 1.0e6; }
+    double deemphasisUs() const { return deemph_.timeUs(); }
+
+    // The WIDTH OF THE WANTED SIDEBAND for USB, LSB and CW, in Hz: the audio
+    // passband runs from the carrier out to about this far (-6 dB at 1.2 x, the
+    // design the 3 kHz default has always had, scaled in proportion). Default
+    // 3000.
+    // The other modes ignore it. The carrier-side edge is -6 dB at 300 Hz for
+    // B of 3 kHz and up (B/10 below that); demod.cpp says why the opposite
+    // sideband cannot be stopped near the carrier without giving up the audio
+    // there.
+    //
+    // Clamped into [1 kHz, 0.3 x the channel rate]; a non-finite value means
+    // the default. Redesigns the sideband filter and the two BFOs, so it
+    // restarts a running sideband mode like a mode change does; asking for the
+    // width already in force does nothing at all.
+    //
+    // THE CHANNEL FILTER AHEAD OF THIS IS SYMMETRIC about the carrier, and the
+    // wanted sideband reaches out to about 1.2 x this width on ONE side, so a
+    // caller that narrows the channel filter for a sideband mode must leave it
+    // at least twice that wide (core::Pipeline gives it four times B).
+    void setSsbBandwidthHz(double bandwidthHz);
+    double ssbBandwidthHz() const { return ssbBandwidthHz_; }
 
 private:
     void processSsb(const std::complex<float>* in, std::size_t n, float* out);
@@ -112,13 +136,8 @@ private:
     // (radians/sample); loudness normalization is the downstream Agc's job.
     QuadDemod quad_{1.0f};
 
-    // FM deemphasis one-pole, run by NFM and WFM alike:
-    // y[n] = (1-p)*x[n] + p*y[n-1]. Pole and state kept in double so the
-    // filter matches its analytic transfer function to well below any
-    // audio-relevant error.
-    double deemphTauSec_ = 0.0;  // 0 = de-emphasis disabled (pole 0 = passthrough)
-    double deemphPole_ = 0.0;
-    double deemphState_ = 0.0;
+    // FM deemphasis one-pole, run by NFM and WFM alike (dsp/deemphasis.hpp).
+    Deemphasis deemph_;
 
     // AM DC blocker: y[n] = x[n] - x[n-1] + R*y[n-1].
     double dcPole_ = 0.0;
@@ -129,6 +148,8 @@ private:
     // 1 = plain streaming FIR), BFO up-mix.
     Nco shiftDown_;
     Nco shiftUp_;
+    double ssbBandwidthHz_ = 3000.0;  // B; see setSsbBandwidthHz
+    double ssbBfoHz_ = 0.0;           // f0, the two mixes' frequency (ssbShape)
     FirDecimator ssbFilter_;
     std::vector<std::complex<float>> work_;      // down-mixed block
     std::vector<std::complex<float>> filtered_;  // filter output (n+1 capacity)

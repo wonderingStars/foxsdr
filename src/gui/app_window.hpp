@@ -582,6 +582,9 @@ public:
     // checkbox calls, so the mid-session behaviour of that switch can be
     // proved against the real application.
     void setDiagToggle(int mode);
+    // FIXME(2026-10-21, 0.99.84 merge, ledger TESTER-LINK): main.cpp passes master's --link-tester reveal; the Settings > Beta tester
+    // link flow (0.99.45) is not re-expressed onto the engine's table yet, so the flag is held and read by nothing.
+    void setLinkTesterReveal(bool reveal) { testerLinkReveal_ = reveal; }
 
 private:
     // THE TEST SEAM for the paths that carry a frequency from one radio to the
@@ -1828,6 +1831,7 @@ private:
     // --diag-toggle on|off: flip the diagnostics switch on frame 30. See
     // setDiagToggle().
     int diagToggle_ = 0;
+    bool testerLinkReveal_ = false;  // see setLinkTesterReveal
     // The whole diagnostics switch - crash handler, log AND watchdog - in one
     // place. The checkbox, the arming path in run() and the test hook all go
     // through it; they used to disagree about the watchdog.

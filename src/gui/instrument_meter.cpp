@@ -93,6 +93,7 @@
 
 #include "core/i18n.hpp"
 #include "gui/fonts.hpp"
+#include "gui/ui_scale.hpp"
 #include "gui/instrument_face.hpp"
 #include "gui/instrument_meter_math.hpp"
 #include "gui/scope_face.hpp"
@@ -255,8 +256,8 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // the drawing shrinks as one object instead of the type staying put while
     // the metal moves - which is what makes a resized panel look broken.
     const float s = std::clamp(std::min(bodyH / 210.0f, bodyW / 540.0f), 0.55f, 1.5f);
-    const float capPx = std::clamp(fonts::kTinySize * s, 9.0f, 18.0f);
-    const float readPx = std::clamp(fonts::kReadingSize * s, 9.0f, 20.0f);
+    const float capPx = std::clamp(fonts::tinyPx() * s, 9.0f, 18.0f);
+    const float readPx = std::clamp(fonts::readingPx() * s, 9.0f, 20.0f);
 
     // The right-hand column is dropped rather than squeezed: below the width
     // its captions need, a column of clipped words is worse than no column,
@@ -491,7 +492,7 @@ float drawMeterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         addBenchGroupCaption(dl, ImVec2(x0, y), colW, tr("COMMODITY"));
         y += capH;
         {
-            ImGui::PushFont(leg, capPx);
+            ImGui::PushFont(leg, capPx / cascade::gui::uiscale::factor());  // capPx already carries S; style.FontScaleMain would double it
             const float pitch = colW / 3.0f;
             struct Lamp {
                 const char* word;

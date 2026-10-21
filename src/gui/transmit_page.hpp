@@ -22,6 +22,7 @@
 #include "core/i18n.hpp"  // FOX_TR_NOOP: txLampText is drawn through tr()
 #include "engine/tx_frequency.hpp"
 #include "foxsdr_api.h"
+#include "core/tx_audio.hpp"  // TxArming::Refusal: the sentences below name its reasons
 
 namespace cascade::gui {
 
@@ -214,6 +215,83 @@ inline std::uint32_t txKeyCommands(const TxKeyFrame& f, TxKeyMemory& m, FoxComma
 // over `floorDb` - because a linear audio meter spends nine tenths of its
 // travel in the top 20 dB and reads as dead for normal speech.
 float txMeterFraction(float peak01, double floorDb = -50.0);
+
+// --- PLUGINS THAT TRANSMIT (0.99.74, CASCADE_CAP_TX_AUDIO) ---------------------
+//
+// The page's half of the plugin key: the sentences the operator reads while a
+// plugin is allowed to transmit, and the one the Fitted modules plate prints. The
+// rule itself (what has to be true for a plugin to key) is core/tx_audio.hpp's
+// pluginMayKey(); nothing here decides anything, it only SAYS - which is why a wrong
+// sentence here is a test failure and not a safety failure, and why every one of
+// them is a constant a test can read.
+
+// Why ARM was refused, in the words the page prints under the keys. The first two are
+// the ones an operator can fix; the third cannot happen from the page's own keys and
+// is here so the function is total.
+inline const char* txArmRefusalText(core::TxArming::Refusal r) {
+    switch (r) {
+        case core::TxArming::Refusal::None: return "";
+        case core::TxArming::Refusal::NoRadio:
+            return FOX_TR_NOOP("Not armed: no transmitter is open. Open the radio above first.");
+        case core::TxArming::Refusal::NoGrant:
+            return FOX_TR_NOOP("Not armed: no plugin has been granted TRANSMIT. Grant one on its "
+                               "page in Fitted modules first.");
+        case core::TxArming::Refusal::BadMinutes:
+            return FOX_TR_NOOP("Not armed: that is not one of the offered times.");
+    }
+    return "";
+}
+
+// "4:32" for 272 seconds, "60:00" for an hour. Whole seconds, minutes unbounded
+// (the longest window is 60 minutes, so it never needs an hour column).
+inline void formatTxArmCountdown(char* out, std::size_t cap, int secondsLeft) {
+    if (out == nullptr || cap == 0) { return; }
+    if (secondsLeft < 0) { secondsLeft = 0; }
+    std::snprintf(out, cap, "%d:%02d", secondsLeft / 60, secondsLeft % 60);
+}
+
+// What one plugin's plate says about its transmit state, most important first. The
+// order is the order of precedence: a plugin that has stopped for good is not
+// "waiting", one that holds the transmitter is not merely "armed".
+enum class TxPlateState : int {
+    NotAsked = 0,      // it has never wanted the transmitter: nothing to say
+    NotGranted,        // it has asked and has no grant
+    GrantedDisarmed,   // granted, and the operator has not armed the page
+    Armed,             // granted and armed: it will be keyed when it asks
+    OnAir,             // it holds the transmitter and the radio is keyed for it
+    Waiting,           // granted and wanting the key, but another plugin holds it
+    Stopped,           // its pull() reported a permanent error
+};
+
+inline TxPlateState txPlateState(bool asked, bool granted, bool armed, bool onAir, bool waiting,
+                                 bool stopped) {
+    if (stopped) { return TxPlateState::Stopped; }
+    if (onAir) { return TxPlateState::OnAir; }
+    if (waiting) { return TxPlateState::Waiting; }
+    if (granted) { return armed ? TxPlateState::Armed : TxPlateState::GrantedDisarmed; }
+    return asked ? TxPlateState::NotGranted : TxPlateState::NotAsked;
+}
+
+inline const char* txPlateText(TxPlateState s) {
+    switch (s) {
+        case TxPlateState::NotAsked: return "";
+        case TxPlateState::NotGranted:
+            return FOX_TR_NOOP("It has asked to transmit and is not allowed to.");
+        case TxPlateState::GrantedDisarmed:
+            return FOX_TR_NOOP("Allowed to transmit, but you have not armed plugins on the "
+                               "TRANSMIT page, so it cannot.");
+        case TxPlateState::Armed:
+            return FOX_TR_NOOP("ARMED: it will be keyed when it asks, until the window closes.");
+        case TxPlateState::OnAir:
+            return FOX_TR_NOOP("ON AIR: this module has the transmitter.");
+        case TxPlateState::Waiting:
+            return FOX_TR_NOOP("Another plugin holds the transmitter, so this one waits.");
+        case TxPlateState::Stopped:
+            return FOX_TR_NOOP("Its transmit audio reported a permanent error and has been "
+                               "stopped; stop and start the module to try again.");
+    }
+    return "";
+}
 
 }  // namespace cascade::gui
 

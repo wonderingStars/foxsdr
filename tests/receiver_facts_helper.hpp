@@ -41,6 +41,10 @@ struct ReceiverFacts {
     double rates[cascade::core::kMaxPublishedRates] = {};
     double outputRateHz = 0.0;
     std::uint64_t outputFrames = 0;
+    // The receiver's position (master's 0.99.4x receiverLocator): the snapshot carries it beside the state.
+    bool rxPositionSet = false;
+    double rxLatDeg = 0.0;
+    double rxLonDeg = 0.0;
 };
 
 inline cascade::core::PublishedState toState(const ReceiverFacts& f) {
@@ -70,6 +74,9 @@ inline cascade::core::PublishedState toState(const ReceiverFacts& f) {
     for (std::size_t i = 0; i < cascade::core::kMaxPublishedRates; ++i) { s.app.rates[i] = f.rates[i]; }
     s.app.outputRateHz = f.outputRateHz;
     s.app.outputFrames = f.outputFrames;
+    s.app.rxPositionSet = f.rxPositionSet;
+    s.app.rxLatDeg = f.rxLatDeg;
+    s.app.rxLonDeg = f.rxLonDeg;
     return s;
 }
 

@@ -89,6 +89,27 @@ IMGUI_IMPL_API int      ImGui_ImplGlfw_ViewportWindowCreationFailures();
 // nobody knows works. Resets itself after one use.
 IMGUI_IMPL_API void     ImGui_ImplGlfw_FailNextViewportWindowForTest();
 
+// FOXSDR PATCH (mouse-passthrough-cache) - see third_party/imgui/FOXSDR-PATCHES.md.
+// TESTS ONLY: how many times ImGui_ImplGlfw_UpdateMouseData has actually called
+// glfwSetWindowAttrib(GLFW_MOUSE_PASSTHROUGH) since the last reset, and a way to
+// reset both that counter and the per-window "last value set" cache it counts
+// against. Upstream calls this every frame for every viewport unconditionally;
+// the cache exists to skip the call once the wanted value stops changing, and
+// this is the only way a test can see the skip happening instead of taking it
+// on faith.
+IMGUI_IMPL_API int      ImGui_ImplGlfw_MousePassthroughSyscallCountForTest();
+IMGUI_IMPL_API void     ImGui_ImplGlfw_ResetMousePassthroughForTest();
+
+// TESTS ONLY (0.99.44 repair): the cache's own decision, and the clear
+// ImGui_ImplGlfw_DestroyWindow makes when a viewport window is torn down, both
+// reachable directly with a synthetic window key - neither ever dereferences
+// the pointer, so this reproduces a window ADDRESS REUSE deterministically
+// (destroy, clear, then a new "window" at the identical key must not inherit
+// the destroyed one's last value) instead of depending on the allocator
+// actually handing the same address back.
+IMGUI_IMPL_API bool    ImGui_ImplGlfw_ShouldSetMousePassthroughForTest(GLFWwindow* window, bool wanted);
+IMGUI_IMPL_API void    ImGui_ImplGlfw_ClearMousePassthroughCacheForTest(GLFWwindow* window);
+
 // GLFW helpers
 IMGUI_IMPL_API void     ImGui_ImplGlfw_Sleep(int milliseconds);
 IMGUI_IMPL_API float    ImGui_ImplGlfw_GetContentScaleForWindow(GLFWwindow* window);

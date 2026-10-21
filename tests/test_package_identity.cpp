@@ -14,7 +14,7 @@
 // precisely so it can be tested without a package:
 //
 //   identityFromApiResult   - the Win32 contract, every branch
-//   updateCheckDisposition  - the three states the startup check has
+//   updateCheckDisposition  - which channel the startup check asks, if any
 //   choosePluginDir(..., packaged) - the directory choice
 //
 // The end-to-end half - a real MSIX package on this machine, taking the
@@ -80,50 +80,47 @@ void testIdentityFromApiResult() {
     CHECK(cascade::core::identityFromApiResult(kErrorSuccess, {}).packaged);
 }
 
-// THE UPDATE CHECK'S THREE STATES.
+// THE UPDATE CHECK'S THREE STATES (the 0.99.53 contract).
 void testUpdateCheckDisposition() {
-    // Ordinary install, the user wants it: ask.
+    // Ordinary install, the user wants it: ask foxsdr.com.
     CHECK(cascade::core::updateCheckDisposition(false, true) == UpdateCheckDisposition::Run);
 
-    // Packaged: the Store is the update channel, so the check stands down
-    // EVEN THOUGH the user's tick is on. This is the whole point of the file.
+    // Packaged, the user wants it: ask the MICROSOFT STORE. Until 0.99.53 this
+    // row was StorePackage, "ask nobody", and a Store user was never told of
+    // an update the Store's own background updating was a day late with.
     CHECK(cascade::core::updateCheckDisposition(true, true) ==
-          UpdateCheckDisposition::StorePackage);
+          UpdateCheckDisposition::AskStore);
 
-    // Unticked wins over packaged when it comes to the REASON shown, because
-    // the user's own choice is the one they can change. Both answers stop the
-    // check; they differ in what the Settings row says.
+    // Unticked asks NOBODY, whichever kind of copy it is - the tick is the
+    // user's, and it now means the same thing on both.
     CHECK(cascade::core::updateCheckDisposition(false, false) ==
           UpdateCheckDisposition::OffByChoice);
     CHECK(cascade::core::updateCheckDisposition(true, false) ==
           UpdateCheckDisposition::OffByChoice);
 
-    // Only one of the four combinations may reach the network.
-    int runs = 0;
+    // foxsdr.com is asked by exactly one of the four combinations, and it is
+    // never a packaged one: a Store copy must not be offered
+    // foxsdr-setup-<ver>.exe, which would install a second FoxSDR beside it.
+    // The Store is asked by exactly one, and it is never an unpackaged one.
+    int site = 0;
+    int store = 0;
     for (const bool packaged : {false, true}) {
         for (const bool enabled : {false, true}) {
-            if (cascade::core::updateCheckDisposition(packaged, enabled) ==
-                UpdateCheckDisposition::Run) {
-                ++runs;
+            const UpdateCheckDisposition d =
+                cascade::core::updateCheckDisposition(packaged, enabled);
+            if (d == UpdateCheckDisposition::Run) {
+                ++site;
+                CHECK(!packaged);
             }
+            if (d == UpdateCheckDisposition::AskStore) {
+                ++store;
+                CHECK(packaged);
+            }
+            if (!enabled) { CHECK(d == UpdateCheckDisposition::OffByChoice); }
         }
     }
-    CHECK(runs == 1);
-}
-
-// THE SENTENCES. Pinned, not because wording is sacred, but because the log
-// line is what a support conversation greps for and the panel sentence is the
-// only thing that tells a Store user why there is no update button.
-void testStandDownWording() {
-    const std::string line = cascade::core::updateCheckStandDownLine();
-    CHECK(line == "update check: running from a Store package - the Store delivers updates");
-    const std::string sentence = cascade::core::updateCheckStandDownSentence();
-    CHECK(!sentence.empty());
-    CHECK(sentence.find("Store") != std::string::npos);
-    // It must not read as a failure. "could not", "error" and "failed" all
-    // describe something going wrong; nothing here has.
-    CHECK(sentence.find("could not") == std::string::npos);
-    CHECK(sentence.find("failed") == std::string::npos);
+    CHECK(site == 1);
+    CHECK(store == 1);
 }
 
 // THE LIVE QUERY, in the only direction this process can prove.
@@ -231,7 +228,6 @@ void testDefaultPluginDirUnderFakedPackage() {
 int main() {
     testIdentityFromApiResult();
     testUpdateCheckDisposition();
-    testStandDownWording();
     testLiveQueryIsUnpackagedHere();
     testSeam();
     testPluginDirChoiceUnderPackage();

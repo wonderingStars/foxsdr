@@ -1,0 +1,1 @@
+{"sourceKind": "soapy", "soapyArgs": "driver=rtlsdr", "antenna": "RX", "sampleRateHz": 2400000, "gainName": "LNA", "gainDb": 20, "agc": true}

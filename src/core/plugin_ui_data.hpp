@@ -21,6 +21,7 @@
 #ifndef CASCADE_CORE_PLUGIN_UI_DATA_HPP
 #define CASCADE_CORE_PLUGIN_UI_DATA_HPP
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <set>
@@ -38,6 +39,28 @@ struct HostTrack {
     CascadeTrack t{};
     std::string plugin;
 };
+
+// WHETHER THE HOST CAN PUT A TRACK ON A MAP (0.99.75).
+//
+// A source may publish a target it HEARS and cannot place yet - an ADS-B
+// aircraft whose position message has not arrived - by setting
+// CASCADE_TRACK_FLAG_NO_POSITION and leaving the coordinates NaN, and it may do
+// so only when the host has said (CASCADE_STATE_LISTS_UNPLACED_TRACKS) that it
+// understands. Such a target is LISTED and never drawn, fitted to, followed,
+// counted into the coverage map or called "on screen".
+//
+// TWO TESTS, AND EITHER ONE IS ENOUGH TO REFUSE. The flag is the contract. The
+// finiteness of both coordinates is the defence: an old plugin or a buggy one
+// that publishes NaN (or an infinity) without the flag must not put it into a
+// renderer, where a NaN projected to the screen compares false against every
+// edge and so is not skipped but drawn - at NaN. And a flagged track whose
+// coordinates a careless plugin filled in anyway is still unplaced, because the
+// flag is the plugin saying so. Written positively (isfinite) because the
+// negation of a comparison would accept NaN, which is every value refused here.
+inline bool trackHasPosition(const CascadeTrack& t) {
+    return (t.flags & CASCADE_TRACK_FLAG_NO_POSITION) == 0u && std::isfinite(t.latDeg) &&
+           std::isfinite(t.lonDeg);
+}
 
 // How stale a target is allowed to get before the host stops showing it.
 //
@@ -77,6 +100,15 @@ struct HostTrack {
 // Times in milliseconds, to match CascadeTrack::ageMs.
 constexpr std::uint64_t kTrackFadeMsAircraft = 30ull * 1000ull;
 constexpr std::uint64_t kTrackDropMsAircraft = 60ull * 1000ull;
+// AN ESTIMATED AIRCRAFT POSITION (0.99.78, CASCADE_TRACK_FLAG_ESTIMATED) is the
+// source's last fix carried forward along the aircraft's last course, published
+// so that an aircraft at the fringe, heard in bursts tens of seconds apart, does
+// not blink off the map between them (a 31,000 ft airliner at 42 nm did, on
+// 2026-10-13). It fades from the same 30 s - the age is still the fix's - and is
+// dropped at 180 s, which is where Flightradar24 and tar1090 give up on a
+// carried-forward position too. The flag is the source's to set; the host never
+// invents it, and for every other kind it changes nothing.
+constexpr std::uint64_t kTrackDropMsAircraftEstimated = 180ull * 1000ull;
 constexpr std::uint64_t kTrackFadeMsVessel = 5ull * 60ull * 1000ull;
 constexpr std::uint64_t kTrackDropMsVessel = 10ull * 60ull * 1000ull;
 constexpr std::uint64_t kTrackFadeMsStation = 30ull * 60ull * 1000ull;
@@ -99,12 +131,38 @@ struct TrackPresentation {
     bool visible = true;
     float alpha = 1.0f;  // 1.0 fresh, ramping to kTrackMinAlpha, then invisible
 };
-TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind);
+// `flags` are the track's CASCADE_TRACK_FLAG_* bits: an aircraft carrying
+// CASCADE_TRACK_FLAG_ESTIMATED is dropped at kTrackDropMsAircraftEstimated.
+TrackPresentation trackPresentation(std::uint64_t ageMs, std::uint32_t kind,
+                                    std::uint32_t flags = 0u);
+// The same rule from the track itself - age, kind AND flags - which is the form
+// every caller that draws, lists or counts a track uses, so none can forget the
+// flags.
+inline TrackPresentation trackPresentation(const CascadeTrack& t) {
+    return trackPresentation(t.ageMs, t.kind, t.flags);
+}
+// Whether a track's position is an estimate (0.99.78): the flag, on a track that
+// has a position at all.
+inline bool trackIsEstimated(const CascadeTrack& t) {
+    return (t.flags & CASCADE_TRACK_FLAG_ESTIMATED) != 0u && trackHasPosition(t);
+}
 
 // How many of `tracks` the rule says to show. The counts beside the map and
 // above the flight list must agree with what is drawn: "30 targets" over a
 // list of twelve is worse than no count at all.
+//
+// PLACED TARGETS ONLY (0.99.75): a target the source hears and cannot place
+// (trackHasPosition false) is not a marker on the map, so it is not in this
+// number whatever vector it is found in; visibleUnplacedTrackCount counts those.
 std::size_t visibleTrackCount(const std::vector<HostTrack>& tracks);
+
+// How many of `tracks` are heard without a position and still inside their
+// kind's staleness rule - the second number on the list's heading, "heard
+// without a position". The same rule as visibleTrackCount for the same reason
+// (the number must be the rows), applied to the other half: an aircraft that
+// has been silent for a minute is not "heard" any more, placed or not, and a
+// vessel at ninety seconds is fine.
+std::size_t visibleUnplacedTrackCount(const std::vector<HostTrack>& tracks);
 
 // A polyline. The plugin owns its vertices only until the next poll, so they
 // are copied here too - the host draws on its own schedule and must not hold a
@@ -129,6 +187,12 @@ struct HostPath {
 // strength): a source may plot a line that is not a target at all - a
 // footprint, a predicted ground track, a boundary - and the host has no age
 // for it and no business hiding it.
+//
+// AN OWNER WITH NO POSITION HIDES ITS TRAIL (0.99.75): a target heard and not
+// placed (trackHasPosition false) has no marker, and a line leading to nowhere
+// says "something is here" about the one thing the host has decided not to draw.
+// PluginUi::poll also drops such a path before it is stored; this is the same
+// rule for a caller that holds both kinds of track in one vector.
 TrackPresentation pathPresentation(const HostPath& path,
                                    const std::vector<HostTrack>& tracks);
 

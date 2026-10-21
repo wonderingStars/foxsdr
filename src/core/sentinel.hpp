@@ -1,0 +1,435 @@
+// sentinel.hpp - a small watcher that notices when the application ends
+// abnormally WITHOUT having been able to report it, and writes the one report
+// that can be known (0.99.64). The design record is docs/DIAGNOSTICS.md, "The
+// sentinel"; this header is the contract.
+//
+// WHAT IT IS. The SAME EXECUTABLE, started by the application itself with
+// `--sentinel`, which does nothing but wait for the application to end. It is
+// not a second binary (the installer ships one), it opens no window, no console,
+// no GL and no radio, and it reads and writes nothing of the user's
+// configuration. While it waits it uses no CPU: it blocks on a handle.
+//
+// WHAT IT CAN SEE, and the rule that bounds it. It reads no memory of the
+// application and takes no dump: no debugger, no ReadProcessMemory, no minidump.
+// It has (1) a handle that lets it WAIT for the process and read its exit code
+// (SYNCHRONIZE and PROCESS_QUERY_LIMITED_INFORMATION - nothing more), (2) the
+// breadcrumb block the application writes into deliberately
+// (core/breadcrumb.hpp) and (3) files the application already writes: the log
+// and the report folder. On Linux a watcher that is not the parent cannot ask the
+// kernel for an exit status, so it gets (1) as a pipe whose write end the application
+// holds: end-of-file means the application has gone. HOW it went (0.99.78) is what the
+// application wrote into the page as it ended - the status of an exit(), the number of
+// a fatal signal - and nothing is there for a SIGKILL (core/exit_record.hpp).
+//
+// WHAT IT DECIDES. When the application ends it answers one question - is there
+// anything the application could not itself report - and writes ONE report in
+// the existing format and folder, or nothing:
+//
+//   a whole report of this death by the in-process handler  -> nothing
+//   exit code 0 after the shutdown reached its last stage   -> nothing (clean)
+//   the session was closing                                 -> Session  (kept here)
+//   it ended before the first frame                         -> Startup  (sent)
+//   a crash exit code the handler never saw                 -> Crash    (sent)
+//   it had stopped drawing for longer than the watchdog's
+//   own threshold, then ended - and nobody was holding the
+//   window (a drag, a menu, a prompt)                       -> Frozen   (sent)
+//   anything else: ended while it was drawing               -> Outside  (kept here)
+//
+// "SENT" means the next launch's uploader may send it, under the same switch and
+// the same limits (one signature a day, five a day) as every other report;
+// "KEPT HERE" means the uploader never does, and the report is still in the
+// folder and in the bundle's "reports on this machine" list. A healthy
+// application that the user ends from Task Manager must not use up the daily
+// five, which is the whole reason there are two kinds.
+//
+// WHERE IT ENDED (0.99.66, Windows only). For the two classes that carry a crash
+// exit code - Crash and Startup - the watcher also asks Windows where the crash
+// was: Windows Error Reporting writes an "Application Error" event (id 1000) for
+// the application's death, naming the faulting module and the offset in it, and
+// the event is already in the log when the process object is signalled
+// (core/os_crash_record.hpp: measured, and what is kept and matched). The module's
+// FILE NAME and the offset go into the report as its `address:` line, with a line
+// saying they came from Windows' record and not from a stack, and they refine the
+// signature. The read is bounded (kSentinelOsRecordBudget), unelevated and quiet:
+// no event, no access or no answer in time all leave the report exactly as it was.
+//
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#ifndef CASCADE_CORE_SENTINEL_HPP
+#define CASCADE_CORE_SENTINEL_HPP
+
+#include <chrono>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "core/breadcrumb.hpp"
+#include "core/os_crash_record.hpp"
+
+namespace cascade::core {
+
+// ---------------------------------------------------------------------------
+// The classes, and the fixed wording of each reason line.
+// ---------------------------------------------------------------------------
+enum class SentinelClass { None, Crash, Frozen, Startup, Outside, Session };
+
+// The START of every sentinel report's `reason:` line. FIXED: each class has one
+// sentence, so the site can classify by prefix and nothing else varies. What
+// follows the sentence is a closed vocabulary (` - <what the exit code means>;
+// phase <phase>; in <part of the frame>; silent <N> s`), never text from the
+// machine. At most 200
+// characters in all, which is what the site keeps of a reason.
+inline constexpr const char* kSentinelReasonCrash =
+    "sentinel: crash exit code, no report from the process";
+inline constexpr const char* kSentinelReasonFrozen =
+    "sentinel: window had stopped drawing when it ended";
+inline constexpr const char* kSentinelReasonStartup = "sentinel: ended before the first frame";
+inline constexpr const char* kSentinelReasonOutside =
+    "sentinel: ended from outside, window was drawing";
+inline constexpr const char* kSentinelReasonSession = "sentinel: ended as the session closed";
+
+// What every sentinel reason begins with, and the two classes that are NEVER
+// uploaded. Shared with the uploader (crash_upload.cpp) so that the writer and
+// the reader of the distinction cannot drift apart.
+inline constexpr const char* kSentinelReasonPrefix = "sentinel: ";
+bool sentinelReasonIsLocalOnly(const std::string& reason);
+bool sentinelReasonIsSentinel(const std::string& reason);
+
+const char* sentinelClassId(SentinelClass c);        // "crash", "frozen", "startup", ...
+const char* sentinelClassReason(SentinelClass c);    // the fixed sentence above
+bool sentinelClassUploads(SentinelClass c);          // Crash, Frozen, Startup
+
+// ---------------------------------------------------------------------------
+// The vocabulary: phases and exit codes, in words.
+// ---------------------------------------------------------------------------
+struct PhaseLabel {
+    const char* id;     // "running", "opening-radio" - used in the signature
+    const char* words;  // "running", "opening a radio" - used in the reason
+};
+// The phase as the report names it: the breadcrumb's phase, refined by what else
+// was going on (a plugin load, a radio open) while the application was up.
+PhaseLabel sentinelPhaseLabel(const breadcrumb::Snapshot& b);
+
+// The part of the frame the window's thread was in (a name from
+// core/frame_timing.hpp's closed list: "rail", "plugin-panels", ...), or nullptr
+// when the page has none that means anything: the frame loop was not turning, no
+// frame had begun, or the number is not one this build knows.
+const char* sentinelFrameScopeName(const breadcrumb::Snapshot& b);
+
+// Was a PERSON holding the frame loop - a window being dragged or resized, an
+// open menu, a prompt of the operating system's being read? Then a silent
+// heartbeat is not a freeze. True only while the frame loop is turning.
+bool sentinelUserPaced(const breadcrumb::Snapshot& b);
+
+// A crash EXIT CODE: a Windows exception or NTSTATUS error (top nibble 8, C or E)
+// other than STATUS_CONTROL_C_EXIT, which is a request to end and not a fault.
+// Anything else - 1 from taskkill, -1 from Stop-Process, 0 - is not.
+bool isCrashLikeExitCode(unsigned long code);
+
+// What an exit code means, in the fixed words the reason carries. "unknown exit
+// code" for any value not in the table; the table is checked against the Windows
+// SDK's ntstatus.h and, for the two codes a forced kill leaves, against a
+// measurement (docs/DIAGNOSTICS.md, "The sentinel").
+//
+// `exitRecordTried` (Linux, 0.99.78): with `exitKnown` false, says that the process's own
+// exit record WAS asked for and held nothing, so the words name what was tried; false (the
+// default) is the Windows case of a failed GetExitCodeProcess and keeps the old words.
+//
+// `windowFailed` (see sentinelWindowFailed): the application said, in the page, that it could not
+// create its window and ended itself. The words are then kSentinelWindowFailedWords, whatever the
+// code. Without it, exit code 1 is worded as what it is: AMBIGUOUS. `taskkill /F` leaves 1, and so
+// does an application that returns 1 itself (field signature 85FF854AA2C772F9 was a window that
+// could not be created, reported as a kill for two releases), so the words name both.
+std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecordTried = false,
+                              bool windowFailed = false);
+
+// What a report says when the application recorded that its window could not be created
+// (breadcrumb::kFlagWindowFailed) and the exit code is the one that goes with returning 1.
+inline constexpr const char* kSentinelWindowFailedWords =
+    "the application ended itself: the window could not be created - see the window: lines in the log";
+// The part of those words that identifies them to a reader of the report listing
+// (core/exit_cause.cpp), which keeps only the first 120 characters of a reason
+// (core/diag_history.cpp): after the start-up sentence and " - " the whole words no longer fit,
+// this lead does (tests/test_exit_cause.cpp holds both).
+inline constexpr const char* kSentinelWindowFailedLead = "the application ended itself: the window could not be created";
+
+// Did the application end ITSELF because its window could not be created? True when the page
+// carries kFlagWindowFailed in the phase that sets it (creating the window) AND the ending is the
+// one `return 1` makes: Windows exit code 1, a tagged POSIX `exit(1)`, or no exit status at all
+// (the flag is then the only evidence there is). Any other code - a fault while the window system
+// was being torn down, say - is what it says.
+bool sentinelWindowFailed(const breadcrumb::Snapshot& crumb, bool exitKnown, unsigned long code);
+
+// ---------------------------------------------------------------------------
+// HOW A POSIX PROCESS ENDED, carried through the platform-neutral `code` (0.99.78).
+//
+// The Linux watcher is its application's CHILD and so cannot wait for it: the kernel
+// gives a process's exit status to its parent only (waitid(2) answers ECHILD for anything
+// else). What it can read is the record the application wrote into the shared page
+// (breadcrumb::noteExit) as it ended. That record is carried in the same 32-bit `code`
+// every other part of the sentinel already moves - the report's `code:` line, the
+// signature, the previous-session classification - as a TAGGED value:
+//
+//     0x5058 HH VV      "PX", HH the ExitHow (1 exit, 2 signal), VV the status or signal
+//
+// A tag nothing on Windows produces (its exit codes are NTSTATUS values, whose top nibble
+// is 8, C or E, or small numbers), so a Windows code is never read as a POSIX one and
+// `sentinelExitWords(true, code)` and `isCrashLikeExitCode(code)` need no platform switch.
+// ---------------------------------------------------------------------------
+inline constexpr unsigned long kPosixExitTag = 0x50580000ul;
+unsigned long sentinelPosixExitCode(breadcrumb::ExitHow how, std::uint32_t value);
+// False for anything that is not a tagged value; `how` and `value` are then untouched.
+bool sentinelPosixExitFromCode(unsigned long code, breadcrumb::ExitHow& how, std::uint32_t& value);
+// "SIGSEGV" for 11 and so on, nullptr for a number with no name here. LINUX numbering
+// (x86-64 and arm64): not <csignal>'s, which on Windows has SIGABRT as 22.
+const char* sentinelSignalName(int signal);
+// A signal that means the program itself faulted (ILL, TRAP, ABRT, BUS, FPE, SEGV), as
+// opposed to one somebody sent it (TERM, HUP, INT, QUIT, KILL, PIPE...).
+bool sentinelIsFaultSignal(int signal);
+
+// ---------------------------------------------------------------------------
+// The decision, a pure function of what was observed.
+// ---------------------------------------------------------------------------
+struct SentinelFacts {
+    bool exitKnown = false;          // false when no source could say how it ended
+    unsigned long exitCode = 0;
+    bool exitRecordTried = false;    // Linux: the process's own record was read and was empty
+    breadcrumb::Snapshot crumb;      // .valid false when the block could not be read
+    std::uint64_t nowMs = 0;         // breadcrumb::nowMs() as the watcher woke
+    bool osSessionEnding = false;    // the operating system says the session is closing
+    bool crashReportExists = false;  // a whole report of this death by the in-process handler
+    bool freezeReportExists = false; // a freeze report by this process, after its last heartbeat
+};
+
+struct SentinelVerdict {
+    SentinelClass cls = SentinelClass::None;
+    std::string reason;         // the whole `reason:` line value; empty for None
+    unsigned long code = 0;     // the exit code (0 when not known)
+    bool codeKnown = false;
+    std::string signatureTag;   // hashed with the code: "sentinel:<class>:<phase>[:<scope>]"
+    std::int64_t silentMs = -1; // how long the heartbeat had been silent; -1 unknown
+    PhaseLabel phase{"unknown", "unknown"};
+    bool write() const { return cls != SentinelClass::None; }
+    bool upload() const { return sentinelClassUploads(cls); }
+};
+
+// Is this a verdict for which Windows' own crash record is worth asking for
+// (0.99.66)? Only an ending that carries a crash exit code AND is written for
+// sending: the Crash class, and the Startup class when the code is a crash code. An
+// ending from outside (taskkill's 1, Stop-Process's -1), a closing session and a
+// freeze have no Application Error event to find, and must not pay for a read.
+bool sentinelWantsOsCrashRecord(const SentinelVerdict& v);
+
+// How long the heartbeat may be silent before the ending is "frozen": the SAME
+// thresholds the freeze watchdog judges by - its start-up budget for the first
+// frames, its frame threshold afterwards, its shutdown budget once the frame loop
+// has ended - read from its own constants, so the two cannot disagree.
+std::uint64_t sentinelFreezeThresholdMs(const breadcrumb::Snapshot& b);
+
+SentinelVerdict decideSentinel(const SentinelFacts& f);
+
+// ---------------------------------------------------------------------------
+// The report
+// ---------------------------------------------------------------------------
+struct SentinelReportInfo {
+    std::string version, commit, os, arch;
+    std::int64_t uptimeSec = -1;            // -1: not known, the line is left out
+    std::vector<std::string> logLines;      // the end of the session's log, oldest first
+    std::size_t logTotalLines = 0;          // how many lines the session had in the files
+    // THE OTHER SOFTWARE'S DLLs IN THE PROCESS (0.99.69), the value of the context line
+    // `foreign-modules:`. The sentinel reads no memory of the application, so this is
+    // rebuilt from the one place the application wrote it that outlives it: the
+    // `modules:` line it logs at start and each `module arrived:` line after it, read
+    // from the WHOLE session's log (SessionLogTail::moduleLines) and not from the
+    // 256-line tail, which a long session has moved far past the start line. File
+    // names only, as the application writes them. `(not recorded)` - the default - when
+    // the log holds neither (diagnostics was switched on part-way, or the line has
+    // been rotated away).
+    std::string foreignModules = "(not recorded)";
+    // WHERE WINDOWS SAYS IT ENDED (0.99.66): the faulting module's file name and the
+    // offset in it, from the Application Error event of this death. `located` false
+    // (the default, and every report written before 0.99.66) adds nothing to the
+    // report - not a line, not a byte.
+    bool located = false;
+    OsCrashLocation location;
+    // THE ONE MODULE-TABLE LINE, for a location that names the application's own
+    // executable (0.99.66): what the crash writer's `--- modules ---` block says of
+    // it, so that `parseReportText` gives the report the build id the offset
+    // resolves against. Only with `located`, and only when `location.module` is this
+    // executable's file name (finishSentinelWatch decides); the line's file name is
+    // `location.module`, so the two always agree. `moduleBase` and `moduleSize` are
+    // the sentinel's own image's - a copy of the same file, never read by the reader
+    // and not sent; `modulePdb` is the PDB's file name and `moduleBuildId` the
+    // CodeView id, empty when the image carries none (the line then says `(none)`, as
+    // the crash writer's does).
+    bool hasModule = false;
+    std::uint64_t moduleBase = 0;
+    std::uint64_t moduleSize = 0;
+    std::string modulePdb;
+    std::string moduleBuildId;
+};
+
+// The fixed sentence of the `address-source:` line, which says the `address:` line
+// above it is not a stack frame.
+inline constexpr const char* kSentinelAddressSource =
+    "Windows' crash record of this process (Application Error event 1000), not a stack";
+
+// The text of the report: the existing format (kind, reason, code, signature,
+// context, process, log), no stack and no module list because there is nothing
+// of either to show. Every header line and every context line it can carry is
+// listed below. With a location, two more header lines: `address: <module>+0x<offset>`
+// (the line the in-process reports carry, which the uploader reads into the
+// payload's `module` and `offset`) and `address-source:`, and the signature is
+// hashed over the location as well as over what it was hashed over before. When
+// the location names the application's own executable the report also carries a
+// `--- modules ---` block of that ONE line, between the context and the process
+// block, so that the reader has a build id for the offset.
+std::string renderSentinelReport(const SentinelVerdict& v, const SentinelReportInfo& info);
+
+// THE SIGNATURE of a sentinel report: what it has always been - the exit code and
+// the tag (class, phase, frame scope) - and, when Windows named the fault, the
+// module and the offset as well, as `<tag>@<module>` and the offset. A refinement,
+// never a merge: a report without a location hashes exactly as one always did, so
+// every report written by 0.99.64 and 0.99.65 keeps its group; with one, the group
+// splits by WHERE (a graphics driver's check, our own executable, a CRT's) but is
+// never joined to another. (Why the phase and part of the frame stay in it:
+// docs/DIAGNOSTICS.md, "Where in the process it ended".)
+std::string sentinelSignature(const SentinelVerdict& v, const OsCrashLocation* location);
+
+// THE INVENTORY, in the spirit of crashReportFieldNames(): PRIVACY.md documents
+// these field by field and tests/test_sentinel.cpp compares them with a report a
+// real sentinel wrote, in both directions. The header lines before the first
+// "--- " marker, the lines of the context block, and the lines of the process
+// block.
+const std::vector<std::string>& sentinelHeaderFieldNames();
+const std::vector<std::string>& sentinelContextFieldNames();
+const std::vector<std::string>& sentinelProcessFieldNames();
+// The header lines a report carries ONLY when Windows' record located the fault
+// (0.99.66): `address` and `address-source`. Documented in PRIVACY.md with the rest,
+// and compared with a located report in both directions.
+const std::vector<std::string>& sentinelLocationFieldNames();
+// What the one-line `--- modules ---` block of such a report is made of (0.99.66): the
+// block's name and the four keys of its line, `base=`, `size=`, `pdb=`, `build=`.
+// Documented in PRIVACY.md and compared with a real report in both directions.
+const std::vector<std::string>& sentinelModuleBlockFieldNames();
+
+// "crash-<stamp>-<application pid>-999999.txt". Named with the APPLICATION's
+// process id so that crashReportWrittenByProcess finds it (one report per
+// death, and asking twice is answered the same), and with a sequence number no
+// in-process report ever reaches, so it can never overwrite one.
+inline constexpr unsigned long kSentinelReportSeq = 999999;
+std::string sentinelReportFileName(unsigned long appPid, std::chrono::system_clock::time_point at);
+
+// Is there a freeze report (hang-*.txt, kind hang or stall) by `appPid` written
+// at or after `since`? Healthy path only. On Linux a freeze report is named with
+// pid 0, so any freeze report since `since` counts.
+bool freezeReportWrittenSince(const std::string& crashDir, unsigned long appPid,
+                              std::chrono::system_clock::time_point since);
+
+// ---------------------------------------------------------------------------
+// The watcher's last act, platform-neutral.
+// ---------------------------------------------------------------------------
+struct SentinelEnd {
+    unsigned long appPid = 0;
+    bool exitKnown = false;
+    unsigned long exitCode = 0;
+    bool exitRecordTried = false;  // see SentinelFacts
+    bool osSessionEnding = false;
+    bool appStartedKnown = false;
+    std::chrono::system_clock::time_point appStarted{};  // when the application began
+    std::int64_t uptimeSec = -1;
+    breadcrumb::Snapshot crumb;
+    std::string crashDir;
+    std::string logDir;
+    // The application's creation and end times as FILETIMEs (100 ns ticks since
+    // 1601), exactly as GetProcessTimes gave them: what Windows' crash record is
+    // matched by (0.99.66). 0 where not known - Linux, a failed call - and then no
+    // location is looked for.
+    std::uint64_t appStartFileTime = 0;
+    std::uint64_t appEndFileTime = 0;
+    // Where the Application Error events come from. Empty: the Windows event log. A
+    // test names a fixture, or one that never answers.
+    OsEventSource osEventSource;
+    // How long to wait for them: negative means kSentinelOsRecordBudget (below), which is
+    // what the watcher always uses. Only a test says otherwise, to keep its own run short.
+    std::chrono::milliseconds osRecordBudget{-1};
+};
+
+// The Linux watcher's one source of an exit status (0.99.78): fills `exitKnown`,
+// `exitCode` (tagged, see above) and `exitRecordTried` of `end` from the exit record in
+// `end.crumb`, which the application wrote as it ended. An empty or unreadable record
+// leaves `exitKnown` false and `exitRecordTried` true.
+void sentinelTakeExitRecord(SentinelEnd& end);
+
+struct SentinelOutcome {
+    SentinelVerdict verdict;
+    std::string reportPath;  // empty when nothing was written
+    bool located = false;    // Windows' crash record was found and is in the report (0.99.66)
+};
+
+// Looks for an in-process report of this death, decides, and writes the one
+// report or none. Pure of any process-wide effect, so a test can call it
+// in-process; the exit deadline below is armed by runSentinelMain, not here.
+SentinelOutcome finishSentinelWatch(const SentinelEnd& end);
+
+// The sentinel never outlives the application by more than this, so the
+// executable can be replaced by an installer: runSentinelMain arms it the moment
+// the application has ended, and whatever is still going on after that - a stuck
+// disk - is cut off. The cost of that is a report that is lost, never an
+// installer that cannot replace cascade.exe.
+inline constexpr std::chrono::milliseconds kSentinelExitDeadline{1000};
+void armSentinelExitDeadline();
+
+// HOW LONG THE WATCHER WAITS FOR WINDOWS' CRASH RECORD (0.99.66). Measured on this
+// machine (docs/DIAGNOSTICS.md): the event is STAMPED 250-475 ms before the
+// application's process object is signalled but is not always READABLE when the
+// watcher wakes. In the real watcher, 16 of 38 deaths showed it at the first query and
+// the other 22 showed it 40-373 ms later; a plain polling probe and the unit test saw
+// it 561-752 ms later in 8 runs of about 180. 800 ms covers all of those and leaves
+// 200 ms of the exit deadline over. The report has been written
+// before the wait begins (finishSentinelWatch), so the wait can cost the location and
+// never the report; a read that has not answered is left behind.
+inline constexpr std::chrono::milliseconds kSentinelOsRecordBudget{800};
+static_assert(kSentinelOsRecordBudget.count() + 150 <= kSentinelExitDeadline.count(),
+              "the crash-record wait must leave part of the exit deadline over");
+
+// ---------------------------------------------------------------------------
+// The application's side: starting it, switching it, noticing it die.
+// All of these are for the GUI thread.
+// ---------------------------------------------------------------------------
+struct SentinelOptions {
+    std::string crashDir;  // where reports are, as the application armed them
+    std::string logDir;    // where the log is
+    // The executable to start. Empty: this one, which is what the application
+    // does. A test names another (cascade.exe, from a test program).
+    std::string exePath;
+};
+
+// Remembers where reports go and that this process MAY run a sentinel. Starts
+// nothing: main() calls this only for an interactive session (or a bounded one a
+// test asked about), and the diagnostics switch decides whether one runs.
+void sentinelConfigure(const SentinelOptions& opts);
+
+// THE DIAGNOSTICS SWITCH. On: start the sentinel if none is running (and log, once,
+// if it cannot be started). Off: end it and set the breadcrumb's flag, so that
+// nothing is written whatever happens next. Returns whether one is running
+// afterwards. A no-op returning false before sentinelConfigure.
+bool sentinelSetEnabled(bool on);
+
+// Called now and then from the frame loop (a non-blocking handle test): says ONCE
+// in the log if the watcher has ended while the application is still running.
+void sentinelPoll();
+
+bool sentinelRunning();
+// The sentinel's own process id, 0 when none. For tests.
+unsigned long sentinelProcessId();
+// How long starting it took the application, in milliseconds, for the log and a
+// test; -1 before any start.
+double sentinelLastStartMs();
+
+// `cascade --sentinel ...`: the watcher's own entry point. Returns the process
+// exit code. Touches no configuration, installs no crash handler.
+int runSentinelMain(int argc, char** argv);
+
+}  // namespace cascade::core
+
+#endif  // CASCADE_CORE_SENTINEL_HPP

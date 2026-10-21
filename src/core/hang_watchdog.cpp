@@ -12,8 +12,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/hang_watchdog.hpp"
 
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/frame_timing.hpp"
+#include "core/phase_clock.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -87,7 +90,12 @@ std::string frameLine(std::uintptr_t addr) {
     DiagModule m;
     std::uintptr_t off = 0;
     char buf[160];
-    if (resolveAddress(addr, m, off)) {
+    // describeModuleContaining, not resolveAddress: the table is a snapshot, and
+    // a stalled thread can be sitting in code mapped after it was taken - a
+    // driver the display stack reloaded, a vendor DLL, a shell extension. Such a
+    // frame used to print as a bare address, so the report could not say where
+    // the thread was and the display-stall rule could not see the driver.
+    if (describeModuleContaining(addr, m, off)) {
         std::snprintf(buf, sizeof(buf), "  %s+0x%llX\n", m.name,
                       static_cast<unsigned long long>(off));
     } else {
@@ -414,12 +422,19 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     // start() is the healthy path, and walking the loader's module list from a
     // process that is already wedged is how a diagnostic becomes the fault.
     if (moduleCount() == 0) { refreshModuleTable(); }
+    // The one ntdll entry point describeModuleContaining names a late-mapped
+    // module with. Resolved HERE for the reason the table is: GetProcAddress
+    // from the capture would be a call into the loader on a process that may be
+    // wedged inside it.
+    prepareModuleAdoption();
 
     lastBeatMs_.store(nowMs(), std::memory_order_relaxed);
     worstGapMs_.store(0.0, std::memory_order_relaxed);
     paused_.store(0, std::memory_order_relaxed);
     reported_.store(false, std::memory_order_relaxed);
     reports_.store(0, std::memory_order_relaxed);
+    displayStalls_.store(0, std::memory_order_relaxed);
+    startupFramesLeft_.store(0, std::memory_order_relaxed);
     skipGap_.store(true, std::memory_order_relaxed);
     stop_.store(false, std::memory_order_relaxed);
     {
@@ -436,6 +451,7 @@ void HangWatchdog::beginShutdown(unsigned thresholdMs) {
     // against the new threshold and not the old one. The reverse order leaves
     // a one-poll window in which the teardown is measured against the frame
     // threshold - which is the whole defect.
+    startupFramesLeft_.store(0, std::memory_order_relaxed);
     thresholdMs_.store((thresholdMs > 0) ? thresholdMs : kShutdownThresholdMs,
                        std::memory_order_relaxed);
     lastBeatMs_.store(nowMs(), std::memory_order_relaxed);
@@ -444,6 +460,17 @@ void HangWatchdog::beginShutdown(unsigned thresholdMs) {
     // measured", which is the number the 5 s threshold is justified against.
     skipGap_.store(true, std::memory_order_relaxed);
     diagLogf("watchdog: shutdown budget %u ms", thresholdMs_.load(std::memory_order_relaxed));
+}
+
+void HangWatchdog::beginStartup(unsigned thresholdMs, unsigned frames) {
+    // Raised before any frame runs; heartbeat() counts the frames down and
+    // drops back to what start() was given (see the header).
+    steadyThresholdMs_ = thresholdMs_.load(std::memory_order_relaxed);
+    startupThresholdMs_ = (thresholdMs > 0) ? thresholdMs : kStartupThresholdMs;
+    if (frames == 0 || startupThresholdMs_ <= steadyThresholdMs_) { return; }
+    thresholdMs_.store(startupThresholdMs_, std::memory_order_relaxed);
+    startupFramesLeft_.store(frames, std::memory_order_relaxed);
+    diagLogf("watchdog: start-up budget %u ms for %u frames", startupThresholdMs_, frames);
 }
 
 unsigned HangWatchdog::thresholdMs() const {
@@ -479,6 +506,11 @@ std::string HangWatchdog::reportDir() const {
 void HangWatchdog::heartbeat(bool recordGap) {
     const double now = nowMs();
     const double prev = lastBeatMs_.exchange(now, std::memory_order_relaxed);
+    // THE SENTINEL'S HEARTBEAT is this one (core/breadcrumb.hpp): what the watcher
+    // outside the process calls "the window had not drawn for N s" is exactly what
+    // this watchdog calls a stall, because both are read off the same call. A
+    // pointer test when no watcher is attached; two relaxed stores when one is.
+    breadcrumb::beat();
 #if defined(_WIN32)
     guiThreadId_.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 #elif defined(__linux__)
@@ -488,6 +520,17 @@ void HangWatchdog::heartbeat(bool recordGap) {
     // open, or the modal dialog, that the pause was taken out for. Folding it
     // into the worst-gap measurement would destroy the very number the
     // threshold is justified against.
+    // The start-up budget ends after its frames - unless beginShutdown() has
+    // replaced it meanwhile, which the compare-and-swap leaves alone.
+    const unsigned left = startupFramesLeft_.load(std::memory_order_relaxed);
+    if (left > 0) {
+        startupFramesLeft_.store(left - 1, std::memory_order_relaxed);
+        if (left == 1) {
+            unsigned expect = startupThresholdMs_;
+            thresholdMs_.compare_exchange_strong(expect, steadyThresholdMs_,
+                                                 std::memory_order_relaxed);
+        }
+    }
     const bool skip = skipGap_.exchange(false, std::memory_order_relaxed);
     if (!recordGap || skip || prev <= 0.0) { return; }
     const double gap = now - prev;
@@ -501,7 +544,43 @@ bool HangWatchdog::running() const { return running_.load(std::memory_order_acqu
 
 void HangWatchdog::pause() {
     pauses_.fetch_add(1, std::memory_order_relaxed);
+    // The instant a CONTINUOUS pause begins is recorded BEFORE the count moves,
+    // so the watchdog thread never sees a held pause with a stale start.
+    if (paused_.load(std::memory_order_relaxed) == 0) {
+        pausedSinceMs_.store(nowMs(), std::memory_order_relaxed);
+    }
     paused_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void HangWatchdog::pauseUser() {
+    // A user-paced pause IS a pause: pausesTaken() counts it (that counter, which
+    // `cascade --frames N` prints, is "how many times did the application take a
+    // pause", not "how many were capped"), and it is held in paused_ like any
+    // other, so the release of the last pause of either kind re-arms the clock
+    // in resume(). userPaused_ is raised FIRST: between the two increments the
+    // watchdog thread then sees an uncapped pause rather than a capped one with
+    // a stale start.
+    pauses_.fetch_add(1, std::memory_order_relaxed);
+    userPaused_.fetch_add(1, std::memory_order_relaxed);
+    paused_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void HangWatchdog::resumeUser() {
+    // The release of the LAST user-paced pause is where an application-paced
+    // pause still held (a rescan nested inside a long shell call) starts to be
+    // measured: it was excused without a cap until now, and its age so far is the
+    // user's, not its own. So its start is re-stamped to this instant, BEFORE the
+    // user count drops - while that count is above zero the watchdog thread
+    // ignores the stamp, and the moment it reads zero the stamp is already fresh.
+    if (userPaused_.load(std::memory_order_relaxed) <= 1) {
+        pausedSinceMs_.store(nowMs(), std::memory_order_relaxed);
+    }
+    userPaused_.fetch_sub(1, std::memory_order_relaxed);
+    resume();
+}
+
+void HangWatchdog::setExcuseCapMs(unsigned ms) {
+    excuseCapMs_.store(ms > 0 ? ms : kExcuseCapMs, std::memory_order_relaxed);
 }
 
 unsigned HangWatchdog::pausesTaken() const { return pauses_.load(std::memory_order_relaxed); }
@@ -517,6 +596,39 @@ void HangWatchdog::resume() {
 }
 
 unsigned HangWatchdog::reportsWritten() const { return reports_.load(std::memory_order_acquire); }
+
+unsigned HangWatchdog::displayStallsRecorded() const {
+    return displayStalls_.load(std::memory_order_acquire);
+}
+
+void HangWatchdog::setForceDisplayStallForTest(bool on) {
+    forceDisplayStall_.store(on, std::memory_order_relaxed);
+}
+
+void HangWatchdog::setDisplayStallSink(std::function<void()> sink) {
+    std::lock_guard<std::mutex> lk(sinkMutex_);
+    displayStallSink_ = std::move(sink);
+}
+
+void HangWatchdog::recordFreezeKind(bool displayStall) {
+    // A HANG IS NOT COUNTED AWAY. It is a fault in this program, it is reported
+    // in full, and the usage number is about the display's behaviour only.
+    if (!displayStall) { return; }
+    displayStalls_.fetch_add(1, std::memory_order_release);
+    std::function<void()> sink;
+    {
+        std::lock_guard<std::mutex> lk(sinkMutex_);
+        sink = displayStallSink_;
+    }
+    if (!sink) { return; }
+    try {
+        sink();
+    } catch (...) {
+        // The watchdog thread must survive its own bookkeeping: a count that
+        // could not be kept is a number that reads low, never a reason to stop
+        // watching.
+    }
+}
 
 std::string HangWatchdog::lastReportPath() const {
     std::lock_guard<std::mutex> lk(pathMutex_);
@@ -703,22 +815,22 @@ bool HangWatchdog::guiThreadIsPumping() const {
 #endif
 }
 
-bool HangWatchdog::suppressed() const {
+HangWatchdog::Excuse HangWatchdog::excuse() const {
     const int mode = suppression_.load(std::memory_order_relaxed);
     if (mode == static_cast<int>(SuppressionForTest::NeverSuppress)) {
         // The debugger and modal rules are off, as the mode promises; rule 2c
         // still answers when a test has injected a module, because that mode
         // is how the rule itself gets tested.
         std::lock_guard<std::mutex> lk(stalledModuleMutex_);
-        if (!stalledModuleForTest_.empty()) {
-            return isMessagePumpModule(stalledModuleForTest_.c_str());
+        if (!stalledModuleForTest_.empty() && isMessagePumpModule(stalledModuleForTest_.c_str())) {
+            return Excuse::Pumping;
         }
-        return false;
+        return Excuse::None;
     }
-    if (mode == static_cast<int>(SuppressionForTest::AlwaysSuppress)) { return true; }
+    if (mode == static_cast<int>(SuppressionForTest::AlwaysSuppress)) { return Excuse::Standing; }
 #if defined(_WIN32)
     // 1. A break is not a hang.
-    if (::IsDebuggerPresent()) { return true; }
+    if (::IsDebuggerPresent()) { return Excuse::Standing; }
     // 2. A nested Windows modal loop - a window drag, a resize, an open system
     //    or popup menu - stops the application's own loop turning over for as
     //    long as the user holds it, legitimately, sometimes for minutes.
@@ -728,7 +840,7 @@ bool HangWatchdog::suppressed() const {
     if (tid != 0 && ::GetGUIThreadInfo(tid, &gi) != 0) {
         const DWORD modal = GUI_INMOVESIZE | GUI_INMENUMODE | GUI_POPUPMENUMODE |
                             GUI_SYSTEMMENUMODE;
-        if ((gi.flags & modal) != 0) { return true; }
+        if ((gi.flags & modal) != 0) { return Excuse::Standing; }
     }
 #elif defined(__linux__)
     // 1. A break is not a hang, POSIX equivalent: /proc/self/status names the
@@ -743,7 +855,7 @@ bool HangWatchdog::suppressed() const {
         while (std::getline(status, line)) {
             if (line.rfind("TracerPid:", 0) == 0) {
                 const std::string v = line.substr(10);
-                if (std::atoi(v.c_str()) != 0) { return true; }
+                if (std::atoi(v.c_str()) != 0) { return Excuse::Standing; }
                 break;
             }
         }
@@ -751,13 +863,19 @@ bool HangWatchdog::suppressed() const {
 #endif
     // 2c. A nested loop those flags do not cover: the thread is parked in the
     //     window manager's own wait, which the application's frame loop never
-    //     does on its own (it only ever PeekMessages). See the header.
-    if (guiThreadIsPumping()) { return true; }
-    return false;
+    //     does on its own (it only ever PeekMessages). See the header - and
+    //     see setExcuseCapMs(): this excuse, unlike the two above, is a guess
+    //     from one register, and win32u.dll holds far more than message waits,
+    //     so it is the one that is capped.
+    if (guiThreadIsPumping()) { return Excuse::Pumping; }
+    return Excuse::None;
 }
 
 void HangWatchdog::threadMain() {
     double lastPoll = nowMs();
+    // When rule 2c first excused the stall now in progress, or 0 for none. Only
+    // this thread reads or writes it.
+    double pumpExcusedSinceMs = 0.0;
     while (true) {
         // THE POLL WAIT, INTERRUPTIBLE. A plain sleep_for here meant that
         // asking the watchdog to stop cost the rest of a poll - up to half a
@@ -786,9 +904,33 @@ void HangWatchdog::threadMain() {
             continue;
         }
 
-        if (paused_.load(std::memory_order_relaxed) > 0) {
+        const double cap = static_cast<double>(excuseCapMs_.load(std::memory_order_relaxed));
+
+        // A USER-PACED PAUSE EXCUSES A STALL FOR AS LONG AS IT IS HELD - the shell
+        // call's consent prompt is read at the person's pace, and no cap is the
+        // right one for that (see setExcuseCapMs). It outranks the capped kind:
+        // while one is held an application-paced pause held with it is excused
+        // too, and its own cap starts when the last user-paced one is released
+        // (resumeUser re-stamps pausedSinceMs_).
+        if (userPaused_.load(std::memory_order_relaxed) > 0) {
             lastBeatMs_.store(now, std::memory_order_relaxed);
+            pumpExcusedSinceMs = 0.0;
             continue;
+        }
+
+        // AN APPLICATION-PACED PAUSE EXCUSES A STALL FOR AT MOST THE CAP (see
+        // setExcuseCapMs). While it does, the clock is re-armed every poll, so
+        // the first poll past the cap finds a stall of about one poll and the
+        // report follows a threshold later. If the GUI thread is beating (a
+        // minimised window) the clock never runs out, whatever the age of the
+        // pause.
+        if (paused_.load(std::memory_order_relaxed) > 0) {
+            const double since = pausedSinceMs_.load(std::memory_order_relaxed);
+            if (now - since < cap) {
+                lastBeatMs_.store(now, std::memory_order_relaxed);
+                pumpExcusedSinceMs = 0.0;
+                continue;
+            }
         }
 
         const double stalled = now - lastBeatMs_.load(std::memory_order_relaxed);
@@ -796,13 +938,29 @@ void HangWatchdog::threadMain() {
             // RECOVERY. The application came back - and the 120 s CAT shutdown
             // freeze did come back. Log it with the duration and re-arm; the
             // app is never killed.
+            pumpExcusedSinceMs = 0.0;
             if (reported_.exchange(false, std::memory_order_relaxed)) {
                 DiagLog::instance().writef("warn", "gui thread recovered after a stall");
             }
             continue;
         }
         if (reported_.load(std::memory_order_relaxed)) { continue; }
-        if (suppressed()) { continue; }
+        const Excuse why = excuse();
+        if (why == Excuse::Standing) {
+            pumpExcusedSinceMs = 0.0;
+            continue;
+        }
+        if (why == Excuse::Pumping) {
+            // RULE 2c IS EXCUSED FOR AT MOST THE CAP, counted from the first
+            // poll that granted it in this stall. Past that the thread is not
+            // "pumping", it is stuck somewhere in win32u.dll - a GPU driver's
+            // wait, a SendMessage nobody answers - and the report below says
+            // which, with the frames to show it.
+            if (pumpExcusedSinceMs == 0.0) { pumpExcusedSinceMs = now; }
+            if (now - pumpExcusedSinceMs < cap) { continue; }
+        } else {
+            pumpExcusedSinceMs = 0.0;
+        }
 
         // ASKED TO STOP IS NOT STALLED - false-positive rule 4 in the header.
         // stop() is called at the very end of AppWindow::run(), so once the
@@ -884,7 +1042,9 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // is genuinely running can move under the walk and produce a garbled tail;
     // the frames are guarded by __except for exactly that, and the threads that
     // matter in a hang are the ones that are not going anywhere. Frame 0 (Rip),
-    // which is what the signature is built from, is captured exactly.
+    // which is what the signature falls back to when no frame of ours is on the
+    // stalled stack (the signature proper comes from phase 1b's walk), is
+    // captured exactly.
     std::vector<ThreadStack> stacks;
     std::vector<CONTEXT> contexts;
     stacks.reserve(tids.size());
@@ -928,24 +1088,16 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
         contexts.push_back(ctx);
     }
 
-    const char* topModule = "?";
-    std::uintptr_t topOffset = 0;
-    if (!stacks.empty() && stacks[0].count > 0) {
-        DiagModule m;
-        std::uintptr_t off = 0;
-        if (resolveAddress(stacks[0].frames[0], m, off)) {
-            topModule = m.name;
-            topOffset = off;
-        }
-    }
-
     // PHASE 1b - THE STALLED THREAD'S WALK, AND WHY IT COMES BEFORE THE HEADER.
     //
     // The `kind` line is the first line of the file and decides how the report
     // groups, so it has to be right before anything is written - and telling a
     // display stall from a real hang needs the frames UNDER the top one, not
-    // just frame 0 (which is ntdll.dll for every wait there is). So exactly one
-    // walk is moved ahead of the header: the stalled thread's.
+    // just frame 0 (which is ntdll.dll for every wait there is). The signature
+    // needs them for the same reason: it is built from the first frame of OUR
+    // code on the stalled thread, and that is never frame 0 of a thread that is
+    // waiting. So exactly one walk is moved ahead of the header: the stalled
+    // thread's.
     //
     // WHAT THAT COSTS, plainly. The header is written first because phase 2's
     // unwinder can in principle block on the loader lock, and a report that
@@ -954,17 +1106,21 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // of the three options: the thread walked here is by definition not moving,
     // it is the one walk whose result the report cannot be written without, and
     // the alternative - filing every AMD display stall as a hang in this
-    // application - is the defect being fixed. Every other thread is still
-    // walked after the header, exactly as before.
+    // application, or every freeze under one signature - is the defect being
+    // fixed. Every other thread is still walked after the header, exactly as
+    // before.
     //
-    // ONLY WHEN IT MIGHT MATTER: a stalled thread whose frame 0 is not a kernel
-    // wait cannot be waiting on presentation, so the ordinary path is untouched
-    // for it and the header goes out first as it always did.
+    // ONLY WHEN IT MIGHT MATTER: a stalled thread whose frame 0 is already in
+    // this program's own image is keyed by that frame as it always was, and
+    // cannot be waiting on presentation (the rule needs a wait at the top), so
+    // the ordinary path is untouched for it and the header goes out first as it
+    // always did. Any other frame 0 - a kernel wait, a vendor driver, an address
+    // no module claims - is walked here.
     bool displayStall = false;
     bool guiWalked = false;
 #if defined(_WIN32) && defined(_M_X64)
     if (!stacks.empty() && stacks[0].tid == gui && stacks[0].tid != self &&
-        stacks[0].count > 0 && isKernelWaitModule(topModule)) {
+        stacks[0].count > 0 && !inMainImage(stacks[0].frames[0])) {
         CONTEXT ctx = contexts[0];
         const int n = walkThreadContext(&ctx, stacks[0].frames, kMaxHangFrames);
         if (n > 0) {
@@ -977,28 +1133,47 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
                                                             : HangWatchdog::kDisplayStallScanFrames;
             for (int i = 0; i < scan; ++i) {
                 std::uintptr_t off = 0;
-                names[i] = resolveAddress(stacks[0].frames[i], mods[i], off) ? mods[i].name
-                                                                            : nullptr;
+                // The same naming the report's frame lines use, so the kind the
+                // header states and the frames under it can never disagree.
+                names[i] = describeModuleContaining(stacks[0].frames[i], mods[i], off)
+                               ? mods[i].name
+                               : nullptr;
             }
             displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
         } else {
             // The walk yielded nothing: frame 0 is still the register the
-            // signature is built from, so put it back rather than leaving an
+            // signature falls back to, so put it back rather than leaving an
             // empty stack behind.
             stacks[0].frames[0] = static_cast<std::uintptr_t>(contexts[0].Rip);
             stacks[0].count = 1;
         }
     }
 #endif
+    if (forceDisplayStall_.load(std::memory_order_relaxed)) { displayStall = true; }  // test hook
 
     // 0x48414E47 is 'HANG' - a hang and a crash at the same address are
     // different bugs and must not group together. 0x5354414C is 'STAL', and it
     // is a THIRD group for the same reason: a stall in the display driver and a
-    // deadlock in this application can present the same top frame
-    // (ntdll.dll+the same wait), and letting them share a signature would bury
-    // a real bug under a pile of monitors being switched off.
+    // deadlock in this application can present the same frame, and letting them
+    // share a signature would bury a real bug under a pile of monitors being
+    // switched off.
+    //
+    // THE FRAME THE SIGNATURE IS BUILT FROM IS THE FIRST FRAME OF OURS (0.99.62),
+    // not frame 0. It used to be frame 0, and a stalled GUI thread is parked in
+    // the same few kernel stubs whatever it is waiting for, so every freeze of
+    // one machine hashed to one value and the uploader's 24-hour de-duplication
+    // dropped the second of two different freezes. See freezeSignature().
     const std::string sig =
-        crashSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, topModule, topOffset);
+        stacks.empty()
+            ? freezeSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, nullptr, 0)
+            : freezeSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, stacks[0].frames,
+                              stacks[0].count);
+
+    // THE KIND IS KNOWN, so a display stall is COUNTED NOW, on this thread,
+    // before anything below can fail or wedge: the report is only ever kept on
+    // the machine, and the number is the one thing about it that is reported
+    // (HangWatchdog::recordFreezeKind). Nothing is suspended at this point.
+    recordFreezeKind(displayStall);
 
     // THE IDENTIFYING HALF GOES TO DISK FIRST, and is flushed, exactly as
     // crash_handler.cpp does on the fault path. Phase 1 above can no longer
@@ -1035,8 +1210,38 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
     out << "threads: " << stacks.size() << "\n";
+    // WHICH PART OF THE FRAME HELD THE WINDOW, in one fixed word from the frame
+    // timer's closed list (core/frame_timing.hpp): the GUI thread publishes the
+    // scope it is in, and it is stalled, so what this thread reads now is where
+    // it stopped. A freeze then says "rail" or "plugins-reload" before anyone has
+    // found a symbol map. `other` in a process with no frame loop.
+    out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
+    // AND WHICH STEP OF A PLUGIN RELOAD, when one is under way (0.99.84), from
+    // the publishing PhaseClock the reload keeps (core/phase_clock.hpp,
+    // core/plugin_reload_phases.hpp). Field report 7591C65EFB69DD94: a reload
+    // stalled past the cap, its per-step log line is only written when the
+    // reload ENDS, and the stalled stack ended in system modules under a
+    // Detours hook - so the scope said `plugins-reload` and nothing could say
+    // which of its six waits it was. Always written, `none` outside a reload,
+    // for the reason `note` and `frame-scope` are: the field inventory is
+    // compared as a set, both ways.
+    {
+        const char* phase = publishedPhaseName();
+        out << "reload-phase: " << (phase != nullptr ? phase : "none") << "\n";
+    }
     out << "--- context ---\n";
     out << diagContextBlock();
+    // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
+    // hidden, minimised, focused, and how long ago the frame loop last said so.
+    // "In present for minutes" is the window system not scheduling a window nobody
+    // can see, or a driver that stalled, and this line is what tells them apart.
+    // Read from atomics the GUI thread published - nothing here calls GLFW - and
+    // RECORDED ONLY: no decision in this file reads it (see publishWindowState).
+    {
+        char stateLine[192];
+        const std::size_t n = renderWindowStateLine(stateLine, sizeof(stateLine));
+        out.write(stateLine, static_cast<std::streamsize>(n));
+    }
 
     // THE MODULE TABLE, and it was missing - which made every freeze report
     // this product writes permanently unreadable.
@@ -1105,7 +1310,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
             CONTEXT ctx = contexts[i];
             ts.count = walkThreadContext(&ctx, ts.frames, kMaxHangFrames);
             // A walk that yielded nothing still has the register frame, which
-            // is the one the signature was built from.
+            // is the one the report's `module`/`offset` name.
             if (ts.count == 0) {
                 ts.frames[0] = static_cast<std::uintptr_t>(contexts[i].Rip);
                 ts.count = 1;
@@ -1166,16 +1371,6 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     // from a hang in this application. The same rule decides both platforms;
     // isDisplayModule knows the Linux graphics libraries.
     ThreadStack first = tids.empty() ? ThreadStack{} : captureOneLinuxThread(tids[0], self);
-    const char* topModule = "?";
-    std::uintptr_t topOffset = 0;
-    if (first.count > 0) {
-        DiagModule m;
-        std::uintptr_t off = 0;
-        if (resolveAddress(first.frames[0], m, off)) {
-            topModule = m.name;
-            topOffset = off;
-        }
-    }
     bool displayStall = false;
     if (!tids.empty() && tids[0] == gui && gui != self && first.count > 0) {
         DiagModule mods[HangWatchdog::kDisplayStallScanFrames];
@@ -1189,9 +1384,21 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
         }
         displayStall = HangWatchdog::isDisplayPresentationStall(names, scan);
     }
-    // 'STAL' / 'HANG', for the reason given at the Windows signature above.
+    if (forceDisplayStall_.load(std::memory_order_relaxed)) { displayStall = true; }  // test hook
+    // 'STAL' / 'HANG', and the first frame of OURS rather than frame 0, for the
+    // reasons given at the Windows signature above. The stack was walked in full
+    // before this point on this platform (captureOneLinuxThread), so there is
+    // no separate pre-header walk to add. NOT COMPILED OR RUN on the machine this
+    // was written on (no Linux toolchain): freezeSignature() is the same shared
+    // function the Windows path calls, and what Linux adds is that the main image
+    // is module 0 of the dl_iterate_phdr snapshot - a non-PIE executable, whose
+    // load bias is 0, reads as "no frame is ours" and keeps the old key.
     const std::string sig =
-        crashSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, topModule, topOffset);
+        freezeSignature(displayStall ? 0x5354414Cul : 0x48414E47ul, first.frames, first.count);
+
+    // Counted here for the reason given at the Windows call: the kind is known,
+    // the report stays on the machine, the number does not.
+    recordFreezeKind(displayStall);
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) { return; }
@@ -1209,8 +1416,26 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs) 
     out << "threshold-ms: " << thresholdMs_.load(std::memory_order_relaxed) << "\n";
     out << "signature: " << sig << "\n";
     out << "threads: " << tids.size() << "\n";
+    // As in the Windows writer above: where the stalled frame was, and which
+    // step of a plugin reload, when one is under way (0.99.84).
+    out << "frame-scope: " << frameScopeName(currentFrameScope()) << "\n";
+    {
+        const char* phase = publishedPhaseName();
+        out << "reload-phase: " << (phase != nullptr ? phase : "none") << "\n";
+    }
     out << "--- context ---\n";
     out << diagContextBlock();
+    // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
+    // hidden, minimised, focused, and how long ago the frame loop last said so.
+    // "In present for minutes" is the window system not scheduling a window nobody
+    // can see, or a driver that stalled, and this line is what tells them apart.
+    // Read from atomics the GUI thread published - nothing here calls GLFW - and
+    // RECORDED ONLY: no decision in this file reads it (see publishWindowState).
+    {
+        char stateLine[192];
+        const std::size_t n = renderWindowStateLine(stateLine, sizeof(stateLine));
+        out.write(stateLine, static_cast<std::streamsize>(n));
+    }
 
     // Same layout as crash_handler_posix.cpp and the Windows writer above, so
     // one parser (crash_upload.cpp's parseReportText) reads all three.

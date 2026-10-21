@@ -1,9 +1,11 @@
-# The FoxSDR plugin host API (host API level 1)
+# The FoxSDR plugin host API (host API levels 1 and 2)
 
 This is the guide for plugin authors to what FoxSDR 0.99.31 added to the plugin
 contract: a plugin can now read the whole receiver, ask to change it, mark the
 spectrum, keep its own settings, talk to the user, offer keys of its own, and
-process the audio the user hears. The contract itself is
+process the audio the user hears. Level 2 (FoxSDR 0.99.74) adds one thing, with
+a section of its own: a plugin can hand the host **audio to transmit**
+([Transmitting](#transmitting-host-api-level-2)). The contract itself is
 [`src/core/plugin_abi.h`](../src/core/plugin_abi.h) - one MIT-licensed C
 header, the same file in the plugin repository's `include/`. Where this guide
 and the header disagree, the header is right; please report the guide.
@@ -23,16 +25,31 @@ plugin would, and its test drives the real module against a fake host.
 7. [Changing the receiver](#changing-the-receiver)
 8. [The stream clock](#the-stream-clock)
 9. [Processing the audio](#processing-the-audio)
-10. [Marks on the spectrum and waterfall](#marks-on-the-spectrum-and-waterfall)
-11. [Your own settings](#your-own-settings)
-12. [Messages](#messages)
-13. [Keys on your plate](#keys-on-your-plate)
-14. [The patch page](#the-patch-page)
-15. [A minimal plugin](#a-minimal-plugin)
-16. [What the host does not offer](#what-the-host-does-not-offer)
-17. [Checklist before you ship](#checklist-before-you-ship)
+10. [Transmitting (host API level 2)](#transmitting-host-api-level-2)
+11. [Marks on the spectrum and waterfall](#marks-on-the-spectrum-and-waterfall)
+12. [Your own settings](#your-own-settings)
+13. [Messages](#messages)
+14. [Keys on your plate](#keys-on-your-plate)
+15. [The patch page](#the-patch-page)
+16. [A minimal plugin](#a-minimal-plugin)
+17. [What the host does not offer](#what-the-host-does-not-offer)
+18. [Checklist before you ship](#checklist-before-you-ship)
 
 ## What changed, and what did not
+
+FoxSDR 0.99.74 adds three optional `CascadePreset.flags` bits without changing
+ABI 3 or the preset structure. `CASCADE_PRESET_KEEP_TUNED_ON_START` (0x2) on a
+plugin's first declared preset makes automatic start/window opening apply that
+preset's reception settings at the current device-centre-plus-VFO frequency.
+It applies even on a listed channel, so stale mode or bandwidth is corrected,
+and takes priority over saved user presets for this automatic setup. Explicit
+preset presses, including saved user presets, retain their normal frequency
+behavior. `CASCADE_PRESET_FLAT_AUDIO` (0x4) sets receiver de-emphasis to Off,
+for automatic setup and explicit preset presses. `CASCADE_PRESET_SHOW_TEXT_OUTPUT`
+(0x8) opens the shared Decoder output window for a text decoder even when its
+own settings panel or another window is also open. Plugins without
+`CASCADE_CAP_DECODER` ignore that request. Older hosts ignore these bits;
+plugins that omit them retain the existing automatic tuning behavior.
 
 **The plugin ABI is still 3.** Nothing about the descriptor changed, no
 existing table changed, and every plugin built before level 1 loads and runs
@@ -98,7 +115,8 @@ and should say plainly what it cannot do (the Host API tour's panel reads
 
 `knownCapabilities` is the host's `CASCADE_CAP_ALL_KNOWN`: the capability bits
 it will actually use. `apiLevel` names the generation of the table's semantics
-(this header: `CASCADE_HOST_API_LEVEL` = 1). `hostName` and `hostVersion` are for
+(this header: `CASCADE_HOST_API_LEVEL` = 2; level 2 added the transmit capability and
+three flags and changed no function). `hostName` and `hostVersion` are for
 messages; branch on `CASCADE_HOST_HAS` and `apiLevel`, never on the version text.
 
 ## Threads
@@ -156,19 +174,22 @@ before the call returns, so nothing the host keeps can point into your image.
 
 ## Permission
 
-Two grants, both per plugin (keyed on the module's file name), both **off by
-default**, both shown on the module's plate in **Fitted modules**:
+Three grants, all per plugin (keyed on the module's file name), all **off by
+default**, all shown on the module's plate in **Fitted modules**:
 
 | Grant | The key the user presses | What it allows |
 |---|---|---|
 | **tune** | GRANT RECEIVER CONTROL | `request_tune`, `set_frequency`, `set_vfo_offset` |
 | **settings** | GRANT RADIO SETTINGS | `set_mode`, `set_bandwidth`, `set_squelch`, `set_sample_rate`, `set_gain`, `set_device_agc`, `set_running`, `set_volume`, `set_muted` |
+| **transmit** (level 2) | GRANT TRANSMIT | handing the host audio to transmit (`CASCADE_CAP_TX_AUDIO`) - and only while the operator has also armed the TRANSMIT page; see [Transmitting](#transmitting-host-api-level-2) |
 
 They are separate so that a grant a user already gave a satellite tracker for
 Doppler correction keeps meaning only that. The settings key appears only on a
 plugin that has asked for one of those functions at least once; the first
 request is refused with `DENIED`, and that refusal is what makes the key appear.
 Tell the user which key would help - the Host API tour logs a warning naming it.
+The transmit key is offered the same way, to a plugin whose `active()` has
+returned non-zero at least once.
 
 Reads, markers, settings, messages and keys need no grant: none of them changes
 what the receiver does. A **stopped** plugin is refused everything.
@@ -240,6 +261,87 @@ Counters never go backwards within a session and start above zero, so 0 can mean
 last request. `get_sample_rates(ctx, out, cap)` returns how many rates the open
 radio offers and copies up to `cap` of them; call it with `cap` 0 to ask the
 count. Both answer "none" (`NOT_FOUND`, 0) with no radio open.
+
+### Targets you hear but cannot place yet (0.99.75)
+
+A track source (`CASCADE_CAP_TRACK_SOURCE`) used to be able to publish only
+targets that had a position, so an ADS-B decoder had to hide every aircraft whose
+position message had not arrived. From FoxSDR 0.99.75 `get_state` reports
+`CASCADE_STATE_LISTS_UNPLACED_TRACKS` (0x00008000) in every state it fills, and a
+plugin that sees it may publish such an aircraft anyway: set
+`CASCADE_TRACK_FLAG_NO_POSITION` (0x00000004) in `CascadeTrack::flags` and leave
+`latDeg` and `lonDeg` NaN. Fill in what you do know (`id`, `label`, `altM`,
+`ageMs`, `kind`).
+
+The host **lists** such a target, below the placed ones, dimmed, with its altitude
+and the words "no position yet", and counts it separately in the list's heading
+("12 targets, 3 heard without a position"). It never draws it, never fits the map
+to it, never counts it in the coverage map or as "on screen", and gives it no
+trail (a `CascadePath` whose id is a no-position target's is dropped). It fades and
+is dropped on the same `ageMs` rule as a placed target of its kind; when the
+position arrives, publish the track again without the flag. The host treats any
+track whose coordinates are not finite as having no position, flag or not, so a
+plugin that leaves NaN in without the flag is listed rather than drawn at NaN - but
+it must not rely on that: **a host older than 0.99.75 drops such a track**, so
+publish them only when the bit is set, and keep working (placed targets only) when
+it is not.
+
+### Panel rows the user can press (0.99.77)
+
+A panel (`CASCADE_CAP_PANEL`) used to be read-only: the host drew the rows and a
+click on one went nowhere. The IBOC Radio plugin lists its eight HD programmes in
+its panel, and a tester asked for the obvious thing - "if I click on HD2 on the
+screen below, it should select that program, instead of having to go into the
+plugin settings and change the Programme to 1". From FoxSDR 0.99.77 a table row
+(`CASCADE_ROW_CELLS`) can be a **key bound to one of your commands**:
+
+```c
+host->add_command(host->ctx, 12, "HD2");              /* once, as for a plate key */
+...
+row.kind  = CASCADE_ROW_CELLS;
+row.flags = CASCADE_ROW_KEY_FLAGS(12) | CASCADE_ROW_FLAG_GOOD;   /* a key for command 12, lit */
+...
+while (host->poll_command(host->ctx, &id) == 1) { if (id == 12) choose_programme(2); }
+```
+
+`CASCADE_ROW_FLAG_KEY` (0x00000008) marks the row and the command id rides in
+bits 8..15 of `flags` (`CASCADE_ROW_KEY_ID_MASK` 0x0000FF00, shifted by
+`CASCADE_ROW_KEY_ID_SHIFT`); `CASCADE_ROW_KEY_FLAGS(id)` builds the two together and
+`CASCADE_ROW_KEY_ID(flags)` reads the id back. The id is in `flags` and not a new
+field because `CascadePanelRow` has no `structSize` - the host allocates the array
+and you write it - so it cannot grow. That makes the id 1..255; `GOOD`, `WARN` and
+`MUTED` still apply to a key.
+
+The host draws the whole row as a key (it lights under the pointer, and the cell
+texts stay as you wrote them) and delivers a press exactly as it delivers a press of
+a key on your plate: it queues the command id, and you take it with `poll_command`
+from wherever you already run regularly - your `poll_rows` is the natural place.
+Three things are not keys, and are drawn as the text they always were: a heading or
+a separator, a row whose id is 0, and **a row whose id you never registered with
+`add_command`** (a key the host would refuse to press). Pressing it never reaches
+you, and neither does a press while the plugin is stopped.
+
+**Use it only when you see the bit.** From 0.99.77 `get_state` reports
+`CASCADE_STATE_ROW_KEYS` (0x00010000) in every state it fills, with no grant. A
+host older than that draws a flagged row as plain text - harmless, but a heading
+that says "press one to choose" would be a lie - so show that wording, and
+register the commands only the keys need, when the bit is set:
+
+```c
+CascadeReceiverState s = {0};
+s.structSize = sizeof s;
+int keys = host->get_state(host->ctx, &s) == CASCADE_API_OK &&
+           (s.flags & CASCADE_STATE_ROW_KEYS) != 0;
+```
+
+**The command limit went from 8 to 16 in the same release**
+(`CASCADE_MAX_COMMANDS_PER_PLUGIN`), because a chooser for eight programmes needs
+eight commands beside the keys a plugin already had. A host before 0.99.77 refuses
+the ninth `add_command` with `CASCADE_API_LIMIT`: register the keys you can live
+without last, or register the row keys only when `CASCADE_STATE_ROW_KEYS` is set, as
+above. An instrument's memory rows (`CASCADE_CAP_INSTRUMENT` with a row feed) follow
+the same contract and behave the same way. The web remote does not show panel rows
+at all, so a flagged row is not delivered to a browser.
 
 ## Changing the receiver
 
@@ -334,6 +436,104 @@ A host older than level 1 ignores the bit. A plugin that also declares a decoder
 still loads there; a processor-only plugin is refused there as "built for a
 newer version of FoxSDR", which is true.
 
+## Transmitting (host API level 2)
+
+`CASCADE_CAP_TX_AUDIO` (0x4000) lets a plugin - a packet TNC, a Winlink-compatible
+link - send audio **through the host's transmitter**. It is the first capability
+that can put a signal on the air, so it is built to be the hardest one to use by
+accident, and the rule it changes is stated plainly in
+[TRANSMITTING.md](TRANSMITTING.md): the transmitter used to be keyed only by a
+hand, and is now keyed by *a hand, or a plugin the operator has granted and
+armed*.
+
+```c
+typedef struct CascadeTxAudioApi {
+    uint32_t structSize;   /* sizeof(CascadeTxAudioApi) */
+    uint32_t sampleRateHz; /* 48000 - this host takes no other rate */
+    uint32_t channels;     /* 1 */
+    uint32_t flags;        /* 0 - anything else is refused */
+    int32_t (*pull)(void *handle, float *mono, size_t frames);
+    int32_t (*active)(void *handle);
+} CascadeTxAudioApi;
+```
+
+- **No `create`/`destroy`.** Like `CASCADE_CAP_AUDIO_OUT` it rides on your first
+  decoder instance (`CASCADE_CAP_DECODER`, then `_IQ_DECODER`, then
+  `_IMAGE_DECODER`); `handle` is the one that decoder's `create()` returned. A
+  plugin that declares the bit with none of the three is **refused at load** with
+  that reason.
+- **`active()`** is non-zero while you want the transmitter keyed. It is called
+  once per audio block on the real-time thread, whether or not you hold any
+  grant - that is how the host learns you have asked, and what makes the GRANT
+  TRANSMIT key appear on your plate. Polling costs you nothing and keys nothing.
+  Read state you have already decided; do not decide in it.
+- **`pull()`** is called **only while the host has keyed the transmitter for
+  you**, never before, on the real-time thread, never concurrently with
+  `process()`/`active()` on the same handle. It returns the frames written
+  (at most `frames`), `0` for "nothing right now" (the host sends silence and keeps
+  the key only while `active()` says so), or a negative number for "stopped for
+  good" (never called again). Each call asks for the shortfall of a 100 ms lead,
+  at most 4800 frames; the audio reaches the air about 100 ms after you return it.
+  The usual real-time rules: no blocking, no allocation, no I/O, no exceptions.
+- **Keep `active()` non-zero for as long as you want the key.** When it goes to zero
+  the host stops asking for audio, plays out what you already returned (at most
+  that 100 ms), and opens the key - so the last sample you hand over is on the
+  air. Every other reason to unkey is immediate and discards what was queued.
+
+### What has to be true for the host to key
+
+All of these at once, on every frame; any one false and the key opens:
+
+1. **The grant.** The user pressed GRANT TRANSMIT on your plate. Per plugin, saved
+   by module file name, off by default. `get_state` reports
+   `CASCADE_STATE_TX_GRANTED`.
+2. **The operator's arming window.** On the TRANSMIT page the operator presses
+   ARM FOR PLUGINS: 5 MIN, 15 MIN or 60 MIN. The window closes itself, is never
+   saved, and is refused when no transmit radio is open or no plugin holds a
+   grant. `get_state` reports `CASCADE_STATE_TX_ARMED` to plugins that declared
+   this capability.
+3. **The TRANSMIT page is on screen** and the application's frame loop is running.
+4. **Your `active()` is non-zero and recent** (the host will not act on a reading
+   more than half a second old - a stopped receiver is not a request).
+5. **The radio is open and has not faulted**, and **no hand is on the PTT, the
+   LATCH or the web remote's key** - a hand always has precedence.
+6. **No fault since the window was armed.**
+
+And it **unkeys** on: your `active()` going to zero (after the tail above), a
+negative `pull()`, the window closing or running out, the page closing, the radio
+closing or faulting, the application's frame loop stalling, the grant being taken
+back, or **60 seconds of continuous key** - the transmitter's own latch cap, not
+a second constant. When the cap fires the window closes with it, so a plugin that
+holds `active()` high for ever is cut once and stays cut until the operator arms
+again. While you are keyed `get_state` reports `CASCADE_STATE_TRANSMITTING`; the
+flags are published once a frame, so you see a change within about 16 ms.
+
+### What you do not choose
+
+**Frequency, power and mode.** The transmitter is on the TRANSMIT page's
+frequency (or the receiver's dial), at its power, in its mode - or, with the
+page's **DATA (flat)** tick on (the default), **NFM with the pre-emphasis off**,
+whatever mode the page shows: a data modem's tones have to reach the far receiver
+flat. The host replaces a NaN or an infinity with silence and clamps your samples
+to +/-1 before the modulator sees them. If you need a different frequency or
+mode, tell the user in your own words and let them set it.
+
+### Checklist for a transmitting plugin
+
+- Check `CASCADE_HOST_HAS(host, get_state)` and read `CASCADE_STATE_TX_GRANTED`
+  and `_TX_ARMED`; say plainly what the user must do (grant, arm) when they are
+  clear, instead of sitting there asking.
+- Keep running: a plugin the user has not opened (AUTO) is dormant and is never
+  asked, so give the plugin a window, or ask the user to tick **Keep running**.
+- Hand the host exactly the audio you want sent and no more; pad your own tail
+  if the far end needs one.
+- Expect the host to cut you at any moment (the window, the page, a fault, the
+  cap) and be ready for `pull()` simply not being called again until the next
+  key.
+
+A host older than level 2 ignores the bit and never calls either function; test
+`knownCapabilities & CASCADE_CAP_TX_AUDIO`.
+
 ## Marks on the spectrum and waterfall
 
 ```c
@@ -379,6 +579,32 @@ host->settings_set(host->ctx, "station", NULL);   /* delete */
   plugin that reads its settings in `attach()` finds them - on the attach after
   the configuration has loaded (see "may run again", above).
 
+### Fields the host draws
+
+`CASCADE_CAP_SETTINGS_UI` (0x1000) lets you describe a small form - up to 16
+`CascadeSettingSpec` entries - instead of asking the user to edit anything by
+hand. The host draws one field per entry wherever your controls appear, writes
+each accepted edit into the store above, and advances `settings_seq`, so you
+know to read the keys again with `settings_get`. The kinds:
+
+| Kind | The host draws | Stored as |
+| --- | --- | --- |
+| `CASCADE_SETTING_TEXT` | a text box, up to `maxLength` UTF-8 bytes | the text |
+| `CASCADE_SETTING_NUMBER` | a number box | decimal text |
+| `CASCADE_SETTING_BOOL` | a checkbox | `"1"` or `""` |
+| `CASCADE_SETTING_PATH` (0.99.74) | a text box and a **BROWSE FILES** key | the path as UTF-8 text, at most `maxLength` bytes |
+
+A `PATH` field is for a file the user has to point you at - the program you
+drive, say. The key opens the system's file dialog (Windows' own; on Linux
+`zenity`, else `kdialog`, and with neither installed the host draws the box
+alone). A chosen path goes down the same route as a typed one, and a cancel
+changes nothing. The host never opens or checks the file, and does not require
+it to exist: that is yours to do when you read the value back. A `placeholder`
+ending in `.exe` makes the dialog offer programs first. **A host older than
+0.99.74 does not know kind 3 and skips the field** (an unknown kind is skipped,
+never refused), so a plugin that uses it must still behave when the value was
+never set.
+
 ## Messages
 
 ```c
@@ -403,8 +629,12 @@ uint32_t id;
 while (host->poll_command(host->ctx, &id) == 1) { run_command(id); }
 ```
 
-Up to 8 keys, drawn on your plate in Fitted modules in the order you added them,
-labelled in your own words (the host does not translate them). A press is queued
+Up to 16 keys (8 before FoxSDR 0.99.77, which refuses the ninth with `LIMIT`),
+drawn on your plate in Fitted modules in the order you added them, two to a line,
+labelled in your own words (the host does not translate them). A command can also
+be bound to a row of your panel, so the user presses the row instead of a key on
+your plate ([Panel rows the user can press](#panel-rows-the-user-can-press-09977)).
+A press is queued
 (16 deep; the oldest is dropped past that) until you take it with
 `poll_command`, which you should call from wherever your plugin already runs
 regularly - a `poll_rows`, a `poll_state`, a `process()`. `remove_command(id)`
@@ -514,6 +744,9 @@ already has.
 - No `settings_*` call on the real-time thread; no allocation, blocking or I/O
   in `process()`.
 - A refused request tells the user which grant would help.
+- A plugin that transmits reads `CASCADE_STATE_TX_GRANTED` / `_TX_ARMED` and tells
+  the user what is missing; it never assumes it will be keyed (see
+  [Transmitting](#transmitting-host-api-level-2)).
 - Settings are stored when they change, not in `destroy()`.
 - The table pointer is kept in an atomic (attach and the real-time thread both
   read it) and `attach()` is idempotent.

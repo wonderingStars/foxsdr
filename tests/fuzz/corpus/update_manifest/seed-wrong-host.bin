@@ -1,0 +1,1 @@
+0.99.63{"version": "0.99.64", "url": "https://example.invalid/x.exe", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "size": 52428800, "notes": [{"version": "0.99.64", "date": "2026-10-01", "critical": true, "notes": ["Fixes a crash.", "Another line."]}, {"version": "0.99.63", "date": "2026-09-20", "notes": ["Older note."]}]}

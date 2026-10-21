@@ -10,10 +10,12 @@
 
 #include "test_check.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace {
@@ -107,6 +109,31 @@ std::vector<float> demodTail(Demodulator& d,
     CHECK(d.process(x.data(), x.size(), y.data()) == x.size());
     return std::vector<float>(y.begin() + static_cast<std::ptrdiff_t>(warm),
                               y.end());
+}
+
+// Complex tone at fHz sampled at rateHz (makeToneHz is fixed at the 48 kHz
+// the rest of this file runs at; the pipeline's channel rate is 150-300 kHz).
+std::vector<std::complex<float>> makeToneAt(double rateHz, double fHz,
+                                            std::size_t n) {
+    std::vector<std::complex<float>> x(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const double ph = kTwoPi * fHz * static_cast<double>(i) / rateHz;
+        x[i] = {static_cast<float>(std::cos(ph)), static_cast<float>(std::sin(ph))};
+    }
+    return x;
+}
+
+// Amplitude of the audio sinusoid at audioHz that `mode` makes of a unit
+// complex tone at toneHz (negative = below the carrier), at channel rate
+// rateHz. The window is rateHz/10 samples so audioHz lands on an integer bin
+// of a 10 Hz grid, after a warm-up of many filter lengths.
+double ssbToneAmp(double rateHz, DemodMode mode, double toneHz, double audioHz) {
+    const std::size_t win = static_cast<std::size_t>(rateHz / 10.0);
+    const std::size_t warm = 8192;
+    Demodulator d(rateHz);
+    d.setMode(mode);
+    auto y = demodTail(d, makeToneAt(rateHz, toneHz, warm + win), warm);
+    return binAmp(y.data(), win, static_cast<std::size_t>(audioHz / 10.0 + 0.5));
 }
 
 // A block with energy for every mode: two sidebands, DC, varying envelope.
@@ -410,6 +437,88 @@ int main() {
         const std::size_t kDom = dominantBin(image.data(), kN, 1, kN / 2);
         CHECK(binAmp(image.data(), kN, 150) < 0.01 * aWant);
         CHECK(binAmp(image.data(), kN, kDom) < 0.01 * aWant);
+    }
+
+    // --- USB/LSB: the opposite sideband is gone at EVERY audio frequency ----
+    // The field report (0.99.81, "LSB and USB are essentially both DSB") was
+    // right below 1 kHz: the sideband filter's skirt lay 600 Hz inside the
+    // opposite sideband, so a tone 100 Hz on the wrong side of the carrier came
+    // out at 0 dB, 500 Hz at -3 dB, 1 kHz at -32 dB - and the two checks above
+    // probe 1.5 kHz only. Swept here from 100 Hz up, at the 48 kHz of the rest
+    // of this file and at 256 kHz, a channel rate the pipeline really runs
+    // (1.024 MS/s rtl_tcp / 4). Rejection is ABSOLUTE: the leaked tone against
+    // the 1.5 kHz wanted tone of the same unit amplitude, so the carrier-side
+    // roll-off of the wanted audio cannot flatter it.
+    {
+        const double kRejectDb = 40.0;
+        const double audio[] = {100.0, 200.0, 300.0, 500.0, 700.0,
+                                1000.0, 1500.0, 2000.0, 2500.0, 3000.0};
+        for (const double rate : {48000.0, 256000.0}) {
+            for (const DemodMode mode : {DemodMode::USB, DemodMode::LSB}) {
+                const double s = (mode == DemodMode::USB) ? 1.0 : -1.0;
+                const double ref = ssbToneAmp(rate, mode, s * 1500.0, 1500.0);
+                CHECK_NEAR(ref, 1.0, 0.05);
+                double worstDb = -1000.0;
+                for (const double f : audio) {
+                    const double img = ssbToneAmp(rate, mode, -s * f, f);
+                    const double db = 20.0 * std::log10(img / ref + 1e-30);
+                    worstDb = std::max(worstDb, db);
+                    CHECK(db < -kRejectDb);
+                }
+                std::printf("  %s %6.0f Hz: worst opposite-sideband leak %6.1f dB "
+                            "(bound -%.0f)\n",
+                            modeName(mode), rate, worstDb, kRejectDb);
+
+                // The price of that is the wanted audio below the transition,
+                // and no more: voice from 500 Hz up is intact (within 1 dB of
+                // the 1.5 kHz tone), the top of the 3 kHz sideband likewise,
+                // and the carrier-side -6 dB edge sits near 300 Hz.
+                for (const double f : {500.0, 700.0, 1000.0, 2000.0, 3000.0}) {
+                    const double w = ssbToneAmp(rate, mode, s * f, f);
+                    CHECK(std::fabs(20.0 * std::log10(w / ref)) < 1.0);
+                }
+                const double edge = ssbToneAmp(rate, mode, s * 300.0, 300.0);
+                CHECK(edge / ref > 0.4);  // -8 dB
+                CHECK(edge / ref < 0.6);  // -4.4 dB
+            }
+        }
+    }
+
+    // --- ...at every sideband width the Bandwidth control can set -----------
+    // The carrier-side transition scales down with B below 3 kHz and is held
+    // above it, so the narrow and the wide settings must each keep the other
+    // sideband out from 100 Hz up, and a wide one (the pipeline's untouched
+    // 150 kHz request lands on 0.3 of the channel rate) must still pass a
+    // 700 Hz CW tone rather than put its carrier-side hole over it.
+    {
+        const double rate = 256000.0;
+        for (const double bw : {1000.0, 6000.0, 10000.0}) {
+            Demodulator d(rate);
+            d.setMode(DemodMode::USB);
+            d.setSsbBandwidthHz(bw);
+            const std::size_t win = static_cast<std::size_t>(rate / 10.0);
+            const std::size_t warm = 8192;
+            auto amp = [&](double toneHz, double audioHz) {
+                d.reset();
+                auto y = demodTail(d, makeToneAt(rate, toneHz, warm + win), warm);
+                return binAmp(y.data(), win, static_cast<std::size_t>(audioHz / 10.0 + 0.5));
+            };
+            const double ref = amp(0.5 * bw, 0.5 * bw);
+            CHECK_NEAR(ref, 1.0, 0.05);
+            double worstDb = -1000.0;
+            for (const double f : {100.0, 300.0, 500.0, 1000.0}) {
+                worstDb = std::max(worstDb, 20.0 * std::log10(amp(-f, f) / ref + 1e-30));
+            }
+            std::printf("  USB %6.0f Hz wide at 256 kHz: worst leak %6.1f dB\n", bw, worstDb);
+            CHECK(worstDb < -40.0);
+        }
+
+        Demodulator cw(240000.0);
+        cw.setMode(DemodMode::CW);
+        cw.setSsbBandwidthHz(1.0e9);  // clamped to 0.3 x the channel rate
+        std::vector<std::complex<float>> x(8192 + 24000, {1.0f, 0.0f});
+        auto y = demodTail(cw, x, 8192);
+        CHECK_NEAR(binAmp(y.data(), y.size(), 70), 1.0, 0.05);
     }
 
     // --- CW: carrier at DC beats at 700 Hz ----------------------------------

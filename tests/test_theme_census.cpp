@@ -233,16 +233,22 @@ int main() {
     };
 
     // The parts every run must have drawn, whatever the theme.
+    // (0.99.74: the GAIN and SQUELCH dials and the AUTO key under each - "deck:gain",
+    // "deck:squelch", "deck:gainauto", "deck:squelchauto" - join "deck:volume" in every
+    // theme, at both window sizes, and must stand on no other part of the deck.)
     std::vector<std::string> required = {"deck:stop",       "deck:lamp0",       "deck:lamp1",
                                          "deck:lamp2",      "deck:lamp3",       "deck:counter",
-                                         "deck:volume",     "deck:meter.rate",  "deck:meter.volume",
+                                         "deck:gain",       "deck:squelch",     "deck:volume",
+                                         "deck:gainauto",   "deck:squelchauto",
+                                         "deck:meter.rate", "deck:meter.volume",
                                          "deck:mute",       "deck:bias"};
     for (int b = 0; b < 5; ++b) { required.push_back("bank:" + std::to_string(b)); }
     // (Each lamp's rectangle runs down to the foot of its word, so the bias
     // tee key under the row is measured against the words, not only the lens.)
     const char* deckParts[] = {"deck:stop",   "deck:lamp0",   "deck:lamp1",      "deck:lamp2",
-                               "deck:lamp3",  "deck:counter", "deck:volume",     "deck:meter.rate",
-                               "deck:meter.volume", "deck:mute", "deck:bias"};
+                               "deck:lamp3",  "deck:counter", "deck:gain",       "deck:squelch",
+                               "deck:volume", "deck:gainauto", "deck:squelchauto",
+                               "deck:meter.rate", "deck:meter.volume", "deck:mute", "deck:bias"};
 
     for (const char* size : {"1600x1000", "1280x720"}) {
         std::printf("  window %s\n", size);

@@ -19,7 +19,7 @@
 # SoapySDR ABI — vendoring it would break exactly what it exists to provide.
 
 cmake_minimum_required(VERSION 3.20)
-project(cascade VERSION 0.99.42 LANGUAGES C CXX)
+project(cascade VERSION 0.99.84 LANGUAGES C CXX)
 
 # The version string the BINARY reports, which is not always the project
 # version. A nightly is built from this tree with a pre-release suffix naming
@@ -112,6 +112,28 @@ if(MSVC)
     string(APPEND CMAKE_CXX_FLAGS_RELEASE " /Zi")
     string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
     string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " /DEBUG /OPT:REF /OPT:ICF")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # THE LINUX HALF OF THE SAME RULE. CMake's own Release flags for GCC and
+    # Clang are "-O3 -DNDEBUG" and carry no -g, so until this line every Linux
+    # build was linked with NO line tables - measured with readelf on the
+    # archived 0.99.59 split-debug file: a symbol table and no .debug_*
+    # section - and a Linux crash could be named ("52 bytes before the end of
+    # _glfwTerminateWayland") but never placed on a line, which is what the
+    # Windows PDB gives for free.
+    #
+    # -g is a debug-INFORMATION switch, like /Zi: it does not change the code
+    # generated (GCC's manual: -g0 negates -g, and -fcompare-debug exists to
+    # check that debug info changes nothing; and 12 of this repository's own
+    # translation units, compiled at -O3 with and without -g by GCC 16 on
+    # x86-64, had byte-identical code and data sections). C as well as C++,
+    # because the frame that started this was in GLFW, which is C.
+    #
+    # The DWARF does NOT ship. tools/archive-symbols-linux.sh, run after the
+    # link, splits it into the symbol archive and strips the binary the CI
+    # tarball and the AppImage copy; the test executables (tests/CMakeLists.txt)
+    # never carry it at all.
+    string(APPEND CMAKE_C_FLAGS_RELEASE " -g")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " -g")
 endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -122,9 +144,13 @@ endif()
 # address,undefined on GCC/Clang) builds the engine, the window, the application,
 # the report reader and every test with that sanitizer. Empty - the default, and
 # what every shipped binary is built with - this changes nothing: the file returns
-# before it defines a target or edits a flag. Ported from origin/master ahead of the
-# full merge; see cmake/sanitize.cmake and docs/SANITIZERS-AND-FUZZING.md.
+# before it defines a target or edits a flag. See cmake/sanitize.cmake and docs/SANITIZERS-AND-FUZZING.md.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/sanitize.cmake")
+
+# -DCASCADE_ANALYZE=ON runs MSVC's /analyze over OUR code; -DCASCADE_WERROR=ON
+# makes our warnings errors. Both off - the default - change nothing. See
+# cmake/analyze.cmake and docs/SANITIZERS-AND-FUZZING.md.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/analyze.cmake")
 
 # ---------------------------------------------------------------------------
 # External dependencies (deliberately minimal — see header comment)
@@ -263,6 +289,11 @@ if(MSVC)
 else()
     target_compile_options(cascade_flags INTERFACE -Wall -Wextra)
 endif()
+# CASCADE_ANALYZE / CASCADE_WERROR (cmake/analyze.cmake): carried by cascade_flags,
+# so by exactly the targets /W4 already applies to.
+if(TARGET cascade_analyze)
+    target_link_libraries(cascade_flags INTERFACE cascade_analyze)
+endif()
 
 # ---------------------------------------------------------------------------
 # The two libraries: the ENGINE and the WINDOW
@@ -302,6 +333,11 @@ if(WIN32)
 endif()
 file(GLOB CASCADE_DSP    CONFIGURE_DEPENDS src/dsp/*.cpp)
 file(GLOB CASCADE_GUI    CONFIGURE_DEPENDS src/gui/*.cpp)
+# MASTER'S WINDOW FILES THAT ARE NOT YET RE-EXPRESSED (the 0.99.84 merge, 2026-10-21; docs/engine-merge-0.99.84.md has the ledger) live in
+# src/gui_pending/, which no target globs: each is AppWindow code that reads or writes the engine's fields directly, which the fence refuses,
+# and each comes back to src/gui/ (git mv) when its feature is ported onto the engine's table. The ledger names the feature, the release that
+# brought it and the red placeholder test (tests/merge_pending.cmake) that stays red until the file is back. test_engine_shell_guard walks
+# src/gui, so a file left here cannot be mistaken for the interface.
 file(GLOB CASCADE_SOURCE CONFIGURE_DEPENDS src/source/*.cpp)
 file(GLOB CASCADE_SINK   CONFIGURE_DEPENDS src/sink/*.cpp)
 file(GLOB CASCADE_NET    CONFIGURE_DEPENDS src/net/*.cpp)
@@ -327,6 +363,18 @@ if(NOT (UNIX AND NOT APPLE))
 endif()
 
 # --- the engine --------------------------------------------------------------
+
+# src/gui/app_window.cpp is one translation unit of nearly thirty thousand lines
+# and it sits within a few hundred sections of the 65,535 an ordinary MSVC object
+# file can hold (0xFE12 = 65,042 at 0.99.64, read with `dumpbin /headers`): each
+# inline function and each lambda or template it instantiates is two or three of
+# them, and one more std::function-wrapped hook stopped the compile with
+# "error C1128: number of sections exceeded object file format limit". /bigobj
+# lifts the limit for that one file, so a change to the window is not a change to
+# the object format.
+if(MSVC)
+    set_source_files_properties(src/gui/app_window.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 
 add_library(cascade_engine STATIC
     ${CASCADE_CORE} ${CASCADE_DSP} ${CASCADE_SOURCE} ${CASCADE_SINK}
@@ -380,6 +428,13 @@ if(WIN32)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
     # output (core/mp3_writer.cpp, 0.99.17).
     target_link_libraries(cascade_engine PUBLIC mf mfplat mfreadwrite mfuuid ole32)
+    # The Windows Runtime, for the Microsoft Store update check a packaged copy
+    # makes (core/store_update.cpp, 0.99.53): RoGetActivationFactory and the
+    # HSTRING functions C++/WinRT calls. Inbox on Windows 10+, like the above.
+    target_link_libraries(cascade_engine PUBLIC runtimeobject)
+    # The common file dialog, for the BROWSE key a PATH settings field draws
+    # (core/file_pick.cpp, 0.99.74): GetOpenFileNameW. Inbox, like the above.
+    target_link_libraries(cascade_engine PUBLIC comdlg32)
 endif()
 
 if(NOT WIN32)
@@ -694,9 +749,32 @@ endif()
 # libraries and the test binaries neither need it nor should carry it. The runtime window
 # icon is a separate mechanism set in AppWindow::run; see
 # resources/icon/README.md.
+#
+# THE WINDOWS SUBSYSTEM (0.99.69). cascade.exe used to be a console-subsystem
+# program, so that --version and the bench checks print to the terminal that ran
+# them, and every launch NOT from a terminal - the Start Menu, Explorer, the Store
+# tile - made Windows create a console for it: with Windows Terminal as the default
+# host, a Windows Terminal window beside the real one for the whole session. Calling
+# FreeConsole() at the top of main() was measured and is not enough: the console
+# host is created by process start-up, before main runs, and the window was still
+# visible for about 255 ms. Only an image with no console at start-up has none, so
+# the executable is WIN32 (/SUBSYSTEM:WINDOWS) and keeps `int main` through
+# /ENTRY:mainCRTStartup rather than gaining a WinMain; the terminal comes back, for
+# the tool modes and for Ctrl+C, through AttachConsole (core/console_owner.hpp).
+# What it costs (measured, 0.99.69): cmd.exe and PowerShell do not wait for a
+# windows-subsystem program, so `cascade --version` at a prompt returns before it
+# has printed and ERRORLEVEL / $LASTEXITCODE are not its exit code. PowerShell
+# waits, captures and sets $LASTEXITCODE only when the output is piped in the SAME
+# pipeline (`& cascade.exe --version 2>&1 | Out-String`; `(& cascade.exe --version)
+# | ...` comes back empty - installer/msix/build-msix.ps1 was changed for that), and
+# a harness that reads pipes or waits on the process handle (ctest, CreateProcess,
+# Git Bash) is unaffected.
 if(WIN32)
     enable_language(RC)
-    add_executable(cascade src/main.cpp resources/icon/foxsdr.rc)
+    add_executable(cascade WIN32 src/main.cpp resources/icon/foxsdr.rc)
+    if(MSVC)
+        target_link_options(cascade PRIVATE /ENTRY:mainCRTStartup)
+    endif()
 else()
     add_executable(cascade src/main.cpp)
 endif()
@@ -777,6 +855,16 @@ add_custom_command(TARGET cascade POST_BUILD
             "${CMAKE_SOURCE_DIR}/resources/bandplans"
             "$<TARGET_FILE_DIR:cascade>/resources/bandplans")
 
+# Stage resources/firmware beside the executable for the same reason: the AOR
+# driver looks for AOR's FX2 firmware at <exe dir>/resources/firmware/aor/
+# fx2fw.hex (source/aor_source.cpp, aorFirmwarePath). Until AOR supplies the
+# file with its redistribution notice, only the NOTICE placeholder is there,
+# and the driver says so in words instead of opening the receiver.
+add_custom_command(TARGET cascade POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/resources/firmware"
+            "$<TARGET_FILE_DIR:cascade>/resources/firmware")
+
 # ARCHIVE THE SYMBOLS, in the same action that produced the binary.
 #
 # This is deliberately a POST_BUILD step on the application rather than a line
@@ -819,6 +907,9 @@ else()
                 --version "${CASCADE_VERSION_STRING}"
                 --commit-header "${CASCADE_COMMIT_HEADER}"
                 --module "$<TARGET_FILE_BASE_NAME:cascade>"
+                # Debug and RelWithDebInfo keep their DWARF in the binary; any
+                # other configuration has it split out and stripped.
+                --config "$<CONFIG>"
         VERBATIM)
 endif()
 

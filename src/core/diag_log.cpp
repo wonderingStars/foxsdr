@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_log.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdarg>
 #include <cstdlib>
@@ -112,7 +113,10 @@ DiagLog& DiagLog::instance() {
 }
 
 void DiagLog::configure(const std::string& dir, bool enabled) {
-    std::lock_guard<std::mutex> lk(mutex_);
+    // The file's lock for all of it, held across the I/O: a configure that finds a
+    // write in flight waits for it, as it always did. The ring's lock is taken only
+    // at the end, for the two facts the panel reads (see publish()).
+    std::lock_guard<std::mutex> lk(fileMutex_);
     if (fp_ != nullptr) {
         std::fclose(fp_);
         fp_ = nullptr;
@@ -121,14 +125,25 @@ void DiagLog::configure(const std::string& dir, bool enabled) {
     path_.clear();
     fileBytes_ = 0;
     enabled_ = false;
+    const auto publish = [this] {
+        std::lock_guard<std::mutex> rk(ringMutex_);
+        publishedPath_ = path_;
+        fileEnabledFlag_.store(enabled_, std::memory_order_release);
+    };
     // OFF MEANS OFF: no directory is created, so a user who never turned this
     // on has no trace of it on disk at all - not an empty folder, not a
     // zero-byte file. Asserted in tests/test_diagnostics.cpp.
-    if (!enabled || dir.empty()) { return; }
+    if (!enabled || dir.empty()) {
+        publish();
+        return;
+    }
 
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(dir), ec);
-    if (ec && !std::filesystem::is_directory(std::filesystem::path(dir))) { return; }
+    if (ec && !std::filesystem::is_directory(std::filesystem::path(dir))) {
+        publish();
+        return;
+    }
 
     dir_ = dir;
     path_ = dir_ + "/foxsdr.log";
@@ -136,22 +151,24 @@ void DiagLog::configure(const std::string& dir, bool enabled) {
     if (fp_ == nullptr) {
         dir_.clear();
         path_.clear();
+        publish();
         return;
     }
     std::error_code sec;
     const auto sz = std::filesystem::file_size(std::filesystem::path(path_), sec);
     fileBytes_ = sec ? 0u : static_cast<std::size_t>(sz);
     enabled_ = true;
+    publish();
 }
 
 bool DiagLog::fileEnabled() const {
-    std::lock_guard<std::mutex> lk(mutex_);
-    return enabled_;
+    // Never waits for the file (see "TWO LOCKS" in the header).
+    return fileEnabledFlag_.load(std::memory_order_acquire);
 }
 
 std::string DiagLog::filePath() const {
-    std::lock_guard<std::mutex> lk(mutex_);
-    return path_;
+    std::lock_guard<std::mutex> lk(ringMutex_);
+    return publishedPath_;
 }
 
 void DiagLog::write(const char* level, const char* msg) {
@@ -167,13 +184,25 @@ void DiagLog::write(const char* level, const char* msg) {
     if (len > maxLen) { len = maxLen; }
     line[len] = '\0';
 
-    std::lock_guard<std::mutex> lk(mutex_);
-    const int slot = next_.load(std::memory_order_relaxed);
-    std::memcpy(ring_[slot], line, len + 1);
-    // RELEASE on both: copyRingRaw reads them with no lock at all, and the
-    // line bytes above must be visible before the index that points at them.
-    next_.store((slot + 1) % kRingLines, std::memory_order_release);
-    written_.fetch_add(1, std::memory_order_release);
+    {
+        // THE RING FIRST, under its own lock, released before the file is touched:
+        // a freeze report's ringSnapshot() and the panel's questions never wait
+        // behind a write that is waiting on a disk, and the line being written is
+        // already in the ring when the file stage begins.
+        std::lock_guard<std::mutex> rk(ringMutex_);
+        const int slot = next_.load(std::memory_order_relaxed);
+        std::memcpy(ring_[slot], line, len + 1);
+        // RELEASE on both: copyRingRaw reads them with no lock at all, and the
+        // line bytes above must be visible before the index that points at them.
+        next_.store((slot + 1) % kRingLines, std::memory_order_release);
+        written_.fetch_add(1, std::memory_order_release);
+    }
+    // THEN THE FILE, under the file's lock - which a slow disk holds, and which
+    // the caller still waits for, exactly as before. A file that is off is not
+    // even locked for: fileEnabledFlag_ says so without the lock, and
+    // appendToFileLocked looks again under it.
+    if (!fileEnabledFlag_.load(std::memory_order_acquire)) { return; }
+    std::lock_guard<std::mutex> fk(fileMutex_);
     appendToFileLocked(line, len);
 }
 
@@ -187,7 +216,8 @@ void DiagLog::writef(const char* level, const char* fmt, ...) {
 }
 
 std::vector<std::string> DiagLog::ringSnapshot() const {
-    std::lock_guard<std::mutex> lk(mutex_);
+    // The RING's lock only: never behind a file write (see "TWO LOCKS").
+    std::lock_guard<std::mutex> lk(ringMutex_);
     const std::uint64_t total = written_.load(std::memory_order_relaxed);
     const int count =
         (total < static_cast<std::uint64_t>(kRingLines)) ? static_cast<int>(total) : kRingLines;
@@ -203,7 +233,7 @@ std::uint64_t DiagLog::linesWritten() const { return written_.load(std::memory_o
 
 std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
     // NO LOCK, NO ALLOCATION, NO CRT FORMATTING. See the header: a crash can
-    // happen while another thread holds mutex_, and blocking here would turn a
+    // happen while another thread holds a lock, and blocking here would turn a
     // crash into a hang with no report at all. The bounded cost is one
     // possibly torn line, and it is the newest one.
     if (out == nullptr || cap == 0) { return 0; }
@@ -230,7 +260,8 @@ std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
 }
 
 void DiagLog::resetForTest() {
-    std::lock_guard<std::mutex> lk(mutex_);
+    std::lock_guard<std::mutex> fk(fileMutex_);
+    std::lock_guard<std::mutex> lk(ringMutex_);
     if (fp_ != nullptr) {
         std::fclose(fp_);
         fp_ = nullptr;
@@ -238,14 +269,23 @@ void DiagLog::resetForTest() {
     dir_.clear();
     path_.clear();
     enabled_ = false;
+    fileEnabledFlag_.store(false, std::memory_order_release);
+    publishedPath_.clear();
     fileBytes_ = 0;
     written_.store(0, std::memory_order_relaxed);
     next_.store(0, std::memory_order_relaxed);
     std::memset(ring_, 0, sizeof(ring_));
 }
 
+namespace {
+std::atomic<DiagLog::FileHook> g_fileHook{nullptr};
+}  // namespace
+
+void DiagLog::setFileHookForTest(FileHook hook) { g_fileHook.store(hook); }
+
 void DiagLog::appendToFileLocked(const char* line, std::size_t len) {
     if (!enabled_ || fp_ == nullptr) { return; }
+    if (const FileHook hook = g_fileHook.load()) { hook(line, len); }
     rotateIfNeededLocked(len + 1);
     if (fp_ == nullptr) { return; }
     std::fwrite(line, 1, len, fp_);
@@ -549,9 +589,18 @@ bool isUsbInventoryLine(const std::string& line) {
 // space does not end it).
 void maskUserDirs(std::string& s) {
     static constexpr char kUser[] = "<user>";
+    // Lowercased ONCE, then kept in step with `s` by applying every edit to
+    // BOTH: `kUser` is already lowercase, so writing it into `low` at the
+    // same span costs nothing further and needs no re-scan of bytes already
+    // passed. Recomputing lowerAscii(s) on every match - the original shape
+    // of this loop - is O(line length) per match, and on the whole-bundle
+    // pass problem_report.cpp added for the report-attachment preview
+    // (rather than one ~192-byte ring line at a time) that is no longer a
+    // rounding error: a bundle with dozens of path-bearing lines measured
+    // multiple milliseconds in it alone (2026-09-28 review).
+    std::string low = lowerAscii(s);
     std::size_t from = 0;
     for (;;) {
-        const std::string low = lowerAscii(s);
         std::size_t at = std::string::npos;
         std::size_t keyLen = 0;
         for (const char* k : {"\\users\\", "/users/", "/home/"}) {
@@ -568,7 +617,10 @@ void maskUserDirs(std::string& s) {
                s[e] != ')' && s[e] != ']' && s[e] != ',' && s[e] != ';') {
             ++e;
         }
-        if (e > p) { s.replace(p, e - p, kUser); }
+        if (e > p) {
+            s.replace(p, e - p, kUser);
+            low.replace(p, e - p, kUser);
+        }
         from = p + (sizeof(kUser) - 1);
     }
 }
@@ -611,6 +663,483 @@ void maskQuotedNames(std::string& s) {
         }
         s.replace(i + 1, close - (i + 1), kName);
         i = i + 1 + kName.size() + 1;
+    }
+}
+
+// A POSSESSIVE NAME inside a PARENTHESISED label a vendor API handed back
+// verbatim - "Headset (Alice's AirPods Pro)", "Microphone (Bob's iPhone)".
+// Windows hands FoxSDR the OS's own device-friendly-name text unchanged, and
+// that name is very often someone's Bluetooth or paired-phone label, not
+// anything this application chose. Only the word immediately before an "'s"
+// is masked - "AirPods Pro" and "iPhone" stay, because the make and model are
+// what a report is actually diagnosing; the person's name never is. Scoped to
+// text inside parentheses (not the whole line) so an ordinary contraction in
+// prose elsewhere is never touched - this project's log lines do not use any
+// today, but nothing should depend on that staying true forever.
+void maskPossessiveWordsInPlace(std::string& span) {
+    static const std::string kName = "<name>";
+    std::size_t i = 0;
+    while (i < span.size()) {
+        if (span[i] != '\'' || i == 0 || !isAlnumChar(span[i - 1])) {
+            ++i;
+            continue;
+        }
+        if (i + 1 >= span.size() || (span[i + 1] != 's' && span[i + 1] != 'S')) {
+            ++i;
+            continue;
+        }
+        std::size_t wordStart = i;
+        while (wordStart > 0 && isAlnumChar(span[wordStart - 1])) { --wordStart; }
+        const std::size_t wordLen = i - wordStart;
+        span.replace(wordStart, wordLen, kName);
+        i = wordStart + kName.size() + 2;  // past "<name>" + "'s"
+    }
+}
+
+void maskPossessiveNamesInParens(std::string& s) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] != '(') {
+            ++i;
+            continue;
+        }
+        const std::size_t close = s.find(')', i + 1);
+        if (close == std::string::npos) { break; }
+        std::string inner = s.substr(i + 1, close - (i + 1));
+        maskPossessiveWordsInPlace(inner);
+        s.replace(i + 1, close - (i + 1), inner);
+        i = i + 1 + inner.size() + 1;
+    }
+}
+
+// --- NETWORK ADDRESSES AND HOST NAMES (0.99.59) ------------------------------
+//
+// PRIVACY.md has always said a report never carries your IP address or your
+// machine name, and until 0.99.59 nothing enforced it: the Pluto's open line
+// printed the address the user typed, its source name ("Pluto: ADALM-Pluto at
+// ip:pluto.local") reached the tune lines, and a network driver (SoapyRemote,
+// rtl_tcp, SpyServer) writes addresses and URLs of its own. Every IPv4 and
+// IPv6 literal, and a host name wherever FoxSDR or such a driver puts one,
+// becomes <host>. A port after it is kept: it says which service, not who.
+
+constexpr char kHost[] = "<host>";
+
+bool oneOf(const std::string& w, std::initializer_list<const char*> set);  // below
+
+bool isHostChar(char c) { return isAlnumChar(c) || c == '-' || c == '_' || c == '.'; }
+
+// A dotted name's last label that is a FILE's extension, not a domain: a
+// module ("SoapyUHD.dll", "cascade.exe+0x1A2B") or a file a line names after
+// "at", "to" or "from" is not a host.
+bool isFileExtension(const std::string& lowLabel) {
+    return oneOf(lowLabel, {"dll", "exe", "so", "dylib", "sys", "pdb", "json", "txt", "log", "ini",
+                            "cfg", "conf", "xml", "yaml", "yml", "csv", "tsv", "wav", "mp3", "flac",
+                            "ogg", "iq", "raw", "bin", "hex", "img", "ihx", "rbf", "fw", "cu8", "cs8",
+                            "cs16", "cf32", "sigmf", "png", "jpg", "jpeg", "bmp", "gif", "zip", "gz",
+                            "tar", "msix", "appx", "lnk", "dat", "db", "sqlite", "py", "js", "html",
+                            "htm", "css", "md", "tmp", "bak", "cache", "lua", "toml", "pem", "crt"});
+}
+
+// "pluto.local", "sdr.example.org": two or more labels, the last of them two
+// or more letters and not a file extension. A version ("v0.38", "1.0.0") ends
+// in digits and a sentence's "e.g." in one letter, so neither is a host.
+bool looksLikeDottedHost(const std::string& tok) {
+    if (tok.empty() || !isAlnumChar(tok[0]) || tok.find("..") != std::string::npos) { return false; }
+    const std::size_t dot = tok.rfind('.');
+    if (dot == std::string::npos || dot + 1 >= tok.size()) { return false; }
+    const std::string last = lowerAscii(tok.substr(dot + 1));
+    if (last.size() < 2) { return false; }
+    for (const char c : last) {
+        if (!isAlphaChar(c)) { return false; }
+    }
+    return !isFileExtension(last);
+}
+
+// Four dotted decimal octets starting at `i`, each 0-255: their length, or 0.
+// Not four (a version "0.99.58", or five parts) and not an octet over 255 (an
+// OS build "10.0.22631.4317") is not an address.
+std::size_t ipv4Length(const std::string& s, std::size_t i) {
+    std::size_t p = i;
+    for (int part = 0; part < 4; ++part) {
+        if (part > 0) {
+            if (p >= s.size() || s[p] != '.') { return 0; }
+            ++p;
+        }
+        const std::size_t start = p;
+        unsigned value = 0;
+        while (p < s.size() && isDigitChar(s[p]) && p - start < 4) {
+            value = value * 10u + static_cast<unsigned>(s[p] - '0');
+            ++p;
+        }
+        if (p == start || p - start > 3 || value > 255u) { return 0; }
+    }
+    if (p < s.size() && (isAlphaChar(s[p]) || isDigitChar(s[p]) || s[p] == '_')) { return 0; }
+    if (p + 1 < s.size() && s[p] == '.' && isDigitChar(s[p + 1])) { return 0; }
+    return p - i;
+}
+
+// One of the colon-separated groups of an IPv6 address: 1-4 hex digits.
+bool ipv6Group(const std::string& g) {
+    if (g.empty() || g.size() > 4) { return false; }
+    for (const char c : g) {
+        if (std::isxdigit(static_cast<unsigned char>(c)) == 0) { return false; }
+    }
+    return true;
+}
+
+// An IPv6 literal, whole: eight groups, or fewer with one "::", the last
+// group allowed to be a dotted IPv4 address (counting as two). A time
+// ("12:34:56"), a USB VID:PID ("0bda:2838"), a MAC address (six groups) and
+// C++'s "::" between words are none of these.
+bool validIpv6(const std::string& t) {
+    if (std::count(t.begin(), t.end(), ':') < 2) { return false; }
+    if (std::none_of(t.begin(), t.end(), [](char c) { return isDigitChar(c); })) { return false; }
+    if (t.find(":::") != std::string::npos) { return false; }
+    const std::size_t dc = t.find("::");
+    if (dc != std::string::npos && t.find("::", dc + 1) != std::string::npos) { return false; }
+    std::vector<std::string> groups;
+    auto split = [&groups](const std::string& part) {
+        if (part.empty()) { return; }
+        std::size_t a = 0;
+        for (;;) {
+            const std::size_t c = part.find(':', a);
+            groups.push_back(part.substr(a, c == std::string::npos ? std::string::npos : c - a));
+            if (c == std::string::npos) { break; }
+            a = c + 1;
+        }
+    };
+    if (dc != std::string::npos) {
+        split(t.substr(0, dc));
+        split(t.substr(dc + 2));
+    } else {
+        split(t);
+    }
+    std::size_t count = 0;
+    for (std::size_t k = 0; k < groups.size(); ++k) {
+        const std::string& g = groups[k];
+        if (g.find('.') != std::string::npos) {
+            if (k + 1 != groups.size() || ipv4Length(g, 0) != g.size()) { return false; }
+            count += 2;
+        } else {
+            if (!ipv6Group(g)) { return false; }
+            ++count;
+        }
+    }
+    return dc != std::string::npos ? count <= 7 : count == 8;
+}
+
+// This machine talking to itself names nobody, and whether a listener was
+// bound to every interface or to loopback only is worth keeping.
+bool isOwnMachine(const std::string& host) {
+    const std::string h = lowerAscii(host);
+    if (h == "localhost" || h == "0.0.0.0" || h == "::" || h == "::1" || h == "[::1]") { return true; }
+    return h.rfind("127.", 0) == 0 && ipv4Length(h, 0) == h.size();
+}
+
+// The word just before `start`, past spaces, ':', '=' and '(' - for a
+// version printed after its word ("version 1.99.58.0", "package 1.99.58.0").
+bool followsVersionWord(const std::string& s, std::size_t start) {
+    std::size_t e = start;
+    while (e > 0 && (s[e - 1] == ' ' || s[e - 1] == ':' || s[e - 1] == '=' || s[e - 1] == '(')) { --e; }
+    std::size_t b = e;
+    while (b > 0 && isAlnumChar(s[b - 1])) { --b; }
+    if (b == e) { return false; }
+    return oneOf(lowerAscii(s.substr(b, e - b)),
+                 {"version", "ver", "v", "firmware", "fw", "build", "package", "api", "rev",
+                  "revision", "release", "driver", "foxsdr", "msix"});
+}
+
+// The host-name token at `v` (letters, digits, '-', '_', '.'), up to a ':' or
+// anything else; a full stop that ends a sentence is not part of it.
+std::size_t hostTokenEnd(const std::string& s, std::size_t v) {
+    std::size_t e = v;
+    while (e < s.size() && isHostChar(s[e])) { ++e; }
+    while (e > v && s[e - 1] == '.') { --e; }
+    return e;
+}
+
+// 1. After a URL scheme ("tcp://", "rtsp://", "http://"...): the whole
+//    authority - a user name and password included - becomes <host>, the
+//    port and the path after it kept.
+void maskUrlHosts(std::string& s) {
+    std::size_t from = 0;
+    for (;;) {
+        const std::size_t at = s.find("://", from);
+        if (at == std::string::npos) { return; }
+        from = at + 3;
+        std::size_t b = at;
+        while (b > 0 && (isAlnumChar(s[b - 1]) || s[b - 1] == '+' || s[b - 1] == '-')) { --b; }
+        if (at - b < 2 || !isAlphaChar(s[b])) { continue; }
+        const std::size_t p = at + 3;
+        std::size_t e = p;
+        bool bracket = false;
+        while (e < s.size()) {
+            const char c = s[e];
+            if (c == '[') { bracket = true; }
+            if (c == ']') { bracket = false; }
+            if (!bracket && (c == ' ' || c == '\t' || c == '"' || c == '\'' || c == '<' || c == '>' ||
+                             c == ',' || c == ';' || c == '(' || c == ')' || c == '/' || c == '?' ||
+                             c == '#' || c == '\\' || c == '\x01' || c == '\x02')) {
+                break;
+            }
+            ++e;
+        }
+        while (e > p && s[e - 1] == '.') { --e; }
+        if (e == p) { continue; }
+        const std::string authority = s.substr(p, e - p);
+        const std::size_t atSign = authority.rfind('@');
+        const std::string hostPort = atSign == std::string::npos ? authority : authority.substr(atSign + 1);
+        std::string host = hostPort;
+        std::string port;
+        if (!hostPort.empty() && hostPort[0] == '[') {
+            const std::size_t close = hostPort.find(']');
+            if (close != std::string::npos) {
+                host = hostPort.substr(1, close - 1);
+                port = hostPort.substr(close + 1);
+            }
+        } else {
+            const std::size_t colon = hostPort.rfind(':');
+            if (colon != std::string::npos) {
+                host = hostPort.substr(0, colon);
+                port = hostPort.substr(colon);
+            }
+        }
+        // A port is ":" and digits; anything else stays part of what is masked.
+        bool portOk = port.empty();
+        if (!port.empty() && port[0] == ':' && port.size() > 1) {
+            portOk = std::all_of(port.begin() + 1, port.end(), [](char c) { return isDigitChar(c); });
+        }
+        if (!portOk) {
+            host = hostPort;
+            port.clear();
+        }
+        if (atSign == std::string::npos && isOwnMachine(host)) { continue; }
+        const std::string replacement = std::string(kHost) + port;
+        s.replace(p, e - p, replacement);
+        from = p + replacement.size();
+    }
+}
+
+// 2. After a key a device-argument string or a driver writes a host with:
+//    "ip:" (FoxSDR's own "Pluto at ip:<host>" and libiio's "ip:<host>" URI),
+//    "host=", "hostname=", "remote=", "rtltcp=", "server=", "uri=", "addr=",
+//    "address=". A single label - a machine name - is masked here as well as
+//    a dotted one. A value that is itself a scheme ("uri=ip:...",
+//    "remote=tcp://...") is left to the rule for that scheme.
+void maskKeyedHosts(std::string& s) {
+    for (const char* key : {"ip:", "host=", "hostname=", "remote=", "rtltcp=", "server=", "uri=",
+                            "addr=", "address="}) {
+        const std::size_t keyLen = std::strlen(key);
+        std::size_t from = 0;
+        for (;;) {
+            const std::string low = lowerAscii(s);
+            const std::size_t at = low.find(key, from);
+            if (at == std::string::npos) { break; }
+            from = at + keyLen;
+            if (at > 0 && isAlnumChar(s[at - 1])) { continue; }
+            std::size_t v = at + keyLen;
+            const bool quoted = v < s.size() && s[v] == '"';
+            if (quoted) { ++v; }
+            const std::size_t e = hostTokenEnd(s, v);
+            if (e == v) { continue; }
+            if (!quoted && e + 1 < s.size() && s[e] == ':' && !isDigitChar(s[e + 1])) { continue; }
+            if (isOwnMachine(s.substr(v, e - v))) { continue; }
+            s.replace(v, e - v, kHost);
+            from = v + std::strlen(kHost);
+        }
+    }
+}
+
+// 3. A host in a sentence: after " at ", " to " or " from " ("could not reach
+//    the Pluto at sdr.example.org:30431", "Connecting to spy.example.net:5555")
+//    when it is plainly one - a dotted name, or a name with a port after it.
+//    "at 2400000 S/s", "at the edge", "to WFM" and "at cascade.exe+0x1A2B"
+//    are not. Also a double-quoted dotted name ("could not find
+//    \"pluto.local\""), anything double-quoted after the word "host", and a
+//    name under one of the local-network suffixes (".local", ".lan",
+//    ".home", ".internal"...) wherever it stands.
+void maskSentenceHosts(std::string& s) {
+    for (const char* lead : {" at ", " to ", " from "}) {
+        const std::size_t leadLen = std::strlen(lead);
+        std::size_t from = 0;
+        for (;;) {
+            const std::size_t at = lowerAscii(s).find(lead, from);
+            if (at == std::string::npos) { break; }
+            const std::size_t v = at + leadLen;
+            from = v;
+            const std::size_t e = hostTokenEnd(s, v);
+            if (e == v) { continue; }
+            const std::string tok = s.substr(v, e - v);
+            const bool hasLetter = std::any_of(tok.begin(), tok.end(), [](char c) { return isAlphaChar(c); });
+            const bool withPort = e + 1 < s.size() && s[e] == ':' && isDigitChar(s[e + 1]);
+            if (!(looksLikeDottedHost(tok) || (hasLetter && withPort)) || isOwnMachine(tok)) { continue; }
+            s.replace(v, e - v, kHost);
+            from = v + std::strlen(kHost);
+        }
+    }
+    // Double quotes: a dotted name on its own, or anything after "host ".
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] != '"') {
+            ++i;
+            continue;
+        }
+        const std::size_t close = s.find('"', i + 1);
+        if (close == std::string::npos) { break; }
+        const std::string inner = s.substr(i + 1, close - (i + 1));
+        const bool afterHostWord = i >= 5 && lowerAscii(s.substr(i - 5, 5)) == "host " &&
+                                   (i == 5 || !isAlnumChar(s[i - 6]));
+        const bool dotted = hostTokenEnd(inner, 0) == inner.size() && looksLikeDottedHost(inner);
+        if (!inner.empty() && inner.find('"') == std::string::npos && (afterHostWord || dotted) &&
+            !isOwnMachine(inner)) {
+            s.replace(i + 1, inner.size(), kHost);
+            i = i + 1 + std::strlen(kHost) + 1;
+            continue;
+        }
+        i = close + 1;
+    }
+    // Local-network names, anywhere.
+    i = 0;
+    while (i < s.size()) {
+        if (!isHostChar(s[i]) || (i > 0 && (isHostChar(s[i - 1]) || s[i - 1] == '/' || s[i - 1] == '\\'))) {
+            ++i;
+            continue;
+        }
+        const std::size_t e = hostTokenEnd(s, i);
+        if (e == i) {
+            ++i;
+            continue;
+        }
+        const std::string tok = s.substr(i, e - i);
+        const std::size_t dot = tok.rfind('.');
+        if (dot != std::string::npos && dot > 0 && looksLikeDottedHost(tok) &&
+            oneOf(lowerAscii(tok.substr(dot + 1)), {"local", "lan", "home", "internal", "localdomain",
+                                                    "intranet", "corp", "arpa", "localnet"})) {
+            s.replace(i, e - i, kHost);
+            i += std::strlen(kHost);
+            continue;
+        }
+        i = e;
+    }
+}
+
+// 4. The machine in a Windows network path: "\\NAS-01\radio\plugins". The
+//    device prefixes "\\.\" and "\\?\" are not machines.
+void maskUncHosts(std::string& s) {
+    std::size_t from = 0;
+    for (;;) {
+        const std::size_t at = s.find("\\\\", from);
+        if (at == std::string::npos) { return; }
+        from = at + 2;
+        if (at > 0 && s[at - 1] == '\\') { continue; }
+        const std::size_t v = at + 2;
+        std::size_t e = v;
+        while (e < s.size() && isHostChar(s[e])) { ++e; }
+        if (e == v || e >= s.size() || s[e] != '\\') { continue; }
+        const std::string tok = s.substr(v, e - v);
+        if (tok == "." || tok == "?" || isOwnMachine(tok)) { continue; }
+        s.replace(v, e - v, kHost);
+        from = v + std::strlen(kHost);
+    }
+}
+
+// 5. IPv6 literals, then IPv4 literals, anywhere on the line. A dotted quad
+//    glued to a word ("FoxSDR_1.99.58.0_x64", "UHD_4.6.0.0") or printed after
+//    a version word ("version 1.99.58.0") is a version, and stays.
+void maskIpLiterals(std::string& s) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        const char c = s[i];
+        const bool start = (std::isxdigit(static_cast<unsigned char>(c)) != 0 || c == ':') &&
+                           (i == 0 || !(isAlnumChar(s[i - 1]) || s[i - 1] == '_' || s[i - 1] == ':' ||
+                                        s[i - 1] == '.'));
+        if (!start) {
+            ++i;
+            continue;
+        }
+        std::size_t j = i;
+        while (j < s.size() && (std::isxdigit(static_cast<unsigned char>(s[j])) != 0 || s[j] == ':' ||
+                                s[j] == '.')) {
+            ++j;
+        }
+        std::size_t e = j;
+        while (e > i && (s[e - 1] == '.' || (s[e - 1] == ':' && !(e >= i + 2 && s[e - 2] == ':')))) { --e; }
+        std::string cand = s.substr(i, e - i);
+        if (!validIpv6(cand)) {
+            i = j > i ? j : i + 1;
+            continue;
+        }
+        std::size_t z = e;
+        if (z < s.size() && s[z] == '%') {
+            ++z;
+            while (z < s.size() && (isAlnumChar(s[z]) || s[z] == '_' || s[z] == '-')) { ++z; }
+        }
+        if (z < s.size() && (isAlnumChar(s[z]) || s[z] == '_')) {
+            i = j;
+            continue;
+        }
+        if (isOwnMachine(cand)) {
+            i = z;
+            continue;
+        }
+        s.replace(i, z - i, kHost);
+        i += std::strlen(kHost);
+    }
+    i = 0;
+    while (i < s.size()) {
+        if (!isDigitChar(s[i]) ||
+            (i > 0 && (isAlnumChar(s[i - 1]) || s[i - 1] == '_' || s[i - 1] == '.'))) {
+            ++i;
+            continue;
+        }
+        const std::size_t n = ipv4Length(s, i);
+        if (n == 0 || followsVersionWord(s, i) || isOwnMachine(s.substr(i, n))) {
+            while (i < s.size() && (isDigitChar(s[i]) || s[i] == '.')) { ++i; }
+            continue;
+        }
+        s.replace(i, n, kHost);
+        i += std::strlen(kHost);
+    }
+}
+
+void maskNetworkAddresses(std::string& s) {
+    maskUrlHosts(s);
+    maskKeyedHosts(s);
+    maskSentenceHosts(s);
+    maskUncHosts(s);
+    maskIpLiterals(s);
+}
+
+// SERIAL PORT NUMBERS (0.99.59): "COM5" becomes "COM#" and "/dev/ttyUSB0"
+// "/dev/ttyUSB#". A report needs to know that a port was tried, opened or
+// refused, and in which order; which number this machine gave it is not
+// something it needs.
+void maskSerialPortNumbers(std::string& s) {
+    std::string low = lowerAscii(s);
+    std::size_t i = 0;
+    while (i + 3 < s.size()) {
+        std::size_t d = std::string::npos;
+        if (low.compare(i, 3, "com") == 0 && (i == 0 || !isAlnumChar(s[i - 1]))) {
+            d = i + 3;
+        } else if (low.compare(i, 8, "/dev/tty") == 0) {
+            d = i + 8;
+            while (d < s.size() && isAlphaChar(s[d])) { ++d; }
+        }
+        if (d == std::string::npos) {
+            ++i;
+            continue;
+        }
+        std::size_t e = d;
+        while (e < s.size() && isDigitChar(s[e])) { ++e; }
+        const bool free = e == s.size() || !(isAlnumChar(s[e]) || s[e] == '_');
+        if (e > d && e - d <= 3 && free) {
+            // Kept in step with `s`: '#' is the same in both.
+            s.replace(d, e - d, "#");
+            low.replace(d, e - d, "#");
+            i = d + 1;
+            continue;
+        }
+        i = d > i ? d : i + 1;
     }
 }
 
@@ -787,23 +1316,107 @@ std::size_t stampLength(const std::string& s) {
     return 12;
 }
 
-}  // namespace
+// THE NAMES A REPORT ALREADY LISTS, as scrubUploadLog(lines, inventory) keeps
+// them: each "name version" entry and the name without its version, longest
+// first so the whole entry wins over its own name. Only entries with a letter
+// in them and at least three characters: a bare number is exactly what the
+// rule below exists to mask, whoever claims it as a name.
+std::vector<std::string> namesToKeep(const std::vector<std::string>& inventory) {
+    std::vector<std::string> out;
+    auto add = [&out](const std::string& s) {
+        if (s.size() < 3) { return; }
+        bool letter = false;
+        for (const char c : s) { letter = letter || isAlphaChar(c); }
+        if (!letter) { return; }
+        if (std::find(out.begin(), out.end(), s) == out.end()) { out.push_back(s); }
+    };
+    for (const std::string& e : inventory) {
+        add(e);
+        const std::size_t sp = e.find_last_of(' ');
+        if (sp != std::string::npos && sp > 0) { add(e.substr(0, sp)); }
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+    return out;
+}
 
-std::string scrubUploadLine(const std::string& line) {
+// A kept name is swapped for a token while the rules run and put back after.
+// The token is \x01, letters from {Q,W,X,J} (the index in base 4) and \x02:
+// no digit for the number rule to mask, and no letter run that could spell
+// any of mentionsFrequency's words, so a token neither is masked nor makes
+// its line look like one that names a frequency.
+std::string keepToken(std::size_t index) {
+    static const char kDigits[4] = {'Q', 'W', 'X', 'J'};
+    std::string t(1, '\x01');
+    do {
+        t += kDigits[index % 4u];
+        index /= 4u;
+    } while (index != 0);
+    t += '\x02';
+    return t;
+}
+
+std::string scrubLineKeeping(const std::string& line, const std::vector<std::string>& keep) {
     const std::size_t stamp = stampLength(line);
     std::string body = line.substr(stamp);
+    // THE FREQUENCY JUDGEMENT READS THIS, UNTOUCHED BY THE KEEP SUBSTITUTION
+    // BELOW (0.99.44 repair). A kept name can itself carry one of
+    // mentionsFrequency's words - "406 MHz Beacons" reads exactly like a tuned
+    // frequency - and once that name is swapped for its token the word is
+    // gone from `body`, so a line whose ONLY frequency word was inside the
+    // kept name looked like it never mentioned one at all, and a genuine bare
+    // frequency elsewhere on the same line ("... 406 MHz Beacons 1.0.0 ...
+    // 144800000 ...") escaped masking entirely. Judging the ORIGINAL text
+    // means the kept name still marks its line as frequency-bearing even
+    // after its own token has taken its place.
+    const std::string originalBody = body;
+    // Only where the name stands on its own: "406 MHz Beacons" inside
+    // "X406 MHz Beacons2" is somebody else's text.
+    std::vector<std::pair<std::string, std::string>> held;
+    for (const std::string& name : keep) {
+        std::size_t at = 0;
+        while ((at = body.find(name, at)) != std::string::npos) {
+            const std::size_t end = at + name.size();
+            const bool freeStart = at == 0 || !isAlnumChar(body[at - 1]);
+            const bool freeEnd = end >= body.size() || !isAlnumChar(body[end]);
+            if (!freeStart || !freeEnd) {
+                ++at;
+                continue;
+            }
+            const std::string token = keepToken(held.size());
+            held.emplace_back(token, name);
+            body.replace(at, name.size(), token);
+            at += token.size();
+        }
+    }
     stripSerials(body);
     maskUsbInstanceIds(body);
     maskSoapyLabelSerials(body);
     maskUserDirs(body);
+    maskNetworkAddresses(body);
+    maskSerialPortNumbers(body);
     maskQuotedNames(body);
+    maskPossessiveNamesInParens(body);
     // A line at the ring's width was CUT: whatever named its numbers may be
     // in the part that was lost ("... at 2048000 S/s, 127.825" with the
     // " MHz" gone), so it is treated as naming a frequency.
     const bool cut = line.size() >= static_cast<std::size_t>(DiagLog::kLineBytes) - 1u;
-    if (cut || mentionsFrequency(lowerAscii(body))) { maskNumbers(body); }
+    if (cut || mentionsFrequency(lowerAscii(originalBody))) { maskNumbers(body); }
     collapseMasks(body);
+    // The kept names back, each where its token still stands. A token some
+    // rule consumed (a name inside quotes becomes '<name>') stays consumed,
+    // which errs the safe way.
+    for (const auto& [token, name] : held) {
+        const std::size_t at = body.find(token);
+        if (at != std::string::npos) { body.replace(at, token.size(), name); }
+    }
     return line.substr(0, stamp) + body;
+}
+
+}  // namespace
+
+std::string scrubUploadLine(const std::string& line) {
+    return scrubLineKeeping(line, std::vector<std::string>());
 }
 
 std::string scrubUploadPath(const std::string& path) {
@@ -843,13 +1456,25 @@ std::string scrubUploadPath(const std::string& path) {
     return out;
 }
 
+std::string maskAccountNames(const std::string& text) {
+    std::string out = text;
+    maskUserDirs(out);
+    return out;
+}
+
 std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines) {
+    return scrubUploadLog(lines, std::vector<std::string>());
+}
+
+std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines,
+                                        const std::vector<std::string>& inventory) {
+    const std::vector<std::string> keep = namesToKeep(inventory);
     std::vector<std::string> out;
     out.reserve(lines.size());
     std::size_t i = 0;
     while (i < lines.size()) {
         if (!isUsbInventoryLine(lines[i])) {
-            out.push_back(scrubUploadLine(lines[i]));
+            out.push_back(scrubLineKeeping(lines[i], keep));
             ++i;
             continue;
         }
@@ -956,11 +1581,12 @@ bool stderrIsWatchedConsole() {
     // A character device that is not a console (NUL, a serial port) has no
     // reader either.
     if (::GetConsoleMode(h, &mode) == 0) { return false; }
-    // THE DISTINCTION THAT MATTERS. cascade.exe is a console-subsystem binary,
-    // so a Start Menu launch gets a console too - one Windows created for it,
-    // with nothing else attached and nobody reading it. A terminal launch
-    // shares the shell's console, so the shell is on the list as well. Only
-    // the second is a person watching.
+    // THE DISTINCTION THAT MATTERS. Until 0.99.69 cascade.exe was a console-
+    // subsystem binary, so a Start Menu launch got a console too - one Windows
+    // created for it, with nothing else attached and nobody reading it (now such a
+    // launch has none, and the check above has already said no). A terminal
+    // launch shares the shell's console (borrowed, console_owner.hpp), so the
+    // shell is on the list as well. Only the second is a person watching.
     DWORD pids[4] = {};
     const DWORD n = ::GetConsoleProcessList(pids, 4);
     return n > 1;

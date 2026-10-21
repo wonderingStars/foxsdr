@@ -48,7 +48,7 @@ inline const char* railBankLabel(RailBank b) {
     switch (b) {
         case RailBank::SignalPath: return FOX_TR_NOOP("SIGNAL");
         case RailBank::Decode: return FOX_TR_NOOP("DECODE");
-        case RailBank::View: return FOX_TR_NOOP("VIEW");
+        case RailBank::Tools: return FOX_TR_NOOP("TOOLS");
         case RailBank::Extend: return FOX_TR_NOOP("EXTEND");
         case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }
@@ -61,7 +61,7 @@ inline const char* railBankCaption(RailBank b) {
     switch (b) {
         case RailBank::SignalPath: return FOX_TR_NOOP("SIGNAL PATH");
         case RailBank::Decode: return FOX_TR_NOOP("DECODE");
-        case RailBank::View: return FOX_TR_NOOP("VIEW");
+        case RailBank::Tools: return FOX_TR_NOOP("TOOLS");
         case RailBank::Extend: return FOX_TR_NOOP("EXTEND");
         case RailBank::System: return FOX_TR_NOOP("SYSTEM");
     }

@@ -23,8 +23,9 @@ public:
     // The underlying generator, exposed so the existing tone/noise
     // configuration surface (Pipeline::sigGen()) keeps working unchanged.
     // SigGen's own threading rules apply: configuring slots while read()
-    // runs on the source thread is the same benign concurrency the Pipeline
-    // has always allowed ("configure tones before/while running").
+    // runs on the source thread is what the Pipeline has always allowed
+    // ("configure tones before/while running"), and SigGen serialises it
+    // with a mutex (siggen.hpp).
     SigGen& sigGen();
 
     // Trivial lifecycle: there is no device to open, so start() cannot fail

@@ -16,12 +16,40 @@
 // corrupt - which is precisely the state a crash handler runs in.
 //
 // WHY THE CRASH-PATH READER TAKES NO LOCK. copyRingRaw() deliberately does
-// not acquire mutex_. A crash can happen while a *different* thread holds it,
+// not acquire ringMutex_. A crash can happen while a *different* thread holds it,
 // and a handler that blocked there would hang the process instead of
 // reporting it - turning a crash into the one thing worse than a crash, a
 // hang with no report. The cost is bounded and known: at most ONE line can be
 // observed half-written, and it is the newest one. A torn last line is an
 // acceptable price for a report that always arrives; a deadlock is not.
+// (Unchanged by 0.99.65: tests/test_diag_log_lock.cpp calls it with a file write
+// parked, and tests/test_diagnostics.cpp holds its output.)
+//
+// TWO LOCKS, NOT ONE (0.99.65). The ring and the file each have a mutex.
+//
+//   ringMutex_  guards the ring's writers and ringSnapshot(), and the two facts
+//               the Diagnostics panel asks every frame (fileEnabled(), filePath()).
+//               It is held for a memcpy and never across I/O.
+//   fileMutex_  guards the file: the append, the flush, the rotation and
+//               configure(). It is held across I/O, which is the point of it.
+//
+// write() copies the line into the ring under ringMutex_, RELEASES it, and then
+// takes fileMutex_ for the append. This used to be one mutex held across both, so
+// a write waiting on a slow disk held the freeze report's log section
+// (ringSnapshot()) and the panel's per-frame questions behind it; now it holds
+// nothing but the file. What did NOT change: every line is flushed before write()
+// returns, and a caller of write() still waits for the disk (there is no queue and
+// no writer thread - see docs/DIAGNOSTICS.md, "The window does no disk work", for
+// why options B and C of the audit were not taken).
+//
+// WHAT THE FILE'S LINE ORDER MEANS. It is the order in which callers reached
+// fileMutex_. For one thread that is the order it logged in. For two threads that
+// race it can differ from the ring's order, which is the order they reached
+// ringMutex_: a line already in the ring may reach the file after a line that
+// entered the ring later. What holds either way: every line is whole (a write is
+// one fwrite under the file lock), none is lost, none is duplicated, and each
+// thread's own lines are in the order it wrote them. Lines carry their time, so a
+// reader that wants the cross-thread order sorts by it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_DIAG_LOG_HPP
@@ -110,13 +138,20 @@ public:
     // application.
     void resetForTest();
 
-    // Test hook: holds the lock every write() takes, for as long as the
-    // returned lock lives - which is what a write stuck behind a slow disk
-    // looks like to every OTHER thread that wants to log. Exists so a test can
-    // prove that a thread which must never wait (a vendor driver's stream
-    // callback, tests/test_sdrplay_stall.cpp) does not wait on the log. Never
-    // called by the application.
-    std::unique_lock<std::mutex> lockForTest() { return std::unique_lock<std::mutex>(mutex_); }
+    // Test hook: holds the FILE's lock, the one a write waiting on a slow disk
+    // holds, for as long as the returned lock lives - which is what a write stuck
+    // behind a slow disk looks like to every OTHER thread that wants to log.
+    // Exists so a test can prove that a thread which must never wait (a vendor
+    // driver's stream callback, tests/test_sdrplay_stall.cpp) does not wait on the
+    // log. Never called by the application.
+    std::unique_lock<std::mutex> lockForTest() { return std::unique_lock<std::mutex>(fileMutex_); }
+
+    // Test seam (0.99.65): called with each line the file is about to take, from
+    // INSIDE the file append, so a test can park a write exactly where a slow disk
+    // would hold it. A plain function pointer, null in every shipped build and set
+    // only by tests.
+    using FileHook = void (*)(const char* line, std::size_t len);
+    static void setFileHookForTest(FileHook hook);
 
 private:
     DiagLog() = default;
@@ -124,12 +159,25 @@ private:
     void appendToFileLocked(const char* line, std::size_t len);
     void rotateIfNeededLocked(std::size_t incoming);
 
-    mutable std::mutex mutex_;
+    // The ring's lock and the file's lock (see "TWO LOCKS" above). Lock order,
+    // where both are needed (configure, resetForTest): fileMutex_ first, then
+    // ringMutex_. write() never holds both.
+    mutable std::mutex ringMutex_;
+    mutable std::mutex fileMutex_;
+
+    // Under fileMutex_:
     std::string dir_;
     std::string path_;
     bool enabled_ = false;
     std::FILE* fp_ = nullptr;
     std::size_t fileBytes_ = 0;
+
+    // The same facts as enabled_ and path_, published for the readers that must
+    // not wait for the file: fileEnabled() reads the flag, filePath() copies the
+    // string under ringMutex_. Written by configure() and resetForTest() after
+    // their file work is done.
+    std::atomic<bool> fileEnabledFlag_{false};
+    std::string publishedPath_;
 
     // ATOMIC because copyRingRaw reads them WITHOUT the lock (see the header
     // comment). Plain ints here would be a data race in the letter as well as
@@ -209,10 +257,33 @@ std::string scrubVendorLine(const std::string& line);
 //      "\\?\usb#vid_x&pid_y#<this>#{guid}");
 //   3. the account name in a path (\Users\X\, /home/X/, /Users/X/) becomes
 //      <user>;
-//   4. anything in single quotes - the names users type for patch nodes,
+//   4. network addresses and host names become <host>, a port after one
+//      kept (0.99.59): every IPv4 literal (four octets of 0-255, so a
+//      three-part version or "10.0.22631.4317" is not one, and neither is a
+//      dotted quad glued to a word - "FoxSDR_1.99.58.0_x64" - or after a
+//      version word - "version 1.99.58.0"), every IPv6 literal, the
+//      authority after a URL scheme ("tcp://", "rtsp://", "http(s)://", a
+//      user name and password with it), the value after "ip:", "host=",
+//      "hostname=", "remote=", "rtltcp=", "server=", "uri=", "addr=",
+//      "address=", a dotted name or a name with a port after " at ", " to "
+//      or " from ", a double-quoted dotted name or anything double-quoted
+//      after the word "host", a name under a local-network suffix (".local",
+//      ".lan", ".home", ".internal"...) anywhere, and the machine in a
+//      Windows network path ("\\NAS\share"). This machine itself (127.x,
+//      0.0.0.0, ::1, localhost) is kept;
+//   5. the number of a serial port becomes '#' (0.99.59): "COM5" and
+//      "\\.\COM12" read "COM#", "/dev/ttyUSB0" reads "/dev/ttyUSB#" - that a
+//      port was tried, opened or refused is kept, which number this machine
+//      gave it is not;
+//   6. anything in single quotes - the names users type for patch nodes,
 //      speakers, presets - becomes '<name>' (a quoted USB hardware id is
 //      kept, its instance segment already stripped);
-//   5. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
+//   7. inside parentheses, a possessive word ("Alice's" in "Headset (Alice's
+//      AirPods Pro)") becomes <name>'s - the make and model that follow are
+//      kept, because a device-friendly-name string handed back by the
+//      operating system is frequently a Bluetooth or paired-phone label a
+//      person chose, never something this application generated;
+//   8. on a line that mentions hertz, a frequency, tuning, a centre, the VFO,
 //      a range, an offset, a carrier, a preset, transmitting or keying, or
 //      "asked for"/"answered" - and on a line cut off at the ring's width -
 //      EVERY free-standing number becomes '#', except a number with a sample
@@ -221,7 +292,7 @@ std::string scrubVendorLine(const std::string& line);
 //      after "firmware", "version", "id", "tuner", "error", "code"...; a
 //      number with a hertz unit is masked whatever else is true of it, and
 //      a number glued to a word (B200, R820T, v1.0.0) is part of a name;
-//   6. any run of '#' becomes a single '#', so a masked frequency does not
+//   9. any run of '#' becomes a single '#', so a masked frequency does not
 //      say how many digits it had.
 // A line with none of these in it is returned byte for byte.
 std::string scrubUploadLine(const std::string& line);
@@ -233,6 +304,25 @@ std::string scrubUploadLine(const std::string& line);
 // run of them becomes one line saying how many were left out.
 std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines);
 
+// THE SAME, KEEPING THE NAMES THE REPORT ALREADY LISTS (0.99.44, GitHub issue
+// 5). `inventory` is the report's own plugin list, "name version" per entry,
+// exactly as its context block prints it unscrubbed ("plugin: 406 MHz
+// Beacons 1.0.0"). Each entry, and its name without the version, is left
+// intact wherever it appears in a line - protected by a token before the
+// masking rule runs, so it survives whether or not the line is judged to
+// mention a frequency - so "plugin: loaded 406 MHz Beacons 1.0.0" is no
+// longer turned into "plugin: loaded # MHz Beacons #". WHETHER THE LINE
+// MENTIONS A FREQUENCY is judged from the line AS WRITTEN, kept name and all
+// (0.99.44 repair): a name that itself reads like one ("406 MHz Beacons")
+// still marks its line as frequency-bearing for every OTHER number on it, so
+// a plugin's own name can never smuggle a genuine, unlabelled frequency past
+// the mask just by sharing a line with it. Every other number on the line is
+// judged exactly as before: a frequency beside a plugin's name is still
+// masked. An entry with no letter in it, or shorter than three characters, is
+// never kept - a bare number is not a name.
+std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines,
+                                        const std::vector<std::string>& inventory);
+
 // A PATH made safe to show outside the machine - the bundle's `log-path` and
 // `crash-dir`. The base directory is written as the variable it came from
 // ("%LOCALAPPDATA%\FoxSDR\logs/foxsdr.log", "$HOME/.local/state/foxsdr/..."),
@@ -241,6 +331,21 @@ std::vector<std::string> scrubUploadLog(const std::vector<std::string>& lines);
 // \Users\, /home/ or /Users/ masked as <user>. A real bundle pasted into a bug
 // report in 0.99.32 read "C:\Users\Utente\AppData\Local\FoxSDR\logs/...".
 std::string scrubUploadPath(const std::string& path);
+
+// THE ACCOUNT-NAME MASK ALONE, exposed for core/problem_report.cpp's
+// belt-and-braces pass over a WHOLE bundle of text (the "REPORT A BUG /
+// DISLIKE" page's attached diagnostics log) rather than one line or one path
+// at a time. This is exactly step 3 of scrubUploadLine() and the second half
+// of scrubUploadPath() - \Users\, /users/ and /home/ segments (case-
+// insensitive, either slash) become <user> - run once over text that has
+// already been through both of those, which is harmless (the rule cannot
+// un-mask an already-masked path) and catches anything a future context
+// field might ever add that neither of those two call sites sees. Does NOT
+// touch any other occurrence of the same name elsewhere in a path: only the
+// segment immediately after one of those three keys is a profile directory,
+// and a name appearing again later (a build path, a project folder) is not
+// masked, because this function has no way to know it is the same person.
+std::string maskAccountNames(const std::string& text);
 
 // STDERR CAPTURE (Windows only; elsewhere returns false and changes nothing).
 //
@@ -253,8 +358,8 @@ std::string scrubUploadPath(const std::string& path);
 //
 // It is only installed for an interactive session (main.cpp decides), and
 // only when nobody is watching stderr: a pipe or a file, or a console this
-// process is the ONLY thing attached to (the one Windows allocates for a
-// Start Menu launch). A developer running from a terminal keeps their stderr.
+// process is the ONLY thing attached to (what a Start Menu launch had until
+// 0.99.69; it has no console now, core/console_owner.hpp). A developer running from a terminal keeps their stderr.
 // `evenIfConsole` overrides that rule for the test, which runs under ctest
 // (a pipe) and from a terminal (a console) and must behave the same in both.
 //

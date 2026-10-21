@@ -47,6 +47,8 @@
 #include "mirisdr_fake_usb.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/msi2500.hpp"
+#include "source/rsp_rows.hpp"
+#include "source/sdrplay_source.hpp"
 #include "source/tuner_msi001.hpp"
 #include "test_check.hpp"
 
@@ -73,34 +75,46 @@ const MiriControlRecord& at(const std::vector<MiriControlRecord>& v, std::size_t
 // One register write, whole. Compared as a unit rather than as five separate
 // CHECKs so a failure names the transfer that is wrong instead of leaving five
 // lines to be reassembled by hand.
+//
+// requestType is checked against msi2500::kRequestTypeVendorOutDevice, NOT a
+// literal, so this helper cannot silently drift from the constant it is
+// meant to verify (round 3 of the 2026-09-28 review: changing that constant
+// from 0x42 to 0x40 reddened every call site of this helper and isCommand
+// below at once - 35 failures - which is exactly the coverage the review
+// asked for: "the fake must now assert bmRequestType". It already did; the
+// constant just had to actually change).
 bool isRegWrite(const char* label, const MiriControlRecord& r, int reg, std::uint32_t val) {
-    const bool ok = !r.in && r.requestType == 0x42 && r.request == 0x41 &&
-                    r.reg() == static_cast<std::uint8_t>(reg) && r.regValue() == val &&
-                    r.payloadBytes == 0;
+    const bool ok = !r.in && r.requestType == msi2500::kRequestTypeVendorOutDevice &&
+                    r.request == 0x41 && r.reg() == static_cast<std::uint8_t>(reg) &&
+                    r.regValue() == val && r.payloadBytes == 0;
     if (!ok) {
         std::printf(
             "     %s: got %s type 0x%02x request 0x%02x reg 0x%02x value 0x%06x (wValue 0x%04x "
-            "wIndex 0x%04x, %u payload bytes); want OUT type 0x42 request 0x41 reg 0x%02x value "
-            "0x%06x\n",
+            "wIndex 0x%04x, %u payload bytes); want OUT type 0x%02x request 0x41 reg 0x%02x "
+            "value 0x%06x\n",
             label, r.in ? "IN" : "OUT", static_cast<unsigned>(r.requestType),
             static_cast<unsigned>(r.request), static_cast<unsigned>(r.reg()), r.regValue(),
             static_cast<unsigned>(r.value), static_cast<unsigned>(r.index),
-            static_cast<unsigned>(r.payloadBytes), static_cast<unsigned>(reg), val);
+            static_cast<unsigned>(r.payloadBytes),
+            static_cast<unsigned>(msi2500::kRequestTypeVendorOutDevice),
+            static_cast<unsigned>(reg), val);
     }
     return ok;
 }
 
 bool isCommand(const char* label, const MiriControlRecord& r, int request) {
-    const bool ok = !r.in && r.requestType == 0x42 &&
+    const bool ok = !r.in && r.requestType == msi2500::kRequestTypeVendorOutDevice &&
                     r.request == static_cast<std::uint8_t>(request) && r.value == 0 &&
                     r.index == 0 && r.payloadBytes == 0;
     if (!ok) {
         std::printf(
-            "     %s: got %s type 0x%02x request 0x%02x value 0x%04x index 0x%04x; want OUT type "
-            "0x42 request 0x%02x value 0 index 0\n",
+            "     %s: got %s type 0x%02x request 0x%02x value 0x%04x index 0x%04x; want OUT "
+            "type 0x%02x request 0x%02x value 0 index 0\n",
             label, r.in ? "IN" : "OUT", static_cast<unsigned>(r.requestType),
             static_cast<unsigned>(r.request), static_cast<unsigned>(r.value),
-            static_cast<unsigned>(r.index), static_cast<unsigned>(request));
+            static_cast<unsigned>(r.index),
+            static_cast<unsigned>(msi2500::kRequestTypeVendorOutDevice),
+            static_cast<unsigned>(request));
     }
     return ok;
 }
@@ -291,9 +305,14 @@ int main() {
             CHECK(w.index == c.index);
         }
 
-        // The request numbers and the request TYPE, which is the one this
-        // family does differently: recipient endpoint, not device.
-        CHECK(msi2500::kRequestTypeVendorOutEndpoint == 0x42);
+        // The request numbers and the request TYPE - recipient DEVICE
+        // (2026-09-28, review round 3: changed from 0x42/recipient ENDPOINT,
+        // which WinUSB's documented contract requires a real endpoint
+        // address in wIndex's low byte for, and most register writes here do
+        // not carry one - see msi2500.hpp's own comment and
+        // scratchpad/bugs0928/sdrplay/mirics-windex.md. Not yet tried on
+        // real hardware).
+        CHECK(msi2500::kRequestTypeVendorOutDevice == 0x40);
         CHECK(msi2500::requestByte(msi2500::VendorRequest::WriteRegister) == 0x41);
         CHECK(msi2500::requestByte(msi2500::VendorRequest::StartStreaming) == 0x43);
         CHECK(msi2500::requestByte(msi2500::VendorRequest::StopStreaming) == 0x45);
@@ -1458,6 +1477,86 @@ int main() {
         CHECK(!src.start());
         CHECK(!src.running());
         CHECK(fake->endBulkCalls() >= 1);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 18. AN RSP MUST NEVER BE OPENED NATIVELY WHILE THE SDRPLAY API IS
+    //     INSTALLED - ON WINDOWS (the 0.99.42 field reports: an RSP1A,
+    //     WinUSB-bound and opened through the SDRplay API, "works briefly,
+    //     then falls back" to this driver, whose ADC-init sequence fails
+    //     with a raw Windows error 87 - see the open() comment for exactly
+    //     what is and is not established about why). rsp_rows.hpp hides this
+    //     row from the Windows Source list whenever the API is installed,
+    //     unconditionally, but a hidden row is not an unreachable open(): a
+    //     config saved before the API was installed, or a patch radio opened
+    //     by its remembered args, can still call here directly. This is the
+    //     open()-time backstop: refuse before a single byte reaches the bus,
+    //     with the exact same sentence rsp_rows.hpp's sdrPlayHiddenRowAdvice()
+    //     gives for the hidden row, so the two paths never disagree.
+    //
+    //     ON LINUX, this guard does not fire at all
+    //     (kNativeMiricsOpenUnsafeWithApi is false there) - usbfs does not
+    //     enforce the endpoint-recipient rule that makes this unsafe on
+    //     Windows, so a Linux user's native row may genuinely work while the
+    //     SDRplay daemon is stopped, and taking it away is not justified by
+    //     two Windows-only field reports. Both platform's behaviours are
+    //     exercised here rather than compiled apart, because
+    //     kNativeMiricsOpenUnsafeWithApi is itself compiled per-platform -
+    //     the #if below picks which one this build is expected to show.
+    // =====================================================================
+#if defined(_WIN32)
+    {
+        MiriSdrSource src;
+        FakeMiriSdrUsb* fake = attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));  // RSP1A
+        cascade::source::setSdrPlayApiPresentForTest(true);
+        CHECK(!src.open(""));
+        CHECK(!src.isOpen());
+        CHECK(std::string(src.lastError()) == cascade::source::sdrPlayHiddenRowAdvice());
+        // NOT ONE TRANSFER: the guard fires before the transport is even
+        // opened - a device the API is mid-fault with must never be poked.
+        CHECK(fake->controls().empty());
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
+        src.closeDevice();
+    }
+#else
+    {
+        // LINUX: the same scenario the Windows guard refuses instead opens
+        // normally - the platform switch, not a coincidence of this fake.
+        MiriSdrSource src;
+        attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));  // RSP1A
+        cascade::source::setSdrPlayApiPresentForTest(true);
+        CHECK(src.open(""));
+        CHECK(src.isOpen());
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
+        src.closeDevice();
+    }
+#endif
+    {
+        // The API being installed says nothing about a plain television
+        // stick sharing the same silicon (oneFakeDevice()'s default:
+        // 1df7:2500, described as "MSi2500" - not SDRplay-badged). It opens
+        // exactly as it always has, on every platform.
+        MiriSdrSource src;
+        attachFake(src);
+        cascade::source::setSdrPlayApiPresentForTest(true);
+        CHECK(src.open(""));
+        CHECK(src.isOpen());
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
+        src.closeDevice();
+    }
+    {
+        // And without the API installed, the RSP1A opens over the native
+        // driver exactly as every release before this guard did, on every
+        // platform - the guard is scoped to "the API is installed", never to
+        // "an RSP is present".
+        MiriSdrSource src;
+        attachFake(src, oneFakeDevice("", 0x1DF7, 0x3000));
+        cascade::source::setSdrPlayApiPresentForTest(false);
+        CHECK(src.open(""));
+        CHECK(src.isOpen());
+        CHECK(std::string(src.name()) == "Mirics: SDRplay RSP1A");
+        cascade::source::setSdrPlayApiPresentForTest(std::nullopt);
         src.closeDevice();
     }
 

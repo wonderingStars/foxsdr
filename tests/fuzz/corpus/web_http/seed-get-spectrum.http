@@ -1,0 +1,4 @@
+GET /api/spectrum?since=0 HTTP/1.1
+Host: localhost
+Connection: close
+

@@ -721,5 +721,151 @@ int main() {
         }
     }
 
+    // =====================================================================
+    // 9. PLUGINS THAT TRANSMIT (0.99.74): THE PAGE'S SENTENCES
+    //
+    //    Nothing here decides anything - core/tx_audio.hpp does, and
+    //    tests/test_tx_audio.cpp pins that - but the operator reads these to
+    //    know whether a plugin can key their radio, so a wrong one is a
+    //    page that lies about the most dangerous thing on it.
+    // =====================================================================
+    {
+        using cascade::core::TxArming;
+        using cascade::gui::TxPlateState;
+
+        // The refusals say what to DO, and None says nothing.
+        CHECK(std::string(cascade::gui::txArmRefusalText(TxArming::Refusal::None)).empty());
+        const std::string noRadio = cascade::gui::txArmRefusalText(TxArming::Refusal::NoRadio);
+        const std::string noGrant = cascade::gui::txArmRefusalText(TxArming::Refusal::NoGrant);
+        const std::string badMin = cascade::gui::txArmRefusalText(TxArming::Refusal::BadMinutes);
+        CHECK(noRadio.find("no transmitter is open") != std::string::npos);
+        CHECK(noGrant.find("TRANSMIT") != std::string::npos);
+        CHECK(!badMin.empty());
+        CHECK(noRadio != noGrant && noGrant != badMin && noRadio != badMin);
+        std::printf("the page says: %s | %s\n", noRadio.c_str(), noGrant.c_str());
+
+        // The countdown: minutes and two-digit seconds; an hour needs no hour column.
+        char buf[16];
+        cascade::gui::formatTxArmCountdown(buf, sizeof(buf), 272);
+        CHECK(std::string(buf) == "4:32");
+        cascade::gui::formatTxArmCountdown(buf, sizeof(buf), 3600);
+        CHECK(std::string(buf) == "60:00");
+        cascade::gui::formatTxArmCountdown(buf, sizeof(buf), 59);
+        CHECK(std::string(buf) == "0:59");
+        cascade::gui::formatTxArmCountdown(buf, sizeof(buf), 0);
+        CHECK(std::string(buf) == "0:00");
+        cascade::gui::formatTxArmCountdown(buf, sizeof(buf), -7);  // a clock that ran past: not "-0:07"
+        CHECK(std::string(buf) == "0:00");
+        char tiny[3];
+        cascade::gui::formatTxArmCountdown(tiny, sizeof(tiny), 3600);  // truncated, never overrun
+        CHECK(tiny[2] == '\0');
+        cascade::gui::formatTxArmCountdown(nullptr, 0, 5);
+        cascade::gui::formatTxArmCountdown(buf, 0, 5);
+
+        // The plate: precedence is the order of the sentences' importance.
+        using cascade::gui::txPlateState;
+        //                            asked granted armed onAir waiting stopped
+        CHECK(txPlateState(false, false, false, false, false, false) == TxPlateState::NotAsked);
+        CHECK(txPlateState(true, false, false, false, false, false) == TxPlateState::NotGranted);
+        CHECK(txPlateState(true, true, false, false, false, false) == TxPlateState::GrantedDisarmed);
+        CHECK(txPlateState(true, true, true, false, false, false) == TxPlateState::Armed);
+        CHECK(txPlateState(true, true, true, true, false, false) == TxPlateState::OnAir);
+        CHECK(txPlateState(true, true, true, false, true, false) == TxPlateState::Waiting);
+        CHECK(txPlateState(true, true, true, true, true, false) == TxPlateState::OnAir);     // holding beats waiting
+        CHECK(txPlateState(true, true, true, true, true, true) == TxPlateState::Stopped);    // a dead one is dead
+        // A grant held for a module that has not asked this session is still shown as granted:
+        // a permission nobody can see is one nobody can take back.
+        CHECK(txPlateState(false, true, false, false, false, false) == TxPlateState::GrantedDisarmed);
+        // NOT ARMED NEVER READS AS ARMED, and ON AIR needs a holder that is keyed.
+        CHECK(txPlateState(true, true, false, false, false, false) != TxPlateState::Armed);
+        CHECK(txPlateState(true, true, true, false, false, false) != TxPlateState::OnAir);
+
+        // Every state but the first has a sentence, each its own, and the one that matters says it.
+        CHECK(std::string(cascade::gui::txPlateText(TxPlateState::NotAsked)).empty());
+        std::vector<std::string> said;
+        for (const TxPlateState s :
+             {TxPlateState::NotGranted, TxPlateState::GrantedDisarmed, TxPlateState::Armed,
+              TxPlateState::OnAir, TxPlateState::Waiting, TxPlateState::Stopped}) {
+            const std::string t = cascade::gui::txPlateText(s);
+            CHECK(!t.empty());
+            for (const std::string& o : said) { CHECK(o != t); }
+            said.push_back(t);
+        }
+        CHECK(std::string(cascade::gui::txPlateText(TxPlateState::OnAir)).find("ON AIR") == 0u);
+        CHECK(std::string(cascade::gui::txPlateText(TxPlateState::Armed)).find("ARMED") == 0u);
+        CHECK(std::string(cascade::gui::txPlateText(TxPlateState::GrantedDisarmed)).find("have not armed") !=
+              std::string::npos);
+    }
+
+    // =====================================================================
+    // 10. ...AND THE PLUGIN'S KEY IS WIRED WHERE THE HAND'S TWO ARE
+    //
+    //     The same argument as section 8, for the third key. It is asked in
+    //     the frame loop, beside the PTT and the LATCH and between the page
+    //     being drawn and the tick that acts on it; the one place that
+    //     decides is pluginMayKey; and the ARM keys reach the window through
+    //     one door (armTransmitPlugins) - never from the page body writing
+    //     the transmitter directly.
+    // =====================================================================
+    {
+        const std::filesystem::path src =
+            std::filesystem::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp";
+        const std::string text = readFile(src);
+        CHECK(!text.empty());
+
+        const std::vector<std::size_t> pttSets = liveHits(text, "transmitter_.setPttHeld(");
+        const std::vector<std::size_t> ticks = liveHits(text, "transmitter_.tick();");
+        const std::vector<std::size_t> applyCalls = liveHits(text, "applyPluginTransmitKey(key);");
+        const std::vector<std::size_t> afterCalls = liveHits(text, "afterTransmitTick();");
+        const std::vector<std::size_t> keySets = liveHits(text, "transmitter_.setPluginKey(");
+        const std::vector<std::size_t> mayKey = liveHits(text, "cc::pluginMayKey(");
+        const std::vector<std::size_t> armCalls = liveHits(text, "txArming_.arm(");
+        std::printf("plugin wiring: apply x%zu, after x%zu, setPluginKey x%zu, pluginMayKey x%zu, "
+                    "arm x%zu\n",
+                    applyCalls.size(), afterCalls.size(), keySets.size(), mayKey.size(),
+                    armCalls.size());
+        CHECK(applyCalls.size() == 1u);
+        CHECK(keySets.size() == 1u);   // ONE place writes the plugin's key into the transmitter
+        CHECK(mayKey.size() == 1u);    // ONE place decides
+        CHECK(armCalls.size() == 1u);  // ONE door opens the window
+        CHECK(pttSets.size() == 1u && ticks.size() == 1u);
+
+        // The call sites that define the function bodies.
+        const std::size_t applyDef = text.find("void AppWindow::applyPluginTransmitKey(");
+        const std::size_t afterDef = text.find("void AppWindow::afterTransmitTick()");
+        const std::size_t armDef = text.find("AppWindow::armTransmitPlugins(int minutes)");
+        const std::size_t pageBody = text.find("void AppWindow::drawTransmitPage()");
+        const std::size_t pageEnd =
+            pageBody == std::string::npos ? std::string::npos
+                                          : text.find("\nvoid AppWindow::", pageBody + 1);
+        CHECK(applyDef != std::string::npos && afterDef != std::string::npos &&
+              armDef != std::string::npos && pageBody != std::string::npos &&
+              pageEnd != std::string::npos);
+        if (applyCalls.size() == 1u && afterCalls.size() >= 1u && pttSets.size() == 1u &&
+            ticks.size() == 1u && keySets.size() == 1u && mayKey.size() == 1u &&
+            armCalls.size() == 1u && applyDef != std::string::npos &&
+            afterDef != std::string::npos && armDef != std::string::npos &&
+            pageEnd != std::string::npos) {
+            // In the frame loop, in drawUi's order: the hand's key, THEN the plugin's, THEN the tick
+            // that acts on both, THEN what the tick did.
+            CHECK(pttSets[0] < applyCalls[0]);
+            CHECK(applyCalls[0] < ticks[0]);
+            CHECK(ticks[0] < afterCalls[0]);
+            // The write and the decision are inside the function that makes them, nowhere else...
+            CHECK(keySets[0] > applyDef && mayKey[0] > applyDef);
+            CHECK(keySets[0] < afterDef && mayKey[0] < afterDef);
+            // ...the window is opened only inside armTransmitPlugins...
+            CHECK(armCalls[0] > armDef);
+            // ...and the page body reaches the window only through the doors, never the transmitter.
+            CHECK(!(keySets[0] > pageBody && keySets[0] < pageEnd));
+            const std::string page = text.substr(pageBody, pageEnd - pageBody);
+            CHECK(page.find("armTransmitPlugins(") != std::string::npos);
+            CHECK(page.find("disarmTransmitPlugins(") != std::string::npos);
+            CHECK(page.find("setPluginKey") == std::string::npos);
+            CHECK(page.find("txArming_.arm(") == std::string::npos);
+            CHECK(page.find("kTxHandInputCount") != std::string::npos);  // the input keys are the hand's
+        }
+    }
+
     return testSummary("test_transmit_page");
 }

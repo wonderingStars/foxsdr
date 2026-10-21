@@ -26,6 +26,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -37,6 +38,16 @@
 #include <vector>
 
 #include "source/sdrplay_api_decl.hpp"
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // SetThreadPriority, for the service thread (see startService)
+#endif
 
 namespace fakesdrplay {
 
@@ -147,6 +158,18 @@ public:
     std::atomic<bool> insideGetDevices{false};
     std::atomic<bool> leftGetDevices{false};
 
+    // THE SAME WEDGE, ONE CALL EARLIER: sdrplay_api_Open. This is the one that
+    // matters for the session mutex, because the driver takes that mutex
+    // BEFORE Open and holds it through the call (sessionAcquire) - so a worker
+    // parked here is a worker holding the lock every other thread needs to read
+    // the session's state. The 0.99.81 patch-view freeze (AppWindow::scanNative
+    // on the GUI thread, in std::mutex::lock) is exactly this. Polled, like the
+    // hangs above, so the abandoned worker can leave when the test releases it.
+    std::atomic<bool> hangInOpen{false};
+    std::atomic<bool> releaseOpenHang{false};
+    std::atomic<bool> insideOpen{false};
+    std::atomic<bool> leftOpen{false};
+
     // THE SAME SERVICE, WEDGED WITH THE RADIO ALREADY OPEN. GetDevices is
     // what a SCAN goes into; sdrplay_api_Update is what every LIVE CONTROL
     // goes into - retune, LNA state, IF gain, AGC, set point, antenna, bias
@@ -164,6 +187,51 @@ public:
     std::atomic<bool> releaseUpdateHang{false};
     std::atomic<bool> insideUpdate{false};
     std::atomic<bool> leftUpdate{false};
+
+    // WHETHER TWO THREADS WERE EVER INSIDE thunkUpdate AT ONCE (the repair-
+    // round review, 2026-09-28: the event callback used to call
+    // sdrplay_api_Update straight from what stands in here for the
+    // service's own thread, unserialised against a GUI-thread control's own
+    // worker). concurrentInUpdate counts entries currently inside; a test
+    // sets updateDelayMs to hold each call open long enough to give a second,
+    // wrongly-unserialised caller a real window to land in, and
+    // maxConcurrentInUpdate is the highest that counter was ever seen at -
+    // 1 is correct (the API's own single-device-lock model), 2 is the bug.
+    // A real overlap would also be a data race on `calls` itself
+    // (push_back from two threads with no lock), which is exactly the kind
+    // of undefined behaviour a raced sdrplay_api_Fail could plausibly be,
+    // so this counter is deliberately a SEPARATE, safe observation of the
+    // same event rather than relying on that race to crash reliably.
+    std::atomic<int> concurrentInUpdate{0};
+    std::atomic<int> maxConcurrentInUpdate{0};
+    std::atomic<int> updateDelayMs{0};
+
+    // ONE SLOW UPDATE (the SDRplay diagnostic probe, 0.99.50): the Update
+    // numbered slowUpdateNumber (0 is the first this fake is asked for) takes
+    // slowUpdateMs before it answers; every other Update is prompt.
+    // updateNumber counts every Update ever asked for.
+    std::atomic<int> updateNumber{0};
+    std::atomic<int> slowUpdateNumber{-1};
+    std::atomic<int> slowUpdateMs{0};
+
+    // A WITNESS FOR THE BIAS TEE (the probe, 0.99.50): set the moment any
+    // Update or Init finds a bias-tee field of ANY model switched on in the
+    // parameter block. The bias tee puts power on the antenna socket, and a
+    // test must be able to say it never went on, not just that it ended off.
+    std::atomic<bool> biasTeeEverOn{false};
+    void noteBiasTee() {
+        if (chA.rsp1aTunerParams.biasTEnable != 0 || chA.rsp2TunerParams.biasTEnable != 0 ||
+            chA.rspDuoTunerParams.biasTEnable != 0 || devParams.rspDxParams.biasTEnable != 0 ||
+            chB.rspDuoTunerParams.biasTEnable != 0) {
+            biasTeeEverOn.store(true);
+        }
+    }
+
+    // THE SERVICE THREAD DELIVERS AT THE RATE THE BLOCK IS SET FOR (the
+    // probe, 0.99.50): each period carries fsHz / decimation * period
+    // samples, up to startService's blockSamples. Off, every block is
+    // blockSamples whatever the block says, as before.
+    std::atomic<bool> serviceFollowsRate{false};
 
     // ...AND THE WEDGE HOLDS THE WHOLE DEVICE, NOT JUST THE ONE CALL.
     //
@@ -206,6 +274,21 @@ public:
     std::atomic<bool> insideReleaseDevice{false};
     std::atomic<bool> leftReleaseDevice{false};
 
+    // AN UNINIT THAT NEVER ANSWERS AT ALL, no earlier abandoned control
+    // needed to reach it - the 2026-09-28 RSP2 report: nothing had touched
+    // the vendor since open(), so stop()'s own Uninit was the FIRST call in,
+    // and it blocked the GUI thread for about ten seconds before answering
+    // sdrplay_api_ServiceNotResponding. Neither hangInUpdate (a live control)
+    // nor wedgedDeviceBlocksTeardown (a teardown queued behind an already-
+    // abandoned control) models that: both need something to have gone wrong
+    // BEFORE this call. Modelled the same way as the other two: polled, so a
+    // caller released later can still leave, and observed through flags so a
+    // test can say WHO went in.
+    std::atomic<bool> hangInUninit{false};
+    std::atomic<bool> releaseUninitHang{false};
+    std::atomic<bool> insideUninit{false};
+    std::atomic<bool> leftUninit{false};
+
     // THE SERVICE'S OWN THREAD, AND A SERVICE THAT WEDGES WHEN IT IS KEPT
     // WAITING (0.99.32).
     //
@@ -237,6 +320,29 @@ public:
         stopService();
         serviceStop_.store(false);
         serviceThread_ = std::thread([this, blockSamples, period, wedgeAfter]() {
+            // THE SERVICE THREAD RUNS AHEAD OF THE TEST'S OWN THREADS (2026-10-01).
+            // Both this thread and the probe measuring it read steady_clock;
+            // what differs is who gets the CPU. This loop sleeps to an
+            // absolute schedule, so on Windows' 15.6 ms timer tick its 1 ms
+            // periods arrive as bursts of ~15 blocks a tick, and a late
+            // wake-up is caught up by the iterations after it - but only once
+            // it runs. At normal priority, under a full ctest -j beside other
+            // builds, it was measured waking up to 219 ms late, while the
+            // probe's own thread woke on time and read the count: a 30 ms
+            // window with NO callbacks ("no samples at all") followed by one
+            // at 164%, or a 52 ms wake past the 50 ms clamp below dropping 26%
+            // of a 150 ms window ("delivered 72% of the rate set"). 21 of 40
+            // test_sdrplay_probe runs failed that way; catching up past the
+            // clamp alone still failed 15 of 25; at this priority 0 of 60, the
+            // latest wake-up in 140 instrumented services 16.6 ms - one tick
+            // plus one period. A real service's samples come from the radio's
+            // clock, not from whichever thread the OS runs first, so the
+            // fake's stand-in for that clock is never queued behind the load.
+            // Windows only: elsewhere sleeps are not tick-quantised and
+            // raising a thread's priority needs privileges.
+#if defined(_WIN32)
+            ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+#endif
             std::vector<short> xi(blockSamples);
             std::vector<short> xq(blockSamples);
             for (unsigned int k = 0; k < blockSamples; ++k) {
@@ -253,12 +359,23 @@ public:
                 if (serviceWedged.load()) { continue; }
                 std::lock_guard<std::mutex> lk(serviceMutex_);
                 if (streamA == nullptr) { continue; }
+                unsigned int n = blockSamples;
+                if (serviceFollowsRate.load()) {
+                    const double dec = (chA.ctrlParams.decimation.enable != 0 &&
+                                        chA.ctrlParams.decimation.decimationFactor > 0)
+                                           ? static_cast<double>(chA.ctrlParams.decimation.decimationFactor)
+                                           : 1.0;
+                    const double want = devParams.fsFreq.fsHz / dec *
+                                        std::chrono::duration<double>(period).count();
+                    n = static_cast<unsigned int>(
+                        std::min<double>(static_cast<double>(blockSamples), std::max(1.0, want)));
+                }
                 abi::StreamCbParamsT p{};
                 p.firstSampleNum = sampleNum;
-                p.numSamples = blockSamples;
-                sampleNum += blockSamples;
+                p.numSamples = n;
+                sampleNum += n;
                 const auto t0 = clock::now();
-                streamA(xi.data(), xq.data(), &p, blockSamples, 0, cbContext);
+                streamA(xi.data(), xq.data(), &p, n, 0, cbContext);
                 const auto us =
                     std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0)
                         .count();
@@ -294,6 +411,18 @@ public:
     // only the reason, which cannot tell an acknowledgement sent to the right
     // tuner from one sent to the wrong one.
     abi::TunerSelectT lastUpdateTuner = abi::Tuner_Neither;
+
+    // EVERY sdrplay_api_Update call, with all three arguments the vendor's
+    // header gives it (tuner, reasonForUpdate, reasonForUpdateExt1): the call
+    // log above is a string with the tuner left out, and a suite that cannot
+    // see the tuner cannot see a driver passing the wrong one (the 0.99.59
+    // RSPdx-R2 report). Guarded by callsMutex_ like `calls`.
+    struct UpdateRecord {
+        abi::TunerSelectT tuner;
+        unsigned int reason;
+        unsigned int ext1;
+    };
+    std::vector<UpdateRecord> updates;
     InitSnapshot atInit;
     int openCount = 0;
     int closeCount = 0;
@@ -312,9 +441,17 @@ public:
 
     // --- building a device list ------------------------------------------
 
+    // `tuners` is what GetDevices lists in DeviceT::tuner. The default is
+    // Tuner_A: that is what a single-tuner RSP is listed with as far as the
+    // vendor's own clients are concerned - SDRplay's RSPdxR2 ExtIO picks the
+    // channel block by `chosenDev->tuner == sdrplay_api_Tuner_A` on a device it
+    // never assigns `tuner` to, and the API specification's example program
+    // (3.15, section 4) selects a non-RSPduo device as listed. Through 0.99.60
+    // this defaulted to Tuner_Neither, which no vendor source supports, and
+    // every test therefore ran against a service the driver could not have met.
     void addDevice(const char* serial, unsigned char hwVer,
                    abi::RspDuoModeT duoModes = abi::RspDuoMode_Unknown,
-                   abi::TunerSelectT tuners = abi::Tuner_Neither) {
+                   abi::TunerSelectT tuners = abi::Tuner_A) {
         abi::DeviceT d{};
         std::snprintf(d.SerNo, sizeof(d.SerNo), "%s", serial);
         d.hwVer = hwVer;
@@ -377,7 +514,19 @@ public:
 
     // --- helpers for the assertions --------------------------------------
 
+    // EVERY READER OF `calls` TAKES callsMutex_, the lock note() writes under: a
+    // worker the driver has left inside the fake can still be logging while a test
+    // counts, and an unlocked size() beside a push_back is the data race
+    // ThreadSanitizer reported in the first Linux run (37355910809, in
+    // testALateAnswerGivesTheRadioBack). Tests count with callCount(), never with
+    // calls.size().
+    std::size_t callCount() const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
+        return calls.size();
+    }
+
     bool called(const std::string& what) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         for (const std::string& c : calls) {
             if (c == what) { return true; }
         }
@@ -386,6 +535,7 @@ public:
 
     // The index of the first call equal to `what`, or -1.
     int indexOf(const std::string& what) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         for (std::size_t i = 0; i < calls.size(); ++i) {
             if (calls[i] == what) { return static_cast<int>(i); }
         }
@@ -397,6 +547,7 @@ public:
     // "Update(0x00020000,0x00000000)", so a test can ask either exactly or by
     // shape.
     int indexStarting(const std::string& prefix) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         for (std::size_t i = 0; i < calls.size(); ++i) {
             if (calls[i].size() >= prefix.size() &&
                 calls[i].compare(0, prefix.size(), prefix) == 0) {
@@ -407,6 +558,7 @@ public:
     }
 
     int countStarting(const std::string& prefix) const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         int n = 0;
         for (const std::string& c : calls) {
             if (c.size() >= prefix.size() && c.compare(0, prefix.size(), prefix) == 0) { ++n; }
@@ -415,6 +567,7 @@ public:
     }
 
     std::string joined() const {
+        std::lock_guard<std::mutex> lk(callsMutex_);
         std::string s;
         for (const std::string& c : calls) {
             if (!s.empty()) { s += " "; }
@@ -435,7 +588,17 @@ private:
         return p;
     }
 
-    void note(std::string s) { calls.push_back(std::move(s)); }
+    // MUTEX-GUARDED, not because the driver is expected to call this
+    // concurrently (it must not - that is exactly what the 2026-09-28
+    // overlap test checks) but because the HARNESS must never turn a real
+    // regression into a crash instead of a clean, named assertion failure:
+    // an unsynchronised std::vector::push_back from two threads is
+    // undefined behaviour, and a test's own UB is not evidence of anything.
+    void note(std::string s) {
+        std::lock_guard<std::mutex> lk(callsMutex_);
+        calls.push_back(std::move(s));
+    }
+    mutable std::mutex callsMutex_;
 
     // A call that has to queue behind a worker parked inside Update, because
     // the vendor DLL lets one call at a time near a device. `entered` records
@@ -470,6 +633,13 @@ private:
         if (f == nullptr) { return abi::Fail; }
         f->note("Open");
         ++f->openCount;
+        if (f->hangInOpen.load()) {
+            f->insideOpen.store(true);
+            while (!f->releaseOpenHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftOpen.store(true);
+        }
         return f->openResult;
     }
 
@@ -611,6 +781,7 @@ private:
             f->cbContext = ctx;
         }
         f->initialised = true;
+        f->noteBiasTee();
 
         InitSnapshot s;
         s.taken = true;
@@ -634,6 +805,18 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr) { return abi::Fail; }
         f->note("Uninit");
+        // A SERVICE THAT NEVER ANSWERS UNINIT AT ALL, with no earlier
+        // abandoned control - see hangInUninit's own comment. Checked before
+        // queueBehindWedgedDevice, which models a different precondition
+        // (an EARLIER call already wedged inside this device).
+        if (f->hangInUninit.load()) {
+            f->insideUninit.store(true);
+            while (!f->releaseUninitHang.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            f->leftUninit.store(true);
+            return abi::ServiceNotResponding;
+        }
         // Noted first, then queued behind a wedged device - so the call is on
         // the record even when it never comes back out. See updateHangDepth.
         queueBehindWedgedDevice(f, f->uninitEnteredWhileWedged);
@@ -666,7 +849,37 @@ private:
         if (f == nullptr) { return abi::Fail; }
         (void) dev;
         f->lastUpdateTuner = tuner;
+        {
+            std::lock_guard<std::mutex> lk(f->callsMutex_);
+            f->updates.push_back(UpdateRecord{tuner, static_cast<unsigned int>(reason),
+                                              static_cast<unsigned int>(ext1)});
+        }
         f->note(updateCall(static_cast<unsigned int>(reason), static_cast<unsigned int>(ext1)));
+
+        // THE OVERLAP DETECTOR (2026-09-28) - see concurrentInUpdate's own
+        // comment. Counts this call in for its whole duration, including the
+        // optional delay below, so a second call arriving while this one is
+        // still "inside" is caught regardless of which branch below it takes.
+        struct InUpdateGuard {
+            FakeSdrPlayApi* f;
+            explicit InUpdateGuard(FakeSdrPlayApi* fake) : f(fake) {
+                const int now = f->concurrentInUpdate.fetch_add(1, std::memory_order_acq_rel) + 1;
+                int prevMax = f->maxConcurrentInUpdate.load(std::memory_order_relaxed);
+                while (now > prevMax &&
+                      !f->maxConcurrentInUpdate.compare_exchange_weak(
+                          prevMax, now, std::memory_order_acq_rel)) {
+                }
+            }
+            ~InUpdateGuard() { f->concurrentInUpdate.fetch_sub(1, std::memory_order_acq_rel); }
+        } inUpdateGuard(f);
+        f->noteBiasTee();
+        const int delayMs = f->updateDelayMs.load(std::memory_order_relaxed);
+        if (delayMs > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delayMs)); }
+        if (f->updateNumber.fetch_add(1) == f->slowUpdateNumber.load() &&
+            f->slowUpdateMs.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(f->slowUpdateMs.load()));
+        }
+
         // A SERVICE THAT NEVER ANSWERS A CONTROL. See hangInUpdate: noted
         // first, so the call is on the record before it disappears, and
         // returned without an acknowledgement once released.

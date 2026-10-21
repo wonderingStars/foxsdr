@@ -176,18 +176,26 @@ int main() {
                                        CounterLayout{2, false}, CounterLayout{2, true}}) {
         for (float barW = static_cast<float>(cascade::gui::kDeckMinWindowW) - 50.0f;
              barW <= 2400.0f; barW += 1.0f) {
-            const float s = cascade::gui::deckScale(barW, layout, 0.62f);
+            // 0.57: the floor app_window.cpp's kBarMinScale has had since 0.99.74 (0.62 before).
+            const float s = cascade::gui::deckScale(barW, layout, 0.57f);
             const float coreW = cascade::gui::deckCoreW(layout);
             const bool meters = cascade::gui::deckMetersFit(barW, layout, s);
             const float plateW = cascade::gui::counterPlateW(layout);
             const float plateH = cascade::gui::counterPlateH(layout);
+            const float gainCx = cascade::gui::deckGainCx(layout);
             const float volCx = cascade::gui::deckVolumeCx(layout);
             const Box bar{0.0f, 0.0f, barW, cascade::gui::deckBarH(layout) * s};
             std::vector<Box> parts = {
                 {28.0f * s, 39.0f * s, 120.0f * s, 131.0f * s},                      // transport
                 {150.0f * s, 50.0f * s, 378.0f * s, 140.0f * s},                     // MASTER, lamps
                 {396.0f * s, 20.0f * s, (396.0f + plateW) * s, (20.0f + plateH) * s},  // plate
-                {(volCx - 30.0f) * s, 38.0f * s, (volCx + 30.0f) * s, 130.0f * s},   // dial
+                // The knob row (0.99.74; was the one volume dial at volCx +/- 30): GAIN, SQUELCH
+                // and VOLUME with their captions above and the AUTO keys and lamp strips below,
+                // from half a pitch left of the first centre to half a pitch right of the last.
+                {(gainCx - 0.5f * cascade::gui::kDeckKnobPitch) * s,
+                 cascade::gui::kDeckKnobCaptionY * s,
+                 (volCx + 0.5f * cascade::gui::kDeckKnobPitch) * s,
+                 (cascade::gui::kDeckAutoKeyY + cascade::gui::kDeckAutoKeyH) * s + 6.0f},
             };
             {
                 // The bias tee key under the lamp row (drawn only for a radio
@@ -196,15 +204,21 @@ int main() {
                 parts.push_back({bk.x0 * s, bk.y0 * s, bk.x1 * s, bk.y1 * s});
             }
             if (meters) {
-                const float meterH = 66.0f + 17.0f * 2.0f + 8.0f;
-                parts.push_back({cascade::gui::meter1XOnBar(barW), 28.0f,
-                                 cascade::gui::meter2XOnBar(barW) + cascade::gui::kMeterW,
-                                 28.0f + meterH});
+                // THE METERS AS drawToolbar DRAWS THEM (0.99.74): every measurement scaled with
+                // the deck, the top edge 28 units down - 28 px at scale 1 only. The deck is drawn
+                // at 0.92 (today's counter) or 0.77 (the enlarged ones) at the first-launch bar
+                // now, and a banner placed against "28 px" lay across the faces by two pixels.
+                const float mw = cascade::gui::kMeterW * s;
+                const float m2x = barW - cascade::gui::kMeterRightMargin * s - mw;
+                const float m1x = m2x - cascade::gui::kMeterGap * s - mw;
+                parts.push_back({m1x, 28.0f * s, m2x + mw, 28.0f * s + 17.0f * 2.0f + 74.0f * s});
             }
             for (const Measured& m : all) {
                 for (int n = 1; n <= 6; ++n) {
+                    // coreScaled true for every layout since 0.99.74 (see drawToolbar): the 1x
+                    // deck is drawn smaller than full size at the first-launch bar too.
                     const MuteBannerLayout l = cascade::gui::layoutMuteBanner(
-                        barW, s, coreW, layout.scale >= 2, meters, m.sizes[n], m.nSizes,
+                        barW, s, coreW, true, meters, m.sizes[n], m.nSizes,
                         m.keyPadX, m.gap);
                     ++placed;
                     ++bySlot[l.slot];
@@ -298,9 +312,14 @@ int main() {
     for (const Measured& m : all) {
         if (m.theme != "today" || m.lang != "en") { continue; }
         const CounterLayout today{1, true};
+        // A 1870 bar (1920 x 1080) since 0.99.74; it was a 1552 bar (1600 x 1000) while the
+        // cluster was 888 units: the GAIN and SQUELCH dials made it 999, and the middle
+        // between it and the meters is 111 narrower - 223 at 1552, under what the words and
+        // the key take (317 in the application's own census) - so the middle is given to a
+        // banner from a bar of about 1650.
         const MuteBannerLayout l = cascade::gui::layoutMuteBanner(
-            1552.0f, 1.0f, cascade::gui::deckCoreW(today), false,
-            cascade::gui::metersFitOnBar(1552.0f, cascade::gui::kDeckCoreW), m.sizes[1], m.nSizes,
+            1870.0f, 1.0f, cascade::gui::deckCoreW(today), false,
+            cascade::gui::metersFitOnBar(1870.0f, cascade::gui::kDeckCoreW), m.sizes[1], m.nSizes,
             m.keyPadX, m.gap);
         CHECK(l.slot == 0);
         CHECK(l.lines == 1);
@@ -319,10 +338,13 @@ int main() {
         const bool print = m.lang == "en" || m.lang == "pl";
         const CounterLayout today{1, true};
         for (int n = 1; n <= 4; ++n) {
+            // The deck as drawn at the first-launch bar since 0.99.74: smaller than full size
+            // (918/999 = 0.919), which is what keeps both meters on it beside the three dials.
+            const float firstScale =
+                cascade::gui::deckScale(cascade::gui::kFirstLaunchBarW, today, 0.57f);
             const MuteBannerLayout l = cascade::gui::layoutMuteBanner(
-                cascade::gui::kFirstLaunchBarW, 1.0f, cascade::gui::deckCoreW(today), false,
-                cascade::gui::metersFitOnBar(cascade::gui::kFirstLaunchBarW,
-                                             cascade::gui::kDeckCoreW),
+                cascade::gui::kFirstLaunchBarW, firstScale, cascade::gui::deckCoreW(today), true,
+                cascade::gui::deckMetersFit(cascade::gui::kFirstLaunchBarW, today, firstScale),
                 m.sizes[n], m.nSizes, m.keyPadX, m.gap);
             if (print) std::printf("  today/%s at 1280 x 720, %d name(s): slot %d, %d line(s), key %.0f px, "
                         "words %.0f px %s, key (%.1f,%.1f) %.1f x %.1f\n",

@@ -8,11 +8,14 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "core/plugin_repo.hpp"
 
 #if defined(_WIN32)
@@ -40,6 +43,48 @@ constexpr std::uint64_t kMaxInstallerBytes = 256ull * 1024ull * 1024ull;
 // is not sufficient on its own (the sha256 is what finally decides), but it
 // keeps a redirect to somewhere unrelated from ever being attempted.
 constexpr char kAllowedHost[] = "foxsdr.com";
+
+// A string (or boolean) field of a JSON object, or empty (false) when it is
+// absent OR HAS ANOTHER TYPE. Not nlohmann's value(key, default): that returns
+// the default only for an absent key and THROWS (type_error 302) for a key
+// that is present with a number, null or object in it - and this runs on the
+// update check's worker thread, whose result the GUI thread collects with
+// future::get(), which rethrows. A service answering {"version": 5} must be a
+// refusal, not the end of the process.
+std::string stringField(const json& j, const char* key) {
+    const auto it = j.find(key);
+    return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string();
+}
+
+bool boolField(const json& j, const char* key) {
+    const auto it = j.find(key);
+    return it != j.end() && it->is_boolean() && it->get<bool>();
+}
+
+// `s` cut to at most `maxBytes` WITHOUT splitting a UTF-8 sequence: backing off over
+// continuation bytes (10xxxxxx) lands on the lead byte of the character the cut would have
+// broken, and that whole character goes - the same rule as user_presets.cpp's cleanLabel.
+// A team message is drawn word-wrapped, and a half letter at the end of a line is garbage.
+std::string clipUtf8(std::string s, std::size_t maxBytes) {
+    if (s.size() <= maxBytes) { return s; }
+    std::size_t cut = maxBytes;
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0u) == 0x80u) { --cut; }
+    s.resize(cut);
+    return s;
+}
+
+// The canned answer's file (FOXSDR_FAKE_UPDATE_MANIFEST), at most a manifest's worth of it.
+// False when it is not there or cannot be opened.
+bool readCannedManifest(std::string& body) {
+    const char* const path = std::getenv("FOXSDR_FAKE_UPDATE_MANIFEST");
+    if (path == nullptr || *path == '\0') { return false; }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { return false; }
+    body.assign(static_cast<std::size_t>(kMaxManifestBytes), '\0');
+    in.read(&body[0], static_cast<std::streamsize>(kMaxManifestBytes));
+    body.resize(static_cast<std::size_t>(in.gcount()));
+    return true;
+}
 
 // 64 lower- or upper-case hex digits and nothing else. Written here rather
 // than borrowed because PluginRepo's copy is file-local to that translation
@@ -144,6 +189,25 @@ bool wellFormedVersion(const std::string& v) {
     return segment != 0;
 }
 
+bool wellFormedMessageId(const std::string& id) {
+    // A charset is the right test here (unlike a version there is no structure to get
+    // wrong): the id is never a path, only a key into a list, so what matters is that
+    // nothing outside [A-Za-z0-9_-] gets in and that it is short.
+    if (id.empty() || id.size() > kMaxTeamMessageIdBytes) { return false; }
+    for (const char ch : id) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '_' || c == '-';
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+bool updateManifestFakeSet() {
+    const char* const v = std::getenv("FOXSDR_FAKE_UPDATE_MANIFEST");
+    return v != nullptr && *v != '\0';
+}
+
 int compareVersions(const std::string& a, const std::string& b) {
     std::string aPre, bPre;
     const std::vector<int> an = numericParts(a, aPre);
@@ -174,13 +238,13 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
         return false;
     }
 
-    out.version = j.value("version", std::string());
+    out.version = stringField(j, "version");
     if (out.version.empty()) {
         error = "the update service named no version";
         return false;
     }
-    out.url = j.value("url", std::string());
-    out.sha256 = j.value("sha256", std::string());
+    out.url = stringField(j, "url");
+    out.sha256 = stringField(j, "sha256");
 
     // THE THREE FIELDS THAT MAKE A DOWNLOAD SAFE. Each is refused rather than
     // warned about, because a manifest missing any of them cannot be acted on
@@ -212,9 +276,9 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
         for (const json& n : j["notes"]) {
             if (!n.is_object()) { continue; }
             ReleaseNote note;
-            note.version = n.value("version", std::string());
-            note.date = n.value("date", std::string());
-            note.critical = n.value("critical", false);
+            note.version = stringField(n, "version");
+            note.date = stringField(n, "date");
+            note.critical = boolField(n, "critical");
             if (n.contains("notes") && n["notes"].is_array()) {
                 for (const json& line : n["notes"]) {
                     if (line.is_string()) { note.notes.push_back(line.get<std::string>()); }
@@ -223,6 +287,38 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
             if (!note.version.empty() && !note.notes.empty()) {
                 out.notes.push_back(std::move(note));
             }
+        }
+    }
+
+    // MESSAGES FROM THE TEAM (0.99.79), present whether or not `newer`: that is what they
+    // are for. Each is kept or dropped ON ITS OWN, the policy malformed notes already
+    // follow, so one broken entry costs only itself and never the manifest or the messages
+    // beside it. What is kept is bounded - at most kMaxTeamMessages, each with at most
+    // kMaxTeamMessageLines lines clipped to kMaxTeamMessageLineBytes - because the answer is
+    // data from a service over the network and the window draws all of it. A message with
+    // an id that fails wellFormedMessageId is dropped, because that id is written into the
+    // settings file; one with no line of text is dropped, because there is nothing to say.
+    // A blank line is skipped rather than drawn as an empty bullet. The first ten USABLE
+    // messages are kept, so a broken entry does not take a place.
+    if (j.contains("messages") && j["messages"].is_array()) {
+        for (const json& m : j["messages"]) {
+            if (out.messages.size() >= kMaxTeamMessages) { break; }
+            if (!m.is_object()) { continue; }
+            TeamMessage msg;
+            msg.id = stringField(m, "id");
+            if (!wellFormedMessageId(msg.id)) { continue; }
+            msg.date = clipUtf8(stringField(m, "date"), kMaxTeamMessageDateBytes);
+            msg.important = boolField(m, "important");
+            if (m.contains("lines") && m["lines"].is_array()) {
+                for (const json& line : m["lines"]) {
+                    if (msg.lines.size() >= kMaxTeamMessageLines) { break; }
+                    if (!line.is_string()) { continue; }
+                    std::string text =
+                        clipUtf8(line.get<std::string>(), kMaxTeamMessageLineBytes);
+                    if (!text.empty()) { msg.lines.push_back(std::move(text)); }
+                }
+            }
+            if (!msg.lines.empty()) { out.messages.push_back(std::move(msg)); }
         }
     }
 
@@ -252,6 +348,24 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
                     const std::string& channel, UpdateInfo& out, std::string& error) {
     out = UpdateInfo{};
     error.clear();
+    // THE TEST SEAM (updater.hpp, FOXSDR_FAKE_UPDATE_MANIFEST): the answer is a file, no URL
+    // is built and fetchText is not called. The log line says so and carries neither the path
+    // nor anything the file said. Counted as a failed check, like the real one, when it fails.
+    if (updateManifestFakeSet()) {
+        diagLogf("update: FOXSDR_FAKE_UPDATE_MANIFEST set - canned answer, foxsdr.com was not "
+                 "asked");
+        std::string canned;
+        if (!readCannedManifest(canned)) {
+            error = "the canned update manifest could not be read";
+            health::noteUpdateCheckFailed();
+            return false;
+        }
+        if (!parseUpdateManifest(canned, currentVersion, out, error)) {
+            health::noteUpdateCheckFailed();
+            return false;
+        }
+        return true;
+    }
     if (baseUrl.empty()) {
         error = "no update endpoint configured";
         return false;
@@ -261,11 +375,19 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
     std::string url = baseUrl + "?v=" + currentVersion;
     if (!channel.empty()) { url += "&channel=" + channel; }
 
+    // COUNTED, ANONYMOUSLY (0.99.64, core/health_events.hpp): a check that did
+    // not complete - the service could not be reached, or did not answer with a
+    // manifest this build will act on. Nothing of what it said is kept.
     std::string body;
     if (!PluginRepo::fetchText(url, kMaxManifestBytes, body, error)) {
+        health::noteUpdateCheckFailed();
         return false;
     }
-    return parseUpdateManifest(body, currentVersion, out, error);
+    if (!parseUpdateManifest(body, currentVersion, out, error)) {
+        health::noteUpdateCheckFailed();
+        return false;
+    }
+    return true;
 }
 
 bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
@@ -298,6 +420,7 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     fs::path dir = fs::temp_directory_path(ec);
     if (ec) {
         error = "no temporary directory available";
+        health::noteUpdateDownloadFailed();
         return false;
     }
     dir /= "foxsdr-update";
@@ -307,8 +430,19 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     // accumulating installers in the user's temp directory.
     const fs::path dest = dir / ("foxsdr-setup-" + info.version + ".exe");
 
+    // COUNTED, ANONYMOUSLY (0.99.64, core/health_events.hpp), and told apart by
+    // the failure's KIND rather than its text: a download that did not complete
+    // (the network, the disk) and bytes that did not hash to the published
+    // digest are different problems with different owners. A cancel is neither.
+    PluginRepo::FetchFailure why = PluginRepo::FetchFailure::None;
     if (!PluginRepo::fetchVerifiedFile(info.url, info.sha256, dest.string(), kMaxInstallerBytes,
-                                       error, progress, cancel)) {
+                                       error, progress, cancel, &why)) {
+        switch (why) {
+            case PluginRepo::FetchFailure::Transfer:
+            case PluginRepo::FetchFailure::Place: health::noteUpdateDownloadFailed(); break;
+            case PluginRepo::FetchFailure::Verify: health::noteUpdateVerifyFailed(); break;
+            default: break;  // cancelled, refused before any transfer, none
+        }
         return false;
     }
     // The bar sat at whatever the last chunk made it; the file is verified and
@@ -320,45 +454,6 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// UpdateCheckTask
-// ---------------------------------------------------------------------------
-
-// A member future of std::async blocks in its destructor, so the destructor
-// reaps first: the future is either taken or handed to a drainer by the time
-// the member itself is destroyed.
-UpdateCheckTask::~UpdateCheckTask() { (void)reap(); }
-
-void UpdateCheckTask::start(Work work) {
-    if (future_.valid() || !work) { return; }
-    future_ = std::async(std::launch::async, std::move(work));
-}
-
-bool UpdateCheckTask::poll(UpdateCheckOutcome& out) {
-    if (!future_.valid()) { return false; }
-    if (future_.wait_for(kNoWait) != std::future_status::ready) { return false; }
-    out = future_.get();
-    return true;
-}
-
-bool UpdateCheckTask::reap(std::chrono::milliseconds grace) {
-    if (!future_.valid()) { return true; }
-    if (future_.wait_for(grace) == std::future_status::ready) {
-        (void)future_.get();
-        return true;
-    }
-    // Still inside the network call. The drainer owns the future now, so its
-    // blocking destructor runs on a thread nobody is waiting for; the outcome
-    // it takes is discarded, because nobody is left to show it to.
-    // An exception out of a detached thread is std::terminate, so the drainer
-    // swallows one: there is no caller left for it to reach.
-    std::thread([f = std::move(future_)]() mutable {
-        try {
-            (void)f.get();
-        } catch (...) {
-        }
-    }).detach();
-    return false;
-}
+// UpdateCheckTask: a template now (AbandonableTask), defined in the header.
 
 }  // namespace cascade::core

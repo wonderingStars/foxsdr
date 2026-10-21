@@ -33,6 +33,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/crash_handler_posix.hpp"
 
+#include "core/breadcrumb.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 
@@ -99,6 +100,27 @@ std::atomic<long> g_reportSeq{0};
 char g_ringBuf[DiagLog::kRingLines * DiagLog::kLineBytes + 1] = {};
 char g_reportPath[kPathBytes] = {};
 unsigned long g_frames[kMaxFrames] = {};
+
+// WHAT THIS PROCESS IS, appended to every `reason:` line (CrashHandlerConfig::
+// reasonSuffix) - the Windows writer's g_reasonSuffix, for the same reason.
+// Filled by install() on the healthy path and only READ from the fault path.
+constexpr std::size_t kReasonSuffixBytes = 128;
+char g_reasonSuffix[kReasonSuffixBytes] = {};
+
+// WHAT THE SIGNATURE HASHES when the faulting address resolves to no module
+// (CrashHandlerConfig::unresolvedSignatureTag); empty means "?".
+constexpr std::size_t kSignatureTagBytes = 96;
+char g_unresolvedTag[kSignatureTagBytes] = {};
+
+// HEALTHY PATH ONLY: `src` as printable ASCII, cut to what fits.
+void copyPrintable(char* dst, std::size_t cap, const std::string& src) {
+    std::size_t at = 0;
+    for (; at < src.size() && at + 1 < cap; ++at) {
+        const unsigned char c = static_cast<unsigned char>(src[at]);
+        dst[at] = (c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?';
+    }
+    dst[at] = '\0';
+}
 
 // The main executable's own base address, read once at install() from module
 // index 0 - dl_iterate_phdr (which refreshModuleTable() calls) always visits
@@ -269,6 +291,10 @@ void writeContextBlock(const Emit& e) {
     int len = 0;
     const char* block = diagContextRaw(len);
     e.raw(block, static_cast<std::size_t>(len));
+    // The window's last-known state and its age, rendered with no allocation and no
+    // formatting call (core/diag_report.hpp): the same line a freeze report carries.
+    char stateLine[192];
+    e.raw(stateLine, renderWindowStateLine(stateLine, sizeof(stateLine)));
 }
 
 void writeModules(const Emit& e) {
@@ -326,7 +352,18 @@ int captureFramesFromContext(unw_context_t* ctx, unsigned long* frames, int maxF
 
 int captureFramesCurrentThread(unsigned long* frames, int maxFrames) {
     unw_context_t ctx;
-    ::unw_getcontext(&ctx);
+    // NOT ::unw_getcontext - on aarch64 this is a macro (libunwind must
+    // capture the CALLER's registers, which cannot be done from inside a
+    // real function, so ports that cannot do it in a portable exported
+    // function expand it inline via a GNU statement-expression). A leading
+    // :: forces qualified-name lookup, which cannot see a macro and fails to
+    // parse the statement-expression it expands to - this compiled cleanly
+    // on x86_64, where libunwind's unw_getcontext happens to be a plain
+    // function-call macro, and broke the whole rest of this file's namespace
+    // lookups on the first arm64 CI run (2026-09-29) with errors that pointed
+    // everywhere except this line. unw_init_local/unw_get_reg/unw_step below
+    // are real exported functions on every arch, so :: is fine there.
+    unw_getcontext(&ctx);
     return captureFramesFromContext(&ctx, frames, maxFrames);
 }
 
@@ -362,6 +399,9 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     const bool resolved = resolveAddress(faultAddr, fm, foff);
     char sig[17];
     const char* sigModule = resolved ? fm.name : "?";
+    // A fault in no module at all hashes the process's own tag when it has one
+    // (CrashHandlerConfig::unresolvedSignatureTag), not the shared "?".
+    if (!resolved && g_unresolvedTag[0] != '\0') { sigModule = g_unresolvedTag; }
     if (child != nullptr && child->signatureTag != nullptr && child->signatureTag[0] != '\0') {
         sigModule = child->signatureTag;
     }
@@ -375,6 +415,9 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
     e.str("kind: crash\n");
     e.str("reason: ");
     e.str(reason);
+    // What this process is (CrashHandlerConfig::reasonSuffix); see the Windows
+    // writer. Plain bytes copied in on the healthy path.
+    e.str(g_reasonSuffix);
     e.str("\ncode: 0x");
     e.hex(code, 8);
     e.str("\naddress: ");
@@ -451,7 +494,11 @@ void writeReport(const char* reason, unsigned long code, std::uintptr_t faultAdd
 
 void finish(unsigned long exitCode) {
     if (!g_exitAfterReport) { return; }
-    ::_exit(static_cast<int>(exitCode == 0 ? 1u : (exitCode & 0x7Fu ? exitCode & 0x7Fu : 1u)));
+    const int status = static_cast<int>(exitCode == 0 ? 1u : (exitCode & 0x7Fu ? exitCode & 0x7Fu : 1u));
+    // HOW THIS PROCESS ENDS, for the sentinel (0.99.78, core/exit_record.hpp): _exit() runs no
+    // exit hook, so the status is written down here.
+    breadcrumb::noteExit(breadcrumb::ExitHow::Exited, static_cast<std::uint32_t>(status));
+    ::_exit(status);
 }
 
 // The parent's line (CrashHandlerConfig::faultLineToStdout), written before
@@ -505,6 +552,7 @@ void faultLine(const char* what, unsigned long code, std::uintptr_t addr) {
         e.str("\n");
         writeLineOnce(e);
     }
+    breadcrumb::noteExit(breadcrumb::ExitHow::Exited, 0xE2u);  // see finish()
     ::_exit(0xE2);
 }
 
@@ -540,6 +588,11 @@ const char* reasonForSignal(int sig) {
 // (crash_handler.cpp's Windows report uses ExceptionAddress, the faulting
 // INSTRUCTION, for the same reason).
 void faultSignalHandler(int sig, siginfo_t* /*info*/, void* ucontextVoid) {
+    // HOW THIS PROCESS IS ENDING, for the sentinel (0.99.78, core/exit_record.hpp), first of
+    // all: if the report below cannot be written, or this handler is itself killed, the
+    // watcher still reads which signal it was. One relaxed store; replaced by a later write
+    // if the process ends another way (handlerCannotRun, finish).
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(sig));
     // Another thread's report is waited for; a fault inside this handler on
     // this thread still dies with 0xE2, saying so first.
     enterFatal(reasonForSignal(sig), static_cast<unsigned long>(sig));
@@ -590,6 +643,9 @@ void onTerminatePosix() {
     ::sigemptyset(&dfl.sa_mask);
     ::sigaction(SIGABRT, &dfl, nullptr);
     if (g_prevTerminate != nullptr && g_prevTerminate != &onTerminatePosix) { g_prevTerminate(); }
+    // abort() below ends the process with SIGABRT at its default disposition (stood down
+    // above), which this handler therefore never sees: the sentinel is told here (0.99.78).
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(SIGABRT));
     ::abort();
 }
 
@@ -625,6 +681,7 @@ extern "C" void __cxa_pure_virtual() {
     dfl.sa_handler = SIG_DFL;
     ::sigemptyset(&dfl.sa_mask);
     ::sigaction(SIGABRT, &dfl, nullptr);
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(SIGABRT));  // see onTerminatePosix
     ::abort();
 }
 
@@ -634,6 +691,11 @@ extern "C" void __cxa_pure_virtual() {
 void install(const CrashHandlerConfig& cfg) {
     g_enabled = cfg.enabled;
     g_exitAfterReport = cfg.exitAfterReport;
+    // The reason's tail and the signature's stand-in for an unresolved fault,
+    // copied into fixed storage on the healthy path: printable ASCII, cut to
+    // what fits, replaced by every install.
+    copyPrintable(g_reasonSuffix, kReasonSuffixBytes, cfg.reasonSuffix);
+    copyPrintable(g_unresolvedTag, kSignatureTagBytes, cfg.unresolvedSignatureTag);
     // cfg.minidump is deliberately not read: there is no Linux equivalent
     // implemented by this feature (see writeReport's comment), so nothing
     // here can silently disagree with what the caller asked for by ignoring
@@ -766,6 +828,7 @@ int captureFramesForTest(bool mayWalkCurrentThread) {
         ::sigemptyset(&dfl.sa_mask);
         ::sigaction(SIGABRT, &dfl, nullptr);
     }
+    breadcrumb::noteExit(breadcrumb::ExitHow::Signalled, static_cast<std::uint32_t>(SIGABRT));  // see onTerminatePosix
     ::abort();
 }
 

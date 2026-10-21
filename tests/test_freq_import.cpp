@@ -13,6 +13,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -443,6 +445,251 @@ int main() {
         }
     }
 
+    // [CSV-RT] (0.99.66) a preset exported as CSV and imported back is the same
+    // preset: name, group, frequency, mode, bandwidth, favourite AND the tick (the
+    // SDR# export drops it). A name with a comma and a quotation mark, a group with a
+    // comma, a plain row with no group, and an unticked one.
+    {
+        std::vector<Bookmark> v;
+        Bookmark a;
+        a.name = "Tower, \"North\" 118.7";
+        a.group = "Harbour, east";
+        a.freqHz = 118700000.0;
+        a.mode = "AM";
+        a.bandwidthHz = 8330.0;
+        a.favourite = true;
+        a.scan = true;
+        v.push_back(a);
+        Bookmark b;
+        b.name = "Ch 16";
+        b.group = "Marine";
+        b.freqHz = 156800000.0;
+        b.mode = "NFM";
+        b.bandwidthHz = 12500.0;
+        b.favourite = false;
+        b.scan = false;
+        v.push_back(b);
+        Bookmark c;
+        c.name = "Plain";
+        c.freqHz = 98500000.0;
+        c.mode = "WFM";
+        c.bandwidthHz = 150000.0;
+        c.scan = true;
+        v.push_back(c);
+
+        const std::string csv = cascade::core::exportCsv(v);
+        // The UTF-8 byte order mark Excel needs, then the header, and a CRLF after every
+        // line as the XML export has.
+        CHECK(csv.rfind("\xEF\xBB\xBF" "frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked\r\n", 0) == 0u);
+        CHECK(csv.find("118.700000,\"Tower, \"\"North\"\" 118.7\",\"Harbour, east\",AM,8330,1,1\r\n") !=
+              std::string::npos);
+        CHECK(csv.find("156.800000,Ch 16,Marine,NFM,12500,0,0\r\n") != std::string::npos);
+        CHECK(csv.find("98.500000,Plain,,WFM,150000,0,1\r\n") != std::string::npos);
+        CHECK(std::count(csv.begin(), csv.end(), '\n') == 4);
+        CHECK(std::count(csv.begin(), csv.end(), '\r') == 4);
+
+        const ImportResult r = cascade::core::importFrequencyList(csv);
+        CHECK(r.error.empty());
+        CHECK(r.format == "CSV");
+        CHECK(r.skipped == 0u);
+        CHECK(r.items.size() == 3u);
+        if (r.items.size() == 3u) {
+            for (std::size_t i = 0; i < 3u; ++i) {
+                const Bookmark& got = r.items[i];
+                const Bookmark& want = v[i];
+                CHECK(got.name == want.name);
+                CHECK(got.group == want.group);
+                CHECK(got.freqHz == want.freqHz);
+                CHECK(got.mode == want.mode);
+                CHECK(got.bandwidthHz == want.bandwidthHz);
+                CHECK(got.favourite == want.favourite);
+                // THE TICK: the column the SDR# export has no place for.
+                CHECK(got.scan == want.scan);
+            }
+        }
+        // An empty list is the header alone, and reads back as nothing to read.
+        CHECK(cascade::core::exportCsv({}) ==
+              "\xEF\xBB\xBF" "frequency_mhz,name,group,mode,bandwidth_hz,favourite,ticked\r\n");
+        CHECK(!cascade::core::importCsv(cascade::core::exportCsv({})).error.empty());
+    }
+
+    // [CSV-BOM] the export starts with ONE UTF-8 byte order mark (Excel reads a CSV without
+    // one as the local code page and shows a name outside ASCII as mojibake), and what
+    // follows it - a name in two scripts included - reads back whole through the importer
+    // that drops the mark.
+    {
+        std::vector<Bookmark> v;
+        Bookmark a;
+        a.name = "Caf\xC3\xA9 T\xC3\xB6wer \xE6\x9D\xB1\xE4\xBA\xAC";   // "Cafe-acute Tower-umlaut Tokyo"
+        a.group = "Z\xC3\xBCrich";
+        a.freqHz = 118100000.0;
+        a.mode = "AM";
+        a.bandwidthHz = 8330.0;
+        a.scan = true;
+        v.push_back(a);
+        const std::string csv = cascade::core::exportCsv(v);
+        CHECK(csv.size() > 6u);
+        CHECK(csv.compare(0, 3, "\xEF\xBB\xBF") == 0);
+        CHECK(csv.compare(3, 3, "\xEF\xBB\xBF") != 0);   // one mark, not two
+        CHECK(csv.compare(3, 9, "frequency") == 0);     // the header follows it at once
+        const ImportResult r = cascade::core::importFrequencyList(csv);
+        CHECK(r.error.empty() && r.skipped == 0u && r.items.size() == 1u);
+        if (r.items.size() == 1u) {
+            CHECK(r.items[0].name == a.name);
+            CHECK(r.items[0].group == a.group);
+            CHECK(r.items[0].freqHz == a.freqHz && r.items[0].scan);
+        }
+    }
+
+    // [CSV-BREAK] a line break in a name, a group or a mode is written as a SPACE. importCsv cuts
+    // the text into lines before it reads a quoted field, so a quoted field that kept its break
+    // lost its row the group and the mode - and the next line its place in the file. A CR LF
+    // pair is one break and one space; a lone CR or LF is one too.
+    {
+        std::vector<Bookmark> v;
+        Bookmark a;
+        a.name = "Tower\r\nNorth";
+        a.group = "Harbour\neast";
+        a.freqHz = 118700000.0;
+        a.mode = "AM";
+        a.bandwidthHz = 8330.0;
+        a.favourite = true;
+        a.scan = true;
+        v.push_back(a);
+        Bookmark b;
+        b.name = "Ground\rSouth, \"two\"\r\n";   // a break at the end, a comma and quotes beside breaks
+        b.group = "Harbour";
+        b.freqHz = 121900000.0;
+        b.mode = "NFM";
+        b.bandwidthHz = 12500.0;
+        b.scan = true;
+        v.push_back(b);
+        Bookmark c;
+        c.name = "After";
+        c.group = "Harbour";
+        c.freqHz = 122800000.0;
+        c.mode = "AM";
+        c.bandwidthHz = 10000.0;
+        c.scan = false;
+        v.push_back(c);
+
+        const std::string csv = cascade::core::exportCsv(v);
+        // Three rows and the header: four lines, so four CRLFs and no other break in the text.
+        CHECK(std::count(csv.begin(), csv.end(), '\n') == 4);
+        CHECK(std::count(csv.begin(), csv.end(), '\r') == 4);
+        const ImportResult r = cascade::core::importFrequencyList(csv);
+        CHECK(r.error.empty());
+        CHECK(r.skipped == 0u);
+        CHECK(r.items.size() == 3u);
+        if (r.items.size() == 3u) {
+            CHECK(r.items[0].name == "Tower North");      // CR LF -> one space
+            CHECK(r.items[0].group == "Harbour east");    // a lone LF -> a space
+            CHECK(r.items[0].mode == "AM");               // the mode and the columns after it survive
+            CHECK(r.items[0].bandwidthHz == 8330.0 && r.items[0].favourite && r.items[0].scan);
+            CHECK(r.items[0].freqHz == 118700000.0);
+            CHECK(r.items[1].name == "Ground South, \"two\"");   // a lone CR; the trailing CR LF's space is trimmed
+            CHECK(r.items[1].group == "Harbour" && r.items[1].mode == "NFM");
+            CHECK(r.items[1].freqHz == 121900000.0 && r.items[1].scan);
+            // THE NEXT LINE IS NOT SKIPPED.
+            CHECK(r.items[2].name == "After" && r.items[2].freqHz == 122800000.0 && !r.items[2].scan);
+        }
+        // A break in the mode column too (a hand-edited row); the mode stays one word's width.
+        std::vector<Bookmark> w(1);
+        w[0].name = "Odd";
+        w[0].group = "G";
+        w[0].freqHz = 118000000.0;
+        w[0].mode = "AM\r\n";
+        w[0].bandwidthHz = 10000.0;
+        const std::string odd = cascade::core::exportCsv(w);
+        CHECK(std::count(odd.begin(), odd.end(), '\n') == 2);
+        const ImportResult o = cascade::core::importFrequencyList(odd);
+        CHECK(o.items.size() == 1u && o.skipped == 0u);
+    }
+
+    // [CSV-TICK] the tick column, whichever header names it, and which values mean
+    // ticked: 1, true, yes or y in any case; anything else, and a file with no such
+    // column, is not.
+    {
+        const ImportResult t = cascade::core::importCsv(
+            "frequency,name,ticked\n121.5,A,1\n121.6,B,TRUE\n121.7,C,yes\n121.8,D,Y\n121.9,E,0\n"
+            "122.0,F,no\n122.1,G,\n122.2,H,True\n");
+        CHECK(t.items.size() == 8u);
+        if (t.items.size() == 8u) {
+            const bool want[8] = {true, true, true, true, false, false, false, true};
+            for (std::size_t i = 0; i < 8u; ++i) { CHECK(t.items[i].scan == want[i]); }
+        }
+        // "scan" names it too, in any column position and with a ';' separator.
+        const ImportResult s = cascade::core::importCsv("Scan;Freq (MHz);Name\nyes;121,5;A\n0;121,6;B\n");
+        CHECK(s.items.size() == 2u);
+        if (s.items.size() == 2u) {
+            CHECK(s.items[0].scan && s.items[0].freqHz == 121500000.0 && s.items[0].name == "A");
+            CHECK(!s.items[1].scan && s.items[1].freqHz == 121600000.0 && s.items[1].name == "B");
+        }
+        // No such column - a header without one, and no header at all: nothing is ticked.
+        const ImportResult n = cascade::core::importCsv("frequency,name\n121.5,A\n");
+        CHECK(n.items.size() == 1u && !n.items[0].scan);
+        const ImportResult h = cascade::core::importCsv("121.5,A,Group,NFM,12500\n");
+        CHECK(h.items.size() == 1u && !h.items[0].scan && h.items[0].group == "Group");
+    }
+
+    // [INTO] applyImportInto: a group puts it on every row, whatever the file wrote - and the
+    // tick on every row the AIRBAND monitor can play (AM, NFM), whatever the file wrote; a row
+    // it cannot play (WFM, SSB, CW...) joins the group UNTICKED, for a tick on it would put it
+    // in the Scanner's list mode with no key in the AIRBAND section to take it out again. No
+    // group leaves the rows as the file had them.
+    {
+        std::vector<Bookmark> rows;
+        Bookmark a;
+        a.name = "A";
+        a.group = "Other";
+        a.freqHz = 121.5e6;
+        a.mode = "AM";
+        a.scan = false;
+        rows.push_back(a);
+        Bookmark b;
+        b.name = "B";
+        b.freqHz = 121.6e6;
+        b.mode = "NFM";
+        b.scan = true;
+        rows.push_back(b);
+        Bookmark w;
+        w.name = "Broadcast";
+        w.freqHz = 98.5e6;
+        w.mode = "WFM";
+        w.group = "Radio";
+        w.scan = true;   // the file ticked it
+        rows.push_back(w);
+        Bookmark u;
+        u.name = "Ham";
+        u.freqHz = 7.1e6;
+        u.mode = "LSB";
+        u.scan = false;
+        rows.push_back(u);
+        Bookmark c;
+        c.name = "Morse";
+        c.freqHz = 14.05e6;
+        c.mode = "CW";
+        c.scan = true;
+        rows.push_back(c);
+        std::vector<Bookmark> asIs = rows;
+        cascade::core::applyImportInto(asIs, cascade::core::ImportInto{});
+        CHECK(asIs[0].group == "Other" && !asIs[0].scan);
+        CHECK(asIs[1].group.empty() && asIs[1].scan);
+        CHECK(asIs[2].group == "Radio" && asIs[2].scan);   // no group: as the file had it, tick and all
+        cascade::core::applyImportInto(rows, cascade::core::ImportInto{"Marine", true});
+        for (const Bookmark& r : rows) { CHECK(r.group == "Marine"); }
+        CHECK(rows[0].scan);    // AM
+        CHECK(rows[1].scan);    // NFM
+        CHECK(!rows[2].scan);   // WFM: the file's tick is taken off too
+        CHECK(!rows[3].scan);   // LSB
+        CHECK(!rows[4].scan);   // CW: the file's tick is taken off too
+        // Nothing else of a row is touched.
+        CHECK(rows[2].freqHz == 98.5e6 && rows[2].mode == "WFM" && rows[2].name == "Broadcast");
+        std::vector<Bookmark> unticked = rows;
+        cascade::core::applyImportInto(unticked, cascade::core::ImportInto{"Tower", false});
+        for (const Bookmark& r : unticked) { CHECK(r.group == "Tower" && !r.scan); }
+    }
+
     // [SAVE] group and favourite survive the bookmark file; a plain bookmark
     // is saved without either key, exactly as before
     {
@@ -493,6 +740,168 @@ int main() {
         CHECK(gEntry.find("\"favourite\"") != std::string::npos);
         std::remove(path.c_str());
         std::remove(dir.c_str());
+    }
+
+    // The Windows picker hands the importer UTF-8. Both a French filename
+    // and one outside the active ANSI code page must open the file actually chosen.
+    {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() /
+            ("foxsdr-import-utf8-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        CHECK(!ec);
+        for (const std::u8string name : {std::u8string(u8"fréquences.csv"), std::u8string(u8"頻率.csv")}) {
+            const fs::path path = dir / fs::path(name);
+            {
+                std::ofstream file(path, std::ios::binary);
+                CHECK(file.good());
+                file << "frequency,name,mode\n121500000,Unicode import,AM\n";
+            }
+            CHECK(fs::exists(path));
+            const std::u8string u8path = path.u8string();
+            const std::string utf8(u8path.begin(), u8path.end());
+            const ImportResult result = cascade::core::importFrequencyFile(utf8);
+            std::printf("  UTF-8 filename import: %zu rows; error=%s\n", result.items.size(), result.error.c_str());
+            CHECK(result.error.empty());
+            CHECK(result.items.size() == 1u);
+            if (result.items.size() == 1u) { CHECK(result.items[0].freqHz == 121500000.0); }
+        }
+        fs::remove_all(dir, ec);
+    }
+
+    // WHAT A PERSON TYPES, PASTES OR DROPS AS A PATH (0.99.82; field report 7c93e85ca4f35c9a): the
+    // Enter or space after a pasted name, quotes of either kind, and a file:// address.
+    {
+        using cascade::core::cleanImportPath;
+        CHECK(cleanImportPath("frequencies.xml") == "frequencies.xml");
+        CHECK(cleanImportPath("") == "");
+        CHECK(cleanImportPath("   \r\n\t ") == "");
+        CHECK(cleanImportPath("frequencies.xml\n") == "frequencies.xml");
+        CHECK(cleanImportPath("frequencies.xml\r\n") == "frequencies.xml");
+        CHECK(cleanImportPath("  frequencies.xml  ") == "frequencies.xml");
+        CHECK(cleanImportPath("my lists/a b.csv") == "my lists/a b.csv");  // inner spaces are the name's
+        CHECK(cleanImportPath("\"C:\\lists\\a b.csv\"") == "C:\\lists\\a b.csv");
+        CHECK(cleanImportPath("'/home/me/a b.csv'") == "/home/me/a b.csv");
+        CHECK(cleanImportPath("\"/home/me/a.csv\" \n") == "/home/me/a.csv");
+        CHECK(cleanImportPath(" '\"/home/me/a.csv\"' ") == "/home/me/a.csv");   // pairs, nested
+        CHECK(cleanImportPath("\"/home/me/a.csv'") == "\"/home/me/a.csv'");    // not a pair: as written
+        CHECK(cleanImportPath("\"") == "\"");
+        CHECK(cleanImportPath("''") == "");
+        CHECK(cleanImportPath("100% done.csv") == "100% done.csv");              // only an address is decoded
+        CHECK(cleanImportPath("a%20b.csv") == "a%20b.csv");
+        // file:// addresses.
+        CHECK(cleanImportPath("file:///home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file:///home/me/a%20b.csv\r\n") == "/home/me/a b.csv");
+        CHECK(cleanImportPath("FILE:///home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file://localhost/home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file://LocalHost/home/me/a.csv") == "/home/me/a.csv");
+        CHECK(cleanImportPath("<file:///x>") == "<file:///x>");                  // not ours to unwrap
+        CHECK(cleanImportPath("'file:///home/me/a.csv'") == "/home/me/a.csv");
+        CHECK(cleanImportPath("file:///home/me/fr%C3%A9quences-%E9%A0%BB%E7%8E%87.csv") ==
+              "/home/me/fr\xC3\xA9quences-\xE9\xA0\xBB\xE7\x8E\x87.csv");        // UTF-8 bytes
+        CHECK(cleanImportPath("file:///home/me/100%25.csv") == "/home/me/100%.csv");
+        CHECK(cleanImportPath("file:///home/me/50%.csv") == "/home/me/50%.csv");  // a stray % stays
+        CHECK(cleanImportPath("file:///home/me/%zz.csv") == "/home/me/%zz.csv");
+        CHECK(cleanImportPath("file:///home/me/a.csv%2") == "/home/me/a.csv%2");  // cut escape at the end
+        CHECK(cleanImportPath("file:///home/me/a%41.csv") == "/home/me/aA.csv");
+        CHECK(cleanImportPath("file:///home/me/a%00b.csv") == "file:///home/me/a%00b.csv");  // no NUL
+        CHECK(cleanImportPath("file://nopath") == "file://nopath");
+        CHECK(cleanImportPath("file://server/share/a%20b.csv") == "//server/share/a b.csv");
+#if defined(_WIN32)
+        CHECK(cleanImportPath("file:///C:/Users/me/a%20b.csv") == "C:/Users/me/a b.csv");
+        CHECK(cleanImportPath("file://localhost/c:/a.csv") == "c:/a.csv");
+        CHECK(cleanImportPath("file:///C:") == "C:");
+#endif
+        // Cleaning what is already clean changes nothing more.
+        for (const char* once : {"frequencies.xml\n", "'/a b/c.csv' ", "file:///home/me/a%20b.csv",
+                                 "\"\"x\"\"", "file://server/share/a.csv", "file:///home/me/100%25.csv"}) {
+            CHECK(cleanImportPath(cleanImportPath(once)) == cleanImportPath(once));
+        }
+    }
+
+    // importFrequencyFileIn: the working directory first, then the recordings folder, and the whole
+    // path of the last place looked when neither opens.
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() /
+            ("foxsdr-import-in-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const fs::path here = root / "cwd";
+        const fs::path rec = root / "rec";
+        std::error_code ec;
+        fs::create_directories(here / "lists", ec);
+        fs::create_directories(rec / "lists", ec);
+        const auto write = [](const fs::path& p, int rows, double firstMhz) {
+            std::ofstream f(p, std::ios::binary);
+            f << "frequency,name,mode\n";
+            for (int i = 0; i < rows; ++i) {
+                f << static_cast<long long>((firstMhz + i) * 1.0e6) << ",Row " << i << ",NFM\n";
+            }
+        };
+        write(rec / "export.csv", 3, 110.0);
+        write(rec / "lists" / "marine.csv", 4, 156.0);
+        write(here / "lists" / "both.csv", 2, 120.0);
+        write(rec / "lists" / "both.csv", 5, 130.0);
+        const std::string recDir = rec.generic_string();
+        const fs::path was = fs::current_path(ec);
+        fs::current_path(here, ec);
+        CHECK(!ec);
+
+        std::string tried;
+        // A bare name that is only in the recordings folder; a quoted one with an Enter after it.
+        ImportResult r = cascade::core::importFrequencyFileIn("export.csv", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 3u);
+        CHECK(tried == recDir + "/export.csv");
+        r = cascade::core::importFrequencyFileIn("'export.csv'\n", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 3u);
+        // A name with a folder part: the recordings folder has it, the working directory does not.
+        r = cascade::core::importFrequencyFileIn("lists/marine.csv", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 4u);
+        CHECK(tried == recDir + "/lists/marine.csv");
+        // ...and when both have it, the working directory's wins (as it always did).
+        r = cascade::core::importFrequencyFileIn("lists/both.csv", recDir, tried);
+        CHECK(r.error.empty() && r.items.size() == 2u);
+        CHECK(fs::equivalent(fs::path(std::u8string(tried.begin(), tried.end())), here / "lists" / "both.csv"));
+        // A trailing separator on the recordings folder is not doubled.
+        r = cascade::core::importFrequencyFileIn("export.csv", recDir + "/", tried);
+        CHECK(r.error.empty() && tried == recDir + "/export.csv");
+        // An absolute path is opened as it stands and never looked for in the recordings folder.
+        r = cascade::core::importFrequencyFileIn("\"" + (rec / "export.csv").string() + "\"", "", tried);
+        CHECK(r.error.empty() && r.items.size() == 3u);
+        r = cascade::core::importFrequencyFileIn((rec / "nope.csv").string(), recDir, tried);
+        CHECK(r.error.rfind("cannot open", 0) == 0);
+        CHECK(tried == (rec / "nope.csv").string());
+        // A file:// address.
+        {
+            std::string s = (rec / "export.csv").generic_string();
+            if (!s.empty() && s[0] != '/') { s.insert(0, "/"); }
+            r = cascade::core::importFrequencyFileIn("file://" + s + "\r\n", "", tried);
+            CHECK(r.error.empty() && r.items.size() == 3u);
+        }
+        // Nowhere: the last place looked, in full - the recordings folder's, or the working
+        // directory's with its whole path when there is no recordings folder.
+        r = cascade::core::importFrequencyFileIn("lists/nope.csv", recDir, tried);
+        CHECK(r.error == "cannot open \"" + recDir + "/lists/nope.csv\"");
+        CHECK(tried == recDir + "/lists/nope.csv");
+        r = cascade::core::importFrequencyFileIn("lists/nope.csv", "", tried);
+        {
+            const fs::path whole = fs::path(std::u8string(tried.begin(), tried.end()));
+            CHECK(whole.is_absolute());
+            CHECK(whole.filename() == fs::path("nope.csv"));
+            CHECK(fs::equivalent(whole.parent_path(), here / "lists"));
+            CHECK(r.error == "cannot open \"" + tried + "\"");
+        }
+        r = cascade::core::importFrequencyFileIn("./lists/../nope.csv", "", tried);
+        CHECK(tried.find("..") == std::string::npos && tried.find("./") == std::string::npos);
+        // A folder is not a list: cannot open, and it names the folder.
+        r = cascade::core::importFrequencyFileIn("lists", "", tried);
+        CHECK(r.error.rfind("cannot open", 0) == 0);
+        // An empty path is not a place to look.
+        r = cascade::core::importFrequencyFileIn("  \n", recDir, tried);
+        CHECK(r.error == "cannot open \"\"" && tried.empty());
+
+        fs::current_path(was, ec);
+        fs::remove_all(root, ec);
     }
 
     return testSummary("test_freq_import");

@@ -44,7 +44,9 @@ ImU32 colourFor(std::uint32_t kind) {
         // pale and busy - and street tiles are now the normal case whenever a
         // basemap plugin is installed. Red is the one hue an OSM raster style
         // does not use for large areas (its reds are thin motorway lines), so
-        // an aircraft stays findable against it.
+        // an aircraft stays findable against it. (An aircraft that reports no
+        // altitude no longer draws in this red - it is grey, so it cannot be
+        // mistaken for one on final approach; see colourForTrack.)
         case CASCADE_TRACK_AIRCRAFT: c = IM_COL32(235, 40, 40, 255); break;  // theme-exempt: per-kind target colour (meaning)
         case CASCADE_TRACK_VESSEL:   c = IM_COL32(120, 255, 170, 255); break;  // theme-exempt: per-kind target colour (meaning)
         case CASCADE_TRACK_STATION:  c = IM_COL32(255, 210, 120, 255); break;  // theme-exempt: per-kind target colour (meaning)
@@ -65,12 +67,18 @@ ImU32 colourFor(std::uint32_t kind) {
 //   2. ALTITUDE BAND, when the altitude is known. This is what makes an
 //      approach and a cruise read differently at a glance, which is the whole
 //      point of colouring by altitude at all.
-//   3. THE KIND COLOUR, when it is not. altM is NaN by ABI contract when the
-//      source does not report it, and a ship or an APRS station reporting no
-//      altitude is not a thing at sea level - it is a thing whose altitude is
-//      not part of what it transmits. Those keep the per-kind colour they have
-//      always had, which is also what keeps several kinds on one map
-//      distinguishable.
+//   3. GREY, for an AIRCRAFT whose altitude is not known (0.99.74). altM is
+//      NaN by ABI contract when the source does not report it. Such an
+//      aircraft used to take the aircraft kind colour, red, and a tester could
+//      not tell it from one on final approach (the lowest band is orange):
+//      "Maybe color this in grey or black. I would like to be able to
+//      distinguish the two." Grey, and not black, which vanishes on the dark
+//      map; the legend names it (see noAltitudeStyle in track_metrics.hpp).
+//   4. THE KIND COLOUR, for everything else without an altitude. A ship or an
+//      APRS station reporting none is not a thing at sea level - it is a thing
+//      whose altitude is not part of what it transmits. Those keep the
+//      per-kind colour they have always had, which is also what keeps several
+//      kinds on one map distinguishable.
 //
 // Selection is not in this list because it is not a colour: a selected target
 // gets a RINGED marker in whatever colour it already had (see the draw loop),
@@ -115,7 +123,13 @@ ImU32 colourForTrack(const CascadeTrack& t) {
         return IM_COL32(255, 45, 45, 255);  // theme-exempt: emergency squawk hue (meaning)
     }
     const int band = bandIndexFor(t.kind, t.altM);
-    if (band < 0) { return colourFor(t.kind); }
+    if (band < 0) {
+        if (noAltitudeUsesGrey(detailTrackKind(t.kind))) {
+            const AltBandStyle& g = noAltitudeStyle();
+            return IM_COL32(g.r, g.g, g.b, 255);  // theme-exempt: "no altitude" grey (a measurement's absence)
+        }
+        return colourFor(t.kind);
+    }
     const AltBandStyle& s = bandStyleFor(t.kind, band);
     return IM_COL32(s.r, s.g, s.b, 255);  // theme-exempt: altitude-band colour (a measurement)
 }
@@ -613,11 +627,11 @@ namespace {
 // Web Mercator, normalised so the whole world is 0..1 in both axes - which is
 // the form the tile grid is defined in: at zoom z the world is 2^z tiles, so a
 // tile index is simply the normalised coordinate times 2^z.
-double mercY(double latDeg) {
-    const double lat = std::clamp(latDeg, -85.05112878, 85.05112878);
-    const double s = std::sin(lat * 3.14159265358979323846 / 180.0);
-    return 0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * 3.14159265358979323846);
-}
+//
+// One definition, in track_metrics.hpp, because MapView::isOnScreen asks the
+// same projection the same question and two copies of it are two chances to
+// disagree at the edge of the map.
+double mercY(double latDeg) { return mapMercatorY(latDeg); }
 
 double mercLat(double y) {
     const double n = 3.14159265358979323846 * (1.0 - 2.0 * y);
@@ -627,6 +641,10 @@ double mercLat(double y) {
 }  // namespace
 
 void MapView::goTo(double latDeg, double lonDeg, double spanDeg) {
+    // A place that is not a place is not gone to (0.99.75): a NaN centre is a NaN in
+    // every projected coordinate on the page. Nothing is asked of the view at all,
+    // so a pending fit is not cancelled either.
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return; }
     centreLat_ = latDeg;
     centreLon_ = lonDeg;
     // Tightened only, never loosened - see the header for why.
@@ -636,6 +654,31 @@ void MapView::goTo(double latDeg, double lonDeg, double spanDeg) {
     // would immediately drag the view somewhere else.
     fitRequested_ = false;
     fittedOnce_ = true;
+}
+
+bool MapView::isOnScreen(double latDeg, double lonDeg) const {
+    // A position that is not a number is on no map, drawn or not.
+    if (!std::isfinite(latDeg) || !std::isfinite(lonDeg)) { return false; }
+    // NOTHING DRAWN YET, NOTHING TO FILTER AGAINST. The first frame of a page
+    // submits its list before its map, so for that one frame the answer is
+    // "everything" rather than an empty list that flickers full a frame later.
+    if (!(frameWidthPx_ > 0.0f) || !(frameHeightPx_ > 0.0f)) { return true; }
+    return mapPointOnScreen(centreLat_, centreLon_, spanDeg_, frameWidthPx_, frameHeightPx_,
+                            frameMercator_, latDeg, lonDeg);
+}
+
+std::size_t listedTrackCount(const MapView& view,
+                             const std::vector<cascade::core::HostTrack>& tracks,
+                             bool onScreenOnly) {
+    std::size_t n = 0;
+    for (const cascade::core::HostTrack& ht : tracks) {
+        // Not a placed row, and never on screen (see the header).
+        if (!cascade::core::trackHasPosition(ht.t)) { continue; }
+        if (!cascade::core::trackPresentation(ht.t).visible) { continue; }
+        if (onScreenOnly && !view.isOnScreen(ht.t.latDeg, ht.t.lonDeg)) { continue; }
+        ++n;
+    }
+    return n;
 }
 
 void MapView::draw(float width, float height,
@@ -683,7 +726,10 @@ void MapView::draw(float width, float height,
         double minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
         bool any = false;
         for (const auto& ht : tracks) {
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            // A target heard without a position is not plotted, so it is not
+            // fitted to (0.99.75): a NaN here would make the centre NaN.
+            if (!cascade::core::trackHasPosition(ht.t)) { continue; }
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             any = true;
@@ -744,9 +790,12 @@ void MapView::draw(float width, float height,
     if (!followId_.empty()) {
         for (const auto& ht : tracks) {
             if (followId_ == ht.t.id) {
-                if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                if (!cascade::core::trackPresentation(ht.t).visible) {
                     break;
                 }
+                // Nothing to follow to while it has no position (0.99.75): the map
+                // stays where it is, as it does for a dropped target.
+                if (!cascade::core::trackHasPosition(ht.t)) { break; }
                 centreLat_ = ht.t.latDeg;
                 centreLon_ = ht.t.lonDeg;
                 break;
@@ -1649,6 +1698,12 @@ void MapView::draw(float width, float height,
     // and satellites needs both keys and a map carrying one needs one.
     bool anyBanded = anyBandedTrail_;
     bool anyOrbitBanded = anyOrbitTrail_;
+    // Whether anything drawn is GREY for want of an altitude, which is what
+    // earns the aviation ladder its "no altitude" row. Counted only for a mark
+    // that really is grey: an aircraft squawking an emergency with no altitude
+    // draws in the emergency hue, and a row explaining a grey that is not on
+    // the map is a key to nothing.
+    bool anyNoAltitude = false;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     // Hit radius in pixels: an aircraft icon is as big as the user made it,
     // and a click anywhere on it must select it.
@@ -1663,8 +1718,14 @@ void MapView::draw(float width, float height,
         // permanently dimmed, and an aircraft heard once an hour ago was drawn
         // at full confidence forever because nothing ever removed it.
         const cascade::core::TrackPresentation pres =
-            cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+            cascade::core::trackPresentation(ht.t);
         if (!pres.visible) { continue; }
+        // NEVER DRAWN WITHOUT A POSITION (0.99.75). The application keeps a target
+        // heard and not placed out of this vector altogether; this is the map
+        // defending itself, because the test below does not: toScreen of a NaN is
+        // NaN, every comparison with NaN is false, and so a NaN marker is not
+        // skipped - it is drawn, at NaN, and could be hit.
+        if (!cascade::core::trackHasPosition(ht.t)) { continue; }
         const ImVec2 s = toScreen(ht.t.latDeg, ht.t.lonDeg);
         if (s.x < origin.x - 40 || s.x > origin.x + width + 40 || s.y < origin.y - 40 ||
             s.y > origin.y + height + 40) {
@@ -1682,6 +1743,9 @@ void MapView::draw(float width, float height,
             } else {
                 anyBanded = true;
             }
+        } else if (noAltitudeUsesGrey(detailTrackKind(ht.t.kind)) &&
+                   (ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) == 0u) {
+            anyNoAltitude = true;
         }
         // An emergency also gets a ring of its own, so it survives being
         // selected (where the marker is knocked out of a disc and the emergency
@@ -1691,6 +1755,14 @@ void MapView::draw(float width, float height,
         if ((ht.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u) {
             dl->AddCircle(s, isAircraft ? aircraftMarkerRadius(iconPx) + 3.0f : 16.0f,
                           fadedColour(IM_COL32(255, 45, 45, 255), pres.alpha), 0, 2.0f);  // theme-exempt: emergency squawk hue (meaning)
+        }
+        // AN ESTIMATE IS DRAWN AS ONE (0.99.78): a thin ring in the marker's own
+        // colour around a position the source carried forward from its last fix,
+        // so a reader can tell "last heard here, probably about here now" from a
+        // fix. The list row says "estimated" beside the id for the same track.
+        if (cascade::core::trackIsEstimated(ht.t)) {
+            dl->AddCircle(s, isAircraft ? aircraftMarkerRadius(iconPx) + 2.0f : 14.0f, col, 0,
+                          1.0f);
         }
 
         if (isAircraft) {
@@ -1793,11 +1865,20 @@ void MapView::draw(float width, float height,
 
         // One ladder's key. Returns the height it used so a second can be
         // stacked under it without either guessing at the other's size.
+        //
+        // `noAltitudeLabel`, when not null, adds ONE row under the bands for an
+        // aircraft that reports no altitude (grey on the map - see
+        // noAltitudeStyle). It is the TRANSLATED label, because the plate's
+        // width was measured from it and the row has to draw those same words.
         const auto drawLadder = [&](const char* heading, int bandCount,
-                                    const AltBandStyle& (*styleAt)(int), float widthPx) {
+                                    const AltBandStyle& (*styleAt)(int), float widthPx,
+                                    const char* noAltitudeLabel) {
             const float headH = lh + 3.0f;
             const float boxH =
-                headH + rowStep * static_cast<float>(bandCount) + 8.0f;
+                headH +
+                rowStep * static_cast<float>(
+                              altLegendRowCount(bandCount, noAltitudeLabel != nullptr)) +
+                8.0f;
             // The heading may be wider than any band label; the plate has to
             // hold whichever is longer or it clips its own title.
             const float headW = ImGui::CalcTextSize(heading).x + pad * 2.0f;
@@ -1828,6 +1909,17 @@ void MapView::draw(float width, float height,
                 // the label beside it is a caption on glass, so it is cream.
                 dl->AddText(ImVec2(tl.x + pad + sw + pad, y), theme::kCream, s.label);
             }
+            if (noAltitudeLabel != nullptr) {
+                // AT THE FOOT, below the lowest band: it is not a band, and
+                // putting it at the head of the ladder would read as "higher
+                // than 30 kft". Same swatch and caption idiom as the rows above.
+                const AltBandStyle& g = noAltitudeStyle();
+                const float y = tl.y + 4.0f + headH + rowStep * static_cast<float>(bandCount);
+                dl->AddRectFilled(ImVec2(tl.x + pad, y + (lh - sw) * 0.5f),
+                                  ImVec2(tl.x + pad + sw, y + (lh + sw) * 0.5f),
+                                  IM_COL32(g.r, g.g, g.b, 255), 2.0f);  // theme-exempt: "no altitude" legend swatch (a measurement's absence)
+                dl->AddText(ImVec2(tl.x + pad + sw + pad, y), theme::kCream, noAltitudeLabel);
+            }
             legendY = br.y + 6.0f;
         };
 
@@ -1839,12 +1931,19 @@ void MapView::draw(float width, float height,
         if (anyOrbitBanded) {
             drawLadder(tr("ORBITAL ALTITUDE - km"), kOrbitBandCount, &orbitBandStyle,
                        orbitLegendWidth(
-                           [](const char* s) { return ImGui::CalcTextSize(s).x; }));
+                           [](const char* s) { return ImGui::CalcTextSize(s).x; }),
+                       nullptr);
         }
         if (anyBanded) {
+            // THE "NO ALTITUDE" ROW RIDES ON THIS LADDER AND ONLY WHEN IT IS
+            // UP: with no aircraft banded there is no ladder to tell the grey
+            // apart from, and a plate holding one row would be a key to a
+            // choice nobody is being asked to make.
+            const char* noAltLabel = anyNoAltitude ? tr("no altitude") : nullptr;
             drawLadder(tr("ALTITUDE - kft"), kAltBandCount, &altBandStyle,
                        altLegendWidth(
-                           [](const char* s) { return ImGui::CalcTextSize(s).x; }));
+                           [](const char* s) { return ImGui::CalcTextSize(s).x; }, noAltLabel),
+                       noAltLabel);
         }
     }
 
@@ -1965,6 +2064,13 @@ void MapView::draw(float width, float height,
                                : tr("Zoomed out as far as the map goes")));
         }
     }
+
+    // WHAT THIS FRAME WAS DRAWN IN, kept for isOnScreen. The centre and span are
+    // already members; the pixel size and the projection are not, and the list
+    // beside the map asks about them before the next frame starts.
+    frameWidthPx_ = width;
+    frameHeightPx_ = height;
+    frameMercator_ = mercator;
 
     dl->PopClipRect();
 }
@@ -2110,7 +2216,7 @@ bool drawDeckKey(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
     // and still visibly dimmer than the cream of a live key, so the state is
     // carried by the tone gap rather than by making the words unreadable.
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const ImU32 ink = enabled ? theme::kEnamel : theme::kInkMuted;
     const float lh = faceH(f, px);
     const int lines = (line2 != nullptr && line2[0] != '\0') ? 2 : 1;
@@ -2164,7 +2270,7 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
     // The label plate: lit brass with ink lettering when on, an engraved
     // outline when off. Same object either way, so the eye compares one thing.
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float lw = textW(f, px, label);
     const float lh = faceH(f, px);
     const ImVec2 lTL(tl.x + rw + 8.0f, tl.y + (rowH - lh - 6.0f) * 0.5f);
@@ -2198,7 +2304,7 @@ bool drawRockerRow(ImDrawList* dl, const ImVec2& tl, float width, float rowH,
 
     if (hint != nullptr && hint[0] != '\0') {
         ImFont* hf = cascade::gui::fonts::legend();
-        const float hpx = cascade::gui::fonts::kTinySize;
+        const float hpx = cascade::gui::fonts::tinyPx();
         const float hw = textW(hf, hpx, hint);
         const float hx = tl.x + width - lampR * 2.0f - 8.0f - hw;
         if (hx > lBR.x + 8.0f) {
@@ -2251,7 +2357,7 @@ bool drawSegment(ImDrawList* dl, const ImVec2& tl, const ImVec2& br, const char*
                     theme::kBrassBright, r + 1.0f, 0, theme::kHairline);
     }
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     dl->AddText(f, px,
                 ImVec2((tl.x + br.x) * 0.5f - textW(f, px, label) * 0.5f,
                        (tl.y + br.y) * 0.5f - faceH(f, px) * 0.5f + (selected ? 1.0f : 0.0f)),
@@ -2279,7 +2385,7 @@ void addHatch(ImDrawList* dl, const ImVec2& tl, const ImVec2& br) {
 // gold for something the user can fix, rust for something refused.
 float noteHeight(float width, const char* text) {
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float wrap = width - 10.0f;
     if (wrap < 20.0f) { return faceH(f, px) + 8.0f; }
     return f->CalcTextSizeA(px, FLT_MAX, wrap, text).y + 8.0f;
@@ -2289,7 +2395,7 @@ void drawNote(ImDrawList* dl, const ImVec2& tl, float width, ImU32 accent,
               const char* text) {
     if (dl == nullptr || width < 30.0f) { return; }
     ImFont* f = cascade::gui::fonts::ui();
-    const float px = cascade::gui::fonts::kTinySize;
+    const float px = cascade::gui::fonts::tinyPx();
     const float h = noteHeight(width, text);
     dl->AddRectFilled(tl, ImVec2(tl.x + width, tl.y + h), theme::withAlpha(accent, 0.10f));
     dl->AddRectFilled(tl, ImVec2(tl.x + 2.0f, tl.y + h), accent);
@@ -2348,7 +2454,7 @@ void drawCoordCells(ImDrawList* dl, const ImVec2& tl, const char* text, bool kno
     // Never below 9 px: a drum digit smaller than that is a smudge, and at
     // that point the window is too narrow for this control however it is laid
     // out. The clip on the well is what keeps the overflow tidy.
-    const float px = std::max(9.0f, cascade::gui::fonts::kReadingSize * scale);
+    const float px = std::max(9.0f, cascade::gui::fonts::readingPx() * scale);
     for (const char* p = text; *p != '\0'; ++p) {
         const float w = cascade::gui::coordCellWidth(*p) * scale;
         drawFreqDrumCell(dl, ImVec2(x, tl.y),
@@ -2415,7 +2521,7 @@ const char* satelliteSortKeyLabel(int index) {
 // shrink the counter below the proportions the design drew it at.
 float coordCellWidth(char shape) {
     ImFont* f = cascade::gui::fonts::reading();
-    const float px = cascade::gui::fonts::kReadingSize;
+    const float px = cascade::gui::fonts::readingPx();
     const char s[2] = {shape, '\0'};
     const float glyph = f->CalcTextSizeA(px, FLT_MAX, 0.0f, s).x;
     // A sign and a decimal point are not figures and do not need a figure's
@@ -2424,7 +2530,7 @@ float coordCellWidth(char shape) {
                              : std::max(13.0f, glyph + 4.0f);
 }
 
-float coordCellHeight() { return std::max(26.0f, cascade::gui::fonts::kReadingSize + 9.0f); }
+float coordCellHeight() { return std::max(26.0f, cascade::gui::fonts::readingPx() + 9.0f); }
 
 // See map_view.hpp. A figure becomes a dash, a sign becomes nothing, and
 // everything else - the decimal point - is left where it is so the counter
@@ -2471,9 +2577,9 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
 
     ImFont* uiF = cascade::gui::fonts::ui();
     ImFont* lgF = cascade::gui::fonts::legend();
-    const float tinyPx = cascade::gui::fonts::kTinySize;
-    const float uiPx = cascade::gui::fonts::kUiSize;
-    const float legPx = cascade::gui::fonts::kLegendSize;
+    const float tinyPx = cascade::gui::fonts::tinyPx();
+    const float uiPx = cascade::gui::fonts::uiPx();
+    const float legPx = cascade::gui::fonts::legendPx();
     const float tinyH = faceH(lgF, tinyPx);
     const float smallH = faceH(uiF, tinyPx);
     const float uiH = faceH(uiF, uiPx);
@@ -2924,7 +3030,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         bool allOrbital = true;
         for (std::size_t i = 0; i < tracks.size(); ++i) {
             const cascade::core::HostTrack& ht = tracks[i];
-            if (!cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+            if (!cascade::core::trackPresentation(ht.t).visible) {
                 continue;
             }
             TrackRow r;
@@ -2957,7 +3063,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
         const cascade::core::HostTrack* sel = nullptr;
         for (const auto& ht : tracks) {
             if (!selectedId_.empty() && selectedId_ == ht.t.id &&
-                cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind).visible) {
+                cascade::core::trackPresentation(ht.t).visible) {
                 sel = &ht;
                 break;
             }
@@ -3113,7 +3219,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                 const TrackRow& r = rows[i];
                 const cascade::core::HostTrack& ht = tracks[r.source];
                 const cascade::core::TrackPresentation pres =
-                    cascade::core::trackPresentation(ht.t.ageMs, ht.t.kind);
+                    cascade::core::trackPresentation(ht.t);
                 const ImVec2 at = ImGui::GetCursorScreenPos();
                 ImGui::PushID(static_cast<int>(i));
                 const bool clicked = ImGui::InvisibleButton("##row", ImVec2(tableW, rowH));

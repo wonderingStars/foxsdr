@@ -88,6 +88,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <string>
 #include <thread>
@@ -103,6 +104,12 @@ namespace cascade::core {
 // second in-memory copy of the fault, because the fault happened in a process
 // that no longer exists - and a second representation would be a second thing
 // to keep in step with crash_handler.cpp and hang_watchdog.cpp.
+
+// What an uploaded FREEZE's `reason` begins with (0.99.64); the part of the frame
+// follows it, one name from core/frame_timing.hpp's closed list. Fixed, so the
+// receiving end can tell it from a crash's reason by its first word.
+inline constexpr const char* kFreezeReasonPrefix = "freeze: the frame was in ";
+
 struct ReportFrame {
     std::string module;   // "cascade.exe", or empty when the address resolved
                           // to no module the snapshot knew about
@@ -127,8 +134,10 @@ struct ParsedReport {
     // separate an ABSORBED vendor fault (the guard filed the report and the
     // process continued — reason says so) from a process death at the same
     // address; dropping them made the two identical on the dashboard, which
-    // is how a survived teardown fault reopened a fixed signature. Hang
-    // reports have neither line, so both stay empty for a hang.
+    // is how a survived teardown fault reopened a fixed signature. A hang
+    // report has neither line: its `code` stays empty, and its `reason` is
+    // kFreezeReasonPrefix followed by the report's `frame-scope:` word when that
+    // is one of the frame timer's names (0.99.64), else empty.
     std::string reason;
     std::string code;
     std::string version;
@@ -149,7 +158,22 @@ struct ParsedReport {
     std::string sdrModel;
     double sampleRateHz = 0.0;
     bool deviceOpen = false;
+    // The report's `foreign-modules:` line (0.99.69): the FILE NAMES of the other
+    // software's DLLs that were loaded into the process, as core/foreign_modules.hpp
+    // writes them. Already put through normaliseForeignField when parsed, so it is a
+    // list of plain file names, or `(none)`, or EMPTY - for a report that says nothing
+    // about it (an older build's, `(not recorded)`, `(not scanned yet)`) and for any
+    // value that is not a list of plain names.
+    std::string foreignModules;
     std::vector<std::string> plugins;  // "name version", as the report writes them
+
+    // The freeze writer's `reload-phase:` line (0.99.84): which step of a plugin
+    // reload was under way when the stall was captured, kept only when it is one
+    // of core/plugin_reload_phases.hpp's closed list of step names - the same
+    // rule as `frame-scope` above - and EMPTY otherwise: for `none`, for a crash
+    // report, for an older build's report, and for any value that is not one of
+    // those words.
+    std::string reloadPhase;
 
     // The `--- process ---` block both writers add since 0.89.0. `uptimeSec`
     // is seconds from process start to the fault (0 when the report predates
@@ -287,6 +311,14 @@ struct UploadResult {
 // `request` is the live WinHTTP request handle, published by the worker before
 // it makes a blocking call and taken by whichever of the two gets there first,
 // so it is closed exactly once. Closing it is what aborts a blocked transfer.
+//
+// On POSIX the handle is the worker's own httplib::ClientImpl, which the
+// worker DESTROYS as soon as take() returns. cancel() used to exchange the
+// pointer out and call stop() on it with nothing stopping the worker's request
+// finishing, take() returning nullptr and the client being freed in between -
+// a use-after-free that crashed ~60% of Linux runs destroying an AppWindow
+// with a tester-link lookup in flight. mu_ now covers cancel()'s stop() and
+// take(), so once take() returns no stop() can still be running on the client.
 class UploadCancel {
 public:
     void cancel();
@@ -299,6 +331,7 @@ public:
 private:
     std::atomic<bool> cancelled_{false};
     std::atomic<void*> request_{nullptr};
+    std::mutex mu_;
 };
 
 // One POST. Synchronous, bounded, and abortable through `cancel`. Returns what
@@ -336,6 +369,38 @@ struct RawPostResult {
 
 RawPostResult postBounded(const std::string& url, const std::string& json,
                           const std::shared_ptr<UploadCancel>& cancel, bool captureBody);
+
+// ---------------------------------------------------------------------------
+// Authenticated request, WITH a response body (2026-09-28, tester-link)
+// ---------------------------------------------------------------------------
+//
+// postBounded() above is POST-only and never sends a custom header: fine for
+// the crash and usage reporters, which carry their credential IN the JSON
+// body, but core/tester_link.hpp's two calls - "who does this app token
+// belong to" and "exchange this portal token for an app token" - both
+// authenticate with a bearer header instead (`Authorization: Bearer <token>`,
+// matching the site's own beta-portal contract) and both need the response
+// BODY read back, not just the status. Rather than a third hand-rolled
+// WinHTTP/httplib client, this is the same transport discipline as
+// postBounded (https except on loopback, abortable via `cancel`, same
+// connect/send/receive timeouts, response capped at the same
+// kMaxCapturedBodyBytes) with the method and the header made parameters.
+//
+// `method` is "GET" or "POST" exactly (nothing else is accepted - returns
+// res.attempted == false); `body` is sent as application/json for POST and
+// ignored for GET. `bearer` is never logged by this function and must not be
+// logged by any caller either - see core/tester_link.hpp's own token-secrecy
+// note.
+struct AuthRequestResult {
+    bool attempted = false;
+    int status = 0;       // 0 when the request never got an answer
+    bool cancelled = false;
+    std::string body;     // always captured, capped at kMaxCapturedBodyBytes
+};
+
+AuthRequestResult authRequestBounded(const std::string& method, const std::string& url,
+                                     const std::string& bearer, const std::string& body,
+                                     const std::shared_ptr<UploadCancel>& cancel);
 
 // WHERE REPORTS GO. https://foxsdr.com/api/crash, overridable by
 // FOXSDR_CRASH_URL, which is how the tests point at a local stub with no

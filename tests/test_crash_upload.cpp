@@ -31,7 +31,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/breadcrumb.hpp"
 #include "core/crash_upload.hpp"
+#include "core/frame_timing.hpp"
+#include "core/plugin_reload_phases.hpp"
+#include "core/sentinel.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -618,6 +622,101 @@ void setEnvVar(const char* name, const std::string& value) {
 
 }  // namespace
 
+// THE SWEEP AND THE SENTINEL'S REPORTS (0.99.64), against a real socket: a report
+// the sentinel wrote of a window that had stopped drawing is sent, with exactly the
+// documented fields and nothing new; a report of an ending from outside while the
+// window was drawing (the user ended it from Task Manager) never reaches the wire,
+// spends none of the day's five, and says why in its sidecar. See core/sentinel.hpp.
+// A free function, called once from main() after both platforms' blocks, because
+// the StubServer above exists on both.
+static void sentinelSweepBlock() {
+    const fs::path dir = scratchDir("sentinel");
+    SentinelReportInfo info;
+    info.version = "0.99.64";
+    info.commit = "abc123def456";
+    info.os = "Windows 10.0.22631";
+    info.arch = "x64";
+    info.uptimeSec = 3600;
+    info.logLines = {"12:00:00.000 info FoxSDR 0.99.64 (abc123def456) starting",
+                     "12:00:09.000 info source: opened"};
+    info.logTotalLines = 2;
+    breadcrumb::Snapshot crumb;
+    crumb.valid = true;
+    crumb.startedMs = 1000;
+    crumb.phase = breadcrumb::Phase::Running;
+    crumb.frames = 500;
+    auto verdictFor = [&](unsigned long code, std::uint64_t silentMs) {
+        SentinelFacts f;
+        f.exitKnown = true;
+        f.exitCode = code;
+        f.nowMs = 10'000'000;
+        crumb.beatMs = f.nowMs - silentMs;
+        crumb.phaseMs = f.nowMs - silentMs;
+        f.crumb = crumb;
+        return decideSentinel(f);
+    };
+    const SentinelVerdict frozen = verdictFor(1, 9000);
+    const SentinelVerdict outside = verdictFor(1, 100);
+    CHECK(frozen.cls == SentinelClass::Frozen && frozen.upload());
+    CHECK(outside.cls == SentinelClass::Outside && !outside.upload());
+    const fs::path sendable = dir / "crash-20260825-120000-1234-999999.txt";
+    const fs::path kept = dir / "crash-20260825-130000-1235-999999.txt";
+    writeFile(sendable, renderSentinelReport(frozen, info));
+    writeFile(kept, renderSentinelReport(outside, info));
+
+    StubServer srv;
+    CHECK(srv.start(StubServer::Mode::Accept204));
+    SweepParams p;
+    p.crashDir = dir.string();
+    p.url = srv.url();
+    p.enabled = true;
+    p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+    p.nowEpoch = 1'700'000'000ull;
+    auto cancel = std::make_shared<UploadCancel>();
+    const SweepOutcome out = sweepCrashDir(p, cancel);
+
+    CHECK(out.considered == 2);
+    CHECK(out.sent == 1);
+    CHECK(out.refused == 1);  // the one kept here
+    CHECK(srv.connections() == 1);
+    // Only the sendable one used any of the day's five.
+    CHECK(out.state.windowCount == 1 && out.state.recent.size() == 1);
+    const std::vector<std::string> bodies = srv.bodies();
+    CHECK(bodies.size() == 1);
+    if (bodies.size() == 1) {
+        const nlohmann::json j = nlohmann::json::parse(bodies[0], nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) {
+            // Exactly the documented request: the sentinel adds no field.
+            std::set<std::string> keys;
+            for (auto it = j.begin(); it != j.end(); ++it) { keys.insert(it.key()); }
+            CHECK(keys == std::set<std::string>(uploadFieldNames().begin(), uploadFieldNames().end()));
+            std::set<std::string> ctxKeys;
+            for (auto it = j["context"].begin(); it != j["context"].end(); ++it) { ctxKeys.insert(it.key()); }
+            CHECK(ctxKeys == std::set<std::string>(uploadContextFieldNames().begin(),
+                                                   uploadContextFieldNames().end()));
+            CHECK(j["kind"] == "crash");
+            CHECK(j["reason"].get<std::string>().rfind(kSentinelReasonFrozen, 0) == 0);
+            CHECK(j["code"] == "0x00000001");
+            CHECK(j["context"]["uptimeSec"] == 3600);
+            CHECK(j["threads"].empty() && j["plugins"].empty());
+            // ...and the kept one is nowhere in it.
+            CHECK(bodies[0].find("ended from outside") == std::string::npos);
+        }
+    }
+    CHECK(readFile(uploadSidecarPath(sendable.string())).find("status: sent") != std::string::npos);
+    const std::string side = readFile(uploadSidecarPath(kept.string()));
+    CHECK(side.find("status: local-only") != std::string::npos);
+    CHECK(side.find("not a fault in FoxSDR") != std::string::npos);
+    // A second start: neither is looked at again, and nothing is sent.
+    const SweepOutcome again = sweepCrashDir(p, cancel);
+    CHECK(again.considered == 0 && again.sent == 0);
+    CHECK(srv.connections() == 1);
+    srv.stop();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 int main() {
     // --- The report parses back into the fields the wire contract needs -----
     {
@@ -692,8 +791,10 @@ int main() {
         CHECK(r.threads.size() == 2);
         CHECK(at(r.threads, 0).id == 100);
         CHECK(at(r.threads, 1).id == 200);
-        // The stalled thread's top frame is what the signature was built from,
-        // so it is what `module`/`offset` name.
+        // The stalled thread's top frame is what `module`/`offset` name. (Until
+        // 0.99.62 it was also what the signature was built from; the signature is
+        // now the first frame of the main executable, and the uploader carries the
+        // file's own `signature:` line as written - tests/test_hang_signature.cpp.)
         CHECK(r.module == "cascade.exe");
         CHECK(r.offset == 0x9999ull);
         CHECK(r.mode == "NFM");
@@ -717,6 +818,124 @@ int main() {
         CHECK(hj.contains("context"));
         CHECK(hj["context"].value("uptimeSec", 99ull) == 0ull);
         CHECK(hj["context"].value("faultThreadOwn", std::string("x")).empty());
+    }
+
+    // --- A freeze's reason is the part of the frame it was in (0.99.64) ------
+    //
+    // The freeze writer's `frame-scope:` line goes up as the reason, as ONE fixed
+    // sentence ending in a name from the frame timer's closed list - and nothing
+    // that is not such a name is ever forwarded, because the reason is shown to
+    // whoever reads the report and this line is read back off a file on disk.
+    {
+        auto withScope = [](const std::string& line) {
+            std::string text = hangReportText();
+            const std::string anchor = "threads: 2\n";
+            const std::size_t at = text.find(anchor);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + anchor.size(), line); }
+            return text;
+        };
+        ParsedReport r;
+        CHECK(parseReportText(withScope("frame-scope: rail\n"), r));
+        CHECK(r.kind == "hang");
+        CHECK(r.reason == "freeze: the frame was in rail");
+        CHECK(r.reason.rfind(kFreezeReasonPrefix, 0) == 0);
+        const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(j.value("reason", std::string()) == "freeze: the frame was in rail");
+        // Everything else about the report is as it was without the line.
+        CHECK(r.signature == "FEDCBA9876543210" && r.threads.size() == 2 && r.code.empty());
+
+        // Every name the timer has is accepted, and comes back as itself.
+        for (int i = 0; i < kFrameScopeCount; ++i) {
+            ParsedReport each;
+            CHECK(parseReportText(
+                withScope(std::string("frame-scope: ") + kFrameScopeNames[i] + "\n"), each));
+            CHECK(each.reason == std::string(kFreezeReasonPrefix) + kFrameScopeNames[i]);
+        }
+
+        // Anything that is not one of those names is dropped, not forwarded.
+        for (const char* bad : {"frame-scope: C:\\Users\\someone\\secret.wav\n",
+                                "frame-scope: rail; tuned to 145.500 MHz\n", "frame-scope: Rail\n",
+                                "frame-scope: \n", "frame-scope: rail extra\n"}) {
+            ParsedReport dropped;
+            CHECK(parseReportText(withScope(bad), dropped));
+            CHECK(dropped.kind == "hang");
+            CHECK(dropped.reason.empty());
+        }
+
+        // A crash report's reason is its own line; a stray frame-scope line in a
+        // crash header changes nothing.
+        std::string crash = "kind: crash\nreason: access violation\nframe-scope: rail\n"
+                            "code: 0xC0000005\nsignature: 0123456789ABCDEF\n"
+                            "--- context ---\nversion: 0.99.64\n";
+        ParsedReport c;
+        CHECK(parseReportText(crash, c));
+        CHECK(c.reason == "access violation");
+    }
+
+    // --- A freeze's reload step rides in the context (0.99.84) ---------------
+    //
+    // The freeze writer's `reload-phase:` line - which step of a plugin reload
+    // the stall was captured in - goes up as `context.reloadPhase`, under the
+    // same closed-list rule as frame-scope above: only a word from
+    // core/plugin_reload_phases.hpp is ever forwarded, because this line too is
+    // read back off a file on disk. This is the field report 7591C65EFB69DD94
+    // lacked: a reload stalled past the cap, and nothing could say which of its
+    // six waits held the GUI thread.
+    {
+        auto withPhase = [](const std::string& line) {
+            std::string text = hangReportText();
+            const std::string anchor = "threads: 2\n";
+            const std::size_t at = text.find(anchor);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + anchor.size(), line); }
+            return text;
+        };
+        ParsedReport r;
+        CHECK(parseReportText(withPhase("reload-phase: unload\n"), r));
+        CHECK(r.kind == "hang");
+        CHECK(r.reloadPhase == "unload");
+        const nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+        CHECK(j["context"].value("reloadPhase", std::string("x")) == "unload");
+
+        // Every step the reload has is accepted, and comes back as itself -
+        // `panels and map`, the one with spaces, included.
+        for (const char* name : kPluginReloadPhaseNames) {
+            ParsedReport each;
+            CHECK(parseReportText(withPhase(std::string("reload-phase: ") + name + "\n"), each));
+            CHECK(each.reloadPhase == name);
+        }
+
+        // `none` - every freeze outside a reload - and anything that is not a
+        // step's name is dropped, not forwarded.
+        for (const char* bad :
+             {"reload-phase: none\n", "reload-phase: C:\\Users\\someone\\plugin.dll\n",
+              "reload-phase: unload; tuned to 145.500 MHz\n", "reload-phase: Unload\n",
+              "reload-phase: \n", "reload-phase: unload extra\n"}) {
+            ParsedReport dropped;
+            CHECK(parseReportText(withPhase(bad), dropped));
+            CHECK(dropped.kind == "hang");
+            CHECK(dropped.reloadPhase.empty());
+        }
+
+        // A report with no such line - every crash, and every freeze written
+        // before 0.99.84 - answers empty rather than inventing, and the key is
+        // still present in the payload: the inventory is exact both ways.
+        ParsedReport plain;
+        CHECK(parseReportText(hangReportText(), plain));
+        CHECK(plain.reloadPhase.empty());
+        const nlohmann::json pj = parseOrEmpty(uploadJson(plain, std::string()));
+        CHECK(pj["context"].contains("reloadPhase"));
+        CHECK(pj["context"].value("reloadPhase", std::string("x")).empty());
+
+        // A stray reload-phase line in a CRASH header is not carried: the step
+        // of a reload is a freeze's fact.
+        std::string crash = "kind: crash\nreason: access violation\nreload-phase: unload\n"
+                            "code: 0xC0000005\nsignature: 0123456789ABCDEF\n"
+                            "--- context ---\nversion: 0.99.84\n";
+        ParsedReport c;
+        CHECK(parseReportText(crash, c));
+        CHECK(c.reloadPhase.empty());
     }
 
     // --- Rubbish is refused rather than posted ------------------------------
@@ -822,6 +1041,67 @@ int main() {
         // and a crash report must not be what creates one.
         const nlohmann::json anon = parseOrEmpty(uploadJson(r, std::string()));
         CHECK(anon.value("installId", std::string("x")).empty());
+    }
+
+    // --- THE OTHER SOFTWARE'S DLLs (0.99.69): the report's `foreign-modules:` line is sent as
+    // context.foreignModules - FILE NAMES, nothing else - and only what passes the one
+    // validator. Every other value is sent as an empty string, and the key is always there.
+    {
+        auto withLine = [](const std::string& value) {
+            std::string t = crashReportText();
+            const std::size_t at = t.find("plugin: ADS-B");
+            t.insert(at, "foreign-modules: " + value + "\n");
+            return t;
+        };
+        auto sentValue = [](const ParsedReport& r) {
+            const nlohmann::json j = nlohmann::json::parse(uploadJson(r, std::string()), nullptr, false);
+            if (!j.is_object() || !j.contains("context") || !j["context"].contains("foreignModules")) {
+                return std::string("(missing)");
+            }
+            return j["context"]["foreignModules"].get<std::string>();
+        };
+
+        ParsedReport r;
+        CHECK(parseReportText(withLine("NahimicOSD.dll, RTSSHooks64.dll"), r));
+        CHECK(sentValue(r) == "NahimicOSD.dll, RTSSHooks64.dll");
+        // A report from before 0.99.69 has no such line: sent, empty.
+        ParsedReport old;
+        CHECK(parseReportText(crashReportText(), old));
+        CHECK(sentValue(old).empty());
+        // The sentences that say nothing about the modules are sent as nothing; "none" is
+        // the one that says something.
+        ParsedReport none;
+        CHECK(parseReportText(withLine("(none)"), none));
+        CHECK(sentValue(none) == "(none)");
+        for (const char* v : {"(not recorded)", "(not scanned yet)", "(not applicable)", ""}) {
+            ParsedReport q;
+            CHECK(parseReportText(withLine(v), q));
+            CHECK(sentValue(q).empty());
+        }
+        // A path, a folder, a control character in a name, an overlong name: dropped, at
+        // the parse and again where the request is built.
+        ParsedReport edited;
+        CHECK(parseReportText(
+            withLine("C:\\Users\\steve\\Overwolf\\evil.dll, good.dll, /etc/passwd, a\tb.dll, " +
+                     std::string(80, 'x') + ".dll"),
+            edited));
+        CHECK(sentValue(edited) == "good.dll");
+        // The parse alone, whatever the request builder would do after it: the parsed report
+        // already holds only what passed (ParsedReport::foreignModules).
+        CHECK(edited.foreignModules == "good.dll");
+        CHECK(r.foreignModules == "NahimicOSD.dll, RTSSHooks64.dll");
+        CHECK(old.foreignModules.empty());
+        CHECK(none.foreignModules == "(none)");
+        edited.foreignModules = "C:\\Users\\steve\\evil.dll, kept.dll";  // set after the parse
+        CHECK(sentValue(edited) == "kept.dll");
+        // The list's own "+K more" is carried.
+        ParsedReport more;
+        CHECK(parseReportText(withLine("a.dll, b.dll, +7 more"), more));
+        CHECK(sentValue(more) == "a.dll, b.dll, +7 more");
+        // And the bytes that leave the machine carry no folder of the machine's.
+        const std::string body = uploadJson(edited, std::string());
+        CHECK(body.find("Users") == std::string::npos);
+        CHECK(body.find("steve") == std::string::npos);
     }
 
     // --- The payload is capped locally, not by making the server say 413 ---
@@ -1788,6 +2068,8 @@ int main() {
         CHECK(dialog.find("No memory dump is sent, ever") != std::string::npos);
         CHECK(dialog.find("Settings > Diagnostics") != std::string::npos);
     }
+
+    sentinelSweepBlock();
 
     return testSummary("test_crash_upload");
 }

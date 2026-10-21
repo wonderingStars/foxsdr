@@ -2,9 +2,20 @@
 #include "core/config.hpp"
 
 #include "core/bias_tee_memory.hpp"
+#include "core/diag_log.hpp"
+#include "core/display_range.hpp"
+#include "core/file_read.hpp"
+#include "core/patch_presets.hpp"
+#include "core/ppm_correction.hpp"
+#include "core/trace_hold.hpp"
 
 #include "core/plugin_api.hpp"
+#include "core/plugin_run.hpp"
 #include "core/telemetry.hpp"
+#include "core/tester_usage.hpp"
+#include "core/write_fault.hpp"
+// validAudioBufferSetting(): the four buffers the sink has (0.99.73).
+#include "sink/audio_out.hpp"
 // clampScopeRangeNm(), the demod scope's clamps and railBankFromIndex(): the
 // ladders of the settings the window keeps in this file.
 //
@@ -118,9 +129,10 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
     dst = std::move(v);
 }
 
-// The shared rule for the five string lists the config carries
-// (pluginTuneAllowed, pluginsStopped, pluginMuteOverride, closedWindows,
-// keyBindings): drop empties, drop duplicates, cap the length. One function
+// The shared rule for the string lists the config carries
+// (pluginTuneAllowed, pluginSettingsAllowed, pluginTransmitAllowed,
+// pluginsStopped, pluginMuteOverride, closedWindows, keyBindings): drop empties,
+// drop duplicates, cap the length. One function
 // rather than five loops, because the lists are the same shape and a rule that applied to
 // only some of them would be a rule nobody could rely on. Name every caller
 // here when another list arrives — an enumeration that stops being exhaustive
@@ -130,12 +142,75 @@ void getStringArray(const json& j, const char* key, std::vector<std::string>& ds
 // and keyBindings holds "actionId=chord" lines. Both are the same shape and
 // want the same treatment, and keeping one rule is worth more than further
 // functions that would only differ in their names.
+//
+// messagesSeen (0.99.79) is deliberately NOT one of its callers: this keeps the FIRST
+// entries when the list is too long, which for a list that grows at the end would forget
+// the message somebody had just marked Seen. See sanitiseMessagesSeen.
 std::vector<std::string> sanitisePluginNames(const std::vector<std::string>& in) {
     std::vector<std::string> out;
     for (const std::string& n : in) {
         if (n.empty()) { continue; }
         if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
         out.push_back(n);
+        if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
+    }
+    return out;
+}
+
+// The ids of the team messages marked Seen (AppConfig::messagesSeen, 0.99.79): empties and
+// repeats dropped, the first copy of a repeat keeping its place, then at most
+// kMaxMessagesSeen kept - THE LAST ones. The list is oldest first (a press appends), so
+// when a hand-edit or a long run of messages makes it too long it is the oldest that go; a
+// cap that kept the first would forget the message just marked Seen and show it again.
+std::vector<std::string> sanitiseMessagesSeen(const std::vector<std::string>& in) {
+    std::vector<std::string> out;
+    for (const std::string& n : in) {
+        if (n.empty()) { continue; }
+        if (std::find(out.begin(), out.end(), n) != out.end()) { continue; }
+        out.push_back(n);
+    }
+    if (out.size() > AppConfig::kMaxMessagesSeen) {
+        out.erase(out.begin(),
+                  out.begin() + static_cast<std::ptrdiff_t>(out.size() - AppConfig::kMaxMessagesSeen));
+    }
+    return out;
+}
+
+// The plugin sites (AppConfig::pluginSites, 0.99.74), entry by entry, so one bad
+// address costs only itself: each goes through the ONE validator
+// (PluginRepo::normaliseSiteUrl - the store's ADD asks the same function), then is
+// dropped if it repeats an earlier one, or is the official address or the override
+// of it (a site that is the official catalogue would list every plugin twice and
+// have all of them hidden as the same id), and the list stops at kMaxPluginSites.
+// Order is kept: it is the order the sites are read in.
+std::vector<std::string> sanitisePluginSites(const std::vector<std::string>& in,
+                                             const std::string& overrideUrl) {
+    static_assert(AppConfig::kMaxPluginSites == PluginRepo::kMaxSites,
+                  "the config's site cap and the repository's are one number");
+    std::vector<std::string> out;
+    for (const std::string& raw : in) {
+        std::string url;
+        std::string why;
+        if (!PluginRepo::normaliseSiteUrl(raw, url, why)) { continue; }
+        if (url == PluginRepo::defaultIndexUrl() || url == overrideUrl) { continue; }
+        if (std::find(out.begin(), out.end(), url) != out.end()) { continue; }
+        out.push_back(url);
+        if (out.size() >= AppConfig::kMaxPluginSites) { break; }
+    }
+    return out;
+}
+
+// How each plugin runs (AppConfig::pluginRun): plugin id -> "auto" | "always" | "stopped".
+// Entry by entry, so one bad line costs nothing else: an empty or over-long id, or a word that
+// is not one of the three, is dropped; at most kMaxTuneGrants entries are kept (std::map walks
+// in key order, so which ones is not a matter of the file's order).
+std::map<std::string, std::string> sanitisePluginRun(const std::map<std::string, std::string>& in) {
+    std::map<std::string, std::string> out;
+    for (const auto& [id, word] : in) {
+        if (id.empty() || id.size() > 128u) { continue; }
+        PluginRun r = PluginRun::Auto;
+        if (!parsePluginRun(word, r)) { continue; }
+        out.emplace(id, word);
         if (out.size() >= AppConfig::kMaxTuneGrants) { break; }
     }
     return out;
@@ -180,25 +255,33 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         return true;  // first run: defaults, and nothing went wrong
     }
 
-    // A directory must be rejected before it is opened. Windows refuses to
-    // open one at all, so `!f` below is enough there; POSIX opens it happily
-    // and then throws on the first read, which aborted the process rather
-    // than reporting a bad path. Checking the type here fails the same way on
-    // both platforms.
-    if (fs::is_directory(fs::path(path), ec)) {
-        error = "config: \"" + path + "\" is a directory, not a file";
-        return false;
-    }
-
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "config: cannot open \"" + path + "\" for reading";
-        return false;
+    // A directory must be rejected before it is read. Windows refuses to
+    // open one at all; POSIX opens it happily and then THROWS on the first
+    // read, which aborted the process rather than reporting a bad path.
+    // readTextFile (core/file_read.hpp) answers a directory, a file that will
+    // not open and a read that fails - by an error or by a throw out of the
+    // buffer - the same way on both platforms, and never throws (0.99.65: the
+    // same reading is now used by every loader here; bookmarks.json,
+    // markers.json and the band plans had the stream read this one was
+    // spared, and ended the program on Linux).
+    std::string text;
+    switch (readTextFile(path, text)) {
+        case ReadResult::Ok:
+            break;
+        case ReadResult::IsDirectory:
+            error = "config: \"" + path + "\" is a directory, not a file";
+            return false;
+        case ReadResult::CannotOpen:
+            error = "config: cannot open \"" + path + "\" for reading";
+            return false;
+        case ReadResult::ReadError:
+            error = "config: \"" + path + "\" could not be read";
+            return false;
     }
 
     // allow_exceptions=false: a corrupt file is an expected condition here,
     // not an exceptional one; parse errors surface as a discarded value.
-    const json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+    const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded()) {
         error = "config: \"" + path + "\" is not valid JSON";
         return false;
@@ -225,6 +308,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "sourceKind", out.sourceKind);
     getString(j, "soapyArgs", out.soapyArgs);
     getBool(j, "lookForNetworkUsrps", out.lookForNetworkUsrps);
+    getBool(j, "radioSetupDontShow", out.radioSetupDontShow);
     getString(j, "nativeArgs", out.nativeArgs);
     // THE BIAS TEE, PER RADIO (AppConfig::biasTee). Element-wise tolerant: an
     // entry that is not a bool, or whose key is not "<kind>|<args>", is
@@ -283,6 +367,21 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.converters = std::move(conv);
         }
     }
+    // The crystal correction (0.99.56): the switch, strict bool like every
+    // other, and the per-radio values - an entry that is not a number is
+    // skipped, every other rule (range, step, zero, the cap) is
+    // sanitisePpmValues', below. A config written before it has neither and
+    // loads as OFF with no values: exactly the behaviour before it existed.
+    getBool(j, "ppmCorrection", out.ppmCorrection);
+    {
+        const auto it = j.find("ppm");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_number()) { continue; }
+                out.ppm[e.key()] = e.value().get<double>();
+            }
+        }
+    }
     // The Airspys, element-wise tolerant: an entry that is not an object is
     // skipped, a field of the wrong type keeps its default, and the ranges,
     // the modes and the cap are sanitiseAirspySettings', below.
@@ -309,7 +408,58 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.airspy = std::move(as);
         }
     }
+    // EACH RADIO'S AUTOMATIC GAIN SWITCH, PER RADIO (0.99.73,
+    // AppConfig::autoGainByRadio). Element-wise tolerant like the bias tee's
+    // memory it shares a key with: an entry that is not a bool, or whose key is
+    // not "<kind>|<args>", is skipped and the rest are kept; at most
+    // kBiasTeeMemoryCap are kept. No rule about serials here - an "on" is not
+    // a power switch (see the field). A file without the key has none.
+    {
+        const auto it = j.find("autoGainByRadio");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_boolean()) { continue; }
+                const std::string& key = e.key();
+                const std::size_t bar = key.find('|');
+                if (bar == std::string::npos || bar == 0) { continue; }
+                if (out.autoGainByRadio.size() >= kBiasTeeMemoryCap) { break; }
+                out.autoGainByRadio[key] = e.value().get<bool>();
+            }
+        }
+    }
+    // EACH RADIO'S MANUAL GAIN, PER RADIO (0.99.75, AppConfig::manualGainByRadio).
+    // Element-wise tolerant, a level deeper than the memories above: a radio whose
+    // value is not an object, or whose key is not "<kind>|<args>", is skipped; inside
+    // one, a stage with no name or whose value is not a FINITE NUMBER (a string, a
+    // bool, null - which is what a NaN is written as - an object) is skipped and the
+    // rest are kept; at most AppConfig::kMaxManualGainStages stages of a radio are
+    // kept (the first ones, which a JSON object hands back in name order, so the
+    // vector is sorted); a radio left with no stage is not kept; and at most
+    // kBiasTeeMemoryCap radios. A file without the key has none.
+    {
+        const auto it = j.find("manualGainByRadio");
+        if (it != j.end() && it->is_object()) {
+            for (auto e = it->begin(); e != it->end(); ++e) {
+                if (!e.value().is_object()) { continue; }
+                const std::string& key = e.key();
+                const std::size_t bar = key.find('|');
+                if (bar == std::string::npos || bar == 0) { continue; }
+                std::vector<std::pair<std::string, double>> stages;
+                for (auto s = e.value().begin(); s != e.value().end(); ++s) {
+                    if (s.key().empty() || !s.value().is_number()) { continue; }
+                    const double db = s.value().get<double>();
+                    if (!std::isfinite(db)) { continue; }
+                    if (stages.size() >= AppConfig::kMaxManualGainStages) { break; }
+                    stages.emplace_back(s.key(), db);
+                }
+                if (stages.empty()) { continue; }
+                if (out.manualGainByRadio.size() >= kBiasTeeMemoryCap) { break; }
+                out.manualGainByRadio[key] = std::move(stages);
+            }
+        }
+    }
     getString(j, "plutoUri", out.plutoUri);
+    getString(j, "rtlTcpAddr", out.rtlTcpAddr);
     getString(j, "soapyAntenna", out.soapyAntenna);
     getString(j, "iqFilePath", out.iqFilePath);
     if (const auto sc = j.find("soundCard"); sc != j.end() && sc->is_object()) {
@@ -325,7 +475,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "mode", out.mode);
     getDouble(j, "bandwidthHz", out.bandwidthHz);
     getFloat(j, "squelchDb", out.squelchDb);
+    getBool(j, "squelchAuto", out.squelchAuto);
     getFloat(j, "volume", out.volume);
+    getInt(j, "audioBufferMs", out.audioBufferMs);
+    getInt(j, "audioBufferAutoMs", out.audioBufferAutoMs);
     getFloat(j, "dbMin", out.dbMin);
     getFloat(j, "dbMax", out.dbMax);
     getFloat(j, "splitRatio", out.splitRatio);
@@ -341,9 +494,48 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getBool(j, "autoNotch", out.autoNotch);
     getBool(j, "bandPlanOverlay", out.bandPlanOverlay);
     getString(j, "patch", out.patch);
+    // The patch presets. ELEMENT-WISE TOLERANT, like userPresets, and louder
+    // about it: an entry that is not an object with a string name and a
+    // string text is a hand-edit or a damaged file, and is dropped with one
+    // line in the log rather than taking the rest of the config - or the rest
+    // of the list - with it. Every other rule is sanitisePatchPresets', below.
+    std::vector<std::size_t> patchPresetPositions;
+    {
+        const auto it = j.find("patchPresets");
+        if (it != j.end() && !it->is_array()) {
+            diagLogf("config: patchPresets is not a list - ignored");
+        } else if (it != j.end()) {
+            std::vector<PatchPreset> presets;
+            std::size_t index = 0;
+            for (const auto& e : *it) {
+                const std::size_t at = index++;
+                if (!e.is_object()) {
+                    diagLogf("config: patch preset %zu dropped - not an object", at);
+                    continue;
+                }
+                const auto n = e.find("name");
+                const auto t = e.find("text");
+                if (n == e.end() || !n->is_string() || t == e.end() || !t->is_string()) {
+                    diagLogf("config: patch preset %zu dropped - no string name and text", at);
+                    continue;
+                }
+                presets.push_back(PatchPreset{n->get<std::string>(), t->get<std::string>()});
+                patchPresetPositions.push_back(at);
+            }
+            out.patchPresets = std::move(presets);
+        }
+    }
+    getString(j, "patchPresetPrevious", out.patchPresetPrevious);
     // The main view: one of the two faces the window has, or the patch view
     // (the default) for anything else - never a name nothing draws.
     getString(j, "mainView", out.mainView);
+    // Absent in a config from before 0.99.49: the rail opens (the default).
+    getBool(j, "railCollapsed", out.railCollapsed);
+    // Absent in a config from before 0.99.74: the status column opens.
+    getBool(j, "statusCollapsed", out.statusCollapsed);
+    // Absent in a config from before 0.99.74: the Display section is folded
+    // (the default), which is what the tester who asked for it wanted.
+    getBool(j, "displayOpen", out.displayOpen);
     if (out.mainView != "patch" && out.mainView != "receiver") { out.mainView = "patch"; }
     getString(j, "bandPlanSelection", out.bandPlanSelection);
     // Carried as written, like bandPlanSelection: which codes are real is a
@@ -387,6 +579,20 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
         out.tunerDisplayStyle != "plain") {
         out.tunerDisplayStyle = "nixie";
     }
+    // EACH BENCH METER'S OWN STYLE, on the same rule as tunerDisplayStyle just
+    // above, and for the same reason: the names are MIRRORED from
+    // gui/meter_styles_math.hpp's meterStyleFromName (core must not depend on
+    // gui) and tests/test_config.cpp holds the two lists together.
+    getString(j, "meterStyleVolume", out.meterStyleVolume);
+    if (out.meterStyleVolume != "classic" && out.meterStyleVolume != "needle" &&
+        out.meterStyleVolume != "led" && out.meterStyleVolume != "peak") {
+        out.meterStyleVolume = "classic";
+    }
+    getString(j, "meterStyleRate", out.meterStyleRate);
+    if (out.meterStyleRate != "classic" && out.meterStyleRate != "needle" &&
+        out.meterStyleRate != "led" && out.meterStyleRate != "peak") {
+        out.meterStyleRate = "classic";
+    }
     // THE INTERFACE THEME, on the same rule: one of the six foxsdr-ui/1 preset
     // names, anything else today's bench. The names are MIRRORED from
     // gui/theme.cpp's preset table (core must not depend on gui);
@@ -405,12 +611,38 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getFloat(j, "readingsScale", out.readingsScale);
     if (!(out.readingsScale >= 1.0f)) { out.readingsScale = 1.0f; }
     if (out.readingsScale > 3.0f) { out.readingsScale = 3.0f; }
+    // THE INTERFACE SIZE. Not core/config.cpp's job to know gui/ui_scale.hpp's
+    // step table (core does not depend on gui) - the valid spellings are
+    // listed here explicitly, the same way uiTheme's five names are just
+    // above, and gui/ui_scale.hpp::normalizeChoice repeats the same list on
+    // its own side of the boundary. Anything else, including an empty string
+    // or a step a future build offers that this one does not, loads as
+    // "auto" - the tunerDisplayStyle rule.
+    getString(j, "interfaceScale", out.interfaceScale);
+    if (out.interfaceScale != "auto" && out.interfaceScale != "100" &&
+        out.interfaceScale != "125" && out.interfaceScale != "150" &&
+        out.interfaceScale != "175" && out.interfaceScale != "200" &&
+        out.interfaceScale != "250") {
+        out.interfaceScale = "auto";
+    }
     // Both default true, so an older config that has never heard of them
     // arrives with trails drawn and coloured - see AppConfig for why the two
     // are separate switches. Neither has a range to clamp: a bool read by
     // getBool is either the value in the file or the default.
     getBool(j, "mapTrails", out.mapTrails);
     getBool(j, "mapTrailAltitudeColours", out.mapTrailAltitudeColours);
+    // Both default true too - see AppConfig for why (bookmarkMarkers had no
+    // config field at all before 0.99.54 and always came back on;
+    // bookmarkStackNames's feature was the one asked for).
+    getBool(j, "bookmarkMarkers", out.bookmarkMarkers);
+    getBool(j, "bookmarkStackNames", out.bookmarkStackNames);
+    // The spectrum's trace mode: normalised and clamped, not trusted.
+    getString(j, "spectrumTraceMode", out.spectrumTraceMode);
+    out.spectrumTraceMode =
+        traceModeName(traceModeFromName(out.spectrumTraceMode));
+    getInt(j, "spectrumAverageMs", out.spectrumAverageMs);
+    out.spectrumAverageMs = static_cast<int>(
+        clampTraceAverageMs(static_cast<double>(out.spectrumAverageMs)));
     getInt(j, "mapTrailStyle", out.mapTrailStyle);
     // CLAMPED ON LOAD, not trusted. The file is user-editable and an unknown
     // style would otherwise reach the draw loop and select nothing at all.
@@ -420,6 +652,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     out.aircraftIconPx = std::clamp(out.aircraftIconPx, 16, 96);
     getInt(j, "mapTrailWidthPx", out.mapTrailWidthPx);
     out.mapTrailWidthPx = std::clamp(out.mapTrailWidthPx, 1, 96);
+    // Defaults false, so a file that predates the key lists every aircraft as
+    // it always has; a bool read by getBool is the value in the file or the
+    // default, and there is no range to clamp.
+    getBool(j, "mapListOnScreenOnly", out.mapListOnScreenOnly);
     // The radar scope. The range is SNAPPED TO THE LADDER the view defines,
     // never trusted: the file is user-editable, and every ring radius, every
     // ring label and the corner readout are derived from this one number, so a
@@ -523,6 +759,7 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "gpsPort", out.gpsPort);
     getInt(j, "gpsBaud", out.gpsBaud);
     getString(j, "pluginCatalogueUrl", out.pluginCatalogueUrl);
+    getStringArray(j, "pluginSites", out.pluginSites);
     getBool(j, "pluginBrowserOpen", out.pluginBrowserOpen);
     // The fitted modules window, open flag and rectangle. Its rectangle is
     // sanitized with the map's below, by the same lambda, so the two stores
@@ -532,16 +769,36 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getInt(j, "fittedModulesY", out.fittedModulesY);
     getInt(j, "fittedModulesWidth", out.fittedModulesWidth);
     getInt(j, "fittedModulesHeight", out.fittedModulesHeight);
+    getInt(j, "pluginStoreX", out.pluginStoreX);
+    getInt(j, "pluginStoreY", out.pluginStoreY);
+    getInt(j, "pluginStoreWidth", out.pluginStoreWidth);
+    getInt(j, "pluginStoreHeight", out.pluginStoreHeight);
     getInt64(j, "pluginLastUpdateCheck", out.pluginLastUpdateCheck);
     getStringArray(j, "pluginTuneAllowed", out.pluginTuneAllowed);
     getStringArray(j, "closedWindows", out.closedWindows);
     getStringArray(j, "pluginsStopped", out.pluginsStopped);
+    // How each plugin runs (0.99.73): an object of strings. A member that is not a
+    // string is a hand-edit and is skipped; the words are checked in the sanitiser.
+    {
+        const auto it = j.find("pluginRun");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, std::string> m;
+            for (auto p = it->begin(); p != it->end(); ++p) {
+                if (p.value().is_string()) { m[p.key()] = p.value().get<std::string>(); }
+            }
+            out.pluginRun = std::move(m);
+        }
+    }
     getStringArray(j, "pluginMuteOverride", out.pluginMuteOverride);
     // Host API level 1 (0.99.31). The grant is a list like the others; the
     // settings store is an object of objects, read element-wise: a member
     // that is not an object, or a value that is not a string, is a hand-edit
     // and is skipped rather than failing the whole file.
     getStringArray(j, "pluginSettingsAllowed", out.pluginSettingsAllowed);
+    // Host API level 2 (0.99.74): the TRANSMIT grant, the third list of module file
+    // names. The grant is saved and the operator's arming window is NOT: there is no
+    // key for the window below and no code that could read one (see config.hpp).
+    getStringArray(j, "pluginTransmitAllowed", out.pluginTransmitAllowed);
     {
         const auto it = j.find("pluginSettings");
         if (it != j.end() && it->is_object()) {
@@ -588,12 +845,26 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
     getBool(j, "updateCheckEnabled", out.updateCheckEnabled);
+    getStringArray(j, "messagesSeen", out.messagesSeen);
     getBool(j, "telemetryEnabled", out.telemetryEnabled);
     getString(j, "telemetryInstallId", out.telemetryInstallId);
     getUint64(j, "telemetryLaunches", out.telemetryLaunches);
     getUint64(j, "telemetryCrashes", out.telemetryCrashes);
+    getUint64(j, "telemetryExitsDied", out.telemetryExitsDied);
+    getUint64(j, "telemetryExitsKilled", out.telemetryExitsKilled);
+    getUint64(j, "telemetryExitsEnded", out.telemetryExitsEnded);
+    getUint64(j, "telemetryExitsUnknown", out.telemetryExitsUnknown);
+    getUint64(j, "telemetrySessionStarted", out.telemetrySessionStarted);
+    getString(j, "telemetryFirstRun", out.telemetryFirstRun);
+    getString(j, "telemetryFirstVersion", out.telemetryFirstVersion);
     getBool(j, "telemetryCleanExit", out.telemetryCleanExit);
     getString(j, "telemetryPending", out.telemetryPending);
+    getString(j, "testerToken", out.testerToken);
+    getBool(j, "testerTokenInvalid", out.testerTokenInvalid);
+    getString(j, "testerAppToken", out.testerAppToken);
+    getString(j, "testerAppTokenName", out.testerAppTokenName);
+    getString(j, "testerUsageCurrent", out.testerUsageCurrent);
+    getStringArray(j, "testerUsagePending", out.testerUsagePending);
     getBool(j, "diagnosticsEnabled", out.diagnosticsEnabled);
     getBool(j, "diagnosticsMinidump", out.diagnosticsMinidump);
     getStringArray(j, "crashUploadRecent", out.crashUploadRecent);
@@ -629,27 +900,132 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.telemetryPending.size() > AppConfig::kMaxPendingReportBytes) {
         out.telemetryPending.clear();
     }
+    // The first-run fields travel in every report, so they get the install
+    // id's rule: anything that is not exactly the expected shape - a
+    // hand-edited name, a sentence - is dropped rather than transmitted. And
+    // without an id they mean nothing, so they go with it.
+    if (!validFirstRunDate(out.telemetryFirstRun) || out.telemetryInstallId.empty()) {
+        out.telemetryFirstRun.clear();
+    }
+    if (!validFirstVersion(out.telemetryFirstVersion) || out.telemetryInstallId.empty()) {
+        out.telemetryFirstVersion.clear();
+    }
+
+    // THE TESTER TOKEN, VALIDATED, NOT TRUSTED - exactly telemetryInstallId's
+    // rule and for the same reason: it is the one tester-usage field that
+    // leaves the machine as free text, so a hand-edited value that is not
+    // exactly the site's own shape (32 lowercase hex characters) must not be
+    // sent anywhere. Unlike telemetryInstallId a bad value does not disable
+    // anything by itself - there is no separate "enabled" flag here, the
+    // token's presence IS the opt-in - so clearing it is the whole repair,
+    // and whatever the tester had queued to send is queued for nobody now.
+    if (!out.testerToken.empty() && !validTesterToken(out.testerToken)) {
+        out.testerToken.clear();
+        out.testerTokenInvalid = false;
+        out.testerUsageCurrent.clear();
+        out.testerUsagePending.clear();
+    }
+    // THE APP TOKEN, VALIDATED THE SAME WAY AND INDEPENDENTLY OF testerToken
+    // above - a hand-edited value that is not exactly 40 lowercase hex
+    // characters (core::validAppToken) is refused rather than sent, and
+    // there being no separate "linked" flag here is deliberate: the app
+    // token's own presence, confirmed by name before it was ever stored
+    // (gui/app_window.cpp's drawTesterLinkPrompt), IS the link.
+    if (!out.testerAppToken.empty() && !cascade::core::validAppToken(out.testerAppToken)) {
+        out.testerAppToken.clear();
+        out.testerAppTokenName.clear();
+    }
+    if (out.testerAppToken.empty()) {
+        // A name with no token to go with it is meaningless and must not
+        // survive to be shown as though it still named a link.
+        out.testerAppTokenName.clear();
+    }
+    if (out.testerUsageCurrent.size() > AppConfig::kMaxPendingReportBytes) {
+        out.testerUsageCurrent.clear();
+    }
+    // THE ACTIVE IDENTITY - the app token when there is one, exactly
+    // AppWindow::activeTesterToken()'s own rule, applied here too so the
+    // pending-queue filter below and the "nothing to retry" rule agree with
+    // what testerUsageStartup will use at the next launch.
+    const std::string active = !out.testerAppToken.empty() ? out.testerAppToken : out.testerToken;
+    // WITH NO ACTIVE IDENTITY, THERE IS NOTHING TO RETRY. A file that carries
+    // a queue but no token at all is either a hand-edit or a code that was
+    // removed after the last save landed mid-write; either way, nothing here
+    // is this session's to send under an identity the tester no longer has.
+    if (active.empty()) {
+        out.testerUsagePending.clear();
+    }
+    // Element-wise tolerant, like the plugin-name lists: an oversized entry
+    // (a corrupt or hand-edited file) is dropped on its own, and the queue is
+    // capped at TesterUsageQueue::kMax - a hand-edited file claiming more
+    // must not become an unbounded send loop at the next launch.
+    //
+    // A REPORT QUEUED UNDER A DIFFERENT TOKEN IS DROPPED, NOT CARRIED OVER:
+    // replacing a revoked or mistyped code must never let an old session's
+    // report be sent under the new one - it would land on the wrong
+    // tester's entry on the site. tests/test_tester_usage.cpp drives this
+    // through core::TesterUsageQueue::dropOthers directly; this is the same
+    // rule applied at load, for a queue that was written under an identity
+    // this file no longer names. (A migration exchange REWRITES the queue's
+    // token before this ever runs again - core::TesterUsageQueue::
+    // rewriteToken - so this filter never has to reconcile a portal-token
+    // queue against an app-token identity itself.)
+    {
+        std::vector<std::string> kept;
+        for (std::string& s : out.testerUsagePending) {
+            if (s.empty() || s.size() > AppConfig::kMaxPendingReportBytes) { continue; }
+            if (cascade::core::tokenOfReport(s) != active) { continue; }
+            kept.push_back(std::move(s));
+            if (kept.size() >= cascade::core::TesterUsageQueue::kMax) { break; }
+        }
+        out.testerUsagePending = std::move(kept);
+    }
 
     // Range sanitization — each rule and its WHY is documented in the header.
     const AppConfig defaults;
     out.volume = clampf(out.volume, 0.0f, 1.0f);
+    if (!cascade::sink::validAudioBufferSetting(out.audioBufferMs)) {
+        out.audioBufferMs = 0;  // automatic: see the header
+    }
+    // The depth AUTOMATIC reached last time: the same legal set, and 0 ("it never had to") for
+    // anything else, so a hand-edited 5000 cannot start the next session five seconds behind.
+    if (!cascade::sink::validAudioBufferSetting(out.audioBufferAutoMs)) {
+        out.audioBufferAutoMs = 0;
+    }
     out.splitRatio = clampf(out.splitRatio, 0.1f, 0.9f);
     if (out.deemphasisIndex < 0) { out.deemphasisIndex = 0; }
     if (out.deemphasisIndex > 2) { out.deemphasisIndex = 2; }
     out.nrStrength = clampf(out.nrStrength, 0.0f, 1.0f);
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
-    if (!(out.dbMin < out.dbMax - 10.0f)) {
+    // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
+    // Display sliders, the web control, the right-click menu: core/display_range.hpp). It used to
+    // be MORE than 10 dB, so a pair a person left exactly 10 apart was accepted all session and
+    // thrown away at the next start.
+    if (!(std::isfinite(out.dbMin) && std::isfinite(out.dbMax) &&
+          spanIsEnough(out.dbMin, out.dbMax))) {
         // Reset BOTH: clamping one end would invent a range nobody chose.
         out.dbMin = defaults.dbMin;
         out.dbMax = defaults.dbMax;
+    }
+    // WHICH WINDOW THAT PAIR IS (0.99.76): the word the file carries, or - for a file from before
+    // there was one, when the pair WAS the window - Manual if the pair is anything but the program's
+    // own. Read after the repair above, so a pair that was refused is not Manual on defaults it
+    // never chose. One of two spellings in memory whatever the file held.
+    {
+        std::string word;
+        getString(j, "waterfallRangeMode", word);
+        out.waterfallRangeMode =
+            rangeModeName(resolveRangeMode(word, DbPair{out.dbMin, out.dbMax}));
     }
     if (out.sourceKind != "siggen" && out.sourceKind != "file" &&
         out.sourceKind != "soapy" && out.sourceKind != "rtlsdr" &&
         out.sourceKind != "hackrf" && out.sourceKind != "airspy" &&
         out.sourceKind != "airspyhf" && out.sourceKind != "sdrplay" &&
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
-        out.sourceKind != "pluto" && out.sourceKind != "soundcard") {
+        out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
+        out.sourceKind != "aor" && out.sourceKind != "hydrasdr" &&
+        out.sourceKind != "rtltcp") {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when
@@ -669,6 +1045,10 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // serves out of the box - the same answer a config that has never seen
     // the key gets.
     if (out.plutoUri.empty()) { out.plutoUri = defaults.plutoUri; }
+    // The rtl_tcp server's address, the same rule: a cleared box is a field
+    // that was emptied, not a choice, and falls back to the server's own
+    // default (this machine, port 1234).
+    if (out.rtlTcpAddr.empty()) { out.rtlTcpAddr = defaults.rtlTcpAddr; }
     // Map window geometry is validated as ONE rectangle: any bad component
     // discards all four, so the window falls back to the size derived from the
     // monitor rather than to a rectangle half of which somebody hand-edited.
@@ -717,6 +1097,14 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             out.fittedModulesY = 0;
             out.fittedModulesWidth = 0;
             out.fittedModulesHeight = 0;
+        }
+        // The plugin store window's rectangle (0.99.72): the same rule.
+        if (!rectOk(out.pluginStoreX, out.pluginStoreY, out.pluginStoreWidth,
+                    out.pluginStoreHeight)) {
+            out.pluginStoreX = 0;
+            out.pluginStoreY = 0;
+            out.pluginStoreWidth = 0;
+            out.pluginStoreHeight = 0;
         }
     }
     // The receiver's position is validated as ONE position, for the same reason
@@ -767,6 +1155,9 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     if (out.pluginCatalogueUrl.empty()) {
         out.pluginCatalogueUrl = defaults.pluginCatalogueUrl;
     }
+    // The plugin sites, after the override above is settled (a site equal to it is
+    // dropped). See sanitisePluginSites.
+    out.pluginSites = sanitisePluginSites(out.pluginSites, out.pluginCatalogueUrl);
     // A timestamp before the epoch is a hand-edit or a backwards clock; either
     // way "never checked" is the only reading that cannot mislead the UI.
     if (out.pluginLastUpdateCheck < 0) {
@@ -807,19 +1198,30 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     // and duplicates dropped, length capped. A window identity is longer than
     // a plugin name but is bounded by the same reasoning.
     out.closedWindows = sanitisePluginNames(out.closedWindows);
+    // The team messages marked Seen (0.99.79): the same empties-and-repeats rule, but its
+    // own function, because its cap keeps the newest.
+    out.messagesSeen = sanitiseMessagesSeen(out.messagesSeen);
     out.pluginsStopped = sanitisePluginNames(out.pluginsStopped);
+    out.pluginRun = sanitisePluginRun(out.pluginRun);
     // And the mute overrides, for the third time from the same function. A
     // duplicate here would be a preference that flipped twice - which is the
     // same as not being there at all, but only if something removes it.
     out.pluginMuteOverride = sanitisePluginNames(out.pluginMuteOverride);
     // The settings grant: the same list of module file names, the same rule.
     out.pluginSettingsAllowed = sanitisePluginNames(out.pluginSettingsAllowed);
+    // And the transmit grant, from the same function again: an empty name matches no
+    // plugin and a duplicate would make revoking look like it failed - on the one
+    // grant where a grant that cannot be taken back matters most.
+    out.pluginTransmitAllowed = sanitisePluginNames(out.pluginTransmitAllowed);
     // The plugins' own settings, by the SAME bounds the live API enforces on
     // settings_set, so nothing a hand-edit put in the file can reach a plugin
     // that the plugin could not have written itself.
     out.pluginSettings = sanitisePluginSettings(out.pluginSettings);
     out.userPresets = sanitiseUserPresets(out.userPresets);
+    out.patchPresets = sanitisePatchPresets(std::move(out.patchPresets), patchPresetPositions);
+    out.patchPresetPrevious = sanitisePatchPresetPrevious(std::move(out.patchPresetPrevious));
     out.converters = sanitiseConverters(out.converters);
+    out.ppm = sanitisePpmValues(out.ppm);
     out.airspy = sanitiseAirspySettings(out.airspy);
     // And the rebound keys, from the same function for the fourth time. An
     // empty line could name no action, and a line repeated verbatim is one
@@ -835,6 +1237,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["sourceKind"] = cfg.sourceKind;
     j["soapyArgs"] = cfg.soapyArgs;
     j["lookForNetworkUsrps"] = cfg.lookForNetworkUsrps;
+    j["radioSetupDontShow"] = cfg.radioSetupDontShow;
     j["nativeArgs"] = cfg.nativeArgs;
     {
         json bias = json::object();
@@ -853,6 +1256,12 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         }
         j["converters"] = std::move(conv);
     }
+    j["ppmCorrection"] = cfg.ppmCorrection;
+    {
+        json ppm = json::object();
+        for (const auto& [radio, v] : cfg.ppm) { ppm[radio] = v; }
+        j["ppm"] = std::move(ppm);
+    }
     {
         json as = json::object();
         for (const auto& [radio, s] : cfg.airspy) {
@@ -864,7 +1273,26 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         }
         j["airspy"] = std::move(as);
     }
+    {
+        json agc = json::object();
+        for (const auto& [radio, on] : cfg.autoGainByRadio) { agc[radio] = on; }
+        j["autoGainByRadio"] = std::move(agc);
+    }
+    {
+        // A stage that is not a finite number is not written (JSON has no NaN: it would
+        // come back as null and be skipped), and a radio with no stage left is not either.
+        json mg = json::object();
+        for (const auto& [radio, stages] : cfg.manualGainByRadio) {
+            json o = json::object();
+            for (const auto& [stage, db] : stages) {
+                if (!stage.empty() && std::isfinite(db)) { o[stage] = db; }
+            }
+            if (!o.empty()) { mg[radio] = std::move(o); }
+        }
+        j["manualGainByRadio"] = std::move(mg);
+    }
     j["plutoUri"] = cfg.plutoUri;
+    j["rtlTcpAddr"] = cfg.rtlTcpAddr;
     j["soapyAntenna"] = cfg.soapyAntenna;
     j["iqFilePath"] = cfg.iqFilePath;
     j["soundCard"] = {{"device", cfg.soundCard.device},     {"hostApi", cfg.soundCard.hostApi},
@@ -875,9 +1303,13 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["mode"] = cfg.mode;
     j["bandwidthHz"] = cfg.bandwidthHz;
     j["squelchDb"] = cfg.squelchDb;
+    j["squelchAuto"] = cfg.squelchAuto;
     j["volume"] = cfg.volume;
+    j["audioBufferMs"] = cfg.audioBufferMs;
+    j["audioBufferAutoMs"] = cfg.audioBufferAutoMs;
     j["dbMin"] = cfg.dbMin;
     j["dbMax"] = cfg.dbMax;
+    j["waterfallRangeMode"] = cfg.waterfallRangeMode;
     j["splitRatio"] = cfg.splitRatio;
     j["vfoOffsetHz"] = cfg.vfoOffsetHz;
     j["sampleRateHz"] = cfg.sampleRateHz;
@@ -891,22 +1323,44 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["autoNotch"] = cfg.autoNotch;
     j["bandPlanOverlay"] = cfg.bandPlanOverlay;
     j["patch"] = cfg.patch;
+    {
+        json presets = json::array();
+        for (const PatchPreset& p : cfg.patchPresets) {
+            json e;
+            e["name"] = p.name;
+            e["text"] = p.text;
+            presets.push_back(std::move(e));
+        }
+        j["patchPresets"] = std::move(presets);
+    }
+    j["patchPresetPrevious"] = cfg.patchPresetPrevious;
     j["mainView"] = cfg.mainView;
+    j["railCollapsed"] = cfg.railCollapsed;
+    j["statusCollapsed"] = cfg.statusCollapsed;
+    j["displayOpen"] = cfg.displayOpen;
     j["bandPlanSelection"] = cfg.bandPlanSelection;
     j["language"] = cfg.language;
     j["country"] = cfg.country;
     j["bandPlanSize"] = cfg.bandPlanSize;
     j["bandPlanPalette"] = cfg.bandPlanPalette;
     j["tunerDisplayStyle"] = cfg.tunerDisplayStyle;
+    j["meterStyleVolume"] = cfg.meterStyleVolume;
+    j["meterStyleRate"] = cfg.meterStyleRate;
     j["uiTheme"] = cfg.uiTheme;
     j["counterScale"] = cfg.counterScale;
     j["counterSwitches"] = cfg.counterSwitches;
     j["readingsScale"] = cfg.readingsScale;
+    j["interfaceScale"] = cfg.interfaceScale;
     j["mapTrails"] = cfg.mapTrails;
     j["mapTrailAltitudeColours"] = cfg.mapTrailAltitudeColours;
+    j["bookmarkMarkers"] = cfg.bookmarkMarkers;
+    j["bookmarkStackNames"] = cfg.bookmarkStackNames;
+    j["spectrumTraceMode"] = cfg.spectrumTraceMode;
+    j["spectrumAverageMs"] = cfg.spectrumAverageMs;
     j["mapTrailStyle"] = cfg.mapTrailStyle;
     j["aircraftIconPx"] = cfg.aircraftIconPx;
     j["mapTrailWidthPx"] = cfg.mapTrailWidthPx;
+    j["mapListOnScreenOnly"] = cfg.mapListOnScreenOnly;
     j["scopeMode"] = cfg.scopeMode;
     j["scopeRangeNm"] = cfg.scopeRangeNm;
     j["demodScopeOpen"] = cfg.demodScopeOpen;
@@ -968,18 +1422,30 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["gpsPort"] = cfg.gpsPort;
     j["gpsBaud"] = cfg.gpsBaud;
     j["pluginCatalogueUrl"] = cfg.pluginCatalogueUrl;
+    j["pluginSites"] = cfg.pluginSites;
     j["pluginBrowserOpen"] = cfg.pluginBrowserOpen;
     j["fittedModulesOpen"] = cfg.fittedModulesOpen;
     j["fittedModulesX"] = cfg.fittedModulesX;
     j["fittedModulesY"] = cfg.fittedModulesY;
     j["fittedModulesWidth"] = cfg.fittedModulesWidth;
     j["fittedModulesHeight"] = cfg.fittedModulesHeight;
+    j["pluginStoreX"] = cfg.pluginStoreX;
+    j["pluginStoreY"] = cfg.pluginStoreY;
+    j["pluginStoreWidth"] = cfg.pluginStoreWidth;
+    j["pluginStoreHeight"] = cfg.pluginStoreHeight;
     j["pluginLastUpdateCheck"] = cfg.pluginLastUpdateCheck;
     j["pluginTuneAllowed"] = cfg.pluginTuneAllowed;
     j["closedWindows"] = cfg.closedWindows;
     j["pluginsStopped"] = cfg.pluginsStopped;
+    {
+        json run = json::object();
+        for (const auto& [id, word] : cfg.pluginRun) { run[id] = word; }
+        j["pluginRun"] = std::move(run);
+    }
     j["pluginMuteOverride"] = cfg.pluginMuteOverride;
     j["pluginSettingsAllowed"] = cfg.pluginSettingsAllowed;
+    // The grant, and ONLY the grant: the arming window is session-only and has no key.
+    j["pluginTransmitAllowed"] = cfg.pluginTransmitAllowed;
     {
         json ps = json::object();
         for (const auto& [plugin, kv] : cfg.pluginSettings) {
@@ -1011,12 +1477,31 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
     j["updateCheckEnabled"] = cfg.updateCheckEnabled;
+    j["messagesSeen"] = cfg.messagesSeen;
     j["telemetryEnabled"] = cfg.telemetryEnabled;
     j["telemetryInstallId"] = cfg.telemetryInstallId;
     j["telemetryLaunches"] = cfg.telemetryLaunches;
     j["telemetryCrashes"] = cfg.telemetryCrashes;
+    j["telemetryExitsDied"] = cfg.telemetryExitsDied;
+    j["telemetryExitsKilled"] = cfg.telemetryExitsKilled;
+    j["telemetryExitsEnded"] = cfg.telemetryExitsEnded;
+    j["telemetryExitsUnknown"] = cfg.telemetryExitsUnknown;
+    j["telemetrySessionStarted"] = cfg.telemetrySessionStarted;
+    j["telemetryFirstRun"] = cfg.telemetryFirstRun;
+    j["telemetryFirstVersion"] = cfg.telemetryFirstVersion;
     j["telemetryCleanExit"] = cfg.telemetryCleanExit;
     j["telemetryPending"] = cfg.telemetryPending;
+    // The tester's own credential - see the field's comment in config.hpp for
+    // why it is never logged and always masked on screen. It is written here
+    // exactly like any other field because config.json is local to the
+    // machine; it is what LEAVES the machine that this file's rules are
+    // about, and this line is not that.
+    j["testerToken"] = cfg.testerToken;
+    j["testerTokenInvalid"] = cfg.testerTokenInvalid;
+    j["testerAppToken"] = cfg.testerAppToken;
+    j["testerAppTokenName"] = cfg.testerAppTokenName;
+    j["testerUsageCurrent"] = cfg.testerUsageCurrent;
+    j["testerUsagePending"] = cfg.testerUsagePending;
     j["diagnosticsEnabled"] = cfg.diagnosticsEnabled;
     j["diagnosticsMinidump"] = cfg.diagnosticsMinidump;
     j["crashUploadRecent"] = cfg.crashUploadRecent;
@@ -1073,6 +1558,7 @@ bool ConfigStore::writeFile(const std::string& path, const std::string& text,
         }
         f.write(text.data(), static_cast<std::streamsize>(text.size()));
         f.flush();
+        writeFaultPoint("config", f);  // test seam: a write that fails part way
         if (!f) {
             f.close();
             fs::remove(tmp, ec);  // best effort; the write already failed

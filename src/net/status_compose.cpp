@@ -80,6 +80,7 @@ RadioStatus composeRadioStatus(const cascade::core::PublishedState& state, const
     o.audioPrimingCallbacks = e.audioPrimingCallbacks;
     o.audioRingMs = e.audioRingMs;
     o.audioRingCapacityMs = e.audioRingCapacityMs;
+    o.audioLeadMs = e.audioLeadMs;
     o.audioPluginGaps = e.audioPluginGaps;
     o.audioPluginGapFrames = e.audioPluginGapFrames;
     o.audioRecording = flag(FOXAPI_RX_RECORDING_AUDIO);

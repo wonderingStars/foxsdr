@@ -331,6 +331,20 @@ void testUnknownCommands() {
     CHECK(!blank.quit);
     CHECK(!blank.hasControl);
     CHECK(run("   \r\n", s).reply.empty());
+
+    // ...and so is a line of whitespace of the kinds the TRIM does not strip
+    // (it knows space, tab, CR and LF) but the word splitter does (every
+    // isspace character: vertical tab, form feed). Such a line survived the
+    // trim as non-empty, split into NO words, and the command word was then
+    // read from the front of an empty vector: a crash in the CAT connection's
+    // thread - the whole application - from any client that could reach the
+    // port and send "\v\n". Found by the cat_command fuzz target in 20 seconds.
+    for (const char* line : {"\v", "\f", "\v\f\v", " \v ", "\t\v\r", "\f\n"}) {
+        const CatResult r = run(line, s);
+        CHECK(r.reply.empty());
+        CHECK(!r.quit);
+        CHECK(!r.hasControl);
+    }
 }
 
 void testChkVfoAndPowerState() {

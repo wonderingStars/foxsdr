@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -30,8 +31,11 @@
 using cascade::gui::altBandStyle;
 using cascade::gui::altitudeBandIndex;
 using cascade::gui::CoverageMap;
+using cascade::gui::coverageLimitKm;
 using cascade::gui::coverageVertex;
 using cascade::gui::CoverageVertex;
+using cascade::gui::kLineOfSightCoverageKm;
+using cascade::gui::recordCoverage;
 using cascade::gui::destinationPoint;
 using cascade::gui::greatCircleKm;
 using cascade::gui::initialBearingDeg;
@@ -1530,6 +1534,85 @@ int main() {
         CHECK(cov.peakKm() == 250.0);
     }
 
+    // --- coverage: what counts, by kind -------------------------------------
+    // The report this pins: a receiver near Chicago read "best 17082 km" off
+    // its ADS-B map. Every case goes through recordCoverage, the one call the
+    // app makes per visible track, so the distance is measured exactly as the
+    // app measures it.
+    {
+        const double rxLat = 41.94287, rxLon = -88.12718;
+        // Tokyo is about 10,100 km from Chicago; Perth about 17,900 km.
+        const double tokyoLat = 35.68, tokyoLon = 139.69;
+        const double perthLat = -31.95, perthLon = 115.86;
+        const double tokyoKm = greatCircleKm(rxLat, rxLon, tokyoLat, tokyoLon);
+        const double perthKm = greatCircleKm(rxLat, rxLon, perthLat, perthLon);
+        CHECK(tokyoKm > 9000.0 && tokyoKm < 11000.0);
+        CHECK(perthKm > 17000.0 && perthKm < 19000.0);
+        // A real aircraft 150 km west, from the same receiver.
+        const double nearLat = 41.94287, nearLon = -89.94;
+        const double nearKm = greatCircleKm(rxLat, rxLon, nearLat, nearLon);
+        CHECK(nearKm > 140.0 && nearKm < 160.0);
+
+        // AN AIRCRAFT PAST THE RADIO HORIZON IS A MIS-DECODE: refused, and it
+        // takes no bucket. A real one counts.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Aircraft);
+            recordCoverage(cov, rxLat, rxLon, tokyoLat, tokyoLon, TrackKind::Aircraft);
+            CHECK(cov.empty());
+            recordCoverage(cov, rxLat, rxLon, nearLat, nearLon, TrackKind::Aircraft);
+            CHECK(cov.filledBuckets() == 1);
+            CHECK_NEAR(cov.peakKm(), nearKm, 1e-9);
+            // ...and a mis-decode arriving after it does not move the record.
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Aircraft);
+            CHECK_NEAR(cov.peakKm(), nearKm, 1e-9);
+            CHECK(cov.filledBuckets() == 1);
+        }
+        // The same rule for a vessel.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Vessel);
+            CHECK(cov.empty());
+        }
+        // THE BOUNDARY. 1,000 km counts; just past it does not.
+        {
+            CHECK(coverageLimitKm(TrackKind::Aircraft) == kLineOfSightCoverageKm);
+            CHECK(coverageLimitKm(TrackKind::Vessel) == kLineOfSightCoverageKm);
+            const LatLon in = destinationPoint(rxLat, rxLon, 90.0, 999.0);
+            const LatLon out = destinationPoint(rxLat, rxLon, 90.0, 1001.0);
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, out.latDeg, out.lonDeg, TrackKind::Aircraft);
+            CHECK(cov.empty());
+            recordCoverage(cov, rxLat, rxLon, in.latDeg, in.lonDeg, TrackKind::Aircraft);
+            CHECK(cov.filledBuckets() == 1);
+            CHECK_NEAR(cov.peakKm(), 999.0, 0.5);
+        }
+        // A SATELLITE NEVER COUNTS, even straight overhead-ish: its position
+        // is a prediction, not a reception.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, nearLat, nearLon, TrackKind::Satellite);
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Satellite);
+            CHECK(cov.empty());
+            CHECK(coverageLimitKm(TrackKind::Satellite) == 0.0);
+        }
+        // ANYTHING ELSE keeps the physical limit: an HF station on the other
+        // side of the world is a real reception.
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, perthLat, perthLon, TrackKind::Other);
+            CHECK(cov.filledBuckets() == 1);
+            CHECK_NEAR(cov.peakKm(), perthKm, 1e-9);
+        }
+        // The bearing is measured from the receiver too: the western aircraft
+        // lands in a western bucket (bearing about 270, bucket 53 or 54).
+        {
+            CoverageMap cov;
+            recordCoverage(cov, rxLat, rxLon, nearLat, nearLon, TrackKind::Aircraft);
+            CHECK(cov.maxKm(53) > 0.0 || cov.maxKm(54) > 0.0);
+        }
+    }
+
     // --- coverage: reset -----------------------------------------------------
     {
         CoverageMap cov;
@@ -1953,8 +2036,308 @@ int main() {
         CHECK(trackSortKeyForMenuIndex(kTrackSortDefaultIndex) == TrackSortKey::Label);
     }
 
+    // --- "no altitude" is grey (0.99.74) -------------------------------------
+    //
+    // A tester (2026-10-12): "instead of highlighting aircraft that are not
+    // transmitting the altitude in red, which is the same as <1,000 ft. Maybe
+    // color this in grey or black. I would like to be able to distinguish the
+    // two." The decision and the colour are pure, so they are pinned here; the
+    // map's use of them is read off its draw data in test_map_view.
+    {
+        using cascade::gui::noAltitudeStyle;
+        using cascade::gui::noAltitudeUsesGrey;
+        using cascade::gui::TrackKind;
+
+        // ONLY AN AIRCRAFT. A ship or an APRS station that reports no altitude
+        // is not an aircraft whose altitude went missing, and the per-kind
+        // colour is what tells several kinds on one map apart.
+        CHECK(noAltitudeUsesGrey(TrackKind::Aircraft));
+        CHECK(!noAltitudeUsesGrey(TrackKind::Vessel));
+        CHECK(!noAltitudeUsesGrey(TrackKind::Satellite));
+        CHECK(!noAltitudeUsesGrey(TrackKind::Other));
+
+        const cascade::gui::AltBandStyle& g = noAltitudeStyle();
+        // NEUTRAL: a grey carrying a hue could be read as a band.
+        CHECK(g.r == g.g && g.g == g.b);
+        // MID-LUMINANCE, inside the window every band is held to: black - which
+        // the request offered - vanishes on the near-black map, and a pale grey
+        // washes out on an OSM raster.
+        const int lum = (299 * g.r + 587 * g.g + 114 * g.b) / 1000;
+        CHECK(lum >= 90);
+        CHECK(lum <= 210);
+        CHECK(std::string(g.label) == "no altitude");
+
+        // DISTINGUISHABLE FROM EVERY BAND, and specifically no harder to tell
+        // from its nearest band than the closest pair of bands are from each
+        // other - the standard the palette already set itself.
+        double minBand = 1e9;
+        double minPair = 1e9;
+        for (int i = 0; i < kAltBandCount; ++i) {
+            const double d = deltaE76(altBandStyle(i), g.r, g.g, g.b);
+            if (d < minBand) { minBand = d; }
+            // Byte-distinct, which is what the drawing code needs.
+            CHECK(altBandStyle(i).r != g.r || altBandStyle(i).g != g.g ||
+                  altBandStyle(i).b != g.b);
+            for (int j = i + 1; j < kAltBandCount; ++j) {
+                const double p = deltaE76(altBandStyle(i), altBandStyle(j));
+                if (p < minPair) { minPair = p; }
+            }
+        }
+        std::printf("  no-altitude grey %d,%d,%d: luma %d, nearest band dE76 %.1f (closest pair of bands %.1f)\n",
+                    g.r, g.g, g.b, lum, minBand, minPair);
+        CHECK(minBand >= minPair);
+        CHECK_NEAR(minBand, 42.1, 0.5);
+
+        // AND NOT THE KIND RED OR THE EMERGENCY RED: the whole point is that it
+        // is not read as either.
+        const cascade::gui::AltBandStyle kindRed = {235, 40, 40, "kind"};
+        const cascade::gui::AltBandStyle emergencyRed = {255, 45, 45, "emergency"};
+        CHECK(deltaE76(kindRed, g.r, g.g, g.b) > 50.0);
+        CHECK(deltaE76(emergencyRed, g.r, g.g, g.b) > 50.0);
+
+        // THE LEGEND ROW. "no altitude" is longer than any band label, so the
+        // plate measured with it is wider than the plate measured without, and
+        // it fits the row whatever the font's advance.
+        for (const float advance : {6.0f, 7.0f, 13.5f}) {
+            const auto measure = [advance](const char* s) {
+                return advance * static_cast<float>(std::strlen(s));
+            };
+            const float fixed = cascade::gui::kAltLegendPad + cascade::gui::kAltLegendSwatch +
+                                cascade::gui::kAltLegendPad + cascade::gui::kAltLegendPad;
+            const float without = cascade::gui::altLegendWidth(measure);
+            const float with = cascade::gui::altLegendWidth(measure, "no altitude");
+            CHECK(with >= fixed + measure("no altitude"));
+            CHECK(with > without);
+            CHECK_NEAR(with, fixed + measure("no altitude"), 0.001);
+            // Passing null is the legend without the row, exactly as before.
+            CHECK_NEAR(cascade::gui::altLegendWidth(measure, nullptr), without, 0.001);
+            // A TRANSLATION LONGER THAN THAT is measured too, and a shorter one
+            // never narrows the plate below its widest band.
+            CHECK(cascade::gui::altLegendWidth(measure, "keine Hoehenangabe") >=
+                  fixed + measure("keine Hoehenangabe"));
+            CHECK_NEAR(cascade::gui::altLegendWidth(measure, "n/a"), without, 0.001);
+        }
+        // The plate is one row taller with the row than without.
+        CHECK(cascade::gui::altLegendRowCount(kAltBandCount, false) == kAltBandCount);
+        CHECK(cascade::gui::altLegendRowCount(kAltBandCount, true) == kAltBandCount + 1);
+        CHECK(cascade::gui::altLegendRowCount(cascade::gui::kOrbitBandCount, false) ==
+              cascade::gui::kOrbitBandCount);
+    }
+
+    // --- where the map puts a point, and what is on screen (0.99.74) ---------
+    //
+    // The list's "On screen only" switch asks MapView::isOnScreen, which is
+    // mapPointOnScreen on the last frame's geometry; mapPointOnScreen is
+    // mapProjectPoint with a bounds test, and mapProjectPoint is toScreen's own
+    // arithmetic. All pure, so every edge is pinned here.
+    {
+        using cascade::gui::mapMercatorY;
+        using cascade::gui::mapPointOnScreen;
+        using cascade::gui::mapProjectPoint;
+        const double kInf = std::numeric_limits<double>::infinity();
+
+        // THE MERCATOR WORLD SQUARE, independently stated: the equator is half
+        // way down, the two poles' limits are the top and the bottom, and north
+        // and south are mirror images.
+        CHECK_NEAR(mapMercatorY(0.0), 0.5, 1e-12);
+        CHECK_NEAR(mapMercatorY(85.05112878), 0.0, 1e-6);
+        CHECK_NEAR(mapMercatorY(-85.05112878), 1.0, 1e-6);
+        CHECK_NEAR(mapMercatorY(40.0) + mapMercatorY(-40.0), 1.0, 1e-12);
+        // Beyond the projection's limit the latitude is CLAMPED, as the tiles
+        // are: a point at 89 N lands where 85.05 N does.
+        CHECK_NEAR(mapMercatorY(89.0), mapMercatorY(85.05112878), 1e-12);
+        CHECK_NEAR(mapMercatorY(-89.0), mapMercatorY(-85.05112878), 1e-12);
+
+        // A KNOWN VIEW: 800 x 600 px, centred on 51 N 10 E, 8 degrees of
+        // longitude across (100 px per degree), so 6 degrees of latitude fit.
+        for (const bool mercator : {false, true}) {
+            // The centre is the middle of the map, in both projections.
+            const cascade::gui::MapPixel c =
+                mapProjectPoint(51.0, 10.0, 8.0, 800.0, 600.0, mercator, 51.0, 10.0);
+            CHECK_NEAR(c.x, 400.0, 1e-9);
+            CHECK_NEAR(c.y, 300.0, 1e-9);
+            CHECK(mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 10.0));
+            // Far outside, in every direction.
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 0.0, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 100.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, -33.0, -150.0));
+            // A NaN or infinite position is on no map.
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, kNaN, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, kNaN));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, kInf, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, -kInf));
+            // A view with no area, no span or no centre has nothing in it.
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 0.0f, 600.0f, mercator, 51.0, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 0.0f, mercator, 51.0, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 0.0, 800.0f, 600.0f, mercator, 51.0, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, -8.0, 800.0f, 600.0f, mercator, 51.0, 10.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, kNaN, 800.0f, 600.0f, mercator, 51.0, 10.0));
+            CHECK(!mapPointOnScreen(kNaN, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 10.0));
+            // EXACTLY ON THE EAST EDGE (4 degrees out = pixel 800 of 800) counts
+            // as inside; a hair beyond does not. Likewise the west edge.
+            CHECK(mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 14.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 14.001));
+            CHECK(mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 6.0));
+            CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, mercator, 51.0, 5.999));
+            // THE ANTIMERIDIAN, the short way round: a view centred on 179.5 E
+            // and 4 degrees across takes in -179.8 (0.7 degrees east of the
+            // centre) and 179.0, and not -177.0 (3.5 degrees east) or 170.0.
+            CHECK(mapPointOnScreen(0.0, 179.5, 4.0, 800.0f, 600.0f, mercator, 0.0, -179.8));
+            CHECK(mapPointOnScreen(0.0, 179.5, 4.0, 800.0f, 600.0f, mercator, 0.0, 179.0));
+            CHECK(!mapPointOnScreen(0.0, 179.5, 4.0, 800.0f, 600.0f, mercator, 0.0, -177.0));
+            CHECK(!mapPointOnScreen(0.0, 179.5, 4.0, 800.0f, 600.0f, mercator, 0.0, 170.0));
+            // ...and the mirror image, centred on -179.5.
+            CHECK(mapPointOnScreen(0.0, -179.5, 4.0, 800.0f, 600.0f, mercator, 0.0, 179.8));
+            CHECK(!mapPointOnScreen(0.0, -179.5, 4.0, 800.0f, 600.0f, mercator, 0.0, 177.0));
+        }
+
+        // EQUIRECTANGULAR EDGES, north and south: 6 degrees of latitude fit,
+        // so 3 each side of the centre, exactly.
+        CHECK(mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, false, 54.0, 10.0));
+        CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, false, 54.001, 10.0));
+        CHECK(mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, false, 48.0, 10.0));
+        CHECK(!mapPointOnScreen(51.0, 10.0, 8.0, 800.0f, 600.0f, false, 47.999, 10.0));
+
+        // THE TWO PROJECTIONS PUT THE SAME POINT AT DIFFERENT HEIGHTS: Mercator
+        // stretches latitude away from the equator, so 1.4 degrees north of the
+        // centre of a 4-degree view is 80 px up equirectangularly and well off
+        // the top of a Mercator map. The decision flips with the projection.
+        const cascade::gui::MapPixel eq =
+            mapProjectPoint(51.0, 0.0, 4.0, 800.0, 600.0, false, 52.4, 0.0);
+        const cascade::gui::MapPixel mer =
+            mapProjectPoint(51.0, 0.0, 4.0, 800.0, 600.0, true, 52.4, 0.0);
+        std::printf("  52.4 N in a 4-degree view centred on 51 N: y = %.1f equirectangular, %.1f Mercator\n",
+                    eq.y, mer.y);
+        CHECK_NEAR(eq.x, mer.x, 1e-9);
+        CHECK(std::fabs(eq.y - mer.y) > 100.0);
+        CHECK_NEAR(eq.y, 20.0, 1e-9);
+        CHECK(mer.y < 0.0);
+        CHECK(mapPointOnScreen(51.0, 0.0, 4.0, 800.0f, 600.0f, false, 52.4, 0.0));
+        CHECK(!mapPointOnScreen(51.0, 0.0, 4.0, 800.0f, 600.0f, true, 52.4, 0.0));
+        // The conformal check: in Mercator one degree of latitude near the
+        // centre is 1 / cos(lat) degrees of longitude tall in pixels, so 0.1
+        // degree north of 51 N is 0.1 / cos(51 deg) * (800 / 4) px up.
+        const cascade::gui::MapPixel up =
+            mapProjectPoint(51.0, 0.0, 4.0, 800.0, 600.0, true, 51.1, 0.0);
+        CHECK_NEAR(300.0 - up.y, 0.1 / std::cos(deg2rad(51.05)) * 200.0, 0.2);
+    }
+
     // --- the target detail block ---------------------------------------------
     testTrackDetailLines();
+
+    // --- targets heard without a position (0.99.75) ---------------------------
+    //
+    // The heading over the target list, and the second line of a row for a target
+    // the source hears and cannot place yet. Both take the translator as an
+    // argument and are run here with the identity, so what is pinned is the
+    // English the catalogues are keyed on.
+    {
+        const auto english = [](const char* s) { return s; };
+        using cascade::gui::targetCountText;
+        // NOTHING HEARD UNPLACED: the lines are the ones the list has always had.
+        CHECK(targetCountText(0, 0, 0, english) == "0 targets");
+        CHECK(targetCountText(1, 1, 0, english) == "1 target");
+        CHECK(targetCountText(3, 3, 0, english) == "3 targets");
+        CHECK(targetCountText(3, 41, 0, english) == "3 of 41 targets");
+        CHECK(targetCountText(0, 12, 0, english) == "0 of 12 targets");
+        // SOME HEARD WITHOUT A POSITION: the second number is said, in the wording
+        // the owner gave, with the singular and the "N of M" forms as whole strings
+        // of their own.
+        CHECK(targetCountText(3, 3, 2, english) == "3 targets, 2 heard without a position");
+        CHECK(targetCountText(0, 0, 5, english) == "0 targets, 5 heard without a position");
+        CHECK(targetCountText(1, 1, 1, english) == "1 target, 1 heard without a position");
+        CHECK(targetCountText(3, 41, 2, english) ==
+              "3 of 41 targets, 2 heard without a position");
+        // THE TRANSLATOR IS APPLIED TO THE WHOLE FORMAT, and the numbers go in after.
+        const auto marked = [](const char* s) {
+            static std::string held;
+            held = std::string("<") + s + ">";
+            return held.c_str();
+        };
+        CHECK(targetCountText(3, 3, 2, marked) == "<3 targets, 2 heard without a position>");
+        CHECK(targetCountText(3, 3, 0, marked) == "<3 targets>");
+
+        // THE ROW'S SECOND LINE: the altitude where one is known, then the words.
+        using cascade::gui::TrackKind;
+        using cascade::gui::unplacedRowNote;
+        const double kNaN = std::numeric_limits<double>::quiet_NaN();
+        CHECK(unplacedRowNote(kNaN, TrackKind::Aircraft, english) == "no position yet");
+        CHECK(unplacedRowNote(10668.0, TrackKind::Aircraft, english) ==
+              "35000 ft - no position yet");
+        CHECK(unplacedRowNote(0.0, TrackKind::Aircraft, english) == "0 ft - no position yet");
+        CHECK(unplacedRowNote(421000.0, TrackKind::Satellite, english) ==
+              "421 km - no position yet");
+        CHECK(unplacedRowNote(10668.0, TrackKind::Aircraft, marked) == "35000 ft - <no position yet>");
+        // THE WORD BESIDE AN ESTIMATED ROW (0.99.78), through the same translator.
+        using cascade::gui::estimatedRowNote;
+        CHECK(estimatedRowNote(english) == "estimated");
+        CHECK(estimatedRowNote(marked) == "<estimated>");
+
+        // THE DETAIL BLOCK: a target with no position says so where the position
+        // would be, prints no coordinates and no range or bearing (they have nothing
+        // to be measured to), and still says everything else it knows.
+        cascade::gui::TrackDetailInput in;
+        in.label = "BAW123";
+        in.id = "400A1B";
+        in.source = "ADS-B";
+        in.hasPosition = false;
+        in.latDeg = kNaN;
+        in.lonDeg = kNaN;
+        in.altM = 10668.0;
+        in.hasHome = true;
+        in.homeLatDeg = 51.0;
+        in.homeLonDeg = 0.0;
+        in.ageMs = 2500;
+        std::string text;
+        for (const cascade::gui::TrackDetailLine& l : cascade::gui::buildTrackDetailLines(in)) {
+            text += l.text;
+            text += '\n';
+        }
+        std::printf("--- unplaced block ---\n%s", text.c_str());
+        CHECK(text.find("pos     no position yet") != std::string::npos);
+        CHECK(text.find("nan") == std::string::npos);
+        CHECK(text.find("range") == std::string::npos);
+        CHECK(text.find("alt     10668 m") != std::string::npos);
+        CHECK(text.find("age     2.5 s") != std::string::npos);
+        // ...and the same target WITH a position is unchanged: coordinates, range.
+        in.hasPosition = true;
+        in.latDeg = 52.0;
+        in.lonDeg = 1.0;
+        text.clear();
+        for (const cascade::gui::TrackDetailLine& l : cascade::gui::buildTrackDetailLines(in)) {
+            text += l.text;
+            text += '\n';
+        }
+        CHECK(text.find("pos     52.00000, 1.00000") != std::string::npos);
+        CHECK(text.find("range   ") != std::string::npos);
+        CHECK(text.find("no position yet") == std::string::npos);
+        CHECK(text.find("estimated from the last fix") == std::string::npos);
+        // ...and an ESTIMATED position (0.99.78) keeps its coordinates and range,
+        // and says under them what they are.
+        in.estimated = true;
+        text.clear();
+        for (const cascade::gui::TrackDetailLine& l : cascade::gui::buildTrackDetailLines(in)) {
+            text += l.text;
+            text += '\n';
+        }
+        CHECK(text.find("pos     52.00000, 1.00000\n        estimated from the last fix") !=
+              std::string::npos);
+        CHECK(text.find("range   ") != std::string::npos);
+        in.estimated = false;
+
+        // A NaN POSITION NEVER REACHES THE COVERAGE MAP, whatever the caller did:
+        // the accumulator refuses a sighting it cannot measure.
+        CoverageMap cov;
+        recordCoverage(cov, 51.0, 0.0, kNaN, kNaN, cascade::gui::TrackKind::Aircraft);
+        recordCoverage(cov, 51.0, 0.0, kNaN, 0.5, cascade::gui::TrackKind::Aircraft);
+        recordCoverage(cov, 51.0, 0.0, 51.2, std::numeric_limits<double>::infinity(),
+                       cascade::gui::TrackKind::Aircraft);
+        CHECK(cov.peakKm() == 0.0);
+        CHECK(cov.empty());
+        recordCoverage(cov, 51.0, 0.0, 51.2, 0.5, cascade::gui::TrackKind::Aircraft);
+        CHECK(cov.peakKm() > 0.0);
+        CHECK(cov.filledBuckets() == 1);
+    }
 
     return testSummary("test_track_metrics");
 }

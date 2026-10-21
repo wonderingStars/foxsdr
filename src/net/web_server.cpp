@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "net/web_server.hpp"
 
+#include "core/health_events.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1019,7 +1021,7 @@ let lastDevKey = '', lastAntKey = '', lastGainKey = '';
 // about eight of them would hide the gain and antenna rows for whichever it
 // had missed, and nothing would say why.
 const RADIO_KINDS = ['soapy', 'rtlsdr', 'hackrf', 'airspy', 'airspyhf',
-                     'sdrplay', 'mirisdr', 'rx888', 'pluto'];
+                     'sdrplay', 'mirisdr', 'rx888', 'pluto', 'hydrasdr', 'rtltcp'];
 function isRadioKind(k) { return RADIO_KINDS.indexOf(k) >= 0; }
 
 // HOW A GAIN IS LETTERED, and it is the desktop's own rule
@@ -3066,6 +3068,7 @@ std::string statusJson(const RadioStatus& s,
     j["audioPrimingCallbacks"] = s.audioPrimingCallbacks;
     j["audioRingMs"] = s.audioRingMs;
     j["audioRingCapacityMs"] = s.audioRingCapacityMs;
+    j["audioLeadMs"] = s.audioLeadMs;
     // Always published, empty and zero included: a page that reads the
     // field only when it is present would have to treat "absent" as "the
     // receiver's own audio", and absent is also what an older build sends.
@@ -3121,6 +3124,18 @@ public:
             return false;
         }
         clock_ = std::move(fn);
+        return true;
+    }
+
+    // Fired once per request served, from the post-routing handler
+    // (installRoutes) - the one point every request passes through whatever
+    // route it hit. Called on whichever worker thread httplib served the
+    // request on; the callback the GUI supplies (TesterUsageRecorder::
+    // noteFeature) is mutex-guarded for exactly this reason. Set only while
+    // not running, the same rule every other provider here follows.
+    bool setUsageCallback(std::function<void()> fn) {
+        if (running()) { return false; }
+        usageCallback_ = std::move(fn);
         return true;
     }
 
@@ -3230,6 +3245,7 @@ private:
     PollHook pollHook_;
     SpectrumProvider spectrum_;
     Clock clock_;
+    std::function<void()> usageCallback_;
 
     mutable std::mutex mutex_;
     WebServerConfig cfg_;
@@ -3333,11 +3349,21 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // caller-influenced JSON, and no-store because nothing here is worth a
     // cache entry and a cached /api/status is a stale readout.
     svr.set_post_routing_handler(
-        [](const httplib::Request&, httplib::Response& res) {
+        [this](const httplib::Request&, httplib::Response& res) {
             res.set_header("X-Content-Type-Options", "nosniff");
             res.set_header("Cache-Control", "no-store");
             res.set_header("Referrer-Policy", "no-referrer");
             res.set_header("X-Frame-Options", "DENY");
+            // TESTER USAGE: "browser access" was used - every request that
+            // reaches ANY route runs the post-routing handler, which is what
+            // makes this the one hook covering the whole surface rather than
+            // one route among many. GATED ON A REAL ANSWER, though: httplib
+            // leaves res.status at its default 404 for a path nothing
+            // matched, and this route also answers 401 for a wrong or
+            // missing login - neither is a browser being USED, both are
+            // scanners and failed logins, and counting them would say
+            // "browser" was exercised by a tester who never opened the page.
+            if (usageCallback_ && res.status != 404 && res.status != 401) { usageCallback_(); }
         });
 
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
@@ -3793,6 +3819,11 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         std::fprintf(stderr, "cascade: web handler threw on %s %s: %s\n",
                      req.method.c_str(), req.path.c_str(), what.c_str());
         std::fflush(stderr);
+        // THE SERVER SURVIVED A HANDLER THAT THREW (the answer below is the 500):
+        // a recovery the usage record counts, once a session - `recovered.webroute`.
+        // On a web worker thread, never a signal thread; the word is all of it (the
+        // route and the message above stay on this console and in this response).
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::WebRoute);
         nlohmann::json j;
         j["error"] = what;
         j["path"] = req.path;
@@ -3876,6 +3907,10 @@ bool WebServer::setStatusProvider(StatusProvider fn) {
 }
 bool WebServer::setStatusPollHook(PollHook fn) {
     return impl_->setStatusPollHook(std::move(fn));
+}
+
+bool WebServer::setUsageCallback(std::function<void()> fn) {
+    return impl_->setUsageCallback(std::move(fn));
 }
 bool WebServer::setSpectrumProvider(SpectrumProvider fn) {
     return impl_->setSpectrumProvider(std::move(fn));

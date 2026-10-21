@@ -22,7 +22,10 @@
 #include "core/pipeline.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/plugin_runner.hpp"
+#include "core/thread_priority.hpp"
+#include "dsp/limiter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -191,6 +194,13 @@ bool acceptedInputRate(double rateHz, unsigned* decimOut, double* chanRateOut,
 // bandwidth of +/-75 kHz deviation with 15 kHz audio is ~180 kHz; 150 kHz is
 // the conventional receiver setting and fits the 200 kHz channel's 0.9x clamp).
 constexpr double kDefaultVfoBandwidthHz = 150000.0;
+// The channel filter in USB, LSB and CW, as a multiple of the sideband width B
+// the demodulator is given (see applyChannelBandwidthLocked). The filter is
+// symmetric about the carrier and its -6 dB edge is half of this, so 4 puts
+// that edge at 2 B: the sideband (flat to B, -6 dB at 1.2 B in the demodulator)
+// passes with under 1 dB of extra droop, and anything beyond ~4 B is gone before
+// it reaches the demodulator.
+constexpr double kSidebandChannelFactor = 4.0;
 // The decimation search above prefers channels this filter fits unclipped;
 // it is declared there, before this constant, so the two are tied here.
 static_assert(kWfmUnclippedChannelHz * 0.9 - kDefaultVfoBandwidthHz < 1e-6 &&
@@ -361,6 +371,45 @@ void Pipeline::publishParamMirrorsLocked() {
     }
 }
 
+void Pipeline::post(Command apply, Command mirrorNow) {
+    {
+        std::lock_guard<std::mutex> ql(cmdMutex_);
+        // Under cmdMutex_, so the order of two posts' mirrors is the order of their
+        // commands, and drainCommandsLocked() cannot publish between this store and
+        // the push below.
+        if (mirrorNow) { mirrorNow(); }
+        cmdQueue_.push_back(std::move(apply));
+        cmdPending_.store(true, std::memory_order_release);
+    }
+    // TRY, never wait: this is the whole point (see the header comment). Failing
+    // means a DSP block - or another control thread - is inside the lock, and the
+    // block that follows it applies the queue. A command can be left behind only
+    // when the lock holder was past its last look at the queue, which is another
+    // thread's setter finishing; it is applied by the next block, the next setter
+    // or start(), whichever comes first.
+    std::unique_lock<std::mutex> al(audioMutex_, std::try_to_lock);
+    if (al.owns_lock()) { drainCommandsLocked(); }
+}
+
+void Pipeline::drainCommandsLocked() {
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> ql(cmdMutex_);
+            if (cmdQueue_.empty()) {
+                cmdPending_.store(false, std::memory_order_relaxed);
+                // Every posted change has run, so the live objects ARE the latest
+                // value of everything: the one moment their clamped/derived figures
+                // are the right ones to publish.
+                publishParamMirrorsLocked();
+                return;
+            }
+            cmdScratch_.swap(cmdQueue_);
+        }
+        for (Command& c : cmdScratch_) { c(); }
+        cmdScratch_.clear();  // keeps the capacity for the next swap
+    }
+}
+
 void Pipeline::holdLockForTest(LockForTest which, int holdMs, std::atomic<bool>* acquired) {
     // THE ONE PLACE THIS FILE DELIBERATELY BLOCKS. See the declaration: it
     // exists so a test can hold the mutex the DSP thread holds across a block
@@ -400,6 +449,22 @@ void Pipeline::applyDemodDeemphasisLocked() {
     // downstream.
     const bool wfm = (demod_.mode() == cascade::dsp::DemodMode::WFM);
     demod_.setDeemphasisUs(wfm ? 0.0 : deemphasisUs_);
+}
+
+void Pipeline::applyChannelBandwidthLocked() {
+    const cascade::dsp::DemodMode m = demod_.mode();
+    const bool sideband = (m == cascade::dsp::DemodMode::USB ||
+                           m == cascade::dsp::DemodMode::LSB ||
+                           m == cascade::dsp::DemodMode::CW);
+    if (!sideband) {
+        vfo_.setBandwidthHz(vfoBandwidthHz_);
+        return;
+    }
+    // The demodulator clamps B for its channel rate; the channel filter is
+    // sized from what B really became, not from the raw request. (The Vfo then
+    // clamps its own width, so a very wide request stays inside the channel.)
+    demod_.setSsbBandwidthHz(vfoBandwidthHz_);
+    vfo_.setBandwidthHz(kSidebandChannelFactor * demod_.ssbBandwidthHz());
 }
 
 void Pipeline::resetDecodersLocked() {
@@ -450,8 +515,7 @@ std::function<bool(int)> Pipeline::audioOpener() {
 }
 
 void Pipeline::publishAudioChannels(bool ok) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    audioChannels_ = ok ? audio_->channels() : 1;
+    audioChannels_.store(ok ? audio_->channels() : 1, std::memory_order_relaxed);
 }
 
 Pipeline::~Pipeline() {
@@ -471,7 +535,8 @@ Pipeline::~Pipeline() {
     // caller with a shorter-lived Pipeline must not have to rediscover this
     // the hard way.
     if (zombieSource_) {
-        static_cast<void>(external_.release());
+        // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+        leakOnPurpose(external_.release());
         zombieSource_ = false;
     }
 }
@@ -528,7 +593,8 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     // later stop()/setSource() does not leak a second, perfectly healthy
     // source it never needed to.
     if (zombieSource_) {
-        static_cast<void>(external_.release());
+        // Marked for LeakSanitizer (core/leak_on_purpose.hpp).
+        leakOnPurpose(external_.release());
         zombieSource_ = false;
     }
     // Swap. Destroying the outgoing external source here is race-free on
@@ -550,12 +616,17 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     // frequency 125 MHz away from where the counter says it is.
     airView_.bind(active_);
     airView_.setConverter(ConverterSetting{});
+    // Nor does one radio's crystal correction (AppWindow::applyPpmForSource).
+    airView_.setPpm(0.0);
     {
         // A new antenna is a new station: drop the decoded RDS content and
         // the pilot lock with the old source. controlMutex_ -> audioMutex_ is
         // the same order start() and setInputRateHz use.
         std::lock_guard<std::mutex> alk(audioMutex_);
         resetDecodersLocked();
+        // And a new crystal: what the drift matcher learned about the old
+        // radio's clock against the sound card's is not true of this one.
+        driftMatcher_.reset();
     }
     if (live) {
         // Resume: start the incoming source BEFORE its thread exists so the
@@ -646,6 +717,16 @@ ConverterSetting Pipeline::converter() {
     return airView_.converter();
 }
 
+void Pipeline::setSoftwarePpm(double ppm, const PpmMemo& memo) {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    airView_.setPpm(ppm, memo);
+}
+
+double Pipeline::softwarePpm() {
+    std::lock_guard<std::mutex> lk(controlMutex_);
+    return airView_.ppm();
+}
+
 const char* Pipeline::activeSourceName() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     return active_->name();
@@ -710,6 +791,10 @@ void Pipeline::start() {
     // (mode, offset, bandwidth, threshold) survives the restart.
     {
         std::lock_guard<std::mutex> alk(audioMutex_);
+        // Changes posted while a block (or another control call) held the lock and
+        // no DSP thread has run since: apply them before the fresh-acquisition
+        // reset below so the stream starts on the settings the user last chose.
+        drainCommandsLocked();
         vfo_.reset();
         demod_.reset();
         agc_.reset();
@@ -855,6 +940,7 @@ void Pipeline::stop() {
     // earlier one holds a token this line never touches.
     quiesceSourceThreadLocked();
     if (dspThread_.joinable()) { dspThread_.join(); }
+    programmeAudio_.store(false, std::memory_order_relaxed);
 }
 
 bool Pipeline::running() const {
@@ -869,17 +955,20 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
 }
 
 void Pipeline::setDeemphasisUs(double us) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    deemphasisUs_ = us;
-    // BOTH owners, every time. The STEREO decoder owns WFM de-emphasis, for
-    // both stereo and mono output (header: "WFM DE-EMPHASIS OWNERSHIP"), and
-    // in WFM the helper below keeps demod_ flat so the composite reaching RDS
-    // keeps its 57 kHz subcarrier. In every other mode StereoFm is not in the
-    // audio path at all, so this line alone was the whole of the setter and
-    // NFM never de-emphasised: the missing half is the helper.
-    stereo_->setDeemphasisUs(us);
-    applyDemodDeemphasisLocked();
-    publishParamMirrorsLocked();
+    post(
+        [this, us] {
+            deemphasisUs_ = us;
+            // BOTH owners, every time. The STEREO decoder owns WFM de-emphasis,
+            // for both stereo and mono output (header: "WFM DE-EMPHASIS
+            // OWNERSHIP"), and in WFM the helper below keeps demod_ flat so the
+            // composite reaching RDS keeps its 57 kHz subcarrier. In every other
+            // mode StereoFm is not in the audio path at all, so this line alone
+            // was the whole of the setter and NFM never de-emphasised: the
+            // missing half is the helper.
+            stereo_->setDeemphasisUs(us);
+            applyDemodDeemphasisLocked();
+        },
+        [this, us] { mirrorDeemphasisUs_.store(us, std::memory_order_relaxed); });
 }
 
 double Pipeline::deemphasisUs() const {
@@ -887,30 +976,40 @@ double Pipeline::deemphasisUs() const {
 }
 
 void Pipeline::setDemodMode(cascade::dsp::DemodMode m) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    if (demod_.mode() == m) { return; }  // idempotent: no gratuitous reset
-    demod_.setMode(m);  // resets the demod's internal state (its contract)
-    // The new mode decides who de-emphasises: off in WFM (StereoFm's job, see
-    // the header), the user's constant everywhere else. Re-applied here rather
-    // than assumed, because setMode does not preserve the setting — and
-    // because leaving it at the bare "off" this line used to be is exactly
-    // what made the De-emph control inert on every mode but WFM.
-    applyDemodDeemphasisLocked();
-    agc_.reset();       // new level regime: relearn the gain from neutral
-    // Leaving WFM abandons the composite the decoders were tracking, and
-    // coming back to it is a fresh acquisition either way.
-    resetDecodersLocked();
-    publishParamMirrorsLocked();
+    post(
+        [this, m] {
+            if (demod_.mode() == m) { return; }  // idempotent: no gratuitous reset
+            demod_.setMode(m);  // resets the demod's internal state (its contract)
+            // The new mode decides who de-emphasises: off in WFM (StereoFm's job,
+            // see the header), the user's constant everywhere else. Re-applied
+            // here rather than assumed, because setMode does not preserve the
+            // setting — and because leaving it at the bare "off" this line used
+            // to be is exactly what made the De-emph control inert on every mode
+            // but WFM.
+            applyDemodDeemphasisLocked();
+            // ...and it decides what the bandwidth MEANS: the whole symmetric
+            // channel in AM, the width of one sideband in USB/LSB/CW. A caller
+            // that sets the mode and never the bandwidth (a browser, a plugin)
+            // must not be left with the previous mode's channel filter.
+            applyChannelBandwidthLocked();
+            agc_.reset();  // new level regime: relearn the gain from neutral
+            // Leaving WFM abandons the composite the decoders were tracking, and
+            // coming back to it is a fresh acquisition either way.
+            resetDecodersLocked();
+        },
+        [this, m] { mirrorDemodMode_.store(static_cast<int>(m), std::memory_order_relaxed); });
 }
 
 void Pipeline::setStereoEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    stereoEnabled_ = on;
-    // Through StereoFm's own ramped gate, so the toggle fades between mono
-    // and stereo instead of stepping — a step in the difference channel is an
-    // audible click in both speakers.
-    stereo_->setForceMono(!on);
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            stereoEnabled_ = on;
+            // Through StereoFm's own ramped gate, so the toggle fades between mono
+            // and stereo instead of stepping — a step in the difference channel is
+            // an audible click in both speakers.
+            stereo_->setForceMono(!on);
+        },
+        [this, on] { mirrorStereoEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::stereoEnabled() const {
@@ -935,15 +1034,21 @@ RdsSnapshot Pipeline::rdsSnapshot() const {
 }
 
 void Pipeline::resetRds() {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    resetDecodersLocked();
+    // Posted like every other setter: this one is called on every hardware retune
+    // (AppWindow::applyRetuneNow), so it is the call a user's hand on the
+    // frequency readout reaches most. The decoded content it clears is the
+    // previous station's; it goes between two blocks instead of mid-block, and
+    // rdsSnapshot() shows the old name for at most one block longer.
+    post([this] { resetDecodersLocked(); });
 }
 
 void Pipeline::setNoiseReductionEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    nrL_->setEnabled(on);
-    nrR_->setEnabled(on);
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            nrL_->setEnabled(on);
+            nrR_->setEnabled(on);
+        },
+        [this, on] { mirrorNrEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::noiseReductionEnabled() const {
@@ -951,10 +1056,12 @@ bool Pipeline::noiseReductionEnabled() const {
 }
 
 void Pipeline::setNoiseReductionStrength(float s01) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    nrL_->setStrength(s01);
-    nrR_->setStrength(s01);
-    publishParamMirrorsLocked();
+    // No verbatim mirror: the block clamps the request, and the getter reports
+    // what is in use (published when the command has run).
+    post([this, s01] {
+        nrL_->setStrength(s01);
+        nrR_->setStrength(s01);
+    });
 }
 
 float Pipeline::noiseReductionStrength() const {
@@ -962,16 +1069,18 @@ float Pipeline::noiseReductionStrength() const {
 }
 
 void Pipeline::setNotchEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    // Clear the biquad memory on the way in: a notch re-enabled with the
-    // charge it held when it was switched off thumps.
-    if (on && !notchL_->isEnabled()) {
-        notchL_->reset();
-        notchR_->reset();
-    }
-    notchL_->setEnabled(on);
-    notchR_->setEnabled(on);
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            // Clear the biquad memory on the way in: a notch re-enabled with the
+            // charge it held when it was switched off thumps.
+            if (on && !notchL_->isEnabled()) {
+                notchL_->reset();
+                notchR_->reset();
+            }
+            notchL_->setEnabled(on);
+            notchR_->setEnabled(on);
+        },
+        [this, on] { mirrorNotchEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::notchEnabled() const {
@@ -979,10 +1088,10 @@ bool Pipeline::notchEnabled() const {
 }
 
 void Pipeline::setNotchFrequencyHz(double hz) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    notchL_->setFrequencyHz(hz);
-    notchR_->setFrequencyHz(hz);
-    publishParamMirrorsLocked();
+    post([this, hz] {
+        notchL_->setFrequencyHz(hz);
+        notchR_->setFrequencyHz(hz);
+    });
 }
 
 double Pipeline::notchFrequencyHz() const {
@@ -990,12 +1099,12 @@ double Pipeline::notchFrequencyHz() const {
 }
 
 void Pipeline::setNotchQ(double q) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    notchL_->setQ(q);
-    notchR_->setQ(q);
-    autoNotchL_->setQ(q);
-    autoNotchR_->setQ(q);
-    publishParamMirrorsLocked();
+    post([this, q] {
+        notchL_->setQ(q);
+        notchR_->setQ(q);
+        autoNotchL_->setQ(q);
+        autoNotchR_->setQ(q);
+    });
 }
 
 double Pipeline::notchQ() const {
@@ -1003,17 +1112,19 @@ double Pipeline::notchQ() const {
 }
 
 void Pipeline::setAutoNotchEnabled(bool on) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    if (on && !autoNotchL_->isEnabled()) {
-        autoNotchL_->reset();
-        autoNotchR_->reset();
-    }
-    autoNotchL_->setEnabled(on);
-    autoNotchR_->setEnabled(on);
-    if (!on) {
-        autoNotchEngaged_.store(false, std::memory_order_relaxed);
-    }
-    publishParamMirrorsLocked();
+    post(
+        [this, on] {
+            if (on && !autoNotchL_->isEnabled()) {
+                autoNotchL_->reset();
+                autoNotchR_->reset();
+            }
+            autoNotchL_->setEnabled(on);
+            autoNotchR_->setEnabled(on);
+            if (!on) {
+                autoNotchEngaged_.store(false, std::memory_order_relaxed);
+            }
+        },
+        [this, on] { mirrorAutoNotchEnabled_.store(on, std::memory_order_relaxed); });
 }
 
 bool Pipeline::autoNotchEnabled() const {
@@ -1034,14 +1145,19 @@ cascade::dsp::DemodMode Pipeline::demodMode() const {
 }
 
 void Pipeline::setVfoOffsetHz(double offsetHz) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
-    vfo_.setOffsetHz(offsetHz);
-    // A retune is a different station: the RDS content and the pilot lock
-    // that belonged to the old one must not survive it. (The SOURCE centre
-    // moving is invisible from here — that caller has to call resetRds().)
-    resetDecodersLocked();
-    publishParamMirrorsLocked();
+    // The verbatim mirror matters most here: the tuned frequency the GUI shows and
+    // tunes from is the source centre plus this offset, read straight after the
+    // setter returns (AppWindow::tuneAbsoluteHz and the slider both do).
+    post(
+        [this, offsetHz] {
+            if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            vfo_.setOffsetHz(offsetHz);
+            // A retune is a different station: the RDS content and the pilot lock
+            // that belonged to the old one must not survive it. (The SOURCE centre
+            // moving is invisible from here — that caller has to call resetRds().)
+            resetDecodersLocked();
+        },
+        [this, offsetHz] { mirrorVfoOffsetHz_.store(offsetHz, std::memory_order_relaxed); });
 }
 
 double Pipeline::vfoOffsetHz() const {
@@ -1049,23 +1165,32 @@ double Pipeline::vfoOffsetHz() const {
 }
 
 void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    // The raw request is remembered separately from the Vfo's clamped value
-    // so a later rate switch can re-apply the caller's intent, re-clamped for
-    // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
-    vfoBandwidthHz_ = bandwidthHz;
-    vfo_.setBandwidthHz(bandwidthHz);
-    publishParamMirrorsLocked();
+    // The filter redesign this runs is the heaviest thing any setter does; it now
+    // happens on the DSP thread between two blocks instead of on the GUI thread
+    // with the DSP thread parked behind it, which is the same stall moved off the
+    // frame.
+    post([this, bandwidthHz] {
+        // The raw request is remembered separately from the Vfo's clamped value
+        // so a later rate switch can re-apply the caller's intent, re-clamped for
+        // the NEW channel rate (clamping a clamp would ratchet the bandwidth).
+        vfoBandwidthHz_ = bandwidthHz;
+        applyChannelBandwidthLocked();
+    });
 }
 
 void Pipeline::setSquelchDb(float thresholdDb) {
-    std::lock_guard<std::mutex> lk(audioMutex_);
-    squelchDb_ = thresholdDb;  // remembered for rate-switch rebuilds
-    squelch_.setThresholdDb(thresholdDb);
+    post([this, thresholdDb] {
+        squelchDb_ = thresholdDb;  // remembered for rate-switch rebuilds
+        squelch_.setThresholdDb(thresholdDb);
+    });
 }
 
 float Pipeline::signalPowerDb() const {
     return signalDb_.load(std::memory_order_relaxed);
+}
+
+bool Pipeline::squelchOpen() const {
+    return squelchOpen_.load(std::memory_order_relaxed);
 }
 
 void Pipeline::setAudioMuted(bool muted) {
@@ -1073,7 +1198,17 @@ void Pipeline::setAudioMuted(bool muted) {
 }
 
 bool Pipeline::audioMuted() const {
-    return audioMuted_.load(std::memory_order_relaxed);
+    return audioMuted_.load(std::memory_order_relaxed) || pluginAudioMuted();
+}
+
+void Pipeline::setDemodAudioMuted(bool muted) {
+    demodAudioMuted_.store(muted, std::memory_order_relaxed);
+}
+
+bool Pipeline::pluginAudioMuted() const {
+    return demodAudioMuted_.load(std::memory_order_relaxed) &&
+           (!run_.load(std::memory_order_relaxed) ||
+            !programmeAudio_.load(std::memory_order_relaxed));
 }
 
 cascade::sink::AudioOut& Pipeline::audio() {
@@ -1161,11 +1296,14 @@ bool Pipeline::setInputRateHz(double rateHz) {
 
     {
         // audioMutex_ is still required even with the DSP thread down:
-        // audioTap()/setDemodMode()/setVfo* may arrive concurrently from
-        // other control-plane threads. controlMutex_ -> audioMutex_ is the
+        // setDemodMode()/setVfo* may arrive concurrently from other
+        // control-plane threads. controlMutex_ -> audioMutex_ is the
         // same acquisition order start() uses, and the DSP thread never takes
         // controlMutex_, so the ordering cannot deadlock.
         std::lock_guard<std::mutex> alk(audioMutex_);
+        // The rebuild below preserves the tuning, mode and bandwidth it reads from
+        // the live objects, so anything still queued is applied first.
+        drainCommandsLocked();
 
         // Preserve caller-visible tuning across the rebuild.
         const double offset = vfo_.offsetHz();
@@ -1187,6 +1325,10 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // leaving it on there would put a second 50 us pole in the audio and
         // gut the 57 kHz subcarrier RDS needs.
         applyDemodDeemphasisLocked();
+        // Likewise a rebuilt demodulator starts at the default sideband width,
+        // and the Vfo built above was given the raw request: both are put back
+        // to what the user's bandwidth means in THIS mode at the NEW rate.
+        applyChannelBandwidthLocked();
 
         // Stereo + RDS decoders, rebuilt for the new composite rate (this
         // re-applies the user's de-emphasis and force-mono settings and
@@ -1289,7 +1431,10 @@ void Pipeline::setAudioRecorder(Recorder* r) {
 }
 
 std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
+    // tapMutex_ alone, never audioMutex_: see the declaration for why and for
+    // the lock order. The DSP thread holds this only while it writes a block's
+    // frames into the window, so the GUI thread does not wait for a block.
+    std::lock_guard<std::mutex> lk(tapMutex_);
     const std::size_t frames = tapBuf_.size() / 2;
     const std::size_t avail = std::min(n, tapFilled_);
     // The newest frame sits at tapWrite_ - 1; walk back `avail` frames and
@@ -1305,7 +1450,7 @@ std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
 
 std::size_t Pipeline::audioTapStereo(float* dstLeft, float* dstRight,
                                      std::size_t n) const {
-    std::lock_guard<std::mutex> lk(audioMutex_);
+    std::lock_guard<std::mutex> lk(tapMutex_);  // alone; see audioTap()
     const std::size_t frames = tapBuf_.size() / 2;
     const std::size_t avail = std::min(n, tapFilled_);
     const std::size_t start = (tapWrite_ + frames - avail) % frames;
@@ -1333,6 +1478,17 @@ void Pipeline::noteThreadFault(const char* where, const char* what) {
 
 bool Pipeline::faulted() const { return faulted_.load(std::memory_order_relaxed); }
 
+std::string Pipeline::dspThreadPriority() const { return dspPriority_->get(); }
+
+std::string Pipeline::sourceThreadPriority() const { return srcPriority_->get(); }
+
+double Pipeline::driftCorrectionPpm() {
+    // The matcher belongs to the DSP thread and is guarded by audioMutex_, which
+    // that thread holds for a block at a time.
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    return driftMatcher_.correctionPpm();
+}
+
 std::string Pipeline::faultMessage() const {
     std::lock_guard<std::mutex> lk(faultMutex_);
     return faultMsg_;
@@ -1354,8 +1510,8 @@ void Pipeline::spawnSourceThread(double chainRateHz) {
     // srcStopToken_/srcExitFuture_ hold by the time this thread actually
     // runs — a later spawn overwrites both members with a DIFFERENT pair,
     // and this closure never sees that change.
-    srcThread_ = std::thread([this, chainRateHz, token, exitPromise]() {
-        sourceThreadMain(chainRateHz, token);
+    srcThread_ = std::thread([this, chainRateHz, token, exitPromise, priority = srcPriority_]() {
+        sourceThreadMain(chainRateHz, token, priority);
         // Fulfilled from INSIDE the thread, after sourceThreadMain has fully
         // returned, so "the future is ready" means "this OS thread is done
         // and join() will return immediately" — see stop()'s use of it.
@@ -1369,7 +1525,17 @@ void Pipeline::spawnSourceThread(double chainRateHz) {
 // from deep inside a stream read when the USB device is pulled mid-capture —
 // that is precisely how unplugging the SDR used to kill the whole app.
 void Pipeline::sourceThreadMain(double chainRateHz,
-                                std::shared_ptr<std::atomic<bool>> stopToken) {
+                                std::shared_ptr<std::atomic<bool>> stopToken,
+                                std::shared_ptr<PriorityNote> priority) {
+    // THE THREAD THAT FILLS THE I/Q RING asks for the same treatment as the DSP
+    // thread that drains it (core/thread_priority.hpp, 0.99.73): a producer that
+    // is scheduled late overflows the ring, and the DSP thread behind it starves
+    // the sound card. Put back when this function returns. The outcome goes into
+    // `priority`, a share this generation owns, and NOT into a Pipeline member:
+    // a generation the session abandoned may wake after the Pipeline has gone.
+    const cascade::core::ThreadPriorityScope raised;
+    priority->set(raised.outcome());
+    cascade::core::diagLogf("dsp: source thread priority %s", raised.outcome().c_str());
     try {
         sourceThreadBody(chainRateHz, *stopToken);
     } catch (const std::exception& e) {
@@ -1385,11 +1551,24 @@ void Pipeline::dspThreadMain() {
     // call from here (the settings store, which allocates) refuse it by this
     // mark rather than by trusting the plugin to know where it is.
     const cascade::core::RealtimeThreadScope realtime;
+    // AND ASKS THE OPERATING SYSTEM TO SCHEDULE IT AHEAD OF ORDINARY WORK
+    // (core/thread_priority.hpp, 0.99.73; Windows: the Multimedia Class
+    // Scheduler's "Pro Audio" class, else above-normal; Linux: SCHED_RR where it
+    // is allowed). Every plugin's process() runs on this thread, and the sound
+    // card's ring is drained by a callback thread PortAudio has already raised:
+    // a producer that runs late is what starves it. Put back when this function
+    // returns. One line in the log, once per thread start - it is the first thing
+    // a "choppy audio" report needs and the only place it can be read from.
+    const cascade::core::ThreadPriorityScope raised;
+    dspPriority_->set(raised.outcome());
+    cascade::core::diagLogf("dsp: thread priority %s", raised.outcome().c_str());
     try {
         dspThreadBody();
     } catch (const std::exception& e) {
+        dspExceptions_.fetch_add(1, std::memory_order_relaxed);
         noteThreadFault("DSP thread", e.what());
     } catch (...) {
+        dspExceptions_.fetch_add(1, std::memory_order_relaxed);
         noteThreadFault("DSP thread", "non-standard exception");
     }
 }
@@ -1455,7 +1634,11 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         while (stopToken.load(std::memory_order_relaxed) &&
                run_.load(std::memory_order_relaxed) &&
                srcRun_.load(std::memory_order_relaxed)) {
-            const std::size_t got = src.read(buf.data(), chunk);
+            // CLAMPED TO WHAT WAS ASKED FOR. read() returns how many of the
+            // `chunk` samples it wrote; a driver that returns more is wrong, and
+            // believing it would copy past the end of `buf` (tests/
+            // test_source_overreport.cpp).
+            const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
             if (!stopToken.load(std::memory_order_relaxed)) { return; }
             // AN INVERTING CONVERTER MIRRORS THE BAND, and this is where it is
             // put back the right way round - after the token test above, so an
@@ -1519,7 +1702,8 @@ void Pipeline::sourceThreadBody(double chainRateHz,
     while (stopToken.load(std::memory_order_relaxed) &&
            run_.load(std::memory_order_relaxed) &&
            srcRun_.load(std::memory_order_relaxed)) {
-        const std::size_t got = src.read(buf.data(), chunk);
+        // Clamped to what was asked for, as in the self-paced loop above.
+        const std::size_t got = std::min(src.read(buf.data(), chunk), chunk);
         // Same post-read token test as the self-paced loop, same reasons.
         if (!stopToken.load(std::memory_order_relaxed)) { return; }
         // The same mirror as the self-paced loop: a generator or a file the
@@ -1588,6 +1772,10 @@ void Pipeline::dspThreadBody() {
 void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     std::lock_guard<std::mutex> lk(audioMutex_);
 
+    // THE SETTERS' QUEUE, between two blocks and nowhere else: a parameter set
+    // never lands halfway through one. One atomic load when nothing was posted.
+    if (cmdPending_.load(std::memory_order_acquire)) { drainCommandsLocked(); }
+
     // IQ recorder tap (P6): the drained block RAW, before any channel
     // processing — "record baseband at the input rate" is exactly the ring's
     // samples. Every sample the DSP thread consumes passes through here, so
@@ -1608,6 +1796,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // layout, so this is a reinterpretation and not a copy.
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
         runner->processIq(reinterpret_cast<const float*>(in), n);
+        // A PLUGIN'S TRANSMIT AUDIO (CASCADE_CAP_TX_AUDIO), once per block and BEFORE any
+        // of the early returns below: whether the plugin wants the transmitter, and - only
+        // while the host has keyed it for that plugin - its next stretch of audio for the
+        // transmit thread's ring. On this thread and under the runner's lock, so the ABI's
+        // promise holds that pull() and active() are never concurrent with process() on
+        // the same handle. A no-op when no plugin declares the capability.
+        runner->pollTxAudio();
     }
 
     // THE PATCH TAPS THE SAME RAW BAND, at the same point and for exactly
@@ -1766,6 +1961,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Squelch measures the pre-demod channel and gates the (AGC'd) audio, so
     // closed-squelch output is exact digital silence after the ramp.
     squelch_.process(gateBuf_.data(), 2 * m, ilvBuf_.data());
+    // The gate's own state, once per block, for the diagnostics bundle and any
+    // other reader that wants to know whether silence is the squelch's doing
+    // (see squelchOpen()). A relaxed store of one bool: nothing is added to the
+    // per-sample loop above.
+    squelchOpen_.store(squelch_.isOpen(), std::memory_order_relaxed);
     for (std::size_t i = 0; i < m; ++i) {
         leftBuf_[i] = ilvBuf_[2 * i];
         rightBuf_[i] = ilvBuf_[2 * i + 1];
@@ -1822,6 +2022,15 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         runner->processAudioChain(outL_.data(), outR_.data(), k);
     }
 
+    // A data decoder's preset quiets the demodulated carrier only. Decoded
+    // programme audio below must survive this automatic mute; DAB otherwise
+    // silenced its own PCM merely by running on its preset. The user's mute
+    // and transmit mute still apply to the finished output below.
+    if (demodAudioMuted_.load(std::memory_order_relaxed)) {
+        std::fill(outL_.begin(), outL_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+        std::fill(outR_.begin(), outR_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
+    }
+
     // --- A PLUGIN'S OWN AUDIO, WHICH REPLACES THE DEMODULATED AUDIO ---------
     //
     // A digital broadcast decoder's whole output is sound (DAB and DAB+ decode
@@ -1854,10 +2063,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Above the hard mute for the same reason everything else here is: the
     // mute lamp, the recorder, the web stream and the test tap must all
     // describe the signal that actually reaches the speakers, whoever made it.
+    bool patchAudio = false;
     {
         patchL_.resize(k);
         patchR_.resize(k);
         const bool patching = patch_.pullAudio(patchL_.data(), patchR_.data(), k);
+        patchAudio = patching;
         if (patching || patchFade_ > 0.0f) {
             const float target = patching ? 1.0f : 0.0f;
             const float step = 1.0f / static_cast<float>(kPluginFadeFrames);
@@ -1880,10 +2091,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         }
     }
 
+    bool pluginAudio = false;
     if (PluginRunner* runner = pluginRunner_.load(std::memory_order_acquire)) {
         plugL_.resize(k);
         plugR_.resize(k);
         const bool playing = runner->pullPluginAudio(plugL_.data(), plugR_.data(), k);
+        pluginAudio = playing;
         if (playing || pluginFade_ > 0.0f) {
             const float target = playing ? 1.0f : 0.0f;
             const float step = 1.0f / static_cast<float>(kPluginFadeFrames);
@@ -1914,6 +2127,8 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         pluginFade_ = 0.0f;
     }
 
+    programmeAudio_.store(patchAudio || pluginAudio, std::memory_order_relaxed);
+
     // --- HARD MUTE, at the one point every consumer is downstream of --------
     //
     // See setAudioMuted for why the mute lives in the pipeline rather than at
@@ -1941,6 +2156,39 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         std::fill(outR_.begin(), outR_.begin() + static_cast<std::ptrdiff_t>(k), 0.0f);
     }
 
+    // --- OUTPUT PEAK LIMITER, the last stage before anything quantizes -------
+    //
+    // WHY THIS EXISTS (a beta report on 0.99.43): "widen the filter bandwidth
+    // and the audio starts to crackle". Widening the channel filter (the VFO
+    // bandwidth control on the spectrum view) admits more of whatever sits
+    // either side of the tuned signal — for AM/SSB that is more noise power,
+    // which raises the demodulated audio's CREST FACTOR even where the Agc
+    // above holds its near-target level steady (Agc measures the OUTPUT and
+    // corrects sample by sample, but only converges without overshoot for a
+    // CONSTANT-amplitude input — see agc.hpp). A high-crest-factor burst can
+    // ride well above 1.0 for many samples in a row while the feedback loop
+    // catches up, and every one of those samples used to reach the int16
+    // quantizer (core/recorder.cpp writeAudio) and the sound device's own
+    // hard clip (sink/audio_out.cpp, paNoFlag) with nothing in between to
+    // round the peaks off — a run of samples truncated flat at full scale,
+    // which is what a listener hears as crackle rather than one clipped peak.
+    //
+    // HERE, and not earlier: below the mute, the patch audio and the plugin
+    // takeover, so — like them — the recorder, the sink and every tap agree
+    // about what "the audio" actually is; above the mono downmix, so both the
+    // stereo sink and the mono recorder are covered by one call.
+    //
+    // softLimit is the identity below kLimiterKnee (0.97), so ordinary
+    // listening — anywhere near the Agc's 0.5 target — is bit-for-bit
+    // unaffected; only the sliver of amplitude that would otherwise clip is
+    // smoothly compressed onto (kLimiterKnee, kLimiterCeiling), which is
+    // mathematically bounded strictly inside [-1, 1] for ANY input, unlike
+    // the Agc's convergence guarantee. See tests/test_audio_clip.cpp.
+    for (std::size_t i = 0; i < k; ++i) {
+        outL_[i] = cascade::dsp::softLimit(outL_[i]);
+        outR_[i] = cascade::dsp::softLimit(outR_[i]);
+    }
+
     // Mono downmix for the test tap's readers and the recorder, which stays
     // the documented mono 16-bit WAV.
     monoOut_.resize(k);
@@ -1952,12 +2200,18 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // even with no device open; then the non-blocking push to the sink (a
     // full ring drops the overflow — the device, not this thread, is behind).
     const std::size_t tapFrames = tapBuf_.size() / 2;
-    for (std::size_t i = 0; i < k; ++i) {
-        tapBuf_[2 * tapWrite_] = outL_[i];
-        tapBuf_[2 * tapWrite_ + 1] = outR_[i];
-        tapWrite_ = (tapWrite_ + 1) % tapFrames;
+    {
+        // audioMutex_ is held (above); tapMutex_ nests inside it for this copy
+        // only, so audioTap()/audioTapStereo() never wait for a whole block.
+        // Order audioMutex_ -> tapMutex_ here, tapMutex_ alone in the readers.
+        std::lock_guard<std::mutex> tapLk(tapMutex_);
+        for (std::size_t i = 0; i < k; ++i) {
+            tapBuf_[2 * tapWrite_] = outL_[i];
+            tapBuf_[2 * tapWrite_ + 1] = outR_[i];
+            tapWrite_ = (tapWrite_ + 1) % tapFrames;
+        }
+        tapFilled_ = std::min(tapFrames, tapFilled_ + k);
     }
-    tapFilled_ = std::min(tapFrames, tapFilled_ + k);
     // THE DEMOD SCOPE'S AUDIO TAP, at the same instant and from the same
     // downmix the recorder takes - which is the whole reason it is HERE and
     // not at the sink. Everything above this line has already happened: a
@@ -1967,10 +2221,10 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // contradict the speakers - the same argument the mute's own comment
     // makes about the four consumers below it.
     //
-    // A SECOND TAP RATHER THAN A WIDER tapBuf_, because that one is read under
-    // audioMutex_ - the mutex this thread holds across a whole block - and a
-    // render thread must not queue behind DSP for a picture. It is also 4096
-    // frames, 85 ms, where the scope's longest sweep is half a second.
+    // A SECOND TAP RATHER THAN A WIDER tapBuf_, because that one is a locked
+    // copy (tapMutex_, taken by this thread for each block's frames) and a
+    // render thread must not queue behind even that for a picture. It is also
+    // 4096 frames, 85 ms, where the scope's longest sweep is half a second.
     scopeAudio_.push(monoOut_.data(), k);
     // Counted in FRAMES, unchanged in meaning: one per 48 kHz instant.
     audioSamples_.fetch_add(k, std::memory_order_relaxed);
@@ -1978,15 +2232,35 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // tap above just captured — post-squelch, pre-AudioOut, so the recording
     // is independent of the output device and its volume.
     if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(monoOut_.data(), k); }
-    if (audioChannels_ == 2) {
+    // THE SOUND CARD RUNS ON ITS OWN CLOCK. Everything above is in the
+    // radio's time; the sink's ring is drained in the sound card's. The
+    // DriftMatcher steers the ring's lead back to its target by resampling
+    // this copy very slightly (sink/drift_matcher.hpp has the tester report
+    // and the bench measurement), so a lead lost to a hiccup is rebuilt
+    // instead of staying lost until the ring runs dry.
+    const std::size_t chan = audioChannels_.load(std::memory_order_relaxed) == 2 ? 2 : 1;
+    // The target is the SINK's (its lead plus 40 ms), read here on every block:
+    // the lead is raised from the window's thread while this one runs, and a
+    // matcher still steering to 160 ms would bleed a deeper lead back down.
+    driftMatcher_.observe(audio_->ringFrames(), audio_->running() && audio_->primed(), k,
+                          static_cast<double>(audio_->targetFrames()));
+    const float* block = monoOut_.data();
+    if (chan == 2) {
         outIlv_.resize(2 * k);
         for (std::size_t i = 0; i < k; ++i) {
             outIlv_[2 * i] = outL_[i];
             outIlv_[2 * i + 1] = outR_[i];
         }
-        audio_->writeStereo(outIlv_.data(), k);
+        block = outIlv_.data();
+    }
+    const std::size_t matchCap = cascade::sink::DriftMatcher::maxOut(k);
+    matchedOut_.resize(matchCap * chan);
+    const std::size_t matched =
+        driftMatcher_.process(block, k, chan, matchedOut_.data(), matchCap);
+    if (chan == 2) {
+        audio_->writeStereo(matchedOut_.data(), matched);
     } else {
-        audio_->write(monoOut_.data(), k);
+        audio_->write(matchedOut_.data(), matched);
     }
 }
 

@@ -238,8 +238,9 @@ def load(path):
 def save(path, doc):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # UTF-8 without a BOM, LF, keys in a stable order so a diff shows what
-    # changed and nothing else.
-    text = json.dumps(doc, ensure_ascii=False, indent=2) + '\n'
+    # changed and nothing else. indent=1 is how every committed catalogue is
+    # written; at indent=2 a plain --merge rewrote the whole file.
+    text = json.dumps(doc, ensure_ascii=False, indent=1) + '\n'
     with io.open(path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(text)
 

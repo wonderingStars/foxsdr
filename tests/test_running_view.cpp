@@ -119,5 +119,47 @@ int main() {
     CHECK(runningCostNote(3).find("3 decoders are running") != std::string::npos);
     CHECK(runningCostNote(3).find("stutter") != std::string::npos);
 
+    // --- AN IDLE DECODER (0.99.73) -----------------------------------------
+    //
+    // A decoder set to AUTO that nothing is using has no instance: it is not stopped by the user
+    // and not failing to be fed, it simply is not running, and costs nothing. Three consequences,
+    // each of which would read wrong if it slipped:
+    //   - it is never counted among the RUNNING ones, in either receiver state (the "N decoders are
+    //     running at once" warning and STOP ALL must not count a sleeping module);
+    //   - its row offers START, not STOP - a press pins it ("keep running"), as it does for a
+    //     stopped one;
+    //   - STOP ALL does not touch it (it is not what is eating the machine) and does not wake it.
+    RunnableDecoder idle = mk("DMR", false, false);
+    idle.idle = true;
+    CHECK(!decoderIsRunning(idle, true));
+    CHECK(!decoderIsRunning(idle, false));
+    CHECK(!rowOffersStop(idle));
+    CHECK(rowOffersStop(mk("DMR", false, false)));  // the same module without the flag: armed, STOP
+    CHECK(std::string(rowKeyLabel(idle)) == "START");
+    // a record cannot be idle and stopped, but if it were, START is still the only honest key
+    RunnableDecoder idleStopped = mk("DMR", true, false);
+    idleStopped.idle = true;
+    CHECK(!rowOffersStop(idleStopped));
+    CHECK(std::string(rowKeyLabel(idleStopped)) == "START");
+    // The tester's bench again, with twenty-eight idle decoders beside the two that run: the
+    // warning is about the two, and the key stops the two.
+    std::vector<RunnableDecoder> many = bench;
+    for (int i = 0; i < 28; ++i) {
+        RunnableDecoder d = mk("IDLE" + std::to_string(i), false, false);
+        d.idle = true;
+        many.push_back(d);
+    }
+    CHECK(many.size() == 32u);
+    CHECK(runningCount(many, true) == 2);
+    CHECK(runningCostNote(runningCount(many, true)).find("2 decoders are running") != std::string::npos);
+    CHECK(stopAllKeys(many, true) == wantKeys);
+    CHECK(runningDecoders(many, true).size() == 2u);
+    // ...and a bench of nothing but idle decoders has nothing running and nothing to stop.
+    std::vector<RunnableDecoder> allIdle(many.begin() + 4, many.end());
+    CHECK(runningCount(allIdle, true) == 0);
+    CHECK(!showStopAll(runningCount(allIdle, true)));
+    CHECK(stopAllKeys(allIdle, true).empty());
+    CHECK(runningCostNote(runningCount(allIdle, true)).empty());
+
     return testSummary("test_running_view");
 }

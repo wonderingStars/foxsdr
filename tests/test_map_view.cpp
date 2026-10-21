@@ -23,11 +23,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "gui/theme.hpp"
 #include "imgui.h"
 #include "test_check.hpp"
 
@@ -712,6 +714,448 @@ void testMapTargetLabelsHaveTheOutline() {
     CHECK(eight - one == 7 * 8 * 4);
 }
 
+// --- NO ALTITUDE IS GREY, NOT RED (0.99.74) ------------------------------------
+//
+// A tester (2026-10-12): "instead of highlighting aircraft that are not
+// transmitting the altitude in red, which is the same as <1,000 ft. Maybe color
+// this in grey or black. I would like to be able to distinguish the two." The
+// aircraft kind colour is red and the lowest altitude band is orange, so an
+// aircraft with no altitude and one on final approach were two near-identical
+// marks. It is read off the DRAW DATA, as the label test above is: the callsign's
+// ink is the target's colour exactly (a measurement, never repainted), so the
+// glyph vertices carry it.
+
+cascade::core::HostTrack makeTarget(const char* id, const char* label, std::uint32_t kind,
+                                    double lat, double lon, double altM,
+                                    std::uint32_t flags = 0) {
+    cascade::core::HostTrack ht;
+    std::snprintf(ht.t.id, sizeof ht.t.id, "%s", id);
+    std::snprintf(ht.t.label, sizeof ht.t.label, "%s", label);
+    ht.t.latDeg = lat;
+    ht.t.lonDeg = lon;
+    ht.t.altM = altM;
+    ht.t.courseDeg = 90.0;
+    ht.t.speedMps = 100.0;
+    ht.t.ageMs = 1000;
+    ht.t.kind = kind;
+    ht.t.flags = flags;
+    ht.plugin = "adsb";
+    return ht;
+}
+
+// One frame of a map 800 x 600 at the window's origin. The draw data stays valid
+// until the next NewFrame, which is when the caller reads it.
+float drawTargetsFrame(cascade::gui::MapView& view,
+                       const std::vector<cascade::core::HostTrack>& tracks) {
+    const std::vector<cascade::core::HostPath> paths;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 700.0f));
+    ImGui::Begin("targets", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
+    ImGui::SetCursorScreenPos(ImVec2(0.0f, 0.0f));
+    const float lineHeight = ImGui::GetTextLineHeight();
+    view.draw(800.0f, 600.0f, tracks, paths);
+    ImGui::End();
+    ImGui::Render();
+    return lineHeight;
+}
+
+// How many TEXT vertices carry exactly `col`, which is how many glyph corners a
+// callsign drawn in that colour has.
+int glyphVertsOfColour(ImU32 col) {
+    int n = 0;
+    ImDrawData* dd = ImGui::GetDrawData();
+    for (int l = 0; dd != nullptr && l < dd->CmdListsCount; ++l) {
+        const ImDrawList* cl = dd->CmdLists[l];
+        for (int i = 0; i < cl->VtxBuffer.Size; ++i) {
+            if (isGlyphVertex(cl->VtxBuffer[i]) && cl->VtxBuffer[i].col == col) { ++n; }
+        }
+    }
+    return n;
+}
+
+// The bounding box of the SHAPE vertices (not glyphs) of colour `col`, and
+// whether any such vertex lies inside it.
+struct Box {
+    bool any = false;
+    float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+};
+
+Box shapeBounds(ImU32 col) {
+    Box b;
+    ImDrawData* dd = ImGui::GetDrawData();
+    for (int l = 0; dd != nullptr && l < dd->CmdListsCount; ++l) {
+        const ImDrawList* cl = dd->CmdLists[l];
+        for (int i = 0; i < cl->VtxBuffer.Size; ++i) {
+            const ImDrawVert& v = cl->VtxBuffer[i];
+            if (isGlyphVertex(v) || v.col != col) { continue; }
+            if (!b.any) {
+                b.any = true;
+                b.x0 = b.x1 = v.pos.x;
+                b.y0 = b.y1 = v.pos.y;
+            }
+            b.x0 = std::min(b.x0, v.pos.x);
+            b.y0 = std::min(b.y0, v.pos.y);
+            b.x1 = std::max(b.x1, v.pos.x);
+            b.y1 = std::max(b.y1, v.pos.y);
+        }
+    }
+    return b;
+}
+
+bool shapeVertexInside(ImU32 col, const Box& box) {
+    ImDrawData* dd = ImGui::GetDrawData();
+    for (int l = 0; dd != nullptr && l < dd->CmdListsCount; ++l) {
+        const ImDrawList* cl = dd->CmdLists[l];
+        for (int i = 0; i < cl->VtxBuffer.Size; ++i) {
+            const ImDrawVert& v = cl->VtxBuffer[i];
+            if (isGlyphVertex(v) || v.col != col) { continue; }
+            if (v.pos.x >= box.x0 && v.pos.x <= box.x1 && v.pos.y >= box.y0 &&
+                v.pos.y <= box.y1) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+constexpr ImU32 kGreyNoAltitude = IM_COL32(150, 150, 150, 255);
+constexpr ImU32 kKindRedAircraft = IM_COL32(235, 40, 40, 255);
+
+// The colour the callsign of ONE target comes out in, as the pair (grey ink
+// vertices, red-kind ink vertices) plus the vertices of `expect`.
+void testNoAltitudeIsGreyNotRed() {
+    const double lat = 50.85;
+    const double lon = -1.35;
+    struct Case {
+        const char* what;
+        std::uint32_t kind;
+        double altM;
+        std::uint32_t flags;
+        ImU32 expect;
+        bool grey;
+    };
+    const double kNoAlt = std::nan("");
+    // 3000 m is 9,843 ft: the third band, 5-10 kft, lime.
+    const cascade::gui::AltBandStyle& lime = cascade::gui::altBandStyle(2);
+    const Case cases[] = {
+        // THE CHANGE: an aircraft with no altitude is grey and not the kind red.
+        {"aircraft, no altitude", CASCADE_TRACK_AIRCRAFT, kNoAlt, 0u, kGreyNoAltitude, true},
+        // An aircraft WITH one is untouched: its band colour.
+        {"aircraft, 3000 m", CASCADE_TRACK_AIRCRAFT, 3000.0, 0u,
+         IM_COL32(lime.r, lime.g, lime.b, 255), false},
+        // Sea level is a real altitude and a band of its own - the lowest, orange -
+        // and not "no altitude".
+        {"aircraft, 0 m", CASCADE_TRACK_AIRCRAFT, 0.0, 0u,
+         IM_COL32(cascade::gui::altBandStyle(0).r, cascade::gui::altBandStyle(0).g,
+                  cascade::gui::altBandStyle(0).b, 255),
+         false},
+        // An emergency still outranks everything, no altitude or not.
+        {"aircraft, no altitude, squawking", CASCADE_TRACK_AIRCRAFT, kNoAlt,
+         CASCADE_TRACK_FLAG_EMERGENCY, IM_COL32(255, 45, 45, 255), false},
+        // Ships, stations and satellites keep the per-kind colours that tell
+        // several kinds on one map apart.
+        {"vessel, no altitude", CASCADE_TRACK_VESSEL, kNoAlt, 0u, IM_COL32(120, 255, 170, 255),
+         false},
+        {"station, no altitude", CASCADE_TRACK_STATION, kNoAlt, 0u,
+         IM_COL32(255, 210, 120, 255), false},
+        {"satellite, no altitude", CASCADE_TRACK_SATELLITE, kNoAlt, 0u,
+         IM_COL32(230, 150, 255, 255), false},
+    };
+    for (const Case& c : cases) {
+        // The default projection with no basemap IS equirectangular; pinning it
+        // would also ask for the whole world, which is not the picture here.
+        cascade::gui::MapView view;
+        view.goTo(lat, lon, 2.0);
+        const std::vector<cascade::core::HostTrack> tracks{
+            makeTarget("AB1234", "M", c.kind, lat, lon, c.altM, c.flags)};
+        for (int f = 0; f < 3; ++f) { drawTargetsFrame(view, tracks); }
+        const int ink = glyphVertsOfColour(c.expect);
+        const int grey = glyphVertsOfColour(kGreyNoAltitude);
+        const int red = glyphVertsOfColour(kKindRedAircraft);
+        std::printf("  %-34s ink %d, grey %d, kind-red %d\n", c.what, ink, grey, red);
+        CHECK(ink > 0);
+        // Grey exactly when the rule says so, and the old kind red NEVER appears
+        // on a target with no altitude.
+        CHECK((grey > 0) == c.grey);
+        CHECK(red == 0);
+    }
+}
+
+// THE LEGEND SAYS WHAT THE GREY MEANS, and only when there is a grey to explain:
+// one extra row at the foot of the aviation ladder, drawn when some aircraft on
+// screen has an altitude (so the ladder is up at all) AND some has none.
+void testNoAltitudeLegendRow() {
+    const double lat = 50.85;
+    const double lon = -1.35;
+    const ImU32 plate = cascade::gui::theme::withAlpha(cascade::gui::theme::kWell,
+                                                       190.0f / 255.0f);
+    const double kNoAlt = std::nan("");
+    const auto frameOf = [&](bool withAltitude, bool withoutAltitude, float* lh) {
+        cascade::gui::MapView view;
+        view.goTo(lat, lon, 2.0);
+        std::vector<cascade::core::HostTrack> tracks;
+        if (withAltitude) {
+            tracks.push_back(
+                makeTarget("A00001", "HIGH", CASCADE_TRACK_AIRCRAFT, lat, lon, 3000.0));
+        }
+        if (withoutAltitude) {
+            tracks.push_back(makeTarget("A00002", "NOALT", CASCADE_TRACK_AIRCRAFT, lat + 0.1,
+                                        lon + 0.1, kNoAlt));
+        }
+        float h = 0.0f;
+        for (int f = 0; f < 3; ++f) { h = drawTargetsFrame(view, tracks); }
+        if (lh != nullptr) { *lh = h; }
+    };
+
+    // Aircraft with an altitude only: the ladder is up, six rows, no grey row.
+    float lh = 0.0f;
+    frameOf(true, false, &lh);
+    const Box six = shapeBounds(plate);
+    const bool sixHasGrey = six.any && shapeVertexInside(kGreyNoAltitude, six);
+    // Both kinds: the same ladder with a seventh row, and a grey swatch in it.
+    frameOf(true, true, &lh);
+    const Box seven = shapeBounds(plate);
+    const bool sevenHasGrey = seven.any && shapeVertexInside(kGreyNoAltitude, seven);
+    // Only aircraft with NO altitude: nothing is banded, so no ladder at all.
+    frameOf(false, true, &lh);
+    const Box none = shapeBounds(plate);
+
+    const float rowStep = lh + 2.0f;
+    const float headH = lh + 3.0f;
+    std::printf("  legend plate: six rows %.1f px tall, seven rows %.1f px tall (row step %.1f),"
+                " grey swatch inside: %d / %d, plate with only no-altitude aircraft: %d\n",
+                six.y1 - six.y0, seven.y1 - seven.y0, rowStep, sixHasGrey ? 1 : 0,
+                sevenHasGrey ? 1 : 0, none.any ? 1 : 0);
+    CHECK(six.any);
+    CHECK(seven.any);
+    // The six-row plate is the heading, six rows and the padding (less the one
+    // pixel ImGui's anti-aliasing fringe takes off the solid vertices' extent);
+    // the seven-row plate is exactly one row step taller.
+    CHECK_NEAR(six.y1 - six.y0, headH + rowStep * 6.0f + 8.0f - 1.0f, 0.01);
+    CHECK_NEAR((seven.y1 - seven.y0) - (six.y1 - six.y0), rowStep, 0.01);
+    CHECK(!sixHasGrey);
+    CHECK(sevenHasGrey);
+    CHECK(!none.any);
+}
+
+// --- "ON SCREEN ONLY" (0.99.74) ---------------------------------------------------
+//
+// A tester (2026-10-12): "Could you add a filter or switch to list only the
+// aircraft currently viewable on the screen. This way if I am zoomed in on my
+// local little airport and watching aircraft I only see the area I am interested
+// in, not the full list of all received aircraft." The list asks the map; the
+// map answers from the view it last drew.
+void testIsOnScreen() {
+    const double kNaN = std::nan("");
+
+    // NOTHING DRAWN YET: nothing to filter against, so everything real is in
+    // (a list that opened empty would look like a fault), and a position that is
+    // not a number is never in.
+    {
+        cascade::gui::MapView fresh;
+        CHECK(fresh.isOnScreen(51.0, 0.0));
+        CHECK(fresh.isOnScreen(-33.0, 150.0));
+        CHECK(!fresh.isOnScreen(kNaN, 0.0));
+        CHECK(!fresh.isOnScreen(51.0, kNaN));
+    }
+
+    // A KNOWN VIEW: 800 x 600 px, centred on 51 N 0 E, 4 degrees of longitude
+    // across. The latitude that fits is 4 * 600 / 800 = 3 degrees, so the map
+    // shows 49.5..52.5 N and -2..+2 E.
+    //
+    // No setProjection: with no basemap the default projection IS equirectangular,
+    // and pinning it on a view that has not yet chosen where to look asks for the
+    // whole world (see MapView::setProjection), which would overrule goTo.
+    cascade::gui::MapView view;
+    view.goTo(51.0, 0.0, 4.0);
+    const Stats s = drawMapFrame(view, 800.0f, 600.0f, false, 0, false);
+    CHECK(s.bad == 0);
+    CHECK_NEAR(view.viewCentreLatDeg(), 51.0, 1e-9);
+    CHECK_NEAR(view.spanDeg(), 4.0, 1e-9);
+    // The centre, and points well inside on each side.
+    CHECK(view.isOnScreen(51.0, 0.0));
+    CHECK(view.isOnScreen(51.0, 1.9));
+    CHECK(view.isOnScreen(51.0, -1.9));
+    CHECK(view.isOnScreen(52.4, 0.0));
+    CHECK(view.isOnScreen(49.6, 0.0));
+    // Just outside on each side, and far outside.
+    CHECK(!view.isOnScreen(51.0, 2.1));
+    CHECK(!view.isOnScreen(51.0, -2.1));
+    CHECK(!view.isOnScreen(52.6, 0.0));
+    CHECK(!view.isOnScreen(49.4, 0.0));
+    CHECK(!view.isOnScreen(0.0, 0.0));
+    CHECK(!view.isOnScreen(-33.0, 150.0));
+    // EXACTLY ON AN EDGE is inside: the east edge is 2 degrees out, which is
+    // pixel 800 of 800.
+    CHECK(view.isOnScreen(51.0, 2.0));
+    CHECK(!view.isOnScreen(51.0, 2.0001));
+    // A position that is not a number is on no map, drawn or not.
+    CHECK(!view.isOnScreen(kNaN, 0.0));
+    CHECK(!view.isOnScreen(51.0, kNaN));
+
+    // IT FOLLOWS THE VIEW, which is the whole point: pan to the east and the
+    // aircraft that were in the middle are now behind you, and the ones that
+    // were off the edge are in.
+    view.goTo(51.0, 5.0, 4.0);
+    CHECK(view.isOnScreen(51.0, 5.0));
+    CHECK(view.isOnScreen(51.0, 3.5));
+    CHECK(!view.isOnScreen(51.0, 0.0));
+
+    // WIDER, AFTER A FRAME IN A WIDER VIEW: 20 degrees across takes in what
+    // 4 degrees did not.
+    cascade::gui::MapView wide;
+    wide.goTo(51.0, 0.0, 20.0);
+    drawMapFrame(wide, 800.0f, 600.0f, false, 0, false);
+    CHECK_NEAR(wide.spanDeg(), 20.0, 1e-9);
+    CHECK(wide.isOnScreen(51.0, 9.0));
+    CHECK(!wide.isOnScreen(51.0, 11.0));
+    CHECK(wide.isOnScreen(58.0, 0.0));
+    CHECK(!wide.isOnScreen(59.0, 0.0));
+
+    // THE SHORT WAY ROUND THE ANTIMERIDIAN: a view centred on 179.5 E shows
+    // -179.8 (0.7 degrees east of the centre) and not -177 (3.5 degrees).
+    cascade::gui::MapView dateline;
+    dateline.goTo(0.0, 179.5, 4.0);
+    drawMapFrame(dateline, 800.0f, 600.0f, false, 0, false);
+    CHECK(dateline.isOnScreen(0.0, -179.8));
+    CHECK(dateline.isOnScreen(0.0, 179.0));
+    CHECK(!dateline.isOnScreen(0.0, -177.0));
+    CHECK(!dateline.isOnScreen(0.0, 170.0));
+}
+
+// --- TARGETS HEARD WITHOUT A POSITION ARE NEVER DRAWN (0.99.75) ---------------------
+//
+// A source may publish an aircraft it hears and cannot place yet
+// (CASCADE_TRACK_FLAG_NO_POSITION, NaN coordinates). The host LISTS it; the map
+// must not draw it, fit to it, follow it or let it be hit. The application never
+// hands a map one (PluginUi keeps them apart), and the map defends itself anyway:
+// a NaN projected to the screen compares false against every edge, so an
+// unguarded marker loop does not skip it, it draws it - at NaN. Measured here as
+// the draw data: the same picture with and without the unplaced targets, every
+// vertex finite.
+struct DrawStats {
+    int vertices = 0;
+    bool allFinite = true;
+};
+
+DrawStats measureDrawData() {
+    DrawStats s;
+    ImDrawData* dd = ImGui::GetDrawData();
+    for (int l = 0; dd != nullptr && l < dd->CmdListsCount; ++l) {
+        const ImDrawList* cl = dd->CmdLists[l];
+        s.vertices += cl->VtxBuffer.Size;
+        for (int i = 0; i < cl->VtxBuffer.Size; ++i) {
+            const ImDrawVert& v = cl->VtxBuffer[i];
+            if (!std::isfinite(v.pos.x) || !std::isfinite(v.pos.y)) { s.allFinite = false; }
+        }
+    }
+    return s;
+}
+
+void testUnplacedTargetsAreNotDrawn() {
+    const double lat = 50.85;
+    const double lon = -1.35;
+    const double kNaN = std::nan("");
+    const cascade::core::HostTrack placed =
+        makeTarget("AB1234", "M", CASCADE_TRACK_AIRCRAFT, lat, lon, 3000.0);
+    // The contract: the flag and NaN. A buggy plugin: the flag and numbers inside the
+    // view. An old plugin: NaN and no flag. One more: the flag and numbers far away.
+    cascade::core::HostTrack flaggedNaN =
+        makeTarget("U00001", "UNPLACED1", CASCADE_TRACK_AIRCRAFT, kNaN, kNaN, 3000.0,
+                   CASCADE_TRACK_FLAG_NO_POSITION);
+    cascade::core::HostTrack flaggedInView =
+        makeTarget("U00002", "UNPLACED2", CASCADE_TRACK_AIRCRAFT, lat + 0.05, lon + 0.05,
+                   3000.0, CASCADE_TRACK_FLAG_NO_POSITION);
+    cascade::core::HostTrack nanNoFlag =
+        makeTarget("U00003", "UNPLACED3", CASCADE_TRACK_AIRCRAFT, kNaN, lon, 3000.0);
+    cascade::core::HostTrack flaggedFar =
+        makeTarget("U00004", "UNPLACED4", CASCADE_TRACK_AIRCRAFT, -33.0, 150.0, 3000.0,
+                   CASCADE_TRACK_FLAG_NO_POSITION);
+    const std::vector<cascade::core::HostTrack> onlyPlaced{placed};
+    const std::vector<cascade::core::HostTrack> mixed{placed, flaggedNaN, flaggedInView,
+                                                      nanNoFlag, flaggedFar};
+
+    // THE PICTURE: the same number of vertices as the placed one alone, and none
+    // of them at NaN.
+    cascade::gui::MapView alone;
+    alone.goTo(lat, lon, 2.0);
+    for (int f = 0; f < 3; ++f) { drawTargetsFrame(alone, onlyPlaced); }
+    const DrawStats aloneStats = measureDrawData();
+    cascade::gui::MapView with;
+    with.goTo(lat, lon, 2.0);
+    for (int f = 0; f < 3; ++f) { drawTargetsFrame(with, mixed); }
+    const DrawStats withStats = measureDrawData();
+    std::printf("  map draw data: %d vertices placed alone, %d with four unplaced beside it"
+                " (all finite: %d / %d)\n",
+                aloneStats.vertices, withStats.vertices, aloneStats.allFinite ? 1 : 0,
+                withStats.allFinite ? 1 : 0);
+    CHECK(aloneStats.vertices > 0);
+    CHECK(aloneStats.allFinite);
+    CHECK(withStats.allFinite);
+    CHECK(withStats.vertices == aloneStats.vertices);
+
+    // THE AUTO-FIT: fitting to everything plotted ignores them, so the view lands
+    // where the placed target alone puts it.
+    cascade::gui::MapView fitAlone;
+    fitAlone.requestFitToTracks();
+    drawTargetsFrame(fitAlone, onlyPlaced);
+    cascade::gui::MapView fitMixed;
+    fitMixed.requestFitToTracks();
+    drawTargetsFrame(fitMixed, mixed);
+    std::printf("  auto-fit centre: %.4f, %.4f placed alone; %.4f, %.4f with unplaced beside it\n",
+                fitAlone.viewCentreLatDeg(), fitAlone.viewCentreLonDeg(),
+                fitMixed.viewCentreLatDeg(), fitMixed.viewCentreLonDeg());
+    CHECK_NEAR(fitAlone.viewCentreLatDeg(), lat, 1e-9);
+    CHECK_NEAR(fitMixed.viewCentreLatDeg(), fitAlone.viewCentreLatDeg(), 1e-9);
+    CHECK_NEAR(fitMixed.viewCentreLonDeg(), fitAlone.viewCentreLonDeg(), 1e-9);
+    CHECK_NEAR(fitMixed.spanDeg(), fitAlone.spanDeg(), 1e-9);
+    // ...and with ONLY unplaced targets there is nothing to fit to: the request is
+    // left pending and the view does not move to NaN.
+    cascade::gui::MapView fitNone;
+    const double lat0 = fitNone.viewCentreLatDeg();
+    const double lon0 = fitNone.viewCentreLonDeg();
+    fitNone.requestFitToTracks();
+    drawTargetsFrame(fitNone, std::vector<cascade::core::HostTrack>{flaggedNaN, flaggedFar});
+    CHECK_NEAR(fitNone.viewCentreLatDeg(), lat0, 1e-9);
+    CHECK_NEAR(fitNone.viewCentreLonDeg(), lon0, 1e-9);
+
+    // FOLLOWING one does not move the view: the centre stays a real place.
+    cascade::gui::MapView follow;
+    follow.goTo(lat, lon, 2.0);
+    follow.setFollowed("U00001");
+    drawTargetsFrame(follow, mixed);
+    CHECK(std::isfinite(follow.viewCentreLatDeg()));
+    CHECK(std::isfinite(follow.viewCentreLonDeg()));
+    CHECK_NEAR(follow.viewCentreLatDeg(), lat, 1e-9);
+    follow.setFollowed("U00004");  // flagged, with real-looking far-away numbers
+    drawTargetsFrame(follow, mixed);
+    CHECK_NEAR(follow.viewCentreLatDeg(), lat, 1e-9);
+    CHECK_NEAR(follow.viewCentreLonDeg(), lon, 1e-9);
+
+    // "GO TO" a target without a place does nothing (the details window's key is
+    // dead for one, and this is the map refusing too).
+    follow.goTo(kNaN, kNaN);
+    follow.goTo(lat, kNaN);
+    CHECK_NEAR(follow.viewCentreLatDeg(), lat, 1e-9);
+    CHECK_NEAR(follow.viewCentreLonDeg(), lon, 1e-9);
+
+    // THE LIST'S COUNT of placed rows (listedTrackCount): the unplaced are never
+    // rows of it and never "on screen", with the switch ticked or not. Placed: one
+    // in view (the target itself) and one on the far side of the world; unplaced:
+    // the four above, one of which has numbers that WOULD be in view.
+    cascade::gui::MapView counted;
+    counted.goTo(lat, lon, 2.0);
+    for (int f = 0; f < 2; ++f) { drawTargetsFrame(counted, onlyPlaced); }
+    std::vector<cascade::core::HostTrack> listed = mixed;
+    listed.push_back(makeTarget("FAR001", "FAR", CASCADE_TRACK_AIRCRAFT, -33.0, 150.0, 3000.0));
+    CHECK(counted.isOnScreen(flaggedInView.t.latDeg, flaggedInView.t.lonDeg));
+    CHECK(cascade::gui::listedTrackCount(counted, listed, false) == 2u);
+    CHECK(cascade::gui::listedTrackCount(counted, listed, true) == 1u);
+    CHECK(cascade::gui::listedTrackCount(counted, mixed, false) == 1u);
+    CHECK(cascade::gui::listedTrackCount(counted, mixed, true) == 1u);
+}
+
 int main() {
     testWholeWorldSpan();
     testCoordApertures();
@@ -733,6 +1177,10 @@ int main() {
     testZoomKeysDriveTheView();
     testTargetLabelHelper();
     testMapTargetLabelsHaveTheOutline();
+    testNoAltitudeIsGreyNotRed();
+    testNoAltitudeLegendRow();
+    testIsOnScreen();
+    testUnplacedTargetsAreNotDrawn();
 
     ImGui::DestroyContext();
     return testSummary("test_map_view");

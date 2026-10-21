@@ -33,12 +33,20 @@
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/sdrplay_probe.hpp"
+#include "source/sdrplay_service.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_source.hpp"
 
+#include "core/breadcrumb.hpp"
+#include "core/console_close.hpp"
+#include "core/console_owner.hpp"
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/exit_record.hpp"
+#include "core/sentinel.hpp"
+#include "core/tester_link.hpp"
 
 // ---------------------------------------------------------------------------
 // Fatal-fault capture.
@@ -883,6 +891,17 @@ int runRecordCheck() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // THE CONSOLE, before anything is printed or opened (0.99.69, core/console_owner.hpp).
+    // cascade.exe is a windows-subsystem program (CMakeLists.txt), so a launch from
+    // the Start Menu or Explorer gets no console and no black window beside the
+    // real one - until 0.99.69 it did, and on a desktop with Windows Terminal as
+    // the default host that was a Windows Terminal window for the whole session.
+    // The tool modes below still print, so a process started from a shell borrows
+    // the shell's console here (AttachConsole) and gets its standard handles back;
+    // one started from Explorer finds no parent console and has none. FIRST in
+    // main(), above the helper modes, because every line this function prints
+    // afterwards must already know where it is printing.
+    cascade::core::applyConsoleOwnership();
     // THE ENUMERATION HELPER, decided before anything else in this function.
     //
     // `cascade --enumerate-json` is not a user-facing mode: it is the child
@@ -906,15 +925,88 @@ int main(int argc, char** argv) {
     // The accepted forms are enumerated exhaustively, and argv[1] must be the
     // flag itself, so no combination of arguments to a real session can turn
     // it into a helper.
+    // THE SDRPLAY DIAGNOSTIC PROBE (0.99.50, source/sdrplay_probe.hpp):
+    //
+    //     cascade --sdrplay-probe <outfile> [--sdrplay-probe-bias-tee]
+    //
+    // Returns here for the same reasons the enumeration helper below does -
+    // no config, no window, no telemetry marker - and because SYSTEM >
+    // Diagnostics runs it as a child process while the GUI is open. The bias
+    // tee is switched on during the run ONLY with the second switch: that is
+    // the command line's form of the GUI's separate confirmation, since the
+    // bias tee puts power on the antenna socket.
+    // THE SDRPLAY API SERVICE'S STATE (0.99.55, source/sdrplay_service.hpp):
+    //
+    //     cascade --sdrplay-service-state
+    //
+    // Asks the Windows Service Control Manager - read-only, no administrator
+    // rights - what the SDRplay API Service is doing, prints it, and returns.
+    // Touches nothing else (no config, no window, no telemetry marker), for
+    // the probe's reasons above; it exists so support and the tests can see
+    // the query's answer on a real machine without opening the application.
+    if (argc >= 2 && std::strcmp(argv[1], "--sdrplay-service-state") == 0) {
+        if (argc != 2) {
+            std::fprintf(stderr, "cascade: --sdrplay-service-state takes no arguments\n");
+            return 2;
+        }
+        const cascade::source::SdrPlayServiceStatus st =
+            cascade::source::querySdrPlayServiceFromWindows();
+        std::printf("sdrplay-service: %s\n", cascade::source::sdrPlayServiceSummary(st).c_str());
+        const char* sentence = cascade::source::sdrPlayServiceSentence(st);
+        if (sentence[0] != '\0') { std::printf("advice: %s\n", sentence); }
+        std::fflush(stdout);
+        return 0;
+    }
+    if (argc >= 2 && std::strcmp(argv[1], "--sdrplay-probe") == 0) {
+        if (argc < 3 || argv[2][0] == '\0' || argv[2][0] == '-') {
+            std::fprintf(stderr, "cascade: --sdrplay-probe requires an output file\n");
+            return 2;
+        }
+        bool biasTee = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--sdrplay-probe-bias-tee") == 0) {
+                biasTee = true;
+            } else {
+                std::fprintf(stderr,
+                             "cascade: --sdrplay-probe takes only an output file and "
+                             "--sdrplay-probe-bias-tee\n");
+                return 2;
+            }
+        }
+        return cascade::source::runSdrPlayProbeToFile(argv[2], biasTee);
+    }
+
+    // THE SENTINEL (0.99.64, core/sentinel.hpp):
+    //
+    //     cascade --sentinel --app-pid=N --app-handle=H --map-handle=M ...
+    //
+    // The same executable, started by the application itself, which waits for the
+    // application to end and writes the one report of an ending nothing inside it
+    // could report. Returns here for the reasons the helpers above do and a few
+    // more: no configuration is read or written, no crash handler is installed (it
+    // would write reports of its own), no instance mutex is claimed, no window,
+    // console, GL or radio is opened. The accepted arguments are enumerated by
+    // runSentinelMain, which refuses anything else, and argv[1] must be the flag
+    // itself, so no combination of arguments to a real session can turn it into a
+    // watcher.
+    if (argc >= 2 && std::strcmp(argv[1], "--sentinel") == 0) {
+        return cascade::core::runSentinelMain(argc, argv);
+    }
+
     constexpr const char* kCrashDirFlag = "--crash-dir=";
     constexpr const char* kDriverFlag = "--driver=";
     constexpr const char* kListDriversFlag = "--list-drivers";
     constexpr const char* kSkipFlag = "--skip=";
+    // Which try the parent says this child is (2026-10-04): only the parent
+    // knows, and the child's own crash report - the one with the stack, and now
+    // the only one filed for a death it covers - says it on its reason line.
+    constexpr const char* kAttemptFlag = "--attempt=";
     if (argc >= 2 && std::strcmp(argv[1], "--enumerate-json") == 0) {
         const char* crashDir = nullptr;
         const char* driver = nullptr;
         const char* skip = nullptr;
         bool listDrivers = false;
+        int attempt = 0;
         for (int i = 2; i < argc; ++i) {
             if (std::strncmp(argv[i], kCrashDirFlag, std::strlen(kCrashDirFlag)) == 0) {
                 crashDir = argv[i] + std::strlen(kCrashDirFlag);
@@ -922,16 +1014,26 @@ int main(int argc, char** argv) {
                 driver = argv[i] + std::strlen(kDriverFlag);
             } else if (std::strncmp(argv[i], kSkipFlag, std::strlen(kSkipFlag)) == 0) {
                 skip = argv[i] + std::strlen(kSkipFlag);
+            } else if (std::strncmp(argv[i], kAttemptFlag, std::strlen(kAttemptFlag)) == 0) {
+                // A number or nothing: anything else leaves it 0, "not told".
+                attempt = std::atoi(argv[i] + std::strlen(kAttemptFlag));
+                if (attempt < 0) { attempt = 0; }
             } else if (std::strcmp(argv[i], kListDriversFlag) == 0) {
                 listDrivers = true;
             } else {
                 std::fprintf(stderr,
-                             "cascade: --enumerate-json takes only %s, %s, %s and %s\n",
-                             kCrashDirFlag, kDriverFlag, kSkipFlag, kListDriversFlag);
+                             "cascade: --enumerate-json takes only %s, %s, %s, %s and %s\n",
+                             kCrashDirFlag, kDriverFlag, kSkipFlag, kAttemptFlag,
+                             kListDriversFlag);
                 return 2;
             }
         }
-        return cascade::source::runEnumerateHelper(crashDir, driver, listDrivers, skip);
+        // ENDED, NOT RETURNED: returning from main runs ExitProcess, which
+        // detaches every vendor module the walk loaded - and an ASIO driver
+        // faulting in its detach killed a child that had already answered
+        // (2026-10-01). See endEnumerateHelperProcess.
+        cascade::source::endEnumerateHelperProcess(
+            cascade::source::runEnumerateHelper(crashDir, driver, listDrivers, skip, attempt));
     }
 
     // FIRST, before anything that could fault has had the chance. The four
@@ -966,6 +1068,95 @@ int main(int argc, char** argv) {
     cascade::core::diagLogf("FoxSDR %s (%s) starting", cascade::versionString(),
                             cascade::gitCommit());
 
+    // --- beta-tester portal link activation (core/tester_link.hpp) ---------
+    //
+    // Checked here, before config is ever read and before the flag loop
+    // below - a URL handed to us by the OS's protocol handler (or, on
+    // Windows, an unpackaged install's registered shell\open\command) is not
+    // a user-facing mode, it is an ACTIVATION, and PORTAL-LINK-VERDICT.md
+    // finding 3 is specific about the ordering: the instance mutex must be
+    // claimed as the first statement of a run, before config is read,
+    // because config is loaded seconds before a listener-based design could
+    // ever exist - claiming here means there is no such window at all.
+    //
+    // THE MUTEX IS CLAIMED UNCONDITIONALLY, for every launch that reaches
+    // this point (every headless tool mode - --version, --selftest,
+    // --soapy-check, --frames CI runs and the rest - returns within this
+    // function well before a real session would ever be mistaken for
+    // "already running", and each releases it at exit like any other
+    // process-lifetime resource). FoxSDR's multi-instance design is
+    // unaffected: this only ANSWERS "is one already running", it never
+    // refuses a second instance the right to start.
+    //
+    // A TEST RUN MAY CLAIM A PRIVATE SCOPE instead (tester_link.hpp,
+    // kInstanceScopeEnv): the CASCADE_CONFIG_TEST hook is passed on only for a
+    // bounded --frames run - exactly startupConfigPath()'s rule - so a real
+    // launch always claims the fixed, shared name whatever the environment says.
+    std::string instanceTestHook;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--frames") == 0) {
+            const char* hook = std::getenv("CASCADE_CONFIG_TEST");
+            if (hook != nullptr) { instanceTestHook = hook; }
+        }
+    }
+    const char* instanceScope = std::getenv(cascade::core::kInstanceScopeEnv);
+    const bool primaryInstance = cascade::core::claimPrimaryInstance(
+        std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
+        instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string());
+    // Set below when argv[1] parsed as a real beta-link activation - the flag
+    // loop starting a few lines down must then skip index 1 rather than hand
+    // it to strcmp against every flag name, which is what used to happen: a
+    // link clicked with FoxSDR already closed fell through to "no instance
+    // was running" below, kept argv[1] as the URL, and the flag loop's
+    // unknown-argument branch (see the trailing else below) printed the whole
+    // URL - the token included - to stderr and exited 1. Neither half of that
+    // was acceptable for a credential.
+    bool argv1IsLinkActivation = false;
+    if (argc >= 2) {
+        const std::string linkToken = cascade::core::parseBetaLinkUrl(argv[1]);
+        if (!linkToken.empty()) {
+            argv1IsLinkActivation = true;
+            // NEVER THE TOKEN ITSELF, only its length - matching
+            // core::extractTesterToken's own out-of-log discipline for the
+            // older portal-token flow.
+            cascade::core::diagLogf("tester link received (len=%zu)", linkToken.size());
+            const std::string configDir =
+                std::filesystem::path(cascade::core::ConfigStore::defaultPath())
+                    .parent_path()
+                    .string();
+            cascade::core::writeLinkRequestFile(configDir, linkToken);
+            if (!primaryInstance) {
+                // A GUI instance is already running: it claims this file on
+                // its own ~1 Hz poll (AppWindow::testerLinkPoll). Nothing
+                // else here - no window, no device scan, no crash sweep.
+                return 0;
+            }
+            // No instance was running: fall through and continue as an
+            // entirely normal launch, which consumes its own just-written
+            // file after ConfigStore::load, through the same poll. argv[1]
+            // itself is skipped below (argv1IsLinkActivation) rather than
+            // parsed as a flag.
+        } else if ([&] {
+                       const char* want = "foxsdr:";
+                       for (int k = 0; want[k] != '\0'; ++k) {
+                           const char c = argv[1][k];
+                           if (c == '\0') { return false; }
+                           if (c != want[k] && c != want[k] - ('a' - 'A')) { return false; }
+                       }
+                       return true;
+                   }()) {
+            // A foxsdr: link in any shape parseBetaLinkUrl does not accept - a
+            // browser's trailing slash, an upper-cased scheme, an extra
+            // parameter. It is not a link we trust, so nothing is written,
+            // but it may still carry a token: it must never reach the
+            // unknown-argument branch, which would echo it to stderr and exit.
+            // Dropped, logged without its text, and the launch carries on.
+            argv1IsLinkActivation = true;
+            cascade::core::diagLogf("unrecognised foxsdr: link ignored (len=%zu)",
+                                    std::strlen(argv[1]));
+        }
+    }
+
     int frames = -1;  // negative: run until the window is closed
     int diagStallMs = 0;
     int diagToggle = 0;
@@ -974,8 +1165,14 @@ int main(int argc, char** argv) {
     bool rtlsdrCheck = false;
     bool recordCheck = false;
     bool toneCheck = false;
+    bool linkTesterReveal = false;
     double rdsCheckMhz = 0.0;
-    for (int i = 1; i < argc; ++i) {
+    // argv[1] was already consumed above as a beta-link activation (written
+    // to the link-request file and logged by length only) - it is never a
+    // flag, and must never reach strcmp/the unknown-argument branch below,
+    // which would otherwise print the whole "foxsdr://beta?t=<token>" URL to
+    // stderr and exit 1 for a link clicked while no instance was running.
+    for (int i = argv1IsLinkActivation ? 2 : 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "cascade: --frames requires an integer argument\n");
@@ -1122,6 +1319,16 @@ int main(int argc, char** argv) {
             // Hidden bench diagnostic (see runToneCheck): plays audible sound,
             // so it is a human-in-the-loop tool, never a ctest entry.
             toneCheck = true;
+        } else if (std::strcmp(argv[i], "--link-tester") == 0) {
+            // Hidden, session-only reveal of SYSTEM > Beta tester's paste box
+            // when no link has been confirmed yet (core/tester_link.hpp,
+            // PORTAL-LINK-VERDICT.md §6/finding 8) - for a tester whose
+            // browser cannot or will not hand the app a foxsdr:// URL
+            // (Linux, or a blocked/dismissed protocol prompt). DELIBERATELY
+            // a bare flag, never --link-tester=<token>: a value here would
+            // sit in shell history indefinitely, unlike a protocol
+            // activation's argv[1], which is OS-delivered and transient.
+            linkTesterReveal = true;
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] "
@@ -1173,6 +1380,60 @@ int main(int argc, char** argv) {
     // declines a console someone else is attached to - see diag_log.hpp).
     if (frames < 0) { cascade::core::installStderrCapture(); }
 
+    // A bounded run standing in for a real session under the sentinel seam
+    // (tests/test_sentinel_app.cpp): honoured only with --frames, like every test
+    // seam in this file. Read once, for the two things below that follow it.
+    const char* sentinelHook = std::getenv("CASCADE_SENTINEL_TEST");
+    const bool sentinelTest = frames >= 0 && sentinelHook != nullptr && sentinelHook[0] == '1';
+
+    // THE CONSOLE CONTROL HANDLER (0.99.67, core/console_close.hpp), for a real
+    // session and for a bounded run under the sentinel seam, so the test can send
+    // the event. Until 0.99.69 cascade.exe was a console-subsystem program, so a
+    // Start Menu launch had a console window of its own; closing that window - or
+    // Ctrl+C in it - ended the process before a line of the shutdown had run, and
+    // the sentinel filed it as an ending from outside (field report, 2026-10-06).
+    // That window is gone now, but a session started from a terminal still shares
+    // the terminal's console (applyConsoleOwnership), and closing the terminal or
+    // Ctrl+C in it is the same event: it is the close the window's own button asks for.
+    if (frames < 0 || sentinelTest) { cascade::core::installConsoleCloseHandler(); }
+    // What applyConsoleOwnership did at the top, in the log, for the next report
+    // that starts "a black window appeared" (or "closing it killed the program").
+    // Windows only: elsewhere there is no console to own and nothing to say.
+#if defined(_WIN32)
+    {
+        const cascade::core::ConsoleOutcome co = cascade::core::consoleOutcome();
+        const char* did = "kept";
+        if (co.decision.action == cascade::core::ConsoleAction::Attach) {
+            did = co.attached ? "attached to the parent's" : "none, and the parent has none";
+        }
+        cascade::core::diagLogf("console: %s (%s)", did, co.decision.reason);
+    }
+#endif
+
+    // THE SENTINEL, for an interactive session only (core/sentinel.hpp): started
+    // HERE, after every tool mode has returned and before the application object
+    // exists, so that the stretch with the most to go wrong - the plugin load, the
+    // window, the first frame - is watched. A bounded --frames run never starts one
+    // unless a test says so with CASCADE_SENTINEL_TEST, honoured only with --frames
+    // and only when the run may write diagnostics at all, like every test seam in
+    // this file. It follows the Diagnostics switch exactly: `wanted` is the stored
+    // switch, and the Settings checkbox starts and ends it through the same call
+    // that arms every other part of diagnostics (AppWindow::applyDiagnosticsEnabled).
+    {
+        if (mayWrite && (frames < 0 || sentinelTest)) {
+            cascade::core::SentinelOptions so;
+            so.crashDir = cascade::core::diagCrashDir();
+            so.logDir = cascade::core::diagLogDir();
+            // HOW THIS PROCESS ENDS, written down for the watcher (0.99.78, core/exit_record.hpp):
+            // a Linux watcher is this process's child and cannot ask the kernel. A no-op where
+            // the watcher reads the exit code from the operating system (Windows).
+            cascade::core::installExitRecording();
+            cascade::core::sentinelConfigure(so);
+            cascade::core::sentinelSetEnabled(wanted);
+            cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::BuildingApp);
+        }
+    }
+
     cascade::gui::AppWindow app(configPath, announceConfig);
     // Empty unless this run is ALLOWED to write - which is not the same as
     // whether the user wants it. run() gates the writing on the stored switch;
@@ -1183,5 +1444,6 @@ int main(int argc, char** argv) {
     app.setDiagnosticsDir(mayWrite ? cascade::core::diagCrashDir() : std::string());
     app.setDiagStallMs(diagStallMs);
     app.setDiagToggle(diagToggle);
+    app.setLinkTesterReveal(linkTesterReveal);
     return app.run(frames);
 }

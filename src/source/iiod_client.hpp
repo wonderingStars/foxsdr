@@ -98,6 +98,30 @@ public:
     // raw samples.
     virtual bool recvAll(void* data, std::size_t n) = 0;
 
+    // WHATEVER ARRIVES NEXT, up to `max` bytes and at least one: the call a
+    // reader of an unframed stream needs (rtl_tcp's endless run of samples has
+    // no length to ask for). `got` is the count delivered. False with
+    // lastError() set on a timeout, an error or an orderly close, exactly as
+    // recvAll fails.
+    //
+    // NOT PURE, so a scripted transport that predates it still compiles. The
+    // default asks for one byte, which is correct and slow; TcpTransport
+    // overrides it with a single recv().
+    virtual bool recvSome(void* data, std::size_t max, std::size_t& got) {
+        got = 0;
+        if (max == 0) { return true; }
+        if (!recvAll(data, 1)) { return false; }
+        got = 1;
+        return true;
+    }
+
+    // WAKES A THREAD PARKED IN A RECEIVE, without closing anything: the socket
+    // handle stays valid, so the parked thread is never inside a closed
+    // descriptor. Its receive returns at once (an orderly end, which the caller
+    // reads as a failed receive). Callable from any thread, and idempotent. For
+    // a transport that has nothing to wake the default does nothing.
+    virtual void shutdown() {}
+
     // Idempotent. After it, every send and receive fails.
     virtual void close() = 0;
 
@@ -108,9 +132,28 @@ public:
 // by ioWait for every later send and receive. Returns nullptr with `error`
 // set. `host` may be a dotted quad or a name (pluto.local, resolved by
 // whatever mDNS the machine has - we do not implement one).
+//
+// WHO IS BEING TALKED TO is a parameter because this socket code is shared:
+// the Pluto's IIOD client was its only user until the rtl_tcp source
+// (rtl_tcp_source.hpp), and the sentences a failure produces name the peer.
+// The default is the Pluto's own wording, byte for byte, so every message the
+// Pluto path produced before is unchanged (tests/test_pluto_source.cpp asserts
+// some of them).
+struct PeerWording {
+    // Fills "could not reach <name> at host:port", "<name> did not answer in
+    // time", "<name> closed the connection" and the like.
+    const char* name = "the Pluto";
+    // In brackets after "could not find the host ... on the network".
+    const char* unknownHostHint = "is the Pluto plugged in, and is this the right address?";
+    // Appended, in brackets, to "could not reach <name> at host:port - <why>"
+    // when it is not empty. Empty for the Pluto (nothing is appended).
+    const char* unreachableHint = "";
+};
+
 std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t port,
                                       std::chrono::milliseconds connectWait,
-                                      std::chrono::milliseconds ioWait, std::string& error);
+                                      std::chrono::milliseconds ioWait, std::string& error,
+                                      const PeerWording& peer = PeerWording());
 
 // --- the context ----------------------------------------------------------
 //

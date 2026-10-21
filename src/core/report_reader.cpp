@@ -254,6 +254,16 @@ bool isElfBuildId(const std::string& buildId) {
 std::string SymbolArchive::elfSymbolPath(const std::string& moduleName,
                                          const std::string& buildId) const {
     if (buildId.empty() || !exists()) { return std::string(); }
+    // ec IS RE-USED across several unrelated fs:: calls below, so it is
+    // cleared before every one of them. Leaving a stale error in it broke
+    // the by-id scan on the arm64 CI runner (2026-09-29): checking the
+    // "module" path above (a plausible, deliberately non-existent path, when
+    // only the split-DWARF file exists) can leave a non-existent-intermediate-
+    // directory error in ec on that libstdc++, and the scan loop's own
+    // `if (ec) { break; }` then exits after zero iterations, exactly as if
+    // the archive were empty - the standard only guarantees ec is cleared for
+    // the checked path itself not existing, not for every implementation's
+    // handling of a missing INTERMEDIATE component.
     std::error_code ec;
     if (!moduleName.empty()) {
         // The split DWARF first - it is the file with the line tables. The
@@ -261,20 +271,27 @@ std::string SymbolArchive::elfSymbolPath(const std::string& moduleName,
         const fs::path debug =
             fs::path(root_) / (moduleName + ".debug") / buildId / (moduleName + ".debug");
         if (fs::is_regular_file(debug, ec)) { return debug.string(); }
+        ec.clear();
         const fs::path module = fs::path(root_) / moduleName / buildId / moduleName;
         if (fs::is_regular_file(module, ec)) { return module.string(); }
+        ec.clear();
     }
     // The by-id scan, as pdbPath does - the id directory is the actual key.
     // .debug entries win over plain modules for the same reason as above.
     std::string fallback;
     for (const fs::directory_entry& e : fs::directory_iterator(fs::path(root_), ec)) {
         if (ec) { break; }
-        if (!e.is_directory(ec)) { continue; }
+        ec.clear();
+        if (!e.is_directory(ec)) { ec.clear(); continue; }
+        ec.clear();
         const fs::path byId = e.path() / buildId;
-        if (!fs::is_directory(byId, ec)) { continue; }
+        if (!fs::is_directory(byId, ec)) { ec.clear(); continue; }
+        ec.clear();
         for (const fs::directory_entry& f : fs::directory_iterator(byId, ec)) {
             if (ec) { break; }
-            if (!f.is_regular_file(ec)) { continue; }
+            ec.clear();
+            if (!f.is_regular_file(ec)) { ec.clear(); continue; }
+            ec.clear();
             const std::string p = f.path().string();
             if (p.size() > 6 && p.compare(p.size() - 6, 6, ".debug") == 0) { return p; }
             if (fallback.empty()) { fallback = p; }
@@ -641,6 +658,19 @@ std::string joinList(const std::vector<std::string>& v) {
     return out.empty() ? std::string("(none)") : out;
 }
 
+// What follows a resolved function name: its file and line, or - when the
+// archived symbols name the function but carry no source line for the offset -
+// that fact, in words. A symbol-table-only archive (a Linux build compiled
+// without -g, which is what every archived cascade.debug was until the build
+// changed) used to print exactly as a complete answer would, just shorter, so
+// nothing on the page said a line had been unavailable rather than overlooked.
+std::string locationSuffix(const SymbolResult& s) {
+    if (s.file.empty()) { return "  (function only: no source line in the archived symbols)"; }
+    std::string out = "  " + s.file;
+    if (s.line > 0) { out += ":" + std::to_string(s.line); }
+    return out;
+}
+
 // A frame, for a human.
 //
 // NOTE WHAT IS NOT HERE: the raw offset. An offset without the matching PDB is
@@ -654,11 +684,7 @@ std::string frameLine(const SymbolisedFrame& f) {
     if (f.symbol.resolved) {
         out += "!";
         out += f.symbol.function;
-        if (!f.symbol.file.empty()) {
-            out += "  ";
-            out += f.symbol.file;
-            if (f.symbol.line > 0) { out += ":" + std::to_string(f.symbol.line); }
-        }
+        out += locationSuffix(f.symbol);
     } else {
         out += "  -- ";
         out += f.symbol.note;
@@ -698,10 +724,7 @@ std::string renderGroupsText(const std::vector<ReportGroup>& groups, int totalRe
         out += g.module.empty() ? std::string("(unknown module)") : g.module;
         if (g.symbol.resolved) {
             out += "!" + g.symbol.function;
-            if (!g.symbol.file.empty()) {
-                out += "  " + g.symbol.file;
-                if (g.symbol.line > 0) { out += ":" + std::to_string(g.symbol.line); }
-            }
+            out += locationSuffix(g.symbol);
             out += "\n";
         } else {
             out += "\n                NOT SYMBOLISED: " + g.symbol.note + "\n";

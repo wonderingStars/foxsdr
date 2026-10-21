@@ -319,7 +319,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         float cy = bodyTL.y + 2.0f;
 
         addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, tr("STATUS"));
-        cy += fonts::kTinySize + 8.0f;
+        cy += fonts::tinyPx() + 8.0f;
 
         // The lamps, TWO TO A ROW and in the legend face at the engraving
         // size rather than the ambient one: drawBenchLamp letters its caption
@@ -343,10 +343,10 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
                                // An alerting lamp BLINKS. One that is merely
                                // on is a lamp somebody has stopped seeing.
                                {theme::kAlarmHot, alert && blinkOn, tr("ALERT")}};
-        ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);
+        ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);  // base: style.FontScaleMain applies S
         const float lampR = 6.0f;
         const float lampPitch = capW * 0.5f;
-        const float lampRowH = lampR * 2.0f + fonts::kTinySize - 3.0f + 5.0f;
+        const float lampRowH = lampR * 2.0f + fonts::tinyPx() - 3.0f + 5.0f;
         for (int i = 0; i < 4; ++i) {
             // Room is checked PER ROW, so a short window keeps the first two
             // lamps and the counter rather than losing the counter to lamps
@@ -361,9 +361,9 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         ImGui::PopFont();
         cy += 3.0f;
 
-        if (cy + fonts::kTinySize + 34.0f < bodyBR.y) {
+        if (cy + fonts::tinyPx() + 34.0f < bodyBR.y) {
             addBenchGroupCaption(dl, ImVec2(cx0, cy), capW, tr("MESSAGES"));
-            cy += fonts::kTinySize + 9.0f;
+            cy += fonts::tinyPx() + 9.0f;
             const float cellW = std::min(26.0f, (capW - 14.0f) / 4.0f);
             const float cellH = std::min(30.0f, bodyBR.y - cy - 6.0f);
             if (cellW > 8.0f && cellH > 12.0f) {
@@ -390,7 +390,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // still readable in a small window.
     float bayTop = bayTL.y + 4.0f;
     if (colW <= 0.0f && bayW > 150.0f) {
-        ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);
+        ImGui::PushFont(fonts::legend(), fonts::kTinySize - 3.0f);  // base: style.FontScaleMain applies S
         const float lampR = 5.0f;
         float lx = bayBR.x - 26.0f;
         drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kAlarmHot,
@@ -402,7 +402,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
         drawBenchLamp(dl, ImVec2(lx, bayTop + lampR + 1.0f), lampR, theme::kPhosphor, in.have,
                       tr("READY"));
         ImGui::PopFont();
-        bayTop += lampR * 2.0f + fonts::kTinySize + 2.0f;
+        bayTop += lampR * 2.0f + fonts::tinyPx() + 2.0f;
     }
 
     // --- what is on the paper ----------------------------------------------
@@ -428,7 +428,7 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     // strip, and shrunk rather than allowed to spill: a printer that could
     // only ever show fourteen characters of a message is not showing the
     // message.
-    float px = fonts::kReadingSize;
+    float px = fonts::readingPx();
     float charW = pf->CalcTextSizeA(px, FLT_MAX, 0.0f, "M").x;
     while (px > 11.0f && tp::paperColumns(textW, charW) < 26) {
         px -= 1.0f;
@@ -519,11 +519,11 @@ float drawTeleprinterFace(ImDrawList* dl, const ImVec2& tl, const ImVec2& br,
     } else {
         const char* legend = in.have ? tr("NO MESSAGE PRINTED") : tr("PRINTER IDLE");
         const float ly = paperBottom + 10.0f;
-        if (ly + fonts::kTinySize < bayBR.y) {
+        if (ly + fonts::tinyPx() < bayBR.y) {
             ImFont* lf = fonts::legend();
-            const ImVec2 sz = lf->CalcTextSizeA(fonts::kTinySize, FLT_MAX, 0.0f, legend);
+            const ImVec2 sz = lf->CalcTextSizeA(fonts::tinyPx(), FLT_MAX, 0.0f, legend);
             engrave(dl, ImVec2((bayTL.x + bayBR.x) * 0.5f - sz.x * 0.5f, ly), legend,
-                    fonts::kTinySize, theme::kInkFaint);
+                    fonts::tinyPx(), theme::kInkFaint);
         }
     }
 

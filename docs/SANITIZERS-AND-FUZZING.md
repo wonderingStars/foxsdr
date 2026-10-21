@@ -1,17 +1,72 @@
-# Memory-error and thread testing (engine/stage4 branch)
+# Memory-error, thread, static-analysis and fuzz testing
 
-**This is the sanitizer page of origin/master, extracted into the engine/stage4
-branch ahead of the full master merge** (master is hundreds of commits ahead;
-merging is its own project). What landed is the sanitizer plumbing and the
-ThreadSanitizer job, as groundwork for the pump move's threaded tests. What did
-not land is listed under "Master-only, not on this branch" at the end, and the
-rest of this page says where master's instructions differ here. When the branch
-merges, take master's page and keep its history.
+Four things the ordinary build and the ordinary suite cannot do: notice a memory
+error that does not (yet) change a result (AddressSanitizer), notice two threads
+using one thing without agreeing how (ThreadSanitizer), read every path through
+the code and not only the ones a test takes (the static analyser), and feed the
+parsers input nobody wrote a test for (fuzzing). Every one is an optional build
+with its own option and its own build directory; none changes anything a user
+receives, and with its option off none changes a byte of what the normal build
+generates (`CASCADE_SANITIZE`, `CASCADE_ANALYZE` and `CASCADE_WERROR` each return
+before defining anything when they are not asked for).
 
-Two optional builds, each with its own option and its own build directory;
-neither changes anything a user receives, and with `CASCADE_SANITIZE` empty (the
-default) `cmake/sanitize.cmake` returns before defining anything, so the generated
-project files are what they were before it existed.
+## AddressSanitizer (and UBSan) over the whole suite
+
+```
+cmake -S . -B build-asan -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCASCADE_SANITIZE=address
+cmake --build build-asan --config Release --parallel 10
+ctest --test-dir build-asan -C Release -j 4 --output-on-failure
+```
+
+On Linux, GCC or Clang:
+
+```
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_SANITIZE=address,undefined
+cmake --build build-asan -j"$(nproc)"
+xvfb-run -a ctest --test-dir build-asan --output-on-failure -j2
+```
+
+`CASCADE_SANITIZE` is empty by default and then does nothing at all: see
+`cmake/sanitize.cmake`. `address` is AddressSanitizer (and, on Linux,
+LeakSanitizer); `undefined` is UndefinedBehaviorSanitizer and is GCC/Clang only
+(MSVC has none: asking for it there is a warning). It instruments the
+application library, the application, the report reader, every test and the
+vendored libraries linked into them.
+
+- **A sanitizer build is a different build directory.** Keep `build/` for the
+  shipping configuration.
+- **Windows needs the runtime beside the program.** The build copies
+  `clang_rt.asan_dynamic-x86_64.dll` next to every executable it makes, as it does
+  for `SoapySDR.dll`; a program that cannot find it raises a "DLL not found" dialog
+  on the desktop instead of failing. It needs the *MSVC AddressSanitizer* component
+  of Visual Studio. `/RTC`, `/ZI` and incremental linking, which cannot be combined
+  with it, are removed for a sanitizer build, and `/bigobj` is added.
+- **It is slow.** Every test's time limit is multiplied by
+  `CASCADE_SANITIZE_TIMEOUT_SCALE` (5). Runtime options (`ASAN_OPTIONS`,
+  `UBSAN_OPTIONS`, `LSAN_OPTIONS`) are attached to each test by CMake, so a failure
+  is the same on every machine and in CI.
+- **Tests that cannot run under it are listed, not dropped.** They are registered
+  with the label `sanitize-excluded` and disabled, so `ctest -N -L sanitize-excluded`
+  prints them and a full run ends with "Not Run (Disabled)" lines. The reason for
+  each is next to the list in `tests/CMakeLists.txt`. Three tests that fault a child
+  process on purpose, to prove the crash handler writes its report, do run, with
+  AddressSanitizer's own fault handlers switched off (otherwise it ends the process
+  before the product's handler sees the fault). Memory-error checks stay on.
+- **A leak that is the design is marked where it is made, not suppressed.** When a
+  driver or the pipeline gives up on a thread that will not return, it leaks the
+  object that thread is inside on purpose; a test that lets the thread go afterwards
+  leaves that object unreachable, which LeakSanitizer reports. `leakOnPurpose()`
+  (`core/leak_on_purpose.hpp`) excludes exactly that object (and what only it
+  reaches) and is the identity everywhere LeakSanitizer is not running. `lsan.supp`
+  stays libraries-only, so a leak of the same object on an ordinary path is still found.
+- **A function whose job is the fault is exempt from UndefinedBehaviorSanitizer,
+  by name.** `CASCADE_UBSAN_EXEMPT` (`core/ubsan_exempt.hpp`) is on `raiseTestFault`
+  and on the null store of `test_soapy_enum_proc`'s helper: UBSan's null check would
+  report that store and end the child before the SIGSEGV the crash handler is being
+  tested on.
+- **Timing-sensitive tests can fail for speed alone.** An instrumented DSP thread
+  can fall behind a source paced by the wall clock; the symptom is a numeric
+  failure with no sanitizer report. Read the output before believing either way.
 
 ## ThreadSanitizer
 
@@ -22,282 +77,244 @@ xvfb-run -a ctest --test-dir build-tsan -L tsan --output-on-failure -j2
 ```
 
 `thread` is GCC/Clang on Linux only (MSVC has no thread sanitizer: asking for it
-there is a configure error, which is the gate on Windows), and the CI job uses
-Clang 18: GCC 13's libtsan has no interceptor for `pthread_mutex_clocklock`,
-which libstdc++ calls for every `std::timed_mutex::try_lock_for`, so under it
-every unlock of such a mutex is reported as an unlock of an unlocked mutex and
-the happens-before edge of the lock is lost (LLVM added the interceptor in release
-18). A newer GCC (15 was used for the local proof below) may have it; that is not
-the CI compiler and not verified for the whole suite. It cannot share a process
-with `address`, so CMake refuses `address,thread`; `thread,undefined` is allowed.
-Runtime options (`TSAN_OPTIONS`: stop at the first report, show both stacks of a
-lock-order inversion, a longer access history, the suppressions file) are attached
-to each test by CMake, and every test's time limit is multiplied by
-`CASCADE_SANITIZE_TIMEOUT_SCALE` (10: an instrumented program is 5-15 times
-slower).
-
-**On this branch the sanitizer reaches the code through `cascade_engine`.**
-Master links `cascade_sanitize` into `cascade_lib`; the branch split that in two,
-so the line is `target_link_libraries(cascade_engine PUBLIC cascade_sanitize)` in
-`CMakeLists.txt`, and the window (`cascade_gui`), the application, the report
-reader and every test inherit it. The vendored `imgui`, `glfw`, `portaudio_static`
-and `cascade_pffft` are instrumented as on master. The test fixtures built as
-plugin modules (`tests/fixture_*_plugin.cpp`) are not: they stand in for a third
-party's plugin, which is not built with our flags either.
+there is a configure error), and the CI job uses Clang 18: GCC 13's libtsan has no
+interceptor for `pthread_mutex_clocklock`, which libstdc++ calls for every
+`std::timed_mutex::try_lock_for`, so under it every unlock of such a mutex is
+reported as an unlock of an unlocked mutex and the happens-before edge of the lock
+is lost (LLVM added the interceptor in December 2023, release 18). It cannot share a process with `address`
+or `fuzzer`, so CMake refuses `address,thread` and `thread,fuzzer`; `thread,undefined`
+is allowed. Runtime options (`TSAN_OPTIONS`: stop at the first report, show both
+stacks of a lock-order inversion, a longer access history, the suppressions file)
+are attached to each test by CMake, and every test's time limit is multiplied by
+`CASCADE_SANITIZE_TIMEOUT_SCALE` (10: an instrumented program is 5-15 times slower).
 
 **It runs a selection, not the suite.** A thread sanitizer finds a race between
 two threads and nothing else, so a test with one thread in it and no thread inside
 the code it drives cannot fail under it and would only cost a build and a slow
-run. `tests/tsan.cmake` is the list, and on this branch it is the engine's
-threads, not master's list:
+run. `tests/tsan.cmake` is the list: 70 tests run (label `tsan`) - the pipeline
+and its source and DSP threads, the patch radios, the plugin runner and host API,
+the config/bookmark/marker savers and the disk jobs, the health ledger's writer,
+the frame timer, the watchdog, the web and CAT servers, the telemetry sender, the
+sound sink's callback thread, and the real web server over a loopback socket.
+Everything else is registered, disabled and labelled `sanitize-excluded`, like the
+ASan exclusions, so `ctest -N -L sanitize-excluded` prints it. Of those, 42 are
+excluded one by one with a reason in the file - they start the real application as
+a child process (a separate process whose reports would not reach this one's),
+fault a process on purpose, measure against the wall clock (an instrumented DSP
+thread falls behind a paced source and fails with no race report), or drive the
+whole window under a software GL context - and the other 201 start no thread and
+drive no code that has one. Judge a test by what it starts, not by its name, when
+you move one.
 
-- the engine API through the C table against a real headless engine on its own
-  control thread: `test_engine_api_conformance`, `test_engine_api_03`,
-  `test_engine_api_merge`, `test_engine_api_transmit`;
-- the control thread against the front end's thread: `test_command_queue_threads`,
-  `test_engine_control_thread`, `test_engine_host_threads`, `test_engine_shutdown`;
-- the one receiver snapshot, readers against a publishing writer:
-  `test_receiver_snapshot`, `test_snapshot_stress`;
-- every op the engine applies: `test_apply_command`;
-- the transmit key across front end, control thread and TX thread:
-  `test_transmit_key_race`, `test_transmit_liveness`, `test_transmit_dead_man`;
-- the pump move's step P1 (the engine PULLS the web/CAT queues in its own pass; the key rules are the control thread's alone):
-  `test_remote_control_pull` and `test_remote_key_release`;
-- the pump move's step P3 (the plugin UI is the WINDOW'S: the directive the engine's pass posts and the window applies at the head
-  of its poll, the bounded unload handshake, the queued `request_tune`): `test_plugin_directive` (the link's protocol, with threads),
-  `test_plugin_ui_threaded` (a real window and engine with the pass on its own thread, an instrumented plugin module, a rebuild churn
-  against a polling frame, a Doppler corrector, a rescan releasing the basemap) and `test_plugin_unload_handshake` (a window inside the
-  plugin, a window not framing, a stop mid-wait, the watchdog pause, no window at all). **Run with
-  `ctest -L tsan -R "plugin|ui|unload|directive"`; clean under ThreadSanitizer, `halt_on_error=1`.** The break-it run that shows the
-  leg sees what the step prevents: with the pass applying the directive itself (the old design) `test_plugin_ui_threaded` reports
-  "data race plugin_ui.cpp:1064 in PluginUi::destroyInstances()" against `PluginUi::poll()` in its first churn frame.
+**Suppressions** are in `tools/sanitize/tsan.supp` and name third-party libraries
+only (`called_from_lib:` the sound server, PulseAudio's client library, libunwind,
+Mesa, X11/Wayland), each with the reason. Nothing of this repository is in it and
+nothing may be added for it: a race in our code is fixed. The vendored libraries are
+compiled here with the sanitizer, so a report in them is a finding too, with one
+named exception: two upstream PortAudio races (`paUtilErr_`, a scratch variable every
+thread assigns, and the unlocked first read of `parentWaiting` in
+`PaUnixThread_New`), listed by exact name with the argument that each is benign;
+patching the vendored tree instead is the open alternative. PortAudio's ring buffer
+orders its two threads with full memory barriers, which ThreadSanitizer does not
+model; if a log reports it, the line to add is named in the file, with that report
+as the reason.
 
-- the pump move's step P6 (the window tests against the FREE-RUNNING pass): the 24 `<name>_free` registrations of `CASCADE_FREE_PASS_TESTS` (tests/CMakeLists.txt) - every
-  hermetic window test that reaches the engine only through the session, the published state or `passseam::on/read` (the work runs on the pass thread) - minus
-  `test_bias_key_app`, whose window needs the software GL context. Under a thread sanitizer ONLY the `_free` variants are registered (the `_stepped` ones order threads
-  and cannot race). **Clean under ThreadSanitizer, `halt_on_error=1`: 10 of 10 runs each on a md5-pinned binary, plus 3 more each with `halt_on_error=0`.** This is
-  where the 11 tests declared free in P5 on the strength of eight green Windows runs turned out to have real test-side races (direct reads of `engine_.patchGraph_`
-  and `engine_.telemetryEnabled_` beside the pass, and others) that only a thread sanitizer sees.
-- the pump move's steps P4 and P5 (the pass is driven and looked at from another thread): `test_pass_control` (the wake, the floor, the stepped
-  mode, `runPassNow`, the work posted to the pass, a stop mid-step, the proxy apply of a plugin directive, the watchdog), `test_look_order` (the
-  order a frame reads in, against a publish held between its two halves), `test_window_threaded_look` (a real window's frame against a
-  free-running pass, three session threads and a snapshot reader) and `test_pump_live_traffic` (the unload handshake and the transmit key
-  under live traffic). **All four are clean under ThreadSanitizer, `halt_on_error=1`.**
+**The first run (37355910809) failed 39 of the 70, and what it showed is not the
+whole story.** `halt_on_error` ends a test at its FIRST report, so a test that
+stopped on a library's noise has not yet shown what comes after it. 33 stopped on
+the five classes above (suppressed, or the compiler changed); five more stopped on
+races in tests and in the signal generator (fixed) and one on a timing test
+(`test_patch_audio`, now excluded). The next run is expected to show the next layer.
+Do not read the absence of a report from a test that has not yet got past its first
+one as a result.
 
-That is 47 tests (label `tsan`; 14 until the pump move's step P1, 16 until step P3, 19 until steps P4/P5, 23 until step P6 added the 24 `_free` window tests). Everything else is registered, disabled and labelled
-`sanitize-excluded`, so `ctest -N -L sanitize-excluded` prints it, and every excluded
-test that is named in the file carries its reason: it starts the real application as a
-child, faults a process on purpose, measures against the wall clock, drives the whole
-window under a software GL context, or is **not run yet**. The last is the large
-group: the 46 tests of master's TSan list that this branch also has, and 7 of the
-branch's own that are not engine-threading proper (`test_engine_headless`,
-`test_engine_publish_alloc`, `test_snapshot_app`, [`test_remote_key_release`: IN since step P1],
-`test_hang_capture_concurrent`, `test_pa_stream_list_guard`,
-`test_patch_graph_draft_input`). Master's first run found its first races in the
-signal generator and in tests and fixed them there; running master's list here
-before the merge would mostly report what master already repaired, in a job whose
-purpose is to be quiet enough to read when the pump move's own threaded tests go
-in. A test joins the selection by moving its name from an exclusion list to
-`CASCADE_TSAN_TESTS`; the typo check refuses a name that is not a test. The
-remaining tests start no thread and drive no code that has one. Judge a test by
-what it starts, not by its name, when you move one.
+### Shared state across threads in 0.99.64 (read, not run)
 
-The list was written without a Linux run on this branch; read the first log before
-believing it. (P6: the list has now had a Linux run on this branch, 47 of 47 passing in WSL, GCC 15.2, `halt_on_error=1`; the four tests that failed on
-the four races of P5 are clean, and `test_engine_api_03` and three plugin window tests were ported to Linux file names - see docs/engine-stage4.md, the P6 record.
-`test_engine_api_transmit` runs the eight latch probes one at a time under the sanitizer: eight engines at once starved each other with no race reported.)
-`test_engine_api_transmit` and `test_engine_api_merge` run at real
-timers (serial, 600 s before the scale): a probe's heartbeat starving on a slow
-runner is the rule working and reads as a failure with no TSan report.
+What each piece is, which threads touch it, what guards it, and whether it is
+believed correct. Read from the source on the tree this was written against; the
+test that would show a regression is a TSan run of the tests above.
 
-**Suppressions** are in `tools/sanitize/tsan.supp`, ported from master unchanged
-in its rules: third-party libraries only (`called_from_lib:` the sound server,
-PulseAudio's client library, libunwind, Mesa, X11/Wayland) and two named upstream
-PortAudio races, each with the reason. Nothing of this repository is in it and
-nothing may be added for it: a race in our code is fixed. The reasons cite master's
-first run (37355910809); this branch has not had one, so a line it never needs is
-not evidence the line is wrong.
+| State | Threads | Guard | Believed correct |
+|---|---|---|---|
+| Breadcrumb block (`core/breadcrumb.hpp`, one 64-byte page shared with the watcher process) | Writers: the GUI thread only (phase, heartbeat, frame scope, the user-paced bit from the window procedure, the radio-opening bit mirrored each frame, the plugin-reload bit). Reader: another process, after the application has ended | Every field through `std::atomic_ref`, relaxed except the magic (release/acquire) and the `g_block` pointer; bit words changed with `fetch_or`/`fetch_and` | Yes. `phase`/`phaseMs` and `frames` are load-then-store, which is sound only because one thread writes them: every call site was read (`main.cpp`, `app_window.cpp` run/teardown, `hang_watchdog.cpp` heartbeat, `win_frame.cpp`) and all are the GUI thread. A second writer would lose updates (not a data race, but wrong) |
+| `FrameTimer::current_`, `table_` (`core/frame_timing.hpp`) | Writer: the GUI thread. Readers: the freeze watchdog's thread (`frame-scope:` line) and the usage record | `std::atomic`, relaxed stores and `fetch_add`; `counts()` loads each cell relaxed | Yes. Each cell is exact; the cells are not read at one instant, which a usage record does not need. The rest of the timer is plain memory owned by the GUI thread, and all 11 `FrameScopeGuard` sites in `app_window.cpp` are in functions run only from `run()`/`drawUi()` (checked); the test hooks (`setStalls`, clocks) are called only before the loop |
+| Window state (`core/diag_report.cpp`: `g_windowState`, `g_windowSystem`) | Writer: the GUI thread (`publishWindowState` once a frame, `setWindowSystem` once at start-up). Readers: the freeze watchdog's thread and, on the fault path, the crash handlers (`renderWindowStateLine`) | One `std::atomic<uint64_t>` holds the three flags and the monotonic millisecond they were published at, so a reader never pairs one frame's flags with another's time; `g_windowSystem` is one `std::atomic<const char*>` pointing at a string literal. Release stores, acquire loads. No GLFW call is made off the GUI thread | Yes, by reading. The renderer allocates nothing and calls no formatting function (it runs inside a fault filter). Recorded only: nothing branches on it |
+| `HealthLedger` (`core/health_events.cpp`) | Any thread calls `note()`; one short-lived detached writer thread; `disarm()`'s removal thread; the Settings switch on the GUI thread | One mutex over all state; a second mutex (`io`) serialising file writes and removals; a generation counter that makes a stale write skip itself; the writer owns a `shared_ptr` to the state so the ledger may be gone first | Yes for memory safety: every field is read and written under the mutex, lock order is `io` then the state mutex everywhere (nothing takes them the other way), `flush()` waits on a condition variable under the state mutex. One ORDERING hazard, not a data race: `disarm()` then `arm()` of the same path within the scheduling latency of a thread start can let the removal thread (started first, `health_events.cpp:698`) take `io` after the new writer has written, deleting a file the ledger believes it has written; the next change rewrites it. Needs two Settings toggles within microseconds; not fixed, no deterministic test possible |
+| `DiskJob<Result>` (`gui/disk_job.hpp`) | The GUI thread requests and polls; one `std::async` worker; at quit a detached thread holds an abandoned future | The result crosses through the `std::future` (its own synchronisation); the work owns its inputs by value; the throw flag is a `shared_ptr<std::atomic<bool>>`; one worker at a time, so no two jobs race for a file | Yes. All other members are GUI-thread only. `label_` is a `const char*` the caller keeps alive (every use is a literal) |
+| `ConfigWriter` and `BackgroundSaver` (`gui/config_writer.hpp`, `gui/background_saver.hpp`) | The GUI thread; one `std::async` worker per saver; an abandoned worker at quit | Same shape: text and path by value into the worker, `Outcome` back through the future, queue and counters touched only on the GUI thread; one write out per saver, so a newer write never lands before an older one | Yes. The temporary file is named with the process id, not the thread, so two simultaneous writes to ONE target would share a temporary - impossible here (one write out per target) and not reachable at quit (nothing new is requested after the drain) |
+| Sentinel start/stop state (`core/sentinel_host_win.cpp`, `sentinel_host_posix.cpp`: `Host g`, the pid, pipe and mapping) | The GUI thread: `main()` configures and enables it, `AppWindow` polls it once in about 300 frames and toggles it from the Diagnostics switch | None, by design ("GUI thread only: nothing here is locked" in `sentinel.hpp`) | Yes, as long as that stays true: the only callers are `main.cpp:1385-1386`, `app_window.cpp:1828` and `app_window.cpp:27060`, all on the main thread. The shared page is never unmapped while the process lives, so a stray writer would never touch freed memory |
 
-**`halt_on_error` ends a test at its FIRST report**, so a test that stopped on a
-library's noise has not yet shown what comes after it. Do not read the absence of a
-report from a test that has not yet got past its first one as a result.
+No race was found. Three conditions the code relies on and does not enforce (a
+second thread calling the heartbeat or `setPhase`; a frame-scope guard opened
+off the GUI thread; the sentinel API called from a worker) are the first things
+to check if a TSan run reports in these files.
 
-## AddressSanitizer (and UBSan)
+## Fuzzing
 
-The option is in place (`cmake/sanitize.cmake`, `-DCASCADE_SANITIZE=address`, and
-`address,undefined` on GCC/Clang) and the build wiring is the same as for `thread`,
-but **no ASan job runs on this branch and the option has not been exercised beyond
-configure** (see "What was verified"). Master's job needs two source files the branch
-lacks, so do not read a failure under `address,undefined` here as a finding before
-checking them:
+`tests/fuzz/` has one small file per target, each an
+`LLVMFuzzerTestOneInput(const uint8_t*, size_t)`. `fuzz_<target>.cpp` and its
+inputs in `tests/fuzz/corpus/<target>/` are the whole of a target. They cover what
+reaches the program from outside - the plugin catalogue and manifest, the update
+answer, `config.json`, bookmark, marker and band-plan files, frequency-list imports,
+I/Q file headers, CAT commands, web-remote requests (the control body, and the real
+HTTP server over a loopback socket), crash reports, the report feed, NMEA, patch
+documents - and the rate-dependent DSP: the resampler, the channel filter, the
+demodulators and the stereo, RDS and noise-reduction blocks at arbitrary rates and
+block sizes, and the patch page's rate arithmetic.
 
-- `core/ubsan_exempt.hpp` (`CASCADE_UBSAN_EXEMPT`): the functions whose job is the
-  fault (`raiseTestFault`, the null store of `test_soapy_enum_proc`'s helper) are
-  exempt from UBSan by name, or its null check ends the child before the SIGSEGV the
-  crash handler is being tested on;
-- `core/leak_on_purpose.hpp`: a leak that is the design (a driver giving up on a
-  thread that will not return) is marked where it is made so LeakSanitizer ignores it.
+**The regression corpus is part of the normal suite.** Every target is also run as
+`fuzz_corpus_<target>` in CTest: the program `fuzz_corpus_replay` feeds each corpus
+file to the target once and fails on any fault or violated property. It needs no
+fuzzing engine, so it runs on every platform, under AddressSanitizer in a sanitizer
+build, and in `build.yml`. An empty corpus directory is a failure.
 
-`tests/CMakeLists.txt` applies master's ASan exclusions (the wall-clock audio tests,
-`test_crash_second_fault`) to the tests the branch has; `tools/sanitize/lsan.supp`
-(libraries only) came with it. On Windows the MSVC runtime DLL is staged beside every
-executable, as `SoapySDR.dll` is; it needs the *MSVC AddressSanitizer* component of
-Visual Studio.
+**Real fuzzing** needs the libraries to carry libFuzzer's coverage counters, so it
+is a third build directory:
+
+```
+cmake -S . -B build-fuzz -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCASCADE_SANITIZE=address,fuzzer -DCASCADE_FUZZ=ON
+cmake --build build-fuzz --config Release --target fuzz_config fuzz_cat_command   # any of the fuzz_<target>
+mkdir work
+build-fuzz/tests/Release/fuzz_cat_command.exe -max_total_time=300 work tests/fuzz/corpus/cat_command
+```
+
+On Linux the same with Clang (`CC=clang CXX=clang++`, `-DCASCADE_SANITIZE=address,undefined,fuzzer`).
+MSVC's `/fsanitize=fuzzer` is used on Windows (Visual Studio 2022 17.14 here). The
+first directory given is where libFuzzer writes what it finds; the second is the
+regression corpus, read as seeds.
+
+**A finding becomes a test.** Minimise it (`-minimize_crash=1`), put the file in
+`tests/fuzz/corpus/<target>/` with a name that says what it was, and write the
+ordinary unit test that fails without the fix, in the existing test file for that
+code, before fixing it. The corpus file then keeps it fixed on every platform; the
+unit test says why.
+
+A new target: add `tests/fuzz/fuzz_<name>.cpp`, add `<name>` to the list in
+`tests/fuzz/fuzz.cmake`, and put at least one input in `tests/fuzz/corpus/<name>/`.
+Corpus files are committed to a public repository: nothing in them may name a
+person, a machine, an address or a path.
+
+## Static analysis (MSVC `/analyze`)
+
+```
+cmake -S . -B build-analyze -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCASCADE_ANALYZE=ON
+cmake --build build-analyze --config Release --parallel 10 --target cascade_lib cascade
+```
+
+`CASCADE_ANALYZE` is off by default and then does nothing (`cmake/analyze.cmake`
+returns before defining anything; the generated project files of a normal build are
+identical with and without the file). On, it adds to every target that links
+`cascade_flags` (the application library, the application, the report reader, the
+tests) - and so not to the vendored libraries - these switches, each tried on a small
+program first:
+
+- `/analyze`: the C6xxx (PREfast) and C28xxx families - C6001 uninitialised memory,
+  C6011 null dereference, C6385/C6386 buffer over-read and overrun, C28182.
+- `/analyze:external-`, `/external:anglebrackets`, `/external:W0`: code from headers
+  included with `<angle brackets>` is not analysed and its warnings are silenced.
+  That is the standard library, the Windows SDK, and every third-party header
+  (`<imgui.h>`, `<nlohmann/json.hpp>`, `<httplib.h>`, `<SoapySDR/...>`). This tree
+  includes its own headers with quotes everywhere, so none of ours is hidden by it.
+  CMake already marks the vendored and vcpkg include directories as `/external:I`;
+  the angle-bracket rule covers what that cannot, the compiler's and the SDK's own
+  directories.
+- `/analyze:plugin <EspXEngine.dll>` and `Esp_Extensions=ConcurrencyCheck.dll`: the
+  extension host and the one checker run by default. Without the host `/analyze`
+  runs no concurrency checks at all (C26110 "caller failing to hold lock", C26115,
+  C26117, C26135 come only from it). Left alone the host also loads CppCoreCheck,
+  whose C264xx rules add about 9,800 style warnings (`noexcept`, `gsl::at`, raw
+  pointers): a different review, available with
+  `-DCASCADE_ANALYZE_EXTENSIONS=ALL`. With the Visual Studio generators a
+  `Directory.Build.props` in the build directory sets the variable for cl.exe; with
+  another generator set `Esp_Extensions` yourself.
+
+`CASCADE_ANALYZE` is MSVC-only: elsewhere it is a warning and nothing else (GCC's
+`-fanalyzer` has no usable C++ support).
+
+**What it found on the 0.99.63 tree** (MSVC 19.44, `cascade_lib` and the
+application): 26 analyzer warnings and the 10 compiler warnings that `/W4` already
+gave (below), in our code only. None of the priority families (C6001, C6385,
+C6386, C28182) fired; C6011 fired once, and the lock-checking family four times
+(C26110 x2, C26117, C26135). Every one was read against the code, and none is a
+defect:
+
+| Warning | Where | Verdict |
+|---|---|---|
+| C6320 x4, C6322 x2 | `crash_handler.cpp:468`, `:710`; `hang_watchdog.cpp:81`; `diag_report.cpp:289` | Intended. An `__except(EXCEPTION_EXECUTE_HANDLER)` around a hand-rolled stack walk or a read of a module header that may be unmapped: swallowing the fault is the design (what was collected before the bad frame is still worth having) |
+| C6011 | `crash_handler.cpp:1488` | False positive. The null store is the deliberate access violation of `raiseTestFault`, there to provoke the handler |
+| C6387 | `crash_handler.cpp:1022` | Real, harmless as far as the code reads. `sehFilter` tolerates a null `ep` for its own use and then forwards it unchanged to the previous filter; its only caller is the operating system, through `SetUnhandledExceptionFilter` (`:1176`), and no caller in the tree passes null |
+| C26110 x2, C26117 | `patch_audio.cpp:115`, `:123`; `plugin_runner.cpp:545` | False positives. The first two are exception edges after and inside a `lock_guard` taken three lines earlier, which the checker loses through `sh->m` (a `shared_ptr`); the third is `destroyInstances(std::unique_lock&)`, whose contract is that the caller holds the lock, and both callers (`:122`, `:455`) do |
+| C26135 | `diag_log.hpp:119` | Real, harmless. A test hook that returns a held lock has no `_Acquires_lock_` annotation; the application never calls it |
+| C6031 x3 | `sdrplay_service.cpp:230`, `:367`; `soapy_enum_proc.cpp:1585` | The first two are false positives: the documented size-probe call of `QueryServiceConfigW`, which is expected to fail and fill `needed`, and the result is checked on the next line. The third is real, harmless: `_setmode` on the child's stdout, which cannot fail for a valid descriptor |
+| C6262 x4 | `plugin_api.cpp:209` (16 KB, a scratch copy of the control queue), `main.cpp:890` (36 KB, `main`), `web_server.cpp:3534` (19 KB, a streaming-response lambda), `airspyhf_protocol.hpp:509` (32 KB, the one-time initialiser of a static table) | Real, harmless. Large locals in functions that run on the main, GUI or web-worker thread; none is near a 1 MB stack, and none of the four is recursive |
+| C6326 x2 | `diag_log.cpp:289`, `aor_source.cpp:499` | Real, harmless. A deliberate comparison of two constants (`kKeptFiles >= 2`; a log label that turns to `?` if the sample-rate constant ever changes) |
+| C6246 x5 | `app_window.cpp:16937`, `:22677`, `:23060`; `demod_scope_face.cpp:604`; `sdrplay_source.cpp:2673` | Real, harmless. An inner variable of the same name as an outer one in a different role (a colour channel and a rectangle; a text buffer and a number); each was read and the outer value is not used by mistake. The same five sites are the C4456 warnings below |
+
+The 26 stay in the output on purpose: no `#pragma warning` or cast was added to any
+of them, so a new one is visible against this list. Nothing in product code was
+changed for this work.
+
+## Warnings
+
+Measured on the same tree, a clean Release build at the existing level (`/W4`;
+`-Wall -Wextra` on GCC and Clang) - which this change does not raise:
+
+- **MSVC: 112 warnings, not zero.** 10 in 6 product files: C4456 x5 and C4458 x2
+  (a name shadowing another, the same sites as C6246 above plus `crash_handler.cpp:341`
+  and `:354`), C4100 x2 (`scope_view.cpp:412`, two parameters the function never
+  reads - the caller computes the top altitude and nothing draws it), C4127 x1
+  (`diag_log.cpp:289`). And 102 in tests: C4127 x91 (a `CHECK` whose condition is
+  a compile-time constant, from `tests/test_check.hpp`'s macro), C4456 x9 (`src` and
+  `gui` redeclared inside test bodies), C4005 x2 (`WIN32_LEAN_AND_MEAN` defined
+  twice). None is a defect. What stands between the tree and zero is ten small edits
+  in product code and, in the tests, one change at the `CHECK` macro or ninety-one
+  at its call sites.
+- **GCC, a proxy:** no Linux machine was available, so MinGW GCC 16 with
+  `-fsyntax-only` over the sources it can parse (141 of 152 under `src/`, 279 of 284
+  tests) gave 28 warnings in product code and 22 in tests at `-Wall -Wextra`: 25 of
+  the 28 are in `soapy_source.cpp` (17 `-Wmissing-field-initializers` on partly
+  initialised result structs and 8 `-Wswitch` for `Pending` and `NotRun`, which the
+  function it switches on documents as never returned), 2 are the unread
+  parameters above, and 1 is a `memcpy` of `std::complex` (`dsp/fft.cpp:95`,
+  `-Wclass-memaccess`). The 11 source files and 5 tests it could not parse are
+  unmeasured. Real GCC on the CI runner may differ either way.
+
+`CASCADE_WERROR=ON` makes a warning in our own targets an error (`/WX`, `-Werror`),
+at that same level. It is off everywhere, in `build.yml` and `sanitize.yml` alike,
+because the count above is not zero; the sanitizer workflow is where it goes on
+first, when it is.
+
+**Extra warnings worth enabling, with what one build measured** (counts are unique
+`file:line:number` sites; `src/` through MSVC with the flags raised by the `CL`
+environment variable, and through the GCC proxy; the tests through the proxy only):
+
+| Warning | `src/` | tests | Worth it? |
+|---|---|---|---|
+| MSVC C4062 (enumerator not handled, no `default`) | 4 | n/m | Yes: the four are all in `soapy_source.cpp` and are the same switches GCC's `-Wswitch` already flags |
+| MSVC C4061 (enumerator not handled explicitly, `default` present) | 14 | n/m | Later: one switch, `plugin_host.cpp:962`, accounts for 53 of the messages (it names a few rejection reasons and defaults the rest) |
+| MSVC C4242, C4254, C4263, C4264, C4265, C4287, C4296, C4302, C4311, C4355, C4545-C4547, C4549, C4555, C4619, C4640, C4826, C4905, C4906, C4928, C4946, C4165, C4191 | 0 each | n/m | Yes, and free: nothing fires today, so turning them on only guards the future (C4191 and C4242 do fire in the vendored libraries, which do not link `cascade_flags`) |
+| MSVC C4365 (signed/unsigned) | 60 | n/m | No: indexing `std::array` and `std::vector` with an `int`, and `char` to `unsigned char`; GCC's `-Wsign-conversion` says the same thing (70 in `src/`, 39 in tests) |
+| GCC/Clang `-Wshadow` | 10 | 12 | Yes: already an MSVC `/W4` warning (C4456/C4458), so the Linux jobs are the ones that cannot see it |
+| GCC/Clang `-Wconversion` | 1 | 6 | Yes after the 7 are fixed: `sdrplay_probe.cpp:483` and, in tests, five `int` to `float` and one `size_t` to `double` |
+| GCC/Clang `-Wold-style-cast` | 0 | 14 | Only with `core/plugin_abi.h` excluded: it is a C header for plugin authors and its two hits are casts inside its macros, which the tests expand. The other twelve are casts in tests |
+| GCC/Clang `-Wsign-conversion` | 70 | 39 | No, as above |
+
+n/m: not measured (the MSVC extra-warning build covered `cascade_lib` and the
+application, not the tests).
 
 ## CI
 
-`.github/workflows/sanitize.yml` is a separate workflow from `build.yml`, so it can
-neither slow nor colour the release jobs. **It has one job, `tsan`** (Ubuntu 24.04,
-Clang 18, `CASCADE_SANITIZE=thread`, builds only `cascade_tsan_tests`, runs
-`ctest -L tsan -j2` under xvfb with the null audio device, uploads the log as
-`tsan-test-log`). It runs on **every push to `engine/stage4`**, on a pull request that
-changes the sanitizer files, and by "Run workflow" (GitHub offers that only for a file
-on the default branch, so until the merge the push is the way). Master's other two
-jobs are not here; see below.
-
-## What was verified (and what was not)
-
-Windows (MSVC, Visual Studio 17 2022, vcpkg), 2026-10-20: the normal configure and build
-are unchanged by this work and the suite passed 262 of 262 at `ctest -C Release -j 8`
-(`ctest -N -L tsan` lists nothing there). `-DCASCADE_SANITIZE=thread` stops the configure
-with the message "MSVC has no ThreadSanitizer"; `undefined` warns and is ignored;
-`address` configures cleanly, with `/fsanitize=address` on `cascade_engine`,
-`cascade_gui`, the tests, `imgui` and `portaudio_static`, and the runtime DLL staged.
-The ASan build itself was not built or run.
-
-Linux, locally, in WSL (Ubuntu 26.04, GCC 15.2, libtsan from the compiler package; not
-the CI compiler): `-DCASCADE_SANITIZE=thread` configures to "14 tests run, 84 excluded one
-by one, 164 excluded as single-threaded" (14 + 84 + 164 = the 262 tests of the suite);
-`test_snapshot_stress` (10 s) and `test_receiver_snapshot` (4.5 s) PASS under
-ThreadSanitizer through `ctest -L tsan`, with the options CMake attaches
-(`TSAN_OPTIONS=halt_on_error=1:...:suppressions=tools/sanitize/tsan.supp`); and
-`test_command_queue_threads` runs its checks under it (6 checks, 0 failed) and then stops
-on a report in the vendored PortAudio ALSA backend, which is the next layer of the noise
-and is not suppressed (below). To run it the way CI would on a machine whose ALSA default is
-a sound server (WSLg's is), point ALSA at a null device from a user file, and for a test that
-touches the display use X11 rather than Wayland:
-
-```
-cat > ~/asound-null.conf <<'EOF'
-</usr/share/alsa/alsa.conf>
-pcm.!default { type null }
-ctl.!default { type null }
-EOF
-export ALSA_CONFIG_PATH=~/asound-null.conf XDG_SESSION_TYPE=x11; unset WAYLAND_DISPLAY
-```
-
-**What the local run showed, for the first CI log to be read against:**
-
-- GCC warns `-Wtsan` on every inlined `std::atomic_thread_fence` (20 sites: `SeqlockBox`,
-  from `receiver_snapshot`, `plugin_api`, `pipeline`, `fox_engine_api`). ThreadSanitizer does
-  not model a stand-alone fence as synchronisation, so a seqlock's reader/writer ordering
-  that rests on one can read as a race. Neither snapshot test reported one here; if CI's
-  Clang run does, check the fence first.
-- `libpulse.so.0` (`pa_threaded_mainloop_wait`, "unlock of an unlocked mutex") appeared
-  under PortAudio's device enumeration when a sound server was present: added to
-  `tsan.supp` with that report as its reason (the one line in this port that master does
-  not have).
-- A data race in the vendored PortAudio ALSA backend: `callbackAbort` (a `volatile
-  sig_atomic_t`) written by `RealStop` on the closing thread and read by `OnExit` on the
-  callback thread (`pa_linux_alsa.c:3099` and `:3397`), reported at the destruction of
-  an `AudioOut` that had a stream open. It is upstream's flag-by-volatile idiom and benign
-  by construction: the store is made before the thread is told to stop and the read is made by
-  the thread's cleanup handler after `pthread_cancel`, an ordering ThreadSanitizer does not
-  model. **DECIDED (pump move step P1, 2026-10-20): suppressed, by the name of the function that
-  makes the write** - `race:RealStop` in `tools/sanitize/tsan.supp`, with the report quoted there
-  as its reason. Not `race:OnExit` (it calls the stream's finished callback, which is our code),
-  and the vendored file is not patched (it is not compiled on Windows, where this is developed).
-- **The other three of P5's four, resolved in step P6** (docs/engine-stage4.md has the reasoning): the scope tap's seqlock is OURS and is fixed in the code - the
-  elements are relaxed atomic words, the reader stays lock-free (`core/scope_tap.hpp`); `Pa_Initialize` against the pass's `Pa_IsStreamActive` is OURS and is fixed - the
-  init lock is a shared mutex and `streamAlive` takes it shared without waiting (`sink/pa_init.hpp`, "THE COUNT'S READERS"); PortAudio's `AddOpenStream` x2 is a TEST
-  pattern (engines built on several threads at once meet the NoWait guard) and is fixed in the tests, `tests/engine_api_serial.hpp`. No suppression was added for any
-  of them; `tools/sanitize/tsan.supp` is unchanged. A fifth class showed up behind them once the first reports stopped hiding it: the process-global diagnostics context
-  and module table written by every engine's pass (`core/diag_report.cpp`: the healthy writers and `diagContextBlock` are locked, the fault path is not and never
-  may be).
-  With it in place `test_command_queue_threads` passes under ThreadSanitizer and the next layer
-  shows (below).
-
-**The first full run of the selection (pump move step P1, 2026-10-20, WSL, GCC 15.2; the Clang 18 CI leg has still not run).**
-16 tests are in the selection (the 14 above, plus `test_remote_control_pull` and `test_remote_key_release`, which came in with
-the pump move). With the `callbackAbort` line in place: **12 pass** (`test_transmit_key_race` 44 s, `test_remote_control_pull`,
-`test_remote_key_release`, `test_transmit_dead_man`, `test_transmit_liveness`, `test_engine_control_thread`,
-`test_command_queue_threads`, `test_engine_host_threads`, `test_engine_shutdown`, `test_receiver_snapshot`,
-`test_snapshot_stress`, `test_apply_command`) and **4 fail on
-races that are not the pump move's** (none has a frame of the code P1 or P2 changed), each the next layer behind the one that was
-suppressed. Investigated, NOT suppressed, and not fixed here; the owner's call:
-1. **`pa_front.c:312 AddOpenStream`** (`test_engine_api_transmit`, `test_engine_api_merge`): PortAudio's list of open streams
-   (`firstOpenStream_`) written by two threads at once, each holding a DIFFERENT mutex (its own `AudioOut::apiMutex_`). Both tests
-   build several engines on several threads at the same instant, which the application never does. It is also the documented
-   escape hatch of the product's own `PaStreamListGuard::NoWait` (`sink/pa_init.hpp`): an open that finds the guard busy goes ahead
-   without it so the GUI thread never waits. A test-only serialisation of the engines' construction and destruction removes it from
-   `test_engine_api_transmit` but not the next one (2); it was tried and reverted. After the pump move the GUI no longer opens audio,
-   and the engine's opens can take the guard with `Wait` - P3/P5's decision.
-2. **`pa_front.c:363 Pa_Initialize` / `:1357 PaUtil_ValidateStreamPointer`** (`test_engine_api_conformance`, and behind 1 in
-   `test_engine_api_transmit`): PortAudio's `initializationCount_`, a plain int, written by `Pa_Initialize`/`Pa_Terminate` (every
-   `AudioOut`/`AudioIn`/sound card construction goes through `paInitializeShared`, under a lock of its own) and read, unlocked, by
-   `Pa_IsStreamActive` - which the pass calls through `AudioOut::streamAlive()` from `fillPublishedState` on every publish. The value
-   never moves below 1 while an engine lives, so it is benign in effect; it is a real race in kind, today (a worker's sound card
-   beside the GUI-thread pump) and more after the pump move. The remedy that fits the file's own rule is for `streamAlive()` to take
-   the pa_init lock (or keep a cached answer the audio thread updates), not a suppression.
-3. **`scope_tap.hpp:119/151` `ScopeTap<float>::push` against `snapshot`** (`test_engine_api_03`): a sequence-lock whose payload is
-   copied with `memcpy`, written by the DSP thread and read by the API thread. The reader retries when the sequence moved, so the
-   torn copy is discarded - the usual seqlock, which ThreadSanitizer reports because the payload is not atomic. Master's list has
-   `test_scope_tap` under "not run yet" for the same family. The fix is word-wise relaxed atomics in the tap (or an annotated
-   reader), not a suppression.
-**The run of the selection with the pump move's step P3 in it (2026-10-20, WSL, GCC 15.2).** 19 tests: **15 pass** - the 12 above and the
-three of step P3, `test_plugin_directive` (0.4 s), `test_plugin_ui_threaded` (5 s) and `test_plugin_unload_handshake` (2 s), with no
-ThreadSanitizer report - and the SAME 4 FAIL on the SAME races as before (`pa_front.c:312/313 AddOpenStream` in `test_engine_api_transmit` and
-`test_engine_api_merge`, `pa_front.c:363 Pa_Initialize` in `test_engine_api_conformance`, the scope tap's seqlock `memcpy` in
-`test_engine_api_03`): nothing P3 changed is in any of their stacks. No new race. `ctest -L tsan -R "plugin|ui|unload|directive"` is 3/3.
-A deliberate stray call also proved the leg catches the defect P1 fixes: `Engine::applyControlRequest` made from a test thread beside
-the running control thread is reported at once (`TxKeyRules::key` writing `changes_` while the pass's publish reads `changes()`),
-which is why `test_remote_control_pull` D0 uses the one stray call that only reads the rules.
-
-**The run of the selection with the pump move's steps P4 and P5 in it (2026-10-20, WSL, GCC 15.2).** 23 tests: **19 pass** - the 15 above and the
-four of these steps (`test_pass_control` 11 s, `test_look_order` 4 s, `test_window_threaded_look` 4 s, `test_pump_live_traffic` 7 s), with no
-ThreadSanitizer report - and the SAME 4 FAIL on the SAME races (`pa_front.c:312/313 AddOpenStream` in `test_engine_api_transmit` and
-`test_engine_api_merge`, `pa_front.c:363 Pa_Initialize` against the pass's `Pa_IsStreamActive` in `test_engine_api_conformance`, the scope tap's
-seqlock `memcpy` in `test_engine_api_03`): no stack of them names anything these steps added. No new race. One finding of the first run, in the
-TEST, not the product: `test_look_order` set its test hook (`Engine::testHooks_`) after the control thread had started - a plain global read by the
-pass - and ThreadSanitizer said so at once; the rule ("set before the pass exists, cleared after it is gone") is now kept and written in the test.
-The window's frame (`test_window_threaded_look`: 3.4 M frames beside 424 000 passes, three session threads and a snapshot reader) is clean.
-
-**Not run:** the Clang 18 CI job itself, the window tests' stepped and free-running variants (`_stepped`, `_free`: registered in a build without a sanitizer, so
-not in the selection), and any ASan or UBSan job.
-
-## Master-only, not on this branch
-
-Referenced by master's page or files and deliberately not ported; each comes with the
-merge:
-
-- **The `sanitize` job** (ASan + UBSan over the whole suite): needs `ubsan_exempt.hpp`
-  and `leak_on_purpose.hpp` above, and master's exclusion list for the tests this branch
-  has not got.
-- **Fuzzing**: `tests/fuzz/` (23 targets and their corpora), `tests/fuzz/fuzz.cmake`,
-  `CASCADE_FUZZ`, the `fuzz_corpus_*` tests and the `fuzz` job. `cmake/sanitize.cmake`
-  accepts `fuzzer` but there is nothing to build with it here. `fuzz_corpus_web_http`
-  is on master's TSan list for the same reason it is absent from this one.
-- **Static analysis and warnings**: `cmake/analyze.cmake`, `CASCADE_ANALYZE` (MSVC
-  `/analyze`) and `CASCADE_WERROR`, with master's measured findings and warning counts.
-- **Master's shared-state review of 0.99.64** (breadcrumb block, frame timer, window
-  state, health ledger, `DiskJob`, savers, sentinel): written against code the branch
-  has since changed around (stage 3 moved the receiver's ownership into the engine); it
-  would have to be redone against this tree rather than copied.
-- **Tests on master's TSan list that the branch does not have** (they come with the
-  merge and are then judged): `test_audio_clip`, `test_audio_lead_app`,
-  `test_audio_open_log`, `test_autogain_app`, `test_aor_source`, `test_bookmark_save_async`,
-  `test_dsp_priority`, `test_excuse_cap`, `test_frame_timing`, `test_gui_disk_audit`,
-  `test_gui_file_jobs`, `test_hang_signature`, `test_health_events`, `test_health_paths`,
-  `test_iq_open_async`, `test_link_request_poll`, `test_one_chip_one_route`,
-  `test_patch_dest_async`, `test_patch_presets_app`, `test_ppm_app`, `test_record_start`,
-  `test_sdrplay_service`, `test_soapy_read_bound`, `test_source_overreport`,
-  `test_tester_link_app`, `test_watchdog_startup`, `fuzz_corpus_web_http`; and, among
-  master's exclusions, the child-process tests `test_tester_link`, `test_tester_usage`,
-  `test_sentinel*`, `test_stall_count`, `test_health_app`, `test_clean_exit_marker`,
-  `test_slow_frames_app`, the crash test `test_crash_late_module`, the wall-clock tests
-  `test_channel_bandwidth`, `test_pipeline_device_rate_audio`, `test_airband_app`,
-  `test_pipeline_audio_lead`, and the GL tests `test_diag_context_app`,
-  `test_one_chip_app`, `test_bandwidth_app`.
-- Master's `-g0 --strip-debug` for Linux test executables (outside sanitizer builds),
-  `CASCADE_GUI_TESTS` and `CASCADE_REALTIME_AUDIO_TESTS` label handling in
-  `tests/CMakeLists.txt`, and its Linux `-g` Release flag.
+`.github/workflows/sanitize.yml` (separate from `build.yml`, so it can neither slow
+nor colour the release jobs) has three jobs, in parallel on separate runners: the
+whole suite under ASan + UBSan with GCC; the thread-sanitizer selection of
+`tests/tsan.cmake` under ThreadSanitizer with Clang 18 (`tsan`); and the fuzz targets
+under Clang - the corpus replayed first, then each target for a short fixed time
+(`fuzz_seconds`, default 60). Start it on a branch from the Actions tab or with
+`gh workflow run sanitize.yml --ref <branch>`. It has run once (37355910809, on the
+tree of 17ffcbe, 13 commits before 0.99.68) and failed all three jobs: 22 of 313
+tests under ASan + UBSan, 39 of 70 under ThreadSanitizer, and the corpus replay of
+`channel_chain` (the "Fuzz each target" step never ran, so no target has been fuzzed
+yet). Each failure and its class is in the change that answered it; the second run
+will show what they were hiding.
+`CASCADE_ANALYZE` has no CI job: it needs MSVC, and `build.yml`'s Windows job is
+not edited by this work.
