@@ -26,6 +26,13 @@ struct AddAllRow {
     bool fitted = false;
     bool hasUpdate = false;      // a newer build is planned for a fitted module
     bool hasNotice = false;      // the maker attached a legal notice
+    // 0.99.74 (merged 0.99.84): a plugin from a site the USER added is never in the run - neither to fetch nor to update, and not listed as passed
+    // over - because FoxSDR has not reviewed it and its notice is always on its own page; each is fitted from that page. (The engine's catalogue has
+    // no such rows yet - the sites are the window's, ledger STORE-VIEW - so only the store window's model sets it.)
+    bool thirdParty = false;
+    // 0.99.74: a copy of the module is on disk in some state (master's `sm.install != StoreInstallKind::NotInstalled`: installed, update available or
+    // a NEWER build installed) though not counted as fitted: treated as fitted, so it is at most an update and never a fresh install.
+    bool onDisk = false;
     // The same gate a single FIT goes through, asked as the module's own tick
     // stands, and asked as if its notice were acknowledged.
     std::string blockedReason;
@@ -61,9 +68,10 @@ inline AddAllRule planAddAllRows(const std::vector<AddAllRow>& rows, const AddAl
 
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
         const AddAllRow& sm = rows[static_cast<std::size_t>(i)];
+        if (sm.thirdParty) { continue; }
         const std::string& name = sm.name;
         const std::string shown = name.empty() ? std::string(tr("(unnamed module)")) : name;
-        if (sm.fitted) {
+        if (sm.fitted || sm.onDisk) {
             // A FITTED MODULE IS ONLY EVER AN UPDATE HERE. It is never listed
             // as skipped: "already installed" is the outcome the user pressed
             // this key for, not a thing that went wrong, and a summary that
@@ -129,8 +137,8 @@ inline AddAllRule planAddAllRows(const std::vector<AddAllRow>& rows, const AddAl
             plan.blockedReason = tr("the catalogue was read and it lists no modules at all");
         } else if (cat.lastCheckFailed) {
             plan.blockedReason =
-                tr("the last check did not return a catalogue - its reason is under "
-                   "CATALOGUE SOURCE");
+                tr("the last check did not return a catalogue - its reason is shown at the top "
+                   "of the list");
         } else {
             plan.blockedReason =
                 tr("no catalogue has been read yet - press CHECK NOW and this application "
@@ -147,7 +155,7 @@ inline AddAllRule planAddAllRows(const std::vector<AddAllRow>& rows, const AddAl
                 ? tr("every module in the catalogue is already fitted, and none has a "
                      "newer build")
                 : tr("nothing in the catalogue can be fitted on this machine - each "
-                     "module's own reason is on its row");
+                     "module's own reason is on its page");
     }
     return plan;
 }

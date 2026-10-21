@@ -65,6 +65,41 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 cascade_merge_pending_part(PLUGIN-RUN audio_lead_plugin_wake
     "tests/test_audio_lead_app.cpp: a manual tune gives an AUTO audio-output decoder an independent wake signal before it has an instance (pluginUseOf / updatePluginLifecycle, 0.99.73). Restore master's block (git show origin/master:tests/test_audio_lead_app.cpp, 'A manual tune must give an AUTO audio-output decoder') when the plugin run modes are carried.")
 
+# --- ADDED 2026-10-21, after the first run of the gui-labelled tests (real-binary tests; they build and run as they are, and fail only because
+# the feature they read the census of is not in the window yet). The ledger id says which feature.
+cascade_merge_pending(AIRBAND          # 0.99.7x the airband monitor
+    test_airband_app)
+cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 waterfall markers, peak hold / average / trace modes, close names stack, Shift+wheel slide
+    test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app)
+cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip
+    test_display_menu_app test_display_fold_app)
+cascade_merge_pending(PLUGIN-SETTINGS-UI
+    test_decoder_settings_fold_app test_plugin_pathpick_app)
+cascade_merge_pending(PLUGIN-RUN       # 0.99.7x a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes
+    test_plugin_inuse_app)
+cascade_merge_pending(PLUGIN-ROW-KEYS
+    test_row_keys_app)
+cascade_merge_pending(STORE-VIEW
+    test_plugin_dup_app test_plugin_store_app)
+cascade_merge_pending(UPDATES          # 0.99.7x the Store's own update notice and the site banner
+    test_store_update_app)
+cascade_merge_pending(IMPORT-DIALOG
+    test_import_dialog_app)
+cascade_merge_pending(RADIO-SETUP      # 0.99.7x the radio setup page
+    test_radio_setup_app)
+cascade_merge_pending(TESTER-USAGE     # 0.99.44 - 0.99.52 the team's messages to a tester, the usage section
+    test_team_message_app)
+cascade_merge_pending(TESTER-LINK
+    test_tester_link)
+cascade_merge_pending(MAP-WINDOWS      # 0.99.7x the ADS-B map's lists
+    test_unplaced_list_app)
+cascade_merge_pending(PATCH-VIEW       # 0.99.7x the patch page's view keys, information pane and inspector
+    test_patch_canvas_nav test_patch_info_pane)
+cascade_merge_pending(RAIL-CHROME
+    test_theme_census)
+cascade_merge_pending(WINDOW-PLACEMENT # 0.99.73 the Decoder output window and the plugin picture windows open inside the main window
+    test_decoder_window_app)
+
 # Only the names that exist as files here are kept (a name that is not a test is a typo that would be a quiet gap).
 set(_cascade_pending_kept)
 foreach(_t ${CASCADE_MERGE_PENDING_TESTS})
@@ -99,3 +134,4 @@ macro(cascade_merge_pending_register)
         set_tests_properties(merge_pending_part_${_p} PROPERTIES LABELS "merge-pending" TIMEOUT 30)
     endforeach()
 endmacro()
+

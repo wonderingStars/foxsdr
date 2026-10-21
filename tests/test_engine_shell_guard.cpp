@@ -58,11 +58,11 @@ namespace {
 // BUDGETS. Every number is the surface as the fence left it (2026-10-21); a change moves the number in the same commit, with the dated
 // comment in engine_shell.hpp that says why. They only go down on their own: stage 5 deletes the web/CAT section, stage 7 the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 39;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart)
+constexpr int kShellMethodsBudget = 40;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart)
 constexpr int kHostMethodsBudget = 1;     // CLASS HOST: makePluginFeed
 constexpr int kWebMethodsBudget = 7;      // CLASS WEB / CAT: deleted by stage 5
 constexpr int kFeedMethodsBudget = 11;    // HostPluginFeed's virtuals (the eight host accessors and what drives them)
-constexpr int kCallSitesBudget = 71;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 71 when the fence landed (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 72;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -86,7 +86,7 @@ const std::vector<Knock> kEngineKnocks = {
     {"AppWindow::openUiSession", {"apiHandle"}},
     {"AppWindow::run",
      {"startReceiver", "controlPass", "startControlThread", "configureHeartbeat", "markCleanExit", "shutdownQuiesce", "shutdownStop",
-      "shutdownRelease", "reportPluginStatus", "seamBiasStandIn", "seamFetchCatalogue", "seamSelectNativeDevice",
+      "shutdownRelease", "shutdownDrain", "reportPluginStatus", "seamBiasStandIn", "seamFetchCatalogue", "seamSelectNativeDevice",
       "seamDeviceOpenPending", "seamPressPreset", "seamPatchStart", "seamPatchRunning", "seamSubmit", "seamMeasureTick",
       "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource"}},
     // the frame is a look: the three parts of the pass, and the status lines the look copies

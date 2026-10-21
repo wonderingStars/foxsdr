@@ -1397,6 +1397,8 @@ AddAllPlan planAddAll(const PluginStoreModel& model, bool noticesAcknowledged) {
         r.fitted = sm.plate.fitted;
         r.hasUpdate = !sm.updateToVersion.empty();
         r.hasNotice = !sm.plate.legalNotice.empty();
+        r.thirdParty = sm.thirdParty;
+        r.onDisk = sm.install != StoreInstallKind::NotInstalled;
         r.blockedReason = sm.blockedReason;
         r.blockedReasonIfAcknowledged = sm.blockedReasonIfAcknowledged;
         rows.push_back(std::move(r));

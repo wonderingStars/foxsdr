@@ -184,7 +184,10 @@ macro(cascade_tsan_select)
     endforeach()
     # A name that is not a test is a typo that would otherwise be a quiet gap.
     foreach(_n ${CASCADE_TSAN_TESTS} ${_tsan_named_out})
-        if(NOT _n IN_LIST CASCADE_ALL_TEST_NAMES AND NOT _n IN_LIST CASCADE_MERGE_PENDING_TESTS)
+        # (A pending test's _free / _stepped variants are not registered either: the name is the base test's.)
+        string(REGEX REPLACE "_(free|stepped)$" "" _base "${_n}")
+        if(NOT _n IN_LIST CASCADE_ALL_TEST_NAMES AND NOT _n IN_LIST CASCADE_MERGE_PENDING_TESTS
+           AND NOT _base IN_LIST CASCADE_MERGE_PENDING_TESTS)
             message(FATAL_ERROR "tests/tsan.cmake names '${_n}', which is not a test")
         endif()
     endforeach()

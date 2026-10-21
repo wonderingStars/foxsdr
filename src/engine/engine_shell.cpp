@@ -167,7 +167,8 @@ void EngineShell::stopTransfers() { SHELL_ENGINE.stopTransfers(); }
 void EngineShell::teardown() { SHELL_ENGINE.teardown(); }
 void EngineShell::shutdownQuiesce() { SHELL_ENGINE.shutdownQuiesce(); }
 void EngineShell::shutdownStop() { SHELL_ENGINE.shutdownStop(); }
-void EngineShell::shutdownRelease(std::chrono::steady_clock::time_point drainDeadline) { SHELL_ENGINE.shutdownRelease(drainDeadline); }
+void EngineShell::shutdownRelease() { SHELL_ENGINE.shutdownRelease(); }
+void EngineShell::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) { SHELL_ENGINE.shutdownDrain(drainDeadline); }
 void EngineShell::reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui) {
     SHELL_ENGINE.reportPluginStatus(images, ui);
 }

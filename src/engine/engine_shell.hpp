@@ -349,7 +349,8 @@ public:
     void teardown();
     void shutdownQuiesce();
     void shutdownStop();
-    void shutdownRelease(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
+    void shutdownRelease();
+    void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
     // The enforcement diagnostic, printed once after the first phase when the run asked (a bounded run's CASCADE_PLUGIN_STATUS).
     void reportPluginStatus(const std::vector<cascade::core::HostImage>& images, const PluginUiReport& ui);
 

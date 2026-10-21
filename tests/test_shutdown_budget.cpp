@@ -1679,7 +1679,8 @@ int main() {
             return at != std::string::npos && s != std::string::npos && s < end;
         };
         CHECK(phaseHolds("void Engine::shutdownStop() {", "pipeline_.stop();"));
-        CHECK(phaseHolds("void Engine::shutdownRelease(std::chrono::steady_clock::time_point drainDeadline) {", "patchStopAll(false);"));
+        CHECK(phaseHolds("void Engine::shutdownRelease() {", "patchStopAll(false);"));
+        CHECK(phaseHolds("void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) {", "drainRecordFinishes(drainDeadline);"));
         CHECK(phaseHolds("void Engine::shutdownQuiesce() {", "transmitter_.stop();"));
         // ...and run() calls the three phases, in their order, the first of
         // them before the final save (which must read the settled state) and
@@ -1687,7 +1688,7 @@ int main() {
         const std::size_t quiesce =
             haveAnchors ? text.find("engine_.shutdownQuiesce();", begin) : std::string::npos;
         const std::size_t release =
-            haveAnchors ? text.find("engine_.shutdownRelease(drainDeadline);", begin) : std::string::npos;
+            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
         const std::size_t finalSave =
             haveAnchors ? text.find("saveConfigNow(); }", begin) : std::string::npos;
         std::printf("teardown phases: quiesce@%zu final save@%zu stop@%zu release@%zu\n", quiesce, finalSave,
@@ -1697,6 +1698,12 @@ int main() {
         CHECK(quiesce != std::string::npos && pipelineStop != std::string::npos && quiesce < pipelineStop);
         CHECK(pipelineStop != std::string::npos && release != std::string::npos && pipelineStop < release);
         CHECK(release != std::string::npos && release < stop);
+        // THE PLUGINS COME DOWN BEFORE THE CLEAN-EXIT MARKER (master 0.99.60; tests/test_clean_exit_marker kills the real binary inside the stage),
+        // and the drain of the lists' and takes' last writes comes after the marker's save is waited for.
+        const std::size_t marker = haveAnchors ? text.find("engine_.markCleanExit();", begin) : std::string::npos;
+        const std::size_t drain = haveAnchors ? text.find("engine_.shutdownDrain(drainDeadline);", begin) : std::string::npos;
+        CHECK(release != std::string::npos && marker != std::string::npos && release < marker);
+        CHECK(marker != std::string::npos && drain != std::string::npos && marker < drain && drain < stop);
         const std::size_t glfwTerm =
             haveAnchors ? text.find("glfwTerminate();", begin) : std::string::npos;
         std::printf("teardown wiring: beginShutdown@%zu pipeline_.stop@%zu glfwTerminate@%zu "
@@ -1729,7 +1736,7 @@ int main() {
         const std::string closeWaitOff = "SoundCardSource::setCloseWaitEnabled(false);";
         const std::size_t off = haveAnchors ? text.find(closeWaitOff, begin) : std::string::npos;
         const std::size_t patchStop =
-            haveAnchors ? text.find("engine_.shutdownRelease(drainDeadline);", begin) : std::string::npos;
+            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
         std::printf("teardown wiring: sound card close wait off@%zu patchStopAll(false)@%zu\n", off,
                     patchStop);
         CHECK(off != std::string::npos && isLiveCode(text, off));

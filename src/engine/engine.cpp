@@ -7766,8 +7766,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         case FOXAPP_OP_SET_AUDIO_BUFFER:
             // The Sinks rail's AUDIO BUFFER combo (0.99.73): 0 AUTOMATIC, 120, 240, 480 or 960 ms.
-            if (!cascade::sink::validAudioBufferSetting(c.ival[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "no such buffer"); }
-            setAudioBufferMs(c.ival[0]);
+            if (c.ival[0] < 0 || c.ival[0] > 100000 || !cascade::sink::validAudioBufferSetting(static_cast<int>(c.ival[0]))) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "no such buffer");
+            }
+            setAudioBufferMs(static_cast<int>(c.ival[0]));
             return res;
         case FOXAPP_OP_TEST_HOLD_AUDIO_LOCK:
             // FOXSDR_HOLD_AUDIO_LOCK (bounded runs only; the window reads the variable and sends it): see holdAudioLockMs_.
@@ -9220,12 +9222,15 @@ void Engine::shutdownStop() {
     pipeline_.stop();
 }
 
-void Engine::shutdownRelease(std::chrono::steady_clock::time_point drainDeadline) {
-    // The two takes' files, closed on workers since 0.99.65, against the window's drain deadline: they have been finishing since the stop,
-    // so by now they have had as long as the saves did, and the shutdown budget is still charged kSaveBound once.
+void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) {
+    // THE TWO LISTS' LAST SAVES (0.99.64) AND THE TWO TAKES' FILES (0.99.65) ARE DRAINED AGAINST THE SAME DEADLINE, the window's: taken before the
+    // settings' last save was waited for, so what that wait leaves of it is what these get; they have been finishing since the stop, and the
+    // shutdown budget is charged kSaveBound once. A default-constructed deadline waits for nothing and collects what has finished.
     drainListSaves(drainDeadline);
-    // The two takes' files, closed on workers since 0.99.65, against the SAME deadline (see above).
     drainRecordFinishes(drainDeadline);
+}
+
+void Engine::shutdownRelease() {
     // THE PATCH'S RADIOS STOP FIRST (0.99.17): each has a reader thread that
     // may be inside a plugin decoder, and each speaker's file is finalised
     // when its radio's sets go. The receiver's radio is not reopened on the
@@ -9238,6 +9243,7 @@ void Engine::shutdown() {
     shutdownQuiesce();
     shutdownStop();
     shutdownRelease();
+    shutdownDrain();
 }
 
 void Engine::pumpSourceHousekeeping() {

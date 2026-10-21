@@ -1742,6 +1742,33 @@ answer. A VIEW-only session is `DENIED`, as is a REMOTE one (section 8.12, part 
 engine puts that card in the sound card form (and keeps, or re-chooses, the rate), see 8.10. `FOXAPP_OP_SOUND_CARD_FORM`
 takes a field mask in `ival[1]` (8.10); 0 is the whole form, as it always was.
 
+### 9.1 The 0.99.84 merge's additions (docs/engine-merge-0.99.84.md)
+
+Master's window kept five things in engine fields it wrote in place; the table had no op for them. All five ops are APP ops
+(`core/app_commands.hpp`, the 0x8000-0x8FFF band), **LOCAL sessions only**, under the rules every app op follows (the header's comment),
+each listed in `kOps` of `core/app_commands.cpp` (test_apply_command holds the list). 0.3's header (`foxsdr_api.h`) is unchanged:
+no table entry, no struct, no fingerprint field was added - the facts below are `get_setting` keys and the ops are the app band.
+
+  * `FOXAPP_OP_SET_RTLTCP_ADDR` (0x8424): `text`, the rtl_tcp address box as typed (the Pluto box's twin). Fact `source.rtlTcpAddr` (local-only).
+  * `FOXAPP_OP_SET_AUDIO_BUFFER` (0x8425): `ival[0]` 0 AUTOMATIC | 120 | 240 | 480 | 960 ms (`sink::validAudioBufferSetting`; anything else is
+    `FOXAPI_OUT_OF_RANGE`, "no such buffer"). Facts `audio.bufferMs` (the setting), `audio.leadMs` (the lead in force: the AUTOMATIC
+    preview), `audio.leadNote` (what the automatic mode last did to the buffer, one sentence, empty when it has done nothing). All local-only.
+  * `FOXAPP_OP_SET_PPM` (0x8426): `ival[0]` the crystal correction's switch (0/1), `num[0]` the open radio's value in ppm
+    (`core::sanitisePpm`; 0 = none). Facts `ppm.on`, `ppm.method` ("na" nothing to correct | "radio" | "retune"), `ppm.value`, `ppm.whole`
+    (the whole-ppm value for a radio that takes integers only, else empty), `ppm.error`, `ppm.card`, plus the radio the value is for -
+    `ppm.model`, `ppm.serial`, `ppm.key` (local-only).
+  * `FOXAPP_OP_TEST_HOLD_AUDIO_LOCK` (0x8427): bounded runs only (`FOXSDR_HOLD_AUDIO_LOCK`, 0.99.68's seam): `ival[0]` ms. The first stop a
+    control request makes of a running receiver first has a thread take the audio mutex for that long; 0 = no seam. Sent through the window
+    session (`uiSubmit`), not through a door method (test_engine_shell_guard's call-site count is unchanged).
+  * `FOXAPP_OP_BANDWIDTH_DRAG_END` (0x8428): the drag on the spectrum's band edge has settled; the engine writes one log line for the width it
+    ended on (`logBandwidthChange("dragged on the spectrum")`, only if the drag moved it). The drag itself sends `FOXAPP_OP_SET_BANDWIDTH_DRAG`
+(0x8202) as before, which marks the width as dragged and logs nothing per step.
+
+`listSeq` and the publish fingerprint: the PPM and audio facts above are hashed from the raw members they are built from, with no
+string built (the fingerprint runs on every pass and test_engine_publish_alloc counts its allocations). Nothing else about the lists
+changed. What was NOT added, and is stubbed in the window instead, is in the ledger of docs/engine-merge-0.99.84.md (section 6): where a
+stubbed feature will need an op (a marker list and its persistence, the plugin key's grant, the plugin settings' forms) the ledger says so.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

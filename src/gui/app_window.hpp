@@ -2490,9 +2490,24 @@ private:
     std::vector<cascade::gui::ScriptStep> inputScript_;
     std::size_t inputScriptPos_ = 0;
     bool inputScriptActive_ = false;
+    // FOXSDR_SCRIPT_TRACE=<path>: one line a frame while a script runs - the pointer, both buttons, the OS focus, and what ImGui made of them
+    // (the hovered window, the hovered and active item) - so a scripted click that did not take leaves its evidence behind. Empty = off.
+    std::string scriptTracePath_;
+    void traceScriptFrame(long frame);
     bool scriptMouseSet_ = false;
     float scriptMouseX_ = 0.0f;
     float scriptMouseY_ = 0.0f;
+    // A scripted "ctrlwheel" step spans the frame it was read on plus the two that follow, the way a real held Ctrl key does - see
+    // applyInputScript's CtrlWheel case. -1 means nothing is pending. "shiftwheel" (0.99.82) takes the same three frames with Shift in
+    // Ctrl's place; pendingWheelMod_ is the modifier the pending step is holding.
+    long pendingCtrlWheelFrame_ = -1;
+    float pendingCtrlWheelY_ = 0.0f;
+    bool pendingCtrlWheelSent_ = false;
+    int pendingWheelMod_ = 0;  // an ImGuiKey: ImGuiMod_Ctrl or ImGuiMod_Shift
+    // THE SCRIPT IS THE ONLY POINTER AND KEYBOARD (2026-10-01): ImGui's input event id from which events in the queue were NOT put there by
+    // the script, and how many such events the last frame discarded (traced). See the top of applyInputScript.
+    unsigned int scriptNextEventId_ = 0;
+    int scriptDroppedEvents_ = 0;
     // Feeds this frame's steps into ImGui's input queue. Called between the
     // platform backend's NewFrame and ImGui::NewFrame, so the script's events
     // are the last word on the frame.

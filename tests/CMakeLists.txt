@@ -696,7 +696,9 @@ set_tests_properties(engine_link_check PROPERTIES
 # The theme census starts the application sixteen times (eight layouts at two
 # window sizes), so it gets more than the loop's two minutes - most of all on a
 # software-rendered Linux runner.
-set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+if(TEST test_theme_census)
+    set_tests_properties(test_theme_census PROPERTIES TIMEOUT 600)
+endif()
 # The reference's transmit safety suite, ported, runs its rules at the real
 # timers (holds of 2 s, keep-alives of 1-2 s, a re-arm of 1 s, over and over):
 # about 95 s here. The merge sweep is 5450 cases of one pass each (about 40 s;
@@ -712,7 +714,9 @@ set_tests_properties(test_engine_api_transmit test_engine_api_merge PROPERTIES T
 # CI run 38564730541: x64 passed in 61.98 s; arm64 hit the inherited 120 s
 # bound at 120.11 s without stdout (Store test: 35.27 s x64, 69.55 s arm64).
 # Give only this test 300 s; unbuffered launch tags identify a child if it hangs.
-set_tests_properties(test_team_message_app PROPERTIES TIMEOUT 300)
+if(TEST test_team_message_app)
+    set_tests_properties(test_team_message_app PROPERTIES TIMEOUT 300)
+endif()
 # The deck-knobs test starts the real application dozens of times (as a child of
 # itself, so that a fake radio can sit behind the window; the noise-floor and Airband
 # runs hold a few seconds of real time each): 46 s on this desktop before the Airband
@@ -738,20 +742,26 @@ endif()
 # reads them) and leaves a second between each kill and the next start, because a
 # report and a session start are stamped in whole seconds. 78 s on this desktop; the
 # loop's two minutes is not enough on a loaded runner. Windows only (it SKIPs elsewhere).
-set_tests_properties(test_exit_cause_app PROPERTIES TIMEOUT 600)
+if(TEST test_exit_cause_app)
+    set_tests_properties(test_exit_cause_app PROPERTIES TIMEOUT 600)
+endif()
 # The radio-setup test starts the real application fifteen times (one per
 # synthetic machine, the persisted tick, the key, CHECK AGAIN, and the real bus).
 # 71 s on this desktop; the GitHub Linux runners run the application-launching
 # tests at about half that speed (test_airband_app: 123 s here, 261 s there), so
 # the loop's two minutes killed it on both Linux jobs of the 0.99.69 run.
-set_tests_properties(test_radio_setup_app PROPERTIES TIMEOUT 600)
+if(TEST test_radio_setup_app)
+    set_tests_properties(test_radio_setup_app PROPERTIES TIMEOUT 600)
+endif()
 # The airband test starts the application thirty-one times (a layout run and a
 # scripted run per scenario: lookup, O'Hare's list listened to (0.99.71), listen,
 # hand-back, the spectrum, the typed list, presets). Six runs took 68 s on the
 # x64 runner and 101 s on arm64, so twenty-nine would not fit the loop's two
 # minutes there (0.99.66: both Linux jobs timed out at 120 s). On this desktop
 # it is 80 s.
-set_tests_properties(test_airband_app PROPERTIES TIMEOUT 900)
+if(TEST test_airband_app)
+    set_tests_properties(test_airband_app PROPERTIES TIMEOUT 900)
+endif()
 # The update-cleanup test runs the real AppWindow's plugin rescan five times against real
 # modules and waits on a worker for each transfer (a second or two here); the Linux runners
 # are half this desktop's speed, so it is given its own bound instead of the loop's two minutes.
@@ -767,24 +777,34 @@ endif()
 # run per scenario: the Browse and Updates tabs, a page, the legal notice's tick, the window's
 # remembered rectangle, the Fitted modules window and its page). Each is 120 to 200 frames.
 # Linux runners are half this desktop's speed, so it is given the generous bound its siblings are.
-set_tests_properties(test_plugin_store_app PROPERTIES TIMEOUT 600)
+if(TEST test_plugin_store_app)
+    set_tests_properties(test_plugin_store_app PROPERTIES TIMEOUT 600)
+endif()
 # The Decoder output window test starts the real application nine times (the preset on three
 # window sizes, the capture seam, two picture-window runs, and a layout, a drag and a reset run),
 # 100 to 110 frames each.
 # The same bound, for the same reason, as the store test.
-set_tests_properties(test_decoder_window_app PROPERTIES TIMEOUT 600)
+if(TEST test_decoder_window_app)
+    set_tests_properties(test_decoder_window_app PROPERTIES TIMEOUT 600)
+endif()
 # The settings-fold test starts the real application three times (folded as it opens, one click,
 # two clicks), 40 to 60 frames each. The same bound, for the same reason, as the test above.
-set_tests_properties(test_decoder_settings_fold_app PROPERTIES TIMEOUT 600)
+if(TEST test_decoder_settings_fold_app)
+    set_tests_properties(test_decoder_settings_fold_app PROPERTIES TIMEOUT 600)
+endif()
 # The unplaced-list test starts the real application three times (the heard rows, a bare NaN, and
 # "On screen only"), 80 frames each. The same bound, for the same reason, as the test above.
-set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
+if(TEST test_unplaced_list_app)
+    set_tests_properties(test_unplaced_list_app PROPERTIES TIMEOUT 600)
+endif()
 # The row-keys test starts the real application twelve times (a layout run, the window open, a
 # press of HD2, of HD1 then HD2, the three that must press nothing and the control for the click's
 # geometry, an instrument's memory rows opened and pressed, and the module's page with sixteen
 # keys), 60 to 160 frames each with a half-second sleep in most: 28 s on this desktop. The same
 # bound, for the same reason, as the tests above.
-set_tests_properties(test_row_keys_app PROPERTIES TIMEOUT 600)
+if(TEST test_row_keys_app)
+    set_tests_properties(test_row_keys_app PROPERTIES TIMEOUT 600)
+endif()
 if(TEST test_programme_audio_app)
     set_tests_properties(test_programme_audio_app PROPERTIES TIMEOUT 120)
 endif()
@@ -792,37 +812,51 @@ endif()
 # layout run and a scripted run each, three of them paced at 16 ms a frame for a few seconds so an
 # interval in milliseconds can pass). Linux runners are half this desktop's speed, so it is given
 # the generous bound its siblings are.
-set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
+if(TEST test_plugin_inuse_app)
+    set_tests_properties(test_plugin_inuse_app PROPERTIES TIMEOUT 600)
+endif()
 # The duplicate-plugin test starts the real application five times (the bank's layout, a pointer sweep of
 # 110 frames, the Fitted modules window with and without an install record, and a run with no hook), 12 to
 # 110 frames each. The Linux runners are half this desktop's speed, so it is given the generous bound its
 # siblings are.
-set_tests_properties(test_plugin_dup_app PROPERTIES TIMEOUT 600)
+if(TEST test_plugin_dup_app)
+    set_tests_properties(test_plugin_dup_app PROPERTIES TIMEOUT 600)
+endif()
 # The BROWSE-key test starts the real application five times (a layout run, the press, its control,
 # the cancelled press and a relaunch), 33 to 46 frames each. The Linux runners are half this
 # desktop's speed, so it is given a bound well past the loop's two minutes.
-set_tests_properties(test_plugin_pathpick_app PROPERTIES TIMEOUT 300)
+if(TEST test_plugin_pathpick_app)
+    set_tests_properties(test_plugin_pathpick_app PROPERTIES TIMEOUT 300)
+endif()
 # The Import-window test starts the real application sixteen times (a layout run, the failure and the
 # empty box with a control each, Browse chosen with a control, cancelled, Escape, the Cancel key, a
 # bare name with a control, and the AIRBAND section's layout, empty box and Browse), 23 to 90 frames
 # each and a screenshot in most: 33 s for the first thirteen on this desktop and 111 s for all sixteen
 # (the AIRBAND runs are the slow ones). The Linux runners are half this desktop's speed, so it is given
 # the generous bound its siblings are.
-set_tests_properties(test_import_dialog_app PROPERTIES TIMEOUT 600)
+if(TEST test_import_dialog_app)
+    set_tests_properties(test_import_dialog_app PROPERTIES TIMEOUT 600)
+endif()
 # The display-menu test starts the real application twenty-three times (the menu on the waterfall and the
 # spectrum, Manual with its sliders, the ten-decibel rule, Reset, a restart, a 0.99.75 config, a patch
 # Spectrum part, and nine runs that hold the frame loop with `sleep` steps for the 4-second tip, 4 to
 # 9 s each): 95 s on this desktop. The Linux runners are half this desktop's speed and the tip runs
 # measure real time, so it is given the generous bound its siblings are rather than the loop's two
 # minutes.
-set_tests_properties(test_display_menu_app PROPERTIES TIMEOUT 600)
+if(TEST test_display_menu_app)
+    set_tests_properties(test_display_menu_app PROPERTIES TIMEOUT 600)
+endif()
 # The window-platform test starts the real application five times (a default run, =bad, =any, the
 # platform Windows does not have, a forced one on Linux), a few seconds each; the Linux runners are
 # half this desktop's speed and open the window slowly under a virtual display, so it is given the
 # generous bound its siblings are rather than the loop's two minutes.
-set_tests_properties(test_window_platform_app PROPERTIES TIMEOUT 600)
+if(TEST test_window_platform_app)
+    set_tests_properties(test_window_platform_app PROPERTIES TIMEOUT 600)
+endif()
 # The passband-slide test starts the real application about twenty times, 40 to 90 frames each.
-set_tests_properties(test_passband_slide_app PROPERTIES TIMEOUT 600)
+if(TEST test_passband_slide_app)
+    set_tests_properties(test_passband_slide_app PROPERTIES TIMEOUT 600)
+endif()
 # The audio-buffer test builds the real AppWindow three times (its sink opened and then closed, which
 # is a device open each) and makes a few hundred starved callbacks against it by hand. A few seconds
 # here; the Linux runners are half this desktop's speed and open ALSA's `null` device slowly, so it is
@@ -834,7 +868,9 @@ endif()
 # explicit skip as Skipped in CTest, while real-output runs still test the join.
 set_tests_properties(test_pipeline_audio_lead PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP the pipeline's target")
 # The priority test starts a real pipeline twice (a stop and a start is a new thread and a new request).
-set_tests_properties(test_dsp_priority PROPERTIES TIMEOUT 120)
+if(TEST test_dsp_priority)
+    set_tests_properties(test_dsp_priority PROPERTIES TIMEOUT 120)
+endif()
 
 add_test(NAME app_smoke COMMAND cascade --frames 3)
 set_tests_properties(app_smoke PROPERTIES
@@ -1040,6 +1076,10 @@ if(CASCADE_SANITIZE_ENABLED)
         string(REPLACE "|" ";" entry "${entry}")
         list(GET entry 0 t)
         list(GET entry 1 why)
+        string(REGEX REPLACE "_(free|stepped)$" "" _tbase "${t}")
+        if(t IN_LIST CASCADE_MERGE_PENDING_TESTS OR _tbase IN_LIST CASCADE_MERGE_PENDING_TESTS)
+            continue()   # a test the 0.99.84 merge took out of the build (tests/merge_pending.cmake): nothing to exclude
+        endif()
         set_tests_properties(${t} PROPERTIES DISABLED TRUE LABELS "sanitize-excluded")
         message(STATUS "sanitizer: ${t} is excluded - ${why}")
     endforeach()

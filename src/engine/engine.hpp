@@ -185,7 +185,7 @@ private:
     struct TestHooks {
         // Replaces core::readPluginDirSignature (the listing rescanPluginsIfChanged and the scan's own signature take): a test that has to
         // change the folder between two listings, or make one fail.
-        bool (*pluginDirSignature)(const std::string& dir, cascade::core::PluginDirSignature& out) = nullptr;
+        bool (*pluginDirSignature)(const std::string& dir, cascade::core::PluginDirSignature& out);
         // Replaces makeDeviceSource's construction when set: the "radio" a
         // worker or the restore opens is the test's own recording fake.
         std::unique_ptr<cascade::source::DeviceSource> (*makeDevice)(const std::string& kind);
@@ -2709,14 +2709,17 @@ public:
     //                    control thread AFTER this, so the transmitter is
     //                    always stopped before that join (OPEN 7 (d)).
     //   shutdownStop     the bookmark flush, the pipeline stopped and joined.
-    //   shutdownRelease  the patch's radios, then the plugins unloaded.
-    // shutdown() runs all three, for a front end with nothing in between.
+    //   shutdownRelease  the patch's radios, then the plugins unloaded - BEFORE the clean-exit marker (master 0.99.60: a plugin's destroy() is
+    //                    third-party code that can wedge, and a marker written first reads a session killed inside it as a clean one).
+    //   shutdownDrain    after the marker's save: the lists' last saves and the takes' files, waited for against the window's deadline.
+    // shutdown() runs all of them, for a front end with nothing in between.
     // Every step is idempotent, so a phase called twice costs nothing.
     void shutdownQuiesce();
     void shutdownStop();
-    // `drainDeadline`: what is left of the window's drain deadline (taken before the settings' last save), against which the takes' files still
-    // being closed on workers are waited for. A default-constructed one waits for nothing and collects what has finished.
-    void shutdownRelease(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
+    void shutdownRelease();
+    // `drainDeadline`: what is left of the window's drain deadline (taken before the settings' last save), against which the lists' saves and the
+    // takes' files still being closed on workers are waited for. A default-constructed one waits for nothing and collects what has finished.
+    void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
     void shutdown();
     // THE TWO BOUNDED-RUN PLUGIN DIAGNOSTICS (window port group 14, part e; engine_diagnostics.cpp). Test machinery that
     // prints what the engine decided to stdout; they read nothing but the engine's own state and were the window's until

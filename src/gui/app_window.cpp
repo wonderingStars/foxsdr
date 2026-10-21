@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "core/file_read.hpp"
 #include "core/patch_draft.hpp"
 #include "core/patch_io.hpp"
 #include "core/patch_levels.hpp"
@@ -1113,6 +1114,15 @@ int AppWindow::run(int frames) {
     // the measurement switch (gui/frame_log.hpp): an unsynchronised swap, so
     // a frame-time run measures the work rather than the refresh period.
     glfwSwapInterval(cascade::gui::FrameLog::vsyncOffRequested() ? 0 : 1);
+    // WHICH DRIVER ANSWERED, in the log (0.99.78; merged 2026-10-21 - the survey's function walk had missed this statement, test_window_platform_app
+    // found it): the context is current, so these strings are the ones every frame will be drawn with. A death after this line and before the
+    // first frame is the driver's or ImGui's, not the window system's.
+    cascade::core::diagLogf(
+        "%s", cascade::gui::windowplatform::glLine(
+                  reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
+                  reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+                  reinterpret_cast<const char*>(glGetString(GL_VERSION)))
+                  .c_str());
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1276,7 +1286,14 @@ int AppWindow::run(int frames) {
     // like the plugin hooks above: an interactive session can never be wedged
     // by a stray environment variable.
     int shutdownStallMs = 0;
+    int unloadStallMs = 0;
+    // The freeze --diag-stall stages, classified as the DISPLAY's rather than as a hang (HangWatchdog::setForceDisplayStallForTest). A display
+    // driver's frames cannot be staged from a test, and without this the count of display stalls - the watchdog's sink, the ledger, the config
+    // journal, the next start - could not be exercised end to end against the real binary. Bounded runs only, like every hook here.
+    bool forceDisplayStall = false;
     if (frames >= 0) {
+        const char* forceStall = std::getenv("CASCADE_DIAG_FORCE_DISPLAY_STALL");
+        forceDisplayStall = forceStall != nullptr && forceStall[0] == '1';
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
         // A DLL to map on frame 90, standing in for another program's injected hook (foreignModuleTestPath_ in the header). Bounded
@@ -1303,14 +1320,20 @@ int AppWindow::run(int frames) {
         // an interactive session can never be driven by a stray variable.
         if (const char* script = std::getenv("FOXSDR_INPUT_SCRIPT");
             script != nullptr && *script != '\0') {
-            std::ifstream in(script, std::ios::binary);
-            if (in) {
-                const std::string text((std::istreambuf_iterator<char>(in)),
-                                       std::istreambuf_iterator<char>());
+            std::string text;  // readTextFile (core/file_read.hpp): a folder or a failing read is not a script
+            if (cascade::core::readTextFile(script, text) == cascade::core::ReadResult::Ok) {
                 const cascade::gui::ScriptParse sp = cascade::gui::parseInputScript(text);
                 inputScript_ = sp.steps;
                 inputScriptPos_ = 0;
                 inputScriptActive_ = !inputScript_.empty();
+                // THE SCRIPT'S POINTER IGNORES THE DESKTOP'S FOCUS. On losing the OS focus ImGui releases every mouse button and forgets the
+                // pointer; with no window manager (a test's Xvfb) focus follows the pointer, so another application's window opening on the
+                // same display between a scripted "down" and its "up" swallowed the click - the intermittent failure of the scripted tests
+                // under ctest -j (2026-09-29).
+                if (inputScriptActive_) { ImGui::GetIO().ConfigDebugIgnoreFocusLoss = true; }
+                if (const char* tp = std::getenv("FOXSDR_SCRIPT_TRACE"); inputScriptActive_ && tp != nullptr && *tp != '\0') {
+                    scriptTracePath_ = tp;
+                }
                 std::fprintf(stderr, "cascade: input script %s: %zu steps, %d bad lines\n",
                              script, inputScript_.size(), sp.bad);
             } else {
@@ -1321,6 +1344,11 @@ int AppWindow::run(int frames) {
         if (shutdownStall != nullptr && *shutdownStall != '\0') {
             shutdownStallMs = std::atoi(shutdownStall);
             if (shutdownStallMs < 0) { shutdownStallMs = 0; }
+        }
+        const char* unloadStall = std::getenv("CASCADE_DIAG_UNLOAD_STALL_MS");
+        if (unloadStall != nullptr && *unloadStall != '\0') {
+            unloadStallMs = std::atoi(unloadStall);
+            if (unloadStallMs < 0) { unloadStallMs = 0; }
         }
         // The enforcement diagnostic (Engine::reportPluginStatus). Same rules: only
         // in a bounded run, and silent unless asked for, so the
@@ -1413,6 +1441,7 @@ int AppWindow::run(int frames) {
     // usage reporting is on, so an opted-out run counts nothing. (The process's
     // one ledger, core::globalStallLedger: the engine's usage journal reads it.)
     watchdog_.setDisplayStallSink([ledger = cascade::core::globalStallLedger()] { ledger->note(); });
+    watchdog_.setForceDisplayStallForTest(forceDisplayStall);
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
@@ -1840,8 +1869,10 @@ int AppWindow::run(int frames) {
         // ~2 s after the last change, so a crash loses almost nothing.
         // Hermetic runs (empty configPath_) never touch the disk.
         if (!configPath_.empty()) { maybeSaveConfig(glfwGetTime()); }
-        frameScope.to(cascade::core::FrameScope::Other);
 
+        // After every widget, so the hovered and active items are this frame's.
+        frameScope.to(cascade::core::FrameScope::Other);
+        if (!scriptTracePath_.empty()) { traceScriptFrame(static_cast<long>(rendered)); }
         frameScope.to(cascade::core::FrameScope::Render);
         ImGui::Render();
         int fbWidth = 0;
@@ -2224,26 +2255,41 @@ int AppWindow::run(int frames) {
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownStoppingReceiver);
     engine_.shutdownStop();
 
-    // THE CLEAN-EXIT MARKER, after the pipeline join. The join above — DSP
-    // threads, the CAT server, the USB device stack — is where the worst
-    // shipped shutdown freeze lived, so the marker must not be on disk before
-    // it completes; a death in there now leaves telemetryCleanExit=false and
-    // is counted, where until 0.66.0 it read as a clean exit.
+    // THE PLUGINS COME DOWN HERE, ON THE NORMAL PATH, BEFORE THE CLEAN-EXIT MARKER (master 0.99.60; the branch's first merge put them after it and
+    // test_clean_exit_marker found out). A plugin's destroy() is third-party code: a worker join, a vendor close, a flush. One that never returns
+    // leaves the window on screen and not responding; the user ends it from the taskbar (TerminateProcess, nothing runs); and a marker written
+    // before it already said "clean" - reported on 0.99.59 with Radar Sweep running: the next start recorded no crash. This is also the last
+    // moment at which the whole object graph is alive and the GL context is current (a basemap plugin's tiles are GL textures). The pipeline is
+    // stopped and joined above, so no DSP thread can be inside a plugin; the final-state save has been queued, so nothing reads the stop list or
+    // the tune grants any more. The patch's radios stop first (0.99.17: each has a reader thread that may be inside a plugin decoder, and each
+    // speaker's file is finalised when its radio's sets go), then the plugins are destroyed before the host services they call on their way out
+    // and their modules unmapped last (Engine::shutdownRelease). ~AppWindow's teardown() is the net for the paths that never reach here.
+    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);
+    engine_.shutdownRelease();
+
+    // The deliberate wedge in THIS stage - the one the plugins' own code runs in. Bounded runs only (see where unloadStallMs is read). Printed so
+    // a test can prove the process is inside it before it kills it.
+    if (unloadStallMs > 0) {
+        std::printf("cascade: --diag-unload-stall wedging the plugin unload for %d ms\n", unloadStallMs);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::milliseconds(unloadStallMs));
+    }
+
+    // THE CLEAN-EXIT MARKER, after the last of the third-party code. The pipeline join - DSP threads, the CAT server, the USB device stack - and
+    // the plugins' own destroy() above are the two places a shutdown has wedged or can wedge, so the marker must not be on disk before both
+    // have completed; a death in either leaves telemetryCleanExit=false and is counted.
     //
     // It rewrites THE SNAPSHOT THE SAVE ABOVE JUST WROTE with one field
     // changed, rather than calling saveConfigNow() again, and that shape is
     // the point. A second currentConfig() would re-derive every value at a
     // moment when the session is half torn down: it rebuilds the pending
     // usage report through telemetryJournal, whose clock is glfwGetTime()
-    // (0.0 once GLFW is terminated — every session would then report zero
+    // (0.0 once GLFW is terminated - every session would then report zero
     // seconds), and it re-reads live source state through a pipeline that has
     // just been stopped. Neither can happen to a snapshot taken while
     // everything was still alive. Residual, stated plainly: a death in the
-    // GL/GLFW teardown below still counts as a clean exit — the watchdog,
+    // GL/GLFW teardown below still counts as a clean exit - the watchdog,
     // stopped last as ever, is what covers that stretch.
-    // (The branch writes the clean-exit marker BEFORE the plugins come down - Engine::shutdownRelease below - where master unloaded them
-    // first: the phases follow the order the stages really run in, and ShutdownClosingWindow, which the sentinel reads as "the exit was a
-    // clean one", is set after the last of them.)
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownWritingMarker);
     engine_.markCleanExit();
     if (!configPath_.empty()) {
@@ -2284,27 +2330,9 @@ int AppWindow::run(int frames) {
         }
     }
 
-    // THE PLUGINS COME DOWN HERE, ON THE NORMAL PATH, and for the same reason
-    // the waterfall does just below: this is the last moment at which the
-    // whole object graph is still alive and the GL context is still current.
-    //
-    // The pipeline is stopped and joined above, so no DSP thread can be inside
-    // a plugin; the config has been written, so nothing further reads the stop
-    // list or the tune grants. detachAndUnloadPlugins() then destroys the
-    // decoder instances BEFORE the host services they may call on their way
-    // out (Survey Engine 0.1.0 asks the host for the time from inside
-    // destroy()) and unmaps the modules last. ~AppWindow calls it again as a
-    // net for the paths that never reach here - a failed backend init, a test
-    // that never entered the frame loop - and finds nothing left to do.
-    //
-    // A basemap plugin's tiles are GL textures, which is the other half of why
-    // it is here rather than in the destructor: glDeleteTextures needs this
-    // context current, and by ~AppWindow it is gone.
-    //
-    // THE ENGINE'S LAST PHASE (OPEN 9): the patch's radios, then the plugins
-    // unloaded (Engine::shutdownRelease).
-    cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);
-    engine_.shutdownRelease(drainDeadline);
+    // THE TWO LISTS' LAST SAVES AND THE TWO TAKES' FILES are drained against the SAME deadline, taken above and not one of their own: they run
+    // on workers of their own, started before the pipeline join, so by now all of the writes have had the same time (Engine::shutdownDrain).
+    engine_.shutdownDrain(drainDeadline);
     // THE MARKER STAGE IS OVER, saved or abandoned, and the plugins are down: from here a normal exit is a clean one to the sentinel.
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
 
@@ -8437,7 +8465,12 @@ void AppWindow::drawCenterPanels() {
     // NO TICK STRIP TO RESERVE ANY MORE: the frequency axis is lettered inside
     // the spectrum's own well (SpectrumView::Chrome::freqTicks), so the two
     // panels and the splitter own the whole region between them.
-    const float usable = avail.y - splitterThickness;
+    //
+    // LESS THE TWO GAPS ImGui PUTS BETWEEN THEM (master 0.99.5x, merged 2026-10-21 - the survey missed it, test_receiver_layout_app found it).
+    // Spectrum, splitter and waterfall are three layout items, so ItemSpacing.y lands twice between them; leaving it out laid the waterfall
+    // ~12 px past the bottom of this view (1600x900: view to y=900, waterfall to 911.8), and its last rows and the lower edge of its foot plate
+    // were drawn out of sight under the cabinet. tests/test_receiver_layout_app holds the waterfall to the view's bottom edge.
+    const float usable = avail.y - splitterThickness - 2.0f * ImGui::GetStyle().ItemSpacing.y;
     // A squeezed window can drive the region to zero; drawing into negative
     // sizes asserts inside ImGui, so just skip the panels that frame.
     if (usable < 40.0f || avail.x < 40.0f) { return; }
@@ -8593,6 +8626,10 @@ void AppWindow::drawCenterPanels() {
     spectrum_->drawBinRange(bins, static_cast<int>(lastFrame_.dbBins.size()),
                             firstBin, lastBin, width, spectrumHeight, &chrome);
     const bool specHovered = ImGui::IsItemHovered();
+    // THE CENSUS (the test seam of tests/test_receiver_layout_app, test_display_menu_app, test_spectrum_trace_app; master 0.99.5x-0.99.82, merged
+    // 2026-10-21): where the trace was drawn, and the window of dB it was drawn through as the SpectrumView holds it.
+    cascade::gui::census::rect("trc:spec:receiver", specPos.x, specPos.y, specPos.x + width, specPos.y + spectrumHeight);
+    cascade::gui::census::rect("rx:spec:range", spectrum_->rangeMin(), spectrum_->rangeMax(), 0.0f, 0.0f);
 
     // Band plan behind the trace (see kBandFillAlphaScale for why "behind"
     // is achieved with a translucent fill painted after it). Before the
@@ -8662,11 +8699,16 @@ void AppWindow::drawCenterPanels() {
         }
     }
     spectrum_->drawVfoOverlay(band, width, spectrumHeight);
+    // Where the band is on screen, so a test can tell "drawn again" from "never hidden" by the LAST frame.
+    cascade::gui::census::rect("rx:vfo", specPos.x + static_cast<float>(band.x0Frac) * width, specPos.y,
+                               specPos.x + static_cast<float>(band.x1Frac) * width, specPos.y + spectrumHeight);
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
     // the user's proportions.
     ImGui::InvisibleButton("##vsplitter", ImVec2(width, splitterThickness));
+    cascade::gui::census::rect("rx:splitter", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                               ImGui::GetItemRectMax().y);
     if (ImGui::IsItemActive()) {
         splitRatio_ = std::clamp(splitRatio_ + ImGui::GetIO().MouseDelta.y / usable,
                                  0.1f, 0.9f);
@@ -8744,6 +8786,9 @@ void AppWindow::drawCenterPanels() {
     // the user's own marker stays on top. Draw calls only - no widget - so a
     // mark can never take a click meant for the waterfall.
     drawPluginMarkers(wfPos.x, wfPos.y, width, waterfallHeight, true);
+    // The waterfall's rectangle, under master's name for it: master reports it from the frequency-marker call (ledger MARKERS-SPECTRUM, stubbed);
+    // the rectangle is the layout fact tests/test_receiver_layout_app reads, so it is reported here without the markers.
+    cascade::gui::census::rect("fmk:wf:receiver", wfPos.x, wfPos.y, wfPos.x + width, wfPos.y + waterfallHeight);
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
     // line), culled when the tuned frequency is scrolled out of view.
@@ -10545,18 +10590,94 @@ bool AppWindow::takePatchPicture(PatchPicture& pic, const PatchLiveRow& live) {
     return whole;
 }
 
+void AppWindow::traceScriptFrame(long frame) {
+    static bool started = false;  // the first line of this run replaces a stale file
+    FILE* f = std::fopen(scriptTracePath_.c_str(), started ? "a" : "w");
+    started = true;
+    if (f == nullptr) { return; }
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    const ImGuiIO& io = ImGui::GetIO();
+    std::fprintf(f,
+                 "frame %ld t=%.3f display=%.0fx%.0f mouse=%.1f,%.1f left=%d right=%d os_focus=%d "
+                 "queued=%d dropped=%d hovered_window=%s hovered_id=%08X active_id=%08X\n",
+                 frame, ImGui::GetTime(), static_cast<double>(io.DisplaySize.x),
+                 static_cast<double>(io.DisplaySize.y), static_cast<double>(io.MousePos.x),
+                 static_cast<double>(io.MousePos.y), io.MouseDown[0] ? 1 : 0, io.MouseDown[1] ? 1 : 0,
+                 mainWindow_ != nullptr ? glfwGetWindowAttrib(mainWindow_, GLFW_FOCUSED) : -1,
+                 g.InputEventsQueue.Size, scriptDroppedEvents_, g.HoveredWindow != nullptr ? g.HoveredWindow->Name : "-",
+                 static_cast<unsigned>(g.HoveredId), static_cast<unsigned>(g.ActiveId));
+    std::fclose(f);
+}
+
 void AppWindow::applyInputScript(long frame) {
     ImGuiIO& io = ImGui::GetIO();
+    // A SCRIPTED RUN IS DEAF TO THE REAL MOUSE AND KEYBOARD (2026-10-01).
+    // The platform backend's callbacks stay installed, so whatever the OS
+    // delivers to this window - a real click, a real key, the real cursor
+    // moving over it or leaving it - was queued for ImGui beside the
+    // script's own events. Under a full ctest -j dozens of test windows open
+    // on a desk someone may be using, and one receiver run of
+    // test_freq_markers_app saved "mainView": "patch" though its script never
+    // went near the PATCH key - nothing but a click on that key changes the
+    // view there - so its right-click opened no marker menu and the scripted
+    // Remove was lost. Posting a click into a scripted run's window takes the
+    // same path: the press reached ImGui at frame 16 on the PATCH key (left=1,
+    // the key active), was still held at the script's right-click on frame
+    // 22, so again no menu opened and M1 stayed (tests/test_main_view.cpp,
+    // "deaf", proves the fix). Every pointer, wheel, key and text event in
+    // the queue that the script did not add is therefore dropped here,
+    // before ImGui::NewFrame reads the queue; focus events are left (the
+    // focus loss is already ignored, see where the script is loaded). The
+    // script's own events are told apart by ImGui's sequential event id: a
+    // step trickled over to this frame was added before scriptNextEventId_.
+    {
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        scriptDroppedEvents_ = 0;
+        for (int i = g.InputEventsQueue.Size - 1; i >= 0; --i) {
+            const ImGuiInputEvent& e = g.InputEventsQueue[i];
+            const bool input = e.Type == ImGuiInputEventType_MousePos ||
+                               e.Type == ImGuiInputEventType_MouseWheel ||
+                               e.Type == ImGuiInputEventType_MouseButton ||
+                               e.Type == ImGuiInputEventType_MouseViewport ||
+                               e.Type == ImGuiInputEventType_Key ||
+                               e.Type == ImGuiInputEventType_Text;
+            if (input && e.EventId >= scriptNextEventId_) {
+                g.InputEventsQueue.erase(g.InputEventsQueue.Data + i);
+                ++scriptDroppedEvents_;
+            }
+        }
+    }
+    struct NoteScriptEvents {
+        unsigned int& next;
+        ~NoteScriptEvents() { next = ImGui::GetCurrentContext()->InputEventsNextEventId; }
+    } noteScriptEvents{scriptNextEventId_};
     // The scripted pointer is RE-ASSERTED every frame before this frame's
     // steps: the platform backend may post the real cursor's position on a
     // frame with no step, and the script's pointer must not wander with it.
     if (scriptMouseSet_) { io.AddMousePosEvent(scriptMouseX_, scriptMouseY_); }
+    // A pending "ctrlwheel" continues regardless of whether this frame also
+    // has its own script steps: the wheel goes out one frame after Ctrl went
+    // down, and Ctrl comes back up one frame after that.
+    if (pendingCtrlWheelFrame_ >= 0) {
+        if (!pendingCtrlWheelSent_ && frame >= pendingCtrlWheelFrame_ + 1) {
+            io.AddMouseWheelEvent(0.0f, pendingCtrlWheelY_);
+            pendingCtrlWheelSent_ = true;
+        } else if (pendingCtrlWheelSent_ && frame >= pendingCtrlWheelFrame_ + 2) {
+            io.AddKeyEvent(static_cast<ImGuiKey>(pendingWheelMod_), false);
+            pendingCtrlWheelFrame_ = -1;
+            pendingCtrlWheelSent_ = false;
+        }
+    }
     while (inputScriptPos_ < inputScript_.size() && inputScript_[inputScriptPos_].frame <= frame) {
         const cascade::gui::ScriptStep& st = inputScript_[inputScriptPos_];
         switch (st.verb) {
             case cascade::gui::ScriptStep::Verb::World:
                 // Last frame's canvas placement and this frame's view: the
-                // same transform the canvas will draw with.
+                // same transform the canvas will draw with. (Master's draws
+                // through patch::drawView(view, uiscale::factor()); the factor
+                // is the interface-size feature, stubbed UI-SCALE - at 100% the
+                // two are the same transform, and the canvas here draws the raw
+                // zoom. Restore master's line with the feature.)
                 scriptMouseX_ = patchCanvasOriginX_ + patchUi_.view.pan.x + st.x * patchUi_.view.zoom;
                 scriptMouseY_ = patchCanvasOriginY_ + patchUi_.view.pan.y + st.y * patchUi_.view.zoom;
                 scriptMouseSet_ = true;
@@ -10607,6 +10728,45 @@ void AppWindow::applyInputScript(long frame) {
                 break;
             case cascade::gui::ScriptStep::Verb::Wheel:
                 io.AddMouseWheelEvent(0.0f, st.y);
+                break;
+            case cascade::gui::ScriptStep::Verb::WheelH:
+                io.AddMouseWheelEvent(st.x, 0.0f);
+                break;
+            case cascade::gui::ScriptStep::Verb::CtrlWheel:
+                // Spans three frames (see the pendingCtrlWheel* fields and
+                // the block above the main loop) instead of queuing
+                // down/wheel/up together on this one. Queued together, they
+                // do not behave like a real held Ctrl key: with
+                // io.ConfigInputTrickleEventQueue on (the default), ImGui
+                // trickles queued input events out over several NewFrame()
+                // calls rather than applying a whole batch at once, and
+                // io.KeyCtrl is last-state-wins with no per-event link to
+                // io.MouseWheel - so a same-frame down+wheel+up could drain
+                // with Ctrl already back up by the frame the wheel value
+                // reaches the canvas, which read as a plain wheel instead of
+                // a pinch (measured: dispatched frame 24, wheel consumed
+                // frame 26, KeyCtrl already 0). A real touchpad pinch holds
+                // Ctrl down well before the wheel tick and releases it well
+                // after, spanning many real frames - this mirrors that.
+                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                pendingWheelMod_ = ImGuiMod_Ctrl;
+                pendingCtrlWheelFrame_ = frame;
+                pendingCtrlWheelY_ = st.y;
+                pendingCtrlWheelSent_ = false;
+                break;
+            case cascade::gui::ScriptStep::Verb::ShiftWheel:
+                // The same three frames as the pinch above, for the same
+                // reason, with Shift held instead of Ctrl.
+                io.AddKeyEvent(ImGuiMod_Shift, true);
+                pendingWheelMod_ = ImGuiMod_Shift;
+                pendingCtrlWheelFrame_ = frame;
+                pendingCtrlWheelY_ = st.y;
+                pendingCtrlWheelSent_ = false;
+                break;
+            case cascade::gui::ScriptStep::Verb::Sleep:
+                // Real time, inside this frame: the next frame's ImGui clock
+                // and DeltaTime carry it, exactly as a finger held still does.
+                std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(st.x)));
                 break;
         }
         ++inputScriptPos_;
@@ -12090,6 +12250,8 @@ void AppWindow::drawPatchView() {
             patchReadings_.push_back(std::move(r));
         }
 
+        // Where the canvas is, for a scripted press (tests/test_patch_canvas_nav).
+        cascade::gui::census::rect("patch:canvas", origin.x, origin.y, origin.x + canvasW, origin.y + avail.y);
         if (avail.x > 8.0f && avail.y > 8.0f) {
             cascade::gui::patch::drawPatchCanvas(patchDraft_, patchUi_, lists.plan,
                                                  patchReadings_, origin,

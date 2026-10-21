@@ -368,8 +368,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 0.99.82
   * changing frequency or applying a preset does not stall the window ........................ carried (core/pipeline) (unverified under load)
   * a radio scan cannot freeze the window ................................................... re-expressed, C0 (Engine::scanNative's bounded try)
-  * Wayland: a hidden window no longer blocks in the buffer swap ............................. not checked: master's change is not in the lostlines list for run();
-    (unverified)
+  * Wayland: a hidden window no longer blocks in the buffer swap ............................. carried (third_party/glfw: the two upstream commits, wl_window.c /
+    egl_context.c / context.c; third_party/glfw/FOXSDR-PATCHES.md) (unverified: Linux/Wayland); the window-state: / window-system: report lines
+    are re-expressed, C1 (AppWindow::run's frame scopes, window-system log)
   * LSB and USB reject the opposite sideband ................................................. carried (dsp/)
   * a machine with no working OpenGL driver is told so ....................................... re-expressed, C1 (window failure message)
   * a Linux audio device reporting zero periods no longer crashes ........................... carried (sink/) (unverified: Linux)
