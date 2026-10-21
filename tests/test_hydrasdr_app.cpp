@@ -30,7 +30,10 @@
 #include "core/health_events.hpp"
 #include "core/patch_devices.hpp"
 #include "core/telemetry.hpp"
+#include "engine/airspy_panel.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "engine/device_scan_plan.hpp"
 #include "engine/tune_control.hpp"
 #include "hydrasdr_fake_usb.hpp"
@@ -139,39 +142,61 @@ bool writeText(const fs::path& p, const std::string& text) {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp). What is returned from the engine is a COPY made
+    // there, except `radio`/`device`, which are the live objects the test drives and are only used with the pass stepped or out of the way.
     static void installHooks() {
-        AppWindow::testHooks_.makeDevice = &makeFake;
-        AppWindow::testHooks_.nativeScan = &fakeScan;
+        cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
+        cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
     // Picks the one native row and waits for the worker's answer.
     static bool select(AppWindow& a) {
-        a.scanNative();
-        for (std::size_t i = 0; i < a.nativeDevices_.size(); ++i) {
-            if (a.nativeDevices_[i].driver != "hydrasdr") { continue; }
-            a.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-            const auto t0 = std::chrono::steady_clock::now();
-            while (a.deviceOpenPending_) {
-                a.pollSourceAsync();
-                if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        int row = -1;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).scanNative();
+            for (std::size_t i = 0; i < rawEngine(a.engine_).nativeDevices_.size(); ++i) {
+                if (rawEngine(a.engine_).nativeDevices_[i].driver != "hydrasdr") { continue; }
+                row = AppWindow::kNativeRowBase + static_cast<int>(i);
+                rawEngine(a.engine_).selectSource(row);
+                break;
             }
-            return a.device_ != nullptr;
+        });
+        if (row < 0) { return false; }
+        const auto t0 = std::chrono::steady_clock::now();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceOpenPending_; })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollSourceAsync(); });
+            if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        return false;
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
     }
-    static cascade::source::AirspySource* radio(AppWindow& a) { return asAirspy(a.device_); }
-    static cascade::source::DeviceSource* device(AppWindow& a) { return a.device_; }
-    static const std::vector<std::string>& gainNames(AppWindow& a) { return a.deviceGainNames_; }
-    static const std::vector<std::string>& antennas(AppWindow& a) { return a.deviceAntennas_; }
-    static const std::vector<std::string>& rateLabels(AppWindow& a) { return a.deviceRateLabels_; }
-    static const std::string& sourceError(AppWindow& a) { return a.sourceError_; }
-    static const std::string& sourceKind(AppWindow& a) { return a.sourceKind_; }
+    static cascade::source::AirspySource* radio(AppWindow& a) { return cascade::gui::asAirspy(rawEngine(a.engine_).device_); }
+    static cascade::source::DeviceSource* device(AppWindow& a) { return rawEngine(a.engine_).device_; }
+    static std::vector<std::string> gainNames(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceGainNames_; });
+    }
+    static std::vector<std::string> antennas(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAntennas_; });
+    }
+    static std::vector<std::string> rateLabels(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceRateLabels_; });
+    }
+    static std::string sourceError(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+    }
+    static std::string sourceKind(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceKind_; });
+    }
     static bool mode(AppWindow& a, cascade::source::AirspySource::GainMode m) {
-        return a.chooseAirspyGainMode(m);
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyGainMode(m); });
     }
-    static bool decimate(AppWindow& a, unsigned d) { return a.chooseAirspyDecimation(d); }
-    static cascade::core::AppConfig config(AppWindow& a) { return a.currentConfig(); }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { a.applyConfig(c); }
+    static bool decimate(AppWindow& a, unsigned d) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).chooseAirspyDecimation(d); });
+    }
+    static cascade::core::AppConfig config(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });
+        return a.currentConfig();
+    }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& c) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(c); }); }
 };
 
 }  // namespace cascade::gui
@@ -376,7 +401,8 @@ int main() {
             std::ifstream in(fs::path(CASCADE_SOURCE_DIR) / relative, std::ios::binary);
             return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         };
-        const std::string window = readText("src/gui/app_window.cpp");
+        // (The enumeration and the open are the ENGINE's since the extraction: src/engine/engine.cpp holds what app_window.cpp did.)
+        const std::string window = readText("src/engine/engine.cpp");
         CHECK(!window.empty());
         CHECK(window.find("cascade::source::enumerateHydraSdr()") != std::string::npos);
         CHECK(window.find("cascade::source::hydraSdrUsbIds()") != std::string::npos);

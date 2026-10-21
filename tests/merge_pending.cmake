@@ -40,7 +40,7 @@ cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin stor
     test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
     test_plugin_update_cleanup_app)
 cascade_merge_pending(PLUGIN-RESCAN    # 0.99.63 / 0.99.73 a rescan that reloads nothing when nothing changed, a reload that logs its steps
-    test_plugin_rescan_skip test_plugin_rescan_log test_plugin_host_origin)
+    test_plugin_rescan_skip)
 cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: fields the host draws for a plugin
     test_plugin_settings_ui)
 cascade_merge_pending(PLUGIN-ROW-KEYS  # 0.99.77 a row in a plugin's panel as a key
@@ -57,9 +57,7 @@ cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no di
 cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, health ledger, slow frames, previous-session bundle
     test_slow_frames_app)
 cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain
-    test_one_chip_app test_source_row_app)
-cascade_merge_pending(NEW-RADIOS      # 0.99.49 AOR, 0.99.66 HydraSDR, 0.99.70 rtl_tcp: the window's rows, boxes and Open keys
-    test_hydrasdr_app)
+    test_source_row_app)
 cascade_merge_pending_part(PLUGIN-RUN audio_lead_plugin_wake
     "tests/test_audio_lead_app.cpp: a manual tune gives an AUTO audio-output decoder an independent wake signal before it has an instance (pluginUseOf / updatePluginLifecycle, 0.99.73). Restore master's block (git show origin/master:tests/test_audio_lead_app.cpp, 'A manual tune must give an AUTO audio-output decoder') when the plugin run modes are carried.")
 

@@ -1569,8 +1569,8 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
     }
     // An Airspy's own memory travels with the request (see airspyAtOpen).
     r.airspyAtOpen.reset();
-    if (r.kind == "airspy") {
-        const auto mem = airspyMemory_.find(cascade::core::airspyRadioKey(r.args));
+    if (r.kind == "airspy" || r.kind == "hydrasdr") {
+        const auto mem = airspyMemory_.find(cascade::core::airspyRadioKey(r.args, r.kind));
         if (mem != airspyMemory_.end()) { r.airspyAtOpen = mem->second; }
     }
     // The open runs on a worker: Device::make() is the multi-second, USB-bus
@@ -2826,7 +2826,26 @@ bool Engine::quarantineBlockedPlugins(std::string& error) {
     return true;
 }
 
-bool Engine::detachAndUnloadPlugins() {
+bool Engine::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
+    // WHERE THE TIME GOES, for the one caller that asks (rescanPlugins): each of the four steps below is a different kind of wait with a
+    // different owner - a decoder's destroy(), the patch page's decoders and the radios' readers, the panels' and the map's and the track
+    // lookup's destroy() (a basemap that joins its tile workers), and the loader unmapping the modules - and a log line that says only
+    // "the rescan took two minutes" cannot tell them apart.
+    //
+    // EVERY CALLER'S STEPS ARE PUBLISHED, even the ones that ask for no timing (0.99.84): a removal's unload, a stop and the exit path run
+    // these same four waits, so a freeze there must name its step in the watchdog's report too (`reload-phase:`, core/hang_watchdog.cpp).
+    // The caller's clock already publishes; the local one only publishes, and its laps are never logged - the exit path must not write a
+    // "reload" line at every quit (tests/test_plugin_rescan_log.cpp). Built only when there is no caller's clock, because a publishing clock
+    // clears the published name when it dies, and this one dies while the caller's still has its lap open.
+    std::optional<cascade::core::PhaseClock> publishOnly;
+    if (phases == nullptr) { publishOnly.emplace(cascade::core::PhaseClock::Publish{}); }
+    cascade::core::PhaseClock* const clock = (phases != nullptr) ? phases : &*publishOnly;
+    const auto lap = [clock](const char* name) { clock->begin(name); };
+
+    // NOTHING IS LOADED AFTER THIS, so no signature taken for an earlier scan describes what is loaded (rescanPluginsIfChanged): a removal
+    // calls this and then rescans, and the rescan is what makes the signature true again.
+    pluginScanSigValid_ = false;
+
     // THE ORDER IS THE FEATURE, and it is why this is a function rather than
     // an open-coded sequence: it was open-coded, removeInstalledPlugin() then
     // called unloadAll() on its own, and the careful ordering below existed in
@@ -2838,6 +2857,7 @@ bool Engine::detachAndUnloadPlugins() {
     // is memory inside a module about to be unmapped, and destroy() is code
     // inside that same module. Getting this order wrong is a crash in someone
     // else's DLL with no useful stack.
+    lap(cascade::core::kReloadPhaseDecoders);
     pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
     // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
@@ -2848,6 +2868,7 @@ bool Engine::detachAndUnloadPlugins() {
     // returns. The catalogue goes too: its API pointers point into the
     // modules about to go. The page rebuilds both from whatever loads next,
     // and the empty signature makes it republish.
+    lap(cascade::core::kReloadPhasePatch);
     pipeline_.patchRunner().flushNow();
     // Every patch radio's runner too (0.99.17): each has its own reader
     // thread that may be inside a decoder this instant. The radios keep
@@ -2872,6 +2893,7 @@ bool Engine::detachAndUnloadPlugins() {
     // (kPluginUiHandshake), the control thread's watchdog is paused across it, it ends early when the control thread is
     // stopping, and a wait that runs out means DO NOT UNLOAD. Unmapping a module the interface still holds is the failure this
     // exists to prevent; an unload that cannot happen yet is retried (deferPluginUnload).
+    lap(cascade::core::kReloadPhasePanels);
     {
         cascade::core::PluginDirective release;
         release.release = true;
@@ -2891,6 +2913,7 @@ bool Engine::detachAndUnloadPlugins() {
     pluginApi_->clearTuneRecords();
 
     if (testHooks_.pluginsAboutToUnmap != nullptr) { testHooks_.pluginsAboutToUnmap(); }
+    lap(cascade::core::kReloadPhaseUnload);
     pluginHost_.unloadAll();
     return true;
 }
@@ -3006,6 +3029,26 @@ void Engine::rescanPlugins() {
     cascade::core::breadcrumb::ActivityScope sentinelPluginActivity(cascade::core::breadcrumb::kReloadingPlugins);
     ++pluginScans_;  // (API 0.3 8.8: hashed into the lists' fingerprint, so a rescan rebuilds the block)
 
+    // WHERE THE TIME WENT, in one log line per rescan (0.99.63). A session of 0.99.58 logged the line that opens a rescan and, 119.976 s
+    // later, the first of the plugins it had loaded, with nothing between them: six different kinds of wait happen in this function, in a
+    // row, and the log could not say which of them had held it. Nothing in the source waits 120 s, so the two minutes belonged to something
+    // this program was waiting FOR - a plugin's destroy() joining a worker, a disk, the loader - and which one is the whole of the fix. A
+    // scope guard, because there is a `return` in the middle of this function: the rescan that returns early still says how long it took to
+    // get there.
+    //
+    // This measures; it bounds nothing and excuses nothing. AND IT PUBLISHES (0.99.84): the line below is only written when the rescan
+    // ENDS, and field report 7591C65EFB69DD94 was a rescan that did not end - thirty seconds of `plugins-reload` with the stalled stack
+    // ending in system modules, and nothing anywhere saying WHICH of the steps' waits had held it. A publishing clock mirrors the open
+    // step's name for the watchdog to report (`reload-phase:`).
+    cascade::core::PhaseClock phases{cascade::core::PhaseClock::Publish{}};
+    struct ReloadLog {
+        cascade::core::PhaseClock& clock;
+        ~ReloadLog() {
+            clock.end();
+            clock.log("plugins: reload", cascade::core::HangWatchdog::kDefaultThresholdMs / 1000.0);
+        }
+    } reloadLog{phases};
+
     // THE REPORT CONTEXT LISTS THE LOADED PLUGINS, and this function changes them on every path out of it - including the early return
     // below, taken after every plugin has been unloaded - so the block is rendered on the way out rather than at one of the exits (0.99.62).
     DiagContextOnExit refreshOnExit{*this};
@@ -3060,7 +3103,7 @@ void Engine::rescanPlugins() {
     // because a live handle is memory inside a module that is about to be
     // unmapped, and destroy() is code inside that same module. Getting this
     // order wrong is a crash in someone else's DLL with no useful stack.
-    if (!detachAndUnloadPlugins()) {
+    if (!detachAndUnloadPlugins(&phases)) {
         // The interface is not framing: nothing was unmapped, nothing below may run (a scan over mapped modules is exactly
         // what the order above exists to prevent). Retried when it frames.
         deferPluginUnload(PluginUnloadOp::Rescan, std::string());
@@ -3073,8 +3116,36 @@ void Engine::rescanPlugins() {
     // code renamed aside last frame would otherwise read as deleted by the
     // user — which planUpdates deliberately refuses to update, taking away the
     // one remedy a retired plugin has.
+    //
+    // THE DISK'S SHARE of the rescan starts here: the folder is listed, the quarantined files are renamed back, and every installed file is
+    // re-hashed against the record made when it was installed (loadInventory) - all synchronous.
+    phases.begin(cascade::core::kReloadPhaseInventory);
     std::string restoreError;
     if (!restoreQuarantinedPlugins(restoreError)) { pluginEnforceError_ = restoreError; }
+
+    // THE MANIFEST AS THIS SCAN IS ABOUT TO READ IT, noted before it is read: the signature taken below, after the quarantine, must find it
+    // exactly so. The catalogue worker writes the manifest from its own thread, and a floor written between the read and the listing would
+    // be in the signature and not in the blocked set - a retired plugin the next automatic rescan would then decline to look for. Three
+    // numbers from one stat; this is the slow path, which has just taken the folder apart.
+    struct ManifestStamp {
+        bool present = false;
+        std::uint64_t bytes = 0;
+        std::int64_t when = 0;
+    };
+    const auto stampOfManifest = [this]() {
+        ManifestStamp s;
+        const std::filesystem::path m(cascade::core::PluginRepo::manifestPath(pluginDir_));
+        std::error_code ec;
+        const std::uintmax_t bytes = std::filesystem::file_size(m, ec);
+        if (ec) { return s; }
+        const std::filesystem::file_time_type when = std::filesystem::last_write_time(m, ec);
+        if (ec) { return s; }
+        s.present = true;
+        s.bytes = static_cast<std::uint64_t>(bytes);
+        s.when = static_cast<std::int64_t>(when.time_since_epoch().count());
+        return s;
+    };
+    const ManifestStamp manifestRead = stampOfManifest();
 
     std::string invError;
     // A corrupt or absent manifest is an ordinary state and its own kind of
@@ -3098,6 +3169,8 @@ void Engine::rescanPlugins() {
                                                          : cascade::core::health::LoadClass::Retired);
     }
 
+    // Judged afresh by this scan below; nothing is superseded by a scan that does not happen.
+    pluginOldCopies_.clear();
     std::string quarantineError;
     if (!quarantineBlockedPlugins(quarantineError)) {
         // FAIL CLOSED. Scanning now would map the retired plugin along with
@@ -3107,7 +3180,32 @@ void Engine::rescanPlugins() {
         return;
     }
 
-    pluginHost_.scan(pluginDir_);
+    // LoadLibrary of every module, and each one's DllMain, and the descriptor query - the loader and whatever it has to read, off a disk that
+    // may be cold or a scanner's.
+    // THE SIGNATURE OF WHAT THE SCAN IS ABOUT TO LOAD (core/plugin_dir_signature.hpp), taken BEFORE it loads anything and AFTER the
+    // quarantine, so it is the folder as the scan will see it - a retired module already renamed aside - and so equal to what the next check
+    // finds if nobody touches the folder. A file that changes between this listing and the scan's own is then a difference the next check
+    // sees, never one it misses. Kept only if the manifest in it is the one the inventory above read; judged at the end, with what the scan
+    // loaded.
+    cascade::core::PluginDirSignature scanSig;
+    bool scanSigOk = (testHooks_.pluginDirSignature != nullptr ? testHooks_.pluginDirSignature
+                                                               : &cascade::core::readPluginDirSignature)(pluginDir_, scanSig);
+    if (scanSigOk) {
+        const cascade::core::PluginDirSignature::Entry* m = scanSig.find(cascade::core::PluginRepo::manifestFileName());
+        scanSigOk = (m != nullptr) == manifestRead.present &&
+                    (m == nullptr || (m->bytes == manifestRead.bytes && m->writeTime == manifestRead.when));
+    }
+
+    phases.begin(cascade::core::kReloadPhaseLoad);
+    // WHERE EACH FILE CAME FROM (0.99.74), from the install records the inventory above already read - the host reads no manifest of its
+    // own. It is what lets the loader refuse to let a plugin site's module take a declared name from an official one
+    // (resolveDuplicatePlugins).
+    cascade::core::PluginFileOrigins origins;
+    for (const cascade::core::InstalledPlugin& ip : pluginInventory_.plugins) {
+        if (!ip.file.empty()) { origins[ip.file] = !ip.source.empty(); }
+    }
+    pluginHost_.scan(pluginDir_, origins);
+    phases.begin(cascade::core::kReloadPhaseRestart);
 
     // WHICH PLUGINS ARE MAPPED, one line each, because plugins are
     // third-party code running in this process and "which one was loaded" has
@@ -3133,7 +3231,49 @@ void Engine::rescanPlugins() {
     // Instances are created only after the scan has settled, and the pipeline
     // is only pointed at the runner once they exist — so the DSP thread never
     // sees a half-built set.
+    //
+    // The old copies this scan found superseded - what the store's clean-up key offers, judged against this scan and no older one.
+    pluginOldCopies_ = cascade::core::supersededPlugins(pluginHost_.plugins(), pluginInventory_.plugins);
     refreshPluginRunner();
+
+    // THE SCAN RAN TO ITS END: the signature taken above is what is loaded, and rescanPluginsIfChanged may take it as that - unless
+    // something this scan did is not explained by files. A module REFUSED (not turned off as an old copy of another) may have been refused
+    // for what the loader found outside the folder - a runtime a module needs, since installed - which no listing of the folder can show,
+    // so such a scan is never skipped afterwards. An enforcement error (a rename that failed, a restore that failed) is a scan that did not
+    // finish what it set out to.
+    bool refused = false;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if (!p.loaded && p.supersededBy.empty()) { refused = true; }
+    }
+    pluginScanSig_ = std::move(scanSig);
+    pluginScanSigValid_ = scanSigOk && pluginEnforceError_.empty() && !refused;
+}
+
+void Engine::rescanPluginsIfChanged() {
+    // THE PAUSE THE RESCAN HOLDS, held across the listing that decides whether there is one: a folder that is slow to list is the case this
+    // exists for, and the rescan it replaces would have listed it under this same pause and the same cap - a slow listing here is not a new
+    // freeze to report.
+    WaitWatchdogPause holdWatchdog(*this);
+    if (pluginScanSigValid_) {
+        // PUBLISHED AS THE STEP `check` (0.99.84, core/plugin_reload_phases.hpp): a folder slow to list is the case this pause exists for,
+        // and a freeze report taken while the listing hangs should say it was the listing - not leave the scope's `reload-phase: none`
+        // pointing at the reload proper. The clock publishes only; there is no reload log line to lap.
+        cascade::core::PhaseClock checking{cascade::core::PhaseClock::Publish{}};
+        checking.begin(cascade::core::kReloadPhaseCheck);
+        // The folder the scan would read now: the same call the rescan makes, so a folder that moved (the executable's own is no longer
+        // writable, a package) is a different signature without further ado.
+        const std::string dir = (testHooks_.pluginDir != nullptr) ? testHooks_.pluginDir() : cascade::core::PluginHost::defaultPluginDir();
+        cascade::core::PluginDirSignature now;
+        const bool listed = (testHooks_.pluginDirSignature != nullptr ? testHooks_.pluginDirSignature
+                                                                      : &cascade::core::readPluginDirSignature)(dir, now);
+        checking.end();
+        if (listed && now == pluginScanSig_) {
+            // Neither a name nor a path: which plugins there are is in the line each scan wrote when it loaded them.
+            cascade::core::diagLogf("plugins: reload skipped - nothing changed since the last scan");
+            return;
+        }
+    }
+    rescanPlugins();
 }
 
 std::vector<cascade::core::PluginUpdate> Engine::plannedPluginUpdates() const {
@@ -3362,8 +3502,11 @@ void Engine::pollPluginAsync() {
             pluginLastUpdateCheck_ = static_cast<std::int64_t>(std::time(nullptr));
             // The floors the worker just cached only take effect on the next
             // scan, and a user who has just been told a plugin is retired
-            // should not have to restart to stop running it.
-            rescanPlugins();
+            // should not have to restart to stop running it. But a fetch that changed no floor and no file has nothing to take effect: the
+            // full rescan - every decoder destroyed, every module unmapped and mapped again, on this thread, unbounded - is made only when the
+            // plugins folder is not what the last scan left (rescanPluginsIfChanged). The worker leaves the manifest alone when the catalogue
+            // taught it nothing (PluginRepo::cacheCataloguePolicies), so "unchanged" is a state a fetch can leave the folder in.
+            rescanPluginsIfChanged();
             // A cache-write failure is red text next to a catalogue that
             // nevertheless loaded: the list is real, the policy behind it was
             // not remembered, and both facts are shown.

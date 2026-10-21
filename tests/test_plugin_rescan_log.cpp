@@ -50,7 +50,9 @@
 #endif
 
 #include "core/diag_log.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -59,7 +61,8 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private rescan.
 struct AppWindowTestAccess {
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
+    // THE ENGINE'S RESCAN, on the pass's own thread (tests/pass_seam.hpp).
+    static void rescan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).rescanPlugins(); }); }
 };
 
 }  // namespace cascade::gui
@@ -172,11 +175,12 @@ void testARescanSaysWhereItsTimeWent() {
 // rename, which a hermetic run has none of.
 void testStructure() {
     std::printf("the report is made on every way out, and only the rescan asks for it\n");
-    const fs::path gui = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui";
-    const std::string source = readText(gui / "app_window.cpp");
+    // (The rescan is the ENGINE's since the extraction: src/engine holds what app_window*.cpp did.)
+    const fs::path gui = fs::path(CASCADE_SOURCE_DIR) / "src" / "engine";
+    const std::string source = readText(gui / "engine.cpp");
     CHECK(!source.empty());
 
-    const std::string rescan = functionBody(source, "void AppWindow::rescanPlugins(");
+    const std::string rescan = functionBody(source, "void Engine::rescanPlugins(");
     CHECK(!rescan.empty());
     const std::size_t clock = rescan.find("PhaseClock");
     const std::size_t guard = rescan.find("log(\"plugins: reload\"");
@@ -205,7 +209,7 @@ void testStructure() {
             const std::size_t lineStart = text.rfind('\n', at) + 1;
             const std::string before = text.substr(lineStart, at - lineStart);
             // The definition, and a mention in a comment, are not call sites.
-            if (before.find("AppWindow::") != std::string::npos ||
+            if (before.find("Engine::") != std::string::npos ||
                 before.find("//") != std::string::npos) {
                 continue;
             }

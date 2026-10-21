@@ -58,7 +58,11 @@
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
 #include "core/ppm_correction.hpp"
+#include "core/phase_clock.hpp"
+#include "core/plugin_cleanup.hpp"
 #include "core/plugin_directive.hpp"
+#include "core/plugin_dir_signature.hpp"
+#include "core/plugin_reload_phases.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_runner.hpp"
@@ -175,6 +179,9 @@ private:
         std::vector<std::string> faultedDrivers;
     };
     struct TestHooks {
+        // Replaces core::readPluginDirSignature (the listing rescanPluginsIfChanged and the scan's own signature take): a test that has to
+        // change the folder between two listings, or make one fail.
+        bool (*pluginDirSignature)(const std::string& dir, cascade::core::PluginDirSignature& out) = nullptr;
         // Replaces makeDeviceSource's construction when set: the "radio" a
         // worker or the restore opens is the test's own recording fake.
         std::unique_ptr<cascade::source::DeviceSource> (*makeDevice)(const std::string& kind);
@@ -251,7 +258,9 @@ private:
     // RETURNS WHETHER THE MODULES WERE UNMAPPED. False means the interface (which holds the plugin UI) did not acknowledge the
     // release within kPluginUiHandshake - it is not framing - and nothing was unmapped; the caller does not go on to touch the
     // files or scan, and the operation is retried (pluginUnloadOp_) when the interface frames again.
-    bool detachAndUnloadPlugins();
+    // `phases`: the caller's clock (rescanPlugins), whose steps - decoders, patch, panels and map, unload - are lapped here; every caller's
+    // steps are PUBLISHED (0.99.84: the watchdog's `reload-phase:`), the ones that ask for no clock get a publish-only one.
+    bool detachAndUnloadPlugins(cascade::core::PhaseClock* phases = nullptr);
     // THE ONE WAY A DIRECTIVE IS DELIVERED (see setPluginUiApplier): posted, and applied inline where the calling thread is the
     // interface's (or there is none), otherwise waited for - bounded - with the control thread's watchdog paused. Returns whether
     // it was applied before this returned.
@@ -601,6 +610,16 @@ private:
     // installs) — both silently absent when their directory does not exist.
     void loadBandPlan();
     void rescanPlugins();
+    // THE RESCAN A CATALOGUE FETCH MAKES ONLY WHEN THE FOLDER IS NOT WHAT THE LAST SCAN LEFT (0.99.63): the full rescan - every decoder
+    // destroyed, every module unmapped and mapped again - for a fetch that changed no floor and no file would be a freeze for nothing.
+    // pluginScanSig_ is the folder as the last scan saw it, trusted (pluginScanSigValid_) only when that scan ran to its end with nothing
+    // refused for a reason outside the folder.
+    void rescanPluginsIfChanged();
+    cascade::core::PluginDirSignature pluginScanSig_;
+    bool pluginScanSigValid_ = false;
+    // The old copies the last scan found superseded (a file the scan turned off as an older build of another): what the store's clean-up key
+    // offers, judged against that scan and no older one (core/plugin_cleanup.hpp).
+    std::vector<cascade::core::SupersededPlugin> pluginOldCopies_;
     // Every tune that moves the SOURCE centre has to tell the pipeline, which
     // cannot see it: the RDS/stereo decoders must forget the old station.
     //

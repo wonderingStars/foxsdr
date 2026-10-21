@@ -2003,6 +2003,8 @@ private:
     // runs there is no user interface left to ask with. This is the ask.
     void drawDiagnosticsOffer();
     void copyDiagnosticsBundle();
+    // The reports folder in the shell (made first, under a watchdog pause): the diagnostics offer's and the Diagnostics section's key.
+    void openReportsFolder();
     // THE WHOLE BUNDLE (what Copy diagnostics puts on the clipboard and what a problem report attaches): the engine's rendered context
     // block, the log, the counters, the SDRplay service's state, the previous session's log and the reports on this machine, and this
     // session's slow-frame table. `freshHistory` asks for the report list to be read again and waited for (boundedly, on a worker) -

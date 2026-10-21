@@ -341,8 +341,8 @@ foreach(src ${CASCADE_TESTS})
         # probe module built twice (1.0.0 and 1.1.0, one declared name), scanned by the real host and
         # the real AppWindow with install records saying which is whose; both built first.
         add_dependencies(${name} rescan_probe_a rescan_probe_a_newer)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
-                 "$<TARGET_FILE:rescan_probe_a_newer>")
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:rescan_probe_a>" "$<TARGET_FILE:rescan_probe_a_newer>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_plugin_dup_app")
         # Runs the real cascade.exe (built first) with two files of ONE plugin whose declared name
         # differs - probe b 1.0.0 and probe a 1.1.0, copied under file names that share a run id - in a
@@ -490,12 +490,15 @@ if(NOT CASCADE_SANITIZE_ENABLED OR CASCADE_SANITIZE_THREAD)
         get_filename_component(_name "${src}" NAME_WE)
         file(STRINGS "${src}" _seam REGEX "^[ \t]*#[ \t]*include[ \t]*\"pass_seam[.]hpp\"")
         if(_seam AND TARGET ${_name})
+            # THE VARIANTS RUN THE TEST'S OWN COMMAND, arguments included: a test that is handed the probe modules it drives (the plugin
+            # tests) names them in CASCADE_TEST_ARGS_<name> where it is registered, and every variant is handed them too.
+            set(_base_cmd ${_name} ${CASCADE_TEST_ARGS_${_name}})
             if(NOT CASCADE_SANITIZE_ENABLED)
-                add_test(NAME ${_name}_stepped COMMAND ${_name})
+                add_test(NAME ${_name}_stepped COMMAND ${_base_cmd})
                 set_tests_properties(${_name}_stepped PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=stepped" TIMEOUT 120)
             endif()
             if(${_name} IN_LIST CASCADE_FREE_PASS_TESTS)
-                add_test(NAME ${_name}_free COMMAND ${_name})
+                add_test(NAME ${_name}_free COMMAND ${_base_cmd})
                 set_tests_properties(${_name}_free PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=free" TIMEOUT 120)
                 if(CASCADE_SANITIZE_ENABLED)
                     # (the sanitizer block below sets the runtime options and adds FOXSDR_TEST_PASS=free back for the names ending _free)

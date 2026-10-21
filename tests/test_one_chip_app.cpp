@@ -46,7 +46,9 @@
 #include <SoapySDR/Version.hpp>
 
 #include "core/config.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/sdrplay_source.hpp"
 #include "test_check.hpp"
@@ -159,66 +161,86 @@ SoapySDR::Device* makeMiri(const SoapySDR::Kwargs&) {
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static void installHooks() { AppWindow::testHooks_.nativeScan = &fakeScan; }
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass.
+    static void installHooks() { cascade::engine::Engine::testHooks_.nativeScan = &fakeScan; }
 
     static void setSoapyRows(AppWindow& a, std::vector<cascade::source::SoapyDeviceInfo> rows) {
-        a.soapyDevices_ = std::move(rows);
-        a.soapyScanned_ = true;
-        a.soapyScanPending_ = false;
-        a.deviceOpenPending_ = false;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).soapyDevices_ = std::move(rows);
+            rawEngine(a.engine_).soapyScanned_ = true;
+            rawEngine(a.engine_).soapyScanPending_ = false;
+            rawEngine(a.engine_).deviceOpenPending_ = false;
+        });
     }
-    static std::vector<std::string> soapyArgsOf(const AppWindow& a) {
-        std::vector<std::string> out;
-        for (const auto& d : a.soapyDevices_) { out.push_back(d.args); }
-        return out;
+    static std::vector<std::string> soapyArgsOf(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+            std::vector<std::string> out;
+            for (const auto& d : rawEngine(a.engine_).soapyDevices_) { out.push_back(d.args); }
+            return out;
+        });
     }
-    static void scan(AppWindow& a) { a.scanNative(); }
-    static std::vector<std::string> patchChoiceKeys(const AppWindow& a) {
-        std::vector<std::string> out;
-        for (const auto& c : a.patchDeviceChoices()) { out.push_back(c.key); }
-        return out;
+    static void scan(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).scanNative(); }); }
+    static std::vector<std::string> patchChoiceKeys(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(rawEngine(a.engine_), [&] {
+            std::vector<std::string> out;
+            for (const auto& c : rawEngine(a.engine_).patchDeviceChoices()) { out.push_back(c.key); }
+            return out;
+        });
     }
 
     static cascade::core::patch::NodeId addRadioNode(AppWindow& a, const std::string& device) {
         namespace pc = cascade::core::patch;
         a.patchSeeded_ = true;
-        const pc::NodeId id = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
-        if (pc::Node* n = a.patchGraph_.mutableNode(id)) {
-            n->device = device;
-            n->freqHz = 100.0e6;
-            n->centreChosen = true;
-            n->rateHz = 2.0e6;
-            n->on = true;
-        }
-        return id;
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            const pc::NodeId id = rawEngine(a.engine_).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            if (pc::Node* n = rawEngine(a.engine_).patchGraph_.mutableNode(id)) {
+                n->device = device;
+                n->freqHz = 100.0e6;
+                n->centreChosen = true;
+                n->rateHz = 2.0e6;
+                n->on = true;
+            }
+            return id;
+        });
     }
-    // Reconciles until the node has either a running radio or an answer that
-    // it would not open. True when one of those happened in time.
+    // Reconciles until the node has either a running radio or an answer that it would not open. True when one of those happened in time.
     static bool runPatchUntilAnswered(AppWindow& a, cascade::core::patch::NodeId id) {
-        a.patchRunning_ = true;
-        a.patchWasOpen_ = true;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = true;
+            rawEngine(a.engine_).patchWasOpen_ = true;
+        });
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.patchRadios_.count(id) == 0 && a.patchRadioError_.count(id) == 0) {
-            a.patchReconcile();
+        while (passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).patchRadios_.count(id) == 0 && rawEngine(a.engine_).patchRadioError_.count(id) == 0;
+        })) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchReconcile(); });
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(30)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
-    static bool radioRunning(const AppWindow& a, cascade::core::patch::NodeId id) {
-        return a.patchRadios_.count(id) != 0;
+    static bool radioRunning(AppWindow& a, cascade::core::patch::NodeId id) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).patchRadios_.count(id) != 0; });
     }
-    static std::string nodeError(const AppWindow& a, cascade::core::patch::NodeId id) {
-        const auto it = a.patchRadioError_.find(id);
-        return it == a.patchRadioError_.end() ? std::string() : it->second;
+    static std::string nodeError(AppWindow& a, cascade::core::patch::NodeId id) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).patchRadioError_.find(id);
+            return it == rawEngine(a.engine_).patchRadioError_.end() ? std::string() : it->second;
+        });
     }
     static void stopPatch(AppWindow& a) {
-        a.patchRunning_ = false;
-        a.patchStopAll(true);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).patchRunning_ = false;
+            rawEngine(a.engine_).patchStopAll(true);
+        });
     }
-    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
-    static std::string sourceError(const AppWindow& a) { return a.sourceError_; }
-    static bool deviceOpen(const AppWindow& a) { return a.device_ != nullptr; }
+    static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { passseam::on(rawEngine(a.engine_), [&] { a.applyConfig(cfg); }); }
+    static std::string sourceError(AppWindow& a) {
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).sourceError_; });
+    }
+    static bool deviceOpen(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).device_ != nullptr; });
+    }
 };
 
 }  // namespace cascade::gui

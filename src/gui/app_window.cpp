@@ -20931,16 +20931,7 @@ void AppWindow::drawDiagnosticsSection() {
     ImGui::Spacing();
     if (ImGui::Button(trId("Copy diagnostics"))) { copyDiagnosticsBundle(); }
     ImGui::SameLine();
-    if (ImGui::Button(trId("Open reports folder"))) {
-        if (!crashDir.empty()) {
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(crashDir), ec);
-            // Explorer's (or the Linux file manager's) first window of a
-            // session is a multi-second cold start and this thread is inside
-            // the shell for all of it.
-            shellOpen(crashDir);
-        }
-    }
+    if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
     if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
 
     if (ImGui::SmallButton(trId("What exactly is in a report?"))) {
@@ -21001,19 +20992,26 @@ void AppWindow::drawDiagnosticsOffer() {
         ImGui::Spacing();
         if (ImGui::Button(trId("Copy diagnostics"))) { copyDiagnosticsBundle(); }
         ImGui::SameLine();
-        if (ImGui::Button(trId("Open reports folder"))) {
-            const std::string dir = cascade::core::diagCrashDir();
-            if (!dir.empty()) {
-                std::error_code ec;
-                std::filesystem::create_directories(std::filesystem::path(dir), ec);
-                shellOpen(dir);
-            }
-        }
+        if (ImGui::Button(trId("Open reports folder"))) { openReportsFolder(); }
         ImGui::SameLine();
         if (ImGui::Button(trId("Not now"))) { diagOfferOpen_ = false; }
         if (!diagBundleStatus_.empty()) { ImGui::TextDisabled("%s", diagBundleStatus_.c_str()); }
     }
     ImGui::End();
+}
+
+void AppWindow::openReportsFolder() {
+    const std::string dir = cascade::core::diagCrashDir();
+    if (dir.empty()) { return; }
+    // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window does no disk work"): one create_directories in the
+    // reports folder, on the press of a button, before the shell is asked to show it. shellOpen holds its own bracket for the shell; this
+    // one covers the folder.
+    cascade::core::WatchdogPause holdWatchdog(watchdog_);
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(dir), ec);
+    // Explorer's (or the Linux file manager's) first window of a session is a multi-second cold start and this thread is inside the shell
+    // for all of it.
+    shellOpen(dir);
 }
 
 void AppWindow::startDiagHistoryRead() {
