@@ -669,8 +669,11 @@ int main() {
     {
         // CODE, NOT COMMENTS: a call commented out must not satisfy a scan for the call.
         // (The poll is the ENGINE's since the extraction - src/engine/engine.cpp; the card and the rail are the window's.)
-        const std::string eng =
+        std::string eng =
             stripComments(readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp"));
+        // The scan below looks for a function's end as "\n}\n": read the file as LF whatever the checkout's line ends are
+        // (a Windows working copy with autocrlf=true holds CRLF, which made this section fail with the function found nowhere).
+        eng.erase(std::remove(eng.begin(), eng.end(), '\r'), eng.end());
         const std::size_t poll = eng.find("void Engine::pollAudioHealth()");
         const std::size_t end = poll == std::string::npos ? poll : eng.find("\n}\n", poll);
         CHECK(poll != std::string::npos && end != std::string::npos && end > poll);
