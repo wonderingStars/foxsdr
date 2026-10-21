@@ -1330,6 +1330,34 @@ void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
     if (dropped) { link.cbOverflows.fetch_add(1, std::memory_order_relaxed); }
 }
 
+void SdrPlaySource::noteSampleNumber(Link& link, std::uint32_t firstSampleNum,
+                                     std::uint32_t numSamples) {
+    // THE SERVICE'S THREAD: one load, one compare-exchange, nothing else.
+    constexpr std::uint64_t kArmed = std::uint64_t{1} << 32;
+    const std::uint64_t armed = link.cbSampleNumExpected.load(std::memory_order_relaxed);
+    if (armed != 0) {
+        const std::uint32_t expected = static_cast<std::uint32_t>(armed);
+        if (firstSampleNum != expected) {
+            // uint32 arithmetic, as gr-sdrplay3 does it: a gap that straddles
+            // the counter's wrap comes out right, and a service that started
+            // its numbering again WITHOUT raising `reset` shows as one gap of
+            // nearly 2^32 samples - which is itself the evidence that it did.
+            const std::uint32_t missing = firstSampleNum - expected;
+            link.cbApiGaps.fetch_add(1, std::memory_order_relaxed);
+            link.cbApiGapSamples.fetch_add(missing, std::memory_order_relaxed);
+        }
+    }
+    // Arm for the next block. A compare-exchange rather than a store so that a
+    // disarm from the control thread that lands between the load above and
+    // here (a rate change issued while this block was in flight) wins: the
+    // next block then arms afresh instead of being judged against a number
+    // from before the change.
+    std::uint64_t seen = armed;
+    link.cbSampleNumExpected.compare_exchange_strong(
+        seen, kArmed | static_cast<std::uint32_t>(firstSampleNum + numSamples),
+        std::memory_order_relaxed, std::memory_order_relaxed);
+}
+
 std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning) {
     if (rateWarning != nullptr) { rateWarning->clear(); }
     // CLOSED FIRST, then emptied: a block the callback lands in between opens
@@ -1342,6 +1370,8 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
     const std::uint64_t samples = link.cbSamples.exchange(0, std::memory_order_relaxed);
     const std::uint64_t overflows = link.cbOverflows.exchange(0, std::memory_order_relaxed);
     std::int64_t longestGapMs = link.cbLongestGapMs.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t apiGaps = link.cbApiGaps.exchange(0, std::memory_order_relaxed);
+    const std::uint64_t apiGapSamples = link.cbApiGapSamples.exchange(0, std::memory_order_relaxed);
     StreamHealth& h = link.health;
     const StreamHealth mine = h;
     h = StreamHealth{};
@@ -1377,13 +1407,18 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
         if (openGap > longestGapMs) { longestGapMs = openGap; }
     }
     const std::int64_t windowMs = (now > start) ? (now - start) / 1000000 : 0;
-    char buf[192];
+    char buf[256];
     // THE SAME FORMAT SoapySource::streamHealthLine WRITES, word for word, so
     // a reader of the diagnostic log does not have to know which driver was
-    // open to parse the line.
+    // open to parse the line - then, AFTER every field that line has, the one
+    // only this driver can know (0.99.84): the gaps the SERVICE made in its
+    // own sample numbering, which no other radio here reports. `overflows`
+    // keeps its meaning (our ring was full), so a log from before this
+    // release reads the same as one after it.
     std::snprintf(buf, sizeof(buf),
                   "source: stream health - reads %llu, with samples %llu, timeouts %llu, "
-                  "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
+                  "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s, "
+                  "service gaps %llu (%llu samples)",
                   static_cast<unsigned long long>(reads),
                   static_cast<unsigned long long>(withSamples),
                   static_cast<unsigned long long>(mine.timeouts),
@@ -1391,7 +1426,9 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
                   static_cast<unsigned long long>(mine.errors),
                   static_cast<long long>(longestGapMs),
                   static_cast<unsigned long long>(samples),
-                  static_cast<long long>((windowMs + 500) / 1000));
+                  static_cast<long long>((windowMs + 500) / 1000),
+                  static_cast<unsigned long long>(apiGaps),
+                  static_cast<unsigned long long>(apiGapSamples));
     return std::string(buf);
 }
 
@@ -1410,7 +1447,15 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         const std::int64_t windowNs =
             std::chrono::duration_cast<std::chrono::nanoseconds>(link.healthWindow).count();
         if (steadyNowNs() - start < windowNs) { return; }
-        warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
+        // A SERVICE GAP IS WORRYING (0.99.84): it is exactly the click the
+        // RSPduo airband report heard, so a window holding one is written,
+        // and as a warning, where a clean window after the first is not. It
+        // does NOT feed the rate warning above: that one exists for a plan
+        // mismatch (a factor of three), and samples lost to gaps already
+        // lower the delivered rate the honest way - and are now named as
+        // gaps, which is the more useful word.
+        warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 ||
+               link.cbApiGaps.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
         const bool first = !link.healthEverWritten;
         line = healthLineLocked(link, &rateWarning);
         // A wrong rate is said whether or not the window is otherwise worth
@@ -1453,7 +1498,6 @@ void SdrPlaySource::drainEventLogs(Link& link) {
 
 void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* params,
                                     unsigned int numSamples, unsigned int reset, void* ctx) {
-    (void) reset;
     Link* link = static_cast<Link*>(ctx);
     if (link == nullptr) { return; }
     link->inCallback.fetch_add(1, std::memory_order_acq_rel);
@@ -1469,12 +1513,21 @@ void SdrPlaySource::streamCallbackA(short* xi, short* xq, abi::StreamCbParamsT* 
         if (params->rfChanged != 0) { link->rfChanged.store(1, std::memory_order_relaxed); }
         if (params->fsChanged != 0) { link->fsChanged.store(1, std::memory_order_relaxed); }
     }
+    // "A re-initialisation has occurred within the API and local buffering
+    // should be reset" (the specification's words for `reset`): the sample
+    // numbering starts again, so the block that carries it is a new baseline
+    // and not a gap. Done whether or not this block has samples.
+    if (reset != 0) { link->cbSampleNumExpected.store(0, std::memory_order_relaxed); }
 
     if (!link->accepting.load(std::memory_order_relaxed) || xi == nullptr || xq == nullptr ||
         numSamples == 0) {
         link->inCallback.fetch_sub(1, std::memory_order_acq_rel);
         return;
     }
+    // The service's own account of where this block sits in its stream - the
+    // one thing that can tell a block the SERVICE lost from one we did. See
+    // Link::cbSampleNumExpected.
+    if (params != nullptr) { noteSampleNumber(*link, params->firstSampleNum, numSamples); }
 
     // Converted HERE, on the service's thread, exactly as every other driver
     // converts on its reader thread: the ring carries finished samples so the
@@ -2027,6 +2080,13 @@ bool SdrPlaySource::startStreamingLocked() {
     link_->streamStartNs.store(0, std::memory_order_relaxed);
     link_->emptySinceNs.store(0, std::memory_order_relaxed);
     link_->lastEmptyReadNs.store(0, std::memory_order_relaxed);
+    // A NEW STREAM NUMBERS ITS SAMPLES FROM WHEREVER THE SERVICE LIKES
+    // (0.99.84): the first block after Init is a baseline, never a gap from
+    // the last block of the previous session, and that session's gaps are
+    // not this one's to report.
+    link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
+    link_->cbApiGaps.store(0, std::memory_order_relaxed);
+    link_->cbApiGapSamples.store(0, std::memory_order_relaxed);
     // A STALE ACK MUST NOT SURVIVE INTO A NEW SESSION (round 3, measured): an
     // overload that fired and was never drained (no read() between it and
     // stop()) left these flags set, and the very first read() of the NEXT
@@ -2558,6 +2618,9 @@ void SdrPlaySource::syncMirrorsAfterLateSuccessLocked(abi::ReasonForUpdateT reas
         if (initialised_) {
             link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
             link_->setRateHz.store(out, std::memory_order_relaxed);
+            // The numbering may start again with the rate; the next block is
+            // a baseline (see Link::cbSampleNumExpected).
+            link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
         }
     }
     if (has(abi::Update_Rsp1a_BiasTControl)) {
@@ -2966,6 +3029,9 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
     if (initialised_) {
         link_->rateChangedInWindow.store(true, std::memory_order_relaxed);
         link_->setRateHz.store(best, std::memory_order_relaxed);
+        // The numbering may start again with the rate; the next block is a
+        // baseline (see Link::cbSampleNumExpected).
+        link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
     }
     return true;
 }

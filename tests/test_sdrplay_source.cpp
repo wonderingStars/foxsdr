@@ -1586,6 +1586,199 @@ void testStreamHealthLine() {
     CHECK(src.streamHealthLine().empty());
 }
 
+// --- 9b. the service's own sample numbering (0.99.84) ---------------------
+//
+// The RSPduo airband report: clean audio at 2 MS/s, about thirteen broadband
+// clicks a second at 4 MS/s, no clipping and no silence in the recording -
+// discontinuities in the I/Q stream. The only loss this driver could count
+// until now was its own ring filling ("overflows"); what the SERVICE lost
+// between the radio and the callback was invisible, because the callback
+// never read StreamCbParamsT::firstSampleNum. These hold the driver to the
+// numbering as gr-sdrplay3 understands it (see Link::cbSampleNumExpected for
+// what the vendor's specification does and does not say): the block after
+// one starting at F with N samples starts at F+N, modulo 2^32.
+
+namespace {
+
+// The "service gaps N (M samples)" tail of a health line, or "" without one.
+std::string serviceGapsOf(const std::string& line) {
+    const std::size_t at = line.find("service gaps ");
+    return (at == std::string::npos) ? std::string() : line.substr(at);
+}
+
+struct GapRig {
+    FakeSdrPlayApi fake;
+    SdrPlaySource src;
+    short xi[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    short xq[8] = {8, 7, 6, 5, 4, 3, 2, 1};
+    bool up = false;
+    GapRig() {
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        up = openOn(src, fake) && src.start();
+    }
+    // A block of 8 the service says starts at `first`.
+    void block(unsigned int first, unsigned int reset = 0) {
+        fake.pushBlock(xi, xq, 8, first, reset);
+    }
+    // A block of 8 contiguous with the one before, as a healthy service sends.
+    void next() { fake.pushSamples(xi, xq, 8); }
+    std::string gaps() { return serviceGapsOf(src.streamHealthLine()); }
+};
+
+}  // namespace
+
+void testContiguousBlocksCountNoServiceGap() {
+    GapRig r;
+    CHECK(r.up);
+    r.block(1000);
+    r.next();  // 1008
+    r.next();  // 1016
+    const std::string line = r.src.streamHealthLine();
+    // Every field the other drivers' line has, in its place, and then ours.
+    CHECK(line.find("source: stream health - reads 3, with samples 3, timeouts 0, overflows 0, "
+                    "errors 0, longest gap ") == 0);
+    CHECK(line.find("24 samples in ") != std::string::npos);
+    CHECK(serviceGapsOf(line) == "service gaps 0 (0 samples)");
+}
+
+void testAJumpInTheServicesNumberingIsOneGapOfTheMissingSamples() {
+    GapRig r;
+    CHECK(r.up);
+    r.block(0);
+    r.block(108);  // 8 .. 107 never came: one gap, 100 samples
+    r.next();      // 116, contiguous again: still one gap
+    CHECK(r.gaps() == "service gaps 1 (100 samples)");
+    // Drained with the window: the next window starts from nothing.
+    CHECK(r.src.streamHealthLine().empty());
+    // Two jumps are two gaps, and the samples add up.
+    r.block(500);  // expected 124: 376 missing
+    r.block(600);  // expected 508: 92 missing
+    CHECK(r.gaps() == "service gaps 2 (468 samples)");
+}
+
+void testAGapAcrossTheCountersWrapCountsOnlyTheMissingSamples() {
+    // The number is an unsigned int and wraps at 2^32 (gr-sdrplay3's
+    // sample_gaps_check handles exactly this). A block that lands past the
+    // wrap must be judged in that arithmetic, not as four billion missing.
+    {
+        GapRig r;
+        CHECK(r.up);
+        r.block(0xFFFFFFF0u);  // the next must start at 0xFFFFFFF8
+        r.block(0x00000004u);  // 0xFFFFFFF8 .. 0xFFFFFFFF and 0 .. 3 missing: 12
+        CHECK(r.gaps() == "service gaps 1 (12 samples)");
+    }
+    {
+        GapRig r;
+        CHECK(r.up);
+        r.fake.pushBlock(r.xi, r.xq, 8, 0xFFFFFFFCu, 0);  // ends at 3, wrapped
+        r.block(4);                                       // contiguous across it
+        r.next();                                         // 12
+        CHECK(r.gaps() == "service gaps 0 (0 samples)");
+    }
+}
+
+void testAResetBlockReArmsWithoutAFalseGap() {
+    GapRig r;
+    CHECK(r.up);
+    r.block(0);
+    r.block(8);
+    // "A re-initialisation has occurred within the API" (the specification's
+    // words for `reset`): the numbering is new, and the block that says so is
+    // the new baseline, wherever it starts.
+    r.block(5000, 1);
+    r.next();  // 5008
+    CHECK(r.gaps() == "service gaps 0 (0 samples)");
+    // ...and the detection is armed again from that baseline, so a jump
+    // AFTER the reset is still a gap.
+    r.block(6000);  // expected 5016: 984 missing
+    CHECK(r.gaps() == "service gaps 1 (984 samples)");
+    // A reset on a callback WITHOUT samples (the shape of the service's
+    // Update acknowledgements) re-arms too: the numbering it announces
+    // arrives with the next block.
+    r.fake.pushBlock(nullptr, nullptr, 0, 0, 1);
+    r.block(7777);
+    r.next();
+    CHECK(r.gaps() == "service gaps 0 (0 samples)");
+    // And an acknowledgement without reset (numSamples 0, firstSampleNum 0,
+    // the fake's own autoAck shape) is neither a gap nor a new baseline.
+    r.fake.pushBlock(nullptr, nullptr, 0, 0, 0);
+    r.block(7793);  // contiguous with the block before the acknowledgement
+    CHECK(r.gaps() == "service gaps 0 (0 samples)");
+}
+
+void testAStreamRestartOrARateChangeReArms() {
+    GapRig r;
+    CHECK(r.up);
+    r.block(0);
+    r.block(8);
+    // Init again: the service numbers the new stream from wherever it likes.
+    r.src.stop();
+    CHECK(r.src.start());
+    r.block(90000);
+    r.next();  // 90008
+    CHECK(r.gaps() == "service gaps 0 (0 samples)");
+    // A gap counted and never drained before a stop is not the next
+    // session's to report.
+    r.block(1);  // expected 90016: a gap
+    r.src.stop();
+    CHECK(r.src.start());
+    r.block(5);
+    CHECK(r.gaps() == "service gaps 0 (0 samples)");
+    // A live rate change: the numbering may start again with the rate (the
+    // specification does not say), so the first block after it is a baseline.
+    r.next();  // 13
+    CHECK(r.src.setSampleRateHz(8000000.0));
+    r.block(424242);
+    r.next();  // 424250
+    CHECK(r.gaps() == "service gaps 0 (0 samples)");
+    // ...and armed again from there.
+    r.block(424258 + 50);
+    CHECK(r.gaps() == "service gaps 1 (50 samples)");
+}
+
+void testAWindowWithServiceGapsIsWrittenAsAWarning() {
+    // maybeWriteHealth (from read()) writes the first window always and after
+    // that only a window with something to report. A service gap is something
+    // to report - it is the click the report heard - so its window is written,
+    // as a warning; a clean window after the first still is not.
+    GapRig r;
+    CHECK(r.up);
+    r.src.setStreamHealthWindowForTest(std::chrono::milliseconds(1));
+    cascade::core::DiagLog::instance().resetForTest();
+    std::vector<std::complex<float>> buf(64);
+    auto closeWindow = [&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        while (r.src.read(buf.data(), buf.size()) > 0) {}
+    };
+    auto healthLines = [&]() {
+        std::vector<std::string> out;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("stream health") != std::string::npos) { out.push_back(l); }
+        }
+        return out;
+    };
+
+    r.block(0);
+    closeWindow();  // the first window: written whatever it holds
+    std::vector<std::string> lines = healthLines();
+    CHECK(lines.size() == 1);
+    CHECK(!lines.empty() && lines.back().find(" info source: stream health") != std::string::npos);
+    CHECK(!lines.empty() && serviceGapsOf(lines.back()) == "service gaps 0 (0 samples)");
+
+    r.block(1000);  // expected 8: a gap of 992
+    closeWindow();
+    lines = healthLines();
+    CHECK(lines.size() == 2);
+    CHECK(!lines.empty() && lines.back().find(" warn source: stream health") != std::string::npos);
+    CHECK(!lines.empty() && serviceGapsOf(lines.back()) == "service gaps 1 (992 samples)");
+
+    r.next();  // 1008: a clean window, nothing to say
+    closeWindow();
+    lines = healthLines();
+    CHECK(lines.size() == 2);
+    r.src.stop();
+}
+
 // --- 10. faults -----------------------------------------------------------
 
 void testDeviceRemovedFaultsTheSource() {
@@ -3927,6 +4120,12 @@ int main() {
     testSetSampleRateWritesThePlanInOneUpdate();
     testStreamingDeliversEverySampleInOrder();
     testStreamHealthLine();
+    testContiguousBlocksCountNoServiceGap();
+    testAJumpInTheServicesNumberingIsOneGapOfTheMissingSamples();
+    testAGapAcrossTheCountersWrapCountsOnlyTheMissingSamples();
+    testAResetBlockReArmsWithoutAFalseGap();
+    testAStreamRestartOrARateChangeReArms();
+    testAWindowWithServiceGapsIsWrittenAsAWarning();
     testDeviceRemovedFaultsTheSource();
     testDeviceFailureAndMasterLossAlsoFault();
     testOverloadIsCountedAndAcknowledged();

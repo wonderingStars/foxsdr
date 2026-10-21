@@ -932,6 +932,44 @@ private:
         std::atomic<std::int64_t> cbWindowStartNs{0};
         std::atomic<std::int64_t> cbLastSamplesNs{0};
 
+        // THE SERVICE'S OWN SAMPLE NUMBERING (0.99.84, the RSPduo airband
+        // report): what the SERVICE lost on its side of the USB, which
+        // `overflows` above cannot see. `overflows` counts blocks that did
+        // not fit OUR ring - the host fell behind. The report's recording
+        // (clean at 2 MS/s, thirteen broadband clicks a second at 4 MS/s, no
+        // clipping, no silence) is discontinuities in the I/Q stream itself,
+        // and every block the service delivers names its first sample:
+        // StreamCbParamsT::firstSampleNum. So the callback keeps the number
+        // the NEXT block must start at, and a block that starts anywhere
+        // else is a gap the service made, counted here and said in the
+        // health line as "service gaps N (M samples)".
+        //
+        // WHAT THE VENDOR'S SPECIFICATION SAYS AND DOES NOT SAY (v3.15,
+        // sections 2.10.2 and 3.21, read for this): the struct carries
+        // `unsigned int firstSampleNum` and `unsigned int numSamples`, and
+        // the callback's `reset` argument "Indicates if a re-initialisation
+        // has occurred within the API and that local buffering should be
+        // reset". It says NOTHING about firstSampleNum being contiguous, or
+        // about it wrapping. That `firstSampleNum + numSamples` of one block
+        // is `firstSampleNum` of the next, and that the number wraps at 2^32,
+        // is taken from gr-sdrplay3 (fventuri, lib/rsp_impl.cc,
+        // sample_gaps_check), whose check is exactly this one, and is agreed
+        // by two other independent consumers (msiner/sdrplay-go's drop
+        // detector, weakmon's sdrplay.py). Unverified against a real RSP on
+        // this machine, which has none.
+        //
+        // cbSampleNumExpected packs "armed" and "expected" into ONE word so
+        // the callback has one load and one compare-exchange, and a disarm
+        // from the control thread (a start, a rate change) cannot be torn
+        // against a callback mid-flight: bit 32 set means armed, the low 32
+        // bits are the expected firstSampleNum, 0 means disarmed. Disarmed
+        // blocks arm without counting; `reset` disarms, as the spec asks.
+        // Only blocks WITH samples take part: a zero-sample callback (the
+        // service's Update acknowledgement) carries no numbering.
+        std::atomic<std::uint64_t> cbSampleNumExpected{0};
+        std::atomic<std::uint64_t> cbApiGaps{0};
+        std::atomic<std::uint64_t> cbApiGapSamples{0};
+
         // THE STALL CLOCK (0.99.36), separate from the health window's because
         // that one is reset every time a window closes. lastCallbackNs is
         // written by EVERY stream callback, samples or not - a callback at all
@@ -1193,6 +1231,11 @@ private:
     static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr);
     // Service thread: atomics only. Never a lock, never the log.
     static void noteBlock(Link& link, std::size_t samples, bool dropped);
+    // Service thread, same rule: checks one delivered block's firstSampleNum
+    // against the number the previous block said the next would start at,
+    // and counts a service gap when they differ. See Link::cbSampleNumExpected.
+    static void noteSampleNumber(Link& link, std::uint32_t firstSampleNum,
+                                 std::uint32_t numSamples);
     // The pipeline's source thread (read()): closes a window that has run
     // out and writes its line, and logs what the event callback left.
     static void maybeWriteHealth(Link& link);
