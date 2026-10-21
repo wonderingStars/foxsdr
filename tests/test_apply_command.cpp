@@ -1066,9 +1066,18 @@ void receiverOps(AppWindow& a) {
         CHECK(refused(A::apply(a, c), FOXAPI_BAD_ARGUMENT));
         CHECK(A::vfo(a) == v);
     }
+    // The servers' configuration (stage 5a): the engine records it, and starts nothing (the listeners are still the window's). The strict
+    // parse and the worker for the password are test_engine_api_05a's; here the op has its case.
+    covering(FOXAPI_OP_SERVER_CONFIG);
+    {
+        CHECK(ok(A::apply(a, cmd::makeText(FOXAPI_OP_SERVER_CONFIG, "{\"cat\":{\"port\":4999}}"))));
+        CHECK(refused(A::apply(a, cmd::makeText(FOXAPI_OP_SERVER_CONFIG, "{}")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, cmd::makeText(FOXAPI_OP_SERVER_CONFIG, "{\"cat\":{\"port\":80}}")), FOXAPI_BAD_ARGUMENT));
+        CHECK(ok(A::apply(a, cmd::makeText(FOXAPI_OP_SERVER_CONFIG, "{\"cat\":{\"port\":4532}}"))));
+    }
     // An op nothing implements is UNSUPPORTED, and says so.
     {
-        const FoxCommandResult r = A::apply(a, cmd::make(FOXAPI_OP_SERVER_CONFIG));
+        const FoxCommandResult r = A::apply(a, cmd::make(FOXAPI_OP_UPDATE_CHECK));
         CHECK(refused(r, FOXAPI_UNSUPPORTED));
         CHECK(std::strlen(r.message) > 0u);
         CHECK(refused(A::apply(a, cmd::make(0x7FFFu)), FOXAPI_UNSUPPORTED));

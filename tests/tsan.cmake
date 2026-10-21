@@ -73,6 +73,8 @@ set(CASCADE_TSAN_TESTS
     # through the C table against a real headless Engine on its own control thread
     test_engine_api_conformance test_engine_api_03 test_engine_api_merge
     test_engine_api_transmit test_engine_api_hermetic
+    # stage 5a: read_audio's feed against its readers, the internal sessions' profiles and SERVER_CONFIG's worker against the pass
+    test_engine_api_05a
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order
@@ -90,6 +92,9 @@ set(CASCADE_TSAN_TESTS
     # pass, the ordering, the 2 s hold, the latch's marking and the re-arm (test_transmit_key_race's case G is the same storm
     # against the hammer); and the same standing conditions through the window's own source and a real web server
     test_remote_control_pull test_remote_key_release
+    # stage 5a: the same guarantee for the engine-internal sessions - the tier applied after the local and API queues whatever arrived
+    # first, the same-pass release, the flood, the liveness and the storm with producers on the web and CAT sessions
+    test_internal_session_order
     # the pump move's step P3 (PluginUi's thread ownership): the directive the engine's pass posts and the window applies at the head
     # of its poll, the bounded unload handshake, the queued request_tune, the plugin UI's instances created, polled and destroyed on
     # the window's thread alone - the link's protocol with threads; a real window, a real engine with its pass on its own thread

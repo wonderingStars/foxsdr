@@ -93,7 +93,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_SET_POSITION, "SET_POSITION", true},
     {FOXAPI_OP_GPS, "GPS", true},
     {FOXAPI_OP_SCAN_SERIAL_PORTS, "SCAN_SERIAL_PORTS", true},
-    {FOXAPI_OP_SERVER_CONFIG, "SERVER_CONFIG", false},
+    {FOXAPI_OP_SERVER_CONFIG, "SERVER_CONFIG", true},
     {FOXAPI_OP_UPDATE_CHECK, "UPDATE_CHECK", false},
     // --- extensions ---
     {FOXAPP_OP_VFO_TO_ABSOLUTE, "APP_VFO_TO_ABSOLUTE", true},

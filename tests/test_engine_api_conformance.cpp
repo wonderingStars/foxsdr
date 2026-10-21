@@ -981,21 +981,36 @@ void testBookmarks() {
 }
 
 void testAudioAndSettings() {
-    // PORT: the real engine plays its own audio; the audio stream and the
-    // settings store are not served through the table yet, so their
-    // capability bits are clear and the calls answer UNSUPPORTED - an
-    // interface greys them out (API.md 3, "Capability discovery").
+    // PORT (the reference's testAudioAndSettings): the real engine plays its own audio and, since stage 5a, serves the finished audio
+    // through read_audio (the capability bit is set; tests/test_engine_api_05a.cpp holds the stream itself). The settings store is
+    // not served through the table yet, so its bit is clear - an interface greys it out (API.md 3, "Capability discovery").
     engine_api_test::SerialEngine e(api(), kHooks);
     const FoxEngineApi* a = api();
-    CHECK((a->capabilities & FOXAPI_CAP_AUDIO_STREAM) == 0u);
+    CHECK((a->capabilities & FOXAPI_CAP_AUDIO_STREAM) != 0u);
     CHECK((a->capabilities & FOXAPI_CAP_SETTINGS) == 0u);
-    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    testing::Session noAudio(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     uint64_t cursor = 0;
-    float buf[480];
+    float buf[4800];
+    CHECK_EQ(a->read_audio(noAudio.raw(), &cursor, buf, 4800, nullptr), FOXAPI_DENIED);
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     FoxStreamInfo info{};
     info.structSize = sizeof(info);
-    CHECK_EQ(a->read_audio(s.raw(), &cursor, buf, 480, &info), FOXAPI_UNSUPPORTED);
-    CHECK_EQ(cursor, 0ull);
+    // A short info is refused, not silently left unfilled - and the cursor does not move, so no audio is lost to the refusal.
+    FoxStreamInfo shortInfo{};
+    shortInfo.structSize = static_cast<uint32_t>(FOXAPI_MIN_STREAM_INFO - 8);
+    uint64_t probe = 12345;
+    CHECK_EQ(a->read_audio(s.raw(), &probe, buf, 4800, &shortInfo), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(probe, 12345ull);
+    CHECK_EQ(a->read_audio(s.raw(), &cursor, buf, 4800, &info), 0);  // joins live
+    CHECK_EQ(info.rateHz, 48000.0);
+    CHECK_EQ(info.channels, 1u);
+    CHECK(cursor >= 1u);
+    int64_t audioTotal = 0;
+    CHECK(check::waitFor([&] {
+        const int32_t n = a->read_audio(s.raw(), &cursor, buf, 4800, &info);
+        audioTotal += n > 0 ? n : 0;
+        return audioTotal >= 4800;
+    }, 3000));
     char v[64];
     CHECK_EQ(a->get_setting(s.raw(), "no.such.key", v, sizeof(v)), FOXAPI_NOT_FOUND);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SETTING_SET, 0, 0, "ui.note=hello")).result.status, FOXAPI_UNSUPPORTED);

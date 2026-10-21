@@ -3291,7 +3291,7 @@ private:
     // members. The web one takes the whole block (state and lists of one
     // publish); CAT reads only figures, lock-free.
     cascade::net::RadioStatus webStatusNow() const;
-    cascade::net::RadioStatus catStatusNow() const;
+    cascade::net::CatRadio catStatusNow() const;
     // Drains the server's control queue and applies each request to the radio.
     // Called once per frame from drawUi, on the GUI thread, because that is
     // the only thread allowed to move the SOURCE — the HTTP handler validated

@@ -87,6 +87,7 @@
 #include "engine/engine_host.hpp"
 #include "engine/engine_shell.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/server_host.hpp"
 #include "engine/pass_stats.hpp"
 #include "engine/running_view.hpp"
 #include "engine/source_fallback.hpp"
@@ -2164,6 +2165,8 @@ private:
     // sites, the per-radio gain memory ...) - goes back into the file as it was read instead of as a default. Every field a half DOES
     // write is overwritten by it. Written by applyConfig (the control thread's own call), read by publishConfig on the same thread.
     cascade::core::AppConfig loadedCfg_;
+    // The web server's and the CAT listener's configuration, status and counters (stage 5a). Restored by applyConfig, written by fillConfig.
+    ServerHost servers_;
     // TESTS ONLY (an engine created through the table with testHooks=1): the
     // fault test.fault stands in for (published as FAULTED until RUN 1), and
     // the dummy load TX_OPEN "test:tx:dummy" installs. Empty / null in the
@@ -2668,6 +2671,11 @@ public:
     // serves a browser or a CAT client installs the source once (before the pass runs on a thread of its own, or from it);
     // an engine with none - the table's headless engine - pulls nothing and judges nothing.
     //
+    // STAGE 5a: the same phase is where the ENGINE-INTERNAL SESSIONS' commands are applied (ApiHost::applyTail, called by pumpRemoteControls). The
+    // web server and CAT will hold sessions of their own (ApiHost::openInternalSession) instead of these queues; their submits go to a tier of
+    // their own, drained here after the pull's requests, so "after the local and API queues, whenever it arrived" stops being a property of
+    // a pull and is structural (docs/api-0.3-additions.md 8.16.4). The pull stays until 5c/5d delete it.
+    //
     // WHY A PULL AND NOT A PUSH THROUGH submitCommand OR THE API QUEUE: both drain BEFORE this phase, so a remote request
     // that arrived in the same pass as a local one would be applied FIRST and could win the key (rule 6, first come); the
     // pull keeps today's order, the web after both.
@@ -2858,6 +2866,9 @@ public:
     // and events. Built with the engine; its two pass calls run in
     // pumpFrameBegin and pumpPublish, on whichever thread pumps.
     ApiHost& api() { return *api_; }
+    // THE SERVER HOST (stage 5a, engine/server_host.hpp): the web server's and the CAT listener's configuration (FOXAPI_OP_SERVER_CONFIG,
+    // the engine's half of the config file), their status and live counters. The listeners themselves move in with 5b.
+    ServerHost& servers() { return servers_; }
     // The C handle an in-process interface opens its sessions on.
     FoxEngine* apiHandle() { return api_->handle(); }
     // Rebuilds the API host with engine options (FoxEngineParams::options) -

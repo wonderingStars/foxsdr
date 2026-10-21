@@ -7732,6 +7732,20 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
                                           cascade::versionString());
             return res;
+        case FOXAPI_OP_SERVER_CONFIG: {
+            // Stage 5a (docs/api-0.3-additions.md 8.16): the local operator's configuration of the web server and the CAT listener.
+            // LOCAL + ADMIN only (validate), the JSON in the text (the first 255 bytes are all validate sees, so a longer one
+            // comes by submit_text), strict (ServerConfigRequest). The configuration is the engine's and rides the config file; the
+            // listeners it describes are the window's until 5b, so until then this records and publishes, and starts nothing. The
+            // password is hashed on a worker the pass polls (a click used to run PBKDF2 on the GUI thread).
+            ServerConfigRequest req;
+            std::string why;
+            if (!parseServerConfigRequest(text, req, why)) { return refuse(FOXAPI_BAD_ARGUMENT, why.c_str()); }
+            const ServerHost::Outcome o = servers_.apply(req);
+            res.status = o.status;
+            if (!o.message.empty()) { std::snprintf(res.message, sizeof(res.message), "%s", o.message.c_str()); }
+            return res;
+        }
         case FOXAPP_OP_TRACK_INFO_LINE: {
             // The track-info plugin's status ("cannot reach the registry") lands in the same log as the decoders' lines: it is
             // the only place a user looks when a plugin is quiet. SENT BY THE WINDOW (it owns the plugin's cache and polls its
@@ -8196,6 +8210,7 @@ void Engine::exitCauseFinish(const cascade::core::ExitVerdict& v) {
 // start-up state (core::startupState), not the file as saved.
 void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     loadedCfg_ = cfg;  // see loadedCfg_ in engine.hpp
+    servers_.load(cfg);  // the web server's and the CAT listener's half (stage 5a)
     // The device scan's UHD rule (gui::soapyDriversWithNoHardware): the switch,
     // and the Soapy args the file named whether or not that radio opens this
     // launch - a USRP that is switched off or unreachable today is still one
@@ -8674,6 +8689,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
 // of AppConfig is written by exactly one half. Not const: the usage report's
 // journal (telemetryJournal) accrues the session as it is written.
 void Engine::fillConfig(cascade::core::AppConfig& cfg) {
+    // The web server's and the CAT listener's fields (stage 5a). Until the window stops writing them itself (5b) its own mirror is
+    // written over these in currentConfig, and the two agree; once it does not, this is the only writer.
+    servers_.store(cfg);
     // WHICH SOURCE THE FILE NAMES, which is not always the one that is
     // running: a restore that could not open the saved radio leaves the
     // generator installed and the radio remembered, and the radio is what
@@ -9045,22 +9063,29 @@ void Engine::pumpInputs() {
 // the operator could observe is the one the window's frame had - a local press landed in the same pass is applied first and a
 // remote one meets its key (rule 6). Every request is a TRANSLATION into commands (applyControlRequest) and applyCommand
 // reaches the key rules from RUN 0, TX_OPEN, TX_CLOSE and the web's TX_PTT, so this phase and no other thread is what keeps
-// ApiHostImpl::rules_ single-threaded. A source that is not installed makes the phase a no-op - the table's headless engine
+// ApiHostImpl::rules_ single-threaded. A source that is not installed makes the pull a no-op - the table's headless engine
 // pulls nothing and judges nothing (it has no server, so no standing condition either).
+//
+// STAGE 5a: THE SAME PLACE IS THE INTERNAL TIER'S. The engine-internal sessions (ApiHost::openInternalSession - what the web server and
+// the CAT listener will hold in place of the pull) submit to a queue of their own, drained here, after the pull's requests (which only
+// the old path uses, and which shrinks as the servers move): the order the operator could observe is the same one, by construction
+// now - a session's command can never be applied before the local and API queues of the pass it lands in, whenever it arrived.
 void Engine::pumpRemoteControls() {
     std::shared_ptr<const RemoteControlSource> source;
     {
         std::lock_guard<std::mutex> lk(remoteSourceMutex_);
         source = remoteSource_;
     }
-    if (source == nullptr) { return; }
-    const RemoteControls pulled = (*source)();
-    for (const cascade::net::ControlRequest& r : pulled.requests) { applyControlRequest(r); }
-    // THE STANDING CONDITION ON THE REMOTE KEY, once a pass: the server that carries the browser's PTT is not running (never
-    // started, disabled in the settings panel). The consent half is the local operator's TX_REMOTE_ARM, which the key rules
-    // themselves withdraw with its session. WebServer::stop() also queues a release for the requests above; releasing twice
-    // costs nothing (a no-op with no remote key held).
-    if (!pulled.serverRunning) { api_->webRemoteStopped("the web server is not running"); }
+    if (source != nullptr) {
+        const RemoteControls pulled = (*source)();
+        for (const cascade::net::ControlRequest& r : pulled.requests) { applyControlRequest(r); }
+        // THE STANDING CONDITION ON THE REMOTE KEY, once a pass: the server that carries the browser's PTT is not running (never
+        // started, disabled in the settings panel). The consent half is the local operator's TX_REMOTE_ARM, which the key rules
+        // themselves withdraw with its session. WebServer::stop() also queues a release for the requests above; releasing twice
+        // costs nothing (a no-op with no remote key held).
+        if (!pulled.serverRunning) { api_->webRemoteStopped("the web server is not running"); }
+    }
+    api_->applyTail();
 }
 
 void Engine::setRemoteControlSource(RemoteControlSource source) {
@@ -9292,6 +9317,8 @@ void Engine::pumpWorkers() {
     pollPendingRetune();
     // Same contract for the catalogue fetch / plugin download.
     pollPluginAsync();
+    // ...and the web password's hash (stage 5a): a worker, never the pass.
+    servers_.poll();
     // AFTER the poll, never before: the poll is what clears installPending_
     // when a transfer lands, and a pump that ran first would see the slot busy
     // and waste a frame on every module in the queue.

@@ -30,9 +30,23 @@
 #include <string>
 
 #include "net/web_control.hpp"
-#include "net/web_server.hpp"
 
 namespace cascade::net {
+
+// WHAT A CAT CLIENT IS TOLD, AND NOTHING MORE (engine extraction stage 5a). The protocol layer used to take the browser's whole
+// RadioStatus - sixty fields, the lists, the strings - for the six numbers it reads, which made rigctld include the web server and
+// would have made a CAT connection a reader of the web page's status. These are the six: the centre and the offset inside the band
+// (their sum is the tuned frequency), the sample rate (the band the VFO may move inside), the mode by name and its passband, and
+// whether the receiver runs ("power" on or off). Everything on it is a FoxReceiverState figure, so a CAT connection fills it from
+// read_state on its own session (net/status_compose.hpp: catRadioFrom, and catRadioFromState for the figures alone).
+struct CatRadio {
+    bool running = false;
+    double centerHz = 0.0;
+    double sampleRateHz = 0.0;
+    double vfoOffsetHz = 0.0;
+    double bandwidthHz = 0.0;
+    std::string mode;  // the receiver's mode name (dsp::modeFromName's words)
+};
 
 // Hamlib error codes, by their documented names. Only the ones this server can
 // actually produce are listed: inventing a code we never return would suggest
@@ -82,11 +96,11 @@ bool catModeFromToken(const std::string& token, cascade::dsp::DemodMode& out);
 //
 // `line` may carry a trailing CR and/or LF and any amount of surrounding
 // whitespace; a blank line produces an empty reply and no control request.
-CatResult executeCatLine(const std::string& line, const RadioStatus& status);
+CatResult executeCatLine(const std::string& line, const CatRadio& status);
 
 // The `\dump_state` payload. Split out because it is long, fixed, and worth
 // reading on its own: it is how a client learns what this radio can do.
-std::string catDumpState(const RadioStatus& status);
+std::string catDumpState(const CatRadio& status);
 
 }  // namespace cascade::net
 

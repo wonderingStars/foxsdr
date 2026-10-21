@@ -42,13 +42,13 @@ constexpr SockT INVALID_SOCKET = -1;
 
 using cascade::net::CatServer;
 using cascade::net::ControlRequest;
-using cascade::net::RadioStatus;
+using cascade::net::CatRadio;
 
 namespace {
 
-RadioStatus g_status;
+CatRadio g_status;
 
-RadioStatus provider() { return g_status; }
+CatRadio provider() { return g_status; }
 
 void closeClient(SockT s) {
 #if defined(_WIN32)
@@ -143,7 +143,7 @@ int startOnFreePort(CatServer& server, std::string& error) {
 }
 
 void resetStatus() {
-    g_status = RadioStatus{};
+    g_status = CatRadio{};
     g_status.running = true;
     g_status.centerHz = 145'000'000.0;
     g_status.sampleRateHz = 2'400'000.0;

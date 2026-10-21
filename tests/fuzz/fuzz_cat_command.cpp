@@ -27,7 +27,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     // The radio the client is talking to. A few real-world values plus whatever
     // the input says, so frequency and bandwidth formatting is reached with the
     // awkward ones too.
-    RadioStatus status;
+    CatRadio status;
     const std::uint8_t pick = in.u8();
     status.running = (pick & 1) != 0;
     status.centerHz = (pick & 2) ? in.rawDouble() : 100.0e6;

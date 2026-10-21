@@ -148,7 +148,7 @@ bool catModeFromToken(const std::string& token, cascade::dsp::DemodMode& out) {
     return false;
 }
 
-std::string catDumpState(const RadioStatus& status) {
+std::string catDumpState(const CatRadio& status) {
     // The state block a client reads once to learn the radio's shape. The
     // layout is positional, so the comments name each field rather than
     // leaving a column of bare numbers.
@@ -204,7 +204,7 @@ std::string catDumpState(const RadioStatus& status) {
     return o.str();
 }
 
-CatResult executeCatLine(const std::string& line, const RadioStatus& status) {
+CatResult executeCatLine(const std::string& line, const CatRadio& status) {
     const std::string text = trimmed(line);
     if (text.empty()) {
         return CatResult{};  // nothing said, nothing answered

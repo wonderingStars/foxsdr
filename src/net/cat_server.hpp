@@ -54,7 +54,7 @@ inline constexpr std::size_t kMaxQueuedCatControls = 64;
 
 class CatServer {
 public:
-    using StatusProvider = std::function<RadioStatus()>;
+    using StatusProvider = std::function<CatRadio()>;
 
     CatServer() = default;
     ~CatServer();

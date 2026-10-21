@@ -22,12 +22,12 @@ using cascade::net::catModeToken;
 using cascade::net::CatResult;
 using cascade::net::executeCatLine;
 using cascade::net::planTune;
-using cascade::net::RadioStatus;
+using cascade::net::CatRadio;
 
 namespace {
 
-RadioStatus baseStatus() {
-    RadioStatus s;
+CatRadio baseStatus() {
+    CatRadio s;
     s.running = true;
     s.centerHz = 145'000'000.0;
     s.sampleRateHz = 2'400'000.0;
@@ -37,12 +37,12 @@ RadioStatus baseStatus() {
     return s;
 }
 
-CatResult run(const std::string& line, const RadioStatus& s) {
+CatResult run(const std::string& line, const CatRadio& s) {
     return executeCatLine(line, s);
 }
 
 void testGetFrequency() {
-    RadioStatus s = baseStatus();
+    CatRadio s = baseStatus();
     s.vfoOffsetHz = 500'000.0;
 
     const CatResult r = run("f", s);
@@ -60,7 +60,7 @@ void testGetFrequency() {
 }
 
 void testSetFrequencyInsideBandMovesOnlyTheVfo() {
-    const RadioStatus s = baseStatus();  // 145.0 MHz centre, 2.4 MS/s
+    const CatRadio s = baseStatus();  // 145.0 MHz centre, 2.4 MS/s
 
     const CatResult r = run("F 145800000", s);
     CHECK(r.reply == "RPRT 0\n");  // a set answers only this
@@ -76,7 +76,7 @@ void testSetFrequencyInsideBandMovesOnlyTheVfo() {
 }
 
 void testSetFrequencyOutsideBandRetunes() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
 
     const CatResult r = run("F 433000000", s);
     CHECK(r.reply == "RPRT 0\n");
@@ -124,7 +124,7 @@ void testTunePlanBoundary() {
 }
 
 void testSetFrequencyRejectsRubbish() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     // Each of these would be read as a frequency by a lenient parser, and each
     // would tune the radio somewhere the client never asked for.
     const char* bad[] = {"F", "F abc", "F 14250000abc", "F -1", "F ", "F 1e"};
@@ -136,7 +136,7 @@ void testSetFrequencyRejectsRubbish() {
 }
 
 void testSetFrequencyHonoursTheSameUpperBoundAsTheWeb() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     // The web and GUI tune paths refuse a centre above kMaxCenterHz. CAT drives
     // the SAME receiver, so a client that asks for more has to be refused the
     // same way rather than being the one route that can push a nonsense
@@ -158,7 +158,7 @@ void testSetFrequencyHonoursTheSameUpperBoundAsTheWeb() {
 }
 
 void testGetMode() {
-    RadioStatus s = baseStatus();
+    CatRadio s = baseStatus();
     s.mode = "USB";
     s.bandwidthHz = 2400.0;
 
@@ -177,7 +177,7 @@ void testGetMode() {
 }
 
 void testSetMode() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
 
     const CatResult r = run("M USB 2400", s);
     CHECK(r.reply == "RPRT 0\n");
@@ -209,7 +209,7 @@ void testSetMode() {
 }
 
 void testSetModeHonoursTheSamePassbandBoundsAsTheWeb() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     // The web path clamps a requested passband to [kMinBandwidthHz,
     // kMaxBandwidthHz] (web_control.hpp). CAT drives the SAME receiver and the
     // same filter, so a CAT client asking for a 1 Hz or a 999 MHz passband has
@@ -280,7 +280,7 @@ void testModeTokenRoundTrip() {
 }
 
 void testVfoAndSplit() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
 
     CHECK(run("v", s).reply == "VFOA\n");
     CHECK(run("V VFOA", s).reply == "RPRT 0\n");
@@ -295,7 +295,7 @@ void testVfoAndSplit() {
 }
 
 void testPttIsAlwaysReceive() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
 
     CHECK(run("t", s).reply == "0\n");
     // Being told to stop transmitting is agreeable.
@@ -308,7 +308,7 @@ void testPttIsAlwaysReceive() {
 }
 
 void testQuit() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     const CatResult r = run("q", s);
     CHECK(r.quit);
     CHECK(r.reply.empty());  // nothing to say; the socket just closes
@@ -317,7 +317,7 @@ void testQuit() {
 }
 
 void testUnknownCommands() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     // Understood-but-unimplemented and outright unknown both answer, so a
     // client is never left waiting on a line that will not come.
     CHECK(run("Z", s).reply == "RPRT -4\n");
@@ -348,7 +348,7 @@ void testUnknownCommands() {
 }
 
 void testChkVfoAndPowerState() {
-    RadioStatus s = baseStatus();
+    CatRadio s = baseStatus();
     CHECK(run("\\chk_vfo", s).reply == "CHKVFO 0\n");
 
     CHECK(run("\\get_powerstat", s).reply == "1\n");
@@ -357,7 +357,7 @@ void testChkVfoAndPowerState() {
 }
 
 void testDumpState() {
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     const CatResult r = run("\\dump_state", s);
     const std::string& d = r.reply;
     CHECK(!d.empty());
@@ -401,7 +401,7 @@ void testSetsNeverApplyDirectly() {
     // code runs on a network thread and the pipeline belongs to the GUI
     // thread. The property is that a set carries a control and a get never
     // does.
-    const RadioStatus s = baseStatus();
+    const CatRadio s = baseStatus();
     const char* sets[] = {"F 145000000", "M USB 2400", "V VFOA", "S 0 VFOA", "T 0"};
     for (const char* line : sets) {
         const CatResult r = run(line, s);

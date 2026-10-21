@@ -448,7 +448,7 @@ void CatServer::serveClient(std::intptr_t sock) {
             const std::string line = pending.substr(0, nl);
             pending.erase(0, nl + 1);
 
-            RadioStatus snapshot = status_ ? status_() : RadioStatus{};
+            CatRadio snapshot = status_ ? status_() : CatRadio{};
             const CatResult result = executeCatLine(line, snapshot);
             commands_.fetch_add(1, std::memory_order_relaxed);
 

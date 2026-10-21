@@ -15711,14 +15711,14 @@ cascade::net::RadioStatus AppWindow::webStatusNow() const {
     return cascade::net::composeRadioStatus(full->state, full->lists.get());
 }
 
-cascade::net::RadioStatus AppWindow::catStatusNow() const {
+cascade::net::CatRadio AppWindow::catStatusNow() const {
     // CAT reads figures only (frequency, offset, rate, mode, bandwidth, run
     // state), so it takes them lock-free. In the rare case a read keeps
     // overlapping a publish it takes the installed block instead - whole,
     // and at most a frame older - rather than answer nothing.
     cascade::core::PublishedState s;
     if (!engine_.readSnapshot(s)) { s = engine_.readFullSnapshot()->state; }
-    return cascade::net::composeRadioStatus(s, nullptr);
+    return cascade::net::catRadioFromState(s);
 }
 
 void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,

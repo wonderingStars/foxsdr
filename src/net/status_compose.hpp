@@ -21,6 +21,7 @@
 #include <cstdint>
 
 #include "core/receiver_snapshot.hpp"
+#include "net/cat_protocol.hpp"
 #include "net/web_server.hpp"
 
 namespace cascade::net {
@@ -40,6 +41,15 @@ const char* scannerStateName(std::uint32_t state);
 // are then empty. Before the first publish (state.app.published false) the
 // answer is a default RadioStatus, which is what a reader got then.
 RadioStatus composeRadioStatus(const cascade::core::PublishedState& state, const RadioStatus* lists);
+
+// The six figures CAT reads (net/cat_protocol.hpp: CatRadio), from the same publish composeRadioStatus reads - the same words for
+// the same state, by construction (the first is the second's six members).
+CatRadio catRadioFrom(const RadioStatus& status);
+CatRadio catRadioFromState(const cascade::core::PublishedState& state);
+// ...and from what a CAT connection's own session reads (read_state's FoxReceiverState): the same six members composeRadioStatus
+// takes from the same fields, so an engine-internal CAT session (stage 5c) answers exactly what the window's snapshot read did.
+// Unlike catRadioFromState it does not know whether anything was published yet (the table says so in the state's `seq`).
+CatRadio catRadioFromRx(const FoxReceiverState& rx);
 
 }  // namespace cascade::net
 

@@ -31,6 +31,7 @@
 #include <mutex>
 #include <random>
 #include <set>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -43,6 +44,7 @@
 #include "engine/engine.hpp"
 #include "engine/receiver_tables.hpp"
 #include "net/status_compose.hpp"
+#include "net/web_audio.hpp"
 #include "source/tx_sink.hpp"
 #include "engine/tune_control.hpp"
 
@@ -119,6 +121,9 @@ struct Options {
     std::int64_t tokenTtlMs = std::int64_t{12} * 3600 * 1000;
     bool testHooks = false;
     bool running = true;  // create(): start the receiver (the reference engine's default)
+    // read_audio: how long the pass keeps feeding the audio ring after a reader last asked (stage 5a). Nothing reads the audio of an
+    // engine nobody listens to, so the pass copies none of it. A test may SHORTEN it.
+    int audioDemandMs = 5000;
 };
 
 Options parseOptions(const std::string& all) {
@@ -161,6 +166,8 @@ Options parseOptions(const std::string& all) {
                 o.testHooks = d != 0.0;
             } else if (k == "running") {
                 o.running = d != 0.0;
+            } else if (k == "audioDemandMs") {
+                o.audioDemandMs = std::clamp(static_cast<int>(d), 10, 5000);
             }
         }
         pos = end + 1;
@@ -365,6 +372,81 @@ enum Group : uint32_t {
     kList = 1u << 6,
 };
 
+// ---------------------------------------------------------------------------
+// The closed op profiles of the engine-internal sessions (stage 5a)
+// ---------------------------------------------------------------------------
+
+// WEB: EXACTLY the closure of net::controlRequestToCommands (net/control_ops.cpp) - every op a ControlRequest can turn into, and no
+// other. That is the browser page's whole power today: the receiver, the display, the audio DSP, the source, the recorder, the
+// bookmarks, the scanner, the plugin grants and presets, the PTT, the plugin store (three ADMIN ops: the page has buttons for them) and
+// six of the application's own ops (the display's ends, the noise-reduction strength, the notch's frequency and Q, the scanner's
+// range). tests/test_engine_api_05a.cpp derives the closure from controlRequestToCommands and compares it with this list both ways.
+constexpr std::uint32_t kWebProfile[] = {
+    FOXAPI_OP_RUN,           FOXAPI_OP_SET_CENTRE,      FOXAPI_OP_SET_MODE,       FOXAPI_OP_SET_BANDWIDTH,
+    FOXAPI_OP_SET_VFO_OFFSET, FOXAPI_OP_SET_SQUELCH,    FOXAPI_OP_SET_VOLUME,     FOXAPI_OP_SET_DISPLAY_RANGE,
+    FOXAPI_OP_SET_DEEMPHASIS, FOXAPI_OP_SET_STEREO,     FOXAPI_OP_SET_NR,         FOXAPI_OP_SET_NOTCH,
+    FOXAPI_OP_SET_AUTO_NOTCH, FOXAPI_OP_SCAN_DEVICES,   FOXAPI_OP_SELECT_SOURCE,  FOXAPI_OP_SET_ANTENNA,
+    FOXAPI_OP_SET_SAMPLE_RATE, FOXAPI_OP_SET_GAIN,      FOXAPI_OP_SET_DEVICE_AGC, FOXAPI_OP_RECORD_IQ,
+    FOXAPI_OP_RECORD_AUDIO,  FOXAPI_OP_BOOKMARK_ADD,    FOXAPI_OP_BOOKMARK_TUNE,  FOXAPI_OP_BOOKMARK_REMOVE,
+    FOXAPI_OP_PLUGIN_GRANT,  FOXAPI_OP_PLUGIN_PRESET,   FOXAPI_OP_SCANNER_RUN,    FOXAPI_OP_SCANNER_SKIP,
+    FOXAPI_OP_TX_PTT,
+    // the plugin store: ADMIN ops the page's "Get plugins", Install and Remove buttons send (the profile, not a grant, allows them)
+    FOXAPI_OP_STORE_FETCH,   FOXAPI_OP_STORE_INSTALL,   FOXAPI_OP_STORE_REMOVE,
+    // the application's own ops the page's sliders send (every other REMOTE session is refused all of them)
+    FOXAPP_OP_SET_DISPLAY_MIN, FOXAPP_OP_SET_DISPLAY_MAX, FOXAPP_OP_SET_NR_STRENGTH, FOXAPP_OP_SET_NOTCH_FREQUENCY,
+    FOXAPP_OP_SET_NOTCH_Q,   FOXAPP_OP_SCANNER_RANGE,
+};
+
+// CAT: what rigctld's F and M can send - the centre, the offset inside the band, the mode and its passband. NEVER the transmitter
+// (the app's CAT answers "T 1" with RPRT -11, and keeps doing so), never the store, never a setting.
+constexpr std::uint32_t kCatProfile[] = {
+    FOXAPI_OP_SET_CENTRE,
+    FOXAPI_OP_SET_VFO_OFFSET,
+    FOXAPI_OP_SET_MODE,
+    FOXAPI_OP_SET_BANDWIDTH,
+};
+
+constexpr std::uint64_t kWebProfileGrants = FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_TRANSMIT | FOXAPI_GRANT_AUDIO;
+constexpr std::uint64_t kCatProfileGrants = FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS;
+
+}  // namespace
+
+std::span<const std::uint32_t> internalProfileOps(InternalKind kind) {
+    switch (kind) {
+        case InternalKind::Web: return std::span<const std::uint32_t>(kWebProfile);
+        case InternalKind::Cat: return std::span<const std::uint32_t>(kCatProfile);
+        case InternalKind::None: break;
+    }
+    return {};
+}
+
+std::uint64_t internalProfileGrants(InternalKind kind) {
+    switch (kind) {
+        case InternalKind::Web: return kWebProfileGrants;
+        case InternalKind::Cat: return kCatProfileGrants;
+        case InternalKind::None: break;
+    }
+    return 0;
+}
+
+const char* internalKindName(InternalKind kind) {
+    switch (kind) {
+        case InternalKind::Web: return "web";
+        case InternalKind::Cat: return "cat";
+        case InternalKind::None: break;
+    }
+    return "";
+}
+
+namespace {
+
+bool profileHas(InternalKind kind, std::uint32_t op) {
+    for (const std::uint32_t o : internalProfileOps(kind)) {
+        if (o == op) { return true; }
+    }
+    return false;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -385,6 +467,9 @@ struct ApiSession : FoxSession {
     // "token:<token>" for a remote one. Latch marks belong to the principal.
     std::string principal;
     std::atomic<bool> detached{false};
+    // Stage 5a: an engine-internal session (ApiHost::openInternalSession) is bound to a closed op profile and submits to the
+    // internal tier (ApiHostImpl::applyTail). None for every session a client opened through the table.
+    InternalKind internal = InternalKind::None;
 
     std::mutex m;  // guards everything below, down to `safer`
     FixedRing<FoxCommandResult> results;
@@ -416,6 +501,7 @@ struct Pending {
     std::uint64_t sourceGen = 0;  // Engine::sourceGen_ when submitted (device-scoped ops)
     std::string principal;        // ApiSession::principal of the sender ("local" needs no allocation)
     std::string longText;         // submit_text's text (API 0.3); empty for every other command
+    InternalKind internal = InternalKind::None;  // the sender's internal kind (stage 5a): which tier, and whose profile a refusal names
 };
 
 // ---------------------------------------------------------------------------
@@ -430,6 +516,9 @@ public:
         live_.reserve(64);
         queue_.reserve(256);
         work_.reserve(256);
+        tailQueue_.reserve(256);
+        tailWork_.reserve(256);
+        audioScratch_.resize(kAudioTapFrames);
         // The web remote's key (engine-internal, REMOTE, never listed): the
         // one session the app's browser page holds. Its heartbeat is the
         // page's status poll (webRemoteBeat).
@@ -474,19 +563,7 @@ public:
         s->lastBeatMs.store(steadyMs());
         {
             std::lock_guard<std::mutex> lk(sessionsMutex_);
-            const int open = static_cast<int>(sessions_.size());
-            if (open >= opt_.maxSessions) { return FOXAPI_LIMIT; }
-            if (remote) {
-                if (open >= opt_.maxSessions - kLocalReservedPlaces) { return FOXAPI_LIMIT; }
-                int remotes = 0;
-                for (const auto& kv : sessions_) {
-                    remotes += ((kv.second->flags & FOXAPI_SESSION_REMOTE) != 0u && !kv.second->detached.load()) ? 1
-                                                                                                                 : 0;
-                }
-                if (remotes >= opt_.maxRemoteSessions) { return FOXAPI_LIMIT; }
-            }
-            s->id = ++nextSessionId_;
-            sessions_[s->id] = s;
+            if (const int32_t st = admitLocked(s, remote); st != FOXAPI_OK) { return st; }
         }
         if (remote && !tokenValid(token.c_str())) {
             std::lock_guard<std::mutex> lk(sessionsMutex_);
@@ -495,6 +572,49 @@ public:
         }
         *out = s.get();
         return FOXAPI_OK;
+    }
+
+    // The session limits (under sessionsMutex_): 64 in all, 16 REMOTE, four places kept for LOCAL ones. An engine-internal session is
+    // REMOTE and counts like any other (TRANSPORTS 2.6). Gives the session its id and files it.
+    int32_t admitLocked(const std::shared_ptr<ApiSession>& s, bool remote) {
+        const int open = static_cast<int>(sessions_.size());
+        if (open >= opt_.maxSessions) { return FOXAPI_LIMIT; }
+        if (remote) {
+            if (open >= opt_.maxSessions - kLocalReservedPlaces) { return FOXAPI_LIMIT; }
+            int remotes = 0;
+            for (const auto& kv : sessions_) {
+                remotes += ((kv.second->flags & FOXAPI_SESSION_REMOTE) != 0u && !kv.second->detached.load()) ? 1 : 0;
+            }
+            if (remotes >= opt_.maxRemoteSessions) { return FOXAPI_LIMIT; }
+        }
+        s->id = ++nextSessionId_;
+        sessions_[s->id] = s;
+        return FOXAPI_OK;
+    }
+
+    // STAGE 5a, ApiHost::openInternalSession: a session the engine's own server holds. No token (nothing outside opened it), the REMOTE
+    // flag, the profile's grants, and the profile itself - an allow-list the session can never widen. Its principal is "web" for the
+    // browser page and "cat:<id>" for one rigctld connection.
+    FoxSession* openInternal(InternalKind kind, const std::string& label, int32_t* status) {
+        const auto fail = [&](int32_t st) -> FoxSession* {
+            if (status != nullptr) { *status = st; }
+            return nullptr;
+        };
+        if (kind != InternalKind::Web && kind != InternalKind::Cat) { return fail(FOXAPI_BAD_ARGUMENT); }
+        auto s = std::make_shared<ApiSession>();
+        s->flags = FOXAPI_SESSION_REMOTE;
+        s->grants = internalProfileGrants(kind) | FOXAPI_GRANT_VIEW;
+        s->clientName = label;
+        s->host = this;
+        s->internal = kind;
+        s->lastBeatMs.store(steadyMs());
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            if (const int32_t st = admitLocked(s, true); st != FOXAPI_OK) { return fail(st); }
+            s->principal = kind == InternalKind::Web ? std::string("web") : "cat:" + std::to_string(s->id);
+        }
+        if (status != nullptr) { *status = FOXAPI_OK; }
+        return s.get();
     }
 
     void closeSession(ApiSession* s) {
@@ -735,6 +855,14 @@ public:
         } else if (opt_.testHooks && std::strcmp(key, "test.queueDepth") == 0) {
             std::lock_guard<std::mutex> lk(queueMutex_);
             v = std::to_string(queue_.size());
+        } else if (opt_.testHooks && std::strcmp(key, "test.tailDepth") == 0) {
+            std::lock_guard<std::mutex> lk(queueMutex_);
+            v = std::to_string(tailQueue_.size());
+        } else if (opt_.testHooks && std::strcmp(key, "test.audioFeed") == 0) {
+            // "feeding=<0|1> written=<frames the ring has been given>": whether the pass is topping the audio ring up now.
+            std::lock_guard<std::mutex> lk(audioFeedMutex_);
+            v = std::string("feeding=") + (audioFeeding_.load() ? "1" : "0") +
+                " written=" + std::to_string(audioRing_ != nullptr ? audioRing_->written() : 0u);
         } else if (opt_.testHooks && std::strcmp(key, "test.keyState") == 0) {
             std::lock_guard<std::mutex> lk(keyStateMutex_);
             v = keyState_;
@@ -794,7 +922,7 @@ public:
             if (kind < 0 && s->pending >= kMaxPendingPerSession) {
                 r.status = FOXAPI_BUSY;
             } else {
-                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen, s->principal, {}};
+                Pending p{c, 0, s->id, s->flags, refused, kind, false, gen, s->principal, {}, s->internal};
                 if (longText != nullptr && refused == FOXAPI_OK) { p.longText = *longText; }
                 if (kind < 0) {
                     r.status = FOXAPI_OK;
@@ -903,6 +1031,104 @@ public:
         }
         if (info != nullptr) { copyOut(local, info, FOXAPI_MIN_SCOPE_INFO); }
         return static_cast<int32_t>(got);
+    }
+
+    // TESTS ONLY (ApiHost::validateForTest; nothing in the product calls it): what submit would answer for `c` from session `s` against
+    // the newest snapshot - the refusal at the door, with nothing queued and nothing applied. The profile tests ask it of every op there
+    // is, which no real submit could do (a store fetch would fetch).
+    int32_t validateForTest(ApiSession* s, const FoxCommand& c) {
+        cascade::core::PublishedState snap;
+        const bool haveSnap = engine_.receiverSnapshot_->read(snap);
+        return validate(*s, c, haveSnap ? &snap.rx : nullptr);
+    }
+
+    // ---- read_audio (stage 5a) -------------------------------------------------------------------------------------------------
+    //
+    // THE FINISHED AUDIO the engine plays, mono at 48 kHz (what Pipeline::audioTap carries), from the ring the browser's /api/audio
+    // has always been served from (net::AudioRing: 96 000 frames, two seconds; a reader that falls behind it is RESYNCED to the oldest
+    // frame and told how many it lost - `dropped` - and nobody else is ever made to wait). The ring is filled from the pipeline's
+    // 4096-frame tap by its monotonic produced-counter, exactly as AppWindow::publishWebAudio did it (the same cap, the same "re-mark
+    // when the counter goes backwards") - but by whoever LOOKS first: every read_audio tops the ring up itself on the reader's thread
+    // (read-time, as read_scope reads its tap), and the pass tops it up once a pass so a reader that polls more slowly than the tap's
+    // 85 ms still has everything. Neither costs the pass anything when nobody listens: the pass feeds only for audioDemandMs after
+    // the last read, and the first read of a quiet engine marks the counter and feeds from there on (a reader joins LIVE).
+    //
+    // WHAT IS DELIBERATELY AS IT WAS: the counter and the tap are two reads, so a block that lands between them shifts the copied
+    // span by that block (a few frames repeated, the same few missed); the COUNT of frames the ring has been given is exact.
+    // A cursor of 0 means "join live" and never names a frame: the ring starts with one frame of silence so a joined cursor is >= 1.
+    int32_t readAudio(ApiSession* s, uint64_t* cursor, float* out, uint32_t cap, FoxStreamInfo* info) {
+        if ((s->grants & FOXAPI_GRANT_AUDIO) == 0u) { return FOXAPI_DENIED; }
+        if (cursor == nullptr || (out == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
+        // A short info is refused BEFORE the cursor moves, never skipped: a caller that silently got no drop count would not know it
+        // lost audio.
+        if (info != nullptr && info->structSize < FOXAPI_MIN_STREAM_INFO) { return FOXAPI_BAD_ARGUMENT; }
+        audioDemandUntilMs_.store(steadyMs() + opt_.audioDemandMs, std::memory_order_relaxed);
+        std::uint64_t dropped = 0;
+        std::size_t n = 0;
+        std::uint64_t written = 0;
+        {
+            std::lock_guard<std::mutex> lk(audioFeedMutex_);
+            if (audioRing_ == nullptr) {
+                audioRing_ = std::make_unique<cascade::net::AudioRing>();
+                // ONE LEADING FRAME OF SILENCE, so that a cursor that has joined the stream is never 0 (0 is "join live"): a reader that
+                // joined an empty stream and kept 0 would join again at its next call, and skip whatever came between. `written` counts it.
+                const float lead = 0.0f;
+                audioRing_->write(&lead, 1);
+            }
+            feedAudioLocked(true);
+            if (*cursor == 0) {
+                *cursor = audioRing_->written();  // join LIVE
+            } else {
+                n = audioRing_->read(*cursor, out, cap, dropped);
+            }
+            written = audioRing_->written();
+        }
+        if (info != nullptr) {
+            FoxStreamInfo local{};
+            local.structSize = sizeof(local);
+            local.channels = 1;
+            local.rateHz = cascade::core::Pipeline::kAudioRateHz;
+            local.dropped = dropped;
+            local.written = written;
+            copyOut(local, info, FOXAPI_MIN_STREAM_INFO);
+        }
+        return static_cast<int32_t>(n);
+    }
+
+    // Under audioFeedMutex_. `asked`: a reader is feeding (so an idle feed starts); the pass's call only continues a feed.
+    void feedAudioLocked(bool asked) {
+        if (audioRing_ == nullptr) { return; }
+        const std::uint64_t produced = engine_.pipeline_.audioSamplesProduced();
+        if (!audioFeeding_.load(std::memory_order_relaxed)) {
+            if (!asked) { return; }
+            // The first read of a quiet stream: start from live, not from everything since launch.
+            audioLastProduced_ = produced;
+            audioFeeding_.store(true, std::memory_order_relaxed);
+            return;
+        }
+        if (produced <= audioLastProduced_) {
+            // Equal is the ordinary "no new audio"; less can only mean the counter restarted, and the honest answer to both is to re-mark.
+            audioLastProduced_ = produced;
+            return;
+        }
+        std::uint64_t fresh = produced - audioLastProduced_;
+        if (fresh > kAudioTapFrames) { fresh = kAudioTapFrames; }  // the tap holds no more: anything older is gone whatever we do
+        const std::size_t got = engine_.pipeline_.audioTap(audioScratch_.data(), static_cast<std::size_t>(fresh));
+        audioRing_->write(audioScratch_.data(), got);
+        audioLastProduced_ = produced;
+    }
+
+    // The pumping thread, once a pass (endPass): feed while somebody is listening, and stop feeding when they stop. A reader that is
+    // feeding at this moment has the same frames in hand: the pass skips rather than wait for it.
+    void feedAudioFromPass() {
+        if (!audioFeeding_.load(std::memory_order_relaxed)) { return; }
+        std::unique_lock<std::mutex> lk(audioFeedMutex_, std::try_to_lock);
+        if (!lk.owns_lock()) { return; }
+        if (steadyMs() >= audioDemandUntilMs_.load(std::memory_order_relaxed)) {
+            audioFeeding_.store(false, std::memory_order_relaxed);  // nobody has asked for a while: the next read marks live again
+            return;
+        }
+        feedAudioLocked(false);
     }
 
     // API 0.3: a patch radio's own spectrum, published once a pass beside the
@@ -1050,6 +1276,7 @@ public:
 
     void beginPass();
     void endPass();
+    void applyTail();
 
 private:
     friend class ApiHost;
@@ -1078,18 +1305,22 @@ private:
     // Every send keeps its own place; a merged send that cannot change
     // anything is dropped (see the reference engine's enqueueLocked, and
     // test_engine_api_merge for the proof).
+    //
+    // An INTERNAL session's commands go to the internal tier (tailQueue_), drained at the pull's old place (applyTail); everything else
+    // to queue_, drained in beginPass. The merge rule is per session, so the same code serves both.
     void enqueueLocked(ApiSession& s, const Pending& p) {
+        std::vector<Pending>& q = s.internal != InternalKind::None ? tailQueue_ : queue_;
         if (p.saferKind < 0) {
-            queue_.push_back(p);
+            q.push_back(p);
             return;
         }
         if (p.merged) {
-            for (auto it = queue_.rbegin(); it != queue_.rend() && it->saferKind >= 0; ++it) {
+            for (auto it = q.rbegin(); it != q.rend() && it->saferKind >= 0; ++it) {
                 if (it->sessionId == p.sessionId && it->saferKind == p.saferKind) { return; }
             }
         }
         ++s.safer[static_cast<std::size_t>(p.saferKind)].copies;
-        queue_.push_back(p);
+        q.push_back(p);
     }
 
     static bool textTerminated(const FoxCommand& c) { return std::memchr(c.text, '\0', sizeof(c.text)) != nullptr; }
@@ -1232,6 +1463,15 @@ private:
     SpectrumRing spectrum_;
     cascade::core::SpectrumFrame frame_;                 // the pumping thread's copy, reused
 
+    // read_audio (stage 5a). The tap holds this many frames (Pipeline::kAudioTapSize), the most one feed can copy.
+    static constexpr std::size_t kAudioTapFrames = 4096;
+    std::mutex audioFeedMutex_;                          // the feed, the ring's pointer and every read of it
+    std::unique_ptr<cascade::net::AudioRing> audioRing_; // made by the first read (384 KB an engine nobody listens to never pays)
+    std::vector<float> audioScratch_;                    // the tap's copy, reserved once: no allocation in the pass
+    std::uint64_t audioLastProduced_ = 0;                // under audioFeedMutex_
+    std::atomic<bool> audioFeeding_{false};
+    std::atomic<std::int64_t> audioDemandUntilMs_{0};
+
     std::mutex sessionsMutex_;
     std::map<uint64_t, std::shared_ptr<ApiSession>> sessions_;
     std::map<uint64_t, std::shared_ptr<ApiSession>> reaped_;
@@ -1240,6 +1480,9 @@ private:
     std::mutex queueMutex_;
     std::condition_variable queueCv_;
     std::vector<Pending> queue_;
+    // The internal tier (stage 5a): what the engine-internal sessions submitted, drained by applyTail. Under queueMutex_ too.
+    std::vector<Pending> tailQueue_;
+    std::vector<Pending> tailWork_;                      // the pumping thread's half of it
     std::vector<uint64_t> closedSessions_;
 
     std::mutex tokensMutex_;
@@ -1296,6 +1539,9 @@ private:
     bool havePatch_ = false;
 
 public:
+    FoxSession* openInternalSession(InternalKind kind, const std::string& label, int32_t* status) {
+        return openInternal(kind, label, status);
+    }
     void setLists(std::shared_ptr<const ApiListBlock> l) {
         std::lock_guard<std::mutex> lk(listsMutex_);
         lists_ = std::move(l);
@@ -1338,7 +1584,15 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
     if (c.op != FOXAPI_OP_SETTING_SET && !keyOp && !cascade::core::cmd::isKnownOp(c.op)) {
         return FOXAPI_UNSUPPORTED;  // a newer interface's op, or one not implemented: it degrades
     }
-    if ((s.grants & grantFor(c.op)) == 0u) { return FOXAPI_DENIED; }
+    // AN ENGINE-INTERNAL SESSION SPEAKS ITS PROFILE'S OPS AND NO OTHER (stage 5a). An op on the profile needs no ADMIN grant even
+    // where the op is an ADMIN one (the page's plugin-store buttons): the profile is what grants it, and it is a closed list.
+    const bool profiled = s.internal != InternalKind::None;
+    const bool profileAllows = profiled && profileHas(s.internal, c.op);
+    if (profiled && !profileAllows) { return FOXAPI_DENIED; }
+    const std::uint64_t need = grantFor(c.op);
+    if ((s.grants & need) == 0u && !(profileAllows && need == FOXAPI_GRANT_ADMIN)) { return FOXAPI_DENIED; }
+    // SERVER_CONFIG changes what listens on this machine: the local operator's, and no REMOTE session is ever given ADMIN.
+    if (c.op == FOXAPI_OP_SERVER_CONFIG && (s.flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
     if (c.op == FOXAPI_OP_SETTING_SET &&
         (!opt_.testHooks || std::strncmp(c.text, "test.", 5) != 0)) {
         // Only the test hooks, and only in an engine created with them; the
@@ -1348,7 +1602,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
     }
     // The app's own extension ops are the standard window's vocabulary, and
     // some name paths on this machine: LOCAL sessions only.
-    if (remote && cascade::core::cmd::isAppOp(c.op)) { return FOXAPI_DENIED; }
+    if (remote && cascade::core::cmd::isAppOp(c.op) && !profileAllows) { return FOXAPI_DENIED; }
     // A REMOTE SESSION HAS THE WEB REMOTE'S POWER AND NO MORE: of the
     // transmitter it may only press and release the PTT, and pressing needs
     // the local operator's standing consent (TX_REMOTE_ARM, below).
@@ -1439,12 +1693,18 @@ const char* ApiHostImpl::refusalText(const Pending& p) {
     const bool remote = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
     switch (p.refused) {
         case FOXAPI_DENIED:
+            if (p.internal != InternalKind::None && !profileHas(p.internal, p.cmd.op)) {
+                return "this session's profile does not include that command";
+            }
             if (remote && (p.cmd.op & 0xFF00u) == 0x0A00u) {
                 return p.cmd.op == FOXAPI_OP_TX_PTT ? "the local operator has not given consent to remote transmit"
                                                     : "a remote session may only press and release the PTT";
             }
             if (remote && cascade::core::cmd::isAppOp(p.cmd.op)) {
                 return "the application's own commands are for sessions on this machine";
+            }
+            if (remote && p.cmd.op == FOXAPI_OP_SERVER_CONFIG) {
+                return "the servers are configured by the local operator only";
             }
             if (remote && p.cmd.op == FOXAPI_OP_TX_LATCH) {
                 return "the latch is a hands-on control and cannot be closed remotely";
@@ -1838,6 +2098,33 @@ void ApiHostImpl::beginPass() {
     }
 }
 
+// THE INTERNAL TIER (stage 5a), at the place the web remote's and CAT's pull has always had in the pass: after the local queue, the API
+// queue (beginPass) and the inputs, before the plugins' requests and the scanner. The web session's commands first, then the CAT
+// connections', each session's in the order it submitted them - the pull's own order (web, then CAT). It is the table's one `apply`:
+// the same range checks, the same key rules, the same Engine::applyCommand as every session's, so what the internal tier adds is WHEN
+// (after the operator at the machine), nothing else.
+//
+// THE KEY DRIVE RUNS AGAIN. txPass sits at the end of beginPass, before this phase; the old pull released a PTT 0 itself (webRemotePtt
+// told the Transmitter at once), while the table's way is to decide in the rules and let txPass drive the Transmitter. Without this
+// second drive a browser's PTT 0 would keep the radio keyed until the NEXT pass. The drive is idempotent (the rules' clocks and the
+// Transmitter's tick are levels), so it runs only when the tier had something to apply.
+void ApiHostImpl::applyTail() {
+    noteKeyTouch();
+    tailWork_.clear();
+    {
+        std::lock_guard<std::mutex> lk(queueMutex_);
+        if (tailQueue_.empty()) { return; }
+        tailWork_.swap(tailQueue_);
+    }
+    for (const InternalKind kind : {InternalKind::Web, InternalKind::Cat}) {
+        for (const Pending& p : tailWork_) {
+            if (p.internal == kind) { apply(p); }
+        }
+    }
+    tailWork_.clear();
+    txPass();
+}
+
 // Once a pass, after the commands: the rules' clocks (the hold, the latch's
 // deadline, every key holder's and consenter's keep-alive), then the
 // Transmitter driven from what they decided and ticked - the control stamp
@@ -2034,6 +2321,8 @@ void ApiHostImpl::endPass() {
         pendingMuteTuneAway_ = -1;
         broadcast(e);
     }
+    // read_audio (stage 5a): the ring is topped up while somebody listens.
+    feedAudioFromPass();
     if (stallAfterPassMs_ > 0) {  // test seam: test.stallAfterPass
         const int ms = stallAfterPassMs_;
         stallAfterPassMs_ = 0;
@@ -2597,6 +2886,25 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
             }
             break;
         // ---- API 0.3 8.8: the fitted modules --------------------------------------------------------------
+        // ---- API 0.3 8.16: the web server and the CAT listener --------------------------------------------------------
+        case FOXAPI_LIST_SERVERS:
+            // What listens on this machine, on which port, and why a start was refused: the local operator's business.
+            if (!local) { return FOXAPI_DENIED; }
+            if (want(b->servers.size())) {
+                const auto& sv = b->servers[index];
+                it.id = index + 1u;
+                copyText(it.name, sv.name.c_str());
+                copyText(it.detail, sv.refusal.c_str());
+                it.value[0] = static_cast<double>(sv.port);
+                if (const auto* live = static_cast<const ServerHost::Counters*>(sv.live)) {
+                    it.value[1] = static_cast<double>(live->clients.load(std::memory_order_relaxed));
+                    it.value[2] = static_cast<double>(live->audioListeners.load(std::memory_order_relaxed));
+                    it.value[3] = static_cast<double>(live->commands.load(std::memory_order_relaxed));
+                }
+                if (sv.running) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (sv.fault) { it.flags |= FOXAPI_ITEM_FAULT; }
+            }
+            break;
         case FOXAPI_LIST_PLUGIN_COMMANDS:
             if (want(b->pluginCommands.size())) {
                 const auto& c = b->pluginCommands[index];
@@ -2624,6 +2932,18 @@ ApiHost::~ApiHost() = default;
 FoxEngine* ApiHost::handle() { return impl_.get(); }
 
 void ApiHost::beginPass() { impl_->beginPass(); }
+void ApiHost::applyTail() { impl_->applyTail(); }
+std::int32_t ApiHost::validateForTest(FoxSession* s, const FoxCommand& c) {
+    return s == nullptr ? FOXAPI_BAD_ARGUMENT : impl_->validateForTest(static_cast<ApiSession*>(s), c);
+}
+FoxSession* ApiHost::openInternalSession(InternalKind kind, const std::string& label, std::int32_t* status) {
+    try {
+        return impl_->openInternalSession(kind, label, status);
+    } catch (...) {
+        if (status != nullptr) { *status = FOXAPI_FAILED; }
+        return nullptr;
+    }
+}
 void ApiHost::endKeyFromEngine(const char* why) { impl_->endKeyFromEngine(why); }
 FoxCommandResult ApiHost::webRemotePtt(bool on) {
     FoxCommandResult r{};
@@ -2762,8 +3082,8 @@ int32_t FOXAPI_CALL apiPollEvents(FoxSession* s, FoxEvent* out, uint32_t cap) {
     return onSession(s, [&](ApiSession* x) { return x->host->pollEvents(x, out, cap); });
 }
 
-int32_t FOXAPI_CALL apiReadAudio(FoxSession* s, uint64_t*, float*, uint32_t, FoxStreamInfo*) {
-    return onSession(s, [&](ApiSession*) { return FOXAPI_UNSUPPORTED; });
+int32_t FOXAPI_CALL apiReadAudio(FoxSession* s, uint64_t* cursor, float* out, uint32_t capFrames, FoxStreamInfo* info) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readAudio(x, cursor, out, capFrames, info); });
 }
 
 int32_t FOXAPI_CALL apiReadIq(FoxSession* s, uint64_t*, float*, uint32_t, FoxStreamInfo*) {
@@ -2811,13 +3131,15 @@ const FoxEngineApi kApi = {
     FOXAPI_VERSION_MAJOR,
     FOXAPI_VERSION_MINOR,
     0,
-    // ONLY WHAT IS IMPLEMENTED (engine-stage4.md plan step 1): the receiver,
-    // the spectrum, the source and gain commands, the audio DSP, bookmarks,
-    // events and the transmitter with its key (API 0.2's rules). Settings,
-    // the audio stream and the rest arrive with their steps and set their
-    // bits then.
-    FOXAPI_CAP_RECEIVER | FOXAPI_CAP_SPECTRUM | FOXAPI_CAP_AUDIO_LEVELS | FOXAPI_CAP_AUDIO_DSP |
-        FOXAPI_CAP_EVENTS | FOXAPI_CAP_TRANSMIT |
+    // ONLY WHAT IS IMPLEMENTED, and every bit of it (stage 5a, docs/api-0.3-additions.md 8.16 states the reason for each bit, set and
+    // clear). The word was set once, at plan step 1, with what the table then did; the rest of the 0.2 vocabulary was served by later
+    // steps and never declared, and an interface that greys out what a bit does not promise (the header's own rule) would have greyed
+    // out most of the engine. Clear, on purpose: IQ_STREAM (read_iq), DECODERS (the text EVENTS), SETTINGS (SETTING_SET is the test
+    // hooks), REPORTS, TELEMETRY (the API's own switch is refused), TRACKS (the list is a gap).
+    FOXAPI_CAP_RECEIVER | FOXAPI_CAP_SPECTRUM | FOXAPI_CAP_AUDIO_LEVELS | FOXAPI_CAP_AUDIO_STREAM | FOXAPI_CAP_SOURCES |
+        FOXAPI_CAP_GAINS | FOXAPI_CAP_AUDIO_DSP | FOXAPI_CAP_RDS | FOXAPI_CAP_PATCH | FOXAPI_CAP_RECORDER |
+        FOXAPI_CAP_BOOKMARKS | FOXAPI_CAP_SCANNER | FOXAPI_CAP_PLUGIN_STORE | FOXAPI_CAP_EVENTS | FOXAPI_CAP_BAND_PLAN |
+        FOXAPI_CAP_POSITION | FOXAPI_CAP_TRANSMIT |
         // API 0.3 (docs/api-0.3-additions.md).
         FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM | FOXAPI_CAP_IMAGES,
     "FoxSDR engine",

@@ -102,4 +102,30 @@ RadioStatus composeRadioStatus(const cascade::core::PublishedState& state, const
     return o;
 }
 
+CatRadio catRadioFrom(const RadioStatus& status) {
+    CatRadio r;
+    r.running = status.running;
+    r.centerHz = status.centerHz;
+    r.sampleRateHz = status.sampleRateHz;
+    r.vfoOffsetHz = status.vfoOffsetHz;
+    r.bandwidthHz = status.bandwidthHz;
+    r.mode = status.mode;
+    return r;
+}
+
+CatRadio catRadioFromState(const cascade::core::PublishedState& state) {
+    return catRadioFrom(composeRadioStatus(state, nullptr));
+}
+
+CatRadio catRadioFromRx(const FoxReceiverState& rx) {
+    CatRadio r;
+    r.running = (rx.flags & FOXAPI_RX_RUNNING) != 0u;
+    r.centerHz = rx.centreHz;
+    r.sampleRateHz = rx.sampleRateHz;
+    r.vfoOffsetHz = rx.vfoOffsetHz;
+    r.bandwidthHz = rx.bandwidthHz;
+    r.mode = demodName(rx.demodMode);
+    return r;
+}
+
 }  // namespace cascade::net

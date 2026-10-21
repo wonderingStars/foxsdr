@@ -72,6 +72,8 @@
 //   F10 the GPS reader (API 0.3 8.13): the GPS list is ONE entry read at the call from the reader, outside the block: 1000 rounds of
 //      reading the idle entry allocate nothing, a LISTENING reader moves nothing in the lists (the fingerprint is the same, the
 //      publish still allocates nothing) and a read costs the sentence the engine words, a bounded handful.
+//   F12 stage 5a (API 0.3 8.16): the servers are one number in the fingerprint, read_audio allocates nothing once warm, the pass's
+//       audio feed adds nothing to a pass, and the internal tier costs per command what the application of the command costs.
 //   F11 the usage switch, the session counters and the diagnostics context (API 0.3 8.13): the four facts are built with the block
 //      and hashed into its fingerprint, each input ALONE (the switch, the id, the launches, the crashes), a settled pass with
 //      them allocates nothing and so do 1000 reads of the two diag facts (the switch's key is 17 bytes, and the table's lookup of
@@ -263,6 +265,7 @@ struct AppWindowTestAccess {
     static void setPluginDir(std::string (*dir)()) { cascade::engine::Engine::testHooks_.pluginDir = dir; }
     static void apply(cascade::engine::Engine& e, const FoxCommand& c) { (void)e.applyCommand(c); }
     static std::uint64_t publishLists(cascade::engine::Engine& e) { return e.publishApiLists(); }
+    static std::uint64_t produced(cascade::engine::Engine& e) { return e.pipeline_.audioSamplesProduced(); }
     // The fitted-modules window's inputs (API 0.3 8.8): the plugin API's host side (what a module's own calls
     // reach through the bridge), the install records, and the drain of what the modules said.
     static cascade::core::PluginApiCore& core(cascade::engine::Engine& e) { return *e.pluginApi_; }
@@ -400,6 +403,11 @@ long allocationsOfPublishes(cascade::engine::Engine& e, const cascade::core::Rds
     for (int i = 0; i < kPublishes; ++i) { Access::publish(e, ps, heard); }
     t_counting = false;
     return t_news;
+}
+
+bool waitProduced(cascade::engine::Engine& e, std::uint64_t frames) {
+    for (int i = 0; i < 2500 && Access::produced(e) < frames; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+    return Access::produced(e) >= frames;
 }
 
 }  // namespace
@@ -1981,5 +1989,213 @@ int main() {
     }
 
 // F11 CASE END>>
+// <<F12 CASE BEGIN
+
+    // F12: STAGE 5a - read_audio, the internal tier and the servers' facts take nothing from the pass (API 0.3 8.16).
+    //   (a) the servers are hashed into the lists' fingerprint by ONE number (ServerHost::version): settled publishes with the web
+    //       server and CAT configured, a listener reporting and a counter moving allocate nothing; each input moves the
+    //       fingerprint ALONE where it should (the configuration, a listener's report), and the traffic counters do not move it;
+    //   (b) read_audio: 1000 reads of a warm ring allocate nothing on the reader's thread;
+    //   (c) the pass's audio feed allocates nothing: an endPass with somebody listening costs what one with nobody does;
+    //   (d) the internal tier: an empty tier costs the pass nothing, and a tier of commands costs per command what the same command
+    //       costs to apply (the table's `apply`), with nothing added for the tier itself.
+    {
+        cascade::engine::Engine e12;
+        e12.configureApi("testHooks=1;audioDemandMs=5000");
+        e12.initialise();
+        (void)e12.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RUN, 1));
+        e12.controlPass();
+        e12.controlPass();
+        // (a)
+        {
+            cascade::engine::ServerConfigRequest req;
+            std::string why;
+            CHECK(cascade::engine::parseServerConfigRequest(
+                R"({"web":{"enabled":true,"port":9000,"username":"op"},"cat":{"enabled":true,"port":4600}})", req, why));
+            (void)e12.servers().apply(req);
+            (void)Access::publishLists(e12);
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e12); }
+            t_counting = false;
+            std::printf("F12: %d settled publishes with the servers configured: %ld heap allocations\n", kPublishes, t_news);
+            CHECK(t_news == 0);
+            const auto movedBy = [&](const char* what, auto change, bool moves) {
+                const std::uint64_t before = Access::fingerprint(e12);
+                change();
+                const std::uint64_t after = Access::fingerprint(e12);
+                CHECK((after != before) == moves);
+                t_news = 0;
+                t_counting = true;
+                (void)Access::publishLists(e12);  // the rebuild (when there is one)
+                t_counting = false;
+                const long rebuild = t_news;
+                t_news = 0;
+                t_counting = true;
+                for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e12); }
+                t_counting = false;
+                std::printf("F12: %-44s %s the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n", what,
+                            moves ? "moved" : "left", rebuild, kPublishes, t_news);
+                CHECK(t_news == 0);
+                if (moves) { CHECK(rebuild > 0 && rebuild < 2000); }
+            };
+            movedBy("the web port", [&] {
+                cascade::engine::ServerConfigRequest r2;
+                r2.webPort = 9100;
+                (void)e12.servers().apply(r2);
+            }, true);
+            movedBy("the same port said again", [&] {
+                cascade::engine::ServerConfigRequest r2;
+                r2.webPort = 9100;
+                (void)e12.servers().apply(r2);
+            }, false);
+            movedBy("CAT's bind-all switch", [&] {
+                cascade::engine::ServerConfigRequest r2;
+                r2.catBindAll = true;
+                (void)e12.servers().apply(r2);
+            }, true);
+            movedBy("a listener's report", [&] {
+                cascade::engine::ServerHost::Listener up;
+                up.running = true;
+                up.boundPort = 9100;
+                up.addresses = {"192.168.1.5"};
+                e12.servers().setWeb(up);
+            }, true);
+            movedBy("the same report again", [&] {
+                cascade::engine::ServerHost::Listener up;
+                up.running = true;
+                up.boundPort = 9100;
+                up.addresses = {"192.168.1.5"};
+                e12.servers().setWeb(up);
+            }, false);
+            movedBy("the traffic counters (read live)", [&] {
+                e12.servers().webCounters().commands.fetch_add(5);
+                e12.servers().webCounters().clients.store(2);
+                e12.servers().catCounters().commands.fetch_add(9);
+            }, false);
+        }
+        // (b)
+        const FoxEngineApi* table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        FoxSession* listener = nullptr;
+        {
+            FoxSessionParams p{};
+            p.structSize = sizeof(p);
+            p.flags = FOXAPI_SESSION_LOCAL;
+            p.grants = FOXAPI_GRANT_VIEW | FOXAPI_GRANT_AUDIO;
+            p.clientName = "F12 listener";
+            CHECK(table->open_session(e12.apiHandle(), &p, &listener) == FOXAPI_OK);
+        }
+        CHECK(waitProduced(e12, 30000));
+        std::uint64_t cursor = 0;
+        FoxStreamInfo info{};
+        info.structSize = sizeof(info);
+        std::vector<float> out(4800);
+        (void)table->read_audio(listener, &cursor, out.data(), 0, &info);  // the join (makes the ring: allocates, once)
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        (void)table->read_audio(listener, &cursor, out.data(), 4800, &info);  // warm
+        {
+            long frames = 0;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 1000; ++i) {
+                if (i % 100 == 0) {  // (let the receiver make audio, so the reads copy frames out, and the top-up copies frames in)
+                    t_counting = false;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                    t_counting = true;
+                }
+                const int32_t n = table->read_audio(listener, &cursor, out.data(), 4800, &info);
+                frames += n > 0 ? n : 0;
+            }
+            t_counting = false;
+            std::printf("F12: 1000 reads of read_audio (%ld frames in all): %ld heap allocations\n", frames, t_news);
+            CHECK(frames > 1000);
+            CHECK(t_news == 0);
+        }
+        // (c) The pass's own feed. A control pass by hand (endPass inside) with a listener inside its demand window, against the same
+        // pass with the feed stopped: the feed adds nothing.
+        auto passAllocs = [&](int n) {
+            for (int i = 0; i < 3; ++i) { e12.controlPass(); }  // warm
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < n; ++i) { e12.api().endPass(); }
+            t_counting = false;
+            return t_news;
+        };
+        (void)table->read_audio(listener, &cursor, out.data(), 4800, &info);  // demand on
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const long fed = passAllocs(60);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const long fedMore = passAllocs(60);
+        std::printf("F12: 60 endPass calls with a listener (the pass feeds the ring): %ld, again: %ld heap allocations\n", fed, fedMore);
+        CHECK(fed == 0 && fedMore == 0);
+        {
+            // Stop the feed (the demand lapses) and count the same calls.
+            cascade::engine::Engine e13;
+            e13.configureApi("testHooks=1");
+            e13.initialise();
+            e13.controlPass();
+            e13.controlPass();
+            for (int i = 0; i < 3; ++i) { e13.controlPass(); }
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 60; ++i) { e13.api().endPass(); }
+            t_counting = false;
+            std::printf("F12: 60 endPass calls with nobody listening: %ld heap allocations\n", t_news);
+            CHECK(t_news == 0);  // ...and the same with nobody listening: the feed adds nothing to either
+        }
+        table->close_session(listener);
+
+        // (d) THE INTERNAL TIER
+        {
+            FoxSession* web = e12.api().openInternalSession(cascade::engine::InternalKind::Web, "F12 web");
+            CHECK(web != nullptr);
+            FoxCommand v{};
+            v.structSize = sizeof(v);
+            v.op = FOXAPI_OP_SET_VOLUME;
+            v.num[0] = 0.4;
+            // an empty tier: nothing to drain, nothing allocated
+            e12.api().applyTail();
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { e12.api().applyTail(); }
+            t_counting = false;
+            std::printf("F12: %d empty tiers: %ld heap allocations\n", kPublishes, t_news);
+            CHECK(t_news == 0);
+            const auto tier = [&](int commands) {
+                for (int i = 0; i < commands; ++i) {
+                    v.num[0] = 0.1 + 0.001 * (i % 100);
+                    CHECK(table->submit(web, &v, 1, nullptr) == 1);
+                }
+                t_news = 0;
+                t_counting = true;
+                e12.api().applyTail();
+                t_counting = false;
+                const long n = t_news;
+                e12.api().endPass();  // (the results go out)
+                FoxCommandResult r[64];
+                for (auto& x : r) { x.structSize = sizeof(x); }
+                while (table->poll_results(web, r, 64) == 64) {}
+                return n;
+            };
+            (void)tier(10);  // warm
+            const long a50 = tier(50);
+            const long a200 = tier(200);
+            // the same commands applied straight by the engine, for the cost of the application itself
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < 200; ++i) {
+                v.num[0] = 0.1 + 0.001 * (i % 100);
+                (void)e12.applyCommand(v);
+            }
+            t_counting = false;
+            const long direct = t_news;
+            std::printf("F12: a tier of 50 commands: %ld heap allocations, of 200: %ld; 200 applied straight by the engine: %ld\n", a50,
+                        a200, direct);
+            CHECK(a200 == direct);  // the tier adds nothing of its own to the application
+            CHECK(a50 == 0);
+            table->close_session(web);
+        }
+    }
+// F12 CASE END>>
     return testSummary("test_engine_publish_alloc");
 }

@@ -28,7 +28,9 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/receiver_tables.hpp"
+#include "engine/server_host.hpp"
 #include "engine/soundcard_panel.hpp"
+#include "net/web_policy.hpp"
 #include "source/airspy_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
@@ -455,6 +457,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.text(telemetryInstallId_);
     f.value(telemetryLaunches_);
     f.value(telemetryCrashes_);
+    // The servers (API 0.3 8.16): the host's one version moves with the configuration, a listener's report and the password's hash
+    // starting and finishing - and with nothing a connection does (the counters are read live).
+    f.value(servers_.version());
     // An Airspy's own choices.
     if (airspy != nullptr) {
         f.value(airspy->gainMode());
@@ -1088,6 +1093,44 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("telemetry.installId", telemetryEnabled_ ? telemetryInstallId_ : std::string(), true);
     fact("diag.launches", std::to_string(telemetryLaunches_), true);
     fact("diag.crashes", std::to_string(telemetryCrashes_), true);
+    // THE SERVERS (API 0.3 8.16), all LOCAL: what the local operator configured through SERVER_CONFIG, what the policy makes of it and
+    // what the listeners say of themselves. NEVER the password or its record - only whether one is set.
+    {
+        const ServerConfig sc = servers_.config();
+        const ServerHost::Listener wl = servers_.web();
+        const ServerHost::Listener cl = servers_.cat();
+        cascade::net::WebServerConfig probe = sc.web;
+        probe.enabled = true;  // "would it be allowed", whether or not it is switched on
+        const cascade::net::BindDecision decision = cascade::net::evaluateBind(probe);
+        fact("web.enabled", sc.web.enabled ? "1" : "0", true);
+        fact("web.bindAddress", sc.web.bindAddress, true);
+        fact("web.port", std::to_string(sc.web.port), true);
+        fact("web.username", sc.web.username, true);
+        fact("web.hasPassword", sc.web.passwordRecord.empty() ? "0" : "1", true);
+        fact("web.passwordPending", servers_.passwordPending() ? "1" : "0", true);
+        fact("web.reachable", decision.allowed() && decision.reachableOffMachine ? "1" : "0", true);
+        fact("web.authRequired", decision.allowed() && decision.authRequired ? "1" : "0", true);
+        fact("web.policy", decision.allowed() ? std::string() : decision.reason, true);
+        std::string addresses;
+        for (const std::string& a : wl.addresses) { addresses += (addresses.empty() ? "" : "\n") + a; }
+        fact("web.addresses", addresses, true);
+        fact("cat.enabled", sc.cat.enabled ? "1" : "0", true);
+        fact("cat.bindAll", sc.cat.bindAll ? "1" : "0", true);
+        fact("cat.port", std::to_string(sc.cat.port), true);
+        const auto add = [&b](const char* name, const ServerHost::Listener& l, bool enabled, int configuredPort,
+                              const ServerHost::Counters& live) {
+            ApiListBlock::Server s;
+            s.name = name;
+            s.running = l.running;
+            s.port = l.running && l.boundPort > 0 ? l.boundPort : configuredPort;
+            s.refusal = l.refusal;
+            s.fault = enabled && !l.running && !l.refusal.empty();
+            s.live = &live;
+            b.servers.push_back(std::move(s));
+        };
+        add("web", wl, sc.web.enabled, sc.web.port, servers_.webCounters());
+        add("cat", cl, sc.cat.enabled, sc.cat.port, servers_.catCounters());
+    }
     // THE RECORDINGS: the two recorders' takes (current or last), then the
     // patch's files.
     fact("recorder.dir", recordDir_, true);

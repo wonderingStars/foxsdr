@@ -284,7 +284,7 @@ struct AppWindowTestAccess {
         rawEngine(a.engine_).publishReceiverState();
     }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
-    static cascade::net::RadioStatus catStatus(AppWindow& a) { return a.catStatusNow(); }
+    static cascade::net::CatRadio catStatus(AppWindow& a) { return a.catStatusNow(); }
     // Engine stage 2's cost, measured on the real window (report only).
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -371,7 +371,7 @@ void recordCat(AppWindow& a) {
     };
     for (const char* line : kLines) {
         // Asked afresh for every line, as the CAT server asks per request.
-        const cascade::net::RadioStatus s = A::catStatus(a);
+        const cascade::net::CatRadio s = A::catStatus(a);
         const cascade::net::CatResult r = cascade::net::executeCatLine(line, s);
         std::string o = std::string("cat [") + printable(line) + "] reply=" + printable(r.reply) +
                         " quit=" + (r.quit ? "1" : "0") + " control=" + (r.hasControl ? "1" : "0");

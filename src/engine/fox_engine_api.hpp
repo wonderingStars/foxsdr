@@ -35,6 +35,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,23 @@ class ApiHostImpl;
 struct ApiListBlock;
 struct ApiLiveBlock;
 struct ApiImageSet;
+
+// ENGINE-INTERNAL SESSIONS (stage 5a; docs/api-0.3-additions.md 8.16). The web server and the CAT listener are part of the engine
+// (TRANSPORTS 2.6), so each holds a session of its own that no outside client opened: no token, the REMOTE flag (so it can never
+// latch, hold ADMIN as a grant, name a path or be armed for transmit), and a CLOSED OP PROFILE - an allow-list fixed when the session
+// is opened and enforced at submit, so the session can speak exactly the ops its server speaks today and no other. A violation is
+// answered DENIED as a result, like any refusal. Not part of the C table or the vendored header: only code inside the engine opens one
+// (ApiHost::openInternalSession), and every other call - submit, poll_results, read_state, read_spectrum, read_audio, heartbeat,
+// close_session - is the table's own, on the FoxSession* this returns.
+enum class InternalKind : int {
+    None = 0,
+    Web = 1,  // the browser page: what /api/control can emit, the plugin store and the PTT included
+    Cat = 2,  // rigctld: tune, mode and passband, never the transmitter
+};
+// The ops a kind's profile allows, and the grants besides VIEW it holds. The closure tests read these.
+std::span<const std::uint32_t> internalProfileOps(InternalKind kind);
+std::uint64_t internalProfileGrants(InternalKind kind);
+const char* internalKindName(InternalKind kind);
 
 // The engine's side of the table. One per Engine; built with it.
 class ApiHost {
@@ -72,6 +90,20 @@ public:
     // The pumping thread's two calls, once a pass (see the file header).
     void beginPass();
     void endPass();
+    // STAGE 5a, the pumping thread's third call: the INTERNAL tier (Engine::pumpRemoteControls, the place the pull of the web
+    // remote's and CAT's requests has always been - after the local and API queues, the inputs and before the plugins and the
+    // scanner). Drains what the internal sessions submitted, the web's before CAT's and each in its own order, then runs the key drive
+    // again so a PTT 0 released here releases the Transmitter in THIS pass. Why a tier of its own and not the queue beginPass drains:
+    // that queue is in ARRIVAL order, and a browser that arrived first in wall time would then win the key against a local press that
+    // landed in the same pass (rule 6, the operator at the machine comes first). Nothing is applied here by any other thread.
+    void applyTail();
+    // Opens an engine-internal session (see InternalKind): the C table's handle for it, or null with `status` saying why (FOXAPI_LIMIT
+    // beyond the session limits - it counts against the 64 and the 16 REMOTE places like any other - or FOXAPI_BAD_ARGUMENT). Any
+    // thread. The caller closes it with the table's close_session.
+    FoxSession* openInternalSession(InternalKind kind, const std::string& label, std::int32_t* status = nullptr);
+    // TESTS ONLY - nothing in the product calls it: the status submit would give `c` from session `s` at the door (the refusal a result
+    // would carry), with nothing queued or applied. Any thread.
+    std::int32_t validateForTest(FoxSession* s, const FoxCommand& c);
     // The pumping thread hands over a new list block (before the publish
     // whose listSeq says it changed).
     void setLists(std::shared_ptr<const ApiListBlock> lists);
@@ -437,6 +469,15 @@ struct ApiListBlock {
         bool localOnly = false;
     };
     std::map<std::string, Fact> facts;
+    // API 0.3 8.16, SERVERS: the web server and the CAT listener as the engine's server host reported them (engine/server_host.hpp). The
+    // counters are the host's own atomics, read when the list is read, so traffic rebuilds no block.
+    struct Server {
+        std::string name, refusal;
+        int port = 0;
+        bool running = false, fault = false;
+        const void* live = nullptr;  // const ServerHost::Counters*
+    };
+    std::vector<Server> servers;
     // FOXAPI_EVENT_PATCH: what the graph's publish says. (patchVersion: the graph's version, API 0.3 8.12 - the
     // same number as fact.patch.version, in the same block.)
     std::uint64_t patchEpoch = 0;
