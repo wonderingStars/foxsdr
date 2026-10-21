@@ -140,6 +140,31 @@ race:PaUnixThread_NotifyParent
 #                  change could not be built where this repository is developed).
 race:RealStop
 
+# FOURTH, ADDED ON THE ENGINE/STAGE4 BRANCH (not on master; 2026-10-21, the 0.99.84 merge's TSan leg, docs/engine-merge-0.99.84.md
+# section 10), from test_engine_api_merge, which creates and destroys 24 engines in one process: the engine's control thread (and an
+# engine's own teardown) asks AudioOut::streamAlive(), i.e. Pa_IsStreamActive, while the sink's callback thread is ending.
+#
+#   WARNING: ThreadSanitizer: data race
+#     Write of size 4 at 0x726000120244 by thread T293:
+#       #0 OnExit third_party/portaudio/src/hostapi/alsa/pa_linux_alsa.c:3415   #1 CallbackThreadFunc ...:4226
+#     Previous read of size 4 at 0x726000120244 by thread T315 (mutexes: write M0, read M1):
+#       #0 IsStreamActive ...pa_linux_alsa.c:3165   #1 Pa_IsStreamActive ...pa_front.c:1533
+#       #2 cascade::sink::AudioOut::streamAlive() const src/sink/audio_out.cpp:376 ...
+#   SUMMARY: ThreadSanitizer: data race pa_linux_alsa.c:3415 in OnExit
+#
+#   isActive     - `PaError isActive` in PaAlsaStream: the callback thread's last act (OnExit, after the stream's finished
+#                  callback) stores 0, and Pa_IsStreamActive returns it with no lock, as PortAudio documents it callable from any
+#                  thread - a status flag a poller reads, a stale 1 being "not finished yet" and a 0 being final. It is a
+#                  stream's liveness poll and nothing else, which is all the sink's streamAlive() does with it.
+#                  The field is a struct member, which a `race:` line cannot name, so the line names the one PortAudio function
+#                  that reads it: IsStreamActive (and its caller Pa_IsStreamActive, which the same substring matches) is
+#                  `return stream->isActive;` and runs no code of ours. NOT `race:OnExit`, for the reason given under RealStop.
+#                  Not a regression of the merge: the same read is in b4584aa's published state (fillPublishedState); it
+#                  needed a run that destroys engines while others poll, and the merge's extra poll at teardown
+#                  (refreshDiagContext) widens the window a little. Seen once in 1 run at C0 (under the real-time starvation of
+#                  section 10) and once in 9 runs at the fixed tip; never in 12 runs at b4584aa.
+race:IsStreamActive
+
 # DELIBERATELY NOT LISTED.
 #   libusb       - not linked: the USB drivers use usbfs directly (src/usb).
 #   PortAudio's ring buffer - its callback thread and our writer share it, and its
