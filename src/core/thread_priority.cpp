@@ -25,6 +25,7 @@ namespace cascade::core {
 namespace {
 
 std::atomic<bool> g_mmcssDisabledForTest{false};
+std::atomic<bool> g_disabledForTest{false};
 
 #if defined(_WIN32)
 
@@ -67,9 +68,17 @@ void ThreadPriorityScope::setMmcssDisabledForTest(bool disabled) {
     g_mmcssDisabledForTest.store(disabled, std::memory_order_relaxed);
 }
 
+void ThreadPriorityScope::setDisabledForTest(bool disabled) {
+    g_disabledForTest.store(disabled, std::memory_order_relaxed);
+}
+
 #if defined(_WIN32)
 
 ThreadPriorityScope::ThreadPriorityScope() {
+    if (g_disabledForTest.load(std::memory_order_relaxed)) {
+        outcome_ = "none: switched off for a test";
+        return;
+    }
     // The Multimedia Class Scheduler, class "Pro Audio": what an audio program is
     // meant to ask for, and the one that survives the machine being busy.
     std::string why;   // what to say if neither works
@@ -130,6 +139,10 @@ ThreadPriorityScope::~ThreadPriorityScope() {
 
 ThreadPriorityScope::ThreadPriorityScope() {
     handle_ = nullptr;   // (the Windows task handle; nothing to hold here)
+    if (g_disabledForTest.load(std::memory_order_relaxed)) {
+        outcome_ = "none: switched off for a test";
+        return;
+    }
     // SCHED_RR at the lowest real-time priority. An ordinary user is refused
     // (EPERM) unless RLIMIT_RTPRIO allows it, and that is the normal case: the
     // thread is left exactly as it was and the outcome says so. Nice is not

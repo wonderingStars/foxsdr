@@ -144,6 +144,27 @@ int main() {
     }
 #endif
 
+    // --- 2b. The seam that asks for nothing, on every platform -------------------
+    {
+        ThreadPriorityScope::setDisabledForTest(true);
+        const Seen s = scopeOnAThread();
+        ThreadPriorityScope::setDisabledForTest(false);
+        std::printf("thread priority scope switched off: outcome \"%s\", priority %d -> %d -> %d\n",
+                    s.outcome.c_str(), s.before, s.during, s.after);
+        CHECK(startsWith(s.outcome, "none: "));
+        CHECK(!s.raised);
+        CHECK(s.during == s.before);   // the thread was not touched
+        CHECK(s.after == s.before);
+        // ...and the seam is off again: the next scope asks as it should.
+        const Seen again = scopeOnAThread();
+#if defined(_WIN32)
+        CHECK(again.outcome == "mmcss" || again.outcome == "above-normal");
+#else
+        CHECK(again.outcome == "sched-rr" || startsWith(again.outcome, "none: "));
+        CHECK(again.outcome != "none: switched off for a test");
+#endif
+    }
+
     // --- 3. The real Pipeline ----------------------------------------------------
     {
         Pipeline::Config cfg;

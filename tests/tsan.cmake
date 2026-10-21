@@ -72,7 +72,7 @@ set(CASCADE_TSAN_TESTS
     # the engine API held to the reference checklist, and the API's own groups, driven
     # through the C table against a real headless Engine on its own control thread
     test_engine_api_conformance test_engine_api_03 test_engine_api_merge
-    test_engine_api_transmit
+    test_engine_api_transmit test_engine_api_hermetic
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

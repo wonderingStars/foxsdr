@@ -55,6 +55,18 @@ public:
     // works. Process-wide; never set by the application.
     static void setMmcssDisabledForTest(bool disabled);
 
+    // TEST SEAM. True makes the next scopes ask for NOTHING, on every platform:
+    // the thread is left exactly as it was and the outcome is "none: switched off
+    // for a test". For a test that runs many engines in one process (the engine
+    // API's merge sweep runs 24): each engine's DSP and source threads would
+    // otherwise be real-time threads wherever the operating system grants it
+    // (Linux as root, which is how the ThreadSanitizer leg runs under WSL), and
+    // 48 real-time threads doing their work flat out starve every ordinary thread
+    // on the machine - the engines' own control threads included, so a keep-alive
+    // lapses (docs/engine-merge-0.99.84.md section 10). Process-wide; set by
+    // engine_api_test::hermetic() and never by the application.
+    static void setDisabledForTest(bool disabled);
+
 private:
     enum class Kind { None, Mmcss, AboveNormal, RoundRobin };
     Kind kind_ = Kind::None;

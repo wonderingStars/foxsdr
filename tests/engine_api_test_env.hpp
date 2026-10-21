@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <string>
 
+#include "core/thread_priority.hpp"
+
 #if defined(_WIN32)
 #include <process.h>
 #include <windows.h>
@@ -43,6 +45,11 @@ inline void hermetic(const char* tag) {
         setEnv(v, tmp);
     }
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
+    // THE SCHEDULER IS THE MACHINE'S, NOT THE TEST'S (0.99.84 merge, docs/engine-merge-0.99.84.md section 10). Master's 0.99.73 makes
+    // every pipeline's DSP and source threads real-time wherever the operating system grants it (Linux as root: the ThreadSanitizer
+    // leg under WSL), and a test that runs 24 engines at once (test_engine_api_merge) then starves its own control threads: 458 s
+    // instead of 106 s, and keep-alives that lapse. Asking for priority is test_dsp_priority's subject, not these tests'.
+    cascade::core::ThreadPriorityScope::setDisabledForTest(true);
 }
 
 }  // namespace engine_api_test
