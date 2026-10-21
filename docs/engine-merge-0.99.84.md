@@ -100,7 +100,7 @@ sat in a file the branch had not touched but the code it calls had moved:
 
 ## 4. The build, the fence, the tests
 
-(Filled in at the end of this pass: sections 7 and 8.)
+The results are in section 9 ("Status at the end of this pass"); the API additions are section 7, the traps section 8.
 
 ## 5. tests/tsan.cmake
 
@@ -312,6 +312,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the radio and its sound stay responsive with many modules fitted ......................... re-expressed in part: the audio buffer that deepens itself
     (C1, test_audio_lead_app); a fitted plugin that runs only while it is used is stubbed PLUGIN-RUN (test_plugin_rescan_skip and
     merge_pending_part_audio_lead_plugin_wake)
+  * the DECODER OUTPUT and plugin picture windows open inside the main window; RESET WINDOW SIZES places them there ........ stubbed WINDOW-PLACEMENT
+    (placeInsideMainWindow; test_decoder_window_app). Found by the gui-labelled tests, not by the release-note pass: the ledger had not listed it.
 
 0.99.74
   * GAIN and SQUELCH dials with AUTO keys on the top bar ..................................... stubbed RAIL-CHROME (test_deck_knobs_app)
@@ -388,8 +390,116 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 ### 6.2 Totals
 
-(Computed from section 6.1 at the end of the pass: see "Status at the end of this pass".)
+134 checklist items (docs/release-notes-0.99.43 to 0.99.84, one line each; an item that is split between states is counted under the
+state that decides whether the user has it):
+
+  * carried      42   (git merged them in files the branch did not restructure: core/, dsp/, source/, sink/, net/, third_party/, a pure gui/ view,
+                       a catalogue). "Carried" is the merge's CLAIM. The gui-labelled tests showed it is not safe to read it as verified: nine
+                       changes of master's that sat in functions the branch restructured were silently absent (section 9, commit C7), and
+                       nothing but a running test found them. Where a test of the item runs, the line names it; the others are (unverified).
+  * re-expressed 35   (an Engine member plus facts/ops, or a window part kept as it was: C1-C7; every line names its commit and its test)
+  * stubbed      49   (NOT done: section 6.3; each has a ledger id, its master tests out of the build and replaced by a red placeholder)
+  * n/a           7
+
+49 stubbed of 134 is more than the brief's scope line (about 25 features): the merge commit and the receiver-side re-expressions (PPM, rtl_tcp,
+gain memory, usage record, audio buffer, diagnostics, sentinel, async recordings and lists, plugin rescan, bandwidth log, meter faces) were
+done to the house bar, and the window-side features that need the window ported (the rail chrome, the store and Fitted modules windows, the
+tester pages, patch presets and view keys, markers and spectrum traces, the display range, the map lists, the radio setup, the import dialog,
+the plugin settings forms, plugin run modes, window placement) were left stubbed rather than rushed. The second pass starts from 6.3.
 
 ### 6.3 The tests that are red, and why
 
-(See "Status at the end of this pass".)
+`ctest -L merge-pending`: 54 red placeholders (51 tests, 3 parts of converted tests). Each says its ledger id. In ids (tests):
+
+  RAIL-CHROME (7)         test_app_rail test_rail_fold test_rail_fold_app test_status_fold test_status_fold_app test_deck_knobs_app test_theme_census
+  STORE-VIEW (9)          test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
+                          test_plugin_update_cleanup_app test_plugin_store_view test_fitted_modules_no_disk test_plugin_dup_app test_plugin_store_app
+  PLUGIN-SETTINGS-UI (3)  test_plugin_settings_ui test_decoder_settings_fold_app test_plugin_pathpick_app
+  PLUGIN-ROW-KEYS (2)     test_programme_audio_app test_row_keys_app
+  TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
+  TESTER-LINK (3)         test_tester_link_app test_link_request_poll test_tester_link
+  MARKERS-SPECTRUM (4)    test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app
+  DISPLAY-RANGE (2)       test_display_menu_app test_display_fold_app
+  PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
+  DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
+  one each                PLUGIN-RESCAN test_plugin_rescan_skip; PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
+                          SOURCE-ROWS test_source_row_app; AIRBAND test_airband_app; PLUGIN-RUN test_plugin_inuse_app; UPDATES test_store_update_app;
+                          IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
+                          MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
+  parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
+
+One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
+strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to
+SITES in the store, which is STORE-VIEW) and the "VIEW" bank heading (RAIL-CHROME renamed it TOOLS; the branch's rail still says VIEW). It is
+left red on purpose: loosening it would hide the strings the second pass owes.
+
+## 7. API additions (docs/api-0.3-additions.md, section 9.1)
+
+No change to `third_party/foxsdr_api/foxsdr_api.h` (0.3's header stands) and no new fingerprint field: five APP ops and the facts they move.
+
+  * ops (core/app_commands.hpp, all LOCAL sessions, listed in kOps): 0x8424 FOXAPP_OP_SET_RTLTCP_ADDR, 0x8425 FOXAPP_OP_SET_AUDIO_BUFFER,
+    0x8426 FOXAPP_OP_SET_PPM, 0x8427 FOXAPP_OP_TEST_HOLD_AUDIO_LOCK (bounded runs only), 0x8428 FOXAPP_OP_BANDWIDTH_DRAG_END.
+  * facts (get_setting): `source.rtlTcpAddr`, `audio.bufferMs`, `audio.leadMs`, `audio.leadNote`, `ppm.on` `ppm.method` `ppm.value` `ppm.whole`
+    `ppm.error` `ppm.card` `ppm.model` `ppm.serial` `ppm.key`. Hashed into the publish fingerprint from the raw members they are built from, with
+    no string built (test_engine_publish_alloc holds it).
+  * the door (not the table): EngineShell::shutdownRelease() lost its argument and EngineShell::shutdownDrain(deadline) is new - the plugins come
+    down BEFORE the clean-exit marker (master 0.99.60), the drain of the lists' and takes' last writes after it. test_engine_shell_guard: 40
+    methods, 72 call sites (was 39 / 71).
+  * moved, not added: ConfigWriter and BackgroundSaver now live in src/core (the engine's saves need them and the CMake guard forbids the engine
+    including src/gui).
+
+## 8. Traps found on the way (for the second pass and for the next merge)
+
+  1. THE SURVEY IS NOT THE CHECK. docs/engine-merge-0.99.84-lostlines.txt is a function-level diff; it missed whole statements in functions the
+     branch restructured (the clean-exit marker's place in the teardown, the waterfall's height, a log line, the input script's deaf mode and
+     verbs, the Add-all rule, a watchdog seam). Every one was found by RUNNING a test: the gui label found six, test_i18n one. Run
+     `ctest -L gui` on the hidden desktop before calling a window merge carried.
+  2. The gui-labelled tests are not in the `headless` label. A headless-only run of this merge was 41 red of 495, all explained - and blind to
+     28 failures of the real-binary tests.
+  3. `hidrun.cmd` / run_on_hidden_desktop.ps1: a ctest regex with `^` or `|` is eaten by cmd.exe; drive ctest from a .cmd file with the names in a
+     list file.
+  4. Heredocs through the tool layer collapse `\\n` and `\\0` to a real newline and a real NUL byte: a Python edit of app_window.cpp wrote a NUL into
+     a char literal twice (grep said "Binary file matches" - that is the tell). Build the escape with chr(92).
+  5. tests/tsan.cmake is stored with CR CR LF line ends on the branch (it was at b4584aa); editing it with an LF-writing tool rewrites every line.
+     Edit it as bytes.
+  6. GCC refuses a default member initializer in Engine::TestHooks (an aggregate used as `inline static TestHooks testHooks_{}` inside the class):
+     the first Linux error of the merge. A TSan build of master here also needs `called_from_lib:libpulse.so.0` in tools/sanitize/tsan.supp.
+  7. This WSL's TSan leg: `test_plugin_audio`, `test_sdrplay_source` and `test_transmitter` fail on a TSan build of origin/master itself with the
+     branch's suppressions (races in the tests' own fake-plugin and fake-device fields); they are not the merge's.
+  8. `$t` inside `wsl bash -lc '...'` called from Git Bash expands to empty before WSL sees it: put loops in a script file and run the file.
+
+## 9. Status at the end of this pass
+
+Commits on engine/stage4 (none pushed): C0 2c5d14f (the merge of origin/master f28d40b), C1 96093f8, C2 168ff14, C3 00e35d2, C4 26203b7, C5 f7cfb85,
+C6 0631eb6, C7 c4a7517 (the gui label's first run), and the commit that carries this section.
+
+Verification (this tree, after C7):
+
+  * Build: a clean rebuild (`cmake --build build --config Release --clean-first --parallel 24`), 0 errors; incremental builds after C7 clean.
+  * Headless label, `ctest -L headless -j 8`: 522 tests; the red ones are the 54 placeholders and test_i18n (6.3). Two other reds appeared once and
+    are not real: test_file_pick (a -j 8 flake; 3 of 3 solo) and test_diagnostics_free (compares the binary's embedded commit with HEAD: stale until
+    the rebuild after C7; 3 of 3 after).
+  * Gui label on the hidden kernel desktop (`-j 1`): 23 of 23 pass (46 before the stubbed ones left it). No straggler cascade/ctest/test_ process
+    afterwards (the two cascade.exe in C:\Program Files\FoxSDR are the installed product, not these runs).
+  * Fence probes: interface_fence_allows, 12 denies / 12 controls - all pass. test_engine_shell_guard passes (40 / 72).
+  * TSan (WSL Ubuntu, GCC 15, `-DCASCADE_SANITIZE=thread`, `ctest -L tsan -j2`, 108 tests): 103 pass, 5 fail.
+      - test_plugin_audio, test_sdrplay_source, test_transmitter: the same race at the same test line on a TSan build of origin/master here (section 8.7).
+      - test_engine_api_transmit: fails its throughput assertion (`issued.size() > 1000`: 533 to 780 new tickets); the same binary built from the
+        branch BEFORE the merge (b4584aa) run three times directly reads 625, 744, 810 - below the line as well - and passed once under ctest, so the
+        assertion straddles its threshold on this machine regardless of the merge. Not attributed to the merge.
+      - test_engine_api_merge: THE ONE THAT IS NOT EXPLAINED. Before the merge: 106 s on 24 threads, 0 differ. After: about 465 s, 783-851 differ
+        (every difference a keep-alive that lapsed - "the interface holding the key stopped answering" - so the engine's passes are slower under
+        TSan than the test's timers allow). Not caused by pumpDiagContext / healthPoll / pollSdrPlayTrouble / exitCausePoll (removing the four per-pass
+        calls: 471 s, 851 differ). UNVERIFIED which cluster: a TSan build of C0 (the raw merge, before the re-expressions) does not get that far - the same test stops on an
+        unsymbolised data race there - so the bisect is C1..C7 and is the second pass's first task (build one commit at a time into a scratch
+        tree with the typo-check and exclusion fixes of C7 applied; ~12 min a build, ~8 min a run).
+  * Visual (hidden desktop, scratch config, SOAPY_SDR_PLUGIN_PATH cleared, master built into a scratch dir; frames 150 / 100 settled; the real
+    %APPDATA% config was never read or written - every run set APPDATA to a scratch tree): four features compared against master's own build:
+    the meter faces (LED ladder on VOLUME, needle on SAMPLE RATE) - identical; the right-click meter-style menu with the checked entry - identical;
+    the PPM frequency-correction section - identical; the receiver view (spectrum, splitter, waterfall to the view's bottom) - identical after the
+    waterfall fix. The only visible differences are the known stubs: the GAIN and SQUELCH dials, the rail and status fold keys, the RADIO SETUP
+    button, the patch page's PRESETS button and information pane.
+
+Not verified: every item of the ledger marked carried without a named test; Linux and Wayland behaviour of the carried glfw patch; the stubbed
+features by definition; rtl_tcp and the audio-buffer combo were not compared visually (their tests, test_audio_lead_app and test_apply_command,
+run and pass).
