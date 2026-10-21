@@ -48,6 +48,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/receiver_snapshot.hpp"
+#include "core/record_finish.hpp"
 #include "engine/engine.hpp"
 #include "test_check.hpp"
 
@@ -212,6 +213,8 @@ int main() {
         CHECK(pumpUntil(e, [](const cascade::core::PublishedState& ps) {
             return (ps.rx.flags & FOXAPI_RX_RECORDING_AUDIO) == 0u;
         }));
+        // A STOP'S FILE IS CLOSED ON A WORKER (0.99.65, core/record_finish.hpp): the take is a finished WAV once that worker is done.
+        CHECK(cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() + std::chrono::seconds(10)));
         const std::vector<fs::path> takes = takesIn(recDir);
         std::error_code ec;
         const std::uintmax_t bytes = takes.size() == 1u ? fs::file_size(takes[0], ec) : 0u;

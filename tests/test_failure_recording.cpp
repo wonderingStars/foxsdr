@@ -70,7 +70,10 @@
 #include "core/patch_recordings.hpp"
 #include "core/record_finish.hpp"
 #include "core/recorder.hpp"
+#include "core/app_commands.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -80,21 +83,31 @@ using cascade::core::Recorder;
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass, except the
+    // recorders themselves, which the test drives directly only with the pass stepped or out of the way.
     static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        a.iqRecorder_.bindOpener(o);
-        a.audioRecorder_.bindOpener(std::move(o));
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
+            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        });
     }
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
-    static bool startAudio(AppWindow& a) { return a.startAudioRecording(); }
-    static bool startIq(AppWindow& a) { return a.startIqRecording(); }
-    static void stopAudio(AppWindow& a) { a.stopAudioRecording(); }
-    static void stopIq(AppWindow& a) { a.stopIqRecording(); }
-    static void poll(AppWindow& a, double nowS) { a.pollRecordStarts(nowS); }
-    static bool finishing(AppWindow& a, bool iq) { return a.takeFinishing(iq); }
-    static Recorder& audioRec(AppWindow& a) { return a.audioRecorder_; }
-    static Recorder& iqRec(AppWindow& a) { return a.iqRecorder_; }
-    static const std::string& recordError(AppWindow& a) { return a.recordError_; }
-    static const std::string& recordNotice(AppWindow& a) { return a.recordNotice_; }
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
+    static bool startAudio(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startAudioRecording(); });
+    }
+    static bool startIq(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startIqRecording(); });
+    }
+    static void stopAudio(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopAudioRecording(); }); }
+    static void stopIq(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopIqRecording(); }); }
+    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
+    static bool finishing(AppWindow& a, bool iq) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).takeFinishing(iq); });
+    }
+    static Recorder& audioRec(AppWindow& a) { return rawEngine(a.engine_).audioRecorder_; }
+    static Recorder& iqRec(AppWindow& a) { return rawEngine(a.engine_).iqRecorder_; }
+    static std::string recordError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordError_; }); }
+    static std::string recordNotice(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordNotice_; }); }
 };
 
 }  // namespace cascade::gui

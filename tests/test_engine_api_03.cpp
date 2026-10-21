@@ -7429,10 +7429,12 @@ void testPatchLive() {
         { std::ofstream f(blocker); f << "x"; }
         Access::setRecordDir(d.eng, blocker.string());
         CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
-        CHECK(passUntil(d.eng, [&] { return liveRow(s, 5, speaker).id != 0u; }, 8000));
-        CHECK(std::string(liveRow(s, 5, speaker).detail).size() > 0);
-        CHECK_EQ(liveRow(s, 2, speaker).id, 0u);
-        std::printf("G13b-3: a speaker with no output: \"%s\"\n", liveRow(s, 5, speaker).detail);
+        // (0.99.64: A WAV SPEAKER'S DESTINATION EXISTS AT ONCE and its file is opened by a worker, so a folder that cannot be made is a LATE
+        // failure: it rides on the speaker's own reading (kind 2: the destination's error is hashed with its figures), and no destination "could
+        // not be made" (kind 5 is for a speaker whose destination is refused on the spot - a sound device that will not open).)
+        CHECK(passUntil(d.eng, [&] { return std::string(liveRow(s, 2, speaker).detail).size() > 0; }, 8000));
+        CHECK_EQ(liveRow(s, 5, speaker).id, 0u);
+        std::printf("G13b-3: a speaker whose file could not be made: \"%s\"\n", liveRow(s, 2, speaker).detail);
         CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 0)).status(), FOXAPI_OK);
         passes(d.eng, 3);
     }

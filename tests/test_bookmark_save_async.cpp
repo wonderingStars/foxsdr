@@ -5,7 +5,7 @@
 // thread that draws the window: create the settings folder, write a temporary
 // file, flush it, rename it over bookmarks.json (or markers.json). That is the
 // synchronous write that froze a window in 0.96.3 for the CONFIG file
-// (gui/config_writer.hpp moved it) and the same disk call in the same folder
+// (core/config_writer.hpp moved it) and the same disk call in the same folder
 // (%APPDATA%\foxsdr, which a Store package redirects and OneDrive can sync). A
 // bookmark star clicked, a marker's note typed, an imported list: any of them
 // followed a second later by a window that did not draw for as long as the disk
@@ -75,8 +75,10 @@
 #include "core/freq_manager.hpp"
 #include "core/freq_markers.hpp"
 #include "core/hang_watchdog.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
-#include "gui/background_saver.hpp"
+#include "pass_seam.hpp"
+#include "core/background_saver.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -89,45 +91,63 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass. The two
+    // lists and their savers are the ENGINE's since the extraction (Engine::flushBookmarkSave / flushMarkerSave).
     static void bindBookmarkWriter(AppWindow& a, ConfigWriter::Writer w) {
-        a.bookmarkSaver_.bind(std::move(w));
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).bookmarkSaver_.bind(std::move(w)); });
     }
     static void bindMarkerWriter(AppWindow& a, ConfigWriter::Writer w) {
-        a.markerSaver_.bind(std::move(w));
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).markerSaver_.bind(std::move(w)); });
     }
     static void setPaths(AppWindow& a, const std::string& bookmarks, const std::string& markers) {
-        a.bookmarkPath_ = bookmarks;
-        a.markerPath_ = markers;
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).bookmarkPath_ = bookmarks;
+            rawEngine(a.engine_).markerPath_ = markers;
+        });
     }
     // What the "Add current" button does after the list changed.
     static void addBookmark(AppWindow& a, const std::string& name, double hz) {
-        cascade::core::Bookmark b;
-        b.name = name;
-        b.freqHz = hz;
-        b.mode = "NFM";
-        a.freqMgr_.add(std::move(b));
-        a.saveBookmarks();
+        passseam::on(rawEngine(a.engine_), [&] {
+            cascade::core::Bookmark b;
+            b.name = name;
+            b.freqHz = hz;
+            b.mode = "NFM";
+            rawEngine(a.engine_).freqMgr_.add(std::move(b));
+            rawEngine(a.engine_).saveBookmarks();
+        });
     }
-    static void addMarker(AppWindow& a, double hz) { a.freqMarkers_.add(hz, 1700000000); }
-    // What drawUi calls, once a frame.
+    static void addMarker(AppWindow& a, double hz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).freqMarkers_.add(hz, 1700000000); }); }
+    // What a pass calls, once a pass.
     static void flush(AppWindow& a) {
-        a.flushBookmarkSave(false);
-        a.flushMarkerSave(false);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).flushBookmarkSave(false);
+            rawEngine(a.engine_).flushMarkerSave(false);
+        });
     }
     // What the teardown calls before the drain: the final request.
     static void flushNow(AppWindow& a) {
-        a.flushBookmarkSave(true);
-        a.flushMarkerSave(true);
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).flushBookmarkSave(true);
+            rawEngine(a.engine_).flushMarkerSave(true);
+        });
     }
-    // The exit drain, as run() calls it.
+    // The exit drain, as shutdownRelease calls it.
     static bool drain(AppWindow& a, int boundMs) {
-        return a.drainListSaves(std::chrono::steady_clock::now() +
-                                std::chrono::milliseconds(boundMs));
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).drainListSaves(std::chrono::steady_clock::now() + std::chrono::milliseconds(boundMs));
+        });
     }
-    static std::string bookmarkText(AppWindow& a) { return a.freqMgr_.serialize(); }
-    static std::string markerText(AppWindow& a) { return a.freqMarkers_.serialize(); }
-    static std::string bookmarkError(AppWindow& a) { return a.bookmarkError_; }
-    static std::string markerError(AppWindow& a) { return a.markerError_; }
+    static std::string bookmarkText(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMgr_.serialize(); }); }
+    static std::string markerText(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).freqMarkers_.serialize(); }); }
+    static std::string bookmarkError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).bookmarkError_; }); }
+    static std::string markerError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).markerError_; }); }
+    // The engine's clock, put at `s` seconds (clockS() == s from here on) and read back.
+    static void setClock(AppWindow& a, double s) {
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).clockOrigin_ = std::chrono::steady_clock::now() - std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(s));
+        });
+    }
+    static double clockNow(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).clockS(); }); }
 };
 
 }  // namespace cascade::gui
@@ -282,17 +302,17 @@ void startWatchdog(HangWatchdog& w, const fs::path& dir) {
     CHECK(w.reportsWritten() == 0u);
 }
 
-// The window's own clock is ImGui's: the debounce reads ImGui::GetTime(), which
-// moves once a frame in the product. Here the test moves it.
-void setClockS(double s) { ImGui::GetCurrentContext()->Time = s; }
+// THE CLOCK THE DEBOUNCE READS is the engine's (Engine::clockS, since the lists are its): here the test puts it where each case needs it, by
+// moving its origin - the window's version of this test moved ImGui's time.
+void setClockS(AppWindow& app, double s) { Access::setClock(app, s); }
 
 // Waits until `cond`, feeding the window's per-frame flush on a moving clock.
 template <class Cond>
 bool pumpApp(AppWindow& app, double ms, Cond&& cond) {
     const double t0 = nowMs();
-    const double base = ImGui::GetCurrentContext()->Time;
+    const double base = Access::clockNow(app);
     while (nowMs() < t0 + ms) {
-        setClockS(base + (nowMs() - t0) / 1000.0);
+        setClockS(app, base + (nowMs() - t0) / 1000.0);
         Access::flush(app);
         if (cond()) { return true; }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -452,7 +472,7 @@ void checkAppWindowSavesNeverHoldAFrame() {
     const double t0 = nowMs();
     bool first = true;
     const LoopStats s = runFrameLoop(w, 4200.0, [&] {
-        setClockS((nowMs() - t0) / 1000.0);
+        setClockS(app, (nowMs() - t0) / 1000.0);
         if (first) {
             first = false;
             Access::addBookmark(app, "Tower", 118.5e6);
@@ -492,17 +512,17 @@ void checkNoEditIsLost() {
         Access::setPaths(app, bm, mk);
         auto disk = makeDisk(600);
         Access::bindBookmarkWriter(app, slowWriter(disk, &FreqManager::writeFile));
-        setClockS(10.0);
+        setClockS(app, 10.0);
         Access::addBookmark(app, "First", 118.0e6);
         const std::string afterFirst = Access::bookmarkText(app);
-        setClockS(11.5);  // past the one-second debounce
+        setClockS(app, 11.5);  // past the one-second debounce
         Access::flush(app);  // the first save starts, and the disk is now busy
         std::this_thread::sleep_for(std::chrono::milliseconds(80));
         // A second edit while the first write is still in flight: debounced, then
         // handed over behind it.
         Access::addBookmark(app, "Second", 119.0e6);
         const std::string afterSecond = Access::bookmarkText(app);
-        setClockS(13.0);
+        setClockS(app, 13.0);
         Access::flush(app);
         CHECK(pumpApp(app, 6000.0, [&] { return writtenOf(disk).size() == 2u; }));
         const std::vector<std::string> order = writtenOf(disk);
@@ -526,7 +546,7 @@ void checkNoEditIsLost() {
         auto mkDisk = makeDisk(400);
         Access::bindBookmarkWriter(app, slowWriter(bmDisk, &FreqManager::writeFile));
         Access::bindMarkerWriter(app, slowWriter(mkDisk, &FreqMarkers::writeFile));
-        setClockS(20.0);
+        setClockS(app, 20.0);
         Access::addBookmark(app, "Before quit", 121.5e6);
         Access::addMarker(app, 145.8e6);
         // Quit lands inside the debounce window: nothing has been requested yet,
@@ -551,7 +571,7 @@ void checkNoEditIsLost() {
         Access::setPaths(app, bm, mk);
         auto disk = makeDisk(500);
         Access::bindBookmarkWriter(app, slowWriter(disk, &FreqManager::writeFile));
-        setClockS(30.0);
+        setClockS(app, 30.0);
         Access::addBookmark(app, "One", 100.0e6);
         Access::flushNow(app);  // in flight, 500 ms
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
@@ -574,7 +594,7 @@ void checkNoEditIsLost() {
         Access::setPaths(app, bm, mk);
         auto disk = makeDisk(2200);
         Access::bindBookmarkWriter(app, slowWriter(disk, &FreqManager::writeFile));
-        setClockS(40.0);
+        setClockS(app, 40.0);
         Access::addBookmark(app, "Wedged", 102.0e6);
         Access::flushNow(app);
         const double t0 = nowMs();
@@ -614,10 +634,10 @@ void checkAFailedSaveIsReportedAsItAlwaysWas() {
     Access::bindBookmarkWriter(app, slowWriter(bmDisk, &FreqManager::writeFile));
     Access::bindMarkerWriter(app, slowWriter(mkDisk, &FreqMarkers::writeFile));
     Access::setPaths(app, badBm, badMk);
-    setClockS(50.0);
+    setClockS(app, 50.0);
     Access::addBookmark(app, "Nowhere", 123.0e6);
     Access::addMarker(app, 146.0e6);
-    setClockS(52.0);
+    setClockS(app, 52.0);
     Access::flush(app);
     CHECK(Access::bookmarkError(app).empty());  // not before the disk has answered
     CHECK(pumpApp(app, 6000.0, [&] {
@@ -629,10 +649,10 @@ void checkAFailedSaveIsReportedAsItAlwaysWas() {
     // Fixed, and edited again: the next successful save clears the stale error.
     const fs::path good = g_scratch / "app-fail" / "good";
     Access::setPaths(app, (good / "bookmarks.json").string(), (good / "markers.json").string());
-    setClockS(60.0);
+    setClockS(app, 60.0);
     Access::addBookmark(app, "Somewhere", 124.0e6);
     Access::addMarker(app, 147.0e6);
-    setClockS(62.0);
+    setClockS(app, 62.0);
     CHECK(pumpApp(app, 6000.0, [&] {
         return Access::bookmarkError(app).empty() && Access::markerError(app).empty();
     }));
@@ -655,7 +675,7 @@ void checkExitWhileASaveIsWedged() {
         Access::setPaths(*app, bm, mk);
         Access::bindBookmarkWriter(*app, slowWriter(bmDisk, &FreqManager::writeFile));
         Access::bindMarkerWriter(*app, slowWriter(mkDisk, &FreqMarkers::writeFile));
-        setClockS(70.0);
+        setClockS(*app, 70.0);
         Access::addBookmark(*app, "Wedged", 125.0e6);
         Access::addMarker(*app, 148.0e6);
         Access::flushNow(*app);
@@ -736,27 +756,25 @@ void checkNothingSavesAListOnTheGuiThread() {
     // THE CONTROL: the scan sees the call it exists to forbid, on the function as
     // it was before the fix.
     const std::string before =
-        "void AppWindow::flushBookmarkSave(bool force) {\n"
+        "void Engine::flushBookmarkSave(bool force) {\n"
         "    bookmarkSaveDirty_ = false;\n"
         "    std::string err;\n"
         "    if (freqMgr_.save(bookmarkPath_, err)) {\n"
         "        bookmarkError_.clear();\n"
         "    }\n"
         "}\n";
-    CHECK(!blockingSavesIn(functionBody(before, "void AppWindow::flushBookmarkSave(")).empty());
+    CHECK(!blockingSavesIn(functionBody(before, "void Engine::flushBookmarkSave(")).empty());
     // ...and a comment ABOUT a save is not one.
     CHECK(blockingSavesIn("void f() {\n    // freqMgr_.save(p) was here\n    int x = 1;\n}\n")
               .empty());
 
-    const fs::path gui = fs::path(CASCADE_SOURCE_DIR) / "src" / "gui";
-    // The flushes live in app_window_disk_work.cpp (the 0.99.64 file for the
-    // members that hand disk work to a worker); saveBookmarks is still in
-    // app_window.cpp. Both are searched.
-    const std::string source =
-        readFileText(gui / "app_window_disk_work.cpp") + "\n" + readFileText(gui / "app_window.cpp");
+    // (The two lists are the ENGINE's since the extraction: src/engine holds what app_window*.cpp did - the flushes and saveBookmarks are in
+    // engine.cpp.)
+    const fs::path gui = fs::path(CASCADE_SOURCE_DIR) / "src" / "engine";
+    const std::string source = readFileText(gui / "engine.cpp");
     CHECK(!source.empty());
-    for (const char* sig : {"void AppWindow::flushBookmarkSave(", "void AppWindow::flushMarkerSave(",
-                            "void AppWindow::saveBookmarks("}) {
+    for (const char* sig : {"void Engine::flushBookmarkSave(", "void Engine::flushMarkerSave(",
+                            "void Engine::saveBookmarks("}) {
         const std::string body = functionBody(source, sig);
         CHECK(body.size() > 100);
         const std::vector<std::string> hits = blockingSavesIn(body);
@@ -764,9 +782,9 @@ void checkNothingSavesAListOnTheGuiThread() {
         CHECK(hits.empty());
     }
     // Both flushes hand the text to their saver, which is the only way out.
-    CHECK(functionBody(source, "void AppWindow::flushBookmarkSave(")
+    CHECK(functionBody(source, "void Engine::flushBookmarkSave(")
               .find("bookmarkSaver_.request(") != std::string::npos);
-    CHECK(functionBody(source, "void AppWindow::flushMarkerSave(")
+    CHECK(functionBody(source, "void Engine::flushMarkerSave(")
               .find("markerSaver_.request(") != std::string::npos);
     // And no file under src/gui saves either list directly, anywhere.
     int direct = 0;
@@ -791,7 +809,6 @@ void checkNothingSavesAListOnTheGuiThread() {
 
 int main() {
     isolate();
-    ImGui::CreateContext();
     checkNothingSavesAListOnTheGuiThread();
     checkTheSynchronousSaveIsReported();
     checkARequestNeverWaits();
@@ -802,7 +819,6 @@ int main() {
     checkNoEditIsLost();
     checkAFailedSaveIsReportedAsItAlwaysWas();
     checkExitWhileASaveIsWedged();
-    ImGui::DestroyContext();
     std::error_code ec;
     if (g_checksFailed == 0) { fs::remove_all(g_scratch, ec); }
     return testSummary("test_bookmark_save_async");

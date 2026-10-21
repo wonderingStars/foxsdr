@@ -200,11 +200,33 @@ struct AppWindowTestAccess {
     }
     // Every reach into the engine is made on the pass's thread with the pass out of the way (passseam::read / on; the pump
     // move's P6), or - the "Held" forms - from the test's thread while a PassHold parks the pass.
+    // A RECORDING'S FILE OPENS ON A WORKER (0.99.63): a take just asked for is armed on the pass that collects the file. Waits (bounded) until no
+    // start is out, polling as the pass does, so a test that asked for a take then reads it "recording".
+    static bool recordStartsOut(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).iqStart_.pending() || rawEngine(a.engine_).audioStart_.pending() || rawEngine(a.engine_).iqStartQueued_ ||
+                   rawEngine(a.engine_).audioStartQueued_;
+        });
+    }
+    static void settleRecordStarts(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (recordStartsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(rawEngine(a.engine_).clockS()); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c, {}); });
+        const FoxCommandResult r =
+            passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(c, {}); });
+        if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
+        return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return passseam::read<FoxCommandResult>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        const FoxCommandResult r = passseam::read<FoxCommandResult>(
+            rawEngine(a.engine_), [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
+        return r;
     }
     // Inline and stepped the wait runs the poll a frame's workers run; free-running the pass runs its own and the wait watches.
     static bool waitOpen(AppWindow& a) {

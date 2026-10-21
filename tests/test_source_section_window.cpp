@@ -1338,10 +1338,12 @@ bool sameCommands(const std::vector<std::string>& got, std::vector<std::string> 
     return same;
 }
 
-// The three that every state of the section has at the top: the combo's opening, Refresh and the network box.
+// The four that every state of the section has at the top: the combo's opening, Refresh, the network box and - since 0.99.56 - the crystal
+// correction's switch (the Source section's "Frequency correction": a click turns it ON, with the stored value of the open radio).
 const std::vector<std::string>& topKeys() {
     static const std::vector<std::string> keys = {expect("APP_SCAN_DEVICES_ON_OPEN"), expect("SCAN_DEVICES"),
-                                                  expect("APP_SET_NETWORK_USRP_SCAN", 1, 0, "")};
+                                                  expect("APP_SET_NETWORK_USRP_SCAN", 1, 0, ""),
+                                                  expect("APP_SET_PPM", 1, 0, "")};
     return keys;
 }
 std::vector<std::string> withTop(std::vector<std::string> more) {

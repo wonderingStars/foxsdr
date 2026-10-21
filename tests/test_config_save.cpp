@@ -1,4 +1,4 @@
-// Tests for gui/config_writer.hpp (ConfigWriter) and the two halves of
+// Tests for core/config_writer.hpp (ConfigWriter) and the two halves of
 // core::ConfigStore::save() it composes (serialize()/writeFile()).
 //
 // THE FIELD REPORT THIS EXISTS FOR. "hang ntdll.dll @
@@ -33,7 +33,7 @@
 // mock can stand in for.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-#include "gui/config_writer.hpp"
+#include "core/config_writer.hpp"
 
 #include "core/config.hpp"
 #include "core/hang_watchdog.hpp"

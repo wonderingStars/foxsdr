@@ -59,6 +59,10 @@
 #include "core/pipeline.hpp"
 #include "core/ppm_correction.hpp"
 #include "core/phase_clock.hpp"
+#include "core/freq_markers.hpp"
+#include "core/background_saver.hpp"
+#include "core/record_finish.hpp"
+#include "engine/record_start.hpp"
 #include "core/plugin_cleanup.hpp"
 #include "core/plugin_directive.hpp"
 #include "core/plugin_dir_signature.hpp"
@@ -739,6 +743,27 @@ private:
     // that could drift from the one on screen. Returns whether a take started;
     // the error, when it did not, is in recordError_ exactly as before.
     bool startAudioRecording();
+    // THE DISK IS NOT TOUCHED ON THE PASS (0.99.63 / 0.99.65; gui/record_start.hpp, core/record_finish.hpp). Recorder::start's create_directories
+    // and fopen waited for the disk on the control thread - whose key the transmitter judges by its heartbeat - and a slow one froze the pass.
+    // A start is PREPARED here (the cheap half: a refusal that needs no disk is reported at once), its file opened by RecordStart's worker and
+    // ARMED when it arrives (pollRecordStarts); a stop detaches the file without touching the disk and RecordFinisher closes it on a worker.
+    // A Record pressed while the previous take's file is still being closed is remembered (iqStartQueued_ / audioStartQueued_) and starts the
+    // moment that file is closed, so a Stop followed by a Record in one breath still gives the take that was asked for and an open never
+    // lands beside a file still being finalised (a file name has a one-second resolution).
+    cascade::gui::RecordStart iqStart_;
+    cascade::gui::RecordStart audioStart_;
+    bool iqStartQueued_ = false;
+    bool audioStartQueued_ = false;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket> iqFinish_;
+    std::shared_ptr<cascade::core::RecordFinisher::Ticket> audioFinish_;
+    void pollRecordStarts(double nowS);
+    void finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, double nowS);
+    void finishTake(bool iq);
+    bool takeFinishing(bool iq) const;
+    void pollRecordFinishes();
+    // At quit: a Record queued behind a finish is not started; the finishes still out are waited for until `deadline` (the shutdown budget's
+    // one kSaveBound, shared with the settings and the lists - Engine::shutdownRelease's argument).
+    bool drainRecordFinishes(std::chrono::steady_clock::time_point deadline);
     // The Radio section's own mode-button path, lifted out for the same
     // reason: a mode key must set the demodulator, its default bandwidth and
     // the log line identically to a click on the button beside it.
@@ -1688,6 +1713,23 @@ private:
     std::string bookmarkPath_;   // empty = bookmark persistence disabled
     std::string bookmarkError_;  // red text in the Bookmarks section
     std::string bookmarkImportNote_;     // what the last import did
+    // THE BOOKMARK LIST'S SAVE IS A WORKER'S (0.99.64, core/config_writer.hpp): the snapshot is taken on the pass, so the worker never reads the
+    // list being edited; the write itself - the folder, the temp file, the flush, the rename - is the worker's. NEVER WAITS FOR THE DISK.
+    // Its answer is collected on the pass it has come back (flushBookmarkSave), a failure in the words the synchronous save gave.
+    cascade::gui::BackgroundSaver bookmarkSaver_{"bookmarks", &cascade::core::FreqManager::writeFile};
+    // THE WATERFALL'S MARKERS (0.99.57; core/freq_markers.hpp), kept beside the bookmarks and saved the same way: markers.json, a save half a
+    // second after a change is first seen (a note is typed a character at a time), the text taken on the pass and the write a worker's. The
+    // list belongs to the engine so that the file's persistence is one thing with the bookmarks'; the markers' interface (the waterfall's
+    // lines and the menu that drops one) is the window's, to be re-expressed (ledger MARKERS).
+    cascade::core::FreqMarkers freqMarkers_;
+    cascade::gui::BackgroundSaver markerSaver_{"markers", &cascade::core::FreqMarkers::writeFile};
+    std::string markerPath_;
+    std::string markerError_;
+    unsigned markerSavedVersion_ = 0;
+    double markerSaveDueS_ = -1.0;
+    void flushMarkerSave(bool force);
+    // At quit: the last saves waited for until `deadline` (the shutdown budget's one kSaveBound, shared - Engine::shutdownRelease's argument).
+    bool drainListSaves(std::chrono::steady_clock::time_point deadline);
     bool bookmarkSaveDirty_ = false;
     double bookmarkSaveDueS_ = 0.0;
 
@@ -2032,6 +2074,8 @@ private:
     std::map<cascade::core::patch::NodeId, std::string> patchRadioSig_;
     // Each speaker's output, and the output key it was made for.
     cascade::core::patch::DestTable patchDests_;
+    // The slow-disk seams of a speaker's file (core/patch_audio.hpp). Empty in the application; a test binds ones that sleep.
+    cascade::core::patch::DestSeams patchDestSeams_;
     std::map<cascade::core::patch::NodeId, std::string> patchDestMadeFor_;
     std::map<cascade::core::patch::NodeId, std::string> patchDestError_;
     // Each radio's newest spectrum, for its Spectrum parts and channel levels.
@@ -2670,7 +2714,9 @@ public:
     // Every step is idempotent, so a phase called twice costs nothing.
     void shutdownQuiesce();
     void shutdownStop();
-    void shutdownRelease();
+    // `drainDeadline`: what is left of the window's drain deadline (taken before the settings' last save), against which the takes' files still
+    // being closed on workers are waited for. A default-constructed one waits for nothing and collects what has finished.
+    void shutdownRelease(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
     void shutdown();
     // THE TWO BOUNDED-RUN PLUGIN DIAGNOSTICS (window port group 14, part e; engine_diagnostics.cpp). Test machinery that
     // prints what the engine decided to stdout; they read nothing but the engine's own state and were the window's until
@@ -2842,7 +2888,9 @@ public:
 
 private:
     bool tornDown_ = false;  // teardown() ran (so ~Engine does not run it again)
-    const std::chrono::steady_clock::time_point clockOrigin_ = std::chrono::steady_clock::now();
+    // The origin of clockS(). Not const: tests/test_bookmark_save_async.cpp moves it (EngineTestAccess) to put the pass's clock where its debounce
+    // cases need it, as the window's version of that test moved ImGui's.
+    std::chrono::steady_clock::time_point clockOrigin_ = std::chrono::steady_clock::now();
     // The remote controls' source (setRemoteControlSource): the pass copies the pointer under the lock and calls it
     // outside it, so a front end may replace or clear it from any thread.
     std::mutex remoteSourceMutex_;

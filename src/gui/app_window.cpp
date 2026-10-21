@@ -45,6 +45,7 @@
 #include "core/crash_handler.hpp"
 #include "core/console_close.hpp"
 #include "core/frame_timing.hpp"
+#include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/sentinel.hpp"
@@ -850,7 +851,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     });
 
     // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
-    // EITHER. gui/config_writer.hpp carries the field report ("hang ntdll.dll
+    // EITHER. core/config_writer.hpp carries the field report ("hang ntdll.dll
     // @ cascade::core::ConfigStore::save", 0.96.3) and the whole argument.
     // Unlike audioOpen_ above, no watchdog hooks: config_writer.hpp never
     // blocks the requesting frame, so there is nothing here to bracket.
@@ -882,6 +883,8 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             updateCheckEnabled_ = cfg.updateCheckEnabled;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
+            // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp).
+            setAsideDamagedFile("settings", configPath_);
         }
         if (configAnnounce_) {
             // ONE diagnostic line, printed only under CASCADE_CONFIG_TEST
@@ -1827,7 +1830,7 @@ int AppWindow::run(int frames) {
         // Collects a config write configWriter_ finished, whether it was
         // requested by maybeSaveConfig() below, by saveConfigNow(), or by the
         // teardown - see requestConfigSave()/pollConfigWriter() in
-        // gui/config_writer.hpp's callers. A no-op every frame nothing was
+        // core/config_writer.hpp's callers. A no-op every frame nothing was
         // ever requested (hermetic runs, or a session that never changed a
         // setting), so it costs nothing to call unconditionally.
         frameScope.to(cascade::core::FrameScope::Saves);
@@ -2245,7 +2248,7 @@ int AppWindow::run(int frames) {
     engine_.markCleanExit();
     if (!configPath_.empty()) {
         // Built on lastRequestedConfig_, not savedCfg_: the final-state save
-        // just above (still async - see gui/config_writer.hpp) may not have
+        // just above (still async - see core/config_writer.hpp) may not have
         // been collected yet, so savedCfg_ can still be one save behind.
         // lastRequestedConfig_ is not - it is set the instant a save is
         // REQUESTED, which is exactly the "what did we just ask to be
@@ -2257,13 +2260,16 @@ int AppWindow::run(int frames) {
     }
 
     // THE LAST SAVE MUST BE GIVEN A REAL CHANCE TO LAND, OR BE SEEN NOT TO -
-    // see gui/config_writer.hpp. Everything above this point only QUEUED
+    // see core/config_writer.hpp. Everything above this point only QUEUED
     // bytes; this is the one place that WAITS, bounded and charged in the
     // shutdown budget (HangWatchdog::kShutdownBoundedWaitsMs,
     // tests/test_shutdown_budget.cpp). Past the bound the write is
     // ABANDONED rather than joined - the same choice AudioOpen::reap() makes
     // for a wedged device open at quit - and logged, so a config that never
     // reached disk is a line in the log instead of a silent gap.
+    // THE ONE DEADLINE THE LAST WRITES SHARE: taken before the settings' drain, so what that drain leaves of it is what the takes' files still
+    // being closed on workers get (Engine::shutdownRelease) - the shutdown budget is charged kSaveBound once, here.
+    const auto drainDeadline = std::chrono::steady_clock::now() + cascade::gui::ConfigWriter::kSaveBound;
     if (!configPath_.empty()) {
         if (configWriter_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
             if (configWriter_.lastOk()) {
@@ -2298,7 +2304,7 @@ int AppWindow::run(int frames) {
     // THE ENGINE'S LAST PHASE (OPEN 9): the patch's radios, then the plugins
     // unloaded (Engine::shutdownRelease).
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownUnloadingPlugins);
-    engine_.shutdownRelease();
+    engine_.shutdownRelease(drainDeadline);
     // THE MARKER STAGE IS OVER, saved or abandoned, and the plugins are down: from here a normal exit is a clean one to the sentinel.
     cascade::core::breadcrumb::setPhase(cascade::core::breadcrumb::Phase::ShutdownClosingWindow);
 
@@ -21441,7 +21447,90 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     return cfg;
 }
 
+// --- A DAMAGED SETTINGS FILE IS KEPT, NOT OVERWRITTEN (0.99.65, core/damaged_file.hpp) -----------------------------------------------------
+//
+// A settings file that failed to load was left on disk and then saved over by the first change (or the clean exit), so whatever could have
+// been recovered from it was gone. It is renamed aside before anything is saved (the three newest are kept); if the rename is refused the file
+// stays exactly as it is and this session's saver writes nothing. (The bookmark list's is the engine's: Engine::loadBookmarks.)
+
+void AppWindow::setAsideDamagedFile(const char* which, const std::string& path) {
+    const cascade::core::SetAsideResult r = cascade::core::setDamagedFileAside(path);
+    const unsigned long long bytes = static_cast<unsigned long long>(r.bytes);
+    switch (r.outcome) {
+        case cascade::core::SetAsideResult::Outcome::NothingToKeep:
+            return;  // a first run, an empty file, or a folder: nothing to lose, nothing said
+        case cascade::core::SetAsideResult::Outcome::KeptAside:
+            // WHICH FILE AND HOW BIG, and no path: a log line never names one.
+            cascade::core::diagLogf(
+                "%s: a damaged file (%llu bytes) was kept aside beside the live one; the next save writes a new file", which, bytes);
+            return;
+        case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
+            break;
+    }
+    // THE RENAME WAS REFUSED (held by another program, a read-only folder): the damaged file stays exactly as it is, and this file's saver
+    // writes nothing for the rest of the session.
+    configWriter_.forbidWrites("config: not saved - the damaged settings file could not be kept aside");
+    cascade::core::diagWarnf(
+        "%s: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", which, bytes);
+}
+
+// --- THE SETTINGS SAVE BACKS OFF (0.99.65) ---------------------------------------------------------------------------------------------
+//
+// A failed settings write used to be asked for again every debounce window (two seconds) for as long as the folder stayed read-only, one
+// stderr line each time. Now each failure lengthens the wait - doubling from the debounce window to five minutes - and the first success puts
+// it back. The failure is said once per run of failures, in a sentence that names no path (the writer's own text does). The clean-exit save
+// is not held by it.
+
+namespace {
+
+constexpr double kConfigRetryCapS = 300.0;  // five minutes
+
+// What the writer's sentence (which names the file) said, as a cause.
+const char* configFailureCause(const std::string& error) {
+    if (error.find("cannot create temp file") != std::string::npos) { return "the settings folder would not take a new file"; }
+    if (error.find("atomic replace") != std::string::npos) { return "the settings file is held by another program or could not be replaced"; }
+    if (error.find("write to temp file") != std::string::npos) { return "the write failed part way"; }
+    if (error.find("cannot create directory") != std::string::npos) { return "the settings folder could not be made"; }
+    return "the write failed";
+}
+
+}  // namespace
+
+void AppWindow::noteConfigWrite(bool ok, const std::string& error) {
+    if (ok) {
+        configFailures_ = 0;
+        configFailureFresh_ = false;
+        configRetryAtS_ = 0.0;
+        configFailureLogged_ = false;  // the next failure starts a new run
+        return;
+    }
+    ++configFailures_;
+    configFailureFresh_ = true;  // the next maybeSaveConfig gives it the clock
+    if (!configFailureLogged_) {
+        configFailureLogged_ = true;
+        cascade::core::diagWarnf("config: the settings could not be saved (%s); trying again, with a longer wait each time",
+                                 configFailureCause(error));
+    }
+}
+
+bool AppWindow::configRetryHeld(double nowS, double baseWaitS) {
+    if (configFailureFresh_) {
+        configFailureFresh_ = false;
+        double wait = baseWaitS;
+        for (int i = 0; i < configFailures_ && wait < kConfigRetryCapS; ++i) { wait *= 2.0; }
+        if (wait > kConfigRetryCapS) { wait = kConfigRetryCapS; }
+        configRetryAtS_ = nowS + wait;
+    }
+    return nowS < configRetryAtS_;
+}
+
 void AppWindow::maybeSaveConfig(double nowS) {
+    // A DAMAGED SETTINGS FILE THAT COULD NOT BE KEPT ASIDE is never saved over (0.99.65, core/damaged_file.hpp): the writer was told so at
+    // start-up, and there is nothing to ask for.
+    if (configWriter_.writesForbidden()) { return; }
+    // A FAILED WRITE'S WAIT (0.99.65): each failure doubles it, from the debounce window up to five minutes; the first success puts it back.
+    // Asked every call so that a failure just noted by pollConfigWriter is given the clock it did not have.
+    const bool retryHeld = configRetryHeld(nowS, kConfigDebounceS);
     cascade::core::AppConfig cur = currentConfig();
     if (configsEqual(cur, savedCfg_)) {
         lastChangeTimeS_ = -1.0;  // clean again (e.g. change was undone)
@@ -21454,8 +21543,8 @@ void AppWindow::maybeSaveConfig(double nowS) {
         lastChangeTimeS_ = nowS;
         return;
     }
-    if (nowS - lastChangeTimeS_ >= kConfigDebounceS) {
-        // THE REQUEST NEVER BLOCKS (see gui/config_writer.hpp) - this is the
+    if (!retryHeld && nowS - lastChangeTimeS_ >= kConfigDebounceS) {
+        // THE REQUEST NEVER BLOCKS (see core/config_writer.hpp) - this is the
         // exact call the 0.96.3 field report's stack ran synchronously
         // instead. lastChangeTimeS_ resets to -1.0 optimistically: if the
         // write goes on to fail, savedCfg_ stays stale (pollConfigWriter()
@@ -21488,11 +21577,15 @@ void AppWindow::pollConfigWriter() {
         // Only when fully drained: a write that just finished but has
         // another coalesced behind it is not yet the LAST requested content
         // (poll() has already started that queued write by the time this
-        // runs) - see gui/config_writer.hpp's finishOrAbandon() comment for
+        // runs) - see core/config_writer.hpp's finishOrAbandon() comment for
         // the same reasoning applied to the shutdown drain below.
         if (!configWriter_.inFlight()) { savedCfg_ = lastRequestedConfig_; }
+        noteConfigWrite(true, std::string());  // the wait after failures goes back to the start
     } else {
         std::fprintf(stderr, "cascade: %s\n", configWriter_.lastError().c_str());
+        // The wait before the next attempt is lengthened, and the failure said once in the log (0.99.65): a read-only folder is not asked
+        // again every two seconds for ever.
+        noteConfigWrite(false, configWriter_.lastError());
         // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk, a file another program holds) and the window carries
         // on with what it has: counted, once a session - the debounce asks again by itself, so a count of 1 means "this session had it".
         // Never the message (a path). (0.99.65's back-off - the wait lengthened after failures - is DISK-WORK, still to carry.)

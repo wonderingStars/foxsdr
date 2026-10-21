@@ -905,7 +905,7 @@ int main(int argc, char** argv) {
                     "    frozen window for as long as the disk takes: four field freezes, 0.99.58 -\n"
                     "    0.99.63. WHAT TO DO:\n"
                     "      * normally, MOVE IT TO A WORKER: gui/disk_job.hpp (a click that saves, opens\n"
-                    "        or lists), gui/background_saver.hpp (a file saved when it changes) or\n"
+                    "        or lists), core/background_saver.hpp (a file saved when it changes) or\n"
                     "        gui/record_start.hpp (a recording). Do the call inside the lambda you hand\n"
                     "        to request(); this test then sees it is a worker's. tests/test_gui_file_jobs.cpp\n"
                     "        shows the test that proves the window keeps drawing.\n"

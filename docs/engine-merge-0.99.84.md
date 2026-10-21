@@ -110,4 +110,285 @@ branch does not have the fixes for"; the fixes are here now, so that exclusion i
 (section 6) are skipped by the typo check, not selected.
 
 ## 6. The ledger
-(See the next sections: filled as the passes land.)
+
+Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes-0.99.NN.md), with its state:
+
+  * **carried**: the change lives in a file the branch did not restructure (core/, dsp/, source/, sink/, net/, a pure gui/ view, a script, a
+    catalogue) and git merged it; it compiles behind the fence. "Carried" is the merge's claim, not a verification: where a test of the item
+    exists and runs, the test is named; where none does, the item says (unverified).
+  * **re-expressed**: master's AppWindow code became an Engine member plus facts/ops for the window (or stayed the window's where it is
+    pure interface), with the commit that carries it and the test that holds it. C0 = 2c5d14f (the merge), C1 = 96093f8, C2 = 168ff14,
+    C3 = 00e35d2, C4 = 26203b7, C5 = the commit that follows C4 (async disk work).
+  * **stubbed**: NOT done. Each has an id; its master tests are out of the build in tests/merge_pending.cmake and replaced by a red
+    `merge_pending_<test>` (`ctest -L merge-pending`); its master source is in src/gui_pending/ where it is a whole file, and in
+    docs/engine-merge-0.99.84-lostlines.txt (every code line master added to a window function that is absent from this tree, by function)
+    where it is part of a function. A stub is a feature missing from the window, never a feature that is wrong.
+  * **n/a**: not part of the application (a catalogue, a site, a packaging or documentation note, a plugin's own change).
+
+### 6.1 Release by release
+
+0.99.43  (the merge base's successor; plugin settings forms)
+  * a plugin's settings UI, CASCADE_CAP_SETTINGS_UI .......................................... stubbed PLUGIN-SETTINGS-UI (test_plugin_settings_ui; core and
+    gui/plugin_settings_form.* are in the tree and their pure tests run; the window's forms and the engine's grants are not wired)
+
+0.99.44
+  * interface size, for 4K screens ........................................................... stubbed UI-SCALE (gui/ui_scale.* is in the tree and its
+    pure tests pass; no window code calls it: the scale never leaves 100%)
+  * SDRplay asks for zero-IF ................................................................. carried (source/sdrplay_source.cpp) (unverified: no radio)
+  * audio no longer crackles when the channel filter widens ................................... carried (dsp/) (test_bandwidth_app also exercises the filter, C3)
+  * a per-frame system call removed .......................................................... carried (unverified)
+  * Airspy ADS-B with decimation raised ...................................................... carried (source/)
+  * beta tester usage reporting .............................................................. stubbed TESTER-USAGE (core/tester_usage.* and its pure tests
+    are in; the Settings section, the hooks that note a feature, the engine's journal field are not)
+  * the crash-report cleaner and a plugin's name ............................................. carried (core/) (test_crash_scrub runs)
+
+0.99.45
+  * link FoxSDR from the tester portal ....................................................... stubbed TESTER-LINK (test_tester_link_app, test_link_request_poll)
+  * the usage report is sent once, not once per launch ....................................... carried (core/telemetry) with the engine's journal (C0, C1)
+
+0.99.46
+  * Linux: closing while sending a report ..................................................... carried (net/, core/) (unverified: Linux)
+  * slow computers file no start-up freeze ................................................... carried (core/hang_watchdog) (test_diag_hang green)
+
+0.99.47  (no bold item of its own in the notes)
+
+0.99.48
+  * bench meter styles ....................................................................... re-expressed, C3 (test_meter_style_app green; visual check in 8)
+
+0.99.49
+  * whole-patch presets ...................................................................... stubbed PATCH-PRESETS (test_patch_presets_app; core/patch_presets
+    and the file src/gui_pending/app_window_patch_presets.cpp)
+  * AOR AR5700D / IQ5001 ..................................................................... re-expressed, C0 (engine enumeration, the "aor" source kind and its
+    unbound-id row; no window-specific part)
+
+0.99.50
+  * the plugin store cleans up after its own updates ......................................... stubbed STORE-VIEW (the engine keeps the scan's old copies, C4;
+    test_plugin_cleanup_app, test_plugin_update_cleanup_app)
+  * FUNCTION SELECT folds to a strip ......................................................... stubbed RAIL-CHROME (test_rail_fold*, test_app_rail)
+  * the patch page's information pane at the top right ....................................... stubbed PATCH-VIEW (lostlines: drawPatchView, drawPatchFaces)
+  * the patch canvas pans by dragging empty canvas, the wheel pans ........................... stubbed PATCH-VIEW
+  * two fixes for radios reported wrongly (the Source row's words) ........................... re-expressed in part: the one-chip-one-route rule runs in
+    the engine and is held by test_one_chip_app (C4); the Source row's chip/preview/"No radio hardware found" is stubbed SOURCE-ROWS (test_source_row_app)
+
+0.99.51
+  * SDRplay: no more "restart the SDR API" on a slow setting ................................. carried (source/)
+  * Raspberry Pi 64-bit downloads ............................................................ n/a
+
+0.99.52
+  * Windows testers can link from the tester page again ...................................... stubbed TESTER-LINK
+
+0.99.53
+  * the Store version tells you when the Store has an update ................................. stubbed UPDATES (core/store_update.* in; the window's check and
+    banner are not)
+
+0.99.54
+  * close bookmark names stack instead of hiding ............................................. stubbed MARKERS-SPECTRUM (the setting is in AppConfig and kept
+    by loadedCfg_; the spectrum's drawing is not)
+
+0.99.55
+  * the SDRplay API Service stopped or stuck is named and can be restarted ................... re-expressed in part: its two recovery troubles are counted by the
+    engine (C2, test_health_app); the card, the restart key and the note are stubbed SDRPLAY-SERVICE
+
+0.99.56
+  * PPM frequency correction ................................................................. re-expressed, C1 (engine_ppm.cpp; test_ppm_app, inline and stepped, break-it done)
+  * RTL-SDR steadier when the computer is busy ............................................... carried (source/)
+  * audio no longer turns choppy ............................................................. carried (sink/)
+
+0.99.57
+  * markers on the waterfall ................................................................. stubbed MARKERS-SPECTRUM (the marker LIST and its persistence are
+    the engine's since C5: Engine::freqMarkers_, markers.json saved on a worker, tests/test_bookmark_save_async.cpp holds it; the waterfall's lines,
+    the right-click menu and the Markers window are not drawn)
+  * peak hold and average on the spectrum ................................................... stubbed MARKERS-SPECTRUM
+  * the receiver's waterfall fits its window ................................................ stubbed MARKERS-SPECTRUM (spectrum/waterfall views are in the tree)
+  * holding the left button on the waterfall no longer tunes ................................. stubbed MARKERS-SPECTRUM
+
+0.99.58
+  * the map's coverage line counts only what a receiver could hear ........................... stubbed MAP-WINDOWS (lostlines: drawPluginWindows, recordCoverage)
+  * plugin updates in the catalogue .......................................................... n/a
+
+0.99.59
+  * Red Pitaya request ....................................................................... n/a
+  * picking a radio that does not answer no longer freezes the window ........................ carried (the engine's open worker: C0)
+  * a faulty ASIO driver no longer makes the scan fail ....................................... carried (source/)
+  * SDRplay through SoapySDR no longer freezes after the service restarts .................... carried (source/)
+  * privacy: reports carry no addresses, computer names, ports or sound-card names ........... carried (core/) and re-expressed (C1: no log line names a card)
+
+0.99.60
+  * Airband: type an airport, hear its control frequencies ................................... stubbed AIRBAND (src/gui_pending/app_window_airband.cpp, 1,329 lines;
+    core/ and the views are in the tree)
+  * LISTEN, ticked frequencies ............................................................... stubbed AIRBAND / MARKERS-SPECTRUM (the scanner's list mode is
+    in core/scanner_params.hpp; the window's tick column and the engine's list scan are not)
+
+0.99.61
+  * the Bandwidth control narrows what you hear .............................................. re-expressed, C3 (the filter is core/dsp; test_bandwidth_app)
+  * SDRplay live controls name the tuner ..................................................... carried (source/)
+  * SoapySDR is not a second way into a released SDRplay radio ............................... carried (source/) with the engine's row rule (C0)
+  * Linux (Wayland) crash when closing ....................................................... carried (gui/) (unverified: Linux)
+  * the window does not freeze on a slow settings folder ..................................... re-expressed, C5 (the settings writer was async already; C5
+    adds the back-off and the kept-aside damaged file)
+  * a freeze cannot go unreported; a taskbar-ended freeze is a crash ......................... carried (core/sentinel) and re-expressed, C1 (the phases)
+  * scan crash reports name the driver ....................................................... carried (core/, source/)
+  * "No audio" reports answer themselves ..................................................... re-expressed, C1/C2 (the diagnostics context's sound-path lines;
+    test_diag_audio_app, test_diag_context_app)
+
+0.99.62
+  * freezes grouped by FoxSDR's own code ..................................................... carried (core/)
+  * one scan failure is one report ........................................................... carried (core/, source/)
+  * display stalls counted in the usage record ............................................... re-expressed, C1 (core::globalStallLedger, the watchdog's sink)
+  * diagnostics describe the radio in use; a bug report carries the previous session's log ... re-expressed, C1/C2 (Engine::refreshDiagContext on every event
+    - Engine::commitModeIndex, DiagContextOnExit - and AppWindow::currentDiagnosticsBundle with the history; test_diag_context_app, test_diag_history)
+  * Linux line-level debug information kept ................................................. n/a (the symbol archive: tools/ and CMake, merged)
+
+0.99.63
+  * Record does not freeze while the disk creates the file; a waiting start can be cancelled . re-expressed, C5 (Engine::startAudioRecording/startIqRecording
+    prepare, RecordStart opens, pollRecordStarts arms; test_record_start)
+  * a catalogue refresh reloads nothing when nothing changed; every reload logs its steps ..... re-expressed, C4 (Engine::rescanPluginsIfChanged; test_plugin_rescan_log;
+    test_plugin_rescan_skip waits for PLUGIN-RUN)
+  * the Fitted modules window reads no plugin file's size per frame ......................... stubbed STORE-VIEW (test_fitted_modules_no_disk red)
+  * freeze reports name a late-loaded module ................................................ re-expressed, C1 (ForeignModuleWatch; test_foreign_modules_app)
+
+0.99.64
+  * FoxSDR notices when it ends without saying why ........................................... re-expressed, C1 (breadcrumb phases/activity; test_sentinel_app)
+  * a slow frame is measured and named ....................................................... re-expressed in part, C1 (the frame timer and its scopes through run()
+    and drawUi; the recorder and reload scopes are not carried - those run on the engine's pass, not the frame; test_slow_frames_app stays pending)
+  * the usage record counts what quietly did not work ........................................ re-expressed, C1/C2 (test_health_app, test_health_paths)
+  * eight more file operations off the drawing thread ........................................ re-expressed in part: the recorders (C5), the bookmark list's save
+    (C5), a patch speaker's file (C5); the picture save, the bookmark export, the I/Q open on a worker, the screenshot flush are stubbed DISK-WORK
+    (test_failure_files, test_gui_file_jobs, test_iq_open_async, test_gui_disk_audit)
+  * five faults found with a memory checker .................................................. carried (core/)
+
+0.99.65
+  * Stop then Record does not overwrite ...................................................... carried (core/recorder naming) and re-expressed, C5 (the queued Record)
+  * a damaged settings, bookmark or marker file is kept ...................................... re-expressed, C5 (AppWindow::setAsideDamagedFile for the settings,
+    Engine::loadBookmarks for the two lists); test_failure_files (not converted) holds the three
+  * Linux: a folder in a list's place no longer ends the program ............................. carried (core/) (unverified: Linux)
+  * stopping a recording does not freeze the window .......................................... re-expressed, C5 (finishTake / RecordFinisher; test_record_finish_async)
+  * a freeze report keeps its log on a slow disk ............................................. carried (core/diag_log; test_diag_log_lock)
+  * the usage record counts slow frames and recoveries ....................................... re-expressed, C1/C2
+  * an unwritable settings folder is not retried every two seconds .......................... re-expressed, C5 (noteConfigWrite / configRetryHeld)
+
+0.99.66
+  * the Airband monitor takes a typed list and plays NFM ..................................... stubbed AIRBAND
+  * presets: a named list filled by hand, from a file, exported ............................. stubbed AIRBAND
+  * the spectrum shows what the monitor is hearing ........................................... stubbed AIRBAND
+  * a native HydraSDR RFOne driver ........................................................... re-expressed, C0/C4 (engine enumeration and kind; the remembered
+    gain mode under its own key, found by test_hydrasdr_app)
+  * a sentinel report says where a fast-fail was ............................................. carried (core/)
+
+0.99.67
+  * closing the console window no longer ends FoxSDR ......................................... re-expressed, C1 (the frame loop's condition; test_engine_shell_guard)
+
+0.99.68
+  * a stop does not wait on idle recorders; the log says who asked ........................... re-expressed, C2/C5 (Engine::stopReceiver(who), FOXAPP_OP_TEST_HOLD_AUDIO_LOCK;
+    test_stop_ends_recordings green on the hidden desktop)
+  * the browser remote no longer makes the window wait for the signal thread each frame ....... carried by the architecture (the pass publishes the audio; unverified)
+
+0.99.69
+  * no console window beside FoxSDR's own ................................................... carried (main.cpp, merged) (unverified)
+  * the RADIO SETUP page ..................................................................... stubbed RADIO-SETUP (src/gui_pending/app_window_radio_setup.cpp)
+  * NFM de-emphasis in the Airband monitor ................................................... stubbed AIRBAND
+  * an airport lookup while listening changes nothing played ................................ stubbed AIRBAND
+  * a pasted report is recognised; `upload local-only` says what it means ..................... stubbed PROBLEM-REPORT (core/pasted_report is in; the page's
+    attach-diagnostics rows, the preview and the recognised-report line are not - lostlines: drawProblemReportPage)
+  * Fitted modules names the files not installed from the store ............................ stubbed STORE-VIEW
+  * the log and every report name the other programs' DLLs ................................... re-expressed, C1 (test_foreign_modules_app, test_diag_context_app)
+  * the usage report says how an unclean session ended ....................................... re-expressed, C1 (exit causes)
+  * the ADS-B scope's compass labels ......................................................... carried (gui/scope_view.cpp)
+  * machine translations reviewed ............................................................ carried (resources/lang); test_i18n is RED until the stubbed window
+    features' strings are back (see 6.3)
+  * `--rtlsdr-check` notices a dongle that stopped receiving ................................ carried (main.cpp, source/)
+
+0.99.70
+  * listening to an rtl_tcp server ........................................................... re-expressed, C1 (the kind, the open, the address box and its op;
+    the remote API refuses an address-bearing open from a remote session)
+
+0.99.71
+  * the Airband monitor says what it is hearing where you look ............................... stubbed AIRBAND
+
+0.99.72
+  * the plugin store laid out like a store; Fitted modules like an operating panel ........... stubbed STORE-VIEW
+
+0.99.73
+  * the radio and its sound stay responsive with many modules fitted ......................... re-expressed in part: the audio buffer that deepens itself
+    (C1, test_audio_lead_app); a fitted plugin that runs only while it is used is stubbed PLUGIN-RUN (test_plugin_rescan_skip and
+    merge_pending_part_audio_lead_plugin_wake)
+
+0.99.74
+  * GAIN and SQUELCH dials with AUTO keys on the top bar ..................................... stubbed RAIL-CHROME (test_deck_knobs_app)
+  * the STATUS column folds ................................................................. stubbed RAIL-CHROME (test_status_fold*)
+  * the VIEW bank is TOOLS; Display moves to SYSTEM and starts folded ........................ carried in part (the bank rename is in rail_banks.hpp, C0); the
+    folded-Display memory is stubbed RAIL-CHROME
+  * each decoder's settings in a folded "Plugin settings" line ............................... stubbed PLUGIN-SETTINGS-UI
+  * the ADS-B map lists only the aircraft you can see; no-altitude is grey ................... stubbed MAP-WINDOWS
+  * third-party plugin sites in the store ................................................... stubbed STORE-VIEW
+  * BROWSE FILES beside a plugin setting that names a file ................................... stubbed PLUGIN-SETTINGS-UI
+  * switching auto gain off gives the radio its manual gains back ........................... re-expressed, C1 (Engine::changeAutoGain; test_autogain_app)
+  * a plugin may send transmit audio through FoxSDR, granted and armed ...................... stubbed TX-PLUGIN, in the SAFE state: Transmitter's plugin key and
+    cap are merged and tested (test_tx_audio), and NOTHING in the engine calls Transmitter::setPluginKey, so no plugin can key a radio
+  * POCSAG settings and messages together; automatic configuration ........................... n/a (the plugin) / PLUGIN-SETTINGS-UI
+  * Language & country does not freeze while it looks for CJK fonts ........................... carried (gui/fonts, merged) (unverified)
+
+0.99.75
+  * unplaced aircraft listed apart from the placed ones ...................................... stubbed MAP-WINDOWS
+  * a radio's manual gain remembered and put back at its next open .......................... re-expressed, C1 (Engine::rememberManualGain / restoreManualGain;
+    test_autogain_app)
+  * B200 antenna/gain advice ................................................................. n/a
+
+0.99.76
+  * the spectrum's and waterfall's range set by hand ......................................... stubbed DISPLAY-RANGE (core RangeMode is in; the menu and the
+    dB window are not)
+  * no more death when a window is dropped into / pulled out of a dock node .................. re-expressed, C1 (page_resize_id.hpp; test_page_resize_id)
+  * a Linux scan helper with no reader is not a crash ........................................ carried (source/)
+
+0.99.77
+  * the Fitted modules / DECODE lists grouped under the store's headings ..................... stubbed STORE-VIEW
+  * a row in a plugin's panel is a key ....................................................... stubbed PLUGIN-ROW-KEYS (test_programme_audio_app)
+  * an old copy of a renamed plugin no longer loads beside the new one; ImGui's duplicate-ID box is off in the shipped build
+    .......................................................................................... carried (core/plugin_host, gui/imgui_debug_policy.hpp) and held in part by
+    test_plugin_host_origin (C4)
+  * Linux builds of 41 of 43 plugins ......................................................... n/a
+
+0.99.78
+  * an aircraft at the edge of range stays on the map (estimated positions) .................. stubbed MAP-WINDOWS
+  * a start-up death at the window says how it ended and which window system it used ......... re-expressed, C1 (window: lines, the failure message,
+    FOXSDR_WINDOW_PLATFORM, the breadcrumb flag; test_window_failed_app)
+
+0.99.79
+  * a message from the FoxSDR team is shown whether or not there is an update ................ stubbed UPDATES
+
+0.99.80
+  * bookmark Import: drop zone and Browse button; by-name import; translated errors;
+    Unicode filenames on Windows; Browse opens in the recordings folder ....................... stubbed IMPORT-DIALOG (src/gui_pending/app_window_import_dialog.cpp)
+
+0.99.81
+  * IBOC dashboard programme rows respond to clicks ......................................... stubbed PLUGIN-ROW-KEYS
+  * DAB decoder muting preserves decoded sound ............................................... carried in the core mute logic; the engine's updateAudioMute was not
+    diffed against master's (unverified)
+
+0.99.82
+  * changing frequency or applying a preset does not stall the window ........................ carried (core/pipeline) (unverified under load)
+  * a radio scan cannot freeze the window ................................................... re-expressed, C0 (Engine::scanNative's bounded try)
+  * Wayland: a hidden window no longer blocks in the buffer swap ............................. not checked: master's change is not in the lostlines list for run();
+    (unverified)
+  * LSB and USB reject the opposite sideband ................................................. carried (dsp/)
+  * a machine with no working OpenGL driver is told so ....................................... re-expressed, C1 (window failure message)
+  * a Linux audio device reporting zero periods no longer crashes ........................... carried (sink/) (unverified: Linux)
+  * Bookmark Import accepts the path shapes people use ....................................... stubbed IMPORT-DIALOG
+  * slide the tuned band with Shift + wheel .................................................. stubbed MARKERS-SPECTRUM (gui/passband_slide.hpp is in the tree)
+
+0.99.83
+  * the audio buffer comes back down by itself and says where it stands ...................... re-expressed, C1 (test_audio_lead_app)
+  * the mode follows a typed band change ..................................................... stubbed MARKERS-SPECTRUM (lostlines: drawFrequencyReadout)
+  * the Radiofax recorder prints the chart on its paper .................................... carried (gui/instrument_fax.cpp)
+
+0.99.84
+  * a freeze inside a plugin reload names the reload's step ................................. re-expressed, C4 (the phases are published by the engine's rescan and
+    by every caller of detachAndUnloadPlugins; core/hang_watchdog reports `reload-phase:`)
+
+### 6.2 Totals
+
+(Computed from section 6.1 at the end of the pass: see "Status at the end of this pass".)
+
+### 6.3 The tests that are red, and why
+
+(See "Status at the end of this pass".)

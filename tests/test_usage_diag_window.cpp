@@ -436,18 +436,23 @@ void testBundle() {
 
     // THE CRASH HANDLER'S COPY IS NOT TOUCHED. A foreign block stands in the process-global (what a crash would print); the
     // old member rendered its own copy of the context over it. The bundle now carries whatever block stands, and leaves it be.
-    cascade::core::DiagContext foreign;
-    foreign.version = "7.7.7";
-    foreign.commit = "decafbad";
-    foreign.mode = "CW";
-    foreign.sourceKind = "iqfile";
-    foreign.plugins.push_back("Foreign 1.0.0");
-    cascade::core::setDiagContext(foreign);
-    const std::string foreignBlock = cascade::core::diagContextBlock();
-    imguiFrame([&] { Access::copyBundle(a); });
-    CHECK(cascade::core::diagContextBlock() == foreignBlock);
-    CHECK(has(clipboard(), "version: 7.7.7\n"));
-    CHECK(!has(clipboard(), std::string("version: ") + cascade::versionString() + "\n"));
+    {
+        // (The engine's pass keeps the process-global block true to the session - that is the next part of this test - so a free-running
+        // pass would render over the foreign block between the two lines that matter: the pass is parked for exactly this stretch.)
+        Access::PassHold hold(a);
+        cascade::core::DiagContext foreign;
+        foreign.version = "7.7.7";
+        foreign.commit = "decafbad";
+        foreign.mode = "CW";
+        foreign.sourceKind = "iqfile";
+        foreign.plugins.push_back("Foreign 1.0.0");
+        cascade::core::setDiagContext(foreign);
+        const std::string foreignBlock = cascade::core::diagContextBlock();
+        imguiFrame([&] { Access::copyBundle(a); });
+        CHECK(cascade::core::diagContextBlock() == foreignBlock);
+        CHECK(has(clipboard(), "version: 7.7.7\n"));
+        CHECK(!has(clipboard(), std::string("version: ") + cascade::versionString() + "\n"));
+    }
     std::printf("      a foreign context in the crash handler's slot: carried by the bundle, left in place by it\n");
 
     // THE BLOCK FOLLOWS THE SESSION through the engine's pass alone: a new mode is in the block within the second, and

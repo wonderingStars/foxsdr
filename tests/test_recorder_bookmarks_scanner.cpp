@@ -121,7 +121,23 @@ struct AppWindowTestAccess {
     // One frame's engine part, in drawUi's order: the session's queue taken (a command submitted
     // since lands here), the scanner's frame when asked, the publish, the status copy, the window's
     // read of the state.
-    static void look(AppWindow& a, bool scannerTick = false) {
+    // A RECORDING'S FILE OPENS ON A WORKER (0.99.63): a take just asked for is armed on the pass that collects the file. Waits (bounded) until no
+    // start is out, polling as the pass does, so a test that asked for a take then reads it "recording".
+    static bool recordStartsOut(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).iqStart_.pending() || rawEngine(a.engine_).audioStart_.pending() || rawEngine(a.engine_).iqStartQueued_ ||
+                   rawEngine(a.engine_).audioStartQueued_;
+        });
+    }
+    static void settleRecordStarts(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (recordStartsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(rawEngine(a.engine_).clockS()); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    static void lookOnce(AppWindow& a, bool scannerTick) {
         passseam::custom(rawEngine(a.engine_), [&] {
             rawEngine(a.engine_).pumpFrameBegin();
             if (scannerTick) { rawEngine(a.engine_).scannerFrame(); }
@@ -129,6 +145,15 @@ struct AppWindowTestAccess {
         });
         a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
+    }
+    static void look(AppWindow& a, bool scannerTick = false) {
+        lookOnce(a, scannerTick);
+        // The file of a take this look just asked for opens on a worker: wait for it, then look again, so the take is armed and published
+        // (the product's next pass does the same).
+        if (recordStartsOut(a)) {
+            settleRecordStarts(a);
+            lookOnce(a, false);
+        }
     }
     // The answers the session has been given since it was last asked, in order.
     static std::vector<Answer> answers(AppWindow& a) {

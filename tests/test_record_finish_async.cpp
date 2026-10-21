@@ -67,7 +67,9 @@
 #include "core/patch_radio.hpp"
 #include "core/record_finish.hpp"
 #include "core/recorder.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
 
@@ -82,69 +84,84 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass, except the
+    // recorders and the speaker's destination, which the test drives directly with the pass stepped or out of the way.
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
     // The file opener of both takes (the seam for a disk that fails: tests/failing_disk.hpp).
     static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        a.iqRecorder_.bindOpener(o);
-        a.audioRecorder_.bindOpener(std::move(o));
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
+            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        });
     }
-    static bool startAudio(AppWindow& a) { return a.startAudioRecording(); }
-    static bool startIq(AppWindow& a) { return a.startIqRecording(); }
-    static void stopAudio(AppWindow& a) { a.stopAudioRecording(); }
-    static void stopIq(AppWindow& a) { a.stopIqRecording(); }
-    static void poll(AppWindow& a, double nowS) { a.pollRecordStarts(nowS); }
-    static bool audioRecording(AppWindow& a) { return a.audioRecorder_.recording(); }
-    static bool iqRecording(AppWindow& a) { return a.iqRecorder_.recording(); }
-    static bool finishing(AppWindow& a, bool iq) { return a.takeFinishing(iq); }
+    static bool startAudio(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startAudioRecording(); });
+    }
+    static bool startIq(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startIqRecording(); });
+    }
+    static void stopAudio(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopAudioRecording(); }); }
+    static void stopIq(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopIqRecording(); }); }
+    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
+    static bool audioRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.recording(); }); }
+    static bool iqRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqRecorder_.recording(); }); }
+    static bool finishing(AppWindow& a, bool iq) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).takeFinishing(iq); });
+    }
     static bool drainFinishes(AppWindow& a, std::chrono::steady_clock::time_point d) {
-        return a.drainRecordFinishes(d);
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).drainRecordFinishes(d); });
     }
-    static const std::string& recordError(AppWindow& a) { return a.recordError_; }
-    static const std::string& recordNotice(AppWindow& a) { return a.recordNotice_; }
-    static Recorder& audioRec(AppWindow& a) { return a.audioRecorder_; }
-    static Recorder& iqRec(AppWindow& a) { return a.iqRecorder_; }
+    static std::string recordError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordError_; }); }
+    static std::string recordNotice(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordNotice_; }); }
+    static Recorder& audioRec(AppWindow& a) { return rawEngine(a.engine_).audioRecorder_; }
+    static Recorder& iqRec(AppWindow& a) { return rawEngine(a.engine_).iqRecorder_; }
     // The source changing ends an I/Q take (installSource -> endTakes).
-    static void sourceChanged(AppWindow& a) { a.endTakes(true, false, "the source changed", false); }
+    static void sourceChanged(AppWindow& a) {
+        passseam::on(rawEngine(a.engine_), [&] { (void)rawEngine(a.engine_).endTakes(true, false, "the source changed", false); });
+    }
 
     // A patch with a radio running on the generator and a speaker (a WAV file).
     static pc::NodeId buildSpeakerPatch(AppWindow& a) {
         a.patchSeeded_ = true;
-        const pc::NodeId r = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq);
-        const pc::NodeId c = a.patchGraph_.addNode(pc::NodeKind::Channel, "Tone", pc::PortType::Iq);
-        const pc::NodeId d = a.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq);
-        const pc::NodeId s = a.patchGraph_.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio);
-        auto gen = std::make_unique<cascade::source::SigGenSource>(2.4e6);
-        gen->sigGen().setTone(0, 300000.0, -30.0f);
-        a.patchRadios_[r] = std::make_unique<pc::PatchRadio>(r, std::move(gen), "generator");
-        if (pc::Node* n = a.patchGraph_.mutableNode(c)) {
-            n->freqHz = a.patchRadios_[r]->centreHz() + 300000.0;
-        }
-        if (pc::Node* n = a.patchGraph_.mutableNode(d)) { n->mode = 2; }
-        CHECK(a.patchGraph_.connect(r, 0, c, 0) == pc::Connect::Ok);
-        CHECK(a.patchGraph_.connect(c, 0, d, 0) == pc::Connect::Ok);
-        CHECK(a.patchGraph_.connect(d, 0, s, 0) == pc::Connect::Ok);
-        std::string err;
-        CHECK(a.patchRadios_[r]->start(err));
-        a.patchPlan_ = pc::compile(a.patchGraph_, a.patchRadioInfos(), nullptr, false);
-        CHECK(a.patchPlan_.runnable);
-        return s;
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            cascade::engine::Engine& e = rawEngine(a.engine_);
+            const pc::NodeId r = e.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq);
+            const pc::NodeId c = e.patchGraph_.addNode(pc::NodeKind::Channel, "Tone", pc::PortType::Iq);
+            const pc::NodeId d = e.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq);
+            const pc::NodeId s = e.patchGraph_.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio);
+            auto gen = std::make_unique<cascade::source::SigGenSource>(2.4e6);
+            gen->sigGen().setTone(0, 300000.0, -30.0f);
+            e.patchRadios_[r] = std::make_unique<pc::PatchRadio>(r, std::move(gen), "generator");
+            if (pc::Node* n = e.patchGraph_.mutableNode(c)) { n->freqHz = e.patchRadios_[r]->centreHz() + 300000.0; }
+            if (pc::Node* n = e.patchGraph_.mutableNode(d)) { n->mode = 2; }
+            CHECK(e.patchGraph_.connect(r, 0, c, 0) == pc::Connect::Ok);
+            CHECK(e.patchGraph_.connect(c, 0, d, 0) == pc::Connect::Ok);
+            CHECK(e.patchGraph_.connect(d, 0, s, 0) == pc::Connect::Ok);
+            std::string err;
+            CHECK(e.patchRadios_[r]->start(err));
+            e.patchPlan_ = pc::compile(e.patchGraph_, e.patchRadioInfos(), nullptr, false);
+            CHECK(e.patchPlan_.runnable);
+            return s;
+        });
     }
-    static void publish(AppWindow& a) { a.patchPublishSets(); }
+    static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchPublishSets(); }); }
     static std::shared_ptr<pc::AudioDest> destOf(AppWindow& a, pc::NodeId sink) {
-        return pc::destFor(a.patchDests_, sink);
+        return passseam::read<std::shared_ptr<pc::AudioDest>>(rawEngine(a.engine_), [&] { return pc::destFor(rawEngine(a.engine_).patchDests_, sink); });
     }
-    // The page closing, as patchStopAll does it for the speakers: radios stop and
-    // are destroyed, then the outputs go.
+    // The page closing, as patchStopAll does it for the speakers: radios stop and are destroyed, then the outputs go.
     static void retireSpeakers(AppWindow& a) {
-        for (auto& [id, radio] : a.patchRadios_) {
-            (void)id;
-            radio->stop();
-        }
-        a.patchRadios_.clear();
-        a.patchRadioSig_.clear();
-        a.patchDests_.clear();
-        a.patchDestMadeFor_.clear();
-        a.patchDestError_.clear();
+        passseam::on(rawEngine(a.engine_), [&] {
+            cascade::engine::Engine& e = rawEngine(a.engine_);
+            for (auto& [id, radio] : e.patchRadios_) {
+                (void)id;
+                radio->stop();
+            }
+            e.patchRadios_.clear();
+            e.patchRadioSig_.clear();
+            e.patchDests_.clear();
+            e.patchDestMadeFor_.clear();
+            e.patchDestError_.clear();
+        });
     }
 };
 

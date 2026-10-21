@@ -70,7 +70,7 @@ struct GLFWwindow;
 #include "engine/running_view.hpp"
 #include "gui/bench_rail.hpp"
 #include "engine/audio_open.hpp"
-#include "gui/config_writer.hpp"
+#include "core/config_writer.hpp"
 #include "gui/shell_open.hpp"
 // The keyboard, as a table. ImGui-free by construction (it declares ImGuiKey
 // opaquely rather than including imgui.h - see its own note), so a KeyBindings
@@ -1211,7 +1211,7 @@ private:
     // THE ASYNC SAVE (0.97.2). Field report "hang ntdll.dll @
     // cascade::core::ConfigStore::save" (0.96.3): both functions above used
     // to write the file directly, on the GUI thread, inside whichever of
-    // them called them - see gui/config_writer.hpp for the whole argument.
+    // them called them - see core/config_writer.hpp for the whole argument.
     // requestConfigSave() is now the ONE place either of them hands bytes to
     // configWriter_, so pollConfigWriter() has one place to apply the result
     // to savedCfg_ from. `cfg` is remembered as lastRequestedConfig_
@@ -1664,7 +1664,7 @@ private:
     // THE WRITE, OFF THIS THREAD. Field report "hang ntdll.dll @
     // cascade::core::ConfigStore::save" (0.96.3): the debounced save above
     // put the GUI thread inside the file write itself. See
-    // gui/config_writer.hpp for the whole argument; requestConfigSave() and
+    // core/config_writer.hpp for the whole argument; requestConfigSave() and
     // pollConfigWriter() are the only callers.
     cascade::gui::ConfigWriter configWriter_;
     // The config content behind whatever configWriter_ is currently holding
@@ -2003,6 +2003,14 @@ private:
     // runs there is no user interface left to ask with. This is the ask.
     void drawDiagnosticsOffer();
     void copyDiagnosticsBundle();
+    // A damaged settings file is kept aside before anything can save over it; and the save's back-off after failures (0.99.65).
+    void setAsideDamagedFile(const char* which, const std::string& path);
+    void noteConfigWrite(bool ok, const std::string& error);
+    bool configRetryHeld(double nowS, double baseWaitS);
+    int configFailures_ = 0;
+    bool configFailureFresh_ = false;
+    double configRetryAtS_ = 0.0;
+    bool configFailureLogged_ = false;
     // The reports folder in the shell (made first, under a watchdog pause): the diagnostics offer's and the Diagnostics section's key.
     void openReportsFolder();
     // THE WHOLE BUNDLE (what Copy diagnostics puts on the clipboard and what a problem report attaches): the engine's rendered context

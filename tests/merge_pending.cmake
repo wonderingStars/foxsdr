@@ -52,8 +52,8 @@ cascade_merge_pending(TESTER-LINK      # 0.99.45 / 0.99.52 beta-tester portal li
 cascade_merge_pending(PATCH-PRESETS    # 0.99.49 whole-patch presets
     test_patch_presets_app)
 cascade_merge_pending(DISK-WORK        # 0.99.63 - 0.99.65 the window does no disk work (recorders, saves, file opens on workers)
-    test_gui_file_jobs test_record_finish_async test_record_start test_failure_files test_failure_recording
-    test_iq_open_async test_bookmark_save_async test_patch_dest_async)
+    test_gui_file_jobs test_failure_files
+    test_iq_open_async test_gui_disk_audit)
 cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, health ledger, slow frames, previous-session bundle
     test_slow_frames_app)
 cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain

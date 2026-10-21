@@ -1727,10 +1727,22 @@ int main() {
         {
             const std::filesystem::path blocker = rec / "not_a_folder";
             { std::ofstream f(blocker); f << "x"; }
+            const auto countWavs = [&rec] {
+                std::size_t n = 0;
+                std::error_code wavEc;
+                for (const auto& entry : std::filesystem::recursive_directory_iterator(rec, wavEc)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".wav") { ++n; }
+                }
+                return n;
+            };
+            const std::size_t wavFilesBefore = countWavs();   // (earlier cases of this test wrote speaker files here)
             A::setRecordDir(*a, blocker.string());
             A::submit(*a, cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 1));
             CHECK(untilText(*a, "cannot create directory"));
-            CHECK(!shows("WAV  patch-"));
+            // (0.99.64: A WAV SPEAKER'S DESTINATION EXISTS AT ONCE and its file is opened by a worker - nothing waits for the disk - so the face
+            // may still name the file it was going to write while the failure is on its way; what must hold is that the failure is said and that
+            // no file came of it, in the folder that could not be made or beside it.)
+            CHECK_EQ(countWavs(), wavFilesBefore);
         }
         delete a;
     }

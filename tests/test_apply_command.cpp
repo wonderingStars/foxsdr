@@ -337,11 +337,31 @@ struct AppWindowTestAccess {
         });
     }
 
+    // A RECORDING'S FILE OPENS ON A WORKER (0.99.63): a take just asked for is armed on the pass that collects the file. Waits (bounded) until no
+    // start is out, polling as the pass does, so a test that asked for a take then reads it "recording".
+    static bool recordStartsOut(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] {
+            return rawEngine(a.engine_).iqStart_.pending() || rawEngine(a.engine_).audioStart_.pending() || rawEngine(a.engine_).iqStartQueued_ ||
+                   rawEngine(a.engine_).audioStartQueued_;
+        });
+    }
+    static void settleRecordStarts(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (recordStartsOut(a) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            passseam::custom(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(rawEngine(a.engine_).clockS()); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        return rd(a, [&] { return rawEngine(a.engine_).applyCommand(c, lt); });
+        const FoxCommandResult r = rd(a, [&] { return rawEngine(a.engine_).applyCommand(c, lt); });
+        if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
+        return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return rd(a, [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        const FoxCommandResult r = rd(a, [&] { return rawEngine(a.engine_).applyCommand(q.c, q.longText); });
+        if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
+        return r;
     }
     // (Engine::submitCommand is the front end's own call from any thread: the queue has its own lock, and it wakes the pass.)
     static void submit(AppWindow& a, const FoxCommand& c) { rawEngine(a.engine_).submitCommand(c); }

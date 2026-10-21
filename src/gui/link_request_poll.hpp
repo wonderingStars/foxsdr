@@ -16,7 +16,7 @@
 // until the directory it names is on a redirected or network profile, a cloud-
 // synced folder, behind an antivirus holding the directory, or on a disk that
 // has spun down - and %APPDATA% is also where config.json is written, which
-// 0.97.2 had already had to move off this thread (gui/config_writer.hpp) for
+// 0.97.2 had already had to move off this thread (core/config_writer.hpp) for
 // the same reason. The poll's only job is to notice a file that, in nearly
 // every second of nearly every session, is not there; it is the last thing
 // that should be able to stop a window.

@@ -1095,7 +1095,7 @@ const KnownWait kKnownWaits[] = {
     // synchronously on the GUI thread, and so - unremarked, because it was
     // always fast until it was not - did the teardown's own two saves (the
     // final-state save before pipeline_.stop() and the clean-exit marker
-    // after it; see AppWindow::run()). gui/config_writer.hpp moves all three
+    // after it; see AppWindow::run()). core/config_writer.hpp moves all three
     // off the GUI thread: a save REQUEST never blocks and a burst of them
     // coalesces to the last content asked for, so however many of the
     // teardown's two calls land while the worker is already busy, there is
@@ -1106,18 +1106,18 @@ const KnownWait kKnownWaits[] = {
     // rather than mutually exclusive with anything else here: it runs
     // whatever source or transmitter is or is not installed. 9000 -> 10500,
     // and kShutdownThresholdMs with it.
-    {"src/gui/config_writer.hpp", "kSaveBound", 1,
+    {"src/core/config_writer.hpp", "kSaveBound", 1,
      "ConfigWriter::finishOrAbandon()'s bound, spent once by AppWindow::run() right after the "
      "clean-exit marker save is requested - the ONE drain that waits for whatever the "
      "teardown's saves coalesced down to. Not spent by the two requestAsync() calls "
      "themselves: neither one blocks. Since 0.99.64 the bookmark list's and the markers' "
      "last saves are drained against the SAME deadline (what the config drain leaves of "
      "it), so this stays one kSaveBound, not three"},
-    {"src/gui/config_writer.hpp", "kNoWait", 0,
+    {"src/core/config_writer.hpp", "kNoWait", 0,
      "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. "
      "The frame loop has ended before beginShutdown() raises the threshold, so poll() is not "
      "even called on the teardown path; finishOrAbandon() above does its own waiting"},
-    {"src/gui/config_writer.hpp", "kQuitGrace", 0,
+    {"src/core/config_writer.hpp", "kQuitGrace", 0,
      "~ConfigWriter's safety-net grace before a save still blocked at object destruction is "
      "abandoned: reached from ~AppWindow, which runs after watchdog_.stop() - outside the "
      "budgeted stretch, exactly like app_window.cpp's kQuitGrace and audio_open.hpp's. A "
@@ -1187,12 +1187,12 @@ const KnownWait kKnownWaits[] = {
      "turn (six at most, one per feature - the frequency list's import joined in 0.99.65), "
      "still after the watchdog has stopped"},
 
-    // THE BOOKMARK LIST AND THE MARKERS (0.99.64, gui/background_saver.hpp): two more
+    // THE BOOKMARK LIST AND THE MARKERS (0.99.64, core/background_saver.hpp): two more
     // ConfigWriters in all but name. Their last request is drained at exit within the
     // SAME deadline ConfigWriter::kSaveBound already charges (AppWindow::run() takes
     // the deadline before the config drain and gives the lists what is left of it), so
     // the shutdown budget above is unchanged: still one kSaveBound, spent once.
-    {"src/gui/background_saver.hpp", "kStuckAfter", 0,
+    {"src/core/background_saver.hpp", "kStuckAfter", 0,
      "not a wait: the age at which a write still out is called stuck in the log (once), "
      "compared against a clock by poll() on the frame loop, which has ended before "
      "beginShutdown() raises the threshold"},
@@ -1679,7 +1679,7 @@ int main() {
             return at != std::string::npos && s != std::string::npos && s < end;
         };
         CHECK(phaseHolds("void Engine::shutdownStop() {", "pipeline_.stop();"));
-        CHECK(phaseHolds("void Engine::shutdownRelease() {", "patchStopAll(false);"));
+        CHECK(phaseHolds("void Engine::shutdownRelease(std::chrono::steady_clock::time_point drainDeadline) {", "patchStopAll(false);"));
         CHECK(phaseHolds("void Engine::shutdownQuiesce() {", "transmitter_.stop();"));
         // ...and run() calls the three phases, in their order, the first of
         // them before the final save (which must read the settled state) and
@@ -1687,7 +1687,7 @@ int main() {
         const std::size_t quiesce =
             haveAnchors ? text.find("engine_.shutdownQuiesce();", begin) : std::string::npos;
         const std::size_t release =
-            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
+            haveAnchors ? text.find("engine_.shutdownRelease(drainDeadline);", begin) : std::string::npos;
         const std::size_t finalSave =
             haveAnchors ? text.find("saveConfigNow(); }", begin) : std::string::npos;
         std::printf("teardown phases: quiesce@%zu final save@%zu stop@%zu release@%zu\n", quiesce, finalSave,
@@ -1729,7 +1729,7 @@ int main() {
         const std::string closeWaitOff = "SoundCardSource::setCloseWaitEnabled(false);";
         const std::size_t off = haveAnchors ? text.find(closeWaitOff, begin) : std::string::npos;
         const std::size_t patchStop =
-            haveAnchors ? text.find("engine_.shutdownRelease();", begin) : std::string::npos;
+            haveAnchors ? text.find("engine_.shutdownRelease(drainDeadline);", begin) : std::string::npos;
         std::printf("teardown wiring: sound card close wait off@%zu patchStopAll(false)@%zu\n", off,
                     patchStop);
         CHECK(off != std::string::npos && isLiveCode(text, off));

@@ -77,7 +77,9 @@
 #include "core/patch_radio.hpp"
 #include "core/record_finish.hpp"
 #include "core/recorder.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "source/siggen_source.hpp"
 #include "test_check.hpp"
 
@@ -90,64 +92,71 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
-    static void setSeams(AppWindow& a, pc::DestSeams s) { a.patchDestSeams_ = std::move(s); }
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); the radios and the destination are driven directly with
+    // the pass stepped or out of the way.
+    static void setSeams(AppWindow& a, pc::DestSeams s) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchDestSeams_ = std::move(s); }); }
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
 
-    // A patch as the parts bin builds it - a radio, a channel, a demodulator and a
-    // speaker wired behind - with the radio RUNNING on the signal generator, as a
-    // patch radio is, so its reader thread feeds the speaker for real. `device`
-    // is the speaker's output key ("" is the default, a WAV file; "mp3").
+    // A patch as the parts bin builds it - a radio, a channel, a demodulator and a speaker wired behind - with the radio RUNNING on the signal
+    // generator, as a patch radio is, so its reader thread feeds the speaker for real. `device` is the speaker's output key ("" is the
+    // default, a WAV file; "mp3").
     static pc::NodeId buildSpeakerPatch(AppWindow& a, const std::string& device, bool start) {
         a.patchSeeded_ = true;
-        const pc::NodeId r = a.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq);
-        const pc::NodeId c = a.patchGraph_.addNode(pc::NodeKind::Channel, "Tone", pc::PortType::Iq);
-        const pc::NodeId d = a.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq);
-        const pc::NodeId s = a.patchGraph_.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio);
-        auto gen = std::make_unique<cascade::source::SigGenSource>(2.4e6);
-        gen->sigGen().setTone(0, 300000.0, -30.0f);
-        a.patchRadios_[r] = std::make_unique<pc::PatchRadio>(r, std::move(gen), "generator");
-        // The channel sits 300 kHz above wherever the generator says its centre is.
-        if (pc::Node* n = a.patchGraph_.mutableNode(c)) {
-            n->freqHz = a.patchRadios_[r]->centreHz() + 300000.0;
-        }
-        if (pc::Node* n = a.patchGraph_.mutableNode(d)) { n->mode = 2; }
-        if (pc::Node* n = a.patchGraph_.mutableNode(s)) { n->device = device; }
-        CHECK(a.patchGraph_.connect(r, 0, c, 0) == pc::Connect::Ok);
-        CHECK(a.patchGraph_.connect(c, 0, d, 0) == pc::Connect::Ok);
-        CHECK(a.patchGraph_.connect(d, 0, s, 0) == pc::Connect::Ok);
-        if (start) {
-            std::string err;
-            CHECK(a.patchRadios_[r]->start(err));
-        }
-        a.patchPlan_ = pc::compile(a.patchGraph_, a.patchRadioInfos(), nullptr, false);
-        CHECK(a.patchPlan_.runnable);
-        CHECK(a.patchPlan_.sinks.size() == 1u);
-        return s;
+        return passseam::read<pc::NodeId>(rawEngine(a.engine_), [&] {
+            cascade::engine::Engine& e = rawEngine(a.engine_);
+            const pc::NodeId r = e.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq);
+            const pc::NodeId c = e.patchGraph_.addNode(pc::NodeKind::Channel, "Tone", pc::PortType::Iq);
+            const pc::NodeId d = e.patchGraph_.addNode(pc::NodeKind::Demod, "AM", pc::PortType::Iq);
+            const pc::NodeId s = e.patchGraph_.addNode(pc::NodeKind::Sink, "Speaker", pc::PortType::Audio);
+            auto gen = std::make_unique<cascade::source::SigGenSource>(2.4e6);
+            gen->sigGen().setTone(0, 300000.0, -30.0f);
+            e.patchRadios_[r] = std::make_unique<pc::PatchRadio>(r, std::move(gen), "generator");
+            // The channel sits 300 kHz above wherever the generator says its centre is.
+            if (pc::Node* n = e.patchGraph_.mutableNode(c)) { n->freqHz = e.patchRadios_[r]->centreHz() + 300000.0; }
+            if (pc::Node* n = e.patchGraph_.mutableNode(d)) { n->mode = 2; }
+            if (pc::Node* n = e.patchGraph_.mutableNode(s)) { n->device = device; }
+            CHECK(e.patchGraph_.connect(r, 0, c, 0) == pc::Connect::Ok);
+            CHECK(e.patchGraph_.connect(c, 0, d, 0) == pc::Connect::Ok);
+            CHECK(e.patchGraph_.connect(d, 0, s, 0) == pc::Connect::Ok);
+            if (start) {
+                std::string err;
+                CHECK(e.patchRadios_[r]->start(err));
+            }
+            e.patchPlan_ = pc::compile(e.patchGraph_, e.patchRadioInfos(), nullptr, false);
+            CHECK(e.patchPlan_.runnable);
+            CHECK(e.patchPlan_.sinks.size() == 1u);
+            return s;
+        });
     }
 
-    // What the patch page calls once a frame, after the plan is compiled.
-    static void publish(AppWindow& a) { a.patchPublishSets(); }
+    // What the patch page calls once a pass, after the plan is compiled.
+    static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).patchPublishSets(); }); }
 
     static std::shared_ptr<pc::AudioDest> destOf(AppWindow& a, pc::NodeId sink) {
-        return pc::destFor(a.patchDests_, sink);
+        return passseam::read<std::shared_ptr<pc::AudioDest>>(rawEngine(a.engine_), [&] { return pc::destFor(rawEngine(a.engine_).patchDests_, sink); });
     }
-    static bool published(AppWindow& a) { return !a.patchRadioSig_.empty(); }
-    static auto& radios(AppWindow& a) { return a.patchRadios_; }
+    static bool published(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return !rawEngine(a.engine_).patchRadioSig_.empty(); }); }
+    static auto& radios(AppWindow& a) { return rawEngine(a.engine_).patchRadios_; }
     static std::string destError(AppWindow& a, pc::NodeId sink) {
-        const auto it = a.patchDestError_.find(sink);
-        return it == a.patchDestError_.end() ? std::string() : it->second;
+        return passseam::read<std::string>(rawEngine(a.engine_), [&] {
+            const auto it = rawEngine(a.engine_).patchDestError_.find(sink);
+            return it == rawEngine(a.engine_).patchDestError_.end() ? std::string() : it->second;
+        });
     }
     // The page closing: radios stop and are destroyed, then the outputs go.
     static void closeRadios(AppWindow& a) {
-        for (auto& [id, radio] : a.patchRadios_) {
-            (void)id;
-            radio->stop();
-        }
-        a.patchRadios_.clear();
-        a.patchRadioSig_.clear();
-        a.patchDests_.clear();
-        a.patchDestMadeFor_.clear();
-        a.patchDestError_.clear();
+        passseam::on(rawEngine(a.engine_), [&] {
+            cascade::engine::Engine& e = rawEngine(a.engine_);
+            for (auto& [id, radio] : e.patchRadios_) {
+                (void)id;
+                radio->stop();
+            }
+            e.patchRadios_.clear();
+            e.patchRadioSig_.clear();
+            e.patchDests_.clear();
+            e.patchDestMadeFor_.clear();
+            e.patchDestError_.clear();
+        });
     }
 };
 
@@ -782,11 +791,12 @@ void checkNothingOpensASpeakerFileOnTheGuiThread() {
 
     const fs::path root(CASCADE_SOURCE_DIR);
     const std::string audio = readFileText(root / "src" / "core" / "patch_audio.cpp");
-    const std::string radios = readFileText(root / "src" / "gui" / "app_window_patch_radios.cpp");
+    // (The page's reconcile is the ENGINE's since the extraction: src/engine/engine_patch_radios.cpp holds what app_window_patch_radios.cpp did.)
+    const std::string radios = readFileText(root / "src" / "engine" / "engine_patch_radios.cpp");
     CHECK(!audio.empty() && !radios.empty());
 
     // The page's reconcile reaches the disk through no call of its own...
-    const std::string publish = functionBody(radios, "void AppWindow::patchPublishSets(");
+    const std::string publish = functionBody(radios, "void Engine::patchPublishSets(");
     CHECK(publish.size() > 500);
     const std::vector<std::string> hits = blockingCallsIn(publish);
     for (const std::string& h : hits) { std::printf("  patchPublishSets asks the disk: %s\n", h.c_str()); }

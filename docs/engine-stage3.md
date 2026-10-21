@@ -628,9 +628,9 @@ comments, the same mention/contract split, only the numbers moved.)
 - [ ] `src/gui/basemap_cache.cpp:185` (mention) the GUI thread, once per frame, and the loop used to run until the
 - [ ] `src/gui/basemap_cache.hpp:65` (mention) called from the GUI thread), and the same start-the-fetch semantics:
 - [ ] `src/gui/basemap_cache.hpp:87` (mention) from owning the GUI thread for ever.
-- [ ] `src/gui/config_writer.hpp:1` (mention) config_writer.hpp - saving the config file without blocking the GUI thread.
-- [ ] `src/gui/config_writer.hpp:5` (mention) tail shows a mode change, two "gui thread recovered after a stall"
-- [ ] `src/gui/config_writer.hpp:25` (mention) (std::async), so the GUI thread is never inside the write. Unlike
+- [ ] `src/core/config_writer.hpp:1` (mention) config_writer.hpp - saving the config file without blocking the GUI thread.
+- [ ] `src/core/config_writer.hpp:5` (mention) tail shows a mode change, two "gui thread recovered after a stall"
+- [ ] `src/core/config_writer.hpp:25` (mention) (std::async), so the GUI thread is never inside the write. Unlike
 - [ ] `src/gui/frame_log.hpp:120` (mention) "with vsync on" measured the GUI thread rendering flat out, and moved with
 - [ ] `src/gui/instrument_teleprinter.cpp:62` (**contract**) The elapsed time comes from a tiny GUI-thread-only table keyed on the
 - [ ] `src/gui/instrument_teleprinter.cpp:110` (**contract**) that takes half a second needs the difference. GUI THREAD ONLY - every

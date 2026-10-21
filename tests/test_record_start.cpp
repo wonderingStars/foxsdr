@@ -85,7 +85,10 @@
 
 #include "core/hang_watchdog.hpp"
 #include "core/recorder.hpp"
+#include "core/app_commands.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "engine/record_start.hpp"
 #include "net/web_control.hpp"
 #include "test_check.hpp"
@@ -100,58 +103,61 @@ namespace cascade::gui {
 
 // The friend AppWindow names for the test files that drive its private members.
 struct AppWindowTestAccess {
-    // Both recorders get the same opener: the seam for the slow disk. Each
-    // RecordStart copies its recorder's opener at request time.
+    // EVERY READ AND WRITE OF THE ENGINE GOES THROUGH THE SEAM (tests/pass_seam.hpp); what is returned is a COPY made on the pass.
+    // Both recorders get the same opener: the seam for the slow disk. Each RecordStart copies its recorder's opener at request time.
     static void bindOpener(AppWindow& a, Recorder::Opener o) {
-        a.iqRecorder_.bindOpener(o);
-        a.audioRecorder_.bindOpener(std::move(o));
+        passseam::on(rawEngine(a.engine_), [&] {
+            rawEngine(a.engine_).iqRecorder_.bindOpener(o);
+            rawEngine(a.engine_).audioRecorder_.bindOpener(std::move(o));
+        });
     }
-    static void setRecordDir(AppWindow& a, std::string d) { a.recordDir_ = std::move(d); }
+    static void setRecordDir(AppWindow& a, std::string d) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).recordDir_ = std::move(d); }); }
 
     // The handlers themselves, not stand-ins for them.
-    static bool startAudio(AppWindow& a) { return a.startAudioRecording(); }
-    static bool startIq(AppWindow& a) { return a.startIqRecording(); }
-    // A Stop's file is closed on a worker since 0.99.65 (core/record_finish.hpp), and a
-    // Record pressed meanwhile is remembered, not started (tests/test_record_finish_async.cpp
-    // tests that). These tests are about the START, so a Stop here waits for its file
-    // to be closed and collects it, as the user's next press, a moment later, would.
+    static bool startAudio(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startAudioRecording(); });
+    }
+    static bool startIq(AppWindow& a) {
+        return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).startIqRecording(); });
+    }
+    // A Stop's file is closed on a worker since 0.99.65 (core/record_finish.hpp), and a Record pressed meanwhile is remembered, not started
+    // (tests/test_record_finish_async.cpp tests that). These tests are about the START, so a Stop here waits for its file to be closed and
+    // collects it, as the user's next press, a moment later, would.
     static void settleFinishes(AppWindow& a) {
-        cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() +
-                                             std::chrono::seconds(10));
-        a.pollRecordFinishes();
+        cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() + std::chrono::seconds(10));
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordFinishes(); });
     }
     static void stopAudio(AppWindow& a) {
-        a.stopAudioRecording();
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopAudioRecording(); });
         settleFinishes(a);
     }
     static void stopIq(AppWindow& a) {
-        a.stopIqRecording();
+        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).stopIqRecording(); });
         settleFinishes(a);
     }
-    // What the web remote and the plugins' host API do (the Record key and the
-    // buttons reach startAudioRecording/startIqRecording directly).
+    // What the web remote and the plugins' host API do (the Record key and the buttons reach startAudioRecording/startIqRecording
+    // directly): the engine's RECORD ops.
     static void applyRecord(AppWindow& a, std::optional<bool> iq, std::optional<bool> audio) {
-        cascade::net::ControlRequest r;
-        r.recordIq = iq;
-        r.recordAudio = audio;
-        a.applyControlRequest(r);
+        passseam::on(rawEngine(a.engine_), [&] {
+            if (iq.has_value()) { (void)rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RECORD_IQ, *iq ? 1 : 0), std::string()); }
+            if (audio.has_value()) { (void)rawEngine(a.engine_).applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, *audio ? 1 : 0), std::string()); }
+        });
     }
-    // One frame's worth of the poll.
-    static void poll(AppWindow& a, double nowS) { a.pollRecordStarts(nowS); }
+    // One pass's worth of the poll.
+    static void poll(AppWindow& a, double nowS) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pollRecordStarts(nowS); }); }
 
-    static bool iqRecording(AppWindow& a) { return a.iqRecorder_.recording(); }
-    static bool audioRecording(AppWindow& a) { return a.audioRecorder_.recording(); }
-    static bool iqPending(AppWindow& a) { return a.iqStart_.pending(); }
-    static bool audioPending(AppWindow& a) { return a.audioStart_.pending(); }
-    static bool audioStarting(AppWindow& a) { return a.audioStart_.starting(); }
-    static bool audioCancelled(AppWindow& a) { return a.audioStart_.cancelled(); }
-    static std::string recordError(AppWindow& a) { return a.recordError_; }
-    static std::string recordNotice(AppWindow& a) { return a.recordNotice_; }
-    static double audioStartS(AppWindow& a) { return a.audioRecordStartS_; }
-    static double iqStartS(AppWindow& a) { return a.iqRecordStartS_; }
-    // The input rate moving while an IQ file is opening: a source switch or a
-    // SoapySDR rate change would do it; this is the same state change.
-    static void moveIqRate(AppWindow& a, double deltaHz) { a.iqRecordRateHz_ += deltaHz; }
+    static bool iqRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqRecorder_.recording(); }); }
+    static bool audioRecording(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecorder_.recording(); }); }
+    static bool iqPending(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqStart_.pending(); }); }
+    static bool audioPending(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioStart_.pending(); }); }
+    static bool audioStarting(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioStart_.starting(); }); }
+    static bool audioCancelled(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioStart_.cancelled(); }); }
+    static std::string recordError(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordError_; }); }
+    static std::string recordNotice(AppWindow& a) { return passseam::read<std::string>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).recordNotice_; }); }
+    static double audioStartS(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).audioRecordStartS_; }); }
+    static double iqStartS(AppWindow& a) { return passseam::read<double>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).iqRecordStartS_; }); }
+    // The input rate moving while an IQ file is opening: a source switch or a SoapySDR rate change would do it; this is the same state change.
+    static void moveIqRate(AppWindow& a, double deltaHz) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).iqRecordRateHz_ += deltaHz; }); }
 };
 
 }  // namespace cascade::gui
@@ -418,7 +424,9 @@ std::size_t countOf(const std::string& hay, const std::string& needle) {
 }
 
 void checkTheOpenIsNotMadeOnTheGuiThread() {
-    const fs::path gui = fs::path(__FILE__).parent_path().parent_path() / "src" / "gui";
+    // (The recorders are the ENGINE's since the extraction: src/engine holds what app_window*.cpp did, and the window asks for a take through a
+    // command - so the scan covers the engine's files, and the window holds no recorder at all.)
+    const fs::path gui = fs::path(__FILE__).parent_path().parent_path() / "src" / "engine";
     std::error_code ec;
     CHECK(fs::is_directory(gui, ec));
     int scanned = 0;
@@ -445,15 +453,15 @@ void checkTheOpenIsNotMadeOnTheGuiThread() {
                 l.find("setAudioRecorder(&") != std::string::npos) {
                 ++tapInstalls;
             }
-            if (p.filename() == "app_window.cpp") {
+            if (p.filename() == "engine.cpp") {
                 if (l.find("iqStart_.request(") != std::string::npos ||
                     l.find("audioStart_.request(") != std::string::npos) {
                     ++requests;
                 }
             }
         }
-        if (p.filename() == "app_window.cpp") {
-            finishBody = memberBody(lines, "void AppWindow::finishRecordStart(");
+        if (p.filename() == "engine.cpp") {
+            finishBody = memberBody(lines, "void Engine::finishRecordStart(");
         }
     }
     CHECK(scanned > 10);

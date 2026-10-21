@@ -683,15 +683,17 @@ void Engine::patchPublishSets() {
         const std::string prefix = pc::patchFilePrefix(static_cast<unsigned>(sp.sink), n->name);
         switch (pc::outputKind(key)) {
             case pc::OutputKind::Wav:
-                dest = pc::makeWavDest(recordDir_, prefix, err);
+                // THE DISK IS NOT WAITED FOR (0.99.64, docs/DIAGNOSTICS.md): the destination exists at once and takes samples, its file is opened
+                // by a worker of its own, and a file that could not be made says so through the node's error a pass later.
+                dest = pc::makeWavDestAsync(recordDir_, prefix, err, &patchDestSeams_);
                 break;
             case pc::OutputKind::Mp3: {
-                dest = pc::makeMp3Dest(recordDir_, prefix, err);
+                dest = pc::makeMp3Dest(recordDir_, prefix, err, &patchDestSeams_);
                 if (!dest) {
                     // THE FILE STILL GETS WRITTEN: an MP3 this build cannot
                     // make is a WAV, and the face says so.
                     std::string werr;
-                    dest = pc::makeWavDest(recordDir_, prefix, werr);
+                    dest = pc::makeWavDestAsync(recordDir_, prefix, werr, &patchDestSeams_);
                     err += dest ? " - writing WAV instead" : "; " + werr;
                 }
                 break;

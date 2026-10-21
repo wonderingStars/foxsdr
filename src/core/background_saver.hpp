@@ -6,7 +6,7 @@
 // temporary file written and renamed over the target in the settings folder.
 // AppWindow did both on the GUI thread, from drawUi, every frame it had one due -
 // the same synchronous write that froze a window in 0.96.3 for the CONFIG file and
-// that gui/config_writer.hpp moved off the thread. The two lists live in the same
+// that core/config_writer.hpp moved off the thread. The two lists live in the same
 // folder, on the same disk, so they were the same freeze waiting for the same slow
 // answer.
 //
@@ -43,7 +43,7 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
-#include "gui/config_writer.hpp"
+#include "core/config_writer.hpp"
 
 namespace cascade::gui {
 

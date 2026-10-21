@@ -16,7 +16,7 @@
 //
 // WHEN THE RENAME IS REFUSED (another program holds the file, the folder is read-only) the result
 // says so and the caller must not save over the file in this session: AppWindow tells that file's
-// saver to write nothing (gui/config_writer.hpp, forbidWrites).
+// saver to write nothing (core/config_writer.hpp, forbidWrites).
 //
 // The band plan is never written by the application (it is read-only data it ships or the user
 // installs), so it has nothing to protect and is not handled here.

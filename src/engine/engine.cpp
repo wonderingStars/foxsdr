@@ -36,6 +36,7 @@
 #include "core/version.hpp"
 #include "core/crash_handler.hpp"
 #include "core/breadcrumb.hpp"
+#include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
@@ -5300,18 +5301,156 @@ void Engine::loadBandPlan() {
 }
 
 void Engine::stopIqRecording() {
-    // Order per the Pipeline::setIqRecorder contract: after the setter
-    // returns no writeIq against this recorder is in flight or can begin
-    // (the pointer swap serializes on the mutex the DSP thread holds across
-    // writes), so stop() — which patches the header and closes the file —
-    // cannot overlap a write. Both calls are no-ops when already idle.
+    // A start still opening its file is withdrawn first: nothing is recording yet, so there is no tap to take out and no header to patch, and
+    // nothing here waits for the disk (RecordStart::cancel only sets a flag - the file, when it arrives, is closed unused by
+    // pollRecordStarts). A no-op when no open is out.
+    iqStart_.cancel();
+    // Order per the Pipeline::setIqRecorder contract: after the setter returns no writeIq against this recorder is in flight or can begin
+    // (the pointer swap serializes on the mutex the DSP thread holds across writes), so the finish - which patches the header and closes
+    // the file - cannot overlap a write. Both calls are no-ops when already idle.
+    //
+    // THE FINISH IS NOT DONE HERE (0.99.65): finishTake detaches the file from the recorder without touching the disk and a worker flushes,
+    // patches and closes it. A Record queued behind a finish still out is withdrawn too.
+    iqStartQueued_ = false;
     pipeline_.setIqRecorder(nullptr);
-    iqRecorder_.stop();
+    finishTake(true);
 }
 
 void Engine::stopAudioRecording() {
+    audioStart_.cancel();  // see stopIqRecording
+    audioStartQueued_ = false;
     pipeline_.setAudioRecorder(nullptr);
-    audioRecorder_.stop();
+    finishTake(false);
+}
+
+namespace {
+// What the worker said, said once, in the log and nowhere else: the synchronous stop said nothing at all about a header that did not reach
+// the file (it ignored every result), and this keeps the screen the same - a line the user cannot act on, about a file that still opens -
+// while no longer losing the fact. Never names the file.
+void collectFinish(std::shared_ptr<cascade::core::RecordFinisher::Ticket>& slot, const char* what) {
+    if (!slot || !slot->done.load()) { return; }
+    if (!slot->ok.load()) {
+        cascade::core::diagWarnf("recorder: the %s take's file could not be finalised - it keeps the header it was opened with", what);
+    }
+    slot.reset();
+}
+}  // namespace
+
+void Engine::finishTake(bool iq) {
+    cascade::core::Recorder& rec = iq ? iqRecorder_ : audioRecorder_;
+    cascade::core::Recorder::FinishRequest req;
+    // False when there is no open file: never started, already stopped, or ended by the size limit (which closed its own file). Nothing to
+    // finish, nothing to wait for.
+    if (!rec.stopForFinish(req)) { return; }
+    (iq ? iqFinish_ : audioFinish_) = cascade::core::RecordFinisher::submit(std::move(req));
+}
+
+bool Engine::takeFinishing(bool iq) const {
+    const auto& slot = iq ? iqFinish_ : audioFinish_;
+    return slot && !slot->done.load();
+}
+
+void Engine::pollRecordFinishes() {
+    const auto service = [this](bool iq) {
+        collectFinish(iq ? iqFinish_ : audioFinish_, iq ? "I/Q" : "audio");
+        bool& queued = iq ? iqStartQueued_ : audioStartQueued_;
+        if (queued && !takeFinishing(iq)) {
+            queued = false;
+            if (iq) {
+                startIqRecording();
+            } else {
+                startAudioRecording();
+            }
+        }
+    };
+    service(true);
+    service(false);
+}
+
+bool Engine::drainRecordFinishes(std::chrono::steady_clock::time_point deadline) {
+    // A Record queued behind a finish is not started at quit: the window is closing.
+    iqStartQueued_ = false;
+    audioStartQueued_ = false;
+    const bool landed = cascade::core::RecordFinisher::drain(deadline);
+    if (!landed) {
+        cascade::core::diagLogf(
+            "recorder: a take's file was still being closed at exit - the disk did not answer in time; it keeps the header it was opened with");
+    }
+    collectFinish(iqFinish_, "I/Q");
+    collectFinish(audioFinish_, "audio");
+    return landed;
+}
+
+void Engine::pollRecordStarts(double nowS) {
+    // Both takes, the same way: collect a finished open and act on it, then say in the log - once - if one is taking long. A no-op on every
+    // pass nothing was requested, so it costs nothing to call unconditionally. `nowS` is the take's start time (the elapsed-time readout's
+    // origin): the pass passes its own clock.
+    const auto service = [this, nowS](bool iq, cascade::gui::RecordStart& start, const char* what) {
+        cascade::gui::RecordStart::Result r;
+        if (start.poll(r)) { finishRecordStart(iq, r, nowS); }
+        // THE ONLY RECORD A REPORT WILL CARRY of a disk that was slow to open a recording: once when an open has been out for 5 s, once
+        // when it comes back. Neither names the directory or the file, which are in the user's profile.
+        double seconds = 0.0;
+        switch (start.takeNotice(seconds)) {
+            case cascade::gui::RecordStart::Notice::Stuck:
+                cascade::core::diagWarnf(
+                    "recorder: the %s file has not opened for %.0f s - the open is waiting on a worker thread, the pass is not", what, seconds);
+                break;
+            case cascade::gui::RecordStart::Notice::Recovered:
+                cascade::core::diagLogf("recorder: the %s file opened after %.0f s", what, seconds);
+                break;
+            case cascade::gui::RecordStart::Notice::None:
+                break;
+        }
+    };
+    service(true, iqStart_, "I/Q");
+    service(false, audioStart_, "audio");
+    // A Record that was pressed behind a take's finish, started now its file is closed.
+    pollRecordFinishes();
+}
+
+void Engine::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, double nowS) {
+    cascade::core::Recorder& rec = iq ? iqRecorder_ : audioRecorder_;
+    const char* what = iq ? "I/Q" : "audio";
+    if (r.cancelled) {
+        // Stopped while the file was opening: RecordStart has already closed it, and nothing was armed or tapped. Silent on screen - the
+        // user pressed Stop, and "the recording ended because you stopped" is not news.
+        cascade::core::diagLogf("recorder: the %s take was stopped before its file finished opening", what);
+        return;
+    }
+    if (!r.ok) {
+        // The same words Recorder::start gave, a little later.
+        recordError_ = r.error;
+        return;
+    }
+    if (iq && pipeline_.inputRateHz() != iqRecordRateHz_) {
+        // THE RATE MOVED WHILE THE FILE WAS OPENING (a source switch, a SoapySDR rate change): the header on that file is for the old rate,
+        // and a take whose header disagrees with its samples replays detuned - the reason an accepted rate change ends a take already
+        // running. Not started, and said, because nothing went wrong that the user did not do.
+        r.file = cascade::core::Recorder::OpenedFile{};  // closes it, unused
+        // Translated where it is set, like the other notes the engine keeps in a member. The log line below is not.
+        recordNotice_ =
+            tr("The I/Q recording was not started because the input rate changed while its "
+               "file was opening; press Record to start a new one.");
+        cascade::core::diagLogf("recorder: the I/Q take was dropped, the input rate changed while its file opened");
+        return;
+    }
+    std::string err;
+    // ARM FIRST, TAP SECOND - the Pipeline::set*Recorder contract: the tap must never feed a recorder that is not accepting, and begin() is
+    // what makes it accept. No write can be in flight against it yet, because the pipeline has not been given it.
+    if (!rec.begin(std::move(r.file), err)) {
+        recordError_ = err;
+        return;
+    }
+    recordError_.clear();
+    recordNotice_.clear();
+    if (iq) {
+        iqRecordStartS_ = nowS;
+        pipeline_.setIqRecorder(&iqRecorder_);
+    } else {
+        audioRecordStartS_ = nowS;
+        pipeline_.setAudioRecorder(&audioRecorder_);
+    }
 }
 
 bool Engine::endTakes(bool iq, bool audio, const char* why, bool asError) {
@@ -5403,8 +5542,8 @@ void Engine::stopReceiver(const char* who) {
     // seconds in, nothing recording, eight seconds before the death. An idle recorder has no tap to take out and no file to finish, so that
     // wait is not spent. The stop still waits once, inside pipeline_.stop(), for the block in progress to end - that wait is the join's.
     const bool running = pipeline_.running() || pipeline_.faulted();
-    const bool iq = running && iqRecorder_.recording();
-    const bool audio = running && audioRecorder_.recording();
+    const bool iq = running && (iqRecorder_.recording() || iqStart_.pending() || iqStartQueued_);
+    const bool audio = running && (audioRecorder_.recording() || audioStart_.pending() || audioStartQueued_);
     // The two recording stops timed, for the log line below: the quantity the 0.99.65 report showed as 701 ms. tests/test_stop_ends_
     // recordings.cpp asserts on it.
     const auto recordersFrom = std::chrono::steady_clock::now();
@@ -5448,40 +5587,51 @@ void Engine::installSource(std::unique_ptr<cascade::source::IqSource> src) {
 }
 
 bool Engine::startAudioRecording() {
-    if (audioRecorder_.recording()) { return true; }
+    // A take that is recording, or whose file is still opening, is left exactly as it is: a second press of the button, the key or the
+    // browser's Record changes nothing (RecordStart refuses a second open anyway, so two cannot race for one file name). One whose start was
+    // withdrawn and has not yet come back is neither, and a Record in that gap is not a take.
+    if (audioRecorder_.recording() || audioStart_.pending()) { return !audioStart_.cancelled(); }
+    // THE PREVIOUS TAKE'S FILE IS STILL BEING CLOSED (a worker's, 0.99.65): this press is remembered and the take starts on the pass that
+    // file is closed (pollRecordFinishes). Not started now - a file name has a one-second resolution, and an open beside a file still being
+    // finalised could truncate it - and not refused either, so a Stop followed by a Record in one breath (a script, the web remote) still
+    // gives the take that was asked for.
+    if (takeFinishing(false)) {
+        audioStartQueued_ = true;
+        return true;
+    }
+    // THE DISK IS NOT TOUCHED HERE. This used to be Recorder::start, whose create_directories and fopen waited for the disk on this thread,
+    // and a slow one froze it (see gui/record_start.hpp). The cheap half stays: a refusal that needs no disk is reported at once.
     std::string err;
-    if (!audioRecorder_.start(cascade::core::RecordKind::Audio, recordDir_,
-                              cascade::core::Pipeline::kAudioRateHz, err)) {
+    cascade::core::Recorder::OpenRequest req;
+    if (!audioRecorder_.prepare(cascade::core::RecordKind::Audio, recordDir_, cascade::core::Pipeline::kAudioRateHz, std::string{}, req,
+                                err)) {
         recordError_ = err;
         return false;
     }
-    recordError_.clear();
-    recordNotice_.clear();
-    audioRecordStartS_ = clockS();
-    // Install AFTER start(): the tap must never feed a recorder that is not
-    // accepting (Pipeline::setAudioRecorder contract).
-    pipeline_.setAudioRecorder(&audioRecorder_);
+    audioStart_.request(audioRecorder_.opener(), std::move(req));
     return true;
 }
 
 bool Engine::startIqRecording() {
-    // The Record IQ key's body and the web remote's recordIq, which were two
-    // copies of the same six lines until stage 1. Baseband at the DSP input
-    // rate through the pipeline's raw tap.
-    if (iqRecorder_.recording()) { return true; }
+    // The Record IQ key's body and the web remote's recordIq. Baseband at the DSP input rate through the pipeline's raw tap.
+    // See startAudioRecording for the pending and withdrawn cases.
+    if (iqRecorder_.recording() || iqStart_.pending()) { return !iqStart_.cancelled(); }
+    // See startAudioRecording: behind a finish still out, remembered.
+    if (takeFinishing(true)) {
+        iqStartQueued_ = true;
+        return true;
+    }
     const double rate = pipeline_.inputRateHz();
     std::string err;
-    if (!iqRecorder_.start(cascade::core::RecordKind::BasebandIq, recordDir_, rate, err)) {
+    cascade::core::Recorder::OpenRequest req;
+    if (!iqRecorder_.prepare(cascade::core::RecordKind::BasebandIq, recordDir_, rate, std::string{}, req, err)) {
         recordError_ = err;
         return false;
     }
-    recordError_.clear();
-    recordNotice_.clear();
+    // The rate the file's header is being written for, kept to compare with the rate when the file arrives: a take is one rate, and a source
+    // that changed it while the disk was slow must not get a header that lies (see finishRecordStart).
     iqRecordRateHz_ = rate;
-    iqRecordStartS_ = clockS();
-    // Install AFTER start(): the tap must never feed a recorder that is not
-    // accepting (Pipeline::setIqRecorder contract).
-    pipeline_.setIqRecorder(&iqRecorder_);
+    iqStart_.request(iqRecorder_.opener(), std::move(req));
     return true;
 }
 
@@ -5810,15 +5960,86 @@ void Engine::saveBookmarks() {
 }
 
 void Engine::flushBookmarkSave(bool force) {
+    // THE LAST SAVE'S ANSWER, whenever it has come back (0.99.64: the write is on a worker, so what it says is a pass or more late). A
+    // failure is shown in the words the synchronous save gave; a success clears a stale error.
+    {
+        bool ok = false;
+        std::string err;
+        if (bookmarkSaver_.poll(ok, err)) {
+            if (ok) {
+                bookmarkError_.clear();  // a successful save clears a stale error
+            } else {
+                bookmarkError_ = err;
+            }
+        }
+    }
     if (!bookmarkSaveDirty_ || bookmarkPath_.empty()) { return; }
     if (!force && clockS() < bookmarkSaveDueS_) { return; }
     bookmarkSaveDirty_ = false;
-    std::string err;
-    if (freqMgr_.save(bookmarkPath_, err)) {
-        bookmarkError_.clear();  // a successful save clears a stale error
-    } else {
-        bookmarkError_ = err;
+    // The snapshot is taken on this thread, so the worker never reads the list being edited; the write itself - the folder, the temp file, the
+    // flush, the rename - is the worker's. NEVER WAITS FOR THE DISK.
+    bookmarkSaver_.request(bookmarkPath_, freqMgr_.serialize());
+}
+
+void Engine::flushMarkerSave(bool force) {
+    // The last save's answer first, as flushBookmarkSave does (0.99.64).
+    {
+        bool ok = false;
+        std::string err;
+        if (markerSaver_.poll(ok, err)) {
+            if (ok) {
+                markerError_.clear();
+            } else {
+                markerError_ = err;
+            }
+        }
     }
+    if (markerPath_.empty()) { return; }  // hermetic run: never touch disk
+    const unsigned v = freqMarkers_.version();
+    if (v == markerSavedVersion_) {
+        markerSaveDueS_ = -1.0;
+        return;
+    }
+    const double now = clockS();
+    if (!force) {
+        // Half a second after a change is first seen: a note is typed a character at a time, and costs at most two writes a second rather
+        // than one a keystroke.
+        if (markerSaveDueS_ < 0.0) {
+            markerSaveDueS_ = now + 0.5;
+            return;
+        }
+        if (now < markerSaveDueS_) { return; }
+    }
+    // The text is taken here; the write is the worker's (see flushBookmarkSave).
+    markerSaver_.request(markerPath_, freqMarkers_.serialize());
+    // Recorded either way: a save that failed is reported, not retried every frame; the next change tries again.
+    markerSavedVersion_ = v;
+    markerSaveDueS_ = -1.0;
+}
+
+bool Engine::drainListSaves(std::chrono::steady_clock::time_point deadline) {
+    // What is left of the one deadline, never negative: a write that has already finished is still collected at zero
+    // (ConfigWriter::finishOrAbandon).
+    const auto now = std::chrono::steady_clock::now();
+    const auto left = now < deadline ? std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now) : std::chrono::milliseconds(0);
+    bool landed = true;
+    if (!bookmarkSaver_.finishOrAbandon(left)) {
+        cascade::core::diagLogf("bookmarks: final save abandoned - the disk did not answer in time");
+        landed = false;
+    } else if (!bookmarkSaver_.lastOk() && bookmarkSaver_.completed() > 0) {
+        bookmarkError_ = bookmarkSaver_.lastError();
+        cascade::core::diagWarnf("bookmarks: the final save failed");
+        landed = false;
+    }
+    if (!markerSaver_.finishOrAbandon(left)) {
+        cascade::core::diagLogf("markers: final save abandoned - the disk did not answer in time");
+        landed = false;
+    } else if (!markerSaver_.lastOk() && markerSaver_.completed() > 0) {
+        markerError_ = markerSaver_.lastError();
+        cascade::core::diagWarnf("markers: the final save failed");
+        landed = false;
+    }
+    return landed;
 }
 
 void Engine::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
@@ -8648,7 +8869,50 @@ void Engine::initialise() {
 void Engine::loadBookmarks() {
     bookmarkPath_ = cascade::core::FreqManager::defaultPath();
     std::string bmErr;
-    if (!freqMgr_.load(bookmarkPath_, bmErr)) { bookmarkError_ = bmErr; }
+    if (!freqMgr_.load(bookmarkPath_, bmErr)) {
+        bookmarkError_ = bmErr;
+        // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (0.99.65, core/damaged_file.hpp); the red line stays up. If the rename is refused the
+        // file stays exactly as it is and this session's saver writes nothing.
+        const cascade::core::SetAsideResult r = cascade::core::setDamagedFileAside(bookmarkPath_);
+        const unsigned long long bytes = static_cast<unsigned long long>(r.bytes);
+        switch (r.outcome) {
+            case cascade::core::SetAsideResult::Outcome::NothingToKeep:
+                break;  // a first run, an empty file, or a folder: nothing to lose, nothing said
+            case cascade::core::SetAsideResult::Outcome::KeptAside:
+                // WHICH FILE AND HOW BIG, and no path: a log line never names one.
+                cascade::core::diagLogf(
+                    "bookmarks: a damaged file (%llu bytes) was kept aside beside the live one; the next save writes a new file", bytes);
+                break;
+            case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
+                bookmarkSaver_.forbidWrites("bookmarks: not saved - the damaged file could not be kept aside");
+                cascade::core::diagWarnf(
+                    "bookmarks: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
+                break;
+        }
+    }
+    // The waterfall's markers, under the same gate and beside them. A damaged file is reported in the Markers window, never on stdout, and
+    // is kept aside the same way (0.99.65).
+    markerPath_ = cascade::core::FreqMarkers::defaultPath();
+    std::string mkErr;
+    if (!freqMarkers_.load(markerPath_, mkErr)) {
+        markerError_ = mkErr;
+        const cascade::core::SetAsideResult r = cascade::core::setDamagedFileAside(markerPath_);
+        const unsigned long long bytes = static_cast<unsigned long long>(r.bytes);
+        switch (r.outcome) {
+            case cascade::core::SetAsideResult::Outcome::NothingToKeep:
+                break;
+            case cascade::core::SetAsideResult::Outcome::KeptAside:
+                cascade::core::diagLogf(
+                    "markers: a damaged file (%llu bytes) was kept aside beside the live one; the next save writes a new file", bytes);
+                break;
+            case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
+                markerSaver_.forbidWrites("markers: not saved - the damaged file could not be kept aside");
+                cascade::core::diagWarnf(
+                    "markers: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
+                break;
+        }
+    }
+    markerSavedVersion_ = freqMarkers_.version();
 }
 
 // THE ENGINE'S TRANSFERS, CANCELLED (engine stage 3a): the first step of a
@@ -8798,6 +9062,7 @@ void Engine::pumpPlugins() {
 
 double Engine::pumpPublish() {
     flushBookmarkSave(false);
+    flushMarkerSave(false);
     // THE TRANSMITTER FOLLOWS THE RECEIVER'S DIAL (SPLIT off), once a pass,
     // after the pass's commands - the engine's own work since stage 4 (the
     // window called it after drawing its page; that is an interface reaching
@@ -8945,6 +9210,7 @@ void Engine::shutdownQuiesce() {
 
 void Engine::shutdownStop() {
     flushBookmarkSave(true);
+    flushMarkerSave(true);
     // Closing the window while receiving must not leave DSP threads pacing a
     // dead display; stop before teardown so the join happens while the object
     // graph is still fully alive. Not stopReceiver(): the takes were already
@@ -8954,7 +9220,12 @@ void Engine::shutdownStop() {
     pipeline_.stop();
 }
 
-void Engine::shutdownRelease() {
+void Engine::shutdownRelease(std::chrono::steady_clock::time_point drainDeadline) {
+    // The two takes' files, closed on workers since 0.99.65, against the window's drain deadline: they have been finishing since the stop,
+    // so by now they have had as long as the saves did, and the shutdown budget is still charged kSaveBound once.
+    drainListSaves(drainDeadline);
+    // The two takes' files, closed on workers since 0.99.65, against the SAME deadline (see above).
+    drainRecordFinishes(drainDeadline);
     // THE PATCH'S RADIOS STOP FIRST (0.99.17): each has a reader thread that
     // may be inside a plugin decoder, and each speaker's file is finalised
     // when its radio's sets go. The receiver's radio is not reopened on the
@@ -8986,6 +9257,9 @@ void Engine::pumpSourceHousekeeping() {
 
 void Engine::pumpWorkers() {
     pumpSourceHousekeeping();
+    // A recording's file that finished opening on its worker is armed here, and one that finished closing releases the Record pressed behind
+    // it (pollRecordStarts).
+    pollRecordStarts(clockS());
     pollSourceAsync();
     // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
     pollSoundCard();

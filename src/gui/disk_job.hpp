@@ -6,7 +6,7 @@
 // was slow to answer (a synchronised or network folder, a drive that had spun
 // down, a scanner holding the file). The settings-folder poll became
 // gui/link_request_poll.hpp, the recording's file open became engine/record_start.hpp
-// and the config write became gui/config_writer.hpp. Each is the same class with
+// and the config write became core/config_writer.hpp. Each is the same class with
 // the work and the result type written out; 0.99.64's audit of what was LEFT on
 // the GUI thread (docs/DIAGNOSTICS.md, "The window does no disk work") found the
 // same defect in a dozen more places - an I/Q file's header, a recordings
@@ -47,7 +47,7 @@
 // and keeps the freeze - the argument in gui/audio_open.hpp - and the point of
 // moving the work is that the window keeps drawing), and it does not order two
 // writes to one file; a caller that needs "the newest content wins, and an older
-// write never lands after a newer one" wants gui/background_saver.hpp.
+// write never lands after a newer one" wants core/background_saver.hpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_GUI_DISK_JOB_HPP

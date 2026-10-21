@@ -1736,7 +1736,7 @@ The shapes the 0.99.58 - 0.99.63 fixes made, once, for the rest:
   250 ms and then **abandons** it (detached; the result, and so the file it holds, is
   let go by the abandoned thread). A job out for five seconds writes one warning to
   the log, and one line when it comes back; **neither names a file or a folder**.
-- **`gui::BackgroundSaver`** (`src/gui/background_saver.hpp`) is `ConfigWriter`'s
+- **`gui::BackgroundSaver`** (`src/core/background_saver.hpp`) is `ConfigWriter`'s
   shape for a small file saved when it changes: the text is taken on the GUI thread,
   one write is ever out, a request made behind it replaces any request already held
   (so a burst ends as the **newest** content and an older write can never land after a

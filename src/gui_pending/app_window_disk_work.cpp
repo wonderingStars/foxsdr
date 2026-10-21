@@ -11,7 +11,7 @@
 //   openIqFile / pollIqOpen / installOpenedIqFile   the Source section's I/Q-file
 //       Open (gui/disk_job.hpp): the header is read on a worker.
 //   flushBookmarkSave / flushMarkerSave / drainListSaves   the bookmark list and
-//       the waterfall markers (gui/background_saver.hpp): the temp file and the
+//       the waterfall markers (core/background_saver.hpp): the temp file and the
 //       rename are a worker's; the last request lands within a bound at exit.
 //   saveImageBmp / exportBookmarksForSdrSharp / writeShots   a picture saved as
 //       a BMP, the frequency list exported for SDR#, F12's screenshot: the folder
@@ -63,7 +63,7 @@
 #include "core/record_finish.hpp"
 #include "core/unique_file.hpp"
 #include "gui/app_window_disk_state.hpp"
-#include "gui/background_saver.hpp"
+#include "core/background_saver.hpp"
 #include "gui/disk_job.hpp"
 
 namespace cascade::gui {

@@ -279,7 +279,7 @@ public:
     // final-state save and the clean-exit marker, see AppWindow::run()) -
     // they simply never showed up here because "milliseconds in a healthy
     // run" was true until a slow or cloud-synced %APPDATA%, or an antivirus
-    // holding the file, made it false. gui/config_writer.hpp moves all three
+    // holding the file, made it false. core/config_writer.hpp moves all three
     // off the GUI thread and gives the LAST one a single bounded, charged
     // wait at the very end of the teardown (ConfigWriter::kSaveBound, spent
     // once no matter how many saves were requested during the teardown,
