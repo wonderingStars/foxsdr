@@ -102,10 +102,13 @@ struct ControlThreadOptions {
     // at the same places in the frame the pump ran them before the move. Stepped mode orders threads; it cannot find a race (the
     // front end is parked while a part runs) - the free-running mode and ThreadSanitizer do that.
     bool stepped = false;
-    // THE TIMER TICK (Windows only; 0 leaves it alone): a wait of 16 ms on this system's default 15.6 ms tick ends on the SECOND tick, ~31 ms
-    // - so a "62 passes a second" thread ran at 35, found by the interactive smoke of step P5 - and a floor of 2 ms is ~15 ms. The thread asks for
-    // this resolution (timeBeginPeriod) from its start to its stop, as the audio stream's WASAPI host already does whenever one is open; the
-    // operating system keeps the finest request any process makes, per process since Windows 10 2004.
+    // THE TIMER TICK, NOW ONLY A FALLBACK (Windows only; 0 leaves it alone). A wait of 16 ms on the system's default 15.6 ms tick ends on the
+    // SECOND tick, ~31 ms (a "62 passes a second" thread ran at 35, found by the interactive smoke of step P5), and a floor of 2 ms is ~15 ms.
+    // The free-running loop no longer asks the process for a finer tick: it waits its period, its floor and its wake on its own
+    // high-resolution waitable timer and an event, which need none (and a process-wide 1 ms request made the window's own frame-cap
+    // wait overshoot by ~2 ms, 12x as often - docs/engine-stage4.md, the capped-tail record). This resolution (timeBeginPeriod, from the
+    // thread's start to its stop) is asked for ONLY when that timer cannot be made (Windows 10 before 1803), where the loop falls back to a
+    // condition variable's millisecond waits.
     unsigned timerResolutionMs = 1;
 };
 

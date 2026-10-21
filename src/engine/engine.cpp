@@ -117,6 +117,16 @@ void Engine::wakeControl() {
         }
     }
     controlWakeCv_.notify_one();
+    kickControlWait();
+}
+
+// The control loop's timer wait is not a condition variable's: a wake sets the event that wait also listens to. The flags the wake set
+// (under controlWakeMutex_) are set BEFORE this, and the event stays signalled until the loop's wait takes it, so a wake that lands between
+// the loop's check of the flags and its wait is not lost.
+void Engine::kickControlWait() {
+#ifdef _WIN32
+    if (void* const ev = passWakeEvent_.load(std::memory_order_acquire); ev != nullptr) { (void)::SetEvent(static_cast<HANDLE>(ev)); }
+#endif
 }
 
 // A front end that did not take the engine down itself (a headless one, a
@@ -151,6 +161,11 @@ Engine::~Engine() {
         stopTransfers();
         teardown();
     }
+#ifdef _WIN32
+    // The control thread is gone (teardown, above or earlier): nothing waits on, or sets, these any more.
+    if (void* const t = passTimer_.exchange(nullptr); t != nullptr) { (void)::CloseHandle(static_cast<HANDLE>(t)); }
+    if (void* const e = passWakeEvent_.exchange(nullptr); e != nullptr) { (void)::CloseHandle(static_cast<HANDLE>(e)); }
+#endif
 }
 
 namespace {
@@ -9433,8 +9448,23 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
     }
     controlStepped_.store(options.stepped);
 #ifdef _WIN32
-    if (options.timerResolutionMs > 0 && !options.stepped && timeBeginPeriod(options.timerResolutionMs) == TIMERR_NOERROR) {
-        timerResolutionApplied_ = options.timerResolutionMs;
+    if (!options.stepped) {
+        // THE PASS'S OWN TIMER (the capped-tail fix): made once, kept until ~Engine. CREATE_WAITABLE_TIMER_HIGH_RESOLUTION is Windows 10
+        // 1803+; without it the loop falls back to the condition variable and the process timer resolution it needs (below).
+        if (passWakeEvent_.load() == nullptr) {
+            if (HANDLE ev = ::CreateEventW(nullptr, FALSE, FALSE, nullptr); ev != nullptr) { passWakeEvent_.store(ev); }
+        }
+        if (passTimer_.load() == nullptr) {
+            constexpr DWORD kHighResolution = 0x00000002;  // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+            if (HANDLE t = ::CreateWaitableTimerExW(nullptr, nullptr, kHighResolution, TIMER_ALL_ACCESS); t != nullptr) { passTimer_.store(t); }
+        }
+        if (passTimer_.load() != nullptr && passWakeEvent_.load() != nullptr) {
+            (void)::ResetEvent(static_cast<HANDLE>(passWakeEvent_.load()));  // a wake from before this start is not one of its
+            cascade::core::diagLogf("engine pass: waits on its own high-resolution timer; no process timer resolution requested");
+        } else if (options.timerResolutionMs > 0 && timeBeginPeriod(options.timerResolutionMs) == TIMERR_NOERROR) {
+            timerResolutionApplied_ = options.timerResolutionMs;
+            cascade::core::diagWarnf("engine pass: no high-resolution timer here; falling back to a %u ms process timer resolution", options.timerResolutionMs);
+        }
     }
 #endif
     controlRun_.store(true);
@@ -9524,6 +9554,35 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
     SteadyClock::time_point passStart{};
     bool first = true;
     std::int64_t wakeAtNs = 0;  // the wake the pass now running is serving (0: none - the period ran out, or a runPassNow)
+    // THE WAIT, on the pass's own clock where there is one (see passTimer_): `lk` (controlWakeMutex_) is held on entry and on return, and
+    // is dropped for the wait itself. It returns when `done()` (the flags, read under the lock) or `deadline`. Without the timer it is the
+    // condition variable's wait_until, whose millisecond-granular timeout the PROCESS's timer resolution governs.
+    void* const passTimer = stepped ? nullptr : passTimer_.load();
+    void* const passEvent = stepped ? nullptr : passWakeEvent_.load();
+    [[maybe_unused]] const bool ownClock = passTimer != nullptr && passEvent != nullptr;  // (used by the Windows branch only)
+    auto waitUntil = [&](std::unique_lock<std::mutex>& lk, SteadyClock::time_point deadline, auto done) {
+#ifdef _WIN32
+        if (ownClock) {
+            for (;;) {
+                if (done()) { return; }
+                const auto left = deadline - SteadyClock::now();
+                if (left <= SteadyClock::duration::zero()) { return; }
+                // A relative due time, in 100 ns units; SetWaitableTimer also un-signals a timer an earlier wait left expired.
+                LARGE_INTEGER due;
+                due.QuadPart = -std::max<LONGLONG>(1, static_cast<LONGLONG>(std::chrono::duration_cast<std::chrono::nanoseconds>(left).count() / 100));
+                if (!::SetWaitableTimer(static_cast<HANDLE>(passTimer), &due, 0, nullptr, nullptr, FALSE)) {
+                    controlWakeCv_.wait_until(lk, deadline, done);  // cannot arm it: the old wait, this once
+                    return;
+                }
+                lk.unlock();
+                const HANDLE handles[2] = {static_cast<HANDLE>(passTimer), static_cast<HANDLE>(passEvent)};
+                (void)::WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+                lk.lock();
+            }
+        }
+#endif
+        controlWakeCv_.wait_until(lk, deadline, done);
+    };
     while (controlRun_.load()) {
         controlWatchdog_.heartbeat();
         if (stepped) {
@@ -9566,11 +9625,10 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
             if (!first) {
                 // THE PASS PERIOD (engine-stage4.md decision 2): a pass every `period`, and at once when an interface submits or
                 // closes a session (wakeControl) - so a control lands within one pass's own time of its submit, not a period later.
-                controlWakeCv_.wait_until(lk, passStart + period,
-                                          [this] { return controlWake_ || controlWakeNow_ || !controlRun_.load(); });
+                waitUntil(lk, passStart + period, [this] { return controlWake_ || controlWakeNow_ || !controlRun_.load(); });
                 // THE FLOOR (adopted decision 6): a wake inside it waits the rest of it out; a runPassNow's does not.
                 if (floor.count() > 0 && controlRun_.load() && !controlWakeNow_) {
-                    controlWakeCv_.wait_until(lk, passStart + floor, [this] { return controlWakeNow_ || !controlRun_.load(); });
+                    waitUntil(lk, passStart + floor, [this] { return controlWakeNow_ || !controlRun_.load(); });
                 }
             }
             first = false;
@@ -9583,6 +9641,7 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
             passesBegun_.fetch_add(1);
         }
         passStart = SteadyClock::now();
+        if (testHooks_.passStarting != nullptr) { testHooks_.passStarting(); }
         controlWatchdog_.heartbeat();
         while (controlParkForTest_.load() && controlRun_.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -9718,6 +9777,7 @@ bool Engine::runPassNow(std::chrono::milliseconds bound) {
     controlWake_ = true;
     controlWakeNow_ = true;
     controlWakeCv_.notify_one();
+    kickControlWait();
     return waitForPassCounter(lk, [this, target] { return passesEnded_.load() >= target; }, bound);
 }
 

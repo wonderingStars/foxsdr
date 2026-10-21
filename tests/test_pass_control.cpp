@@ -144,6 +144,9 @@ struct AppWindowTestAccess {
     static void setUnmapHook(void (*h)()) { Engine::testHooks_.pluginsAboutToUnmap = h; }
     static void setPluginDir(std::string (*f)()) { Engine::testHooks_.pluginDir = f; }
     static void betweenPublishes(void (*f)()) { Engine::testHooks_.betweenPublishes = f; }
+    static void passStarting(void (*f)()) { Engine::testHooks_.passStarting = f; }
+    static bool hasPassTimer(Engine& e) { return e.passTimer_.load() != nullptr && e.passWakeEvent_.load() != nullptr; }
+    static unsigned timerResolutionRequested(Engine& e) { return e.timerResolutionApplied_; }
 };
 }  // namespace cascade::gui
 using A = cascade::gui::AppWindowTestAccess;
@@ -296,6 +299,187 @@ void testPeriodRate() {
     CHECK(n >= 60u);       // on a 15.6 ms timer tick a 16 ms wait ends on the second tick and this reads ~48 (35 a second in the smoke)
     CHECK(n <= 130u);
     e.stopControlThread();
+}
+
+// A3: the pass keeps its own clock -------------------------------------------------------------------------------------------------
+// The control loop waits on a high-resolution waitable timer and an event, and asks the process for NO finer system tick (the capped-tail fix:
+// a process-wide 1 ms request made the window's frame-cap wait overshoot by ~2 ms, 12x as often; and Windows 11 does not honour the request
+// for a minimized or occluded window at all). Elsewhere the loop is the condition variable's and there is nothing to ask.
+void testOwnClock() {
+    std::printf("  A3: the pass waits on its own timer and requests no process timer resolution\n");
+    Engine e;
+    e.initialise();
+    e.startControlThread(opts(16, 2));
+#if defined(_WIN32)
+    CHECK(A::hasPassTimer(e));
+    CHECK(A::timerResolutionRequested(e) == 0u);
+    std::printf("      high-resolution timer + wake event made: %d; timeBeginPeriod requested: %u ms\n", A::hasPassTimer(e) ? 1 : 0,
+                A::timerResolutionRequested(e));
+#endif
+    CHECK(e.runPassNow());
+    e.stopControlThread();
+    // A restart keeps working on the same handles (they live as long as the engine).
+    e.startControlThread(opts(16, 2));
+    CHECK(e.runPassNow());
+    e.stopControlThread();
+}
+
+// A4: the pass's start times, from the loop's own hook ------------------------------------------------------------------------------
+std::mutex g_startsMutex;
+std::vector<Clock::time_point> g_starts;
+void recordPassStart() {
+    const auto now = Clock::now();
+    std::lock_guard<std::mutex> lk(g_startsMutex);
+    g_starts.push_back(now);
+}
+std::vector<Clock::time_point> takeStarts() {
+    std::lock_guard<std::mutex> lk(g_startsMutex);
+    std::vector<Clock::time_point> v;
+    v.swap(g_starts);
+    return v;
+}
+
+// The start-to-start gaps of the passes two submits make (see testFloorBetweenStarts), on an engine already running (period 1500 ms, floor 2 ms).
+std::vector<double> floorGaps(Engine& e, int pairs) {
+    A::passStarting(&recordPassStart);
+    (void)takeStarts();
+    std::vector<double> gaps;
+    for (int i = 0; i < pairs; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));      // idle: the loop is in its period wait, past any floor
+        (void)takeStarts();
+        e.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, volumeOf(2 * i)));
+        // The second submit as soon as the first one's pass has begun (both made before it would fold into ONE pass): its wake is then
+        // inside the floor of the pass that is running.
+        for (int spin = 0; spin < 3000000; ++spin) {
+            std::lock_guard<std::mutex> lk(g_startsMutex);
+            if (!g_starts.empty()) { break; }
+        }
+        e.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, volumeOf(2 * i + 1)));
+        const float want = volumeOf(2 * i + 1);
+        (void)spinFor([&] { return A::publishedVolume(e) == want; }, 3000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+        const auto s = takeStarts();
+        for (std::size_t k = 1; k < s.size(); ++k) {
+            gaps.push_back(std::chrono::duration<double, std::milli>(s[k] - s[k - 1]).count());
+        }
+    }
+    A::passStarting(nullptr);
+    std::sort(gaps.begin(), gaps.end());
+    return gaps;
+}
+
+// The lag from a submit to the start of the pass it wakes, on an engine already running (period 1500 ms: only the wake can start it).
+std::vector<double> wakeLags(Engine& e, int submits) {
+    A::passStarting(&recordPassStart);
+    std::vector<double> lags;
+    for (int i = 0; i < submits; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        (void)takeStarts();
+        const auto t0 = Clock::now();
+        e.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, volumeOf(i)));
+        double ms = -1.0;
+        for (int spin = 0; spin < 3000000 && ms < 0.0; ++spin) {
+            std::lock_guard<std::mutex> lk(g_startsMutex);
+            if (!g_starts.empty()) { ms = std::chrono::duration<double, std::milli>(g_starts.front() - t0).count(); }
+        }
+        CHECK(ms >= 0.0);
+        if (ms >= 0.0) { lags.push_back(ms); }
+    }
+    A::passStarting(nullptr);
+    std::sort(lags.begin(), lags.end());
+    return lags;
+}
+
+void checkFloorGaps(const std::vector<double>& gaps) {
+    CHECK(gaps.size() >= 36u);   // nearly every pair made two passes (the second submit landed after the first pass had begun)
+    if (!gaps.empty()) {
+        std::printf("      %zu pairs that made two passes: start-to-start min %.3f ms, median %.3f ms, max %.3f ms (floor 2 ms)\n", gaps.size(),
+                    gaps.front(), median(gaps), gaps.back());
+        CHECK(gaps.front() >= 2.0);
+        CHECK(median(gaps) < 4.0);    // it is the floor that spaces them, not a coarse tick (~15 ms) after it
+    }
+}
+
+void checkWakeLags(const std::vector<double>& lags) {
+    CHECK(lags.size() >= 50u);
+    if (!lags.empty()) {
+        std::printf("      submit to pass start, %zu submits: median %.3f ms, p90 %.3f ms, max %.3f ms\n", lags.size(), median(lags),
+                    lags[lags.size() * 9 / 10], lags.back());
+        CHECK(median(lags) < 1.0);
+    }
+}
+
+// THE FLOOR on the precise timer: two submits no time apart start two passes at least `floor` apart (a coarse wait would make the 2 ms floor
+// ~15 ms; a missing one would make the second pass follow the first at once).
+void testFloorBetweenStarts() {
+    std::printf("  A4: two submits no time apart: the passes they start are at least the 2 ms floor apart\n");
+    Engine e;
+    e.initialise();
+    e.startControlThread(opts(1500, 2));
+    CHECK(e.runPassNow());
+    const std::vector<double> gaps = floorGaps(e, 40);
+    e.stopControlThread();
+    checkFloorGaps(gaps);
+}
+
+// THE WAKE: the lag from a submit to the start of the pass it wakes (the event, not the 1500 ms period or a timer tick).
+void testWakeToStart() {
+    std::printf("  A5: a submit starts a pass in well under a millisecond\n");
+    Engine e;
+    e.initialise();
+    e.startControlThread(opts(1500, 2));
+    CHECK(e.runPassNow());
+    const std::vector<double> lags = wakeLags(e, 60);
+    e.stopControlThread();
+    checkWakeLags(lags);
+}
+
+// A6: THE MINIMIZED CASE. Windows 11 does not honour a process's timer-resolution request when its window is minimized, occluded or
+// otherwise invisible (the documented remark of timeBeginPeriod): the system default applies to it, 15.6 ms. The OS's own switch for that
+// is the process power-throttling policy IGNORE_TIMER_RESOLUTION; this test turns it ON for the test process, which is exactly the
+// state of a hidden window, and holds the pass to its contract in it: the period (a 16 ms wait ending on the second 15.6 ms tick reads
+// 35 a second), the 2 ms floor (~15 ms on the tick) and the wake. A pass waiting on its own high-resolution timer does not depend on the
+// resolution at all; the old design (timeBeginPeriod(1) and a condition variable's timeout) fails the first two here.
+void testMinimizedImmunity() {
+    std::printf("  A6: the pass keeps its rate, its floor and its wake while the OS ignores the process's timer-resolution request\n");
+#if defined(_WIN32)
+    struct ThrottleState { ULONG Version, ControlMask, StateMask; };
+    constexpr ULONG kIgnoreTimerResolution = 0x4;   // PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+    constexpr int kProcessPowerThrottling = 4;      // ProcessPowerThrottling
+    auto setIgnore = [&](bool on) {
+        ThrottleState st{1, kIgnoreTimerResolution, on ? kIgnoreTimerResolution : 0u};
+        return ::SetProcessInformation(::GetCurrentProcess(), static_cast<PROCESS_INFORMATION_CLASS>(kProcessPowerThrottling), &st, sizeof(st)) != FALSE;
+    };
+    if (!setIgnore(true)) {
+        std::printf("      SKIPPED: this Windows has no per-process timer-resolution throttle (error %lu)\n", static_cast<unsigned long>(::GetLastError()));
+        return;
+    }
+    {
+        Engine e;
+        e.initialise();
+        e.startControlThread(opts(16, 2));
+        const std::uint64_t p0 = e.passesEnded();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        const std::uint64_t n = e.passesEnded() - p0;
+        std::printf("      no submits for 1.5 s: %llu passes (%.1f a second)\n", static_cast<unsigned long long>(n), static_cast<double>(n) / 1.5);
+        CHECK(n >= 80u);    // 53 a second or more; the throttled old design reads ~35 a second (52 here)
+        e.stopControlThread();
+    }
+    {
+        Engine e;
+        e.initialise();
+        e.startControlThread(opts(1500, 2));
+        CHECK(e.runPassNow());
+        const std::vector<double> gaps = floorGaps(e, 40);
+        const std::vector<double> lags = wakeLags(e, 60);
+        e.stopControlThread();
+        checkFloorGaps(gaps);
+        checkWakeLags(lags);
+    }
+    (void)setIgnore(false);
+#else
+    std::printf("      SKIPPED: Windows only\n");
+#endif
 }
 
 // B: the floor ---------------------------------------------------------------------------------------------------------------
@@ -720,6 +904,10 @@ int main() {
     testWake();
     testPassFigures();
     testPeriodRate();
+    testOwnClock();
+    testFloorBetweenStarts();
+    testWakeToStart();
+    testMinimizedImmunity();
     testFloor();
     testRunPassNow();
     testStepped();

@@ -229,6 +229,9 @@ private:
         // reader that takes the status lines and THEN the state never sees lines from a later pass than the state (the pump move's
         // step P4, the survey's 1.6 C). Never set in the product.
         void (*betweenPublishes)();
+        // Called by the free-running control loop at the instant a pass starts, on the control thread (tests/test_pass_control.cpp: the
+        // floor between two passes' starts, and the lag from a submit to the pass it wakes, are read from it). Never set in the product.
+        void (*passStarting)();
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -2913,7 +2916,19 @@ private:
     std::uint64_t stepsDone_ = 0;
     std::chrono::milliseconds controlFloor_{0};
     std::atomic<bool> controlStepped_{false};
-    unsigned timerResolutionApplied_ = 0;   // the resolution startControlThread asked the OS for (0: none), given back by stopControlThread
+    // THE PASS'S OWN CLOCK (Windows; the capped-tail fix, docs/engine-stage4.md). The free-running loop waits for its period, its floor
+    // and a wake on a HIGH-RESOLUTION WAITABLE TIMER plus an auto-reset event (WaitForMultipleObjects) - the mechanism the frame cap
+    // already uses - so it keeps its ~60 passes a second without asking the process for a finer system tick (timeBeginPeriod). Both are
+    // created once (the first free-running start) and closed by ~Engine: wakeControl may run on any thread at any time, so a handle
+    // that stopControlThread closed under it could be a reused one. They are void* so this header needs no windows.h. The condition
+    // variable stays: a stepped run waits on it, and so does any system that cannot make the timer (Windows 10 before 1803).
+    std::atomic<void*> passTimer_{nullptr};
+    std::atomic<void*> passWakeEvent_{nullptr};
+    // The wake the loop's waitable-timer wait needs beside the condition variable's notify (a no-op where there is no such timer).
+    void kickControlWait();
+    // Only the FALLBACK's request now: set when no high-resolution timer could be made and the loop fell back to the condition variable's
+    // millisecond waits, which the process's timer resolution governs (timeBeginPeriod); given back by stopControlThread. 0: none.
+    unsigned timerResolutionApplied_ = 0;
     struct PassStatsCounters {
         std::atomic<std::uint64_t> passes{0}, sumUs{0}, maxUs{0}, overPeriod{0}, wakes{0};
         std::atomic<std::uint64_t> lagCount{0}, lagSumUs{0}, lagMaxUs{0};
