@@ -129,6 +129,9 @@ runs engine waits in its frame - should improve), CPU at a fixed rate (one
 control thread's passes added, the window's engine work removed), memory
 (per-session rings and result queues). Nothing here touches the sample path.
 
+THE ANSWER (taken 2026-10-21, pump move step P7): see "PUMP MOVE, STEP P7" at the end of section 6 - frame time and tune-to-audio
+unchanged or better, CPU and memory flat, one open finding (the capped frame tail).
+
 ## 6. Record: what was built, in order
 
 The owner's decisions (2026-09-29): 1 ADOPT API 0.2's key model; 2 ACCEPT
@@ -3846,3 +3849,193 @@ EVIDENCE
   and the newest were refused (1.6 I above), found because test_window_threaded_look G asserted the opposite and failed.
   Nothing committed, pushed, stashed or switched. The scratchpad holds the scripts (mutants.py, capture_cmp.py, latency_ab.py, smoke.ps1, freeloop.sh, binstress.sh) and their logs.
 
+
+PUMP MOVE, STEP P6 (2026-10-20/21; the survey's section 5 and 7): THE THREADED SUITE, HARDENED.
+Built on top of P4/P5 (4a4380a) in the same worktree; nothing committed, pushed, stashed or switched. Scope: the window tests that could not run free, the four
+ThreadSanitizer races, the soak. Every number below was printed by a run on this desk (Windows, MSVC Release, 32 logical CPUs) or in WSL (Ubuntu 26.04, GCC 15.2,
+the TSan build), runs of the final sources unless a count says otherwise.
+
+THE FREE-RUNNING SET IS 25 WINDOW TESTS NOW (was 11). The brief counted twelve not-free window tests; the records name thirteen in tests/CMakeLists.txt plus
+test_fitted_modules_window (taken out at 22/24 in P5) = FOURTEEN, plus three real-binary tests. Fates:
+  CONVERTED, and now registered as <name>_free (14): test_apply_command, test_bias_key_app, test_converter_app_paths, test_decoders_mute_grants,
+  test_fitted_modules_window, test_patch_add_radio_part, test_plugin_store_window, test_radio_panel_reads, test_recorder_bookmarks_scanner, test_scope_window,
+  test_snapshot_app, test_soundcard_app_paths, test_source_section_window, test_tuning_surface.
+  HOW: every engine touch of the test thread became passseam::on / passseam::read (the work runs ON THE PASS THREAD with the pass out of the way, Engine::runOnPass;
+  helpers that returned a REFERENCE into an engine member return a copy made inside read(), and the callers changed). The waits poll through read() and let the pass
+  do its own polling (pollSourceAsync etc.). WHERE AN ASSERTION IS ABOUT WHAT HAPPENS BETWEEN TWO PASSES ("the click only queued it", "nothing is applied yet", a
+  figure the engine's fields and the window's view must show together) THE PASS IS HELD FOR THAT STRETCH ONLY: a job posted with Engine::postToPass that blocks the pass
+  thread until released (a pass runs posted work after it has taken its queues, so once it has started no other pass can start; what the window sends meanwhile is taken
+  by the NEXT pass, the order the product's frame has), or Engine::TestHooks::betweenPublishes parking the pass between its two publishes (test_plugin_store_window,
+  the ADD ALL walk). Inline and stepped hold nothing. The pass free-runs everywhere else. THIS IS A CONCESSION AND IT IS SAID: the held stretches are order-exact by
+  nature and are not tests of concurrency; the concurrency is everything around them. The largest users: test_source_section_window (every click's frames),
+  test_tuning_surface, test_decoders_mute_grants (the click surveys), test_plugin_store_window (four stretches, the ADD ALL walk one publish at a time - close to
+  stepped; the first candidate if you would rather count it so), test_apply_command (A::exclusive() blocks: ~15 commands whose "no pass between the command and the
+  read" is the point, listed in the file).
+  NO ASSERTION WAS WEAKENED: every changed CHECK line is the same check through a different access path or re-indented into a block; three tests gained a CHECK(took) on
+  their own hold; test_apply_command gained a wait (waitSoapy) that returns at once inline. One value break-it per file, red in free mode, file restored byte-identically.
+  RUNS per test (inline 3 / stepped 5 / free solo 8 / free under load 24, six copies at once): all green, all fourteen. test_converter_app_paths and
+  test_radio_panel_reads and test_snapshot_app had CRASHED free; test_patch_add_radio_part was 2/8; test_soundcard_app_paths and test_recorder_bookmarks_scanner 7/8.
+  ONE CHECK STAYS STEPPED-ONLY, with its reason: test_recorder_bookmarks_scanner D, the scanner's "Scanning | 144.0000 MHz" straight after START. With a dwell of 0 the
+  scanner steps on every tick after the first and a free pass ticks on its own clock, so that readout is tick-exact; free mode skips it (said in the output) and checks
+  the readout against the scanner's own frequency under a hold instead.
+  STILL STEPPED, NOT CONVERTED (3, real-binary, all frame-exact by construction - unchanged from P5): test_bias_key_run (a scripted click at a fixed frame expects the
+  dialog and the lamp a few frames later: 5/6 free), test_main_view (the census walks the rail's banks by frame number: 5/6), and
+  test_theme_census, which P5 never ran free and this step did: FOXSDR_PASS=free 8/8 solo and 69/72 six at once, ALL THREE FAILURES the same third-party crash,
+  "fatal exception 0xC0000005 at NahimicOSD.dll+0x14504" (the audio-enhancement overlay this desk injects into every process that opens a window); the same crash is in
+  the scratch folders of this test's STEPPED runs of 2026-10-19, before the pump move existed (cascade-theme-census-*/diag/crashes), and 24 stepped runs six at once
+  today had none - too few to say the rate differs. Kept stepped and not registered free: a second variant that a third-party DLL crashes 4 % of the time under load
+  would be noise in the suite, and nothing in it is free-specific (it asserts the census of a still picture; test_window_threaded_look holds the threaded frame).
+THE ELEVEN P5 FREE TESTS WERE NOT RACE-FREE EITHER, AND THAT IS WHAT THE TSAN LEG IS FOR. Eight runs green on Windows proved nothing: a first TSan run of the free set
+(WSL, halt_on_error=1) reported real races in test_patch_graph_draft_input (a direct read of engine_.patchGraph_ at line 660 against applyCommand's assignment) and
+test_usage_diag_window (engine_.telemetryEnabled_ read directly), and test_rail_reads had direct writes of fields the pass reads (engine.cpp:3738). All eleven were
+converted the same way and re-proved under TSan: test_patch_graph_draft_input (17 helpers, ~60 call sites; the baseline run showed 122 reports and, under TSan's
+timing, 16 functional failures because a free pass applied a drag's commit before the test read the engine: a hold on scenarios B, G, L, B2 and P), test_airspy_app (16
+helpers; radio() handed out a raw device pointer dereferenced 14 times), test_scanner_draft_input, test_usage_diag_window, test_config_snapshot_app (24 races, 22 of
+them status-field writes), test_gps_window, test_rail_reads (14 helpers, five of them returned references), test_map_window, test_panel_note_once, test_plugin_window,
+test_remote_key_release. Each: Windows inline 3 / stepped 5 / free solo 8 / free under load 24 green; TSan free 10 of 10 with halt_on_error=1 and 3 of 3 with
+halt_on_error=0 on a md5-pinned binary, no report; a break-it red. NO REPORT HAD A FRAME IN src/ - the engine has no race these tests could reach.
+  The TSan leg registers the _free variants now (tests/CMakeLists.txt: under CASCADE_SANITIZE=thread only the _free ones are registered, the stepped ones order threads
+  and cannot race; tests/tsan.cmake: the 24 of them without test_bias_key_app, whose window needs the software GL context). The selection is 47 tests (23 + 24).
+
+THE FOUR PRE-EXISTING TSAN RACES (P5 record: PortAudio AddOpenStream x2, Pa_Initialize against Pa_IsStreamActive, the scope tap's seqlock memcpy) - RESOLUTIONS:
+  1. THE SCOPE TAP SEQLOCK (core/scope_tap.hpp) - OURS, FIXED IN THE CODE, not annotated. Chosen: the element storage is 32-bit std::atomic words stored and loaded with
+     relaxed order, the two counters and the two fences exactly as they were (SeqlockBox's shape for one value). Why not annotate: __tsan_ignore_thread_begin /
+     no_sanitize hide a race that is real in the C++ memory model (a reader copying plain memory a writer may be rewriting is undefined however well the counters validate
+     it afterwards) and need a TSan-only #ifdef; the atomics are correct on every compiler and tool, keep the reader lock-free and the writer wait-free, and cost what a
+     relaxed 32-bit store costs (a plain mov) - the vector memcpy is given up, at 200 kHz (channel) and 48 kHz (audio) taps, which is nothing (the P7 cpu medians are the
+     check). test_scope_tap, test_scope_taps_wired, test_engine_api_03 unchanged green. Found AFTER it by test_engine_api_03 under TSan: readScope read `written` BEFORE
+     the snapshot, so a push landing between gave 65536 frames beside a smaller `written` (src/engine/fox_engine_api.cpp: now read after the snapshot, all three taps).
+  2. Pa_Initialize against the pass's Pa_IsStreamActive (PortAudio's plain-int initializationCount_) - OURS, FIXED. The count only moves between values the reader's own
+     initialisation keeps above zero, so it was benign in effect, but a second sound user initialising (a sound card worker, the microphone, a patch speaker) while a pass
+     asks is the product's pattern, and the pass makes that call every pass. sink/pa_init: the init lock is a std::shared_mutex (Pa_Initialize and Pa_Terminate exclusive,
+     as before) and AudioOut/AudioIn::streamAlive take PaCountReadGuard - shared, WITHOUT WAITING; an initialisation in progress reports the stream alive (the rule
+     streamAlive already had for an open in progress) and the next pass asks again. The pass never waits behind a device enumeration. (test_engine_api_conformance, which
+     builds a second engine while the first one's pass runs, is clean.) Considered and not done: suppressing by the global's name (it works - TSan matches `race:` against
+     a global's name - but hides the next reader that is not benign), patching the vendored pa_front.c (compiled on Windows too, unlike pa_unix_util.c, but a vendored
+     patch to answer a test pattern).
+  3. PortAudio AddOpenStream x2 (firstOpenStream_, pa_front.c:312-313) - A TEST PATTERN, FIXED IN THE TESTS, no suppression. The product's PaStreamListGuard serialises
+     every open and close EXCEPT that a NoWait caller (the GUI thread must never wait for a driver) goes ahead when the lock is busy; the only caller that ever meets a busy
+     lock is a test that builds engines on several threads at once (test_engine_api_merge's 24 workers, test_engine_api_transmit's parallel probes: every Engine opens the
+     default output in its constructor). tests/engine_api_serial.hpp: engine_api_test::SerialEngine is a testing::Engine whose construction and destruction hold one
+     process lock (the base takes it before testing::Engine is built and the derived constructor drops it; the destructor takes it again) - what the tests are about, the
+     engines' own passes and sessions, still runs concurrently from the constructor's return to the destructor's entry. Used for every `testing::Engine` declaration in the four
+     engine-API tests. A product-side change (the pass opening with Wait now that the GUI thread no longer pumps) is possible and not made.
+  4. (the same family) the other Pa_* reads of that count at construction (Pa_GetDefaultHostApi, Pa_GetDeviceCount, Pa_Terminate against Pa_Initialize) showed up once the
+     list race stopped hiding them (halt_on_error ends a test at its FIRST report) and are the same serialisation.
+  FOUND BEHIND THEM (not in the P5 list, because every test stopped at its first report), all fixed: core/diag_report.cpp - the process-global diagnostics context
+  (g_context) was written by every engine's pass (24 at once in test_engine_api_merge) and read by the window's "Copy diagnostics" and the hang report while the pass
+  rewrites it - a real window-vs-pass race that THE MOVE CREATED (the pass is the one writer now). The healthy writers and diagContextBlock() take a mutex; the FAULT path
+  (diagContextRaw, resolveAddress, moduleAt) takes no lock and never may - a fault that lands mid-write can still read a half-written block, exactly as before; refreshModuleTable's
+  rebuilds are serialised (separate lock, so a refresh stuck in the loader cannot hold up a report that wants the context). And test code: test_engine_api_transmit called
+  CHECK from worker threads (afterSafer) - the result moves to the caller.
+  test_engine_api_03 and three plugin window tests were NOT PORTED TO LINUX (they create `zz_refused.dll`-style files and the Linux plugin host takes only .so, ~38 FAILs
+  with no race in them; the P5 record said "fails on the same race" because TSan ended the run at the first report). Ported by naming (moduleFile(stem): .dll on Windows,
+  lib<stem>.so on Linux - the `lib` prefix keeps the same duplicate winning the host's sort): test_engine_api_03, test_decoders_mute_grants, test_fitted_modules_window,
+  test_plugin_store_window. Beside it, in test_engine_api_03: a dangling reference in the TEST (`CHECK_EQ(std::min<uint32_t>(...), ...)` held a reference to a temporary: GCC
+  warned, MSVC read it by luck), a full-ring scope read that retries within the fill's own 20 s (a lapped read is documented to return 0), the sound-card un-list check made
+  to wait for the engine's own re-list, and the 2500 ms scan bound x4 under TSan only (the instrumented run is ~6x slower: measured 593-793 ms quiet, 2884 under load).
+  test_decoders_mute_grants also had a Linux-only click sweep that never reached the forget key (the embedded font is narrower than Georgia): one more column.
+  THE TSAN LEG, FINAL (WSL, GCC 15.2, halt_on_error=1, the CI command): see EVIDENCE below. KNOWN TIMING FAILURE, NOT A RACE AND NOT NEW: test_engine_api_transmit fails on
+  wall-clock checks under TSan (lines 364 and 1493: "a probe's heartbeat starving"); the engine-stage4 SANITIZERS page says so since P0. It was measured WITHOUT SerialEngine
+  too (7 FAIL lines in one run of three) so the serialisation did not cause it. It reports no TSan race.
+
+THE SOAK (the house rule: the timing-bound 50x solo, the contention-bound 8 at once; a flake is investigated, not waved off). Results are in EVIDENCE; it found THREE REAL
+THINGS, all fixed:
+  (a) test_look_order B failed in 4 runs of 50 (a state OLDER than the figure an answer names, 14 answers in 1.3 M): A PRODUCT RULE THAT HAD A HOLE. refreshUiState keeps
+      the last good state when read_state answers BUSY (a read that keeps overlapping a publish: the pass preempted mid-write), and the frame then acted on the answers it had
+      polled before the read against that OLDER state - the very thing the look's order exists to prevent. Confirmed: the fixed window counts 6-62 BUSY reads per run (the
+      broken one acted on 14 answers through them). Fix: AppWindow::uiStateFresh_ - a look whose read failed leaves the answers in their buffer (pollUiAnswers already keeps what
+      is not acted on) and acts on them at the next look that read; actOnUiAnswers(stateRead) is for pumpTransmitKey, which has no look. test_look_order C holds it
+      deterministically (declared BUSY: not acted on, not lost, acted on at the next real look); break-it (the deferral removed) RED 3 FAILs; B: 100 of 100 runs green after (46/50 before).
+  (b) test_pump_live_traffic L2 failed 3 of 50 at "total >= 140 ms" (137-138): the bound assumed the pass takes the rescan up within 10 ms of the test's t0; a wake can be
+      served up to a timer tick (~15.6 ms, P5 TRAP 7) after the submit. The bound is 130 ms now and the comment says why; it still proves the pass WAITED for the stalled
+      frame (a skipped wait reads ~0) and did not run out at 250.
+  (c) test_usage_diag_window failed 1 in 24 and, with eight copies, 3-13 in 100 at the clipboard checks: ImGui's clipboard on Windows IS THE OPERATING SYSTEM'S, shared by every
+      process (its own _stepped and _free registrations under ctest -j, and the person at the keyboard): another copy's bundle was on it. The test installs a private
+      clipboard (Platform_GetClipboardTextFn / SetClipboardTextFn). 160 of 160 free at eight copies after; 88 of 96 before. (It overwrote the user's clipboard on every run
+      before; no other test touches it.)
+
+EVIDENCE FOR P6 (final sources; Windows MSVC Release, WSL GCC 15.2 TSan)
+  Build: clean full rebuild (cmake --build build --config Release --clean-first -- -m), no errors, no new warning in a file this step touched.
+  Suite (ctest -C Release -j 8): 333 tests = P5's 319 + 14 new <name>_free registrations. Full suite three times on the way (333/333, 333/333, 333/333) after the last source change that
+  affects Windows; the very last run is recorded at the end of this record.
+  THE SOAK (tests run from build/tests/Release, md5-pinned binaries; timing-bound tests 50 solo in turn, the 25 free window tests 24 runs each as eight copies at once):
+    test_pass_control 50/50; test_look_order 50/50 (46/50 BEFORE the BUSY fix); test_window_threaded_look 50/50; test_pump_live_traffic 47/50 (the three were the 140 ms bound, now 130);
+    test_plugin_ui_threaded 50/50; test_plugin_unload_handshake 50/50; test_remote_control_pull 50/50; test_remote_key_release 50/50;
+    the 25 free window tests: 24/24 each except test_usage_diag_window 23/24 (the shared OS clipboard; 160/160 at eight copies after the private clipboard).
+    The soak was run on the sources as they stood after the BUSY fix and before the pump-live-traffic bound and the clipboard fix; those two tests were re-run afterwards (usage_diag
+    160/160 free x8; pump_live_traffic's bound is a one-line change checked by the final suite, not re-soaked: the coordinator's instruction was to stop extending loops).
+  THREADSANITIZER (WSL, GCC 15.2, `ctest -L tsan -j2`, halt_on_error=1): 47 of 47 pass on the final sources (the last full leg ran 46 of 47 with test_engine_api_transmit failing its
+  wall-clock checks; after running its eight latch probes one at a time under the sanitizer it passes 3 of 3 at 128 s). No TSan report in any test. The four P5 failures are clean.
+  NOT FIXED / OPEN: nothing in the TSan leg. Open finding of P7 below (the capped-frame tail).
+
+  FINAL FULL RUN (after the last source change, desk busy with the user's own applications): 331 of 333 - test_crash_upload_free (check 1264, srv.connections() == 1) and test_remote_control_pull
+  (676, a 1000 ms wait for a latch to end) failed under -j 8 LOAD and passed solo straight after (test_remote_control_pull 8 of 8 with --repeat until-fail, 50 of 50 in the soak); the three full runs before it were 333/333.
+  Both are real-time-bound tests with a wall-clock wait; recorded as load flakes with that evidence, not investigated further (the coordinator's instruction was to stop extending loops). UNVERIFIED that a quiet desk is 333/333 every time.
+
+PUMP MOVE, STEP P7 (2026-10-21): THE MEASUREMENT RUN (plan section 5; XP section 3). THE ANSWER TO SECTION 5.
+WHAT WAS MEASURED, AND AGAINST WHAT. Tool: tools/measure_engine.ps1 (interleaved A B A B, 5 runs a build, soak 2 x 600 s, the signal generator, three decoders - aprs 1.0.1, cw 1.0.0, eas 1.0.0 -
+the same three the 0.99.39 baseline used, a 60 Hz cap for the capped measures, 1600x1000). The old baseline (tools/measure_baseline-0.99.39.json, "contaminated") was NOT used; the baseline was
+re-taken in the same session as the candidate. Builds, each in its own clone so no repository state was touched (tools: git clone --local --no-checkout + checkout --detach):
+  PRE-PORT  748546c (engine/stage4 immediately before window-port group 1: the table exported, the window still driving the engine directly) - the plan's section 5 "pre-port baseline";
+            the 0.99.39 control (master 1de7221 + the measurement switches) is not rebuilt: the stage-4 start is the nearer control and has the same measurement switches.
+  PRE-MOVE  0fd57f3 (the commit before the pass left the frame) - the control that isolates THE MOVE from the 14 port groups.
+  CANDIDATE 4a4380a plus this step's working tree, reported by the build as "4a4380a51515-dirty" (only src/ differs from the commit; the 15 files are listed in the P6 record).
+  Session 1 (ab1): pre-port vs candidate, all measures. Session 1b: cpubusy again, same builds (the scripted drag missed the VFO slider in the first session in BOTH builds: the slider is at y=626 in
+  the current layout, the tool's default 590 was found on 0.99.39; found by a capture of each build, 'orange handle x 215-224 y 616-636' in all three). Session 2 (ab2): pre-move vs candidate,
+  frames, cpu, cpubusy, latency. Files: C:\Users\steve\bl-p7\out\ab1, ab1busy, ab2 (session.json, summary.json, every run's result.json and frames.log); tools/measure_baseline-0.99.42.json is the pre-port baseline
+  with this session's gates, marked with its commit.
+MACHINE STATE - THIS IS NOT THE TOOL'S QUIET-DESKTOP SESSION AND THE RECORD SAYS SO. The desk was in use: Chrome, an Emby client, VMware, Defender; the kernel's "System" process read 0.17-0.20 cores
+  (cycles) against the tool's one-process limit of 0.15 in EVERY attempt (the first session, at the tool's limits, was refused four times running on the first slot and was stopped). Both sessions ran
+  with -MaxBackgroundCores 2.0 -MaxBackgroundProcessCores 0.6; the tool therefore prints REFUSED beside every gate and exits 3, by design. The verdicts below were read from a scratch copy of the tool whose
+  ONLY change is that one refusal turned off (C:\Users\steve\bl-p7\measure_engine_scratch.ps1 -Summarize), so they are the tool's own gate rules over the tool's own validated runs; the runs are interleaved, so
+  load that is the desk's lands on both builds. Cycle rate 3.11 GHz (registry 3187 MHz). OS Windows 23H2 22631, RTX 4090, High performance, i9-14900K 32 logical.
+  TOOL BUGS FOUND AND FIXED ON THE WAY: (1) the retake bookkeeping (`$meta.retakes = @($meta.retakes) + @($slotRun.retakes)`) throws "Argument types do not match" in Windows PowerShell 5.1 the first time a run
+  is retaken (a List[object]); the self-test's retake case does not go through that line; fixed (.ToArray()); (2) the -CandidateCommit of a dirty build must be the FULL reported name ("4a4380a51515-dirty"),
+  a short prefix is refused; (3) the busy-drag default coordinates are stale (above). The self-test passes (PASS) with this step's additions. NEW IN THE TOOL: the engine's own pass figures from the run result
+  ("pass": passes a second, mean/p99/longest of a pass, passes longer than the period, and submit-to-publish: the lag from a submit's wake to the publish of the pass that served it, over the same window as the CPU) -
+  produced by Engine::passStatsJson (engine/pass_stats.hpp: a log-linear histogram, "at most" percentiles), marked at the end of the warm-up, tested in test_pass_control I (the histogram's arithmetic, the lag,
+  the window; break-it: no stamp in wakeControl -> 5 FAILs). REPORTED, NOT GATED (a baseline has nothing to hold them against).
+
+THE TABLE (medians of five runs; soak of two; the range in brackets; baseline = pre-port 748546c, candidate = 4a4380a51515-dirty)
+  gate                         pre-port           candidate          delta                  verdict (the tool's rule)
+  frame p99, vsync off (ms)    1.323 [1.20-1.46]  1.279 [1.24-1.62]  -0.04 ms               PASS (gate: not worse by > 1 ms)
+  frame mean, vsync off (ms)   0.805 [0.77-0.83]  0.772 [0.74-0.80]  -4.1 %                 NOISY (baseline spread over the gate), not judged; direction: better
+  CPU idle at 60 Hz (% core)   37.13 [37.06-37.20] 37.11 [36.69-37.56] -0.07 % (-0.1 % rel)   PASS (gate 5 %)
+  CPU busy, VFO drag (% core)  33.75 [33.65-34.02] 33.41 [33.38-33.55] -1.0 %                PASS (session 1b, drag landed on 100 % of frames in both)
+  working set 60 s (MB)        117.9 [114.5-118.5] 115.8 [114.5-118.4] -1.8 %                PASS
+  tune-to-audio median (ms)    16 [16-16]         16 [16-16]         0                      PASS (gate: not worse by > 16.7 ms); the audio clock quantises to 5.33 ms blocks
+  max sustained rate (Hz)      28 672 000         28 672 000         0                      PASS (the ladder's top rung, zero drops, all 10 runs)
+  soak hang reports            0                  0                  0                      PASS
+  soak frames > 100 ms         0                  0                  0                      PASS
+  soak working set 10 min (MB) 134.9 [134.4-135.4] 134.8 [133.8-135.9] -0.03 %             PASS
+  and against the PRE-MOVE build 0fd57f3 (session 2, same rules; this isolates the move):
+  frame p99, vsync off (ms)    1.036 [1.02-1.06]  0.962 [0.91-1.07]  -0.07 ms               PASS
+  frame mean, vsync off (ms)   0.774 [0.75-0.78]  0.741 [0.72-0.78]  -4.3 %                 PASS
+  CPU idle at 60 Hz (% core)   34.40 [34.25-34.45] 33.79 [33.68-33.86] -1.8 %                PASS
+  CPU busy (% core)            34.00 [33.70-45.14] 33.78 [33.31-39.55] -0.6 %                NOISY (baseline spread: one 45 % run), not judged
+  working set 60 s (MB)        117.9              118.5              +0.6 %                 PASS
+  tune-to-audio median (ms)    16                 16                 0                      PASS
+  THE TAIL OF TUNE-TO-AUDIO, reported: p90 16 ms in all five pre-move runs, 21.3 ms in four of five candidate runs here (and in one of five in the pre-port session, where the baseline was 16 in all five) - one audio block longer, the median unchanged: the
+  P5 smoke's finding, reproduced; inside the gate (the gate is the median).
+  CPU, THE CAVEAT: the tool's cpuPct is CYCLES (QueryProcessCycleTime over the measured cycle rate) and is what is gated: equal. The time-based figure (GetProcessTimes, "cpuPctTimes", never gated: it under-reads up
+  to 5x on this Hyper-V desktop) reads 5 % pre-port against 12 % candidate - a tick-sampled accounting artefact of a thread that wakes 60 times a second with the 1 ms timer (the candidate asks Windows for it), not
+  cycles; it is in the files and is said here so nobody finds it later and calls it a regression.
+THE PASS'S OWN FIGURES (the candidate; the survey's section 4 additions; medians of five): the pass runs 60.6 a second free-running (86 under the VFO drag: one wake per submit on top); a pass costs a MEAN 60-76 us,
+  p99 at most 191-255 us (383 us under the drag), the longest 0.4-1.5 ms in the 60 s windows (7.2 ms once, under the drag), 3.0-5.1 ms in the 10-minute soak; 0 passes longer than the 16 ms period in any run. SUBMIT TO PUBLISH UNDER LOAD (the
+  drag, 3 520 submits a minute through the window's own session, all five runs): mean 1.08 ms, p99 at most 4.1 ms, longest at most 5.1 ms (14.3 ms in one run) - the 2 ms pass floor and the timer tick, as P5 TRAP 7 said;
+  the headless figure (test_pass_control A, idle) is 0.1 ms. No hang report, no pass over its period, in 4 x 10 minutes of soak.
+MY READ OF IT. The move cost nothing the gates can see: frame time (vsync off) is the same or better (the pump's work left the frame), CPU in cycles is equal at idle and under the drag, memory is flat, the sustained rate
+  is the ladder's top in all ten runs, no stall, no hang report, tune-to-audio is the same 16 ms (three audio blocks) with a longer tail. Nothing is beyond the plan's tolerance, so nothing is STOPPED. The scope-tap
+  change of P6 (relaxed atomic words instead of memcpy) is inside these numbers (the candidate carries it): CPU in cycles equal.
+ONE OPEN FINDING THE GATES DO NOT SEE - REPORTED, CAUSE UNVERIFIED, NOT TUNED: THE CAPPED FRAME TAIL. In the 60 Hz-capped soak the interval between frames has a tail the pre-port build does not: p99 19.0 ms
+  against 17.3 ms (+1.7 ms), 2-2.4 % of the candidate's frames longer than 18 ms (650 and 856 of 35 200) against 0.03 % (14 and 8 of 35 400); median 17.03 against 16.94 ms, mean +0.6 %. The long intervals are NOT
+  the frame's work (0.98 ms mean in the long ones, the same as any frame): they are the cap's wait overshooting by ~2 ms, about every 31 frames, which at a real 60 Hz vsync would be a missed deadline now and then.
+  Not a gate (the frame gates are taken vsync-off, where the interval is the work and the candidate is better), but it is exactly the kind of thing section 5 asked about ("the frame time"), and on a vsync-paced
+  display it could be visible as a rare 2 ms slip. Hypotheses, none tested: the second periodic thread (the pass, 60/s, woken from the same timer resolution as the frame cap's high-resolution timer) landing
+  beside the frame thread's wake; timer coalescing with the engine's 1 ms timeBeginPeriod. NOT measured: the pre-move build's capped tail (session 2 had no soak), so it is not known whether the tail belongs to the
+  move or to an earlier port group - UNVERIFIED. The next step is one 150-second capped soak of 0fd57f3 against the candidate (6 runs, 17 minutes) and, if the move owns it, a pass thread with its own
+  (coarser or lower-priority) timer; deliberately not done here, per "do not tune blindly".
+WHAT THE RUN DID NOT COVER (the tool's own gaps stand): the Raspberry Pi, a real radio's USB, anything only a human sees (rubber-banding, waterfall judder - the line rate is min(pass 60/s, frame rate, DSP rate)),
+  a pass stalled by a real rescan during the soak (the soak had no rescan and no rate change: the 10-minute soaks prove steady state, the stalls are the P5 live-traffic test's), and a run with a track-source
+  plugin loaded (H7's path; the three decoders are decoder plugins). Files: docs/engine-stage4.md (this), tools/measure_baseline-0.99.42.json, tools/measure_engine.ps1 (the figures, the retake fix).

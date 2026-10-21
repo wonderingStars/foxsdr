@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -55,15 +56,20 @@ namespace cascade::gui {
 struct AppWindowTestAccess {
     static void draw(AppWindow& a) { a.drawScannerSection(); }
     static void flush(AppWindow& a) { a.flushScannerDraft(); }
+    // The launch's restore, on a window no pass has attached a thread to yet (makeApp seeds before the first frame): the test's
+    // thread is the only one in the engine.
     static void seed(AppWindow& a) { a.applyConfig(cascade::core::AppConfig{}); }
-    static double start(AppWindow& a) { return a.engine_.scanStartMhz_; }
-    static double stop(AppWindow& a) { return a.engine_.scanStopMhz_; }
-    static double step(AppWindow& a) { return a.engine_.scanStepKhz_; }
-    static double dwell(AppWindow& a) { return a.engine_.scanDwellMs_; }
-    static double hold(AppWindow& a) { return a.engine_.scanHoldMs_; }
+    // EVERY READ OF THE ENGINE from the test's thread (the pump move's P6) is made on the pass's thread with the pass out of the way
+    // (passseam::read): free-running, the pass - which runs the scanner - runs beside the test.
+    static double rd(AppWindow& a, const std::function<double()>& readIt) { return passseam::read<double>(a.engine_, readIt); }
+    static double start(AppWindow& a) { return rd(a, [&] { return a.engine_.scanStartMhz_; }); }
+    static double stop(AppWindow& a) { return rd(a, [&] { return a.engine_.scanStopMhz_; }); }
+    static double step(AppWindow& a) { return rd(a, [&] { return a.engine_.scanStepKhz_; }); }
+    static double dwell(AppWindow& a) { return rd(a, [&] { return a.engine_.scanDwellMs_; }); }
+    static double hold(AppWindow& a) { return rd(a, [&] { return a.engine_.scanHoldMs_; }); }
     static double draft(AppWindow& a, int i) { return a.scanDraft_[i]; }
-    static bool active(AppWindow& a) { return a.engine_.scanner_.active(); }
-    static double scanningHz(AppWindow& a) { return a.engine_.scanner_.currentHz(); }
+    static bool active(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.scanner_.active(); }); }
+    static double scanningHz(AppWindow& a) { return rd(a, [&] { return a.engine_.scanner_.currentHz(); }); }
     static void drain(AppWindow& a) { passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); }); }
     // Window port group 7: the section draws from the state the engine PUBLISHED and sends its
     // commands on the window's engine API session. A frame of this harness therefore looks first
@@ -79,7 +85,9 @@ struct AppWindowTestAccess {
             a.engine_.drainLocalCommands();
         });
     }
-    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c); }
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
+        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(c); });
+    }
 };
 }  // namespace cascade::gui
 

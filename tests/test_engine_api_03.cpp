@@ -176,6 +176,7 @@
 #include "engine/soundcard_panel.hpp"
 #include "engine_api_fake_radio.hpp"
 #include "engine_api_test_env.hpp"
+#include "engine_api_serial.hpp"
 #include "engine_client.hpp"
 #include "foxsdr_api.h"
 #include "hackrf_fake_usb.hpp"
@@ -740,7 +741,7 @@ void testVersionGate() {
 }
 
 void testEveryListIsServed() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
     for (uint32_t l = 1; l <= FOXAPI_LIST_GPS; ++l) {
@@ -769,7 +770,7 @@ void testEveryListIsServed() {
 }
 
 void testSubmitText() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     const std::string longText(600, 'x');
@@ -795,7 +796,7 @@ void testSubmitText() {
 }
 
 void testStatusLines() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     CHECK_EQ(count(s, FOXAPI_LIST_STATUS_LINES), 0);
     const std::string why = std::string("the radio said no: ") + std::string(300, 'y');
@@ -823,7 +824,7 @@ void testStatusLines() {
 }
 
 void testFacts() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     Remote r(e);
     CHECK(r.ok());
@@ -844,7 +845,7 @@ void testFacts() {
 }
 
 void testPatchGraph() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     a->subscribe(s.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_PATCH));
@@ -905,7 +906,7 @@ void testPatchGraph() {
 }
 
 void testRecordings() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     Remote r(e);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_RUN, 0, 1)).result.status, FOXAPI_OK);
@@ -931,7 +932,7 @@ void testRecordings() {
 }
 
 void testScope() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     Remote r(e);
     const FoxEngineApi* a = api();
@@ -971,7 +972,7 @@ void testScope() {
 }
 
 void testNodeSpectrum() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     FoxSpectrumInfo info{};
     info.structSize = sizeof(info);
@@ -983,7 +984,7 @@ void testNodeSpectrum() {
 }
 
 void testSerialPorts() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     Remote r(e);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SCAN_SERIAL_PORTS)).result.status, FOXAPI_OK);
@@ -992,7 +993,7 @@ void testSerialPorts() {
 }
 
 void testDecoderLines() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     CHECK_EQ(count(s, FOXAPI_LIST_DECODER_LINES), 0);
     // Both in ONE batch, so both lines reach the list in the same pass.
@@ -1010,7 +1011,7 @@ void testDecoderLines() {
 }
 
 void testStore() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
     const std::string legal = "You must hold a licence to decode this. " + std::string(400, 'L');
@@ -1030,7 +1031,7 @@ void testStore() {
 }
 
 void testBiasTee() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxReceiverState st = s.state();
     CHECK((st.flags & (FOXAPI_RX_BIAS_TEE_PRESENT | FOXAPI_RX_BIAS_TEE_ON)) == 0u);
@@ -1039,7 +1040,7 @@ void testBiasTee() {
 }
 
 void testTransmitterState() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     // No transmitter: nothing open, but a power setting is still the setting
     // (never the 0 dB - full power - a closed board's readback would say),
@@ -1173,7 +1174,7 @@ int32_t setting(testing::Session& s, const std::string& keyValue) {
 
 // AUDIO and SINK and DECODER OUTPUT and DECODERS: the state's new members.
 void testStatusColumnState() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     FoxReceiverState st = settled(s);
     std::printf("Y: sink flags 0x%x, sinkName '%s', ring %llu of %llu frames at %.0f Hz, running %u of %u fitted (%u matched)\n",
@@ -1345,7 +1346,7 @@ void testStatusColumnState() {
 // the pair then straddled STREAM_ALIVE coming back (audioSeq +2, flags 14 vs 10). Only on a machine that has an
 // output device to lose (without one nothing ever opened and the sink is steady from the first read).
 void testBaselineWaitsForTheSink() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxReceiverState first = settled(s);
     CHECK(audioSteady(first));  // a settled state is a steady one
@@ -1391,7 +1392,7 @@ void testBaselineWaitsForTheSink() {
 
 // RECEIVER: the GAINS entries carry the unit token.
 void testStatusColumnGains() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     CHECK_EQ(count(s, FOXAPI_LIST_GAINS), 0);  // no radio, no stages
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SCAN_DEVICES)).result.status, FOXAPI_OK);
@@ -1419,7 +1420,7 @@ void testStatusColumnGains() {
 
 // RECORDER: RECORDINGS' value[3] is the take's seconds, read live.
 void testStatusColumnRecordings() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     using Clock = std::chrono::steady_clock;
     CHECK_EQ(s.run(cmd(FOXAPI_OP_RUN, 0, 1)).result.status, FOXAPI_OK);
@@ -2131,7 +2132,7 @@ std::string countersMoved(const FoxReceiverState& a, const FoxReceiverState& b) 
 
 // R1-R3: the RDS decoder's state.
 void testRdsState() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     FoxReceiverState st = settled(s);
     // A receiver that hears no RDS: every member empty, the counter at its start.
@@ -2237,7 +2238,7 @@ void testRdsState() {
 
 // R4: the auto-notch's readout.
 void testAutoNotchReadout() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxReceiverState base = settled(s);
     CHECK((base.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) == 0u);
@@ -2294,7 +2295,7 @@ void testAutoNotchReadout() {
 
 // R7: the pilot lock, which STEREO_ACTIVE is a conjunction with.
 void testPilotLock() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxReceiverState base = settled(s);
     CHECK((base.flags & FOXAPI_RX_PILOT_LOCKED) == 0u);
@@ -2321,7 +2322,7 @@ void testPilotLock() {
 
 // R5: the Sinks section's note is a status line.
 void testAudioHealthLine() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     FoxReceiverState st = settled(s);
     const bool everOpened = (st.audioFlags & FOXAPI_AUDIO_EVER_OPENED) != 0u;
@@ -2370,7 +2371,7 @@ void testAudioHealthLine() {
 
 // R8: the loaded band plan's name is not the active entry's.
 void testBandPlanName() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxReceiverState base = settled(s);
     int32_t status = 0;
@@ -3071,8 +3072,21 @@ void testBookmarkExportCost() {
     const testing::Outcome o = pumpedText(d.eng, s, testing::cmd(FOXAPP_OP_BOOKMARK_EXPORT), idsText);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     CHECK_EQ(o.status(), FOXAPI_OK);
-    std::printf("O2: 100 000 ids (%zu bytes) exported in %.0f ms\n", idsText.size(), ms);
-    CHECK(ms < 2500.0);
+    // The ceiling tells a pass (~0.1 s) from a search per id (~5 s) in a plain build. Under ThreadSanitizer - which
+    // the sanitizer build announces with CASCADE_SANITIZE_THREAD, on everything that links cascade_engine - every
+    // load and store is instrumented: the pass measured 0.6-0.8 s on an idle machine (about six times the plain
+    // build's 0.1 s) and 2.9 s on a loaded one, over the plain ceiling. The ceiling scales by 4, not by the 10
+    // cmake/sanitize.cmake gives that build's ctest TIMEOUTs: 10 s is 3.4 times the loaded pass, and a search per id
+    // at the same sixfold slowdown (~30 s) is three times past it, where 25 s would barely tell the two apart. A
+    // plain build's ceiling is untouched.
+#if defined(CASCADE_SANITIZE_THREAD)
+    constexpr double kSlowdown = 4.0;
+#else
+    constexpr double kSlowdown = 1.0;
+#endif
+    std::printf("O2: 100 000 ids (%zu bytes) exported in %.0f ms (ceiling %.0f ms)\n", idsText.size(), ms,
+                2500.0 * kSlowdown);
+    CHECK(ms < 2500.0 * kSlowdown);
     const std::vector<std::filesystem::path> files = exportedFiles(dir);
     CHECK_EQ(files.size(), 1u);
     if (files.size() == 1u) {
@@ -3285,6 +3299,24 @@ void testMuteCauses() {
     std::printf("M1: MUTE_CAUSES names the muting plugins, the latch flags them, one event a tune-away\n");
 }
 
+// A plugin FILE name on this platform: what PluginHost::hasPluginExtension scans for and PluginRepo's
+// kModuleExtension admits (".dll" on Windows, ".so" on Linux, ".dylib" on macOS), behind the prefix the build gives
+// a module (CMake's shared-library prefix: none on Windows, "lib" elsewhere, as FIXTURE_*_PLUGIN's own names
+// have it). The prefix keeps the host's by-file-name order the same on every platform: "group.nine.v2" sorts AFTER
+// the group-9 fixture it duplicates as "fixture_..." and as "libfixture_..." alike. On Windows every name comes out
+// as it always was.
+#if defined(_WIN32)
+constexpr const char* kModulePrefix = "";
+constexpr const char* kModuleExt = ".dll";
+#elif defined(__APPLE__)
+constexpr const char* kModulePrefix = "lib";
+constexpr const char* kModuleExt = ".dylib";
+#else
+constexpr const char* kModulePrefix = "lib";
+constexpr const char* kModuleExt = ".so";
+#endif
+std::string moduleFile(const std::string& stem) { return kModulePrefix + stem + kModuleExt; }
+
 // The scratch plugin folder of group M: the two fixture modules, and a third file that is not one.
 //
 // Group 9 asks for more (`nine`): the third fixture, tests/fixture_group9_plugin.cpp (an audio processor with two
@@ -3307,11 +3339,11 @@ struct PluginWorld {
             CHECK(!ec);
         }
         if (dotted) {
-            std::filesystem::copy_file(FIXTURE_GROUP9_PLUGIN, dir / "group.nine.v2.dll",
+            std::filesystem::copy_file(FIXTURE_GROUP9_PLUGIN, dir / moduleFile("group.nine.v2"),
                                        std::filesystem::copy_options::overwrite_existing, ec);
             CHECK(!ec);
         }
-        std::ofstream junk(dir / "zz_refused.dll", std::ios::binary);
+        std::ofstream junk(dir / moduleFile("zz_refused"), std::ios::binary);
         junk << "this is not a portable executable";
         junk.close();
         hook = dir.string();
@@ -3337,15 +3369,16 @@ void testPluginLists() {
     passes(d.eng, 3);
     const std::string stage1 = PluginWorld::fileOf(FIXTURE_STAGE1_PLUGIN);
     const std::string g8 = PluginWorld::fileOf(FIXTURE_GROUP8_PLUGIN);
+    const std::string zz = moduleFile("zz_refused");
 
     // PLUGINS: the host's order (by file name), the capability word, loaded -> ACTIVE.
     CHECK_EQ(count(s, FOXAPI_LIST_PLUGINS), 3);
     const FoxListItem pg = entryNamed(s, FOXAPI_LIST_PLUGINS, "Group Eight Fixture");
     const FoxListItem ps1 = entryNamed(s, FOXAPI_LIST_PLUGINS, "Stage One Fixture");
-    const FoxListItem refused = entryNamed(s, FOXAPI_LIST_PLUGINS, "zz_refused.dll");
+    const FoxListItem refused = entryNamed(s, FOXAPI_LIST_PLUGINS, zz);
     CHECK_EQ(std::string(pg.detail), g8);
     CHECK_EQ(std::string(ps1.detail), stage1);
-    CHECK_EQ(std::string(refused.detail), std::string("zz_refused.dll"));
+    CHECK_EQ(std::string(refused.detail), zz);
     CHECK_EQ(static_cast<unsigned>(pg.value[0]),
              static_cast<unsigned>(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_PRESET | CASCADE_CAP_HOST_CLIENT));
     CHECK_EQ(static_cast<unsigned>(ps1.value[0]),
@@ -3421,22 +3454,23 @@ void testPluginLists() {
 
     // STALE_GRANTS: a tune grant no LOADED module holds - a module the host has no record of at all, and one
     // it refused - in the order the grants were given; a loaded module's grant is not stale.
+    const std::string removed = moduleFile("removed-module");
     CHECK_EQ(count(s, FOXAPI_LIST_STALE_GRANTS), 0);
-    CHECK_EQ(pumped(d.eng, s, grantCmd("removed-module.dll", 1, 1)).status(), FOXAPI_OK);
-    CHECK_EQ(pumped(d.eng, s, grantCmd("zz_refused.dll", 1, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, grantCmd(removed, 1, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, grantCmd(zz, 1, 1)).status(), FOXAPI_OK);
     CHECK_EQ(pumped(d.eng, s, grantCmd(g8, 1, 1)).status(), FOXAPI_OK);
     passes(d.eng, 2);
     CHECK_EQ(count(s, FOXAPI_LIST_STALE_GRANTS), 2);
     const FoxListItem gone = item(s, FOXAPI_LIST_STALE_GRANTS, 0);
     const FoxListItem broken = item(s, FOXAPI_LIST_STALE_GRANTS, 1);
-    CHECK_EQ(std::string(gone.name), std::string("removed-module.dll"));
+    CHECK_EQ(std::string(gone.name), removed);
     CHECK((gone.flags & FOXAPI_ITEM_REFUSED) == 0u);  // no such file
-    CHECK_EQ(std::string(broken.name), std::string("zz_refused.dll"));
+    CHECK_EQ(std::string(broken.name), zz);
     CHECK((broken.flags & FOXAPI_ITEM_REFUSED) != 0u);  // the file is there and the host refused it
-    CHECK_EQ(pumped(d.eng, s, grantCmd("removed-module.dll", 1, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, s, grantCmd(removed, 1, 0)).status(), FOXAPI_OK);
     passes(d.eng, 2);
     CHECK_EQ(count(s, FOXAPI_LIST_STALE_GRANTS), 1);
-    CHECK_EQ(std::string(item(s, FOXAPI_LIST_STALE_GRANTS, 0).name), std::string("zz_refused.dll"));
+    CHECK_EQ(std::string(item(s, FOXAPI_LIST_STALE_GRANTS, 0).name), zz);
 
     // THE LAST REFUSAL: "" until a module asks to tune without the grant, then the module file name (the key
     // the grant is held under); a rescan forgets it.
@@ -3671,8 +3705,8 @@ struct Nine {
     std::string g8 = PluginWorld::fileOf(FIXTURE_GROUP8_PLUGIN);
     std::string g9 = PluginWorld::fileOf(FIXTURE_GROUP9_PLUGIN);
     std::string s1 = PluginWorld::fileOf(FIXTURE_STAGE1_PLUGIN);
-    std::string dotted = "group.nine.v2.dll";
-    std::string refused = "zz_refused.dll";
+    std::string dotted = moduleFile("group.nine.v2");
+    std::string refused = moduleFile("zz_refused");
 };
 
 // H1: the per-file facts - whole texts, the LOCAL ones denied to a REMOTE session, "" for a known file with
@@ -3745,7 +3779,7 @@ void testFittedModuleFacts() {
 
     // NOT_FOUND: a file nobody holds, a leaf that is not one, the key with no leaf, the folder's key with a
     // leaf, and a file named for a leaf.
-    CHECK_EQ(moduleFact(s, "no-such-module.dll", "version", &st), std::string());
+    CHECK_EQ(moduleFact(s, moduleFile("no-such-module"), "version", &st), std::string());
     CHECK_EQ(st, FOXAPI_NOT_FOUND);
     CHECK_EQ(moduleFact(s, n.g9, "colour", &st), std::string());
     CHECK_EQ(st, FOXAPI_NOT_FOUND);
@@ -3753,7 +3787,7 @@ void testFittedModuleFacts() {
     CHECK_EQ(st, FOXAPI_NOT_FOUND);
     CHECK_EQ(fact(s, "fact.plugin.dir.path", &st), std::string());
     CHECK_EQ(st, FOXAPI_NOT_FOUND);
-    CHECK_EQ(moduleFact(remote, "no-such-module.dll", "path", &st), std::string());
+    CHECK_EQ(moduleFact(remote, moduleFile("no-such-module"), "path", &st), std::string());
     CHECK_EQ(st, FOXAPI_NOT_FOUND);  // not found is not hidden behind denied
 
     // A rescan that takes a file away takes its facts: the record is gone, so NOT_FOUND again.
@@ -4125,11 +4159,12 @@ void testInstallStatusLines() {
     CHECK_EQ(d.eng.statusText().installError, std::string());
 
     // The engine's own writer, a remove that fails: red, verbatim, and no green line beside it.
-    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_REMOVE, 0, 0, "no-such-plugin.dll")).status(), FOXAPI_OK);
+    const std::string noSuch = moduleFile("no-such-plugin");
+    CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_REMOVE, 0, 0, noSuch.c_str())).status(), FOXAPI_OK);
     passes(d.eng, 2);
     const std::string err = fact(s, "fact.status.installError");
     CHECK(err.find("is not an installed plugin file") != std::string::npos);
-    CHECK(err.find("no-such-plugin.dll") != std::string::npos);
+    CHECK(err.find(noSuch) != std::string::npos);
     CHECK_EQ(levelOf("installError"), 3.0);
     CHECK_EQ(levelOf("installReport"), -1.0);
     CHECK_EQ(d.eng.statusText().installError, err);
@@ -4278,7 +4313,7 @@ struct StoreWorld {
             e.summary = "Decodes alpha.";
             e.description = std::string(400, 'd');
             e.homepage = "https://example.org/alpha";
-            e.platforms = {hostBuild("alpha_good.dll", 'a', 12345), IdxPlatform{"plan9", "mips", "alpha_plan9.so", hex64('b'), 99}};
+            e.platforms = {hostBuild(moduleFile("alpha_good"), 'a', 12345), IdxPlatform{"plan9", "mips", "alpha_plan9.so", hex64('b'), 99}};
             v.push_back(e);
         }
         {
@@ -4289,7 +4324,7 @@ struct StoreWorld {
             e.licence = "GPL-3.0-or-later";
             e.legal = std::string(300, 'L');
             e.floor = "0.9.0";
-            e.platforms = {hostBuild("beta_legal.dll", 'c', 0)};
+            e.platforms = {hostBuild(moduleFile("beta_legal"), 'c', 0)};
             v.push_back(e);
         }
         {
@@ -4307,7 +4342,7 @@ struct StoreWorld {
             e.version = "3.0.0";
             e.licence = "MIT";
             e.abi = CASCADE_PLUGIN_ABI_VERSION + 1u;
-            e.platforms = {hostBuild("delta_abi.dll", 'd', 777)};
+            e.platforms = {hostBuild(moduleFile("delta_abi"), 'd', 777)};
             v.push_back(e);
         }
         {
@@ -4315,7 +4350,7 @@ struct StoreWorld {
             e.id = "epsilon-nolicence";
             e.name = "Epsilon Decoder";
             e.version = "1.1.0";
-            e.platforms = {hostBuild("epsilon.dll", 'e', 4096)};
+            e.platforms = {hostBuild(moduleFile("epsilon"), 'e', 4096)};
             v.push_back(e);
         }
         {
@@ -4350,7 +4385,7 @@ struct StoreWorld {
             e.name = std::string("Bad ") + word;
             e.version = "1.0.0";
             e.licence = "MIT";
-            e.platforms = {hostBuild(std::string("sub/") + word + ".dll", '8', 100)};
+            e.platforms = {hostBuild(std::string("sub/") + moduleFile(word), '8', 100)};
             run.push_back(e);
         }
         indexRun = world.dir.parent_path() / "store_index_group10_run.json";
@@ -4488,7 +4523,7 @@ void testStoreBeforeAndFetch() {
     CHECK_EQ(storeFact(s, "alpha-good", "platforms"), w.hostPair + ", plan9/mips");  // the index's order
     CHECK_EQ(storeFact(s, "alpha-good", "floor", &st), std::string());  // no floor: "" and not NOT_FOUND
     CHECK_EQ(st, 0);
-    CHECK_EQ(storeFact(s, "alpha-good", "file"), std::string("alpha_good.dll"));
+    CHECK_EQ(storeFact(s, "alpha-good", "file"), moduleFile("alpha_good"));
     CHECK_EQ(storeFact(s, "alpha-good", "updateReason", &st), std::string());  // no plan
     CHECK_EQ(st, 0);
     CHECK_EQ(storeFact(s, "alpha-good", "description"), std::string(400, 'd'));
@@ -4498,7 +4533,7 @@ void testStoreBeforeAndFetch() {
     CHECK_EQ(storeFact(s, "beta.legal", "licence"), std::string("GPL-3.0-or-later"));
     CHECK_EQ(storeFact(s, "beta.legal", "floor"), std::string("0.9.0"));
     CHECK_EQ(storeFact(s, "beta.legal", "platforms"), w.hostPair);
-    CHECK_EQ(storeFact(s, "beta.legal", "file"), std::string("beta_legal.dll"));
+    CHECK_EQ(storeFact(s, "beta.legal", "file"), moduleFile("beta_legal"));
     CHECK_EQ(storeFact(s, "beta.legal", "legal"), std::string(300, 'L'));
     CHECK_EQ(storeFact(s, "beta.legal", "blocked"), std::string());  // the notice taken as acknowledged
     CHECK_EQ(storeFact(s, "gamma-nobuild", "platforms", &st), std::string());  // no build at all
@@ -4507,7 +4542,7 @@ void testStoreBeforeAndFetch() {
     CHECK_EQ(st, 0);
     CHECK_EQ(storeFact(s, "gamma-nobuild", "blocked"), cascade::gui::pluginNoBuildReason(w.hostPair));
     CHECK_EQ(storeFact(s, "delta-abi", "blocked"), cascade::gui::pluginAbiMismatchReason(abi + 1u, abi));
-    CHECK_EQ(storeFact(s, "delta-abi", "file"), std::string("delta_abi.dll"));
+    CHECK_EQ(storeFact(s, "delta-abi", "file"), moduleFile("delta_abi"));
     CHECK_EQ(storeFact(s, "epsilon-nolicence", "licence", &st), std::string());  // declares none
     CHECK_EQ(st, 0);
     CHECK_EQ(storeFact(s, "epsilon-nolicence", "blocked"), std::string("the catalogue entry declares no licence"));
@@ -4559,7 +4594,7 @@ void testStoreBeforeAndFetch() {
     fact(s, "fact.store.alpha-good", &st);
     CHECK_EQ(st, FOXAPI_NOT_FOUND);
     CHECK_EQ(storeFact(remote, "alpha-good", "author"), std::string("Alpha Labs Ltd"));
-    CHECK_EQ(storeFact(remote, "alpha-good", "file"), std::string("alpha_good.dll"));
+    CHECK_EQ(storeFact(remote, "alpha-good", "file"), moduleFile("alpha_good"));
     CHECK_EQ(storeFact(remote, w.stageId, "updateReason"), std::string("version 2.0.0 replaces the installed 1.0.0"));
     CHECK_EQ(fact(remote, "fact.store.url", &st), std::string());
     CHECK_EQ(st, FOXAPI_DENIED);
@@ -5203,12 +5238,19 @@ void testSourceFlags() {
         w.listGate = true;
         CHECK(passUntil(d.eng, [&] { return g11::has(s, FOXAPI_SRC_CARD_LISTED); }));
         CHECK(!g11::has(s, FOXAPI_SRC_CARD_SCANNING));
-        // The engine never un-lists: the friend does, and the flag follows.
+        // The engine never un-lists: the friend does, and the flag follows. With the row selected an un-listed engine
+        // takes the list again on its next pass (pumpSourceHousekeeping), and a worker that lands before the second
+        // pass's poll would list it back under the check - it did, one run in three under ThreadSanitizer - so the
+        // list's gate is held shut while the friend moves the flag, and that re-list lands only once it is let go.
+        w.listGate = false;
         Access::cardListed(d.eng) = false;
         passes(d.eng, 2);
         CHECK(!g11::has(s, FOXAPI_SRC_CARD_LISTED));
         Access::cardListed(d.eng) = true;
         passes(d.eng, 2);
+        CHECK(g11::has(s, FOXAPI_SRC_CARD_LISTED));
+        w.listGate = true;
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_CARD_SCANNING); }));
         CHECK(g11::has(s, FOXAPI_SRC_CARD_LISTED));
         // OPENING: the open of the form's card held on its gate, then let go.
         w.openGate = false;
@@ -6180,7 +6222,7 @@ void testScopeCapacity() {
     CHECK(FOXAPI_MIN_SCOPE_INFO == sizeof(FoxScopeInfo));
     CHECK(offsetof(FoxScopeInfo, capacityFrames) + sizeof(uint32_t) <= FOXAPI_MIN_SCOPE_INFO);
 
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     Remote r(e);
     const FoxEngineApi* a = api();
@@ -6204,8 +6246,11 @@ void testScopeCapacity() {
             CHECK_EQ(info.capacityFrames, want);
             CHECK_EQ(info.tap, t.tap);
         }
-        // A REMOTE session reads min(ring, 4096): the constant, whatever the ring.
-        CHECK_EQ(std::min<uint32_t>(t.ring, FOXAPI_SCOPE_REMOTE_FRAMES), FOXAPI_SCOPE_REMOTE_FRAMES);
+        // A REMOTE session reads min(ring, 4096): the constant, whatever the ring. Held by VALUE: std::min returns a
+        // reference, here to the temporary the macro's uint32_t conversion made, which CHECK_EQ's `const auto&` would
+        // read after it died (GCC: -Wdangling-reference; it read 0 under ThreadSanitizer).
+        const uint32_t remoteCap = std::min<uint32_t>(t.ring, FOXAPI_SCOPE_REMOTE_FRAMES);
+        CHECK_EQ(remoteCap, FOXAPI_SCOPE_REMOTE_FRAMES);
     }
     // The capacity is not what ONE call returns for an empty ring: nothing has been written and the answer is 0.
     // Running the receiver fills the audio ring; a request past the capacity is cut to it (LOCAL: the ring; REMOTE:
@@ -6218,8 +6263,22 @@ void testScopeCapacity() {
         [&] { return a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, &info, buf.data(), 70000) == 65536; }, 20000));
     CHECK_EQ(info.capacityFrames, 65536u);
     CHECK(info.written >= 65536u);
-    const int32_t local = a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, &info, buf.data(), info.capacityFrames + 1000u);
-    CHECK_EQ(local, static_cast<int32_t>(info.capacityFrames));  // the most a call can return IS capacityFrames
+    // The most a call can return IS capacityFrames. A read of the WHOLE ring against a running receiver is thrown away
+    // by ScopeTap::snapshot whenever a push begins during the copy (any push reaches back into a full-ring span), and
+    // after three laps the call answers 0 - the table's own "lapped, ask again". Under ThreadSanitizer the copy is slow
+    // enough for that to happen (one run in three), so the read is asked again until it is not lapped, within the
+    // bound the fill above has; every answer must be 0 or exactly the capacity, and the last one must be the capacity.
+    int32_t local = 0;
+    bool onlyLapsOrCapacity = true;
+    CHECK(check::waitFor(
+        [&] {
+            local = a->read_scope(s.raw(), FOXAPI_SCOPE_AUDIO, &info, buf.data(), info.capacityFrames + 1000u);
+            if (local != 0 && local != static_cast<int32_t>(info.capacityFrames)) { onlyLapsOrCapacity = false; }
+            return local != 0;
+        },
+        20000));
+    CHECK(onlyLapsOrCapacity);
+    CHECK_EQ(local, static_cast<int32_t>(info.capacityFrames));
     FoxScopeInfo rinfo{};
     rinfo.structSize = sizeof(rinfo);
     const int32_t remote = a->read_scope(r.raw(), FOXAPI_SCOPE_AUDIO, &rinfo, buf.data(), 70000);

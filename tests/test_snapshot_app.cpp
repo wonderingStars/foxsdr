@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -197,24 +198,35 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.nativeScan = &fakeNativeScan;
         cascade::engine::Engine::testHooks_.soapyScan = &fakeSoapyScan;
     }
-    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c, {}); }
-    static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return a.engine_.applyCommand(q.c, q.longText);
+    // Every reach into the engine is made on the pass's thread with the pass out of the way (passseam::read / on; the pump
+    // move's P6), or - the "Held" forms - from the test's thread while a PassHold parks the pass.
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
+        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(c, {}); });
     }
+    static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
+        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(q.c, q.longText); });
+    }
+    // Inline and stepped the wait runs the poll a frame's workers run; free-running the pass runs its own and the wait watches.
     static bool waitOpen(AppWindow& a) {
         return waitFor([&a] {
-            a.engine_.pollSourceAsync();
-            return !a.engine_.deviceOpenPending_;
+            return passseam::read<bool>(a.engine_, [&a] {
+                if (passseam::mode() != passseam::Mode::Free) { a.engine_.pollSourceAsync(); }
+                return !a.engine_.deviceOpenPending_;
+            });
         });
     }
     static bool sourceBusy(AppWindow& a) {
-        a.engine_.pollSourceAsync();
-        return a.engine_.soapyScanPending_ || a.engine_.deviceOpenPending_;
+        return passseam::read<bool>(a.engine_, [&a] {
+            if (passseam::mode() != passseam::Mode::Free) { a.engine_.pollSourceAsync(); }
+            return a.engine_.soapyScanPending_ || a.engine_.deviceOpenPending_;
+        });
     }
-    static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
-    static void setTransmitPageOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
-    static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
-    static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode) {
+    static void setRecordDir(AppWindow& a, const std::string& d) { passseam::on(a.engine_, [&] { a.engine_.recordDir_ = d; }); }
+    static void setTransmitPageOpen(AppWindow& a, bool on) {
+        passseam::on(a.engine_, [&] { a.engine_.transmitOpen_ = on; });
+    }
+    static bool haveTx(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.transmitter_.haveSink(); }); }
+    static std::uint64_t addBookmarkHeld(AppWindow& a, const std::string& name, double hz, const char* mode) {
         cascade::core::Bookmark b;
         b.name = name;
         b.freqHz = hz;
@@ -223,11 +235,55 @@ struct AppWindowTestAccess {
         const int at = a.engine_.freqMgr_.add(b);
         return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
     }
-    static int modeIndex(AppWindow& a) { return a.engine_.modeIndex_; }
+    static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode) {
+        return passseam::read<std::uint64_t>(a.engine_, [&] { return addBookmarkHeld(a, name, hz, mode); });
+    }
+    static int modeIndexHeld(AppWindow& a) { return a.engine_.modeIndex_; }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
-    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
+    static void webRequestHeld(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *a.engine_.receiverSnapshot_; }
     static void publish(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); }); }
+    static void publishHeld(AppWindow& a) { a.engine_.publishReceiverState(); }
+    // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
+    // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head) from
+    // the constructor to the destructor - so in that block the only publish is the test's, and the test's thread may use
+    // the engine directly (the Held forms above).
+    class PassHold {
+    public:
+        explicit PassHold(AppWindow& a) : a_(a) {
+            if (passseam::mode() != passseam::Mode::Free) { return; }
+            passseam::attach(a_.engine_);
+            holder_ = std::thread([this] {
+                passseam::on(a_.engine_, [this] {
+                    std::unique_lock<std::mutex> lk(m_);
+                    held_ = true;
+                    cv_.notify_all();
+                    cv_.wait(lk, [this] { return release_; });
+                });
+            });
+            std::unique_lock<std::mutex> lk(m_);
+            cv_.wait(lk, [this] { return held_; });
+        }
+        ~PassHold() {
+            if (!holder_.joinable()) { return; }
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                release_ = true;
+            }
+            cv_.notify_all();
+            holder_.join();
+        }
+        PassHold(const PassHold&) = delete;
+        PassHold& operator=(const PassHold&) = delete;
+
+    private:
+        AppWindow& a_;
+        std::thread holder_;
+        std::mutex m_;
+        std::condition_variable cv_;
+        bool held_ = false;
+        bool release_ = false;
+    };
     static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
     // The engine's pass as far as the key needs it (the queue applied, the
     // state published), without the audio half, which reads ImGui's clock.
@@ -237,10 +293,16 @@ struct AppWindowTestAccess {
             (void)a.engine_.pumpPublish();
         });
     }
-    static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }
-    static std::size_t fedDecoders(AppWindow& a) { return a.engine_.fedDecoderCount(); }
-    static std::size_t runnerActive(AppWindow& a) { return a.engine_.pluginRunner_.activeCount(); }
-    static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
+    static std::size_t loadedDecoders(AppWindow& a) {
+        return passseam::read<std::size_t>(a.engine_, [&] { return a.engine_.loadedDecoderCount(); });
+    }
+    static std::size_t fedDecoders(AppWindow& a) {
+        return passseam::read<std::size_t>(a.engine_, [&] { return a.engine_.fedDecoderCount(); });
+    }
+    static std::size_t runnerActive(AppWindow& a) {
+        return passseam::read<std::size_t>(a.engine_, [&] { return a.engine_.pluginRunner_.activeCount(); });
+    }
+    static bool running(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.pipeline_.running(); }); }
     static cascade::core::PublishedState state(AppWindow& a) {
         cascade::core::PublishedState s;
         const bool ok = a.engine_.receiverSnapshot_->read(s);
@@ -463,8 +525,11 @@ void webRowsFollowTheirBlock(AppWindow& a) {
     // PUBLISHED since. /api/status still serves the old block, and a web row
     // is resolved against the block current when the request is applied: the
     // page's row 0 is still A (AM), whatever the live list now holds.
+    // (From here to the end the pass is HELD: free-running, a pass of its own would publish within milliseconds, and this
+    // block is what a reader sees between two publishes - the test's own being the only one.)
+    A::PassHold hold(a);
     cascade::core::ReceiverSnapshot& snap = A::snapshot(a);
-    A::addBookmark(a, "Row D", 100.1e6, "USB");
+    A::addBookmarkHeld(a, "Row D", 100.1e6, "USB");
     const cascade::net::RadioStatus s2 = A::webStatus(a);
     std::printf("      /api/status row 0 before the next publish: %s\n",
                 s2.bookmarks.empty() ? "(none)" : s2.bookmarks[0].name.c_str());
@@ -472,9 +537,9 @@ void webRowsFollowTheirBlock(AppWindow& a) {
     // The page tunes the row it shows: 0 is A (AM).
     cascade::net::ControlRequest tune;
     tune.bookmarkTune = 0;
-    A::webRequest(a, tune);
-    std::printf("      web tune of row 0 -> mode index %d (AM is 2, USB 4)\n", A::modeIndex(a));
-    CHECK(A::modeIndex(a) == 2);
+    A::webRequestHeld(a, tune);
+    std::printf("      web tune of row 0 -> mode index %d (AM is 2, USB 4)\n", A::modeIndexHeld(a));
+    CHECK(A::modeIndexHeld(a) == 2);
 
     // The next publish arrives while a reader holds the swap lock: the block
     // goes through the hand-over slot, and the very next reader installs it -
@@ -482,7 +547,7 @@ void webRowsFollowTheirBlock(AppWindow& a) {
     // now, for the page and for the web remote alike.
     {
         std::unique_lock<std::mutex> held = snap.holdSwapLockForTest();
-        A::publish(a);
+        A::publishHeld(a);
     }
     CHECK(snap.installPending());
     const cascade::net::RadioStatus s3 = A::webStatus(a);
@@ -490,8 +555,8 @@ void webRowsFollowTheirBlock(AppWindow& a) {
     std::printf("      /api/status row 0 once the handed-over block is read: %s\n",
                 s3.bookmarks.empty() ? "(none)" : s3.bookmarks[0].name.c_str());
     CHECK(!s3.bookmarks.empty() && s3.bookmarks[0].name == "Row D");
-    A::webRequest(a, tune);
-    CHECK(A::modeIndex(a) == 4);
+    A::webRequestHeld(a, tune);
+    CHECK(A::modeIndexHeld(a) == 4);
 }
 
 }  // namespace

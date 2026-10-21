@@ -2573,7 +2573,9 @@ private:
     // caller (a test frame) that has no look of its own to put them around.
     void submitTransmitKey();
     void pollUiAnswers();
-    void actOnUiAnswers();
+    // `stateRead`: for a caller that has no look of its own (pumpTransmitKey) - act on the buffer whatever the last state read did. A frame
+    // (drawUi) passes nothing: the answers are acted on only against a state this frame's look READ (uiStateFresh_), else they wait.
+    void actOnUiAnswers(bool stateRead = false);
     void pumpTransmitKey();
     // The frame takes a file dropped on the window (pendingDropPath_) as an import command on the window's session (the pump move's step P4).
     void submitPendingDrop();
@@ -2586,6 +2588,13 @@ private:
         int nEvents = 0;
     };
     UiAnswers uiAnswers_;
+    // DID THIS LOOK'S STATE READ SUCCEED (refreshUiState)? A read that keeps overlapping a publish answers BUSY and the last good state
+    // stands - older than the snapshot that raised the answers the frame has just polled. Acting on them against that state breaks the
+    // rule the look's order exists for (found by the P6 soak of test_look_order: 4 runs in 50 saw, in about 1 answer in 100 000, a state older
+    // than the figure the answer names - a BUSY read, the publishing thread preempted mid-write). So a frame whose read failed LEAVES
+    // THE ANSWERS in their buffer (pollUiAnswers keeps what is not yet acted on) and acts on them at the next look that did read.
+    bool uiStateFresh_ = true;
+    std::uint64_t uiStateBusyReads_ = 0;   // reads that answered BUSY (the answers they would have been acted on against were held back)
     // A test's tap on the answers the window acts on (null: none): called for each result with the state the window had read when it
     // acted - which tests/test_look_order.cpp holds to be at least as new as the snapshot that raised the result.
     std::function<void(const FoxCommandResult&)>* uiAnswerTap_ = nullptr;

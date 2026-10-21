@@ -138,10 +138,16 @@ struct AppWindowTestAccess {
     static const std::vector<std::string>& serialPorts(AppWindow& a) { return a.serialPorts(); }
     static bool waiting(AppWindow& a) { return a.serialPortsWaiting(); }
     static void clearResult(AppWindow& a) { a.clearGpsResult(); }
-    static void gpsOpener(AppWindow& a, cascade::core::GpsReader::Opener op) { a.engine_.gpsReader_.setOpenerForTest(std::move(op)); }
-    static cascade::core::GpsReader::Status gpsStatus(AppWindow& a) { return a.engine_.gpsReader_.status(); }
-    static void gpsStop(AppWindow& a) { a.engine_.gpsReader_.stop(); }
-    static void setRefusal(AppWindow& a, const std::string& s) { a.engine_.gpsRefusal_ = s; }
+    // The engine's reader and its refusal line are the pass's: each reach goes through passseam::on/read (on the pass's thread
+    // with the pass out of the way when it free-runs; right here otherwise).
+    static void gpsOpener(AppWindow& a, cascade::core::GpsReader::Opener op) {
+        passseam::on(a.engine_, [&] { a.engine_.gpsReader_.setOpenerForTest(std::move(op)); });
+    }
+    static cascade::core::GpsReader::Status gpsStatus(AppWindow& a) {
+        return passseam::read<cascade::core::GpsReader::Status>(a.engine_, [&] { return a.engine_.gpsReader_.status(); });
+    }
+    static void gpsStop(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.gpsReader_.stop(); }); }
+    static void setRefusal(AppWindow& a, const std::string& s) { passseam::on(a.engine_, [&] { a.engine_.gpsRefusal_ = s; }); }
 };
 
 }  // namespace cascade::gui

@@ -26,10 +26,15 @@
 // the two suites never fight over the same ports run in parallel).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
 
 #if defined(_WIN32)
 #include <process.h>
@@ -105,13 +110,28 @@ namespace cascade::gui {
 
 // The friend AppWindow names for its tests.
 struct AppWindowTestAccess {
+    // A command applied as the engine applies one: on the pass's thread, with the pass out of the way when it free-runs
+    // (passseam::read - the key rules are the pass's alone, and an apply from this thread would run beside it).
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        return a.engine_.applyCommand(c, lt);
+        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(c, lt); });
     }
     static FoxCommandResult apply(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        return a.engine_.applyCommand(q.c, q.longText);
+        return passseam::read<FoxCommandResult>(a.engine_, [&] { return a.engine_.applyCommand(q.c, q.longText); });
     }
+    // The web remote's press and the hold it left, in ONE step on the pass's thread: free-running, a pass between the two
+    // could judge the standing condition (B: no server) before the hold was read, and that check is that the press TOOK.
+    static std::pair<FoxCommandResult, std::int64_t> webPress(AppWindow& a, const FoxCommand& c) {
+        return passseam::read<std::pair<FoxCommandResult, std::int64_t>>(a.engine_, [&] {
+            const FoxCommandResult r = a.engine_.applyCommand(c, {});
+            return std::make_pair(r, a.engine_.transmitter_.remoteHoldRemainingMs());
+        });
+    }
+    // The engine itself, for what is any thread's: the API handle a desk session opens on, and the web remote's beat.
     static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
+    // What the publish carries of the key: the key rules' own fields, read on the pass's thread (passseam::read).
+    static cascade::engine::ApiHost::TxFacts txFacts(AppWindow& a) {
+        return passseam::read<cascade::engine::ApiHost::TxFacts>(a.engine_, [&] { return a.engine_.api().txFacts(); });
+    }
     // The engine's pass as far as the key needs it - the queue applied, the
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
@@ -121,6 +141,8 @@ struct AppWindowTestAccess {
             (void)a.engine_.pumpPublish();
         });
     }
+    // Any thread: Transmitter::remoteHoldRemainingMs reads only atomics, haveSink takes the transmitter's own mutex, and
+    // transmitter_ is a member the engine never replaces.
     static std::int64_t remoteHoldMs(AppWindow& a) {
         return a.engine_.transmitter_.remoteHoldRemainingMs();
     }
@@ -134,6 +156,48 @@ struct AppWindowTestAccess {
         a.applyWebSettings();
     }
     static WebServer& webServer(AppWindow& a) { return a.webServer_; }
+
+    // THE PASS HELD, free-running only (the idiom of test_tuning_surface.cpp): a piece of work posted to the pass
+    // (Engine::postToPass) that waits until the hold is let go. A pass runs posted work at the head of its front part, after it
+    // has taken its queues, so while it is held no pass runs: what the window does meanwhile (the settings panel's click) is
+    // judged by a pass that starts after the release - which is what E's "not inside the click" is about. Inline and stepped no
+    // pass runs unless the test asks for one, so there is nothing to hold. Nothing may ask for a pass (apply, pass, pumpRemote,
+    // txFacts) while it is held.
+    struct Hold {
+        std::mutex m;
+        std::condition_variable cv;
+        bool running = false;
+        bool release = false;
+    };
+    static std::shared_ptr<Hold>& held() {
+        static std::shared_ptr<Hold> h;
+        return h;
+    }
+    static void holdPass(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
+        passseam::attach(a.engine_);
+        auto h = std::make_shared<Hold>();
+        a.engine_.postToPass([h] {
+            std::unique_lock<std::mutex> lk(h->m);
+            h->running = true;
+            h->cv.notify_all();
+            h->cv.wait(lk, [&] { return h->release; });
+        });
+        std::unique_lock<std::mutex> lk(h->m);
+        const bool took = h->cv.wait_for(lk, std::chrono::seconds(10), [&] { return h->running; });
+        CHECK(took);
+        held() = h;
+    }
+    static void releasePass(AppWindow&) {
+        const std::shared_ptr<Hold> h = held();
+        if (h == nullptr) { return; }
+        held().reset();
+        {
+            std::lock_guard<std::mutex> lk(h->m);
+            h->release = true;
+        }
+        h->cv.notify_all();
+    }
 };
 
 }  // namespace cascade::gui
@@ -174,10 +238,14 @@ int main() {
         desk.frame(true, false, false, true, on);
         Access::pass(app);
     };
-    // The browser polls its status (the web remote's keep-alive) as it presses.
+    // The browser polls its status (the web remote's keep-alive) as it presses. The press, and the hold it left read in
+    // the same step (pressedHoldMs: Access::webPress).
+    std::int64_t pressedHoldMs = 0;
     auto webKey = [&] {
         engine.api().webRemoteBeat();
-        return Access::apply(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1)); };
+        const auto pressed = Access::webPress(app, cmd::makeInt(FOXAPI_OP_TX_PTT, 1));
+        pressedHoldMs = pressed.second;
+        return pressed.first; };
 
     WebServer& webServer = Access::webServer(app);
 
@@ -207,12 +275,12 @@ int main() {
         CHECK(!webServer.running());
         consent(1);
         CHECK(ok(webKey()));
-        CHECK(Access::remoteHoldMs(app) > 0);
+        CHECK(pressedHoldMs > 0);
         Access::pumpRemote(app);
         CHECK(Access::remoteHoldMs(app) == 0);
         // The rules let go IN THE SAME STEP, not only the radio - not left
         // for the next pass to notice.
-        CHECK((engine.api().txFacts().owner) == 0u);
+        CHECK((Access::txFacts(app).owner) == 0u);
         std::printf("  B: server never started -> remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }
@@ -261,7 +329,7 @@ int main() {
         desk.frame(false, false, false);  // the page closes
         Access::pass(app);
         CHECK(Access::remoteHoldMs(app) == 0);
-        CHECK((engine.api().txFacts().remoteArmed) == false);
+        CHECK((Access::txFacts(app).remoteArmed) == false);
         std::printf("  D: page closed -> remote hold %lld ms\n", static_cast<long long>(Access::remoteHoldMs(app)));
     }
 
@@ -279,13 +347,15 @@ int main() {
         consent(1);
         CHECK(ok(webKey()));
         CHECK(Access::remoteHoldMs(app) > 0);
+        Access::holdPass(app);  // (free-running: no pass between the click and the read below)
         Access::disableWeb(app);
         CHECK(!webServer.running());
         // The window did NOT reach into the engine: the key is still held until the pass runs.
         CHECK(Access::remoteHoldMs(app) > 0);
+        Access::releasePass(app);
         Access::pumpRemote(app);
         CHECK(Access::remoteHoldMs(app) == 0);
-        CHECK((engine.api().txFacts().owner) == 0u);
+        CHECK((Access::txFacts(app).owner) == 0u);
         std::printf("  E: web server switched off -> the key held until the engine's pass, then remote hold %lld ms\n",
                     static_cast<long long>(Access::remoteHoldMs(app)));
     }

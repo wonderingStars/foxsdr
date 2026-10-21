@@ -137,11 +137,14 @@ struct AppWindowTestAccess {
     static std::string moduleFile(AppWindow& a, const std::string& name) {
         return cascade::gui::moduleFileForName(a.pluginLists().plugins, name);
     }
-    // The engine's own fields, for what the engine says and the window must agree with.
-    static bool engineHasPosition(AppWindow& a) { return a.engine_.rxSet_; }
-    static double engineLat(AppWindow& a) { return a.engine_.rxLat_; }
-    static double engineLon(AppWindow& a) { return a.engine_.rxLon_; }
-    static void engineSetPosition(AppWindow& a, double lat, double lon) { (void)a.engine_.applyReceiverPosition(lat, lon); }
+    // The engine's own fields, for what the engine says and the window must agree with: read (and written) on the pass's
+    // thread with the pass out of the way (passseam::read / on), never from this thread beside a free-running pass.
+    static bool engineHasPosition(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.rxSet_; }); }
+    static double engineLat(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.rxLat_; }); }
+    static double engineLon(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.rxLon_; }); }
+    static void engineSetPosition(AppWindow& a, double lat, double lon) {
+        passseam::on(a.engine_, [&] { (void)a.engine_.applyReceiverPosition(lat, lon); });
+    }
 };
 
 }  // namespace cascade::gui

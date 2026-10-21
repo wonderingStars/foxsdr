@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -41,7 +42,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <new>
+#include <optional>
 #include <random>
 #include <set>
 #include <sstream>
@@ -193,31 +196,122 @@ struct AppWindowTestAccess {
     static void drawBookmarks(AppWindow& a) { a.drawBookmarksSection(); }
     static void drawScanner(AppWindow& a) { a.drawScannerSection(); }
 
-    // The engine, for comparison and for what a hermetic window cannot make (a signal, a sample flow).
-    static cascade::core::FreqManager& store(AppWindow& a) { return a.engine_.freqMgr_; }
-    static cascade::core::Recorder& audioRecorder(AppWindow& a) { return a.engine_.audioRecorder_; }
-    static cascade::core::Recorder& iqRecorder(AppWindow& a) { return a.engine_.iqRecorder_; }
-    static void setSquelch(AppWindow& a, float db) { a.engine_.squelchDb_ = db; }
-    static void muteBy(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
+    // The engine, for comparison and for what a hermetic window cannot make (a signal, a sample flow). EVERY REACH is made on the
+    // pass's thread with the pass out of the way (passseam::read / on; the pump move's P6) - the store's list as a COPY, the
+    // recorders fed there (a Recorder's writes must never overlap the pass's start or stop of it) - or, the Held forms, from this
+    // thread while a PassHold parks the pass.
+    static void storeDo(AppWindow& a, const std::function<void(cascade::core::FreqManager&)>& fn) {
+        passseam::on(a.engine_, [&] { fn(a.engine_.freqMgr_); });
+    }
+    static std::vector<cascade::core::Bookmark> storeList(AppWindow& a) {
+        return passseam::read<std::vector<cascade::core::Bookmark>>(
+            a.engine_, [&]() -> std::vector<cascade::core::Bookmark> { return a.engine_.freqMgr_.list(); });
+    }
+    static std::size_t storeSizeHeld(AppWindow& a) { return a.engine_.freqMgr_.list().size(); }
+    static void writeAudio(AppWindow& a, const float* s, std::size_t n) {
+        passseam::on(a.engine_, [&] { a.engine_.audioRecorder_.writeAudio(s, n); });
+    }
+    static void writeIq(AppWindow& a, const std::complex<float>* s, std::size_t n) {
+        passseam::on(a.engine_, [&] { a.engine_.iqRecorder_.writeIq(s, n); });
+    }
+    static void setSquelch(AppWindow& a, float db) { passseam::on(a.engine_, [&] { a.engine_.squelchDb_ = db; }); }
+    // Where the scanner is, and then the squelch set - one step on the pass (free-running, a pass between the two would step the
+    // scanner off the frequency the test names).
+    static double scannerHzThenSquelch(AppWindow& a, float db) {
+        return passseam::read<double>(a.engine_, [&] {
+            const double hz = a.engine_.scanner_.currentHz();
+            a.engine_.squelchDb_ = db;
+            return hz;
+        });
+    }
+    static void muteBy(AppWindow& a, std::vector<std::string> names) {
+        passseam::on(a.engine_, [&] { a.engine_.mutedBy_ = std::move(names); });
+    }
+    static void muteByHeld(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
     // A change of the lists that touches nothing these tests read. A decoder line used to be it (it moved
     // listSeq once a line); since API 0.3 8.7 (D3) a line moves no list counter, so the preset note - a
     // status line the Decoders section letters - changes instead, and moves listSeq all the same.
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
-        a.engine_.presetNote_ = "note " + std::to_string(++n);
+        const std::string line = "note " + std::to_string(++n);
+        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = line; });
     }
-    static const std::string& recordDir(AppWindow& a) { return a.engine_.recordDir_; }
-    static cascade::core::Scanner::Params engineParams(AppWindow& a) { return a.engine_.scannerParams(); }
-    static double engineStartMhz(AppWindow& a) { return a.engine_.scanStartMhz_; }
-    static double engineStopMhz(AppWindow& a) { return a.engine_.scanStopMhz_; }
-    static double engineStepKhz(AppWindow& a) { return a.engine_.scanStepKhz_; }
-    static double engineDwell(AppWindow& a) { return a.engine_.scanDwellMs_; }
-    static double engineHold(AppWindow& a) { return a.engine_.scanHoldMs_; }
-    static double engineResume(AppWindow& a) { return a.engine_.scanResumeMs_; }
-    static double engineListen(AppWindow& a) { return a.engine_.scanListenMs_; }
-    static double scannerHz(AppWindow& a) { return a.engine_.scanner_.currentHz(); }
-    static bool scannerActive(AppWindow& a) { return a.engine_.scanner_.active(); }
-    static double tuned(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }
+    static std::string recordDir(AppWindow& a) { return passseam::read<std::string>(a.engine_, [&] { return a.engine_.recordDir_; }); }
+    static cascade::core::Scanner::Params engineParams(AppWindow& a) {
+        return passseam::read<cascade::core::Scanner::Params>(a.engine_, [&] { return a.engine_.scannerParams(); });
+    }
+    static double engineStartMhz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanStartMhz_; }); }
+    static double engineStopMhz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanStopMhz_; }); }
+    static double engineStepKhz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanStepKhz_; }); }
+    static double engineDwell(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanDwellMs_; }); }
+    static double engineHold(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanHoldMs_; }); }
+    static double engineResume(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanResumeMs_; }); }
+    static double engineListen(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.scanListenMs_; }); }
+    static double scannerHzHeld(AppWindow& a) { return a.engine_.scanner_.currentHz(); }
+    static double scannerHz(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return scannerHzHeld(a); }); }
+    static bool scannerActiveHeld(AppWindow& a) { return a.engine_.scanner_.active(); }
+    static bool scannerActive(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return scannerActiveHeld(a); }); }
+    static double tuned(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.currentAbsoluteHz(); }); }
+    // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
+    // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head, after
+    // its command queues and before its scanner tick and its publish) from the constructor to the destructor - so what the
+    // window submits in that block is not applied in it (and a dropQueued in it drops it, as inline), the published state is
+    // the last pass's whole, and this thread may read the engine directly (the Held forms above).
+    class PassHold {
+    public:
+        explicit PassHold(AppWindow& a) : a_(a) {
+            if (passseam::mode() != passseam::Mode::Free) { return; }
+            passseam::attach(a_.engine_);
+            holder_ = std::thread([this] {
+                passseam::on(a_.engine_, [this] {
+                    std::unique_lock<std::mutex> lk(m_);
+                    held_ = true;
+                    cv_.notify_all();
+                    cv_.wait(lk, [this] { return release_; });
+                });
+            });
+            std::unique_lock<std::mutex> lk(m_);
+            cv_.wait(lk, [this] { return held_; });
+        }
+        ~PassHold() {
+            if (!holder_.joinable()) { return; }
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                release_ = true;
+            }
+            cv_.notify_all();
+            holder_.join();
+        }
+        PassHold(const PassHold&) = delete;
+        PassHold& operator=(const PassHold&) = delete;
+
+    private:
+        AppWindow& a_;
+        std::thread holder_;
+        std::mutex m_;
+        std::condition_variable cv_;
+        bool held_ = false;
+        bool release_ = false;
+    };
+    // The window's read again, made under a PassHold, free-running only: the look's own read may have been followed by a pass of
+    // the thread's own; this one is of the state no pass is changing while the hold stands. (Inline and stepped no pass has
+    // run since the look: nothing to read again, and nothing is.)
+    static void relook(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free) { return; }
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
+    }
+    // A look made under a PassHold: inline and stepped exactly look(); free-running the pass is parked, so the publish is made
+    // here, on this thread, and the window reads it.
+    static void lookHeld(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free) {
+            look(a);
+            return;
+        }
+        (void)a.engine_.publishReceiverState();
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
+    }
     // The allocations one get_setting of a fact makes inside the table.
     static long factAllocations(AppWindow& a, const char* key) {
         char buf[512];
@@ -599,11 +693,11 @@ void testCopyIsMadeWhenTheStoreChanges() {
     many[3].name = std::string(120, 'n') + "!";
     many[4].group = std::string(170, 'g');
     many[5].mode = "ZZ-FUTURE";
-    Access::store(app).addMany(std::move(many));
+    Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(many)); });
     Access::look(app);
     (void)Access::tuning(app);
     CHECK_EQ(c.markerCopies, copies0 + 1u);
-    const auto& list = Access::store(app).list();
+    std::vector<cc::Bookmark> list = Access::storeList(app);  // (a copy: taken again after each change below)
     CHECK_EQ(c.markers.size(), list.size());
     bool whole = c.markers.size() == list.size();
     for (std::size_t i = 0; whole && i < list.size(); ++i) {
@@ -629,7 +723,8 @@ void testCopyIsMadeWhenTheStoreChanges() {
     {
         cc::Bookmark b = list[10];
         b.favourite = !b.favourite;
-        Access::store(app).updateAt(10, b);
+        Access::storeDo(app, [&](cc::FreqManager& s) { s.updateAt(10, b); });
+        list = Access::storeList(app);
         Access::look(app);
         (void)Access::tuning(app);
         CHECK_EQ(c.markerCopies, copies0 + 2u);
@@ -637,7 +732,8 @@ void testCopyIsMadeWhenTheStoreChanges() {
         std::size_t at = 0;
         for (std::size_t i = 0; i < list.size(); ++i) { at = list[i].id == b.id ? i : at; }
         if (c.markers.size() > at) { CHECK_EQ(c.markers[at].favourite, b.favourite); }
-        Access::store(app).removeAt(0);
+        Access::storeDo(app, [](cc::FreqManager& s) { s.removeAt(0); });
+        list = Access::storeList(app);
         Access::look(app);
         (void)Access::tuning(app);
         CHECK_EQ(c.markerCopies, copies0 + 3u);
@@ -657,8 +753,8 @@ void testCopyIsMadeWhenTheStoreChanges() {
 
     // The cost of the one copy of a big import (measured), and of what it holds.
     {
-        cc::FreqManager& store = Access::store(app);
-        store.addMany(bigList(33000, 33));
+        std::vector<cc::Bookmark> big = bigList(33000, 33);
+        Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(big)); });
         Access::look(app);
         const Clock::time_point t0 = Clock::now();
         (void)Access::tuning(app);
@@ -683,8 +779,8 @@ void testViewAndGroupsAreDerivedFromTheCopy() {
     std::printf("  C: the view and the groups follow the copy; a chosen group stays chosen by name\n");
     AppWindow app;
     Access::look(app);
-    cc::FreqManager& store = Access::store(app);
-    store.addMany(bigList(10000, 20261014));
+    std::vector<cc::Bookmark> big = bigList(10000, 20261014);
+    Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(big)); });
     Access::look(app);
     Access::rebuild(app);
 
@@ -703,19 +799,19 @@ void testViewAndGroupsAreDerivedFromTheCopy() {
     std::strcpy(Access::filter(app), "radio");
     Access::rebuild(app);
     const std::string chosen = Access::groups(app)[2];
-    CHECK(Access::view(app) == modelView(store.list(), chosen, false, "radio"));
+    CHECK(Access::view(app) == modelView(Access::storeList(app), chosen, false, "radio"));
     CHECK(!Access::view(app).empty());
     Access::favOnly(app) = true;
     std::strcpy(Access::filter(app), "145");
     Access::groupSel(app) = 0;
     Access::rebuild(app);
-    CHECK(Access::view(app) == modelView(store.list(), "", true, "145"));
+    CHECK(Access::view(app) == modelView(Access::storeList(app), "", true, "145"));
     // The group is picked again, with an empty filter.
     Access::favOnly(app) = false;
     Access::filter(app)[0] = '\0';
     Access::groupSel(app) = 3;
     Access::rebuild(app);
-    CHECK(Access::view(app) == modelView(store.list(), chosen, false, ""));
+    CHECK(Access::view(app) == modelView(Access::storeList(app), chosen, false, ""));
 
     // A group that sorts before all the others is added: the chosen group moves one place in the list
     // and is still the chosen one, by name.
@@ -724,13 +820,13 @@ void testViewAndGroupsAreDerivedFromTheCopy() {
         b.name = "First of all";
         b.freqHz = 50.0e6;
         b.group = "0-first";
-        store.add(b);
+        Access::storeDo(app, [&](cc::FreqManager& s) { s.add(b); });
         Access::look(app);
         Access::rebuild(app);
         CHECK_EQ(Access::groups(app)[0], std::string("0-first"));
         CHECK_EQ(Access::groupSel(app), 4);
         CHECK_EQ(Access::groups(app)[3], chosen);
-        CHECK(Access::view(app) == modelView(store.list(), chosen, false, ""));
+        CHECK(Access::view(app) == modelView(Access::storeList(app), chosen, false, ""));
     }
     // The chosen group is removed (through the session, as the key does): the choice is gone, "every group".
     {
@@ -741,14 +837,15 @@ void testViewAndGroupsAreDerivedFromTheCopy() {
         Access::rebuild(app);
         CHECK_EQ(Access::groupSel(app), 0);
         for (const std::string& g : Access::groups(app)) { CHECK(g != chosen); }
-        CHECK(Access::view(app) == modelView(store.list(), "", false, ""));
+        CHECK(Access::view(app) == modelView(Access::storeList(app), "", false, ""));
         const auto after = Access::list21(app);
         CHECK_EQ(after.size(), Access::groups(app).size());
     }
 
     // A view nothing moved costs nothing: 1000 rebuilds over a 33 000-entry list allocate nothing and are
     // a few comparisons each.
-    store.addMany(bigList(33000, 9));
+    std::vector<cc::Bookmark> more = bigList(33000, 9);
+    Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(more)); });
     Access::look(app);
     Access::rebuild(app);
     std::strcpy(Access::filter(app), "Weather");
@@ -767,7 +864,7 @@ void testViewAndGroupsAreDerivedFromTheCopy() {
     std::strcpy(Access::filter(app), "Weather ");  // a character more: built again
     Access::rebuild(app);
     CHECK(Access::view(app).size() <= shown);
-    CHECK(Access::view(app) == modelView(store.list(), "", false, "Weather "));
+    CHECK(Access::view(app) == modelView(Access::storeList(app), "", false, "Weather "));
 }
 
 // --- D -----------------------------------------------------------------------------------------
@@ -810,20 +907,40 @@ void testScannerFollowsTheEngine() {
     CHECK(has(t, "Idle | 88.0000 MHz"));  // (the scanner's frequency has not moved: no scan has run)
 
     // Started: Scanning, at the start of the range.
+    // (Free-running, the look is followed by the pass HELD, the window's read made again and the draw and the scanner's own
+    // figures made under it: the scanner steps on every tick of a pass of its own - a dwell of 0 - and the readout is held
+    // to where the scanner IS, at a moment no pass is moving it.)
     Access::submit(app, cascade::gui::scannerStartCommand(Access::state(app)));
     Access::look(app, true);
+    std::optional<Access::PassHold> hold(std::in_place, app);
+    Access::relook(app);
     t = drawn();
     std::printf("      after START: \"%s\"\n", t.c_str());
-    CHECK(has(t, "Scanning | 144.0000 MHz"));
-    CHECK(Access::scannerActive(app));
+    if (passseam::mode() == passseam::Mode::Free) {
+        // STEPPED-ONLY: "at the start of the range" is the readout exactly ONE scanner tick after START (the tick that emits the
+        // start), and a free-running pass ticks the scanner on its own clock - with a dwell of 0 every tick after that one steps -
+        // so how many ticks precede the window's read is the thread's, not the test's. Held inline and stepped; here the
+        // readout is held to the scanner's own frequency instead (as the stepping below is).
+        std::printf("      (free-running pass: \"Scanning | 144.0000 MHz\" right after START is tick-exact, checked inline and stepped only)\n");
+        char now[64];
+        std::snprintf(now, sizeof(now), "Scanning | %.4f MHz", Access::scannerHzHeld(app) / 1.0e6);
+        CHECK(has(t, now));
+    } else {
+        CHECK(has(t, "Scanning | 144.0000 MHz"));
+    }
+    CHECK(Access::scannerActiveHeld(app));
     CHECK(has(t, "Stop scan") && has(t, "Skip") && !has(t, "Start scan"));
+    hold.reset();
     // Stepping: the readout is where the scanner is, not where the range starts.
     std::set<std::string> seen;
     for (int i = 0; i < 6; ++i) {
         Access::look(app, true);
+        hold.emplace(app);
+        Access::relook(app);
         t = drawn();
         char want[64];
-        std::snprintf(want, sizeof(want), "Scanning | %.4f MHz", Access::scannerHz(app) / 1.0e6);
+        std::snprintf(want, sizeof(want), "Scanning | %.4f MHz", Access::scannerHzHeld(app) / 1.0e6);
+        hold.reset();
         CHECK(has(t, want));
         seen.insert(want);
     }
@@ -831,8 +948,7 @@ void testScannerFollowsTheEngine() {
     CHECK(seen.size() >= 4u);
 
     // A signal is found, then it goes quiet.
-    const double heardAt = Access::scannerHz(app);
-    Access::setSquelch(app, -1000.0f);
+    const double heardAt = Access::scannerHzThenSquelch(app, -1000.0f);
     Access::look(app, true);
     t = drawn();
     char want[96];
@@ -885,7 +1001,7 @@ void testRecorderIsLive() {
     const std::uint64_t listSeq0 = Access::listSeq(app);
 
     std::vector<float> block(48000, 0.5f);
-    Access::audioRecorder(app).writeAudio(block.data(), block.size());
+    Access::writeAudio(app, block.data(), block.size());
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
     t = drawn();
     std::printf("      after 48000 frames and 150 ms: \"%s\"\n", [&] {
@@ -907,7 +1023,7 @@ void testRecorderIsLive() {
     CHECK_EQ(Access::listSeq(app), listSeq0);
     Access::look(app);
     CHECK_EQ(Access::listSeq(app), listSeq0);
-    Access::audioRecorder(app).writeAudio(block.data(), 1000);
+    Access::writeAudio(app, block.data(), 1000);
     CHECK_EQ(Access::take(app, Access::takeAudio(app), 2.0).bytes, 98000.0);
     // The seconds are the recorder's own clock: a later read is later.
     const double s1 = Access::take(app, Access::takeAudio(app), 2.0).seconds;
@@ -916,9 +1032,13 @@ void testRecorderIsLive() {
 
     // The take is silent: a plugin mutes the audio (its names say so), and the section says whose.
     CHECK(!has(drawn(), "Muted by"));
-    Access::muteBy(app, {"ADS-B", "AIS"});
-    Access::look(app);
+    // (The stand-in for the plugins' mute is written and published with the pass HELD: free-running, a pass of its own
+    // recomputes mutedBy_ from the plugins' presets - none here - at its mute part, and would clear it before any look.)
+    std::optional<Access::PassHold> hold(std::in_place, app);
+    Access::muteByHeld(app, {"ADS-B", "AIS"});
+    Access::lookHeld(app);
     t = drawn();
+    hold.reset();
     CHECK(has(t, "Muted by ADS-B and AIS - this take is silent"));
     Access::muteBy(app, {});
     Access::look(app);
@@ -935,7 +1055,7 @@ void testRecorderIsLive() {
     Access::submit(app, cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1));
     Access::look(app);
     std::vector<std::complex<float>> iq(2400, std::complex<float>(0.1f, 0.2f));
-    Access::iqRecorder(app).writeIq(iq.data(), iq.size());
+    Access::writeIq(app, iq.data(), iq.size());
     t = drawn();
     CHECK(Access::takeIq(app) >= 0);
     CHECK(has(t, "Stop IQ") && has(t, "IQ ") && has(t, "2400 samples | 0.0 MB"));
@@ -959,13 +1079,14 @@ void testNothingAllocatesOnceSettled() {
     std::printf("  F: a settled window's reads allocate nothing\n");
     AppWindow app;
     Access::look(app);
-    Access::store(app).addMany(bigList(2000, 4));
+    std::vector<cc::Bookmark> some = bigList(2000, 4);
+    Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(some)); });
     Access::submit(app, cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 1));
     Access::submit(app, cascade::gui::scannerStartCommand(Access::state(app)));
     Access::look(app, true);
     Access::look(app, true);
     std::vector<float> block(480, 0.1f);
-    Access::audioRecorder(app).writeAudio(block.data(), block.size());
+    Access::writeAudio(app, block.data(), block.size());
     // Settled: one of each, so the caches have their room.
     (void)Access::tuning(app);
     Access::rebuild(app);
@@ -1034,9 +1155,12 @@ void testADroppedFileIsImportedThroughTheSession() {
         std::ofstream f(csv, std::ios::binary);
         f << "frequency,name\n100100000,Dropped One\n100200000,Dropped Two\n";
     }
-    const std::size_t before = Access::store(app).list().size();
+    const std::size_t before = Access::storeList(app).size();
     Access::Sent sent;
     Access::tap(app, &sent);
+    // (The pass HELD from the drop to the checks that it was sent and not applied: free-running, a pass of its own would
+    // apply the import within milliseconds, and "not applied" is "not applied BY THE DROP".)
+    std::optional<Access::PassHold> hold(std::in_place, app);
     Access::drop(app, csv.string());
     // Sent, not applied: the command is on the session, the engine's store has not moved.
     CHECK_EQ(sent.size(), 1u);
@@ -1044,14 +1168,15 @@ void testADroppedFileIsImportedThroughTheSession() {
         CHECK_EQ(sent[0].c.op, static_cast<std::uint32_t>(FOXAPP_OP_BOOKMARK_IMPORT_FILE));
         CHECK_EQ(sent[0].longText.empty() ? std::string(sent[0].c.text) : sent[0].longText, csv.string());
     }
-    CHECK_EQ(Access::store(app).list().size(), before);
+    CHECK_EQ(Access::storeSizeHeld(app), before);
     CHECK(Access::pendingDrop(app).empty());              // the drop was taken (a second frame would not import it again)
+    hold.reset();
     Access::look(app);                                    // the pass applies it
     const auto got = Access::answers(app);
     bool answered = false;
     for (const auto& r : got) { answered = answered || (r.first == FOXAPP_OP_BOOKMARK_IMPORT_FILE && r.second == FOXAPI_OK); }
     CHECK(answered);
-    CHECK_EQ(Access::store(app).list().size(), before + 2u);
+    CHECK_EQ(Access::storeList(app).size(), before + 2u);
     // Nothing to take: nothing sent.
     sent.clear();
     Access::drop(app, std::string());
@@ -1191,7 +1316,6 @@ Captured g_cap;
 
 // Three bookmarks in two groups, the first starred; their ids, in the store's order.
 std::vector<std::uint64_t> seedThree(AppWindow& app) {
-    cc::FreqManager& store = Access::store(app);
     std::vector<cc::Bookmark> three(3);
     three[0].name = "Alpha";
     three[0].freqHz = 100.3e6;
@@ -1206,11 +1330,11 @@ std::vector<std::uint64_t> seedThree(AppWindow& app) {
     three[2].freqHz = 145.5e6;
     three[2].mode = "NFM";
     three[2].group = "Airband";
-    store.addMany(std::move(three));
+    Access::storeDo(app, [&](cc::FreqManager& s) { s.addMany(std::move(three)); });
     Access::look(app);
     Access::rebuild(app);
     std::vector<std::uint64_t> id;
-    for (const cc::Bookmark& b : store.list()) { id.push_back(b.id); }
+    for (const cc::Bookmark& b : Access::storeList(app)) { id.push_back(b.id); }
     return id;
 }
 
@@ -1276,18 +1400,24 @@ void testDrawnAndClicked() {
         Access::look(app);
         const auto body = [&] { Access::drawRecorder(app); };
         std::printf("    recorder, idle:\n");
+        // (Each sweep to its dropQueued with the pass HELD: what the clicks queue is dropped, not applied, as inline -
+        // free-running, a pass of its own would apply each click before the next is made, and the sweep's widgets move.)
+        std::optional<Access::PassHold> hold(std::in_place, app);
         auto got = clickEverything(app, body, &g_cap.recorder);
         checkSet(got, {expect("RECORD_IQ", 1, 0, 0, 0, 0, 0, ""), expect("RECORD_AUDIO", 1, 0, 0, 0, 0, 0, "")}, "idle");
         Access::dropQueued(app);
+        hold.reset();
         // Both takes running: the same two buttons say stop.
         Access::submit(app, cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1));
         Access::submit(app, cmd::makeInt(FOXAPI_OP_RECORD_AUDIO, 1));
         Access::look(app);
         Access::refreshStatus(app);
         std::printf("    recorder, both takes running:\n");
+        hold.emplace(app);
         got = clickEverything(app, body, &g_cap.recorder);
         checkSet(got, {expect("RECORD_IQ", 0, 0, 0, 0, 0, 0, ""), expect("RECORD_AUDIO", 0, 0, 0, 0, 0, 0, "")}, "taping");
         Access::dropQueued(app);
+        hold.reset();
     }
 
     // --- the scanner ---
@@ -1296,15 +1426,19 @@ void testDrawnAndClicked() {
         Access::look(app);
         const auto body = [&] { Access::drawScanner(app); };
         std::printf("    scanner, idle:\n");
+        std::optional<Access::PassHold> hold(std::in_place, app);
         auto got = clickEverything(app, body, &g_cap.scanner);
         checkSet(got, {expect("SCANNER_RUN", 1, 0, 88.0e6, 108.0e6, 100.0e3, 0, "")}, "idle");
         Access::dropQueued(app);
+        hold.reset();
         Access::submit(app, cascade::gui::scannerStartCommand(Access::state(app)));
         Access::look(app, true);
         std::printf("    scanner, running:\n");
+        hold.emplace(app);
         got = clickEverything(app, body, &g_cap.scanner);
         checkSet(got, {expect("SCANNER_RUN", 0, 0, 0, 0, 0, 0, ""), expect("SCANNER_SKIP", 0, 0, 0, 0, 0, 0, "")}, "running");
         Access::dropQueued(app);
+        hold.reset();
     }
 
     // --- the bookmarks: three rows (two groups), a name typed for Add current, an import path ---
@@ -1312,7 +1446,7 @@ void testDrawnAndClicked() {
         AppWindow app;
         Access::look(app);
         const std::vector<std::uint64_t> id = seedThree(app);
-        const auto& list = Access::store(app).list();
+        const std::vector<cc::Bookmark> list = Access::storeList(app);  // (a copy: nothing below changes the store - the clicks are dropped)
         std::strcpy(Access::nameField(app), "Mine");
         const auto body = [&] { Access::drawBookmarks(app); };
         std::string idsText;
@@ -1332,12 +1466,14 @@ void testDrawnAndClicked() {
             Access::favOnly(app) = false;
             Access::markersOn(app) = true;
         };
+        std::optional<Access::PassHold> hold(std::in_place, app);
         auto got = clickEverything(app, body, &g_cap.bookmarks, restore);
         checkSet(got, want, "every group");
         restore();
         Access::groupSel(app) = 0;
         Access::filter(app)[0] = '\0';
         Access::dropQueued(app);
+        hold.reset();
 
         // One group chosen and an import path typed: the group's removal and the import appear; only that group's rows are shown.
         Access::groupSel(app) = 1;  // "Airband" (sorted first)
@@ -1360,12 +1496,14 @@ void testDrawnAndClicked() {
         std::printf("    bookmarks, the group Airband chosen, an import path typed:\n");
         // (clicking "Remove this group" sets the choice back to every group, which the view would then show
         //  in full; the choice is put back after each click so the rows the sweep found are still the rows)
+        hold.emplace(app);
         got = clickEverything(app, body, &g_cap.bookmarks, [&] {
             restore();
             Access::groupSel(app) = 1;
         });
         checkSet(got, want, "the group Airband chosen");
         Access::dropQueued(app);
+        hold.reset();
     }
 }
 
@@ -1385,7 +1523,7 @@ void testTheCommandsReachTheEngine() {
             AppWindow app;
             Access::look(app);
             const std::vector<std::uint64_t> id = seedThree(app);
-            const std::size_t n0 = Access::store(app).list().size();
+            const std::size_t n0 = Access::storeList(app).size();
             const std::uint64_t op = q.c.op;
             // The state a stop or a skip needs to find.
             if (op == FOXAPI_OP_RECORD_IQ && q.c.ival[0] == 0) { Access::submit(app, cmd::makeInt(FOXAPI_OP_RECORD_IQ, 1)); }
@@ -1405,7 +1543,7 @@ void testTheCommandsReachTheEngine() {
             CHECK_EQ(answers.size(), 1u);
             if (answers.size() == 1u) { CHECK_EQ(answers[0].second, FOXAPI_OK); }
             const FoxReceiverState& st = Access::state(app);
-            const auto& list = Access::store(app).list();
+            const std::vector<cc::Bookmark> list = Access::storeList(app);
             switch (op) {
                 case FOXAPI_OP_RECORD_IQ: CHECK_EQ((st.flags & FOXAPI_RX_RECORDING_IQ) != 0u, q.c.ival[0] != 0); break;
                 case FOXAPI_OP_RECORD_AUDIO: CHECK_EQ((st.flags & FOXAPI_RX_RECORDING_AUDIO) != 0u, q.c.ival[0] != 0); break;

@@ -44,6 +44,15 @@
 // that moves before the elements do - the ordinary seqlock shape, with the
 // "sequence" split into its pre-write and post-write halves.
 //
+// THE ELEMENTS ARE RELAXED ATOMIC WORDS, NOT PLAIN MEMORY (the pump move's P6). A seqlock whose reader copies plain memory that the
+// writer may be rewriting is a data race in the C++ memory model however well the counters validate the result afterwards - the
+// reader throws a torn copy away, but the load itself was already undefined - and ThreadSanitizer, which does not model a stand-alone
+// fence as synchronisation, reported it as one (test_engine_api_03, memcpy in snapshot() against memcpy in push()). The elements are
+// therefore stored as 32-bit std::atomic words with relaxed ordering and the two counters and the two fences are exactly as they
+// were: the same proof (core/seqlock_box.hpp has the same shape for one value), now with no race for any tool to find, and the reader
+// stays lock-free and the writer wait-free. A relaxed 32-bit store is a plain mov on x86-64 and arm64; what is given up is the vector
+// memcpy, which at this tap's rate (the 200 kHz channel, the 48 kHz audio) is nothing - see docs/engine-stage4.md, the P6 record.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_SCOPE_TAP_HPP
 #define CASCADE_CORE_SCOPE_TAP_HPP
@@ -73,12 +82,17 @@ class ScopeTap {
     // with - both qualify.
     static_assert(std::is_trivially_copyable_v<T>,
                   "ScopeTap requires a trivially copyable element type");
+    // The elements live as 32-bit atomic words (the file header says why), so an element is a whole number of them.
+    static_assert(sizeof(T) % sizeof(std::uint32_t) == 0 && alignof(T) <= alignof(std::uint32_t),
+                  "ScopeTap needs elements of whole 32-bit words");
+    static constexpr std::size_t kWordsPerElement = sizeof(T) / sizeof(std::uint32_t);
 
 public:
     // Capacity must be a nonzero power of two: a slot is `counter & (capacity
     // - 1)`, which is only a correct modulo-capacity reduction when capacity
     // divides the counter's own 2^64 wrap.
-    explicit ScopeTap(std::size_t capacity) : buf_(capacity), mask_(capacity - 1) {
+    explicit ScopeTap(std::size_t capacity)
+        : cap_(capacity), words_(capacity * kWordsPerElement), mask_(capacity - 1) {
         if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
             throw std::invalid_argument("ScopeTap capacity must be a power of two");
         }
@@ -87,7 +101,7 @@ public:
     ScopeTap(const ScopeTap&) = delete;
     ScopeTap& operator=(const ScopeTap&) = delete;
 
-    std::size_t capacity() const { return buf_.size(); }
+    std::size_t capacity() const { return cap_; }
 
     // How many elements have EVER been written. Monotonic, and the reader's
     // way to tell a live tap from a stalled one - two frames at the same
@@ -100,7 +114,7 @@ public:
     // the older ones could not have survived the same push anyway.
     void push(const T* src, std::size_t n) {
         if (src == nullptr || n == 0) { return; }
-        const std::size_t cap = buf_.size();
+        const std::size_t cap = cap_;
         if (n > cap) {
             src += (n - cap);
             n = cap;
@@ -115,8 +129,8 @@ public:
         // begun_ that predates it.
         begun_.store(head + n, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);
-        std::memcpy(&buf_[idx], src, first * sizeof(T));
-        if (n > first) { std::memcpy(buf_.data(), src + first, (n - first) * sizeof(T)); }
+        storeElements(idx, src, first);
+        if (n > first) { storeElements(0, src + first, n - first); }
         // Release pairs with the acquire in written()/snapshot(): the element
         // stores above are visible to the reader no later than the counter is.
         written_.store(head + n, std::memory_order_release);
@@ -135,7 +149,7 @@ public:
     // copy is a memcpy of at most a buffer's worth.
     std::size_t snapshot(T* dst, std::size_t n, int attempts = 3) const {
         if (dst == nullptr || n == 0) { return 0; }
-        const std::size_t cap = buf_.size();
+        const std::size_t cap = cap_;
         if (n > cap) { n = cap; }
         for (int attempt = 0; attempt < attempts; ++attempt) {
             const std::uint64_t end = written_.load(std::memory_order_acquire);
@@ -148,10 +162,8 @@ public:
             const std::size_t idx = static_cast<std::size_t>(start) & mask_;
             std::size_t first = cap - idx;
             if (first > avail) { first = avail; }
-            std::memcpy(dst, &buf_[idx], first * sizeof(T));
-            if (avail > first) {
-                std::memcpy(dst + first, buf_.data(), (avail - first) * sizeof(T));
-            }
+            loadElements(idx, dst, first);
+            if (avail > first) { loadElements(0, dst + first, avail - first); }
             // Has a push BEGUN that reaches back into what was just copied? It
             // has iff begun_ is more than a whole buffer past `start`. The
             // acquire fence keeps the element loads above ahead of this load,
@@ -164,7 +176,30 @@ public:
     }
 
 private:
-    std::vector<T> buf_;
+    // `count` elements into the slots from `slot` on, as relaxed word stores. The caller (push) is the only writer, and a reader that
+    // overlaps these stores is the one validation exists for; atomics make that overlap defined, not harmful.
+    void storeElements(std::size_t slot, const T* src, std::size_t count) {
+        std::atomic<std::uint32_t>* dst = &words_[slot * kWordsPerElement];
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(src);
+        const std::size_t words = count * kWordsPerElement;
+        for (std::size_t i = 0; i < words; ++i) {
+            std::uint32_t w;
+            std::memcpy(&w, bytes + i * sizeof(w), sizeof(w));
+            dst[i].store(w, std::memory_order_relaxed);
+        }
+    }
+    void loadElements(std::size_t slot, T* dst, std::size_t count) const {
+        const std::atomic<std::uint32_t>* src = &words_[slot * kWordsPerElement];
+        unsigned char* bytes = reinterpret_cast<unsigned char*>(dst);
+        const std::size_t words = count * kWordsPerElement;
+        for (std::size_t i = 0; i < words; ++i) {
+            const std::uint32_t w = src[i].load(std::memory_order_relaxed);
+            std::memcpy(bytes + i * sizeof(w), &w, sizeof(w));
+        }
+    }
+
+    std::size_t cap_;
+    std::vector<std::atomic<std::uint32_t>> words_;
     std::size_t mask_;
     // Monotonic element counter. alignas keeps it off the reader's cache line
     // for the buffer itself; the two are touched by different threads every

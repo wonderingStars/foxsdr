@@ -27,12 +27,15 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <random>
 #include <string>
@@ -95,9 +98,13 @@ struct AppWindowTestAccess {
     using Rail = AppWindow::RailListCache;
     // The shipped band plans, read from the source tree (the tests' executables
     // have none beside them), and loaded as the engine loads them.
+    // (Every reach into the engine below is made through passseam::on / passseam::read: on the pass's thread with the pass out
+    // of the way when it free-runs, and a READ returns a copy made there - never a reference into the engine's members.)
     static void usePlans(AppWindow& a) {
-        a.engine_.bandPlanDirForTest_ = kPlans;
-        a.engine_.loadBandPlan();
+        passseam::on(a.engine_, [&] {
+            a.engine_.bandPlanDirForTest_ = kPlans;
+            a.engine_.loadBandPlan();
+        });
     }
     // The window looks, as a frame does: the engine publishes, the window reads.
     static void look(AppWindow& a) {
@@ -153,16 +160,29 @@ struct AppWindowTestAccess {
     // status line the Decoders section letters - changes instead, and moves listSeq all the same.
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
-        a.engine_.presetNote_ = "note " + std::to_string(++n);
+        const std::string note = "note " + std::to_string(++n);
+        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = note; });
     }
-    // The engine's side, for comparison.
-    static const cascade::core::BandPlan& plan(AppWindow& a) { return a.engine_.bandPlan_; }
-    static const std::vector<cascade::core::PlanInfo>& choices(AppWindow& a) { return a.engine_.bandPlanChoices_; }
-    static const std::string& selection(AppWindow& a) { return a.engine_.bandPlanSelection_; }
-    static const std::vector<cascade::sink::AudioDevice>& outputs(AppWindow& a) { return a.engine_.devices_; }
-    static int outputIndex(AppWindow& a) { return a.engine_.deviceIndex_; }
-    static void setAudioHealth(AppWindow& a, const std::string& note) { a.engine_.audioHealthNote_ = note; }
-    static void setBandPlanError(AppWindow& a, const std::string& note) { a.engine_.bandPlanError_ = note; }
+    // The engine's side, for comparison: COPIES, made on the pass's thread.
+    static cascade::core::BandPlan plan(AppWindow& a) {
+        return passseam::read<cascade::core::BandPlan>(a.engine_, [&] { return a.engine_.bandPlan_; });
+    }
+    static std::vector<cascade::core::PlanInfo> choices(AppWindow& a) {
+        return passseam::read<std::vector<cascade::core::PlanInfo>>(a.engine_, [&] { return a.engine_.bandPlanChoices_; });
+    }
+    static std::string selection(AppWindow& a) {
+        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.bandPlanSelection_; });
+    }
+    static std::vector<cascade::sink::AudioDevice> outputs(AppWindow& a) {
+        return passseam::read<std::vector<cascade::sink::AudioDevice>>(a.engine_, [&] { return a.engine_.devices_; });
+    }
+    static int outputIndex(AppWindow& a) { return passseam::read<int>(a.engine_, [&] { return a.engine_.deviceIndex_; }); }
+    static void setAudioHealth(AppWindow& a, const std::string& note) {
+        passseam::on(a.engine_, [&] { a.engine_.audioHealthNote_ = note; });
+    }
+    static void setBandPlanError(AppWindow& a, const std::string& note) {
+        passseam::on(a.engine_, [&] { a.engine_.bandPlanError_ = note; });
+    }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     // The members, drawn.
     static void drawRadio(AppWindow& a) { a.drawRadioSection(); }
@@ -174,20 +194,86 @@ struct AppWindowTestAccess {
     static void drawOverlay(AppWindow& a) { a.drawBandPlanOverlay(0.0f, 0.0f, 900.0f, 300.0f); }
     // The engine's stand-ins and settings, set as the table's test hooks and commands do.
     static void rds(AppWindow& a, const cascade::core::RdsSnapshot* heard) {
-        a.engine_.testRdsOn_ = heard != nullptr;
-        if (heard != nullptr) { a.engine_.testRds_ = *heard; }
+        passseam::on(a.engine_, [&] {
+            a.engine_.testRdsOn_ = heard != nullptr;
+            if (heard != nullptr) { a.engine_.testRds_ = *heard; }
+        });
     }
     static void pilot(AppWindow& a, bool locked) {
-        a.engine_.testPilotOn_ = true;
-        a.engine_.testPilotLocked_ = locked;
+        passseam::on(a.engine_, [&] {
+            a.engine_.testPilotOn_ = true;
+            a.engine_.testPilotLocked_ = locked;
+        });
     }
     static void autoNotch(AppWindow& a, bool engaged, double hz) {
-        a.engine_.testAutoNotchOn_ = true;
-        a.engine_.testAutoNotchEngaged_ = engaged;
-        a.engine_.testAutoNotchHz_ = hz;
+        passseam::on(a.engine_, [&] {
+            a.engine_.testAutoNotchOn_ = true;
+            a.engine_.testAutoNotchEngaged_ = engaged;
+            a.engine_.testAutoNotchHz_ = hz;
+        });
     }
-    static void command(AppWindow& a, const FoxCommand& c) { (void)a.engine_.applyCommand(c); }
-    static void mutedBy(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
+    static void command(AppWindow& a, const FoxCommand& c) {
+        passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(c); });
+    }
+    static void mutedBy(AppWindow& a, std::vector<std::string> names) {
+        passseam::on(a.engine_, [&] { a.engine_.mutedBy_ = std::move(names); });
+    }
+    // THE PASS HELD, free-running only (RAII): a piece of work posted to the pass (Engine::postToPass) that waits until the hold
+    // goes. A pass runs posted work at the head of its front part, so while the hold stands no pass runs and what this thread
+    // reads or writes of the engine is a state no pass is changing (the hold's handshake orders it before and after the pass).
+    // Inline and stepped no pass runs unless the test asks for one: nothing to hold. Nothing may ask for a pass (on, read, look,
+    // pass) while it stands - lookHeld is the look made under it.
+    class PassHold {
+    public:
+        explicit PassHold(AppWindow& a) {
+            if (passseam::mode() != passseam::Mode::Free) { return; }
+            passseam::attach(a.engine_);
+            h_ = std::make_shared<State>();
+            const std::shared_ptr<State> h = h_;
+            a.engine_.postToPass([h] {
+                std::unique_lock<std::mutex> lk(h->m);
+                h->running = true;
+                h->cv.notify_all();
+                h->cv.wait(lk, [&] { return h->release; });
+            });
+            std::unique_lock<std::mutex> lk(h_->m);
+            const bool took = h_->cv.wait_for(lk, std::chrono::seconds(10), [&] { return h_->running; });
+            CHECK(took);
+        }
+        ~PassHold() {
+            if (h_ == nullptr) { return; }
+            {
+                std::lock_guard<std::mutex> lk(h_->m);
+                h_->release = true;
+            }
+            h_->cv.notify_all();
+        }
+        PassHold(const PassHold&) = delete;
+        PassHold& operator=(const PassHold&) = delete;
+
+    private:
+        struct State {
+            std::mutex m;
+            std::condition_variable cv;
+            bool running = false;
+            bool release = false;
+        };
+        std::shared_ptr<State> h_;
+    };
+    // The plugins' mute stand-in, written under a PassHold (free-running a pass of the thread's own recomputes mutedBy_ from the
+    // plugins' presets - none here - at its mute part, and would clear it before any look could publish it). Inline and stepped
+    // the pass is not running or is parked: the same write.
+    static void mutedByHeld(AppWindow& a, std::vector<std::string> names) { a.engine_.mutedBy_ = std::move(names); }
+    // A look made under a PassHold: inline and stepped exactly look(); free-running the pass is parked, so the publish is made
+    // here, on this thread, and the window reads it.
+    static void lookHeld(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free) {
+            look(a);
+            return;
+        }
+        a.engine_.publishReceiverState();
+        a.refreshUiState();
+    }
     static void country(AppWindow& a, const std::string& code) { a.countrySetting_ = code; }
     static void ask(AppWindow& a, const cascade::gui::BandPlanAsk& k) { a.bandPlanAsk_ = k; }
 };
@@ -359,11 +445,12 @@ void testCacheFollowsTheEngine() {
     CHECK_EQ(Access::selection(app), std::string("world"));
     // The loaded plan: its name is the engine's (not the ACTIVE entry's, once a
     // chain is loaded), and its rows are the engine's, row for row.
-    CHECK_EQ(r.bandPlanName, Access::plan(app).name());
-    CHECK_EQ(r.bands.size(), Access::plan(app).entries().size());
+    const cc::BandPlan loaded = Access::plan(app);
+    CHECK_EQ(r.bandPlanName, loaded.name());
+    CHECK_EQ(r.bands.size(), loaded.entries().size());
     CHECK(!r.bands.empty());
     for (std::size_t i = 0; i < r.bands.size(); ++i) {
-        const cc::BandEntry& e = Access::plan(app).entries()[i];
+        const cc::BandEntry& e = loaded.entries()[i];
         CHECK(r.bands[i].startHz == e.startHz && r.bands[i].endHz == e.endHz);
         CHECK(r.bands[i].name == e.name && r.bands[i].service == e.service);
     }
@@ -378,11 +465,12 @@ void testCacheFollowsTheEngine() {
     CHECK_EQ(r.plans[static_cast<std::size_t>(r.activePlan)].id, std::string("uk"));
     CHECK_EQ(r.bandPlanName, std::string("ITU Region 1 + United Kingdom"));
     CHECK(r.plans[static_cast<std::size_t>(r.activePlan)].name != r.bandPlanName);
-    CHECK_EQ(r.bandPlanName, Access::plan(app).name());
-    CHECK_EQ(r.bands.size(), Access::plan(app).entries().size());
+    const cc::BandPlan ukPlan = Access::plan(app);
+    CHECK_EQ(r.bandPlanName, ukPlan.name());
+    CHECK_EQ(r.bands.size(), ukPlan.entries().size());
     CHECK_EQ(r.bandReads, readsBefore + 1u);  // the plan changed: its rows were read again
     for (std::size_t i = 0; i < r.bands.size(); ++i) {
-        CHECK(r.bands[i].name == Access::plan(app).entries()[i].name);
+        CHECK(r.bands[i].name == ukPlan.entries()[i].name);
     }
     // No selection at all (the legacy setting): every plan merged, none ACTIVE.
     Access::submit(app, cc::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, ""));
@@ -711,9 +799,13 @@ void testWhatIsDrawn() {
         std::string t = drawnText([&] { Access::drawSinks(app); });
         CHECK(has(t, "Device") || has(t, "No audio output devices"));
         CHECK(!has(t, "Muted by") && !has(t, "restarted"));
-        Access::mutedBy(app, {"Alpha", "Beta", "Gamma"});
-        Access::look(app);
-        t = drawnText([&] { Access::drawSinks(app); });
+        {
+            // (written, published and drawn with the pass HELD: see Access::mutedByHeld)
+            Access::PassHold hold(app);
+            Access::mutedByHeld(app, {"Alpha", "Beta", "Gamma"});
+            Access::lookHeld(app);
+            t = drawnText([&] { Access::drawSinks(app); });
+        }
         CHECK(has(t, "Muted by Alpha, Beta and Gamma"));
         CHECK(has(t, "sound returns when the plugin stops"));
         Access::mutedBy(app, {});
@@ -734,19 +826,21 @@ void testWhatIsDrawn() {
     {
         (void)Access::pass(app);  // (what the frames above sent: the audio filters' first sighting)
         const Access::Rail& r = Access::rail(app);
-        std::string caption = Access::plan(app).name() + " (" + std::to_string(Access::plan(app).entries().size()) + " bands)";
+        const cc::BandPlan shown = Access::plan(app);
+        std::string caption = shown.name() + " (" + std::to_string(shown.entries().size()) + " bands)";
         std::string t = drawnText([&] { Access::drawDisplay(app); });
         std::printf("      Display's caption: \"%s\"\n", caption.c_str());
         CHECK(has(t, caption));
-        CHECK(r.bands.size() == Access::plan(app).entries().size());
+        CHECK(r.bands.size() == shown.entries().size());
         // A chain: the caption names the plan LOADED, not the one entry that is ACTIVE.
         Access::submit(app, cc::cmd::makeText(FOXAPI_OP_SET_BAND_PLAN, "uk"));
         CHECK_EQ(Access::pass(app), 1);
         Access::look(app);
-        caption = "ITU Region 1 + United Kingdom (" + std::to_string(Access::plan(app).entries().size()) + " bands)";
+        const std::size_t ukBands = Access::plan(app).entries().size();
+        caption = "ITU Region 1 + United Kingdom (" + std::to_string(ukBands) + " bands)";
         t = drawnText([&] { Access::drawDisplay(app); });
         CHECK(has(t, caption));
-        CHECK(!has(t, "United Kingdom (" + std::to_string(Access::plan(app).entries().size()) + " bands)") ||
+        CHECK(!has(t, "United Kingdom (" + std::to_string(ukBands) + " bands)") ||
               has(t, "ITU Region 1 + United Kingdom ("));
         // An error replaces the caption.
         Access::setBandPlanError(app, "uk.json: bad json");

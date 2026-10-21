@@ -90,36 +90,46 @@ endforeach()
 #   _free     the thread free-runs (3 ms) and "one pass" is Engine::runPassNow() - passes of its own beside the test's. Only for the tests
 #             that touch the engine through the session and the published state; a test that reads or writes an engine field directly races
 #             the pass in this mode (that is a finding about the test, listed beside the names below, not something to paper over)
-# (Not under a sanitizer build: the variants are not in the selection lists.)
-if(NOT CASCADE_SANITIZE_ENABLED)
-    # The tests whose own reads and writes of the engine are all through the published state and the session, so they hold against free passes.
-    #   in: test_airspy_app test_config_snapshot_app test_gps_window test_map_window test_panel_note_once test_patch_graph_draft_input
-    #       test_plugin_window test_rail_reads test_remote_key_release test_scanner_draft_input test_usage_diag_window - eight runs each
-    #       of the built binary and then 24 more each (six copies at once, four rounds), all green (recorded in docs/engine-stage4.md)
-    #       test_fitted_modules_window WAS IN and is out: 22 of 24 under load - its clicks are recorded by a tap but still reach the
-    #       session, and a free pass applies a PLUGIN_RESCAN the inline test never lets run, mid-survey
-    #   out, and why (each reads or writes engine fields from the test's thread, or drives a phase subset no free pass can be asked for,
-    #   so it races the pass or sees phases it never meant to):
-    #       test_apply_command (pipeline_, device_, applyCommand direct)      test_bias_key_app (device_, biasTeePanel_, selectSource)
-    #       test_converter_app_paths (converters_, device_, scanNative: crashes)   test_decoders_mute_grants (decoderLog_, muteStates_, applyCommand)
-    #       test_patch_add_radio_part (the native scan's own worker and patchScanDone_: 2 of 8)
-    #       test_plugin_store_window (addAllRun_, installPending_, applyCommand)   test_radio_panel_reads (nativeDevices_, device_, selectSource: crashes)
-    #       test_recorder_bookmarks_scanner (scannerFrame() on request: a free pass ticks the scanner beside it: 7 of 8)
-    #       test_scope_window (pipeline_, deviceGainsDb_)   test_snapshot_app (receiverSnapshot_, freqMgr_, applyCommand: crashes)
-    #       test_soundcard_app_paths (soundCard_ and its worker: 7 of 8)   test_source_section_window (the source's own fields)
-    #       test_tuning_surface (muteStates_, pipeline_, volume_, applyCommand)
+# (Under a ThreadSanitizer build only the _free variants are registered, and tests/tsan.cmake selects them: that is where a window test's
+# thread meets the free-running pass. The stepped ones order threads and cannot race, so a sanitizer build does not register them.)
+if(NOT CASCADE_SANITIZE_ENABLED OR CASCADE_SANITIZE_THREAD)
+    # THE FREE-RUNNING SET (the pump move's P6): every window test that reaches the engine only through the session, the published state,
+    # the seam's passseam::on/read (the work runs ON THE PASS THREAD with the pass out of the way) or a documented thread-safe accessor.
+    #   P5 had 11 in: test_airspy_app test_config_snapshot_app test_gps_window test_map_window test_panel_note_once
+    #       test_patch_graph_draft_input test_plugin_window test_rail_reads test_remote_key_release test_scanner_draft_input
+    #       test_usage_diag_window.
+    #   P6 CONVERTED the 14 that P5 left out (each read or wrote engine fields from the test's thread beside the pass: crashes, 7/8, 2/8):
+    #       test_apply_command test_bias_key_app test_converter_app_paths test_decoders_mute_grants test_fitted_modules_window
+    #       test_patch_add_radio_part test_plugin_store_window test_radio_panel_reads test_recorder_bookmarks_scanner test_scope_window
+    #       test_snapshot_app test_soundcard_app_paths test_source_section_window test_tuning_surface
+    #     by moving every engine touch onto passseam::on/read and, where an assertion is about what happens BETWEEN two passes ("the click
+    #     only queued it", "nothing is applied yet"), holding the pass for that stretch only (a posted job that blocks the pass thread, or
+    #     Engine::TestHooks::betweenPublishes parking it between the two publishes) - the pass free-runs everywhere else. Each ran inline 3,
+    #     stepped 5, free solo 8 and free under load 24 (six copies at once) green, with a break-it. ONE CHECK stays stepped-only, in
+    #     test_recorder_bookmarks_scanner D: the scanner's "Scanning | 144.0000 MHz" right after START is tick-exact (a free pass ticks on
+    #     its own clock); in free mode it is skipped, said so, and the readout is checked against the scanner's own frequency under a hold.
+    #   (docs/engine-stage4.md, the P6 record, has the per-test detail.)
     set(CASCADE_FREE_PASS_TESTS test_airspy_app test_config_snapshot_app test_gps_window test_map_window
         test_panel_note_once test_patch_graph_draft_input test_plugin_window test_rail_reads test_remote_key_release
-        test_scanner_draft_input test_usage_diag_window)
+        test_scanner_draft_input test_usage_diag_window
+        test_apply_command test_bias_key_app test_converter_app_paths test_decoders_mute_grants test_fitted_modules_window
+        test_patch_add_radio_part test_plugin_store_window test_radio_panel_reads test_recorder_bookmarks_scanner test_scope_window
+        test_snapshot_app test_soundcard_app_paths test_source_section_window test_tuning_surface)
     foreach(src ${CASCADE_TESTS})
         get_filename_component(_name "${src}" NAME_WE)
         file(STRINGS "${src}" _seam REGEX "^[ \t]*#[ \t]*include[ \t]*\"pass_seam[.]hpp\"")
         if(_seam AND TARGET ${_name})
-            add_test(NAME ${_name}_stepped COMMAND ${_name})
-            set_tests_properties(${_name}_stepped PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=stepped" TIMEOUT 120)
+            if(NOT CASCADE_SANITIZE_ENABLED)
+                add_test(NAME ${_name}_stepped COMMAND ${_name})
+                set_tests_properties(${_name}_stepped PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=stepped" TIMEOUT 120)
+            endif()
             if(${_name} IN_LIST CASCADE_FREE_PASS_TESTS)
                 add_test(NAME ${_name}_free COMMAND ${_name})
                 set_tests_properties(${_name}_free PROPERTIES ENVIRONMENT "FOXSDR_TEST_PASS=free" TIMEOUT 120)
+                if(CASCADE_SANITIZE_ENABLED)
+                    # (the sanitizer block below sets the runtime options and adds FOXSDR_TEST_PASS=free back for the names ending _free)
+                    list(APPEND CASCADE_ALL_TEST_NAMES ${_name}_free)
+                endif()
             endif()
         endif()
     endforeach()
@@ -424,6 +434,9 @@ if(CASCADE_SANITIZE_ENABLED)
         # Runtime options travel with the test, not with whoever runs ctest.
         if(t IN_LIST CASCADE_SANITIZE_FAULT_TESTS)
             set_tests_properties(${t} PROPERTIES ENVIRONMENT "${_cascade_fault_env}")
+        elseif(t MATCHES "_free$")
+            # a window test against the free-running pass (above): the sanitizer's options and the seam's mode
+            set_tests_properties(${t} PROPERTIES ENVIRONMENT "${CASCADE_SANITIZE_TEST_ENV};FOXSDR_TEST_PASS=free")
         else()
             set_tests_properties(${t} PROPERTIES ENVIRONMENT "${CASCADE_SANITIZE_TEST_ENV}")
         endif()

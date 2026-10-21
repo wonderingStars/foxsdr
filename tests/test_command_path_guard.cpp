@@ -346,6 +346,9 @@ const LineAllow kLineAllowed[] = {
     {"run", "followInputRate();"},
     {"run", "runPassNow()"},
     {"run", "if (!measure_->tick(pipeline_, hooks)) {"},
+    // the measurement run's pass figures (P7): where its window starts, and what it reports
+    {"run", "markPassStats();"},
+    {"run", "passStatsJson();"},
     // the engine's teardown, in its three ordered phases between the
     // window's own steps (engine/stage3b-pre OPEN 9 - they were eight lines
     // here: the transmitter, the GPS reader, the recordings, the bookmark

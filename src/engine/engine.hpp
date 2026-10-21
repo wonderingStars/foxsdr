@@ -73,6 +73,7 @@
 #include "engine/device_scan_plan.hpp"
 #include "engine/engine_host.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "engine/pass_stats.hpp"
 #include "engine/running_view.hpp"
 #include "engine/source_fallback.hpp"
 #include "engine/tune_control.hpp"
@@ -2688,12 +2689,21 @@ public:
     // WHAT THE FREE-RUNNING PASS COSTS (the measurement run's pass-specific figures, the survey's section 4; written by the pass, read by anyone):
     // how many passes, the sum and the longest of their durations in microseconds, how many ran longer than the period, and how many were
     // started by a wake rather than by the period running out. A stepped thread keeps none (its parts are timed by the front end that asks).
+    //
+    // AND (the pump move's P7) THE TWO DISTRIBUTIONS the measurement run reports: a pass's duration, and the LAG from a submit's wake to the
+    // publish of the pass that served it (the survey's "submit-to-publish"; a wake is any session's submit or close, Engine::submitCommand,
+    // postToPass). The percentiles are the upper edge of a log-linear histogram bucket (engine/pass_stats.hpp: "at most", about 19 % wide).
+    // Written by the control thread alone, with no lock and no allocation; read by anyone.
     struct PassStats {
         std::uint64_t passes = 0, sumUs = 0, maxUs = 0, overPeriod = 0, wakes = 0;
+        std::uint64_t durationP50Us = 0, durationP99Us = 0;
+        std::uint64_t lagCount = 0, lagSumUs = 0, lagMaxUs = 0, lagP50Us = 0, lagP99Us = 0;
     };
-    PassStats passStats() const {
-        return {passStats_.passes.load(), passStats_.sumUs.load(), passStats_.maxUs.load(), passStats_.overPeriod.load(), passStats_.wakes.load()};
-    }
+    PassStats passStats() const;
+    // THE MEASUREMENT WINDOW: markPassStats() starts it (the harness calls it where its own warm-up ends), passStatsJson() reports the figures
+    // since the mark (since the thread started when there was none) as one JSON object, for the measurement result.
+    void markPassStats();
+    std::string passStatsJson() const;
     // Passes begun and finished (whole passes; a stepped pass counts when its Back part ends).
     std::uint64_t passesBegun() const { return passesBegun_.load(); }
     std::uint64_t passesEnded() const { return passesEnded_.load(); }
@@ -2783,8 +2793,24 @@ private:
     unsigned timerResolutionApplied_ = 0;   // the resolution startControlThread asked the OS for (0: none), given back by stopControlThread
     struct PassStatsCounters {
         std::atomic<std::uint64_t> passes{0}, sumUs{0}, maxUs{0}, overPeriod{0}, wakes{0};
+        std::atomic<std::uint64_t> lagCount{0}, lagSumUs{0}, lagMaxUs{0};
     };
     PassStatsCounters passStats_;
+    PassHist passDurHist_;
+    PassHist passLagHist_;
+    // When the first wake since the last pass started was made (steady ns; 0 none) - set by wakeControl, taken by the pass that serves it,
+    // both under controlWakeMutex_. And when the newest pass finished publishing (results included).
+    std::int64_t controlWakeAtNs_ = 0;
+    std::atomic<std::int64_t> lastPublishNs_{0};
+    struct PassMark {
+        bool have = false;
+        std::int64_t atNs = 0;
+        std::uint64_t passes = 0, sumUs = 0, overPeriod = 0, wakes = 0, lagCount = 0, lagSumUs = 0;
+        std::uint64_t dur[PassHist::kBuckets] = {};
+        std::uint64_t lag[PassHist::kBuckets] = {};
+    };
+    mutable std::mutex passMarkMutex_;
+    PassMark passMark_;
     std::atomic<std::uint64_t> passesBegun_{0};
     std::atomic<std::uint64_t> passesEnded_{0};
     // The wait a front-end thread makes for a pass or a step; applies a plugin directive for it if it is the front end's thread.

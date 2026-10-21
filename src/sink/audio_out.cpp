@@ -197,6 +197,10 @@ bool AudioOut::streamAlive() const {
     std::unique_lock<std::mutex> lk(apiMutex_, std::try_to_lock);
     if (!lk.owns_lock()) { return true; }
     if (stream_ == nullptr) { return false; }
+    // The same rule for a PortAudio initialisation or termination in progress on another thread (a second sound user starting while
+    // this pass asks): not a dead stream, and not a call to make now - sink/pa_init.hpp, "THE COUNT'S READERS".
+    const PaCountReadGuard countGuard;
+    if (!countGuard.held()) { return true; }
     // Pa_IsStreamActive: 1 = the callback is being called, 0 = stopped, and a
     // negative PaError when the host API cannot answer at all — which is what
     // a vanished device tends to produce. Only 1 means the user is hearing

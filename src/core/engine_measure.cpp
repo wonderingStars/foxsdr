@@ -266,6 +266,7 @@ std::size_t EngineMeasure::readTap(Pipeline& p, std::uint64_t& endIndex) {
 }
 
 bool EngineMeasure::tick(Pipeline& p, const MeasureHooks& h) {
+    if (h.passStatsJson && !passStatsFn_) { passStatsFn_ = h.passStatsJson; }
     if (!started_) {
         started_ = true;
         t0Ns_ = steadyNs();
@@ -288,6 +289,7 @@ bool EngineMeasure::tickRun(Pipeline& p, const MeasureHooks& h) {
         return true;
     }
     if (phase_ == 1 && t >= warmup_) {
+        if (h.markPassStats) { h.markPassStats(); }
         cpu0_ = processCpuSeconds();
         cyc0_ = processCycles();
         drop0_ = p.ringDroppedSamples();
@@ -546,9 +548,13 @@ void EngineMeasure::finish(Pipeline& p) {
                      static_cast<unsigned long long>(across(decAudio0_, decAudio1_)),
                      static_cast<unsigned long long>(across(decIq0_, decIq1_)));
         std::fprintf(f, "  \"decoders\": %s,\n", decoderStatusJson_.c_str());
-        std::fprintf(f, "  \"ticks\": %llu,\n  \"vfoChanges\": %llu\n",
+        std::fprintf(f, "  \"ticks\": %llu,\n  \"vfoChanges\": %llu",
                      static_cast<unsigned long long>(ticks_),
                      static_cast<unsigned long long>(vfoChanges_));
+        // The engine's own pass, when it has one: the figures over the same window as the CPU (passes a second, how long a pass takes,
+        // submit to publish). Candidate-only by nature; the tool reads it when it is there.
+        if (passStatsFn_) { std::fprintf(f, ",\n  \"pass\": %s", passStatsFn_().c_str()); }
+        std::fprintf(f, "\n");
     } else if (mode_ == Mode::Rates) {
         std::fprintf(f, "  \"warmupS\": %.3f,\n  \"windowS\": %.3f,\n  \"steps\": [", warmup_,
                      window_);

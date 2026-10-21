@@ -94,6 +94,11 @@ struct MeasureHooks {
     // followInputRate: DSP chain, frequency axis, decoders). Without it the
     // driver swaps and makes only the DSP chain follow.
     std::function<void(std::unique_ptr<cascade::source::IqSource>)> installSource;
+    // THE ENGINE'S PASS FIGURES (the pump move's P7), where the engine has a pass of its own: markPassStats starts their window where the
+    // run's warm-up ends; passStatsJson answers one JSON object of the figures since (passes a second, durations, submit-to-publish), which a
+    // run result carries as "pass". Unset (a build whose pass is the frame's), the result has no "pass" and the tool reads none.
+    std::function<void()> markPassStats;
+    std::function<std::string()> passStatsJson;
 };
 
 class EngineMeasure {
@@ -134,6 +139,7 @@ private:
     };
 
     EngineMeasure() = default;
+    std::function<std::string()> passStatsFn_;  // the hook's, kept from the first tick for finish()
     double now() const;  // seconds since the first tick
     void installGenerator(Pipeline& p, const MeasureHooks& h, double rateHz, bool latencyTone);
     bool tickRun(Pipeline& p, const MeasureHooks& h);

@@ -207,7 +207,12 @@ void testStalledFrame() {
                 static_cast<unsigned long long>(after.waits - before.waits), static_cast<unsigned long long>(after.timeouts - before.timeouts));
     CHECK(g_unmapRuns() > unmapsBefore);
     CHECK(after.timeouts == before.timeouts);
-    CHECK(total >= 140.0 && total < 330.0);
+    // THE LOWER BOUND IS 150 MINUS A TIMER TICK, NOT MINUS 10 ms (found by the P6 soak: 3 runs of 50 read 137-138 ms against the old 140).
+    // The wait starts when the pass takes the rescan up, and a wake can be served up to one Windows timer tick (~15.6 ms) after the submit
+    // (P5 TRAP 7: the floor is the tick in practice); t0 above is taken at the submit, so the wait can begin that late and still end with the
+    // window's first frame at 150 ms. What the bound proves is unchanged: the pass WAITED for the stalled frame (a pass that skipped the wait
+    // reads ~0) and did not run out at the 250 ms bound (the check above and the 330 ceiling).
+    CHECK(total >= 130.0 && total < 330.0);
 }
 
 void testTransmitKey() {

@@ -109,6 +109,10 @@ void Engine::wakeControl() {
     {
         std::lock_guard<std::mutex> lk(controlWakeMutex_);
         controlWake_ = true;
+        // The first wake since the last pass started: what the lag to the publish is measured from (engine/pass_stats.hpp).
+        if (controlWakeAtNs_ == 0) {
+            controlWakeAtNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
     }
     controlWakeCv_.notify_one();
 }
@@ -7800,8 +7804,83 @@ double Engine::pumpPublish() {
     publishStatusText();
     // The API's results, only now that the state they describe is published.
     api_->endPass();
+    lastPublishNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                         std::memory_order_release);
     return centre;
 }
+
+Engine::PassStats Engine::passStats() const {
+    PassStats s{passStats_.passes.load(), passStats_.sumUs.load(), passStats_.maxUs.load(), passStats_.overPeriod.load(), passStats_.wakes.load()};
+    std::uint64_t h[PassHist::kBuckets];
+    passDurHist_.copyTo(h);
+    s.durationP50Us = PassHist::percentile(h, 50.0);
+    s.durationP99Us = PassHist::percentile(h, 99.0);
+    s.lagCount = passStats_.lagCount.load();
+    s.lagSumUs = passStats_.lagSumUs.load();
+    s.lagMaxUs = passStats_.lagMaxUs.load();
+    passLagHist_.copyTo(h);
+    s.lagP50Us = PassHist::percentile(h, 50.0);
+    s.lagP99Us = PassHist::percentile(h, 99.0);
+    return s;
+}
+
+void Engine::markPassStats() {
+    std::lock_guard<std::mutex> lk(passMarkMutex_);
+    passMark_.have = true;
+    passMark_.atNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    passMark_.passes = passStats_.passes.load();
+    passMark_.sumUs = passStats_.sumUs.load();
+    passMark_.overPeriod = passStats_.overPeriod.load();
+    passMark_.wakes = passStats_.wakes.load();
+    passMark_.lagCount = passStats_.lagCount.load();
+    passMark_.lagSumUs = passStats_.lagSumUs.load();
+    passDurHist_.copyTo(passMark_.dur);
+    passLagHist_.copyTo(passMark_.lag);
+}
+
+// The pass figures since the mark (or the thread's start), as the one JSON object the measurement result carries. The percentiles and the
+// "at most" longest are of the WINDOW (the histograms differ bucket by bucket); maxUsSinceStart is the cumulative longest, for a reader who
+// wants the stall that happened before the mark too.
+std::string Engine::passStatsJson() const {
+    PassMark m;
+    {
+        std::lock_guard<std::mutex> lk(passMarkMutex_);
+        m = passMark_;
+    }
+    const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::uint64_t dur[PassHist::kBuckets], lag[PassHist::kBuckets];
+    passDurHist_.copyTo(dur);
+    passLagHist_.copyTo(lag);
+    std::uint64_t durTop = 0, lagTop = 0;
+    for (int i = 0; i < PassHist::kBuckets; ++i) {
+        dur[i] -= m.dur[i];
+        lag[i] -= m.lag[i];
+        if (dur[i] > 0) { durTop = PassHist::upperEdge(i); }
+        if (lag[i] > 0) { lagTop = PassHist::upperEdge(i); }
+    }
+    const std::uint64_t passes = passStats_.passes.load() - m.passes;
+    const std::uint64_t sumUs = passStats_.sumUs.load() - m.sumUs;
+    const std::uint64_t lagN = passStats_.lagCount.load() - m.lagCount;
+    const std::uint64_t lagSum = passStats_.lagSumUs.load() - m.lagSumUs;
+    const double seconds = m.have ? static_cast<double>(nowNs - m.atNs) / 1e9 : 0.0;
+    char buf[900];
+    std::snprintf(buf, sizeof(buf),
+                  "{\"marked\": %s, \"seconds\": %.3f, \"passes\": %llu, \"passesPerSecond\": %.2f, \"meanUs\": %.1f, \"p50UsAtMost\": %llu, "
+                  "\"p99UsAtMost\": %llu, \"maxUsAtMost\": %llu, \"maxUsSinceStart\": %llu, \"overPeriod\": %llu, \"wakes\": %llu, "
+                  "\"submitToPublish\": {\"served\": %llu, \"meanUs\": %.1f, \"p50UsAtMost\": %llu, \"p99UsAtMost\": %llu, \"maxUsAtMost\": %llu}}",
+                  m.have ? "true" : "false", seconds, static_cast<unsigned long long>(passes),
+                  seconds > 0.0 ? static_cast<double>(passes) / seconds : 0.0,
+                  passes > 0 ? static_cast<double>(sumUs) / static_cast<double>(passes) : 0.0,
+                  static_cast<unsigned long long>(PassHist::percentile(dur, 50.0)), static_cast<unsigned long long>(PassHist::percentile(dur, 99.0)),
+                  static_cast<unsigned long long>(durTop), static_cast<unsigned long long>(passStats_.maxUs.load()),
+                  static_cast<unsigned long long>(passStats_.overPeriod.load() - m.overPeriod),
+                  static_cast<unsigned long long>(passStats_.wakes.load() - m.wakes), static_cast<unsigned long long>(lagN),
+                  lagN > 0 ? static_cast<double>(lagSum) / static_cast<double>(lagN) : 0.0,
+                  static_cast<unsigned long long>(PassHist::percentile(lag, 50.0)), static_cast<unsigned long long>(PassHist::percentile(lag, 99.0)),
+                  static_cast<unsigned long long>(lagTop));
+    return std::string(buf);
+}
+
 
 void Engine::pumpAudioMute() { updateAudioMute(); }
 
@@ -8132,6 +8211,7 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
     using SteadyClock = std::chrono::steady_clock;
     SteadyClock::time_point passStart{};
     bool first = true;
+    std::int64_t wakeAtNs = 0;  // the wake the pass now running is serving (0: none - the period ran out, or a runPassNow)
     while (controlRun_.load()) {
         controlWatchdog_.heartbeat();
         if (stepped) {
@@ -8185,6 +8265,8 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
             if (controlWake_ || controlWakeNow_) { passStats_.wakes.fetch_add(1); }
             controlWake_ = false;
             controlWakeNow_ = false;
+            wakeAtNs = controlWakeAtNs_;
+            controlWakeAtNs_ = 0;
             if (!controlRun_.load()) { break; }
             passesBegun_.fetch_add(1);
         }
@@ -8206,6 +8288,20 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
                 std::chrono::duration_cast<std::chrono::microseconds>(SteadyClock::now() - passStart).count());
             passStats_.passes.fetch_add(1);
             passStats_.sumUs.fetch_add(us);
+            passDurHist_.add(us);
+            // SUBMIT TO PUBLISH: from the wake this pass serves to the moment its publish (results included) was done.
+            if (wakeAtNs != 0) {
+                const std::int64_t pubNs = lastPublishNs_.load(std::memory_order_acquire);
+                if (pubNs >= wakeAtNs) {
+                    const std::uint64_t lag = static_cast<std::uint64_t>((pubNs - wakeAtNs) / 1000);
+                    passStats_.lagCount.fetch_add(1, std::memory_order_relaxed);
+                    passStats_.lagSumUs.fetch_add(lag, std::memory_order_relaxed);
+                    std::uint64_t lm = passStats_.lagMaxUs.load(std::memory_order_relaxed);
+                    while (lag > lm && !passStats_.lagMaxUs.compare_exchange_weak(lm, lag)) {}
+                    passLagHist_.add(lag);
+                }
+            }
+            wakeAtNs = 0;
             std::uint64_t prev = passStats_.maxUs.load();
             while (us > prev && !passStats_.maxUs.compare_exchange_weak(prev, us)) {}
             if (us > static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(period).count())) {
@@ -8224,6 +8320,10 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
                                 static_cast<unsigned long long>(st.passes), st.passes > 0 ? static_cast<double>(st.sumUs) / static_cast<double>(st.passes) : 0.0,
                                 static_cast<double>(st.maxUs), static_cast<unsigned long long>(st.overPeriod), static_cast<int>(period.count()),
                                 static_cast<unsigned long long>(st.wakes));
+        cascade::core::diagLogf("engine pass: duration p50 <= %llu us, p99 <= %llu us; submit to publish: %llu served, mean %.0f us, p50 <= %llu us, p99 <= %llu us, longest %llu us",
+                                static_cast<unsigned long long>(st.durationP50Us), static_cast<unsigned long long>(st.durationP99Us),
+                                static_cast<unsigned long long>(st.lagCount), st.lagCount > 0 ? static_cast<double>(st.lagSumUs) / static_cast<double>(st.lagCount) : 0.0,
+                                static_cast<unsigned long long>(st.lagP50Us), static_cast<unsigned long long>(st.lagP99Us), static_cast<unsigned long long>(st.lagMaxUs));
     }
     // THE LAST ACT, by the thread that ticks the transmitter: stop() never
     // runs beside a tick(). The key is already up (stopControlThread let go

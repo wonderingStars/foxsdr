@@ -22,6 +22,9 @@
 //   G  THE ENGINE'S CLOCK is its own: it runs with no front end at all
 //   H  THE CONTROL WATCHDOG follows the diagnostics switch (the dir moved at run time), and a stepped thread that idles while its front
 //      end draws is not a hung pass
+//   I  THE PASS'S OWN FIGURES (the measurement run's, P7): the log-linear histogram's arithmetic, pinned; and the engine's submit-to-publish
+//      lag and pass durations - every wake a submit made is served by a pass whose publish is timed from it, the window the harness marks
+//      is the window the JSON reports, and a build with no wake has no lag (the break-it: no stamp in wakeControl -> 0 served)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -48,6 +51,7 @@
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_host.hpp"
+#include "engine/pass_stats.hpp"
 #include "test_check.hpp"
 
 using cascade::engine::ControlThreadOptions;
@@ -192,6 +196,90 @@ void testWake() {
     CHECK(st.wakes >= 20u);
     CHECK(st.overPeriod == 0u);
     CHECK(st.maxUs < 500000u);
+    // SUBMIT TO PUBLISH, the engine's own figure (case I has the arithmetic): each of the twenty submits and the post was a wake the pass
+    // served, so there are at least twenty lags, all far inside the period, and the percentiles are ordered.
+    std::printf("      submit to publish (engine's own): %llu served, p50 <= %llu us, p99 <= %llu us, longest %llu us\n",
+                static_cast<unsigned long long>(st.lagCount), static_cast<unsigned long long>(st.lagP50Us),
+                static_cast<unsigned long long>(st.lagP99Us), static_cast<unsigned long long>(st.lagMaxUs));
+    CHECK(st.lagCount >= 20u);
+    CHECK(st.lagP50Us <= st.lagP99Us);
+    CHECK(st.lagP50Us < 150000u);
+    CHECK(st.lagMaxUs < 400000u);
+    CHECK(st.durationP50Us <= st.durationP99Us);
+    e.stopControlThread();
+}
+
+// I: the pass's own figures ---------------------------------------------------------------------------------------------------
+void testPassFigures() {
+    std::printf("  I: the histogram's arithmetic, the lag and the window\n");
+    using cascade::engine::PassHist;
+    // Every value lands in a bucket whose upper edge is at or above it and whose lower neighbour's edge is below it; the edges rise.
+    bool ordered = true;
+    for (std::uint64_t us : {0ull, 1ull, 3ull, 4ull, 5ull, 7ull, 8ull, 9ull, 10ull, 11ull, 12ull, 99ull, 100ull, 1000ull, 15999ull, 16000ull,
+                             1000000ull, 123456789ull}) {
+        const int b = PassHist::bucketOf(us);
+        if (PassHist::upperEdge(b) < us) { ordered = false; }
+        if (b > 0 && PassHist::upperEdge(b - 1) >= us) { ordered = false; }
+    }
+    CHECK(ordered);
+    for (int b = 1; b < PassHist::kBuckets; ++b) { CHECK(PassHist::upperEdge(b) > PassHist::upperEdge(b - 1)); }
+    CHECK((PassHist::bucketOf(4)) == (4));
+    CHECK((PassHist::upperEdge(4)) == (4u));
+    CHECK((PassHist::bucketOf(8)) == (8));
+    CHECK((PassHist::upperEdge(8)) == (9u));
+    CHECK((PassHist::bucketOf(11)) == (9));
+    CHECK((PassHist::upperEdge(9)) == (11u));
+    // A percentile is the upper edge of the bucket holding the nearest rank: 99 values of 10 us and one of 5000 us -> p50 and p99 are the
+    // 10 us bucket's edge (11), the longest is the 5000 us bucket's; an empty histogram says 0.
+    PassHist h;
+    for (int i = 0; i < 99; ++i) { h.add(10); }
+    h.add(5000);
+    std::uint64_t c[PassHist::kBuckets];
+    h.copyTo(c);
+    CHECK((PassHist::percentile(c, 50.0)) == (11u));
+    CHECK((PassHist::percentile(c, 99.0)) == (11u));
+    CHECK(PassHist::percentile(c, 100.0) >= 5000u);
+    std::uint64_t none[PassHist::kBuckets] = {};
+    CHECK((PassHist::percentile(none, 50.0)) == (0u));
+
+    // THE ENGINE'S FIGURES. Marked after a first pass, then thirty submits each followed by its state: the window's JSON counts at least
+    // thirty served, carries the marked flag and the window's seconds, and the unmarked cumulative figure is at least the window's.
+    Engine e;
+    e.initialise();
+    e.startControlThread(opts(1500, 2));
+    CHECK(e.runPassNow());
+    for (int i = 0; i < 5; ++i) {
+        const float want = volumeOf(i + 1);
+        e.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, want));
+        CHECK(spinFor([&] { return A::publishedVolume(e) == want; }, 3000) >= 0.0);
+    }
+    // (the lag is recorded when the pass that published has returned: a moment after the state shows - wait for it)
+    CHECK(spinFor([&] { return e.passStats().lagCount >= 5u; }, 3000) >= 0.0);
+    const Engine::PassStats before = e.passStats();
+    e.markPassStats();
+    for (int i = 0; i < 30; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const float want = volumeOf(i + 11);
+        e.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, want));
+        CHECK(spinFor([&] { return A::publishedVolume(e) == want; }, 3000) >= 0.0);
+    }
+    CHECK(spinFor([&] { return e.passStats().lagCount >= before.lagCount + 30u; }, 3000) >= 0.0);
+    const std::string js = e.passStatsJson();
+    const Engine::PassStats after = e.passStats();
+    std::printf("      the window: %s\n", js.c_str());
+    CHECK(js.find("\"marked\": true") != std::string::npos);
+    CHECK(js.find("\"submitToPublish\": {\"served\": ") != std::string::npos);
+    CHECK(after.lagCount - before.lagCount >= 30u);
+    // the JSON's served count is the window's: read it back out of the text
+    const std::size_t at = js.find("\"served\": ");
+    const unsigned long long served = at == std::string::npos ? 0ull : std::strtoull(js.c_str() + at + 10, nullptr, 10);
+    CHECK(served >= 30ull);
+    CHECK(served == after.lagCount - before.lagCount);
+    // a run with no wake at all (the period ran out, a runPassNow) adds no lag: the lag is for SUBMITS
+    const std::uint64_t lagsBefore = e.passStats().lagCount;
+    CHECK(e.runPassNow());
+    CHECK(e.runPassNow());
+    CHECK((e.passStats().lagCount) == (lagsBefore));
     e.stopControlThread();
 }
 
@@ -630,6 +718,7 @@ int main() {
     std::printf("test_pass_control\n");
     isolate();
     testWake();
+    testPassFigures();
     testPeriodRate();
     testFloor();
     testRunPassNow();

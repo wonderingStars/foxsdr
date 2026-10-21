@@ -22,6 +22,7 @@
 #include "foxsdr_api.h"
 #include "engine/fox_engine_api.hpp"
 #include "engine_api_test_env.hpp"
+#include "engine_api_serial.hpp"
 
 using testing::cmd;
 using testing::kAllGrants;
@@ -63,7 +64,7 @@ public:
     testing::Session& admin() { return admin_; }
 
 private:
-    testing::Engine e_;
+    engine_api_test::SerialEngine e_;
     testing::Session admin_;
 };
 

@@ -869,25 +869,34 @@ public:
             case FOXAPI_SCOPE_AUDIO:
                 local.channels = 1;
                 local.rateHz = cascade::core::Pipeline::kAudioRateHz;
-                local.written = pl.scopeAudio().written();
                 local.capacityFrames = capacityOf(pl.scopeAudio().capacity());
                 got = cap == 0 ? 0 : pl.scopeAudio().snapshot(out, cap);
+                // READ AFTER THE SNAPSHOT (P6): the counter only grows, so a count read after the copy is at least the end of the span the
+                // copy returned - never fewer frames ever written than frames handed back (read before it, a push landing in between
+                // gave 65536 frames beside a smaller `written`: found by test_engine_api_03 under ThreadSanitizer).
+                local.written = pl.scopeAudio().written();
                 break;
             case FOXAPI_SCOPE_MPX:
                 local.channels = 1;
                 local.rateHz = have ? ps.rx.channelRateHz : 0.0;
-                local.written = pl.scopeMpx().written();
                 local.capacityFrames = capacityOf(pl.scopeMpx().capacity());
                 got = cap == 0 ? 0 : pl.scopeMpx().snapshot(out, cap);
+                // READ AFTER THE SNAPSHOT (P6): the counter only grows, so a count read after the copy is at least the end of the span the
+                // copy returned - never fewer frames ever written than frames handed back (read before it, a push landing in between
+                // gave 65536 frames beside a smaller `written`: found by test_engine_api_03 under ThreadSanitizer).
+                local.written = pl.scopeMpx().written();
                 break;
             case FOXAPI_SCOPE_IQ:
                 // std::complex<float> is two floats, laid out as an array of
                 // them (the standard's own guarantee): copied straight in.
                 local.channels = 2;
                 local.rateHz = have ? ps.rx.channelRateHz : 0.0;
-                local.written = pl.scopeIq().written();
                 local.capacityFrames = capacityOf(pl.scopeIq().capacity());
                 got = cap == 0 ? 0 : pl.scopeIq().snapshot(reinterpret_cast<std::complex<float>*>(out), cap);
+                // READ AFTER THE SNAPSHOT (P6): the counter only grows, so a count read after the copy is at least the end of the span the
+                // copy returned - never fewer frames ever written than frames handed back (read before it, a push landing in between
+                // gave 65536 frames beside a smaller `written`: found by test_engine_api_03 under ThreadSanitizer).
+                local.written = pl.scopeIq().written();
                 break;
             default:
                 return FOXAPI_UNSUPPORTED;

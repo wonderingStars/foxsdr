@@ -28,6 +28,7 @@
 #include "foxsdr_api.h"
 #include "engine/fox_engine_api.hpp"
 #include "engine_api_test_env.hpp"
+#include "engine_api_serial.hpp"
 
 using testing::cmd;
 using testing::kAllGrants;
@@ -63,7 +64,7 @@ bool sawUnkey(testing::Session& s, const char* reasonPart) {
 }
 
 void testNoTransmitterNoKey() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     // Judged at SUBMIT against the published state (and answered as a
     // refused result), so a key request can never wait in the queue for a
@@ -77,7 +78,7 @@ void testNoTransmitterNoKey() {
 }
 
 void testPttIsAHold() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     api()->subscribe(s.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_TX_UNKEYED));
     openTx(s);
@@ -110,7 +111,7 @@ void testPttIsAHold() {
 }
 
 void testLatchRules() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session remote(api(), e.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, "t");
     CHECK(remote.ok());
@@ -147,7 +148,7 @@ void testLatchRules() {
 // until it has released the latch (LATCH 0), so an interface that re-sends
 // LATCH 1 every frame gets one latch, not one after another.
 void testRelatchDoesNotExtend() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     api()->subscribe(s.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_TX_UNKEYED));
     openTx(s);
@@ -263,7 +264,7 @@ struct EndOutcome {
 EndOutcome levelTriggeredAcross(EndHow how) {
     const std::string opts = std::string("pttHoldMs=200;keepaliveMs=150;token=t;latchTimeoutMs=") +
                              (how == kEndTimeout ? "400" : "10000");
-    testing::Engine e(api(), ("testHooks=1;" + opts).c_str());
+    engine_api_test::SerialEngine e(api(), ("testHooks=1;" + opts).c_str());
     testing::Session ui(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session op(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session remote(api(), e.raw(), FOXAPI_SESSION_REMOTE,
@@ -345,9 +346,16 @@ void testEveryLatchEndMarksItsOwner() {
     std::vector<std::thread> threads;
     for (int i = 0; i < kEndCount; ++i) {
         threads.emplace_back([&out, i] { out[i] = levelTriggeredAcross(kEndCases[i].how); });
+#if defined(CASCADE_SANITIZE_THREAD)
+        // ONE AT A TIME UNDER THREADSANITIZER (the P6 TSan leg): eight engines at once, each with its own control, DSP and transmitter threads, polled
+        // every 10 ms against 150 ms keep-alives, starve each other when every access is instrumented (the probes read "the latch never ended" or the
+        // wrong reason with no race reported). The probes are independent engines - the parallelism is for speed, not the subject - so the
+        // instrumented build runs them in turn; the plain build is unchanged.
+        threads.back().join();
+#endif
     }
     for (auto& t : threads) {
-        t.join();
+        if (t.joinable()) { t.join(); }
     }
     for (int i = 0; i < kEndCount; ++i) {
         const EndOutcome& o = out[i];
@@ -371,7 +379,7 @@ void testEveryLatchEndMarksItsOwner() {
 // The review's chain probe, as it ran: 12 s of LATCH 1 every frame with a
 // 300 ms stall every 2.5 s against a 3 s latch timeout. One latch, not a chain.
 void testStallsDoNotChainLatches() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=3000;keepaliveMs=150;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=3000;keepaliveMs=150;token=t");
     testing::Session ui(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session obs(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     openTx(ui);
@@ -450,7 +458,7 @@ FoxSubmitResult submitOne(testing::Session& s, const FoxCommand& c) {
 // most FOXAPI_MAX_PENDING + FOXAPI_SAFETY_RESERVE (one per safer kind)
 // unread results, however long it goes on.
 void testSaferCommandsAreNeverBusy() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=150;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=150;token=t");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session obs(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     openTx(s);
@@ -537,7 +545,7 @@ void testSaferCommandsAreNeverBusy() {
 // nothing is applied: 10,000 safer commands from one session leave at most
 // one waiting per kind.
 void testSaferCommandsDoNotPileUpInTheQueue() {
-    testing::Engine e(api(), "testHooks=1;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;token=t");
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     stall(admin, 600);
@@ -574,7 +582,7 @@ void testSaferCommandsDoNotPileUpInTheQueue() {
 // own order is kept exactly: TX_CLOSE, PTT 1, TX_CLOSE never keys.
 void testMergingKeepsSafetyInOrder() {
     {
-        testing::Engine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
         testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
@@ -611,7 +619,7 @@ void testMergingKeepsSafetyInOrder() {
         CHECK((watcher.state().flags & FOXAPI_RX_TX_KEYED) == 0u);
     }
     {
-        testing::Engine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000");
         testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
@@ -641,7 +649,7 @@ void testMergingKeepsSafetyInOrder() {
         // after the re-arm is accepted (exactly as sent), and the second
         // withdrawal opens it - merging did not override the session's own
         // later wish.
-        testing::Engine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
         testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
@@ -671,7 +679,7 @@ void testMergingKeepsSafetyInOrder() {
     }
     {   // A merged ticket is answered ONCE, even when its result is read
         // while a merged application is still queued.
-        testing::Engine e(api(), "testHooks=1;token=t");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;token=t");
         testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         const FoxSubmitResult first = submitOne(s, cmd(FOXAPI_OP_TX_PTT, 0, 0));
@@ -703,7 +711,7 @@ void testMergingKeepsSafetyInOrder() {
         // inside the stall, must get a NEW ticket (and that ticket its own
         // result), never NO_CHANGE naming the ticket already answered - its
         // answer would never arrive.
-        testing::Engine e(api(), "testHooks=1;token=t");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;token=t");
         testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         const FoxSubmitResult first = submitOne(s, cmd(FOXAPI_OP_TX_PTT, 0, 0));
@@ -750,7 +758,7 @@ void testMergingKeepsSafetyInOrder() {
             int32_t close2 = 999;
         };
         auto runIt = [](bool merged) {
-            testing::Engine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000");
+            engine_api_test::SerialEngine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000");
             testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
             testing::Session c(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
             testing::Session d(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -810,7 +818,7 @@ struct PlaceSeen {
 };
 
 PlaceSeen aroundAnOwnRelease(uint32_t op, bool twice) {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=60000;keepaliveMs=1000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=60000;keepaliveMs=1000;token=t");
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session b(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -902,7 +910,7 @@ bool releaseFirst(testing::Session& s) { return (s.state().flags & FOXAPI_RX_TX_
 // timeout, after its own release (which marks nobody: round-6 mutant
 // owner_release_remarks), and in a restarted interface.
 void testLatchKeyProtocol() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=600;keepaliveMs=1000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=600;keepaliveMs=1000;token=t");
     testing::Session t(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session stuck(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session obs(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
@@ -1005,7 +1013,7 @@ void testLatchKeyProtocol() {
 // says (round-6 mutant refused_safer_never_busy survived: nothing tested it).
 // The valid one of the kind beside it is still never BUSY.
 void testRefusedSaferCommandCanBeBusy() {
-    testing::Engine e(api(), "testHooks=1;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;token=t");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     std::vector<FoxCommand> fill(FOXAPI_MAX_PENDING, cmd(FOXAPI_OP_SET_VOLUME, 0.3));
     CHECK_EQ(api()->submit(s.raw(), fill.data(), static_cast<uint32_t>(fill.size()), nullptr),
@@ -1026,7 +1034,7 @@ void testRefusedSaferCommandCanBeBusy() {
 // nothing proved it did anything). A command sent right after it waits out
 // the stall; the same command without it is answered at once.
 void testStallAfterPassHolds() {
-    testing::Engine e(api(), "testHooks=1;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;token=t");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     auto timeOne = [&] {
         const auto t0 = std::chrono::steady_clock::now();
@@ -1048,7 +1056,7 @@ void testStallAfterPassHolds() {
 // queued right behind the command): the result must not be readable until
 // the snapshot shows it.
 void testResultsFollowTheirState() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=1000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=1000;token=t");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(s);
     s.beat();
@@ -1106,7 +1114,7 @@ struct LatchState {
 };
 
 LatchState releaseAroundALatch(bool merged, int extraReleases) {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session b(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1194,10 +1202,11 @@ struct AfterSafer {
     std::string unkeyReason;
     int32_t oLatch = 999;
     int32_t lLatch = 999;
+    bool answered = true;  // the merged RUN 0's own result came back (checked by the caller: CHECK is not thread-safe)
 };
 
 AfterSafer afterSafer(uint32_t op, int times, bool merged) {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=2000;latchTimeoutMs=10000;keepaliveMs=5000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=2000;latchTimeoutMs=10000;keepaliveMs=5000;token=t");
     testing::Session l(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session o(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1205,6 +1214,7 @@ AfterSafer afterSafer(uint32_t op, int times, bool merged) {
     l.beat();
     l.run(cmd(FOXAPI_OP_TX_REMOTE_ARM, 0, 1));
     l.run(cmd(FOXAPI_OP_TX_LATCH, 0, 1));
+    bool merged_answered = true;
     if (merged) {
         stall(admin, 200);
         uint64_t ticket = 0;
@@ -1224,7 +1234,7 @@ AfterSafer afterSafer(uint32_t op, int times, bool merged) {
             for (int32_t i = 0; i < n; ++i) { answered = answered || r[i].ticket == ticket; }
             if (n <= 0) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
         }
-        CHECK(answered);
+        merged_answered = answered;  // NOT CHECKed here: this runs on a thread of its own and the harness's counts are not atomic
         drainAll(o, 100);
     } else {
         for (int i = 0; i < times; ++i) {
@@ -1232,6 +1242,7 @@ AfterSafer afterSafer(uint32_t op, int times, bool merged) {
         }
     }
     AfterSafer a;
+    a.answered = merged_answered;
     const FoxReceiverState st = l.state();
     a.flags = st.flags & (FOXAPI_RX_RUNNING | FOXAPI_RX_TX_AVAILABLE | FOXAPI_RX_TX_KEYED | FOXAPI_RX_TX_LATCHED |
                           FOXAPI_RX_TX_REMOTE_ARMED);
@@ -1269,6 +1280,7 @@ void testSaferCommandsAreIdempotent() {
         std::printf("%s from another window, once / three times / three merged: flags %x/%x/%x, O's LATCH 1 %d/%d/%d, "
                     "L's %d/%d/%d, why \"%s\"\n", names[k], once.flags, thrice.flags, merged.flags, once.oLatch,
                     thrice.oLatch, merged.oLatch, once.lLatch, thrice.lLatch, merged.lLatch, once.unkeyReason.c_str());
+        CHECK(merged.answered);  // the merged ticket's own result arrived (it was CHECKed on the worker thread, which raced the harness)
         CHECK_EQ(thrice.flags, once.flags);
         CHECK_EQ(merged.flags, once.flags);
         CHECK_EQ(thrice.unkeyReason, once.unkeyReason);
@@ -1298,7 +1310,7 @@ struct MalformedSeen {
 };
 
 MalformedSeen malformedBeside(uint32_t op, bool badFirst) {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=1000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=1000;token=t");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session obs(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     s.run(cmd(FOXAPI_OP_TX_OPEN, 0, 0, "test:tx:dummy"));
@@ -1365,7 +1377,7 @@ void testRefusedSaferCommandsAreNotMerged() {
 // into t1) in one submit: the merged copy replaced t1's in the queue, BEHIND
 // t2, and the results came out 2 then 1.
 void testMergedResultsKeepTicketOrder() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     for (const bool held : {false, true}) {
@@ -1403,7 +1415,7 @@ void testMergedResultsKeepTicketOrder() {
 // has already been read (a merge into a delivered ticket would be a second
 // answer nobody gets).
 void testTicketBooksUnderMerging() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=5000");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=5000");
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(admin);
@@ -1505,7 +1517,7 @@ void testTicketBooksUnderMerging() {
 // itself, it is gone - so "closing sessions never clears a mark" is exact.
 void testGoneWindowsReleaseStillReleases() {
     {
-        testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session obs(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
@@ -1528,7 +1540,7 @@ void testGoneWindowsReleaseStillReleases() {
         CHECK(std::strstr(again.result.message, "released from another interface") != nullptr);
     }
     {
-        testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=2000;token=t");
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         openTx(admin);
@@ -1567,7 +1579,7 @@ void testGoneWindowsReleaseStillReleases() {
 // mutant: a detached owner left to the end-of-pass check - the local PTT was
 // answered BUSY, another interface holding the key.)
 void testDetachedKeyHolderIsReleasedFirst() {
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw;pttHoldMs=2000;keepaliveMs=2000;remoteKeepaliveMs=2000");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;pttHoldMs=2000;keepaliveMs=2000;remoteKeepaliveMs=2000");
     char tok[80] = {};
     CHECK_EQ(api()->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
     testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1614,7 +1626,7 @@ void testDetachedKeyHolderIsReleasedFirst() {
 // (DETACHED).
 void testGoneSessionsApplyOnlySaferCommands() {
     {   // the review's scenario
-        testing::Engine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;token=t;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
         auto local = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
         testing::Session remote(api(), e.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, "t");
@@ -1652,7 +1664,7 @@ void testGoneSessionsApplyOnlySaferCommands() {
         CHECK_EQ(st.txSeq, txSeqBefore + 1);  // the consent lapsing, and nothing else
     }
     {   // a closed session's retune, setting and key request are refused; its stop is not
-        testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+        engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
         auto local = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
@@ -1677,7 +1689,7 @@ void testGoneSessionsApplyOnlySaferCommands() {
         CHECK((st.flags & FOXAPI_RX_RUNNING) == 0u);  // the stop still stopped
     }
     {   // a DETACHED session's stop applies too; its retune does not
-        testing::Engine e(api(), "testHooks=1;user=op;password=pw");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw");
         char tok[80] = {};
         CHECK_EQ(api()->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1703,7 +1715,7 @@ void testGoneSessionsApplyOnlySaferCommands() {
 // holds the control thread (test.stall) while the remote queues a PTT and a
 // retune and its token is revoked behind them.
 void testDetachedSessionsQueuedCommandsAreRefused() {
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;pttHoldMs=2000;keepaliveMs=1000;remoteKeepaliveMs=2000");
     char tok[80] = {};
     CHECK_EQ(api()->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
     testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1754,7 +1766,7 @@ void testDetachedSessionsQueuedCommandsAreRefused() {
 // time alone no longer caught a one-slot engine).
 void testTwoSessionsCannotFreeEachOther() {
     {
-        testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+        engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
         testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session b(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         openTx(a);
@@ -1792,7 +1804,7 @@ void testTwoSessionsCannotFreeEachOther() {
         CHECK(keyedFrames * 100 < frames * 15);
     }
     {
-        testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+        engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
         testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session b(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         openTx(a);
@@ -1853,7 +1865,7 @@ void testTwoSessionsCannotFreeEachOther() {
 // remote one - and closing sessions never clears it. And the operator is
 // never locked out: a fresh session that releases first may press again.
 void testMarkBelongsToTheOperator() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     auto a = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     auto b = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(*a);
@@ -1989,7 +2001,7 @@ struct ReleaseSeen {
 ReleaseSeen releaseElsewhere(ReleaseHow how) {
     const std::string opts = std::string("pttHoldMs=200;keepaliveMs=150;token=t;latchTimeoutMs=") +
                              (how == kReleaseAfterTimeout ? "1500" : "20000");
-    testing::Engine e(api(), ("testHooks=1;" + opts).c_str());
+    engine_api_test::SerialEngine e(api(), ("testHooks=1;" + opts).c_str());
     testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session b(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     b.run(cmd(FOXAPI_OP_TX_OPEN, 0, 0, "test:tx:dummy"));
@@ -2153,7 +2165,7 @@ struct ChainSeen {
 // 500 ms every 2.5 s; the transport closes it (and its session) for not
 // reading, and it reconnects with a NEW session each time. 12 s, 3 s latch.
 ChainSeen reconnectingChain() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=3000;keepaliveMs=150;remoteKeepaliveMs=300;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=3000;keepaliveMs=150;remoteKeepaliveMs=300;token=t");
     auto ui = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session obs(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     ui->run(cmd(FOXAPI_OP_TX_OPEN, 0, 0, "test:tx:dummy"));
@@ -2200,7 +2212,7 @@ ChainSeen reconnectingChain() {
 // on sending LATCH 1 every frame. Returns when (ms after the stop) the key
 // closed again, or -1 when it never did; `keyedBefore` is the control.
 long long reopenAfterStop(bool& keyedBefore) {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=150;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=200;latchTimeoutMs=10000;keepaliveMs=150;token=t");
     testing::Session op(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     auto ui = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     op.run(cmd(FOXAPI_OP_TX_OPEN, 0, 0, "test:tx:dummy"));
@@ -2265,7 +2277,7 @@ void testReconnectingDoesNotEscapeTheMark() {
 // transmitter change or a lost keep-alive - no latch closes again, from any
 // session, for FOXAPI_LATCH_REARM_MS: the key is OFF for at least that long.
 void testToggleCannotHoldTheLatch() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session other(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(s);
@@ -2323,7 +2335,7 @@ void testToggleCannotHoldTheLatch() {
 // THE KEY NEVER SURVIVES A STOP (foxsdr_api.h, "THE KEY"). RUN 0 opens it,
 // with a reason, whether it was latched or held.
 void testStopUnkeys() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     api()->subscribe(s.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_TX_UNKEYED));
     openTx(s);
@@ -2364,7 +2376,7 @@ void testStopUnkeys() {
 // LOCAL operator's consent (TX_REMOTE_ARM from a local session), which
 // lapses when that session disarms, closes or stops answering.
 void testRemoteIsPttOnlyWithLocalConsent() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session remote(api(), e.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, "t");
     CHECK(remote.ok());
     remote.beat();
@@ -2445,7 +2457,7 @@ void testRemoteIsPttOnlyWithLocalConsent() {
 // opens when the REMOTE keep-alive runs out. (PTT re-assertions are not
 // heartbeats: liveness is the interface's own beat, never the transport's.)
 void testRemoteKeepAlive() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=2000;latchTimeoutMs=400;keepaliveMs=150;"
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=2000;latchTimeoutMs=400;keepaliveMs=150;"
                              "remoteKeepaliveMs=400;token=t");
     testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session remote(api(), e.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, "t");
@@ -2478,7 +2490,7 @@ void testRemoteKeepAlive() {
 }
 
 void testKeepAliveLoss() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     api()->subscribe(watcher.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_TX_UNKEYED));
@@ -2498,7 +2510,7 @@ void testKeepAliveLoss() {
 }
 
 void testSessionCloseReleases() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session watcher(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     api()->subscribe(watcher.raw(), FOXAPI_EVENT_MASK(FOXAPI_EVENT_TX_UNKEYED));
     auto s = std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -2517,7 +2529,7 @@ void testSessionCloseReleases() {
 }
 
 void testOneKeyholder() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session a(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session b(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(a);
@@ -2533,7 +2545,7 @@ void testOneKeyholder() {
 }
 
 void testFaultAndCloseUnkey() {
-    testing::Engine e(api(), (std::string("testHooks=1;") + kFast).c_str());
+    engine_api_test::SerialEngine e(api(), (std::string("testHooks=1;") + kFast).c_str());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(s);
     s.beat();
@@ -2569,7 +2581,7 @@ void testFaultAndCloseUnkey() {
 }
 
 void testTimersCannotBeLengthened() {
-    testing::Engine e(api(), "testHooks=1;pttHoldMs=999999;latchTimeoutMs=99999999;keepaliveMs=999999");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;pttHoldMs=999999;latchTimeoutMs=99999999;keepaliveMs=999999");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     openTx(s);
     s.beat();
@@ -2590,7 +2602,7 @@ void testTimersCannotBeLengthened() {
 // beating and asserting: an expired token detaches the session, and a
 // detached session holds nothing.
 void testKeyDiesWithTheToken() {
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=400;pttHoldMs=2000");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=400;pttHoldMs=2000");
     char tok[80] = {};
     CHECK_EQ(api()->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
     testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -2618,7 +2630,7 @@ void testKeyDiesWithTheToken() {
 }
 
 void testRemoteKeepAliveCannotBeLengthened() {
-    testing::Engine e(api(), "testHooks=1;remoteKeepaliveMs=999999;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;remoteKeepaliveMs=999999;token=t");
     testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session remote(api(), e.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, "t");
     openTx(local);

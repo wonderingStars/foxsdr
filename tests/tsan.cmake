@@ -80,6 +80,16 @@ set(CASCADE_TSAN_TESTS
     # (test_pump_live_traffic)
     test_pass_control test_window_threaded_look test_look_order test_pump_live_traffic)
 
+# THE PUMP MOVE'S P6: the window tests against the FREE-RUNNING pass (tests/CMakeLists.txt, CASCADE_FREE_PASS_TESTS; each is registered as
+# <name>_free, FOXSDR_TEST_PASS=free). A hermetic window test is the engine's front end and its pass on two threads, which is exactly what a
+# thread sanitizer exists for; they were not in the selection before because nothing but the engine-API tests were threaded. The one that
+# drives the window under a software GL context (test_bias_key_app) stays out, with the reason below.
+foreach(_t ${CASCADE_FREE_PASS_TESTS})
+    if(NOT _t STREQUAL "test_bias_key_app")
+        list(APPEND CASCADE_TSAN_TESTS ${_t}_free)
+    endif()
+endforeach()
+
 set(CASCADE_TSAN_EXCLUDED_TESTS)
 
 macro(_cascade_tsan_exclude reason)
@@ -113,7 +123,7 @@ _cascade_tsan_exclude(
 
 _cascade_tsan_exclude(
     "it drives the whole window under a software GL context: the threads in it are the test's own helpers, and Mesa's thread pool is what ThreadSanitizer would mostly see"
-    test_bias_key_app test_transmit_page test_ui_census)
+    test_bias_key_app test_bias_key_app_free test_transmit_page test_ui_census)
 
 _cascade_tsan_exclude(
     "NOT RUN YET: it is on master's ThreadSanitizer list (threads of its own against product code) and this branch has it, but master found its first races in code and tests this branch does not have the fixes for yet, so it joins the selection with the master merge (or earlier, one test at a time)"
@@ -166,8 +176,10 @@ macro(cascade_tsan_select)
     foreach(_t ${CASCADE_ALL_TEST_NAMES})
         if(_t IN_LIST CASCADE_TSAN_TESTS)
             set_tests_properties(${_t} PROPERTIES LABELS "tsan")
-            if(TARGET ${_t})
-                list(APPEND _tsan_deps ${_t})
+            # (a <name>_free variant is the same binary as <name>: build that)
+            string(REGEX REPLACE "_free$" "" _tsan_tgt "${_t}")
+            if(TARGET ${_tsan_tgt})
+                list(APPEND _tsan_deps ${_tsan_tgt})
             endif()
         elseif(NOT _t IN_LIST _tsan_named_out)
             set_tests_properties(${_t} PROPERTIES DISABLED TRUE LABELS "sanitize-excluded")

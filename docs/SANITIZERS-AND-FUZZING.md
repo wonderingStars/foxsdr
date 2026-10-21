@@ -72,13 +72,19 @@ threads, not master's list:
   leg sees what the step prevents: with the pass applying the directive itself (the old design) `test_plugin_ui_threaded` reports
   "data race plugin_ui.cpp:1064 in PluginUi::destroyInstances()" against `PluginUi::poll()` in its first churn frame.
 
+- the pump move's step P6 (the window tests against the FREE-RUNNING pass): the 24 `<name>_free` registrations of `CASCADE_FREE_PASS_TESTS` (tests/CMakeLists.txt) - every
+  hermetic window test that reaches the engine only through the session, the published state or `passseam::on/read` (the work runs on the pass thread) - minus
+  `test_bias_key_app`, whose window needs the software GL context. Under a thread sanitizer ONLY the `_free` variants are registered (the `_stepped` ones order threads
+  and cannot race). **Clean under ThreadSanitizer, `halt_on_error=1`: 10 of 10 runs each on a md5-pinned binary, plus 3 more each with `halt_on_error=0`.** This is
+  where the 11 tests declared free in P5 on the strength of eight green Windows runs turned out to have real test-side races (direct reads of `engine_.patchGraph_`
+  and `engine_.telemetryEnabled_` beside the pass, and others) that only a thread sanitizer sees.
 - the pump move's steps P4 and P5 (the pass is driven and looked at from another thread): `test_pass_control` (the wake, the floor, the stepped
   mode, `runPassNow`, the work posted to the pass, a stop mid-step, the proxy apply of a plugin directive, the watchdog), `test_look_order` (the
   order a frame reads in, against a publish held between its two halves), `test_window_threaded_look` (a real window's frame against a
   free-running pass, three session threads and a snapshot reader) and `test_pump_live_traffic` (the unload handshake and the transmit key
   under live traffic). **All four are clean under ThreadSanitizer, `halt_on_error=1`.**
 
-That is 23 tests (label `tsan`; 14 until the pump move's step P1, 16 until step P3, 19 until steps P4/P5). Everything else is registered, disabled and labelled
+That is 47 tests (label `tsan`; 14 until the pump move's step P1, 16 until step P3, 19 until steps P4/P5, 23 until step P6 added the 24 `_free` window tests). Everything else is registered, disabled and labelled
 `sanitize-excluded`, so `ctest -N -L sanitize-excluded` prints it, and every excluded
 test that is named in the file carries its reason: it starts the real application as a
 child, faults a process on purpose, measures against the wall clock, drives the whole
@@ -97,7 +103,10 @@ remaining tests start no thread and drive no code that has one. Judge a test by
 what it starts, not by its name, when you move one.
 
 The list was written without a Linux run on this branch; read the first log before
-believing it. `test_engine_api_transmit` and `test_engine_api_merge` run at real
+believing it. (P6: the list has now had a Linux run on this branch, 47 of 47 passing in WSL, GCC 15.2, `halt_on_error=1`; the four tests that failed on
+the four races of P5 are clean, and `test_engine_api_03` and three plugin window tests were ported to Linux file names - see docs/engine-stage4.md, the P6 record.
+`test_engine_api_transmit` runs the eight latch probes one at a time under the sanitizer: eight engines at once starved each other with no race reported.)
+`test_engine_api_transmit` and `test_engine_api_merge` run at real
 timers (serial, 600 s before the scale): a probe's heartbeat starving on a slow
 runner is the rule working and reads as a failure with no TSan report.
 
@@ -198,6 +207,13 @@ export ALSA_CONFIG_PATH=~/asound-null.conf XDG_SESSION_TYPE=x11; unset WAYLAND_D
   makes the write** - `race:RealStop` in `tools/sanitize/tsan.supp`, with the report quoted there
   as its reason. Not `race:OnExit` (it calls the stream's finished callback, which is our code),
   and the vendored file is not patched (it is not compiled on Windows, where this is developed).
+- **The other three of P5's four, resolved in step P6** (docs/engine-stage4.md has the reasoning): the scope tap's seqlock is OURS and is fixed in the code - the
+  elements are relaxed atomic words, the reader stays lock-free (`core/scope_tap.hpp`); `Pa_Initialize` against the pass's `Pa_IsStreamActive` is OURS and is fixed - the
+  init lock is a shared mutex and `streamAlive` takes it shared without waiting (`sink/pa_init.hpp`, "THE COUNT'S READERS"); PortAudio's `AddOpenStream` x2 is a TEST
+  pattern (engines built on several threads at once meet the NoWait guard) and is fixed in the tests, `tests/engine_api_serial.hpp`. No suppression was added for any
+  of them; `tools/sanitize/tsan.supp` is unchanged. A fifth class showed up behind them once the first reports stopped hiding it: the process-global diagnostics context
+  and module table written by every engine's pass (`core/diag_report.cpp`: the healthy writers and `diagContextBlock` are locked, the fault path is not and never
+  may be).
   With it in place `test_command_queue_threads` passes under ThreadSanitizer and the next layer
   shows (below).
 

@@ -70,6 +70,10 @@ struct DiagModule {
 //
 // Returns the number of modules captured (capped; see kMaxDiagModules in the
 // .cpp).
+//
+// Rebuilds are serialised against each other (a process with several engines refreshes from several threads); the READERS below take
+// no lock, because the fault path must not - a refresh rewrites the entries in place, so a reader that overlaps one sees the old or
+// the new description of a module, and a table that changed under a report is a report written at the moment a plugin loaded.
 int refreshModuleTable();
 
 int moduleCount();
@@ -121,7 +125,8 @@ std::string renderDiagContext(const DiagContext& ctx);
 void setDiagContext(const DiagContext& ctx);
 
 // The rendered block, for tests and for the bundle. Empty until the first
-// setDiagContext call.
+// setDiagContext call. Takes the context lock the writer holds (the window's "Copy diagnostics" and the hang report read it while
+// the engine's pass may be rewriting it); the fault path reads diagContextRaw instead, which takes nothing.
 std::string diagContextBlock();
 
 // THE SAME BYTES, for the fault path: a pointer into the fixed storage above

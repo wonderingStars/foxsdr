@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -103,13 +105,63 @@ struct AppWindowTestAccess {
     static const std::string& bundleStatus(AppWindow& a) { return a.diagBundleStatus_; }
     static void setUnclean(AppWindow& a, bool v) { a.lastRunUnclean_ = v; }
     static const std::string& fact(AppWindow& a, const char* key) { return a.uiFact(key); }
-    // The engine's own fields, for what the engine says and the window must agree with.
-    static bool engineOn(AppWindow& a) { return a.engine_.telemetryEnabled_; }
-    static std::string engineId(AppWindow& a) { return a.engine_.telemetryInstallId_; }
-    static void setCounters(AppWindow& a, std::uint64_t launches, std::uint64_t crashes) {
-        a.engine_.telemetryLaunches_ = launches;
-        a.engine_.telemetryCrashes_ = crashes;
+    // The engine's own fields, for what the engine says and the window must agree with. They are the pass's: each read and
+    // write goes through passseam::read/on (on the pass's thread with the pass out of the way when it free-runs; right here
+    // otherwise) - or, the "Held" form, from this thread while a PassHold parks the pass.
+    static bool engineOnHeld(AppWindow& a) { return a.engine_.telemetryEnabled_; }
+    static bool engineOn(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return engineOnHeld(a); }); }
+    static std::string engineId(AppWindow& a) {
+        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.telemetryInstallId_; });
     }
+    static void setCounters(AppWindow& a, std::uint64_t launches, std::uint64_t crashes) {
+        passseam::on(a.engine_, [&] {
+            a.engine_.telemetryLaunches_ = launches;
+            a.engine_.telemetryCrashes_ = crashes;
+        });
+    }
+    // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is
+    // let go. A pass runs posted work at the head of its front part AFTER it has taken its queues, so once the work has STARTED
+    // the pass that runs it has taken everything it will take and no other pass can start until it ends: what the window sends
+    // meanwhile is taken by the NEXT pass, after the release, and what the test reads meanwhile PRECEDES that pass. Inline and
+    // stepped no pass runs unless the test asks for one, so there is nothing to hold. Nothing may ask for a pass (on/read/pass)
+    // while it is held: the window's own session reads and submits, and the Held forms, only.
+    class PassHold {
+    public:
+        explicit PassHold(AppWindow& a) {
+            if (passseam::mode() != passseam::Mode::Free) { return; }
+            passseam::attach(a.engine_);
+            s_ = std::make_shared<State>();
+            std::shared_ptr<State> s = s_;
+            a.engine_.postToPass([s] {
+                std::unique_lock<std::mutex> lk(s->m);
+                s->running = true;
+                s->cv.notify_all();
+                s->cv.wait(lk, [&] { return s->release; });
+            });
+            std::unique_lock<std::mutex> lk(s_->m);
+            const bool took = s_->cv.wait_for(lk, std::chrono::seconds(10), [&] { return s_->running; });
+            CHECK(took);
+        }
+        ~PassHold() {
+            if (s_ == nullptr) { return; }
+            {
+                std::lock_guard<std::mutex> lk(s_->m);
+                s_->release = true;
+            }
+            s_->cv.notify_all();
+        }
+        PassHold(const PassHold&) = delete;
+        PassHold& operator=(const PassHold&) = delete;
+
+    private:
+        struct State {
+            std::mutex m;
+            std::condition_variable cv;
+            bool running = false;
+            bool release = false;
+        };
+        std::shared_ptr<State> s_;
+    };
 };
 
 }  // namespace cascade::gui
@@ -261,13 +313,16 @@ void testUsageRow() {
     CHECK_EQ(Access::fact(a, "fact.telemetry.installId"), std::string());
 
     // THE CLICK: one FOXAPP_OP_TELEMETRY_CONSENT 1 through the session, applied at the next pass and not before.
+    // (The pass is held from before the click to the read of the engine: free-running, a pass of its own would take the
+    // session's queue within milliseconds, and "not before" is about what precedes the next pass.)
     {
+        Access::PassHold hold(a);
         Tap tap(a);
         CHECK(clickItem(draw, "Send anonymous usage reports"));
         CHECK_EQ(tap.count(FOXAPP_OP_TELEMETRY_CONSENT), 1);
         const cmd::QueuedCommand* q = tap.last(FOXAPP_OP_TELEMETRY_CONSENT);
         CHECK(q != nullptr && q->c.ival[0] == 1);
-        CHECK(!Access::engineOn(a));  // (not applied: the engine has not had a pass)
+        CHECK(!Access::engineOnHeld(a));  // (not applied: the engine has not had a pass)
     }
     // The checkbox shows what was asked for AT ONCE (the fact has not caught up): no snap-back; no id yet.
     imguiFrame(draw, true);
@@ -333,6 +388,15 @@ void testUsageRow() {
 // ======================================================================================================================
 // B. THE BUNDLE
 // ======================================================================================================================
+// THE TEST'S OWN CLIPBOARD. ImGui's default on Windows is the OPERATING SYSTEM'S, which every process on the desktop shares: this test, its
+// _stepped and _free registrations (ctest -j runs them at once), and the user's own copy and paste. Found by the P6 soak: with eight copies
+// at once, 3-13 runs in 100 read another copy's bundle (the real version where the foreign 7.7.7 had just been copied) - and a test run
+// overwrote whatever the person at the keyboard had copied. The bundle is built by the window and handed to ImGui::SetClipboardText, which
+// is all this test needs to see, so the clipboard is a string of this process.
+std::string g_privateClipboard;
+const char* privateClipboardGet(ImGuiContext*) { return g_privateClipboard.c_str(); }
+void privateClipboardSet(ImGuiContext*, const char* text) { g_privateClipboard = text != nullptr ? text : ""; }
+
 std::string clipboard() {
     const char* c = ImGui::GetClipboardText();
     return c != nullptr ? std::string(c) : std::string();
@@ -480,6 +544,8 @@ int main() {
     io.DisplaySize = ImVec2(1600.0f, 1000.0f);
     io.IniFilename = nullptr;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    ImGui::GetPlatformIO().Platform_GetClipboardTextFn = &privateClipboardGet;
+    ImGui::GetPlatformIO().Platform_SetClipboardTextFn = &privateClipboardSet;
     CHECK(cascade::gui::fonts::load());
     Access::install();
 

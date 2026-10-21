@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -39,7 +40,9 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <new>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -147,13 +150,22 @@ struct AppWindowTestAccess {
     static std::size_t iqBufSize(AppWindow& a) { return a.scopeIqBuf_.size(); }
     static bool& demodOpen(AppWindow& a) { return a.demodScopeOpen_; }
     static void drawDemodPage(AppWindow& a) { a.drawDemodScopePage(); }
-    // The pipeline's own rings and figures, for the model the feed is held equal to.
+    // The pipeline's own rings and figures, for the model the feed is held equal to. (The rings are read from this thread
+    // directly: a ScopeTap is a member of the pipeline for the engine's whole life, its capacity is fixed at construction, and
+    // its snapshot() is the lock-free cross-thread reader it was built to be - core/scope_tap.hpp. The figures beside them
+    // are the pass's, read with the pass out of the way: passseam::read, the pump move's P6.)
     static const cascade::core::ScopeTap<float>& ringAudio(AppWindow& a) { return a.engine_.pipeline_.scopeAudio(); }
     static const cascade::core::ScopeTap<std::complex<float>>& ringIq(AppWindow& a) { return a.engine_.pipeline_.scopeIq(); }
     static const cascade::core::ScopeTap<float>& ringMpx(AppWindow& a) { return a.engine_.pipeline_.scopeMpx(); }
-    static double pipelineChannelRate(AppWindow& a) { return a.engine_.pipeline_.channelRateHz(); }
-    static bool pipelineWfm(AppWindow& a) { return a.engine_.pipeline_.demodMode() == cascade::dsp::DemodMode::WFM; }
-    static void setPlaying(AppWindow& a, const std::string& name) { a.engine_.pluginRunner_.setPlayingForTest(name, 0, 0); }
+    static double pipelineChannelRate(AppWindow& a) {
+        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.channelRateHz(); });
+    }
+    static bool pipelineWfm(AppWindow& a) {
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.pipeline_.demodMode() == cascade::dsp::DemodMode::WFM; });
+    }
+    static void setPlaying(AppWindow& a, const std::string& name) {
+        passseam::on(a.engine_, [&] { a.engine_.pluginRunner_.setPlayingForTest(name, 0, 0); });
+    }
     static const FoxEngineApi* engineApi(AppWindow& a) { return a.engineApi_; }
     static void setEngineApi(AppWindow& a, const FoxEngineApi* t) { a.engineApi_ = t; }
     static FoxSession* session(AppWindow& a) { return a.uiSession_; }
@@ -169,8 +181,52 @@ struct AppWindowTestAccess {
     static const AppWindow::PluginListCache& pluginRows(AppWindow& a) { return a.pluginLists(); }
 
     // ---- the engine, for what a hermetic window cannot make and for comparison ---------------------------------------------
-    static std::vector<float>& gainsDb(AppWindow& a) { return a.engine_.deviceGainsDb_; }
-    static float engineGain(AppWindow& a) { return a.engine_.deviceGainsDb_.empty() ? -1.0f : a.engine_.deviceGainsDb_[0]; }
+    // (Made on the pass's thread with the pass out of the way; the Held form from this thread while a PassHold parks the pass.)
+    static void setGain0(AppWindow& a, float db) { passseam::on(a.engine_, [&] { a.engine_.deviceGainsDb_[0] = db; }); }
+    static float engineGainHeld(AppWindow& a) {
+        return a.engine_.deviceGainsDb_.empty() ? -1.0f : a.engine_.deviceGainsDb_[0];
+    }
+    static float engineGain(AppWindow& a) { return passseam::read<float>(a.engine_, [&] { return engineGainHeld(a); }); }
+    // THE PASS HELD OUT OF THE WAY for a block of the test's own steps. Inline and stepped no pass runs between them anyway;
+    // free-running a second thread parks the pass inside passseam::on (Engine::runOnPass: work run at the pass's head) from
+    // the constructor to the destructor - so what the window submits in that block is applied by a pass that starts after
+    // it, and the test's thread may read the engine directly (the Held form above).
+    class PassHold {
+    public:
+        explicit PassHold(AppWindow& a) : a_(a) {
+            if (passseam::mode() != passseam::Mode::Free) { return; }
+            passseam::attach(a_.engine_);
+            holder_ = std::thread([this] {
+                passseam::on(a_.engine_, [this] {
+                    std::unique_lock<std::mutex> lk(m_);
+                    held_ = true;
+                    cv_.notify_all();
+                    cv_.wait(lk, [this] { return release_; });
+                });
+            });
+            std::unique_lock<std::mutex> lk(m_);
+            cv_.wait(lk, [this] { return held_; });
+        }
+        ~PassHold() {
+            if (!holder_.joinable()) { return; }
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                release_ = true;
+            }
+            cv_.notify_all();
+            holder_.join();
+        }
+        PassHold(const PassHold&) = delete;
+        PassHold& operator=(const PassHold&) = delete;
+
+    private:
+        AppWindow& a_;
+        std::thread holder_;
+        std::mutex m_;
+        std::condition_variable cv_;
+        bool held_ = false;
+        bool release_ = false;
+    };
 };
 
 }  // namespace cascade::gui
@@ -855,6 +911,10 @@ void testKnob() {
         const Pointer q = locate(a);
         CHECK(q.found);
         log.clear();
+        // (The pass HELD across the click's frame and its checks: free-running, a pass of its own would take the detent off
+        // the session within milliseconds, and the check below is "nothing has landed IN THE CLICK'S FRAME".)
+        std::optional<Access::PassHold> hold;
+        hold.emplace(a);
         turn(a, q, 1.0f);
         std::vector<cmd::QueuedCommand> sent = withoutNotes(log);
         CHECK_EQ(sent.size(), 1u);
@@ -865,7 +925,8 @@ void testKnob() {
             CHECK_NEAR(c->c.num[0], 31.7, 1e-4);
         }
         // Nothing has landed in the click's frame: the radio is where it was.
-        CHECK_NEAR(Access::engineGain(a), 29.7, 0.01);
+        CHECK_NEAR(Access::engineGainHeld(a), 29.7, 0.01);
+        hold.reset();
         putAway(a);
         pass(a);
         pass(a);
@@ -949,7 +1010,7 @@ void testKnob() {
         // The engine takes it, then the radio is told something else (quantised, or set from elsewhere): 0.3 dB off.
         pass(a);
         pass(a);
-        Access::gainsDb(a)[0] = base - 1.7f;
+        Access::setGain0(a, base - 1.7f);
         pass(a);
         // Held for the hold's length (half a second of frames), then the readback shows.
         for (int i = 0; i < 20; ++i) { radarDraw(a); }
@@ -959,7 +1020,7 @@ void testKnob() {
         CHECK(!Access::gainLocal(a).valid);
         CHECK_NEAR(Access::knob(a).shownDb, static_cast<double>(base) - 1.7, 1e-3);
         putAway(a);
-        Access::gainsDb(a)[0] = 29.7f;
+        Access::setGain0(a, 29.7f);
         pass(a);
         pass(a);
     }
@@ -967,7 +1028,7 @@ void testKnob() {
     std::printf("  C6: the travel's ends: a detent at the end sends nothing\n");
     {
         const Pointer q = locate(a);
-        Access::gainsDb(a)[0] = 49.6f;
+        Access::setGain0(a, 49.6f);
         pass(a);
         pass(a);
         putAway(a);
@@ -975,7 +1036,7 @@ void testKnob() {
         log.clear();
         turn(a, q, 1.0f);
         CHECK(withoutNotes(log).empty());
-        Access::gainsDb(a)[0] = 0.0f;
+        Access::setGain0(a, 0.0f);
         pass(a);
         pass(a);
         putAway(a);
@@ -983,7 +1044,7 @@ void testKnob() {
         log.clear();
         turn(a, q, -1.0f);
         CHECK(withoutNotes(log).empty());
-        Access::gainsDb(a)[0] = 29.7f;
+        Access::setGain0(a, 29.7f);
         pass(a);
         pass(a);
         putAway(a);

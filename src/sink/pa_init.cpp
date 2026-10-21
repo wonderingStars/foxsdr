@@ -14,6 +14,8 @@ bool paInitializeShared() { return false; }
 void paTerminateShared() {}
 PaStreamListGuard::PaStreamListGuard(Mode /*mode*/) {}
 PaStreamListGuard::~PaStreamListGuard() {}
+PaCountReadGuard::PaCountReadGuard() { held_ = true; }
+PaCountReadGuard::~PaCountReadGuard() {}
 std::uint64_t paStreamListWaitsAbandoned() { return 0; }
 
 }  // namespace cascade::sink
@@ -26,6 +28,7 @@ std::uint64_t paStreamListWaitsAbandoned() { return 0; }
 
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 
 #include "core/diag_log.hpp"
 
@@ -36,21 +39,28 @@ namespace {
 // Allocated once and never destroyed: a sound card's closer thread can still
 // be finishing (and so terminating its PortAudio) while the process runs its
 // static destructors, and a destroyed mutex is not something it may touch.
-std::mutex& initMutex() {
-    static std::mutex* const m = new std::mutex;
+// Shared: Pa_Initialize and Pa_Terminate take it exclusively (one at a time, as before); PaCountReadGuard takes it shared, without waiting.
+std::shared_mutex& initMutex() {
+    static std::shared_mutex* const m = new std::shared_mutex;
     return *m;
 }
 
 }  // namespace
 
 bool paInitializeShared() {
-    std::lock_guard<std::mutex> lk(initMutex());
+    std::unique_lock<std::shared_mutex> lk(initMutex());
     return Pa_Initialize() == paNoError;
 }
 
 void paTerminateShared() {
-    std::lock_guard<std::mutex> lk(initMutex());
+    std::unique_lock<std::shared_mutex> lk(initMutex());
     Pa_Terminate();
+}
+
+PaCountReadGuard::PaCountReadGuard() { held_ = initMutex().try_lock_shared(); }
+
+PaCountReadGuard::~PaCountReadGuard() {
+    if (held_) { initMutex().unlock_shared(); }
 }
 
 namespace {

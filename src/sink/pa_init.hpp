@@ -32,6 +32,15 @@
 // the audio output's and the microphone's wherever they run), so those list
 // changes happen one at a time.
 //
+// THE COUNT'S READERS (the pump move's P6). The same int is READ by every other Pa_ call (each begins "is PortAudio initialised?"), and
+// the engine's pass makes one of them every pass: AudioOut::streamAlive -> Pa_IsStreamActive, to publish whether the sink is alive.
+// A second sound user initialising while a pass asks was a data race on that int (ThreadSanitizer, test_engine_api_conformance: a
+// second engine's AudioOut against the first engine's pass). The count only ever moves between values the reader's own
+// initialisation keeps above zero, so the race was benign in effect - but it is ours to close, not to list, and the close costs one
+// try-lock: the init lock is a shared mutex, Pa_Initialize and Pa_Terminate take it exclusively, and PaCountReadGuard takes it shared
+// WITHOUT WAITING. A pass that finds an initialisation in progress reports the stream alive (the rule streamAlive already has for an
+// open in progress) and asks again next pass: it never waits behind a device enumeration.
+//
 // AND WHY IT CANNOT HANG ANYBODY. A close that has stopped answering holds the
 // guard for as long as it hangs - but by then it is inside the host API's own
 // close, which comes AFTER its list bookkeeping. So the guard is a TIMED one:
@@ -70,6 +79,21 @@ bool paInitializeShared();
 // Pa_Terminate() under the same lock. Call only after a successful
 // paInitializeShared().
 void paTerminateShared();
+
+// Held (shared, never waited for) around a PortAudio call that only READS the library's state and is made from a thread that is not
+// the one initialising - see "THE COUNT'S READERS" in the file header. held() is false while a Pa_Initialize or Pa_Terminate is in
+// progress: the caller then answers from what it already knows and does not make the call.
+class PaCountReadGuard {
+public:
+    PaCountReadGuard();
+    ~PaCountReadGuard();
+    PaCountReadGuard(const PaCountReadGuard&) = delete;
+    PaCountReadGuard& operator=(const PaCountReadGuard&) = delete;
+    bool held() const { return held_; }
+
+private:
+    bool held_ = false;
+};
 
 // The most anyone waits for the stream-list lock before going ahead without
 // it. Far longer than any list change takes (microseconds), far shorter than

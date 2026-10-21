@@ -12,6 +12,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <mutex>
 #include <vector>
 
 #if defined(_WIN32)
@@ -43,6 +44,24 @@ std::atomic<int> g_moduleCount{0};
 constexpr std::size_t kContextBytes = 4096;
 char g_context[kContextBytes] = {};
 std::atomic<int> g_contextLen{0};
+
+// THE HEALTHY PATH'S TWO LOCKS (the pump move's P6). Both blocks are process-wide and were written by one thread at a time - the
+// window's frame, then the engine's pass - and read lock-free by the fault path. Two things made that a race to answer for: the
+// pass now writes from a thread of its own while the window's "Copy diagnostics" and the hang watchdog read the context block, and a
+// process with several engines (the engine-API tests build up to 24) has several writers. So the WRITERS take a lock, and so do the
+// healthy readers of the context block (diagContextBlock); the FAULT PATH takes none and never may - a lock held by the thread that
+// faulted would turn a crash into a hang in the reporter. A fault that lands in the middle of a healthy write can therefore still
+// read a half-written block, exactly as before; what is gone is every race between two threads that are both alive. Separate locks,
+// so a refresh stuck in the loader (it walks the loader's own list) never holds up a report that wants the context.
+// Allocated once and never destroyed, like the sink's: a thread can outlive the static destructors.
+std::mutex& contextMutex() {
+    static std::mutex* const m = new std::mutex;
+    return *m;
+}
+std::mutex& moduleMutex() {
+    static std::mutex* const m = new std::mutex;
+    return *m;
+}
 
 void copyField(char* dst, std::size_t cap, const char* src) {
     if (cap == 0) { return; }
@@ -242,6 +261,8 @@ int elfModuleCallback(struct dl_phdr_info* info, std::size_t /*size*/, void* dat
 }  // namespace
 
 int refreshModuleTable() {
+    // One rebuild at a time (see the two locks above); the readers on the fault path and in the hang report read without it.
+    std::lock_guard<std::mutex> lk(moduleMutex());
 #if defined(_WIN32)
     // HEALTHY PATH ONLY. EnumProcessModules reads loader data under the loader
     // lock; doing this from a fault handler is the one way to turn a crash
@@ -442,12 +463,14 @@ void setDiagContext(const DiagContext& ctx) {
     const std::string block = renderDiagContext(ctx);
     std::size_t n = block.size();
     if (n > kContextBytes - 1) { n = kContextBytes - 1; }
+    std::lock_guard<std::mutex> lk(contextMutex());
     std::memcpy(g_context, block.data(), n);
     g_context[n] = '\0';
     g_contextLen.store(static_cast<int>(n), std::memory_order_release);
 }
 
 std::string diagContextBlock() {
+    std::lock_guard<std::mutex> lk(contextMutex());
     const int n = g_contextLen.load(std::memory_order_acquire);
     if (n <= 0) { return std::string(); }
     return std::string(g_context, g_context + n);

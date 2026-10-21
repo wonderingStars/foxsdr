@@ -24,6 +24,7 @@
 #include "foxsdr_api.h"
 #include "engine/fox_engine_api.hpp"
 #include "engine_api_test_env.hpp"
+#include "engine_api_serial.hpp"
 #include "engine/engine.hpp"
 #include "engine_api_fake_radio.hpp"
 
@@ -75,7 +76,7 @@ void testVersionGate() {
 }
 
 void testSessions() {
-    testing::Engine e(api(), "testHooks=1;token=s3cret");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;token=s3cret");
     CHECK_EQ(e.createStatus, FOXAPI_OK);
     {
         testing::Session local(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -101,14 +102,14 @@ void testSessions() {
     }
     {
         // An engine with no token configured refuses every remote session.
-        testing::Engine e2(api(), kHooks);
+        engine_api_test::SerialEngine e2(api(), kHooks);
         testing::Session remote(api(), e2.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, "");
         CHECK_EQ(remote.openStatus, FOXAPI_UNAUTHENTICATED);
     }
 }
 
 void testDefaultState() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxReceiverState st = s.state();
     CHECK_EQ(st.structSize, static_cast<uint32_t>(sizeof(FoxReceiverState)));
@@ -120,7 +121,7 @@ void testDefaultState() {
 }
 
 void testSpectrum() {
-    testing::Engine e(api(), "testHooks=1;bins=1024;fps=60");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;bins=1024;fps=60");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     std::vector<float> bins(1024);
@@ -177,7 +178,7 @@ void testSpectrum() {
 }
 
 void testTuningAndClamps() {
-    testing::Engine e(api(), "testHooks=1;centreHz=94.5e6");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;centreHz=94.5e6");
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
 
     const FoxReceiverState before = s.state();
@@ -227,7 +228,7 @@ void testTuningAndClamps() {
 }
 
 void testRefusals() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     // Refused: the answer is a RESULT (rule 2), never applied.
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_VOLUME, 1.5)).status(), FOXAPI_OUT_OF_RANGE);
@@ -258,7 +259,7 @@ void testRefusals() {
 }
 
 void testBatchAndQueueBound() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     // One batch, three commands: all three TAKEN (tickets 1, 2, 3 - per
@@ -332,7 +333,7 @@ void testBatchAndQueueBound() {
 // review: refusals decided when APPLIED came back without it). Apply-time
 // NOT_FOUND and NO_DEVICE, a submit-time refusal, and a plain OK.
 void testRefusedFlagMeansNothingChanged() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const double vol = s.state().volume;
     const auto notFound = s.run(cmd(FOXAPI_OP_BOOKMARK_TUNE, 0, 999));      // decided when applied
@@ -351,7 +352,7 @@ void testRefusedFlagMeansNothingChanged() {
 }
 
 void testRefusalsAreResults() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session viewer(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     const FoxEngineApi* a = api();
     const double before = viewer.state().tunedHz;
@@ -396,7 +397,7 @@ void testRefusalsAreResults() {
 // result has been POLLED, so unpolled results can never exceed the pending
 // bound and none is ever dropped.
 void testPendingCountsUntilPolled() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     std::vector<FoxCommand> batch(FOXAPI_MAX_PENDING, cmd(FOXAPI_OP_SET_VOLUME, 0.4));
@@ -436,7 +437,7 @@ void testPendingCountsUntilPolled() {
 // No more than 16 REMOTE sessions (docs/TRANSPORTS.md 2.5), whatever the
 // total allows; local sessions are not held back by them.
 void testRemoteSessionLimit() {
-    testing::Engine e(api(), "testHooks=1;token=t");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;token=t");
     std::vector<std::unique_ptr<testing::Session>> remotes;
     for (int i = 0; i < 16; ++i) {
         remotes.push_back(std::make_unique<testing::Session>(api(), e.raw(), FOXAPI_SESSION_REMOTE,
@@ -457,7 +458,7 @@ void testRemoteSessionLimit() {
 // session is detached when its token expires (checked on the control
 // thread's pass and on every submit), exactly as a logout detaches it.
 void testSessionDiesWithItsToken() {
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=300");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=300");
     const FoxEngineApi* a = api();
     char tok[80] = {};
     CHECK_EQ(a->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
@@ -488,7 +489,7 @@ void testSessionDiesWithItsToken() {
 void testTokenExpiryDetachesEverySession() {
     const FoxEngineApi* a = api();
     for (int round = 0; round < 5; ++round) {
-        testing::Engine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=300");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=300");
         char tok[80] = {};
         CHECK_EQ(a->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
         std::vector<FoxSession*> held;
@@ -540,7 +541,7 @@ void testTokenExpiryDetachesEverySession() {
     // The same through submit: the first thing to notice the expiry is the
     // session's own submit, which must detach EVERY session on the token.
     {
-        testing::Engine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=300;controlHz=20");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=300;controlHz=20");
         char tok[80] = {};
         CHECK_EQ(a->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
         testing::Session one(api(), e.raw(), FOXAPI_SESSION_REMOTE, kAllGrants, tok);
@@ -566,7 +567,7 @@ void testTokenExpiryDetachesEverySession() {
 // out. The cap counts attached remote sessions; the overall limit still
 // counts every session until it is closed.
 void testDetachedSessionsFreeRemotePlaces() {
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw");
     const FoxEngineApi* a = api();
     char tokA[80] = {};
     CHECK_EQ(a->login(e.raw(), "op", "pw", tokA, sizeof(tokA)), 64);
@@ -612,7 +613,7 @@ void holdControlThread(testing::Session& admin, int ms) {
 void testDetachedSessionsAreClosedAndLocalHasPlaces() {
     const FoxEngineApi* a = api();
     {   // the review's probe
-        testing::Engine e(api(), "testHooks=1;user=op;password=pw");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw");
         std::vector<std::unique_ptr<testing::Session>> held;
         int logins = 0;
         for (int round = 0; round < 8 && held.size() < 64; ++round) {
@@ -635,7 +636,7 @@ void testDetachedSessionsAreClosedAndLocalHasPlaces() {
         CHECK_EQ(a->heartbeat(held.front()->raw()), FOXAPI_DETACHED);  // handle still valid
     }
     {   // the reserve, with nothing closed meanwhile (the control thread held)
-        testing::Engine e(api(), "testHooks=1;user=op;password=pw");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw");
         testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         holdControlThread(admin, 800);
         std::vector<std::unique_ptr<testing::Session>> held;
@@ -686,7 +687,7 @@ void testDetachedSessionsAreClosedAndLocalHasPlaces() {
 // detaches nothing (only changing the configuration revokes it).
 void testLogoutCannotRevokeTheConfiguredToken() {
     const FoxEngineApi* a = api();
-    testing::Engine e(api(), "testHooks=1;token=t;user=op;password=pw");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;token=t;user=op;password=pw");
     testing::Session r(api(), e.raw(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW, "t");
     CHECK(r.ok());
     CHECK_EQ(a->logout(e.raw(), "t"), FOXAPI_DENIED);
@@ -710,7 +711,7 @@ void testLogoutCannotRevokeTheConfiguredToken() {
 // (Round-4 review: the `live` check in logout was never exercised.)
 void testLogoutOfAnExpiredUnsweptToken() {
     const FoxEngineApi* a = api();
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=150");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;tokenTtlMs=150");
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     char tok[80] = {};
     CHECK_EQ(a->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
@@ -729,7 +730,7 @@ void testLogoutOfAnExpiredUnsweptToken() {
 // holds the open inside that gap while the token is revoked.
 void testOpenSessionRechecksTheToken() {
     const FoxEngineApi* a = api();
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw");
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     char tok[80] = {};
     CHECK_EQ(a->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
@@ -760,7 +761,7 @@ void testOpenSessionRechecksTheToken() {
 
 void testSessionLimitAndLogin() {
     {
-        testing::Engine e(api(), "testHooks=1;maxSessions=2");
+        engine_api_test::SerialEngine e(api(), "testHooks=1;maxSessions=2");
         testing::Session a1(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session a2(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         testing::Session a3(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -773,18 +774,18 @@ void testSessionLimitAndLogin() {
     {   // The last 4 places are LOCAL-only, so an engine configured with 4
         // or fewer places serves LOCAL sessions only (round-5 review, r8:
         // documented in API.md 4); with 5, one remote fits.
-        testing::Engine fourPlaces(api(), "testHooks=1;maxSessions=4;token=t");
+        engine_api_test::SerialEngine fourPlaces(api(), "testHooks=1;maxSessions=4;token=t");
         testing::Session r(api(), fourPlaces.raw(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_TUNE, "t");
         CHECK_EQ(r.openStatus, FOXAPI_LIMIT);
         testing::Session l(api(), fourPlaces.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
         CHECK(l.ok());
-        testing::Engine five(api(), "testHooks=1;maxSessions=5;token=t");
+        engine_api_test::SerialEngine five(api(), "testHooks=1;maxSessions=5;token=t");
         testing::Session r1(api(), five.raw(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_TUNE, "t");
         testing::Session r2(api(), five.raw(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_TUNE, "t");
         CHECK(r1.ok());
         CHECK_EQ(r2.openStatus, FOXAPI_LIMIT);
     }
-    testing::Engine e(api(), "testHooks=1;user=op;password=pw;loginLockoutMs=300;keepaliveMs=150");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;user=op;password=pw;loginLockoutMs=300;keepaliveMs=150");
     const FoxEngineApi* a = api();
     char tok[80] = {};
     CHECK_EQ(a->login(e.raw(), "op", "wrong", tok, sizeof(tok)), FOXAPI_UNAUTHENTICATED);
@@ -818,12 +819,12 @@ void testSessionLimitAndLogin() {
     std::this_thread::sleep_for(std::chrono::milliseconds(350));
     CHECK_EQ(a->login(e.raw(), "op", "pw", tok, sizeof(tok)), 64);
     // No credential configured: login is refused.
-    testing::Engine bare(api(), kHooks);
+    engine_api_test::SerialEngine bare(api(), kHooks);
     CHECK_EQ(a->login(bare.raw(), "", "", tok, sizeof(tok)), FOXAPI_UNAUTHENTICATED);
 }
 
 void testEvents() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     // Nothing until subscribed.
@@ -856,7 +857,7 @@ void testEvents() {
 }
 
 void testSourcesAndLists() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     FoxListItem it{};
@@ -905,7 +906,7 @@ void testSourcesAndLists() {
 }
 
 void testBookmarks() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     s.run(cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6));
@@ -984,7 +985,7 @@ void testAudioAndSettings() {
     // settings store are not served through the table yet, so their
     // capability bits are clear and the calls answer UNSUPPORTED - an
     // interface greys them out (API.md 3, "Capability discovery").
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     const FoxEngineApi* a = api();
     CHECK((a->capabilities & FOXAPI_CAP_AUDIO_STREAM) == 0u);
     CHECK((a->capabilities & FOXAPI_CAP_SETTINGS) == 0u);
@@ -1009,7 +1010,7 @@ void testAudioAndSettings() {
 // control thread is publishing. tunedHz is published as centre + offset in
 // the same write; a torn copy would break that identity.
 void testSnapshotsNeverTear() {
-    testing::Engine e(api(), "testHooks=1;controlHz=1000");
+    engine_api_test::SerialEngine e(api(), "testHooks=1;controlHz=1000");
     testing::Session writer(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     testing::Session reader(api(), e.raw(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     const FoxEngineApi* a = api();
@@ -1054,7 +1055,7 @@ void testSnapshotsNeverTear() {
 // as fast as it can; the moment the result is read, the state must already
 // carry that volume.
 void testResultsNeverBeforeTheirSnapshot() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     int early = 0;
@@ -1088,7 +1089,7 @@ void testResultsNeverBeforeTheirSnapshot() {
 // key). A command queued behind a stalled pass, its session closed before the
 // pass runs, changes nothing.
 void testClosedSessionsQueuedCommandsAreDropped() {
-    testing::Engine e(api(), kHooks);
+    engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session admin(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     const FoxEngineApi* a = api();
     CHECK_EQ(admin.run(cmd(FOXAPI_OP_SET_VOLUME, 0.3)).status(), FOXAPI_OK);

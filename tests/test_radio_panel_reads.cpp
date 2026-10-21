@@ -124,42 +124,47 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
         cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
-    static bool open(AppWindow& a, const std::string& driver, const std::string& args) {
-        a.engine_.scanNative();
-        for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
-            if (a.engine_.nativeDevices_[i].driver != driver || a.engine_.nativeDevices_[i].args != args) { continue; }
-            a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-            const auto t0 = std::chrono::steady_clock::now();
-            while (a.engine_.deviceOpenPending_) {
-                a.engine_.pollSourceAsync();
-                if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    // THE ROW CHOSEN, with the pass out of the way (passseam::read: the scan, the search and selectSource are one step on the
+    // pass's thread, as they were one step of the test's): -1 no such row, 1 the open is pending on its worker, 0 not pending.
+    static int selectRow(AppWindow& a, const std::string& driver, const std::string& args) {
+        return passseam::read<int>(a.engine_, [&]() -> int {
+            a.engine_.scanNative();
+            for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
+                if (a.engine_.nativeDevices_[i].driver != driver || a.engine_.nativeDevices_[i].args != args) { continue; }
+                a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
+                return a.engine_.deviceOpenPending_ ? 1 : 0;
             }
-            return a.engine_.device_ != nullptr;
-        }
-        return false;
+            return -1;
+        });
+    }
+    static bool open(AppWindow& a, const std::string& driver, const std::string& args) {
+        return selectRow(a, driver, args) >= 0 && finishOpen(a);
     }
     // An open started and left running on its worker (the Airspy's wire holds it
     // while the gate is shut); finishOpen waits for it as a frame's poll would.
     static bool startOpen(AppWindow& a, const std::string& driver, const std::string& args) {
-        a.engine_.scanNative();
-        for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
-            if (a.engine_.nativeDevices_[i].driver != driver || a.engine_.nativeDevices_[i].args != args) { continue; }
-            a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-            return a.engine_.deviceOpenPending_;
-        }
-        return false;
+        return selectRow(a, driver, args) == 1;
     }
+    // The wait reads the engine's flags through passseam::read (1 pending, 2 open, 0 neither). Inline and stepped it runs the
+    // poll a frame's workers run (pollSourceAsync, through passseam::on); free-running the pass runs its own workers, and the
+    // wait only watches.
     static bool finishOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.engine_.deviceOpenPending_) {
-            a.engine_.pollSourceAsync();
+        const auto state = [&] {
+            return passseam::read<int>(a.engine_, [&]() -> int {
+                return a.engine_.deviceOpenPending_ ? 1 : (a.engine_.device_ != nullptr ? 2 : 0);
+            });
+        };
+        int s = state();
+        while (s == 1) {
+            if (passseam::mode() != passseam::Mode::Free) { passseam::on(a.engine_, [&] { a.engine_.pollSourceAsync(); }); }
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            s = state();
         }
-        return a.engine_.device_ != nullptr;
+        return s == 2;
     }
-    static void selectGenerator(AppWindow& a) { a.engine_.selectSource(0); }
+    static void selectGenerator(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.selectSource(0); }); }
     // The window looks, as a frame does: the engine publishes, the window reads.
     static void look(AppWindow& a) {
         passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); });
@@ -184,7 +189,9 @@ struct AppWindowTestAccess {
         }
         return answered;
     }
-    static void tune(AppWindow& a, double airCentreHz) { a.engine_.applyRetuneNow(airCentreHz); }
+    static void tune(AppWindow& a, double airCentreHz) {
+        passseam::on(a.engine_, [&] { a.engine_.applyRetuneNow(airCentreHz); });
+    }
     static const AirspyCache& airspy(AppWindow& a) { return a.airspyLists(); }
     static const ConverterCache& converter(AppWindow& a) { return a.converterLists(); }
     static const BiasTeePanel& key(AppWindow& a) { return a.biasKeyPanel(); }
@@ -196,18 +203,28 @@ struct AppWindowTestAccess {
         c.num[0] = loHz;
         a.uiSubmit(c);
     }
-    // The engine's side, for comparison.
-    static bool agc(AppWindow& a, bool lna, bool on) { return a.engine_.chooseAirspyAgc(lna, on); }
-    static bool decimate(AppWindow& a, unsigned d) { return a.engine_.chooseAirspyDecimation(d); }
+    // The engine's side, for comparison (each made on the pass's thread with the pass out of the way: passseam::read).
+    static bool agc(AppWindow& a, bool lna, bool on) {
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.chooseAirspyAgc(lna, on); });
+    }
+    static bool decimate(AppWindow& a, unsigned d) {
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.chooseAirspyDecimation(d); });
+    }
     static bool mode(AppWindow& a, cascade::source::AirspySource::GainMode m) {
-        return a.engine_.chooseAirspyGainMode(m);
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.chooseAirspyGainMode(m); });
     }
-    static double chainRate(AppWindow& a) { return a.engine_.pipeline_.inputRateHz(); }
+    static double chainRate(AppWindow& a) {
+        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.inputRateHz(); });
+    }
     static double hardwareRate(AppWindow& a) {
-        auto* s = dynamic_cast<cascade::source::AirspySource*>(a.engine_.device_);
-        return s == nullptr ? 0.0 : s->hardwareSampleRateHz();
+        return passseam::read<double>(a.engine_, [&] {
+            auto* s = dynamic_cast<cascade::source::AirspySource*>(a.engine_.device_);
+            return s == nullptr ? 0.0 : s->hardwareSampleRateHz();
+        });
     }
-    static double radioCentre(AppWindow& a) { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); }
+    static double radioCentre(AppWindow& a) {
+        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.rawSource().centerFrequencyHz(); });
+    }
 };
 
 }  // namespace cascade::gui

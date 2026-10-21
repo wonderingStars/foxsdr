@@ -141,15 +141,24 @@ struct AppWindowTestAccess {
     static std::vector<std::uint64_t>& imageTexRev(AppWindow& a) { return a.imageTexRev_; }
     static const std::string& imageSaveNote(AppWindow& a) { return a.imageSaveNote_; }
     static std::map<std::string, AppWindow::InstrumentSeen>& instrumentSeen(AppWindow& a) { return a.instrumentSeen_; }
-    static const std::vector<cascade::core::LoadedPlugin>& loaded(AppWindow& a) { return a.engine_.pluginHost_.plugins(); }
+    // The engine's plugin host's records: a COPY made on the pass's thread (the pass owns the host; a reference into it
+    // would be read from this thread beside a free-running pass).
+    static std::vector<cascade::core::LoadedPlugin> loaded(AppWindow& a) {
+        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(a.engine_,
+                                                                          [&] { return a.engine_.pluginHost_.plugins(); });
+    }
     static const AppWindow::PluginListCache& pluginRows(AppWindow& a) { return a.pluginLists(); }
     static std::string fact(AppWindow& a, const char* key) {
         std::string s;
         a.readFactText(key, s);
         return s;
     }
-    // The engine's own, for what the window must NOT be reading and for the runner's feed.
-    static void engineSetPosition(AppWindow& a, double lat, double lon) { (void)a.engine_.applyReceiverPosition(lat, lon); }
+    // The engine's own, for what the window must NOT be reading and for the runner's feed. The position is the pass's
+    // (passseam::on); the runner is fed and counted directly: PluginRunner guards every call with its own mutex (the product
+    // feeds it from the audio thread beside the pass), and pluginRunner_ is a member the engine never replaces.
+    static void engineSetPosition(AppWindow& a, double lat, double lon) {
+        passseam::on(a.engine_, [&] { (void)a.engine_.applyReceiverPosition(lat, lon); });
+    }
     static void feedAudio(AppWindow& a, std::size_t frames) {
         std::vector<float> mono(frames, 0.0f);
         a.engine_.pluginRunner_.processAudio(mono.data(), frames);
@@ -247,9 +256,10 @@ struct Env {
     AppWindow& a() { return *app; }
 };
 
-const cascade::core::LoadedPlugin* loadedNamed(AppWindow& a, const std::string& name) {
+// The engine's record for `name`, COPIED out of the host (null: none by that name).
+std::unique_ptr<const cascade::core::LoadedPlugin> loadedNamed(AppWindow& a, const std::string& name) {
     for (const cascade::core::LoadedPlugin& p : Access::loaded(a)) {
-        if (p.name == name) { return &p; }
+        if (p.name == name) { return std::make_unique<const cascade::core::LoadedPlugin>(p); }
     }
     return nullptr;
 }
@@ -521,9 +531,9 @@ void testPages(AppWindow& a) {
 void testOpenFor(AppWindow& a) {
     std::printf("  E: openPluginWindowsFor: the page, the panel, the instrument, the picture and the Decoder output window\n");
     drawPlugins(a);
-    const cascade::core::LoadedPlugin* tracks = loadedNamed(a, kTracks);
-    const cascade::core::LoadedPlugin* text = loadedNamed(a, kText);
-    const cascade::core::LoadedPlugin* image = loadedNamed(a, kImage);
+    const auto tracks = loadedNamed(a, kTracks);
+    const auto text = loadedNamed(a, kText);
+    const auto image = loadedNamed(a, kImage);
     CHECK(tracks != nullptr);
     CHECK(text != nullptr);
     CHECK(image != nullptr);
@@ -860,7 +870,7 @@ void testTwoSources() {
     std::printf("      2 pages, 8 tracks, each page 3 visible targets of its own module\n");
 
     // THE PRESET PRESS opens ITS module's page only.
-    const cascade::core::LoadedPlugin* b = loadedNamed(a, kTracksB);
+    const auto b = loadedNamed(a, kTracksB);
     CHECK(b != nullptr);
     if (b == nullptr) { return; }
     for (auto& pg : Access::pages(a)) { pg.open = false; }

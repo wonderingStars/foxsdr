@@ -946,6 +946,25 @@ function Test-Run([string]$Dir, [string]$Measure, $want, $knobs) {
             if ($null -eq $aud -or $win -le 0 -or [Math]::Abs([double]$aud - $AudioRateHz * $win) -gt 0.05 * $AudioRateHz * $win) { $reasons.Add("audio: '$aud' audio samples in $win s, $($AudioRateHz * $win) expected") }  # CHECK:audio
             $fig.ringDropped = [double](Get-P $j 'ringDropped' 0)
             $fig.decodersActive = [double]$active
+            # THE ENGINE'S OWN PASS (the pump move's P7; candidate builds only - a build whose pass is the frame's writes no "pass"): passes a
+            # second, how long a pass takes, and the submit-to-publish lag (a wake to the publish of the pass that served it), over the
+            # same window as the CPU. REPORTED, NOT GATED: there is nothing in the baseline to hold them against - the gates that
+            # carry them are the frame time and the tune-to-audio median. Percentiles and "AtMost" figures are histogram bucket edges.
+            $pj = Get-P $j 'pass' $null
+            if ($null -ne $pj) {
+                $fig.passPerSec = [double](Get-P $pj 'passesPerSecond' 0)
+                $fig.passMeanUs = [double](Get-P $pj 'meanUs' 0)
+                $fig.passP99UsAtMost = [double](Get-P $pj 'p99UsAtMost' 0)
+                $fig.passMaxUsAtMost = [double](Get-P $pj 'maxUsAtMost' 0)
+                $fig.passOverPeriod = [double](Get-P $pj 'overPeriod' 0)
+                $sp = Get-P $pj 'submitToPublish' $null
+                if ($null -ne $sp) {
+                    $fig.lagServed = [double](Get-P $sp 'served' 0)
+                    $fig.lagMeanUs = [double](Get-P $sp 'meanUs' 0)
+                    $fig.lagP99UsAtMost = [double](Get-P $sp 'p99UsAtMost' 0)
+                    $fig.lagMaxUsAtMost = [double](Get-P $sp 'maxUsAtMost' 0)
+                }
+            }
             if ($Measure -eq 'frames' -or $Measure -eq 'soak') {
                 $logPath = Join-Path $Dir 'frames.log'
                 if (-not (Test-Path $logPath)) { $reasons.Add('frame-log: no frames.log') }  # CHECK:frame-log
@@ -2247,7 +2266,9 @@ foreach ($m in $Measures) {
             $slotRun = Invoke-Slot { param($dirArg) Invoke-Launch -Exe $exeNow -Dir $dirArg -Measure $m -Setup $knobSet } $runDir $RetakeRefusedRuns "$label-$m-r$r" $script:Limits
             $li = $slotRun.info
             if ($slotRun.retakes.Count -gt 0) {
-                $meta.retakes = @($meta.retakes) + @($slotRun.retakes)
+                # (.ToArray(): in Windows PowerShell 5.1 `array + @(List[object])` throws "Argument types do not match" - the first real retake of the
+                # P7 session found it; the self-test's retake case does not go through this line.)
+                $meta.retakes = @($meta.retakes) + @($slotRun.retakes.ToArray())
                 Write-Json $meta (Join-Path $Out 'session.json')
             }
             if ([string]$li.ended -like 'not started*') {

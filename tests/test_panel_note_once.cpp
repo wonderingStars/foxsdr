@@ -78,13 +78,19 @@ struct AppWindowTestAccess {
             (void)a.engine_.pumpPublish();
         });
     }
-    static std::vector<std::string> panels(AppWindow& a) { return a.engine_.telemetryPanels_; }
+    // The engine's list, COPIED on the pass's thread with the pass out of the way (passseam::read).
+    static std::vector<std::string> panels(AppWindow& a) {
+        return passseam::read<std::vector<std::string>>(a.engine_, [&] { return a.engine_.telemetryPanels_; });
+    }
     // The usage record the engine writes for the next launch to send: reporting
     // switched on the way the checkbox does (the desktop's own op), then the
     // config snapshot the save reads, whose telemetryPending is that record.
+    // (The consent and the publish are the pass's, made through passseam::on; configSnapshot() is the published copy, any thread.)
     static std::string usageRecord(AppWindow& a) {
-        (void)a.engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1));
-        a.engine_.publishConfig();
+        passseam::on(a.engine_, [&] {
+            (void)a.engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1));
+            a.engine_.publishConfig();
+        });
         return a.engine_.configSnapshot().telemetryPending;
     }
     static std::size_t notedByWindow(AppWindow& a) { return a.uiNotedPanels_.size(); }

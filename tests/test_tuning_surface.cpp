@@ -33,14 +33,17 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <random>
 #include <sstream>
@@ -179,7 +182,7 @@ struct AppWindowTestAccess {
         return a.engineApi_->read_spectrum(a.uiSession_, since, info, out, cap);
     }
     static void publish(AppWindow& a, const std::vector<float>& bins, double centreHz, double spanHz) {
-        a.engine_.api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz);
+        passseam::on(a.engine_, [&] { a.engine_.api().publishSpectrumForTest(bins.data(), bins.size(), centreHz, spanHz); });
     }
     static const AppWindow::TuneLocal& local(AppWindow& a) { return a.tuneLocal_; }
     static void clock(AppWindow& a, double (*f)()) { a.uiClockS_ = f != nullptr ? f : &AppWindow::steadyNowS; }
@@ -202,7 +205,8 @@ struct AppWindowTestAccess {
     // status line the Decoders section letters - changes instead, and moves listSeq all the same.
     static void aLineAppears(AppWindow& a) {
         static unsigned n = 0;
-        a.engine_.presetNote_ = "note " + std::to_string(++n);
+        const std::string note = "note " + std::to_string(++n);
+        passseam::on(a.engine_, [&] { a.engine_.presetNote_ = note; });
     }
     // The allocations one get_setting of a fact makes inside the table.
     static long factAllocations(AppWindow& a, const char* key) {
@@ -219,7 +223,8 @@ struct AppWindowTestAccess {
         double tuned, sourceRate, bandwidth, channelRate, centre, offset, inputRate;
         int mode;
     };
-    static Old oldReads(AppWindow& a) {
+    static Old oldReads(AppWindow& a) { return passseam::read<Old>(a.engine_, [&] { return oldReadsOnPass(a); }); }
+    static Old oldReadsOnPass(AppWindow& a) {
         Engine& e = a.engine_;
         Old o{};
         o.running = e.pipeline_.running();
@@ -240,16 +245,23 @@ struct AppWindowTestAccess {
         return o;
     }
     using Engine = cascade::engine::Engine;
-    static void setVolume(AppWindow& a, float v) { a.engine_.volume_ = v; }
-    static void setSquelch(AppWindow& a, float v) { a.engine_.squelchDb_ = v; }
-    static void setFault(AppWindow& a, const std::string& why) { a.engine_.testFault_ = why; }
-    static bool setChainRate(AppWindow& a, double hz) { return a.engine_.pipeline_.setInputRateHz(hz); }
-    static double engineOffset(AppWindow& a) { return a.engine_.pipeline_.vfoOffsetHz(); }
-    static double engineBandwidth(AppWindow& a) { return a.engine_.vfoBandwidthHz_; }
-    static void command(AppWindow& a, const FoxCommand& c) { (void)a.engine_.applyCommand(c); }
-    static void setSourceError(AppWindow& a, const std::string& s) { a.engine_.sourceError_ = s; }
+    // Every engine field these read or write is the pass's: each goes through passseam::on/read (on the pass's own thread, with the
+    // pass out of the way, when it free-runs; right here otherwise).
+    static void setVolume(AppWindow& a, float v) { passseam::on(a.engine_, [&] { a.engine_.volume_ = v; }); }
+    static void setSquelch(AppWindow& a, float v) { passseam::on(a.engine_, [&] { a.engine_.squelchDb_ = v; }); }
+    static void setFault(AppWindow& a, const std::string& why) { passseam::on(a.engine_, [&] { a.engine_.testFault_ = why; }); }
+    static bool setChainRate(AppWindow& a, double hz) {
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.pipeline_.setInputRateHz(hz); });
+    }
+    static double engineOffset(AppWindow& a) {
+        return passseam::read<double>(a.engine_, [&] { return a.engine_.pipeline_.vfoOffsetHz(); });
+    }
+    static double engineBandwidth(AppWindow& a) { return passseam::read<double>(a.engine_, [&] { return a.engine_.vfoBandwidthHz_; }); }
+    static void command(AppWindow& a, const FoxCommand& c) { passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(c); }); }
+    static void setSourceError(AppWindow& a, const std::string& s) { passseam::on(a.engine_, [&] { a.engine_.sourceError_ = s; }); }
     static void pumpMute(AppWindow& a) { passseam::mute(a.engine_, [&] { a.engine_.pumpAudioMute(); }); }
-    static void muteBy(AppWindow& a, const std::string& name, double hz) {
+    static void muteBy(AppWindow& a, const std::string& name, double hz) { passseam::on(a.engine_, [&] { muteByOnPass(a, name, hz); }); }
+    static void muteByOnPass(AppWindow& a, const std::string& name, double hz) {
         cascade::core::MutePlugin m;
         m.name = name;
         m.key = name + ".dll";
@@ -262,8 +274,60 @@ struct AppWindowTestAccess {
         a.engine_.muteStates_.clear();
         a.engine_.muteStates_.push_back(std::move(m));
     }
-    static void noMuteBy(AppWindow& a) { a.engine_.muteStates_.clear(); }
-    static cascade::core::FreqManager& store(AppWindow& a) { return a.engine_.freqMgr_; }
+    static void noMuteBy(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.muteStates_.clear(); }); }
+    // The bookmark store, which the pass reads (the save, the lists): a change made in it, a COPY of its list, and its search.
+    static void storeDo(AppWindow& a, const std::function<void(cascade::core::FreqManager&)>& change) {
+        passseam::on(a.engine_, [&] { change(a.engine_.freqMgr_); });
+    }
+    static std::vector<cascade::core::Bookmark> storeList(AppWindow& a) {
+        return passseam::read<std::vector<cascade::core::Bookmark>>(a.engine_, [&] { return a.engine_.freqMgr_.list(); });
+    }
+    static std::pair<std::size_t, std::size_t> storeRange(AppWindow& a, double lo, double hi) {
+        return passseam::read<std::pair<std::size_t, std::size_t>>(a.engine_, [&] { return a.engine_.freqMgr_.range(lo, hi); });
+    }
+
+    // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is let go.
+    // A pass runs posted work at the head of its front part AFTER it has taken its queues (pumpFrameBegin: the local queue, the API's,
+    // then runPassWork), so once the work has STARTED the pass that runs it has taken everything it will take, and no other pass can
+    // start until it ends: what the window sends meanwhile is taken by the NEXT pass, after the release, and what it reads meanwhile is
+    // known to PRECEDE that pass - which is what the P4 cases are about. Inline and stepped no pass runs unless the test asks for one,
+    // so there is nothing to hold. Nothing may ask for a pass (on/read/pass/answers) while it is held: the window's own session reads
+    // and submits only.
+    struct Hold {
+        std::mutex m;
+        std::condition_variable cv;
+        bool running = false;
+        bool release = false;
+    };
+    static std::shared_ptr<Hold>& held() {
+        static std::shared_ptr<Hold> h;
+        return h;
+    }
+    static void holdPass(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
+        passseam::attach(a.engine_);
+        auto h = std::make_shared<Hold>();
+        a.engine_.postToPass([h] {
+            std::unique_lock<std::mutex> lk(h->m);
+            h->running = true;
+            h->cv.notify_all();
+            h->cv.wait(lk, [&] { return h->release; });
+        });
+        std::unique_lock<std::mutex> lk(h->m);
+        const bool took = h->cv.wait_for(lk, std::chrono::seconds(10), [&] { return h->running; });
+        CHECK(took);
+        held() = h;
+    }
+    static void releasePass(AppWindow&) {
+        const std::shared_ptr<Hold> h = held();
+        if (h == nullptr) { return; }
+        held().reset();
+        {
+            std::lock_guard<std::mutex> lk(h->m);
+            h->release = true;
+        }
+        h->cv.notify_all();
+    }
 };
 
 }  // namespace cascade::gui
@@ -595,12 +659,12 @@ void testMarkersAreCopiedWhenTheStoreChanges() {
                                : "Station " + std::to_string(i);
         b.freqHz = std::uniform_real_distribution<double>(80.0e6, 110.0e6)(rng);
         b.favourite = (i % 9 == 0);
-        Access::store(app).add(b);
+        Access::storeDo(app, [&](cc::FreqManager& fm) { fm.add(b); });
     }
     Access::look(app);
     (void)Access::tuning(app);
     CHECK_EQ(c.markerCopies, copies0 + 1u);
-    const auto& list = Access::store(app).list();
+    std::vector<cc::Bookmark> list = Access::storeList(app);  // (a copy, read again after each change below)
     CHECK_EQ(c.markers.size(), list.size());
     bool same = c.markers.size() == list.size();
     for (std::size_t i = 0; same && i < list.size(); ++i) {
@@ -618,7 +682,7 @@ void testMarkersAreCopiedWhenTheStoreChanges() {
     for (int i = 0; i < 500; ++i) {
         const double lo = std::uniform_real_distribution<double>(79.0e6, 111.0e6)(rng);
         const double hi = lo + std::uniform_real_distribution<double>(0.0, 8.0e6)(rng);
-        CHECK(cascade::gui::markerRange(c.markers, lo, hi) == Access::store(app).range(lo, hi));
+        CHECK(cascade::gui::markerRange(c.markers, lo, hi) == Access::storeRange(app, lo, hi));
         ++windows;
     }
 
@@ -626,13 +690,15 @@ void testMarkersAreCopiedWhenTheStoreChanges() {
     {
         cc::Bookmark b = list[10];
         b.favourite = !b.favourite;
-        Access::store(app).updateAt(10, b);
+        Access::storeDo(app, [&](cc::FreqManager& fm) { fm.updateAt(10, b); });
+        list = Access::storeList(app);
         Access::look(app);
         (void)Access::tuning(app);
         CHECK_EQ(c.markerCopies, copies0 + 2u);
         CHECK(c.markers.size() > 10u);  // (never index a cache a failed copy left short)
         if (c.markers.size() > 10u) { CHECK_EQ(c.markers[10].favourite, b.favourite); }
-        Access::store(app).removeAt(0);
+        Access::storeDo(app, [&](cc::FreqManager& fm) { fm.removeAt(0); });
+        list = Access::storeList(app);
         Access::look(app);
         (void)Access::tuning(app);
         CHECK_EQ(c.markerCopies, copies0 + 3u);
@@ -658,7 +724,7 @@ void testMarkersAreCopiedWhenTheStoreChanges() {
             b.freqHz = 100.0e6 + 1000.0 * i;
             many.push_back(std::move(b));
         }
-        Access::store(app).addMany(std::move(many));
+        Access::storeDo(app, [&](cc::FreqManager& fm) { fm.addMany(std::move(many)); });
         Access::look(app);
         const Clock::time_point t0 = Clock::now();
         (void)Access::tuning(app);
@@ -772,6 +838,7 @@ void testTheDragsLocalCopyIsWhatTheEngineDoes() {
         Access::command(app, cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, 0.0));
         Access::look(app);
         CHECK(!Access::local(app).offset.valid);
+        Access::holdPass(app);  // (free-running: no pass of the thread's own may land the drag before the reads below)
         Access::dragCentre(app, Access::state(app).centreHz + 60000.0);
         CHECK(Access::local(app).offset.valid);
         // A READ BEFORE THE PASS: the state still says 0, and the window must go on showing the figure it sent (and take its next
@@ -784,6 +851,7 @@ void testTheDragsLocalCopyIsWhatTheEngineDoes() {
         Access::refresh(app);
         CHECK(Access::local(app).offset.valid);              // 0.2 s on, the readback still differs: the hold stands
         CHECK_EQ(Access::tunedOffset(app), 60000.0);
+        Access::releasePass(app);
         // THE PASS LANDS IT: the next read shows the same figure, and the copy goes.
         (void)Access::answers(app);
         Access::look(app);
@@ -805,10 +873,12 @@ void testTheDragsLocalCopyIsWhatTheEngineDoes() {
         CHECK(!Access::local(app).offset.valid);              // ...and 0.8 s on it does not
         CHECK_EQ(Access::tunedOffset(app), 5000.0);
         // The bandwidth, the same.
+        Access::holdPass(app);
         Access::dragEdge(app, Access::state(app).centreHz + 5000.0 + 30000.0, Access::state(app).centreHz + 5000.0);
         Access::refresh(app);
         CHECK(Access::local(app).bandwidth.valid);
         CHECK_EQ(Access::tunedBandwidth(app), 60000.0);
+        Access::releasePass(app);
         (void)Access::answers(app);
         Access::look(app);
         CHECK(!Access::local(app).bandwidth.valid);
@@ -933,6 +1003,9 @@ void testTheKeys() {
     (void)Access::answers(app);
     Access::Sent sent;
     Access::tap(app, &sent);
+    // (Free-running: the keys below reach the session, and a start or a take must not be APPLIED - see dropQueued. Held until it
+    // has dropped them; inline and stepped no pass runs here.)
+    Access::holdPass(app);
     FoxReceiverState& st = Access::state(app);
 
     const auto one = [&](KeyAction k) -> FoxCommand {
@@ -1002,6 +1075,11 @@ void testTheKeys() {
         expect(KeyAction::TuneSpanUp, su, "span up");
         expect(KeyAction::TuneSpanDown, sd, "span down");
     }
+    // Free-running, what those keys queued goes before the pass runs again (the volume steps below need passes: their settings are
+    // the pass's, and what they send is a volume or a squelch, which each next setting overwrites); inline and stepped it is still
+    // queued, unapplied, until the dropQueued below.
+    if (passseam::mode() == passseam::Mode::Free) { Access::dropQueued(app); }
+    Access::releasePass(app);
 
     // The volume and squelch steps, against the old expressions (the engine's float, plus the step,
     // clamped) on floats of every kind: the state publishes the decimal a float was set to, and the
@@ -1247,7 +1325,7 @@ void testDrawn() {
     b.name = "In view";
     b.freqHz = 100.3e6;
     b.favourite = true;
-    Access::store(app).add(b);
+    Access::storeDo(app, [&](cc::FreqManager& fm) { fm.add(b); });
     Access::look(app);
     int vertsOne = 0;
     imframe([&] {

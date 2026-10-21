@@ -135,6 +135,9 @@ void AudioIn::close() {
 
 bool AudioIn::streamAlive() const {
     if (stream_ == nullptr) { return false; }
+    // An initialisation in progress on another thread is not a dead stream (sink/pa_init.hpp, "THE COUNT'S READERS").
+    const PaCountReadGuard countGuard;
+    if (!countGuard.held()) { return true; }
     // 1 = the callback is being called; 0 = stopped; negative = the host API
     // cannot answer, which is what a vanished device tends to produce. Only 1
     // means a microphone is actually being heard.

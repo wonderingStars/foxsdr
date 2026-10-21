@@ -26,17 +26,27 @@
 // and lets the NEXT look take what the draw sent; the workers are polled after the draw, as drawUi polls them.
 // pumpTransmitKey is not run, so the session's answers are still there to be read.
 //
+// AGAINST A FREE-RUNNING PASS (FOXSDR_TEST_PASS=free, tests/pass_seam.hpp): every read or write of an engine field from
+// this thread goes through passseam::on/read (run on the pass, with the pass out of the way). Where a statement is about
+// ONE publish - "the click only queued it", the survey's "nothing is applied: no pass runs", "a fetch began, seen" and the
+// ADD ALL run lettered publish by publish - the pass is PARKED at its publish (Engine::TestHooks::betweenPublishes, set
+// before any thread runs): the state and the lists of that publish are the newest, the engine's fields are as they were
+// published (the pass's workers have not run), and while it is parked they are read here directly.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <set>
 #include <string>
@@ -148,6 +158,54 @@ void writeText(const std::filesystem::path& p, const std::string& text) {
     f << text;
 }
 
+// THE PASS PARKED AT ITS PUBLISH (free-running mode only: inline and stepped no pass runs beside the test). The hook runs
+// on the pass's thread between the state's publish (the lists are handed over just before it) and the status lines';
+// armed, it parks there - when `when` holds, evaluated on the pass - until it is let go. Asked for again while one is
+// parked, the next publish is armed BEFORE the parked one goes, so a walk publish by publish misses none.
+struct PublishGate {
+    std::mutex m;
+    std::condition_variable cv;
+    bool armed = false;
+    bool parked = false;
+    std::function<bool()> when;
+};
+PublishGate g_gate;
+
+void betweenPublishes() {
+    std::unique_lock<std::mutex> lk(g_gate.m);
+    if (!g_gate.armed || (g_gate.when && !g_gate.when())) { return; }
+    g_gate.armed = false;
+    g_gate.parked = true;
+    g_gate.cv.notify_all();
+    g_gate.cv.wait(lk, [] { return !g_gate.parked; });
+}
+bool parked() {
+    std::lock_guard<std::mutex> lk(g_gate.m);
+    return g_gate.parked;
+}
+void parkAtPublish(cascade::engine::Engine& e, std::function<bool()> when = {}) {
+    if (passseam::mode() != passseam::Mode::Free) { return; }
+    passseam::attach(e);
+    std::unique_lock<std::mutex> lk(g_gate.m);
+    g_gate.when = std::move(when);
+    g_gate.armed = true;
+    if (g_gate.parked) {
+        g_gate.parked = false;
+        g_gate.cv.notify_all();
+    }
+    g_gate.cv.wait(lk, [] { return g_gate.parked; });
+    g_gate.when = nullptr;
+}
+void unpark() {
+    std::lock_guard<std::mutex> lk(g_gate.m);
+    g_gate.armed = false;
+    g_gate.when = nullptr;
+    if (g_gate.parked) {
+        g_gate.parked = false;
+        g_gate.cv.notify_all();
+    }
+}
+
 }  // namespace
 
 namespace cascade::gui {
@@ -162,11 +220,58 @@ struct AppWindowTestAccess {
         Engine::testHooks_.nativeScan = &engine_api_test::fakeNativeScan;
         Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
         Engine::testHooks_.pluginDir = &pluginDirHook;
+        Engine::testHooks_.betweenPublishes = &betweenPublishes;  // (idle unless a free-running test parks a publish)
+    }
+
+    // An engine read or write from this thread: on the pass (passseam), or right here while the pass is parked.
+    template <class R>
+    static R onPass(AppWindow& a, const std::function<R()>& f) {
+        return parked() ? f() : passseam::read<R>(a.engine_, f);
+    }
+    static void doOnPass(AppWindow& a, const std::function<void()>& f) {
+        if (parked()) {
+            f();
+        } else {
+            passseam::on(a.engine_, f);
+        }
+    }
+    // The pass parked at its next publish (free-running; nothing otherwise) - for the click, the survey's clicks, the
+    // ADD ALL walk - and let go by the next look, the next workers' poll or dropQueued.
+    static void park(AppWindow& a) { parkAtPublish(a.engine_); }
+    // ...at the first publish of a fetch in flight.
+    static void parkAtFetch(AppWindow& a) {
+        parkAtPublish(a.engine_, [&a] { return a.engine_.catalogPending_; });
+    }
+    // THE LOOK OF ONE PUBLISH: free-running, the pass parked at its next publish (the one parked now let go) and that
+    // publish read; otherwise the look. With its `after`: free-running nothing (the parked pass polls its workers when it
+    // goes on), otherwise the workers.
+    static void lookAtPublish(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free) {
+            look(a);
+            return;
+        }
+        parkAtPublish(a.engine_);
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
+    }
+    static void afterPublish(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free) { after(a); }
+    }
+    // The look at the publish of the fetch just submitted (free-running: parked there; otherwise the look).
+    static void lookAtFetch(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free) {
+            look(a);
+            return;
+        }
+        parkAtFetch(a);
+        a.statusLines_ = a.engine_.statusText();
+        a.refreshUiState();
     }
 
     // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the
     // window's read of the state.
     static void look(AppWindow& a) {
+        unpark();
         passseam::pass(a.engine_, [&] {
             a.engine_.pumpFrameBegin();
             a.engine_.pumpInputs();
@@ -179,6 +284,7 @@ struct AppWindowTestAccess {
     // ...and the end of the frame: the workers polled (a fetch or a download that finished is applied, the ADD ALL
     // queue steps) and the lines handed over, as drawUi does after the draw.
     static void after(AppWindow& a) {
+        unpark();
         passseam::workers(a.engine_, [&] {
             a.engine_.pumpWorkers();
             a.engine_.pumpAudio();
@@ -203,13 +309,22 @@ struct AppWindowTestAccess {
         a.closeUiSession();
         a.openUiSession();
         a.refreshUiState();
+        unpark();  // (what was queued is gone: the pass may go on)
     }
-    static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { (void)a.engine_.applyCommand(q.c, q.longText); }
-    static void command(AppWindow& a, const FoxCommand& c) { (void)a.engine_.applyCommand(c); }
+    static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
+        doOnPass(a, [&] { (void)a.engine_.applyCommand(q.c, q.longText); });
+    }
+    static void command(AppWindow& a, const FoxCommand& c) {
+        doOnPass(a, [&] { (void)a.engine_.applyCommand(c); });
+    }
     static std::uint64_t listSeq(AppWindow& a) { return a.uiState_.listSeq; }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
-    static std::size_t loadedDecoders(AppWindow& a) { return a.engine_.loadedDecoderCount(); }
-    static std::size_t fedDecoders(AppWindow& a) { return a.engine_.fedDecoderCount(); }
+    static std::size_t loadedDecoders(AppWindow& a) {
+        return onPass<std::size_t>(a, [&] { return a.engine_.loadedDecoderCount(); });
+    }
+    static std::size_t fedDecoders(AppWindow& a) {
+        return onPass<std::size_t>(a, [&] { return a.engine_.fedDecoderCount(); });
+    }
 
     // The window's own: its cache, its deck, its open flag, the flag the fitted window reads.
     static StoreListCache& lists(AppWindow& a, bool full = true) { return a.storeLists(full); }
@@ -235,25 +350,34 @@ struct AppWindowTestAccess {
     }
     static void setUrlBuf(AppWindow& a, const std::string& v) { std::snprintf(a.pluginUrlBuf_, sizeof(a.pluginUrlBuf_), "%s", v.c_str()); }
 
-    // The engine, for comparison and for what a hermetic window cannot make.
-    static std::size_t catalogSize(AppWindow& a) { return a.engine_.catalog_.size(); }
-    static bool catalogPending(AppWindow& a) { return a.engine_.catalogPending_; }
-    static bool installPending(AppWindow& a) { return a.engine_.installPending_; }
-    static bool addAllActive(AppWindow& a) { return a.engine_.addAllRun_.active; }
-    static std::size_t addAllNext(AppWindow& a) { return a.engine_.addAllRun_.next; }
-    static std::size_t addAllTotal(AppWindow& a) { return a.engine_.addAllRun_.total; }
-    static const std::string& engineUrl(AppWindow& a) { return a.engine_.pluginCatalogueUrl_; }
-    static const std::string& engineSummary(AppWindow& a) { return a.engine_.addAllSummary_; }
+    // The engine, for comparison and for what a hermetic window cannot make (by value: never a reference into a member
+    // the pass rewrites).
+    static std::size_t catalogSize(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.catalog_.size(); }); }
+    static bool catalogPending(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.catalogPending_; }); }
+    static bool installPending(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.installPending_; }); }
+    static bool addAllActive(AppWindow& a) { return onPass<bool>(a, [&] { return a.engine_.addAllRun_.active; }); }
+    static std::size_t addAllNext(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.addAllRun_.next; }); }
+    static std::size_t addAllTotal(AppWindow& a) { return onPass<std::size_t>(a, [&] { return a.engine_.addAllRun_.total; }); }
+    static std::string engineUrl(AppWindow& a) { return onPass<std::string>(a, [&] { return a.engine_.pluginCatalogueUrl_; }); }
+    static std::string engineSummary(AppWindow& a) { return onPass<std::string>(a, [&] { return a.engine_.addAllSummary_; }); }
     // What writes the engine's lines (the table's own hook is not in an engine the window holds): set where the engine
     // keeps them, handed over at the end of the next frame.
-    static void setAddAllFailed(AppWindow& a, bool v) { a.engine_.addAllFailed_ = v; }
-    static void setCatalogStatus(AppWindow& a, const std::string& v) { a.engine_.catalogStatus_ = v; }
-    static void setAddAllSummary(AppWindow& a, const std::string& v) { a.engine_.addAllSummary_ = v; }
-    static std::string blockedReason(AppWindow& a, int idx, bool acked) { return a.engine_.pluginInstallBlockedReason(idx, acked); }
-    static bool stopped(AppWindow& a, const std::string& key) { return a.engine_.pluginIsStopped(key); }
-    static const std::vector<cascade::core::LoadedPlugin>& host(AppWindow& a) { return a.engine_.pluginHost_.plugins(); }
-    static const std::vector<cascade::core::BlockedPlugin>& engineBlocked(AppWindow& a) { return a.engine_.pluginBlocked_; }
-    static std::vector<cascade::core::PluginUpdate> plans(AppWindow& a) { return a.engine_.plannedPluginUpdates(); }
+    static void setAddAllFailed(AppWindow& a, bool v) { doOnPass(a, [&] { a.engine_.addAllFailed_ = v; }); }
+    static void setCatalogStatus(AppWindow& a, const std::string& v) { doOnPass(a, [&] { a.engine_.catalogStatus_ = v; }); }
+    static void setAddAllSummary(AppWindow& a, const std::string& v) { doOnPass(a, [&] { a.engine_.addAllSummary_ = v; }); }
+    static std::string blockedReason(AppWindow& a, int idx, bool acked) {
+        return onPass<std::string>(a, [&] { return a.engine_.pluginInstallBlockedReason(idx, acked); });
+    }
+    static bool stopped(AppWindow& a, const std::string& key) { return onPass<bool>(a, [&] { return a.engine_.pluginIsStopped(key); }); }
+    static std::vector<cascade::core::LoadedPlugin> host(AppWindow& a) {
+        return onPass<std::vector<cascade::core::LoadedPlugin>>(a, [&] { return a.engine_.pluginHost_.plugins(); });
+    }
+    static std::vector<cascade::core::BlockedPlugin> engineBlocked(AppWindow& a) {
+        return onPass<std::vector<cascade::core::BlockedPlugin>>(a, [&] { return a.engine_.pluginBlocked_; });
+    }
+    static std::vector<cascade::core::PluginUpdate> plans(AppWindow& a) {
+        return onPass<std::vector<cascade::core::PluginUpdate>>(a, [&] { return a.engine_.plannedPluginUpdates(); });
+    }
 
     // A transfer as its worker would have left it (test_engine_api_03, group I): the engine's install slot holds a
     // promise the test keeps, so a download is in flight (installPending_, the busy name) until the test says it is
@@ -263,10 +387,12 @@ struct AppWindowTestAccess {
         return p;
     }
     static void beginTransfer(AppWindow& a, const std::string& name) {
-        installPromise() = std::promise<Engine::PluginInstallResult>();
-        a.engine_.installFuture_ = installPromise().get_future();
-        a.engine_.installBusyName_ = name;
-        a.engine_.installPending_ = true;
+        doOnPass(a, [&] {
+            installPromise() = std::promise<Engine::PluginInstallResult>();
+            a.engine_.installFuture_ = installPromise().get_future();
+            a.engine_.installBusyName_ = name;
+            a.engine_.installPending_ = true;
+        });
     }
     static void endTransfer(bool ok, const std::string& name, const std::string& error) {
         Engine::PluginInstallResult r;
@@ -275,13 +401,23 @@ struct AppWindowTestAccess {
         r.error = error;
         installPromise().set_value(std::move(r));
     }
+    // (the repo's progress is an atomic, stored by a worker in the product: any thread)
     static void setProgress(AppWindow& a, float p) { a.engine_.pluginRepo_.setProgressForTest(p); }
 
     // THE MODEL AS IT WAS BEFORE THE PORT: built from the engine's own members, every frame the window was open (the
     // code AppWindow::buildPluginStoreModel held from the day it was written to the day it was ported, restated). The
     // ADD ALL line is the one place it is NOT restated: it lettered min(next + 1, total), which reads one too many
-    // (API 0.3 8.9, "the position is the module in flight"), and the test says what the true number is instead.
-    static PluginStoreModel oldModel(AppWindow& a) {
+    // (API 0.3 8.9, "the position is the module in flight"), and the test says what the true number is instead. Built
+    // on the pass; `allocs`, when given, gets what the build allocated, counted on the thread that built it.
+    static PluginStoreModel oldModel(AppWindow& a, long* allocs = nullptr) {
+        return onPass<PluginStoreModel>(a, [&] {
+            const long mark = t_allocs;
+            PluginStoreModel m = oldModelOnPass(a);
+            if (allocs != nullptr) { *allocs += t_allocs - mark; }
+            return m;
+        });
+    }
+    static PluginStoreModel oldModelOnPass(AppWindow& a) {
         Engine& e = a.engine_;
         PluginStoreModel model;
         model.sourceUrl = e.pluginCatalogueUrl_;
@@ -357,7 +493,8 @@ struct AppWindowTestAccess {
     }
 
     // "installing P of N: name" with P the module in flight (1-based), from the engine's own run: what the table
-    // serves and the window letters. The OLD window lettered min(next + 1, total) here.
+    // serves and the window letters. The OLD window lettered min(next + 1, total) here. (Both read the engine's run:
+    // called on the pass, or with the pass parked at the publish being compared.)
     static std::string trueAddAllLine(AppWindow& a) {
         const auto& run = a.engine_.addAllRun_;
         if (!run.active) { return {}; }
@@ -383,10 +520,28 @@ namespace cmd = cascade::core::cmd;
 
 namespace {
 
+// A plugin FILE name on this platform: what PluginHost::hasPluginExtension scans for and PluginRepo's kModuleExtension
+// admits (".dll" on Windows, ".so" on Linux, ".dylib" on macOS), behind the prefix the build gives a module (CMake's
+// shared-library prefix: none on Windows, "lib" elsewhere, as FIXTURE_*_PLUGIN's own names have it). The prefix keeps the
+// host's by-file-name order the same on every platform: "zz_..." sorts after the fixtures as "fixture_..." and as
+// "libfixture_..." alike. On Windows every name comes out as it always was. (Names the engine never scans or judges as a
+// file - a display name, another platform's build, a module that is not there - stay as they are.)
+#if defined(_WIN32)
+constexpr const char* kModulePrefix = "";
+constexpr const char* kModuleExt = ".dll";
+#elif defined(__APPLE__)
+constexpr const char* kModulePrefix = "lib";
+constexpr const char* kModuleExt = ".dylib";
+#else
+constexpr const char* kModulePrefix = "lib";
+constexpr const char* kModuleExt = ".so";
+#endif
+std::string moduleFile(const std::string& stem) { return kModulePrefix + stem + kModuleExt; }
+
 const std::string kStage1 = fileOf(FIXTURE_STAGE1_PLUGIN);
 const std::string kGroup8 = fileOf(FIXTURE_GROUP8_PLUGIN);
 const std::string kGroup9 = fileOf(FIXTURE_GROUP9_PLUGIN);
-const std::string kRefused = "zz_refused.dll";
+const std::string kRefused = moduleFile("zz_refused");
 
 const std::string kStageId = "stage-one-fixture";
 const std::string kNineId = "group-nine-fixture";
@@ -441,7 +596,7 @@ struct World {
             e.summary = "Decodes alpha.";
             e.description = std::string(400, 'd');
             e.homepage = "https://example.org/alpha";
-            e.platforms = {hostBuild("alpha_good.dll", 'a', 12345), IdxPlatform{"plan9", "mips", "alpha_plan9.so", hex64('b'), 99}};
+            e.platforms = {hostBuild(moduleFile("alpha_good"), 'a', 12345), IdxPlatform{"plan9", "mips", "alpha_plan9.so", hex64('b'), 99}};
             v.push_back(e);
         }
         {
@@ -452,7 +607,7 @@ struct World {
             e.licence = "GPL-3.0-or-later";
             e.legal = std::string(300, 'L');
             e.floor = "0.9.0";
-            e.platforms = {hostBuild("beta_legal.dll", 'c', 0)};
+            e.platforms = {hostBuild(moduleFile("beta_legal"), 'c', 0)};
             v.push_back(e);
         }
         {
@@ -470,7 +625,7 @@ struct World {
             e.version = "3.0.0";
             e.licence = "MIT";
             e.abi = CASCADE_PLUGIN_ABI_VERSION + 1u;
-            e.platforms = {hostBuild("delta_abi.dll", 'd', 777)};
+            e.platforms = {hostBuild(moduleFile("delta_abi"), 'd', 777)};
             v.push_back(e);
         }
         {
@@ -478,7 +633,7 @@ struct World {
             e.id = "epsilon-nolicence";
             e.name = "Epsilon Decoder";
             e.version = "1.1.0";
-            e.platforms = {hostBuild("epsilon.dll", 'e', 4096)};
+            e.platforms = {hostBuild(moduleFile("epsilon"), 'e', 4096)};
             v.push_back(e);
         }
         {
@@ -522,7 +677,7 @@ struct World {
             e.name = std::string("Bad ") + word;
             e.version = "1.0.0";
             e.licence = "MIT";
-            e.platforms = {hostBuild(std::string("sub/") + word + ".dll", '8', 100)};
+            e.platforms = {hostBuild(std::string("sub/") + moduleFile(word), '8', 100)};
             run.push_back(e);
         }
         indexRun = g_scratch / "store_index_group10_run.json";
@@ -954,10 +1109,10 @@ void testCacheFollowsListSeq() {
     Access::deck(app).selected = -1;
 
     // What the window cost before the port, every frame it was open, for the record: the same seven entries.
-    before = t_allocs;
+    long oldAllocs = 0;
     const int frames = 100;
-    for (int i = 0; i < frames; ++i) { sink += Access::oldModel(app).modules.size(); }
-    const long oldPerFrame = (t_allocs - before) / frames;
+    for (int i = 0; i < frames; ++i) { sink += Access::oldModel(app, &oldAllocs).modules.size(); }
+    const long oldPerFrame = oldAllocs / frames;
     std::printf("      the old window's model, built every frame from the engine's members: %ld allocations a frame\n", oldPerFrame);
     CHECK(oldPerFrame > 0);
 
@@ -1123,6 +1278,7 @@ std::vector<Found> survey(AppWindow& app, bool store, bool rail, float stepX, fl
         putBack();
         prepare();
         drawOnly(app, store, rail);
+        Access::park(app);  // (free-running: no pass until the click's queue is dropped)
         sent.clear();
         clickNoPass(app, store, rail, s.x, s.y);
         Found fd{"", s.x, s.y};
@@ -1177,7 +1333,8 @@ const Found* spotFor(const std::vector<Found>& spots, const std::string& command
 }
 
 // A click that lands: the press with the engine's pass before it, and the release - where a key fires - with NO pass
-// after it, so the caller can show nothing has happened yet. The next frame is the engine's next pass.
+// after it, so the caller can show nothing has happened yet. The next frame is the engine's next pass. (Free-running,
+// the pass is parked at a publish from before the release to that frame.)
 void clickThenHold(AppWindow& app, bool store, bool rail, float x, float y) {
     ImGuiIO& io = ImGui::GetIO();
     io.AddMousePosEvent(x, y);
@@ -1185,6 +1342,7 @@ void clickThenHold(AppWindow& app, bool store, bool rail, float x, float y) {
     frame(app, store, rail);
     io.AddMouseButtonEvent(0, true);
     frame(app, store, rail);
+    Access::park(app);
     io.AddMouseButtonEvent(0, false);
     drawOnly(app, store, rail);
     io.AddMousePosEvent(2000.0f, 2000.0f);
@@ -1669,7 +1827,8 @@ void testUrlField() {
     drawOnly(app, false, true);
     sent.clear();
     CHECK(sent.empty());  // typing commits nothing: only leaving the field does
-    // Leave it: a click in the rail's empty lower part.
+    // Leave it: a click in the rail's empty lower part. (Free-running, the pass parked from before it to the next frame.)
+    Access::park(app);
     clickNoPass(app, false, true, 160.0f, 880.0f);
     CHECK(!io.WantTextInput);
     std::size_t url = 0;
@@ -1717,7 +1876,7 @@ void testConsentsAndRun() {
     // (a) A FETCH BEGAN, SEEN: entry 1 with value[1] 1 in a block the window reads - the window shut, the rail drawn.
     tick();
     Access::submit(app, cmd::make(FOXAPI_OP_STORE_FETCH));
-    Access::look(app);                      // the engine's pass: the fetch is in flight
+    Access::lookAtFetch(app);               // the engine's pass: the fetch is in flight
     CHECK(Access::deck(app).legalAck);      // (not read yet)
     (void)Access::lists(app, false);        // the rail tier reads the block
     CHECK(Access::cache(app).transfer && Access::cache(app).transferKind == 1);
@@ -1779,6 +1938,7 @@ void testConsentsAndRun() {
     Access::deck(app).addAllAck = true;
     Access::Sent sent;
     Access::tap(app, &sent);
+    Access::park(app);  // (free-running: from here the run is walked publish by publish, none missed)
     Access::submit(app, cmd::makeText(FOXAPP_OP_STORE_ADD_ALL, "", 1));
     std::vector<std::string> trace;
     std::vector<std::string> oldTrace;
@@ -1786,7 +1946,7 @@ void testConsentsAndRun() {
     bool tickHeldWhileRunning = true;
     std::set<std::string> seen;
     for (int i = 0; i < 6000; ++i) {
-        Access::look(app);
+        Access::lookAtPublish(app);
         imguiFrame(app, true, true);
         // Here the engine's state is what was just published and read: the window's line is the true one.
         const bool running = Access::cache(app).model.addAllRunning;
@@ -1802,7 +1962,7 @@ void testConsentsAndRun() {
             }
             seen.insert(line);
         }
-        Access::after(app);
+        Access::afterPublish(app);
         if (everRan && !Access::addAllActive(app) && !Access::installPending(app)) { break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }

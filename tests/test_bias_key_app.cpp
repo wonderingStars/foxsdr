@@ -251,36 +251,45 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.makeDevice = &makeFake;
         cascade::engine::Engine::testHooks_.nativeScan = &fakeScan;
     }
+    // EVERY REACH INTO THE ENGINE is made on the pass's thread with the pass out of the way (passseam::read / on; the pump
+    // move's P6). The open's wait reads the flag through passseam::read; inline and stepped it runs the poll a frame's workers
+    // run (pollSourceAsync), free-running the pass runs its own workers and the wait only watches.
     static bool waitOpen(AppWindow& a) {
         const auto t0 = std::chrono::steady_clock::now();
-        while (a.engine_.deviceOpenPending_) {
-            a.engine_.pollSourceAsync();
+        const auto pending = [&] { return passseam::read<bool>(a.engine_, [&] { return a.engine_.deviceOpenPending_; }); };
+        while (pending()) {
+            if (passseam::mode() != passseam::Mode::Free) { passseam::on(a.engine_, [&] { a.engine_.pollSourceAsync(); }); }
             if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(20)) { return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return true;
     }
     static bool selectNative(AppWindow& a, const std::string& args) {
-        a.engine_.scanNative();
-        for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
-            if (a.engine_.nativeDevices_[i].args == args) {
-                a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
-                return waitOpen(a);
+        const bool found = passseam::read<bool>(a.engine_, [&] {
+            a.engine_.scanNative();
+            for (std::size_t i = 0; i < a.engine_.nativeDevices_.size(); ++i) {
+                if (a.engine_.nativeDevices_[i].args == args) {
+                    a.engine_.selectSource(AppWindow::kNativeRowBase + static_cast<int>(i));
+                    return true;
+                }
             }
-        }
-        return false;
+            return false;
+        });
+        return found && waitOpen(a);
     }
     static bool selectSoapy(AppWindow& a, const std::string& args, const std::string& label) {
         // The native rows first, so the SoapySDR row's number is the one it
         // keeps: a row picked before the scan is renumbered by it, and the
         // next native pick would land on the "same" row and do nothing.
-        a.engine_.scanNative();
-        a.engine_.soapyDevices_.clear();
-        a.engine_.soapyDevices_.push_back({label, args});
-        a.engine_.selectSource(a.engine_.soapyRowBase());
+        passseam::on(a.engine_, [&] {
+            a.engine_.scanNative();
+            a.engine_.soapyDevices_.clear();
+            a.engine_.soapyDevices_.push_back({label, args});
+            a.engine_.selectSource(a.engine_.soapyRowBase());
+        });
         return waitOpen(a);
     }
-    static void selectGenerator(AppWindow& a) { a.engine_.selectSource(0); }
+    static void selectGenerator(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.selectSource(0); }); }
 
     // THE WINDOW READS ITS ENGINE API SESSION (window port, group 4), so without
     // a frame what it draws from is the last frame's. A frame's own order is run
@@ -313,8 +322,8 @@ struct AppWindowTestAccess {
     }
     // THE CHECKBOX, as the Source panel draws it: shown and ticked from
     // biasTeePanel_ (the stand-in never reaches it).
-    static bool boxShown(AppWindow& a) { return a.engine_.biasTeePanel_.present; }
-    static bool boxTicked(AppWindow& a) { return a.engine_.biasTeePanel_.shown; }
+    static bool boxShown(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.biasTeePanel_.present; }); }
+    static bool boxTicked(AppWindow& a) { return passseam::read<bool>(a.engine_, [&] { return a.engine_.biasTeePanel_.shown; }); }
     // A press of the key, and the two answers - the members the deck and the
     // dialog call.
     // A press and an answer SUBMIT a command (on the window's session since
@@ -345,33 +354,53 @@ struct AppWindowTestAccess {
     // What the dialog would do if it were drawn now: the question still stands.
     static void clearQueued(AppWindow& a) { a.biasKeyAskQueued_ = false; }
     // A tick or untick of the Source panel's checkbox.
-    static void tick(AppWindow& a, bool want) { a.engine_.switchBiasTee(want); }
-    static const std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
-    static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
-    static const std::string& args(AppWindow& a) { return a.engine_.deviceArgs_; }
-    static void clearSourceError(AppWindow& a) { a.engine_.sourceError_.clear(); }
+    static void tick(AppWindow& a, bool want) { passseam::on(a.engine_, [&] { a.engine_.switchBiasTee(want); }); }
+    // (Copies, made with the pass out of the way: a reference into the engine would be read beside the pass.)
+    static std::string sourceError(AppWindow& a) {
+        return passseam::read<std::string>(a.engine_, [&] { return a.engine_.sourceError_; });
+    }
+    static std::string kind(AppWindow& a) { return passseam::read<std::string>(a.engine_, [&] { return a.engine_.sourceKind_; }); }
+    static std::string args(AppWindow& a) { return passseam::read<std::string>(a.engine_, [&] { return a.engine_.deviceArgs_; }); }
+    static void clearSourceError(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.sourceError_.clear(); }); }
+    // The HackRF fake refuses the bias-T request (true) or nothing (false). Its failure list is read by the driver inside a
+    // transfer, on the pass's thread, so it is changed there.
+    static void failBiasRequests(AppWindow& a, bool fail) {
+        passseam::on(a.engine_, [&] {
+            if (fail) {
+                hack()->failingRequests.push_back(kAntennaEnable);
+            } else {
+                hack()->failingRequests.clear();
+            }
+        });
+    }
     // The HackRF driver the application opened, for its readback.
     static bool driverBiasT(AppWindow& a) {
-        auto* h = dynamic_cast<cascade::source::HackRfSource*>(a.engine_.device_);
-        return h != nullptr && h->biasT();
+        return passseam::read<bool>(a.engine_, [&] {
+            auto* h = dynamic_cast<cascade::source::HackRfSource*>(a.engine_.device_);
+            return h != nullptr && h->biasT();
+        });
     }
     // The open radio's bias tee as its OWN driver reports it, any family
     // (false when there is no radio or it has none).
     static bool radioBiasT(AppWindow& a) {
-        return a.engine_.device_ != nullptr &&
-               withBiasTee(a.engine_.device_, [](auto& d) { return d.biasT(); });
+        return passseam::read<bool>(a.engine_, [&] {
+            return a.engine_.device_ != nullptr && withBiasTee(a.engine_.device_, [](auto& d) { return d.biasT(); });
+        });
     }
     static std::string radioName(AppWindow& a) {
-        return a.engine_.device_ != nullptr ? std::string(a.engine_.device_->name()) : std::string("(none)");
+        return passseam::read<std::string>(a.engine_, [&] {
+            return a.engine_.device_ != nullptr ? std::string(a.engine_.device_->name()) : std::string("(none)");
+        });
     }
     // What the application would save now, and a restore from it.
     static cascade::core::AppConfig config(AppWindow& a) {
-        a.engine_.publishConfig();   // the engine's frame hands its half over (OPEN 2)
+        passseam::on(a.engine_, [&] { a.engine_.publishConfig(); });   // the engine's frame hands its half over (OPEN 2)
         return a.currentConfig();
     }
+    // (Always made on a window just built, before its first pass: the engine's control thread is not started yet.)
     static void restore(AppWindow& a, const cascade::core::AppConfig& cfg) { a.applyConfig(cfg); }
     static void seedMemory(AppWindow& a, const std::string& key, bool on) {
-        a.engine_.biasTeePanel_.remembered[key] = on;
+        passseam::on(a.engine_, [&] { a.engine_.biasTeePanel_.remembered[key] = on; });
     }
     // Whether the dialog, drawn now, would PROMISE that the radio comes back
     // on at its next open (the restore sentence) - the fact it draws from.
@@ -380,8 +409,12 @@ struct AppWindowTestAccess {
         return a.uiFact("fact.biasTee.mayRemember") == "1";
     }
     // ...and the engine's own rule for it, which the fact must agree with.
-    static bool enginePromisesRestore(AppWindow& a) { return a.engine_.biasKeyMayRememberNow(); }
-    static std::size_t memorySize(AppWindow& a) { return a.engine_.biasTeePanel_.remembered.size(); }
+    static bool enginePromisesRestore(AppWindow& a) {
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.biasKeyMayRememberNow(); });
+    }
+    static std::size_t memorySize(AppWindow& a) {
+        return passseam::read<std::size_t>(a.engine_, [&] { return a.engine_.biasTeePanel_.remembered.size(); });
+    }
 };
 
 }  // namespace cascade::gui
@@ -500,7 +533,7 @@ void testRefusalChangesNothing() {
     cascade::gui::AppWindow app;
     CHECK(Access::selectNative(app, kHackArgs));
     // The radio refuses every bias-T request from here on.
-    hack()->failingRequests.push_back(kAntennaEnable);
+    Access::failBiasRequests(app, true);
     Access::clearSourceError(app);
     Access::press(app);
     CHECK(Access::asking(app));
@@ -513,7 +546,7 @@ void testRefusalChangesNothing() {
     CHECK(!Access::keyLit(app));
     CHECK(!Access::boxTicked(app));
     CHECK(!Access::sourceError(app).empty());
-    hack()->failingRequests.clear();
+    Access::failBiasRequests(app, false);
 
     // On, then the radio refuses the OFF: the lamp stays lit, because the
     // power is still on the port. A FRESH radio: on a HackRF a failed control
@@ -524,7 +557,7 @@ void testRefusalChangesNothing() {
     Access::tick(app2, true);
     CHECK(Access::keyLit(app2));
     Access::clearSourceError(app2);
-    hack()->failingRequests.push_back(kAntennaEnable);
+    Access::failBiasRequests(app2, true);
     Access::press(app2);
     std::printf("      refused off: asking %d driver %d key shown %d box %d error \"%s\"\n",
                 Access::asking(app2), Access::driverBiasT(app2), Access::keyShown(app2),
@@ -537,7 +570,7 @@ void testRefusalChangesNothing() {
     CHECK(Access::boxTicked(app2));
     CHECK(!Access::keyShown(app2));
     CHECK(!Access::sourceError(app2).empty());
-    hack()->failingRequests.clear();
+    Access::failBiasRequests(app2, false);
 }
 
 // --- REPAIR ROUND 1 (review of 97815fc) -------------------------------------------
@@ -728,9 +761,9 @@ void testNoKeyOverADeadRadio() {
     CHECK(Access::selectNative(app, kHackArgs));
     CHECK(Access::keyShown(app));
     // A failed control transfer is a HackRF that stopped answering.
-    hack()->failingRequests.push_back(kAntennaEnable);
+    Access::failBiasRequests(app, true);
     Access::tick(app, true);
-    hack()->failingRequests.clear();
+    Access::failBiasRequests(app, false);
     std::printf("      after the fault: key shown %d\n", Access::keyShown(app));
     CHECK(!Access::keyShown(app));
     // And a press on it (a stale frame) does nothing and asks nothing.

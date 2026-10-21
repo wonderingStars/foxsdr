@@ -88,7 +88,9 @@
 //      it; the hook and the window's copy of the picture are gone from the source
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -109,7 +111,10 @@
 #include <unistd.h>
 #endif
 
+#include <functional>
 #include <future>
+#include <memory>
+#include <mutex>
 #include <new>
 
 #include "core/app_commands.hpp"
@@ -160,13 +165,14 @@ std::vector<cascade::source::SoapyDeviceInfo> noSoapyRadios() { return {}; }
 std::string g_pluginDir;
 std::string pluginDir() { return g_pluginDir; }
 
-// What patchPublishSets saw of one node, this frame.
-pc::NodeId g_watch = pc::kNoNode;
-bool g_published = false;
-float g_publishedX = 0.0f;
-float g_publishedY = 0.0f;
+// What patchPublishSets saw of one node, this frame. Atomics: the hook runs on the pass's thread, which free-running is not the
+// test's (the frame clears g_published and B reads them while that thread's passes run).
+std::atomic<pc::NodeId> g_watch{pc::kNoNode};
+std::atomic<bool> g_published{false};
+std::atomic<float> g_publishedX{0.0f};
+std::atomic<float> g_publishedY{0.0f};
 void onPublish(const pc::Graph& g) {
-    if (const pc::Node* n = g.find(g_watch)) {
+    if (const pc::Node* n = g.find(g_watch.load())) {
         g_published = true;
         g_publishedX = n->x;
         g_publishedY = n->y;
@@ -202,10 +208,86 @@ struct AppWindowTestAccess {
         return taken;
     }
     static void patchOpenFalse(AppWindow& a) { a.patchOpen_ = false; }
+    // EVERY REACH INTO THE ENGINE from the test's thread (the pump move's P6) is made on the pass's thread with the pass out of the
+    // way (passseam::read / on), or directly where no pass can run beside it: before the control thread exists (a window no look has
+    // attached yet - what I, I2 and M mean by "before any frame"), or while the pass is HELD (below).
+    //
+    // THE PASS HELD BETWEEN LOOKS, free-running only (B, G, L, B2, P). What those scenarios assert is what the engine holds BETWEEN
+    // two of the frame's passes: one frame behind the pointer, a commit in flight and not yet applied, a full session queue not
+    // drained, what one frame (one pass) costs.
+    // Free-running, a pass of the thread's own lands within milliseconds of the page's commit (the draw commits a drag as it moves)
+    // and applies it before the test has read anything. So there the pass is held: a piece of work posted to it (Engine::postToPass)
+    // that waits until it is let go. A pass runs posted work at the head of its front part AFTER it has taken its queues, so while it
+    // is held nothing the window sends is applied, and what the test reads precedes the next pass. Each look lets it go, has its one
+    // whole pass (runPassNow) and holds it again before the window's part of the frame - the order a stepped run has; a stalled
+    // frame (lookStalled) leaves it held. Inline and stepped no pass runs unless the test asks for one: there is nothing to hold.
+    // While it is held nothing may ask for a pass, so rd/wr go direct.
+    struct Hold {
+        std::mutex m;
+        std::condition_variable cv;
+        bool running = false;
+        bool release = false;
+    };
+    static std::shared_ptr<Hold>& held() {
+        static std::shared_ptr<Hold> h;
+        return h;
+    }
+    static bool& holdingLooks() {
+        static bool on = false;
+        return on;
+    }
+    static void holdPass(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
+        passseam::attach(a.engine_);
+        auto h = std::make_shared<Hold>();
+        a.engine_.postToPass([h] {
+            std::unique_lock<std::mutex> lk(h->m);
+            h->running = true;
+            h->cv.notify_all();
+            h->cv.wait(lk, [&] { return h->release; });
+        });
+        std::unique_lock<std::mutex> lk(h->m);
+        const bool took = h->cv.wait_for(lk, std::chrono::seconds(10), [&] { return h->running; });
+        CHECK(took);
+        held() = h;
+    }
+    static void releasePass() {
+        const std::shared_ptr<Hold> h = held();
+        if (h == nullptr) { return; }
+        held().reset();
+        {
+            std::lock_guard<std::mutex> lk(h->m);
+            h->release = true;
+        }
+        h->cv.notify_all();
+    }
+    // From here on (on) the pass runs only inside a look; off lets it run free again. Off before the window goes.
+    static void holdBetweenLooks(AppWindow& a, bool on) {
+        if (passseam::mode() != passseam::Mode::Free) { return; }
+        holdingLooks() = on;
+        if (on) {
+            holdPass(a);
+        } else {
+            releasePass();
+        }
+    }
+    static bool direct(AppWindow& a) { return held() != nullptr || !a.engine_.controlThreadRunning(); }
+    template <class R>
+    static R rd(AppWindow& a, const std::function<R()>& readIt) {
+        return direct(a) ? readIt() : passseam::read<R>(a.engine_, readIt);
+    }
+    static void wr(AppWindow& a, const std::function<void()>& work) {
+        if (direct(a)) {
+            work();
+        } else {
+            passseam::on(a.engine_, work);
+        }
+    }
     // THE ENGINE'S PART OF A FRAME, in drawUi's order: the commands the last frame queued are applied by the pass, the
     // once-a-frame commit and the page-open flag, the patch step, the publish, the window's read of it, and the session's
     // answers (pumpTransmitKey) - which is where a commit's answer reaches the page.
     static void look(AppWindow& a) {
+        releasePass();   // (held between looks: let go for this look's pass)
         passseam::pass(a.engine_, [&] {
             a.engine_.pumpFrameBegin();
             a.engine_.drainLocalCommands();
@@ -216,10 +298,11 @@ struct AppWindowTestAccess {
             a.engine_.pumpPatch();
             (void)a.engine_.pumpPublish();
         }, [&] {
+            if (holdingLooks()) { holdPass(a); }
             a.syncPatchPageOpen();
             a.commitPatchDraft();
         });
-        a.statusLines_ = a.engine_.statusText();
+        a.statusLines_ = a.engine_.statusText();   // (a copy behind the engine's own lock: any thread)
         a.refreshUiState();
         a.pumpTransmitKey();
     }
@@ -238,25 +321,34 @@ struct AppWindowTestAccess {
     static bool seeded(AppWindow& a) { return a.patchSeeded_; }
     static bool inStepNow(AppWindow& a) { return a.patchDraftInStep_; }
     static bool sending(AppWindow& a) { return a.patchSend_.state != AppWindow::PatchSend::State::Idle; }
-    static bool enginePageOpen(AppWindow& a) { return a.engine_.patchPageOpen_; }
-    static bool enginePageWasOpen(AppWindow& a) { return a.engine_.patchWasOpen_; }
-    static bool engineRunning(AppWindow& a) { return a.engine_.patchRunning_; }
-    static std::size_t engineRadios(AppWindow& a) { return a.engine_.patchRadios_.size(); }
-    static std::uint64_t engineVersion(AppWindow& a) { return a.engine_.patchGraphVersion_; }
+    static bool enginePageOpen(AppWindow& a) { return rd<bool>(a, [&] { return a.engine_.patchPageOpen_; }); }
+    static bool enginePageWasOpen(AppWindow& a) { return rd<bool>(a, [&] { return a.engine_.patchWasOpen_; }); }
+    static bool engineRunning(AppWindow& a) { return rd<bool>(a, [&] { return a.engine_.patchRunning_; }); }
+    static std::size_t engineRadios(AppWindow& a) { return rd<std::size_t>(a, [&] { return a.engine_.patchRadios_.size(); }); }
+    static std::uint64_t engineVersion(AppWindow& a) { return rd<std::uint64_t>(a, [&] { return a.engine_.patchGraphVersion_; }); }
     static std::uint64_t draftVersion(AppWindow& a) { return a.patchDraftVersion_; }
     static FoxCommandResult apply(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
-        return a.engine_.applyCommand(q.c, q.longText);
+        return rd<FoxCommandResult>(a, [&] { return a.engine_.applyCommand(q.c, q.longText); });
     }
-    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) { return a.engine_.applyCommand(c); }
+    static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
+        return rd<FoxCommandResult>(a, [&] { return a.engine_.applyCommand(c); });
+    }
     // A patch document, as applyConfig loads one.
     static void load(AppWindow& a, const pc::Graph& g) { (void)a.loadPatchDocument(g); }
-    static const pc::Graph& engine(AppWindow& a) { return a.engine_.patchGraph_; }
+    // The engine's graph: a COPY, made where no pass runs beside it (a reference into patchGraph_ is read while the pass assigns it).
+    static pc::Graph engine(AppWindow& a) { return rd<pc::Graph>(a, [&] { return a.engine_.patchGraph_; }); }
+    // Where the engine's node store holds a node - compared, never dereferenced (I2: the store is the very one it was).
+    static const pc::Node* engineNodeAddress(AppWindow& a, pc::NodeId id) {
+        return rd<const pc::Node*>(a, [&] { return a.engine_.patchGraph_.find(id); });
+    }
     static const pc::Graph& draft(AppWindow& a) { return a.patchDraft_; }
     static pc::Graph& mutableDraft(AppWindow& a) { return a.patchDraft_; }
     // The Engine's own runtime changing a node (as patchReconcile does when
     // an I/Q recording tells a Radio its rate) - the test stands in for it.
     static void engineSetsRate(AppWindow& a, pc::NodeId id, double hz) {
-        if (pc::Node* n = a.engine_.patchGraph_.mutableNode(id)) { n->rateHz = hz; }
+        wr(a, [&] {
+            if (pc::Node* n = a.engine_.patchGraph_.mutableNode(id)) { n->rateHz = hz; }
+        });
     }
     static float originX(AppWindow& a) { return a.patchCanvasOriginX_; }
     static float originY(AppWindow& a) { return a.patchCanvasOriginY_; }
@@ -290,26 +382,34 @@ struct AppWindowTestAccess {
         return it == a.patchTextOutLines_.end() ? 0u : it->second.size();
     }
     static void clearDecoderOutput(AppWindow& a) { a.clearDecoderLines(); }
-    static void injectNote(AppWindow& a, pc::NodeId node, const std::string& text) { a.engine_.patchRadioError_[node] = text; }
-    static void clearNote(AppWindow& a, pc::NodeId node) { a.engine_.patchRadioError_.erase(node); }
+    static void injectNote(AppWindow& a, pc::NodeId node, const std::string& text) {
+        wr(a, [&] { a.engine_.patchRadioError_[node] = text; });
+    }
+    static void clearNote(AppWindow& a, pc::NodeId node) { wr(a, [&] { a.engine_.patchRadioError_.erase(node); }); }
     struct Pending {
         std::promise<cascade::engine::Engine::PatchRadioOpen> promise;
     };
     static void injectPending(AppWindow& a, pc::NodeId node, Pending& held) {
-        a.engine_.patchRadioPending_[node] = held.promise.get_future();
-        a.engine_.patchRadioPendingAs_[node] = "test@1";
+        wr(a, [&] {
+            a.engine_.patchRadioPending_[node] = held.promise.get_future();
+            a.engine_.patchRadioPendingAs_[node] = "test@1";
+        });
     }
     static void answerPending(Pending& held) { held.promise.set_value(cascade::engine::Engine::PatchRadioOpen{}); }
-    static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
-    static void injectDestError(AppWindow& a, pc::NodeId node, const std::string& text) { a.engine_.patchDestError_[node] = text; }
+    static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { a.engine_.recordDir_ = d; }); }
+    static void injectDestError(AppWindow& a, pc::NodeId node, const std::string& text) {
+        wr(a, [&] { a.engine_.patchDestError_[node] = text; });
+    }
     // A line the engine's decoders said, as pumpDecoderOutput logs one (node 0: the receiver's own decoders).
     static void injectLine(AppWindow& a, pc::NodeId node, const std::string& plugin, const std::string& text) {
         cascade::core::DecodedLine l;
         l.node = node;
         l.plugin = plugin;
         l.text = text;
-        a.engine_.decoderLog_.push_back(std::move(l));
-        ++a.engine_.decoderLinesTotal_;
+        wr(a, [&] {
+            a.engine_.decoderLog_.push_back(std::move(l));
+            ++a.engine_.decoderLinesTotal_;
+        });
     }
     // The cache refresh alone (no draw): the table's lists and facts when listSeq moved, PATCH_LIVE, a radio's spectrum.
     static void refreshReads(AppWindow& a, pc::NodeId radio) {
@@ -330,7 +430,9 @@ struct AppWindowTestAccess {
     static std::size_t pictureScratchCapacity(AppWindow& a) { return a.patchPictureScratch_.capacity(); }
     static const FoxEngineApi* engineApi(AppWindow& a) { return a.engineApi_; }
     static void setEngineApi(AppWindow& a, const FoxEngineApi* t) { a.engineApi_ = t; }
-    static void engineStops(AppWindow& a) { (void)a.engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 0)); }
+    static void engineStops(AppWindow& a) {
+        wr(a, [&] { (void)a.engine_.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_PATCH_RUN, 0)); });
+    }
 };
 }  // namespace cascade::gui
 
@@ -449,7 +551,8 @@ ImVec2 screen(AppWindow& a, pg::Vec2 w) {
 
 // A point on a node's title bar, clear of its close key.
 ImVec2 header(AppWindow& a, pc::NodeId id) {
-    const pc::Node* n = A::engine(a).find(id);
+    const pc::Graph g = A::engine(a);
+    const pc::Node* n = g.find(id);
     return n == nullptr ? ImVec2(0, 0) : screen(a, pg::Vec2{n->x + 24.0f, n->y + 8.0f});
 }
 
@@ -649,6 +752,7 @@ int main() {
         const pc::Node start = *A::engine(*a).find(s.radio);
         const ImVec2 at = header(*a, s.radio);
         g_watch = s.radio;
+        A::holdBetweenLooks(*a, true);   // (free-running: the engine as this frame's pass left it - see AppWindowTestAccess::Hold)
         mouseTo(*a, at.x, at.y);
         press(*a);
         CHECK(A::dragging(*a) == s.radio);
@@ -657,7 +761,8 @@ int main() {
         float lastY = start.y;
         for (int k = 1; k <= 5; ++k) {
             mouseTo(*a, at.x + 30.0f * static_cast<float>(k), at.y + 12.0f * static_cast<float>(k));
-            const pc::Node* e = A::engine(*a).find(s.radio);
+            const pc::Graph eg = A::engine(*a);
+            const pc::Node* e = eg.find(s.radio);
             const pc::Node* d = A::draft(*a).find(s.radio);
             CHECK(e != nullptr && d != nullptr);
             if (e == nullptr || d == nullptr) { break; }
@@ -682,9 +787,11 @@ int main() {
         release(*a);
         frames(*a, 3);
         CHECK(A::dragging(*a) == pc::kNoNode);
-        const pc::Node* e = A::engine(*a).find(s.radio);
+        const pc::Graph eg = A::engine(*a);
+        const pc::Node* e = eg.find(s.radio);
         CHECK(e != nullptr && nearly(e->x, start.x + 150.0f / zoom) && nearly(e->y, start.y + 60.0f / zoom));
         CHECK(inStep(*a));
+        A::holdBetweenLooks(*a, false);
         g_watch = pc::kNoNode;
         delete a;
     }
@@ -770,6 +877,7 @@ int main() {
         const pc::Node start = *A::engine(*a).find(s.radio);
         const float zoom = A::view(*a).zoom;
         const ImVec2 at = header(*a, s.radio);
+        A::holdBetweenLooks(*a, true);   // (free-running: "the frame behind" is the engine between two of the frame's passes)
         mouseTo(*a, at.x, at.y);
         press(*a);
         mouseTo(*a, at.x + 40.0f, at.y + 10.0f);
@@ -781,7 +889,8 @@ int main() {
         for (int k = 2; k <= 4; ++k) {
             mouseTo(*a, at.x + 40.0f * static_cast<float>(k), at.y + 10.0f * static_cast<float>(k));
             const pc::Node* d = A::draft(*a).find(s.radio);
-            const pc::Node* e = A::engine(*a).find(s.radio);
+            const pc::Graph eg = A::engine(*a);
+            const pc::Node* e = eg.find(s.radio);
             CHECK(d != nullptr && e != nullptr);
             if (d == nullptr || e == nullptr) { break; }
             // The drag is where the pointer put it - never thrown back...
@@ -795,11 +904,13 @@ int main() {
         CHECK(A::dragging(*a) == s.radio);
         release(*a);
         frames(*a, 3);
-        const pc::Node* e = A::engine(*a).find(s.radio);
+        const pc::Graph eg = A::engine(*a);
+        const pc::Node* e = eg.find(s.radio);
         CHECK(e != nullptr && nearly(e->x, start.x + 160.0f / zoom) && !e->on && e->rateHz == 1.024e6);
         CHECK(A::engine(*a).find(s.chan) != nullptr &&
               A::engine(*a).find(s.chan)->freqHz == 144800000.25);
         CHECK(inStep(*a));
+        A::holdBetweenLooks(*a, false);
         delete a;
     }
 
@@ -890,7 +1001,8 @@ int main() {
         for (int k = 2; k <= 4; ++k) {
             mouseTo(*a, at.x + 40.0f * static_cast<float>(k), at.y + 10.0f * static_cast<float>(k));
         }
-        const pc::Node* m = A::engine(*a).find(s.radio);
+        pc::Graph mg = A::engine(*a);
+        const pc::Node* m = mg.find(s.radio);
         std::printf("   Map at %.1f,%.1f\n", m != nullptr ? static_cast<double>(m->x) : -1.0,
                     m != nullptr ? static_cast<double>(m->y) : -1.0);
         CHECK(m != nullptr && m->kind == pc::NodeKind::Map && m->x == 10.0f && m->y == 10.0f);
@@ -898,7 +1010,8 @@ int main() {
         CHECK(A::selected(*a) == pc::kNoNode);   // ...and so did what was selected in it
         release(*a);
         frames(*a, 2);
-        m = A::engine(*a).find(s.radio);
+        mg = A::engine(*a);
+        m = mg.find(s.radio);
         CHECK(m != nullptr && m->x == 10.0f && m->y == 10.0f);
         CHECK(A::engine(*a).nodes().size() == 1u);
         CHECK(inStep(*a));
@@ -918,7 +1031,7 @@ int main() {
         const cascade::core::cmd::QueuedCommand q =
             cascade::core::cmd::makeText(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(g), 0);
         CHECK(A::apply(*a, q).status == FOXAPI_OK);
-        const pc::Node* before = A::engine(*a).find(one);
+        const pc::Node* before = A::engineNodeAddress(*a, one);
         std::vector<cascade::core::cmd::QueuedCommand> sent;
         A::tap(*a, &sent);
         A::flush(*a);
@@ -927,7 +1040,7 @@ int main() {
         A::flush(*a);
         A::look(*a);
         CHECK(sent.empty());
-        CHECK(before != nullptr && A::engine(*a).find(one) == before);
+        CHECK(before != nullptr && A::engineNodeAddress(*a, one) == before);
         delete a;
     }
 
@@ -985,7 +1098,8 @@ int main() {
             frame(*a);
             kio.AddKeyEvent(ImGuiKey_Enter, false);
             frames(*a, 4);
-            const pc::Node* e = A::engine(*a).find(s.demod);
+            const pc::Graph eg = A::engine(*a);
+            const pc::Node* e = eg.find(s.demod);
             const pc::Node* d = A::draft(*a).find(s.demod);
             std::printf("   engine %.1f dB, page %.1f dB\n", e != nullptr ? static_cast<double>(e->squelchDb) : 0.0,
                         d != nullptr ? static_cast<double>(d->squelchDb) : 0.0);
@@ -1018,12 +1132,14 @@ int main() {
         g_viewShown = true;
         frames(*a, 2);
         const ImVec2 at = header(*a, s.radio);
+        A::holdBetweenLooks(*a, true);   // (free-running: ONE frame's cost is one pass's - see AppWindowTestAccess::Hold)
         mouseTo(*a, at.x, at.y);
         press(*a);
         mouseTo(*a, at.x + 10.0f, at.y);
         c0 = count.load();
         mouseTo(*a, at.x + 20.0f, at.y);
         const std::uint64_t drag = count.load() - c0;
+        A::holdBetweenLooks(*a, false);
         release(*a);
         std::printf("   10 idle frames open: %llu, 10 not drawn: %llu, one drag frame: %llu\n",
                     static_cast<unsigned long long>(open), static_cast<unsigned long long>(hidden),
@@ -1059,7 +1175,8 @@ int main() {
         CHECK(A::apply(*a, cascade::core::cmd::make(FOXAPI_OP_PATCH_ALL_OFF)).status == FOXAPI_OK);
         g_viewShown = true;
         frames(*a, 3);
-        const pc::Node* e = A::engine(*a).find(s.radio);
+        const pc::Graph eg = A::engine(*a);
+        const pc::Node* e = eg.find(s.radio);
         const pc::Node* d = A::draft(*a).find(s.radio);
         std::printf("   engine on=%d, page on=%d\n", e != nullptr && e->on ? 1 : 0, d != nullptr && d->on ? 1 : 0);
         CHECK(e != nullptr && !e->on);
@@ -1101,7 +1218,9 @@ int main() {
         mouseTo(*a, at.x, at.y);
         press(*a);
         CHECK(A::dragging(*a) == s.radio);
-        // The first move goes through a pass: its commit is the one in flight.
+        // The first move goes through a pass: its commit is the one in flight. (Free-running, the stall is the pass HELD: from
+        // this frame on a pass runs only in a look, and a stalled frame has none.)
+        A::holdBetweenLooks(*a, true);
         mouseTo(*a, at.x + 30.0f, at.y + 12.0f);
         CHECK_EQ(graphCommands(), 1u);
         CHECK(A::sending(*a));
@@ -1111,7 +1230,8 @@ int main() {
         for (int k = 2; k <= 5; ++k) {
             mouseTo(*a, at.x + 30.0f * static_cast<float>(k), at.y + 12.0f * static_cast<float>(k));
             const pc::Node* d = A::draft(*a).find(s.radio);
-            const pc::Node* e = A::engine(*a).find(s.radio);
+            const pc::Graph eg = A::engine(*a);
+            const pc::Node* e = eg.find(s.radio);
             CHECK(d != nullptr && e != nullptr);
             if (d == nullptr || e == nullptr) { break; }
             CHECK(nearly(d->x, start.x + 30.0f * static_cast<float>(k) / zoom));
@@ -1135,7 +1255,8 @@ int main() {
         frames(*a, 4);
         {
             const pc::Node* d = A::draft(*a).find(s.radio);
-            const pc::Node* e = A::engine(*a).find(s.radio);
+            const pc::Graph eg = A::engine(*a);
+            const pc::Node* e = eg.find(s.radio);
             CHECK(d != nullptr && e != nullptr);
             if (d != nullptr && e != nullptr) {
                 CHECK(nearly(e->x, start.x + 150.0f / zoom) && nearly(e->y, start.y + 60.0f / zoom));
@@ -1146,6 +1267,7 @@ int main() {
         CHECK_EQ(graphCommands(), 2u);
         CHECK(inStep(*a));
         CHECK(!A::sending(*a));
+        A::holdBetweenLooks(*a, false);
         A::tap(*a, nullptr);
         delete a;
     }
@@ -1221,9 +1343,10 @@ int main() {
             CHECK(A::seeded(*a));
             CHECK_EQ(setCount(sent, false), 1u);
             CHECK_EQ(setCount(sent, true), 0u);
-            CHECK(A::engine(*a).nodes().size() == 1u);
-            if (A::engine(*a).nodes().size() == 1u) {
-                const pc::Node& n = A::engine(*a).nodes()[0];
+            const pc::Graph eg = A::engine(*a);
+            CHECK(eg.nodes().size() == 1u);
+            if (eg.nodes().size() == 1u) {
+                const pc::Node& n = eg.nodes()[0];
                 CHECK(n.kind == pc::NodeKind::Radio);
                 CHECK(n.device == pc::kGeneratorKey);   // no radio in the receiver: the stand-in
             }
@@ -1244,6 +1367,7 @@ int main() {
         const ImVec2 at = header(*a, s.radio);
         mouseTo(*a, at.x, at.y);
         press(*a);
+        A::holdBetweenLooks(*a, true);   // (free-running: the stall is the pass HELD, so nothing drains the queue it fills)
         g_passRuns = false;
         const int taken = A::fillQueue(*a);
         std::printf("   %d ordinary commands pending when the table said BUSY\n", taken);
@@ -1256,9 +1380,11 @@ int main() {
         g_passRuns = true;
         release(*a);
         frames(*a, 4);
-        const pc::Node* e = A::engine(*a).find(s.radio);
+        const pc::Graph eg = A::engine(*a);
+        const pc::Node* e = eg.find(s.radio);
         CHECK(e != nullptr && nearly(e->x, start.x + 60.0f / zoom) && nearly(e->y, start.y + 24.0f / zoom));
         CHECK(inStep(*a));
+        A::holdBetweenLooks(*a, false);
         delete a;
     }
 
@@ -1287,8 +1413,9 @@ int main() {
         // ...and the next pass applies START, then the commit, whose version is the one before START.
         release(*a);
         frames(*a, 3);
-        const pc::Node* er = A::engine(*a).find(s.radio);
-        const pc::Node* ed = A::engine(*a).find(s.demod);
+        const pc::Graph eg = A::engine(*a);
+        const pc::Node* er = eg.find(s.radio);
+        const pc::Node* ed = eg.find(s.demod);
         const pc::Node* dr = A::draft(*a).find(s.radio);
         const pc::Node* dd = A::draft(*a).find(s.demod);
         CHECK(er != nullptr && ed != nullptr && dr != nullptr && dd != nullptr);

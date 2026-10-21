@@ -22,9 +22,17 @@
 // engine's pass takes the session's queue, publishes, the window reads its state), draws, and lets the NEXT look
 // take what the draw sent. pumpTransmitKey is not run, so the session's answers are still there to be read.
 //
+// AGAINST A FREE-RUNNING PASS (FOXSDR_TEST_PASS=free, tests/pass_seam.hpp): every read or write of an engine field from
+// this thread goes through passseam::on/read (run on the pass, with the pass out of the way); the survey's clicks are
+// made with the window's session CLOSED, so the tap records what each click sends and nothing reaches the engine (a
+// free pass would otherwise apply them - a RESCAN, a STOP - mid-survey); and where E says "the click only queued it"
+// the pass is HELD from just before the click's release to the look after it (holdPass): that statement is about the
+// pass not having run, which a free-running pass can only be made to keep by being held.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +40,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <set>
 #include <string>
@@ -92,6 +101,43 @@ std::string fileOf(const char* fixture) { return std::filesystem::path(fixture).
 
 const char* const kWindowName = "Fitted modules###fittedmoduleswindow";
 
+// THE PASS HELD (free-running mode only; inline and stepped there is no pass of its own to hold): work posted to the pass
+// that waits until it is let go, so from the moment holdPass returns until releasePass no pass runs - what E's "the click
+// only queued it" needs. While it is held the engine's fields may be read from this thread (the pass thread is parked in
+// the hold, ordered by its mutex: the same "pass out of the way" runOnPass gives). Released by the next look and by Fresh.
+struct PassHold {
+    std::mutex m;
+    std::condition_variable cv;
+    bool parked = false;
+    bool released = false;
+};
+std::shared_ptr<PassHold> g_hold;
+
+void holdPass(cascade::engine::Engine& e) {
+    if (passseam::mode() != passseam::Mode::Free || g_hold != nullptr) { return; }
+    passseam::attach(e);
+    auto h = std::make_shared<PassHold>();
+    g_hold = h;
+    e.postToPass([h] {
+        std::unique_lock<std::mutex> lk(h->m);
+        h->parked = true;
+        h->cv.notify_all();
+        h->cv.wait(lk, [&] { return h->released; });
+    });
+    std::unique_lock<std::mutex> lk(h->m);
+    h->cv.wait(lk, [&] { return h->parked; });
+}
+void releasePass() {
+    if (g_hold == nullptr) { return; }
+    {
+        std::lock_guard<std::mutex> lk(g_hold->m);
+        g_hold->released = true;
+    }
+    g_hold->cv.notify_all();
+    g_hold.reset();
+}
+bool passHeld() { return g_hold != nullptr; }
+
 }  // namespace
 
 namespace cascade::gui {
@@ -111,6 +157,7 @@ struct AppWindowTestAccess {
     // One frame's engine part, in drawUi's order: the session's queue taken, the publish, the status copy, the
     // window's read of the state.
     static void look(AppWindow& a) {
+        releasePass();
         passseam::pass(a.engine_, [&] {
             a.engine_.pumpFrameBegin();
             a.engine_.pumpInputs();
@@ -133,14 +180,21 @@ struct AppWindowTestAccess {
         return out;
     }
     static void submit(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { a.uiSubmit(q); }
+    static Engine& engine(AppWindow& a) { return a.engine_; }
     static void tap(AppWindow& a, Sent* log) { a.uiSubmitTap_ = log; }
-    static void dropQueued(AppWindow& a) {
-        a.closeUiSession();
+    // The survey's clicks are made with the session CLOSED (the tap records each submit before the session is asked), so
+    // what a click sends is seen and never applied, whenever a pass runs; reopened after the click, with the state read.
+    static void unplug(AppWindow& a) { a.closeUiSession(); }
+    static void plugBack(AppWindow& a) {
         a.openUiSession();
         a.refreshUiState();
     }
-    static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) { (void)a.engine_.applyCommand(q.c, q.longText); }
-    static void command(AppWindow& a, const FoxCommand& c) { (void)a.engine_.applyCommand(c); }
+    static void command(AppWindow& a, const cascade::core::cmd::QueuedCommand& q) {
+        passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(q.c, q.longText); });
+    }
+    static void command(AppWindow& a, const FoxCommand& c) {
+        passseam::on(a.engine_, [&] { (void)a.engine_.applyCommand(c); });
+    }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
     static std::uint64_t listSeq(AppWindow& a) { return a.uiState_.listSeq; }
 
@@ -159,24 +213,53 @@ struct AppWindowTestAccess {
     static void storeDrew(AppWindow& a, bool drew) { a.pluginBrowserDrawnThisFrame_ = drew; }
     static void draw(AppWindow& a) { a.drawFittedModulesWindow(); }
 
-    // The engine, for comparison and for what a hermetic window cannot make.
-    static const std::vector<cascade::core::LoadedPlugin>& host(AppWindow& a) { return a.engine_.pluginHost_.plugins(); }
-    static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
-    static bool stopped(AppWindow& a, const std::string& key) { return a.engine_.pluginIsStopped(key); }
+    // The engine, for comparison and for what a hermetic window cannot make. (Copies made on the pass, never a reference
+    // into a member the pass rewrites.)
+    static std::vector<cascade::core::LoadedPlugin> host(AppWindow& a) {
+        return passseam::read<std::vector<cascade::core::LoadedPlugin>>(a.engine_, [&] { return a.engine_.pluginHost_.plugins(); });
+    }
+    static bool running(AppWindow& a) {
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.pipeline_.running(); });
+    }
+    static bool stopped(AppWindow& a, const std::string& key) {
+        if (passHeld()) { return a.engine_.pluginIsStopped(key); }  // (the pass is parked in the hold)
+        return passseam::read<bool>(a.engine_, [&] { return a.engine_.pluginIsStopped(key); });
+    }
+    // (both are the API core's grants, under its lock: any thread)
     static bool tuneAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.tuneAllowed(key); }
     static bool settingsAllowed(AppWindow& a, const std::string& key) { return a.pluginUi_.settingsAllowed(key); }
+    // (the core is built with the engine and never replaced; client() and the plugin-side calls take its lock)
     static cascade::core::PluginApiCore& core(AppWindow& a) { return *a.engine_.pluginApi_; }
-    static cascade::core::PluginInventory& inventory(AppWindow& a) { return a.engine_.pluginInventory_; }
-    static const std::string& engineDir(AppWindow& a) { return a.engine_.pluginDir_; }
+    static void addInventory(AppWindow& a, const cascade::core::InstalledPlugin& rec) {
+        passseam::on(a.engine_, [&] { a.engine_.pluginInventory_.plugins.push_back(rec); });
+    }
+    static void clearInventory(AppWindow& a) {
+        passseam::on(a.engine_, [&] { a.engine_.pluginInventory_.plugins.clear(); });
+    }
     static void aLine(AppWindow& a, const std::string& plugin, const std::string& text) {
-        a.engine_.decoderLog_.push_back({plugin, text});
-        while (a.engine_.decoderLog_.size() > Engine::kDecoderLogMax) { a.engine_.decoderLog_.pop_front(); }
-        ++a.engine_.decoderLinesTotal_;
+        passseam::on(a.engine_, [&] {
+            a.engine_.decoderLog_.push_back({plugin, text});
+            while (a.engine_.decoderLog_.size() > Engine::kDecoderLogMax) { a.engine_.decoderLog_.pop_front(); }
+            ++a.engine_.decoderLinesTotal_;
+        });
+    }
+    // An environment variable the fixture reads when the pass creates its instance, set on the pass.
+    static void envOnPass(AppWindow& a, const char* name, const std::string& value) {
+        passseam::on(a.engine_, [&] { setEnv(name, value); });
     }
 
     // THE WINDOW AS IT WAS BEFORE THE PORT: the model built from the engine's own records, every frame (the code
-    // drawFittedModulesWindow held from the day it was written to the day it was ported, restated).
-    static FittedModulesModel oldModel(AppWindow& a) {
+    // drawFittedModulesWindow held from the day it was written to the day it was ported, restated). Built on the pass;
+    // `allocs`, when given, gets what the build allocated, counted on the thread that built it.
+    static FittedModulesModel oldModel(AppWindow& a, long* allocs = nullptr) {
+        return passseam::read<FittedModulesModel>(a.engine_, [&] {
+            const long mark = t_allocs;
+            FittedModulesModel m = oldModelOnPass(a);
+            if (allocs != nullptr) { *allocs += t_allocs - mark; }
+            return m;
+        });
+    }
+    static FittedModulesModel oldModelOnPass(AppWindow& a) {
         Engine& e = a.engine_;
         FittedModulesModel model;
         model.directory = e.pluginDir_;
@@ -226,10 +309,28 @@ namespace cmd = cascade::core::cmd;
 
 namespace {
 
+// A plugin FILE name on this platform: what PluginHost::hasPluginExtension scans for and PluginRepo's kModuleExtension
+// admits (".dll" on Windows, ".so" on Linux, ".dylib" on macOS), behind the prefix the build gives a module (CMake's
+// shared-library prefix: none on Windows, "lib" elsewhere, as FIXTURE_*_PLUGIN's own names have it). The prefix keeps the
+// host's by-file-name order the same on every platform: "zz_..." sorts after the fixtures as "fixture_..." and as
+// "libfixture_..." alike. On Windows every name comes out as it always was. (Names the engine never scans or judges as a
+// file - a display name, another platform's build, a module that is not there - stay as they are.)
+#if defined(_WIN32)
+constexpr const char* kModulePrefix = "";
+constexpr const char* kModuleExt = ".dll";
+#elif defined(__APPLE__)
+constexpr const char* kModulePrefix = "lib";
+constexpr const char* kModuleExt = ".dylib";
+#else
+constexpr const char* kModulePrefix = "lib";
+constexpr const char* kModuleExt = ".so";
+#endif
+std::string moduleFile(const std::string& stem) { return kModulePrefix + stem + kModuleExt; }
+
 const std::string kStage1 = fileOf(FIXTURE_STAGE1_PLUGIN);
 const std::string kGroup8 = fileOf(FIXTURE_GROUP8_PLUGIN);
 const std::string kGroup9 = fileOf(FIXTURE_GROUP9_PLUGIN);
-const std::string kRefused = "zz_refused.dll";
+const std::string kRefused = moduleFile("zz_refused");
 const std::string kNineName = "Group Nine Fixture";
 
 const char* const kNoCreate = "FOXSDR_FIXTURE_G9_NO_CREATE";
@@ -250,6 +351,7 @@ struct Fresh {
         Access::setRect(app, 20, 20, 1560, 1900);
         Access::setOpen(app, true);
     }
+    ~Fresh() { releasePass(); }  // (a held pass must not outlive the window's teardown, which stops the thread)
 };
 
 // A frame of the application, as far as this window is concerned: the engine's part, then the window drawn.
@@ -427,16 +529,16 @@ void testModelEqualsTheOldWindow() {
     rec.name = kNineName;
     rec.file = kGroup9;
     rec.digestMismatch = true;
-    Access::inventory(app).plugins.push_back(rec);
+    Access::addInventory(app, rec);
     Access::look(app);
     Access::look(app);
     compared += sameModel(app, "an integrity finding");
     CHECK(mod(app, kGroup9)->integrityNote.find("is not the file that was installed") != std::string::npos);
     CHECK(mod(app, kGroup8)->integrityNote.empty());
-    Access::inventory(app).plugins.clear();
+    Access::clearInventory(app);
 
     // Idle: the processor cannot start. The runner's sentence, whole.
-    setEnv(kNoCreate, "1");
+    Access::envOnPass(app, kNoCreate, "1");
     Access::command(app, cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
     Access::look(app);
     Access::look(app);
@@ -445,7 +547,7 @@ void testModelEqualsTheOldWindow() {
     CHECK(!mod(app, kGroup9)->fed);
     CHECK(mod(app, kGroup9)->idleDetail.find("failed to start its audio processor") != std::string::npos);
     CHECK(mod(app, kGroup8)->idleDetail.empty());
-    setEnv(kNoCreate, "");
+    Access::envOnPass(app, kNoCreate, "");
     Access::command(app, cmd::make(FOXAPI_OP_PLUGIN_RESCAN));
     Access::look(app);
     Access::look(app);
@@ -582,7 +684,7 @@ void testWhatTheWindowIsTold() {
 
     // The install sentence comes from the status lines, and only when the store did not print it.
     CHECK(model.report.empty() && model.error.empty());
-    Access::command(app, cmd::makeText(FOXAPI_OP_STORE_REMOVE, "no-such-file.dll"));
+    Access::command(app, cmd::makeText(FOXAPI_OP_STORE_REMOVE, moduleFile("no-such-file")));
     Access::look(app);
     Access::look(app);
     CHECK(Access::lists(app).model.report.empty());
@@ -628,7 +730,7 @@ void testCacheFollowsListSeq() {
     std::printf("      1000 reads of an unchanged state: %ld allocation(s) (%zu)\n", spent, sink);
     CHECK_EQ(spent, 0L);
     // ...also while a sentence is up (it is copied into the model each frame: the room is there after the first).
-    Access::command(app, cmd::makeText(FOXAPI_OP_STORE_REMOVE, "no-such-file.dll"));
+    Access::command(app, cmd::makeText(FOXAPI_OP_STORE_REMOVE, moduleFile("no-such-file")));
     Access::look(app);
     Access::look(app);
     (void)Access::lists(app);
@@ -639,10 +741,10 @@ void testCacheFollowsListSeq() {
     CHECK_EQ(spent, 0L);
 
     // What the window DID cost before the port, every frame it was open, for the record: the same four files.
-    before = t_allocs;
+    long oldAllocs = 0;
     const int frames = 100;
-    for (int i = 0; i < frames; ++i) { sink += Access::oldModel(app).modules.size(); }
-    const long oldPerFrame = (t_allocs - before) / frames;
+    for (int i = 0; i < frames; ++i) { sink += Access::oldModel(app, &oldAllocs).modules.size(); }
+    const long oldPerFrame = oldAllocs / frames;
     std::printf("      the old window's model, built every frame from the engine's records: %ld allocations a frame (and a stat of each file)\n",
                 oldPerFrame);
     CHECK(oldPerFrame > 0);
@@ -804,6 +906,7 @@ std::vector<Found> survey(AppWindow& app, const std::string& file, std::vector<s
         putBack();
         selectModule(app, file);
         sent.clear();
+        Access::unplug(app);
         clickNoPass(app, s.x, s.y);
         Found fd{"", Access::deck(app).confirmRemove, s.x, s.y};
         for (const auto& q : sent) {
@@ -812,7 +915,7 @@ std::vector<Found> survey(AppWindow& app, const std::string& file, std::vector<s
             if (commandsSent != nullptr) { commandsSent->push_back(fd.command); }
         }
         found.push_back(fd);
-        Access::dropQueued(app);
+        Access::plugBack(app);
     }
     Access::tap(app, nullptr);
     putBack();
@@ -919,6 +1022,7 @@ const Found* armSpot(const std::vector<Found>& spots, const std::string& file) {
 
 // A click that lands: the press with the engine's pass before it, and the release - where the key fires - with NO
 // pass after it, so the caller can show nothing has happened yet. The next lookDraw is the engine's next pass.
+// (Free-running, the pass is held from before the release to that look: holdPass.)
 void clickThenHold(AppWindow& app, float x, float y) {
     ImGuiIO& io = ImGui::GetIO();
     io.AddMousePosEvent(x, y);
@@ -926,6 +1030,7 @@ void clickThenHold(AppWindow& app, float x, float y) {
     lookDraw(app);
     io.AddMouseButtonEvent(0, true);
     lookDraw(app);
+    holdPass(Access::engine(app));
     io.AddMouseButtonEvent(0, false);
     drawFrame(app);
     io.AddMousePosEvent(2.0f, 2.0f);
@@ -1081,7 +1186,7 @@ void testControlsLandAtTheNextPass() {
 
     // RESCAN: the whole list is replaced at the next pass; an armed Remove stays armed on its FILE.
     {
-        junk("zz_second_refused.dll");
+        junk(moduleFile("zz_second_refused"));
         const Found* arm = armSpot(spots, kGroup9);
         CHECK(arm != nullptr);
         if (arm != nullptr) {
@@ -1101,7 +1206,7 @@ void testControlsLandAtTheNextPass() {
             lookDraw(app);
             lookDraw(app);
             CHECK_EQ(Access::lists(app).model.modules.size(), 5u);  // the file that was added is in the list
-            CHECK(mod(app, "zz_second_refused.dll") != nullptr && !mod(app, "zz_second_refused.dll")->loaded);
+            CHECK(mod(app, moduleFile("zz_second_refused")) != nullptr && !mod(app, moduleFile("zz_second_refused"))->loaded);
             CHECK_EQ(Access::deck(app).confirmRemove, kGroup9);      // keyed on the file, not on a position
             CHECK(mod(app, kGroup9)->loaded && mod(app, kGroup9)->fed);
             std::printf("      RESCAN: the list replaced at the next pass (5 files now); the armed Remove still names its file\n");
@@ -1112,7 +1217,7 @@ void testControlsLandAtTheNextPass() {
     // REMOVE: two presses (arm, confirm); the file goes at the next pass, and its row and the sentence leave and
     // arrive in the SAME frame.
     {
-        const std::string victim = "zz_second_refused.dll";
+        const std::string victim = moduleFile("zz_second_refused");
         spots = survey(app, victim);
         Access::tap(app, &sent);
         ImGui::GetIO().AddMousePosEvent(2.0f, 2.0f);

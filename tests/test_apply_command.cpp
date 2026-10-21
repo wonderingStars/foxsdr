@@ -44,6 +44,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #if defined(_WIN32)
@@ -306,139 +307,189 @@ struct AppWindowTestAccess {
         cascade::engine::Engine::testHooks_.pluginDir = &pluginDirHook;
         cascade::engine::Engine::testHooks_.soundCardBackend = &makeCard;
     }
+
+    // EVERY ENGINE FIELD BELOW IS THE PASS'S (the pump move's step P6): a read is made, and a write or a call is done, through
+    // passseam::read/on - on the pass's own thread, with the pass out of the way, when it free-runs (FOXSDR_TEST_PASS=free); right here
+    // otherwise. What a read returns is a COPY made with the pass out of the way, never a reference into an engine member. The cases
+    // whose meaning needs NO pass between two of their steps (a submit and the drain that must follow a change of radio, a command and
+    // the flag only the next pass acts on) run those steps as ONE block with exclusive() - a block in which the calls below run
+    // directly, the pass being the thread that runs them.
+    template <class F>
+    static auto rd(AppWindow& a, F f) -> std::decay_t<decltype(f())> {
+        using R = std::decay_t<decltype(f())>;
+        return passseam::read<R>(a.engine_, std::function<R()>(f));
+    }
+    template <class F>
+    static void wr(AppWindow& a, F f) { passseam::on(a.engine_, std::function<void()>(f)); }
+    template <class F>
+    static void exclusive(AppWindow& a, F f) { wr(a, f); }
+    // A WAIT FOR WORK THE PASS COMPLETES ITSELF (an open, a scan, a fetch): inline and stepped the test polls it as the pass's workers
+    // would (no pass runs here); free-running the pass's own workers poll it and the test only reads the flag - unless the wait is made
+    // inside an exclusive() block, where the pass is the thread waiting and so polls it itself.
+    template <class Poll, class Done>
+    static bool waitPolled(AppWindow& a, Poll poll, Done done) {
+        const bool byPass = passseam::mode() == passseam::Mode::Free && !a.engine_.onControlThread();  // (the CALLER's thread)
+        return waitFor([&] {
+            return rd(a, [&] {
+                if (!byPass) { poll(); }
+                return done();
+            });
+        });
+    }
+
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
-        return a.engine_.applyCommand(c, lt);
+        return rd(a, [&] { return a.engine_.applyCommand(c, lt); });
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
-        return a.engine_.applyCommand(q.c, q.longText);
+        return rd(a, [&] { return a.engine_.applyCommand(q.c, q.longText); });
     }
+    // (Engine::submitCommand is the front end's own call from any thread: the queue has its own lock, and it wakes the pass.)
     static void submit(AppWindow& a, const FoxCommand& c) { a.engine_.submitCommand(c); }
     static void submit(AppWindow& a, const cmd::QueuedCommand& q) { a.engine_.submitCommand(q); }
-    static void drain(AppWindow& a) { passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); }); }
-    static std::size_t queued(AppWindow& a) { return a.engine_.localCommands_.size(); }
+    static void drain(AppWindow& a) {
+        if (a.engine_.onControlThread()) {  // (inside an exclusive() block, free-running: the pass is this thread)
+            a.engine_.drainLocalCommands();
+            return;
+        }
+        passseam::custom(a.engine_, [&] { a.engine_.drainLocalCommands(); });
+    }
+    static std::size_t queued(AppWindow& a) { return a.engine_.localCommandsQueuedForTest(); }  // (under the queue's own lock)
 
     // The receiver.
-    static bool running(AppWindow& a) { return a.engine_.pipeline_.running(); }
-    static double centre(AppWindow& a) { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }
-    static double tuned(AppWindow& a) { return a.engine_.currentAbsoluteHz(); }
-    static double vfo(AppWindow& a) { return a.engine_.pipeline_.vfoOffsetHz(); }
-    static float vfoKhz(AppWindow& a) { return a.engine_.vfoOffsetKhz_; }
-    static double inputRate(AppWindow& a) { return a.engine_.pipeline_.inputRateHz(); }
-    static double channelRate(AppWindow& a) { return a.engine_.pipeline_.channelRateHz(); }
-    static int modeIndex(AppWindow& a) { return a.engine_.modeIndex_; }
-    static cascade::dsp::DemodMode demod(AppWindow& a) { return a.engine_.pipeline_.demodMode(); }
-    static double bw(AppWindow& a) { return a.engine_.vfoBandwidthHz_; }
-    static int bwIndex(AppWindow& a) { return a.engine_.bandwidthIndex_; }
-    static float squelch(AppWindow& a) { return a.engine_.squelchDb_; }
-    static float volume(AppWindow& a) { return a.engine_.volume_; }
-    static bool muted(AppWindow& a) { return a.engine_.userMuted_; }
-    static int deemph(AppWindow& a) { return a.engine_.deemphIndex_; }
-    static double deemphUs(AppWindow& a) { return a.engine_.pipeline_.deemphasisUs(); }
-    static bool stereo(AppWindow& a) { return a.engine_.stereoEnabled_ && a.engine_.pipeline_.stereoEnabled(); }
-    static bool stereoOff(AppWindow& a) { return !a.engine_.stereoEnabled_ && !a.engine_.pipeline_.stereoEnabled(); }
-    static bool nr(AppWindow& a) { return a.engine_.nrEnabled_; }
-    static bool nrPipe(AppWindow& a) { return a.engine_.pipeline_.noiseReductionEnabled(); }
-    static float nrStrength(AppWindow& a) { return a.engine_.nrStrength_; }
-    static float nrStrengthPipe(AppWindow& a) { return a.engine_.pipeline_.noiseReductionStrength(); }
-    static bool notch(AppWindow& a) { return a.engine_.notchEnabled_ && a.engine_.pipeline_.notchEnabled(); }
-    static bool notchOff(AppWindow& a) { return !a.engine_.notchEnabled_ && !a.engine_.pipeline_.notchEnabled(); }
-    static float notchHz(AppWindow& a) { return a.engine_.notchFreqHz_; }
-    static double notchHzPipe(AppWindow& a) { return a.engine_.pipeline_.notchFrequencyHz(); }
-    static float notchQ(AppWindow& a) { return a.engine_.notchQ_; }
-    static double notchQPipe(AppWindow& a) { return a.engine_.pipeline_.notchQ(); }
-    static bool autoNotch(AppWindow& a) { return a.engine_.autoNotch_ && a.engine_.pipeline_.autoNotchEnabled(); }
-    static float dbMin(AppWindow& a) { return a.engine_.dbMin_; }
-    static float dbMax(AppWindow& a) { return a.engine_.dbMax_; }
-    static const std::string& bandPlan(AppWindow& a) { return a.engine_.bandPlanSelection_; }
+    static bool running(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.running(); }); }
+    static double centre(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.activeSource().centerFrequencyHz(); }); }
+    static double tuned(AppWindow& a) { return rd(a, [&] { return a.engine_.currentAbsoluteHz(); }); }
+    static double vfo(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.vfoOffsetHz(); }); }
+    static float vfoKhz(AppWindow& a) { return rd(a, [&] { return a.engine_.vfoOffsetKhz_; }); }
+    static double inputRate(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.inputRateHz(); }); }
+    static double channelRate(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.channelRateHz(); }); }
+    static int modeIndex(AppWindow& a) { return rd(a, [&] { return a.engine_.modeIndex_; }); }
+    static cascade::dsp::DemodMode demod(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.demodMode(); }); }
+    static double bw(AppWindow& a) { return rd(a, [&] { return a.engine_.vfoBandwidthHz_; }); }
+    static int bwIndex(AppWindow& a) { return rd(a, [&] { return a.engine_.bandwidthIndex_; }); }
+    static float squelch(AppWindow& a) { return rd(a, [&] { return a.engine_.squelchDb_; }); }
+    static float volume(AppWindow& a) { return rd(a, [&] { return a.engine_.volume_; }); }
+    static bool muted(AppWindow& a) { return rd(a, [&] { return a.engine_.userMuted_; }); }
+    static int deemph(AppWindow& a) { return rd(a, [&] { return a.engine_.deemphIndex_; }); }
+    static double deemphUs(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.deemphasisUs(); }); }
+    static bool stereo(AppWindow& a) {
+        return rd(a, [&] { return a.engine_.stereoEnabled_ && a.engine_.pipeline_.stereoEnabled(); });
+    }
+    static bool stereoOff(AppWindow& a) {
+        return rd(a, [&] { return !a.engine_.stereoEnabled_ && !a.engine_.pipeline_.stereoEnabled(); });
+    }
+    static bool nr(AppWindow& a) { return rd(a, [&] { return a.engine_.nrEnabled_; }); }
+    static bool nrPipe(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.noiseReductionEnabled(); }); }
+    static float nrStrength(AppWindow& a) { return rd(a, [&] { return a.engine_.nrStrength_; }); }
+    static float nrStrengthPipe(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.noiseReductionStrength(); }); }
+    static bool notch(AppWindow& a) {
+        return rd(a, [&] { return a.engine_.notchEnabled_ && a.engine_.pipeline_.notchEnabled(); });
+    }
+    static bool notchOff(AppWindow& a) {
+        return rd(a, [&] { return !a.engine_.notchEnabled_ && !a.engine_.pipeline_.notchEnabled(); });
+    }
+    static float notchHz(AppWindow& a) { return rd(a, [&] { return a.engine_.notchFreqHz_; }); }
+    static double notchHzPipe(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.notchFrequencyHz(); }); }
+    static float notchQ(AppWindow& a) { return rd(a, [&] { return a.engine_.notchQ_; }); }
+    static double notchQPipe(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.notchQ(); }); }
+    static bool autoNotch(AppWindow& a) {
+        return rd(a, [&] { return a.engine_.autoNotch_ && a.engine_.pipeline_.autoNotchEnabled(); });
+    }
+    static float dbMin(AppWindow& a) { return rd(a, [&] { return a.engine_.dbMin_; }); }
+    static float dbMax(AppWindow& a) { return rd(a, [&] { return a.engine_.dbMax_; }); }
+    static std::string bandPlan(AppWindow& a) { return rd(a, [&] { return a.engine_.bandPlanSelection_; }); }
 
     // The recorder.
-    static void setRecordDir(AppWindow& a, const std::string& d) { a.engine_.recordDir_ = d; }
-    static bool recIq(AppWindow& a) { return a.engine_.iqRecorder_.recording(); }
-    static bool recAudio(AppWindow& a) { return a.engine_.audioRecorder_.recording(); }
+    static void setRecordDir(AppWindow& a, const std::string& d) { wr(a, [&] { a.engine_.recordDir_ = d; }); }
+    static bool recIq(AppWindow& a) { return rd(a, [&] { return a.engine_.iqRecorder_.recording(); }); }
+    static bool recAudio(AppWindow& a) { return rd(a, [&] { return a.engine_.audioRecorder_.recording(); }); }
 
     // The source.
-    static std::size_t nativeCount(AppWindow& a) { return a.engine_.nativeDevices_.size(); }
-    static void clearNative(AppWindow& a) { a.engine_.nativeDevices_.clear(); }
-    static std::size_t soapyCount(AppWindow& a) { return a.engine_.soapyDevices_.size(); }
+    static std::size_t nativeCount(AppWindow& a) { return rd(a, [&] { return a.engine_.nativeDevices_.size(); }); }
+    static void clearNative(AppWindow& a) { wr(a, [&] { a.engine_.nativeDevices_.clear(); }); }
+    static std::size_t soapyCount(AppWindow& a) { return rd(a, [&] { return a.engine_.soapyDevices_.size(); }); }
     static void clearSoapy(AppWindow& a) {
-        a.engine_.soapyDevices_.clear();
-        a.engine_.soapyScanned_ = false;
-        a.engine_.soapyScanPartial_ = false;
+        wr(a, [&] {
+            a.engine_.soapyDevices_.clear();
+            a.engine_.soapyScanned_ = false;
+            a.engine_.soapyScanPartial_ = false;
+        });
     }
     static void markSoapyScanned(AppWindow& a) {
-        a.engine_.soapyScanned_ = true;
-        a.engine_.soapyScanPartial_ = false;
-    }
-    static bool soapyPending(AppWindow& a) { return a.engine_.soapyScanPending_; }
-    static bool waitSoapy(AppWindow& a) {
-        return waitFor([&a] {
-            a.engine_.pollSourceAsync();
-            return !a.engine_.soapyScanPending_;
+        wr(a, [&] {
+            a.engine_.soapyScanned_ = true;
+            a.engine_.soapyScanPartial_ = false;
         });
+    }
+    static bool soapyPending(AppWindow& a) { return rd(a, [&] { return a.engine_.soapyScanPending_; }); }
+    static bool waitSoapy(AppWindow& a) {
+        return waitPolled(a, [&] { a.engine_.pollSourceAsync(); }, [&] { return !a.engine_.soapyScanPending_; });
     }
     // The patch page's device-list wish (engine/stage3b-pre B2).
-    static bool patchListsWanted(AppWindow& a) { return a.engine_.patchListsWanted_; }
-    static void setPatchListsWanted(AppWindow& a, bool v) { a.engine_.patchListsWanted_ = v; }
-    static bool patchScanWanted(AppWindow& a) { return a.engine_.patchScanWanted_; }
-    static void setDeviceOpenPending(AppWindow& a, bool v) { a.engine_.deviceOpenPending_ = v; }
-    static void patchReconcile(AppWindow& a) { a.engine_.patchReconcile(); }
-    static void setPatchScanWanted(AppWindow& a, bool v) { a.engine_.patchScanWanted_ = v; }
-    static bool networkUsrps(AppWindow& a) { return a.engine_.lookForNetworkUsrps_; }
+    static bool patchListsWanted(AppWindow& a) { return rd(a, [&] { return a.engine_.patchListsWanted_; }); }
+    static void setPatchListsWanted(AppWindow& a, bool v) { wr(a, [&] { a.engine_.patchListsWanted_ = v; }); }
+    static bool patchScanWanted(AppWindow& a) { return rd(a, [&] { return a.engine_.patchScanWanted_; }); }
+    static void setDeviceOpenPending(AppWindow& a, bool v) { wr(a, [&] { a.engine_.deviceOpenPending_ = v; }); }
+    static void patchReconcile(AppWindow& a) { wr(a, [&] { a.engine_.patchReconcile(); }); }
+    static void setPatchScanWanted(AppWindow& a, bool v) { wr(a, [&] { a.engine_.patchScanWanted_ = v; }); }
+    static bool networkUsrps(AppWindow& a) { return rd(a, [&] { return a.engine_.lookForNetworkUsrps_; }); }
     static bool waitOpen(AppWindow& a) {
-        return waitFor([&a] {
-            a.engine_.pollSourceAsync();
-            return !a.engine_.deviceOpenPending_;
-        });
+        return waitPolled(a, [&] { a.engine_.pollSourceAsync(); }, [&] { return !a.engine_.deviceOpenPending_; });
     }
     static bool waitCard(AppWindow& a) {
-        return waitFor([&a] {
-            a.engine_.pollSoundCard();
-            return !a.engine_.soundCardOpenPending_ && !a.engine_.soundCardScanPending_;
-        });
+        return waitPolled(a, [&] { a.engine_.pollSoundCard(); },
+                          [&] { return !a.engine_.soundCardOpenPending_ && !a.engine_.soundCardScanPending_; });
     }
-    static const std::string& kind(AppWindow& a) { return a.engine_.sourceKind_; }
-    static int sourceSel(AppWindow& a) { return a.engine_.sourceSel_; }
-    static bool haveDevice(AppWindow& a) { return a.engine_.device_ != nullptr; }
-    static const std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
-    static void clearSourceError(AppWindow& a) { a.engine_.sourceError_.clear(); }
-    static void setSourceError(AppWindow& a, const std::string& s) { a.engine_.sourceError_ = s; }
+    static std::string kind(AppWindow& a) { return rd(a, [&] { return a.engine_.sourceKind_; }); }
+    static int sourceSel(AppWindow& a) { return rd(a, [&] { return a.engine_.sourceSel_; }); }
+    static bool haveDevice(AppWindow& a) { return rd(a, [&] { return a.engine_.device_ != nullptr; }); }
+    static std::string sourceError(AppWindow& a) { return rd(a, [&] { return a.engine_.sourceError_; }); }
+    static void clearSourceError(AppWindow& a) { wr(a, [&] { a.engine_.sourceError_.clear(); }); }
+    static void setSourceError(AppWindow& a, const std::string& s) { wr(a, [&] { a.engine_.sourceError_ = s; }); }
     static float gain(AppWindow& a, const char* name) {
-        for (std::size_t i = 0; i < a.engine_.deviceGainNames_.size() && i < a.engine_.deviceGainsDb_.size(); ++i) {
-            if (a.engine_.deviceGainNames_[i] == name) { return a.engine_.deviceGainsDb_[i]; }
-        }
-        return -999.0f;
+        return rd(a, [&] {
+            for (std::size_t i = 0; i < a.engine_.deviceGainNames_.size() && i < a.engine_.deviceGainsDb_.size(); ++i) {
+                if (a.engine_.deviceGainNames_[i] == name) { return a.engine_.deviceGainsDb_[i]; }
+            }
+            return -999.0f;
+        });
     }
     // NULL-SAFE, every one: a build in which the source was never selected
     // must report the failure, not crash the harness in the run that has
     // something to say.
     static double radioGain(AppWindow& a, const char* name) {
-        return a.engine_.device_ != nullptr ? a.engine_.device_->gainDb(name) : -999.0;
+        return rd(a, [&] { return a.engine_.device_ != nullptr ? a.engine_.device_->gainDb(name) : -999.0; });
     }
-    static bool agc(AppWindow& a) { return a.engine_.device_ != nullptr && a.engine_.deviceAgc_ && a.engine_.device_->autoGain(); }
+    static bool agc(AppWindow& a) {
+        return rd(a, [&] { return a.engine_.device_ != nullptr && a.engine_.deviceAgc_ && a.engine_.device_->autoGain(); });
+    }
     static bool agcOff(AppWindow& a) {
-        return a.engine_.device_ != nullptr && !a.engine_.deviceAgc_ && !a.engine_.device_->autoGain();
+        return rd(a, [&] { return a.engine_.device_ != nullptr && !a.engine_.deviceAgc_ && !a.engine_.device_->autoGain(); });
     }
-    static const std::string& antenna(AppWindow& a) { return a.engine_.deviceAntenna_; }
-    static double rate(AppWindow& a) { return a.engine_.pipeline_.activeSource().sampleRateHz(); }
-    static int rateIndex(AppWindow& a) { return a.engine_.deviceRateIndex_; }
-    static void setBiasStandIn(AppWindow& a) { a.engine_.biasStandIn_ = cascade::gui::BiasStandIn::Accept; }
-    static bool biasOn(AppWindow& a) { return a.engine_.biasStandInOn_; }
-    static cascade::core::ConverterSetting converter(AppWindow& a) { return a.engine_.pipeline_.converter(); }
-    static void setSoundCardForm(AppWindow& a) {
+    static std::string antenna(AppWindow& a) { return rd(a, [&] { return a.engine_.deviceAntenna_; }); }
+    static double rate(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.activeSource().sampleRateHz(); }); }
+    static int rateIndex(AppWindow& a) { return rd(a, [&] { return a.engine_.deviceRateIndex_; }); }
+    static void setBiasStandIn(AppWindow& a) { wr(a, [&] { a.engine_.biasStandIn_ = cascade::gui::BiasStandIn::Accept; }); }
+    static bool biasOn(AppWindow& a) { return rd(a, [&] { return a.engine_.biasStandInOn_; }); }
+    static cascade::core::ConverterSetting converter(AppWindow& a) { return rd(a, [&] { return a.engine_.pipeline_.converter(); }); }
+    static void setSoundCardForm(AppWindow& a) { wr(a, [&] { soundCardFormHere(a); }); }
+    static void setSoundCardFormIq(AppWindow& a) {
+        wr(a, [&] {
+            soundCardFormHere(a);
+            a.engine_.soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
+            a.engine_.soundCard_.iqCentreHz = 7.0e6;
+        });
+    }
+    static void soundCardFormHere(AppWindow& a) {
         a.engine_.soundCard_ = cascade::source::SoundCardSettings{};
         a.engine_.soundCard_.device = "Fake Card";
         a.engine_.soundCard_.hostApi = "Fake API";
         a.engine_.soundCard_.cardRateHz = 48000.0;
     }
-    static void setSoundCardFormIq(AppWindow& a) {
-        setSoundCardForm(a);
-        a.engine_.soundCard_.format = cascade::source::SoundCardFormat::IqStereo;
-        a.engine_.soundCard_.iqCentreHz = 7.0e6;
-    }
-    static double liveIqCentre(AppWindow& a) { return a.engine_.soundCardLive_.iqCentreHz; }
+    static double liveIqCentre(AppWindow& a) { return rd(a, [&] { return a.engine_.soundCardLive_.iqCentreHz; }); }
 
     // Bookmarks and scanner.
-    static const std::vector<cascade::core::Bookmark>& bookmarks(AppWindow& a) { return a.engine_.freqMgr_.list(); }
+    static std::vector<cascade::core::Bookmark> bookmarks(AppWindow& a) { return rd(a, [&] { return a.engine_.freqMgr_.list(); }); }
     static std::uint64_t addBookmark(AppWindow& a, const std::string& name, double hz, const char* mode,
                                      double bwHz, const std::string& group = {}) {
         cascade::core::Bookmark b;
@@ -447,34 +498,38 @@ struct AppWindowTestAccess {
         b.mode = mode;
         b.bandwidthHz = bwHz;
         b.group = group;
-        const int at = a.engine_.freqMgr_.add(b);
-        return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
+        return rd(a, [&] {
+            const int at = a.engine_.freqMgr_.add(b);
+            return a.engine_.freqMgr_.list()[static_cast<std::size_t>(at)].id;
+        });
     }
-    static const std::string& importNote(AppWindow& a) { return a.engine_.bookmarkImportNote_; }
-    static const std::string& recordDir(AppWindow& a) { return a.engine_.recordDir_; }
+    static std::string importNote(AppWindow& a) { return rd(a, [&] { return a.engine_.bookmarkImportNote_; }); }
+    static std::string recordDir(AppWindow& a) { return rd(a, [&] { return a.engine_.recordDir_; }); }
     // The engine/stage3b-pre 2c status-line commands.
-    static void setGpsRefusal(AppWindow& a, const std::string& s) { a.engine_.gpsRefusal_ = s; }
-    static const std::string& gpsRefusal(AppWindow& a) { return a.engine_.gpsRefusal_; }
-    static void setSoundCardMissing(AppWindow& a, const std::string& s) { a.engine_.soundCardMissing_ = s; }
-    static const std::string& soundCardMissing(AppWindow& a) { return a.engine_.soundCardMissing_; }
+    static void setGpsRefusal(AppWindow& a, const std::string& s) { wr(a, [&] { a.engine_.gpsRefusal_ = s; }); }
+    static std::string gpsRefusal(AppWindow& a) { return rd(a, [&] { return a.engine_.gpsRefusal_; }); }
+    static void setSoundCardMissing(AppWindow& a, const std::string& s) { wr(a, [&] { a.engine_.soundCardMissing_ = s; }); }
+    static std::string soundCardMissing(AppWindow& a) { return rd(a, [&] { return a.engine_.soundCardMissing_; }); }
     static void pushDecoderLogLine(AppWindow& a) {
-        a.engine_.decoderLog_.push_back(cascade::core::DecodedLine{"test", "line"});
+        wr(a, [&] { a.engine_.decoderLog_.push_back(cascade::core::DecodedLine{"test", "line"}); });
     }
-    static std::size_t decoderLogSize(AppWindow& a) { return a.engine_.decoderLog_.size(); }
-    static std::uint64_t decoderLinesTotal(AppWindow& a) { return a.engine_.decoderLinesTotal_; }
-    static cascade::core::DecodedLine decoderLogBack(AppWindow& a) { return a.engine_.decoderLog_.back(); }
-    static void setSoapyScanDeferredLogged(AppWindow& a, bool v) { a.engine_.soapyScanDeferredLogged_ = v; }
-    static bool soapyScanDeferredLogged(AppWindow& a) { return a.engine_.soapyScanDeferredLogged_; }
-    static void setMutePopupQueued(AppWindow& a, bool v) { a.engine_.mutePopupQueued_ = v; }
-    static bool mutePopupQueued(AppWindow& a) { return a.engine_.mutePopupQueued_; }
-    static bool muteKeptRunning(AppWindow& a) { return a.engine_.muteKeptRunning_; }
+    static std::size_t decoderLogSize(AppWindow& a) { return rd(a, [&] { return a.engine_.decoderLog_.size(); }); }
+    static std::uint64_t decoderLinesTotal(AppWindow& a) { return rd(a, [&] { return a.engine_.decoderLinesTotal_; }); }
+    static cascade::core::DecodedLine decoderLogBack(AppWindow& a) { return rd(a, [&] { return a.engine_.decoderLog_.back(); }); }
+    static void setSoapyScanDeferredLogged(AppWindow& a, bool v) { wr(a, [&] { a.engine_.soapyScanDeferredLogged_ = v; }); }
+    static bool soapyScanDeferredLogged(AppWindow& a) { return rd(a, [&] { return a.engine_.soapyScanDeferredLogged_; }); }
+    static void setMutePopupQueued(AppWindow& a, bool v) { wr(a, [&] { a.engine_.mutePopupQueued_ = v; }); }
+    static bool mutePopupQueued(AppWindow& a) { return rd(a, [&] { return a.engine_.mutePopupQueued_; }); }
+    static bool muteKeptRunning(AppWindow& a) { return rd(a, [&] { return a.engine_.muteKeptRunning_; }); }
     static void setMutePopupSubject(AppWindow& a, const std::string& name, const std::string& key) {
-        a.engine_.mutePopup_.open = true;
-        a.engine_.mutePopup_.names = {name};
-        a.engine_.mutePopup_.keys = {key};
+        wr(a, [&] {
+            a.engine_.mutePopup_.open = true;
+            a.engine_.mutePopup_.names = {name};
+            a.engine_.mutePopup_.keys = {key};
+        });
     }
-    static bool mutePopupOpen(AppWindow& a) { return a.engine_.mutePopup_.open; }
-    static std::size_t mutePopupKeyCount(AppWindow& a) { return a.engine_.mutePopup_.keys.size(); }
+    static bool mutePopupOpen(AppWindow& a) { return rd(a, [&] { return a.engine_.mutePopup_.open; }); }
+    static std::size_t mutePopupKeyCount(AppWindow& a) { return rd(a, [&] { return a.engine_.mutePopup_.keys.size(); }); }
     // The web remote's side: the snapshot a browser reads (and the row map it
     // leaves), and a request applied as the engine's pumpRemoteControls applies it.
     static void publishWeb(AppWindow& a) { passseam::on(a.engine_, [&] { a.engine_.publishReceiverState(); }); }
@@ -489,61 +544,68 @@ struct AppWindowTestAccess {
         }
         return -1;
     }
-    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { a.engine_.applyControlRequest(r); }
-    static bool scanning(AppWindow& a) { return a.engine_.scanner_.active(); }
-    static double scanStartMhz(AppWindow& a) { return a.engine_.scanStartMhz_; }
-    static double scanStopMhz(AppWindow& a) { return a.engine_.scanStopMhz_; }
-    static double scanStepKhz(AppWindow& a) { return a.engine_.scanStepKhz_; }
-    static double scanDwell(AppWindow& a) { return a.engine_.scanDwellMs_; }
-    static double scanListen(AppWindow& a) { return a.engine_.scanListenMs_; }
-    static double scanHold(AppWindow& a) { return a.engine_.scanHoldMs_; }
-    static double scanResume(AppWindow& a) { return a.engine_.scanResumeMs_; }
+    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { wr(a, [&] { a.engine_.applyControlRequest(r); }); }
+    static bool scanning(AppWindow& a) { return rd(a, [&] { return a.engine_.scanner_.active(); }); }
+    static double scanStartMhz(AppWindow& a) { return rd(a, [&] { return a.engine_.scanStartMhz_; }); }
+    static double scanStopMhz(AppWindow& a) { return rd(a, [&] { return a.engine_.scanStopMhz_; }); }
+    static double scanStepKhz(AppWindow& a) { return rd(a, [&] { return a.engine_.scanStepKhz_; }); }
+    static double scanDwell(AppWindow& a) { return rd(a, [&] { return a.engine_.scanDwellMs_; }); }
+    static double scanListen(AppWindow& a) { return rd(a, [&] { return a.engine_.scanListenMs_; }); }
+    static double scanHold(AppWindow& a) { return rd(a, [&] { return a.engine_.scanHoldMs_; }); }
+    static double scanResume(AppWindow& a) { return rd(a, [&] { return a.engine_.scanResumeMs_; }); }
 
     // Plugins and the store.
-    static const cascade::core::LoadedPlugin* fixture(AppWindow& a) {
+    static const cascade::core::LoadedPlugin* fixtureHere(AppWindow& a) {  // (with the pass out of the way only)
         for (const cascade::core::LoadedPlugin& p : a.engine_.pluginHost_.plugins()) {
             if (p.loaded && p.name == "Stage One Fixture") { return &p; }
         }
         return nullptr;
     }
+    static bool haveFixture(AppWindow& a) { return rd(a, [&] { return fixtureHere(a) != nullptr; }); }
     static std::string fixtureKey(AppWindow& a) {
-        const cascade::core::LoadedPlugin* p = fixture(a);
-        return p != nullptr ? cascade::core::pluginKey(*p) : std::string();
-    }
-    static bool stopped(AppWindow& a, const std::string& key) { return a.engine_.pluginIsStopped(key); }
-    static bool mutes(AppWindow& a) {
-        const cascade::core::LoadedPlugin* p = fixture(a);
-        return p != nullptr && a.engine_.pluginMutes(*p);
-    }
-    static bool tuneGranted(AppWindow& a, const std::string& key) {
-        for (const std::string& k : a.engine_.pluginTuneAllowed_) {
-            if (k == key) { return true; }
-        }
-        return false;
-    }
-    static bool settingsGranted(AppWindow& a, const std::string& key) {
-        for (const std::string& k : a.engine_.pluginSettingsAllowed_) {
-            if (k == key) { return true; }
-        }
-        return false;
-    }
-    static std::size_t userPresetCount(AppWindow& a) { return a.engine_.userPresets_.size(); }
-    static const std::string& presetNote(AppWindow& a) { return a.engine_.presetNote_; }
-    static void setCatalogueUrl(AppWindow& a, const std::string& u) { a.engine_.pluginCatalogueUrl_ = u; }
-    static const std::string& catalogueUrl(AppWindow& a) { return a.engine_.pluginCatalogueUrl_; }
-    static bool telemetryEnabled(AppWindow& a) { return a.engine_.telemetryEnabled_; }
-    static const std::string& telemetryInstallId(AppWindow& a) { return a.engine_.telemetryInstallId_; }
-    static const std::vector<std::string>& telemetryPanels(AppWindow& a) { return a.engine_.telemetryPanels_; }
-    static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return a.engine_.soundCard_; }
-    static bool storeBusy(AppWindow& a) { return a.engine_.catalogPending_ || a.engine_.installPending_; }
-    static bool waitStore(AppWindow& a) {
-        return waitFor([&a] {
-            a.engine_.pollPluginAsync();
-            return !a.engine_.catalogPending_ && !a.engine_.installPending_;
+        return rd(a, [&] {
+            const cascade::core::LoadedPlugin* p = fixtureHere(a);
+            return p != nullptr ? cascade::core::pluginKey(*p) : std::string();
         });
     }
-    static const std::string& installError(AppWindow& a) { return a.engine_.installError_; }
-    static void clearInstallError(AppWindow& a) { a.engine_.installError_.clear(); }
+    static bool stopped(AppWindow& a, const std::string& key) { return rd(a, [&] { return a.engine_.pluginIsStopped(key); }); }
+    static bool mutes(AppWindow& a) {
+        return rd(a, [&] {
+            const cascade::core::LoadedPlugin* p = fixtureHere(a);
+            return p != nullptr && a.engine_.pluginMutes(*p);
+        });
+    }
+    static bool tuneGranted(AppWindow& a, const std::string& key) {
+        return rd(a, [&] {
+            for (const std::string& k : a.engine_.pluginTuneAllowed_) {
+                if (k == key) { return true; }
+            }
+            return false;
+        });
+    }
+    static bool settingsGranted(AppWindow& a, const std::string& key) {
+        return rd(a, [&] {
+            for (const std::string& k : a.engine_.pluginSettingsAllowed_) {
+                if (k == key) { return true; }
+            }
+            return false;
+        });
+    }
+    static std::size_t userPresetCount(AppWindow& a) { return rd(a, [&] { return a.engine_.userPresets_.size(); }); }
+    static std::string presetNote(AppWindow& a) { return rd(a, [&] { return a.engine_.presetNote_; }); }
+    static void setCatalogueUrl(AppWindow& a, const std::string& u) { wr(a, [&] { a.engine_.pluginCatalogueUrl_ = u; }); }
+    static std::string catalogueUrl(AppWindow& a) { return rd(a, [&] { return a.engine_.pluginCatalogueUrl_; }); }
+    static bool telemetryEnabled(AppWindow& a) { return rd(a, [&] { return a.engine_.telemetryEnabled_; }); }
+    static std::string telemetryInstallId(AppWindow& a) { return rd(a, [&] { return a.engine_.telemetryInstallId_; }); }
+    static std::vector<std::string> telemetryPanels(AppWindow& a) { return rd(a, [&] { return a.engine_.telemetryPanels_; }); }
+    static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return rd(a, [&] { return a.engine_.soundCard_; }); }
+    static bool storeBusyHere(AppWindow& a) { return a.engine_.catalogPending_ || a.engine_.installPending_; }
+    static bool storeBusy(AppWindow& a) { return rd(a, [&] { return storeBusyHere(a); }); }
+    static bool waitStore(AppWindow& a) {
+        return waitPolled(a, [&] { a.engine_.pollPluginAsync(); }, [&] { return !storeBusyHere(a); });
+    }
+    static std::string installError(AppWindow& a) { return rd(a, [&] { return a.engine_.installError_; }); }
+    static void clearInstallError(AppWindow& a) { wr(a, [&] { a.engine_.installError_.clear(); }); }
     static void injectCatalogue(AppWindow& a) {
         cascade::core::PluginCatalogEntry e;
         e.id = "stage1-catalogue-only";
@@ -560,19 +622,22 @@ struct AppWindowTestAccess {
         pf.sha256 = std::string(64, 'a');
         e.platforms.push_back(pf);
         e.compatible = true;
-        a.engine_.catalog_.clear();
-        a.engine_.catalog_.push_back(e);
+        wr(a, [&] {
+            a.engine_.catalog_.clear();
+            a.engine_.catalog_.push_back(e);
+        });
     }
-    static bool addAllActive(AppWindow& a) { return a.engine_.addAllRun_.active; }
-    static void stopAddAll(AppWindow& a) { a.engine_.addAllRun_ = AppWindow::AddAllRun{}; }
-    static const std::string& pluginDirNow(AppWindow& a) { return a.engine_.pluginDir_; }
+    static bool addAllActive(AppWindow& a) { return rd(a, [&] { return a.engine_.addAllRun_.active; }); }
+    static void stopAddAll(AppWindow& a) { wr(a, [&] { a.engine_.addAllRun_ = AppWindow::AddAllRun{}; }); }
+    static std::string pluginDirNow(AppWindow& a) { return rd(a, [&] { return a.engine_.pluginDir_; }); }
 
     // The patch page, the transmitter, audio, position, GPS.
-    static bool patchRunning(AppWindow& a) { return a.engine_.patchRunning_; }
-    static void setTransmitOpen(AppWindow& a, bool on) { a.engine_.transmitOpen_ = on; }
-    static bool transmitOpen(AppWindow& a) { return a.engine_.transmitOpen_; }
+    static bool patchRunning(AppWindow& a) { return rd(a, [&] { return a.engine_.patchRunning_; }); }
+    static void setTransmitOpen(AppWindow& a, bool on) { wr(a, [&] { a.engine_.transmitOpen_ = on; }); }
+    static bool transmitOpen(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitOpen_; }); }
+    // (Only for what is thread-safe by construction: the API host's handle a session is opened on.)
     static cascade::engine::Engine& engine(AppWindow& a) { return a.engine_; }
-    static std::uint64_t serialPortsScans(AppWindow& a) { return a.engine_.serialPortsScans_; }
+    static std::uint64_t serialPortsScans(AppWindow& a) { return rd(a, [&] { return a.engine_.serialPortsScans_; }); }
     // The engine's pass as far as the key needs it - the queue applied, the
     // state published - without the audio half, which reads the window's
     // ImGui clock (no ImGui context in this test).
@@ -582,23 +647,24 @@ struct AppWindowTestAccess {
             (void)a.engine_.pumpPublish();
         });
     }
-    static bool haveTx(AppWindow& a) { return a.engine_.transmitter_.haveSink(); }
-    static std::int64_t remoteHoldMs(AppWindow& a) { return a.engine_.transmitter_.remoteHoldRemainingMs(); }
-    static int txMode(AppWindow& a) { return a.engine_.transmitModeIndex_; }
-    static bool txSplit(AppWindow& a) { return a.engine_.transmitSplit_; }
-    static double txSplitHz(AppWindow& a) { return a.engine_.transmitSplitHz_; }
-    static double txPower(AppWindow& a) { return a.engine_.transmitPowerDb_; }
-    static int txInput(AppWindow& a) { return a.engine_.transmitInputIndex_; }
-    static double txTone(AppWindow& a) { return a.engine_.transmitToneHz_; }
-    static bool txMonitor(AppWindow& a) { return a.engine_.transmitMonitor_; }
-    static const std::string& txArgs(AppWindow& a) { return a.engine_.transmitArgs_; }
-    static std::string plutoUri(AppWindow& a) { return a.engine_.plutoUri_; }
+    static bool haveTx(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitter_.haveSink(); }); }
+    static std::int64_t remoteHoldMs(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitter_.remoteHoldRemainingMs(); }); }
+    static std::uint64_t txOwner(AppWindow& a) { return rd(a, [&] { return a.engine_.api().txFacts().owner; }); }
+    static int txMode(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitModeIndex_; }); }
+    static bool txSplit(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitSplit_; }); }
+    static double txSplitHz(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitSplitHz_; }); }
+    static double txPower(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitPowerDb_; }); }
+    static int txInput(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitInputIndex_; }); }
+    static double txTone(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitToneHz_; }); }
+    static bool txMonitor(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitMonitor_; }); }
+    static std::string txArgs(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitArgs_; }); }
+    static std::string plutoUri(AppWindow& a) { return rd(a, [&] { return a.engine_.plutoUri_; }); }
     // The patch decoders' pictures the engine keeps (API 0.3 8.12, part 3), and the graph they are pruned against.
     static cascade::core::patch::NodeId addPatchNode(AppWindow& a) {
-        return a.engine_.patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe");
+        return rd(a, [&] { return a.engine_.patchGraph_.addNode(cascade::core::patch::NodeKind::Decoder, "prune probe"); });
     }
     static void removePatchNode(AppWindow& a, cascade::core::patch::NodeId id) {
-        (void)a.engine_.patchGraph_.removeNode(id);
+        wr(a, [&] { (void)a.engine_.patchGraph_.removeNode(id); });
     }
     static void putPatchImage(AppWindow& a, cascade::core::patch::NodeId id) {
         cascade::core::HostImage h;
@@ -607,41 +673,46 @@ struct AppWindowTestAccess {
         h.height = 1;
         h.format = CASCADE_IMAGE_GRAY8;
         h.pixels = {1, 2};
-        a.engine_.takePatchImage(id, std::move(h));
+        wr(a, [&] { a.engine_.takePatchImage(id, std::move(h)); });
     }
-    static bool hasPatchImage(AppWindow& a, cascade::core::patch::NodeId id) { return a.engine_.patchImages_.count(id) != 0; }
-    static void syncPatchImages(AppWindow& a) { a.engine_.syncPatchImages(); }
+    static bool hasPatchImage(AppWindow& a, cascade::core::patch::NodeId id) {
+        return rd(a, [&] { return a.engine_.patchImages_.count(id) != 0; });
+    }
+    static void syncPatchImages(AppWindow& a) { wr(a, [&] { a.engine_.syncPatchImages(); }); }
     // FOXAPP_OP_PATCH_SET_GRAPH (docs/engine-stage3.md OPEN 6).
-    static const cascade::core::patch::Graph& patchGraph(AppWindow& a) { return a.engine_.patchGraph_; }
-    static cascade::core::patch::Graph& mutablePatchGraph(AppWindow& a) { return a.engine_.patchGraph_; }
-    static std::uint64_t patchGraphEpoch(AppWindow& a) { return a.engine_.patchGraphEpoch_; }
-    static std::uint64_t patchGraphVersion(AppWindow& a) { return a.engine_.patchGraphVersion_; }
-    static bool patchPageOpen(AppWindow& a) { return a.engine_.patchPageOpen_; }
-    static std::size_t patchRecordingCount(AppWindow& a) { return a.engine_.patchRecordings_.size(); }
-    static double patchRecordingRate(AppWindow& a, std::size_t i) { return a.engine_.patchRecordings_[i].rateHz; }
-    static bool patchWasOpen(AppWindow& a) { return a.engine_.patchWasOpen_; }
-    static void setPatchRunning(AppWindow& a, bool v) { a.engine_.patchRunning_ = v; }
+    static cascade::core::patch::Graph patchGraph(AppWindow& a) { return rd(a, [&] { return a.engine_.patchGraph_; }); }
+    template <class F>
+    static void changePatchGraph(AppWindow& a, F change) { wr(a, [&] { change(a.engine_.patchGraph_); }); }
+    static std::uint64_t patchGraphEpoch(AppWindow& a) { return rd(a, [&] { return a.engine_.patchGraphEpoch_; }); }
+    static std::uint64_t patchGraphVersion(AppWindow& a) { return rd(a, [&] { return a.engine_.patchGraphVersion_; }); }
+    static bool patchPageOpen(AppWindow& a) { return rd(a, [&] { return a.engine_.patchPageOpen_; }); }
+    static std::size_t patchRecordingCount(AppWindow& a) { return rd(a, [&] { return a.engine_.patchRecordings_.size(); }); }
+    static double patchRecordingRate(AppWindow& a, std::size_t i) { return rd(a, [&] { return a.engine_.patchRecordings_[i].rateHz; }); }
+    static bool patchWasOpen(AppWindow& a) { return rd(a, [&] { return a.engine_.patchWasOpen_; }); }
+    static void setPatchRunning(AppWindow& a, bool v) { wr(a, [&] { a.engine_.patchRunning_ = v; }); }
     static void pumpPatch(AppWindow& a) { passseam::custom(a.engine_, [&] { a.engine_.pumpPatch(); }); }
-    static void setSoundCardsListed(AppWindow& a, bool on) { a.engine_.soundCardListed_ = on; }
-    static bool soundCardScanPending(AppWindow& a) { return a.engine_.soundCardScanPending_; }
-    static double txFrequency(AppWindow& a) { return a.engine_.transmitter_.frequencyHz(); }
+    static void setSoundCardsListed(AppWindow& a, bool on) { wr(a, [&] { a.engine_.soundCardListed_ = on; }); }
+    static bool soundCardScanPending(AppWindow& a) { return rd(a, [&] { return a.engine_.soundCardScanPending_; }); }
+    static double txFrequency(AppWindow& a) { return rd(a, [&] { return a.engine_.transmitter_.frequencyHz(); }); }
     static void addAudioDevice(AppWindow& a, int paIndex, const char* name) {
-        a.engine_.devices_.push_back({paIndex, name, false});
+        wr(a, [&] { a.engine_.devices_.push_back({paIndex, name, false}); });
     }
-    static int audioDeviceIndex(AppWindow& a) { return a.engine_.deviceIndex_; }
+    static int audioDeviceIndex(AppWindow& a) { return rd(a, [&] { return a.engine_.deviceIndex_; }); }
     static bool positionSet(AppWindow& a, double lat, double lon) {
-        return a.engine_.rxSet_ && a.engine_.rxLat_ == lat && a.engine_.rxLon_ == lon;
+        return rd(a, [&] { return a.engine_.rxSet_ && a.engine_.rxLat_ == lat && a.engine_.rxLon_ == lon; });
     }
-    static bool gpsListening(AppWindow& a) { return a.engine_.gpsReader_.listening(); }
+    static bool gpsListening(AppWindow& a) { return rd(a, [&] { return a.engine_.gpsReader_.listening(); }); }
     // Window port group 14, part b (FOXAPP_STATUS_GPS_RESULT): a read that ended in failure, and one that is running.
-    static int gpsState(AppWindow& a) { return static_cast<int>(a.engine_.gpsReader_.status().state); }
+    static int gpsState(AppWindow& a) { return rd(a, [&] { return static_cast<int>(a.engine_.gpsReader_.status().state); }); }
     static bool gpsFail(AppWindow& a) {
-        a.engine_.gpsReader_.setOpenerForTest(
-            [](const std::string&, int, std::string& error) -> std::unique_ptr<cascade::core::ByteSource> {
-                error = "could not be opened: test";
-                return nullptr;
-            });
-        a.engine_.gpsReader_.start({"BAD1", 9600, 5.0});
+        wr(a, [&] {
+            a.engine_.gpsReader_.setOpenerForTest(
+                [](const std::string&, int, std::string& error) -> std::unique_ptr<cascade::core::ByteSource> {
+                    error = "could not be opened: test";
+                    return nullptr;
+                });
+            a.engine_.gpsReader_.start({"BAD1", 9600, 5.0});
+        });
         for (int i = 0; i < 2000 && gpsState(a) != 3; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
         return gpsState(a) == 3;
     }
@@ -652,10 +723,12 @@ struct AppWindowTestAccess {
         }
     };
     static bool gpsListen(AppWindow& a) {
-        a.engine_.gpsReader_.start(std::make_unique<Silent>(), {"SILENT", 9600, 30.0});
-        return gpsState(a) == 1;
+        return rd(a, [&] {
+            a.engine_.gpsReader_.start(std::make_unique<Silent>(), {"SILENT", 9600, 30.0});
+            return static_cast<int>(a.engine_.gpsReader_.status().state) == 1;
+        });
     }
-    static void gpsStop(AppWindow& a) { a.engine_.gpsReader_.stop(); }
+    static void gpsStop(AppWindow& a) { wr(a, [&] { a.engine_.gpsReader_.stop(); }); }
 };
 
 }  // namespace cascade::gui
@@ -1039,9 +1112,11 @@ void sourceOps(AppWindow& a) {
         // asked again.
         A::clearNative(a);
         A::markSoapyScanned(a);
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN))));
-        CHECK(A::nativeCount(a) == 1u);
-        CHECK(!A::soapyPending(a));
+        A::exclusive(a, [&] {
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN))));
+            CHECK(A::nativeCount(a) == 1u);
+            CHECK(!A::soapyPending(a));
+        });
         // Never scanned: the lazy first scan runs.
         A::clearSoapy(a);
         CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN))));
@@ -1056,10 +1131,12 @@ void sourceOps(AppWindow& a) {
         A::clearNative(a);
         A::clearSoapy(a);
         CHECK(cascade::core::cmd::isKnownOp(FOXAPP_OP_SCAN_NATIVE_ONLY));
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY))));
-        CHECK(A::nativeCount(a) == 1u);       // the walk ran
-        CHECK(!A::soapyPending(a));           // the vendor probe did not
-        CHECK(!A::patchListsWanted(a));       // and nothing is owed
+        A::exclusive(a, [&] {
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY))));
+            CHECK(A::nativeCount(a) == 1u);       // the walk ran
+            CHECK(!A::soapyPending(a));           // the vendor probe did not
+            CHECK(!A::patchListsWanted(a));       // and nothing is owed
+        });
     }
 
     covering(FOXAPP_OP_PATCH_RADIO_LIST_OPENED);
@@ -1071,20 +1148,26 @@ void sourceOps(AppWindow& a) {
         // test_patch_scan_wanted.cpp. Here: the wish and the one-time guard.
         A::clearNative(a);
         A::clearSoapy(a);
-        CHECK(!A::patchListsWanted(a));
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED))));
-        CHECK(A::nativeCount(a) == 1u);       // scanNative ran at once
-        CHECK(!A::soapyPending(a));           // never scanSoapy() directly
-        CHECK(A::patchListsWanted(a));        // the wish is now on
-        CHECK(A::patchScanWanted(a));         // unscanned: SoapySDR is owed
+        // (One block: the pass's own patchReconcile consumes the wish, so a free-running pass between the command and these reads
+        // would answer for it.)
+        A::exclusive(a, [&] {
+            CHECK(!A::patchListsWanted(a));
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED))));
+            CHECK(A::nativeCount(a) == 1u);       // scanNative ran at once
+            CHECK(!A::soapyPending(a));           // never scanSoapy() directly
+            CHECK(A::patchListsWanted(a));        // the wish is now on
+            CHECK(A::patchScanWanted(a));         // unscanned: SoapySDR is owed
+        });
         // A second opening: the native list still refreshes, but the
         // first-open guard means the wish is not re-armed once it has been
         // consumed (simulated here by clearing it, as patchReconcile would).
         A::clearNative(a);
-        A::setPatchScanWanted(a, false);      // as if patchReconcile ran it
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED))));
-        CHECK(A::nativeCount(a) == 1u);       // native always re-reads
-        CHECK(!A::patchScanWanted(a));        // NOT re-armed: already opened once
+        A::exclusive(a, [&] {
+            A::setPatchScanWanted(a, false);      // as if patchReconcile ran it
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_PATCH_RADIO_LIST_OPENED))));
+            CHECK(A::nativeCount(a) == 1u);       // native always re-reads
+            CHECK(!A::patchScanWanted(a));        // NOT re-armed: already opened once
+        });
     }
 
     covering(FOXAPP_OP_PATCH_LOOK_FOR_RADIOS);
@@ -1101,15 +1184,20 @@ void sourceOps(AppWindow& a) {
 
     covering(FOXAPP_OP_SET_NETWORK_USRP_SCAN);
     {
+        CHECK(A::waitSoapy(a));  // (free-running: a scan the patch page's wish above started has been collected)
         A::clearSoapy(a);
         A::markSoapyScanned(a);
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_NETWORK_USRP_SCAN, 1))));
-        CHECK(A::networkUsrps(a));
-        CHECK(A::soapyPending(a));  // ticking it rescans at once
+        A::exclusive(a, [&] {  // (the pass's workers collect a finished scan)
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_NETWORK_USRP_SCAN, 1))));
+            CHECK(A::networkUsrps(a));
+            CHECK(A::soapyPending(a));  // ticking it rescans at once
+        });
         CHECK(A::waitSoapy(a));
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_NETWORK_USRP_SCAN, 0))));
-        CHECK(!A::networkUsrps(a));
-        CHECK(!A::soapyPending(a));  // unticking does not
+        A::exclusive(a, [&] {
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_NETWORK_USRP_SCAN, 0))));
+            CHECK(!A::networkUsrps(a));
+            CHECK(!A::soapyPending(a));  // unticking does not
+        });
     }
 
     covering(FOXAPP_OP_SET_PLUTO_URI);
@@ -1353,12 +1441,14 @@ void sourceOps(AppWindow& a) {
         CHECK(A::radioGain(a, "LNA") == 21.0);
         CHECK(A::gain(a, "LNA") == 21.0f);  // THE READBACK, not the request
         CHECK(r.applied[0] == 21.0);
-        A::clearSourceError(a);
         // A stage the radio does not list is NOT_FOUND and never reaches the
         // driver (engine stage 4, API.md 8: "stage must be listed"), so the
         // driver's own refusal is not asked for and the line stays clear.
-        CHECK(refused(A::apply(a, text(FOXAPI_OP_SET_GAIN, "NOPE", 0, 0, 3.0)), FOXAPI_NOT_FOUND));
-        CHECK(A::sourceError(a).empty());
+        A::exclusive(a, [&] {
+            A::clearSourceError(a);
+            CHECK(refused(A::apply(a, text(FOXAPI_OP_SET_GAIN, "NOPE", 0, 0, 3.0)), FOXAPI_NOT_FOUND));
+            CHECK(A::sourceError(a).empty());
+        });
     }
 
     covering(FOXAPP_OP_SET_GAIN_NO_READBACK);
@@ -1428,11 +1518,15 @@ void sourceOps(AppWindow& a) {
     std::printf("  [queued radio commands and a change of radio]\n");
     {
         CHECK(A::haveDevice(a));
-        A::submit(a, text(FOXAPI_OP_SET_GAIN, "LNA", 0, 0, 17.0));
-        A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -44.0));
-        // (Another radio: selecting the one already open reopens nothing.)
-        CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "soapy:driver=fake,serial=9"))));
-        CHECK(A::waitOpen(a));
+        // (One block: the submits, the change of radio and its open with the pass out of the way. A free-running pass would drain
+        // the gain BEFORE the radio changed - onto the old radio - and the check below would prove nothing.)
+        A::exclusive(a, [&] {
+            A::submit(a, text(FOXAPI_OP_SET_GAIN, "LNA", 0, 0, 17.0));
+            A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -44.0));
+            // (Another radio: selecting the one already open reopens nothing.)
+            CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "soapy:driver=fake,serial=9"))));
+            CHECK(A::waitOpen(a));
+        });
         CHECK(A::kind(a) == "soapy");
         CHECK(A::haveDevice(a));
         const double before = A::radioGain(a, "LNA");
@@ -1629,23 +1723,27 @@ void webBookmarkRows(AppWindow& a) {
     std::printf("      published rows: A %d, B %d, C %d\n", rowA, rowB, rowC);
     CHECK(rowA >= 0 && rowB >= 0 && rowC >= 0);
 
-    // Frame N+1: the desktop's x on A (submitted last frame) drains first...
-    A::submit(a, ints(FOXAPI_OP_BOOKMARK_REMOVE, static_cast<std::int64_t>(idA)));
-    A::drain(a);
-    // ...then the browser's "tune to row C" arrives.
-    cascade::net::ControlRequest tune;
-    tune.bookmarkTune = rowC;
-    A::webRequest(a, tune);
-    std::printf("      after the web tune to row C: %.0f Hz, mode %s\n", A::tuned(a),
-                cascade::dsp::modeName(A::demod(a)));
-    CHECK(A::tuned(a) == 32.0e6);
-    CHECK(std::string(cascade::dsp::modeName(A::demod(a))) == "AM");
+    // THE SAME FRAME is one block (the pass out of the way from the submit to the requests): a free-running pass between them would
+    // drain the x and PUBLISH a new row map before the browser's rows arrive, which is a later frame, not this case.
+    A::exclusive(a, [&] {
+        // Frame N+1: the desktop's x on A (submitted last frame) drains first...
+        A::submit(a, ints(FOXAPI_OP_BOOKMARK_REMOVE, static_cast<std::int64_t>(idA)));
+        A::drain(a);
+        // ...then the browser's "tune to row C" arrives.
+        cascade::net::ControlRequest tune;
+        tune.bookmarkTune = rowC;
+        A::webRequest(a, tune);
+        std::printf("      after the web tune to row C: %.0f Hz, mode %s\n", A::tuned(a),
+                    cascade::dsp::modeName(A::demod(a)));
+        CHECK(A::tuned(a) == 32.0e6);
+        CHECK(std::string(cascade::dsp::modeName(A::demod(a))) == "AM");
 
-    // A row whose bookmark has gone since the snapshot changes nothing.
-    cascade::net::ControlRequest gone;
-    gone.bookmarkTune = rowA;
-    A::webRequest(a, gone);
-    CHECK(A::tuned(a) == 32.0e6);
+        // A row whose bookmark has gone since the snapshot changes nothing.
+        cascade::net::ControlRequest gone;
+        gone.bookmarkTune = rowA;
+        A::webRequest(a, gone);
+        CHECK(A::tuned(a) == 32.0e6);
+    });
 
     // Frame N+2: the browser reads a fresh snapshot; a desktop ADD (the
     // bookmark lands at the tuned frequency, below B in the list) drains
@@ -1655,13 +1753,15 @@ void webBookmarkRows(AppWindow& a) {
     A::publishWeb(a);
     const int rowB2 = A::webRowOf(a, "Web B");
     CHECK(rowB2 >= 0);
-    A::submit(a, cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, "Web D").c);
-    A::drain(a);
-    const std::size_t before = A::bookmarks(a).size();
-    cascade::net::ControlRequest rm;
-    rm.bookmarkRemove = rowB2;
-    A::webRequest(a, rm);
-    CHECK(A::bookmarks(a).size() == before - 1u);
+    A::exclusive(a, [&] {  // (the same frame, as above)
+        A::submit(a, cmd::makeText(FOXAPI_OP_BOOKMARK_ADD, "Web D").c);
+        A::drain(a);
+        const std::size_t before = A::bookmarks(a).size();
+        cascade::net::ControlRequest rm;
+        rm.bookmarkRemove = rowB2;
+        A::webRequest(a, rm);
+        CHECK(A::bookmarks(a).size() == before - 1u);
+    });
     bool haveB = false, haveC = false, haveD = false;
     for (const cascade::core::Bookmark& b : A::bookmarks(a)) {
         haveB = haveB || b.name == "Web B";
@@ -1700,8 +1800,10 @@ void scannerOps(AppWindow& a) {
         CHECK(A::scanStartMhz(a) == 144.0);
         CHECK(A::scanStopMhz(a) == 146.0);
         CHECK(A::scanStepKhz(a) == 12.5);
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SCANNER_RUN, 0))));
-        CHECK(!A::scanning(a));
+        A::exclusive(a, [&] {  // (the stop seen is the command's, not one the pass's own scanner step made)
+            CHECK(ok(A::apply(a, ints(FOXAPI_OP_SCANNER_RUN, 0))));
+            CHECK(!A::scanning(a));
+        });
     }
 
     covering(FOXAPI_OP_SCANNER_SKIP);
@@ -1875,8 +1977,10 @@ void storeOps(AppWindow& a) {
     covering(FOXAPI_OP_STORE_FETCH);
     {
         CHECK(!A::storeBusy(a));
-        CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_STORE_FETCH))));
-        CHECK(A::storeBusy(a));  // the fetch is in flight
+        A::exclusive(a, [&] {  // (the pass's workers collect a finished fetch)
+            CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_STORE_FETCH))));
+            CHECK(A::storeBusy(a));  // the fetch is in flight
+        });
         CHECK(A::waitStore(a));
     }
 
@@ -1886,14 +1990,20 @@ void storeOps(AppWindow& a) {
     covering(FOXAPI_OP_STORE_INSTALL);
     {
         A::injectCatalogue(a);
-        A::clearInstallError(a);
-        CHECK(refused(A::apply(a, text(FOXAPI_OP_STORE_INSTALL, "stage1-catalogue-only", 0)), FOXAPI_DENIED));
-        CHECK(A::installError(a).find("legal notice") != std::string::npos);
-        CHECK(!A::storeBusy(a));
+        // (One block: a download the command started by mistake would fail at once on the pass's workers - setting the error and
+        // ending the busy flag - and answer for it.)
+        A::exclusive(a, [&] {
+            A::clearInstallError(a);
+            CHECK(refused(A::apply(a, text(FOXAPI_OP_STORE_INSTALL, "stage1-catalogue-only", 0)), FOXAPI_DENIED));
+            CHECK(A::installError(a).find("legal notice") != std::string::npos);
+            CHECK(!A::storeBusy(a));
+        });
         CHECK(refused(A::apply(a, text(FOXAPI_OP_STORE_INSTALL, "no-such-id", 1)), FOXAPI_NOT_FOUND));
         CHECK(A::installError(a).find("no catalogue entry") != std::string::npos);
-        CHECK(ok(A::apply(a, text(FOXAPI_OP_STORE_INSTALL, "stage1-catalogue-only", 1))));
-        CHECK(A::storeBusy(a));  // the download is in flight (and cannot land)
+        A::exclusive(a, [&] {
+            CHECK(ok(A::apply(a, text(FOXAPI_OP_STORE_INSTALL, "stage1-catalogue-only", 1))));
+            CHECK(A::storeBusy(a));  // the download is in flight (and cannot land)
+        });
         CHECK(A::waitStore(a));
     }
 
@@ -1901,9 +2011,11 @@ void storeOps(AppWindow& a) {
     {
         A::injectCatalogue(a);
         A::clearInstallError(a);
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_STORE_UPDATE_ALL, 1))));
-        CHECK(A::addAllActive(a));
-        A::stopAddAll(a);
+        A::exclusive(a, [&] {  // (a pass would step the run: a download in flight that the next case's key then waits for)
+            CHECK(ok(A::apply(a, ints(FOXAPI_OP_STORE_UPDATE_ALL, 1))));
+            CHECK(A::addAllActive(a));
+            A::stopAddAll(a);
+        });
     }
 
     // FOXAPP_OP_STORE_ADD_ALL (OPEN 5): the store window's key - the engine
@@ -1913,14 +2025,18 @@ void storeOps(AppWindow& a) {
     covering(FOXAPP_OP_STORE_ADD_ALL);
     {
         A::injectCatalogue(a);
+        A::exclusive(a, [&] {  // (a run started by mistake would end, with an error, on the pass's workers: the same reason)
+            A::clearInstallError(a);
+            CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_ADD_ALL, "", 0))));
+            CHECK(!A::addAllActive(a));
+            CHECK(!A::installError(a).empty());
+        });
         A::clearInstallError(a);
-        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_ADD_ALL, "", 0))));
-        CHECK(!A::addAllActive(a));
-        CHECK(!A::installError(a).empty());
-        A::clearInstallError(a);
-        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_ADD_ALL, "stage1-catalogue-only", 0))));
-        CHECK(A::addAllActive(a));
-        A::stopAddAll(a);
+        A::exclusive(a, [&] {
+            CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_ADD_ALL, "stage1-catalogue-only", 0))));
+            CHECK(A::addAllActive(a));
+            A::stopAddAll(a);
+        });
     }
 
     covering(FOXAPP_OP_STORE_UPDATE);
@@ -1947,7 +2063,7 @@ void storeOps(AppWindow& a) {
         const std::string key = A::fixtureKey(a);
         CHECK(!key.empty());
         CHECK(ok(A::apply(a, text(FOXAPI_OP_STORE_REMOVE, key))));
-        CHECK(A::fixture(a) == nullptr);
+        CHECK(!A::haveFixture(a));
         CHECK(!std::filesystem::exists(g_plugins / key));
     }
 
@@ -2108,7 +2224,9 @@ void patchOps(AppWindow& a) {
             CHECK(A::patchGraph(a).find(radio)->on);
             pc::Graph rename = A::patchGraph(a);
             if (pc::Node* n = rename.mutableNode(chan)) { n->name = "renamed"; }
-            if (pc::Node* n = A::mutablePatchGraph(a).mutableNode(radio)) { n->on = false; }
+            A::changePatchGraph(a, [&](pc::Graph& graph) {
+                if (pc::Node* n = graph.mutableNode(radio)) { n->on = false; }
+            });
             const FoxCommandResult kept = A::apply(a, text(FOXAPP_OP_PATCH_SET_GRAPH, pc::graphCommandText(rename), 0, static_cast<std::int64_t>(vSeen)));
             CHECK(ok(kept));
             CHECK(kept.applied[1] == 1.0);
@@ -2149,9 +2267,11 @@ void patchOps(AppWindow& a) {
         // patch stops and the mark goes; closed again, nothing more happens.
         A::pumpPatch(a);
         CHECK(A::patchWasOpen(a));
-        A::setPatchRunning(a, true);
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 0))));
-        CHECK(A::patchRunning(a));            // the command only says so ...
+        A::exclusive(a, [&] {  // (... and a free-running pass's own step would act on it before the read)
+            A::setPatchRunning(a, true);
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 0))));
+            CHECK(A::patchRunning(a));            // the command only says so ...
+        });
         A::pumpPatch(a);
         CHECK(!A::patchRunning(a));           // ... the pass's step stops the patch
         CHECK(!A::patchWasOpen(a));
@@ -2328,10 +2448,14 @@ void transmitterOps(AppWindow& a) {
         CHECK(A::remoteHoldMs(a) == 0);
         consent(1);
         A::setTransmitOpen(a, false);  // the page flag gates no key any more
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
-        CHECK(A::remoteHoldMs(a) > 0);
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 0))));
-        CHECK(A::remoteHoldMs(a) == 0);
+        // (One block: every pass releases a remote key while no web server runs - Engine::pumpRemoteControls' standing condition,
+        // test_remote_key_release's - so the hold the op gives, and the release PTT 0 gives, are read with no pass between.)
+        A::exclusive(a, [&] {
+            CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
+            CHECK(A::remoteHoldMs(a) > 0);
+            CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 0))));
+            CHECK(A::remoteHoldMs(a) == 0);
+        });
     }
 
     // FOXAPP_OP_WEB_CONTROL_STOPPED (OPEN 7 (c)): no server, no remote key -
@@ -2342,18 +2466,22 @@ void transmitterOps(AppWindow& a) {
     // test_soundcard_app_paths's testSoundCardsWantedIsACommand - this file
     // never lets PortAudio list this machine's inputs).
     covering(FOXAPP_OP_SOUND_CARDS_WANTED);
-    A::setSoundCardsListed(a, true);
-    CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED))));
-    CHECK(!A::soundCardScanPending(a));
+    A::exclusive(a, [&] {
+        A::setSoundCardsListed(a, true);
+        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED))));
+        CHECK(!A::soundCardScanPending(a));
+    });
 
     covering(FOXAPP_OP_WEB_CONTROL_STOPPED);
     {
-        CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
-        CHECK(A::remoteHoldMs(a) > 0);
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
-        CHECK(A::remoteHoldMs(a) == 0);
-        CHECK(A::engine(a).api().txFacts().owner == 0u);  // the rules let go, not only the radio
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
+        A::exclusive(a, [&] {  // (the pass's standing condition does the same release: one block, as above)
+            CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
+            CHECK(A::remoteHoldMs(a) > 0);
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
+            CHECK(A::remoteHoldMs(a) == 0);
+            CHECK(A::txOwner(a) == 0u);  // the rules let go, not only the radio
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
+        });
     }
 
     covering(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN);
@@ -2484,11 +2612,13 @@ void otherOps(AppWindow& a) {
 void statusLineOps(AppWindow& a) {
     covering(FOXAPP_OP_SET_SOURCE_ERROR);
     {
-        A::setSourceError(a, "stale");
-        CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_SOURCE_ERROR, "a new message"))));
-        CHECK(A::sourceError(a) == "a new message");
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SET_SOURCE_ERROR))));  // empty text: clears
-        CHECK(A::sourceError(a).empty());
+        A::exclusive(a, [&] {  // (the pass writes the line too: set, command and read with none between)
+            A::setSourceError(a, "stale");
+            CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_SOURCE_ERROR, "a new message"))));
+            CHECK(A::sourceError(a) == "a new message");
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SET_SOURCE_ERROR))));  // empty text: clears
+            CHECK(A::sourceError(a).empty());
+        });
     }
 
     covering(FOXAPP_OP_SET_BOOKMARK_NOTE);
@@ -2499,32 +2629,46 @@ void statusLineOps(AppWindow& a) {
 
     covering(FOXAPP_OP_CLEAR_STATUS);
     {
-        A::setGpsRefusal(a, "refused");
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_REFUSAL))));
-        CHECK(A::gpsRefusal(a).empty());
+        // (Each line or flag below is one the pass writes or consumes too: each is set, cleared by the command and read as one block,
+        // so the clearing seen is the command's.)
+        A::exclusive(a, [&] {
+            A::setGpsRefusal(a, "refused");
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_REFUSAL))));
+            CHECK(A::gpsRefusal(a).empty());
+        });
 
-        A::setSoundCardMissing(a, "missing");
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_SOUND_CARD_MISSING))));
-        CHECK(A::soundCardMissing(a).empty());
+        A::exclusive(a, [&] {
+            A::setSoundCardMissing(a, "missing");
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_SOUND_CARD_MISSING))));
+            CHECK(A::soundCardMissing(a).empty());
+        });
 
-        A::pushDecoderLogLine(a);
-        CHECK(A::decoderLogSize(a) >= 1u);
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_DECODER_LOG))));
-        CHECK(A::decoderLogSize(a) == 0u);
+        A::exclusive(a, [&] {
+            A::pushDecoderLogLine(a);
+            CHECK(A::decoderLogSize(a) >= 1u);
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_DECODER_LOG))));
+            CHECK(A::decoderLogSize(a) == 0u);
+        });
 
-        A::setSoapyScanDeferredLogged(a, true);
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED))));
-        CHECK(!A::soapyScanDeferredLogged(a));
+        A::exclusive(a, [&] {
+            A::setSoapyScanDeferredLogged(a, true);
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_SOAPY_SCAN_DEFERRED_LOGGED))));
+            CHECK(!A::soapyScanDeferredLogged(a));
+        });
 
-        A::setMutePopupQueued(a, true);
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED))));
-        CHECK(!A::mutePopupQueued(a));
+        A::exclusive(a, [&] {
+            A::setMutePopupQueued(a, true);
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_MUTE_POPUP_QUEUED))));
+            CHECK(!A::mutePopupQueued(a));
+        });
 
         // THE FINISHED READ'S LINE (window port group 14, part b; code 6): a failed read is Idle again, and the call is a no-op
         // while a read is running (the reader's own clearResult says so).
         CHECK(A::gpsFail(a));
-        CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_RESULT))));
-        CHECK(A::gpsState(a) == 0);
+        A::exclusive(a, [&] {  // (the pass polls the reader)
+            CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_RESULT))));
+            CHECK(A::gpsState(a) == 0);
+        });
         CHECK(A::gpsListen(a));
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_CLEAR_STATUS, cmd::FOXAPP_STATUS_GPS_RESULT))));
         CHECK(A::gpsState(a) == 1);
@@ -2548,14 +2692,18 @@ void statusLineOps(AppWindow& a) {
         // "Keep it running" (engine/stage3b-pre fields-to-commands round 2):
         // both fields move together - the mute stays (muteKeptRunning_), and
         // the subject closes so the NEXT one is a fresh capture.
-        A::setMutePopupSubject(a, "POCSAG", "pocsag");
-        CHECK(A::mutePopupOpen(a));
-        CHECK(A::mutePopupKeyCount(a) == 1u);
-        CHECK(!A::muteKeptRunning(a));
-        CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_MUTE_KEEP_RUNNING))));
-        CHECK(A::muteKeptRunning(a));
-        CHECK(!A::mutePopupOpen(a));
-        CHECK(A::mutePopupKeyCount(a) == 0u);
+        // (One block: the subject is made up - no plugin here mutes - and the pass's own mute step closes such a popup, so a
+        // free-running pass between these steps would answer for the command.)
+        A::exclusive(a, [&] {
+            A::setMutePopupSubject(a, "POCSAG", "pocsag");
+            CHECK(A::mutePopupOpen(a));
+            CHECK(A::mutePopupKeyCount(a) == 1u);
+            CHECK(!A::muteKeptRunning(a));
+            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_MUTE_KEEP_RUNNING))));
+            CHECK(A::muteKeptRunning(a));
+            CHECK(!A::mutePopupOpen(a));
+            CHECK(A::mutePopupKeyCount(a) == 0u);
+        });
     }
 
     // engine/stage3b-pre Airspy round (OPEN 2/3): this suite's fake radio is
@@ -2580,11 +2728,15 @@ void queueDrainsInOrder(AppWindow& a) {
     std::printf("  [the local queue]\n");
     // A submitted command changes nothing until the drain; the drain applies
     // every one, in order, and empties the queue.
-    CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_SQUELCH, -10.0))));
-    A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -20.0));
-    A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -30.0));
-    CHECK(A::queued(a) == 2u);
-    CHECK(A::squelch(a) == -10.0f);
+    // (One block up to the drain: a submit wakes a free-running pass, which drains at once - the queue's "until the drain" is
+    // then that pass's, and the reads below would race it.)
+    A::exclusive(a, [&] {
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_SQUELCH, -10.0))));
+        A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -20.0));
+        A::submit(a, num(FOXAPI_OP_SET_SQUELCH, -30.0));
+        CHECK(A::queued(a) == 2u);
+        CHECK(A::squelch(a) == -10.0f);
+    });
     A::drain(a);
     CHECK(A::queued(a) == 0u);
     CHECK(A::squelch(a) == -30.0f);

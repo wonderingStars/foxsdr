@@ -43,8 +43,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -249,6 +251,7 @@ struct AppWindowTestAccess {
 
     // ---- one frame's engine part, in drawUi's order ----------------------------------------------------------------
     static void look(AppWindow& a) {
+        releasePass(a);  // (a pass asked for ends a hold: see THE PASS HELD)
         passseam::pass(a.engine_, [&] {
             a.engine_.pumpFrameBegin();
             a.engine_.pumpInputs();
@@ -259,6 +262,7 @@ struct AppWindowTestAccess {
         a.refreshUiState();
     }
     static void after(AppWindow& a) {
+        releasePass(a);
         passseam::workers(a.engine_, [&] {
             a.engine_.pumpWorkers();
             a.engine_.pumpAudio();
@@ -284,7 +288,9 @@ struct AppWindowTestAccess {
         a.openUiSession();
         a.refreshUiState();
     }
-    static FoxCommandResult command(AppWindow& a, const cmd::QueuedCommand& q) { return a.engine_.applyCommand(q.c, q.longText); }
+    static FoxCommandResult command(AppWindow& a, const cmd::QueuedCommand& q) {
+        return engineRead<FoxCommandResult>(a, [&] { return a.engine_.applyCommand(q.c, q.longText); });
+    }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
 
     // ---- the window's own ------------------------------------------------------------------------------------------
@@ -314,45 +320,132 @@ struct AppWindowTestAccess {
     }
 
     // ---- the engine, for what a hermetic window cannot make and for comparison ----------------------------------------
-    static int& sourceSel(AppWindow& a) { return a.engine_.sourceSel_; }
-    static bool& patchRunning(AppWindow& a) { return a.engine_.patchRunning_; }
-    static std::string& testFault(AppWindow& a) { return a.engine_.testFault_; }
-    static SoundCardSettings& form(AppWindow& a) { return a.engine_.soundCard_; }
-    static const SoundCardSettings& liveCard(AppWindow& a) { return a.engine_.soundCardLive_; }
-    static std::string& cardMissing(AppWindow& a) { return a.engine_.soundCardMissing_; }
-    static std::string& keepKind(AppWindow& a) { return a.engine_.restoreKeep_.kind; }
-    static std::string& keepLabel(AppWindow& a) { return a.engine_.restoreKeepLabel_; }
-    static bool& cardOpening(AppWindow& a) { return a.engine_.soundCardOpenPending_; }
-    static std::string& sourceError(AppWindow& a) { return a.engine_.sourceError_; }
-    static std::string& sdrAdvice(AppWindow& a) { return a.engine_.sdrPlayAdvice_; }
-    static std::string& tuneNote(AppWindow& a) { return a.engine_.tuneMismatchNote_; }
-    static const std::string& sourceKind(AppWindow& a) { return a.engine_.sourceKind_; }
-    static bool deviceOpen(AppWindow& a) { return a.engine_.device_ != nullptr; }
-    static bool& agcSupported(AppWindow& a) { return a.engine_.deviceAgcSupported_; }
-    static bool& agcOn(AppWindow& a) { return a.engine_.deviceAgc_; }
-    static std::vector<std::string>& antennas(AppWindow& a) { return a.engine_.deviceAntennas_; }
-    static std::string& antenna(AppWindow& a) { return a.engine_.deviceAntenna_; }
-    static std::vector<cascade::source::GainInfo>& gainRanges(AppWindow& a) { return a.engine_.deviceGainRanges_; }
-    static std::vector<std::string>& gainNames(AppWindow& a) { return a.engine_.deviceGainNames_; }
-    static std::vector<float>& gainsDb(AppWindow& a) { return a.engine_.deviceGainsDb_; }
-    static cascade::gui::BiasTeePanel& biasTee(AppWindow& a) { return a.engine_.biasTeePanel_; }
-    static bool& rfNotchPresent(AppWindow& a) { return a.engine_.deviceRfNotchPresent_; }
-    static bool& rfNotch(AppWindow& a) { return a.engine_.deviceRfNotch_; }
-    static bool& dabNotchPresent(AppWindow& a) { return a.engine_.deviceDabNotchPresent_; }
-    static bool& dabNotch(AppWindow& a) { return a.engine_.deviceDabNotch_; }
-    static bool& hdrPresent(AppWindow& a) { return a.engine_.deviceHdrPresent_; }
-    static bool& hdr(AppWindow& a) { return a.engine_.deviceHdr_; }
-    static bool& adcPresent(AppWindow& a) { return a.engine_.deviceAdcSwitchesPresent_; }
-    static bool& dither(AppWindow& a) { return a.engine_.deviceDither_; }
-    static bool& randomiser(AppWindow& a) { return a.engine_.deviceRandomiser_; }
-    static double engineRateNow(AppWindow& a) { return a.engine_.pipeline_.activeSource().sampleRateHz(); }
-    static std::map<std::string, cascade::core::ConverterSetting>& converters(AppWindow& a) { return a.engine_.converters_; }
-    static int soapyRowBase(AppWindow& a) { return a.engine_.soapyRowBase(); }
-    static std::string idForRow(AppWindow& a, int row) { return a.engine_.sourceIdForRow(row); }
-    static char* plutoBuffer(AppWindow& a) { return a.engine_.plutoUri_; }
-    static bool gated(AppWindow& a) { return a.engine_.soapyScanGated(); }
-    static std::vector<std::string>& absent(AppWindow& a) { return a.engine_.soapyAbsentDrivers_; }
-    static bool& scanned(AppWindow& a) { return a.engine_.soapyScanned_; }
+    // EVERY ONE GOES THROUGH THE SEAM (tests/pass_seam.hpp): passseam::on / read run it on the pass's thread with the pass out of
+    // the way when the pass free-runs (FOXSDR_TEST_PASS=free), and right here inline and stepped; a read returns a COPY. While the
+    // pass is HELD (below) it is made right here too: the pass is then parked inside a piece of work of its own and touches nothing.
+    template <class R, class F>
+    static R engineRead(AppWindow& a, F f) {
+        if (held() != nullptr) { return f(); }
+        return passseam::read<R>(a.engine_, std::function<R()>(f));
+    }
+    template <class F>
+    static void engineDo(AppWindow& a, F f) {
+        if (held() != nullptr) {
+            f();
+            return;
+        }
+        passseam::on(a.engine_, std::function<void()>(f));
+    }
+    static int sourceSel(AppWindow& a) { return engineRead<int>(a, [&] { return a.engine_.sourceSel_; }); }
+    static bool patchRunning(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.patchRunning_; }); }
+    static void setPatchRunning(AppWindow& a, bool on) { engineDo(a, [&] { a.engine_.patchRunning_ = on; }); }
+    static void setTestFault(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.testFault_ = s; }); }
+    static SoundCardSettings form(AppWindow& a) { return engineRead<SoundCardSettings>(a, [&] { return a.engine_.soundCard_; }); }
+    static SoundCardSettings liveCard(AppWindow& a) { return engineRead<SoundCardSettings>(a, [&] { return a.engine_.soundCardLive_; }); }
+    static void setCardMissing(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.soundCardMissing_ = s; }); }
+    static void setKeepKind(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.restoreKeep_.kind = s; }); }
+    static void setKeepLabel(AppWindow& a, const std::string& s) { engineDo(a, [&] { a.engine_.restoreKeepLabel_ = s; }); }
+    static bool cardOpening(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.soundCardOpenPending_; }); }
+    static std::string sourceError(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.sourceError_; }); }
+    static std::string sdrAdvice(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.sdrPlayAdvice_; }); }
+    static std::string tuneNote(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.tuneMismatchNote_; }); }
+    static std::string sourceKind(AppWindow& a) { return engineRead<std::string>(a, [&] { return a.engine_.sourceKind_; }); }
+    static bool deviceOpen(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.device_ != nullptr; }); }
+    static bool agcOn(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.deviceAgc_; }); }
+    static void setAntennas(AppWindow& a, const std::vector<std::string>& v) { engineDo(a, [&] { a.engine_.deviceAntennas_ = v; }); }
+    // What a driver with these things reports (the members the table's lists are built from), written in ONE go as an open of
+    // such a radio would have set them - so no pass publishes a half-written panel (three gain names beside one range).
+    struct RadioPanel {
+        std::vector<std::string> antennas;
+        std::string antenna;
+        bool agcSupported = false;
+        std::vector<std::string> gainNames;
+        std::vector<cascade::source::GainInfo> gainRanges;
+        std::vector<float> gainsDb;
+        bool biasTeePresent = false, biasTeeShown = false;
+        bool rfNotchPresent = false, rfNotch = false, dabNotchPresent = false, hdrPresent = false, adcPresent = false,
+             randomiser = false;
+    };
+    static void setRadioPanel(AppWindow& a, const RadioPanel& p) {
+        engineDo(a, [&] {
+            Engine& e = a.engine_;
+            e.deviceAntennas_ = p.antennas;
+            e.deviceAntenna_ = p.antenna;
+            e.deviceAgcSupported_ = p.agcSupported;
+            e.deviceGainNames_ = p.gainNames;
+            e.deviceGainRanges_ = p.gainRanges;
+            e.deviceGainsDb_ = p.gainsDb;
+            e.biasTeePanel_.present = p.biasTeePresent;
+            e.biasTeePanel_.shown = p.biasTeeShown;
+            e.deviceRfNotchPresent_ = p.rfNotchPresent;
+            e.deviceRfNotch_ = p.rfNotch;
+            e.deviceDabNotchPresent_ = p.dabNotchPresent;
+            e.deviceHdrPresent_ = p.hdrPresent;
+            e.deviceAdcSwitchesPresent_ = p.adcPresent;
+            e.deviceRandomiser_ = p.randomiser;
+        });
+    }
+    static double engineRateNow(AppWindow& a) {
+        return engineRead<double>(a, [&] { return a.engine_.pipeline_.activeSource().sampleRateHz(); });
+    }
+    static void setConverter(AppWindow& a, const std::string& key, const cascade::core::ConverterSetting& s) {
+        engineDo(a, [&] { a.engine_.converters_[key] = s; });
+    }
+    static void eraseConverter(AppWindow& a, const std::string& key) { engineDo(a, [&] { a.engine_.converters_.erase(key); }); }
+    static int soapyRowBase(AppWindow& a) { return engineRead<int>(a, [&] { return a.engine_.soapyRowBase(); }); }
+    static std::string idForRow(AppWindow& a, int row) { return engineRead<std::string>(a, [&] { return a.engine_.sourceIdForRow(row); }); }
+    static std::string plutoBuffer(AppWindow& a) { return engineRead<std::string>(a, [&] { return std::string(a.engine_.plutoUri_); }); }
+    static bool gated(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.soapyScanGated(); }); }
+    static void setAbsent(AppWindow& a, const std::vector<std::string>& v) { engineDo(a, [&] { a.engine_.soapyAbsentDrivers_ = v; }); }
+    static bool scanned(AppWindow& a) { return engineRead<bool>(a, [&] { return a.engine_.soapyScanned_; }); }
+    // The test's own world (the hooks' data) written where the pass and the workers it starts are ordered after it.
+    template <class F>
+    static void onPass(AppWindow& a, F f) { engineDo(a, f); }
+
+    // ---- THE PASS HELD, free-running only ---------------------------------------------------------------------------------
+    // The window's own frames with no engine pass between them (a click's frames, a survey's clicks and the session dropped
+    // after them, an edit typed and then lost) are what most of this file is about: inline and stepped no pass runs unless the
+    // test asks for one, so there is nothing to hold. FREE-RUNNING, the session's submit wakes the pass at once, so a click the
+    // test then drops (dropQueued) would be applied first and a "nothing has landed yet" read of the engine would race it. So the
+    // pass is HELD for those stretches: a piece of work posted to it (Engine::postToPass, run at the head of a pass after the
+    // queues were taken) waits until the hold is let go, so what the window sends meanwhile is taken by the NEXT pass - the
+    // order a frame has in the product, where the click's frame always precedes the pass that applies it. Nothing that asks for
+    // a pass may run while it is held; look() and after() let it go first.
+    struct Hold {
+        std::mutex m;
+        std::condition_variable cv;
+        bool running = false;
+        bool release = false;
+    };
+    static std::shared_ptr<Hold>& held() {
+        static std::shared_ptr<Hold> h;
+        return h;
+    }
+    static void holdPass(AppWindow& a) {
+        if (passseam::mode() != passseam::Mode::Free || held() != nullptr) { return; }
+        passseam::attach(a.engine_);
+        auto h = std::make_shared<Hold>();
+        a.engine_.postToPass([h] {
+            std::unique_lock<std::mutex> lk(h->m);
+            h->running = true;
+            h->cv.notify_all();
+            h->cv.wait(lk, [&] { return h->release; });
+        });
+        std::unique_lock<std::mutex> lk(h->m);
+        const bool took = h->cv.wait_for(lk, std::chrono::seconds(10), [&] { return h->running; });
+        CHECK(took);
+        held() = h;
+    }
+    static void releasePass(AppWindow&) {
+        const std::shared_ptr<Hold> h = held();
+        if (h == nullptr) { return; }
+        held().reset();
+        {
+            std::lock_guard<std::mutex> lk(h->m);
+            h->release = true;
+        }
+        h->cv.notify_all();
+    }
 };
 
 }  // namespace cascade::gui
@@ -379,6 +472,7 @@ struct Env {
         Access::look(app);
         Access::look(app);
     }
+    ~Env() { Access::releasePass(app); }
 };
 
 // --- frames --------------------------------------------------------------------------------------------------
@@ -558,6 +652,7 @@ void clickThenHold(AppWindow& a, float x, float y) {
     frame(a);
     io.AddMouseButtonEvent(0, true);
     frame(a);
+    Access::holdPass(a);  // (free-running: no pass until the caller asks for the next frame)
     io.AddMouseButtonEvent(0, false);
     drawOnly(a);
     putAway();
@@ -737,7 +832,7 @@ void testCombo() {
 
     std::printf("  A4: while the patch runs the radios' rows are greyed and send nothing - the three fixed rows still do\n");
     {
-        Access::patchRunning(a) = true;
+        Access::setPatchRunning(a, true);
         pass(a);
         pass(a);
         CHECK(rxFlag(a, FOXAPI_RX_PATCH_RUNNING));
@@ -763,7 +858,7 @@ void testCombo() {
         }
         closePopups(a);
         Access::dropQueued(a);
-        Access::patchRunning(a) = false;
+        Access::setPatchRunning(a, false);
         pass(a);
         pass(a);
         CHECK(!rxFlag(a, FOXAPI_RX_PATCH_RUNNING));
@@ -818,14 +913,16 @@ void testScanStates() {
         CHECK(!has(t, "Scanning for devices..."));
         CHECK(!has(t, "No radio hardware found"));  // (the scan found radios)
         const std::vector<Hit> top = sweepSection(a);
+        Access::holdPass(a);
         const Access::Sent sent = clickSent(a, top.size() > 1 ? top[1].x : 0.0f, top.size() > 1 ? top[1].y : 0.0f);
         CHECK_EQ(sentText(sent), std::vector<std::string>{expect("SCAN_DEVICES")});  // Refresh is live again
         Access::dropQueued(a);
+        Access::releasePass(a);
     }
 
     std::printf("  B2: a radio being opened: \"Opening ...\", the combo greyed - and its end lifts it\n");
     {
-        Access::makeDevice(&gatedRadio);
+        Access::onPass(a, [] { Access::makeDevice(&gatedRadio); });
         world::get().openGate = false;
         selectRowId(a, "rtlsdr:serial=00000001");
         CHECK(passUntil(a, [&] { return rxFlag(a, FOXAPI_RX_DEVICE_OPENING); }));
@@ -850,7 +947,7 @@ void testScanStates() {
         CHECK(passUntil(a, [&] { return rxFlag(a, FOXAPI_RX_DEVICE_OPEN) && !rxFlag(a, FOXAPI_RX_DEVICE_OPENING); }));
         pass(a);
         CHECK(!has(shot(a), "Opening "));
-        Access::makeDevice(&engine_api_test::makeFakeRadio);
+        Access::onPass(a, [] { Access::makeDevice(&engine_api_test::makeFakeRadio); });
     }
 
     std::printf("  B3: beside an open radio the scan is gated: the sentence for what Refresh leaves out, or for a scan deferred\n");
@@ -899,12 +996,12 @@ void testPartialAndNetworkBox() {
     std::printf("  B5: the UHD note and the network box: drawn from two flags, and the tick is a command\n");
     {
         CHECK(!srcFlag(a, FOXAPI_SRC_NETWORK_USRPS));
-        Access::absent(a).clear();  // a scan that left nothing out: nothing to say
+        Access::setAbsent(a, {});  // a scan that left nothing out: nothing to say
         pass(a);
         pass(a);
         CHECK(!srcFlag(a, FOXAPI_SRC_UHD_LEFT_OUT));
         CHECK(!has(shot(a), "Network USRPs are not searched"));
-        Access::absent(a) = {"uhd"};  // what a landed scan that found no USRP says
+        Access::setAbsent(a, {"uhd"});  // what a landed scan that found no USRP says
         pass(a);
         pass(a);
         CHECK(srcFlag(a, FOXAPI_SRC_UHD_LEFT_OUT));
@@ -995,7 +1092,7 @@ void testNoHardware() {
         CHECK(has(t, "module: only.dll"));
         CHECK(!has(t, "search: "));
         CHECK(!has(t, "Not scanned again this session"));
-        w.modules.clear();
+        Access::onPass(a, [&] { w.modules.clear(); });
         const int taken = w.diagCalls.load();
         Access::submit(a, cmd::make(FOXAPI_OP_SCAN_DEVICES));
         CHECK(passUntil(a, [&] { return w.diagCalls.load() > taken; }));
@@ -1074,7 +1171,7 @@ void testNoHardware() {
         std::string t = shot(a);
         CHECK(has(t, w3.sdrAdvice));
         CHECK(has(t, "SDRplay API: " + w3.sdrDetail));
-        w3.sdrRows = true;  // an API row was found: the advice is not for this machine
+        Access::onPass(a, [&] { w3.sdrRows = true; });  // an API row was found: the advice is not for this machine
         Access::submit(a, cmd::make(FOXAPI_OP_SCAN_DEVICES));
         CHECK(passUntil(a, [&] { return srcFlag(a, FOXAPI_SRC_SDRPLAY_ROWS); }));
         pass(a);
@@ -1100,7 +1197,7 @@ void testFaultAndLamp() {
     CHECK_EQ(zombie.size(), 134u);
     const char* const advice = "Reconnect it and pick the source again, or switch to the signal generator.";
     {
-        Access::testFault(a) = zombie;
+        Access::setTestFault(a, zombie);
         pass(a);
         pass(a);
         CHECK(rxFlag(a, FOXAPI_RX_FAULTED));
@@ -1116,13 +1213,13 @@ void testFaultAndLamp() {
     }
     std::printf("  D2: any other fault is followed by the advice\n");
     {
-        Access::testFault(a) = "usb: the device was removed while streaming";
+        Access::setTestFault(a, "usb: the device was removed while streaming");
         pass(a);
         pass(a);
         const std::string t = shot(a);
         CHECK(has(t, "Device stopped: usb: the device was removed while streaming"));
         CHECK(has(t, advice));
-        Access::testFault(a).clear();
+        Access::setTestFault(a, "");
         pass(a);
         pass(a);
         // (the engine latches a test fault until the next start: the flag follows the line)
@@ -1130,21 +1227,21 @@ void testFaultAndLamp() {
 
     std::printf("  D3: the lamp and the saved-not-open preview: a kept radio, I/Q file or sound card\n");
     {
-        Access::keepKind(a) = "soapy";
-        Access::keepLabel(a) = "Kept Soapy Radio";
+        Access::setKeepKind(a, "soapy");
+        Access::setKeepLabel(a, "Kept Soapy Radio");
         pass(a);
         pass(a);
         CHECK(Access::lamp(a));
         std::string t = shot(a);
         CHECK(has(t, "Kept Soapy Radio (saved, not open)"));  // the combo's preview
         CHECK(has(t, "Kept Soapy Radio is still the saved radio. The signal generator is running in its place"));
-        Access::keepKind(a) = "soundcard";
+        Access::setKeepKind(a, "soundcard");
         pass(a);
         pass(a);
         CHECK(Access::lamp(a));
         t = shot(a);
         CHECK(has(t, "Kept Soapy Radio is still the saved sound card."));
-        Access::keepKind(a) = "file";
+        Access::setKeepKind(a, "file");
         pass(a);
         pass(a);
         CHECK(!Access::lamp(a));  // (an I/Q file is said in its own words, not by the lamp)
@@ -1152,8 +1249,8 @@ void testFaultAndLamp() {
         CHECK(has(t, "Kept Soapy Radio is still the saved I/Q file."));
         CHECK(has(t, "Kept Soapy Radio (saved, not open)"));
         // Nothing kept: no lamp, no preview, the generator's own name.
-        Access::keepKind(a).clear();
-        Access::keepLabel(a).clear();
+        Access::setKeepKind(a, "");
+        Access::setKeepLabel(a, "");
         pass(a);
         pass(a);
         CHECK(!Access::lamp(a));
@@ -1161,8 +1258,8 @@ void testFaultAndLamp() {
         CHECK(!has(t, "saved, not open"));
         CHECK(has(t, "Signal generator"));
         // A radio open: nothing is "standing in" for anything.
-        Access::keepKind(a) = "soapy";
-        Access::keepLabel(a) = "Kept Soapy Radio";
+        Access::setKeepKind(a, "soapy");
+        Access::setKeepLabel(a, "Kept Soapy Radio");
         selectRowId(a, "rtlsdr:serial=00000001");
         CHECK(passUntil(a, [&] { return rxFlag(a, FOXAPI_RX_DEVICE_OPEN); }));
         pass(a);
@@ -1170,8 +1267,8 @@ void testFaultAndLamp() {
         CHECK(!has(shot(a), "saved, not open"));
         selectRowId(a, "siggen");
         CHECK(passUntil(a, [&] { return !rxFlag(a, FOXAPI_RX_DEVICE_OPEN); }));
-        Access::keepKind(a).clear();
-        Access::keepLabel(a).clear();
+        Access::setKeepKind(a, "");
+        Access::setKeepLabel(a, "");
     }
 }
 
@@ -1202,6 +1299,7 @@ struct Found {
 };
 std::vector<Found> survey(AppWindow& a) {
     std::vector<Found> out;
+    Access::holdPass(a);  // (free-running: the clicks are dropped before any pass takes them, as in a frame with no pass)
     const std::vector<Hit> spots = sweepSection(a);
     for (const Hit& s : spots) {
         Access::Sent sent;
@@ -1216,6 +1314,7 @@ std::vector<Found> survey(AppWindow& a) {
         Access::dropQueued(a);
         drawOnly(a);
     }
+    Access::releasePass(a);
     return out;
 }
 std::vector<std::string> commandsOf(const std::vector<Found>& v) {
@@ -1302,6 +1401,7 @@ void testRadioPanel() {
                 const std::vector<Hit> again = openAt(a, top[3]);
                 CHECK_EQ(again.size(), 6u);
                 if (again.size() == 6u) {
+                    Access::holdPass(a);  // (free-running: the click's frame, then the engine read below, before any pass)
                     const Access::Sent sent = clickSent(a, again[4].x, again[4].y);
                     CHECK_EQ(sent.size(), 1u);
                     if (sent.size() == 1u) {
@@ -1314,6 +1414,7 @@ void testRadioPanel() {
         // Nothing has landed in the click's frame: the state, the radio and the window's cache are what they were.
         CHECK_NEAR(Access::state(a).sampleRateHz, 2048000.0, 0.5);
         CHECK_NEAR(Access::engineRateNow(a), 2048000.0, 0.5);
+        Access::releasePass(a);
         // ...and the engine's value is there the frame after the pass.
         const std::string t = shot(a);
         CHECK_NEAR(Access::state(a).sampleRateHz, 2400000.0, 0.5);
@@ -1370,23 +1471,25 @@ void testRadioPanel() {
     {
         // What a driver with these things reports (the members the table's lists are built from, set as an open of
         // such a radio would have set them).
-        Access::antennas(a) = {"RX", "TX/RX"};
-        Access::antenna(a) = "RX";
-        Access::agcSupported(a) = false;
-        Access::gainNames(a) = {"LNA", "VGA", "STEPS"};
+        Access::RadioPanel p;
+        p.antennas = {"RX", "TX/RX"};
+        p.antenna = "RX";
+        p.agcSupported = false;
+        p.gainNames = {"LNA", "VGA", "STEPS"};
         cascade::source::GainInfo lna{"LNA", 0.0, 33.0, 1.0};
         cascade::source::GainInfo vga{"VGA", -4.7, 40.8, 0.1};
         cascade::source::GainInfo steps{"STEPS", 0.0, 15.0, 1.0, cascade::source::GainUnit::Steps};
-        Access::gainRanges(a) = {lna, vga, steps};
-        Access::gainsDb(a) = {20.0f, -3.2f, 7.0f};
-        Access::biasTee(a).present = true;
-        Access::biasTee(a).shown = false;
-        Access::rfNotchPresent(a) = true;
-        Access::rfNotch(a) = true;
-        Access::dabNotchPresent(a) = true;
-        Access::hdrPresent(a) = true;
-        Access::adcPresent(a) = true;
-        Access::randomiser(a) = true;
+        p.gainRanges = {lna, vga, steps};
+        p.gainsDb = {20.0f, -3.2f, 7.0f};
+        p.biasTeePresent = true;
+        p.biasTeeShown = false;
+        p.rfNotchPresent = true;
+        p.rfNotch = true;
+        p.dabNotchPresent = true;
+        p.hdrPresent = true;
+        p.adcPresent = true;
+        p.randomiser = true;
+        Access::setRadioPanel(a, p);
         pass(a);
         pass(a);
         const auto& cc = Access::lists(a);
@@ -1433,6 +1536,7 @@ void testRadioPanel() {
                 CHECK(sentText(clickSent(a, rows[0].x, rows[0].y)).empty());
                 closePopups(a);
                 const std::vector<Hit> again = openAt(a, top[4]);
+                Access::holdPass(a);  // (free-running: the click is dropped below before any pass takes it)
                 if (again.size() == 2u) {
                     CHECK_EQ(sentText(clickSent(a, again[1].x, again[1].y)),
                              std::vector<std::string>{expect("SET_ANTENNA", 0, 0, "TX/RX")});
@@ -1440,6 +1544,7 @@ void testRadioPanel() {
             }
             closePopups(a);
             Access::dropQueued(a);
+            Access::releasePass(a);
         }
     }
 }
@@ -1527,9 +1632,11 @@ void testIqFileAndPluto() {
             // The engine's own copy is what Open will use if the window's draft is stale?: no - Open sends the DRAFT.
             top = sweepSection(a);
             if (top.size() >= 5u) {
+                Access::holdPass(a);  // (free-running: the Open is dropped before any pass takes it)
                 CHECK_EQ(sentText(clickSent(a, top[4].x, top[4].y)),
                          std::vector<std::string>{expect("SELECT_SOURCE", 0, 0, "open-pluto:uri=ip:192.168.2.17")});
                 Access::dropQueued(a);
+                Access::releasePass(a);
             }
         }
         // An address changed ELSEWHERE (the web remote's open, a config reload) shows in the box that is not being typed in.
@@ -1545,6 +1652,7 @@ void testIqFileAndPluto() {
         std::vector<Hit> top = sweepSection(a);
         CHECK(top.size() >= 5u);
         if (top.size() >= 5u) {
+            Access::holdPass(a);  // (free-running: the edit is dropped before any pass takes it)
             ImGuiIO& io = ImGui::GetIO();
             io.AddMousePosEvent(top[3].x, top[3].y);
             drawOnly(a);
@@ -1560,6 +1668,7 @@ void testIqFileAndPluto() {
             io.AddInputCharactersUTF8("1");
             drawOnly(a);
             Access::dropQueued(a);  // (the session is dropped: the engine never sees the edit)
+            Access::releasePass(a);
             io.AddMousePosEvent(300.0f, 900.0f);
             drawOnly(a);
             io.AddMouseButtonEvent(0, true);
@@ -1673,7 +1782,7 @@ void testSoundCard() {
                 // The form's card is A (the default input): a click on its row does nothing, as it never did.
                 CHECK(sentText(clickSent(a, rows[0].x, rows[0].y)).empty());
                 closePopups(a);
-                Access::cardMissing(a) = "Fake In B is not connected.";
+                Access::setCardMissing(a, "Fake In B is not connected.");
                 pass(a);
                 pass(a);
                 CHECK(has(shot(a), "Fake In B is not connected."));
@@ -1791,9 +1900,11 @@ void testSoundCard() {
         CHECK(top.size() >= 9u);
         if (top.size() >= 9u) {
             // Swap I/Q: one field.
+            Access::holdPass(a);  // (free-running: the click is dropped before any pass takes it)
             const Access::Sent sw = clickSent(a, top[5].x, top[5].y);
             CHECK_EQ(sentText(sw), std::vector<std::string>{expect("APP_SOUND_CARD_FORM", 4, FOXAPP_SOUND_CARD_FIELD_SWAP_IQ, unitSep())});
             Access::dropQueued(a);
+            Access::releasePass(a);
             // The centre: typed, Return sends the form's centre and then the live one.
             Access::Sent typed;
             typeInto(a, top[6], "7.1", true, typed);
@@ -1821,8 +1932,10 @@ void testSoundCard() {
             CHECK(answered(a, FOXAPP_OP_SOUNDCARD_IQ_CENTRE, FOXAPI_NO_CHANGE));
             // A figure the engine never took is not held for ever: after two seconds the box shows the engine's.
             Access::Sent lost;
+            Access::holdPass(a);  // (free-running: the figure is dropped before any pass takes it)
             typeInto(a, top[6], "9.9", true, lost);
             Access::dropQueued(a);
+            Access::releasePass(a);
             CHECK(Access::centrePending(a));
             CHECK_NEAR(Access::centreMhz(a), 9.9, 1e-9);
             for (int i = 0; i < 100; ++i) { frame(a); }
@@ -1850,7 +1963,7 @@ void testSoundCard() {
         Access::submit(a, formField(real, FOXAPP_SOUND_CARD_FIELD_FORMAT | FOXAPP_SOUND_CARD_FIELD_RATE));
         const std::string key = cascade::gui::soundCardConverterKey("Fake In C", "Fake API");
         const cascade::core::ConverterSetting down{cascade::core::ConverterMode::Down, 100.0e6, false};
-        Access::converters(a)[key] = down;
+        Access::setConverter(a, key, down);
         pass(a);
         pass(a);
         s = Access::form(a);
@@ -1860,7 +1973,7 @@ void testSoundCard() {
         CHECK_EQ(Access::receives(a), want);
         CHECK(has(t, want));
         CHECK(want != expected(s, cascade::core::ConverterSetting{}));  // (the converter is in it)
-        Access::converters(a).erase(key);
+        Access::eraseConverter(a, key);
         pass(a);
         pass(a);
         CHECK_EQ(Access::receives(a), expected(s, cascade::core::ConverterSetting{}));
@@ -1878,8 +1991,8 @@ void testSoundCard() {
             CHECK_EQ(sentText(opened), std::vector<std::string>{expect("SELECT_SOURCE", 0, 0, "soundcard:open")});
         }
         CHECK(passUntil(a, [&] { return srcFlag(a, FOXAPI_SRC_CARD_OPENING); }));
-        Access::keepKind(a) = "soundcard";  // (a restored card brought back: the lamp must stay dark meanwhile)
-        Access::keepLabel(a) = "Fake In C";
+        Access::setKeepKind(a, "soundcard");  // (a restored card brought back: the lamp must stay dark meanwhile)
+        Access::setKeepLabel(a, "Fake In C");
         pass(a);
         const std::string t = shot(a);
         CHECK(has(t, "Opening Fake In C (Fake API)..."));
@@ -1887,8 +2000,8 @@ void testSoundCard() {
         CHECK(!has(t, "(saved, not open)"));
         const std::vector<Found> found = survey(a);
         sameCommands(commandsOf(found), topKeys(), "G7 card opening");  // (the card's own controls send nothing)
-        Access::keepKind(a).clear();
-        Access::keepLabel(a).clear();
+        Access::setKeepKind(a, "");
+        Access::setKeepLabel(a, "");
         world::get().openGate = true;
         CHECK(passUntil(a, [&] { return !srcFlag(a, FOXAPI_SRC_CARD_OPENING) && Access::sourceKind(a) == "soundcard"; }));
         pass(a);
@@ -1900,8 +2013,10 @@ void testSoundCard() {
 
     std::printf("  G8: no card to list: the line, and Open is greyed\n");
     {
-        Access::install();
-        world::get().cards.clear();
+        Access::onPass(a, [] {
+            Access::install();
+            world::get().cards.clear();
+        });
         Env env2;
         AppWindow& b = env2.app;
         scanAll(b);
@@ -1985,12 +2100,12 @@ void testSweeps() {
 
     std::printf("  H5: a fault does not stop the controls: the same keys, and the fault says why\n");
     {
-        Access::testFault(a) = "usb: the device was removed while streaming";
+        Access::setTestFault(a, "usb: the device was removed while streaming");
         pass(a);
         pass(a);
         const std::vector<Found> found = survey(a);
         sameCommands(commandsOf(found), topKeys(), "H5 fault");
-        Access::testFault(a).clear();
+        Access::setTestFault(a, "");
         pass(a);
     }
 }
@@ -2013,6 +2128,7 @@ void testClicksLand() {
             clickThenHold(a, top[1].x, top[1].y);  // Refresh
             CHECK_EQ(world::get().soapyCalls.load(), scans);  // nothing yet
             CHECK(!srcFlag(a, FOXAPI_SRC_SCAN_PENDING));
+            Access::releasePass(a);
             frame(a);  // the engine's next pass takes it
             CHECK(passUntil(a, [&] { return world::get().soapyCalls.load() == scans + 1; }));
         }
@@ -2078,7 +2194,7 @@ void testCache() {
     pass(a);
     // A busy world: a radio's lists too (the sound card's are there already).
     {
-        Access::antennas(a) = {"RX", "TX/RX"};
+        Access::setAntennas(a, {"RX", "TX/RX"});
         pass(a);
     }
     const std::uint64_t seq = Access::listSeq(a);
@@ -2102,13 +2218,13 @@ void testCache() {
     {
         // Settle the strings' room first (a second identical rebuild is the steady cost), then count.
         for (int round = 0; round < 3; ++round) {
-            Access::keepKind(a) = round % 2 == 0 ? "soapy" : "";
+            Access::setKeepKind(a, round % 2 == 0 ? "soapy" : "");
             pass(a);
             (void)Access::lists(a);
         }
         long worst = 0;
         for (int round = 0; round < 6; ++round) {
-            Access::keepKind(a) = round % 2 == 0 ? "" : "soapy";
+            Access::setKeepKind(a, round % 2 == 0 ? "" : "soapy");
             pass(a);
             const std::uint64_t moved = Access::listSeq(a);
             const std::uint32_t r0 = c.refreshes;

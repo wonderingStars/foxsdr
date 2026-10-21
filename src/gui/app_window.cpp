@@ -1843,6 +1843,8 @@ int AppWindow::run(int frames) {
                 // the pass's, and a swap of it would race a read from this thread.
                 engine_.submitCommand(cascade::core::cmd::makeNumInt(FOXAPP_OP_VFO_TO_ABSOLUTE, uiState_.centreHz + offsetHz, 0));
             };
+            hooks.markPassStats = [this] { engine_.markPassStats(); };
+            hooks.passStatsJson = [this] { return engine_.passStatsJson(); };
             hooks.installSource = [this](std::unique_ptr<cascade::source::IqSource> src) {
                 // THE PASS INSTALLS IT (the pump move's step P4): the swap and the chain's following it are the engine's own
                 // work on the engine's own state, which the free-running pass is changing beside this thread. Posted, then one
@@ -15978,8 +15980,11 @@ void AppWindow::refreshUiState() {
     if (uiSession_ == nullptr) { return; }
     FoxReceiverState st{};
     st.structSize = sizeof(st);
-    // A read that keeps overlapping a publish answers BUSY: the last good one stands.
-    if (engineApi_->read_state(uiSession_, &st) == FOXAPI_OK) {
+    // A read that keeps overlapping a publish answers BUSY: the last good one stands - and this look's answers wait for the next
+    // (uiStateFresh_, in the header).
+    uiStateFresh_ = engineApi_->read_state(uiSession_, &st) == FOXAPI_OK;
+    if (!uiStateFresh_) { ++uiStateBusyReads_; }
+    if (uiStateFresh_) {
         uiState_ = st;
         // THE SPECTRUM'S AXIS follows the display range the state carries (the pump move's step P2: the engine used to call
         // this window's onDisplayRange from its pass the moment the range changed, writing the view's two floats from beside
@@ -16899,7 +16904,8 @@ void AppWindow::pollUiAnswers() {
 }
 
 // ...AND HANDLED (the second half): after the state, the spectrum and the lists this frame's look read.
-void AppWindow::actOnUiAnswers() {
+void AppWindow::actOnUiAnswers(bool stateRead) {
+    if (!stateRead && !uiStateFresh_) { return; }   // the state this look read is the last good one, older than these answers: next frame
     UiAnswers& a = uiAnswers_;
     for (int i = 0; i < a.nResults; ++i) {
         const FoxCommandResult& r = a.results[i];
@@ -16938,7 +16944,7 @@ void AppWindow::pumpTransmitKey() {
     for (;;) {
         pollUiAnswers();
         const bool more = uiAnswers_.nResults == UiAnswers::kMaxResults || uiAnswers_.nEvents == UiAnswers::kMaxEvents;
-        actOnUiAnswers();
+        actOnUiAnswers(/*stateRead=*/true);
         if (!more) { break; }
     }
 }

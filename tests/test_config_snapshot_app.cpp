@@ -22,9 +22,13 @@
 //      saved says 0.3 - not the 0.5 of a snapshot nobody filled
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
 
 #if defined(_WIN32)
@@ -46,14 +50,18 @@ struct AppWindowTestAccess {
     static cascade::core::AppConfig current(AppWindow& a) { return a.currentConfig(); }
     static cascade::core::AppConfig saved(AppWindow& a) { return a.savedCfg_; }
     static cascade::core::AppConfig lastRequested(AppWindow& a) { return a.lastRequestedConfig_; }
-    static void saveNow(AppWindow& a) { a.saveConfigNow(); }
-    static void publish(AppWindow& a) { a.engine_.publishConfig(); }
+    // THE HELD FORMS: the engine's own fields and calls, made from this thread - every use is inside a PassHold (free-running
+    // the pass is parked there; inline and stepped no pass runs unless the test asks for one). saveConfigNow is the window's,
+    // but it hands the engine's half over itself (Engine::publishConfig), which the product does only with no pass running
+    // (before the control thread starts, and after shutdownQuiesce).
+    static void saveNowHeld(AppWindow& a) { a.saveConfigNow(); }
+    static void publishHeld(AppWindow& a) { a.engine_.publishConfig(); }
     static void pump(AppWindow& a) { passseam::whole(a.engine_, [&] { a.engine_.pump(); }); }
     static cascade::engine::EngineStatusText status(AppWindow& a) { return a.engine_.statusText(); }
     static void pumpPublish(AppWindow& a) { passseam::custom(a.engine_, [&] { (void)a.engine_.pumpPublish(); }); }
     static void pumpAudio(AppWindow& a) { passseam::workers(a.engine_, [&] { a.engine_.pumpAudio(); }); }
     // Every status line, set as the engine's own code sets it.
-    static void setAllStatus(AppWindow& a, const std::string& p) {
+    static void setAllStatusHeld(AppWindow& a, const std::string& p) {
         cascade::engine::Engine& e = a.engine_;
         e.sourceError_ = p + "1";
         e.gpsRefusal_ = p + "2";
@@ -77,9 +85,51 @@ struct AppWindowTestAccess {
         e.catalogStatus_ = p + "20";       // API 0.3 8.9: the plugin store's catalogue status line and its
         e.addAllSummary_ = p + "21";       // ADD ALL summary, the twentieth and the twenty-first
     }
-    static FoxCommandResult volume(AppWindow& a, double v) {
+    static FoxCommandResult volumeHeld(AppWindow& a, double v) {
         return a.engine_.applyCommand(cascade::core::cmd::makeNum(FOXAPI_OP_SET_VOLUME, v));
     }
+    // THE PASS HELD, free-running only: a piece of work posted to the pass (Engine::postToPass) that waits until the hold is
+    // let go. Once it has STARTED no other pass can start until it ends, so between the constructor and the destructor the
+    // only publishes are the test's own - which is what A, B, C and E are about: what a reader sees BEFORE the engine's next
+    // publish. Inline and stepped no pass runs unless the test asks for one, so there is nothing to hold. Nothing may ask for
+    // a pass (pump, pumpPublish, pumpAudio) while it is held: the Held forms and the thread-safe reads only.
+    class PassHold {
+    public:
+        explicit PassHold(AppWindow& a) {
+            if (passseam::mode() != passseam::Mode::Free) { return; }
+            passseam::attach(a.engine_);
+            s_ = std::make_shared<State>();
+            std::shared_ptr<State> s = s_;
+            a.engine_.postToPass([s] {
+                std::unique_lock<std::mutex> lk(s->m);
+                s->running = true;
+                s->cv.notify_all();
+                s->cv.wait(lk, [&] { return s->release; });
+            });
+            std::unique_lock<std::mutex> lk(s_->m);
+            const bool took = s_->cv.wait_for(lk, std::chrono::seconds(10), [&] { return s_->running; });
+            CHECK(took);
+        }
+        ~PassHold() {
+            if (s_ == nullptr) { return; }
+            {
+                std::lock_guard<std::mutex> lk(s_->m);
+                s_->release = true;
+            }
+            s_->cv.notify_all();
+        }
+        PassHold(const PassHold&) = delete;
+        PassHold& operator=(const PassHold&) = delete;
+
+    private:
+        struct State {
+            std::mutex m;
+            std::condition_variable cv;
+            bool running = false;
+            bool release = false;
+        };
+        std::shared_ptr<State> s_;
+    };
 };
 }  // namespace cascade::gui
 
@@ -132,25 +182,36 @@ int main() {
         CHECK(A::saved(app).volume == 0.3f);
 
         // A: not published yet -> not in currentConfig(); published -> in it.
+        // (A, B's first half, C and E's "not yet" steps run with the pass HELD: free-running, a pass of the engine's own would
+        // publish within milliseconds, and each is about what a reader sees before the next publish.)
         const float before = A::current(app).volume;
-        CHECK(A::volume(app, 0.25).status == FOXAPI_OK);
-        std::printf("A: volume set to 0.25, before the engine publishes: %.2f\n",
-                    static_cast<double>(A::current(app).volume));
-        CHECK(A::current(app).volume == before);
-        A::publish(app);
-        std::printf("   after it publishes: %.2f\n", static_cast<double>(A::current(app).volume));
-        CHECK(A::current(app).volume == 0.25f);
+        {
+            A::PassHold hold(app);
+            CHECK(A::volumeHeld(app, 0.25).status == FOXAPI_OK);
+            std::printf("A: volume set to 0.25, before the engine publishes: %.2f\n",
+                        static_cast<double>(A::current(app).volume));
+            CHECK(A::current(app).volume == before);
+            A::publishHeld(app);
+            std::printf("   after it publishes: %.2f\n", static_cast<double>(A::current(app).volume));
+            CHECK(A::current(app).volume == 0.25f);
+        }
 
         // B: one pump of the engine's frame publishes it.
-        CHECK(A::volume(app, 0.5).status == FOXAPI_OK);
-        CHECK(A::current(app).volume == 0.25f);
+        {
+            A::PassHold hold(app);
+            CHECK(A::volumeHeld(app, 0.5).status == FOXAPI_OK);
+            CHECK(A::current(app).volume == 0.25f);
+        }
         A::pump(app);
         std::printf("B: after one pump: %.2f\n", static_cast<double>(A::current(app).volume));
         CHECK(A::current(app).volume == 0.5f);
 
         // C: the save at shutdown carries a change made after the last pump.
-        CHECK(A::volume(app, 0.75).status == FOXAPI_OK);
-        A::saveNow(app);
+        {
+            A::PassHold hold(app);
+            CHECK(A::volumeHeld(app, 0.75).status == FOXAPI_OK);
+            A::saveNowHeld(app);
+        }
         std::printf("C: saved at shutdown: %.2f\n", static_cast<double>(A::lastRequested(app).volume));
         CHECK(A::lastRequested(app).volume == 0.75f);
 
@@ -165,14 +226,20 @@ int main() {
                    t.installReport == p + "18" && t.installError == p + "19" && t.catalogStatus == p + "20" &&
                    t.addAllSummary == p + "21";
         };
-        A::setAllStatus(app, "first");
-        CHECK(A::status(app).sourceError != "first1");   // not handed over yet
+        {
+            A::PassHold hold(app);
+            A::setAllStatusHeld(app, "first");
+            CHECK(A::status(app).sourceError != "first1");   // not handed over yet
+        }
         A::pumpPublish(app);
         std::printf("E: after the frame's publish, all twenty-one handed over: %s\n",
                     allAre(A::status(app), "first") ? "yes" : "NO");
         CHECK(allAre(A::status(app), "first"));
-        A::setAllStatus(app, "later");
-        CHECK(allAre(A::status(app), "first"));
+        {
+            A::PassHold hold(app);
+            A::setAllStatusHeld(app, "later");
+            CHECK(allAre(A::status(app), "first"));
+        }
         A::pumpAudio(app);
         std::printf("   after the end of the frame: %s\n", allAre(A::status(app), "later") ? "yes" : "NO");
         CHECK(allAre(A::status(app), "later"));

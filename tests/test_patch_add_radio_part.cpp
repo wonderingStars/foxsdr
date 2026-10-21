@@ -25,9 +25,13 @@
 // window's reads and the session's answers - the same order as drawUi's).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -120,12 +124,52 @@ struct AppWindowTestAccess {
         sync(a);
         commit(a);
     }
+    // THE PASS HELD OUT OF THE WAY while `fn` runs on the test's thread (the pump move's P6). Inline and stepped, no pass runs
+    // between the test's own steps anyway. Free-running, a second thread parks the pass inside passseam::on (Engine::runOnPass:
+    // work run at the pass's head) until `fn` has finished - so what `fn` reads of the engine is a state no pass is changing,
+    // and a command `fn` submits is applied by a pass that starts after it: "a queued command has not run yet", which is what
+    // the steps run under it assert.
+    template <class F>
+    static void withPassHeld(AppWindow& a, F&& fn) {
+        if (passseam::mode() != passseam::Mode::Free) {
+            fn();
+            return;
+        }
+        passseam::attach(a.engine_);
+        std::mutex m;
+        std::condition_variable cv;
+        bool held = false;
+        bool release = false;
+        std::thread holder([&] {
+            passseam::on(a.engine_, [&] {
+                std::unique_lock<std::mutex> lk(m);
+                held = true;
+                cv.notify_all();
+                cv.wait(lk, [&] { return release; });
+            });
+        });
+        {
+            std::unique_lock<std::mutex> lk(m);
+            cv.wait(lk, [&] { return held; });
+        }
+        fn();
+        {
+            std::lock_guard<std::mutex> lk(m);
+            release = true;
+        }
+        cv.notify_all();
+        holder.join();
+    }
     static const pc::Node* draftNode(AppWindow& a, pc::NodeId id) { return a.patchDraft_.find(id); }
     // The exact call drawPatchView's Radio-part branch makes.
     static pc::NodeId addRadioPart(AppWindow& a, float x, float y) {
         return a.patchAddRadioPart("Radio", pc::PortType::Iq, x, y);
     }
-    static std::size_t nativeCount(AppWindow& a) { return a.engine_.nativeDevices_.size(); }
+    static std::size_t nativeCount(AppWindow& a) {
+        return passseam::read<std::size_t>(a.engine_, [&] { return a.engine_.nativeDevices_.size(); });
+    }
+    // The same, made INSIDE withPassHeld (the pass is parked: a read through runOnPass would wait for the pass it holds).
+    static std::size_t nativeCountHeld(AppWindow& a) { return a.engine_.nativeDevices_.size(); }
     // Group 13 part b: the table's device list as the window reads it, the recording the engine has listed and the radio the
     // receiver has lent to the patch (put there behind the engine's back).
     static std::vector<std::string> deviceKeys(AppWindow& a) {
@@ -135,25 +179,38 @@ struct AppWindowTestAccess {
     }
     static std::string receiverRadio(AppWindow& a) { return a.patchLists().receiverRadio; }
     static void listRecording(AppWindow& a, const std::string& path, double rateHz) {
-        a.engine_.patchRecordings_.push_back({path, "rec.wav", pc::makeIqFileKey(path), rateHz});
+        passseam::on(a.engine_, [&] {
+            a.engine_.patchRecordings_.push_back({path, "rec.wav", pc::makeIqFileKey(path), rateHz});
+        });
     }
     static void lend(AppWindow& a, const std::string& kind, const std::string& args) {
-        a.engine_.patchMainKeep_.valid = true;
-        a.engine_.patchMainKeep_.kind = kind;
-        a.engine_.patchMainKeep_.args = args;
-        a.engine_.patchMainKeep_.label = "Lent radio";
+        passseam::on(a.engine_, [&] {
+            a.engine_.patchMainKeep_.valid = true;
+            a.engine_.patchMainKeep_.kind = kind;
+            a.engine_.patchMainKeep_.args = args;
+            a.engine_.patchMainKeep_.label = "Lent radio";
+        });
     }
-    static const pc::Node* find(AppWindow& a, pc::NodeId id) { return a.engine_.patchGraph_.find(id); }
+    // A COPY of the engine graph's node, made with the pass out of the way (null: no such node).
+    static std::unique_ptr<const pc::Node> find(AppWindow& a, pc::NodeId id) {
+        return passseam::read<std::unique_ptr<const pc::Node>>(a.engine_, [&]() -> std::unique_ptr<const pc::Node> {
+            const pc::Node* n = a.engine_.patchGraph_.find(id);
+            return n != nullptr ? std::make_unique<const pc::Node>(*n) : nullptr;
+        });
+    }
     // The buggy pre-fix call, kept here ONLY so this test can show the
     // regression it replaces still fails the way the reviewer's
     // addradio.py found it - a queued scan has not run by the time the
     // very next line reads the native list.
+    // (With the pass held: the submit, the read and the graph's edit are the buggy press's one step, as they were inline.)
     static pc::NodeId addRadioPartQueued(AppWindow& a, float x, float y) {
-        a.engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
-        const std::string dev = a.patchDefaultDeviceKey();
-        const pc::NodeId made = a.engine_.patchGraph_.addNode(pc::NodeKind::Radio, "Radio",
-                                                              pc::PortType::Iq, x, y);
-        if (pc::Node* n = a.engine_.patchGraph_.mutableNode(made)) { n->device = dev; }
+        pc::NodeId made = pc::kNoNode;
+        withPassHeld(a, [&] {
+            a.engine_.submitCommand(cascade::core::cmd::make(FOXAPP_OP_SCAN_NATIVE_ONLY));
+            const std::string dev = a.patchDefaultDeviceKey();
+            made = a.engine_.patchGraph_.addNode(pc::NodeKind::Radio, "Radio", pc::PortType::Iq, x, y);
+            if (pc::Node* n = a.engine_.patchGraph_.mutableNode(made)) { n->device = dev; }
+        });
         return made;
     }
 };
@@ -175,7 +232,7 @@ int main() {
         cascade::gui::AppWindow a;
         CHECK(Access::nativeCount(a) == 0);  // nothing scanned yet
         const pc::NodeId made = Access::addRadioPartQueued(a, 40.0f, 40.0f);
-        const pc::Node* n = Access::find(a, made);
+        const auto n = Access::find(a, made);
         CHECK(n != nullptr);
         if (n != nullptr) {
             std::printf("  queued (buggy) path saved: %s\n", n->device.c_str());
@@ -188,10 +245,15 @@ int main() {
         cascade::gui::AppWindow a;
         CHECK(Access::nativeCount(a) == 0);
         Access::frame(a);  // the page is up: the first publish is read and the draft starts from it
-        const pc::NodeId made = Access::addRadioPart(a, 40.0f, 40.0f);
-        // THE PRESS SHOWS AT ONCE, with no device: the scan has not run and the list is not there to read.
-        CHECK(Access::draftNode(a, made) != nullptr && Access::draftNode(a, made)->device.empty());
-        CHECK(Access::nativeCount(a) == 0);
+        pc::NodeId made = pc::kNoNode;
+        // (The pass held across the press and its two checks: free-running, a pass of its own would otherwise run the scan the
+        // press asked for between the press and the count, and the count is "the PRESS did not run it".)
+        Access::withPassHeld(a, [&] {
+            made = Access::addRadioPart(a, 40.0f, 40.0f);
+            // THE PRESS SHOWS AT ONCE, with no device: the scan has not run and the list is not there to read.
+            CHECK(Access::draftNode(a, made) != nullptr && Access::draftNode(a, made)->device.empty());
+            CHECK(Access::nativeCountHeld(a) == 0);
+        });
         // A page step before the scan has been answered (a second press, the draft's follow) must not choose from the list
         // as it is - the scan's answer is what the device waits for.
         Access::finish(a);
@@ -199,7 +261,7 @@ int main() {
         Access::frame(a);  // the pass runs the scan; its answer reaches the page; the device is chosen from the list
         CHECK(Access::nativeCount(a) == 1);  // the scan ran
         Access::frame(a);  // and the pass takes the device
-        const pc::Node* n = Access::find(a, made);
+        const auto n = Access::find(a, made);
         CHECK(n != nullptr);
         if (n != nullptr) {
             std::printf("  two-pass (fixed) path saved: %s\n", n->device.c_str());
@@ -220,8 +282,8 @@ int main() {
         Access::frame(a);
         Access::frame(a);
         Access::frame(a);
-        const pc::Node* n1 = Access::find(a, first);
-        const pc::Node* n2 = Access::find(a, second);
+        const auto n1 = Access::find(a, first);
+        const auto n2 = Access::find(a, second);
         CHECK(n1 != nullptr && n2 != nullptr);
         if (n1 != nullptr && n2 != nullptr) {
             CHECK(n1->device == "rtlsdr|serial=00000001");
@@ -248,10 +310,10 @@ int main() {
         std::printf("\n");
         CHECK(keys.size() == 5u);   // the generator, the recording, and the three radios
         CHECK(keys.size() >= 5u && keys[0] == pc::kGeneratorKey && pc::isIqFileKey(keys[1]));
-        const pc::Node* d1 = Access::find(a, n1);
-        const pc::Node* d2 = Access::find(a, n2);
-        const pc::Node* d3 = Access::find(a, n3);
-        const pc::Node* d4 = Access::find(a, n4);
+        const auto d1 = Access::find(a, n1);
+        const auto d2 = Access::find(a, n2);
+        const auto d3 = Access::find(a, n3);
+        const auto d4 = Access::find(a, n4);
         CHECK(d1 != nullptr && d2 != nullptr && d3 != nullptr && d4 != nullptr);
         if (d1 != nullptr && d2 != nullptr && d3 != nullptr && d4 != nullptr) {
             CHECK(d1->device == "rtlsdr|serial=00000001");   // the list's order: the press order is the radios' order
@@ -274,8 +336,8 @@ int main() {
         const pc::NodeId first = Access::addRadioPart(a, 40.0f, 40.0f);
         const pc::NodeId second = Access::addRadioPart(a, 80.0f, 80.0f);
         for (int i = 0; i < 5; ++i) { Access::frame(a); }
-        const pc::Node* d1 = Access::find(a, first);
-        const pc::Node* d2 = Access::find(a, second);
+        const auto d1 = Access::find(a, first);
+        const auto d2 = Access::find(a, second);
         CHECK(d1 != nullptr && d2 != nullptr);
         if (d1 != nullptr && d2 != nullptr) {
             std::printf("  with a radio lent: %s then %s\n", d1->device.c_str(), d2->device.c_str());

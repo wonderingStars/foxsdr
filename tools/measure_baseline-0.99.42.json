@@ -1,0 +1,1382 @@
+{
+  "format": "foxsdr-measure-summary/2",
+  "contaminated": false,
+  "what": "The engine-extraction performance baseline for the PRE-PORT build (engine/stage4 748546c: the table exported, the window not yet ported - the commit before window-port group 1), taken 2026-10-21 in ONE session with the candidate (stage 4 at 4a4380a plus the P6 working tree, built '4a4380a51515-dirty'), interleaved A B A B, 5 runs (soak 2), three decoders (aprs 1.0.1, cw 1.0.0, eas 1.0.0), the signal generator, 60 Hz cap for the capped measures. The cpubusy block is from a second session of the same two builds (same desk, same day) because the first session's scripted drag missed the VFO slider in BOTH builds (the slider is at y=626 in the current layout, not the tool's 590): BusyY 626. CAVEAT - NOT A QUIET-DESKTOP SESSION: the desk was in use (Chrome, an Emby client, VMware, Defender, the System process at 0.17-0.20 cores - over the tool's one-process limit of 0.15 in every attempt), so both sessions ran with -MaxBackgroundCores 2.0 -MaxBackgroundProcessCores 0.6. The tool therefore REFUSES to compare against this file (-CompareFiles) and prints REFUSED beside every gate; the gate verdicts in docs/engine-stage4.md were read from a scratch copy of the tool with only the 'session ran with background limits' refusal turned off. The runs are interleaved so shared load lands on both builds.",
+  "commit": "748546ce8af8",
+  "environment": {
+    "os": "Windows 23H2 build 22631.6199",
+    "gpu": "NVIDIA GeForce RTX 4090 driver 32.0.16.1088 5120x1440@119",
+    "powerPlan": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)",
+    "battery": "none",
+    "cpu": "Intel(R) Core(TM) i9-14900K, 32 logical",
+    "windowSize": "1600x1000",
+    "machine": "MACBOOKPRO"
+  },
+  "envStable": true,
+  "limits": {
+    "maxBackgroundProcessCores": 0.6,
+    "maxBackgroundCores": 2
+  },
+  "cycleRateHz": 3109247761.1283584,
+  "runs": 5,
+  "soakRuns": 2,
+  "warmupSeconds": 5,
+  "soakSeconds": 600,
+  "measures": [
+    "frames",
+    "cpu",
+    "cpubusy",
+    "latency",
+    "rates",
+    "soak"
+  ],
+  "rateLadder": "14336000,16384000,18432000,20480000,22528000,24576000,28672000",
+  "frameCapHz": 60,
+  "retunes": 50,
+  "plugins": [
+    "aprs-decoder-1.0.1-abi3-win-x64.dll",
+    "cw-decoder-1.0.0-abi3-win-x64.dll",
+    "eas-decoder-1.0.0-abi3-win-x64.dll"
+  ],
+  "expectedDecoders": 3,
+  "gaps": [
+    "raspberry-pi: section 3 records every measure on the Raspberry Pi as well; this script runs only on the Windows desktop and no Pi figures were taken.",
+    "real-radio: every figure is taken off the built-in signal generator, not the B200 or RTL-SDR section 3 names; the USB transport and the vendor drivers' threads are outside every figure.",
+    "release: section 3 names 0.99.35 as the release to record; the baseline measured is 0.99.39 (master 1de7221 plus the measurement switches).",
+    "decoders-open: \"three decoders open\" is measured as decoder instances created and fed, from the app's own report; their output window is not opened.",
+    "busy-viewport: CPU with the interface busy runs single-viewport (FOXSDR_SINGLE_VIEWPORT=1, the DEMOD SCOPE drawn inside the main window) so the scripted drag's coordinates are the window's own; it is comparable baseline-to-candidate, not to the idle CPU run.",
+    "rate-resolution: the maximum sustained rate is the highest rung of a fixed ladder with zero drops, not a continuous search between rungs.",
+    "longest-frame: the soak's longest frame is reported, not gated - one frame is one sample and swings by tens of ms between runs of one binary; \"no new stalls\" is gated as the count of frames over 100 ms.",
+    "background-short-lived: background load is the kernel's per-process CPU between a snapshot before and after each run; a process born AND gone between the two is not counted (compilers are caught by name every 5 s instead), and interrupt/DPC time belongs to no process."
+  ],
+  "builds": {
+    "baseline": {
+      "exe": "C:\\Users\\steve\\bl-p7\\out\\ab1\\stage\\baseline\\cascade.exe",
+      "sha256": "0402909982055ecc6b2bec3cbebd3902bd6ecc190cf076d2d488e7f66e4c3d72",
+      "commit": "748546ce8af8",
+      "measures": {
+        "frames": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "cpuPct": [
+              165.98215434195976,
+              162.72186518400562,
+              161.99028063105644,
+              143.530089527629,
+              163.75927626167567
+            ],
+            "cpuPctTimes": [
+              20.104166666666668,
+              12.421875,
+              21.015625,
+              13.28125,
+              13.879977000383327
+            ],
+            "workingSetMB": [
+              134.921875,
+              134.5703125,
+              135.875,
+              142.74609375,
+              140.734375
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ],
+            "frameMeanMs": [
+              0.7731974925911737,
+              0.8045572259837711,
+              0.8115006139615258,
+              0.7996412923257282,
+              0.8253254005804159
+            ],
+            "frameP99Ms": [
+              1.2242,
+              1.1994,
+              1.3226,
+              1.3783,
+              1.4586
+            ],
+            "frameMaxMs": [
+              5.3519,
+              3.4948,
+              5.3716,
+              164.2909,
+              8.5347
+            ],
+            "workMeanMs": [
+              0.7724410630073455,
+              0.803797443185628,
+              0.8106758120790806,
+              0.7987880508508495,
+              0.8245068232769911
+            ],
+            "workP99Ms": [
+              1.2235,
+              1.1986,
+              1.3217,
+              1.3774,
+              1.457
+            ],
+            "intervals": [
+              77610,
+              74585,
+              73946,
+              75043,
+              72707
+            ],
+            "stallsOver100Ms": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          "median": {
+            "cpuPct": 162.72186518400562,
+            "cpuPctTimes": 13.879977000383327,
+            "workingSetMB": 135.875,
+            "ringDropped": 0,
+            "decodersActive": 3,
+            "frameMeanMs": 0.8045572259837711,
+            "frameP99Ms": 1.3226,
+            "frameMaxMs": 5.3716,
+            "workMeanMs": 0.803797443185628,
+            "workP99Ms": 1.3217,
+            "intervals": 74585,
+            "stallsOver100Ms": 0
+          },
+          "runs": [
+            {
+              "run": 1,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 165.98215434195976,
+                "cpuPctTimes": 20.104166666666668,
+                "workingSetMB": 134.921875,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 0.7731974925911737,
+                "frameP99Ms": 1.2242,
+                "frameMaxMs": 5.3519,
+                "workMeanMs": 0.7724410630073455,
+                "workP99Ms": 1.2235,
+                "intervals": 77610,
+                "stallsOver100Ms": 0
+              }
+            },
+            {
+              "run": 2,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 162.72186518400562,
+                "cpuPctTimes": 12.421875,
+                "workingSetMB": 134.5703125,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 0.8045572259837711,
+                "frameP99Ms": 1.1994,
+                "frameMaxMs": 3.4948,
+                "workMeanMs": 0.803797443185628,
+                "workP99Ms": 1.1986,
+                "intervals": 74585,
+                "stallsOver100Ms": 0
+              }
+            },
+            {
+              "run": 3,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 161.99028063105644,
+                "cpuPctTimes": 21.015625,
+                "workingSetMB": 135.875,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 0.8115006139615258,
+                "frameP99Ms": 1.3226,
+                "frameMaxMs": 5.3716,
+                "workMeanMs": 0.8106758120790806,
+                "workP99Ms": 1.3217,
+                "intervals": 73946,
+                "stallsOver100Ms": 0
+              }
+            },
+            {
+              "run": 4,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 143.530089527629,
+                "cpuPctTimes": 13.28125,
+                "workingSetMB": 142.74609375,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 0.7996412923257282,
+                "frameP99Ms": 1.3783,
+                "frameMaxMs": 164.2909,
+                "workMeanMs": 0.7987880508508495,
+                "workP99Ms": 1.3774,
+                "intervals": 75043,
+                "stallsOver100Ms": 1
+              }
+            },
+            {
+              "run": 5,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 163.75927626167567,
+                "cpuPctTimes": 13.879977000383327,
+                "workingSetMB": 140.734375,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 0.8253254005804159,
+                "frameP99Ms": 1.4586,
+                "frameMaxMs": 8.5347,
+                "workMeanMs": 0.8245068232769911,
+                "workP99Ms": 1.457,
+                "intervals": 72707,
+                "stallsOver100Ms": 0
+              }
+            }
+          ]
+        },
+        "cpu": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "cpuPct": [
+              37.19050069850483,
+              37.08374852186708,
+              37.06267505862648,
+              37.132867808863296,
+              37.195092110324104
+            ],
+            "cpuPctTimes": [
+              5.312854190279352,
+              5.077786480901273,
+              4.71244209684407,
+              5.910473254457591,
+              3.724765365829263
+            ],
+            "workingSetMB": [
+              117.78515625,
+              114.4765625,
+              117.91796875,
+              118.45703125,
+              118.49609375
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          "median": {
+            "cpuPct": 37.132867808863296,
+            "cpuPctTimes": 5.077786480901273,
+            "workingSetMB": 117.91796875,
+            "ringDropped": 0,
+            "decodersActive": 3
+          },
+          "runs": [
+            {
+              "run": 1,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 37.19050069850483,
+                "cpuPctTimes": 5.312854190279352,
+                "workingSetMB": 117.78515625,
+                "ringDropped": 0,
+                "decodersActive": 3
+              }
+            },
+            {
+              "run": 2,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 37.08374852186708,
+                "cpuPctTimes": 5.077786480901273,
+                "workingSetMB": 114.4765625,
+                "ringDropped": 0,
+                "decodersActive": 3
+              }
+            },
+            {
+              "run": 3,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 37.06267505862648,
+                "cpuPctTimes": 4.71244209684407,
+                "workingSetMB": 117.91796875,
+                "ringDropped": 0,
+                "decodersActive": 3
+              }
+            },
+            {
+              "run": 4,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 37.132867808863296,
+                "cpuPctTimes": 5.910473254457591,
+                "workingSetMB": 118.45703125,
+                "ringDropped": 0,
+                "decodersActive": 3
+              }
+            },
+            {
+              "run": 5,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 37.195092110324104,
+                "cpuPctTimes": 3.724765365829263,
+                "workingSetMB": 118.49609375,
+                "ringDropped": 0,
+                "decodersActive": 3
+              }
+            }
+          ]
+        },
+        "cpubusy": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "cpuPct": [
+              34.02161035386049,
+              33.65079168554755,
+              33.727672993883424,
+              33.74763636323386,
+              34.00285826798259
+            ],
+            "cpuPctTimes": [
+              6.2762508750291675,
+              6.431970068163259,
+              6.56271875729191,
+              6.77139761646804,
+              7.082979184374115
+            ],
+            "workingSetMB": [
+              117.76171875,
+              118.13671875,
+              118.00390625,
+              117.70703125,
+              118.140625
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ],
+            "vfoChangeFraction": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          },
+          "median": {
+            "cpuPct": 33.74763636323386,
+            "cpuPctTimes": 6.56271875729191,
+            "workingSetMB": 118.00390625,
+            "ringDropped": 0,
+            "decodersActive": 3,
+            "vfoChangeFraction": 1
+          },
+          "runs": [
+            {
+              "run": 1,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 34.02161035386049,
+                "cpuPctTimes": 6.2762508750291675,
+                "workingSetMB": 117.76171875,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "vfoChangeFraction": 1
+              }
+            },
+            {
+              "run": 2,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 33.65079168554755,
+                "cpuPctTimes": 6.431970068163259,
+                "workingSetMB": 118.13671875,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "vfoChangeFraction": 1
+              }
+            },
+            {
+              "run": 3,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 33.727672993883424,
+                "cpuPctTimes": 6.56271875729191,
+                "workingSetMB": 118.00390625,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "vfoChangeFraction": 1
+              }
+            },
+            {
+              "run": 4,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 33.74763636323386,
+                "cpuPctTimes": 6.77139761646804,
+                "workingSetMB": 117.70703125,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "vfoChangeFraction": 1
+              }
+            },
+            {
+              "run": 5,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 34.00285826798259,
+                "cpuPctTimes": 7.082979184374115,
+                "workingSetMB": 118.140625,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "vfoChangeFraction": 1
+              }
+            }
+          ]
+        },
+        "latency": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "latencyMedianMs": [
+              16,
+              16,
+              16,
+              16,
+              16
+            ],
+            "latencyP90Ms": [
+              16,
+              16,
+              16,
+              16,
+              16
+            ],
+            "retunesValid": [
+              50,
+              50,
+              50,
+              50,
+              50
+            ],
+            "awayRatioMax": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "toneAudioHz": [
+              1000,
+              1000,
+              1000,
+              1000,
+              1000
+            ],
+            "steadyPower": [
+              0.16318,
+              0.16318,
+              0.16318,
+              0.16318,
+              0.16318
+            ],
+            "ringDropped": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "median": {
+            "latencyMedianMs": 16,
+            "latencyP90Ms": 16,
+            "retunesValid": 50,
+            "awayRatioMax": 0,
+            "toneAudioHz": 1000,
+            "steadyPower": 0.16318,
+            "ringDropped": 0
+          },
+          "runs": [
+            {
+              "run": 1,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "latencyMedianMs": 16,
+                "latencyP90Ms": 16,
+                "retunesValid": 50,
+                "awayRatioMax": 0,
+                "toneAudioHz": 1000,
+                "steadyPower": 0.16318,
+                "ringDropped": 0
+              }
+            },
+            {
+              "run": 2,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "latencyMedianMs": 16,
+                "latencyP90Ms": 16,
+                "retunesValid": 50,
+                "awayRatioMax": 0,
+                "toneAudioHz": 1000,
+                "steadyPower": 0.16318,
+                "ringDropped": 0
+              }
+            },
+            {
+              "run": 3,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "latencyMedianMs": 16,
+                "latencyP90Ms": 16,
+                "retunesValid": 50,
+                "awayRatioMax": 0,
+                "toneAudioHz": 1000,
+                "steadyPower": 0.16318,
+                "ringDropped": 0
+              }
+            },
+            {
+              "run": 4,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "latencyMedianMs": 16,
+                "latencyP90Ms": 16,
+                "retunesValid": 50,
+                "awayRatioMax": 0,
+                "toneAudioHz": 1000,
+                "steadyPower": 0.16318,
+                "ringDropped": 0
+              }
+            },
+            {
+              "run": 5,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "latencyMedianMs": 16,
+                "latencyP90Ms": 16,
+                "retunesValid": 50,
+                "awayRatioMax": 0,
+                "toneAudioHz": 1000,
+                "steadyPower": 0.16318,
+                "ringDropped": 0
+              }
+            }
+          ]
+        },
+        "rates": {
+          "runsExpected": 5,
+          "runsValid": 5,
+          "values": {
+            "maxRateHz": [
+              28672000,
+              28672000,
+              28672000,
+              28672000,
+              28672000
+            ],
+            "firstDropHz": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "median": {
+            "maxRateHz": 28672000,
+            "firstDropHz": 0
+          },
+          "runs": [
+            {
+              "run": 1,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "maxRateHz": 28672000,
+                "firstDropHz": 0
+              }
+            },
+            {
+              "run": 2,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "maxRateHz": 28672000,
+                "firstDropHz": 0
+              }
+            },
+            {
+              "run": 3,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "maxRateHz": 28672000,
+                "firstDropHz": 0
+              }
+            },
+            {
+              "run": 4,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "maxRateHz": 28672000,
+                "firstDropHz": 0
+              }
+            },
+            {
+              "run": 5,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "maxRateHz": 28672000,
+                "firstDropHz": 0
+              }
+            }
+          ]
+        },
+        "soak": {
+          "runsExpected": 2,
+          "runsValid": 2,
+          "values": {
+            "cpuPct": [
+              34.684092512555345,
+              34.66619018401212
+            ],
+            "cpuPctTimes": [
+              6.265698099811164,
+              6.53133708449446
+            ],
+            "workingSetMB": [
+              135.3515625,
+              134.3984375
+            ],
+            "ringDropped": [
+              0,
+              0
+            ],
+            "decodersActive": [
+              3,
+              3
+            ],
+            "frameMeanMs": [
+              16.94367182796316,
+              16.945585689270413
+            ],
+            "frameP99Ms": [
+              17.2761,
+              17.2774
+            ],
+            "frameMaxMs": [
+              23.8918,
+              88.6079
+            ],
+            "workMeanMs": [
+              0.9237822625737829,
+              0.9323932894625347
+            ],
+            "workP99Ms": [
+              1.5268,
+              1.5315
+            ],
+            "intervals": [
+              35411,
+              35407
+            ],
+            "stallsOver100Ms": [
+              0,
+              0
+            ],
+            "hangReports": [
+              0,
+              0
+            ],
+            "worstGapMs": [
+              160.7,
+              88.6
+            ]
+          },
+          "median": {
+            "cpuPct": 34.67514134828373,
+            "cpuPctTimes": 6.398517592152812,
+            "workingSetMB": 134.875,
+            "ringDropped": 0,
+            "decodersActive": 3,
+            "frameMeanMs": 16.944628758616787,
+            "frameP99Ms": 17.27675,
+            "frameMaxMs": 56.24985,
+            "workMeanMs": 0.9280877760181588,
+            "workP99Ms": 1.52915,
+            "intervals": 35409,
+            "stallsOver100Ms": 0,
+            "hangReports": 0,
+            "worstGapMs": 124.64999999999999
+          },
+          "runs": [
+            {
+              "run": 1,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 34.684092512555345,
+                "cpuPctTimes": 6.265698099811164,
+                "workingSetMB": 135.3515625,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 16.94367182796316,
+                "frameP99Ms": 17.2761,
+                "frameMaxMs": 23.8918,
+                "workMeanMs": 0.9237822625737829,
+                "workP99Ms": 1.5268,
+                "intervals": 35411,
+                "stallsOver100Ms": 0,
+                "hangReports": 0,
+                "worstGapMs": 160.7
+              }
+            },
+            {
+              "run": 2,
+              "valid": true,
+              "reasons": [],
+              "commit": "748546ce8af8",
+              "figures": {
+                "cpuPct": 34.66619018401212,
+                "cpuPctTimes": 6.53133708449446,
+                "workingSetMB": 134.3984375,
+                "ringDropped": 0,
+                "decodersActive": 3,
+                "frameMeanMs": 16.945585689270413,
+                "frameP99Ms": 17.2774,
+                "frameMaxMs": 88.6079,
+                "workMeanMs": 0.9323932894625347,
+                "workP99Ms": 1.5315,
+                "intervals": 35407,
+                "stallsOver100Ms": 0,
+                "hangReports": 0,
+                "worstGapMs": 88.6
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "sessionCandidate": {
+    "commit": "4a4380a51515-dirty",
+    "sha256": "0e7b88aa87dcaa4f26a4e38bec696b84628a10a36e87f76c70890038481f8e6c",
+    "note": "4a4380a plus the P6 working tree (src/ only differs from the commit)"
+  },
+  "sessionGates": [
+    {
+      "gate": "frame p99 (ms)",
+      "verdict": "PASS",
+      "baselineMedian": 1.3226,
+      "baselineRange": [
+        1.1994,
+        1.4586
+      ],
+      "baselineRuns": [
+        1.2242,
+        1.1994,
+        1.3226,
+        1.3783,
+        1.4586
+      ],
+      "candidateMedian": 1.2794,
+      "candidateRange": [
+        1.2392,
+        1.6151
+      ],
+      "candidateRuns": [
+        1.2794,
+        1.2392,
+        1.2549,
+        1.6151,
+        1.4215
+      ]
+    },
+    {
+      "gate": "frame mean (ms)",
+      "verdict": "NOISY (baseline spread exceeds the gate) - not judged",
+      "baselineMedian": 0.8045572259837711,
+      "baselineRange": [
+        0.7731974925911737,
+        0.8253254005804159
+      ],
+      "baselineRuns": [
+        0.7731974925911737,
+        0.8045572259837711,
+        0.8115006139615258,
+        0.7996412923257282,
+        0.8253254005804159
+      ],
+      "candidateMedian": 0.7716972440843538,
+      "candidateRange": [
+        0.7421370649781087,
+        0.7985593559118999
+      ],
+      "candidateRuns": [
+        0.7421370649781087,
+        0.7517651658649058,
+        0.7716972440843538,
+        0.7985593559118999,
+        0.7825364075011062
+      ]
+    },
+    {
+      "gate": "CPU idle (% of a core)",
+      "verdict": "PASS",
+      "baselineMedian": 37.132867808863296,
+      "baselineRange": [
+        37.06267505862648,
+        37.195092110324104
+      ],
+      "baselineRuns": [
+        37.19050069850483,
+        37.08374852186708,
+        37.06267505862648,
+        37.132867808863296,
+        37.195092110324104
+      ],
+      "candidateMedian": 37.10777746341306,
+      "candidateRange": [
+        36.691425186765414,
+        37.56286705995366
+      ],
+      "candidateRuns": [
+        37.56286705995366,
+        37.2553872668481,
+        37.07961938678677,
+        37.10777746341306,
+        36.691425186765414
+      ]
+    },
+    {
+      "gate": "CPU busy (% of a core)",
+      "verdict": "INVALID (baseline 0 of 5 runs valid, candidate 0 of 5)"
+    },
+    {
+      "gate": "working set 60 s (MB)",
+      "verdict": "PASS",
+      "baselineMedian": 117.91796875,
+      "baselineRange": [
+        114.4765625,
+        118.49609375
+      ],
+      "baselineRuns": [
+        117.78515625,
+        114.4765625,
+        117.91796875,
+        118.45703125,
+        118.49609375
+      ],
+      "candidateMedian": 115.81640625,
+      "candidateRange": [
+        114.484375,
+        118.40625
+      ],
+      "candidateRuns": [
+        114.94140625,
+        114.484375,
+        118.25,
+        118.40625,
+        115.81640625
+      ]
+    },
+    {
+      "gate": "tune-to-audio median (ms)",
+      "verdict": "PASS",
+      "baselineMedian": 16,
+      "baselineRange": [
+        16,
+        16
+      ],
+      "baselineRuns": [
+        16,
+        16,
+        16,
+        16,
+        16
+      ],
+      "candidateMedian": 16,
+      "candidateRange": [
+        16,
+        16
+      ],
+      "candidateRuns": [
+        16,
+        16,
+        16,
+        16,
+        16
+      ]
+    },
+    {
+      "gate": "max sustained rate (Hz)",
+      "verdict": "PASS",
+      "baselineMedian": 28672000,
+      "baselineRange": [
+        28672000,
+        28672000
+      ],
+      "baselineRuns": [
+        28672000,
+        28672000,
+        28672000,
+        28672000,
+        28672000
+      ],
+      "candidateMedian": 28672000,
+      "candidateRange": [
+        28672000,
+        28672000
+      ],
+      "candidateRuns": [
+        28672000,
+        28672000,
+        28672000,
+        28672000,
+        28672000
+      ]
+    },
+    {
+      "gate": "soak hang reports",
+      "verdict": "PASS",
+      "baselineMedian": 0,
+      "baselineRange": [
+        0,
+        0
+      ],
+      "baselineRuns": [
+        0,
+        0
+      ],
+      "candidateMedian": 0,
+      "candidateRange": [
+        0,
+        0
+      ],
+      "candidateRuns": [
+        0,
+        0
+      ]
+    },
+    {
+      "gate": "soak frames > 100 ms",
+      "verdict": "PASS",
+      "baselineMedian": 0,
+      "baselineRange": [
+        0,
+        0
+      ],
+      "baselineRuns": [
+        0,
+        0
+      ],
+      "candidateMedian": 0,
+      "candidateRange": [
+        0,
+        0
+      ],
+      "candidateRuns": [
+        0,
+        0
+      ]
+    },
+    {
+      "gate": "soak working set 10 min (MB)",
+      "verdict": "PASS",
+      "baselineMedian": 134.875,
+      "baselineRange": [
+        134.3984375,
+        135.3515625
+      ],
+      "baselineRuns": [
+        135.3515625,
+        134.3984375
+      ],
+      "candidateMedian": 134.83984375,
+      "candidateRange": [
+        133.80078125,
+        135.87890625
+      ],
+      "candidateRuns": [
+        133.80078125,
+        135.87890625
+      ]
+    },
+    {
+      "gate": "soak longest frame (ms)",
+      "verdict": "INFO (reported, not a gate)",
+      "baselineMedian": 56.24985,
+      "baselineRange": [
+        23.8918,
+        88.6079
+      ],
+      "baselineRuns": [
+        23.8918,
+        88.6079
+      ],
+      "candidateMedian": 24.74335,
+      "candidateRange": [
+        24.7227,
+        24.764
+      ],
+      "candidateRuns": [
+        24.7227,
+        24.764
+      ]
+    }
+  ],
+  "sessionGatesCpuBusy": [
+    {
+      "gate": "frame p99 (ms)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "frame mean (ms)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "CPU idle (% of a core)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "CPU busy (% of a core)",
+      "verdict": "PASS",
+      "baselineMedian": 33.74763636323386,
+      "baselineRange": [
+        33.65079168554755,
+        34.02161035386049
+      ],
+      "baselineRuns": [
+        34.02161035386049,
+        33.65079168554755,
+        33.727672993883424,
+        33.74763636323386,
+        34.00285826798259
+      ],
+      "candidateMedian": 33.413407576286275,
+      "candidateRange": [
+        33.38426821267887,
+        33.55147223201553
+      ],
+      "candidateRuns": [
+        33.413407576286275,
+        33.55147223201553,
+        33.38671156553484,
+        33.478397638706085,
+        33.38426821267887
+      ]
+    },
+    {
+      "gate": "working set 60 s (MB)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "tune-to-audio median (ms)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "max sustained rate (Hz)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "soak hang reports",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "soak frames > 100 ms",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "soak working set 10 min (MB)",
+      "verdict": "NOT MEASURED"
+    },
+    {
+      "gate": "soak longest frame (ms)",
+      "verdict": "NOT MEASURED"
+    }
+  ],
+  "preMoveSession": {
+    "baselineCommit": "0fd57f3af911",
+    "candidate": "4a4380a51515-dirty",
+    "gates": [
+      {
+        "gate": "frame p99 (ms)",
+        "verdict": "PASS",
+        "baselineMedian": 1.0356,
+        "baselineRange": [
+          1.0218,
+          1.0555
+        ],
+        "baselineRuns": [
+          1.031,
+          1.0443,
+          1.0218,
+          1.0356,
+          1.0555
+        ],
+        "candidateMedian": 0.9622,
+        "candidateRange": [
+          0.9125,
+          1.0667
+        ],
+        "candidateRuns": [
+          0.9494,
+          0.9622,
+          1.0667,
+          0.9877,
+          0.9125
+        ]
+      },
+      {
+        "gate": "frame mean (ms)",
+        "verdict": "PASS",
+        "baselineMedian": 0.773734831547605,
+        "baselineRange": [
+          0.7496468295607782,
+          0.780056591142467
+        ],
+        "baselineRuns": [
+          0.773734831547605,
+          0.780056591142467,
+          0.7496468295607782,
+          0.7617532058849675,
+          0.7786652250639087
+        ],
+        "candidateMedian": 0.7406448129451116,
+        "candidateRange": [
+          0.7182251726490385,
+          0.7804335617863505
+        ],
+        "candidateRuns": [
+          0.7182251726490385,
+          0.7470479078742512,
+          0.7804335617863505,
+          0.7406448129451116,
+          0.7223481064618681
+        ]
+      },
+      {
+        "gate": "CPU idle (% of a core)",
+        "verdict": "PASS",
+        "baselineMedian": 34.395176135664464,
+        "baselineRange": [
+          34.2468973945259,
+          34.45306706547808
+        ],
+        "baselineRuns": [
+          34.437416216215546,
+          34.395176135664464,
+          34.45306706547808,
+          34.27700829173823,
+          34.2468973945259
+        ],
+        "candidateMedian": 33.790813088082594,
+        "candidateRange": [
+          33.68098115143922,
+          33.86480476329245
+        ],
+        "candidateRuns": [
+          33.68098115143922,
+          33.790813088082594,
+          33.86480476329245,
+          33.81677846156152,
+          33.687216198932184
+        ]
+      },
+      {
+        "gate": "CPU busy (% of a core)",
+        "verdict": "NOISY (baseline spread exceeds the gate) - not judged",
+        "baselineMedian": 33.99543907323094,
+        "baselineRange": [
+          33.69869700973456,
+          45.14193906944681
+        ],
+        "baselineRuns": [
+          33.99543907323094,
+          33.80947080736737,
+          45.14193906944681,
+          35.553047219723176,
+          33.69869700973456
+        ],
+        "candidateMedian": 33.78114083610906,
+        "candidateRange": [
+          33.30962539721147,
+          39.54702156283882
+        ],
+        "candidateRuns": [
+          33.78114083610906,
+          39.54702156283882,
+          38.223992205089964,
+          33.30962539721147,
+          33.77066153909556
+        ]
+      },
+      {
+        "gate": "working set 60 s (MB)",
+        "verdict": "PASS",
+        "baselineMedian": 117.85546875,
+        "baselineRange": [
+          116.6328125,
+          118.44921875
+        ],
+        "baselineRuns": [
+          117.68359375,
+          117.85546875,
+          118.2265625,
+          118.44921875,
+          116.6328125
+        ],
+        "candidateMedian": 118.5234375,
+        "candidateRange": [
+          115.32421875,
+          118.55078125
+        ],
+        "candidateRuns": [
+          115.32421875,
+          118.5234375,
+          116.01171875,
+          118.52734375,
+          118.55078125
+        ]
+      },
+      {
+        "gate": "tune-to-audio median (ms)",
+        "verdict": "PASS",
+        "baselineMedian": 16,
+        "baselineRange": [
+          16,
+          16
+        ],
+        "baselineRuns": [
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "candidateMedian": 16,
+        "candidateRange": [
+          16,
+          16
+        ],
+        "candidateRuns": [
+          16,
+          16,
+          16,
+          16,
+          16
+        ]
+      },
+      {
+        "gate": "max sustained rate (Hz)",
+        "verdict": "NOT MEASURED"
+      },
+      {
+        "gate": "soak hang reports",
+        "verdict": "NOT MEASURED"
+      },
+      {
+        "gate": "soak frames > 100 ms",
+        "verdict": "NOT MEASURED"
+      },
+      {
+        "gate": "soak working set 10 min (MB)",
+        "verdict": "NOT MEASURED"
+      },
+      {
+        "gate": "soak longest frame (ms)",
+        "verdict": "NOT MEASURED"
+      }
+    ]
+  }
+}

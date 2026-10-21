@@ -57,6 +57,10 @@ struct AppWindowTestAccess {
     static void act(AppWindow& a) { a.actOnUiAnswers(); }
     static void submit(AppWindow& a, const FoxCommand& c) { a.uiSubmit(c); }
     static const FoxReceiverState& state(AppWindow& a) { return a.uiState_; }
+    static std::uint64_t busyReads(AppWindow& a) { return a.uiStateBusyReads_; }
+    // A look whose state read came back BUSY: the last good state stands and the flag says so (what refreshUiState does itself).
+    static void pretendBusy(AppWindow& a) { a.uiStateFresh_ = false; }
+    static int pending(AppWindow& a) { return a.uiAnswers_.nResults; }
     static void tap(AppWindow& a, std::function<void(const FoxCommandResult&)>* f) { a.uiAnswerTap_ = f; }
     static void start(AppWindow& a, int periodMs) {
         cascade::engine::ControlThreadOptions o;
@@ -193,6 +197,7 @@ void testStatusThenState() {
 struct AnswerRun {
     long answers = 0;
     long stateOlderThanAnswer = 0;
+    unsigned long long busyReads = 0;   // state reads that came back BUSY: their answers were held to the next look
 };
 
 AnswerRun answerRun(bool answersFirst) {
@@ -223,6 +228,7 @@ AnswerRun answerRun(bool answersFirst) {
         std::this_thread::yield();
     }
     A::tap(app, nullptr);
+    out.busyReads = A::busyReads(app);
     return out;
 }
 
@@ -234,9 +240,50 @@ void testAnswersAfterTheState() {
                 good.stateOlderThanAnswer);
     std::printf("      state, answers, act (the control):         %ld offset answers, the state older than the answer in %ld\n",
                 control.answers, control.stateOlderThanAnswer);
+    std::printf("      state reads that came back BUSY (their answers waited for the next look): %llu in the window's order, %llu in the control\n",
+                good.busyReads, control.busyReads);
     CHECK(good.answers > 50);
     CHECK(good.stateOlderThanAnswer == 0);
     CHECK(control.stateOlderThanAnswer > 0);
+}
+
+// ---- C -------------------------------------------------------------------------------------------------------------------------
+// A STATE READ THAT CAME BACK BUSY HOLDS THE ANSWERS BACK. Found by the P6 soak of case B: a read that keeps overlapping a publish answers
+// BUSY, the last good state stands, and the answers the frame had just polled were acted on against it - a state OLDER than the figure the
+// answer names, in about one answer in 100 000 (4 runs of 50). Deterministic here: the look is declared BUSY, the answers must stay in
+// the buffer (not acted on, not lost), and the next look that did read acts on them, against a state that shows them.
+void testBusyHoldsAnswersBack() {
+    std::printf("  C: a BUSY state read holds the answers back until a look that read\n");
+    AppWindow app;
+    A::start(app, 1);
+    long acted = 0;
+    long olderThanAnswer = 0;
+    std::function<void(const FoxCommandResult&)> tap = [&](const FoxCommandResult& r) {
+        if (r.op != FOXAPI_OP_SET_VFO_OFFSET || r.status != FOXAPI_OK) { return; }
+        ++acted;
+        if (A::state(app).vfoOffsetHz < r.applied[0]) { ++olderThanAnswer; }
+    };
+    A::tap(app, &tap);
+    A::look(app);
+    A::submit(app, cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, 777.0));
+    const auto t0 = Clock::now();
+    while (A::pending(app) == 0 && msSince(t0) < 3000.0) {
+        A::poll(app);
+        std::this_thread::yield();
+    }
+    CHECK(A::pending(app) >= 1);              // the answer is in the buffer
+    A::pretendBusy(app);                      // ...and the look that follows could not read the state
+    A::act(app);
+    CHECK(acted == 0);                        // not acted on against the old state
+    CHECK(A::pending(app) >= 1);              // ...and not lost
+    for (int i = 0; i < 200 && acted == 0; ++i) {   // the next look that reads (the answer is a pass old by now: the state shows it)
+        A::look(app);
+        A::act(app);
+    }
+    CHECK(acted >= 1);
+    CHECK(olderThanAnswer == 0);
+    CHECK(A::pending(app) == 0);
+    A::tap(app, nullptr);
 }
 
 }  // namespace
@@ -265,6 +312,7 @@ int main() {
 
     testStatusThenState();
     testAnswersAfterTheState();
+    testBusyHoldsAnswersBack();
 
     ImGui::DestroyContext();
     std::error_code ec;
