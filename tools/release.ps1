@@ -13,7 +13,9 @@
 #                 five TBD hash lines or five real ones, every tool is present and the
 #                 two hosts answer, and a changed telemetry Worker has been deployed.
 #   build         configure and build Release twice, hash cascade.exe, run --version,
-#                 archive the symbols for exactly that binary.
+#                 archive the symbols for exactly that binary. foxsdr-engine.exe is built
+#                 beside it and held to the same version line and its own symbols (it is not
+#                 a Windows release file: the installer and the MSIX stay cascade.exe's).
 #   installer     ISCC, then the installer's name, size and hash.
 #   msix          build-msix.ps1 with the Store identity, then the package's own
 #                 manifest (name, publisher, version) and the exe inside it.
@@ -475,16 +477,24 @@ function Step-Build {
     # up late and runs the symbol archive; the second must be a no-op, and says so by
     # leaving cascade.exe byte-identical.
     $exe = Join-Path $RC.BuildDir 'Release\cascade.exe'
+    # foxsdr-engine.exe, the receiver with no window, is built beside it (engine extraction stage 7g).
+    # It does NOT ship on Windows (the installer and the MSIX carry cascade.exe alone: nothing below
+    # copies it anywhere) - it ships in the Linux tarballs, which CI builds and checks. It is built and
+    # asserted here because it is the SAME source and the same version stamp, and a build that cannot
+    # produce it, or one that stamps it with another version, is a broken release whatever it ships.
+    $engineExe = Join-Path $RC.BuildDir 'Release\foxsdr-engine.exe'
     $hashes = @()
     foreach ($pass in 1, 2) {
-        $b = Invoke-Planned -What ('build pass ' + $pass) -File $cmake -Arguments @('--build', $RC.BuildDir, '--config', 'Release', '--target', 'cascade', '--', '-m:4') -TimeoutSec 3600 -WorkDir $RC.Repo
+        $b = Invoke-Planned -What ('build pass ' + $pass) -File $cmake -Arguments @('--build', $RC.BuildDir, '--config', 'Release', '--target', 'cascade', 'foxsdr-engine', '--', '-m:4') -TimeoutSec 3600 -WorkDir $RC.Repo
         if ($null -eq $b) { continue }
         Assert-Check ($b.ExitCode -eq 0) ('build pass ' + $pass + ' exit code') ([string]$b.ExitCode + ' in ' + ('{0:N0}' -f $b.Seconds) + ' s') ('see ' + $script:Ctx.LogPath)
         Assert-Check (Test-Path -LiteralPath $exe) ('build pass ' + $pass + ': cascade.exe') $exe 'the build reported success but wrote no cascade.exe'
+        Assert-Check (Test-Path -LiteralPath $engineExe) ('build pass ' + $pass + ': foxsdr-engine.exe') $engineExe 'the build reported success but wrote no foxsdr-engine.exe'
         $hashes += (Get-Sha256 $exe)
     }
     if ($script:Ctx.DryRun) {
         Write-Plan 'check' 'cascade.exe --version prints "FoxSDR <version>"'
+        Write-Plan 'check' 'foxsdr-engine.exe --version prints "FoxSDR <version>" too (built and checked here, not shipped on Windows)'
         Write-Plan 'check' 'build\Release holds no runtime DLL but SoapySDR.dll'
         Write-Plan 'archive symbols' ('tools\archive-symbols.ps1 -Binary ' + $exe + ' -EmitPaths')
         Write-Plan 'copy' ('cascade.exe and SoapySDR.dll to ' + $RC.MsixIn)
@@ -502,6 +512,15 @@ function Step-Build {
     Assert-Check ($ver.ExitCode -eq 0 -and $line.Trim() -eq ('FoxSDR ' + $v)) 'cascade.exe --version' ('"' + $line.Trim() + '" exit ' + $ver.ExitCode) ('expected "FoxSDR ' + $v + '"; for a windows-subsystem build the output must still arrive on the redirected pipe')
     $sub = Get-PeSubsystem $exe
     Write-Result 'INFO' 'cascade.exe subsystem' $sub
+
+    # The engine's own version line: read the same way, and it must be the same line. A console
+    # program, so its output needs no redirected-handle care, but it goes through the same helper.
+    $ever = Get-VersionOutput $engineExe
+    $eline = ($ever.StdOut -split "`r?`n" | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
+    if ($null -eq $eline) { $eline = '' }
+    Assert-Check ($ever.ExitCode -eq 0 -and $eline.Trim() -eq ('FoxSDR ' + $v)) 'foxsdr-engine.exe --version' ('"' + $eline.Trim() + '" exit ' + $ever.ExitCode) ('expected "FoxSDR ' + $v + '", the line cascade.exe prints; the engine takes its version from the same stamp')
+    $engineSub = Get-PeSubsystem $engineExe
+    Assert-Check ($engineSub -eq 'console') 'foxsdr-engine.exe is a console program' $engineSub 'a service and a command-line tool whose stdout and stderr are the point (CMakeLists.txt); a windows-subsystem build would print nothing to a terminal'
 
     $relDir = Join-Path $RC.BuildDir 'Release'
     $dlls = @(Get-ChildItem -LiteralPath $relDir -Filter *.dll -File | ForEach-Object { $_.Name })
@@ -531,6 +550,26 @@ function Step-Build {
     Assert-Check ($row -ne '') 'symbol index row for this build id' $buildId ($idxPath + ' has no row for it')
     Write-JsonFile (Join-Path $RC.Verify 'symbols.json') @{ buildId = $buildId; indexRow = $row; files = $symFiles }
     Write-Result 'PASS' 'symbols for this build' ('build id ' + $buildId + ', ' + $symFiles.Count + ' files')
+
+    # THE ENGINE'S SYMBOLS, asserted the same way: its own build id, its PDB, its map, its index row.
+    # Not written into symbols.json, so not mirrored by the symbols step: foxsdr-engine.exe is not a
+    # Windows release file (the engine ships in the Linux tarballs, whose symbols arrive as the CI
+    # artifacts the symbols step already mirrors, both modules). If the Windows engine is ever shipped,
+    # its row and files belong in symbols.json beside cascade's.
+    $eArchived = @(& (Join-Path $RC.Repo 'tools\archive-symbols.ps1') -Binary $engineExe -ArchiveRoot $symRoot -Version $v -CommitHeader (Join-Path $RC.BuildDir 'generated\cascade_git_commit.h') -EmitPaths)
+    Assert-Check ($eArchived.Count -ge 4) 'engine symbols archived' ($eArchived.Count.ToString() + ' paths') 'tools\archive-symbols.ps1 returned fewer than the pdb, the exe, the map and index.txt for foxsdr-engine.exe: a headless crash report against it would be unreadable'
+    $eBuildId = ([string]$eArchived[0]).Split('\')[1]
+    Assert-Check ($eBuildId -ne $buildId) 'engine build id is its own' $eBuildId 'foxsdr-engine.exe has the same build id as cascade.exe: one of the two was archived under the other''s key'
+    Assert-Check (([string]$eArchived[0]) -like 'foxsdr-engine.pdb\*') 'engine PDB archived as foxsdr-engine.pdb' ([string]$eArchived[0]) 'the PDB the engine was linked with is not the one that was archived'
+    foreach ($rel in $eArchived) {
+        if ([string]$rel -eq 'index.txt') { continue }
+        $full = Join-Path $symRoot ([string]$rel)
+        Assert-Check ((Test-Path -LiteralPath $full) -and ((Get-Item -LiteralPath $full).Length -gt 0)) ('engine symbol file ' + $rel) '' ($full + ' is missing or empty')
+    }
+    $eRow = ''
+    foreach ($l in [System.IO.File]::ReadAllLines($idxPath)) { if ($l.Contains("`t" + $eBuildId + "`t")) { $eRow = $l } }
+    Assert-Check ($eRow -ne '' -and $eRow.Split("`t")[1] -eq 'foxsdr-engine.exe') 'engine symbol index row' $eBuildId ($idxPath + ' has no row for it naming foxsdr-engine.exe')
+    Write-Result 'PASS' 'symbols for the engine (kept locally, not mirrored)' ('build id ' + $eBuildId)
 
     Copy-Item -LiteralPath $exe -Destination (Join-Path $RC.MsixIn 'cascade.exe') -Force
     Copy-Item -LiteralPath (Join-Path $relDir 'SoapySDR.dll') -Destination (Join-Path $RC.MsixIn 'SoapySDR.dll') -Force
@@ -909,6 +948,24 @@ function Get-CiJobs([string]$RunId) {
     return ($r.StdOut | ConvertFrom-Json)
 }
 
+# What is INSIDE a Linux release tarball (engine extraction stage 7g): both programs and the resources they read from
+# beside themselves. CI checked the same on the runner (tools/check-linux-tarball.sh, which also runs both); this reads
+# the downloaded bytes, the ones about to be released, with the system's tar. $Name is the tarball's file name, which
+# is its top directory plus .tar.gz (the Package step of the Linux jobs). Throws (RELEASE-FAIL) on the first thing missing.
+function Assert-LinuxTarballContents([string]$Src, [string]$Name) {
+    $tar = Find-Tool 'tar' @('C:\Windows\System32\tar.exe')
+    Assert-Check ($tar -ne '') 'tar is available to read the tarballs back' '' 'Windows 10 and later ship tar.exe in System32'
+    $top = $Name.Substring(0, $Name.Length - '.tar.gz'.Length)
+    $lr = Invoke-Exe -File $tar -Arguments @('-tzf', $Src) -TimeoutSec 600 -NoLog
+    Assert-Check ($lr.ExitCode -eq 0) ('tar lists ' + $Name) ('exit ' + $lr.ExitCode) 'the tarball is not a readable gzip tar'
+    $members = @($lr.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    foreach ($m in @(($top + '/cascade'), ($top + '/foxsdr-engine'), ($top + '/resources/firmware/aor/NOTICE'))) {
+        Assert-Check ($members -contains $m) ('tarball member ' + $m) ($members.Count.ToString() + ' members') ($Name + ' does not contain it: the Package step of the Linux jobs stages it')
+    }
+    $plans = @($members | Where-Object { $_ -like ($top + '/resources/bandplans/*.json') })
+    Assert-Check ($plans.Count -ge 1) ('tarball band plans in ' + $Name) ($plans.Count.ToString() + ' plan(s)') 'both programs read resources/bandplans from beside themselves'
+}
+
 function Step-Ci {
     $RC = $script:RC
     $v = $RC.Version
@@ -922,7 +979,7 @@ function Step-Ci {
         Write-Result 'DRY' 'find the run for HEAD' (Format-CommandLine 'gh' @('run', 'list', '--commit', $RC.Head, '-R', $cfg['repo'], '--json', 'databaseId,status,conclusion,workflowName,headSha,event,url,createdAt,attempt'))
         Write-Result 'DRY' 'wait for jobs' ('poll every 60 s: gh run view <id> -R ' + $cfg['repo'] + ' --json jobs,status,conclusion,url ; required: ' + ($RequiredCiJobs -join ', ') + ' ; give up after ' + $CiTimeoutMinutes + ' min')
         foreach ($a in $artifacts) { Write-Result 'DRY' ('download ' + $a) (Format-CommandLine 'gh' @('run', 'download', '<run-id>', '-R', $cfg['repo'], '-n', $a, '-D', (Join-Path $RC.Ci $a))) }
-        Write-Plan 'check' ('every tarball and AppImage exists (' + (($RC.Files | Select-Object -Skip 1) -join ', ') + ') with a gzip or ELF header')
+        Write-Plan 'check' ('every tarball and AppImage exists (' + (($RC.Files | Select-Object -Skip 1) -join ', ') + ') with a gzip or ELF header; each tarball lists cascade, foxsdr-engine, a band plan and the firmware notice')
         Write-Plan 'copy' ('the four Linux files beside ' + $RC.InstallerName + ' in ' + $RC.Dist + ', then write dist\sha256.txt')
         Write-Plan 'edit' ('replace the five TBD lines in ' + $RC.NotesRel + ' with the five sha256 values, print git diff of that file')
         return 'done'
@@ -999,6 +1056,7 @@ function Step-Ci {
         try { [void]$fs.Read($head, 0, 4) } finally { $fs.Dispose() }
         if ($name -like '*.tar.gz') {
             Assert-Check ($head[0] -eq 0x1F -and $head[1] -eq 0x8B) ('gzip header ' + $name) '1f 8b' 'not a gzip file'
+            Assert-LinuxTarballContents $src $name
         } else {
             Assert-Check ($head[0] -eq 0x7F -and $head[1] -eq 0x45 -and $head[2] -eq 0x4C -and $head[3] -eq 0x46) ('ELF header ' + $name) '7f 45 4c 46' 'not an ELF file'
         }
@@ -1106,22 +1164,45 @@ function Step-Symbols {
     foreach ($art in @('foxsdr-linux-x64-symbols', 'foxsdr-linux-arm64-symbols')) {
         $dir = Join-Path $RC.Ci $art
         if (-not (Test-Path -LiteralPath $dir)) {
-            if ($script:Ctx.DryRun) { Write-Plan ('Linux symbols ' + $art) 'downloaded by the ci step: cascade.debug\<id>\{cascade.debug,symmap.json.gz}, cascade\<id>\cascade, one index row'; continue }
+            if ($script:Ctx.DryRun) { Write-Plan ('Linux symbols ' + $art) 'downloaded by the ci step: for each of cascade and foxsdr-engine, <module>.debug\<id>\{<module>.debug,symmap.json.gz} and <module>\<id>\<module>, and one index row apiece; only cascade''s map goes to the Pi'; continue }
             Stop-Release ($dir + ' is missing: run the ci step')
         }
         $files = @(Get-ChildItem -LiteralPath $dir -Recurse -File)
         $idFile = $files | Where-Object { $_.Name -eq 'index.txt' } | Select-Object -First 1
-        Assert-Check ($null -ne $idFile) ('index.txt in ' + $art) '' 'the symbols artifact carries its one-row index.txt'
-        $row = ([System.IO.File]::ReadAllLines($idFile.FullName) | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
-        $cols = $row.Split("`t")
-        Assert-Check ($cols.Count -ge 5) ('index row of ' + $art) $row 'expected the tab-separated row tools/archive-symbols-linux.sh writes'
-        $id = $cols[4]
-        $rows += @{ BuildId = $id; Row = $row }
+        Assert-Check ($null -ne $idFile) ('index.txt in ' + $art) '' 'the symbols artifact carries its index.txt: one row per binary the tarball holds (cascade and foxsdr-engine)'
+        # EVERY row, not the first: before engine extraction stage 7g the artifact held one binary and so one row, and
+        # reading only the first would now leave the other binary's build id out of the NAS index and name the Pi's map
+        # for the wrong one.
+        $idRows = @([System.IO.File]::ReadAllLines($idFile.FullName) | Where-Object { $_.Trim() -ne '' })
+        $artIds = @{}     # module -> build id, from the index's own columns
+        foreach ($row in $idRows) {
+            $cols = $row.Split("`t")
+            Assert-Check ($cols.Count -ge 5) ('index row of ' + $art) $row 'expected the tab-separated row tools/archive-symbols-linux.sh writes'
+            $rows += @{ BuildId = $cols[4]; Row = $row }
+            $artIds[$cols[1]] = $cols[4]
+        }
+        foreach ($module in @('cascade', 'foxsdr-engine')) {
+            Assert-Check ($artIds.ContainsKey($module)) ('index row for ' + $module + ' in ' + $art) ((@($artIds.Keys) -join ', ')) ('the tarball in this run holds ' + $module + ' and a crash report against it needs its symbols archived: the Build step archives each binary, the Check the symbol archive step reads both')
+        }
         foreach ($f in $files) {
             if ($f.Name -eq 'index.txt') { continue }
             $rel = $f.FullName.Substring($dir.Length + 1).Replace('\', '/')
             $items += @{ Local = $f.FullName; Rel = $rel }
-            if ($f.Name -eq 'symmap.json.gz') { $maps += @{ Local = $f.FullName; PiName = ('cascade-' + $id + '.linux.json.gz') } }
+            if ($f.Name -eq 'symmap.json.gz') {
+                # <module>.debug/<build id>/symmap.json.gz: the map's own path says whose it is
+                $fmod = $f.Directory.Parent.Name -replace '\.debug$', ''
+                $fid = $f.Directory.Name
+                if ($fmod -eq 'cascade') {
+                    Assert-Check ($fid -eq $artIds['cascade']) ('cascade map matches its index row in ' + $art) $fid 'the symbol map is for a different build than the index row'
+                    $maps += @{ Local = $f.FullName; PiName = ('cascade-' + $fid + '.linux.json.gz') }
+                } else {
+                    # The site's side - whether it loads a map for another module name from the Pi's symbol directory - is not
+                    # known from this tree (docs/headless-service.md, open question), and a headless engine uploads no report
+                    # by default (PRIVACY.md), so there is nothing there for the map to group. It goes to the NAS with the rest
+                    # of the archive; it does not go to the Pi.
+                    Write-Result 'INFO' ('map for ' + $fmod + ' stays off the Pi') ('build id ' + $fid + ': archived on the NAS only')
+                }
+            }
         }
     }
     # --- the NAS ----------------------------------------------------------------------

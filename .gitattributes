@@ -34,4 +34,11 @@ resources/airband/*.tsv text eol=lf
 # silently turn them into different inputs that still pass.
 tests/fuzz/corpus/** -text
 
+# THE RELEASE-CHECK SHELL SCRIPTS ARE LF ON EVERY CHECKOUT: bash reads a CR as part of the
+# last word on a line ("then\r" is not "then"), so with autocrlf=true a Windows checkout would
+# make them unrunnable - and tests/CMakeLists.txt runs one of them as a test (its --self-test,
+# through Git's bash) on every platform that has a bash.
+tools/check-linux-tarball.sh text eol=lf
+tools/check-symbol-archive-linux.sh text eol=lf
+
 # Everything else in the tree keeps git's default handling.

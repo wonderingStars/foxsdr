@@ -552,6 +552,48 @@ foreach(_t IN ITEMS test_engine_main_version test_engine_main_args test_engine_m
         add_dependencies(${_t} foxsdr-engine cascade)
     endif()
 endforeach()
+# STAGE 7g: what is beside the engine and what is kept of it (tests/test_engine_packaging.cpp). It reads the built
+# executables, so both are built first; FOXSDR_ENGINE_BINDIR is where the build put foxsdr-engine, to be compared
+# with CASCADE_APP_BINDIR (where cascade is): the staging is "beside both" only while they are one directory.
+if(TARGET test_engine_packaging)
+    add_dependencies(test_engine_packaging foxsdr-engine cascade)
+    target_compile_definitions(test_engine_packaging PRIVATE
+        FOXSDR_ENGINE_BINDIR="$<TARGET_FILE_DIR:foxsdr-engine>")
+endif()
+# ...and the configure-level proof of CASCADE_BUILD_INTERFACE=OFF (tests/engine_only_configure.cmake): a nested configure of
+# this project, option OFF and OpenGL disabled, in a scratch directory, must succeed; the same with the option ON must fail
+# (so the first is not vacuous); and the OFF tree's staging must land. No build of the engine happens inside it (CI's
+# linux-engine-only job and the stage's record do that). Its generator, platform, toolchain and triplet are this build's.
+add_test(NAME engine_only_configure
+    COMMAND ${CMAKE_COMMAND}
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DSCRATCH=${CMAKE_CURRENT_BINARY_DIR}/engine_only_configure
+            "-DGENERATOR=${CMAKE_GENERATOR}"
+            "-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+            "-DTOOLCHAIN=${CMAKE_TOOLCHAIN_FILE}"
+            "-DTRIPLET=${VCPKG_TARGET_TRIPLET}"
+            -DCONFIG=$<CONFIG>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/engine_only_configure.cmake)
+set_tests_properties(engine_only_configure PROPERTIES TIMEOUT 600)
+
+# The Linux release tarball's read-back (tools/check-linux-tarball.sh, called by .github/workflows/build.yml) proves it can FAIL:
+# its --self-test builds small archives of stand-in scripts and shows the check accepting a good one and refusing one without the
+# engine, without cascade, without a band plan, without the firmware notice, of the wrong version, and one that does not exist.
+# Run through a bash when there is one: Git's on Windows (named, NOT the first on PATH: that can be WSL's launcher), the system's
+# elsewhere. No bash, no test: it says so.
+if(WIN32)
+    find_program(CASCADE_TEST_BASH NAMES bash HINTS "$ENV{ProgramFiles}/Git/bin" "$ENV{ProgramFiles}/Git/usr/bin" NO_DEFAULT_PATH)
+else()
+    find_program(CASCADE_TEST_BASH NAMES bash)
+endif()
+if(CASCADE_TEST_BASH)
+    add_test(NAME release_tarball_check_selftest
+        COMMAND ${CASCADE_TEST_BASH} ${CMAKE_SOURCE_DIR}/tools/check-linux-tarball.sh --self-test)
+    set_tests_properties(release_tarball_check_selftest PROPERTIES TIMEOUT 120)
+else()
+    message(STATUS "no bash: release_tarball_check_selftest is not registered")
+endif()
+
 # STAGE 7d: the wedged-stop test runs the production budget once (a stop wedged for 120 s, ended at 53 s + the 5 s grace),
 # on top of its seven-second cases, so the default 120 s is not enough; a bound that holds with room under a loaded machine.
 if(TARGET test_engine_main_sigterm_wedged)

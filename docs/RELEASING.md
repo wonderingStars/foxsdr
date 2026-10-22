@@ -100,12 +100,12 @@ versions, `ssh <host> true`, `gh auth status`, the public Store catalogue query 
 | Step | Checks |
 |---|---|
 | `preflight` | Tree clean (a modified tracked file stamps `-dirty` into the binary); HEAD tagged or taggable (an existing tag on another commit fails); CMakeLists.txt, README.md and the notes file agree on the version; the notes carry five `TBD` blocks or five real hashes, naming exactly the five release files; every tool present; `gh auth status`; `ssh <host> true` for the NAS and the Pi; a changed `worker.js` needs `-WorkerDeployed`. |
-| `build` | Configure; the binary's version string is the project version; build twice (the second pass should change nothing); `cascade.exe --version` prints `FoxSDR <version>`; only `SoapySDR.dll` beside it; symbols archived for exactly that binary (PDB, exe, symbol map, index row); the copy in `msix-in\` equals the build. |
+| `build` | Configure; the binary's version string is the project version; build twice (the second pass should change nothing); `cascade.exe --version` prints `FoxSDR <version>`; only `SoapySDR.dll` beside it; symbols archived for exactly that binary (PDB, exe, symbol map, index row); the copy in `msix-in\` equals the build. `foxsdr-engine.exe` is built beside it (the build is `--target cascade foxsdr-engine`) and held to the same: it exists after both passes, `--version` prints the same `FoxSDR <version>`, it is a console program, and its own symbols are archived (its own build id, a `foxsdr-engine.pdb`, a map, an index row naming `foxsdr-engine.exe`). It is **not** copied to `msix-in\` and not in the installer: owner decision O4, the engine ships in the Linux tarballs only, so its Windows symbols stay in the local archive and are not mirrored. |
 | `installer` | ISCC from PowerShell; `generated-version.iss` says the version; the installer exists, its size and sha256; it is not code-signed (stated). |
 | `msix` | `build-msix.ps1` with the Store identity; the package's own `AppxManifest.xml` has the right Name, Publisher and Version (product major + 1); the `cascade.exe` inside has the sha256 of the built one. |
 | `install-test` | Refuses an existing directory or uninstall entry unless `-AllowReplaceInstalled`; reports an authorized replacement truthfully. Silent per-user install exits 0; the installed `cascade.exe` and `SoapySDR.dll` equal the built ones; payload and registry entries present; `--version`, `--selftest` and `--frames 60` run (with scratch `APPDATA`/`LOCALAPPDATA`/`CASCADE_CONFIG_TEST`, usage reporting off and its URLs pointed at a discard port). Validates the timestamped Inno install log and its success marker. Silent uninstall polls every recorded installed path (including Start Menu/Desktop shortcuts outside the app directory and shipped files inside plugins), generated `unins000.exe`/`.dat`, uninstall keys in both scopes and the `foxsdr:` handlers together. Only the user `plugins` directory may remain under the install root; unknown files, other directories and a file named plugins fail. A failure still attempts uninstall. |
-| `ci` | The run for HEAD exists; the required jobs (`linux`, `arm64`) succeeded; every artifact downloaded (three tries each); every tarball is gzip and every AppImage ELF, over 1 MB; the five hashes written into the notes. |
-| `symbols` | Every file sent by `cat >` into a `.part` name, its sha256 read back on the far side, then renamed; a file already there with the same hash is skipped and one with a different hash stops the run; the NAS index must end in a newline and have no BOM before a row is appended, and grows by exactly one row; the symbol maps go to the Pi as `cascade-<build id>.json.gz` and `cascade-<id>.linux.json.gz`. |
+| `ci` | The run for HEAD exists; the required jobs (`linux`, `arm64`) succeeded; every artifact downloaded (three tries each); every tarball is gzip and every AppImage ELF, over 1 MB; each tarball, listed with the system's `tar`, holds `cascade`, `foxsdr-engine`, at least one band plan under `resources/bandplans/` and `resources/firmware/aor/NOTICE` (the same read-back `tools/check-linux-tarball.sh` makes on the runner, there also running both with `--version`); the five hashes written into the notes. |
+| `symbols` | Every file sent by `cat >` into a `.part` name, its sha256 read back on the far side, then renamed; a file already there with the same hash is skipped and one with a different hash stops the run; the NAS index must end in a newline and have no BOM before a row is appended, and grows by exactly one row **per build id**. Each Linux symbols artifact carries two modules, `cascade` and `foxsdr-engine`, and so two index rows: every row is read and appended (before engine extraction stage 7g only the first was, which would now have left one binary's build id out of the NAS index), a row for each of the two must be there, and all the module files go to the NAS. The symbol maps go to the Pi as `cascade-<build id>.json.gz` and `cascade-<id>.linux.json.gz`: **only `cascade`'s**. `foxsdr-engine`'s map stays on the NAS, because whether the site loads a map for another module name from that directory is not known from this tree, and a headless engine uploads no crash report by default, so the site has nothing to group with it (open question: `docs/headless-service.md`). |
 | `github` | HEAD is on `origin/master`; the notes' hashes equal the files'; annotated tag `v<version>` on HEAD, pushed; draft release; every asset's name, size and digest equal the local file's; only then `--draft=false --latest`. |
 | `store` | See below. |
 | `store-status` | The public catalogue answers; the package version is decoded (four 16-bit numbers; product major = package major - 1); compared with `StoreAppVersion` in the site's `version.go`. |
@@ -140,6 +140,18 @@ installer calls or writes to user paths. Polling time is accelerated by a fake c
 No network, real installation or real uninstallation is involved. `-Cases a,b` selects
 cases, and `-SourcePath <scratch-script>` supports mutation checks without editing the
 production script. No C++ suite is required for this unversioned release tooling.
+
+A second suite of the same kind covers what engine extraction stage 7g changed (run the same way:
+`powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_release_symbols.ps1`; it also takes
+`-Cases` and `-SourcePath`): the `symbols` step against fake CI artifacts that hold BOTH modules
+(`cascade` and `foxsdr-engine`, two index rows, two maps each) and `Assert-LinuxTarballContents`
+against real tarballs made with `tar`. It proves that every build id reaches the NAS index, that only
+`cascade`'s maps go to the Pi and each under its own build id, and that a missing engine row, a
+missing cascade row, a malformed row, a map for another build, and a tarball without `cascade`,
+`foxsdr-engine`, a band plan or the firmware notice are each refused for that reason. Run against the
+pre-7g `release.ps1` (`-SourcePath`) it fails 9 of its 10 cases, the hazard it guards: the old step
+read only the first index row of each artifact and named every map in it for that row's build id, so
+two modules would have collided on one Pi file name.
 
 Silent uninstall preserves data without `/CLEANDATA`. Beside-exe plugins are supported
 by `PluginHost::defaultPluginDir` in `src/core/plugin_host.cpp`; other caches/settings
@@ -197,9 +209,26 @@ certification. Certification took a few hours both times on 2026-10-05.
 
 ## CI
 
-`.github/workflows/build.yml` has three jobs: `linux` and `arm64` (build, test, package,
-AppImage, symbols) and `windows`. The `windows` job is NEW and has not yet run on a runner:
-read the first run, expect to correct it.
+`.github/workflows/build.yml` has four jobs: `linux` and `arm64` (build, test, package,
+AppImage, symbols), `linux-engine-only` and `windows`. The `windows` job is NEW and has not yet run on a runner:
+read the first run, expect to correct it. So is `linux-engine-only` (stage 7g), and so are the
+steps the stage added to the other two:
+
+* **The tarballs carry two programs** (`cascade` and `foxsdr-engine`) and the resources both read
+  from beside themselves (`resources/bandplans`, `resources/firmware`); the AppImage stays the
+  window application's launcher. A "Check the tarball" step reads each tarball back before it is
+  uploaded (`tools/check-linux-tarball.sh`: the members, ELF and the execute bit, and each binary
+  extracted and run with `--version`); a missing binary fails the job and withholds the artifact.
+  Its `--self-test` is a ctest (`release_tarball_check_selftest`) that shows it refusing a tarball
+  without the engine, without cascade, without a band plan, without the firmware notice, of the wrong
+  version, and one that is not there. **Until a CI run has happened this is CI-level evidence only.**
+* **"Check the symbol archive" runs once per binary** (`tools/check-symbol-archive-linux.sh cascade
+  main.cpp`, then `foxsdr-engine engine_main.cpp`): line tables in the archived split-debug file, none
+  in the binary that ships, `main()` resolved to a source line.
+* **`linux-engine-only`** configures with `-DCASCADE_BUILD_INTERFACE=OFF` (and OpenGL disabled, so it
+  does not depend on what the runner image has installed), installing only the engine's packages, builds,
+  runs `foxsdr-engine --version` and `--seconds 2`, and checks its symbols. It is not one of
+  `RequiredCiJobs`.
 
 * It runs on `windows-2022`, not `windows-latest`: `windows-latest` is Windows Server 2025 with
   Visual Studio 2026 only (`actions/runner-images` README), and the project is configured with
@@ -262,3 +291,14 @@ from the documentation, and the 409 question above is open); `sha256sum` on the 
 helper falls back to `shasum` and `openssl`); the real `gh` digest field of a draft release;
 the Windows-subsystem build of `cascade.exe` itself (only a patched copy of the console build
 has been run).
+
+Engine extraction stage 7g added, and has not been run on a runner or a release: the Linux
+tarballs' new contents and their read-back (`Check the tarball`; it has been run on real ELF
+binaries built under WSL2, and refused a tarball made without the engine); the `linux-engine-only`
+job; the `Check the symbol archive` step once per binary; and the `ci` and `symbols` steps' new
+assertions of `release.ps1`, which have been run only as `-DryRun` plans and against fake artifacts
+(`tests\test_release_symbols.ps1`), never for real - the first real release after this change is the
+first real run of them. (The `build` step's new assertions HAVE been run for real, as
+`release.ps1 -Steps build -AllowDirty` into a scratch `-ReleaseRoot` against the stage's own build
+directory: every one passed. That is a rehearsal of one step on a development machine, not a release.)
+`foxsdr-engine` has not run on an arm64 machine at all.

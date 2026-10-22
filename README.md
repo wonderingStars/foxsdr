@@ -111,6 +111,18 @@ browser on your LAN. It is off by default. A password is required for any
 binding beyond this machine, and there is no TLS: do not port-forward it to the
 internet. Put a reverse proxy or a tunnel in front of it instead.
 
+## Without a window
+
+For a service, or a Raspberry Pi with no desktop, the same receiver runs with no
+window as **`foxsdr-engine`**. The Linux tarballs carry it beside `cascade` (not
+in 0.99.84 or earlier); it is set up from its command line (a settings file, the
+web server, CAT), stops cleanly on SIGTERM, and is built with
+`-DCASCADE_BUILD_INTERFACE=OFF` where no OpenGL or desktop libraries are
+installed. It is new and has been run on Windows only so far. How to run it,
+its exit codes, a sample systemd unit and what it sends:
+[docs/headless-service.md](docs/headless-service.md) and
+[PRIVACY.md](PRIVACY.md).
+
 ## Privacy
 
 Usage reporting is on by default and sends anonymous counts only: version,

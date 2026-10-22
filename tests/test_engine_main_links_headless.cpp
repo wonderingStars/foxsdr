@@ -162,6 +162,19 @@ int main() {
                     if (!allowed) { std::printf("    foxsdr-engine links '%s'\n", w.c_str()); }
                     CHECK(allowed);
                 }
+            } else if (fn == "add_dependencies") {
+                // STAGE 7g: ordering only, and only on the one target that stages the executables' resources
+                // (cascade_stage_resources, copy_directory of resources/bandplans and resources/firmware): it
+                // links nothing and compiles nothing, but it is a statement about the target, so what it may
+                // name is pinned here, not left to the general rule below.
+                std::istringstream words(args);
+                std::string w;
+                while (words >> w) {
+                    const bool allowed = w == "cascade_stage_resources";
+                    if (!allowed) { std::printf("    foxsdr-engine now depends on '%s'\n", w.c_str()); }
+                    CHECK(allowed);
+                }
+                CHECK(!windowWord(args));
             } else if (fn != "add_executable" && fn != "target_link_options" &&
                        fn != "cascade_sanitize_stage_runtime") {
                 // target_sources / target_include_directories / target_compile_definitions and the rest: not for it.

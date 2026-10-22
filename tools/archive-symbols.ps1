@@ -70,10 +70,12 @@
 #
 # Nothing here is specific to cascade.exe: -Binary takes any PE, the build id
 # is read out of its own CodeView record, and the layout is the standard
-# symbol-server one. But the POST_BUILD step in CMakeLists.txt runs for the
-# `cascade` target only, and no plugin is built in this tree - they live in the
-# separate plugin repository - so symbols\ holds cascade.exe and cascade.pdb
-# and nothing else.
+# symbol-server one. The POST_BUILD steps in CMakeLists.txt run for the
+# `cascade` and `foxsdr-engine` targets (the second since engine extraction
+# stage 7g: a headless crash report names foxsdr-engine.exe and its own build
+# id), and no plugin is built in this tree - they live in the separate plugin
+# repository - so symbols\ holds cascade.exe and foxsdr-engine.exe with their
+# PDBs and nothing else.
 #
 # That matters more than it sounds. A report's --- modules --- block carries a
 # build id for every loaded plugin DLL, plugins are third-party code running
@@ -343,7 +345,23 @@ $existing = @()
 if (Test-Path -LiteralPath $indexPath) { $existing = @(Get-Content -LiteralPath $indexPath) }
 if (-not ($existing | Where-Object { $_ -like "*`t$buildId`t*" })) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::AppendAllText($indexPath, $line + "`r`n", $utf8NoBom)
+    # RETRIED, because two binaries share this index: the POST_BUILD step of `cascade` and of
+    # `foxsdr-engine` (CMakeLists.txt) run this script into one archive at the same moment in a
+    # parallel build, and AppendAllText opens the file with no write sharing - the second writer
+    # gets an IOException, which under ErrorActionPreference=Stop ended the script with exit 1 and
+    # FAILED THE BUILD over a human-readable index (the one thing this script promises never to
+    # do). A held file is waited for, up to about five seconds; still held after that is a
+    # warning, and the row is simply added by the next run (it checks for the build id first).
+    $appended = $false
+    for ($try = 1; $try -le 20 -and -not $appended; $try++) {
+        try {
+            [System.IO.File]::AppendAllText($indexPath, $line + "`r`n", $utf8NoBom)
+            $appended = $true
+        } catch [System.IO.IOException] {
+            Start-Sleep -Milliseconds (50 * [Math]::Min($try, 5))
+        }
+    }
+    if (-not $appended) { Warn "could not append the index row for ${buildId}: $indexPath stayed in use by another process" }
 }
 
 Write-Host "archive-symbols: $exeName $Version build $buildId -> $pdbDest"

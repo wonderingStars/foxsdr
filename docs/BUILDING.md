@@ -142,9 +142,11 @@ through a shell), so a desktop environment with no `xdg-open` on `PATH` will
 see those buttons fail rather than silently do nothing.
 
 **Packaging.** `installer/linux/build-appimage.sh` packages a Release build as
-a single-file AppImage — the same payload the CI tarball carries (the
-`cascade` binary and the `resources/bandplans` it reads next to itself at
-runtime) plus `LICENSE`, `THIRD-PARTY-LICENSES.txt` and `POSTINSTALL.txt`. It
+a single-file AppImage — the window application's payload as the CI tarball
+carries it (the `cascade` binary and the `resources/bandplans` it reads next to
+itself at runtime) plus `LICENSE`, `THIRD-PARTY-LICENSES.txt` and
+`POSTINSTALL.txt`. It stays a launcher for the window application: the tarball
+also carries `foxsdr-engine` (below), the AppImage does not. It
 does not bundle SoapySDR, OpenSSL, ALSA or OpenGL, so a machine running the
 AppImage needs the same libraries the tarball already needs on the host. Build
 it after the `cmake --build` step above:
@@ -171,7 +173,9 @@ the tarball.
 crash report can be placed on a source line, not just a function. After the
 link, `tools/archive-symbols-linux.sh` writes the DWARF (compressed) to
 `symbols/cascade.debug/<build id>/cascade.debug` and strips it from
-`build/cascade`, so the tarball and the AppImage carry none; CI uploads that
+`build/cascade`, so the tarball and the AppImage carry none (the same is done
+for `build/foxsdr-engine`, under its own build id, to
+`symbols/foxsdr-engine.debug/<build id>/foxsdr-engine.debug`); CI uploads that
 `symbols/` directory as a `foxsdr-linux-*-symbols` artifact. A `Debug` or
 `RelWithDebInfo` build keeps its DWARF in the binary, which is the one to use
 under a debugger. To put an offset from a report on a line, run
@@ -187,6 +191,49 @@ seven newest instrument decoders (ACARS, FLEX, 406 MHz beacons, ERT meters,
 433 MHz weather sensors, WEFAX) are Windows-only so far, as is the example
 plugin, which is built from this repository rather than the plugin
 repository.
+
+## Building the engine without the window (`CASCADE_BUILD_INTERFACE`)
+
+`foxsdr-engine` is the receiver with no window: the same engine as `cascade`,
+started from a command line, for a service or a machine with no desktop
+([headless-service.md](headless-service.md)). It is built with everything else
+by default. The CMake option `CASCADE_BUILD_INTERFACE` (default **ON**) can turn
+the window half off:
+
+```
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_INTERFACE=OFF
+cmake --build build -j"$(nproc)"
+build/foxsdr-engine --version
+```
+
+With it **OFF** the configure never reaches OpenGL, GLFW, Dear ImGui, the shell,
+the interface or the `cascade` executable, so none of the OpenGL, X11, Wayland
+and xkbcommon packages above is needed. What is still needed on Debian or
+Ubuntu is the engine's own: `build-essential cmake ninja-build libsoapysdr-dev
+libssl-dev libunwind-dev libasound2-dev` (PortAudio's ALSA backend). What it
+builds: the engine library, `foxsdr-engine`, `foxsdr-reports` (the crash-report
+reader), the engine link check, and the staging of `resources/bandplans` and
+`resources/firmware` beside `foxsdr-engine` (the engine reads both from beside
+itself, as `cascade` does). **It builds no tests**: nearly every test links the
+window or spawns `cascade`. The OFF configure is itself tested, from a normal
+build: `engine_only_configure` (`tests/engine_only_configure.cmake`) configures
+the project again in a scratch directory with the option OFF and OpenGL
+disabled, which must succeed, and with the option ON, which must fail on
+OpenGL (so the first result means something), and checks that the staged
+resources land.
+
+`foxsdr-engine`'s symbols are archived by a POST_BUILD step, exactly as
+`cascade`'s are (see Symbols, below), under the module name `foxsdr-engine`.
+
+**Not yet verified:** that a bare Raspberry Pi image (no OpenGL, X11 or Wayland
+packages installed at all) configures and builds with the package list above.
+The OFF configure and build have been run on Windows (MSVC; the engine built
+and ran from that tree) and on Ubuntu under WSL2, which has those
+packages installed (OpenGL was disabled with
+`-DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON`, CMake's own "pretend it is not
+installed" switch, so a `find_package(OpenGL)` that was reached would fail the
+configure); GitHub's `linux-engine-only` job (`.github/workflows/build.yml`)
+builds it with exactly the package list above and no others, and has not run yet.
 
 ## Building the installer
 
@@ -244,3 +291,12 @@ exists for a deliberately offline build and says plainly what it is risking.
 `tests/test_diagnostics.cpp` asserts that *this* build's PDB really is in the
 archive under the build id a report would quote. Full detail:
 [docs/DIAGNOSTICS.md](DIAGNOSTICS.md).
+
+**`foxsdr-engine` is archived the same way, as its own module with its own build
+id** (`foxsdr-engine.pdb` on Windows, `foxsdr-engine.debug` on Linux), by a
+second `POST_BUILD` step into the same `symbols/` and the same `index.txt`;
+`tests/test_engine_packaging.cpp` asserts it, as `test_diagnostics` does for
+`cascade`. The nightly and the Windows release mirror `cascade.exe`'s symbols
+only, because `foxsdr-engine.exe` is not a Windows release file; the Linux
+tarballs carry `foxsdr-engine`, and their CI symbol artifacts hold both modules
+(`docs/RELEASING.md`, the `symbols` step).

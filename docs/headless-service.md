@@ -1,8 +1,60 @@
-# Running foxsdr-engine as a service: provisioning the web and CAT servers, stopping it, exit codes, a sample systemd unit
+# Running foxsdr-engine as a service: getting it, settings, provisioning the web and CAT servers, stopping it, exit codes, a sample systemd unit, what it sends
 
-This is a sample and a statement of behaviour, not shipped code: nothing here is installed by any package, and the Linux
-half has NOT been run on a real machine with a real radio (see "What is verified" at the end). The packaging, install paths
-and a full headless guide are stage 7g's.
+`foxsdr-engine` is the receiver with no window: the same engine `cascade` runs, started from a command line. This is its
+guide, and a statement of its behaviour. The systemd unit below is a sample, not shipped code: nothing here is installed by
+any package, and the Linux half has NOT been run on a real machine with a real radio (see "What is verified" at the end,
+and "Open questions" after it).
+
+## Getting it
+
+- **Linux tarballs** (x86_64 and arm64; not in 0.99.84 or earlier) hold `foxsdr-engine` beside `cascade`:
+
+  ```
+  foxsdr-<version>-linux-<arch>/
+      cascade  foxsdr-engine  README.md  LICENSE  PRIVACY.md
+      resources/bandplans/*.json
+      resources/firmware/aor/NOTICE
+  ```
+
+  Both programs read `resources/` from beside themselves (executable-relative: the band-plan overlay and AOR's firmware
+  path), so keep the layout; the engine run from elsewhere on a copy of the binary alone has an empty band-plan overlay.
+  The AppImage is the window application's launcher and does not carry it. The same libraries the tarball already needs
+  apply (SoapySDR, OpenSSL, libunwind, ALSA); a machine that will only ever run the engine needs no OpenGL, X11 or Wayland
+  to *build* it (below), and `foxsdr-engine` itself imports none of them.
+- **Windows**: not in the installer or the Microsoft Store package (a decision, O4: it is for Linux and the Raspberry Pi).
+  Build it from source if you want it: it is a normal target of the Windows build (`cmake --build ... --target foxsdr-engine`).
+- **From source, with no window**: `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_INTERFACE=OFF`
+  then `cmake --build build`: only the engine's packages are needed, no OpenGL or desktop libraries, and no tests are
+  built. [BUILDING.md](BUILDING.md) has the details and the package list.
+
+## Running it, and where it keeps things
+
+```
+foxsdr-engine [--seconds N] [--config PATH | --use-config] [--selftest] [--version]
+              [--web-enable [--web-bind ADDR] [--web-port N] [--web-user NAME] [--web-password-file FILE|-]]
+              [--cat-enable [--cat-bind-all]]
+```
+
+- **With no `--config` and no `--use-config` it is hermetic**: the built-in signal generator, muted (a service has no business
+  playing a demo tone at a sound card), no settings file read, written or locked, nothing written to the disk by the engine,
+  nothing sent. A test run, not a service. (On a Linux machine whose ALSA routes to PulseAudio - `libasound2-plugins` - the
+  sound-server client library itself creates `$XDG_CONFIG_HOME/pulse/cookie` when the audio output is opened; seen on Ubuntu under
+  WSL2, and it is the library's file, not the engine's.)
+- **`--config PATH`** names the settings file (the same JSON the window application writes); **`--use-config`** is the
+  per-user file the window application uses (Linux: `$XDG_CONFIG_HOME/foxsdr/config.json`, or `~/.config/foxsdr/config.json`
+  when that is unset). With either, the engine takes a lock beside the file first - a second `foxsdr-engine`, or the window
+  application, on the same file is refused with a sentence and exit 1 - restores the receiver from it as the window does,
+  keeps it saved while it runs, and writes its clean-exit marker last of all. A service wants `--config` on a file of its own
+  (the unit below); `--use-config` is for running "headless" with a desktop user's settings while the window is not open.
+- **`--seconds N`** ends the run after N seconds, in order, exit 0. Without it the run goes on until it is stopped from
+  outside (next section).
+- **`--version`** prints `FoxSDR <version>`, the line `cascade --version` prints, and exits 0. **`--selftest`** runs the
+  headless DSP self-test, as `cascade --selftest` does.
+- Its journal is its standard error: a line when it is running, the settings-file line, a line when it stops. Under systemd
+  that is the journal.
+- **Crash and freeze reports stay on the machine.** With Diagnostics on in its settings file the engine writes them as the
+  window does and never uploads them; `foxsdr-reports` reads them against the symbol archive. What it does send, and how to
+  stop that, is in [PRIVACY.md](../PRIVACY.md) (the section on `foxsdr-engine`) and under "Open questions" below.
 
 ## Setting up the web server and the CAT listener (stage 7e)
 
@@ -164,3 +216,59 @@ Notes on the choices:
   ends the process. That is **WSL evidence, not a Linux machine's, and not inside foxsdr-engine**: the engine itself, the
   spawned-process tests' POSIX halves (SIGTERM/SIGINT/SIGHUP, a second SIGTERM), the POSIX ending of the budget guard (`_exit` after
   the exit record is written), the unit above, a cgroup's `SIGTERM` reaching a sentinel child, and anything on arm64 have never run.
+- Packaging and build (stage 7g). **Windows**: the configure of the engine-only build (`-DCASCADE_BUILD_INTERFACE=OFF`) with OpenGL
+  disabled succeeds and the same configure with the option ON fails on OpenGL, so the first result is not vacuous; the OFF tree has no
+  `cascade`, `cascade_gui`, `cascade_shell`, `cascade_interface`, `imgui` or `glfw` target and no OpenGL or GLFW cache entry; the
+  staged `resources/bandplans` and `resources/firmware` land byte for byte (ctest `engine_only_configure`); the engine's staging and
+  symbols are asserted by `test_engine_packaging`, and the tarball check proves it can fail by `release_tarball_check_selftest`.
+  **Linux, under WSL2 only** (Ubuntu 26.04, kernel 6.18.54.1-microsoft-standard-WSL2, g++ 15.2, x86_64; OpenGL and the desktop
+  libraries are installed on that machine, and the OpenGL package was disabled with `-DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON`): the OFF
+  configure and build of `foxsdr-engine` succeed (that tree has no `cascade`; the engine's ELF needs `libasound`, `libSoapySDR`,
+  `libssl`, `libcrypto`, `libunwind` and the C and C++ runtimes and nothing of OpenGL, X11 or Wayland); `foxsdr-engine --version`
+  prints `FoxSDR 0.99.84`; a hermetic `--seconds 2` run on a machine with **no sound card** (ALSA printed its complaints; the engine
+  reported running, made 125 passes and stopped with exit 0); the symbol archive holds the engine's own build id with line tables and
+  `main()` resolves to `src/engine_main.cpp`; and the Package and Check-the-tarball steps, taken verbatim from `build.yml` and run on
+  the real ON-build binaries, produce and accept a tarball that holds both programs, the band plans and the firmware notice, and refuse
+  it when the engine, or the band plans, are dropped from the `cp`.
+- The existing `test_engine_main_*` tests, built and run on Linux under WSL2 for the first time (stage 7g changed none of them; nothing was
+  fixed): 9 of 13 pass, including `test_engine_main_sigterm` (a real SIGTERM, SIGINT and SIGHUP, and a second signal) and
+  `test_engine_main_sigterm_wedged` (the 53 s + 5 s budget ended a wedged stop; 98.8 s on that machine), `config_roundtrip`,
+  `clean_exit_marker`, `damaged_config`, `helpers`, `password_not_in_argv`, `version`, `links_headless`. 4 fail, each on one or two
+  checks of many: `args`, `provision` and `smoke` on "the isolated profile holds only what the test made" - a hermetic run leaves
+  `pulse/cookie` there (reproduced by hand: `foxsdr-engine --seconds 1` and `--selftest` do, `--version` does not; PulseAudio's client
+  library writes it when the audio output opens, through ALSA's pulse plugin); and `second_instance_refused` on "the refused engine's
+  stderr does not contain `running`" - the JACK library PortAudio loads prints "jack server is not running or cannot be started" on a
+  machine with libjack and no server. All four are about the machine the test ran on, not the engine's behaviour, and are the
+  tests' to adapt for a Linux host with an audio stack. Whether the Linux CI jobs, whose audio set-up is different, show the same
+  is not known until they run.
+
+## Open questions (recorded, not decided here)
+
+- **What a headless engine sends, and the Worker's "kind" (owner decision O8, open).** Decision O6 is that a headless engine uploads
+  no crash report by default, and that holds: the crash-report sweep is the window's, nothing in `foxsdr-engine` calls it, and
+  `PRIVACY.md` says so. **That is not the same as "sends nothing".** With a settings file (`--config`, `--use-config`) the engine's
+  restore runs the same `Engine::telemetryStartup` the window's does. Usage reporting is on by default in a settings file, so a first
+  run on a fresh file wrote an install identifier and a pending usage report into it (`telemetryEnabled`, `telemetryInstallId`,
+  `telemetryPending`, measured), and a later `--config` run opened two TLS connections to the telemetry endpoint to send it
+  (measured on Windows, with `FOXSDR_TELEMETRY_URL` pointed at an https address on a local TCP listener, because the client refuses
+  plain http); a hermetic run made none; a settings file holding `{"telemetryEnabled": false}` made none in two runs and kept the
+  setting. The engine arms no update check and no "still running" beat (`EngineService::start`, 7c: a service on the desktop's install
+  id would double-count one machine, and the beat wants a "kind" the Worker may not have). What the Worker takes is in
+  `telemetry-worker/worker.js`, read only where it records the install channel (`ch`, at most 12 characters): the client fills it with
+  `installer`, `store`, `appimage` or `tarball` (`installChannel()`, `core/telemetry.cpp`), so a `foxsdr-engine` from the tarball
+  reports as `tarball`, as the window application from the same tarball does: **its usage record carries nothing that tells the two
+  apart**. A "kind" is a Worker change and a deploy (RELEASING.md, procedure step 2); the rest of the Worker is unread and nothing
+  Worker-facing was implemented. For the owner: should a headless engine's settings default usage reporting OFF (no panel on which
+  anyone chose it)? should its record say which program it came from (a new `ch` word that fits 12 characters, or a new field)? With
+  `--use-config` the identifier is the window's, so the window's own opt-out silences both.
+- **The site's crash feed and a second module name.** A report names its module (`foxsdr-engine`, `foxsdr-engine.exe`) and its build
+  id; whether the site's feed accepts and resolves a module other than `cascade` is not known from this tree (the site is another
+  repository), and a headless engine uploads no report by default, so nothing is sent to find out. `release.ps1 -Steps symbols` sends
+  the engine's symbol files and index rows to the NAS (the archive is ours) and **not** its map to the Pi's symbol directory (the
+  site's side). Reports are read locally: `foxsdr-reports` against the archive.
+- **Linux, arm64, the Raspberry Pi.** Nothing of the engine has run on a Raspberry Pi, on an arm64 machine or on a real Linux machine
+  (all the Linux evidence above is WSL2). The `arm64` job in `build.yml` is the first run that will build and start it on aarch64 (its
+  tarball step runs `foxsdr-engine --version`); `linux-engine-only` is the first run of the engine-only package list on a runner. The
+  performance baseline on real hardware (owner decision O10) is the owner's.
+- **Headless tracks, tiles (7f).** Deferred: a headless engine serves no track list or track details until a headless interface
+  thread is written (the survey's 7f). The engine API's table is complete for what the engine itself knows.

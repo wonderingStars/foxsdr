@@ -97,13 +97,32 @@ jobs:
       - name: Selftest
         run: ./build/cascade --selftest
 
+      # THE TARBALL HOLDS TWO PROGRAMS: cascade (the window application) and foxsdr-engine (the
+      # receiver with no window, for a service or a Raspberry Pi with no desktop - docs/headless-
+      # service.md). Both read resources/bandplans and resources/firmware from BESIDE themselves
+      # (BandPlan::defaultDir and aorFirmwarePath are executable-relative), so the tarball carries
+      # them, laid out the way the AppImage and the Windows installer lay them out. The AppImage
+      # below is untouched: it stays a launcher for the window application.
       - name: Package
         run: |
           version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          mkdir -p "dist/foxsdr-$version-linux-x64"
-          cp build/cascade README.md LICENSE PRIVACY.md "dist/foxsdr-$version-linux-x64/"
+          mkdir -p "dist/foxsdr-$version-linux-x64/resources/bandplans"
+          cp build/cascade build/foxsdr-engine README.md LICENSE PRIVACY.md "dist/foxsdr-$version-linux-x64/"
+          cp resources/bandplans/*.json "dist/foxsdr-$version-linux-x64/resources/bandplans/"
+          cp -r resources/firmware "dist/foxsdr-$version-linux-x64/resources/"
           tar -C dist -czf "foxsdr-$version-linux-x64.tar.gz" "foxsdr-$version-linux-x64"
           echo "version=$version" >> "$GITHUB_ENV"
+
+      # The tarball is READ BACK before it is uploaded: both binaries and the resources are in it,
+      # both are ELF with the execute bit, and each, extracted and run, answers --version with this
+      # version (tools/check-linux-tarball.sh; its --self-test is a ctest). It gates the upload on
+      # purpose: a tarball without the application downloads fine. NOT YET RUN ON A RUNNER: until a
+      # push has run this job the assertion is CI-level evidence only, written and self-tested on
+      # stand-in files (docs/engine-stage4.md section 6.20).
+      - name: Check the tarball
+        run: |
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          bash tools/check-linux-tarball.sh "foxsdr-$version-linux-x64.tar.gz" "foxsdr-$version-linux-x64" "$version"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -156,7 +175,10 @@ jobs:
       # CMakeLists.txt) wrote symbols/ on this runner: the split-debug file
       # that carries the line tables, the function map and an index row, keyed
       # by the GNU build id of the very build/cascade the tarball and the
-      # AppImage above contain. The runner is discarded when the job ends, so
+      # AppImage above contain - and the same for build/foxsdr-engine, which
+      # only the tarball contains, under its own build id and in the same
+      # symbols/ (one artifact, two modules, two index rows). The runner is
+      # discarded when the job ends, so
       # without this step the build that reaches users has its symbols
       # nowhere, and every crash report against it can be named at best and
       # never placed on a line. Copying the artifact into the symbol archive is
@@ -178,32 +200,15 @@ jobs:
       # file with the same addr2line a developer will use. Matches are done
       # with case rather than a pipe into grep -q, because a pipe plus
       # pipefail turns grep's early exit into a spurious failure.
+      # Once per binary the tarball carries: the engine's build id is its own, and a crash report from
+      # a headless run is readable only if THAT binary's symbols were archived (the Build step's
+      # POST_BUILD archived both). The assertions are tools/check-symbol-archive-linux.sh's, which is
+      # what this step's body used to be, for cascade alone.
       - name: Check the symbol archive
         run: |
           set -eu
-          id=$(readelf -n build/cascade | sed -n 's/.*Build ID: \([0-9a-f]*\).*/\1/p')
-          test -n "$id"
-          dbg="symbols/cascade.debug/$id/cascade.debug"
-          echo "build id $id"
-          ls -l build/cascade "$dbg"
-          dbg_sections=$(readelf -S -W "$dbg")
-          bin_sections=$(readelf -S -W build/cascade)
-          printf '%s\n' "$dbg_sections" | grep -E '\.debug_(info|line)' || true
-          case "$dbg_sections" in
-            *.debug_line*) ;;
-            *) echo "FAIL: the archived split-debug file has no line tables"; exit 1 ;;
-          esac
-          case "$bin_sections" in
-            *.debug_info*|*.debug_line*) echo "FAIL: the binary that ships still carries DWARF"; exit 1 ;;
-          esac
-          addr=$(nm build/cascade | awk '$2 == "T" && $3 == "main" { print $1 }')
-          test -n "$addr"
-          where=$(addr2line -f -C -e "$dbg" "0x$addr")
-          echo "$where"
-          case "$where" in
-            *main.cpp:[0-9]*) ;;
-            *) echo "FAIL: main() did not resolve to a source line in the archived file"; exit 1 ;;
-          esac
+          bash tools/check-symbol-archive-linux.sh cascade main.cpp
+          bash tools/check-symbol-archive-linux.sh foxsdr-engine engine_main.cpp
 
   # Same job as "linux" above, on GitHub's hosted Arm64 runner, for the
   # Raspberry Pi (64-bit Raspberry Pi OS is aarch64) and other Arm64 Linux
@@ -248,13 +253,24 @@ jobs:
       - name: Selftest
         run: ./build/cascade --selftest
 
+      # The same tarball as the "linux" job's (read the comment there): cascade, foxsdr-engine, the
+      # resources beside them, and the read-back that gates the upload. THIS is the job that makes
+      # the engine's first aarch64 binary - the Raspberry Pi's - and its --version run below is the
+      # first time anything of the engine executes on that architecture.
       - name: Package
         run: |
           version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          mkdir -p "dist/foxsdr-$version-linux-arm64"
-          cp build/cascade README.md LICENSE PRIVACY.md "dist/foxsdr-$version-linux-arm64/"
+          mkdir -p "dist/foxsdr-$version-linux-arm64/resources/bandplans"
+          cp build/cascade build/foxsdr-engine README.md LICENSE PRIVACY.md "dist/foxsdr-$version-linux-arm64/"
+          cp resources/bandplans/*.json "dist/foxsdr-$version-linux-arm64/resources/bandplans/"
+          cp -r resources/firmware "dist/foxsdr-$version-linux-arm64/resources/"
           tar -C dist -czf "foxsdr-$version-linux-arm64.tar.gz" "foxsdr-$version-linux-arm64"
           echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Check the tarball
+        run: |
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          bash tools/check-linux-tarball.sh "foxsdr-$version-linux-arm64.tar.gz" "foxsdr-$version-linux-arm64" "$version"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -290,32 +306,62 @@ jobs:
           path: symbols/
           if-no-files-found: warn
 
+      # Once per binary the tarball carries: the engine's build id is its own, and a crash report from
+      # a headless run is readable only if THAT binary's symbols were archived (the Build step's
+      # POST_BUILD archived both). The assertions are tools/check-symbol-archive-linux.sh's, which is
+      # what this step's body used to be, for cascade alone.
       - name: Check the symbol archive
         run: |
           set -eu
-          id=$(readelf -n build/cascade | sed -n 's/.*Build ID: \([0-9a-f]*\).*/\1/p')
-          test -n "$id"
-          dbg="symbols/cascade.debug/$id/cascade.debug"
-          echo "build id $id"
-          ls -l build/cascade "$dbg"
-          dbg_sections=$(readelf -S -W "$dbg")
-          bin_sections=$(readelf -S -W build/cascade)
-          printf '%s\n' "$dbg_sections" | grep -E '\.debug_(info|line)' || true
-          case "$dbg_sections" in
-            *.debug_line*) ;;
-            *) echo "FAIL: the archived split-debug file has no line tables"; exit 1 ;;
-          esac
-          case "$bin_sections" in
-            *.debug_info*|*.debug_line*) echo "FAIL: the binary that ships still carries DWARF"; exit 1 ;;
-          esac
-          addr=$(nm build/cascade | awk '$2 == "T" && $3 == "main" { print $1 }')
-          test -n "$addr"
-          where=$(addr2line -f -C -e "$dbg" "0x$addr")
-          echo "$where"
-          case "$where" in
-            *main.cpp:[0-9]*) ;;
-            *) echo "FAIL: main() did not resolve to a source line in the archived file"; exit 1 ;;
-          esac
+          bash tools/check-symbol-archive-linux.sh cascade main.cpp
+          bash tools/check-symbol-archive-linux.sh foxsdr-engine engine_main.cpp
+
+  # THE ENGINE WITHOUT A WINDOW (engine extraction stage 7g), the way a Raspberry Pi image with
+  # no desktop would build it: CASCADE_BUILD_INTERFACE=OFF, and only the packages the engine
+  # itself needs - no libgl1-mesa-dev, no X11, no Wayland, no xkbcommon, no xvfb. The two jobs
+  # above build the window application too and so cannot show that. This one configures, builds
+  # foxsdr-engine, runs it, and checks its symbols were archived.
+  #
+  # CMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON makes the proof independent of what the runner image
+  # happens to have installed: with it, a find_package(OpenGL REQUIRED) that the OFF path reached
+  # would fail the configure (tests/engine_only_configure.cmake runs the same pair, with a control,
+  # on every full build). It builds no tests - the test programs link the window or spawn cascade.
+  #
+  # NOT YET RUN ON A RUNNER. Whether the minimal package list below is the whole of it (PortAudio's
+  # ALSA backend is the one to watch) is exactly what the first run will say; the job is not one of
+  # release.ps1's RequiredCiJobs, so a correction here holds up nothing.
+  linux-engine-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the engine's dependencies only
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            libsoapysdr-dev libssl-dev libunwind-dev libasound2-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_INTERFACE=OFF -DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: The engine runs
+        run: |
+          set -eu
+          version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          test ! -e build/cascade
+          line=$(./build/foxsdr-engine --version | head -n 1)
+          echo "$line"
+          test "$line" = "FoxSDR $version"
+          printf 'pcm.!default { type null }\nctl.!default { type null }\n' | sudo tee /etc/asound.conf
+          ./build/foxsdr-engine --seconds 2
+          ls build/resources/bandplans/*.json build/resources/firmware/aor/NOTICE
+
+      - name: Check the symbol archive
+        run: bash tools/check-symbol-archive-linux.sh foxsdr-engine engine_main.cpp
 
   # THE WINDOWS BUILD: Release, installer, MSIX, symbols. NEW, and not yet run on
   # a runner: every step below is written from the documentation and from what the

@@ -167,7 +167,21 @@ if(NOT WIN32)
     pkg_check_modules(LIBUNWIND REQUIRED IMPORTED_TARGET libunwind)
 endif()
 
-find_package(OpenGL REQUIRED)
+# CASCADE_BUILD_INTERFACE (engine extraction stage 7g). ON - the default, and what every shipped
+# window application is built with - configures everything as it always did. OFF builds the
+# ENGINE alone: cascade_engine, foxsdr-engine (the receiver with no window), the report reader and
+# the engine link check, for a machine that will only ever run headless (a Raspberry Pi image with
+# no desktop). With it OFF this file never reaches find_package(OpenGL), the GLFW subdirectory,
+# Dear ImGui, the shell, the interface, cascade_gui or the cascade executable, so none of OpenGL,
+# X11, Wayland or xkbcommon has to be installed just to configure. The tests directory is not added
+# either: its programs link the window or spawn cascade, and a headless image has no use for them
+# (tests/engine_only_configure.cmake proves the OFF configure instead, from the full build).
+option(CASCADE_BUILD_INTERFACE "Build the window application (cascade; needs OpenGL, GLFW's windowing libraries). OFF builds the engine and foxsdr-engine only" ON)
+message(STATUS "cascade: window application ${CASCADE_BUILD_INTERFACE} (CASCADE_BUILD_INTERFACE)")
+
+if(CASCADE_BUILD_INTERFACE)
+    find_package(OpenGL REQUIRED)
+endif()
 # Hardware sources (P4+). Target verified from SoapySDRExport.cmake: plain
 # `SoapySDR`, shared. Vendor support (B200 via SoapyUHD, RTL dongles, etc.)
 # arrives through SoapySDR's runtime-loaded modules, keeping this tree MIT.
@@ -192,12 +206,16 @@ endif()
 
 set(CASCADE_TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
-# GLFW 3.4 (static; docs/tests/examples/install off)
-set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-add_subdirectory("${CASCADE_TP}/glfw" EXCLUDE_FROM_ALL)
+# GLFW 3.4 (static; docs/tests/examples/install off). The window's, so not configured at all
+# with CASCADE_BUILD_INTERFACE OFF: EXCLUDE_FROM_ALL defers its BUILD, not its configure, and its
+# configure is the one that wants the X11 / Wayland headers.
+if(CASCADE_BUILD_INTERFACE)
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${CASCADE_TP}/glfw" EXCLUDE_FROM_ALL)
+endif()
 
 # PortAudio 19.7 (static). Windows host APIs: WASAPI + WMME only — ASIO needs
 # the proprietary Steinberg SDK, DirectSound and WDM/KS are deliberately off
@@ -222,20 +240,23 @@ unset(CMAKE_POLICY_VERSION_MINIMUM)
 # Dear ImGui 1.92.8: same translation units the vcpkg port compiled (core +
 # imgui_stdlib + the GLFW and OpenGL3 backends). Include dirs exported so
 # <imgui.h>, <imgui_impl_glfw.h>, <imgui_impl_opengl3.h> resolve as before.
-add_library(imgui STATIC
-    "${CASCADE_TP}/imgui/imgui.cpp"
-    "${CASCADE_TP}/imgui/imgui_demo.cpp"
-    "${CASCADE_TP}/imgui/imgui_draw.cpp"
-    "${CASCADE_TP}/imgui/imgui_tables.cpp"
-    "${CASCADE_TP}/imgui/imgui_widgets.cpp"
-    "${CASCADE_TP}/imgui/misc/cpp/imgui_stdlib.cpp"
-    "${CASCADE_TP}/imgui/backends/imgui_impl_glfw.cpp"
-    "${CASCADE_TP}/imgui/backends/imgui_impl_opengl3.cpp")
-target_include_directories(imgui SYSTEM PUBLIC
-    "${CASCADE_TP}/imgui"
-    "${CASCADE_TP}/imgui/backends"
-    "${CASCADE_TP}/imgui/misc/cpp")
-target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+# The window's, like GLFW above: not defined with CASCADE_BUILD_INTERFACE OFF.
+if(CASCADE_BUILD_INTERFACE)
+    add_library(imgui STATIC
+        "${CASCADE_TP}/imgui/imgui.cpp"
+        "${CASCADE_TP}/imgui/imgui_demo.cpp"
+        "${CASCADE_TP}/imgui/imgui_draw.cpp"
+        "${CASCADE_TP}/imgui/imgui_tables.cpp"
+        "${CASCADE_TP}/imgui/imgui_widgets.cpp"
+        "${CASCADE_TP}/imgui/misc/cpp/imgui_stdlib.cpp"
+        "${CASCADE_TP}/imgui/backends/imgui_impl_glfw.cpp"
+        "${CASCADE_TP}/imgui/backends/imgui_impl_opengl3.cpp")
+    target_include_directories(imgui SYSTEM PUBLIC
+        "${CASCADE_TP}/imgui"
+        "${CASCADE_TP}/imgui/backends"
+        "${CASCADE_TP}/imgui/misc/cpp")
+    target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+endif()
 
 # pffft v1.0.0: mirrors the vcpkg port's own CMakeLists — pffft.c only,
 # _USE_MATH_DEFINES on MSVC, no /arch flag (pffft auto-selects SSE via _M_X64
@@ -394,9 +415,16 @@ add_dependencies(cascade_engine cascade_git_commit)
 # PUBLIC, and only these two: the test binaries need to find the application
 # binary and the symbol archive in order to assert that this build's PDB was
 # actually archived under the build id a report would quote. Nothing in the
-# library itself reads them.
+# library itself reads them. The directory is the window application's; with CASCADE_BUILD_INTERFACE
+# OFF there is none, and it is the directory foxsdr-engine is built into (the same one: both
+# executables take the default output directory, which tests/test_engine_packaging.cpp holds).
+if(CASCADE_BUILD_INTERFACE)
+    set(CASCADE_APP_BINDIR_TARGET cascade)
+else()
+    set(CASCADE_APP_BINDIR_TARGET foxsdr-engine)
+endif()
 target_compile_definitions(cascade_engine PUBLIC
-    CASCADE_APP_BINDIR="$<TARGET_FILE_DIR:cascade>"
+    CASCADE_APP_BINDIR="$<TARGET_FILE_DIR:${CASCADE_APP_BINDIR_TARGET}>"
     CASCADE_SYMBOL_ARCHIVE_DIR="${CASCADE_SYMBOL_ARCHIVE}"
     # ...and these three so tests/test_diagnostics.cpp can hold the commit a
     # report quotes to what git says HEAD is RIGHT NOW, and can run the commit
@@ -448,6 +476,11 @@ if(NOT WIN32)
     target_link_libraries(cascade_engine PUBLIC PkgConfig::LIBUNWIND)
 endif()
 
+# THE WINDOW HALF (the shell, the interface, cascade_gui): defined only with CASCADE_BUILD_INTERFACE
+# ON. The block between here and the matching endif() below is deliberately not indented, so that
+# the diff that made it optional is the two lines that bracket it.
+if(CASCADE_BUILD_INTERFACE)
+
 # --- the shell: the fence's one door ----------------------------------------
 
 # engine/engine_shell.hpp is the whole of what the interface may ask of the engine that is not the engine API's table; its
@@ -488,6 +521,8 @@ target_link_libraries(cascade_interface PUBLIC
 # check below, which refuses it to the engine.
 add_library(cascade_gui INTERFACE)
 target_link_libraries(cascade_gui INTERFACE cascade_interface cascade_shell cascade_engine)
+
+endif()  # CASCADE_BUILD_INTERFACE: the window half ends here
 
 # --- the line between them, enforced -----------------------------------------
 
@@ -769,17 +804,22 @@ endif()
 # | ...` comes back empty - installer/msix/build-msix.ps1 was changed for that), and
 # a harness that reads pipes or waits on the process handle (ctest, CreateProcess,
 # Git Bash) is unaffected.
-if(WIN32)
-    enable_language(RC)
-    add_executable(cascade WIN32 src/main.cpp resources/icon/foxsdr.rc)
-    if(MSVC)
-        target_link_options(cascade PRIVATE /ENTRY:mainCRTStartup)
+#
+# Only with CASCADE_BUILD_INTERFACE ON (the default): with it OFF there is no window application,
+# and no enable_language(RC) for its icon.
+if(CASCADE_BUILD_INTERFACE)
+    if(WIN32)
+        enable_language(RC)
+        add_executable(cascade WIN32 src/main.cpp resources/icon/foxsdr.rc)
+        if(MSVC)
+            target_link_options(cascade PRIVATE /ENTRY:mainCRTStartup)
+        endif()
+    else()
+        add_executable(cascade src/main.cpp)
     endif()
-else()
-    add_executable(cascade src/main.cpp)
+    # The window, and through it the engine.
+    target_link_libraries(cascade PRIVATE cascade_gui)
 endif()
-# The window, and through it the engine.
-target_link_libraries(cascade PRIVATE cascade_gui)
 
 # ---------------------------------------------------------------------------
 # foxsdr-reports - the reader that makes an uploaded report readable
@@ -812,9 +852,9 @@ target_link_libraries(foxsdr-reports PRIVATE cascade_engine)
 #
 # A CONSOLE program, not a windows-subsystem one: it is a service and a command-line
 # tool, and its stdout and stderr are the point. None of cascade's /ENTRY and
-# AttachConsole story (above) applies. Not packaged for Windows (the survey's P1:
-# the installer and the MSIX stay the window application's); symbol archiving, the
-# Linux tarballs and the release scripts are stage 7g's.
+# AttachConsole story (above) applies. Not packaged for Windows (owner decision O4:
+# the installer and the MSIX stay the window application's); it ships in the Linux
+# tarballs (.github/workflows/build.yml), and its symbols are archived below.
 add_executable(foxsdr-engine src/engine_main.cpp)
 target_link_libraries(foxsdr-engine PRIVATE cascade_engine)
 # The same delay-load as cascade (below, for why), so a missing hardware runtime is a
@@ -824,22 +864,66 @@ if(MSVC)
     target_link_options(foxsdr-engine PRIVATE "/DELAYLOAD:SoapySDR.dll")
     target_link_libraries(foxsdr-engine PRIVATE delayimp)
 endif()
-# WHAT CASCADE STAGES BESIDE ITSELF (below): SoapySDR.dll, resources/bandplans and
-# resources/firmware. Both executables land in ONE directory, so cascade's staging
-# already serves the engine and is not repeated here: two POST_BUILD copies of the
-# same directory tree into the same place, in a parallel build, are a race for a
-# file (and copy_directory_if_different, the safe form, needs CMake 3.26 where the
-# project's floor is 3.20). The DLL alone is staged for the engine too
-# (copy_if_different has no such floor and writes nothing when the file is there),
-# so a build of this target alone still runs. THE GAP, named for stage 7g: a build
-# with no window application (its CASCADE_BUILD_INTERFACE option) must stage the
-# band plans and firmware itself; until then the engine runs without them, as a
-# build tree without them does (BandPlan::defaultDir finds nothing and the overlay
-# is empty, which a window-less engine does not draw).
+# THE ENGINE'S RESOURCES: resources/bandplans and resources/firmware, beside the executable.
+# BandPlan::defaultDir() and aorFirmwarePath() are executable-relative, and both are
+# engine code, so a headless engine needs the same two directories the window application
+# does (stage 7b staged only SoapySDR.dll and left these to 7g). They are copied by ONE
+# target that both executables depend on, not by a POST_BUILD step on each: two
+# copy_directory commands into the same place, run by a parallel build, are a race for a
+# file, and copy_directory_if_different, the safe form, needs CMake 3.26 where the
+# project's floor is 3.20. One target, run once per build, and a dependency that says so:
+# building foxsdr-engine alone (the only executable there is with CASCADE_BUILD_INTERFACE
+# OFF) stages what it needs, and so does building cascade. Both executables take the
+# default output directory, so this is "beside" both (tests/test_engine_packaging.cpp
+# holds that, and that the files land).
+add_custom_target(cascade_stage_resources ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/resources/bandplans"
+            "$<TARGET_FILE_DIR:foxsdr-engine>/resources/bandplans"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/resources/firmware"
+            "$<TARGET_FILE_DIR:foxsdr-engine>/resources/firmware"
+    COMMENT "Staging resources/bandplans and resources/firmware beside the executables"
+    VERBATIM)
+add_dependencies(foxsdr-engine cascade_stage_resources)
+
+# SoapySDR.dll beside the engine too (Windows; copy_if_different has no version floor and
+# writes nothing when the file is there), so a build of this target alone still runs.
 if(WIN32 AND TARGET SoapySDR)
     add_custom_command(TARGET foxsdr-engine POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:foxsdr-engine>)
+endif()
+
+# THE ENGINE'S SYMBOLS, archived by the same action that links it, exactly as the window
+# application's are (the full argument is at the end of this file, where cascade's own step
+# is). The module name in a crash report is the binary's - foxsdr-engine(.exe) - and its
+# build id is its own, so a report from a headless run resolves against symbols/ only if
+# THIS binary was archived. tools/archive-symbols.ps1 and tools/archive-symbols-linux.sh
+# take any binary; nothing in them is cascade's. They share one archive (and one index.txt)
+# with cascade's step, which a parallel build runs at the same moment: the Windows script's
+# index append retries a held file for that reason. Whether the crash feed on the site
+# accepts the module name is NOT known from this tree (docs/headless-service.md).
+if(WIN32)
+    add_custom_command(TARGET foxsdr-engine POST_BUILD
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/archive-symbols.ps1"
+                -Binary "$<TARGET_FILE:foxsdr-engine>"
+                -ArchiveRoot "${CASCADE_SYMBOL_ARCHIVE}"
+                -Version "${CASCADE_VERSION_STRING}"
+                -CommitHeader "${CASCADE_COMMIT_HEADER}"
+        VERBATIM)
+else()
+    add_custom_command(TARGET foxsdr-engine POST_BUILD
+        COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/archive-symbols-linux.sh"
+                --binary "$<TARGET_FILE:foxsdr-engine>"
+                --archive-root "${CASCADE_SYMBOL_ARCHIVE}"
+                --version "${CASCADE_VERSION_STRING}"
+                --commit-header "${CASCADE_COMMIT_HEADER}"
+                --module "$<TARGET_FILE_BASE_NAME:foxsdr-engine>"
+                --config "$<CONFIG>"
+        VERBATIM)
 endif()
 
 # Sanitizer build only (CASCADE_SANITIZE, cmake/sanitize.cmake): instrument the
@@ -849,10 +933,15 @@ endif()
 # the runtime beside the programs. Not in a normal build: the block is skipped.
 if(CASCADE_SANITIZE_ENABLED)
     foreach(_vendored imgui glfw portaudio_static cascade_pffft)
-        cascade_sanitize_target(${_vendored})
+        # imgui and glfw are the window's: not there with CASCADE_BUILD_INTERFACE OFF
+        if(TARGET ${_vendored})
+            cascade_sanitize_target(${_vendored})
+        endif()
     endforeach()
     target_link_libraries(cascade_engine PUBLIC cascade_sanitize)
-    cascade_sanitize_stage_runtime(cascade)
+    if(TARGET cascade)
+        cascade_sanitize_stage_runtime(cascade)
+    endif()
     cascade_sanitize_stage_runtime(foxsdr-reports)
     cascade_sanitize_stage_runtime(foxsdr-engine)
     cascade_sanitize_stage_runtime(cascade_engine_link_check)
@@ -865,6 +954,12 @@ endif()
 # in the Source panel while the generator and IQ-file sources keep working.
 # Only the shipped executable needs it — the test binaries link it normally and
 # are given a copy of the DLL beside them (see tests/CMakeLists.txt).
+#
+# EVERYTHING FROM HERE TO THE TESTS IS THE WINDOW APPLICATION'S (cascade), so it is
+# only there with CASCADE_BUILD_INTERFACE ON; not indented, as the other bracketed
+# block above is not.
+if(CASCADE_BUILD_INTERFACE)
+
 if(MSVC)
     target_link_options(cascade PRIVATE "/DELAYLOAD:SoapySDR.dll")
     target_link_libraries(cascade PRIVATE delayimp)
@@ -894,20 +989,18 @@ endif()
 # that the installer never packaged the plans either: the model, the palette,
 # the overlay renderer, the "what am I tuned to" readout and a full test file
 # all worked, and no user has ever been able to see any of it.
-add_custom_command(TARGET cascade POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/resources/bandplans"
-            "$<TARGET_FILE_DIR:cascade>/resources/bandplans")
-
+#
 # Stage resources/firmware beside the executable for the same reason: the AOR
 # driver looks for AOR's FX2 firmware at <exe dir>/resources/firmware/aor/
 # fx2fw.hex (source/aor_source.cpp, aorFirmwarePath). Until AOR supplies the
 # file with its redistribution notice, only the NOTICE placeholder is there,
 # and the driver says so in words instead of opening the receiver.
-add_custom_command(TARGET cascade POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/resources/firmware"
-            "$<TARGET_FILE_DIR:cascade>/resources/firmware")
+#
+# BOTH ARE COPIED BY cascade_stage_resources (defined with foxsdr-engine above, which needs
+# the same two directories): one target that cascade and foxsdr-engine both depend on, where
+# these were two POST_BUILD steps of cascade's. The files land in the same place, before
+# cascade links instead of after.
+add_dependencies(cascade cascade_stage_resources)
 
 # ARCHIVE THE SYMBOLS, in the same action that produced the binary.
 #
@@ -957,9 +1050,17 @@ else()
         VERBATIM)
 endif()
 
+endif()  # CASCADE_BUILD_INTERFACE: the window application's half ends here
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
-enable_testing()
-add_subdirectory(tests)
+# The tests link the window or spawn cascade, nearly all of them, so there is no test
+# build without the window application (see CASCADE_BUILD_INTERFACE above). The
+# configure of that OFF build is itself a test, run from the full build:
+# tests/engine_only_configure.cmake.
+if(CASCADE_BUILD_INTERFACE)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

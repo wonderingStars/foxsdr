@@ -4641,6 +4641,13 @@ and that must be checked rather than assumed:
 
 and compare it with the directory name under `cascade.debug/` in the mirror.
 
+Since engine extraction stage 7g the tarball holds a second program, `foxsdr-engine`
+(the receiver with no window), with **its own build id**: the same check is
+`readelf -n foxsdr-engine | grep "Build ID"` against the directory name under
+`foxsdr-engine.debug/`, and the artifact holds both modules and two index rows.
+A headless engine uploads no crash report by default (PRIVACY.md), so its reports
+are read on the machine that wrote them, with `foxsdr-reports` against this archive.
+
 Each CI job now uploads its `symbols/` as an artifact —
 `foxsdr-linux-x64-symbols` and `foxsdr-linux-arm64-symbols` — and then checks
 it (below). Mirroring is still by hand, and it must use the artifacts of the

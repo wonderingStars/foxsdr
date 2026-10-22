@@ -190,6 +190,41 @@ exactly as many.
   as a feature request plus that one choice, and nothing else. It is not a
   crash report and carries nothing a crash report does. Listed field by field
   below.
+- **`foxsdr-engine`, the receiver with no window, never uploads a crash or
+  freeze report, and runs no update check and no "still running" beat on its
+  own.** It does send the usage report of its previous run when its settings
+  file has usage reporting on. See the next section.
+
+## `foxsdr-engine`, the receiver with no window
+
+`foxsdr-engine` is the same receiver without the window, for a service or a
+computer with no desktop (the Linux tarballs carry it beside `cascade`, from the
+release after 0.99.84; see `docs/headless-service.md`). Nothing about what you
+listen to is collected by it either. What it does and does not send:
+
+- **Crash and freeze reports are never sent from it. They stay on your machine.**
+  The part of the program that uploads them belongs to the window application and
+  is not in `foxsdr-engine`. With Diagnostics on in its settings file it writes a
+  report to the same reports folder the window uses (setting `FOXSDR_DIAG_DIR` to
+  a folder makes it write there instead), and leaves it there: nothing sends it,
+  so nothing waits on disk to be sent. The reports are read where they are, with
+  `foxsdr-reports`.
+- **No update check and no "still running" beat run on their own.** Neither is
+  started by the engine. (The support command `foxsdr-engine --update-check`
+  asks the update service once, when you type it, exactly as
+  `cascade --update-check` does.)
+- **Usage reporting follows the settings file it is given, and is on by default.**
+  Started with a settings file (`--config PATH`, or `--use-config` for the window's
+  own), it reads that file as the window does. Where usage reporting is on, which
+  is the state of a file that does not exist yet, it counts the run, keeps an
+  install identifier in the file, and sends the previous run's usage report, the
+  one described in the next section, when it next starts. Given the window's own
+  settings file it is the same identifier and the same switch as the window's, so
+  switching reporting off there switches it off here. **To keep a service from ever
+  sending it, write `{"telemetryEnabled": false}` as the settings file before its
+  first start**: the engine then sends nothing and writes no identifier (tested on
+  Windows). Started with no settings file (no `--config`) it reads nothing,
+  writes nothing and sends nothing.
 
 ## What is sent when usage reporting is enabled
 
