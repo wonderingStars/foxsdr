@@ -9690,15 +9690,28 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
                 // kick - a 60 Hz frame is 16.7 ms and the period 16 - so with a kick in the last `kickGrace` the wait runs to the kick's grace
                 // (a kick resets it) rather than to the period; once the frames have stopped, the wait after the one grace that ran out is the
                 // period again. Every kick arrives as a flag and ends the wait like a wake.
-                SteadyClock::time_point deadline = passStart + period;
-                if (const std::int64_t graceNs = kickGraceNs_.load(std::memory_order_relaxed); graceNs > 0) {
-                    const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count();
-                    const std::int64_t kickNs = lastKickNs_.load(std::memory_order_relaxed);
-                    if (kickNs != 0 && nowNs - kickNs < graceNs) {
-                        deadline = std::max(deadline, SteadyClock::time_point(std::chrono::nanoseconds(kickNs + graceNs)));
+                const auto periodDone = [this] { return controlWake_ || controlWakeNow_ || controlKick_ || !controlRun_.load(); };
+                const auto periodDeadline = [&] {
+                    SteadyClock::time_point deadline = passStart + period;
+                    if (const std::int64_t graceNs = kickGraceNs_.load(std::memory_order_relaxed); graceNs > 0) {
+                        const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count();
+                        const std::int64_t kickNs = lastKickNs_.load(std::memory_order_relaxed);
+                        if (kickNs != 0 && nowNs - kickNs < graceNs) {
+                            deadline = std::max(deadline, SteadyClock::time_point(std::chrono::nanoseconds(kickNs + graceNs)));
+                        }
                     }
+                    return deadline;
+                };
+                for (;;) {
+                    waitUntil(lk, periodDeadline(), periodDone);
+                    if (periodDone()) { break; }
+                    // THE TIMER RAN OUT - but the deadline this wait was given was fixed when it began, and a kick that arrived during it
+                    // may have moved the fallback on: a kick the gap DROPPED (it came within kickGap of a pass the timer had just started)
+                    // stamps lastKickNs_ and starts no pass, so without this look the timer fires again at the old deadline, the next
+                    // kick again lands inside the gap of that pass, and the pass stays timer-paced for as many frames as it takes the two
+                    // phases to drift apart (K1 measured up to 17 timer passes after the frames began; 6.9). The frames are flowing: wait on.
+                    if (periodDeadline() <= SteadyClock::now()) { break; }
                 }
-                waitUntil(lk, deadline, [this] { return controlWake_ || controlWakeNow_ || controlKick_ || !controlRun_.load(); });
                 // THE FLOOR (adopted decision 6): a wake inside it waits the rest of it out; a runPassNow's does not.
                 if (floor.count() > 0 && controlRun_.load() && !controlWakeNow_) {
                     waitUntil(lk, passStart + floor, [this] { return controlWakeNow_ || !controlRun_.load(); });

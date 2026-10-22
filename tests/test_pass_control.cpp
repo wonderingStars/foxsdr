@@ -556,53 +556,75 @@ Engine::PassStats statsDiff(const Engine::PassStats& a, const Engine::PassStats&
 
 // K1: 60 Hz frames pace the pass. period 16 ms, the grace 24: the frames come every 16.667 ms - LONGER than the period, so a pass paced by its
 // own 16 ms timer would start just before every kick; paced by the kicks it starts at them and the timer never fires.
+//
+// THE FLAKE THIS HAD (6.9, "K1's flake"): the first kick lands while the loop is still on its plain 16 ms timer and is DROPPED by the gap
+// (it is within 8 ms of the timer's pass); the wait that was already running kept its old, unextended deadline, so the timer fired again just
+// before the next kick, which was dropped again, and so on for as many frames as the two phases took to drift apart (up to 17 timer passes
+// of 121, a third of solo runs failing). That was the ENGINE's, not the sampling's: the kicker was on time (longest gap between kicks 16.7-17.2
+// ms) in every failing run. The engine now looks again when the timer runs out (controlLoop), and this case holds it: at most the one timer
+// pass that was already due when the first kick came.
+//
+// THE RERUN GUARD (the house pattern of test_engine_api_merge): a KICKER that itself stalls past the grace (a gap between its kicks over 24 ms
+// - a desk that took its core away) hands the timer the right to fire, so that attempt says nothing about the pacing and is run again, up to
+// three times, loudly. A run whose kicker was on time is never excused: its counts are held.
 void testKickPaces() {
     std::printf("  K1: a frame every 16.667 ms paces the pass: one pass a kick, started by the kick, none by the timer\n");
     const int framesMs = 2000;
     for (const bool graceOn : {true, false}) {
-        Engine e;
-        e.initialise();
-        A::passStarting(&recordPassStart);   // (set before the thread exists and cleared after it is joined: the hook is a plain pointer the loop reads)
-        e.startControlThread(kickOpts(16, 2, graceOn ? 24 : 0, 8));
-        CHECK(e.runPassNow());
-        std::this_thread::sleep_for(std::chrono::milliseconds(60));
-        const Engine::PassStats before = e.passStats();
-        std::size_t nKicks = 0;
-        std::vector<Clock::time_point> kickTimes;
-        {
-            Kicker k(e, 1000.0 / 60.0);
-            std::this_thread::sleep_for(std::chrono::milliseconds(framesMs));
-            k.stop();
-            nKicks = k.times.size();
-            kickTimes = k.times;
-        }
-        const Engine::PassStats d = statsDiff(e.passStats(), before);
-        e.stopControlThread();
-        A::passStarting(nullptr);
-        const std::vector<Clock::time_point> starts = takeStarts();
-        const double perSecond = static_cast<double>(d.passes) / (framesMs / 1000.0);
-        std::printf("      grace %s: %zu kicks, %llu passes (%.1f a second), %llu started by a kick, %llu by the timer, %llu kicks dropped\n",
-                    graceOn ? "24 ms" : "OFF  ", nKicks, static_cast<unsigned long long>(d.passes), perSecond,
-                    static_cast<unsigned long long>(d.kickedPasses), static_cast<unsigned long long>(d.timedPasses),
-                    static_cast<unsigned long long>(d.kicksDropped));
-        if (graceOn) {
-            CHECK(nKicks >= 100u);
-            CHECK(d.kicks >= nKicks * 95u / 100u);                  // the gap drops nothing here: a pass starts at each kick, 16 ms before the next
-            CHECK(d.kickedPasses >= nKicks * 95u / 100u);           // a pass a kick
-            CHECK(d.timedPasses * 20u <= d.passes);                 // and the timer started at most one in twenty (a late kick thread on a busy desk)
-            CHECK(d.passes <= nKicks + 6u);                         // nothing else started a pass
-            CHECK(perSecond >= 55.0 && perSecond <= 65.0);          // ~60 passes a second
-            const std::vector<double> lags = kickToStart(kickTimes, starts);
-            CHECK(lags.size() >= nKicks * 9u / 10u);
-            if (!lags.empty()) {
-                std::printf("      kick to the start of its pass, %zu kicks: median %.3f ms, p90 %.3f ms, max %.3f ms\n", lags.size(), median(lags),
-                            lags[lags.size() * 9 / 10], lags.back());
-                CHECK(median(lags) < 1.0);
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            Engine e;
+            e.initialise();
+            A::passStarting(&recordPassStart);   // (set before the thread exists and cleared after it is joined: the hook is a plain pointer the loop reads)
+            e.startControlThread(kickOpts(16, 2, graceOn ? 24 : 0, 8));
+            CHECK(e.runPassNow());
+            std::this_thread::sleep_for(std::chrono::milliseconds(60));
+            const Engine::PassStats before = e.passStats();
+            std::size_t nKicks = 0;
+            std::vector<Clock::time_point> kickTimes;
+            {
+                Kicker k(e, 1000.0 / 60.0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(framesMs));
+                k.stop();
+                nKicks = k.times.size();
+                kickTimes = k.times;
             }
-        } else {
-            // The control, and what the grace is for: without it the 16 ms timer fires before every 16.667 ms kick, and the kick lands inside
-            // the gap of the pass the timer just started (dropped) - the pass is timer-paced, exactly the wake the cure removes.
-            CHECK(d.timedPasses * 10u >= d.passes * 8u);
+            const Engine::PassStats d = statsDiff(e.passStats(), before);
+            e.stopControlThread();
+            A::passStarting(nullptr);
+            const std::vector<Clock::time_point> starts = takeStarts();
+            const double perSecond = static_cast<double>(d.passes) / (framesMs / 1000.0);
+            double longest = 0.0;
+            for (std::size_t i = 1; i < kickTimes.size(); ++i) { longest = std::max(longest, msBetween(kickTimes[i - 1], kickTimes[i])); }
+            std::printf("      grace %s: %zu kicks, %llu passes (%.1f a second), %llu started by a kick, %llu by the timer, %llu kicks dropped; the kicker's longest gap %.2f ms\n",
+                        graceOn ? "24 ms" : "OFF  ", nKicks, static_cast<unsigned long long>(d.passes), perSecond,
+                        static_cast<unsigned long long>(d.kickedPasses), static_cast<unsigned long long>(d.timedPasses),
+                        static_cast<unsigned long long>(d.kicksDropped), longest);
+            if (graceOn && longest > 24.0 && attempt < 2) {
+                std::printf("      RERUN: the kicker stalled past the grace (%.2f ms), so the timer was entitled to fire; this attempt says nothing\n", longest);
+                continue;
+            }
+            if (graceOn) {
+                CHECK(longest <= 24.0);                                 // (three stalled attempts in a row is a desk that cannot run this case)
+                CHECK(nKicks >= 100u);
+                CHECK(d.kicks >= nKicks * 95u / 100u);                  // the gap drops nothing here: a pass starts at each kick, 16 ms before the next
+                CHECK(d.kickedPasses >= nKicks * 95u / 100u);           // a pass a kick
+                CHECK(d.timedPasses * 20u <= d.passes);                 // and the timer started at most one in twenty
+                CHECK(d.timedPasses <= 2u);                             // in fact the one that was already due when the first kick came
+                CHECK(d.passes <= nKicks + 6u);                         // nothing else started a pass
+                CHECK(perSecond >= 55.0 && perSecond <= 65.0);          // ~60 passes a second
+                const std::vector<double> lags = kickToStart(kickTimes, starts);
+                CHECK(lags.size() >= nKicks * 9u / 10u);
+                if (!lags.empty()) {
+                    std::printf("      kick to the start of its pass, %zu kicks: median %.3f ms, p90 %.3f ms, max %.3f ms\n", lags.size(), median(lags),
+                                lags[lags.size() * 9 / 10], lags.back());
+                    CHECK(median(lags) < 1.0);
+                }
+            } else {
+                // The control, and what the grace is for: without it the 16 ms timer fires before every 16.667 ms kick, and the kick lands inside
+                // the gap of the pass the timer just started (dropped) - the pass is timer-paced, exactly the wake the cure removes.
+                CHECK(d.timedPasses * 10u >= d.passes * 8u);
+            }
+            break;
         }
     }
 }
@@ -1216,6 +1238,19 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("test_pass_control\n");
     isolate();
+    // PASS_CONTROL_ONLY=K1 (or K1,K2 ...) runs just those K cases: the flake protocol loops one case a hundred times, not the whole 50 s file.
+    if (const char* only = std::getenv("PASS_CONTROL_ONLY"); only != nullptr && only[0] != 0) {
+        const std::string want = std::string(",") + only + ",";
+        const auto has = [&](const char* tag) { return want.find(std::string(",") + tag + ",") != std::string::npos; };
+        if (has("K1")) { testKickPaces(); }
+        if (has("K2")) { testKickFallback(); }
+        if (has("K3")) { testKickFloor(); }
+        if (has("K4")) { testKickGap(); }
+        if (has("K5")) { testKickIsOnlyAKick(); }
+        std::error_code ec0;
+        std::filesystem::remove_all(g_scratch, ec0);
+        return testSummary("test_pass_control (filtered)");
+    }
     testWake();
     testPassFigures();
     testPeriodRate();
