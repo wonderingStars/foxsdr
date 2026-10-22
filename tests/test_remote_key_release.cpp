@@ -150,12 +150,17 @@ struct AppWindowTestAccess {
     // The engine's remote-controls phase: the web and CAT queues pulled through the source the window installed, and the
     // remote key's standing condition judged (the pump move's step P1 - this was the window's applyWebControls).
     static void pumpRemote(AppWindow& a) { passseam::pass(rawEngine(a.engine_), [&] { rawEngine(a.engine_).pumpRemoteControls(); }); }
-    // The settings panel switching the web server off.
+    // The settings panel switching the web server off: the staged edit and its Apply, which SUBMITS a SERVER_CONFIG on the window's session
+    // (stage 5b: the server is the engine's; a pass applies the command and the host's worker stops the server - nothing happens inside the
+    // click itself).
     static void disableWeb(AppWindow& a) {
-        a.webCfg_.enabled = false;
+        a.webStageEnabled_ = false;
         a.applyWebSettings();
     }
-    static WebServer& webServer(AppWindow& a) { return a.webServer_; }
+    // The engine's own web server (ServerHost owns it since stage 5b).
+    static WebServer& webServer(AppWindow& a) { return rawEngine(a.engine_).servers().webServer(); }
+    // The host's worker has made the servers match the configuration (a stop or a start has returned).
+    static bool serversSettled(AppWindow& a) { return rawEngine(a.engine_).servers().waitIdle(std::chrono::seconds(15)); }
 
     // THE PASS HELD, free-running only (the idiom of test_tuning_surface.cpp): a piece of work posted to the pass
     // (Engine::postToPass) that waits until the hold is let go. A pass runs posted work at the head of its front part, after it
@@ -349,10 +354,16 @@ int main() {
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::holdPass(app);  // (free-running: no pass between the click and the read below)
         Access::disableWeb(app);
-        CHECK(!webServer.running());
-        // The window did NOT reach into the engine: the key is still held until the pass runs.
+        // The window did NOT reach into the engine: the click only SUBMITTED the configuration, so no pass has applied it - the server
+        // still runs and the key is still held until the pass runs.
+        CHECK(webServer.running());
         CHECK(Access::remoteHoldMs(app) > 0);
         Access::releasePass(app);
+        // The pass applies the SERVER_CONFIG; the host's WORKER (never the pass) stops the server; the next remote-controls phase pulls the
+        // release the stop queued and finds the server not running.
+        Access::pass(app);
+        CHECK(Access::serversSettled(app));
+        CHECK(!webServer.running());
         Access::pumpRemote(app);
         CHECK(Access::remoteHoldMs(app) == 0);
         CHECK((Access::txFacts(app).owner) == 0u);

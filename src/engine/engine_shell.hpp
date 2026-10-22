@@ -19,9 +19,11 @@
 //   HOST       plugin-drawn content: the plugin UI's tracks, paths, panels and instruments, polled and drawn on the window's
 //              thread (HostPluginFeed). Their end: a feed over the engine API's table (a plugin UI is a front end's, so it
 //              moves with the host process).
-//   WEB / CAT  the browser's and the CAT client's servers still live in the window until stage 5, and read the engine's
-//              published snapshot and the audio tap directly. Their end: stage 5 makes them sessions of the table and this
-//              whole section is DELETED, not moved.
+//   WEB / CAT  the browser's and the CAT client's servers are the ENGINE'S since stage 5b (engine/server_host.hpp); the window
+//              configures them (FOXAPI_OP_SERVER_CONFIG), reads them (the SERVERS list and the facts) and still FEEDS the web
+//              server the data only it produces - the audio tap, the receiver plugins' pictures, the basemap's tiles, the
+//              spectrum it drew. Their end: stages 5c-5e make the servers sessions of the table, which reads all of that
+//              itself, and this whole section is DELETED, not moved.
 //
 // THE SURFACE DOES NOT GROW SILENTLY. tests/test_engine_shell_guard.cpp counts the declarations of each section and holds the
 // budgets; a method added here takes a dated comment naming its class and its end, and the budget moves in the same change
@@ -163,11 +165,11 @@ struct BasemapFacts {
 };
 
 // WHAT THE FRONT END HANDS OVER FOR THE PUBLISH (engine/stage3b-pre, docs/engine-stage3.md OPEN 4): the facts only the window knows -
-// its web listener's state, the counter's face (the web page mirrors it), the basemap plugin's figures, the web status' extras -
+// the counter's face (the web page mirrors it), the basemap plugin's figures, the web status' extras -
 // handed to the engine once a frame (EngineShell::setFrontEndFacts) instead of the engine calling the window for them while it
 // publishes.
 struct FrontEndFacts {
-    bool webListening = false;
+    // (webListening was here until stage 5b: the web server is the engine's, and the receiver state's WEB_LISTENING bit is its host's answer.)
     // A front end that has handed nothing over (the headless engine) shows
     // the product's default face, as EngineHost's own answer always was.
     std::string tunerDisplayStyle = cascade::gui::tunerStyleName(cascade::gui::TunerStyle::Nixie);
@@ -229,10 +231,11 @@ struct EngineStatusText {
     std::string deviceFault;
 };
 
-// THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md): what the front end's source hands the
-// engine's pass when it asks (Engine::RemoteControls is this). The web remote and CAT hand the engine ControlRequests through
-// queues of their own (WebServer/CatServer::takePendingControls - mutex-protected, any thread, bounded, drop-oldest); the ENGINE
-// pulls them, in its own pass, after the local and API queues and the inputs, before the plugins' requests and the scanner.
+// THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md): what a source hands the engine's pass when it
+// asks (Engine::RemoteControls is this). The web remote and CAT hand the engine ControlRequests through queues of their own
+// (WebServer/CatServer::takePendingControls - mutex-protected, any thread, bounded, drop-oldest); the ENGINE pulls them, in its own
+// pass, after the local and API queues and the inputs, before the plugins' requests and the scanner. Since stage 5b the servers and the
+// source are the engine's (ServerHost::pull, armed by EngineShell::create); the vocabulary stays here until 5c-5d delete the pull.
 struct RemoteControls {
     std::vector<cascade::net::ControlRequest> requests;  // web first, then CAT (the order applyWebControls had)
     // Whether the server that carries the browser's key is running AT THE MOMENT OF THE PULL (the standing condition
@@ -405,19 +408,20 @@ public:
     std::unique_ptr<HostPluginFeed> makePluginFeed(HostPluginFeed::Steps steps);
 
     // ---------------------------------------------------------------------------------------------------------------------------
-    // CLASS WEB / CAT (added 2026-10-21, stage 4 step 5; END: DELETED by stage 5, when the browser and the CAT client are sessions
-    // of the table). The servers live in the window until then; what they read of the engine is here.
+    // CLASS WEB / CAT (added 2026-10-21, stage 4 step 5; reshaped 2026-10-22, stage 5b; END: DELETED by stages 5c-5e, when the browser
+    // and the CAT client are sessions of the table and the table serves what the window feeds here). The servers are the engine's; what is
+    // left is the window's FEED of the data only it produces (until 5e): the audio tap (read by the window's frame, pushed here), the
+    // receiver plugins' pictures, the basemap's tiles, and the spectrum frame the window drew.
     // ---------------------------------------------------------------------------------------------------------------------------
-    void setRemoteControlSource(RemoteControlSource source);
-    // The browser page's own poll is the web remote's keep-alive (API 0.2: only an interface's heartbeat counts).
-    void webRemoteBeat();
-    // The whole block of one publish (the browser's status) and the figures alone (CAT's, lock-free).
-    std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> readFullSnapshot() const;
-    bool readSnapshot(cascade::core::PublishedState& out) const;
-    // The audio tap and the input rate the web publishes read straight off the pipeline.
     std::uint64_t audioSamplesProduced() const;
     std::size_t audioTap(float* out, std::size_t frames) const;
-    double inputRateHz() const;
+    void pushWebAudio(const float* samples, std::size_t frames);
+    void setWebImages(std::vector<cascade::net::WebImage> images);
+    std::vector<cascade::net::WebServer::TileRequest> takeWebTileRequests();
+    void setWebTile(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t> bmp);
+    void clearWebTiles();
+    // The frame the window just drew (its sequence, its bins) labelled with the look's centre; the engine adds the span (the chain's input rate).
+    void publishWebSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz);
 
 private:
     EngineShell();

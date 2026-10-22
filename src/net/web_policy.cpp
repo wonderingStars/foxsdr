@@ -11,81 +11,9 @@
 #include "net/web_auth.hpp"
 
 namespace cascade::net {
-namespace {
 
-// Splits on '.' WITHOUT collapsing empty fields, so "1..2.3" and "1.2.3." are
-// seen as the malformed things they are rather than silently repaired.
-std::vector<std::string> splitDots(const std::string& s) {
-    std::vector<std::string> parts;
-    std::string cur;
-    for (char c : s) {
-        if (c == '.') {
-            parts.push_back(cur);
-            cur.clear();
-        } else {
-            cur.push_back(c);
-        }
-    }
-    parts.push_back(cur);
-    return parts;
-}
-
-// One IPv4 octet: 1-3 decimal digits, value <= 255, and no leading zero on a
-// multi-digit field (rule 5 — "010" is octal to some parsers). Returns -1 if
-// the text is not such an octet.
-int parseOctet(const std::string& text) {
-    if (text.empty() || text.size() > 3) {
-        return -1;
-    }
-    for (char c : text) {
-        if (c < '0' || c > '9') {
-            return -1;
-        }
-    }
-    if (text.size() > 1 && text[0] == '0') {
-        return -1;
-    }
-    const int value = std::atoi(text.c_str());
-    return (value >= 0 && value <= 255) ? value : -1;
-}
-
-// True iff `addr` is a well-formed dotted quad. `firstOctet` receives octet 0
-// so the caller can test for 127.0.0.0/8 without parsing twice.
-bool parseIPv4(const std::string& addr, int& firstOctet) {
-    const std::vector<std::string> parts = splitDots(addr);
-    if (parts.size() != 4) {
-        return false;
-    }
-    int octets[4];
-    for (std::size_t i = 0; i < 4; ++i) {
-        octets[i] = parseOctet(parts[i]);
-        if (octets[i] < 0) {
-            return false;
-        }
-    }
-    firstOctet = octets[0];
-    return true;
-}
-
-}  // namespace
-
-bool isLoopbackAddress(const std::string& addr) {
-    if (addr == "localhost" || addr == "::1") {
-        return true;
-    }
-    int first = 0;
-    if (parseIPv4(addr, first)) {
-        // The whole 127.0.0.0/8 block, not just 127.0.0.1 — 127.0.0.2 is every
-        // bit as local, and treating it as remote would demand a password for
-        // a binding that no other machine can reach.
-        return first == 127;
-    }
-    return false;
-}
-
-bool isWildcardAddress(const std::string& addr) {
-    return addr.empty() || addr == "0.0.0.0" || addr == "::";
-}
+// (parseIPv4, isLoopbackAddress and isWildcardAddress are core/server_ports.hpp's since stage 5b - the settings panels need them and the
+// interface includes nothing of net/. Unchanged; this file uses them as it always did.)
 
 bool isAcceptableBindAddress(const std::string& addr) {
     if (isWildcardAddress(addr) || addr == "localhost" || addr == "::1") {

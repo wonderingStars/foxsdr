@@ -63,16 +63,11 @@
 
 #include <string>
 
+// kMinPort / kMaxPort (rule 6's floor), kDefaultWebPort, kDefaultCatPort, isLoopbackAddress and isWildcardAddress live in core/server_ports.hpp
+// since stage 5b (the settings panels take them from there; the interface includes nothing of net/). They are named here as they always were.
+#include "core/server_ports.hpp"
+
 namespace cascade::net {
-
-// Floor for the listening port; see rule 6.
-inline constexpr int kMinPort = 1024;
-inline constexpr int kMaxPort = 65535;
-
-// The default the application ships with: loopback, so a fresh install is
-// reachable only from the machine it runs on and turning the feature on cannot
-// by itself expose anything.
-inline constexpr int kDefaultWebPort = 8073;
 
 struct WebServerConfig {
     bool enabled = false;
@@ -120,13 +115,7 @@ struct BindDecision {
     bool allowed() const { return verdict == BindVerdict::Allowed; }
 };
 
-// True for 127.0.0.0/8, ::1, and the literal "localhost" (rule 4).
-bool isLoopbackAddress(const std::string& addr);
-
-// True for 0.0.0.0, ::, and the empty string — "every interface". These are
-// valid binds, but they are the MOST exposed ones, so they are classified
-// explicitly rather than falling out of "not loopback".
-bool isWildcardAddress(const std::string& addr);
+// (isLoopbackAddress and isWildcardAddress: core/server_ports.hpp, above.)
 
 // Accepts a dotted-quad IPv4 (no leading zeros in any octet), "::1", "::",
 // "0.0.0.0", "localhost", or the empty string. Anything else — a hostname, a

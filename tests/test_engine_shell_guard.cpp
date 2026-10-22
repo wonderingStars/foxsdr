@@ -60,9 +60,9 @@ namespace {
 // ----------------------------------------------------------------------------------------------------------------------------------
 constexpr int kShellMethodsBudget = 41;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 40 before the frame's kick (frameKick, 6.9)
 constexpr int kHostMethodsBudget = 1;     // CLASS HOST: makePluginFeed
-constexpr int kWebMethodsBudget = 7;      // CLASS WEB / CAT: deleted by stage 5
+constexpr int kWebMethodsBudget = 8;      // CLASS WEB / CAT: deleted by stages 5c-5e. 7 before 5b (the pull and the status reads: setRemoteControlSource, webRemoteBeat, readFullSnapshot, readSnapshot, audioSamplesProduced, audioTap, inputRateHz), 8 after: those four and inputRateHz are gone with the servers (the engine owns them) and six FEED methods came (pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum) - the window still produces the audio tap, the pictures, the tiles and the spectrum the web page serves, and the servers it used to hand them to are the engine's now (docs/engine-stage4.md 6.10)
 constexpr int kFeedMethodsBudget = 11;    // HostPluginFeed's virtuals (the eight host accessors and what drives them)
-constexpr int kCallSitesBudget = 73;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 72;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -76,8 +76,8 @@ const std::vector<Knock> kEngineKnocks = {
     // CLASS SHELL: construction, the config restore, the run, the teardown
     {"AppWindow::AppWindow",
      {"initialise", "loadBookmarks", "telemetryStartup", "pluginCatalogueUrl", "configReadback", "publishConfig", "publishStatusText",
-      "statusText", "setFrontEndWaitBeat", "makePluginFeed", "setRemoteControlSource", "webRemoteBeat"}},
-    {"AppWindow::~AppWindow", {"setFrontEndWaitBeat", "setRemoteControlSource", "stopTransfers", "teardown"}},
+      "statusText", "setFrontEndWaitBeat", "makePluginFeed"}},
+    {"AppWindow::~AppWindow", {"setFrontEndWaitBeat", "stopTransfers", "teardown"}},
     {"AppWindow::applyConfig", {"applyConfig", "pluginCatalogueUrl"}},
     {"AppWindow::currentConfig", {"configSnapshot"}},
     {"AppWindow::saveConfigNow", {"publishConfig"}},
@@ -91,11 +91,11 @@ const std::vector<Knock> kEngineKnocks = {
       "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource", "frameKick"}},
     // the frame is a look: the three parts of the pass, and the status lines the look copies
     {"AppWindow::drawUi", {"stepPass", "statusText"}},
-    // CLASS WEB / CAT (stage 5 deletes these members' reads)
-    {"AppWindow::webStatusNow", {"readFullSnapshot"}},
-    {"AppWindow::catStatusNow", {"readSnapshot", "readFullSnapshot"}},
-    {"AppWindow::publishWebAudio", {"audioSamplesProduced", "audioTap"}},
-    {"AppWindow::publishWebSpectrum", {"inputRateHz"}},
+    // CLASS WEB / CAT: the window's FEED of the web page (stage 5b; 5e deletes these members, the table serves what they push)
+    {"AppWindow::publishWebAudio", {"audioSamplesProduced", "audioTap", "pushWebAudio"}},
+    {"AppWindow::publishWebImages", {"setWebImages"}},
+    {"AppWindow::pumpWebTiles", {"clearWebTiles", "takeWebTileRequests", "setWebTile"}},
+    {"AppWindow::publishWebSpectrum", {"publishWebSpectrum"}},
 };
 // The host feed (CLASS HOST): the eight host accessors and what drives them.
 const std::vector<Knock> kFeedKnocks = {
@@ -117,8 +117,8 @@ const std::vector<Knock> kFeedKnocks = {
 const char* const kWindowMachinery[] = {
     "AppWindow::AppWindow",       "AppWindow::~AppWindow",       "AppWindow::applyConfig",      "AppWindow::currentConfig",
     "AppWindow::handFrontEndFacts", "AppWindow::wallTimeS",      "AppWindow::pauseWatchdog",    "AppWindow::resumeWatchdog",
-    "AppWindow::applyDirectiveBefore", "AppWindow::applyDirectiveAfter", "AppWindow::takeRemoteControls",
-    "AppWindow::webStatusNow",    "AppWindow::catStatusNow",     "AppWindow::publishWebAudio",  "AppWindow::publishWebSpectrum",
+    "AppWindow::applyDirectiveBefore", "AppWindow::applyDirectiveAfter",
+    "AppWindow::publishWebAudio",  "AppWindow::publishWebSpectrum",
 };
 const char* const kImGuiInput[] = {
     "Button(", "SmallButton(", "InvisibleButton(", "ArrowButton(", "Checkbox(", "RadioButton(",
@@ -476,7 +476,7 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     const auto ho = namesOf(s.host, true);
     const auto we = namesOf(s.web, true);
     const auto fe = namesOf(s.feed, true);
-    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), web/CAT %zu (%d, deleted by stage 5), "
+    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), web/CAT %zu (%d, deleted by stages 5c-5e), "
                 "the feed's %zu virtuals (%d)\n",
                 sh.size(), kShellMethodsBudget, ho.size(), kHostMethodsBudget, we.size(), kWebMethodsBudget, fe.size(), kFeedMethodsBudget);
     if (static_cast<int>(sh.size()) > kShellMethodsBudget || static_cast<int>(ho.size()) > kHostMethodsBudget ||
@@ -1057,14 +1057,28 @@ void checkDataHeaderSplit(const fs::path& root) {
         at += 8;
     }
     CHECK(includes >= 5);
-    // The data headers the fence's hoists made (core/spectrum_frame.hpp, scanner_params.hpp, tx_input.hpp) stay as light.
-    for (const char* h : {"spectrum_frame.hpp", "scanner_params.hpp", "tx_input.hpp"}) {
+    // The data headers the fence's hoists made (core/spectrum_frame.hpp, scanner_params.hpp, tx_input.hpp, and since stage 5b
+    // server_ports.hpp - the settings panels' ports and address classifiers) stay as light.
+    for (const char* h : {"spectrum_frame.hpp", "scanner_params.hpp", "tx_input.hpp", "server_ports.hpp"}) {
         const std::string t = readFile(root / "src" / "core" / h);
         CHECK(!t.empty());
         for (const std::string& inc : includesOf(t)) {
             std::printf("FAIL: core/%s includes \"%s\" - a hoisted data header takes nothing of the engine\n", h, inc.c_str());
             CHECK(false);
         }
+    }
+    // STAGE 5b: the window's header takes the panels' vocabulary from that header and names neither server (they are the engine's).
+    // Full fencing of net/ is 5f; this is the part of it that is done.
+    {
+        const std::string w = readFile(root / "src" / "gui" / "app_window.hpp");
+        const bool hoisted = w.find("#include \"core/server_ports.hpp\"") != std::string::npos;
+        const bool noServers = w.find("#include \"net/web_server.hpp\"") == std::string::npos &&
+                               w.find("#include \"net/cat_server.hpp\"") == std::string::npos &&
+                               w.find("#include \"net/web_policy.hpp\"") == std::string::npos;
+        if (!hoisted) { std::printf("FAIL: src/gui/app_window.hpp does not include core/server_ports.hpp\n"); }
+        if (!noServers) { std::printf("FAIL: src/gui/app_window.hpp includes a server header of net/ - the servers are the engine's\n"); }
+        CHECK(hoisted);
+        CHECK(noServers);
     }
 }
 

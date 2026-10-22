@@ -261,7 +261,7 @@ struct AppWindowTestAccess {
         return passseam::read<std::uint64_t>(rawEngine(a.engine_), [&] { return addBookmarkHeld(a, name, hz, mode); });
     }
     static int modeIndexHeld(AppWindow& a) { return rawEngine(a.engine_).modeIndex_; }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
     static void webRequestHeld(AppWindow& a, const cascade::net::ControlRequest& r) { rawEngine(a.engine_).applyControlRequest(r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *rawEngine(a.engine_).receiverSnapshot_; }
     static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); }); }

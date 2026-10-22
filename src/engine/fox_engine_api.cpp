@@ -120,6 +120,10 @@ struct Options {
     int loginLockoutMs = 60000;
     std::int64_t tokenTtlMs = std::int64_t{12} * 3600 * 1000;
     bool testHooks = false;
+    // The web server and the CAT listener (stage 5b): an engine created with testHooks=1 hosts NO listener - it binds no socket, so a
+    // test of the table that configures them (SERVER_CONFIG, a restored config) sees the configuration and the published status and
+    // opens nothing on the machine - unless it asks (servers=1).
+    bool servers = false;
     bool running = true;  // create(): start the receiver (the reference engine's default)
     // read_audio: how long the pass keeps feeding the audio ring after a reader last asked (stage 5a). Nothing reads the audio of an
     // engine nobody listens to, so the pass copies none of it. A test may SHORTEN it.
@@ -164,6 +168,8 @@ Options parseOptions(const std::string& all) {
                                           std::int64_t{12} * 3600 * 1000);
             } else if (k == "testHooks") {
                 o.testHooks = d != 0.0;
+            } else if (k == "servers") {
+                o.servers = d != 0.0;
             } else if (k == "running") {
                 o.running = d != 0.0;
             } else if (k == "audioDemandMs") {
@@ -1277,6 +1283,7 @@ public:
     void beginPass();
     void endPass();
     void applyTail();
+    bool hostsServers() const { return !opt_.testHooks || opt_.servers; }
 
 private:
     friend class ApiHost;
@@ -2897,6 +2904,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 copyText(it.detail, sv.refusal.c_str());
                 it.value[0] = static_cast<double>(sv.port);
                 if (const auto* live = static_cast<const ServerHost::Counters*>(sv.live)) {
+                    live->sample();  // 5b: a running server's figures are read off it at the call
                     it.value[1] = static_cast<double>(live->clients.load(std::memory_order_relaxed));
                     it.value[2] = static_cast<double>(live->audioListeners.load(std::memory_order_relaxed));
                     it.value[3] = static_cast<double>(live->commands.load(std::memory_order_relaxed));
@@ -2933,6 +2941,7 @@ FoxEngine* ApiHost::handle() { return impl_.get(); }
 
 void ApiHost::beginPass() { impl_->beginPass(); }
 void ApiHost::applyTail() { impl_->applyTail(); }
+bool ApiHost::hostsServers() const { return impl_->hostsServers(); }
 std::int32_t ApiHost::validateForTest(FoxSession* s, const FoxCommand& c) {
     return s == nullptr ? FOXAPI_BAD_ARGUMENT : impl_->validateForTest(static_cast<ApiSession*>(s), c);
 }

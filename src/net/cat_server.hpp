@@ -27,13 +27,12 @@
 #include <thread>
 #include <vector>
 
+#include "core/server_ports.hpp"
 #include "net/cat_protocol.hpp"
 
 namespace cascade::net {
 
-// The port Hamlib's rigctld uses, and therefore the one every client already
-// expects. Changing it means configuring every client, so it is the default.
-inline constexpr std::uint16_t kDefaultCatPort = 4532;
+// (kDefaultCatPort, the port Hamlib's rigctld uses, is core/server_ports.hpp's since stage 5b.)
 
 // A client is allowed a generous but finite line; anything longer is a client
 // that has lost sync, and reading it forever would be a memory leak driven

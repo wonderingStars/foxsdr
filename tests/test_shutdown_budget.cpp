@@ -1020,6 +1020,13 @@ const KnownWait kKnownWaits[] = {
      "the path are the ones the stopped pass was inside, spent in it and not again, and "
      "the key is already up before this is spent (stopControlThread lets go of it first, "
      "from the calling thread). 10500 -> 13500, and kShutdownThresholdMs 27000 -> 33000 with it"},
+    {"src/net/web_server.hpp", "kClientIoTimeout", 1,
+     "WebServer::stop(), which the ENGINE now calls first in Engine::shutdownQuiesce (stage 5b: the servers are the engine's; ~AppWindow stopped "
+     "its own AFTER watchdog_.stop(), outside this budget): httplib joins its workers and cannot close a client's socket from outside, so a "
+     "browser holding a request open (a half-sent request, a stalled body) keeps the handler in its read for the whole read timeout, which is "
+     "this constant. Measured on the shipped binary (--frames 3 with the page enabled and a half-sent request held): teardown 9.8 s; with the "
+     "page enabled and nobody connected 16 ms. Charged ONCE: the web server is stopped once, and the CAT listener beside it is bounded by "
+     "its poll interval (fractions of a second). 13500 -> 23500, and kShutdownThresholdMs 33000 -> 53000 with it"},
     {"src/engine/engine.hpp", "kSteppedIdleBeat", 0,
      "Engine::controlLoop() - how often a STEPPED control thread that is idle (its front end is drawing a frame) beats its own watchdog. "
      "A heartbeat interval, not a bound: the wait ends the moment a step is asked for or the thread is told to stop (stopControlThread "

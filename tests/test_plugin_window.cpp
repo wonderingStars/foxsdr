@@ -112,7 +112,7 @@ struct AppWindowTestAccess {
     static void pumpEvents(AppWindow& a) { a.pumpUiEvents(); }
     // What the window hands the engine once a frame (the track-info answers, the pictures' headers), and what a browser reads.
     static void hand(AppWindow& a) { a.handFrontEndFacts(); }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
     static void attachTrackInfo(AppWindow& a, const CascadeTrackInfoApi* api) { a.trackInfo_.attach(api); }
     static void sendTrackInfoText(AppWindow& a) { a.sendTrackInfoText(); }
     static const AppWindow::DecoderLineCache& decoderLines(AppWindow& a) { return a.decoderLines(); }

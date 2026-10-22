@@ -115,6 +115,10 @@ EngineShell::~EngineShell() = default;
 std::unique_ptr<EngineShell> EngineShell::create(ShellHooks& hooks) {
     std::unique_ptr<EngineShell> shell(new EngineShell());
     shell->impl_ = std::make_unique<Impl>(hooks);
+    // THE COMPOSITION ROOT ARMS THE PULL OVER THE ENGINE'S OWN SERVERS (stage 5b): the browser's and CAT's queued requests reach the pass, and
+    // a key the browser holds ends when the web server is not running - what the window did over the servers it owned. Before anything can
+    // run a pass (the control thread starts in the window's run()).
+    shell->impl_->engine->installServerPull();
     return shell;
 }
 
@@ -283,15 +287,22 @@ std::unique_ptr<HostPluginFeed> EngineShell::makePluginFeed(HostPluginFeed::Step
 
 // --- CLASS WEB / CAT ---------------------------------------------------------------------------------------------------------
 
-void EngineShell::setRemoteControlSource(RemoteControlSource source) { SHELL_ENGINE.setRemoteControlSource(std::move(source)); }
-void EngineShell::webRemoteBeat() { SHELL_ENGINE.api().webRemoteBeat(); }
-std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> EngineShell::readFullSnapshot() const {
-    return SHELL_ENGINE.receiverSnapshot_->readFull();
-}
-bool EngineShell::readSnapshot(cascade::core::PublishedState& out) const { return SHELL_ENGINE.receiverSnapshot_->read(out); }
+// What the window still feeds the engine-owned web server (stage 5b; all of it goes in 5e). The server's stores are thread-safe: these are
+// forwards.
 std::uint64_t EngineShell::audioSamplesProduced() const { return SHELL_ENGINE.pipeline_.audioSamplesProduced(); }
 std::size_t EngineShell::audioTap(float* out, std::size_t frames) const { return SHELL_ENGINE.pipeline_.audioTap(out, frames); }
-double EngineShell::inputRateHz() const { return SHELL_ENGINE.pipeline_.inputRateHz(); }
+void EngineShell::pushWebAudio(const float* samples, std::size_t frames) { SHELL_ENGINE.servers().webServer().pushAudio(samples, frames); }
+void EngineShell::setWebImages(std::vector<cascade::net::WebImage> images) { SHELL_ENGINE.servers().webServer().setImages(std::move(images)); }
+std::vector<cascade::net::WebServer::TileRequest> EngineShell::takeWebTileRequests() {
+    return SHELL_ENGINE.servers().webServer().takePendingTileRequests();
+}
+void EngineShell::setWebTile(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t> bmp) {
+    SHELL_ENGINE.servers().webServer().setTile(z, x, y, std::move(bmp));
+}
+void EngineShell::clearWebTiles() { SHELL_ENGINE.servers().webServer().clearTiles(); }
+void EngineShell::publishWebSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz) {
+    SHELL_ENGINE.servers().publishSpectrum(seq, bins, centreHz, SHELL_ENGINE.pipeline_.inputRateHz());
+}
 
 #undef SHELL_ENGINE
 

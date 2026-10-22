@@ -78,7 +78,8 @@ public:
     // keepaliveMs, remoteKeepaliveMs - which may only SHORTEN), token, user,
     // password, maxSessions, maxRemoteSessions, loginLockoutMs, tokenTtlMs,
     // and testHooks=1 (the SETTING_SET "test.*" keys and the dummy
-    // transmitter "test:tx:dummy" - never set by the product).
+    // transmitter "test:tx:dummy" - never set by the product), with servers=1
+    // to let such an engine host its web server and CAT listener as well.
     ApiHost(Engine& engine, const std::string& options);
     ~ApiHost();
     ApiHost(const ApiHost&) = delete;
@@ -97,6 +98,9 @@ public:
     // that queue is in ARRIVAL order, and a browser that arrived first in wall time would then win the key against a local press that
     // landed in the same pass (rule 6, the operator at the machine comes first). Nothing is applied here by any other thread.
     void applyTail();
+    // Whether the engine this host serves runs the web server and the CAT listener it is configured for (stage 5b): yes, unless it was
+    // created with testHooks=1 and without servers=1 (a hermetic engine of the tests binds no socket).
+    bool hostsServers() const;
     // Opens an engine-internal session (see InternalKind): the C table's handle for it, or null with `status` saying why (FOXAPI_LIMIT
     // beyond the session limits - it counts against the 64 and the 16 REMOTE places like any other - or FOXAPI_BAD_ARGUMENT). Any
     // thread. The caller closes it with the table's close_session.

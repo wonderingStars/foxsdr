@@ -126,9 +126,9 @@ int main() {
         CHECK(mid >= lo && hi >= mid);
 
         // C: the publish-time facts are the ones HANDED OVER, not asked of the
-        // window (whose web server is not running and has no basemap here).
+        // window (which has no basemap here). Whether the web server listens is not one of them since stage 5b: the server is the engine's,
+        // and the bit is its host's answer - NOT listening here, whatever the window hands over.
         cascade::engine::FrontEndFacts f;
-        f.webListening = true;
         f.basemap.active = true;
         f.basemap.minZoom = 3;
         f.basemap.maxZoom = 11;
@@ -136,10 +136,10 @@ int main() {
         A::handFacts(app, f);
         const cascade::core::PublishedState ps = A::published(app);
         const bool listening = (ps.rx.flags & FOXAPI_RX_WEB_LISTENING) != 0u;
-        std::printf("C: handed over listening=1 basemap 3..11: published listening=%d basemap=%d %u..%u\n",
+        std::printf("C: handed over basemap 3..11: published listening=%d (the engine's own server: none) basemap=%d %u..%u\n",
                     listening ? 1 : 0, ps.app.basemapActive ? 1 : 0, ps.app.basemapMinZoom,
                     ps.app.basemapMaxZoom);
-        CHECK(listening);
+        CHECK(!listening);
         CHECK(ps.app.basemapActive);
         CHECK(ps.app.basemapMinZoom == 3u && ps.app.basemapMaxZoom == 11u && ps.app.basemapTileSize == 256u);
     }

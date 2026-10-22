@@ -2165,8 +2165,7 @@ private:
     // sites, the per-radio gain memory ...) - goes back into the file as it was read instead of as a default. Every field a half DOES
     // write is overwritten by it. Written by applyConfig (the control thread's own call), read by publishConfig on the same thread.
     cascade::core::AppConfig loadedCfg_;
-    // The web server's and the CAT listener's configuration, status and counters (stage 5a). Restored by applyConfig, written by fillConfig.
-    ServerHost servers_;
+    // (servers_, the web server's and the CAT listener's host, is declared LAST - after api_ - so it is destroyed first.)
     // TESTS ONLY (an engine created through the table with testHooks=1): the
     // fault test.fault stands in for (published as FAULTED until RUN 1), and
     // the dummy load TX_OPEN "test:tx:dummy" installs. Empty / null in the
@@ -2672,7 +2671,8 @@ public:
     // the plugins' requests and the scanner. Nothing else applies a remote request, so the key rules (ApiHostImpl::rules_,
     // single-threaded by contract) and the whole of applyCommand are touched by the pumping thread alone. A front end that
     // serves a browser or a CAT client installs the source once (before the pass runs on a thread of its own, or from it);
-    // an engine with none - the table's headless engine - pulls nothing and judges nothing.
+    // an engine with none - the table's headless engine - pulls nothing and judges nothing. Since 5b the front end does not install a
+    // source of its own over servers of its own: the servers are the engine's (ServerHost) and installServerPull arms the pull over them.
     //
     // STAGE 5a: the same phase is where the ENGINE-INTERNAL SESSIONS' commands are applied (ApiHost::applyTail, called by pumpRemoteControls). The
     // web server and CAT will hold sessions of their own (ApiHost::openInternalSession) instead of these queues; their submits go to a tier of
@@ -2882,9 +2882,19 @@ public:
     // and events. Built with the engine; its two pass calls run in
     // pumpFrameBegin and pumpPublish, on whichever thread pumps.
     ApiHost& api() { return *api_; }
-    // THE SERVER HOST (stage 5a, engine/server_host.hpp): the web server's and the CAT listener's configuration (FOXAPI_OP_SERVER_CONFIG,
-    // the engine's half of the config file), their status and live counters. The listeners themselves move in with 5b.
+    // THE SERVER HOST (engine/server_host.hpp): the web server and the CAT listener, which the engine OWNS since stage 5b, their configuration
+    // (FOXAPI_OP_SERVER_CONFIG, the engine's half of the config file), their status and live counters.
     ServerHost& servers() { return servers_; }
+    // What the web page's status and CAT's figures are read from: the newest publish (the whole block of one, or the figures alone), on the
+    // servers' own threads. The providers the engine's constructor hands the host.
+    cascade::net::RadioStatus webStatusNow() const;
+    cascade::net::CatRadio catStatusNow() const;
+    // THE FRONT END'S WAY OF ARMING THE PULL OVER THE ENGINE'S OWN SERVERS (stage 5b): installs, as the remote controls' source, the host's
+    // pull (the browser's queued requests, then CAT's, and whether the web server runs), exactly the source the window used to install over
+    // the servers it owned. NOT done by the constructor: an engine with no source "pulls nothing and judges nothing" (below), which is what
+    // every engine that is not a product front end's (the table's headless engine, the unit tests that key the browser's remote with no
+    // server at all) relies on; the composition root arms it (EngineShell::create).
+    void installServerPull();
     // The C handle an in-process interface opens its sessions on.
     FoxEngine* apiHandle() { return api_->handle(); }
     // Rebuilds the API host with engine options (FoxEngineParams::options) -
@@ -3041,6 +3051,12 @@ private:
     // yet when it goes, and the control thread is stopped (teardown) before
     // any member is destroyed.
     std::unique_ptr<ApiHost> api_;
+    // THE SERVER HOST (stage 5a configuration and status, stage 5b the servers themselves): the web server, the CAT listener, the worker
+    // that starts and stops them, the configuration restored by applyConfig and written by fillConfig. Declared AFTER api_ so it is
+    // destroyed BEFORE it: the servers' providers reach the receiver snapshot and the API host (the browser's keep-alive), and no handler
+    // may run once either is gone. ~ServerHost stops them (a hard stop: no thread of either survives it); Engine::shutdownQuiesce does so
+    // first, before the control thread.
+    ServerHost servers_;
 };
 
 // The ops addressed to the open radio itself (the Source panel's device

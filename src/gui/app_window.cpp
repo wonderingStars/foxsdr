@@ -98,7 +98,6 @@
 // unique_ptr behind forward declarations for exactly that reason.
 #include "gui/plugin_store_view.hpp"
 #include "engine/running_view.hpp"
-#include "net/status_compose.hpp"
 #include "gui/plugins_view.hpp"
 #include "gui/spectrum_view.hpp"
 #include "gui/track_detail_view.hpp"
@@ -814,43 +813,11 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // The store's URL box starts at the engine's default (a config restore
     // below overwrites both).
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl().c_str());
-    // Web server providers. Installed once, before any start(), because the
-    // server refuses to change them while running. Both do nothing but read
-    // the snapshot the GUI thread publishes each frame — see the note in
-    // app_window.hpp for why they must not touch the pipeline directly.
-    webServer_.setStatusProvider([this]() { return webStatusNow(); });
-    // The browser page's own poll is the web remote's keep-alive (API 0.2:
-    // only an interface's heartbeat counts) - never its PTT re-assertions.
-    webServer_.setStatusPollHook([this]() { engine_.webRemoteBeat(); });
-    // THE REMOTE CONTROLS' SOURCE (pump move step P1, F3): the engine's pass pulls the web server's and the CAT server's
-    // queued requests - where the frame's applyWebControls used to apply them - so nothing but the pumping thread ever
-    // applies one. Cleared in the destructor, before either server goes.
-    engine_.setRemoteControlSource([this]() { return takeRemoteControls(); });
+    // (THE WEB AND CAT SERVERS ARE THE ENGINE'S since stage 5b: it installs their providers and the remote controls' pull itself, and
+    // starts them when the restored config says so. This window configures them from its panels and feeds the web page what only it makes.)
     // While this window's frame waits for the engine's pass (a STEPPED run: stepPass, runPassNow) it is blocked, not hung - it beats its
     // watchdog from the wait (the gap is not a frame gap), and a pass part that really hangs is the control thread's own watchdog's to report.
     engine_.setFrontEndWaitBeat([this] { watchdog_.heartbeat(false); });
-    // The CAT server reads the SAME published snapshot - and the plugin host
-    // API reads it too - so a frequency read over CAT, one read in the
-    // browser and one a plugin reads come from the same publishes. They can
-    // differ only by publish: CAT and plugins read the newest state lock-free,
-    // while the browser's block may be the one before it for the moment a
-    // reader holds its swap lock (core/receiver_snapshot.hpp).
-    catServer_.setStatusProvider([this]() { return catStatusNow(); });
-    webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
-        std::lock_guard<std::mutex> lock(webMutex_);
-        // Same contract as Pipeline::getLatestFrame: nothing newer than the
-        // caller's cursor means "no frame", so a polling browser never
-        // re-fetches a picture it already drew.
-        if (webSeq_ == 0 || inOut.seq >= webSeq_) {
-            return false;
-        }
-        inOut.seq = webSeq_;
-        inOut.centerHz = webSnapCenterHz_;
-        inOut.spanHz = webSnapSpanHz_;
-        inOut.dbBins = webBins_;
-        return true;
-    });
-
     // THE CONFIG WRITE IS BLOCKING WORK AND DOES NOT BELONG ON THIS THREAD
     // EITHER. core/config_writer.hpp carries the field report ("hang ntdll.dll
     // @ cascade::core::ConfigStore::save", 0.96.3) and the whole argument.
@@ -925,25 +892,14 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
 }
 
 AppWindow::~AppWindow() {
-    // FIRST, before anything else is torn down: stop serving.
-    //
-    // The server's provider callbacks capture `this` and read webMutex_,
-    // webBins_ and receiverSnapshot_; the first two are declared AFTER
-    // webServer_ and are therefore destroyed BEFORE it. Relying on ~WebServer
-    // to stop the listener would mean a request in flight could touch a
-    // destroyed mutex during teardown. stop() joins the listener thread, so
-    // once it returns no handler is running or can start.
-    webServer_.stop();
-    // Same reasoning for the CAT server: its provider captures `this` and
-    // reads receiverSnapshot_ through it.
-    catServer_.stop();
+    // (The servers are not stopped here any more: they are the engine's, which stops them first of all in shutdownQuiesce - the run's end -
+    // or, on a path that never ran, in teardown below. Nothing they call reads this window.)
     // The window's session: closing it releases any key it holds, at the
     // start of the engine's next pass (the engine's teardown stops the
     // transmitter in any case).
     closeUiSession();
-    // The engine no longer calls into this window for the browser's requests.
+    // The engine no longer calls into this window while it waits for a pass.
     engine_.setFrontEndWaitBeat({});
-    engine_.setRemoteControlSource({});
 
     // A catalogue fetch or a plugin download may still be in flight: the
     // engine cancels its own (Engine::stopTransfers says why), first, as
@@ -4208,21 +4164,23 @@ void AppWindow::drawStatusColumn() {
     // on the user's own machine, and whether it is open is exactly the sort of
     // thing a status column exists to answer without opening a section. Dropping
     // it to match a mock would be losing a fact to gain a resemblance.
-    if (webServer_.running()) {
-        cascade::core::formatUtf8(v, tr("port %d"), webCfg_.port);
-        cascade::core::formatUtf8(l0, "%s", webCfg_.bindAddress.c_str());
+    // (From the table's SERVERS list and facts since stage 5b: the server is the engine's.)
+    const ServerPanel& webSp = serverPanel(false);
+    if (webSp.webRunning) {
+        cascade::core::formatUtf8(v, tr("port %d"), webSp.webPort);
+        cascade::core::formatUtf8(l0, "%s", uiFact("fact.web.bindAddress").c_str());
         const StatusLine lines[1] = {{l0.c_str(), kFaint}};
         card(tr("WEB ACCESS"), cascade::gui::theme::kPhosphor, v.c_str(), lines, 1);
-    } else if (!webStartRefusal_.empty()) {
-        // SWITCHED ON AND REFUSED IS NOT "OFF". applyWebSettings leaves the
-        // setting enabled on purpose when a start fails - the usual cause is a
-        // port already held by something else, which the user fixes and
+    } else if (webSp.webFault) {
+        // SWITCHED ON AND REFUSED IS NOT "OFF". A start that fails leaves the setting enabled on purpose
+        // - the usual cause is a port already held by something else, which the user fixes and
         // retries - and this card drew "off / not listening" over it, which is
         // the state a user reads as "I never turned that on". The refusal's
         // own sentence goes on the card, clipped to the well like every other
         // line here, because naming the thing that refused is worth more than
         // a tidier word for it.
-        cascade::core::formatUtf8(l0, "%s", webStartRefusal_.c_str());
+        const std::string refusal = serverRefusalText(webSp.webRefusal, "fact.web.policy");
+        cascade::core::formatUtf8(l0, "%s", refusal.c_str());
         const StatusLine lines[1] = {{l0.c_str(), cascade::gui::theme::kAlarm}};
         card(tr("WEB ACCESS"), cascade::gui::theme::kAlarmHot, tr("REFUSED"), lines, 1);
     } else {
@@ -15708,27 +15666,8 @@ void AppWindow::openPluginWindowsFor(const std::string& name, std::uint32_t caps
 
 // --- HOST API LEVEL 1 (0.99.31) -------------------------------------------------
 
-cascade::net::RadioStatus AppWindow::webStatusNow() const {
-    // The whole block of one publish - figures and lists together - so a
-    // browser can never be shown two fields from different frames. The lock
-    // inside readFull() is held for a reference count (or the install of a
-    // handed-over block); the publish only ever try-locks it - the one place
-    // the publishing thread takes it BLOCKING is applyControlRequest's own
-    // readFull() (core/receiver_snapshot.hpp).
-    const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full =
-        engine_.readFullSnapshot();
-    return cascade::net::composeRadioStatus(full->state, full->lists.get());
-}
-
-cascade::net::CatRadio AppWindow::catStatusNow() const {
-    // CAT reads figures only (frequency, offset, rate, mode, bandwidth, run
-    // state), so it takes them lock-free. In the rare case a read keeps
-    // overlapping a publish it takes the installed block instead - whole,
-    // and at most a frame older - rather than answer nothing.
-    cascade::core::PublishedState s;
-    if (!engine_.readSnapshot(s)) { s = engine_.readFullSnapshot()->state; }
-    return cascade::net::catRadioFromState(s);
-}
+// (webStatusNow and catStatusNow - what the web server's status and CAT's figures read - moved into the engine with the servers, stage 5b:
+// Engine::webStatusNow, Engine::catStatusNow.)
 
 void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
                                   bool waterfall) {
@@ -17543,6 +17482,12 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
         // version the draft is rebased onto, and the native scan a new Radio part waits for.
         if (r.op == FOXAPP_OP_PATCH_SET_GRAPH) { onPatchGraphResult(r); }
         if (r.op == FOXAPP_OP_SCAN_NATIVE_ONLY) { patchScanDone_ = std::max<std::uint64_t>(patchScanDone_, r.ticket); }
+        // THE WEB AND CAT PANELS' ANSWER (stage 5b): one is owed for every SERVER_CONFIG sent (the mirrors wait for them), and a refusal -
+        // a password under eight characters, say - is lettered on the web panel in the engine's words, as the password field's own complaint was.
+        if (r.op == FOXAPI_OP_SERVER_CONFIG) {
+            if (serverAsksPending_ > 0) { --serverAsksPending_; }
+            if (r.status != FOXAPI_OK && r.status != FOXAPI_NO_CHANGE) { webError_ = r.message; }
+        }
     }
     a.nResults = 0;
     // (An event handler may poll the session itself - nothing today does - so the buffer is released before they run.)
@@ -19977,7 +19922,7 @@ void AppWindow::flushScannerDraft() {
 
 void AppWindow::publishWebAudio() {
     const std::uint64_t produced = engine_.audioSamplesProduced();
-    if (!webServer_.running()) {
+    if (!webListening()) {
         // Keep the mark current so switching the server on later starts from
         // live rather than trying to publish everything since launch.
         webAudioLastProduced_ = produced;
@@ -19999,12 +19944,12 @@ void AppWindow::publishWebAudio() {
     }
     webAudioBuf_.resize(static_cast<std::size_t>(fresh));
     const std::size_t got = engine_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
-    webServer_.pushAudio(webAudioBuf_.data(), got);
+    engine_.pushWebAudio(webAudioBuf_.data(), got);
     webAudioLastProduced_ = produced;
 }
 
 void AppWindow::publishWebImages() {
-    if (!webServer_.running()) {
+    if (!webListening()) {
         return;
     }
     // Nothing to do unless a picture changed OR the set itself did (a rescan
@@ -20038,7 +19983,7 @@ void AppWindow::publishWebImages() {
         }
         out.push_back(std::move(w));
     }
-    webServer_.setImages(std::move(out));
+    engine_.setWebImages(std::move(out));
 }
 
 void AppWindow::pumpWebTiles() {
@@ -20047,15 +19992,14 @@ void AppWindow::pumpWebTiles() {
     // served under the new one's attribution — or at all.
     if (active != webTilesActive_ ||
         (active && basemap_.attribution() != webTileAttribution_)) {
-        webServer_.clearTiles();
+        engine_.clearWebTiles();
         webTilesActive_ = active;
         webTileAttribution_ = active ? basemap_.attribution() : std::string();
     }
-    if (!active || !webServer_.running()) {
+    if (!active || !webListening()) {
         return;
     }
-    const std::vector<cascade::net::WebServer::TileRequest> wants =
-        webServer_.takePendingTileRequests();
+    const std::vector<cascade::net::WebServer::TileRequest> wants = engine_.takeWebTileRequests();
     // Bounded per frame: each READY tile is a 192 KB copy plus a BMP encode,
     // and this runs on the frame path. Whatever is not served here the browser
     // simply asks for again.
@@ -20085,7 +20029,7 @@ void AppWindow::pumpWebTiles() {
                               // better answer than "stop asking"
             }
         }
-        webServer_.setTile(r.z, r.x, r.y, std::move(bmp));
+        engine_.setWebTile(r.z, r.x, r.y, std::move(bmp));
         ++served;
     }
 }
@@ -20147,172 +20091,197 @@ namespace {
 namespace {
 }  // namespace
 
-cascade::engine::RemoteControls AppWindow::takeRemoteControls() {
-    cascade::engine::RemoteControls pulled;
-    std::vector<cascade::net::ControlRequest>& requests = pulled.requests;
-    requests = webServer_.takePendingControls();
-    // CAT requests are the SAME ControlRequest type, so they are appended here
-    // and applied by the identical code below rather than by a second copy of
-    // it. That is the whole reason CAT emits control requests instead of
-    // touching the radio: a frequency set over CAT and one set from the
-    // browser must do exactly the same thing, including the parts that are
-    // easy to forget — telling the RDS decoder to drop the old station,
-    // clamping the offset against the live sample rate, and moving the
-    // bandwidth to the new mode's default.
-    if (catServer_.running()) {
-        std::vector<cascade::net::ControlRequest> fromCat =
-            catServer_.takePendingControls();
-        requests.insert(requests.end(), std::make_move_iterator(fromCat.begin()),
-                        std::make_move_iterator(fromCat.end()));
+// --- THE WEB AND CAT SERVERS, AS THE TABLE SHOWS THEM (stage 5b; docs/engine-stage4.md 6.10) ------------------------------------------
+//
+// The servers are the engine's. This window configures them with FOXAPI_OP_SERVER_CONFIG and draws what the SERVERS list (49) and the
+// facts say of them. Everything the panels showed before they show now, from the same figures: whether each listens and on which port, the
+// refusal a start was given, how many browsers and clients are on them, what the bind policy makes of the configuration.
+
+namespace {
+
+// A JSON string literal for `s` (the SERVER_CONFIG text is JSON): quotes, backslashes and control characters escaped, everything else
+// (UTF-8 included) as it is.
+std::string serverJsonQuote(const std::string& s) {
+    std::string out = "\"";
+    for (const char ch : s) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20u) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                    out += buf;
+                } else {
+                    out += ch;
+                }
+        }
     }
-    // --- THE STANDING CONDITIONS ON THE REMOTE KEY ---------------------------
-    //
-    // Both close a window that the hold's own expiry would otherwise leave
-    // open for two seconds, and both are the ENGINE's (engine/stage3b-pre,
-    // docs/engine-stage3.md OPEN 7 (c); the pump move, step P1, made the
-    // engine's pass the only thing that applies them):
-    //
-    // THE CONSENT is the local operator's TX_REMOTE_ARM (the Transmit page's
-    // "Allow remote transmit"), which the window withdraws when the page goes
-    // away, and which lapses with its session (engine stage 4).
-    // THE SERVER is this window's until stage 5, so it says whether it is
-    // running, read here AFTER the queues were taken (the order the frame's
-    // drain had): the engine ends a key the web remote holds, in the phase
-    // that applies these requests, when it is not - a server that never
-    // started or was disabled in the settings panel. WebServer::stop() also
-    // queues a release among the requests above; releasing twice costs nothing.
-    pulled.serverRunning = webServer_.running();
-    return pulled;
+    out += '"';
+    return out;
 }
 
-void AppWindow::refreshCatServer() {
-    catStatus_.clear();
-    if (!catEnabled_) {
-        catServer_.stop();
-        return;
+}  // namespace
+
+const AppWindow::ServerPanel& AppWindow::serverPanel(bool withFacts) {
+    ServerPanel& c = serverPanel_;
+    if (uiSession_ == nullptr) { return c; }
+    if (c.listSeq != uiState_.listSeq) {
+        c.listSeq = uiState_.listSeq;
+        FoxListItem it{};
+        for (std::uint32_t i = 0; i < 2; ++i) {
+            it = FoxListItem{};
+            it.structSize = sizeof(it);
+            // `<= i` is "not there" (a list that changed under the read, or one this session may not read): what was read stands.
+            const bool got = engineApi_->read_list(uiSession_, FOXAPI_LIST_SERVERS, i, &it) > static_cast<int32_t>(i);
+            const bool running = got && (it.flags & FOXAPI_ITEM_ACTIVE) != 0u;
+            const bool fault = got && (it.flags & FOXAPI_ITEM_FAULT) != 0u;
+            const int port = got ? static_cast<int>(it.value[0]) : 0;
+            if (i == 0u) {
+                c.webRunning = running;
+                c.webFault = fault;
+                c.webPort = port;
+                c.webRefusal = got ? it.detail : "";
+            } else {
+                c.catRunning = running;
+                c.catFault = fault;
+                c.catPort = port;
+                c.catRefusal = got ? it.detail : "";
+            }
+        }
     }
-    if (catServer_.running()) {
-        return;  // already listening on the configured port
+    if (withFacts && c.factsSeq != uiState_.listSeq) {
+        c.factsSeq = uiState_.listSeq;
+        const auto flag = [&](const char* key) {
+            readFactText(key, c.factText);
+            return c.factText == "1";
+        };
+        const auto number = [&](const char* key) {
+            readFactText(key, c.factText);
+            return std::atoi(c.factText.c_str());
+        };
+        c.webEnabled = flag("fact.web.enabled");
+        readFactText("fact.web.bindAddress", c.webBindAddress);
+        c.webConfiguredPort = number("fact.web.port");
+        readFactText("fact.web.username", c.webUsername);
+        c.webHasPassword = flag("fact.web.hasPassword");
+        c.webReachable = flag("fact.web.reachable");
+        c.webAuthRequired = flag("fact.web.authRequired");
+        readFactText("fact.web.addresses", c.factText);
+        c.webAddresses.clear();
+        for (std::size_t at = 0; at < c.factText.size();) {
+            std::size_t eol = c.factText.find('\n', at);
+            if (eol == std::string::npos) { eol = c.factText.size(); }
+            if (eol > at) { c.webAddresses.push_back(c.factText.substr(at, eol - at)); }
+            at = eol + 1;
+        }
+        c.catEnabled = flag("fact.cat.enabled");
+        c.catBindAll = flag("fact.cat.bindAll");
+        c.catConfiguredPort = number("fact.cat.port");
     }
-    std::string error;
-    if (!catServer_.start(static_cast<std::uint16_t>(catPortMirror_), catBindAll_,
-                          error)) {
-        // Left enabled in the config on purpose: the usual cause is a port
-        // held by something else, which the user fixes and retries. Silently
-        // turning the setting off would hide that.
-        catStatus_ = error;
-        cascade::core::diagWarnf("cat: listener refused on port %d (%s)", catPortMirror_,
-                                 error.c_str());
-        return;
-    }
-    // The 120 s freeze that started this whole feature was a CAT client being
-    // shut down. Whether one was connected at all is the first question a hang
-    // report from that path has to answer.
-    cascade::core::diagLogf("cat: listening on port %d (%s)", catPortMirror_,
-                            catBindAll_ ? "all interfaces" : "loopback");
+    return c;
 }
 
-void AppWindow::applyWebSettings() {
+AppWindow::ServerLive AppWindow::readServerLive(bool cat) {
+    ServerLive l;
+    if (uiSession_ == nullptr) { return l; }
+    FoxListItem it{};
+    it.structSize = sizeof(it);
+    const std::uint32_t index = cat ? 1u : 0u;
+    if (engineApi_->read_list(uiSession_, FOXAPI_LIST_SERVERS, index, &it) <= static_cast<int32_t>(index)) { return l; }
+    l.clients = static_cast<int>(it.value[1]);
+    l.audioListeners = static_cast<int>(it.value[2]);
+    l.commands = static_cast<unsigned long long>(it.value[3]);
+    return l;
+}
+
+std::string AppWindow::serverRefusalText(const std::string& listed, const char* policyFact) {
+    if (listed.empty() || policyFact == nullptr) { return listed; }
+    const std::string& policy = uiFact(policyFact);
+    if (policy.size() > listed.size() && policy.compare(0, listed.size(), listed) == 0) { return policy; }
+    return listed;
+}
+
+bool AppWindow::sendServerConfig(const std::string& json) {
+    if (uiSubmitTicket(cascade::core::cmd::makeText(FOXAPI_OP_SERVER_CONFIG, json)) == 0u) { return false; }
+    ++serverAsksPending_;
+    return true;
+}
+
+// The panels' mirrors are taken from the table when it has published and nothing this window sent is still on its way (an answer is never
+// read before the snapshot that carries its effect, so with none owed the facts are at least as new as the last click); the web section's
+// staged edits are left alone while they are staged (webDirty_).
+void AppWindow::syncServerMirrors(const ServerPanel& sp) {
+    if (sp.factsSeq == 0u || serverMirrorSeq_ == sp.factsSeq || serverAsksPending_ > 0) { return; }
+    serverMirrorSeq_ = sp.factsSeq;
+    catEnabled_ = sp.catEnabled;
+    catBindAll_ = sp.catBindAll;
+    catPortMirror_ = sp.catConfiguredPort;
+    if (webDirty_) { return; }
+    webStageEnabled_ = sp.webEnabled;
+    webStageBind_ = sp.webBindAddress;
+    webPortMirror_ = sp.webConfiguredPort;
+    webBindChoice_ = cascade::net::isLoopbackAddress(webStageBind_) ? 0 : cascade::net::isWildcardAddress(webStageBind_) ? 1 : 2;
+    cascade::core::formatUtf8(webUserBuf_, sizeof(webUserBuf_), "%s", sp.webUsername.c_str());
+}
+
+void AppWindow::applyWebSettings(const std::string& extraWebMembers) {
     webError_.clear();
     webNote_.clear();
-    // Cleared on entry with the rest: whatever the last apply refused is not a
-    // fact about this one, and every path below either sets it again or leaves
-    // the server in a state that has nothing to refuse.
-    webStartRefusal_.clear();
     webDirty_ = false;
-
-    if (!webCfg_.enabled) {
-        webServer_.stop();
-        // ...and the remote key goes WITH it (OPEN 7 (c)): stop() queued its release, and the engine's next pass pulls it
-        // - and finds the server not running - in the phase that applies the browser's requests. The window does not
-        // reach into the engine for it (that call ran beside the pass once the pass has a thread of its own: the pump
-        // move's F3), so the release lands at that pass, not inside this click.
-        return;
-    }
-
-    std::string error;
-    if (!webServer_.start(webCfg_, error)) {
-        // The policy's refusal text is written to be shown verbatim; a bind
-        // failure's is too. Which of the two it was is available from
-        // decision(), but the user only needs the sentence.
-        webError_ = error;
-        // KEPT SEPARATELY FOR THE TWO SURFACES THAT SUMMARISE THIS SECTION.
-        // The status column's card and the rail row both used to read "off"
-        // for a server the user had switched on and that had refused to
-        // listen, and webError_ cannot be what they read: the password field
-        // writes its own complaints into it, and a mistyped password is not a
-        // listener that would not start.
-        webStartRefusal_ = error;
-        cascade::core::diagWarnf("web: server refused to start (%s)", error.c_str());
-        return;
-    }
-    // The PORT and the SCOPE, never the password record and never the bind
-    // address's provenance: this line goes in a file the user may send us.
-    cascade::core::diagLogf("web: serving on port %d", webServer_.boundPort());
-
-    const cascade::net::BindDecision d = webServer_.decision();
-    const int port = webServer_.boundPort();
-    // Drawn and nothing else, so it is translated as it is written.
-    std::string note;
-    if (d.reachableOffMachine) {
-        cascade::core::formatUtf8(note, tr("serving on port %d to every machine on your network"),
-                      port);
-    } else {
-        cascade::core::formatUtf8(note, tr("serving at http://127.0.0.1:%d"), port);
-    }
-    webNote_ = note;
+    std::string json = "{\"web\":{\"enabled\":";
+    json += webStageEnabled_ ? "true" : "false";
+    json += ",\"bindAddress\":" + serverJsonQuote(webStageBind_);
+    json += ",\"port\":" + std::to_string(webPortMirror_);
+    json += ",\"username\":" + serverJsonQuote(webUserBuf_);
+    if (!extraWebMembers.empty()) { json += "," + extraWebMembers; }
+    json += "}}";
+    (void)sendServerConfig(json);
+    // (a password in it does not outlive the call in this window's memory)
+    std::fill(json.begin(), json.end(), '\0');
 }
 
 void AppWindow::setWebPassword(const std::string& password) {
-    webError_.clear();
-    if (password.empty()) {
-        // Clearing is allowed here; the POLICY decides whether the resulting
-        // configuration may still listen, and it refuses an off-machine
-        // binding with no password. That refusal is the right place for it —
-        // this dialog should not be a second copy of the rule.
-        webCfg_.passwordRecord.clear();
-        webServer_.revokeAllSessions();
-        applyWebSettings();
-        return;
-    }
-    cascade::net::PasswordRecord rec;
-    std::string error;
-    if (!cascade::net::hashPassword(password, rec, error)) {
-        webError_ = error;  // "at least 8 characters", or a CNG failure
-        return;
-    }
-    webCfg_.passwordRecord = rec.serialize();
-    // Anyone signed in under the old password should have to prove themselves
-    // against the new one.
-    webServer_.revokeAllSessions();
-    applyWebSettings();
+    // Clearing is allowed here; the POLICY decides whether the resulting configuration may still listen, and it refuses an off-machine
+    // binding with no password. That refusal is the right place for it - this dialog should not be a second copy of the rule. A password is
+    // hashed by the ENGINE, on a worker; anyone signed in under the old one has to prove themselves against the new when its record lands
+    // (the server restarts with it). The staged edits go with it, as applying the settings after the hash always did.
+    std::string member = password.empty() ? std::string("\"clearPassword\":true") : "\"password\":" + serverJsonQuote(password);
+    applyWebSettings(member);
+    std::fill(member.begin(), member.end(), '\0');
 }
 
 void AppWindow::drawCatSection() {
     // LISTENING, AND HOW MANY CLIENTS ARE ON IT. A CAT port with something
     // connected to it can retune this receiver, which is exactly the sort of
-    // thing the rail exists to show without opening the section. catStatus_ is
-    // the listener's own failure text, so a refused port reads as trouble
-    // rather than as OFF.
+    // thing the rail exists to show without opening the section. The table's
+    // entry carries the listener's own failure (FAULT) so a refused port reads
+    // as trouble rather than as OFF.
     // A string, not a chip-sized buffer: a translated word is longer, and
     // what fits on the chip is the chip's business, not a byte count's.
+    const ServerPanel& sp = serverPanel(false);
     std::string catChip;
     ImU32 catLamp = cascade::gui::theme::kPhosphor;
-    if (!catStatus_.empty()) {
+    if (sp.catFault) {
         catChip = tr("FAIL");
         catLamp = cascade::gui::theme::kAlarm;
-    } else if (!catServer_.running()) {
+    } else if (!sp.catRunning) {
         catChip = tr("OFF");
-    } else if (catServer_.clientCount() > 0) {
-        cascade::core::formatUtf8(catChip, tr("%d CLI"), catServer_.clientCount());
+    } else if (const ServerLive live = readServerLive(true); live.clients > 0) {
+        cascade::core::formatUtf8(catChip, tr("%d CLI"), live.clients);
     } else {
         catChip = tr("ON");
     }
     if (!benchSection(trId("CAT control (rigctld)"), false, catChip.c_str(), catLamp,
-                      !catStatus_.empty() || catServer_.running())) {
+                      sp.catFault || sp.catRunning)) {
         return;
     }
     uiNotePanel("cat");
+    syncServerMirrors(serverPanel(true));
 
     ImGui::TextWrapped(
         "%s",
@@ -20321,8 +20290,8 @@ void AppWindow::drawCatSection() {
            "address on the port below and choose a Hamlib \"NET rigctl\" radio."));
 
     if (ImGui::Checkbox(trId("Accept CAT connections"), &catEnabled_)) {
-        catServer_.stop();  // a port or scope change needs a fresh listener
-        refreshCatServer();
+        // (a port or scope change needs a fresh listener: the engine's worker restarts it)
+        (void)sendServerConfig(std::string("{\"cat\":{\"enabled\":") + (catEnabled_ ? "true" : "false") + "}}");
     }
 
     // "Port##cat": the web section draws its own "Port" field, and neither
@@ -20334,13 +20303,11 @@ void AppWindow::drawCatSection() {
     // separates same-named widgets.
     if (ImGui::InputInt(cascade::gui::labelAboveIfNeeded(trId("Port##cat")), &catPortMirror_)) {
         catPortMirror_ = std::max(1024, std::min(catPortMirror_, 65535));
-        catServer_.stop();
-        refreshCatServer();
+        (void)sendServerConfig("{\"cat\":{\"port\":" + std::to_string(catPortMirror_) + "}}");
     }
 
     if (ImGui::Checkbox(trId("Reachable from other machines"), &catBindAll_)) {
-        catServer_.stop();
-        refreshCatServer();
+        (void)sendServerConfig(std::string("{\"cat\":{\"bindAll\":") + (catBindAll_ ? "true" : "false") + "}}");
     }
     if (catBindAll_) {
         // Said plainly, because it is a blunter exposure than the web server's:
@@ -20350,14 +20317,13 @@ void AppWindow::drawCatSection() {
                               "reach the port can retune the receiver."));
     }
 
-    if (!catStatus_.empty()) {
-        ImGui::TextColored(cascade::gui::theme::bad(), "%s",
-                           catStatus_.c_str());
-    } else if (catServer_.running()) {
+    if (sp.catFault) {
+        ImGui::TextColored(cascade::gui::theme::bad(), "%s", sp.catRefusal.c_str());
+    } else if (sp.catRunning) {
+        const ServerLive live = readServerLive(true);
         ImGui::Text(tr("Listening on %s:%d — %d client(s), %llu command(s)"),
                     catBindAll_ ? "0.0.0.0" : "127.0.0.1", catPortMirror_,
-                    catServer_.clientCount(),
-                    static_cast<unsigned long long>(catServer_.commandCount()));
+                    live.clients, live.commands);
     } else {
         ImGui::TextDisabled("%s", tr("Not listening."));
     }
@@ -20365,29 +20331,26 @@ void AppWindow::drawCatSection() {
 
 void AppWindow::drawWebSection() {
     // THREE STATES, NOT TWO. A server that was switched on and REFUSED to
-    // start is not off: applyWebSettings leaves the setting enabled - the
+    // start is not off: the setting stays enabled - the
     // usual cause is a port something else already holds, which the user fixes
     // and retries - and this row used to letter OFF over it, so the one
     // surface that said otherwise was inside the section nobody had opened.
     // Rust and lit, the rail's own convention for a fault (see the Source and
     // CAT rows).
-    const bool webRefused = !webServer_.running() && !webStartRefusal_.empty();
+    const ServerPanel& sp = serverPanel(false);
+    const bool webRefused = sp.webFault;
     const bool webOpen = benchSection(
         trId("Web access"), false,
-        webServer_.running() ? tr("ON") : (webRefused ? tr("FAIL") : tr("OFF")),
+        sp.webRunning ? tr("ON") : (webRefused ? tr("FAIL") : tr("OFF")),
         webRefused ? cascade::gui::theme::kAlarm : cascade::gui::theme::kPhosphor,
-        webServer_.running() || webRefused);
+        sp.webRunning || webRefused);
     if (!webOpen) { return; }
     uiNotePanel("web");
+    syncServerMirrors(serverPanel(true));
 
-    if (!webAddressesScanned_) {
-        webLocalAddresses_ = cascade::net::localInterfaceAddresses();
-        webAddressesScanned_ = true;
-    }
-
-    bool enabled = webCfg_.enabled;
+    bool enabled = webStageEnabled_;
     if (ImGui::Checkbox(trId("Serve a browser page"), &enabled)) {
-        webCfg_.enabled = enabled;
+        webStageEnabled_ = enabled;
         webDirty_ = true;
     }
 
@@ -20401,14 +20364,14 @@ void AppWindow::drawWebSection() {
     if (ImGui::Combo(cascade::gui::labelAboveIfNeeded(trId("Reachable from")), &webBindChoice_,
                      kWhere, whereCount)) {
         if (webBindChoice_ == 0) {
-            webCfg_.bindAddress = "127.0.0.1";
+            webStageBind_ = "127.0.0.1";
         } else if (webBindChoice_ == 1) {
-            webCfg_.bindAddress = "0.0.0.0";
+            webStageBind_ = "0.0.0.0";
         }
         webDirty_ = true;
     }
     if (webBindChoice_ == 2) {
-        ImGui::TextDisabled(tr("address: %s"), webCfg_.bindAddress.c_str());
+        ImGui::TextDisabled(tr("address: %s"), webStageBind_.c_str());
     }
 
     // "Port##web": see the matching note in drawCatSection — the two sections
@@ -20416,18 +20379,16 @@ void AppWindow::drawWebSection() {
     if (ImGui::InputInt(cascade::gui::labelAboveIfNeeded(trId("Port##web")), &webPortMirror_)) {
         webPortMirror_ = std::clamp(webPortMirror_, cascade::net::kMinPort,
                                     cascade::net::kMaxPort);
-        webCfg_.port = webPortMirror_;
         webDirty_ = true;
     }
 
     if (ImGui::InputText(cascade::gui::labelAboveIfNeeded(trId("User name")),
                          webUserBuf_, sizeof(webUserBuf_))) {
-        webCfg_.username = webUserBuf_;
         webDirty_ = true;
     }
 
     // --- Password ------------------------------------------------------------
-    const bool hasPassword = !webCfg_.passwordRecord.empty();
+    const bool hasPassword = sp.webHasPassword;
     ImGui::TextDisabled("%s", hasPassword ? tr("a password is set") : tr("no password set"));
 
     ImGui::InputText(cascade::gui::labelAboveIfNeeded(trId("Password")),
@@ -20446,7 +20407,7 @@ void AppWindow::drawWebSection() {
             setWebPassword(a);
         }
         // Do not leave the plaintext sitting in a buffer once it has been
-        // hashed (or rejected).
+        // sent (or rejected).
         std::memset(webPassBuf_, 0, sizeof(webPassBuf_));
         std::memset(webPassConfirmBuf_, 0, sizeof(webPassConfirmBuf_));
     }
@@ -20466,19 +20427,26 @@ void AppWindow::drawWebSection() {
     ImGui::EndDisabled();
 
     // --- Outcome -------------------------------------------------------------
-    if (!webError_.empty()) {
+    // The refusal a start was given is the panel's red line too, as the one the policy or the bind gave always was; a complaint of this
+    // window's own (the passwords differ, the engine refused a SERVER_CONFIG) takes its place.
+    const std::string refusal = webError_.empty() && sp.webFault ? serverRefusalText(sp.webRefusal, "fact.web.policy") : std::string();
+    if (!webError_.empty() || !refusal.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorRed);
-        ImGui::TextWrapped("%s", webError_.c_str());
+        ImGui::TextWrapped("%s", webError_.empty() ? refusal.c_str() : webError_.c_str());
         ImGui::PopStyleColor();
-    } else if (webServer_.running()) {
+    } else if (sp.webRunning) {
+        // Drawn and nothing else, so it is translated as it is written.
+        if (sp.webReachable) {
+            cascade::core::formatUtf8(webNote_, tr("serving on port %d to every machine on your network"), sp.webPort);
+        } else {
+            cascade::core::formatUtf8(webNote_, tr("serving at http://127.0.0.1:%d"), sp.webPort);
+        }
         ImGui::TextWrapped("%s", webNote_.c_str());
-        const cascade::net::BindDecision d = webServer_.decision();
-        if (d.reachableOffMachine) {
+        if (sp.webReachable) {
             // The one thing worth shouting about on this panel.
             ImGui::TextColored(kErrorRed, "%s", tr("reachable from your network"));
-            for (const std::string& addr : webLocalAddresses_) {
-                ImGui::TextDisabled("http://%s:%d", addr.c_str(),
-                                    webServer_.boundPort());
+            for (const std::string& addr : sp.webAddresses) {
+                ImGui::TextDisabled("http://%s:%d", addr.c_str(), sp.webPort);
             }
             ImGui::TextWrapped(
                 "%s",
@@ -20487,15 +20455,14 @@ void AppWindow::drawWebSection() {
                    "put it behind something that terminates TLS rather than "
                    "forwarding this port."));
         }
-        if (d.authRequired) {
-            ImGui::TextDisabled(tr("%d browser session(s)"),
-                                static_cast<int>(webServer_.sessionCount()));
+        const ServerLive live = readServerLive(false);
+        if (sp.webAuthRequired) {
+            ImGui::TextDisabled(tr("%d browser session(s)"), live.clients);
         }
-        if (webServer_.audioListeners() > 0) {
-            ImGui::TextDisabled(tr("%d listening to audio"),
-                                static_cast<int>(webServer_.audioListeners()));
+        if (live.audioListeners > 0) {
+            ImGui::TextDisabled(tr("%d listening to audio"), live.audioListeners);
         }
-    } else if (webCfg_.enabled) {
+    } else if (webStageEnabled_) {
         ImGui::TextDisabled("%s", tr("not serving"));
     }
 }
@@ -21471,26 +21438,9 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     fittedWinY_ = cfg.fittedModulesY;
     fittedWinW_ = cfg.fittedModulesWidth;
     fittedWinH_ = cfg.fittedModulesHeight;
-    // Web server. Applied LAST in the restore so the snapshot the providers
-    // publish is assembled from a fully restored radio; applyWebSettings is
-    // what decides whether anything actually listens, and it refuses on its
-    // own terms (an off-machine binding with no password never starts).
-    webCfg_.enabled = cfg.webEnabled;
-    webCfg_.bindAddress = cfg.webBindAddress;
-    webCfg_.port = cfg.webPort;
-    webCfg_.username = cfg.webUsername;
-    webCfg_.passwordRecord = cfg.webPasswordRecord;
-    webPortMirror_ = webCfg_.port;
-    webBindChoice_ = cascade::net::isLoopbackAddress(webCfg_.bindAddress) ? 0
-                     : cascade::net::isWildcardAddress(webCfg_.bindAddress) ? 1
-                                                                            : 2;
-    cascade::core::formatUtf8(webUserBuf_, sizeof(webUserBuf_), "%s", webCfg_.username.c_str());
-    applyWebSettings();
-
-    catEnabled_ = cfg.catEnabled;
-    catBindAll_ = cfg.catBindAll;
-    catPortMirror_ = cfg.catPort;
-    refreshCatServer();
+    // (The web server's and the CAT listener's half of the config - webEnabled, webBindAddress, webPort, webUsername, webPasswordRecord,
+    // catEnabled, catBindAll, catPort - is the ENGINE's since stage 5b: Engine::applyConfig restores it and starts what it switches on, on a
+    // worker. The panels' mirrors are taken from the table's facts once it has published them.)
 }
 
 bool AppWindow::crashUploadStart() {
@@ -21606,14 +21556,6 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.fittedModulesY = fittedWinY_;
     cfg.fittedModulesWidth = fittedWinW_;
     cfg.fittedModulesHeight = fittedWinH_;
-    cfg.catEnabled = catEnabled_;
-    cfg.catBindAll = catBindAll_;
-    cfg.catPort = catPortMirror_;
-    cfg.webEnabled = webCfg_.enabled;
-    cfg.webBindAddress = webCfg_.bindAddress;
-    cfg.webPort = webCfg_.port;
-    cfg.webUsername = webCfg_.username;
-    cfg.webPasswordRecord = webCfg_.passwordRecord;
     diagnosticsJournal(cfg);
     return cfg;
 }
@@ -21915,11 +21857,11 @@ void AppWindow::sendTrackInfoText() {
     }
 }
 
-bool AppWindow::webListening() const { return webServer_.running(); }
+// Whether the web server listens: the state this window read at the look carries the bit (the server is the engine's, stage 5b).
+bool AppWindow::webListening() const { return (uiState_.flags & FOXAPI_RX_WEB_LISTENING) != 0u; }
 
 void AppWindow::handFrontEndFacts() {
     cascade::engine::FrontEndFacts f;
-    f.webListening = webListening();
     f.tunerDisplayStyle = tunerDisplayStyle();
     f.basemap = basemapFacts();
     f.webExtras = webExtrasNow();
@@ -21989,20 +21931,10 @@ cascade::engine::BasemapFacts AppWindow::basemapFacts() const {
 }
 
 void AppWindow::publishWebSpectrum(double centerHz) {
-    // THE SPECTRUM FRAME for the browser - a stream, not state, and not part
-    // of stage 2 (docs/engine-stage2.md, OPEN): copied under webMutex_ only
-    // when the frame advanced, as before.
-    const double spanHz = engine_.inputRateHz();
-    std::lock_guard<std::mutex> lock(webMutex_);
-    // Copy the bins only when the frame actually advanced. lastFrame_ is what
-    // the spectrum panel just drew, so the browser and the window are showing
-    // the same data by construction.
-    if (lastFrame_.seq != webSeq_) {
-        webSeq_ = lastFrame_.seq;
-        webBins_ = lastFrame_.dbBins;
-        webSnapCenterHz_ = centerHz;
-        webSnapSpanHz_ = spanHz;
-    }
+    // THE SPECTRUM FRAME for the browser - a stream, not state, and not part of stage 2 (docs/engine-stage2.md, OPEN): handed to the engine's
+    // web server when the frame advanced, as before (lastFrame_ is what the spectrum panel just drew, so the browser and the window show the
+    // same data by construction). The server's copy, its lock and the span (the chain's input rate) are the engine's since stage 5b.
+    engine_.publishWebSpectrum(lastFrame_.seq, lastFrame_.dbBins, centerHz);
 }
 
 void AppWindow::diagnosticsStartup(const cascade::core::AppConfig& cfg) {

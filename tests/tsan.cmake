@@ -95,6 +95,12 @@ set(CASCADE_TSAN_TESTS
     # stage 5a: the same guarantee for the engine-internal sessions - the tier applied after the local and API queues whatever arrived
     # first, the same-pass release, the flood, the liveness and the storm with producers on the web and CAT sessions
     test_internal_session_order
+    # stage 5b: the engine OWNS the servers - the real web server and CAT listener over loopback sockets, started, restarted and stopped by
+    # SERVER_CONFIG on the host's worker thread against the pass, the HTTP and CAT threads reading the engine's publish and feeding the pull,
+    # the password's hash against a restart, a stop that waits for a browser's open request while the pass keeps its rate, the teardown
+    test_server_host
+    # ...and the window's side of it: a real AppWindow starting the engine's server from its settings panel and feeding a browser's audio stream
+    test_window_web_feed
     # the pump move's step P3 (PluginUi's thread ownership): the directive the engine's pass posts and the window applies at the head
     # of its poll, the bounded unload handshake, the queued request_tune, the plugin UI's instances created, polled and destroyed on
     # the window's thread alone - the link's protocol with threads; a real window, a real engine with its pass on its own thread

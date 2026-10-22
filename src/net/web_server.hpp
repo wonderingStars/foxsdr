@@ -28,6 +28,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -52,6 +53,12 @@ namespace cascade::net {
 // Fixed display range for the spectrum sent to the browser. Fixed rather than
 // per-frame min/max because a range recomputed each frame makes the waterfall
 // breathe: the same signal changes colour as the noise floor wanders.
+// HOW LONG A BROWSER MAY HOLD ONE REQUEST OPEN: the server's read and write timeout (a stalled peer must not hold a worker for ever). It is
+// also the longest WebServer::stop() can WAIT - httplib joins its workers and cannot close a client's socket from outside - which is why it
+// has a name: since stage 5b the engine stops the server in Engine::shutdownQuiesce, INSIDE the teardown's watchdog budget (the window used to
+// stop it in its destructor, after the watchdog was). tests/test_shutdown_budget.cpp charges it once (docs/engine-stage4.md 6.10).
+inline constexpr std::chrono::seconds kClientIoTimeout{10};
+
 inline constexpr float kSpectrumDbMin = -140.0f;
 inline constexpr float kSpectrumDbMax = 0.0f;
 

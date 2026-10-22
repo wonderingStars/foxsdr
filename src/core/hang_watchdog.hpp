@@ -290,7 +290,14 @@ public:
     // shutdownQuiesce() stops it first, and stopControlThread() waits for the pass it is in - Engine::kControlJoinWait,
     // 3000 ms, the longest bound anything a pass can wait on has - before it joins. Spent once, at the top of the
     // teardown. 10500 -> 13500, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 13500;
+    //
+    // AND THE ENGINE'S WEB SERVER IS THE FOURTH (stage 5b, which moved it into the engine): shutdownQuiesce() stops the servers before it
+    // stops the control thread, and WebServer::stop() waits for the handlers httplib cannot interrupt - a browser holding a request open
+    // costs the whole of net::kClientIoTimeout, 10 s (measured on the application: teardown 9.8 s with a half-sent request held, 16 ms
+    // without; docs/engine-stage4.md 6.10). The window used to stop the server in its destructor, AFTER watchdog_.stop(), where the same
+    // wait cost the process its exit and nobody's budget. CAT's stop is bounded by its poll interval, a fraction of a second. Spent once.
+    // 13500 -> 23500, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 23500;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, queuing the teardown's two config saves (the WRITE is
@@ -310,7 +317,10 @@ public:
     // tests/test_shutdown_budget.cpp pins the "at least twice". 24000 ->
     // 27000 with kShutdownBoundedWaitsMs's 9000 -> 10500 above (0.97.2).
     // (27000 -> 33000 with the control thread's join above: twice (13500 + kShutdownReserveMs 3000).)
-    static constexpr unsigned kShutdownThresholdMs = 33000;
+    // (33000 -> 53000 with the web server's stop above: twice (23500 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
+    // really wedges is reported 20 s later than it was. The alternative - leaving the threshold and counting 10 s the budget cannot see -
+    // is the drift this test exists to stop; a stop that does not wait for a held request is the better cure and is not done.)
+    static constexpr unsigned kShutdownThresholdMs = 53000;
 
     HangWatchdog() = default;
     ~HangWatchdog();

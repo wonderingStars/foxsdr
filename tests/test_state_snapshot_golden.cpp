@@ -283,8 +283,8 @@ struct AppWindowTestAccess {
         a.handFrontEndFacts();
         rawEngine(a.engine_).publishReceiverState();
     }
-    static cascade::net::RadioStatus webStatus(AppWindow& a) { return a.webStatusNow(); }
-    static cascade::net::CatRadio catStatus(AppWindow& a) { return a.catStatusNow(); }
+    static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
+    static cascade::net::CatRadio catStatus(AppWindow& a) { return rawEngine(a.engine_).catStatusNow(); }
     // Engine stage 2's cost, measured on the real window (report only).
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();

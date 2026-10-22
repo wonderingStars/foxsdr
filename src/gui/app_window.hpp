@@ -120,10 +120,9 @@ struct GLFWwindow;
 #include "core/problem_report.hpp"
 #include "core/hang_watchdog.hpp"
 #include "gui/freq_scale.hpp"
-// Pulls in the bind policy and the credential types too, but NOT httplib —
-// web_server.hpp forward-declares it.
-#include "net/cat_server.hpp"
-#include "net/web_server.hpp"
+// The settings panels' port range, default ports and the two address classifiers - as data (stage 5b): the interface includes nothing of
+// net/ for them any more (the servers are the engine's).
+#include "core/server_ports.hpp"
 // For SoapyDeviceInfo and the non-owning SoapySource* below; the header
 // forward-declares the Soapy API types, so this pulls in no Soapy headers.
 #include "source/soapy_source.hpp"
@@ -640,7 +639,8 @@ private:
     // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the
     // pump move's step P2, the track-info plugin's answers for the web status
     // and the pictures' headers (webExtrasNow), the bounded run's report switch
-    // and the frame count it names.
+    // and the frame count it names. (Whether the web server listens is not one of them any more: the server is the engine's, and the
+    // state this window reads carries the bit - webListening.)
     bool webListening() const;
     std::string tunerDisplayStyle() const;
     cascade::engine::BasemapFacts basemapFacts() const;
@@ -3286,103 +3286,93 @@ private:
     // server's store instead of serving the old source's imagery as the new's.
     bool webTilesActive_ = false;
     std::string webTileAttribution_;
-    // What the web server's and CAT's providers answer, from the snapshot:
-    // on their own threads, never touching the pipeline or this window's
-    // members. The web one takes the whole block (state and lists of one
-    // publish); CAT reads only figures, lock-free.
-    cascade::net::RadioStatus webStatusNow() const;
-    cascade::net::CatRadio catStatusNow() const;
-    // Drains the server's control queue and applies each request to the radio.
-    // Called once per frame from drawUi, on the GUI thread, because that is
-    // the only thread allowed to move the SOURCE — the HTTP handler validated
-    // the request and queued it precisely so it would not have to.
-    //
-    // Applying here rather than in the handler also keeps the panel mirrors
-    // (modeIndex_, vfoOffsetKhz_, squelchDb_ ...) in step, so a change made
-    // from a browser shows up on the desktop window and in the debounced
-    // config save exactly as though it had been clicked.
-    // Hands BOTH servers' queued requests — the browser's and CAT's — to the engine's pass
-    // (Engine::setRemoteControlSource, installed by the constructor; the engine's
-    // pumpRemoteControls phase calls this where the frame's applyWebControls used to run) and
-    // says whether the browser's server is running at that moment. The ENGINE applies them,
-    // through one body of code, so the two can never drift - and the key rules are touched by
-    // the pumping thread alone (the pump move's F3). Called by the engine, on the pumping
-    // thread: it reads two servers whose queues are mutex-protected and whose running flags
-    // are atomic, and nothing of the window's.
-    cascade::engine::RemoteControls takeRemoteControls();
-    // Starts or stops the CAT server to match the current configuration, and
-    // records why in catStatus_ when it will not start.
-    void refreshCatServer();
-    // Applies webCfg_ to the server: starts, restarts or stops it, and puts
-    // the outcome in webError_ / webNote_. The ONE place that calls
-    // WebServer::start, so the panel, the config restore and the password
-    // dialog cannot drift apart.
-    void applyWebSettings();
-    // Hashes `password` and stores the record, then re-applies. An empty
-    // string CLEARS the password, which the policy will refuse if the binding
-    // is not loopback — deliberately, since that is the user removing the only
-    // thing protecting an exposed receiver.
+    // THE WEB AND CAT SERVERS ARE THE ENGINE'S (stage 5b, docs/engine-stage4.md 6.10). This window no longer owns a socket, a start, a stop, a
+    // password hash or a copy of their configuration: the panels configure them with FOXAPI_OP_SERVER_CONFIG, and draw what the table says of
+    // them - the SERVERS list (49) for whether each listens, on which port, with what refusal and how many clients, and the facts fact.web.* /
+    // fact.cat.* for the configuration and what the bind policy makes of it. What follows is the VIEW's: the panel mirrors ImGui edits by
+    // pointer, the staged web edits an Apply sends, and the last read of the table.
+    struct ServerPanel {
+        std::uint64_t listSeq = 0;      // the list part below was read at this listSeq; 0: never
+        std::uint64_t factsSeq = 0;     // ...and the facts part at this one
+        // the SERVERS list (value[0] is the port listened on, else the configured one)
+        bool webRunning = false;
+        bool webFault = false;          // enabled, not listening, and a refusal to show
+        int webPort = 0;
+        std::string webRefusal;
+        bool catRunning = false;
+        bool catFault = false;
+        int catPort = 0;
+        std::string catRefusal;
+        // the facts (LOCAL): the configuration, and what the policy makes of it
+        bool webEnabled = false;
+        std::string webBindAddress;
+        int webConfiguredPort = 0;
+        std::string webUsername;
+        bool webHasPassword = false;
+        bool webReachable = false;
+        bool webAuthRequired = false;
+        std::vector<std::string> webAddresses;
+        bool catEnabled = false;
+        bool catBindAll = false;
+        int catConfiguredPort = 0;
+        std::string factText;
+    };
+    // Read when listSeq has moved (the rail's rule); the facts only when a panel asks for them (`withFacts`): the status column and the
+    // rail rows need the list alone and one fact (uiFact), the two sections need all of it.
+    const ServerPanel& serverPanel(bool withFacts);
+    ServerPanel serverPanel_;
+    // The live figures of one server (the list entry's value[1..3]), read now: browser sessions / CAT clients, browsers listening to the
+    // audio, commands received. All zero when the entry is not there.
+    struct ServerLive {
+        int clients = 0;
+        int audioListeners = 0;
+        unsigned long long commands = 0;
+    };
+    ServerLive readServerLive(bool cat);
+    // The refusal sentence WHOLE: a list item's detail is cut at 159 bytes and the policy's longest sentence is a little over, so the fact
+    // that carries the policy's sentence in full stands in when the list's is its beginning.
+    std::string serverRefusalText(const std::string& listed, const char* policyFact);
+    // SERVER_CONFIG on the window's session; false when the session did not take it. The answers it is owed are counted, because the
+    // panel mirrors below are taken from the table only when nothing this window asked is still on its way (a mirror re-read in between
+    // would flicker back to the old value).
+    bool sendServerConfig(const std::string& json);
+    int serverAsksPending_ = 0;
+    std::uint64_t serverMirrorSeq_ = 0;
+    void syncServerMirrors(const ServerPanel& sp);
+    // Applies the staged web edits (and `extra`, a password member, when the password button asked) in one SERVER_CONFIG.
+    void applyWebSettings(const std::string& extraWebMembers = std::string());
+    // The password button: a plaintext password is sent for the ENGINE to hash on a worker; an empty one CLEARS the password, which the
+    // policy will refuse if the binding is not loopback - deliberately, since that is the user removing the only thing protecting an
+    // exposed receiver.
     void setWebPassword(const std::string& password);
 
-    cascade::net::CatServer catServer_;
-    // Shown in the panel: empty while things are as configured, otherwise the
-    // reason the server is not listening (a port already held by a real
-    // rigctld being much the most common).
-    std::string catStatus_;
-    // Panel mirrors, assembled into an AppConfig by currentConfig(). There is
-    // no separate dirty flag anywhere in this window: the debounced save
-    // compares the live state against the last saved one, so a setting is
-    // persisted purely by appearing in currentConfig() and configsEqual().
+    // Panel mirrors (ImGui edits by pointer).
     bool catEnabled_ = false;
     bool catBindAll_ = false;
     int catPortMirror_ = static_cast<int>(cascade::net::kDefaultCatPort);
 
-    cascade::net::WebServer webServer_;
-    cascade::net::WebServerConfig webCfg_;
-    // Panel mirrors (ImGui edits by pointer). webBindChoice_: 0 = this machine
-    // only, 1 = every network interface. A specific interface address loaded
-    // from the config that matches neither shows as choice 2 and is left alone.
+    // The web section's staged edits (ImGui edits by pointer). webBindChoice_: 0 = this machine only, 1 = every network interface. A
+    // specific interface address loaded from the config that matches neither shows as choice 2 and is left alone.
+    bool webStageEnabled_ = false;
+    std::string webStageBind_ = "127.0.0.1";
     int webBindChoice_ = 0;
     int webPortMirror_ = cascade::net::kDefaultWebPort;
     char webUserBuf_[64] = "admin";
     char webPassBuf_[128] = "";
     char webPassConfirmBuf_[128] = "";
-    std::string webError_;   // red: the policy's refusal, or a bind failure
+    std::string webError_;   // red: a refusal of the last SERVER_CONFIG, or the password field's own complaint
     std::string webNote_;    // neutral/green: "serving at http://..."
-    // SWITCHED ON AND NOT LISTENING, WHICH IS NOT THE SAME AS SWITCHED OFF.
-    // Set by applyWebSettings when a start is refused - a port already held by
-    // something else is much the commonest cause - and cleared by the next
-    // apply, successful or not. It exists because the status column and the
-    // rail row both used to read "off" for a server the user had deliberately
-    // turned on, with the refusal visible only to somebody who opened the Web
-    // access section; a socket that could not be opened is news, not a
-    // setting. webError_ cannot serve in its place: the password field writes
-    // its own complaints there, and a mistyped password is not a listener that
-    // refused to start.
-    std::string webStartRefusal_;
     // Edits are staged and applied on a button rather than taking effect as
     // they are typed. Two reasons: restarting the listener on every keystroke
     // of the port field is nonsense, and — the real one — a setting that
     // decides who can reach the receiver should be reviewed before it takes
     // effect, not applied halfway through being typed.
     bool webDirty_ = false;
-    // Addresses of this machine's own interfaces, for the "open this on your
-    // phone" hint. Filled lazily the first time the section is drawn, because
-    // enumerating adapters is a syscall nobody needs on a headless run.
-    std::vector<std::string> webLocalAddresses_;
-    bool webAddressesScanned_ = false;
 
-    // audioSamplesProduced() at the last publish, and the scratch buffer the
-    // tap is read into (a member so a steady stream never allocates).
+    // THE FEEDS (END: 5e, which serves them from the table). audioSamplesProduced() at the last publish, and the scratch buffer the tap is
+    // read into (a member so a steady stream never allocates).
     std::uint64_t webAudioLastProduced_ = 0;
     std::vector<float> webAudioBuf_;
-
-    // The spectrum frame for the browser (the status is receiverSnapshot_).
-    mutable std::mutex webMutex_;
-    std::vector<float> webBins_;
-    std::uint64_t webSeq_ = 0;
-    double webSnapCenterHz_ = 0.0;
-    double webSnapSpanHz_ = 0.0;
 
     // The pointer ledger (see the frame loop), switched on from the
     // Diagnostics section so a tester can read it without setting an

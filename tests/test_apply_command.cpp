@@ -557,7 +557,7 @@ struct AppWindowTestAccess {
     // (what /api/status serves - the web provider's own call), never off the
     // row map under test.
     static int webRowOf(AppWindow& a, const std::string& name) {
-        const cascade::net::RadioStatus status = a.webStatusNow();
+        const cascade::net::RadioStatus status = rawEngine(a.engine_).webStatusNow();
         const auto& rows = status.bookmarks;
         for (std::size_t r = 0; r < rows.size(); ++r) {
             if (rows[r].name == name) { return static_cast<int>(r); }
@@ -1066,8 +1066,9 @@ void receiverOps(AppWindow& a) {
         CHECK(refused(A::apply(a, c), FOXAPI_BAD_ARGUMENT));
         CHECK(A::vfo(a) == v);
     }
-    // The servers' configuration (stage 5a): the engine records it, and starts nothing (the listeners are still the window's). The strict
-    // parse and the worker for the password are test_engine_api_05a's; here the op has its case.
+    // The servers' configuration (stage 5a): the engine records it. (Since 5b its host also starts what is switched ON, on a worker; CAT
+    // stays off here, so nothing opens. The strict parse and the worker for the password are test_engine_api_05a's, the listeners
+    // test_server_host's; here the op has its case.)
     covering(FOXAPI_OP_SERVER_CONFIG);
     {
         CHECK(ok(A::apply(a, cmd::makeText(FOXAPI_OP_SERVER_CONFIG, "{\"cat\":{\"port\":4999}}"))));

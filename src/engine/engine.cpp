@@ -99,10 +99,49 @@ Engine::Engine(EngineHost& host)
         { std::lock_guard<std::mutex> lk(controlWakeMutex_); }
         passDoneCv_.notify_all();
     });
+    // THE ENGINE OWNS THE WEB SERVER AND THE CAT LISTENER (stage 5b), and they answer from the engine's own publish. Installed once, before
+    // any start (a server refuses to change a provider while it runs): the browser's status is the whole block of one publish, CAT's figures
+    // are read lock-free, and the browser's own poll of its status is the web remote's keep-alive (API 0.2: only an interface's heartbeat
+    // counts) - never its PTT re-assertions. They run on the servers' threads and read nothing but the snapshot and the API host, which
+    // outlive them (servers_ is the last member: ~Engine, and shutdownQuiesce before it, stop them first).
+    ServerHost::Providers providers;
+    providers.webStatus = [this] { return webStatusNow(); };
+    providers.webPoll = [this] { api_->webRemoteBeat(); };
+    providers.catStatus = [this] { return catStatusNow(); };
+    servers_.attach(std::move(providers));
+}
+
+// What the web page's status reads: the whole block of one publish - figures and lists together - so a browser can never be shown two fields
+// from different publishes. The lock inside readFull() is held for a reference count (or the install of a handed-over block); the publish
+// only ever try-locks it - the one place the publishing thread takes it BLOCKING is applyControlRequest's own readFull()
+// (core/receiver_snapshot.hpp). (AppWindow::webStatusNow, moved here with the server.)
+cascade::net::RadioStatus Engine::webStatusNow() const {
+    const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full = receiverSnapshot_->readFull();
+    return cascade::net::composeRadioStatus(full->state, full->lists.get());
+}
+
+// CAT reads figures only (frequency, offset, rate, mode, bandwidth, run state), so it takes them lock-free. In the rare case a read keeps
+// overlapping a publish it takes the installed block instead - whole, and at most a pass older - rather than answer nothing.
+// (AppWindow::catStatusNow, moved here with the server.)
+cascade::net::CatRadio Engine::catStatusNow() const {
+    cascade::core::PublishedState s;
+    if (!receiverSnapshot_->read(s)) { s = receiverSnapshot_->readFull()->state; }
+    return cascade::net::catRadioFromState(s);
+}
+
+void Engine::installServerPull() {
+    setRemoteControlSource([this] {
+        ServerHost::Pulled pulled = servers_.pull();
+        RemoteControls rc;
+        rc.requests = std::move(pulled.requests);
+        rc.serverRunning = pulled.serverRunning;
+        return rc;
+    });
 }
 
 void Engine::configureApi(const std::string& options) {
     api_ = std::make_unique<ApiHost>(*this, options);
+    servers_.setHosting(api_->hostsServers());  // a hermetic test engine binds nothing (stage 5b)
     apiLists_.reset();  // the new host is handed a block on the next publish
     apiLive_.reset();   // ...and the patch's live readings (API 0.3 8.12)
 }
@@ -4438,7 +4477,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     converterRadioCentre_.store(converterRadioCentreHz(), std::memory_order_relaxed);
     // Handed over by the front end (OPEN 4), not asked of it while publishing.
     const FrontEndFacts facts = frontEndFacts();
-    fs.webListening = facts.webListening;
+    // ...except whether the web server listens: the server is the engine's own since 5b, so the bit is its host's answer, not a fact the
+    // window hands over.
+    fs.webListening = servers_.webListening();
     fs.positionSet = rxSet_;
 
     r.centreHz = src.centerFrequencyHz();
@@ -7759,8 +7800,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // Stage 5a (docs/api-0.3-additions.md 8.16): the local operator's configuration of the web server and the CAT listener.
             // LOCAL + ADMIN only (validate), the JSON in the text (the first 255 bytes are all validate sees, so a longer one
             // comes by submit_text), strict (ServerConfigRequest). The configuration is the engine's and rides the config file; the
-            // listeners it describes are the window's until 5b, so until then this records and publishes, and starts nothing. The
-            // password is hashed on a worker the pass polls (a click used to run PBKDF2 on the GUI thread).
+            // listeners it describes are the engine's own since 5b: this records and publishes, and the host's WORKER makes them match
+            // (start, restart, stop - never in the pass). The password is hashed on a worker the pass polls (a click used to run PBKDF2
+            // on the GUI thread).
             ServerConfigRequest req;
             std::string why;
             if (!parseServerConfigRequest(text, req, why)) { return refuse(FOXAPI_BAD_ARGUMENT, why.c_str()); }
@@ -8712,8 +8754,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
 // of AppConfig is written by exactly one half. Not const: the usage report's
 // journal (telemetryJournal) accrues the session as it is written.
 void Engine::fillConfig(cascade::core::AppConfig& cfg) {
-    // The web server's and the CAT listener's fields (stage 5a). Until the window stops writing them itself (5b) its own mirror is
-    // written over these in currentConfig, and the two agree; once it does not, this is the only writer.
+    // The web server's and the CAT listener's fields (stage 5a; the only writer since 5b - the window's own copies are gone).
     servers_.store(cfg);
     // WHICH SOURCE THE FILE NAMES, which is not always the one that is
     // running: a restore that could not open the saved radio leaves the
@@ -8993,7 +9034,10 @@ void Engine::stopTransfers() {
 // ~Engine runs stopTransfers and this itself for a front end that did not.
 void Engine::teardown() {
     tornDown_ = true;
-    // The control thread first (stage 3b): nothing below may run beside it.
+    // The servers first (stage 5b; shutdownQuiesce did it already on the product's path, and this is the same call on the paths that do not
+    // go through it): no handler of either may be running while the engine comes apart.
+    servers_.shutdown();
+    // The control thread (stage 3b): nothing below may run beside it.
     stopControlThread();
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
@@ -9243,7 +9287,14 @@ void Engine::pumpAudioMute() { updateAudioMute(); }
 // reasons that went with each line.
 
 void Engine::shutdownQuiesce() {
-    // STAGE 3b: the control thread is stopped first - it lets go of every key
+    // STAGE 5b: THE SERVERS STOP FIRST, before the control thread, as ~AppWindow stopped the ones it owned before anything else: a request in
+    // flight must not reach a stopped pass, the servers' handlers read the snapshot and the API host, and nothing may be accepting a browser's
+    // key while the keys are being let go below. WebServer::stop() can block for as long as the read timeout (10 s) when a client holds a
+    // request open: here it blocks THE CALLER (the window's run, as ~AppWindow did before), never the pass - the control thread runs on until
+    // the next step. A hard stop each - no thread of either server runs after it returns - and idempotent.
+    servers_.shutdown();
+
+    // STAGE 3b: the control thread is stopped next - it lets go of every key
     // at once, from this thread, and then joins (stopControlThread); every
     // step below runs on the engine's state with nothing beside it. A no-op
     // with no control thread (the window, today).

@@ -3832,8 +3832,8 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
     });
     svr_->set_payload_max_length(kMaxPayloadBytes);
     // Without these a single stalled peer holds a worker thread indefinitely.
-    svr_->set_read_timeout(10, 0);
-    svr_->set_write_timeout(10, 0);
+    svr_->set_read_timeout(kClientIoTimeout);
+    svr_->set_write_timeout(kClientIoTimeout);
     installRoutes(*svr_);
 
     const int port = svr_->bind_to_port(d.effectiveAddress.c_str(), cfg.port) ? cfg.port : -1;
