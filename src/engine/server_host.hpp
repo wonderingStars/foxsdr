@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -45,6 +46,15 @@ struct AppConfig;
 }
 
 namespace cascade::engine {
+
+class ApiHost;
+
+// A CAT CONNECTION'S SESSION ON THE ENGINE (stage 5c): opens ApiHost::openInternalSession(InternalKind::Cat, label) and wraps it in the
+// net::CatSession the CAT server speaks - read_state for the six figures, submit for a request's commands, poll_results for their results,
+// close_session in the destructor - every call the C table's own, on the FoxSession* it returns. Null when the engine will not give a
+// session (FOXAPI_LIMIT: 64 in all, 16 REMOTE; an internal session counts like any other). The host must outlive the session (the engine's
+// ServerHost is destroyed first, and stops the CAT server - which closes every session - before that).
+std::unique_ptr<cascade::net::CatSession> openCatSession(ApiHost& api, const std::string& label);
 
 // The two listeners' configuration: the AppConfig fields web* and cat* (core/config.hpp), as one value.
 struct ServerConfig {
@@ -128,18 +138,20 @@ public:
     // --- the providers (stage 5b) ------------------------------------------------------------------------------------------------
     // What the servers answer from, installed ONCE by the engine's constructor before any start (a server refuses to change them while it
     // runs): the web page's status (the whole block of one publish), its keep-alive (any authorised GET /api/status - the browser's poll,
-    // never a PTT re-assertion) and CAT's figures. The spectrum the page long-polls is the host's own (publishSpectrum, below).
+    // never a PTT re-assertion) and the way a CAT connection gets its session (since 5c CAT answers from, and commands through, a session of
+    // its own per connection - see openCatSession). The spectrum the page long-polls is the host's own (publishSpectrum, below).
     struct Providers {
         cascade::net::WebServer::StatusProvider webStatus;
         cascade::net::WebServer::PollHook webPoll;
-        cascade::net::CatServer::StatusProvider catStatus;
+        cascade::net::CatSessionOpener catSession;
     };
     void attach(Providers p);
 
-    // --- the old private chain, owned here (stage 5b; 5c and 5d replace it with sessions) -------------------------------------------
-    // What the engine's pass pulls (Engine::pumpRemoteControls): the browser's queued requests first, then CAT's (a stopped CAT server's
-    // queue is not read), and whether the web server is running AT THE MOMENT OF THE PULL, read after the queues - the standing condition
-    // on the remote key (docs/engine-stage3.md OPEN 7 (c)). Exactly what AppWindow::takeRemoteControls did.
+    // --- the old private chain, owned here (stage 5b; 5c took CAT off it, 5d replaces the rest with a session) ---------------------
+    // What the engine's pass pulls (Engine::pumpRemoteControls): the browser's queued requests, and whether the web server is running AT
+    // THE MOMENT OF THE PULL, read after the queue - the standing condition on the remote key (docs/engine-stage3.md OPEN 7 (c)). CAT is
+    // not here any more: its connections hold sessions, whose commands the pass applies in the internal tier right after this pull's
+    // (ApiHost::applyTail), so the order the pull always gave - the web's requests, then CAT's - is the order of the phase itself.
     struct Pulled {
         std::vector<cascade::net::ControlRequest> requests;
         bool serverRunning = false;

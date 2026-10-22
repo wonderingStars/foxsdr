@@ -108,6 +108,9 @@ public:
     // TESTS ONLY - nothing in the product calls it: the status submit would give `c` from session `s` at the door (the refusal a result
     // would carry), with nothing queued or applied. Any thread.
     std::int32_t validateForTest(FoxSession* s, const FoxCommand& c);
+    // TESTS ONLY - nothing in the product calls it: how many sessions the table holds now, of every kind (InternalKind::None), or only the
+    // engine-internal ones of `kind`. Any thread.
+    std::size_t sessionCountForTest(InternalKind kind = InternalKind::None);
     // The pumping thread hands over a new list block (before the publish
     // whose listSeq says it changed).
     void setLists(std::shared_ptr<const ApiListBlock> lists);

@@ -15667,7 +15667,7 @@ void AppWindow::openPluginWindowsFor(const std::string& name, std::uint32_t caps
 // --- HOST API LEVEL 1 (0.99.31) -------------------------------------------------
 
 // (webStatusNow and catStatusNow - what the web server's status and CAT's figures read - moved into the engine with the servers, stage 5b:
-// Engine::webStatusNow, Engine::catStatusNow.)
+// Engine::webStatusNow, Engine::catStatusNow - and stage 5c deleted the second: a CAT connection reads its figures through a session of its own.)
 
 void AppWindow::drawPluginMarkers(float x0, float y0, float width, float height,
                                   bool waterfall) {

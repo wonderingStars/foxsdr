@@ -64,9 +64,11 @@
 #include "core/app_commands.hpp"
 #include "core/plugin_api.hpp"
 #include "engine/engine.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
 #include "imgui.h"
 #include "net/cat_protocol.hpp"
+#include "net/status_compose.hpp"
 #include "net/web_server.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
@@ -284,7 +286,21 @@ struct AppWindowTestAccess {
         rawEngine(a.engine_).publishReceiverState();
     }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
-    static cascade::net::CatRadio catStatus(AppWindow& a) { return rawEngine(a.engine_).catStatusNow(); }
+    // CAT's six figures as a CAT connection gets them since stage 5c: the read_state of a session of its own (opened as the server opens
+    // one, closed after the read) turned into the figures by net::catRadioFromRx. Not Engine::catStatusNow any more - that is gone.
+    static cascade::net::CatRadio catStatus(AppWindow& a) {
+        cascade::engine::Engine& e = rawEngine(a.engine_);
+        const FoxEngineApi* table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+        FoxSession* s = e.api().openInternalSession(cascade::engine::InternalKind::Cat, "golden");
+        cascade::net::CatRadio out;
+        if (table == nullptr || s == nullptr) { return out; }
+        FoxReceiverState st{};
+        st.structSize = sizeof(st);
+        for (int i = 0; i < 100 && table->read_state(s, &st) != FOXAPI_OK; ++i) {}
+        out = cascade::net::catRadioFromRx(st);
+        table->close_session(s);
+        return out;
+    }
     // Engine stage 2's cost, measured on the real window (report only).
     static double publishNs(AppWindow& a, int n) {
         const auto t0 = std::chrono::steady_clock::now();

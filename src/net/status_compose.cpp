@@ -119,6 +119,9 @@ CatRadio catRadioFromState(const cascade::core::PublishedState& state) {
 
 CatRadio catRadioFromRx(const FoxReceiverState& rx) {
     CatRadio r;
+    // Nothing published yet (seq is 1 or more from the first publish on): what a reader of the window's snapshot got then - composeRadioStatus
+    // answers a default RadioStatus before state.app.published - and so what a CAT client is told (f 0, m RPRT -1), not the zero state's NFM.
+    if (rx.seq == 0) { return r; }
     r.running = (rx.flags & FOXAPI_RX_RUNNING) != 0u;
     r.centerHz = rx.centreHz;
     r.sampleRateHz = rx.sampleRateHz;

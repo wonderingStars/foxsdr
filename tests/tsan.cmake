@@ -99,6 +99,11 @@ set(CASCADE_TSAN_TESTS
     # SERVER_CONFIG on the host's worker thread against the pass, the HTTP and CAT threads reading the engine's publish and feeding the pull,
     # the password's hash against a restart, a stop that waits for a browser's open request while the pass keeps its rate, the teardown
     test_server_host
+    # stage 5c: CAT is an internal engine-API session - the real CAT listener over loopback sockets against the engine's pass on its own
+    # thread: a session opened on the acceptor thread and closed by the connection's, results collected by the connection against the pass
+    # that produces them, a thousand commands and a burst past the session's cap, a client that hangs up with its commands still queued,
+    # the listener stopped (and the engine torn down) with clients connected
+    test_cat_engine
     # ...and the window's side of it: a real AppWindow starting the engine's server from its settings panel and feeding a browser's audio stream
     test_window_web_feed
     # the pump move's step P3 (PluginUi's thread ownership): the directive the engine's pass posts and the window applies at the head

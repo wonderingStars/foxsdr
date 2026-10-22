@@ -10,8 +10,9 @@
 //   H2  THE WEB SERVER, started by SERVER_CONFIG on a worker: the SERVERS entry is ACTIVE on the port, the state carries WEB_LISTENING, the
 //       page answers, and /api/status is the engine's own publish byte for byte (statusJson over Engine::webStatusNow).
 //   H3  THE PULL IS ARMED: a POST /api/control reaches the pass and moves the radio; the spectrum the window feeds is what the page polls.
-//   H4  CAT, started by SERVER_CONFIG: f and F over a real socket, the F inside the band moving the offset only; the list counts the
-//       client and its commands, and counts them back down.
+//   H4  CAT, started by SERVER_CONFIG: f and F over a real socket, the F inside the band moving the offset only (through the connection's
+//       own engine session since stage 5c; tests/test_cat_engine.cpp holds the whole of that); the list counts the client and its
+//       commands, and counts them back down.
 //   H5  A CHANGE RESTARTS, AND A STOP STOPS: the port changes (the old one refuses, the new one answers), disabling closes the socket.
 //   H6  A REFUSAL IS A RESULT AND A RETRY IS THE OPERATOR'S: a port someone else holds is FAULT with the bind failure's sentence, and the
 //       same configuration said again after it is freed starts the server; an off-machine bind with no password never opens a socket and
@@ -405,7 +406,7 @@ void testCatServer() {
     const FoxReceiverState st = r.state();
     const long long want = static_cast<long long>(st.centreHz + st.vfoOffsetHz + 0.5);
     CHECK_EQ(hz, std::to_string(want) + "\n");
-    // An F inside the band moves the offset only (planTune); the pass applies it through the pull.
+    // An F inside the band moves the offset only (planTune); the pass applies it from the connection's session (stage 5c: the internal tier).
     const long long target = static_cast<long long>(st.centreHz) + 40000;
     CHECK(sendRaw(s, "F " + std::to_string(target) + "\n"));
     CHECK_EQ(readLines(s, 1), std::string("RPRT 0\n"));

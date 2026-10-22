@@ -9,7 +9,10 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -26,6 +29,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
+
+#include "net/control_ops.hpp"
 
 namespace cascade::net {
 namespace {
@@ -126,7 +131,7 @@ bool sendAll(std::intptr_t sock, const std::string& data) {
 
 CatServer::~CatServer() { stop(); }
 
-void CatServer::setStatusProvider(StatusProvider fn) { status_ = std::move(fn); }
+void CatServer::setSessionOpener(CatSessionOpener fn) { opener_ = std::move(fn); }
 
 void CatServer::setUsageCallback(std::function<void()> fn) { usageCallback_ = std::move(fn); }
 
@@ -136,8 +141,8 @@ bool CatServer::start(std::uint16_t port, bool bindAll, std::string& error) {
         error = "the CAT server is already running";
         return false;
     }
-    if (!status_) {
-        error = "the CAT server has no status provider";
+    if (!opener_) {
+        error = "the CAT server has no engine session to answer from";
         return false;
     }
     if (!ensureWinsock()) {
@@ -330,6 +335,13 @@ void CatServer::acceptLoop() {
             closeSock(c);
             continue;
         }
+        // THE CONNECTION'S SESSION, opened here - after the cap, on the acceptor thread - and handed to the connection's thread, which
+        // closes it. An engine that will not give one (its session limits are reached) refuses the connection as the cap does.
+        std::unique_ptr<CatSession> session = opener_("cat:" + std::to_string(connections_.fetch_add(1, std::memory_order_relaxed) + 1));
+        if (!session) {
+            closeSock(c);
+            continue;
+        }
         clients_.fetch_add(1, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lk(clientsMu_);
@@ -343,8 +355,13 @@ void CatServer::acceptLoop() {
         // decrement below is deliberately the LAST thing this thread does with
         // `this` — stop() waits on that counter reaching zero, so anything
         // after it would be a use-after-free.
-        std::thread([this, c] {
-            serveClient(c);
+        std::thread([this, c, session = std::move(session)]() mutable {
+            int outstanding = 0;  // commands handed to the session whose results have not been collected
+            serveClient(c, *session, outstanding);
+            // What this client sent is applied before its session goes: a session that closes with commands queued has them refused.
+            drainSession(*session, outstanding);
+            // THE SESSION CLOSES HERE, before the count below drops: stop() seeing zero clients means no session of this server is left.
+            session.reset();
             {
                 std::lock_guard<std::mutex> lk(clientsMu_);
                 clientSocks_.erase(
@@ -359,7 +376,7 @@ void CatServer::acceptLoop() {
     }
 }
 
-void CatServer::serveClient(std::intptr_t sock) {
+void CatServer::serveClient(std::intptr_t sock, CatSession& session, int& outstanding) {
     // FIRST, set this socket's timeouts explicitly rather than inheriting
     // whatever the listener carries.
     //
@@ -416,6 +433,17 @@ void CatServer::serveClient(std::intptr_t sock) {
 #endif
         IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&yes), sizeof(yes));
 
+    // The results of what this connection submitted are collected as it goes (see CatSession::pollResults): after every request, and on
+    // every idle tick below - a session that never collects them is answered BUSY past 256 outstanding commands.
+    const auto collect = [&] {
+        outstanding -= session.pollResults();
+        if (outstanding < 0) outstanding = 0;
+    };
+
+    // The newest figures the session gave. A read can fail (the engine's publish was being replaced twice running); the last good ones
+    // stand in, as the old lock-free read fell back to the installed block rather than answer nothing.
+    CatRadio lastRadio;
+
     std::string pending;
     char buf[512];
     for (;;) {
@@ -430,7 +458,10 @@ void CatServer::serveClient(std::intptr_t sock) {
         if (n < 0) {
             // An expired poll interval is an idle client, not a broken one:
             // go round, re-read stopping_, and block again.
-            if (isRecvTimeout(lastSocketError())) continue;
+            if (isRecvTimeout(lastSocketError())) {
+                if (outstanding > 0) collect();  // the idle tick
+                continue;
+            }
             break;  // the socket failed
         }
         pending.append(buf, static_cast<std::size_t>(n));
@@ -448,21 +479,26 @@ void CatServer::serveClient(std::intptr_t sock) {
             const std::string line = pending.substr(0, nl);
             pending.erase(0, nl + 1);
 
-            CatRadio snapshot = status_ ? status_() : CatRadio{};
-            const CatResult result = executeCatLine(line, snapshot);
+            // The figures come from the session's own read_state, asked afresh for every line (as they always were). BUSY is the engine
+            // saying the read overlapped a publish: ask once more, then keep the last good ones.
+            CatRadio radio = lastRadio;
+            if (session.readState(radio) || session.readState(radio)) lastRadio = radio;
+            const CatResult result = executeCatLine(line, lastRadio);
             commands_.fetch_add(1, std::memory_order_relaxed);
 
             if (result.hasControl) {
-                std::lock_guard<std::mutex> lk(controlsMu_);
-                // Bounded exactly as the browser's queue is: past the cap the
-                // OLDEST request is dropped, because a stalled GUI thread must
-                // not let a client grow this without limit and the most recent
-                // instruction is the one a control surface owes the user.
-                while (controls_.size() >= kMaxQueuedCatControls) {
-                    controls_.erase(controls_.begin());
+                // F is SET_CENTRE and SET_VFO_OFFSET in one batch, never SET_FREQUENCY: cat_protocol's planTune decided whether the
+                // centre moves (outside the band; the offset returns to 0) or only the VFO (inside it - no retune, no gap in the
+                // waterfall), and the translation keeps that order - the mode before the bandwidth, the centre before the offset.
+                std::vector<FoxCommand> batch;
+                for (const cascade::core::cmd::QueuedCommand& q : controlRequestToCommands(result.control, ControlOpsContext{})) {
+                    batch.push_back(q.c);
                 }
-                controls_.push_back(result.control);
+                // A command the session answers BUSY (256 outstanding: the engine is not applying) is not taken, and the client is told
+                // what it was always told: the set was accepted. The old queue dropped its OLDEST past 64; the session refuses the NEWEST.
+                if (!batch.empty()) outstanding += session.submit(batch);
             }
+            collect();
             // Returning is enough: the caller deregisters the socket and then
             // closes it, which is the only ordering under which stop() can
             // never shut down a handle that has already been closed here.
@@ -472,11 +508,15 @@ void CatServer::serveClient(std::intptr_t sock) {
     }
 }
 
-std::vector<ControlRequest> CatServer::takePendingControls() {
-    std::lock_guard<std::mutex> lk(controlsMu_);
-    std::vector<ControlRequest> out;
-    out.swap(controls_);
-    return out;
+// Waits - bounded, and not at all when the server is stopping - for what this connection handed over to be applied and its results
+// collected, so the session can be closed without having its commands refused (see kCatSessionDrainMs).
+void CatServer::drainSession(CatSession& session, int& outstanding) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kCatSessionDrainMs);
+    while (outstanding > 0 && !stopping_.load(std::memory_order_relaxed) && std::chrono::steady_clock::now() < deadline) {
+        outstanding -= session.pollResults();
+        if (outstanding <= 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
 }
 
 }  // namespace cascade::net

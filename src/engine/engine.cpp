@@ -100,14 +100,16 @@ Engine::Engine(EngineHost& host)
         passDoneCv_.notify_all();
     });
     // THE ENGINE OWNS THE WEB SERVER AND THE CAT LISTENER (stage 5b), and they answer from the engine's own publish. Installed once, before
-    // any start (a server refuses to change a provider while it runs): the browser's status is the whole block of one publish, CAT's figures
-    // are read lock-free, and the browser's own poll of its status is the web remote's keep-alive (API 0.2: only an interface's heartbeat
-    // counts) - never its PTT re-assertions. They run on the servers' threads and read nothing but the snapshot and the API host, which
-    // outlive them (servers_ is the last member: ~Engine, and shutdownQuiesce before it, stop them first).
+    // any start (a server refuses to change a provider while it runs): the browser's status is the whole block of one publish, the browser's
+    // own poll of its status is the web remote's keep-alive (API 0.2: only an interface's heartbeat counts) - never its PTT re-assertions -
+    // and (stage 5c) every CAT connection gets a SESSION of its own on the table: its figures are that session's read_state and its sets
+    // are that session's submits. They run on the servers' threads and read nothing but the snapshot and the API host, which outlive them
+    // (servers_ is the last member: ~Engine, and shutdownQuiesce before it, stop them first - which closes every CAT session). The host is
+    // reached through api_ at the call: configureApi replaces it, before any server starts.
     ServerHost::Providers providers;
     providers.webStatus = [this] { return webStatusNow(); };
     providers.webPoll = [this] { api_->webRemoteBeat(); };
-    providers.catStatus = [this] { return catStatusNow(); };
+    providers.catSession = [this](const std::string& label) { return openCatSession(*api_, label); };
     servers_.attach(std::move(providers));
 }
 
@@ -120,14 +122,9 @@ cascade::net::RadioStatus Engine::webStatusNow() const {
     return cascade::net::composeRadioStatus(full->state, full->lists.get());
 }
 
-// CAT reads figures only (frequency, offset, rate, mode, bandwidth, run state), so it takes them lock-free. In the rare case a read keeps
-// overlapping a publish it takes the installed block instead - whole, and at most a pass older - rather than answer nothing.
-// (AppWindow::catStatusNow, moved here with the server.)
-cascade::net::CatRadio Engine::catStatusNow() const {
-    cascade::core::PublishedState s;
-    if (!receiverSnapshot_->read(s)) { s = receiverSnapshot_->readFull()->state; }
-    return cascade::net::catRadioFromState(s);
-}
+// (CAT's figures - frequency, offset, rate, mode, bandwidth, run state - are not read here any more: each connection reads them through
+// the session it holds, the table's read_state; stage 5c deleted Engine::catStatusNow, and with it the Full-block fallback - the
+// connection retries a read that overlapped a publish once and keeps its last good figures.)
 
 void Engine::installServerPull() {
     setRemoteControlSource([this] {
@@ -9137,6 +9134,9 @@ void Engine::pumpInputs() {
 // the CAT listener will hold in place of the pull) submit to a queue of their own, drained here, after the pull's requests (which only
 // the old path uses, and which shrinks as the servers move): the order the operator could observe is the same one, by construction
 // now - a session's command can never be applied before the local and API queues of the pass it lands in, whenever it arrived.
+// STAGE 5c: CAT IS ON THE TIER. Every CAT connection holds such a session (net/cat_server.hpp), so the pull carries the browser's requests
+// alone, and the phase's order - the browser's pulled requests, the web session's commands, then CAT's - is the one the pull gave (web
+// first, then CAT) with nothing left to keep it but the phase itself.
 void Engine::pumpRemoteControls() {
     std::shared_ptr<const RemoteControlSource> source;
     {

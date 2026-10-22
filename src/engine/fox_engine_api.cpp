@@ -1549,6 +1549,15 @@ public:
     FoxSession* openInternalSession(InternalKind kind, const std::string& label, int32_t* status) {
         return openInternal(kind, label, status);
     }
+    // TESTS ONLY (ApiHost::sessionCountForTest): the sessions the table holds now - every kind, detached ones included - and, of those,
+    // the engine-internal ones of `kind`. What proves a server closes the session it opened (stage 5c).
+    std::size_t sessionCount(InternalKind kind) {
+        std::lock_guard<std::mutex> lk(sessionsMutex_);
+        if (kind == InternalKind::None) { return sessions_.size(); }
+        std::size_t n = 0;
+        for (const auto& kv : sessions_) { n += kv.second->internal == kind ? 1u : 0u; }
+        return n;
+    }
     void setLists(std::shared_ptr<const ApiListBlock> l) {
         std::lock_guard<std::mutex> lk(listsMutex_);
         lists_ = std::move(l);
@@ -2945,6 +2954,7 @@ bool ApiHost::hostsServers() const { return impl_->hostsServers(); }
 std::int32_t ApiHost::validateForTest(FoxSession* s, const FoxCommand& c) {
     return s == nullptr ? FOXAPI_BAD_ARGUMENT : impl_->validateForTest(static_cast<ApiSession*>(s), c);
 }
+std::size_t ApiHost::sessionCountForTest(InternalKind kind) { return impl_->sessionCount(kind); }
 FoxSession* ApiHost::openInternalSession(InternalKind kind, const std::string& label, std::int32_t* status) {
     try {
         return impl_->openInternalSession(kind, label, status);

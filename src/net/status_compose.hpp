@@ -47,8 +47,8 @@ RadioStatus composeRadioStatus(const cascade::core::PublishedState& state, const
 CatRadio catRadioFrom(const RadioStatus& status);
 CatRadio catRadioFromState(const cascade::core::PublishedState& state);
 // ...and from what a CAT connection's own session reads (read_state's FoxReceiverState): the same six members composeRadioStatus
-// takes from the same fields, so an engine-internal CAT session (stage 5c) answers exactly what the window's snapshot read did.
-// Unlike catRadioFromState it does not know whether anything was published yet (the table says so in the state's `seq`).
+// takes from the same fields, so an engine-internal CAT session (stage 5c) answers exactly what the window's snapshot read did - and,
+// before anything was published (the state's `seq` is 0), the default figures catRadioFromState gives then.
 CatRadio catRadioFromRx(const FoxReceiverState& rx);
 
 }  // namespace cascade::net

@@ -2664,9 +2664,9 @@ public:
     // Just the web extras of the newest facts (a pointer copy under the same lock), for the publish.
     std::shared_ptr<const WebExtras> webExtras() const;
 
-    // THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md). The web remote and CAT hand the
-    // engine ControlRequests through queues of their own (WebServer/CatServer::takePendingControls - mutex-protected, any
-    // thread, bounded, drop-oldest). The ENGINE pulls them, in its own pass, in a phase of its own (pumpRemoteControls)
+    // THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md). The web remote hands the
+    // engine ControlRequests through a queue of its own (WebServer::takePendingControls - mutex-protected, any
+    // thread, bounded, drop-oldest; CAT did too until stage 5c, and holds sessions now). The ENGINE pulls them, in its own pass, in a phase of its own (pumpRemoteControls)
     // where the window's applyWebControls used to run in the frame: after the local and API queues and the inputs, before
     // the plugins' requests and the scanner. Nothing else applies a remote request, so the key rules (ApiHostImpl::rules_,
     // single-threaded by contract) and the whole of applyCommand are touched by the pumping thread alone. A front end that
@@ -2675,9 +2675,10 @@ public:
     // source of its own over servers of its own: the servers are the engine's (ServerHost) and installServerPull arms the pull over them.
     //
     // STAGE 5a: the same phase is where the ENGINE-INTERNAL SESSIONS' commands are applied (ApiHost::applyTail, called by pumpRemoteControls). The
-    // web server and CAT will hold sessions of their own (ApiHost::openInternalSession) instead of these queues; their submits go to a tier of
+    // web server and CAT hold sessions of their own (ApiHost::openInternalSession) instead of these queues; their submits go to a tier of
     // their own, drained here after the pull's requests, so "after the local and API queues, whenever it arrived" stops being a property of
-    // a pull and is structural (docs/api-0.3-additions.md 8.16.4). The pull stays until 5c/5d delete it.
+    // a pull and is structural (docs/api-0.3-additions.md 8.16.4). CAT holds one per connection since 5c (net/cat_server.hpp); the browser's
+    // pull stays until 5d deletes it.
     //
     // WHY A PULL AND NOT A PUSH THROUGH submitCommand OR THE API QUEUE: both drain BEFORE this phase, so a remote request
     // that arrived in the same pass as a local one would be applied FIRST and could win the key (rule 6, first come); the
@@ -2885,10 +2886,9 @@ public:
     // THE SERVER HOST (engine/server_host.hpp): the web server and the CAT listener, which the engine OWNS since stage 5b, their configuration
     // (FOXAPI_OP_SERVER_CONFIG, the engine's half of the config file), their status and live counters.
     ServerHost& servers() { return servers_; }
-    // What the web page's status and CAT's figures are read from: the newest publish (the whole block of one, or the figures alone), on the
-    // servers' own threads. The providers the engine's constructor hands the host.
+    // What the web page's status is read from: the newest publish (the whole block of one), on the server's own threads. The provider the
+    // engine's constructor hands the host. (CAT's figures are each connection's own session's read_state since stage 5c.)
     cascade::net::RadioStatus webStatusNow() const;
-    cascade::net::CatRadio catStatusNow() const;
     // THE FRONT END'S WAY OF ARMING THE PULL OVER THE ENGINE'S OWN SERVERS (stage 5b): installs, as the remote controls' source, the host's
     // pull (the browser's queued requests, then CAT's, and whether the web server runs), exactly the source the window used to install over
     // the servers it owned. NOT done by the constructor: an engine with no source "pulls nothing and judges nothing" (below), which is what

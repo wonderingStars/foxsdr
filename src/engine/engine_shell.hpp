@@ -232,12 +232,13 @@ struct EngineStatusText {
 };
 
 // THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md): what a source hands the engine's pass when it
-// asks (Engine::RemoteControls is this). The web remote and CAT hand the engine ControlRequests through queues of their own
-// (WebServer/CatServer::takePendingControls - mutex-protected, any thread, bounded, drop-oldest); the ENGINE pulls them, in its own
-// pass, after the local and API queues and the inputs, before the plugins' requests and the scanner. Since stage 5b the servers and the
-// source are the engine's (ServerHost::pull, armed by EngineShell::create); the vocabulary stays here until 5c-5d delete the pull.
+// asks (Engine::RemoteControls is this). The web remote hands the engine ControlRequests through a queue of its own
+// (WebServer::takePendingControls - mutex-protected, any thread, bounded, drop-oldest; CAT did too until stage 5c, and holds sessions
+// now); the ENGINE pulls them, in its own pass, after the local and API queues and the inputs, before the plugins' requests and the
+// scanner. Since stage 5b the servers and the source are the engine's (ServerHost::pull, armed by EngineShell::create); the vocabulary
+// stays here until 5d deletes the pull.
 struct RemoteControls {
-    std::vector<cascade::net::ControlRequest> requests;  // web first, then CAT (the order applyWebControls had)
+    std::vector<cascade::net::ControlRequest> requests;  // the browser's (CAT's commands are the internal tier's since 5c)
     // Whether the server that carries the browser's key is running AT THE MOMENT OF THE PULL (the standing condition
     // of the remote key, docs/engine-stage3.md OPEN 7 (c)): when it is not, a key the web remote holds ends in the same
     // phase (FOXAPP_OP_WEB_CONTROL_STOPPED's rule), since no browser can ask again.
