@@ -7,19 +7,19 @@ Still not fixed: the 0.99.81 plugins-reload freeze itself remains open - this re
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.84.exe`:**
-`TBD`
+`8841de4d3b5850076590ff75cf49abf513a48c0dba882ef8f362c1fa3c133de6`
 
 **SHA-256 of `FoxSDR-0.99.84-x86_64.AppImage`:**
-`TBD`
+`c2ff74fb80647190ab211887f1f83de7e5a01f319d8714f41219797d82534308`
 
 **SHA-256 of `foxsdr-0.99.84-linux-x64.tar.gz`:**
-`TBD`
+`f40846c49a0b651d14f4d47ecc9ed2d9b95d140059c47fadea06c48e7c151b69`
 
 **SHA-256 of `FoxSDR-0.99.84-aarch64.AppImage`:**
-`TBD`
+`3bd35c4032207c74338ec6e819d8584a0202ee0dd746ea320407cc33b376a193`
 
 **SHA-256 of `foxsdr-0.99.84-linux-arm64.tar.gz`:**
-`TBD`
+`232e869533bc8b5e34f9e97fd7dfe111015e3721e74f049bce0352474bf8ad30`
 
 ## Features and fixes, 2026-10-22
 
