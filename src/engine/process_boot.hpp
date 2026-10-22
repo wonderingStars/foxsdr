@@ -27,9 +27,10 @@
 //     channel belongs to the interface that is on the desktop);
 //   * whether it installs the stderr capture (Host only: a service's stderr is
 //     its journal; the capture exists for "a window nobody was reading");
-//   * whether it installs the console-close handler (Host only; the Engine's
-//     signal path arrives in stage 7d and is gated here, beside it);
-//   * the signal path itself (none yet);
+//   * whether it installs the console-close handler (Host only, step 11; the
+//     Engine's is the signal path, next);
+//   * the signal path itself (Engine only, step 14, stage 7d: SIGTERM, SIGINT and
+//     SIGHUP on Linux, the same console handler on Windows - core/stop_signal.hpp);
 // and, added by 7b with the Engine's main, three more - the ones the Engine's
 // hermetic rule is made of (an Engine stores nothing until stage 7c wires its
 // config, and a service is not a user session):

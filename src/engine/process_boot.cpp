@@ -29,6 +29,7 @@
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
 #include "core/sentinel.hpp"
+#include "core/stop_signal.hpp"
 #include "core/tester_link.hpp"
 #include "core/updater.hpp"
 #include "core/version.hpp"
@@ -847,9 +848,10 @@ void readSentinelSeam(BootResult& boot) {
 // POSITION: after the tool modes and the stderr capture (a refused run never
 // reaches it) and BEFORE the sentinel and the application object, so a close of
 // the console during the plugin load already takes the orderly path. An Engine
-// installs no console handler: its terminate path is the signal path of stage 7d
-// (SIGTERM/SIGINT/SIGHUP on Linux, this same handler on Windows), and it will be
-// gated here, beside this, when it exists.
+// installs no console handler HERE: its terminate path is the signal path of stage
+// 7d (SIGTERM/SIGINT/SIGHUP on Linux, this same handler on Windows), and it is armed
+// in step 14, last, because on Linux it has to be installed after the exit recorder
+// (step 13) to compose with it.
 // ---------------------------------------------------------------------------
 void installConsoleHandler(ProcessKind kind, const BootResult& boot) {
     // KIND GATE.
@@ -927,6 +929,35 @@ void armSentinel(const BootResult& boot) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// STEP 14 - the stop signals. ENGINE ONLY (stage 7d).
+//
+// POSITION: LAST, after the sentinel and the exit recorder it arms (step 13),
+// and for one reason: on Linux the recorder installs its handler on SIGTERM,
+// SIGINT and SIGHUP (core/exit_record.hpp) when they are still at the default,
+// and the stop signals must find that handler beneath them and keep it, not
+// displace it or be skipped by it. Installed here, a first signal only asks for
+// the orderly stop and a later one is handed back to the recorder (which writes
+// down "ended by signal N" and lets the signal end the process); installed
+// before step 13 the recorder would have declined the signals as already
+// handled and a second one would end the process unrecorded
+// (core/stop_signal.hpp). On Windows this is the console handler step 11 gives
+// the Host, the same one. After every tool mode and helper, so a refused or
+// helper run never has a handler; before the engine exists, so a signal during
+// the restore is held and acted on at the engine's first wait.
+//
+// The Host does not take part: its stop is the window's close (step 11).
+// ---------------------------------------------------------------------------
+void armStopSignals(ProcessKind kind) {
+    // KIND GATE.
+    if (kind != ProcessKind::Engine) { return; }
+    if (!cascade::core::installStopSignals()) {
+        // The engine runs without a way to be stopped but a kill, and says so: a service manager's stop would then end
+        // it unrecorded, with the marker left FALSE.
+        std::fprintf(stderr, "foxsdr-engine: could not install the stop signal handlers; only a kill will end this run\n");
+    }
+}
+
 }  // namespace
 
 // THE SEQUENCE. One line per step, in the order that is the contract; the step
@@ -973,6 +1004,8 @@ BootResult bootProcess(ProcessKind kind, int argc, char** argv) {
     logConsoleOutcome();
     // STEP 13: the sentinel, last before the application exists.
     armSentinel(boot);
+    // STEP 14: the stop signals (Engine), after the exit recorder they compose with.
+    armStopSignals(kind);
     return boot;
 }
 

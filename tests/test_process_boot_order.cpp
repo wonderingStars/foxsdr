@@ -224,13 +224,14 @@ int main(int argc, char** argv) {
     const Body handler = bodyOf(boot, "void installConsoleHandler(");
     const Body outcome = bodyOf(boot, "void logConsoleOutcome(");
     const Body sentinel = bodyOf(boot, "void armSentinel(");
+    const Body stopSignals = bodyOf(boot, "void armStopSignals(");
     for (const Body* b : {&seq, &helpers, &arming, &claim, &link, &parse, &config, &capture, &seam, &handler,
-                          &outcome, &sentinel}) {
+                          &outcome, &sentinel, &stopSignals}) {
         CHECK(b->found());
     }
     if (!(seq.found() && helpers.found() && arming.found() && claim.found() && link.found() && parse.found() &&
           config.found() && capture.found() && seam.found() && handler.found() && outcome.found() &&
-          sentinel.found())) {
+          sentinel.found() && stopSignals.found())) {
         return testSummary("test_process_boot_order");
     }
 
@@ -239,7 +240,7 @@ int main(int argc, char** argv) {
     CHECK(inOrder(seqCode,
                   {"applyConsoleOwnership(", "runHelperModes(", "armDiagnostics(", "claimInstance(",
                    "activateLink(", "parseFlags(", "runToolMode(", "wireConfig(", "captureStderr(",
-                   "readSentinelSeam(", "installConsoleHandler(", "logConsoleOutcome(", "armSentinel("},
+                   "readSentinelSeam(", "installConsoleHandler(", "logConsoleOutcome(", "armSentinel(", "armStopSignals("},
                   "bootProcess"));
     // The console is the FIRST thing the function does: nothing but the opening
     // brace and whitespace before it.
@@ -319,6 +320,29 @@ int main(int argc, char** argv) {
         if (!ok) { std::printf("  %s: no 'kind != ProcessKind::Host' guard that returns before %s\n", g.name, g.effect); }
         CHECK(ok);
     }
+    // 7d: the stop signals are the ENGINE's (the Host's stop is the window's close, step 11), so the gate is the other way
+    // round - a guard on `kind != ProcessKind::Engine` that returns before the first effect - and the step is the LAST of
+    // the sequence, after the sentinel, so the exit recorder step 13 arms is already beneath them when they compose with it
+    // (core/stop_signal.hpp). It installs nothing but the stop signals, and boot never reaches for the handlers by hand.
+    {
+        const std::string code = slice(boot.blank, stopSignals);
+        const std::size_t guard = findIn(code, "kind != ProcessKind::Engine");
+        const std::size_t effect = findIn(code, "installStopSignals(");
+        const bool ok = guard != std::string::npos && effect != std::string::npos && guard < effect &&
+                        findIn(code.substr(guard, effect - guard), "return") != std::string::npos;
+        if (!ok) { std::printf("  armStopSignals: no 'kind != ProcessKind::Engine' guard that returns before installStopSignals(\n"); }
+        CHECK(ok);
+        CHECK(countOf(boot.blank, "installStopSignals(") == 1);
+        const std::string seqView = slice(boot.blank, seq);
+        const std::size_t sentinelAt = findIn(seqView, "armSentinel(");
+        const std::size_t signalsAt = findIn(seqView, "armStopSignals(");
+        CHECK(sentinelAt != std::string::npos && signalsAt != std::string::npos && sentinelAt < signalsAt);
+        // ...and it is the last step: nothing but the return follows it.
+        const std::size_t after = signalsAt == std::string::npos ? std::string::npos : seqView.find(';', signalsAt);
+        const std::string tail = after == std::string::npos ? std::string("?") : seqView.substr(after + 1);
+        CHECK(findIn(tail, "return boot") != std::string::npos);
+        CHECK(findIn(tail, "(kind") == std::string::npos && findIn(tail, "boot,") == std::string::npos);
+    }
     // The activateLink gate also covers the instance a link would be handed to:
     // the Engine branch (before the guard's return) writes no file, which the line
     // above shows; and no step outside the gates mentions the kind at all.
@@ -392,13 +416,13 @@ int main(int argc, char** argv) {
         CHECK(findIn(boot.blank, "ConfigLock") == std::string::npos);
         CHECK(findIn(boot.blank, "acquire(") == std::string::npos);
     }
-    // The sequence passes the kind to exactly the seven steps that take it: the four gated ones and the three whose
-    // inputs it decides.
+    // The sequence passes the kind to exactly the eight steps that take it: the five gated ones (7d's stop signals the
+    // fifth) and the three whose inputs it decides.
     for (const char* gated : {"armDiagnostics(kind", "claimInstance(kind", "activateLink(kind", "parseFlags(kind",
-                              "wireConfig(kind", "captureStderr(kind", "installConsoleHandler(kind"}) {
+                              "wireConfig(kind", "captureStderr(kind", "installConsoleHandler(kind", "armStopSignals(kind"}) {
         CHECK(findIn(seqCode, gated) != std::string::npos);
     }
-    CHECK(countOf(seqCode, "kind") == 7);  // those seven calls and nothing else in the sequence body mentions it
+    CHECK(countOf(seqCode, "kind") == 8);  // those eight calls and nothing else in the sequence body mentions it
 
     // --- 6. main() is the thin entry point it claims to be ----------------------
     const Views mv = makeViews(mainText);

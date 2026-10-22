@@ -545,11 +545,17 @@ endforeach()
 # drive whatever stale binary the build tree last held. They link the engine alone (no window include in them).
 foreach(_t IN ITEMS test_engine_main_version test_engine_main_args test_engine_main_helpers test_engine_main_smoke
                     test_engine_main_links_headless test_engine_main_config_roundtrip test_engine_main_clean_exit_marker
-                    test_engine_main_damaged_config test_engine_main_second_instance_refused)
+                    test_engine_main_damaged_config test_engine_main_second_instance_refused
+                    test_engine_main_sigterm test_engine_main_sigterm_wedged)
     if(TARGET ${_t})
         add_dependencies(${_t} foxsdr-engine cascade)
     endif()
 endforeach()
+# STAGE 7d: the wedged-stop test runs the production budget once (a stop wedged for 120 s, ended at 53 s + the 5 s grace),
+# on top of its seven-second cases, so the default 120 s is not enough; a bound that holds with room under a loaded machine.
+if(TARGET test_engine_main_sigterm_wedged)
+    set_tests_properties(test_engine_main_sigterm_wedged PROPERTIES TIMEOUT 360)
+endif()
 
 # THE STAGE-1 FIXTURE PLUGIN (engine extraction, docs/engine-stage1.md): a
 # real module - a decoder, two presets and a command key - so

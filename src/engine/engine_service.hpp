@@ -76,6 +76,11 @@ public:
     Engine& engine() { return engine_; }
     bool persistent() const { return !options_.configPath.empty(); }
 
+    // Where a hang report may go right now: the diagnostics directory when boot let this run write at all AND the
+    // stored Diagnostics switch (read by restore()) is on, else empty - the window's setReportDir rule, the one start()
+    // gives the control thread's watchdog. What the stop's budget guard (engine/shutdown_guard.hpp) is handed.
+    std::string reportDir() const { return diagnosticsEnabled_ ? options_.diagnosticsDir : std::string(); }
+
     // 1. THE LOCK. False when another program holds the settings file (the window application, or another
     // foxsdr-engine), or the lock cannot be asked for: `sentence` is then the whole refusal, ready to print.
     // A hermetic service holds nothing and always answers true. Call before restore().

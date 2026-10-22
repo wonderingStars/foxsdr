@@ -11,8 +11,8 @@
 // cascade_engine only; the configure-time walk (CMakeLists.txt, "the line
 // between them") covers it and so does tests/test_engine_main_links_headless.cpp.
 //
-// WHAT IT DOES TODAY (7b made the skeleton; 7c gave it a life-cycle and a config, 7d the signals,
-// 7e the provisioning):
+// WHAT IT DOES TODAY (7b made the skeleton; 7c gave it a life-cycle and a config, 7d the signals and
+// a bound on the stop, 7e the provisioning):
 //   * `--version`, the tool modes (`--selftest` and the hidden bench checks) and
 //     the child-process helper modes the engine re-spawns itself for
 //     (`--enumerate-json`, `--sentinel`, `--sdrplay-probe`, `--sdrplay-service-state`)
@@ -29,21 +29,33 @@
 //     restores the settings the way the window does, keeps them saved while it runs and writes
 //     the clean-exit marker last of all, in the window's stop order;
 //   * `--seconds N` ends the run after N seconds: the stop is the window's order and the exit
-//     code is 0. Without it the run goes on until the process is ended from outside - which,
-//     until 7d's signal path, is a kill, and the engine says so on its stderr line.
+//     code is 0. Without it the run goes on until it is ended from outside, and the engine says so
+//     on its stderr line;
+//   * a STOP SIGNAL ends it the same way (7d, core/stop_signal.hpp, armed by boot): SIGTERM (a service
+//     manager's stop), SIGINT (Ctrl+C) and SIGHUP (the terminal closing) on Linux; Ctrl+C, Ctrl+Break and
+//     a closing console on Windows (the window application's own console handler). The handler only asks;
+//     the wait loop below reads the request and runs the orderly stop, exit 0, the clean-exit marker last.
+//     A kill is not a stop: the marker stays FALSE and the next start counts the crash;
+//   * EVERY STOP IS BOUNDED (7d, finding F5 of 7c, engine/shutdown_guard.hpp): armed around
+//     EngineService::stop() whatever ended the run - a signal, `--seconds`, a run that failed to start - with
+//     the window teardown's own budget (HangWatchdog::kShutdownThresholdMs, 53 s, a hang report when a report
+//     directory is allowed) and ended after it, with exit code 3, if it has not returned.
 //
 // EXIT CODES (cascade's: 0 success, 1 a refused or failed run, 2 a refused
 // helper argument):
-//   0   the run was asked to end and did: `--seconds` elapsed and the engine stopped; a
-//       tool mode that passed; `--version`
+//   0   the run was asked to end and did: `--seconds` elapsed, or a stop signal / console event arrived,
+//       and the engine stopped in order; a tool mode that passed; `--version`
 //   1   a refused argument; a tool mode that failed; the settings file is in use by another
 //       program; the engine could not be started (it threw, or the receiver did not come up) -
 //       the reason is on stderr
 //   2   a helper mode refused its arguments (bootProcess)
+//   3   the stop did not finish within its budget (53 s, then a 5 s grace for the hang report) and the
+//       process was ended: the plugin unload, the pipeline join or a driver's close wedged. The clean-exit
+//       marker is written last of all, so unless the stop had got to it the next start counts the run as a crash
+//   (a process ended by a KILL has no code of its own: the operating system's - 137 for SIGKILL under a shell)
 //
 // stdout carries only what a mode prints (`--version`'s one line, a tool mode's
 // verdict); the engine's own lines go to stderr, where a service manager keeps them.
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -55,15 +67,18 @@
 
 #include "core/diag_log.hpp"
 #include "core/receiver_snapshot.hpp"
+#include "core/stop_signal.hpp"
 #include "core/version.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/process_boot.hpp"
+#include "engine/shutdown_guard.hpp"
 
 namespace {
 
 using cascade::engine::Engine;
 using cascade::engine::EngineService;
+using cascade::engine::ShutdownGuard;
 
 constexpr int kExitOk = 0;
 constexpr int kExitFailed = 1;
@@ -77,10 +92,10 @@ constexpr std::chrono::milliseconds kStartWait{5000};
 // saved (EngineService::keep, which looks at them a few times a second whatever this is).
 constexpr std::chrono::milliseconds kWaitSlice{20};
 
-// Set by whatever ends the run from outside. Nothing sets it in 7c (7d's
-// SIGTERM/SIGINT/SIGHUP path and the console-close handler will); the wait loop
-// reads it so that path needs no change here.
-std::atomic<bool> g_stopRequested{false};
+// Has something ended the run from outside: a stop signal (SIGTERM, SIGINT, SIGHUP) or a console event (Ctrl+C,
+// Ctrl+Break, a closing console), armed by boot (step 14). The handlers only set a flag; the wait loops below read it
+// and the run stops in order, on this thread.
+bool stopRequested() { return cascade::core::stopSignalRequested(); }
 
 bool receiverRunning(const Engine& engine) {
     cascade::core::PublishedState ps = cascade::core::initialPublishedState();
@@ -95,6 +110,19 @@ int envMillis(const char* name) {
     char* end = nullptr;
     const long n = std::strtol(v, &end, 10);
     return (end != v && *end == '\0' && n > 0 && n <= 600000L) ? static_cast<int>(n) : 0;
+}
+
+// The budget guard for one stop (shutdown_guard.hpp): the window teardown's budget, the hang report when this run may write
+// one, and - a bounded run's TEST SEAM only (`--seconds`, as the unload stall above) - a smaller budget, so a wedged stop can
+// be ended in seconds instead of a minute.
+ShutdownGuard::Options guardOptions(const EngineService& service, const cascade::engine::BootResult& boot) {
+    ShutdownGuard::Options o;
+    o.reportDir = service.reportDir();
+    if (boot.seconds >= 0.0) {
+        const int ms = envMillis("FOXSDR_ENGINE_SHUTDOWN_BUDGET_MS");
+        if (ms > 0) { o.budgetMs = static_cast<unsigned>(ms); }
+    }
+    return o;
 }
 
 // The whole run: lock, restore, start, wait (keeping the settings), stop. Returns the exit code.
@@ -123,14 +151,22 @@ int runEngine(const cascade::engine::BootResult& boot) {
     const EngineService::Restored restored = service.restore();
     if (!restored.error.empty() && !restored.damaged) {
         std::fprintf(stderr, "foxsdr-engine: %s\n", restored.error.c_str());
-        service.stop();
+        {
+            ShutdownGuard bound(guardOptions(service, boot));  // a stop is bounded whatever ended the run
+            bound.arm();
+            service.stop();
+        }
         return kExitFailed;
     }
 
     std::string why;
     if (!service.start(why)) {
         std::fprintf(stderr, "foxsdr-engine: %s\n", why.c_str());
-        service.stop();
+        {
+            ShutdownGuard bound(guardOptions(service, boot));
+            bound.arm();
+            service.stop();
+        }
         return kExitFailed;
     }
 
@@ -140,7 +176,7 @@ int runEngine(const cascade::engine::BootResult& boot) {
     };
 
     bool up = false;
-    while (!up && !g_stopRequested.load() &&
+    while (!up && !stopRequested() &&
            std::chrono::steady_clock::now() - t0 < kStartWait) {
         up = receiverRunning(engine);
         if (!up) {
@@ -149,7 +185,7 @@ int runEngine(const cascade::engine::BootResult& boot) {
         }
     }
     int code = kExitOk;
-    if (!up && !g_stopRequested.load()) {
+    if (!up && !stopRequested()) {
         std::fprintf(stderr, "foxsdr-engine: the receiver did not report running within %lld ms\n",
                      static_cast<long long>(kStartWait.count()));
         code = kExitFailed;
@@ -163,17 +199,31 @@ int runEngine(const cascade::engine::BootResult& boot) {
                          cascade::versionString(), tail);
         }
         std::fflush(stderr);
-        while (!g_stopRequested.load() && (boot.seconds < 0.0 || elapsedS() < boot.seconds)) {
+        while (!stopRequested() && (boot.seconds < 0.0 || elapsedS() < boot.seconds)) {
             service.keep();
             std::this_thread::sleep_for(kWaitSlice);
         }
     }
 
+    // WHAT ENDED THE RUN, when it was asked from outside: said before the stop begins, so a journal reads "asked, then
+    // stopping, then stopped" and a stop that wedges is known to have been the one that was asked for.
+    if (stopRequested()) {
+        const char* what = cascade::core::stopSignalName();
+        std::fprintf(stderr, "foxsdr-engine: stop requested (%s), stopping\n", *what != '\0' ? what : "a stop signal");
+        std::fflush(stderr);
+    }
+
     // THE STOP, in the window's order (EngineService::stop: no sound-card close waited for, quiesce, the
     // final-state save, stop, release, the clean-exit marker, the last save waited for within its bound, the
-    // drain).
+    // drain), UNDER ITS BUDGET (ShutdownGuard: the hang watchdog's shutdown budget and, past it, the end of the
+    // process with exit code 3). Armed whatever ended the run - a signal or `--seconds` - and disarmed when the stop
+    // returns.
     const std::uint64_t passes = engine.passesEnded();
-    service.stop();
+    {
+        ShutdownGuard bound(guardOptions(service, boot));
+        bound.arm();
+        service.stop();
+    }
     std::fprintf(stderr, "foxsdr-engine: stopped after %.1f s (%llu passes)\n", elapsedS(),
                  static_cast<unsigned long long>(passes));
     if (persistent) {

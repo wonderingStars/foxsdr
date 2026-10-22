@@ -21,6 +21,14 @@
 // must not put a console window on the desktop). POSIX: fork/execv. The POSIX
 // half was written on a machine that cannot run it and is UNVERIFIED until the
 // Linux jobs run it.
+//
+// ASKING A CHILD TO STOP (stage 7d): Child::requestStop() sends what an operator sends. POSIX: a signal (SIGTERM by
+// default). Windows: a console event - Ctrl+Break, the one a console can deliver to a process group other than the
+// sender's (the system switches Ctrl+C off in a new group; the engine's handler answers the two alike). A console
+// event is addressed to a process group on the SENDER'S console, so a child that is to be asked must be started with
+// setConsoleGroup(true) BEFORE start(): it then shares this process's console (one is allocated, hidden, when there is
+// none - a ctest run from a service has no console) in a process group of its own, instead of the hidden console of
+// its own CREATE_NO_WINDOW gives it, which no event of ours could reach.
 #pragma once
 
 #include <algorithm>
@@ -131,11 +139,30 @@ public:
     Child& operator=(const Child&) = delete;
     ~Child() { kill(); }
 
+    // Windows only (a no-op elsewhere): start the next child on THIS process's console, in a process group of its own,
+    // so requestStop() can reach it. See the header comment.
+    void setConsoleGroup(bool on) {
+#if defined(_WIN32)
+        consoleGroup_ = on;
+#else
+        (void)on;
+#endif
+    }
+
     // Start `exe` with `args`, in `cwd`, its stdout and stderr in `outFile` and `errFile`.
     bool start(const fs::path& exe, const std::vector<std::string>& args, const fs::path& cwd, const fs::path& outFile,
                const fs::path& errFile) {
         t0_ = std::chrono::steady_clock::now();
 #if defined(_WIN32)
+        DWORD creationFlags = CREATE_NO_WINDOW;
+        if (consoleGroup_) {
+            // A console to share: this process's, or one made for the occasion and hidden at once.
+            if (::GetConsoleWindow() == nullptr) {
+                ::AllocConsole();
+                if (HWND w = ::GetConsoleWindow()) { ::ShowWindow(w, SW_HIDE); }
+            }
+            creationFlags = CREATE_NEW_PROCESS_GROUP;
+        }
         SECURITY_ATTRIBUTES sa{};
         sa.nLength = sizeof(sa);
         sa.bInheritHandle = TRUE;
@@ -164,7 +191,7 @@ public:
         si.hStdOutput = hOut;
         si.hStdError = hErr;
         PROCESS_INFORMATION pi{};
-        const BOOL ok = ::CreateProcessW(exe.wstring().c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+        const BOOL ok = ::CreateProcessW(exe.wstring().c_str(), cmd.data(), nullptr, nullptr, TRUE, creationFlags,
                                          nullptr, cwd.wstring().c_str(), &si, &pi);
         closeAll(hOut, hErr, hIn);
         if (!ok) { return false; }
@@ -199,6 +226,25 @@ public:
     }
 
     unsigned long pid() const { return static_cast<unsigned long>(pid_); }
+
+    // Ask the child to stop, as an operator does. POSIX: kill(pid, `posixSignal`) (SIGTERM, SIGINT, SIGHUP). Windows:
+    // Ctrl+Break to the child's process group (`posixSignal` is ignored; the child must have been started with
+    // setConsoleGroup(true)); this process ignores the event itself for the duration. True when the system accepted it.
+    bool requestStop(int posixSignal = 15) {
+#if defined(_WIN32)
+        (void)posixSignal;
+        if (process_ == nullptr || done_) { return false; }
+        ::SetConsoleCtrlHandler(&ignoreEvent, TRUE);
+        const bool ok = ::GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid_) != 0;
+        // The event is delivered on a thread the system makes in each receiving process; give it the moment it takes
+        // before this process's own handler is put back, so an event that is ever addressed to us is still ignored.
+        ::Sleep(100);
+        ::SetConsoleCtrlHandler(&ignoreEvent, FALSE);
+        return ok;
+#else
+        return pid_ > 0 && !done_ && ::kill(pid_, posixSignal) == 0;
+#endif
+    }
 
     // Wait up to `timeoutMs` for the child to end by itself. True when it has (its exit code is then in code()).
     bool waitExit(int timeoutMs) {
@@ -287,6 +333,8 @@ public:
 
 private:
 #if defined(_WIN32)
+    static BOOL WINAPI ignoreEvent(DWORD) { return TRUE; }
+    bool consoleGroup_ = false;
     static void closeAll(HANDLE a, HANDLE b, HANDLE c) {
         for (HANDLE h : {a, b, c}) {
             if (h != INVALID_HANDLE_VALUE && h != nullptr) { ::CloseHandle(h); }
