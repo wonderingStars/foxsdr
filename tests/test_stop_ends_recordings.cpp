@@ -76,6 +76,8 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -175,7 +177,10 @@ class Child {
 public:
     bool start(const fs::path& logPath) {
 #if defined(_WIN32)
-        const std::string exe = std::string(CASCADE_APP_BINDIR) + "/cascade.exe";
+        // FOXSDR_TEST_APP_EXE: another build of the application to run instead (the stage-5e measurement ran this test against the 5d binary
+        // and this tree's, side by side). Unset: the one built beside this test.
+        const char* other = std::getenv("FOXSDR_TEST_APP_EXE");
+        const std::string exe = (other != nullptr && *other != '\0') ? std::string(other) : std::string(CASCADE_APP_BINDIR) + "/cascade.exe";
         SECURITY_ATTRIBUTES sa{};
         sa.nLength = sizeof sa;
         sa.bInheritHandle = TRUE;
@@ -530,6 +535,7 @@ public:
         const int port = freeLoopbackPort();
         CHECK(port > 0);
         if (port <= 0) { return false; }
+        port_ = port;
 
         const fs::path cfgPath = dir_ / "config.json";
         {
@@ -657,12 +663,14 @@ public:
     ~Session() { close(); }
 
     httplib::Client& cli() { return *cli_; }
+    int port() const { return port_; }
     const fs::path& dir() const { return dir_; }
     const fs::path& recDir() const { return recDir_; }
 
 private:
     fs::path dir_;
     fs::path recDir_;
+    int port_ = 0;
     Child child_;
     std::unique_ptr<httplib::Client> cli_;
     int failedAtStart_ = 0;
@@ -773,7 +781,8 @@ void idleStopDoesNotWaitOnTheRecorders() {
     // found the mutex free, and the slow frame in the log was that earlier
     // one. The hold now begins inside the stop's own request, and the number
     // asserted on is the recorders' part of the stop as stopReceiver measures
-    // it (~1490 ms with the guard removed, 0 ms with it).
+    // it (~1490 ms with the guard removed, 0 ms with it). (Since stage 5e the window pushes nothing to the page - the audio is the
+    // engine's - so the next case below holds the other half: a browser LISTENING does not stall the window under the same hold.)
     setEnv("FOXSDR_HOLD_AUDIO_LOCK", "1500");
     Session ss;
     const bool opened = ss.open("idlestop", "", "siggen");
@@ -823,6 +832,118 @@ void idleStopDoesNotWaitOnTheRecorders() {
     // The recorders had nothing to end, so the stop spent no time on them - not
     // the hold, which would be 1000 ms and more.
     CHECK(recordersMs >= 0 && recordersMs < 100);
+}
+
+// --- Session 1c: a browser LISTENING does not make the window wait for the signal thread (stage 5e; the 0.99.68 ledger line) -----------
+
+void aListeningBrowserDoesNotStallTheWindowUnderAHeldAudioLock() {
+    // THE LEDGER'S LINE (docs/engine-merge-0.99.84.md): "the browser remote no longer makes the window wait for the signal thread each frame
+    // - carried by the architecture (the pass publishes the audio; unverified)". What 0.99.68 fixed: the window's frame read the audio tap for
+    // the page (publishWebAudio -> Pipeline::audioTap) and the tap queued behind the DSP thread's whole block - 1 507 ms inside the frame with
+    // the block stretched to 1 500 ms. Since stage 5e the window reads nothing for the page at all (the engine's read_audio feeds the ring, on
+    // the HTTP thread that reads and in the pass), so this holds the property on the real application: a browser LISTENING (the audio stream
+    // open, the spectrum long-poll running) while the pipeline's audio mutex is held for 1 500 ms by the seam, and the window's frames - read
+    // from the slow-frame lines the frame timer writes for a frame of 250 ms and more - never stall. The instrument has that resolution: a
+    // stall of the old kind is a line of ~1 500 ms.
+    //
+    // THE PASS MUST BE THE PRODUCT'S (FOXSDR_PASS=free). A bounded run (--frames N, which every session here is, and which the hold seam needs)
+    // STEPS the engine's pass from the window's frame: the frame waits for each part of it, so a pass held 1 500 ms in the stop is a window
+    // frame held 1 500 ms - by the test's arrangement, not by the product's (the first runs of this case, stepped, read "frame: 1514 ms, 1513 ms
+    // of it in pre-draw" on this tree and on the 5d build alike - stepPass(Front), found by timing the frame's calls - which is what sent the
+    // search for the cause to the arrangement).
+    setEnv("FOXSDR_PASS", "free");
+    setEnv("FOXSDR_HOLD_AUDIO_LOCK", "1500");
+    Session ss;
+    const bool opened = ss.open("holdlisten", "", "siggen");
+    setEnv("FOXSDR_HOLD_AUDIO_LOCK", "");
+    setEnv("FOXSDR_PASS", "");
+    if (!opened) { return; }
+    httplib::Client& cli = ss.cli();
+    nlohmann::json s;
+    CHECK(control(cli, R"({"running":true})"));
+    CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return jb(j, "running"); }));
+
+    // The browser listening: audio stream and spectrum long-poll, each on its own connection, until told to stop.
+    std::atomic<bool> stop{false};
+    std::atomic<std::size_t> audioBytes{0};
+    std::atomic<int> spectrumFrames{0};
+    const int port = ss.port();
+    std::thread audio([&] {
+        httplib::Client c("127.0.0.1", port);
+        c.set_connection_timeout(5, 0);
+        c.set_read_timeout(30, 0);
+        (void)c.Get("/api/audio", [&](const char*, std::size_t len) {
+            audioBytes += len;
+            return !stop.load();
+        });
+    });
+    std::thread spectrum([&] {
+        httplib::Client c("127.0.0.1", port);
+        c.set_connection_timeout(5, 0);
+        c.set_read_timeout(10, 0);
+        std::uint64_t cursor = 0;
+        while (!stop.load()) {
+            const auto r = c.Get(("/api/spectrum?since=" + std::to_string(cursor)).c_str());
+            if (r && r->status == 200) {
+                const nlohmann::json j = nlohmann::json::parse(r->body, nullptr, false);
+                if (!j.is_discarded() && j.value("fresh", false)) {
+                    cursor = j.value("seq", std::uint64_t{0});
+                    ++spectrumFrames;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    });
+    const auto flowing = [&] {
+        for (int i = 0; i < 400; ++i) {
+            if (audioBytes.load() >= 48000 && spectrumFrames.load() >= 5) { return true; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return false;
+    };
+    const bool upAndListening = flowing();
+    CHECK(upAndListening);
+
+    // THE STOP: the first stop of a running receiver that a control request makes takes the hold (inside the stop). Meanwhile this thread asks
+    // the page's status as a browser's own poll does, and reports how long each answer took: the HTTP side is not held up by the block either.
+    CHECK(control(cli, R"({"running":false})"));
+    long long worstStatusMs = 0;
+    int polls = 0;
+    const auto holdEnds = std::chrono::steady_clock::now() + std::chrono::milliseconds(2200);
+    while (std::chrono::steady_clock::now() < holdEnds) {
+        const auto t0 = std::chrono::steady_clock::now();
+        nlohmann::json j;
+        if (getStatus(cli, j)) {
+            ++polls;
+            worstStatusMs = std::max<long long>(worstStatusMs, std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    const std::size_t bytesAtEnd = audioBytes.load();
+    const int framesAtEnd = spectrumFrames.load();
+    stop = true;
+    audio.join();
+    spectrum.join();
+    s = ss.settle();
+    const std::string text = diagLogOf(ss);
+    const std::size_t held = text.find("test: holding the audio lock for 1500 ms");
+    CHECK(held != std::string::npos);
+    const std::size_t from = held == std::string::npos ? 0 : held;
+    // The arrangement under test is the product's: the log says which pass this run had.
+    const std::size_t passAt = text.find("engine pass: free-running");
+    const std::size_t steppedAt = text.find("engine pass: STEPPED");
+    const std::string passLine = passAt != std::string::npos
+                                     ? text.substr(passAt, text.find('\n', passAt) - passAt)
+                                     : (steppedAt != std::string::npos ? text.substr(steppedAt, text.find('\n', steppedAt) - steppedAt) : std::string("(not logged)"));
+    std::printf("  [holdlisten] %s\n", passLine.c_str());
+    CHECK(passAt != std::string::npos && steppedAt == std::string::npos);
+    const std::string slowLine = firstSlowFrameLine(text, from);
+    std::printf("  a browser listening (audio %zu bytes, %d spectrum frames by the end) under a 1500 ms hold of the audio lock: %d status polls, "
+                "the slowest answered in %lld ms; first slow window frame (250 ms and over) after the hold began: %s\n",
+                bytesAtEnd, framesAtEnd, polls, worstStatusMs, slowLine.empty() ? "(none logged)" : slowLine.c_str());
+    CHECK(slowLine.empty());       // no frame of the window waited for the signal thread
+    CHECK(polls >= 10);
+    CHECK(worstStatusMs < 500);    // a status poll is the HTTP side of the same property
 }
 
 // --- Session 2: a fault mid-take ---------------------------------------------------------
@@ -1253,6 +1374,7 @@ int main() {
     everyStopUsesTheRoutine();
     webStopEndsTakes();
     idleStopDoesNotWaitOnTheRecorders();
+    aListeningBrowserDoesNotStallTheWindowUnderAHeldAudioLock();
     faultEndsTakes();
     sameRateSwitchEndsIqTake();
     std::error_code ec;

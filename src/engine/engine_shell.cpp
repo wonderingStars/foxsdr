@@ -277,27 +277,34 @@ void EngineShell::seamInstallSource(std::unique_ptr<cascade::source::IqSource> s
 
 std::unique_ptr<HostPluginFeed> EngineShell::makePluginFeed(HostPluginFeed::Steps steps) {
     Engine& e = SHELL_ENGINE;
+    // THE PICTURES THE WINDOW DRAWS ARE READ FROM THE ENGINE'S ONE ACCUMULATOR (stage 5e: a decoder offers a picture once, so only one
+    // thing may poll the runner - the engine's image feed, which also encodes them for the web page).
     return std::make_unique<PluginFeedImpl>(
-        e, std::move(steps), [&e](std::vector<cascade::core::HostImage>& out) { e.pluginRunner_.pollImages(out); });
+        e, std::move(steps), [&e](std::vector<cascade::core::HostImage>& out) { e.servers().images().copyTo(out); });
 }
 
 // --- CLASS WEB / CAT ---------------------------------------------------------------------------------------------------------
 
-// What the window still feeds the engine-owned web server (stage 5b; all of it goes in 5e). The server's stores are thread-safe: these are
-// forwards.
-std::uint64_t EngineShell::audioSamplesProduced() const { return SHELL_ENGINE.pipeline_.audioSamplesProduced(); }
-std::size_t EngineShell::audioTap(float* out, std::size_t frames) const { return SHELL_ENGINE.pipeline_.audioTap(out, frames); }
-void EngineShell::pushWebAudio(const float* samples, std::size_t frames) { SHELL_ENGINE.servers().webServer().pushAudio(samples, frames); }
-void EngineShell::setWebImages(std::vector<cascade::net::WebImage> images) { SHELL_ENGINE.servers().webServer().setImages(std::move(images)); }
-std::vector<cascade::net::WebServer::TileRequest> EngineShell::takeWebTileRequests() {
-    return SHELL_ENGINE.servers().webServer().takePendingTileRequests();
-}
-void EngineShell::setWebTile(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t> bmp) {
-    SHELL_ENGINE.servers().webServer().setTile(z, x, y, std::move(bmp));
-}
-void EngineShell::clearWebTiles() { SHELL_ENGINE.servers().webServer().clearTiles(); }
-void EngineShell::publishWebSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz) {
-    SHELL_ENGINE.servers().publishSpectrum(seq, bins, centreHz, SHELL_ENGINE.pipeline_.inputRateHz());
+// The basemap's tiles, the one thing the window still serves the page (stage 5e). The web server's tile store is thread-safe; this is the
+// window's frame draining the wants and publishing the answers, with the bound the frame has always had.
+void EngineShell::serveWebTiles(bool clearFirst, bool serve, std::size_t maxTiles, const WebTileSource& source) {
+    cascade::net::WebServer& web = SHELL_ENGINE.servers().webServer();
+    if (clearFirst) { web.clearTiles(); }
+    if (!serve) { return; }
+    const std::vector<cascade::net::WebServer::TileRequest> wants = web.takePendingTileRequests();
+    std::size_t served = 0;
+    for (const cascade::net::WebServer::TileRequest& r : wants) {
+        if (served >= maxTiles) { break; }
+        std::vector<std::uint8_t> bmp;
+        switch (source(WebTileRequest{r.z, r.x, r.y}, bmp)) {
+            case WebTileAnswer::Pending:
+                continue;  // asking is what started the plugin fetching; the page's retry lands after it has had time to finish
+            case WebTileAnswer::Missing: bmp.clear(); break;  // published empty: "the plugin said the tile will never exist"
+            case WebTileAnswer::Ready: break;
+        }
+        web.setTile(r.z, r.x, r.y, std::move(bmp));
+        ++served;
+    }
 }
 
 #undef SHELL_ENGINE

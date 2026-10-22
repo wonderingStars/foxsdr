@@ -484,7 +484,7 @@ public:
     //
     // WHY HERE AND NOT AT THE SINK. The sink is one of four consumers of this
     // signal: the local device, the rolling tap (which is what the web
-    // server's audio stream is pumped from - AppWindow::publishWebAudio), the
+    // server's audio stream is fed from - the engine's read_audio ring, ApiHost::feedAudioLocked), the
     // audio recorder, and --selftest's measurement. Muting the sink alone
     // would leave a browser listening to the very hiss the desktop had just
     // been silenced of, which is worse than not muting at all, because the two
@@ -1055,8 +1055,8 @@ private:
     //
     // GUARDED BY tapMutex_, NOT audioMutex_. audioTap()/audioTapStereo() used to
     // take audioMutex_, which processAudioBlock holds across a WHOLE block, so
-    // the GUI thread - AppWindow::publishWebAudio reads the tap every frame that
-    // has new audio while the browser remote is on - queued behind the entire
+    // the GUI thread - AppWindow::publishWebAudio read the tap every frame that
+    // had new audio while the browser remote was on (since stage 5e the engine's read_audio feed does, on whichever thread reads or on the pass) - queued behind the entire
     // DSP block (measured: 1507 ms inside publishWebAudio with the mutex held
     // for 1500 ms by the test seam that stands in for a plugin stretching a
     // block). tapMutex_ is held only for the copy of one block's frames

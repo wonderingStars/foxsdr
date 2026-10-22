@@ -466,11 +466,128 @@ void testOffMachineBindWithoutPasswordNeverListens() {
     CHECK(!server.decision().allowed());
 }
 
+// --- THE ENGINE SESSION (stage 5d) ------------------------------------------
+//
+// The server speaks to the engine through ONE session it opens when it has bound and closes when it stops (net/web_session.hpp). The engine's
+// side is stood in here by a stub that RECORDS what the server does with it, so these tests hold what is the SERVER'S: the route's order of
+// business (auth, content type, strict parse, the 409 gate, the hand-over), the heartbeat from the status route and from nothing else, the
+// session's open and close. What the engine does with the commands - the profile, the key rules, the pass - is held by
+// tests/test_engine_api_05a.cpp, test_remote_control_pull.cpp and test_remote_key_release.cpp against the real thing.
+
+struct SessionLog {
+    std::mutex m;
+    std::atomic<int> opened{0};
+    std::atomic<int> closed{0};
+    std::atomic<int> heartbeats{0};
+    std::atomic<int> polls{0};
+    std::atomic<int> contexts{0};
+    std::vector<std::string> labels;                                              // under m
+    std::vector<std::vector<cascade::core::cmd::QueuedCommand>> batches;          // under m: one entry per submit, in order
+    // What the stub gives back. Set before the server starts.
+    std::vector<std::uint64_t> ids{11, 22, 33};   // the ids behind the bookmark rows
+    double scanStartHz = 144.0e6, scanStopHz = 146.0e6, scanStepHz = 12.5e3;
+    bool contextWorks = true;
+    bool refuseOpen = false;                       // the engine has no session to give
+    int takes = -1;                                // how many commands submit reports taken; -1: all of them
+    // THE STREAMS (stage 5e): the page's spectrum and audio are read through the session. The stub answers from what a test sets.
+    std::function<bool(SpectrumSnapshot&)> spectrum;   // set before the server starts; called with the cursor in io.seq
+    std::vector<std::uint64_t> spectrumSince;          // under m: the cursor of every readSpectrum, in order
+    AudioRing audio;                                   // what readAudio serves (a test writes it); one leading frame, as the table has
+    std::vector<std::uint64_t> audioCursors;           // under m: the cursor each readAudio was called with, in order
+    std::atomic<int> audioReads{0};
+    bool audioRefused = false;                         // readAudio answers negative (the engine will not serve it)
+    SessionLog() {
+        const float lead = 0.0f;
+        audio.write(&lead, 1);
+    }
+
+    std::size_t batchCount() {
+        std::lock_guard<std::mutex> lk(m);
+        return batches.size();
+    }
+    std::vector<cascade::core::cmd::QueuedCommand> batch(std::size_t i) {
+        std::lock_guard<std::mutex> lk(m);
+        return i < batches.size() ? batches[i] : std::vector<cascade::core::cmd::QueuedCommand>{};
+    }
+    std::vector<std::uint32_t> opsOf(std::size_t i) {
+        std::vector<std::uint32_t> ops;
+        for (const auto& q : batch(i)) { ops.push_back(q.c.op); }
+        return ops;
+    }
+};
+
+class StubSession final : public WebSession {
+public:
+    explicit StubSession(std::shared_ptr<SessionLog> log) : log_(std::move(log)) {}
+    ~StubSession() override { log_->closed.fetch_add(1); }
+    void heartbeat() override { log_->heartbeats.fetch_add(1); }
+    bool context(bool bookmarkIds, bool scanRange, WebControlContext& out) override {
+        log_->contexts.fetch_add(1);
+        if (!log_->contextWorks) { return false; }
+        if (bookmarkIds) { out.bookmarkIdByRow = log_->ids; }
+        if (scanRange) {
+            out.scanStartHz = log_->scanStartHz;
+            out.scanStopHz = log_->scanStopHz;
+            out.scanStepHz = log_->scanStepHz;
+        }
+        return true;
+    }
+    int submit(const std::vector<cascade::core::cmd::QueuedCommand>& commands) override {
+        std::lock_guard<std::mutex> lk(log_->m);
+        log_->batches.push_back(commands);
+        return log_->takes < 0 ? static_cast<int>(commands.size()) : log_->takes;
+    }
+    int pollResults(std::vector<FoxCommandResult>*) override {
+        log_->polls.fetch_add(1);
+        return 0;
+    }
+    bool readSpectrum(SpectrumSnapshot& io) override {
+        {
+            std::lock_guard<std::mutex> lk(log_->m);
+            log_->spectrumSince.push_back(io.seq);
+        }
+        return log_->spectrum ? log_->spectrum(io) : false;
+    }
+    int readAudio(std::uint64_t* cursor, float* out, std::size_t cap, std::uint64_t* dropped) override {
+        log_->audioReads.fetch_add(1);
+        if (log_->audioRefused) { return -1; }
+        {
+            std::lock_guard<std::mutex> lk(log_->m);
+            log_->audioCursors.push_back(*cursor);
+        }
+        if (*cursor == 0) {  // join LIVE, as the table does: nothing copied, the cursor set to the present
+            *cursor = log_->audio.written();
+            return 0;
+        }
+        std::uint64_t d = 0;
+        const std::size_t n = log_->audio.read(*cursor, out, cap, d);
+        if (dropped != nullptr) { *dropped = d; }
+        return static_cast<int>(n);
+    }
+
+private:
+    std::shared_ptr<SessionLog> log_;
+};
+
+// The opener a server is given: counts the session it opens (and the label), refuses when told to.
+WebSessionOpener stubOpener(const std::shared_ptr<SessionLog>& log) {
+    return [log](const std::string& label) -> std::unique_ptr<WebSession> {
+        if (log->refuseOpen) { return nullptr; }
+        log->opened.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> lk(log->m);
+            log->labels.push_back(label);
+        }
+        return std::make_unique<StubSession>(log);
+    };
+}
+
 void testSpectrumEndpoint() {
     WebServer server;
-    // A provider that reports a fresh frame once, then nothing newer — the
-    // same contract Pipeline::getLatestFrame has.
-    server.setSpectrumProvider([](SpectrumSnapshot& inOut) {
+    // The engine's session reports a fresh frame once, then nothing newer - the contract of the table's read_spectrum (a cursor at or past
+    // the newest frame is "no change"). Since stage 5e the page's frame is read through the session, whatever the window is doing.
+    auto log = std::make_shared<SessionLog>();
+    log->spectrum = [](SpectrumSnapshot& inOut) {
         if (inOut.seq >= 7) {
             return false;
         }
@@ -480,7 +597,8 @@ void testSpectrumEndpoint() {
         inOut.dbBins.assign(8, kSpectrumDbMax);   // full scale
         inOut.dbBins[0] = kSpectrumDbMin;         // and one at the floor
         return true;
-    });
+    };
+    CHECK(server.setSessionOpener(stubOpener(log)));
 
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
@@ -618,7 +736,8 @@ void testStaleCursorFromAPreviousRunRecovers() {
     // permanently, and only a manual reload recovers. Found by killing the
     // app under a live page and watching it never come back.
     WebServer server;
-    server.setSpectrumProvider([](SpectrumSnapshot& inOut) {
+    auto log = std::make_shared<SessionLog>();
+    log->spectrum = [](SpectrumSnapshot& inOut) {
         // A freshly started receiver: its newest frame is sequence 5.
         if (inOut.seq >= 5) {
             return false;
@@ -628,7 +747,8 @@ void testStaleCursorFromAPreviousRunRecovers() {
         inOut.spanHz = 2000000.0;
         inOut.dbBins.assign(8, kSpectrumDbMax);
         return true;
-    });
+    };
+    CHECK(server.setSessionOpener(stubOpener(log)));
 
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
@@ -699,88 +819,6 @@ void testRestartRevokesSessions() {
     }
 
     server.stop();
-}
-
-// --- THE ENGINE SESSION (stage 5d) ------------------------------------------
-//
-// The server speaks to the engine through ONE session it opens when it has bound and closes when it stops (net/web_session.hpp). The engine's
-// side is stood in here by a stub that RECORDS what the server does with it, so these tests hold what is the SERVER'S: the route's order of
-// business (auth, content type, strict parse, the 409 gate, the hand-over), the heartbeat from the status route and from nothing else, the
-// session's open and close. What the engine does with the commands - the profile, the key rules, the pass - is held by
-// tests/test_engine_api_05a.cpp, test_remote_control_pull.cpp and test_remote_key_release.cpp against the real thing.
-
-struct SessionLog {
-    std::mutex m;
-    std::atomic<int> opened{0};
-    std::atomic<int> closed{0};
-    std::atomic<int> heartbeats{0};
-    std::atomic<int> polls{0};
-    std::atomic<int> contexts{0};
-    std::vector<std::string> labels;                                              // under m
-    std::vector<std::vector<cascade::core::cmd::QueuedCommand>> batches;          // under m: one entry per submit, in order
-    // What the stub gives back. Set before the server starts.
-    std::vector<std::uint64_t> ids{11, 22, 33};   // the ids behind the bookmark rows
-    double scanStartHz = 144.0e6, scanStopHz = 146.0e6, scanStepHz = 12.5e3;
-    bool contextWorks = true;
-    bool refuseOpen = false;                       // the engine has no session to give
-    int takes = -1;                                // how many commands submit reports taken; -1: all of them
-
-    std::size_t batchCount() {
-        std::lock_guard<std::mutex> lk(m);
-        return batches.size();
-    }
-    std::vector<cascade::core::cmd::QueuedCommand> batch(std::size_t i) {
-        std::lock_guard<std::mutex> lk(m);
-        return i < batches.size() ? batches[i] : std::vector<cascade::core::cmd::QueuedCommand>{};
-    }
-    std::vector<std::uint32_t> opsOf(std::size_t i) {
-        std::vector<std::uint32_t> ops;
-        for (const auto& q : batch(i)) { ops.push_back(q.c.op); }
-        return ops;
-    }
-};
-
-class StubSession final : public WebSession {
-public:
-    explicit StubSession(std::shared_ptr<SessionLog> log) : log_(std::move(log)) {}
-    ~StubSession() override { log_->closed.fetch_add(1); }
-    void heartbeat() override { log_->heartbeats.fetch_add(1); }
-    bool context(bool bookmarkIds, bool scanRange, WebControlContext& out) override {
-        log_->contexts.fetch_add(1);
-        if (!log_->contextWorks) { return false; }
-        if (bookmarkIds) { out.bookmarkIdByRow = log_->ids; }
-        if (scanRange) {
-            out.scanStartHz = log_->scanStartHz;
-            out.scanStopHz = log_->scanStopHz;
-            out.scanStepHz = log_->scanStepHz;
-        }
-        return true;
-    }
-    int submit(const std::vector<cascade::core::cmd::QueuedCommand>& commands) override {
-        std::lock_guard<std::mutex> lk(log_->m);
-        log_->batches.push_back(commands);
-        return log_->takes < 0 ? static_cast<int>(commands.size()) : log_->takes;
-    }
-    int pollResults(std::vector<FoxCommandResult>*) override {
-        log_->polls.fetch_add(1);
-        return 0;
-    }
-
-private:
-    std::shared_ptr<SessionLog> log_;
-};
-
-// The opener a server is given: counts the session it opens (and the label), refuses when told to.
-WebSessionOpener stubOpener(const std::shared_ptr<SessionLog>& log) {
-    return [log](const std::string& label) -> std::unique_ptr<WebSession> {
-        if (log->refuseOpen) { return nullptr; }
-        log->opened.fetch_add(1);
-        {
-            std::lock_guard<std::mutex> lk(log->m);
-            log->labels.push_back(label);
-        }
-        return std::make_unique<StubSession>(log);
-    };
 }
 
 void testControlGoesToTheSession() {
@@ -1336,6 +1374,8 @@ void testTileRequiresAuth() {
 
 void testAudioStreamsRealSamples() {
     WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -1347,10 +1387,10 @@ void testAudioStreamsRealSamples() {
     // deterministic check on the whole path (ring, cursor, float->PCM,
     // chunked transfer) rather than just "some bytes arrived".
     std::atomic<bool> producing{true};
-    std::thread producer([&server, &producing]() {
+    std::thread producer([&log, &producing]() {
         std::vector<float> block(480, 0.5f);   // 10 ms at 48 kHz
         while (producing.load()) {
-            server.pushAudio(block.data(), block.size());
+            log->audio.write(block.data(), block.size());
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     });
@@ -1420,6 +1460,8 @@ void testAudioRequiresAuth() {
 
 void testAudioListenerCap() {
     WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -1428,10 +1470,10 @@ void testAudioListenerCap() {
     }
 
     std::atomic<bool> producing{true};
-    std::thread producer([&server, &producing]() {
+    std::thread producer([&log, &producing]() {
         std::vector<float> block(480, 0.25f);
         while (producing.load()) {
-            server.pushAudio(block.data(), block.size());
+            log->audio.write(block.data(), block.size());
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     });
@@ -1483,6 +1525,155 @@ void testAudioListenerCap() {
     producing.store(false);
     producer.join();
 
+    server.stop();
+}
+
+// THE PAGE'S STREAMS ARE THE SESSION'S (stage 5e). What the server does with the session on the two stream routes, held with a stub that records
+// it: the audio is joined LIVE (a cursor of 0 on the first read, never a position the server picked), one cursor per listener, a listener slot
+// is released when the stream ends, a session that will not serve audio ends the stream, and a server with no session has none to give. The
+// spectrum is read with the browser's own cursor (after the "from the future" reset), and a server with no session says "nothing new".
+void testAudioJoinsLiveThroughTheSession() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    // A listener that joins a stream with history must hear what is being received NOW: the server hands the session a cursor of 0 ("join
+    // live") and takes whatever the session gives back from there - never the two seconds the ring holds. 0.75 is history, 0.5 is live.
+    {
+        std::vector<float> history(24000, 0.75f);
+        log->audio.write(history.data(), history.size());
+    }
+    std::atomic<bool> producing{true};
+    std::thread producer([&log, &producing]() {
+        std::vector<float> block(480, 0.5f);
+        while (producing.load()) {
+            log->audio.write(block.data(), block.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
+    std::string received;
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(5, 0);
+        cli.set_read_timeout(10, 0);
+        (void)cli.Get("/api/audio", [&received](const char* data, std::size_t len) {
+            received.append(data, len);
+            return received.size() < 4000;
+        });
+    }
+    producing.store(false);
+    producer.join();
+    CHECK(received.size() >= 4000);
+    std::size_t history = 0;
+    for (std::size_t i = 0; i + 1 < received.size(); i += 2) {
+        const auto s = static_cast<std::int16_t>(static_cast<std::uint16_t>(static_cast<std::uint8_t>(received[i])) |
+                                                 (static_cast<std::uint16_t>(static_cast<std::uint8_t>(received[i + 1])) << 8));
+        if (s == 24576) { ++history; }  // 0.75 * 32768
+    }
+    CHECK(history == 0);
+    {
+        std::lock_guard<std::mutex> lk(log->m);
+        CHECK(!log->audioCursors.empty());
+        if (!log->audioCursors.empty()) { CHECK(log->audioCursors.front() == 0u); }   // the first read joins live
+        for (std::size_t i = 1; i < log->audioCursors.size(); ++i) { CHECK(log->audioCursors[i] != 0u); }  // and the cursor it set is kept
+    }
+    // The listener's slot is given back when the stream ends.
+    for (int i = 0; i < 200 && server.audioListeners() != 0; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(server.audioListeners() == 0);
+    server.stop();
+}
+
+void testAudioEndsWhenTheSessionWillNotServeIt() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    log->audioRefused = true;   // the engine answers read_audio with an error
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+    std::size_t bytes = 0;
+    auto res = cli.Get("/api/audio", [&bytes](const char*, std::size_t len) {
+        bytes += len;
+        return true;
+    });
+    // The stream is ended by the server, not left open on a session that will never give a frame: no bytes, and the slot is given back.
+    CHECK(bytes == 0);
+    for (int i = 0; i < 200 && server.audioListeners() != 0; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    CHECK(server.audioListeners() == 0);
+    (void)res;
+    server.stop();
+}
+
+void testStreamsWithNoSession() {
+    WebServer server;   // no opener: the server has no engine session to read from
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+    // Audio: 503, the answer a control request gets, and no listener slot is taken.
+    auto audio = cli.Get("/api/audio");
+    CHECK(static_cast<bool>(audio));
+    if (audio) { CHECK(audio->status == 503); }
+    CHECK(server.audioListeners() == 0);
+    // Spectrum: the long-poll's ordinary "nothing new", with the browser's cursor handed back.
+    auto spec = cli.Get("/api/spectrum?since=0");
+    CHECK(static_cast<bool>(spec));
+    if (spec) {
+        CHECK(spec->status == 200);
+        CHECK(spec->body.find("\"fresh\":false") != std::string::npos);
+    }
+    server.stop();
+}
+
+void testSpectrumIsReadWithTheBrowsersCursor() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    log->spectrum = [](SpectrumSnapshot& io) {
+        io.seq += 1;   // every ask finds a newer frame: what the session saw is exactly the cursor the server passed
+        io.dbBins.assign(4, kSpectrumDbMax);
+        return true;
+    };
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    // The server has served nothing yet: a cursor of 41 is "from the future" (a previous run's) and is reset to 0 before the session is asked.
+    auto first = cli.Get("/api/spectrum?since=41");
+    CHECK(static_cast<bool>(first));
+    if (first) { CHECK(first->body.find("\"seq\":1") != std::string::npos); }
+    // Having been given 1, the browser's 1 is passed through as it is.
+    auto second = cli.Get("/api/spectrum?since=1");
+    CHECK(static_cast<bool>(second));
+    if (second) { CHECK(second->body.find("\"seq\":2") != std::string::npos); }
+    {
+        std::lock_guard<std::mutex> lk(log->m);
+        CHECK(log->spectrumSince.size() == 2u);
+        if (log->spectrumSince.size() == 2u) {
+            CHECK(log->spectrumSince[0] == 0u);
+            CHECK(log->spectrumSince[1] == 1u);
+        }
+    }
     server.stop();
 }
 
@@ -2772,6 +2963,10 @@ int main() {
     testAudioStreamsRealSamples();
     testAudioRequiresAuth();
     testAudioListenerCap();
+    testAudioJoinsLiveThroughTheSession();
+    testAudioEndsWhenTheSessionWillNotServeIt();
+    testStreamsWithNoSession();
+    testSpectrumIsReadWithTheBrowsersCursor();
     testServedScriptParses();
     testMapPanIsBoundToPointerEvents();
     testEveryNativeKindCountsAsARadioOnThePage();

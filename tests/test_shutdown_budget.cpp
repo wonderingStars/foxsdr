@@ -1033,6 +1033,13 @@ const KnownWait kKnownWaits[] = {
      "the flag and notifies it before joining, so the wait ends at once and the join costs what one in-flight poll_results does (a lock and "
      "a copy of at most 16 results). Never spent on the shutdown path: stop() joins the listener (kClientIoTimeout, charged above), then "
      "this thread, then closes the session"},
+    {"src/engine/image_feed.cpp", "kPollPeriod", 0,
+     "ImageFeed::workerLoop() (stage 5e) - how often the picture worker polls the receiver plugins' decoders while the web server listens. A "
+     "polling interval, not a bound: the wait is on a condition variable whose predicate is the stop flag, and ServerHost::shutdown() sets "
+     "the flag and notifies it (ImageFeed::shutdown) before joining, so the wait ends at once and the join costs what one cycle in flight "
+     "does (a poll of the decoders under the runner's mutex, and the BMP encode of the pictures that changed - both off the pass, both "
+     "microseconds to a few milliseconds). Never spent on the shutdown path: the join is the first thing ServerHost::shutdown does after its "
+     "own worker, before the servers are stopped (kClientIoTimeout, charged above)"},
     {"src/engine/engine.hpp", "kSteppedIdleBeat", 0,
      "Engine::controlLoop() - how often a STEPPED control thread that is idle (its front end is drawing a frame) beats its own watchdog. "
      "A heartbeat interval, not a bound: the wait ends the moment a step is asked for or the thread is told to stop (stopControlThread "

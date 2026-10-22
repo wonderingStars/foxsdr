@@ -60,9 +60,9 @@ namespace {
 // ----------------------------------------------------------------------------------------------------------------------------------
 constexpr int kShellMethodsBudget = 41;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 40 before the frame's kick (frameKick, 6.9)
 constexpr int kHostMethodsBudget = 1;     // CLASS HOST: makePluginFeed
-constexpr int kWebMethodsBudget = 8;      // CLASS WEB / CAT: deleted by stages 5c-5e. 7 before 5b (the pull and the status reads: setRemoteControlSource, webRemoteBeat, readFullSnapshot, readSnapshot, audioSamplesProduced, audioTap, inputRateHz), 8 after: those four and inputRateHz are gone with the servers (the engine owns them) and six FEED methods came (pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum) - the window still produces the audio tap, the pictures, the tiles and the spectrum the web page serves, and the servers it used to hand them to are the engine's now (docs/engine-stage4.md 6.10)
+constexpr int kWebMethodsBudget = 1;      // CLASS WEB / CAT: deleted by stage 5f. 8 after 5b (the pull and the status reads went with the servers, six FEED methods came: pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum), 1 after 5e: the page's audio and spectrum are the table's (read_audio / read_spectrum on the web server's session), the pictures are the engine's (ImageFeed), and audioSamplesProduced, audioTap, pushWebAudio, setWebImages, publishWebSpectrum are gone with the window's feeds of them; the three tile methods (takeWebTileRequests, setWebTile, clearWebTiles) are ONE (serveWebTiles) - the basemap's tiles are the one thing only the window's GUI-thread plugin client can produce (docs/engine-stage4.md 6.13)
 constexpr int kFeedMethodsBudget = 11;    // HostPluginFeed's virtuals (the eight host accessors and what drives them)
-constexpr int kCallSitesBudget = 72;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 65;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 65 after stage 5e (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -91,11 +91,9 @@ const std::vector<Knock> kEngineKnocks = {
       "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource", "frameKick"}},
     // the frame is a look: the three parts of the pass, and the status lines the look copies
     {"AppWindow::drawUi", {"stepPass", "statusText"}},
-    // CLASS WEB / CAT: the window's FEED of the web page (stage 5b; 5e deletes these members, the table serves what they push)
-    {"AppWindow::publishWebAudio", {"audioSamplesProduced", "audioTap", "pushWebAudio"}},
-    {"AppWindow::publishWebImages", {"setWebImages"}},
-    {"AppWindow::pumpWebTiles", {"clearWebTiles", "takeWebTileRequests", "setWebTile"}},
-    {"AppWindow::publishWebSpectrum", {"publishWebSpectrum"}},
+    // CLASS WEB / CAT: the window's one feed of the web page left (stage 5e: the table serves the audio and the spectrum, the engine the
+    // pictures; 5f deletes the section)
+    {"AppWindow::pumpWebTiles", {"serveWebTiles"}},
 };
 // The host feed (CLASS HOST): the eight host accessors and what drives them.
 const std::vector<Knock> kFeedKnocks = {
@@ -118,7 +116,6 @@ const char* const kWindowMachinery[] = {
     "AppWindow::AppWindow",       "AppWindow::~AppWindow",       "AppWindow::applyConfig",      "AppWindow::currentConfig",
     "AppWindow::handFrontEndFacts", "AppWindow::wallTimeS",      "AppWindow::pauseWatchdog",    "AppWindow::resumeWatchdog",
     "AppWindow::applyDirectiveBefore", "AppWindow::applyDirectiveAfter",
-    "AppWindow::publishWebAudio",  "AppWindow::publishWebSpectrum",
 };
 const char* const kImGuiInput[] = {
     "Button(", "SmallButton(", "InvisibleButton(", "ArrowButton(", "Checkbox(", "RadioButton(",
@@ -476,7 +473,7 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     const auto ho = namesOf(s.host, true);
     const auto we = namesOf(s.web, true);
     const auto fe = namesOf(s.feed, true);
-    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), web/CAT %zu (%d, deleted by stages 5c-5e), "
+    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), web/CAT %zu (%d, deleted by stage 5f), "
                 "the feed's %zu virtuals (%d)\n",
                 sh.size(), kShellMethodsBudget, ho.size(), kHostMethodsBudget, we.size(), kWebMethodsBudget, fe.size(), kFeedMethodsBudget);
     if (static_cast<int>(sh.size()) > kShellMethodsBudget || static_cast<int>(ho.size()) > kHostMethodsBudget ||
@@ -491,7 +488,7 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     CHECK(static_cast<int>(fe.size()) <= kFeedMethodsBudget);
     // The scan saw the real header.
     CHECK(sh.size() >= 25);
-    CHECK(we.size() >= 3);
+    CHECK(we.size() >= 1);   // (3 until stage 5e left the section its one method: this only proves the scan found the section at all - the exact count is held below)
     CHECK(fe.size() >= 8);
     // ...and a class that only ever shrinks: a budget above what is there is a stale budget.
     CHECK(static_cast<int>(sh.size()) == kShellMethodsBudget);

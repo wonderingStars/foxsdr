@@ -585,7 +585,7 @@ endforeach()
 # draws them (test_patch_graph_draft_input scenario W). Copied into a plugin directory of the test's own.
 add_library(fixture_group13_plugin SHARED fixture_group13_plugin.cpp)
 target_include_directories(fixture_group13_plugin PRIVATE "${CMAKE_SOURCE_DIR}/src")
-foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_patch_graph_draft_input test_plugin_window test_plugin_status_report)
+foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_patch_graph_draft_input test_plugin_window test_plugin_status_report test_web_pictures)
     if(TARGET ${_t})
         add_dependencies(${_t} fixture_group13_plugin)
         target_compile_definitions(${_t} PRIVATE

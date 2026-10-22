@@ -61,7 +61,7 @@ public:
     // (the display range and the stored converter), onBookmarksChanged because nothing used it, openPluginWindowsFor because
     // a preset applied is an EVENT now (FOXAPI_EVENT_PRESET_APPLIED, API 0.3 8.14) the window answers on its own thread, and
     // drainTrackInfoText, enrichWebTrack and fillWebImages because the window hands the track-info plugin's lines in as a
-    // command (FOXAPP_OP_TRACK_INFO_LINE) and its answers for the web status over in FrontEndFacts::webExtras.)
+    // command (FOXAPP_OP_TRACK_INFO_LINE) and its answers for the web status over in FrontEndFacts::trackFeed.)
     // (onReceiverPositionApplied left with window port group 14, part a: the receiver's position is in the state, and
     // the window follows it - the typed fields, every map page's and Patch Map part's home, the scope, the coverage map
     // - on its own thread when it moves. API 0.3 8.11.1.)

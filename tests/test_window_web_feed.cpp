@@ -1,17 +1,25 @@
-// test_window_web_feed.cpp - WHAT THE WINDOW STILL FEEDS THE ENGINE'S WEB SERVER, and the panels' side of owning none (engine extraction
-// stage 5b; docs/engine-stage4.md 6.10). A real AppWindow over a real engine; the web server is the ENGINE'S, started the way the settings
-// panel starts it (the staged edit and its Apply: a SERVER_CONFIG on the window's session), and the window's frame feeds it the audio the
-// pipeline produces (publishWebAudio -> EngineShell::pushWebAudio -> the server's ring) exactly as it fed the server it used to own.
+// test_window_web_feed.cpp - THE WEB PAGE'S READS DO NOT NEED A WINDOW THAT IS FRAMING, and the panels' side of owning no server (engine
+// extraction stage 5b, rewritten for stage 5e; docs/engine-stage4.md 6.10 and 6.13). A real AppWindow over a real engine; the web server is the
+// ENGINE'S, started the way the settings panel starts it (the staged edit and its Apply: a SERVER_CONFIG on the window's session). Until 5e the
+// window's frame FED that server the audio the pipeline produced and the spectrum it drew (publishWebAudio, publishWebSpectrum), so a window
+// that stopped framing - hidden, minimised, a menu held open - froze the page. The page reads the table now (read_audio and read_spectrum on the
+// web server's own session) and nothing here ever frames the window after the server is up: only the engine's pass runs.
 //
 //   F1  THE PANEL STARTS THE ENGINE'S SERVER: Apply submits a SERVER_CONFIG; nothing listens until the pass has applied it and the host's
-//       worker has started the server; the state the window then reads carries WEB_LISTENING (which is what gates every feed below), and
-//       the SERVERS entry the panels draw from is ACTIVE on the port with no browser on it.
-//   F2  THE AUDIO FEED: a browser's /api/audio stream gets the pipeline's audio - 16-bit mono at 48 kHz, live from the moment it joins -
-//       from the window's publishWebAudio; the panel's count of browsers listening to the audio (the list's value[2]) is one while it
-//       listens and the feed pushes nothing while the server is not listening (the mark is kept current, so switching it on later starts
-//       from live).
+//       worker has started the server; the state the window then reads carries WEB_LISTENING and the SERVERS entry the panels draw from is
+//       ACTIVE on the port with no browser on it.
+//   F2  THE AUDIO: a browser's /api/audio stream gets the pipeline's audio - 16-bit mono at 48 kHz, live from the moment it joins - with the
+//       window doing NOTHING (no look, no draw: the engine's pass runs, the window is not asked); the panel's count of browsers listening to
+//       the audio (the list's value[2]) is one while it listens; switched off from the panel, the page's audio route is gone.
 //   F3  THE PANELS' MIRRORS FOLLOW THE TABLE and wait for the answers the window is owed: after Apply the staged edits are not overwritten
 //       by the old configuration while the SERVER_CONFIG is on its way (serverAsksPending_), and are taken from the facts once it landed.
+//   F5  THE BASEMAP'S TILES ARE THE ONE FEED THE WINDOW STILL GIVES THE PAGE (EngineShell::serveWebTiles): a tile asked for with no basemap is
+//       answered "pending" and the want is recorded; the window's pump clears on the basemap's change, drains the wants and publishes what its
+//       plugin client (here the bounded-run stand-in) has - a BMP the page then gets - and no more than sixteen a frame, the rest left for the
+//       page's retry.
+//   F4  THE SPECTRUM KEEPS MOVING WHILE THE WINDOW DOES NOT FRAME: the page's /api/spectrum long-poll gets a new frame, again and again, each
+//       newer than the cursor it gave, while the window is never looked through at all - the point of 5e. (Red against 5d's window-copy path:
+//       the page's frame was the window's last look, so a window that does not look has no new frame to serve.)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -31,9 +39,11 @@
 #endif
 
 #include <httplib.h>
+#include <nlohmann/json.hpp>
 
 #include "core/app_commands.hpp"
 #include "gui/app_window.hpp"
+#include "gui/basemap_stand_in.hpp"
 #include "pass_seam.hpp"
 #include "test_check.hpp"
 
@@ -117,7 +127,8 @@ struct AppWindowTestAccess {
         a.applyWebSettings();
     }
     static bool listening(AppWindow& a) { return a.webListening(); }
-    static void feedAudio(AppWindow& a) { a.publishWebAudio(); }
+    static void attachStandInBasemap(AppWindow& a) { a.basemap_.attach(cascade::gui::standInBasemap()); }
+    static void pumpTiles(AppWindow& a) { a.pumpWebTiles(); }
     static const AppWindow::ServerPanel& panel(AppWindow& a, bool facts) { return a.serverPanel(facts); }
     static AppWindow::ServerLive live(AppWindow& a) { return a.readServerLive(false); }
     static int asksPending(AppWindow& a) { return a.serverAsksPending_; }
@@ -191,19 +202,89 @@ int main() {
     });
     CHECK(waitUntil(5000, [&] { return engine.servers().webServer().audioListeners() == 1; }));
     CHECK(Access::live(app).audioListeners == 1);  // the panel's "N listening to audio", read off the table
+    // THE ENGINE'S PASS RUNS; THE WINDOW IS NEVER ASKED (no look, no draw, no feed): the audio is the table's read_audio on the web session.
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     while (bytes.load() < 24000 && std::chrono::steady_clock::now() < until) {
         Access::pass(app);
-        Access::look(app);
-        Access::feedAudio(app);  // the window's frame, as drawUi does it
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     done = true;
     listener.join();
-    std::printf("F2: /api/audio streamed %zu bytes of the pipeline's audio fed by the window's publishWebAudio\n", bytes.load());
+    std::printf("F2: /api/audio streamed %zu bytes of the pipeline's audio with the window not framing at all\n", bytes.load());
     CHECK(bytes.load() >= 24000);
     CHECK(waitUntil(5000, [&] { return engine.servers().webServer().audioListeners() == 0; }));
 
+    // === F4: the spectrum keeps moving while the window does not frame ================================================================
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(2, 0);
+        cli.set_read_timeout(5, 0);
+        std::uint64_t cursor = 0;
+        int fresh = 0;
+        bool monotonic = true;
+        std::size_t bins = 0;
+        const auto spectrumUntil = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (fresh < 8 && std::chrono::steady_clock::now() < spectrumUntil) {
+            Access::pass(app);  // the engine publishes the pipeline's newest frame into the ring once a pass; nothing else runs
+            const auto r = cli.Get(("/api/spectrum?since=" + std::to_string(cursor)).c_str());
+            if (r && r->status == 200) {
+                const nlohmann::json j = nlohmann::json::parse(r->body, nullptr, false);
+                if (!j.is_discarded() && j.value("fresh", false)) {
+                    const std::uint64_t seq = j.value("seq", std::uint64_t{0});
+                    if (seq <= cursor) { monotonic = false; }
+                    cursor = seq;
+                    ++fresh;
+                    if (j.contains("bins")) { bins = j["bins"].get<std::string>().size(); }
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        }
+        CHECK(fresh >= 8);
+        CHECK(monotonic);
+        CHECK(bins > 0);
+        std::printf("F4: /api/spectrum gave %d frames, each newer than its cursor (last seq %llu, %zu base64 chars of bins) with the window never looked through\n",
+                    fresh, static_cast<unsigned long long>(cursor), bins);
+    }
+
+    // === F5: the basemap's tiles, the one feed the window still gives the page ===========================================================
+    {
+        Access::look(app);   // the state the pump reads WEB_LISTENING from
+        CHECK(Access::listening(app));
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(2, 0);
+        cli.set_read_timeout(5, 0);
+        // No basemap yet: the want is recorded and answered "pending" (202).
+        const auto none = cli.Get("/api/tile/3/1/2");
+        CHECK(none && none->status == 202);
+        Access::attachStandInBasemap(app);
+        Access::pumpTiles(app);   // the basemap changed: the stores are cleared (the want above is dropped with them), nothing to serve yet
+        const auto again = cli.Get("/api/tile/3/1/2");
+        CHECK(again && again->status == 202);   // asked again, and recorded again
+        Access::pumpTiles(app);   // the pump drains the want, asks the plugin client, publishes the BMP
+        const auto served = cli.Get("/api/tile/3/1/2");
+        CHECK(served && served->status == 200);
+        if (served) {
+            CHECK(served->get_header_value("Content-Type") == "image/bmp");
+            CHECK(served->body.size() >= 54u + 256u * 256u * 3u);   // a 256 x 256 24-bit BMP
+        }
+        // The bound: twenty distinct tiles asked for, the pump serves no more than sixteen of them in a frame.
+        for (int x = 0; x < 20; ++x) {
+            const auto r = cli.Get(("/api/tile/5/" + std::to_string(x) + "/3").c_str());
+            CHECK(r && r->status == 202);
+        }
+        Access::pumpTiles(app);
+        int ready = 0;
+        int pending = 0;
+        for (int x = 0; x < 20; ++x) {
+            const auto r = cli.Get(("/api/tile/5/" + std::to_string(x) + "/3").c_str());
+            if (r && r->status == 200) { ++ready; }
+            if (r && r->status == 202) { ++pending; }
+        }
+        CHECK(ready == 16);
+        CHECK(pending == 4);
+        std::printf("F5: a tile asked for with no basemap is pending; with the stand-in attached the pump published it (a 256x256 BMP); of 20 asked for, one frame served %d and left %d for the page's retry\n",
+                    ready, pending);
+    }
     // THE PANEL SWITCHES IT OFF: the staged edit and Apply again. The window reads the bit go down, and the feed then pushes nothing (the
     // mark is kept current, so switching it on later starts from live) - the call is made, and the server has no listener to give anything to.
     Access::stageOff(app);
@@ -214,8 +295,12 @@ int main() {
     CHECK(!engine.servers().webServer().running());
     CHECK(!Access::listening(app));
     CHECK(!Access::panel(app, true).webRunning);
-    Access::feedAudio(app);
     CHECK(engine.servers().webServer().audioListeners() == 0);
-    std::printf("F2: switched off from the panel - the window reads WEB_LISTENING go down and the feed idles\n");
+    {
+        httplib::Client gone("127.0.0.1", port);
+        gone.set_connection_timeout(0, 300000);
+        CHECK(!gone.Get("/api/audio"));  // nothing answers any more
+    }
+    std::printf("F2: switched off from the panel - the window reads WEB_LISTENING go down and the page's streams are gone\n");
     return testSummary("test_window_web_feed");
 }

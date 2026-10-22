@@ -10,7 +10,7 @@
 //   H2  THE WEB SERVER, started by SERVER_CONFIG on a worker: the SERVERS entry is ACTIVE on the port, the state carries WEB_LISTENING, the
 //       page answers, and /api/status is the engine's own publish byte for byte (statusJson over Engine::webStatusNow).
 //   H3  THE WEB SESSION: a POST /api/control reaches the pass through the web server's engine session and moves the radio; the session
-//       exists while the server runs and is gone when it stops; the spectrum the window feeds is what the page polls.
+//       exists while the server runs and is gone when it stops; the page's spectrum is the table's frame (stage 5e), read on that session.
 //   H4  CAT, started by SERVER_CONFIG: f and F over a real socket, the F inside the band moving the offset only (through the connection's
 //       own engine session since stage 5c; tests/test_cat_engine.cpp holds the whole of that); the list counts the client and its
 //       commands, and counts them back down.
@@ -24,6 +24,17 @@
 //   H9  THE TEARDOWN: shutdownQuiesce stops both servers, first; nothing is listening afterwards.
 //   H11 THE WEB SESSION, THROUGH THE WHOLE REAL CHAIN (stage 5d): fields, the page's application ops, bookmark rows, the PTT gate over a
 //       real HTTP client; one engine session for the running server, 17 cookies = 1, stop = 0, restart = 1.
+//   H12 THE PAGE'S SPECTRUM, WITH NO WINDOW (stage 5e): a free-running engine and a web server and nothing else - no window exists - and the page's
+//       /api/spectrum long-poll gets frame after frame, each newer than its cursor: the table's read_spectrum on the web session.
+//   H13 THE PAGE'S AUDIO, THROUGH THE WHOLE CHAIN (stage 5e): GET /api/audio streams the pipeline's audio from the table's read_audio - the wire
+//       format (audio/L16 at 48 kHz mono, chunked, 16-bit samples), the panel's listener count, the cap of four with a 503 beyond, the slots given
+//       back - with no window to push anything.
+//   H14 THE PASS WITH A LISTENER, AND THE AUDIO LOCK HELD (stage 5e; the ledger's "browser remote no longer makes the window wait for the signal
+//       thread", engine-merge-0.99.84.md:284): the control pass's figures with no listener and with one attached, and with the pipeline's audio
+//       mutex - the one the DSP thread holds across a block - held for 1.5 s by the test seam while the listener is attached: the audio feed is the
+//       pass's now (and every reader's), so it must not queue behind the block.
+//   H15 NO WINDOW, NO TILES (stage 5e): the basemap's tiles are the one feed only the window's plugin client can give; a headless engine's status
+//       says the basemap is not active, and a tile asked for anyway is answered "pending" (202) - never a picture, never an error.
 //   H10 NEVER IN THE PASS: with a browser holding a request open (so the web server's stop must wait for it), the SERVER_CONFIG that
 //       disables the server is applied by the free-running pass and the pass goes on at its rate while the WORKER is inside the stop. The
 //       gap between two passes stays a small fraction of the second a stalled pass unkeys the transmitter at.
@@ -98,6 +109,13 @@ std::string showVal(const T& v) {
 namespace cascade::gui {
 struct AppWindowTestAccess {
     static std::uint64_t passes(cascade::engine::Engine& e) { return e.controlPasses_.load(); }
+    // The pass's own figures (the measurement run's), over the window since the last mark.
+    static void markPassStats(cascade::engine::Engine& e) { e.markPassStats(); }
+    static std::string passStats(cascade::engine::Engine& e) { return e.passStatsJson(); }
+    // The pipeline's audio mutex held for `ms` from the calling thread (the test seam FOXSDR_HOLD_AUDIO_LOCK stands on), `acquired` set when it is.
+    static void holdAudioLock(cascade::engine::Engine& e, int ms, std::atomic<bool>* acquired) {
+        e.pipeline_.holdLockForTest(cascade::core::Pipeline::LockForTest::Audio, ms, acquired);
+    }
 };
 }  // namespace cascade::gui
 
@@ -382,15 +400,25 @@ void testWebServerStartedBySessionConfig() {
     CHECK(ctl && ctl->status == 202);
     r.pump(2);
     CHECK_EQ(r.state().vfoOffsetHz, 12345.0);
+    // THE SPECTRUM IS THE TABLE'S (stage 5e): a frame in the engine's ring (no pass runs between the publish and the GET, so it is the newest) is
+    // what the page's long-poll is answered with - read on the web server's own session, with nothing fed to the server by anyone.
     std::vector<float> bins(64, -80.0f);
-    r.e.servers().publishSpectrum(7, bins, 100.0e6, 2.0e6);
+    r.e.api().publishSpectrumForTest(bins.data(), bins.size(), 100.0e6, 2.0e6);
+    FoxSpectrumInfo want{};
+    want.structSize = sizeof(want);
+    std::vector<float> tableBins(64);
+    CHECK(api()->read_spectrum(r.op, 0, &want, tableBins.data(), static_cast<std::uint32_t>(tableBins.size())) == FOXAPI_OK);
     const auto sp = cli.Get("/api/spectrum?since=0");
     CHECK(sp && sp->status == 200);
     if (sp) {
         const nlohmann::json j = nlohmann::json::parse(sp->body, nullptr, false);
-        CHECK(!j.is_discarded() && j.value("fresh", false) && j.value("seq", 0) == 7);
+        CHECK(!j.is_discarded() && j.value("fresh", false));
+        CHECK_EQ(j.value("seq", std::uint64_t{0}), want.seq);
+        CHECK_EQ(j.value("centerHz", 0.0), 100.0e6);
+        CHECK_EQ(j.value("spanHz", 0.0), 2.0e6);
     }
-    std::printf("H3: POST /api/control moved the radio through the web server's session (vfoOffsetHz 12345); /api/spectrum served the fed frame (seq 7)\n");
+    std::printf("H3: POST /api/control moved the radio through the web server's session (vfoOffsetHz 12345); /api/spectrum served the table's frame (seq %llu)\n",
+                static_cast<unsigned long long>(want.seq));
 }
 
 void testCatServer() {
@@ -667,6 +695,211 @@ void testStopIsNeverInThePass() {
     CHECK(refuses(port));
 }
 
+
+// ---- the page's streams (stage 5e) -------------------------------------------------------------------------------------------------
+
+// One browser listening to /api/audio on its own thread, counting bytes until told to stop. `status` is the response's (0 until it arrives).
+struct AudioListener {
+    std::atomic<std::size_t> bytes{0};
+    std::atomic<int> status{0};
+    std::atomic<bool> stop{false};
+    std::string contentType;
+    std::thread t;
+    void start(int port) {
+        t = std::thread([this, port] {
+            httplib::Client cli("127.0.0.1", port);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(30, 0);
+            (void)cli.Get(
+                "/api/audio", httplib::Headers{},
+                [this](const httplib::Response& r) {
+                    contentType = r.get_header_value("Content-Type");
+                    status = r.status;
+                    return true;
+                },
+                [this](const char*, std::size_t len) {
+                    bytes += len;
+                    return !stop.load();
+                });
+            if (status.load() == 0) { status = -1; }
+        });
+    }
+    void finish() {
+        stop = true;
+        if (t.joinable()) { t.join(); }
+    }
+    ~AudioListener() { finish(); }
+};
+
+// H12. A free-running engine with its web server and NO window: the page's spectrum long-poll is answered from the table.
+void testSpectrumWithNoWindow() {
+    Rig r("testHooks=1;servers=1", /*thread=*/true);
+    const int port = freePort();
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(2, 0);
+    cli.set_read_timeout(5, 0);
+    std::uint64_t cursor = 0;
+    int fresh = 0;
+    bool monotonic = true;
+    std::size_t binChars = 0;
+    double centre = 0.0, span = 0.0;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (fresh < 10 && std::chrono::steady_clock::now() < until) {
+        const auto res = cli.Get(("/api/spectrum?since=" + std::to_string(cursor)).c_str());
+        if (res && res->status == 200) {
+            const nlohmann::json j = nlohmann::json::parse(res->body, nullptr, false);
+            if (!j.is_discarded() && j.value("fresh", false)) {
+                const std::uint64_t seq = j.value("seq", std::uint64_t{0});
+                if (seq <= cursor) { monotonic = false; }
+                cursor = seq;
+                ++fresh;
+                centre = j.value("centerHz", 0.0);
+                span = j.value("spanHz", 0.0);
+                if (j.contains("bins") && j["bins"].is_string()) { binChars = j["bins"].get<std::string>().size(); }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(fresh >= 10);
+    CHECK(monotonic);
+    CHECK(binChars > 0);
+    // The label is the frame's own: the source's centre and the rate it samples at (the generator's, here).
+    const FoxReceiverState st = r.state();
+    CHECK_EQ(centre, st.centreHz);
+    CHECK_EQ(span, st.sampleRateHz);
+    std::printf("H12: no window - /api/spectrum gave %d frames, each newer than its cursor (seq %llu, %zu base64 chars of bins, centre %.0f Hz, span %.0f Hz)\n",
+                fresh, static_cast<unsigned long long>(cursor), binChars, centre, span);
+}
+
+// H13. The page's audio over the real chain.
+void testAudioThroughTheWholeChain() {
+    Rig r("testHooks=1;servers=1", /*thread=*/true);
+    const int port = freePort();
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);
+    AudioListener a;
+    a.start(port);
+    CHECK(waitUntil(15000, [&] { return a.bytes.load() >= 48000; }));  // half a second of 16-bit mono at 48 kHz
+    CHECK_EQ(a.status.load(), 200);
+    CHECK_EQ(a.contentType, std::string("audio/L16;rate=48000;channels=1"));
+    // The panel's count, read off the table's list, and the cap: four listeners, a fifth is refused 503 and takes no slot.
+    CHECK(waitUntil(5000, [&] { return r.server(0).value[2] == 1.0; }));
+    AudioListener more[3];
+    for (AudioListener& m : more) { m.start(port); }
+    CHECK(waitUntil(15000, [&] { return r.e.servers().webServer().audioListeners() == 4; }));
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(2, 0);
+        cli.set_read_timeout(5, 0);
+        const auto fifth = cli.Get("/api/audio");
+        CHECK(fifth && fifth->status == 503);
+    }
+    CHECK_EQ(r.e.servers().webServer().audioListeners(), std::size_t{4});
+    // Every listener is live (their cursors are their own): each has bytes.
+    for (AudioListener& m : more) { CHECK(waitUntil(15000, [&] { return m.bytes.load() >= 9600; })); }
+    const std::size_t total = a.bytes.load();
+    a.finish();
+    for (AudioListener& m : more) { m.finish(); }
+    CHECK(waitUntil(10000, [&] { return r.e.servers().webServer().audioListeners() == 0; }));
+    std::printf("H13: /api/audio = audio/L16;rate=48000;channels=1, %zu bytes to the first of four listeners, a fifth 503, every slot given back\n", total);
+}
+
+// H15. Headless: no basemap.
+void testNoWindowNoTiles() {
+    Rig r("testHooks=1;servers=1", /*thread=*/true);
+    const int port = freePort();
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(2, 0);
+    cli.set_read_timeout(5, 0);
+    const auto st = cli.Get("/api/status");
+    CHECK(st && st->status == 200);
+    if (st) {
+        const nlohmann::json j = nlohmann::json::parse(st->body, nullptr, false);
+        CHECK(!j.is_discarded() && j.contains("basemap") && !j["basemap"].value("active", true));
+    }
+    const auto tile = cli.Get("/api/tile/3/1/2");
+    CHECK(tile && tile->status == 202);
+    if (tile) { CHECK(tile->body.find("\"pending\":true") != std::string::npos); }
+    std::printf("H15: headless - the status says the basemap is not active and a tile asked for anyway is 202 pending\n");
+}
+
+// H14. The control pass with a listener attached, and with the audio mutex held. The pass is watched for the longest gap between two passes (a
+// stalled pass is what unkeys the transmitter's thread at 1 s) and by the engine's own pass histogram.
+struct PassFigures {
+    double maxGapMs = 0.0;
+    std::uint64_t passes = 0;
+    std::string stats;
+};
+PassFigures watchThePass(Rig& r, int ms, const std::function<void()>& during = {}) {
+    Access::markPassStats(r.e);
+    PassFigures f;
+    const std::uint64_t p0 = Access::passes(r.e);
+    std::uint64_t last = p0;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto lastAt = t0;
+    const auto until = t0 + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < until) {
+        if (during) { during(); }
+        const std::uint64_t now = Access::passes(r.e);
+        const auto t = std::chrono::steady_clock::now();
+        if (now != last) {
+            f.maxGapMs = std::max(f.maxGapMs, std::chrono::duration<double, std::milli>(t - lastAt).count());
+            last = now;
+            lastAt = t;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    f.maxGapMs = std::max(f.maxGapMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lastAt).count());
+    f.passes = last - p0;
+    f.stats = Access::passStats(r.e);
+    return f;
+}
+
+void testThePassWithAListenerAndTheAudioLockHeld() {
+    Rig r("testHooks=1;servers=1", /*thread=*/true);
+    const int port = freePort();
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);
+    // Settle: the pipeline's first blocks and the first publishes are not the steady state.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    const PassFigures none = watchThePass(r, 3000);
+    AudioListener a;
+    a.start(port);
+    CHECK(waitUntil(15000, [&] { return a.bytes.load() >= 9600; }));
+    const std::size_t b0 = a.bytes.load();
+    const PassFigures with = watchThePass(r, 3000);
+    const std::size_t streamed = a.bytes.load() - b0;
+    CHECK(streamed >= 96000);  // the listener was served about two seconds of audio of the three: the stream runs while the pass is watched
+
+    // THE HOLD: the pipeline's audio mutex taken by a thread of the test for 1.5 s, the listener attached throughout. The DSP thread cannot
+    // finish its block; the audio feed (every read_audio, the pass's own top-up) must not wait for it, and neither must the pass.
+    std::atomic<bool> acquired{false};
+    std::thread holder([&] { Access::holdAudioLock(r.e, 1500, &acquired); });
+    CHECK(waitUntil(5000, [&] { return acquired.load(); }));
+    const std::size_t h0 = a.bytes.load();
+    const PassFigures held = watchThePass(r, 1300);   // inside the hold
+    const std::size_t heldBytes = a.bytes.load() - h0;
+    holder.join();
+    // After the hold the DSP thread catches up and the stream goes on.
+    const std::size_t after0 = a.bytes.load();
+    CHECK(waitUntil(10000, [&] { return a.bytes.load() >= after0 + 9600; }));
+    a.finish();
+
+    std::printf("H14: pass, no listener   : %llu passes in 3 s, longest gap %.1f ms; engine %s\n", static_cast<unsigned long long>(none.passes),
+                none.maxGapMs, none.stats.c_str());
+    std::printf("H14: pass, 1 listener    : %llu passes in 3 s, longest gap %.1f ms, %zu bytes streamed; engine %s\n",
+                static_cast<unsigned long long>(with.passes), with.maxGapMs, streamed, with.stats.c_str());
+    std::printf("H14: pass, audio lock HELD (1.5 s, listener attached): %llu passes in 1.3 s, longest gap %.1f ms, %zu bytes streamed meanwhile; engine %s\n",
+                static_cast<unsigned long long>(held.passes), held.maxGapMs, heldBytes, held.stats.c_str());
+    CHECK(none.passes >= 30);
+    CHECK(with.passes >= 30);
+    CHECK(held.passes >= 20);     // 16 ms period: ~80 expected in 1.3 s
+    CHECK(none.maxGapMs < 400.0);
+    CHECK(with.maxGapMs < 400.0);
+    CHECK(held.maxGapMs < 400.0); // a pass that queued behind the DSP block would show the hold's 1 500 ms here
+}
+
 }  // namespace
 
 // H11: THE WEB SESSION, THROUGH THE WHOLE REAL CHAIN (stage 5d): a real httplib client, the real web server the engine hosts, the strict
@@ -778,5 +1011,9 @@ int main(int argc, char** argv) {
     if (want("H9")) { testTeardownStopsFirst(); }
     if (want("H10")) { testStopIsNeverInThePass(); }
     if (want("H11")) { testTheWebSessionThroughTheRealChain(); }
+    if (want("H12")) { testSpectrumWithNoWindow(); }
+    if (want("H13")) { testAudioThroughTheWholeChain(); }
+    if (want("H14")) { testThePassWithAListenerAndTheAudioLockHeld(); }
+    if (want("H15")) { testNoWindowNoTiles(); }
     return testSummary("test_server_host");
 }

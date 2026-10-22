@@ -19,9 +19,14 @@
 // EVERY CALL IS ANY-THREAD. The server's worker threads call all of these concurrently on the one session; an implementation keeps no state
 // of its own (or locks it).
 //
+// STAGE 5e: THE SESSION IS ALSO THE PAGE'S WAY TO THE TWO STREAMS. The waterfall's frames (readSpectrum: the table's read_spectrum, the ring
+// the engine's pass fills) and the audio the page plays (readAudio: the table's read_audio, a cursor per listener) are read on the same
+// session, so neither depends on a window that is framing: a hidden or minimised window feeds the page nothing and takes nothing from it.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -33,6 +38,14 @@
 #include "net/web_control.hpp"
 
 namespace cascade::net {
+
+// One spectrum frame as the page's /api/spectrum serves it (it lived in net/web_server.hpp until 5e: the session reads it now).
+struct SpectrumSnapshot {
+    std::vector<float> dbBins;   // fftshifted dB power, oldest-to-newest bin order
+    std::uint64_t seq = 0;       // strictly increasing; 0 means nothing yet
+    double centerHz = 0.0;
+    double spanHz = 0.0;
+};
 
 // What the translation needs from the receiver (net/control_ops.hpp's ControlOpsContext is built from it; a separate struct so that this
 // header - which the interface reaches through the web server's - names nothing of the plugin host API control_ops.hpp includes).
@@ -64,6 +77,16 @@ public:
     // Collects the results that are ready and returns how many it took (appended to `into` when given). A session that never collects them is
     // answered BUSY past 256 outstanding, so the server calls this around every request that touches the session.
     virtual int pollResults(std::vector<FoxCommandResult>* into = nullptr) = 0;
+
+    // THE WATERFALL'S FRAME: the table's read_spectrum with `io.seq` as the cursor. True, and `io` filled (seq, centre, span, bins), when
+    // the engine has published a frame NEWER than the one `io.seq` names; false, and `io` untouched but for scratch in dbBins, when it
+    // has not (nothing yet, or nothing new - the long-poll's ordinary answer). Never waits for the pass.
+    virtual bool readSpectrum(SpectrumSnapshot& io) = 0;
+
+    // THE PAGE'S AUDIO: the table's read_audio, mono at 48 kHz, one cursor per listener (the caller's). A cursor of 0 JOINS LIVE: nothing is
+    // copied and the cursor is set to the stream's present. Returns the frames copied (0: nothing new yet); negative when the engine will
+    // not serve it (the stream is to end). `dropped` receives the frames the listener fell behind by, when asked.
+    virtual int readAudio(std::uint64_t* cursor, float* out, std::size_t capFrames, std::uint64_t* dropped = nullptr) = 0;
 };
 
 // Opens the session for a server that has just bound; `label` names it. Null when the engine will not give one (its session limits are

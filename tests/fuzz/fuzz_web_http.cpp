@@ -86,7 +86,7 @@ struct Fixture {
         ::WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
         server.setStatusProvider([]() { return sampleStatus(); });
-        server.setSpectrumProvider([](SpectrumSnapshot&) { return false; });
+        // (no spectrum provider since stage 5e: a server with no engine session answers the spectrum route "nothing new")
         WebServerConfig cfg;
         cfg.enabled = true;
         cfg.bindAddress = "127.0.0.1";

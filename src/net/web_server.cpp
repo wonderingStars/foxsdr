@@ -3112,14 +3112,6 @@ public:
         return true;
     }
 
-    bool setSpectrumProvider(SpectrumProvider fn) {
-        if (running()) {
-            return false;
-        }
-        spectrum_ = std::move(fn);
-        return true;
-    }
-
     bool setClock(Clock fn) {
         if (running() || !fn) {
             return false;
@@ -3216,7 +3208,6 @@ public:
         pendingTileKeys_.clear();
     }
 
-    void pushAudio(const float* samples, std::size_t n) { audio_.write(samples, n); }
     std::size_t audioListeners() const {
         return static_cast<std::size_t>(listeners_.load(std::memory_order_relaxed));
     }
@@ -3241,7 +3232,6 @@ private:
     // by stop() after that thread (and with it every handler) has ended: a handler therefore never sees it change, and needs no lock to use
     // it. Null when no opener was set, or while the server is stopped.
     std::unique_ptr<WebSession> session_;
-    SpectrumProvider spectrum_;
     Clock clock_;
     std::function<void()> usageCallback_;
 
@@ -3303,8 +3293,7 @@ private:
     std::deque<WebServer::TileRequest> pendingTiles_;
     std::set<std::uint64_t> pendingTileKeys_;
 
-    // Live audio for listening browsers, and how many are currently streaming.
-    mutable AudioRing audio_;
+    // How many browsers are streaming audio right now (the cap's count). The audio itself is the engine's: read through the session.
     std::atomic<int> listeners_{0};
 
     // Highest spectrum sequence this process has served. Zero at start-up,
@@ -3560,6 +3549,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, "sign in first");
             return;
         }
+        // The audio is the ENGINE'S (stage 5e): read through the server's session, one cursor per listener. A server with no session has
+        // none to give - the same answer a control request gets.
+        if (!session_) {
+            deny(res, "the receiver is not available to this server", 503);
+            return;
+        }
         // Claim a slot BEFORE committing to the stream; each listener parks an
         // HTTP worker thread for as long as it listens.
         const int before = listeners_.fetch_add(1, std::memory_order_acq_rel);
@@ -3571,8 +3566,10 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
         // Start at LIVE, not at the oldest buffered sample: a listener joining
         // a radio wants what is being received now, not two seconds of history
-        // it then stays behind by for ever.
-        auto cursor = std::make_shared<std::uint64_t>(audio_.written());
+        // it then stays behind by for ever. A cursor of 0 is how the table's
+        // read_audio is asked to join live: the first read copies nothing and
+        // sets the cursor to the stream's present.
+        auto cursor = std::make_shared<std::uint64_t>(0);
 
         res.set_chunked_content_provider(
             "audio/L16;rate=48000;channels=1",
@@ -3585,8 +3582,13 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 constexpr std::size_t kChunkSamples = 4800;
                 float samples[kChunkSamples];
                 std::uint64_t dropped = 0;
-                const std::size_t got =
-                    audio_.read(*cursor, samples, kChunkSamples, dropped);
+                // (session_ is set before the listener exists and reset after every handler has ended - the same guarantee the control
+                // route relies on.)
+                const int read = session_->readAudio(cursor.get(), samples, kChunkSamples, &dropped);
+                if (read < 0) {
+                    return false;  // the engine will not serve audio: end the stream
+                }
+                const std::size_t got = static_cast<std::size_t>(read);
                 if (got == 0) {
                     // Nothing new yet. Sleeping here is correct rather than
                     // lazy: this is the listener's OWN worker thread, and
@@ -3764,7 +3766,9 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         if (snap.seq > maxSeenSeq_.load(std::memory_order_relaxed)) {
             snap.seq = 0;
         }
-        const bool fresh = spectrum_ ? spectrum_(snap) : false;
+        // THE ENGINE'S FRAME (stage 5e): the table's read_spectrum through the server's session, whatever the window is doing. No session,
+        // no frame - the same "nothing new" a stopped receiver gives.
+        const bool fresh = session_ ? session_->readSpectrum(snap) : false;
         if (fresh) {
             // Highest sequence this PROCESS has served, which is what makes
             // the test above mean "impossible" rather than merely "large".
@@ -3816,10 +3820,6 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
     // to prove themselves against the new configuration.
     sessions_.revokeAll();
     throttle_.clear();
-    // Nothing buffered from a previous run: its samples are stale by however
-    // long the server was down, and a cursor from then must not find them
-    // readable.
-    audio_.reset();
 
     svr_ = std::make_unique<httplib::Server>();
     // WITHOUT THIS, A THROWING HANDLER IS AN EMPTY 500 AND NOTHING ELSE —
@@ -3949,9 +3949,6 @@ bool WebServer::setSessionOpener(WebSessionOpener fn) {
 bool WebServer::setUsageCallback(std::function<void()> fn) {
     return impl_->setUsageCallback(std::move(fn));
 }
-bool WebServer::setSpectrumProvider(SpectrumProvider fn) {
-    return impl_->setSpectrumProvider(std::move(fn));
-}
 bool WebServer::setClock(Clock fn) { return impl_->setClock(std::move(fn)); }
 bool WebServer::start(const WebServerConfig& cfg, std::string& error) {
     return impl_->start(cfg, error);
@@ -3962,9 +3959,6 @@ int WebServer::boundPort() const { return impl_->boundPort(); }
 BindDecision WebServer::decision() const { return impl_->decision(); }
 std::size_t WebServer::sessionCount() const { return impl_->sessionCount(); }
 void WebServer::revokeAllSessions() { impl_->revokeAllSessions(); }
-void WebServer::pushAudio(const float* samples, std::size_t n) {
-    impl_->pushAudio(samples, n);
-}
 std::size_t WebServer::audioListeners() const { return impl_->audioListeners(); }
 void WebServer::setImages(std::vector<WebImage> images) {
     impl_->setImages(std::move(images));

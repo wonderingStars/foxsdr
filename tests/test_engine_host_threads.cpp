@@ -12,8 +12,8 @@
 //      touched (the context is gone for the read)
 // and the host class no longer has frameTimeS or frameClockRunning (tests/test_engine_shell_guard.cpp holds the hook list).
 //
-// THE PUBLISH-TIME FACTS. webListening, tunerDisplayStyle and basemapFacts
-// were hooks the engine called while publishing; now the window HANDS them
+// THE PUBLISH-TIME FACTS. tunerDisplayStyle and basemapFacts (and webListening, until stage 5b made that the engine's own: the web server
+// is its host's) were hooks the engine called while publishing; now the window HANDS them
 // over (Engine::setFrontEndFacts) and the publish reads what was handed:
 //   C  facts handed over reach the published web block, and a later change
 //      of the window's own state does not until it is handed over again

@@ -104,8 +104,13 @@ set(CASCADE_TSAN_TESTS
     # that produces them, a thousand commands and a burst past the session's cap, a client that hangs up with its commands still queued,
     # the listener stopped (and the engine torn down) with clients connected
     test_cat_engine
-    # ...and the window's side of it: a real AppWindow starting the engine's server from its settings panel and feeding a browser's audio stream
+    # ...and the window's side of it: a real AppWindow starting the engine's server from its settings panel, with a browser's audio stream and
+    # spectrum long-poll served by the engine while the window never frames (stage 5e: the page's reads are the table's)
     test_window_web_feed
+    # stage 5e: the receiver plugins' pictures are the engine's - the one accumulator polled by the window's reads and by the feed's worker beside it,
+    # the BMP encode and the served set on the worker, the headers published after the set (fake decoders), and the whole chain headless: a real
+    # picture decoder in the runner, the pipeline feeding it, the web server serving its picture
+    test_web_pictures
     # the pump move's step P3 (PluginUi's thread ownership): the directive the engine's pass posts and the window applies at the head
     # of its poll, the bounded unload handshake, the queued request_tune, the plugin UI's instances created, polled and destroyed on
     # the window's thread alone - the link's protocol with threads; a real window, a real engine with its pass on its own thread

@@ -78,7 +78,7 @@ struct AppWindowTestAccess {
         a.statusLines_ = rawEngine(a.engine_).statusText();
         a.refreshUiState();
         a.actOnUiAnswers();
-        a.publishWebSpectrum(a.uiState_.centreHz);
+        // (no publishWebSpectrum since stage 5e: the page reads the table's spectrum itself)
         rawEngine(a.engine_).stepPass(PassPart::Mute);
         a.submitTransmitKey();
         rawEngine(a.engine_).stepPass(PassPart::Back);

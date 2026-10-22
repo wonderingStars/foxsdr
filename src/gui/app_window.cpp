@@ -3129,9 +3129,8 @@ void AppWindow::drawUi() {
     // per-session: TX_KEY_MINE, TX_LATCH_RELEASE_FIRST).
     refreshUiState();
     actOnUiAnswers();
-    // THE WEB SPECTRUM, labelled with the centre the state just read carries (the pass's publish used to hand it back; it is the same
-    // number, and read here it is no longer a frame behind the lines it labels).
-    publishWebSpectrum(uiState_.centreHz);
+    // (THE WEB SPECTRUM was copied to the server from here until stage 5e. The page reads the table's read_spectrum on its own session now,
+    // so it neither waits for this look nor stops when the window does: a hidden or minimised window frames nothing and the page goes on.)
     // THE CRASH SWEEP, once, on the first look that can answer whose install id it carries (the facts are the engine's
     // after its first publish, which this frame has just made); armed by run().
     if (crashUploadStartPending_ && crashUploadStart()) { crashUploadStartPending_ = false; }
@@ -3161,8 +3160,8 @@ void AppWindow::drawUi() {
     // has landed (at this frame's pump) and been published and read (above). See
     // dispatchKeyBindings for the three states in which it performs nothing.
     dispatchKeyBindings();
-    publishWebAudio();
-    publishWebImages();
+    // (The page's audio and pictures were pushed to the web server from here until stage 5e: its audio is the table's read_audio on the
+    // web session, its pictures the engine's own - so this frame no longer reads the audio tap, or encodes a bitmap, for a browser.)
     pumpWebTiles();
     // Where the receiver is now decides whether the audio is silenced, and it
     // has to be decided BEFORE anything draws: the toolbar banner, the Sinks
@@ -19920,104 +19919,33 @@ void AppWindow::flushScannerDraft() {
 
 // --- Web server mode (P11) ---------------------------------------------------
 
-void AppWindow::publishWebAudio() {
-    const std::uint64_t produced = engine_.audioSamplesProduced();
-    if (!webListening()) {
-        // Keep the mark current so switching the server on later starts from
-        // live rather than trying to publish everything since launch.
-        webAudioLastProduced_ = produced;
-        return;
-    }
-    if (produced <= webAudioLastProduced_) {
-        // Equal is the ordinary "no new audio" case; less can only mean the
-        // counter restarted, and the honest response to both is to re-mark.
-        webAudioLastProduced_ = produced;
-        return;
-    }
-
-    std::uint64_t fresh = produced - webAudioLastProduced_;
-    // Pipeline::audioTap holds 4096 frames; anything older than that is gone
-    // whatever we do here.
-    constexpr std::uint64_t kTapFrames = 4096;
-    if (fresh > kTapFrames) {
-        fresh = kTapFrames;
-    }
-    webAudioBuf_.resize(static_cast<std::size_t>(fresh));
-    const std::size_t got = engine_.audioTap(webAudioBuf_.data(), webAudioBuf_.size());
-    engine_.pushWebAudio(webAudioBuf_.data(), got);
-    webAudioLastProduced_ = produced;
-}
-
-void AppWindow::publishWebImages() {
-    if (!webListening()) {
-        return;
-    }
-    // Nothing to do unless a picture changed OR the set itself did (a rescan
-    // can add or drop a decoder).
-    bool dirty = (webImageRevs_.size() != pluginImages_.size());
-    for (std::size_t i = 0; !dirty && i < pluginImages_.size(); ++i) {
-        dirty = (webImageRevs_[i] != pluginImages_[i].revision);
-    }
-    if (!dirty) {
-        return;
-    }
-
-    std::vector<cascade::net::WebImage> out;
-    out.reserve(pluginImages_.size());
-    webImageRevs_.assign(pluginImages_.size(), 0);
-    for (std::size_t i = 0; i < pluginImages_.size(); ++i) {
-        const cascade::core::HostImage& src = pluginImages_[i];
-        webImageRevs_[i] = src.revision;
-        cascade::net::WebImage w;
-        w.plugin = src.plugin;
-        w.width = src.width;
-        w.height = src.height;
-        w.complete = src.complete;
-        w.revision = src.revision;
-        std::string err;
-        // A decoder that has produced no pixels yet encodes to nothing; the
-        // slot is still published so the browser can show that it exists and
-        // is waiting, rather than the picture appearing from nowhere later.
-        if (!cascade::core::encodeBmp24(src, w.bmp, err)) {
-            w.bmp.clear();
-        }
-        out.push_back(std::move(w));
-    }
-    engine_.setWebImages(std::move(out));
-}
-
 void AppWindow::pumpWebTiles() {
     const bool active = basemap_.active();
-    // A plugin change mid-session must not leave the old source's tiles being
-    // served under the new one's attribution — or at all.
+    // A plugin change mid-session must not leave the old source's tiles
+    // being served under the new one's attribution — or at all.
+    bool clearFirst = false;
     if (active != webTilesActive_ ||
         (active && basemap_.attribution() != webTileAttribution_)) {
-        engine_.clearWebTiles();
+        clearFirst = true;
         webTilesActive_ = active;
         webTileAttribution_ = active ? basemap_.attribution() : std::string();
     }
-    if (!active || !webListening()) {
-        return;
-    }
-    const std::vector<cascade::net::WebServer::TileRequest> wants = engine_.takeWebTileRequests();
     // Bounded per frame: each READY tile is a 192 KB copy plus a BMP encode,
     // and this runs on the frame path. Whatever is not served here the browser
     // simply asks for again.
     constexpr std::size_t kMaxTilesPerFrame = 16;
-    std::size_t served = 0;
-    for (const cascade::net::WebServer::TileRequest& r : wants) {
-        if (served >= kMaxTilesPerFrame) {
-            break;
-        }
-        std::vector<std::uint8_t> rgb;
-        const std::int32_t got = basemap_.rawTile(r.z, r.x, r.y, rgb);
-        if (got == CASCADE_TILE_PENDING) {
-            // Asking is what started the plugin fetching; the browser's retry
-            // will land after it has had time to finish.
-            continue;
-        }
-        std::vector<std::uint8_t> bmp;
-        if (got == CASCADE_TILE_READY) {
+    // ONE SHELL CALL (stage 5e): the engine drains the page's wants and publishes the answers this window's plugin client gives.
+    engine_.serveWebTiles(
+        clearFirst, active && webListening(), kMaxTilesPerFrame,
+        [this](const cascade::engine::WebTileRequest& r, std::vector<std::uint8_t>& bmp) {
+            std::vector<std::uint8_t> rgb;
+            const std::int32_t got = basemap_.rawTile(r.z, r.x, r.y, rgb);
+            if (got == CASCADE_TILE_PENDING) {
+                // Asking is what started the plugin fetching; the browser's
+                // retry will land after it has had time to finish.
+                return cascade::engine::WebTileAnswer::Pending;
+            }
+            if (got != CASCADE_TILE_READY) { return cascade::engine::WebTileAnswer::Missing; }
             cascade::core::HostImage img;
             img.width = basemap_.tileSize();
             img.height = basemap_.tileSize();
@@ -20025,13 +19953,12 @@ void AppWindow::pumpWebTiles() {
             img.pixels = std::move(rgb);
             std::string err;
             if (!cascade::core::encodeBmp24(img, bmp, err)) {
-                bmp.clear();  // published as missing: an unencodable tile has no
-                              // better answer than "stop asking"
+                // published as missing: an unencodable tile has no better answer than "stop asking"
+                bmp.clear();
+                return cascade::engine::WebTileAnswer::Missing;
             }
-        }
-        engine_.setWebTile(r.z, r.x, r.y, std::move(bmp));
-        ++served;
-    }
+            return cascade::engine::WebTileAnswer::Ready;
+        });
 }
 
 // Hide or show every torn-off window the application owns, following scope
@@ -21864,24 +21791,24 @@ void AppWindow::handFrontEndFacts() {
     cascade::engine::FrontEndFacts f;
     f.tunerDisplayStyle = tunerDisplayStyle();
     f.basemap = basemapFacts();
-    f.webExtras = webExtrasNow();
+    f.trackFeed = trackFeedNow();
     // The bounded run's catalogue diagnostic (CASCADE_PLUGIN_TEST): whether it is on, and the frame it names.
     f.pluginTestReport = !pluginTestHook_.empty();
     f.frame = frameCounter_;
     engine_.setFrontEndFacts(std::move(f));
 }
 
-// WHAT THE WEB STATUS TAKES OF THE PLUGIN POLL, built here and handed over (the pump move's step P2). The engine's pass used to
-// call this window for it while it published (enrichWebTrack per track, fillWebImages per pass), reading trackInfo_ and
-// pluginImages_ - state only this thread may touch. Asking the cache for a track is also what STARTS the plugin looking it up
+// THE TRACK FEED, built here and handed over (the pump move's step P2; named webExtrasNow, and carrying the pictures' headers, until stage 5e: the
+// pictures are the engine's own now). The engine's pass used to call this window for it while it published (enrichWebTrack per track),
+// reading trackInfo_ - state only this thread may touch. Asking the cache for a track is also what STARTS the plugin looking it up
 // (non-blocking; PENDING costs nothing; answers are cached), so this runs every frame over the tracks the poll found, exactly as
-// the pass's loop did, and with the same staleness rule. The tracks and pictures are the last poll's (drawPluginWindows polls them
+// the pass's loop did, and with the same staleness rule. The tracks are the last poll's (drawPluginWindows polls them
 // later in the frame): an answer for a track that has just appeared follows a frame later than it did, which no browser can tell
 // from the plugin's own time to look it up.
-std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
+std::shared_ptr<const cascade::engine::TrackFeed> AppWindow::trackFeedNow() {
     const std::vector<cascade::core::HostTrack>& tracks = hostTracks();
-    if (tracks.empty() && pluginImages_.empty()) { return nullptr; }
-    auto x = std::make_shared<cascade::engine::WebExtras>();
+    if (tracks.empty()) { return nullptr; }
+    auto x = std::make_shared<cascade::engine::TrackFeed>();
     // THE TRACKS THEMSELVES, the visible ones (the pass's list for the browser; pump move step P3): the pass read the plugin UI's own
     // vector for them, which this window's poll rewrites every frame. A copy per frame of what is on the screen, not of every
     // stale target a source never evicts.
@@ -21894,7 +21821,7 @@ std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
             const std::string id = t.t.id;
             const cascade::gui::TrackInfoCache::Info* d = trackInfo_.get(id, t.t.kind);
             if (d == nullptr) { continue; }
-            cascade::engine::WebTrackInfo w;
+            cascade::engine::TrackFeedInfo w;
             w.id = id;
             w.kind = t.t.kind;
             w.infoState = d->known ? 1u : 2u;
@@ -21907,14 +21834,11 @@ std::shared_ptr<const cascade::engine::WebExtras> AppWindow::webExtrasNow() {
             x->tracks.push_back(std::move(w));
         }
         std::sort(x->tracks.begin(), x->tracks.end(),
-                  [](const cascade::engine::WebTrackInfo& a, const cascade::engine::WebTrackInfo& b) {
+                  [](const cascade::engine::TrackFeedInfo& a, const cascade::engine::TrackFeedInfo& b) {
                       return a.id != b.id ? a.id < b.id : a.kind < b.kind;
                   });
     }
-    for (const cascade::core::HostImage& im : pluginImages_) {
-        x->images.push_back({im.plugin, im.width, im.height, im.complete, im.revision});
-    }
-    if (x->tracks.empty() && x->images.empty() && x->polled.empty()) { return nullptr; }
+    if (x->tracks.empty() && x->polled.empty()) { return nullptr; }
     return x;
 }
 
@@ -21928,13 +21852,6 @@ cascade::engine::BasemapFacts AppWindow::basemapFacts() const {
     f.tileSize = basemap_.tileSize();
     f.attribution = basemap_.attribution();
     return f;
-}
-
-void AppWindow::publishWebSpectrum(double centerHz) {
-    // THE SPECTRUM FRAME for the browser - a stream, not state, and not part of stage 2 (docs/engine-stage2.md, OPEN): handed to the engine's
-    // web server when the frame advanced, as before (lastFrame_ is what the spectrum panel just drew, so the browser and the window show the
-    // same data by construction). The server's copy, its lock and the span (the chain's input rate) are the engine's since stage 5b.
-    engine_.publishWebSpectrum(lastFrame_.seq, lastFrame_.dbBins, centerHz);
 }
 
 void AppWindow::diagnosticsStartup(const cascade::core::AppConfig& cfg) {

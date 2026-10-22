@@ -9,6 +9,11 @@
 // setWeb()/setCat(). The window no longer owns either server; it configures them (SERVER_CONFIG), reads them (list 49, the facts) and feeds
 // them the data it still produces (audio, pictures, tiles, the spectrum - until 5e).
 //
+// STAGE 5e: THE WEB'S READS ARE THE ENGINE'S. The spectrum the page long-polls and the audio it plays are read from the table on the web
+// server's own session (net::WebSession::readSpectrum / readAudio: nothing is published INTO the server any more), and the receiver plugins'
+// pictures are polled, encoded and served by this host's ImageFeed (engine/image_feed.hpp). What the window still feeds the page is the
+// basemap's tiles (a GUI-thread plugin client) and the track list (the plugin UI's poll).
+//
 // THREADS. config()/listener()/version()/counters are any-thread; apply(), poll(), load() are the engine's pumping thread's. The
 // password is hashed (PBKDF2-HMAC-SHA256, 600 000 iterations, net/web_auth.hpp) on a worker the pass polls, and the SERVERS are started
 // and stopped on a WORKER THREAD of their own - never in the pass: WebServer::stop() can block for as long as the read timeout (10 s), and
@@ -41,6 +46,8 @@
 #include <thread>
 #include <vector>
 
+#include "core/host_image.hpp"
+#include "engine/image_feed.hpp"
 #include "net/cat_server.hpp"
 #include "net/web_policy.hpp"
 #include "net/web_server.hpp"
@@ -154,19 +161,22 @@ public:
     // runs): the web page's status (the whole block of one publish), the way the web server gets its session (since 5d the browser's control
     // goes through ONE session of the web server's own, opened when the server has bound and closed when it stops - its heartbeat is the
     // page's status poll, never a PTT re-assertion; see openWebSession) and the way a CAT connection gets its session (since 5c CAT
-    // answers from, and commands through, a session of its own per connection - see openCatSession). The spectrum the page long-polls is
-    // the host's own (publishSpectrum, below).
+    // answers from, and commands through, a session of its own per connection - see openCatSession). The web page's spectrum and audio are
+    // not provided here: the web session reads them from the table (net::WebSession::readSpectrum / readAudio, since 5e).
     struct Providers {
         cascade::net::WebServer::StatusProvider webStatus;
         cascade::net::WebSessionOpener webSession;
         cascade::net::CatSessionOpener catSession;
+        // PluginRunner::pollImages (stage 5e): the image feed's one accumulator polls the decoders through it.
+        std::function<void(std::vector<cascade::core::HostImage>&)> pollImages;
     };
     void attach(Providers p);
 
-    // --- the data the window still feeds the web page (stage 5b; END: 5e, which reads them from the table) -----------------------------
-    // The spectrum frame the browser long-polls, labelled with the centre and the span the look carries; copied only when the sequence
-    // moved. (The audio, the pictures and the tiles go straight to the web server's own thread-safe stores: the engine's shell forwards.)
-    void publishSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz, double spanHz);
+    // --- the receiver plugins' pictures (stage 5e) -----------------------------------------------------------------------------------
+    // Polled, BMP-encoded (on the feed's worker) and served to the page by the engine; the window reads them for its own image windows
+    // through the same accumulator (ImageFeed::copyTo) and the status lists their headers (ImageFeed::headers).
+    ImageFeed& images() { return images_; }
+    const ImageFeed& images() const { return images_; }
 
     // --- the servers --------------------------------------------------------------------------------------------------------------
     cascade::net::WebServer& webServer() { return webServer_; }
@@ -245,12 +255,9 @@ private:
     std::atomic<bool> webListening_{false};
     std::atomic<bool> hosting_{true};
 
-    // The spectrum the page long-polls.
-    mutable std::mutex specM_;
-    std::vector<float> specBins_;
-    std::uint64_t specSeq_ = 0;
-    double specCentreHz_ = 0.0;
-    double specSpanHz_ = 0.0;
+    // The pictures. Declared after the web server it publishes into, so it is destroyed first (and shutdown() joins its worker before the
+    // servers stop).
+    ImageFeed images_;
 
     // The worker's wish. wm_ guards the flags; it is never held across a call into a server or into m_.
     mutable std::mutex wm_;

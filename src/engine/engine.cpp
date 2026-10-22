@@ -114,6 +114,9 @@ Engine::Engine(EngineHost& host)
         return openWebSession(*api_, [this] { return receiverSnapshot_->readFull()->bookmarkIds; }, label);
     };
     providers.catSession = [this](const std::string& label) { return openCatSession(*api_, label); };
+    // (stage 5e) The receiver plugins' pictures: the host's image feed owns the ONE accumulator that polls the decoders (a decoder offers a
+    // picture once, so two pollers would split them), through the runner this engine owns.
+    providers.pollImages = [this](std::vector<cascade::core::HostImage>& out) { pluginRunner_.pollImages(out); };
     servers_.attach(std::move(providers));
 }
 
@@ -6366,9 +6369,8 @@ double Engine::publishReceiverState() {
     std::vector<std::uint64_t> bookmarkIds;
     fillStatusLists(*lists, faultMessage, rds, bookmarkIds);
     receiverSnapshot_->publish(ps, std::move(lists), std::move(bookmarkIds));
-    // The spectrum frame for the browser is the window's (a stream, not
-    // state: AppWindow::publishWebSpectrum), labelled with the centre just
-    // published.
+    // (The spectrum the browser long-polls is the table's read_spectrum on the web server's session, filled by endPass - stage 5e; it was
+    // the window's copy of what it drew until then.)
     return ps.rx.centreHz;
 }
 
@@ -6476,9 +6478,10 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         }
     }
 
-    const std::shared_ptr<const WebExtras> extras = webExtras();
-    // THE TRACKS ARE THE WINDOW'S POLL, AS IT HANDED THEM OVER (WebExtras::polled; pump move step P3): the plugin UI is the
+    const std::shared_ptr<const TrackFeed> extras = trackFeed();
+    // THE TRACKS ARE THE WINDOW'S POLL, AS IT HANDED THEM OVER (TrackFeed::polled; pump move step P3): the plugin UI is the
     // window's and its poll rewrites its vectors every frame, so this pass reads an immutable copy and never the vector itself.
+    // With no window there is no feed, and no tracks (stage 7 decides whether a headless engine polls the plugin UI itself).
     static const std::vector<cascade::core::HostTrack> kNoTracks;
     for (const cascade::core::HostTrack& t : extras != nullptr ? extras->polled : kNoTracks) {
         // THE SAME STALENESS RULE THE DESKTOP MAP APPLIES, so the two views do
@@ -6499,15 +6502,19 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         w.ageMs = t.t.ageMs;
         w.kind = t.t.kind;
         w.flags = t.t.flags;
-        // Enrichment from the track-info plugin, as the window handed it over (FrontEndFacts::webExtras, pump move step P2):
+        // Enrichment from the track-info plugin, as the window handed it over (FrontEndFacts::trackFeed, pump move step P2):
         // the window asks the plugin's cache for every live target once a frame - which is what drives the lookups, the ask
         // being non-blocking, PENDING costing nothing and answers cached - and this pass only looks the answer up.
-        if (extras != nullptr) { applyWebTrackInfo(*extras, w); }
+        if (extras != nullptr) { applyTrackFeedInfo(*extras, w); }
         s.tracks.push_back(std::move(w));
     }
 
-    // The receiver plugins' decoded pictures (headers only; the pixels are served by the web server's own set), as handed over.
-    if (extras != nullptr) { s.images.insert(s.images.end(), extras->images.begin(), extras->images.end()); }
+    // The receiver plugins' decoded pictures (headers only; the pixels are served by the web server's own set). THE ENGINE'S OWN since stage
+    // 5e (ServerHost's image feed polls the decoders and encodes the pictures): these are the headers of the set the server holds, published
+    // after it - never ahead of the bitmap a page would fetch for the revision they name.
+    if (const auto headers = servers_.images().headers(); headers != nullptr) {
+        s.images.insert(s.images.end(), headers->begin(), headers->end());
+    }
 
     s.basemap.attribution = frontEndFacts().basemap.attribution;   // handed over (OPEN 4)
 
@@ -9428,16 +9435,16 @@ FrontEndFacts Engine::frontEndFacts() const {
     return frontEndFacts_;
 }
 
-std::shared_ptr<const WebExtras> Engine::webExtras() const {
+std::shared_ptr<const TrackFeed> Engine::trackFeed() const {
     std::lock_guard<std::mutex> lk(frontEndFactsMutex_);
-    return frontEndFacts_.webExtras;
+    return frontEndFacts_.trackFeed;
 }
 
 // One track's enrichment from the handed-over answers (sorted by id, then kind): the same fields the window's enrichWebTrack hook
 // set, and nothing for a track the plugin has not answered (infoState stays 0 = "no answer yet").
-void Engine::applyWebTrackInfo(const WebExtras& x, cascade::net::RadioStatus::Track& w) {
+void Engine::applyTrackFeedInfo(const TrackFeed& x, cascade::net::RadioStatus::Track& w) {
     const auto it = std::lower_bound(x.tracks.begin(), x.tracks.end(), std::make_pair(w.id, w.kind),
-                                     [](const WebTrackInfo& a, const std::pair<std::string, unsigned>& key) {
+                                     [](const TrackFeedInfo& a, const std::pair<std::string, unsigned>& key) {
                                          return a.id != key.first ? a.id < key.first : a.kind < key.second;
                                      });
     if (it == x.tracks.end() || it->id != w.id || it->kind != w.kind) { return; }

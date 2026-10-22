@@ -115,6 +115,9 @@ struct AppWindowTestAccess {
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
     static void attachTrackInfo(AppWindow& a, const CascadeTrackInfoApi* api) { a.trackInfo_.attach(api); }
     static void sendTrackInfoText(AppWindow& a) { a.sendTrackInfoText(); }
+    // The engine's image feed (stage 5e): the cycle its worker makes while a web server listens - poll, encode what changed, publish the set and the
+    // headers - made by hand, since no server listens in this test.
+    static void cycleImages(AppWindow& a) { rawEngine(a.engine_).servers().images().cycleForTest(); }
     static const AppWindow::DecoderLineCache& decoderLines(AppWindow& a) { return a.decoderLines(); }
     static const SpectrumView& spectrum(AppWindow& a) { return *a.spectrum_; }
     // the eight accessors
@@ -617,12 +620,14 @@ void testPresetEvent(AppWindow& a) {
 }
 
 // ======================================================================================================================
-// F2. WHAT THE WEB STATUS TAKES OF THE PLUGIN POLL, AND THE TRACK-INFO PLUGIN'S LINES (the pump move, step P2)
+// F2. WHAT THE WEB STATUS TAKES OF THE PLUGIN POLL, AND THE TRACK-INFO PLUGIN'S LINES (the pump move, step P2; stage 5e)
 // ======================================================================================================================
 // The engine's pass used to ask the window, through two hooks, for a track's enrichment and the pictures' headers while it
 // published (reading the window's TrackInfoCache and picture buffer from the pass), and for the track-info plugin's status lines
-// every pass. The window hands the first two over in FrontEndFacts::webExtras and SENDS the lines as commands. A fake track-info
-// plugin (a scripted C table, test_track_info_cache.cpp's shape) and the fixture track source and picture decoder drive both.
+// every pass. The window hands the track list and the track-info answers over in FrontEndFacts::trackFeed and SENDS the lines as commands;
+// the pictures' headers are not the window's to hand over any more - the engine polls the decoders and serves the pictures itself
+// (ImageFeed, stage 5e) and the status lists the headers of the set the web server holds. A fake track-info plugin (a scripted C table,
+// test_track_info_cache.cpp's shape) and the fixture track source and picture decoder drive both.
 std::string g_infoKnownId;
 bool g_infoLineSent = false;
 void* infoCreate() { return reinterpret_cast<void*>(1); }
@@ -647,7 +652,7 @@ std::int32_t infoPollText(void*, char* buf, size_t cap) {
 void infoDestroy(void*) {}
 
 void testWebExtras(AppWindow& a) {
-    std::printf("  F2: the web status' enrichment and picture headers are HANDED OVER; the track-info lines are SENT\n");
+    std::printf("  F2: the web status' enrichment is HANDED OVER, the picture headers are the ENGINE'S; the track-info lines are SENT\n");
     drawPlugins(a);
     const std::vector<cascade::core::HostTrack> tracks = Access::tracks(a);
     CHECK(tracks.size() >= 2u);
@@ -664,7 +669,7 @@ void testWebExtras(AppWindow& a) {
 
     // NOTHING HANDED OVER YET: the web status carries no enrichment, no pictures and - since the pump move's step P3 - no tracks either
     // (a headless pass has none): the pass reads NOTHING of the plugin UI itself, which is the window's and rewritten by its poll
-    // every frame; the tracks reach the browser in the same hand-over as the enrichment and the pictures' headers.
+    // every frame; the tracks reach the browser in the same hand-over as the enrichment.
     {
         Access::look(a);
         const cascade::net::RadioStatus st = Access::webStatus(a);
@@ -672,8 +677,15 @@ void testWebExtras(AppWindow& a) {
         for (const auto& t : st.tracks) { CHECK_EQ(t.infoState, 0u); }
         CHECK(st.images.empty());
     }
-    // HANDED OVER: the known track is enriched, the other is "the source does not have it" (2), and the pictures' headers are listed.
+    // HANDED OVER: the known track is enriched, the other is "the source does not have it" (2).
     Access::hand(a);
+    Access::look(a);
+    // THE PICTURES' HEADERS ARE NOT HANDED OVER (stage 5e): the window holds the decoders' pictures (it polled them while it drew) and has handed the
+    // engine its facts, and the status still lists none - they are the headers of the set the engine's image feed has published to the web server,
+    // which has not run a cycle yet.
+    CHECK(!Access::images(a).empty());
+    CHECK(Access::webStatus(a).images.empty());
+    Access::cycleImages(a);
     Access::look(a);
     {
         const cascade::net::RadioStatus st = Access::webStatus(a);
@@ -701,8 +713,8 @@ void testWebExtras(AppWindow& a) {
             CHECK_EQ(st.images[0].width, Access::images(a)[0].width);
             CHECK_EQ(st.images[0].revision, Access::images(a)[0].revision);
         }
-        std::printf("      %d track enriched, %d answered missing, %zu picture header(s) listed\n", known, missing,
-                    st.images.size());
+        std::printf("      %d track enriched, %d answered missing, %zu picture header(s) listed (the engine's, after its feed's cycle)\n", known,
+                    missing, st.images.size());
     }
     // THE TRACK-INFO PLUGIN'S STATUS LINE: polled on this thread and sent; it lands in the Decoder output backlog, counted.
     const std::uint64_t total0 = Access::state(a).decoderLinesTotal;

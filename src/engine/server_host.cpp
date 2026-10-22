@@ -179,17 +179,12 @@ ServerHost::ServerHost() {
         c.clients.store(catServer_.clientCount(), std::memory_order_relaxed);
         c.commands.store(catServer_.commandCount(), std::memory_order_relaxed);
     };
-    // The spectrum the page long-polls: the contract of Pipeline::getLatestFrame - nothing newer than the caller's cursor is "no frame", so
-    // a polling browser never re-fetches a picture it already drew.
-    (void)webServer_.setSpectrumProvider([this](cascade::net::SpectrumSnapshot& inOut) {
-        std::lock_guard<std::mutex> lock(specM_);
-        if (specSeq_ == 0 || inOut.seq >= specSeq_) { return false; }
-        inOut.seq = specSeq_;
-        inOut.centerHz = specCentreHz_;
-        inOut.spanHz = specSpanHz_;
-        inOut.dbBins = specBins_;
-        return true;
-    });
+    // THE PICTURES (stage 5e): the feed polls the decoders through the provider attach() is given, encodes on its worker while the web server
+    // listens, and hands the served set to the server.
+    ImageFeed::Hooks h;
+    h.serving = [this] { return webListening(); };
+    h.publish = [this](std::vector<cascade::net::WebImage> set) { webServer_.setImages(std::move(set)); };
+    images_.attach(std::move(h));
 }
 
 ServerHost::~ServerHost() {
@@ -201,16 +196,7 @@ void ServerHost::attach(Providers p) {
     if (p.webStatus) { (void)webServer_.setStatusProvider(std::move(p.webStatus)); }
     if (p.webSession) { (void)webServer_.setSessionOpener(std::move(p.webSession)); }
     if (p.catSession) { catServer_.setSessionOpener(std::move(p.catSession)); }
-}
-
-void ServerHost::publishSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz, double spanHz) {
-    std::lock_guard<std::mutex> lock(specM_);
-    // Copy the bins only when the frame actually advanced.
-    if (seq == specSeq_) { return; }
-    specSeq_ = seq;
-    specBins_ = bins;
-    specCentreHz_ = centreHz;
-    specSpanHz_ = spanHz;
+    if (p.pollImages) { images_.setPoll(std::move(p.pollImages)); }
 }
 
 // ---- the worker ---------------------------------------------------------------------------------------------------------------------
@@ -306,6 +292,8 @@ void ServerHost::reconcileWeb(bool retry) {
     }
     webListening_.store(ok, std::memory_order_relaxed);
     setWeb(std::move(l));
+    // A server that is listening is served its pictures: the feed's worker polls and encodes from now (it sleeps while nobody listens).
+    if (ok) { images_.wake(); }
 }
 
 void ServerHost::reconcileCat(bool retry) {
@@ -354,6 +342,8 @@ void ServerHost::shutdown() {
     }
     wcv_.notify_all();
     if (w.joinable() && w.get_id() != std::this_thread::get_id()) { w.join(); }
+    // The pictures' worker publishes into the web server: it ends first.
+    images_.shutdown();
     // A hard stop each: when it returns no thread of the server runs and every client is closed (what makes destroying them safe).
     webServer_.stop();
     catServer_.stop();
@@ -607,10 +597,45 @@ public:
         return total;
     }
 
+    // THE WATERFALL'S FRAME (stage 5e): the table's read_spectrum, `io.seq` the cursor, the bins copied straight into the caller's vector
+    // (which keeps its room from one long-poll to the next). A frame the buffer cannot hold whole reports its size and is read again at that
+    // size; the table's ring is lock-free, so the second read can only find the same frame or a newer one.
+    bool readSpectrum(cascade::net::SpectrumSnapshot& io) override {
+        std::vector<float>& bins = io.dbBins;
+        if (bins.size() < binHint_.load(std::memory_order_relaxed)) { bins.resize(binHint_.load(std::memory_order_relaxed)); }
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            FoxSpectrumInfo info{};
+            info.structSize = sizeof(info);
+            const std::int32_t r = t_->read_spectrum(s_, io.seq, &info, bins.data(), static_cast<std::uint32_t>(bins.size()));
+            if (r != FOXAPI_OK) { return false; }  // NO_CHANGE: nothing newer than the cursor; BUSY: overtaken for 64 tries, the next poll asks again
+            if (info.binCount > bins.size()) {
+                bins.resize(info.binCount);
+                binHint_.store(info.binCount, std::memory_order_relaxed);
+                continue;
+            }
+            bins.resize(info.copied);
+            io.seq = info.seq;
+            io.centerHz = info.centreHz;
+            io.spanHz = info.spanHz;
+            return true;
+        }
+        return false;
+    }
+
+    // THE PAGE'S AUDIO (stage 5e): the table's read_audio. 0 joins live (nothing copied, the cursor set); the frames copied otherwise.
+    int readAudio(std::uint64_t* cursor, float* out, std::size_t capFrames, std::uint64_t* dropped) override {
+        FoxStreamInfo info{};
+        info.structSize = sizeof(info);
+        const std::int32_t n = t_->read_audio(s_, cursor, out, static_cast<std::uint32_t>(capFrames), &info);
+        if (n >= 0 && dropped != nullptr) { *dropped = info.dropped; }
+        return static_cast<int>(n);
+    }
+
 private:
     const FoxEngineApi* t_;
     FoxSession* s_;
     std::function<std::vector<std::uint64_t>()> bookmarkIds_;
+    std::atomic<std::uint32_t> binHint_{2048};  // the bins the engine's last frame had: the first read of a poll is the right size
 };
 
 }  // namespace

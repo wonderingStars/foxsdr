@@ -116,7 +116,7 @@ struct AppWindowTestAccess;
 
 namespace cascade::engine {
 
-// The vocabulary the engine shares with its front end (ControlThreadOptions, PassPart, WebTrackInfo, WebExtras, BasemapFacts, FrontEndFacts,
+// The vocabulary the engine shares with its front end (ControlThreadOptions, PassPart, TrackFeedInfo, TrackFeed, BasemapFacts, FrontEndFacts,
 // PluginUiReport, EngineStatusText) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
 // name reachable only through this header is a name the interface cannot use. They are in namespace cascade::engine still.
 
@@ -2591,7 +2591,7 @@ private:
     // read once by the caller and handed to both.
     void fillPublishedState(cascade::core::PublishedState& ps, const std::string& faultMessage,
                             const cascade::core::RdsSnapshot& rds);
-    static void applyWebTrackInfo(const WebExtras& x, cascade::net::RadioStatus::Track& w);
+    static void applyTrackFeedInfo(const TrackFeed& x, cascade::net::RadioStatus::Track& w);
     void fillStatusLists(cascade::net::RadioStatus& s, const std::string& faultMessage,
                          const cascade::core::RdsSnapshot& rds, std::vector<std::uint64_t>& bookmarkIds);
     // The runner's feeding keys, reused every frame (fillPublishedState), and
@@ -2656,8 +2656,8 @@ public:
     // thread; the publish reads the newest handed over.
     void setFrontEndFacts(FrontEndFacts f);
     FrontEndFacts frontEndFacts() const;
-    // Just the web extras of the newest facts (a pointer copy under the same lock), for the publish.
-    std::shared_ptr<const WebExtras> webExtras() const;
+    // Just the track feed of the newest facts (a pointer copy under the same lock), for the publish.
+    std::shared_ptr<const TrackFeed> trackFeed() const;
 
     // THE REMOTE CONTROLS' PHASE (pump move step P1; the review's F3, docs/engine-stage4.md). The web server and the CAT connections hold
     // SESSIONS on the table (stage 5c, 5d; net/web_session.hpp, net/cat_server.hpp) and what they submit goes to the INTERNAL TIER, which the
@@ -3029,7 +3029,8 @@ private:
     // that starts and stops them, the configuration restored by applyConfig and written by fillConfig. Declared AFTER api_ so it is
     // destroyed BEFORE it: the servers' providers reach the receiver snapshot and the API host (the browser's keep-alive), and no handler
     // may run once either is gone. ~ServerHost stops them (a hard stop: no thread of either survives it); Engine::shutdownQuiesce does so
-    // first, before the control thread.
+    // first, before the control thread. (Stage 5e: the host also owns the image feed - the ONE accumulator that polls the receiver plugins'
+    // decoders, whose worker encodes their pictures for the web server and publishes into it - and joins that worker in shutdown().)
     ServerHost servers_;
 };
 

@@ -20,10 +20,12 @@
 //              thread (HostPluginFeed). Their end: a feed over the engine API's table (a plugin UI is a front end's, so it
 //              moves with the host process).
 //   WEB / CAT  the browser's and the CAT client's servers are the ENGINE'S since stage 5b (engine/server_host.hpp); the window
-//              configures them (FOXAPI_OP_SERVER_CONFIG), reads them (the SERVERS list and the facts) and still FEEDS the web
-//              server the data only it produces - the audio tap, the receiver plugins' pictures, the basemap's tiles, the
-//              spectrum it drew. Their end: the servers' CONTROL is sessions of the table since 5c and 5d; stage 5e serves the
-//              rest from the table too, and this whole section is DELETED (5f), not moved.
+//              configures them (FOXAPI_OP_SERVER_CONFIG) and reads them (the SERVERS list and the facts). Their CONTROL is sessions
+//              of the table since 5c and 5d, and since 5e so are their READS: the page's spectrum and audio come from the table
+//              on the web server's own session and the receiver plugins' pictures are polled and served by the engine. What the
+//              window still feeds the page is the ONE thing only a GUI-thread plugin client can produce, the basemap's tiles (one
+//              method below, END: 5f deletes the section; headless, nobody serves them and the status says the basemap is not
+//              active, so the page asks for none), and the track list in FrontEndFacts (TrackFeed).
 //
 // THE SURFACE DOES NOT GROW SILENTLY. tests/test_engine_shell_guard.cpp counts the declarations of each section and holds the
 // budgets; a method added here takes a dated comment naming its class and its end, and the budget moves in the same change
@@ -55,7 +57,6 @@
 #include "core/receiver_snapshot.hpp"
 #include "engine/bias_tee.hpp"
 #include "engine/tune_control.hpp"
-#include "net/web_server.hpp"
 #include "source/iq_source.hpp"
 
 namespace cascade::core {
@@ -130,12 +131,14 @@ struct ControlThreadOptions {
 //   Back   the workers (device scans and opens, the retune coalescer, downloads) and the audio sink's health, the config copy
 enum class PassPart { Front, Mute, Back };
 
-// WHAT THE WEB STATUS NEEDS FROM THE WINDOW'S PLUGIN POLL (pump move step P2): the track-info plugin's answers for the tracks on
-// screen, and the headers of the receiver plugins' decoded pictures. Both used to be asked of the window while the engine published
-// (the host hooks enrichWebTrack and fillWebImages), reading the window's TrackInfoCache and picture buffer - GUI-thread state - from
-// the pass. The window builds this once a frame, immutable, and hands the pointer over inside FrontEndFacts (a copy of the facts is
-// a refcount, so the publish's three copies stay free); the pass only looks the answer up.
-struct WebTrackInfo {
+// THE TRACK LIST AND WHAT THE TRACK-INFO PLUGIN SAYS OF IT, the window's plugin poll as it hands it to the engine (pump move steps P2 and P3;
+// named WebExtras until stage 5e, when the receiver plugins' pictures left it: they are the engine's own now, polled by its image feed
+// - engine/image_feed.hpp - so what is left is the one thing only the window's plugin UI knows). The track-info plugin's answers for the
+// tracks on screen used to be asked of the window while the engine published (the host hook enrichWebTrack), reading the window's
+// TrackInfoCache - GUI-thread state - from the pass. The window builds this once a frame, immutable, and hands the pointer over inside
+// FrontEndFacts (a copy of the facts is a refcount, so the publish's three copies stay free); the pass only looks the answer up. A
+// headless engine has no window and so no feed: its status lists no tracks (whether it polls the plugin UI itself is stage 7's to decide).
+struct TrackFeedInfo {
     std::string id;           // the track's id and kind: the key (the vector is sorted by id, then kind)
     unsigned kind = 0;
     unsigned infoState = 0;   // 1 = known, 2 = the source does not have it (RadioStatus::Track::infoState)
@@ -144,9 +147,8 @@ struct WebTrackInfo {
     std::string acOperator;
     std::string acCountry;
 };
-struct WebExtras {
-    std::vector<WebTrackInfo> tracks;
-    std::vector<cascade::net::RadioStatus::Image> images;
+struct TrackFeed {
+    std::vector<TrackFeedInfo> tracks;
     // THE TRACKS THE LAST PLUGIN POLL FOUND, as the window drew them (the pump move's step P3): the pass used to walk the plugin
     // UI's own vector for the browser's target list - a vector the window's poll clears and refills every frame - and walks this
     // immutable copy now. The window carries the VISIBLE ones (the staleness rule the desktop applies); the pass applies it again.
@@ -164,7 +166,7 @@ struct BasemapFacts {
 };
 
 // WHAT THE FRONT END HANDS OVER FOR THE PUBLISH (engine/stage3b-pre, docs/engine-stage3.md OPEN 4): the facts only the window knows -
-// the counter's face (the web page mirrors it), the basemap plugin's figures, the web status' extras -
+// the counter's face (the web page mirrors it), the basemap plugin's figures, the track feed -
 // handed to the engine once a frame (EngineShell::setFrontEndFacts) instead of the engine calling the window for them while it
 // publishes.
 struct FrontEndFacts {
@@ -173,8 +175,8 @@ struct FrontEndFacts {
     // the product's default face, as EngineHost's own answer always was.
     std::string tunerDisplayStyle = cascade::gui::tunerStyleName(cascade::gui::TunerStyle::Nixie);
     BasemapFacts basemap;
-    // The web status' extras (above); null when there are none, which is every pass of a headless engine.
-    std::shared_ptr<const WebExtras> webExtras;
+    // The track feed (above); null when there is none, which is every pass of a headless engine.
+    std::shared_ptr<const TrackFeed> trackFeed;
     // A BOUNDED RUN'S DIAGNOSTIC (CASCADE_PLUGIN_TEST): whether to print the catalogue report when a fetch resolves, and the
     // window's frame count to name in it - the window's onCatalogueResult hook used to read its own counter from the pass.
     bool pluginTestReport = false;
@@ -188,6 +190,19 @@ struct PluginUiReport {
     std::size_t paths = 0;
     std::vector<cascade::core::HostPanel> panels;
 };
+
+// WHAT THE WINDOW ANSWERS A PAGE'S TILE REQUEST WITH (stage 5e; used by EngineShell::serveWebTiles). The page asks the engine's web server for
+// a basemap tile, which records the want; the window - whose plugin client is the only thing that can produce one - drains the wants once a
+// frame and publishes what its plugin has.
+enum class WebTileAnswer { Pending, Missing, Ready };  // Pending: asked of the plugin, ask again later (nothing is published)
+struct WebTileRequest {
+    std::uint32_t z = 0;
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+};
+// Fills `bmp` (a 24-bit BMP) and answers Ready; Missing is the plugin saying the tile will never exist (published empty, so the page stops
+// asking); Pending publishes nothing.
+using WebTileSource = std::function<WebTileAnswer(const WebTileRequest&, std::vector<std::uint8_t>& bmp)>;
 
 // The status sentences the panels letter (Engine::StatusText is this) - see Engine::publishStatusText.
 struct EngineStatusText {
@@ -286,7 +301,9 @@ public:
                               double& outAltM) = 0;
     // Polls the plugins (the frame's one poll, after the head-of-frame directive).
     virtual void poll() = 0;
-    // The receiver plugins' decoded pictures, polled into `out` (PluginRunner::pollImages).
+    // The receiver plugins' decoded pictures, brought up to date in `out` from the engine's one picture accumulator (ImageFeed::copyTo;
+    // stage 5e: the engine polls the decoders and serves the pictures to the web page, this is the window's READ of them for its own image
+    // windows - a poll made on the caller's thread, once a frame, exactly as before).
     virtual void pollImages(std::vector<cascade::core::HostImage>& out) = 0;
     // Applies the newest directive, if one is waiting, on this thread and acknowledges it to the engine (the head of the frame).
     virtual void applyNewestDirective() = 0;
@@ -397,20 +414,16 @@ public:
     std::unique_ptr<HostPluginFeed> makePluginFeed(HostPluginFeed::Steps steps);
 
     // ---------------------------------------------------------------------------------------------------------------------------
-    // CLASS WEB / CAT (added 2026-10-21, stage 4 step 5; reshaped 2026-10-22, stage 5b; END: DELETED by stages 5c-5e, when the browser
-    // and the CAT client are sessions of the table and the table serves what the window feeds here). The servers are the engine's; what is
-    // left is the window's FEED of the data only it produces (until 5e): the audio tap (read by the window's frame, pushed here), the
-    // receiver plugins' pictures, the basemap's tiles, and the spectrum frame the window drew.
+    // CLASS WEB / CAT (added 2026-10-21, stage 4 step 5; reshaped 2026-10-22, stage 5b; one method left 2026-10-22, stage 5e; END: DELETED
+    // by stage 5f). The servers are the engine's, their control and their reads are sessions of the table, the pictures are the engine's
+    // own: what is left is the basemap's TILES, which only the window's GUI-thread plugin client (basemap_) can produce.
     // ---------------------------------------------------------------------------------------------------------------------------
-    std::uint64_t audioSamplesProduced() const;
-    std::size_t audioTap(float* out, std::size_t frames) const;
-    void pushWebAudio(const float* samples, std::size_t frames);
-    void setWebImages(std::vector<cascade::net::WebImage> images);
-    std::vector<cascade::net::WebServer::TileRequest> takeWebTileRequests();
-    void setWebTile(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t> bmp);
-    void clearWebTiles();
-    // The frame the window just drew (its sequence, its bins) labelled with the look's centre; the engine adds the span (the chain's input rate).
-    void publishWebSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz);
+    // ONE CALL A FRAME. `clearFirst` drops every stored tile and pending request (the basemap plugin changed or went away: tiles of the old
+    // source must not be served under the new one). `serve` false (no basemap, or no web server listening) stops there. Otherwise the tiles
+    // the page asked for since the last call are drained and the first `maxTiles` are asked of `source` and published; the rest are dropped
+    // (the page asks again). Headless there is no caller: the status's basemap is not active (BasemapFacts' default) so the page asks for no
+    // tile, and one asked for anyway is answered 202 "pending" - the route records the want (bounded) and nothing drains it.
+    void serveWebTiles(bool clearFirst, bool serve, std::size_t maxTiles, const WebTileSource& source);
 
 private:
     EngineShell();

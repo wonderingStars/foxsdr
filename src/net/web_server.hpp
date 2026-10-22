@@ -435,12 +435,7 @@ struct WebImage {
     std::vector<std::uint8_t> bmp;
 };
 
-struct SpectrumSnapshot {
-    std::vector<float> dbBins;   // fftshifted dB power, oldest-to-newest bin order
-    std::uint64_t seq = 0;       // strictly increasing; 0 means nothing yet
-    double centerHz = 0.0;
-    double spanHz = 0.0;
-};
+// (SpectrumSnapshot is in net/web_session.hpp since stage 5e: the web server reads the spectrum through its engine session.)
 
 // This machine's own IPv4 addresses, so the settings panel can say "open
 // http://192.168.1.20:8073 on your phone" instead of leaving the user to find
@@ -455,10 +450,6 @@ std::vector<std::string> localInterfaceAddresses();
 class WebServer {
 public:
     using StatusProvider = std::function<RadioStatus()>;
-    // Returns false when no frame newer than `inOut.seq` exists, exactly like
-    // Pipeline::getLatestFrame, so the browser can long-poll without copying
-    // the same frame twice.
-    using SpectrumProvider = std::function<bool(SpectrumSnapshot& inOut)>;
     using Clock = std::function<std::int64_t()>;  // seconds since the epoch
 
     WebServer();
@@ -470,7 +461,6 @@ public:
     // Must be set before start(); calling them while running is a no-op that
     // returns false, because a handler could be reading the old one.
     bool setStatusProvider(StatusProvider fn);
-    bool setSpectrumProvider(SpectrumProvider fn);
     // THE ENGINE SESSION (engine stage 5d; net/web_session.hpp). Must be set before start(). start() opens ONE session through it once the
     // bind has succeeded - shared by every browser - and stop() closes it once the last thread of the server has ended, so a stopped server
     // holds none (and a key the browser held is let go by the close, at the engine's next pass). The session is the browser's way to the
@@ -530,21 +520,16 @@ public:
     // takePendingControls and no stop-time release: stopping the server closes its session.
 
     // --- Audio ---------------------------------------------------------------
-    // Publishes newly produced receiver audio (mono, kWebAudioRateHz) for any
-    // browser currently listening. The application calls this once per frame
-    // with exactly the samples produced since the previous call; the ring
-    // (net/web_audio.hpp) gives each listener its own cursor.
-    //
-    // Safe to call whether or not anyone is listening, and whether or not the
-    // server is running — it is a buffer write, not a send.
-    void pushAudio(const float* samples, std::size_t n);
+    // GET /api/audio streams the engine's audio (mono, kWebAudioRateHz, 16-bit little-endian, chunked) from the session's readAudio: one
+    // cursor per listener, joined LIVE. Since stage 5e the server holds no ring of its own and nothing pushes audio into it (the window's
+    // publishWebAudio is gone): a server with no session answers 503.
 
     // Browsers currently streaming audio, for the settings panel.
     std::size_t audioListeners() const;
 
-    // Replaces the served set of decoded pictures. The application calls this
-    // only when a decoder's revision actually moves — re-encoding a megapixel
-    // BMP every frame would cost more than the whole rest of the server.
+    // Replaces the served set of decoded pictures (already BMP-encoded). The engine's image feed (engine/image_feed.hpp) calls this from
+    // its worker, only when a decoder's picture actually changed - re-encoding a megapixel BMP every poll would cost more than the whole
+    // rest of the server.
     void setImages(std::vector<WebImage> images);
 
     // --- Basemap tiles -------------------------------------------------------

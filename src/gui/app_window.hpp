@@ -638,25 +638,22 @@ private:
     // EngineHost hooks the engine calls while publishing, but this window's
     // answers, HANDED OVER once a frame (handFrontEndFacts) - and, since the
     // pump move's step P2, the track-info plugin's answers for the web status
-    // and the pictures' headers (webExtrasNow), the bounded run's report switch
+    // and the track list (trackFeedNow; the receiver plugins' pictures are the engine's own since stage 5e), the bounded run's report switch
     // and the frame count it names. (Whether the web server listens is not one of them any more: the server is the engine's, and the
     // state this window reads carries the bit - webListening.)
     bool webListening() const;
     std::string tunerDisplayStyle() const;
     cascade::engine::BasemapFacts basemapFacts() const;
     void handFrontEndFacts();
-    std::shared_ptr<const cascade::engine::WebExtras> webExtrasNow();
+    std::shared_ptr<const cascade::engine::TrackFeed> trackFeedNow();
     // The track-info plugin's status lines, polled on THIS thread (the cache is GUI-thread state) and sent to the engine, one
     // FOXAPP_OP_TRACK_INFO_LINE each - at the head of the frame, so they land in the pass that frame's drain applies.
     void sendTrackInfoText();
-    // THE WINDOW'S HALVES OF THREE ENGINE FUNCTIONS THAT WERE ONE. The engine
-    // publishes the receiver snapshot and hands back the centre it published;
-    // the browser's spectrum frame (a stream, not state) is copied here,
-    // straight after, as it was. The usage report is the engine's; the crash
+    // THE WINDOW'S HALVES OF TWO ENGINE FUNCTIONS THAT WERE ONE. The usage report is the engine's; the crash
     // report offer, the crash-loop limiter's memory and the update and
     // diagnostics switches that were read and written beside it are this
-    // window's, and run beside the engine's half exactly where it runs.
-    void publishWebSpectrum(double centerHz);
+    // window's, and run beside the engine's half exactly where it runs. (The browser's spectrum frame was copied here once a frame until
+    // stage 5e; the page reads it from the table on its own session now, so a window that is not framing no longer freezes it.)
     void diagnosticsStartup(const cascade::core::AppConfig& cfg);
     void diagnosticsJournal(cascade::core::AppConfig& cfg);
     // The engine's constants under the names this window's code has always used them by. (The engine's nested types the window once
@@ -3242,7 +3239,7 @@ private:
     // reportPluginStatus prints what the ENFORCEMENT decided (how many candidates the host actually mapped, what blockedCount()
     // says, one line per retired plugin including whether the host has any record of it - mapped=0 is the proof that the stale
     // code is not in the process) at the end of the run, so it reflects any catalogue fetch the run performed. The receiver
-    // plugins' pictures are the one thing it takes from this window (pluginImages_, polled by the plugin windows).
+    // plugins' pictures are the one thing it takes from this window (pluginImages_, the window's own copy of the engine's accumulator).
 
     // --- Web server mode (P11) ------------------------------------------------
     //
@@ -3259,28 +3256,12 @@ private:
     // lock the GUI thread ever waits for.
     void drawCatSection();
     void drawWebSection();
-    // Copies audio produced since the last frame into the server's ring.
-    //
-    // The pipeline's tap is a rolling 4096-frame window with no per-reader
-    // position, so "what is new" comes from audioSamplesProduced(), which is
-    // monotonic and counts FRAMES in the same unit the tap returns. The
-    // difference between two readings is exactly what to copy — that is what
-    // makes the stream gap-free and repeat-free rather than "whatever the
-    // window happened to hold". If the GUI ever stalls longer than the window
-    // (85 ms at 48 kHz) the excess is unrecoverable and is dropped; the
-    // listener hears a glitch, which beats hearing stale audio for ever after.
-    void publishWebAudio();
-    // Re-encodes decoded pictures for the browser, but ONLY when a decoder's
-    // revision has actually moved: encoding a megapixel BMP every frame would
-    // cost more than everything else the server does put together.
-    void publishWebImages();
-    // Revisions the last publish encoded, one per image slot.
-    std::vector<std::uint64_t> webImageRevs_;
     // Serves the browser map's tile wants from the basemap plugin. The
     // browser's viewport drives WHICH tiles; this frame-time pump is what
     // keeps the plugin on the GUI thread, the only thread the ABI lets call
     // it: the server records requests it cannot answer, this drains a bounded
     // number per frame, fetches, encodes, publishes, and the browser retries.
+    // It is the ONE feed the window still gives the page (stage 5e: the spectrum and the audio are the table's, the pictures the engine's).
     void pumpWebTiles();
     // What the last pump saw, so a plugin change or removal clears the
     // server's store instead of serving the old source's imagery as the new's.
@@ -3368,11 +3349,6 @@ private:
     // decides who can reach the receiver should be reviewed before it takes
     // effect, not applied halfway through being typed.
     bool webDirty_ = false;
-
-    // THE FEEDS (END: 5e, which serves them from the table). audioSamplesProduced() at the last publish, and the scratch buffer the tap is
-    // read into (a member so a steady stream never allocates).
-    std::uint64_t webAudioLastProduced_ = 0;
-    std::vector<float> webAudioBuf_;
 
     // The pointer ledger (see the frame loop), switched on from the
     // Diagnostics section so a tester can read it without setting an
