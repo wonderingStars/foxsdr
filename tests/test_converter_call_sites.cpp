@@ -151,7 +151,7 @@ bool exempt(const fs::path& p) {
            s.find("/core/pipeline.cpp") != std::string::npos ||  // owns the view
            s.find("/core/patch_radio.cpp") != std::string::npos ||  // owns the view
            s.find("/core/transmitter.cpp") != std::string::npos ||  // TX sink: no converter on TX
-           s.find("/src/main.cpp") != std::string::npos;  // CLI checks, never the GUI receiver
+           s.find("/src/engine/tool_modes.cpp") != std::string::npos;  // CLI checks (were src/main.cpp until stage 7a), never the GUI receiver
 }
 
 std::string findRoot(int argc, char** argv) {

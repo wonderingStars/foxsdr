@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// PROCESS BOOT: everything a FoxSDR executable does between the operating
+// system handing it control and the moment it has an application object to run
+// (engine extraction stage 7a: moved out of src/main.cpp, unchanged).
+//
+// WHY IT IS ITS OWN UNIT. src/main.cpp was 1,449 lines, of which about 150 were
+// the entry point proper. The rest was boot: the console, the child-process
+// helper modes, the crash handlers, the diagnostics switch read ahead of the
+// window, the single-instance claim, the beta-link activation, the argument
+// parse, the tool modes, the stderr capture, the console-close handler and the
+// sentinel. They are process-level, not window-level, and a second executable
+// (the headless engine, stage 7b) needs the same sequence. bootProcess() is that
+// sequence, in the order main() had it. The order is the contract: a helper
+// must return before any handler is armed, the handlers must be armed before the
+// config is read (the read can fault), the instance must be claimed before the
+// flags are parsed, and the console must be settled before anything prints.
+// tests/test_process_boot_order.cpp pins it from the source text, and
+// process_boot.cpp says at each step why that step is where it is.
+//
+// THE KIND. A process is a Host (the window application, `cascade`) or an
+// Engine (the window-less service, stage 7b). The kind decides FIVE things and
+// nothing else:
+//   * whether the process claims the single-instance name (Host only);
+//   * whether it acts on a foxsdr:// link in argv[1] (Host only; an Engine
+//     neither writes a link-request file nor claims the instance - the link
+//     channel belongs to the interface that is on the desktop);
+//   * whether it installs the stderr capture (Host only: a service's stderr is
+//     its journal; the capture exists for "a window nobody was reading");
+//   * whether it installs the console-close handler (Host only; the Engine's
+//     signal path arrives in stage 7d and is gated here, beside it);
+//   * the signal path itself (none yet).
+// Every other step is kind-blind. Today the only binary is a Host, so nothing
+// observable differs from before the move.
+//
+// Engine-clean: no gui/, imgui, GLFW or OpenGL. main() constructs the window; it
+// never happens here.
+#pragma once
+
+#include <string>
+
+#include "engine/tool_modes.hpp"
+
+namespace cascade::engine {
+
+enum class ProcessKind {
+    Host,    // the window application (cascade / cascade.exe)
+    Engine,  // the window-less engine service (foxsdr-engine, stage 7b)
+};
+
+// What boot hands back. Either the process is finished (`exit`: return
+// `exitCode` from main(), nothing else to do - a helper mode, a tool mode, a
+// refused argument, a link handed to the instance already running), or it goes
+// on and the fields below are what the application object is built from.
+struct BootResult {
+    bool exit = false;
+    int exitCode = 0;
+
+    // --- when the process goes on ---------------------------------------------
+    std::string configPath;        // empty: no stored config (a hermetic bounded run)
+    bool announceConfig = false;   // CASCADE_CONFIG_TEST named the path
+    int frames = -1;               // negative: run until the window is closed
+    int diagStallMs = 0;           // --diag-stall
+    int diagToggle = 0;            // --diag-toggle on (1) / off (-1)
+    bool linkTesterReveal = false; // --link-tester
+    bool mayWrite = false;         // this run may put diagnostics on disk (a real session)
+
+    // --- boot's own bookkeeping, public so a test can read what boot decided ---
+    bool wanted = false;           // the stored Diagnostics switch, honoured before the disk
+    bool primaryInstance = false;  // this process holds the instance name (Host only)
+    bool argv1IsLinkActivation = false;  // argv[1] was a foxsdr: link, consumed by boot
+    bool sentinelTest = false;     // CASCADE_SENTINEL_TEST on a bounded run
+    ToolRequest tool;              // the tool mode the command line asked for, if any
+};
+
+// Run the whole boot sequence for this kind of process. Prints and exits for the
+// modes that print and exit; otherwise returns with everything armed.
+BootResult bootProcess(ProcessKind kind, int argc, char** argv);
+
+}  // namespace cascade::engine

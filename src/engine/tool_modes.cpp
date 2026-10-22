@@ -1,0 +1,832 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// The process's headless tool modes: the checks `cascade --selftest`,
+// `--soapy-check`, `--record-check`, `--tone-check` and `--rds-check <MHz>`
+// (and `--rtlsdr-check`, which has its own file) run INSTEAD of a session.
+//
+// MOVED, NOT CHANGED (engine extraction stage 7a). These functions were
+// anonymous-namespace code in src/main.cpp, eighty percent of that file; they
+// are here so the host executable and the engine executable (stage 7b) share
+// one copy of the tool modes and `foxsdr-engine --selftest` exists beside
+// `cascade --selftest`. Every body, message and exit code is the text main.cpp
+// held, byte for byte; only the namespace around them is new. They print
+// plain text with printf/fprintf and no tr(): nothing here is translated, and
+// tools/i18n_keys.py --list is unchanged by the move.
+//
+// None of them touches the window, GL or the config: they run on a Pipeline or
+// a source of their own, which is what lets them run on a CI box or over SSH
+// with no display. The EXCLUSION from tests/test_converter_call_sites.cpp that
+// main.cpp had ("CLI checks, never the GUI receiver") follows them here.
+#include "engine/tool_modes.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <complex>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "core/pipeline.hpp"
+#include "core/recorder.hpp"
+#include "dsp/demod.hpp"
+#include "dsp/rds.hpp"
+#include "dsp/vfo.hpp"
+#include "sink/audio_out.hpp"
+#include "source/iq_file_source.hpp"
+#include "source/soapy_source.hpp"
+
+// --rtlsdr-check, defined in src/source/rtlsdr_check.cpp. Declared here
+// rather than given a header of its own for the same reason the console
+// modes below are written inline: it is one entry point with one caller,
+// and a header would exist only to be included once. OUTSIDE the anonymous
+// namespace, because inside it this declares a different, internal-linkage
+// function and the link fails with the real one unreferenced - which is
+// exactly what it did. Global scope, not cascade::source, because it IS a
+// main: (argc, argv) in, process exit code out.
+int rtlsdrCheckMain(int argc, char** argv);
+
+namespace cascade::engine {
+
+// End-to-end DSP check with zero GUI involvement, so it also runs on CI
+// boxes and SSH sessions with no display. Mirrors the exact pipeline + demo
+// signal AppWindow constructs; if the two drift apart, the selftest guards
+// the DSP path only, which is its job.
+int runSelftest() {
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = 2'000'000.0;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // the audio chain still runs; no device needed
+
+    cascade::core::Pipeline pipeline(cfg);
+    cascade::source::SigGen& gen = pipeline.sigGen();
+    gen.setTone(0, 300000.0, -30.0f);   // the dominant tone the check targets
+    gen.setTone(1, -500000.0, -45.0f);  // present but 15 dB down — must NOT win
+    gen.setNoiseFloorDb(-90.0f);
+    pipeline.start();
+
+    // Wait for at least 5 published frames so the EMA has settled past its
+    // first-frame prime. Generous 10 s deadline: the pipeline needs only
+    // ~5 * 0.5 ms of samples, but Windows scheduling under load is spiky.
+    cascade::core::SpectrumFrame frame;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < deadline) {
+        pipeline.getLatestFrame(frame);
+        if (frame.seq >= 5) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (frame.seq < 5) {
+        pipeline.stop();
+        std::printf("selftest FAIL only %llu frames within 10 s\n",
+                    static_cast<unsigned long long>(frame.seq));
+        return 1;
+    }
+
+    std::size_t peak = 0;
+    for (std::size_t i = 1; i < frame.dbBins.size(); ++i) {
+        if (frame.dbBins[i] > frame.dbBins[peak]) { peak = i; }
+    }
+    const int peakBin = static_cast<int>(peak);
+
+    // Expected bin, computed from the config rather than hard-coded: the
+    // spectrum is fftshifted (DC at fftSize/2), and +300 kHz at 2 MS/s with
+    // 1024 bins sits round(300000 / 2000000 * 1024) = 154 bins above DC.
+    // +/-2 bins of slack covers window spreading of the off-grid tone.
+    const int expected =
+        static_cast<int>(cfg.fftSize) / 2 +
+        static_cast<int>(std::lround(300000.0 / cfg.sampleRateHz *
+                                     static_cast<double>(cfg.fftSize)));
+    if (peakBin < expected - 2 || peakBin > expected + 2) {
+        pipeline.stop();
+        std::printf("selftest FAIL peak_bin=%d expected=%d +/-2\n", peakBin, expected);
+        return 1;
+    }
+
+    // --- Audio-chain check (P3) ---------------------------------------------
+    // Tune the VFO onto demo tone 0 and demodulate it as CW: the carrier at
+    // the VFO center must beat at the 700 Hz sidetone. The chain is tapped
+    // BEFORE AudioOut (Pipeline::audioTap / audioSamplesProduced), so this
+    // verifies VFO -> demod -> AGC -> squelch -> resampler with no device.
+    pipeline.setDemodMode(cascade::dsp::DemodMode::CW);
+    pipeline.setVfoOffsetHz(300000.0);
+
+    // Let >= 24000 post-switch samples (0.5 s at 48 kHz) flow so the squelch
+    // has opened and the tap window holds pure steady-state CW audio.
+    const std::uint64_t base = pipeline.audioSamplesProduced();
+    std::uint64_t produced = 0;
+    const auto audioDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < audioDeadline) {
+        produced = pipeline.audioSamplesProduced() - base;
+        if (produced >= 24000) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (produced < 24000) {
+        pipeline.stop();
+        std::printf("selftest FAIL only %llu audio samples within 10 s\n",
+                    static_cast<unsigned long long>(produced));
+        return 1;
+    }
+
+    std::vector<float> window(4096);
+    const std::size_t got = pipeline.audioTap(window.data(), window.size());
+    pipeline.stop();
+    if (got < window.size()) {
+        std::printf("selftest FAIL audio tap returned %llu of %llu samples\n",
+                    static_cast<unsigned long long>(got),
+                    static_cast<unsigned long long>(window.size()));
+        return 1;
+    }
+
+    // Dominant DFT frequency over the captured window: direct DFT (no
+    // dependency on the FFT wrapper — an independent reference, per the
+    // testing protocol), rectangular window, bins 1..N/2 so DC never wins.
+    const std::size_t nWin = window.size();
+    std::size_t bestBin = 1;
+    double bestPow = -1.0;
+    for (std::size_t k = 1; k <= nWin / 2; ++k) {
+        double re = 0.0;
+        double im = 0.0;
+        const double w = -2.0 * 3.14159265358979323846 *
+                         static_cast<double>(k) / static_cast<double>(nWin);
+        for (std::size_t i = 0; i < nWin; ++i) {
+            const double angle = w * static_cast<double>(i);
+            const double x = static_cast<double>(window[i]);
+            re += x * std::cos(angle);
+            im += x * std::sin(angle);
+        }
+        const double p = re * re + im * im;
+        if (p > bestPow) {
+            bestPow = p;
+            bestBin = k;
+        }
+    }
+    const double audioHz = static_cast<double>(bestBin) *
+                           cascade::core::Pipeline::kAudioRateHz /
+                           static_cast<double>(nWin);
+
+    // CW sidetone is 700 Hz (dsp/demod.cpp kCwToneHz). +/-40 Hz covers the
+    // 48000/4096 = 11.7 Hz bin quantization with margin.
+    if (std::fabs(audioHz - 700.0) > 40.0) {
+        std::printf("selftest FAIL audio_hz=%.1f expected 700 +/-40\n", audioHz);
+        return 1;
+    }
+    std::printf("selftest PASS peak_bin=%d audio_hz=%.1f\n", peakBin, audioHz);
+    return 0;
+}
+
+// Bench diagnostic (hidden flag --soapy-check, deliberately absent from the
+// usage string and never a ctest entry — it needs real hardware): enumerate
+// SoapySDR, open the first RADIO device, set 2 MS/s / 100 MHz, and stream for
+// two seconds through a headless Pipeline. PASS requires >= 20 spectrum
+// frames and a rate readback within 1% of 2 MS/s. A machine with no device
+// (or no vendor modules) FAILs cleanly with a reason — that is the expected
+// answer off the bench, not a crash. The 30 s first-frame deadline covers a
+// cold USB device's firmware/FPGA load, which the open above already blocked
+// through once (UHD loads inside Device::make).
+//
+// "First RADIO device": SoapyAudio (driver=audio) advertises every sound
+// card as a SoapySDR device, so on a bench with that module installed the
+// literal first enumeration row is a Realtek codec, not the SDR. Rows whose
+// kwargs carry driver=audio are skipped — a sound card cannot satisfy a
+// 2 MS/s RF check and its constant presence would make "no device attached"
+// undetectable.
+int runSoapyCheck() {
+    const auto devices = cascade::source::SoapySource::enumerate();
+    const cascade::source::SoapyDeviceInfo* pick = nullptr;
+    for (const auto& d : devices) {
+        if (d.args.find("driver=audio") == std::string::npos) {
+            pick = &d;
+            break;
+        }
+    }
+    if (pick == nullptr) {
+        std::printf("soapy-check FAIL no SoapySDR radio devices enumerated\n");
+        // WHERE IT LOOKED, because "no devices" on its own is the message that
+        // hid a total failure of the module search path for several releases:
+        // it reads identically whether nothing is plugged in, nothing is
+        // installed, or the application is looking in a directory that cannot
+        // exist. These three lines are what turn a support conversation into a
+        // one-command answer.
+        for (const auto& v : cascade::source::SoapySource::vendorInstalls()) {
+            std::printf("soapy-check vendor: %s at %s\n", v.name.c_str(), v.root.c_str());
+        }
+        for (const auto& p : cascade::source::SoapySource::moduleSearchPaths()) {
+            std::printf("soapy-check search: %s\n", p.c_str());
+        }
+        const auto modules = cascade::source::SoapySource::loadedModules();
+        for (const auto& m : modules) {
+            std::printf("soapy-check module: %s\n", m.c_str());
+        }
+        if (modules.empty()) {
+            std::printf("soapy-check modules: none loaded - install PothosSDR or radioconda\n");
+        }
+        return 1;
+    }
+    std::fprintf(stderr, "cascade: soapy-check device: %s (%s)\n",
+                 pick->label.c_str(), pick->args.c_str());
+
+    auto src = std::make_unique<cascade::source::SoapySource>();
+    if (!src->open(pick->args)) {
+        std::printf("soapy-check FAIL open: %s\n", src->lastError());
+        return 1;
+    }
+    if (!src->setSampleRateHz(2'000'000.0)) {
+        std::printf("soapy-check FAIL set rate: %s\n", src->lastError());
+        return 1;
+    }
+    if (!src->setCenterFrequencyHz(100'000'000.0)) {
+        std::printf("soapy-check FAIL tune: %s\n", src->lastError());
+        return 1;
+    }
+    const double actualRate = src->sampleRateHz();  // device readback, not echo
+
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = 2'000'000.0;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // bench diagnostic: no audio device wanted
+    cascade::core::Pipeline pipeline(cfg);
+    pipeline.setSource(std::move(src));
+    pipeline.start();
+
+    // Wait (bounded) for the stream to produce its first frame, then measure
+    // the frame count over exactly two seconds of steady streaming.
+    cascade::core::SpectrumFrame frame;
+    const auto firstDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < firstDeadline) {
+        pipeline.getLatestFrame(frame);
+        if (frame.seq >= 1) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (frame.seq < 1) {
+        pipeline.stop();
+        std::printf("soapy-check FAIL no spectrum frames within 30 s (%s)\n",
+                    pipeline.activeSource().lastError());
+        return 1;
+    }
+    const std::uint64_t seqAtStart = frame.seq;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    pipeline.getLatestFrame(frame);
+    const std::uint64_t frames = frame.seq - seqAtStart;
+    pipeline.stop();
+
+    if (frames < 20) {
+        std::printf("soapy-check FAIL only %llu frames in 2 s (>= 20 required)\n",
+                    static_cast<unsigned long long>(frames));
+        return 1;
+    }
+    if (std::fabs(actualRate - 2'000'000.0) > 0.01 * 2'000'000.0) {
+        std::printf("soapy-check FAIL rate readback %.0f not within 1%% of 2000000\n",
+                    actualRate);
+        return 1;
+    }
+    std::printf("soapy-check PASS frames=%llu rate=%.0f\n",
+                static_cast<unsigned long long>(frames), actualRate);
+    return 0;
+}
+
+// Bench diagnostic (hidden flag --tone-check): drive the audio output
+// directly with an audible 1 kHz sine for two seconds. This is the bisect for
+// "no sound" — it bypasses the whole radio chain (source, VFO, demod, AGC,
+// squelch) and answers one question: does this machine's speakers path work
+// at all? Silence here means the device/volume/routing; sound here means the
+// audio stack is fine and the silence is upstream (nothing tuned, or a mode
+// that is legitimately silent on the signal being fed to it).
+int runToneCheck() {
+    cascade::sink::AudioOut audio;
+    constexpr double kRate = 48000.0;
+    if (!audio.open(-1, kRate)) {
+        std::printf("tone-check FAIL could not open the default output device\n");
+        return 1;
+    }
+    audio.setVolume(0.5f);
+
+    // 1 kHz at half scale, written slightly ahead of real time so the ring
+    // never starves; 2 s is long enough to be unmistakable.
+    constexpr int kBlock = 480;  // 10 ms
+    constexpr double kTwoPi = 6.283185307179586476925286766559;
+    std::vector<float> block(kBlock);
+    double phase = 0.0;
+    const double step = kTwoPi * 1000.0 / kRate;
+    // Keep the ring as full as it will take rather than writing in lockstep
+    // with playback: a bounded ring back-pressures naturally (write() returns
+    // what it accepted), so this both pre-fills before the stream starts
+    // pulling and never starves it afterwards. Pacing by sleep instead would
+    // sit permanently one block from empty and log underruns that say nothing
+    // about the machine's audio.
+    constexpr std::uint64_t kTotal = 96000;  // 2 s at 48 kHz
+    std::uint64_t written = 0;
+    while (written < kTotal) {
+        for (int i = 0; i < kBlock; ++i) {
+            block[static_cast<std::size_t>(i)] = 0.5f * static_cast<float>(std::sin(phase));
+            phase += step;
+            if (phase > kTwoPi) { phase -= kTwoPi; }
+        }
+        const std::size_t took = audio.write(block.data(), block.size());
+        written += took;
+        if (took < block.size()) {
+            // Ring full: rewind the phase for the samples it refused so the
+            // sine stays continuous, then wait for the callback to drain.
+            phase -= step * static_cast<double>(block.size() - took);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    // Let the ring play out: 2 s of audio has been handed over, but the
+    // callback is still consuming the tail.
+    std::this_thread::sleep_for(std::chrono::milliseconds(900));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));  // drain
+    const std::uint64_t under = audio.underruns();
+    audio.close();
+    std::printf("tone-check PASS wrote=%llu underruns=%llu (did you hear a 1 kHz tone?)\n",
+                static_cast<unsigned long long>(written),
+                static_cast<unsigned long long>(under));
+    return 0;
+}
+
+namespace {
+
+// Bench diagnostic (hidden flag --rds-check <MHz>): the ONLY test that can
+// validate the RDS offset words and CRC polynomial. The unit tests encode with
+// the same constants they decode with, so a self-consistent error in them
+// passes every check and still fails off air. Recovering a real station's
+// name from a real broadcast is what closes that gap.
+//
+// Chain built by hand rather than reusing Pipeline's: RDS rides a 57 kHz
+// subcarrier on the FM composite, and the audio path's de-emphasis would
+// crush it (a 50 us one-pole is ~40 dB down at 57 kHz). So: Vfo -> WFM
+// discriminator with de-emphasis explicitly OFF -> RdsDecoder.
+// Diagnostic support for the above (added during the off-air RDS debug,
+// 2026-08-15). The B200 is USB-exclusive and a hardware run costs 45 s, so the
+// bench can CAPTURE the demodulated composite it feeds the decoder
+// (CASCADE_RDS_MPX=<path>, raw little-endian float32 at 250 kHz) and REPLAY it
+// later (CASCADE_RDS_REPLAY=<path>) with no radio attached. Replaying a real
+// broadcast turns a hardware-in-the-loop debug into an offline one that runs in
+// a second, and the capture doubles as a permanent off-air regression fixture.
+int runRdsReplay(const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        std::printf("rds-check FAIL cannot open replay file %s\n", path);
+        return 1;
+    }
+    constexpr double kChanRate = 250'000.0;
+    cascade::dsp::RdsDecoder rds(kChanRate);
+    std::vector<float> block(65536);
+    std::uint64_t fed = 0;
+    while (in) {
+        in.read(reinterpret_cast<char*>(block.data()),
+                static_cast<std::streamsize>(block.size() * sizeof(float)));
+        const std::size_t got =
+            static_cast<std::size_t>(in.gcount()) / sizeof(float);
+        if (got == 0) { break; }
+        rds.process(block.data(), got);
+        fed += got;
+    }
+    const cascade::dsp::RdsState st = rds.state();
+    std::printf("rds-replay %s synced=%d pi=%04X piValid=%d ps=\"%s\" psValid=%d "
+                "pty=%u tp=%d ta=%d groups=%u blockErrors=%u fed=%llu (%.1f s)\n",
+                (st.piValid && st.psValid) ? "PASS" : "FAIL", rds.synced() ? 1 : 0,
+                st.pi, st.piValid ? 1 : 0, st.ps.c_str(), st.psValid ? 1 : 0,
+                static_cast<unsigned>(st.pty), st.tp ? 1 : 0, st.ta ? 1 : 0,
+                st.groupsDecoded, st.blockErrors,
+                static_cast<unsigned long long>(fed),
+                static_cast<double>(fed) / kChanRate);
+    if (!st.radioText.empty()) {
+        std::printf("rds-replay radiotext=\"%s\"\n", st.radioText.c_str());
+    }
+    return (st.piValid && st.psValid) ? 0 : 1;
+}
+
+}  // namespace
+
+int runRdsCheck(double centerHz) {
+    if (const char* replay = std::getenv("CASCADE_RDS_REPLAY")) {
+        return runRdsReplay(replay);
+    }
+    if (!cascade::source::SoapySource::runtimeAvailable()) {
+        std::printf("rds-check FAIL SoapySDR runtime not available\n");
+        return 1;
+    }
+    auto devs = cascade::source::SoapySource::enumerate();
+    std::string args;
+    for (const auto& d : devs) {
+        if (d.args.find("driver=audio") == std::string::npos) { args = d.args; break; }
+    }
+    if (args.empty()) {
+        std::printf("rds-check FAIL no SoapySDR radio devices enumerated\n");
+        return 1;
+    }
+
+    cascade::source::SoapySource src;
+    if (!src.open(args)) {
+        std::printf("rds-check FAIL open: %s\n", src.lastError());
+        return 1;
+    }
+    constexpr double kRate = 2'000'000.0;
+    src.setSampleRateHz(kRate);
+    src.setCenterFrequencyHz(centerHz);
+    // Gain matters: a B200 opens near 0 dB, and RDS at -20 dB relative to the
+    // main carrier is the first thing to vanish in the noise. The GUI pushes a
+    // default too; this path has no UI to do it.
+    src.setAutoGain(false);
+    // CASCADE_RDS_GAIN overrides the 50 dB default (diagnostic: RDS sits at the
+    // top of the FM baseband where demodulator noise is worst, so it is the
+    // first thing lost to a poor carrier-to-noise ratio — gain is the cheapest
+    // variable to sweep when it fails to appear).
+    double gainDb = 50.0;
+    if (const char* g = std::getenv("CASCADE_RDS_GAIN")) {
+        const double v = std::strtod(g, nullptr);
+        if (v > 0.0) { gainDb = v; }
+    }
+    for (const std::string& g : src.listGainNames()) {
+        const bool ok = src.setGainDb(g, gainDb);
+        std::printf("rds-check gain %s := %.1f dB (%s)\n", g.c_str(), gainDb,
+                    ok ? "accepted" : "REFUSED");
+    }
+    if (!src.start()) {
+        std::printf("rds-check FAIL start: %s\n", src.lastError());
+        return 1;
+    }
+
+    // Decimate 2 MS/s -> 250 kHz; 200 kHz of channel comfortably passes the
+    // 53 kHz composite plus the 57 kHz RDS subcarrier.
+    constexpr unsigned kDecim = 8;
+    const double chanRate = kRate / kDecim;
+    cascade::dsp::Vfo vfo(kRate, kDecim, 200000.0);
+    vfo.setOffsetHz(0.0);
+    cascade::dsp::Demodulator demod(chanRate);
+    demod.setMode(cascade::dsp::DemodMode::WFM);
+    demod.setDeemphasisUs(0.0);  // MUST be off: see the comment above
+    cascade::dsp::RdsDecoder rds(chanRate);
+
+    std::vector<std::complex<float>> raw(65536);
+    std::vector<std::complex<float>> chan(65536);
+    std::vector<float> mpx(65536);
+
+    // Optional capture of the exact composite handed to the decoder.
+    std::ofstream capture;
+    if (const char* capPath = std::getenv("CASCADE_RDS_MPX")) {
+        capture.open(capPath, std::ios::binary | std::ios::trunc);
+        if (!capture) { std::printf("rds-check WARN cannot write %s\n", capPath); }
+    }
+    // Optional capture of the RAW IQ ahead of the channel filter, so the whole
+    // chain (channel bandwidth included) can be re-run offline. Capped and
+    // terminating, because 2 MS/s of complex float is 16 MB per second.
+    std::ofstream iqCapture;
+    std::uint64_t iqSamplesLeft = 0;
+    if (const char* iqPath = std::getenv("CASCADE_RDS_IQ")) {
+        iqCapture.open(iqPath, std::ios::binary | std::ios::trunc);
+        if (!iqCapture) { std::printf("rds-check WARN cannot write %s\n", iqPath); }
+        const char* secs = std::getenv("CASCADE_RDS_IQ_SECS");
+        const double s = secs ? std::strtod(secs, nullptr) : 10.0;
+        iqSamplesLeft = static_cast<std::uint64_t>((s > 0.0 ? s : 10.0) * kRate);
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+    std::uint64_t fedSamples = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const std::size_t got = src.read(raw.data(), raw.size());
+        if (got == 0) { continue; }  // self-paced timeout: retry per contract
+        if (iqCapture && iqSamplesLeft > 0) {
+            const std::size_t take = static_cast<std::size_t>(
+                std::min<std::uint64_t>(iqSamplesLeft, got));
+            iqCapture.write(reinterpret_cast<const char*>(raw.data()),
+                            static_cast<std::streamsize>(
+                                take * sizeof(std::complex<float>)));
+            iqSamplesLeft -= take;
+            if (iqSamplesLeft == 0) {
+                iqCapture.close();
+                std::printf("rds-check IQ capture complete\n");
+                break;
+            }
+        }
+        const std::size_t m = vfo.process(raw.data(), got, chan.data(), chan.size());
+        if (m == 0) { continue; }
+        demod.process(chan.data(), m, mpx.data());
+        if (capture) {
+            capture.write(reinterpret_cast<const char*>(mpx.data()),
+                          static_cast<std::streamsize>(m * sizeof(float)));
+        }
+        rds.process(mpx.data(), m);
+        fedSamples += m;
+        const cascade::dsp::RdsState st = rds.state();
+        // CASCADE_RDS_FULL keeps running past the first good PS so the block
+        // error RATE and the complete RadioText can be observed, rather than
+        // just "it locked once".
+        static const bool kRunFull = std::getenv("CASCADE_RDS_FULL") != nullptr;
+        if (st.piValid && st.psValid && !kRunFull) {
+            src.stop();
+            std::printf("rds-check PASS pi=%04X ps=\"%s\" pty=%u groups=%u blockErrors=%u\n",
+                        st.pi, st.ps.c_str(), static_cast<unsigned>(st.pty),
+                        st.groupsDecoded, st.blockErrors);
+            if (!st.radioText.empty()) {
+                std::printf("rds-check radiotext=\"%s\"\n", st.radioText.c_str());
+            }
+            return 0;
+        }
+    }
+    const cascade::dsp::RdsState st = rds.state();
+
+    // Diagnose WHERE it failed rather than just reporting that it did. Measure
+    // the composite the decoder was actually fed: a healthy WFM composite has
+    // a 19 kHz pilot and, on an RDS station, energy at 57 kHz. No pilot means
+    // the failure is upstream (mistuned, too little gain, wrong demod) and the
+    // RDS decoder never had a chance; pilot but no 57 kHz means the station
+    // simply carries no RDS; both present but no sync points at the decoder.
+    const std::size_t got = src.read(raw.data(), raw.size());
+    const std::size_t m = (got > 0) ? vfo.process(raw.data(), got, chan.data(), chan.size()) : 0;
+    if (m > 0) { demod.process(chan.data(), m, mpx.data()); }
+    src.stop();
+
+    auto toneDb = [&](double hz) {
+        if (m < 4096) { return -200.0; }
+        const std::size_t n = 4096;
+        double re = 0.0, im = 0.0, tot = 0.0;
+        const double w = -2.0 * 3.14159265358979323846 * hz / chanRate;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double x = static_cast<double>(mpx[i]);
+            re += x * std::cos(w * static_cast<double>(i));
+            im += x * std::sin(w * static_cast<double>(i));
+            tot += x * x;
+        }
+        const double binP = (re * re + im * im) / (static_cast<double>(n) * n);
+        const double avgP = tot / static_cast<double>(n);
+        return (avgP > 0.0) ? 10.0 * std::log10(binP / avgP + 1e-30) : -200.0;
+    };
+
+    if (st.piValid && st.psValid) {
+        std::printf("rds-check PASS(full) pi=%04X ps=\"%s\" pty=%u tp=%d ta=%d "
+                    "groups=%u blockErrors=%u (%.2f%% of blocks) synced=%d\n",
+                    st.pi, st.ps.c_str(), static_cast<unsigned>(st.pty),
+                    st.tp ? 1 : 0, st.ta ? 1 : 0, st.groupsDecoded, st.blockErrors,
+                    st.groupsDecoded ? 100.0 * st.blockErrors /
+                                           (4.0 * st.groupsDecoded)
+                                     : 0.0,
+                    rds.synced() ? 1 : 0);
+        std::printf("rds-check radiotext=\"%s\"\n", st.radioText.c_str());
+        return 0;
+    }
+    std::printf("rds-check FAIL no PS within 45 s (synced=%d pi=%04X piValid=%d "
+                "groups=%u blockErrors=%u fed=%llu)\n",
+                rds.synced() ? 1 : 0, st.pi, st.piValid ? 1 : 0, st.groupsDecoded,
+                st.blockErrors, static_cast<unsigned long long>(fedSamples));
+    std::printf("rds-check composite: pilot19k=%.1f dBc  rds57k=%.1f dBc  "
+                "audio1k=%.1f dBc (relative to total composite power)\n",
+                toneDb(19000.0), toneDb(57000.0), toneDb(1000.0));
+    return 1;
+}
+
+namespace {
+
+// --- Recorder end-to-end check (hidden flag --record-check) -------------------
+
+// Little-endian field decodes for the WAV probe below (mirrors the recorder's
+// own explicit-byte encoder, so the probe is endian- and alignment-safe).
+std::uint32_t leU32(const unsigned char* p) {
+    return static_cast<std::uint32_t>(p[0]) |
+           (static_cast<std::uint32_t>(p[1]) << 8) |
+           (static_cast<std::uint32_t>(p[2]) << 16) |
+           (static_cast<std::uint32_t>(p[3]) << 24);
+}
+
+std::uint16_t leU16(const unsigned char* p) {
+    return static_cast<std::uint16_t>(static_cast<std::uint32_t>(p[0]) |
+                                      (static_cast<std::uint32_t>(p[1]) << 8));
+}
+
+// Minimal chunk-walking WAV probe: true iff the file is RIFF/WAVE carrying a
+// fmt chunk and a data chunk, reporting rate/channels/bits and the data byte
+// length. Deliberately independent of IqFileSource, which by design rejects
+// the AUDIO recording's mono int16 layout (it only accepts 2-channel IQ).
+bool probeWav(const std::string& path, std::uint32_t* rate,
+              std::uint16_t* channels, std::uint16_t* bits,
+              std::uint64_t* dataBytes) {
+    std::ifstream f(path, std::ios::binary);
+    unsigned char riff[12];
+    if (!f.read(reinterpret_cast<char*>(riff), 12)) { return false; }
+    if (std::memcmp(riff, "RIFF", 4) != 0 ||
+        std::memcmp(riff + 8, "WAVE", 4) != 0) {
+        return false;
+    }
+    bool haveFmt = false;
+    bool haveData = false;
+    unsigned char ch[8];
+    while (f.read(reinterpret_cast<char*>(ch), 8)) {
+        const std::uint32_t size = leU32(ch + 4);
+        std::uint32_t skip = size + (size & 1u);  // chunks are word-aligned
+        if (std::memcmp(ch, "fmt ", 4) == 0 && size >= 16) {
+            unsigned char fmt[16];
+            if (!f.read(reinterpret_cast<char*>(fmt), 16)) { return false; }
+            *channels = leU16(fmt + 2);
+            *rate = leU32(fmt + 4);
+            *bits = leU16(fmt + 14);
+            haveFmt = true;
+            skip -= 16;
+        } else if (std::memcmp(ch, "data", 4) == 0) {
+            *dataBytes = size;
+            haveData = true;
+        }
+        f.seekg(static_cast<std::streamoff>(skip), std::ios::cur);
+    }
+    return haveFmt && haveData;
+}
+
+}  // namespace
+
+// Bench diagnostic (hidden flag --record-check, deliberately absent from the
+// usage string like --soapy-check, and never a ctest entry — it sleeps a
+// real-time second, which is bench-check budget, not unit-test budget):
+// proves the recorder wiring end to end with ZERO GUI involvement. A
+// headless pipeline (generator source, no audio device) runs both recorder
+// taps simultaneously for ~1 s of wall time; the IQ take is then re-read
+// through IqFileSource — the actual replay path, closing the record->replay
+// loop — checking rate readback 2000000 and a sample count within 10% of
+// rate x window (2,000,000 samples for the 1 s window; the slack covers
+// source pacing plus ring/block latency at the tap edges). The audio take
+// must parse as a mono 16-bit 48000 Hz WAV. The takes land in a fresh
+// unique directory under %TEMP% and are left there for inspection.
+int runRecordCheck() {
+    namespace fs = std::filesystem;
+
+    const char* tmp = std::getenv("TEMP");
+    const fs::path base =
+        (tmp != nullptr && *tmp != '\0') ? fs::path(tmp) : fs::path(".");
+    const fs::path dir =
+        base / (std::string("cascade-record-check-") +
+                std::to_string(static_cast<unsigned long long>(
+                    std::chrono::system_clock::now().time_since_epoch().count())));
+
+    cascade::core::Pipeline::Config cfg;
+    cfg.sampleRateHz = 2'000'000.0;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 0.5f;
+    cfg.audioEnabled = false;  // headless: no device; the chain still runs
+    cascade::core::Pipeline pipeline(cfg);
+    // Real content (demo tone over a noise floor): the checks below assert
+    // counts and headers, but recording live nonzero floats exercises the
+    // same encode path a bench take would.
+    pipeline.sigGen().setTone(0, 300000.0, -30.0f);
+    pipeline.sigGen().setNoiseFloorDb(-90.0f);
+    pipeline.start();
+
+    cascade::core::Recorder iqRec;
+    cascade::core::Recorder audioRec;
+    std::string err;
+    if (!iqRec.start(cascade::core::RecordKind::BasebandIq, dir.string(),
+                     cfg.sampleRateHz, err)) {
+        pipeline.stop();
+        std::printf("record-check FAIL iq start: %s\n", err.c_str());
+        return 1;
+    }
+    if (!audioRec.start(cascade::core::RecordKind::Audio, dir.string(),
+                        cascade::core::Pipeline::kAudioRateHz, err)) {
+        iqRec.stop();
+        pipeline.stop();
+        std::printf("record-check FAIL audio start: %s\n", err.c_str());
+        return 1;
+    }
+
+    // Both taps at once (the spec's simultaneous-recording contract). The
+    // window is measured install -> uninstall so the pacing comparison
+    // divides by what the taps actually saw, not by the nominal sleep.
+    const auto t0 = std::chrono::steady_clock::now();
+    pipeline.setIqRecorder(&iqRec);
+    pipeline.setAudioRecorder(&audioRec);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    pipeline.setIqRecorder(nullptr);
+    pipeline.setAudioRecorder(nullptr);
+    const double windowS =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+            .count();
+    // Uninstall-then-stop: the documented Recorder toggle order.
+    iqRec.stop();
+    audioRec.stop();
+    pipeline.stop();
+
+    const std::uint64_t iqSamples = iqRec.samplesWritten();
+    const std::uint64_t audioSamples = audioRec.samplesWritten();
+
+    // Locate the two takes by prefix — the directory is fresh per run, so
+    // exactly one iq_* and one audio_* file can exist.
+    std::string iqPath;
+    std::string audioPath;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.rfind("iq_", 0) == 0) { iqPath = e.path().string(); }
+        if (name.rfind("audio_", 0) == 0) { audioPath = e.path().string(); }
+    }
+    if (ec || iqPath.empty() || audioPath.empty()) {
+        std::printf("record-check FAIL takes not found in %s\n",
+                    dir.string().c_str());
+        return 1;
+    }
+
+    // IQ readback through the REAL replay path.
+    cascade::source::IqFileSource reader;
+    if (!reader.open(iqPath)) {
+        std::printf("record-check FAIL iq reopen: %s\n", reader.lastError());
+        return 1;
+    }
+    if (reader.sampleRateHz() != 2'000'000.0) {
+        std::printf("record-check FAIL iq rate readback %.0f != 2000000\n",
+                    reader.sampleRateHz());
+        return 1;
+    }
+    // Stream a block back to prove the data chunk actually replays (read()
+    // returning short would mean a husk with a lying header).
+    std::vector<std::complex<float>> replay(4096);
+    reader.start();
+    const std::size_t got = reader.read(replay.data(), replay.size());
+    reader.stop();
+    if (got != replay.size()) {
+        std::printf("record-check FAIL iq replay read %llu of %llu\n",
+                    static_cast<unsigned long long>(got),
+                    static_cast<unsigned long long>(replay.size()));
+        return 1;
+    }
+
+    // Length: the file's own frame count (fixed 44-byte header + 8 bytes per
+    // IQ frame) must match the recorder's accepted-frame counter exactly,
+    // and land within the 10% pacing tolerance of rate x window.
+    const std::uintmax_t fileBytes = fs::file_size(iqPath, ec);
+    if (ec || fileBytes < 44u) {
+        std::printf("record-check FAIL iq file unreadable/truncated\n");
+        return 1;
+    }
+    const std::uint64_t fileFrames = (fileBytes - 44u) / 8u;
+    if (fileFrames != iqSamples) {
+        std::printf("record-check FAIL iq file frames %llu != counter %llu\n",
+                    static_cast<unsigned long long>(fileFrames),
+                    static_cast<unsigned long long>(iqSamples));
+        return 1;
+    }
+    const double expect = cfg.sampleRateHz * windowS;
+    if (std::fabs(static_cast<double>(iqSamples) - expect) > 0.10 * expect) {
+        std::printf(
+            "record-check FAIL iq_samples=%llu outside 10%% of %.0f "
+            "(window %.3f s)\n",
+            static_cast<unsigned long long>(iqSamples), expect, windowS);
+        return 1;
+    }
+
+    // Audio take: must parse as the recorder's documented layout at 48 kHz.
+    std::uint32_t aRate = 0;
+    std::uint16_t aChannels = 0;
+    std::uint16_t aBits = 0;
+    std::uint64_t aDataBytes = 0;
+    if (!probeWav(audioPath, &aRate, &aChannels, &aBits, &aDataBytes)) {
+        std::printf("record-check FAIL audio WAV does not parse\n");
+        return 1;
+    }
+    if (aRate != 48000u || aChannels != 1u || aBits != 16u) {
+        std::printf(
+            "record-check FAIL audio header rate=%lu channels=%u bits=%u "
+            "(want 48000/1/16)\n",
+            static_cast<unsigned long>(aRate), aChannels, aBits);
+        return 1;
+    }
+    if (aDataBytes != 2u * audioSamples) {
+        std::printf("record-check FAIL audio data bytes %llu != 2 x %llu\n",
+                    static_cast<unsigned long long>(aDataBytes),
+                    static_cast<unsigned long long>(audioSamples));
+        return 1;
+    }
+
+    std::printf("record-check PASS iq_samples=%llu audio_samples=%llu\n",
+                static_cast<unsigned long long>(iqSamples),
+                static_cast<unsigned long long>(audioSamples));
+    return 0;
+}
+
+// Which tool mode the command line asked for, filled in by the argument parse
+// (process_boot.cpp) and handed over once the parse has finished - NOT while it
+// runs, so `cascade --selftest --bogus` still reports the unknown argument
+// rather than running the check, exactly as it did in main().
+std::optional<int> runToolMode(const ToolRequest& req, int argc, char** argv) {
+    // Headless mode wins over --frames: a selftest that opened a window would
+    // defeat its purpose (running where no display exists). Same for the
+    // hardware bench check, which is likewise headless.
+    if (req.selftest) { return runSelftest(); }
+    if (req.soapyCheck) { return runSoapyCheck(); }
+    // Headless like the rest of them, and it takes the remaining command line
+    // so a second argument can name which dongle ("serial=00000001").
+    if (req.rtlsdrCheck) { return rtlsdrCheckMain(argc, argv); }
+    if (req.recordCheck) { return runRecordCheck(); }
+    if (req.toneCheck) { return runToneCheck(); }
+    if (req.rdsCheckMhz > 0.0) { return runRdsCheck(req.rdsCheckMhz * 1.0e6); }
+    return std::nullopt;
+}
+
+}  // namespace cascade::engine

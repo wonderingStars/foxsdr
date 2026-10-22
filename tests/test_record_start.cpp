@@ -437,6 +437,9 @@ void checkTheOpenIsNotMadeOnTheGuiThread() {
     for (const auto& entry : fs::directory_iterator(gui, ec)) {
         const fs::path p = entry.path();
         if (p.extension() != ".cpp" && p.extension() != ".hpp") { continue; }
+        // The headless tool modes (--record-check among them) were src/main.cpp until stage 7a, which this scan never read: they run a
+        // Pipeline and Recorders of their own on a bench, not the application's recorders, and install their own taps.
+        if (p.filename() == "tool_modes.cpp") { continue; }
         const std::vector<std::string> lines = codeLines(readFile(p));
         ++scanned;
         for (std::size_t i = 0; i < lines.size(); ++i) {
