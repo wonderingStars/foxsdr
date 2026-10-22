@@ -2,9 +2,10 @@
 //
 // This is the JSON a browser - or anything that can reach the web server's
 // port - sends to retune, change mode, start a recording, install or remove a
-// plugin. parseControlRequest turns it into the ControlRequest AppWindow's
-// applyControlRequest acts on, and its range checks are the only thing between
-// a request and the receiver (the GUI side trusts a parsed request).
+// plugin. parseControlRequest turns it into the ControlRequest the web server
+// translates into commands (net::controlRequestToCommands) and submits on its
+// engine session, and its range checks are the first thing between a request
+// and the receiver (the table's own range checks are the second).
 //
 // Properties: a refused body gives an error and an empty request; an accepted
 // one has every number it carries finite and inside the documented bounds.

@@ -20,6 +20,7 @@
 
 #include <cstdint>
 
+#include "core/demod_names.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "net/cat_protocol.hpp"
 #include "net/web_server.hpp"
@@ -28,9 +29,10 @@ namespace cascade::net {
 
 // The receiver's mode names, indexed by FOXAPI_DEMOD_* (1..8): the SAME words
 // the desktop's mode buttons carry (app_window.cpp kModeNames, checked against
-// this table where it is defined). "" outside 1..8.
-inline constexpr const char* kDemodNames[9] = {"", "NFM", "WFM", "AM", "DSB",
-                                               "USB", "CW", "LSB", "RAW"};
+// this table where it is defined, engine/receiver_tables.hpp). "" outside
+// 1..8. The table is core/demod_names.hpp's (data, so the interface can take
+// it without net/; stage 5f); this names it back.
+using cascade::core::kDemodNames;
 const char* demodName(std::uint32_t foxDemod);
 
 // "idle", "scanning", "paused", "holding" for core::kScanner*; "" otherwise.

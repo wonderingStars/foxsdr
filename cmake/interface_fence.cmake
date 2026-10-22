@@ -84,6 +84,17 @@ foreach(_name IN LISTS CASCADE_INTERFACE_ALLOWED_ENGINE_HEADERS)
     endif()
 endforeach()
 
+# --- src/net: DENIED WHOLE (stage 5f, 2026-10-22). The web server and the CAT listener are the engine's (engine/server_host.hpp, stage 5b); their
+# control and their reads are sessions of the table (5c-5e); the window configures them with FOXAPI_OP_SERVER_CONFIG and reads them from the SERVERS
+# list and the fact.web.* / fact.cat.* facts. There is NO allow list: the interface takes the port and address vocabulary from core/server_ports.hpp
+# (the panels' constants, hoisted by 5b) and the mode names from core/demod_names.hpp (hoisted by 5f), and names nothing else of the directory. A
+# new header under src/net is denied until someone decides otherwise, as one under src/engine is.
+file(GLOB _cascade_net_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/src" CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/net/*.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/net/*.h")
+foreach(_h IN LISTS _cascade_net_headers)
+    cascade_interface_deny("${_h}" "net/ is the engine's: the web server and the CAT listener are hosted by the engine (engine/server_host.hpp) and spoken to through the table's sessions and FOXAPI_OP_SERVER_CONFIG; the port vocabulary is core/server_ports.hpp, the mode names core/demod_names.hpp")
+endforeach()
+
 # --- THE HEADER LEDGER: what the interface still reaches that is engine-side LIBRARY code, and why (stage 4 step 5; measured with the fenced
 # include closure of src/gui, 2026-10-21: 232 files - 105 gui, 49 core, 31 source, 13 engine, 9 dsp, 8 net, 1 usb). None of it is the Engine or
 # an object the Engine owns; all of it is vocabulary or arithmetic the views share with the engine, and each group has the change that ends it:
@@ -100,8 +111,12 @@ endforeach()
 #   source/ and usb/ (32 headers): the device-kind vocabulary. engine/bias_tee.hpp, engine/tune_control.hpp, engine/soundcard_panel.hpp and
 #     source/rsp_rows.hpp include the drivers for their capability types, and app_window.hpp names ten of them; the window never opens a radio.
 #     Fate: stage 7 (the headless foxsdr-engine owns the drivers; the pure helpers take a device-kind header instead).
-#   dsp/ (9) and net/ (8): demod/fft/fir/modulator ... the views' arithmetic and the web/CAT servers the window still hosts (stage 5 moves the servers).
-# The guard (tests/test_engine_shell_guard.cpp) holds the engine/ allow list's size; the rest of the ledger is documentation until a hoist moves it.
+#   dsp/ (9): demod/fft/fir/modulator ... the views' arithmetic.
+#   net/ (8 at the first measurement): NOT REACHED ANY MORE, and DENIED (above). Stage 5 moved the servers into the engine; 5b hoisted the panels'
+#     port vocabulary (core/server_ports.hpp) and 5f the last thing reached, the mode names engine/receiver_tables.hpp checks the window's
+#     buttons against (core/demod_names.hpp; it reached net/status_compose.hpp for them, and through it the other seven).
+# The guard (tests/test_engine_shell_guard.cpp) holds the engine/ allow list's size and that no src/gui file and no allowed header names a denied
+# one; the rest of the ledger is documentation until a hoist moves it.
 
 # --- the stubs ---------------------------------------------------------------------------------------------------------------------
 set(CASCADE_INTERFACE_FENCE_DIR "${CMAKE_BINARY_DIR}/interface_fence")

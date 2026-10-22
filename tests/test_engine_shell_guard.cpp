@@ -4,7 +4,7 @@
 // THE SUCCESSOR OF tests/test_command_path_guard.cpp. That ratchet scanned the whole window for reads and writes of the engine's state
 // (163 reads of 31 fields at its first count, 788 calls before the port; 33 of 141 when the pump move began; 13 fields and 26 reads when
 // the fence stepped in) and was written to reach zero. It did not: it ended at a CLASSIFIED RESIDUE (the shell's seams, the host
-// accessors, stage 5's web/CAT reads), and the fence did what a ratchet could not - the interface is its own target
+// accessors, stage 5's web/CAT reads - gone in stage 5f), and the fence did what a ratchet could not - the interface is its own target
 // (cascade_interface), cmake/interface_fence.cmake puts stubs of every header it may not include first on its include path, and the
 // window's engine member is an EngineShell, a class that declares only the residue. A direct read of an engine field, a call to an
 // engine method, a write to engine state, an engine object passed as an argument: none of them compiles, so the ratchet's rules 1 to
@@ -14,7 +14,7 @@
 //      declarations are counted against a budget; every declaration is implemented and is CALLED (a stale door is found here, the way
 //      the old guard's allow lists were).
 //   2. WHO MAY KNOCK. The compiler lets any AppWindow member call any EngineShell method; this holds which members call which (the
-//      shell's seams from the shell's members, the web/CAT surface from the stage-5 members, the host feed from the host accessors).
+//      shell's seams from the shell's members, the host feed and the browser map's tiles from the host accessors and the tile pump).
 //      A widget that calls engine_.teardown() compiles. It fails here.
 //   3. THE FENCE ITSELF IS STILL BUILT. The interface target exists and is put behind the fence; the deny list still holds the engine,
 //      its host, its API table and its pipeline; the engine/ allow list stays small and names no denied header; no file under src/gui -
@@ -56,13 +56,13 @@ namespace {
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // BUDGETS. Every number is the surface as the fence left it (2026-10-21); a change moves the number in the same commit, with the dated
-// comment in engine_shell.hpp that says why. They only go down on their own: stage 5 deletes the web/CAT section, stage 7 the shell's.
+// comment in engine_shell.hpp that says why. They only go down on their own: stage 5f deleted the web/CAT section (there is no budget for
+// it any more), stage 7 deletes the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
 constexpr int kShellMethodsBudget = 41;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 40 before the frame's kick (frameKick, 6.9)
-constexpr int kHostMethodsBudget = 1;     // CLASS HOST: makePluginFeed
-constexpr int kWebMethodsBudget = 1;      // CLASS WEB / CAT: deleted by stage 5f. 8 after 5b (the pull and the status reads went with the servers, six FEED methods came: pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum), 1 after 5e: the page's audio and spectrum are the table's (read_audio / read_spectrum on the web server's session), the pictures are the engine's (ImageFeed), and audioSamplesProduced, audioTap, pushWebAudio, setWebImages, publishWebSpectrum are gone with the window's feeds of them; the three tile methods (takeWebTileRequests, setWebTile, clearWebTiles) are ONE (serveWebTiles) - the basemap's tiles are the one thing only the window's GUI-thread plugin client can produce (docs/engine-stage4.md 6.13)
+constexpr int kHostMethodsBudget = 2;     // CLASS HOST: makePluginFeed, and (stage 5f) serveWebTiles. CLASS WEB / CAT is GONE (stage 5f): it was 7 at the fence, 8 after 5b (the pull and the status reads went with the servers, six FEED methods came: pushWebAudio, setWebImages, takeWebTileRequests, setWebTile, clearWebTiles, publishWebSpectrum), 1 after 5e (the page's audio and spectrum are the table's, the pictures the engine's, and the three tile methods became ONE, serveWebTiles - the basemap's tiles are the one thing only the window's GUI-thread plugin client can produce), and 0 after 5f: serveWebTiles is plugin-drawn content, so it was re-homed to CLASS HOST (+1 there) rather than deleted (deleting it would take the browser's map layer with it); docs/engine-stage4.md 6.14
 constexpr int kFeedMethodsBudget = 11;    // HostPluginFeed's virtuals (the eight host accessors and what drives them)
-constexpr int kCallSitesBudget = 65;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 65 after stage 5e (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 65;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 65 after stage 5e and unchanged by 5f (serveWebTiles is still called, once, from pumpWebTiles) (-7: publishWebAudio's audioSamplesProduced, audioTap and pushWebAudio, publishWebImages' setWebImages, publishWebSpectrum's publishWebSpectrum, and pumpWebTiles' clearWebTiles, takeWebTileRequests and setWebTile; +1: pumpWebTiles' serveWebTiles); was `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 72 after stage 5b (the servers are the engine's: -7 call sites - the constructor's setRemoteControlSource and webRemoteBeat, the destructor's setRemoteControlSource, webStatusNow's readFullSnapshot, catStatusNow's two reads, publishWebSpectrum's inputRateHz - and +6 feed calls: pushWebAudio, setWebImages, clearWebTiles, takeWebTileRequests, setWebTile, publishWebSpectrum); 73 with the frame's kick; 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -91,8 +91,8 @@ const std::vector<Knock> kEngineKnocks = {
       "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource", "frameKick"}},
     // the frame is a look: the three parts of the pass, and the status lines the look copies
     {"AppWindow::drawUi", {"stepPass", "statusText"}},
-    // CLASS WEB / CAT: the window's one feed of the web page left (stage 5e: the table serves the audio and the spectrum, the engine the
-    // pictures; 5f deletes the section)
+    // CLASS HOST, the browser map's tiles: the window's one feed of the web page left (stage 5e: the table serves the audio and the spectrum,
+    // the engine the pictures; stage 5f: the class that held it is gone, the method is plugin-drawn content and lives with the plugin feed)
     {"AppWindow::pumpWebTiles", {"serveWebTiles"}},
 };
 // The host feed (CLASS HOST): the eight host accessors and what drives them.
@@ -128,7 +128,9 @@ const char* const kImGuiInput[] = {
 // The headers the fence must always deny (a deny list that quietly lost one of these would be the fence with a hole).
 const char* const kMustDeny[] = {"engine/engine.hpp",       "engine/engine_host.hpp", "engine/fox_engine_api.hpp", "engine/pass_stats.hpp",
                                  "core/pipeline.hpp",        "core/plugin_ui.hpp",     "core/plugin_api.hpp",       "core/plugin_runner.hpp",
-                                 "core/recorder.hpp",        "core/transmitter.hpp",   "core/gps_reader.hpp",       "core/scanner.hpp"};
+                                 "core/recorder.hpp",        "core/transmitter.hpp",   "core/gps_reader.hpp",       "core/scanner.hpp",
+                                 // src/net, denied whole by stage 5f (the servers are the engine's)
+                                 "net/web_server.hpp",       "net/cat_server.hpp",     "net/web_session.hpp",       "net/status_compose.hpp"};
 constexpr std::size_t kAllowedEngineHeadersBudget = 13;
 
 // ----------------------------------------------------------------------------------------------------------------------------------
@@ -312,7 +314,7 @@ std::vector<Decl> declarationsIn(const std::vector<std::string>& lines) {
 }
 
 struct Surface {
-    std::vector<Decl> shell, host, web, feed;
+    std::vector<Decl> shell, host, feed;
     bool sectionsDated = true;
     std::string whyNot;
 };
@@ -330,9 +332,13 @@ Surface readSurface(const fs::path& root) {
     // The markers inside EngineShell (comments, so found in the raw text).
     const std::size_t mShell = text.find("CLASS SHELL (added", shellAt);
     const std::size_t mHost = text.find("CLASS HOST (added", shellAt);
-    const std::size_t mWeb = text.find("CLASS WEB / CAT (added", shellAt);
-    CHECK(mShell != std::string::npos && mHost != std::string::npos && mWeb != std::string::npos);
-    CHECK(mShell < mHost && mHost < mWeb && mWeb < shellEnd);
+    CHECK(mShell != std::string::npos && mHost != std::string::npos);
+    CHECK(mShell < mHost && mHost < shellEnd);
+    // THE WEB / CAT CLASS IS GONE (stage 5f): its marker may not come back without this file changing with it. The words survive in
+    // comments (the retired class is told of), so what is looked for is the MARKER form, "CLASS WEB / CAT (added".
+    const bool webClassGone = text.find("CLASS WEB / CAT (added") == std::string::npos;
+    if (!webClassGone) { std::printf("FAIL: engine_shell.hpp has a CLASS WEB / CAT marker again - the class was deleted by stage 5f\n"); }
+    CHECK(webClassGone);
     // each marker carries a DATE and an END
     const auto dated = [&](std::size_t at, const char* name) {
         const std::size_t eol = text.find("\n", text.find("\n", at) + 1);
@@ -345,15 +351,13 @@ Surface readSurface(const fs::path& root) {
     };
     dated(mShell, "SHELL");
     dated(mHost, "HOST");
-    dated(mWeb, "WEB / CAT");
     const auto lineStart = [&](std::size_t at) { return text.rfind('\n', at) == std::string::npos ? std::size_t(0) : text.rfind('\n', at) + 1; };
     const auto slice = [&](std::size_t a, std::size_t b) {
         std::vector<std::string> lines = codeLines(text.substr(a, b - a));
         return declarationsIn(lines);
     };
     s.shell = slice(shellAt + std::strlen("class EngineShell {"), lineStart(mHost));  // the shell section: the class head to the HOST marker's line
-    s.host = slice(lineStart(mHost), lineStart(mWeb));
-    s.web = slice(lineStart(mWeb), shellEnd);
+    s.host = slice(lineStart(mHost), shellEnd);
     const std::size_t feedEnd = text.find("\n};", feedAt);
     s.feed = slice(feedAt + std::strlen("class HostPluginFeed {"), feedEnd);
     return s;
@@ -451,6 +455,12 @@ std::set<std::string> denyListOf(const fs::path& root, std::set<std::string>& al
         const std::string name = e.path().filename().string();
         if (allowedEngine.count(name) == 0) { deny.insert("engine/" + name); }
     }
+    // src/net is denied WHOLE (stage 5f: the servers are the engine's), with no allow list
+    for (const auto& e : fs::directory_iterator(root / "src" / "net", ec)) {
+        const std::string ext = e.path().extension().string();
+        if (ext != ".hpp" && ext != ".h") { continue; }
+        deny.insert("net/" + e.path().filename().string());
+    }
     return deny;
 }
 
@@ -471,29 +481,26 @@ std::vector<std::string> includesOf(const std::string& text) {
 void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call>& calls) {
     const auto sh = namesOf(s.shell, true);
     const auto ho = namesOf(s.host, true);
-    const auto we = namesOf(s.web, true);
     const auto fe = namesOf(s.feed, true);
-    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), web/CAT %zu (%d, deleted by stage 5f), "
-                "the feed's %zu virtuals (%d)\n",
-                sh.size(), kShellMethodsBudget, ho.size(), kHostMethodsBudget, we.size(), kWebMethodsBudget, fe.size(), kFeedMethodsBudget);
+    std::printf("  the door's surface: shell %zu methods (budget %d), host %zu (%d), the feed's %zu virtuals (%d); no web/CAT class\n",
+                sh.size(), kShellMethodsBudget, ho.size(), kHostMethodsBudget, fe.size(), kFeedMethodsBudget);
     if (static_cast<int>(sh.size()) > kShellMethodsBudget || static_cast<int>(ho.size()) > kHostMethodsBudget ||
-        static_cast<int>(we.size()) > kWebMethodsBudget || static_cast<int>(fe.size()) > kFeedMethodsBudget) {
+        static_cast<int>(fe.size()) > kFeedMethodsBudget) {
         std::printf("FAIL: engine_shell.hpp grew past a class budget - a new door is a decision: say which class it is, give it its "
                     "dated comment and its end, and move the budget in this file in the same change (or port the read the house way "
                     "instead of widening the door)\n");
     }
     CHECK(static_cast<int>(sh.size()) <= kShellMethodsBudget);
     CHECK(static_cast<int>(ho.size()) <= kHostMethodsBudget);
-    CHECK(static_cast<int>(we.size()) <= kWebMethodsBudget);
     CHECK(static_cast<int>(fe.size()) <= kFeedMethodsBudget);
     // The scan saw the real header.
     CHECK(sh.size() >= 25);
-    CHECK(we.size() >= 1);   // (3 until stage 5e left the section its one method: this only proves the scan found the section at all - the exact count is held below)
+    CHECK(ho.size() >= 1);   // (this only proves the scan found the section at all - the exact count is held below)
+    CHECK(ho.count("serveWebTiles") == 1 && ho.count("makePluginFeed") == 1);   // the two HOST methods are the ones named, not two others
     CHECK(fe.size() >= 8);
     // ...and a class that only ever shrinks: a budget above what is there is a stale budget.
     CHECK(static_cast<int>(sh.size()) == kShellMethodsBudget);
     CHECK(static_cast<int>(ho.size()) == kHostMethodsBudget);
-    CHECK(static_cast<int>(we.size()) == kWebMethodsBudget);
     CHECK(static_cast<int>(fe.size()) == kFeedMethodsBudget);
     if (!s.sectionsDated) {
         std::printf("FAIL: engine_shell.hpp's section marker lacks 'added YYYY-MM-DD' or 'END:' for:%s\n", s.whyNot.c_str());
@@ -509,7 +516,6 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
         CHECK(ok);
     }
     for (const std::string& n : ho) { CHECK(impl.find("EngineShell::" + n + "(") != std::string::npos); }
-    for (const std::string& n : we) { CHECK(impl.find("EngineShell::" + n + "(") != std::string::npos); }
     for (const std::string& n : fe) {
         const bool ok = impl.find(n + "(") != std::string::npos;
         if (!ok) { std::printf("FAIL: HostPluginFeed::%s is declared and not implemented in engine_shell.cpp\n", n.c_str()); }
@@ -528,7 +534,7 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     const auto called = [&](const std::string& n) {
         return engineCalled.count(n) != 0 || guiText.find("EngineShell::" + n + "(") != std::string::npos;
     };
-    for (const std::set<std::string>* group : {&sh, &ho, &we}) {
+    for (const std::set<std::string>* group : {&sh, &ho}) {
         for (const std::string& n : *group) {
             if (!called(n)) {
                 std::printf("FAIL: EngineShell::%s is declared and no member of the window calls it - retire the door (its last caller is gone)\n",
@@ -546,7 +552,6 @@ void checkSurface(const fs::path& root, const Surface& s, const std::vector<Call
     // ...and the window calls nothing the door does not declare (the compiler says so too; this names the class when it is a typo of one).
     std::set<std::string> all = sh;
     all.insert(ho.begin(), ho.end());
-    all.insert(we.begin(), we.end());
     for (const Call& c : calls) {
         if (c.object == "engine_" && all.count(c.method) == 0) {
             std::printf("FAIL: %s:%d calls engine_.%s, which engine_shell.hpp does not declare\n", c.file.c_str(), c.line, c.method.c_str());
@@ -576,7 +581,7 @@ void checkWhoMayKnock(const std::vector<Call>& calls) {
         if (!ok) {
             ++bad;
             std::printf("FAIL: %s:%d: %s calls %s%s%s, which the fence does not let it - only the shell's members drive the door, the "
-                        "stage-5 members read the web/CAT surface, the host accessors go through the feed (kEngineKnocks / kFeedKnocks)\n",
+                        "browser map's tile pump serves tiles, the host accessors go through the feed (kEngineKnocks / kFeedKnocks)\n",
                         c.file.c_str(), c.line, c.member.c_str(), c.object.c_str(), c.object == "engine_" ? "." : "->", c.method.c_str());
         }
     }
@@ -608,6 +613,19 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny, cons
         const bool ok = deny.count(h) != 0;
         if (!ok) { std::printf("FAIL: the fence no longer denies <%s> to the interface (cmake/interface_fence.cmake)\n", h); }
         CHECK(ok);
+    }
+    // src/net is denied WHOLE by the fence file, with no allow list and no way to take a header back out of the deny list (the guard reads
+    // the directory for the deny set above; this holds that the file really does the same)
+    {
+        const std::string fenceText = readFile(root / "cmake" / "interface_fence.cmake");
+        const bool netGlob = fenceText.find("src/net/*.hpp") != std::string::npos &&
+                             fenceText.find("foreach(_h IN LISTS _cascade_net_headers)") != std::string::npos;
+        const bool noTakeBack = fenceText.find("REMOVE_ITEM CASCADE_INTERFACE_DENIED") == std::string::npos &&
+                                fenceText.find("ALLOWED_NET") == std::string::npos;
+        if (!netGlob) { std::printf("FAIL: cmake/interface_fence.cmake no longer denies every header of src/net (stage 5f)\n"); }
+        if (!noTakeBack) { std::printf("FAIL: cmake/interface_fence.cmake takes a header back out of the deny list or has a net/ allow list\n"); }
+        CHECK(netGlob);
+        CHECK(noTakeBack);
     }
     // the engine/ allow list stays small, and never names the Engine
     std::printf("  the fence: %zu headers denied, %zu engine/ headers allowed (budget %zu)\n", deny.size(), allowedEngine.size(),
@@ -1055,8 +1073,9 @@ void checkDataHeaderSplit(const fs::path& root) {
     }
     CHECK(includes >= 5);
     // The data headers the fence's hoists made (core/spectrum_frame.hpp, scanner_params.hpp, tx_input.hpp, and since stage 5b
-    // server_ports.hpp - the settings panels' ports and address classifiers) stay as light.
-    for (const char* h : {"spectrum_frame.hpp", "scanner_params.hpp", "tx_input.hpp", "server_ports.hpp"}) {
+    // server_ports.hpp - the settings panels' ports and address classifiers - and since stage 5f demod_names.hpp, the mode names
+    // engine/receiver_tables.hpp checks the window's buttons against) stay as light.
+    for (const char* h : {"spectrum_frame.hpp", "scanner_params.hpp", "tx_input.hpp", "server_ports.hpp", "demod_names.hpp"}) {
         const std::string t = readFile(root / "src" / "core" / h);
         CHECK(!t.empty());
         for (const std::string& inc : includesOf(t)) {
@@ -1064,18 +1083,32 @@ void checkDataHeaderSplit(const fs::path& root) {
             CHECK(false);
         }
     }
-    // STAGE 5b: the window's header takes the panels' vocabulary from that header and names neither server (they are the engine's).
-    // Full fencing of net/ is 5f; this is the part of it that is done.
+    // STAGES 5b AND 5f: the window's header takes the panels' vocabulary from core/server_ports.hpp, and net/ is fenced whole (5f): the
+    // deny list names every header of the directory (read from the directory, so a new one is denied too), no src/gui file includes any
+    // of them (checkTheFence, over the deny list), and no header the interface is allowed - the engine/ allow list, the hoisted data
+    // headers - includes one either. The compiler holds the same by the interface_fence_denies_net_* probes.
     {
         const std::string w = readFile(root / "src" / "gui" / "app_window.hpp");
         const bool hoisted = w.find("#include \"core/server_ports.hpp\"") != std::string::npos;
-        const bool noServers = w.find("#include \"net/web_server.hpp\"") == std::string::npos &&
-                               w.find("#include \"net/cat_server.hpp\"") == std::string::npos &&
-                               w.find("#include \"net/web_policy.hpp\"") == std::string::npos;
         if (!hoisted) { std::printf("FAIL: src/gui/app_window.hpp does not include core/server_ports.hpp\n"); }
-        if (!noServers) { std::printf("FAIL: src/gui/app_window.hpp includes a server header of net/ - the servers are the engine's\n"); }
         CHECK(hoisted);
-        CHECK(noServers);
+        int netNamed = 0;
+        for (const fs::path& p : guiFiles(root, true)) {
+            for (const std::string& inc : includesOf(readFile(p))) {
+                if (inc.rfind("net/", 0) == 0) {
+                    ++netNamed;
+                    std::printf("FAIL: src/gui/%s includes <%s> - net/ is the engine's and fenced whole (stage 5f)\n",
+                                p.filename().string().c_str(), inc.c_str());
+                }
+            }
+        }
+        CHECK(netNamed == 0);
+        // the one allowed header that used to reach net/ (receiver_tables.hpp, for the mode names) takes them from the data header
+        const std::string rt = readFile(root / "src" / "engine" / "receiver_tables.hpp");
+        CHECK(!rt.empty());
+        const bool rtClean = rt.find("#include \"net/") == std::string::npos && rt.find("#include \"core/demod_names.hpp\"") != std::string::npos;
+        if (!rtClean) { std::printf("FAIL: engine/receiver_tables.hpp must take the mode names from core/demod_names.hpp and include nothing of net/\n"); }
+        CHECK(rtClean);
     }
 }
 

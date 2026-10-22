@@ -813,8 +813,9 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
     // The store's URL box starts at the engine's default (a config restore
     // below overwrites both).
     cascade::core::formatUtf8(pluginUrlBuf_, sizeof(pluginUrlBuf_), "%s", engine_.pluginCatalogueUrl().c_str());
-    // (THE WEB AND CAT SERVERS ARE THE ENGINE'S since stage 5b: it installs their providers and the remote controls' pull itself, and
-    // starts them when the restored config says so. This window configures them from its panels and feeds the web page what only it makes.)
+    // (THE WEB AND CAT SERVERS ARE THE ENGINE'S since stage 5b: it installs their providers itself, and starts them when the restored
+    // config says so; their control and their reads are sessions of the table (5c-5e). This window configures them from its panels
+    // and hands the web page what only it makes: the track feed and the basemap's tiles.)
     // While this window's frame waits for the engine's pass (a STEPPED run: stepPass, runPassNow) it is blocked, not hung - it beats its
     // watchdog from the wait (the gap is not a frame gap), and a pass part that really hangs is the control thread's own watchdog's to report.
     engine_.setFrontEndWaitBeat([this] { watchdog_.heartbeat(false); });

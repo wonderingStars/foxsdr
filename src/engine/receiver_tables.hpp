@@ -24,10 +24,10 @@
 #include <string_view>
 #include <vector>
 
+#include "core/demod_names.hpp"
 #include "core/patch_graph.hpp"
 #include "core/receiver_position.hpp"
 #include "dsp/demod.hpp"
-#include "net/status_compose.hpp"
 
 namespace pc = cascade::core::patch;
 
@@ -137,18 +137,18 @@ constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
 constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
 
 // The web and CAT readers name the mode from the published FOXAPI_DEMOD_*
-// (net::kDemodNames, indexed modeIndex_ + 1 - gui::abiDemodForModeIndex):
-// the two tables must be one list, word for word.
+// (core::kDemodNames - core/demod_names.hpp, which net/status_compose.hpp names back as net::kDemodNames - indexed
+// modeIndex_ + 1 - gui::abiDemodForModeIndex): the two tables must be one list, word for word.
 static_assert(
     [] {
         for (int i = 0; i < 8; ++i) {
-            if (std::string_view(kModeNames[i]) != std::string_view(cascade::net::kDemodNames[i + 1])) {
+            if (std::string_view(kModeNames[i]) != std::string_view(cascade::core::kDemodNames[i + 1])) {
                 return false;
             }
         }
         return true;
     }(),
-    "kModeNames and net::kDemodNames must name the modes identically");
+    "kModeNames and core::kDemodNames must name the modes identically");
 
 constexpr cascade::dsp::DemodMode kModeMap[8] = {
     cascade::dsp::DemodMode::NFM, cascade::dsp::DemodMode::WFM,

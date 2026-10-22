@@ -11,7 +11,8 @@
 // One writer thread plays the publishing thread (the GUI thread in stage 3a,
 // the engine's control thread from 3b): retryInstall() at the top of every
 // "frame", publish(), sometimes a readFull() of its own (applyControlRequest
-// resolving web bookmark rows), sometimes a long pause with no frame at all
+// resolved web bookmark rows on the publishing thread until stage 5d; the
+// shape stays as a load on the writer), sometimes a long pause with no frame at all
 // (the Windows modal move/resize loop). N reader threads call readFull() and
 // read() with randomized holds and sleeps.
 //

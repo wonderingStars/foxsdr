@@ -17,15 +17,17 @@
 //              the run with. Their end: the shell leaves src/gui when the host process is split from the interface (stage 7,
 //              the headless foxsdr-engine and its own front-end binary).
 //   HOST       plugin-drawn content: the plugin UI's tracks, paths, panels and instruments, polled and drawn on the window's
-//              thread (HostPluginFeed). Their end: a feed over the engine API's table (a plugin UI is a front end's, so it
-//              moves with the host process).
-//   WEB / CAT  the browser's and the CAT client's servers are the ENGINE'S since stage 5b (engine/server_host.hpp); the window
-//              configures them (FOXAPI_OP_SERVER_CONFIG) and reads them (the SERVERS list and the facts). Their CONTROL is sessions
-//              of the table since 5c and 5d, and since 5e so are their READS: the page's spectrum and audio come from the table
-//              on the web server's own session and the receiver plugins' pictures are polled and served by the engine. What the
-//              window still feeds the page is the ONE thing only a GUI-thread plugin client can produce, the basemap's tiles (one
-//              method below, END: 5f deletes the section; headless, nobody serves them and the status says the basemap is not
-//              active, so the page asks for none), and the track list in FrontEndFacts (TrackFeed).
+//              thread (HostPluginFeed), and the basemap plugin's tiles the browser's map asks the engine's web server for
+//              (serveWebTiles). Their end: a feed over the engine API's table (a plugin UI and its basemap client are a front end's,
+//              so they move with the host process).
+//
+//   (There was a fourth class, WEB / CAT, until stage 5f. The browser's and the CAT client's servers are the ENGINE'S since stage 5b
+//   (engine/server_host.hpp); the window configures them (FOXAPI_OP_SERVER_CONFIG) and reads them (the SERVERS list and the facts).
+//   Their CONTROL is sessions of the table since 5c and 5d, and since 5e so are their READS: the page's spectrum and audio come
+//   from the table on the web server's own session and the receiver plugins' pictures are polled and served by the engine. The class's
+//   last method was the basemap's tiles, which only a GUI-thread plugin client can produce: it is plugin-drawn content, so it lives
+//   with the plugin feed (HOST) and the class itself is gone. The track list the page shows is not a door method: it is FrontEndFacts'
+//   TrackFeed. docs/engine-stage4.md 6.14.)
 //
 // THE SURFACE DOES NOT GROW SILENTLY. tests/test_engine_shell_guard.cpp counts the declarations of each section and holds the
 // budgets; a method added here takes a dated comment naming its class and its end, and the budget moves in the same change
@@ -409,15 +411,15 @@ public:
 
     // ---------------------------------------------------------------------------------------------------------------------------
     // CLASS HOST (added 2026-10-21, stage 4 step 5; END: a feed over the table). The window's plugin UI, built over the engine's API
-    // core and wired to the engine's directive link.
+    // core and wired to the engine's directive link; and (2026-10-22, stage 5f) the basemap plugin's tiles for the browser's map.
     // ---------------------------------------------------------------------------------------------------------------------------
     std::unique_ptr<HostPluginFeed> makePluginFeed(HostPluginFeed::Steps steps);
 
-    // ---------------------------------------------------------------------------------------------------------------------------
-    // CLASS WEB / CAT (added 2026-10-21, stage 4 step 5; reshaped 2026-10-22, stage 5b; one method left 2026-10-22, stage 5e; END: DELETED
-    // by stage 5f). The servers are the engine's, their control and their reads are sessions of the table, the pictures are the engine's
-    // own: what is left is the basemap's TILES, which only the window's GUI-thread plugin client (basemap_) can produce.
-    // ---------------------------------------------------------------------------------------------------------------------------
+    // THE BROWSER MAP'S TILES (moved here from the retired CLASS WEB / CAT, 2026-10-22, stage 5f; END: the basemap client over the table -
+    // then the engine asks the plugin itself). The servers are the engine's, their control and their reads are sessions of the table and
+    // the pictures are the engine's own; what is left is the basemap's TILES, which only the window's GUI-thread plugin client (basemap_)
+    // can produce, so the window hands them over.
+    //
     // ONE CALL A FRAME. `clearFirst` drops every stored tile and pending request (the basemap plugin changed or went away: tiles of the old
     // source must not be served under the new one). `serve` false (no basemap, or no web server listening) stops there. Otherwise the tiles
     // the page asked for since the last call are drained and the first `maxTiles` are asked of `source` and published; the rest are dropped

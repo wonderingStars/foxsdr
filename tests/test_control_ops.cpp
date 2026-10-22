@@ -13,7 +13,7 @@
 //   2. EVERY FIELD HAS A ROW. src/net/web_control.hpp is read and every
 //      `std::optional<...> name;` member of ControlRequest must be named by a
 //      row. A field added to the web remote without a mapping to a command
-//      fails here, rather than being silently ignored by applyControlRequest.
+//      fails here, rather than being silently ignored by the translation.
 //
 //   3. THE ORDER. A request carrying everything comes out in the historical
 //      order: run state, centre, mode, bandwidth, offset, ... source, device

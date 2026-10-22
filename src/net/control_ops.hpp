@@ -3,9 +3,13 @@
 //
 // THE TRANSLATION, AND ONLY THE TRANSLATION (engine extraction stage 1,
 // docs/engine-stage1.md). AppWindow::applyControlRequest used to hold its own
-// copy of what a mode change, a bookmark tune or a record press does; now it
-// calls this and hands every command to AppWindow::applyCommand, the one
-// function a desktop widget's command reaches too. Pure: no window, no
+// copy of what a mode change, a bookmark tune or a record press does; then
+// Engine::applyControlRequest did, applying in the engine's pass. Since stage
+// 5d (docs/engine-stage4.md 6.12) nothing applies a request: the web server
+// (net/web_session.hpp: handOverControl) and the CAT server translate it with
+// this and SUBMIT the commands on their engine-internal session, and the pass
+// applies them through the table like any other session's - the one function
+// a desktop widget's command reaches too (applyCommand). Pure: no window, no
 // receiver, no clock - so every field's mapping is pinned by
 // tests/test_control_ops.cpp without an application.
 //
@@ -28,8 +32,8 @@
 namespace cascade::net {
 
 // What the translation needs from the receiver and nothing more - read by the
-// caller at the moment of translation, which is also the moment of applying
-// (applyControlRequest translates and applies in one call on the GUI thread).
+// caller at the moment of translation (on the web server's HTTP thread since
+// stage 5d; the commands are applied a pass later, by the engine).
 struct ControlOpsContext {
     // bookmarkTune / bookmarkRemove name a ROW of the list the web status
     // published; the command names the bookmark's id. Row r's id, or 0 when
