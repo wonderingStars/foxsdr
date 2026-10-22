@@ -33,6 +33,7 @@
 #include "core/tester_link.hpp"
 #include "core/updater.hpp"
 #include "core/version.hpp"
+#include "net/web_policy.hpp"
 #include "source/sdrplay_probe.hpp"
 #include "source/sdrplay_service.hpp"
 #include "source/soapy_enum_proc.hpp"
@@ -508,6 +509,16 @@ Step activateLink(ProcessKind kind, int argc, char** argv, BootResult& boot) {
 // as it always refused it; the Engine takes --seconds and refuses the window's,
 // each as an unknown argument, with its own name in the message.
 // ---------------------------------------------------------------------------
+// The value of an Engine provisioning flag (stage 7e): the next argument, which must be there and must not be another flag
+// (a forgotten value is not a file called "--seconds"). Null, after saying so, when it is not; `i` is moved onto it otherwise.
+const char* provisionValue(int argc, char** argv, int& i, const char* flag, const char* needs) {
+    if (i + 1 >= argc || argv[i + 1][0] == '\0' || std::strncmp(argv[i + 1], "--", 2) == 0) {
+        std::fprintf(stderr, "foxsdr-engine: %s requires %s\n", flag, needs);
+        return nullptr;
+    }
+    return argv[++i];
+}
+
 Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     const bool host = kind == ProcessKind::Host;
     const bool argv1IsLinkActivation = boot.argv1IsLinkActivation;
@@ -515,6 +526,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     double seconds = -1.0;  // negative: run until stopped (Engine)
     std::string configArg;  // --config PATH (Engine)
     bool useConfig = false;  // --use-config (Engine)
+    ProvisionRequest prov;   // --web-* and --cat-* (Engine, stage 7e)
     int diagStallMs = 0;
     int diagToggle = 0;
     bool selftest = false;
@@ -721,11 +733,80 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         } else if (!host && std::strcmp(argv[i], "--use-config") == 0) {
             // The per-user settings file the window application uses: the one shared file, behind a lock.
             useConfig = true;
+        } else if (!host && std::strcmp(argv[i], "--web-enable") == 0) {
+            // THE ENGINE'S PROVISIONING (stage 7e, engine/provision.hpp): the web server and the CAT listener, set up from
+            // the command line because a service has no settings panel. Every value flag below needs the switch it belongs
+            // to (checked after the loop, so their order on the line does not matter), and the PASSWORD IS NEVER A VALUE
+            // HERE - --web-password-file names a file (or `-`, standard input), the rule of --link-tester above.
+            prov.webEnable = true;
+        } else if (!host && std::strcmp(argv[i], "--cat-enable") == 0) {
+            prov.catEnable = true;
+        } else if (!host && std::strcmp(argv[i], "--cat-bind-all") == 0) {
+            prov.catBindAll = true;
+        } else if (!host && std::strcmp(argv[i], "--web-bind") == 0) {
+            const char* v = provisionValue(argc, argv, i, "--web-bind", "an address (an IPv4 address, ::1, :: or localhost)");
+            if (v == nullptr) { return 1; }
+            if (!prov.webBind.empty()) {
+                std::fprintf(stderr, "foxsdr-engine: --web-bind was given twice\n");
+                return 1;
+            }
+            // The policy's own predicate (net/web_policy.hpp): a hostname is not an address, and the line is refused
+            // before the engine starts rather than after its plugin scan. (The empty string, which the predicate
+            // accepts as "any", is refused above: a missing value is not a wildcard.)
+            if (!cascade::net::isAcceptableBindAddress(v)) {
+                std::fprintf(stderr,
+                             "foxsdr-engine: invalid --web-bind value '%s' (an IPv4 address, ::1, :: or localhost)\n", v);
+                return 1;
+            }
+            prov.webBind = v;
+        } else if (!host && std::strcmp(argv[i], "--web-port") == 0) {
+            const char* v = provisionValue(argc, argv, i, "--web-port", "a port number");
+            if (v == nullptr) { return 1; }
+            if (prov.webPort != 0) {
+                std::fprintf(stderr, "foxsdr-engine: --web-port was given twice\n");
+                return 1;
+            }
+            char* end = nullptr;
+            const long port = std::strtol(v, &end, 10);
+            if (end == v || *end != '\0' || port < cascade::net::kMinPort || port > cascade::net::kMaxPort) {
+                std::fprintf(stderr, "foxsdr-engine: invalid --web-port value '%s' (a port from %d to %d)\n", v,
+                             cascade::net::kMinPort, cascade::net::kMaxPort);
+                return 1;
+            }
+            prov.webPort = static_cast<int>(port);
+        } else if (!host && std::strcmp(argv[i], "--web-user") == 0) {
+            const char* v = provisionValue(argc, argv, i, "--web-user", "a user name");
+            if (v == nullptr) { return 1; }
+            if (!prov.webUser.empty()) {
+                std::fprintf(stderr, "foxsdr-engine: --web-user was given twice\n");
+                return 1;
+            }
+            prov.webUser = v;
+        } else if (!host && std::strcmp(argv[i], "--web-password-file") == 0) {
+            // DELIBERATELY the name of a file, never the password: a value here would sit in shell history, in the
+            // process list and in a service manager's unit file for as long as any of them lives.
+            const char* v = provisionValue(argc, argv, i, "--web-password-file",
+                                           "the name of a file holding the password, or - for standard input");
+            if (v == nullptr) { return 1; }
+            if (!prov.passwordFile.empty()) {
+                std::fprintf(stderr, "foxsdr-engine: --web-password-file was given twice\n");
+                return 1;
+            }
+            prov.passwordFile = v;
         } else if (!host) {
+            // AN ARGUMENT WITH `=` IN IT IS SHOWN ONLY UP TO THE `=` (stage 7e): `--web-password=hunter2` is somebody
+            // who thought the password goes on the command line - the one thing this refusal must not then print, into
+            // a terminal, a journal or a pasted bug report. (No flag takes `=`; nothing that was accepted is hidden.)
+            std::string shown = argv[i];
+            if (const std::size_t eq = shown.find('='); eq != std::string::npos) {
+                shown = shown.substr(0, eq) + "=<value not shown>";
+            }
             std::fprintf(stderr,
                          "foxsdr-engine: unknown argument '%s' (usage: foxsdr-engine [--seconds N] "
-                         "[--config PATH | --use-config] [--selftest] [--version])\n",
-                         argv[i]);
+                         "[--config PATH | --use-config] [--selftest] [--version] "
+                         "[--web-enable [--web-bind ADDR] [--web-port N] [--web-user NAME] [--web-password-file FILE|-]] "
+                         "[--cat-enable [--cat-bind-all]])\n",
+                         shown.c_str());
             return 1;
         } else {
             std::fprintf(stderr,
@@ -742,8 +823,29 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         return 1;
     }
 
+    // A web value with no --web-enable, and --cat-bind-all with no --cat-enable, would be a setting that nothing
+    // switches on: refused, not quietly dropped (the provisioning says what it does or says why not).
+    {
+        const char* orphan = nullptr;
+        if (!prov.webEnable) {
+            if (!prov.webBind.empty()) { orphan = "--web-bind"; }
+            else if (prov.webPort != 0) { orphan = "--web-port"; }
+            else if (!prov.webUser.empty()) { orphan = "--web-user"; }
+            else if (!prov.passwordFile.empty()) { orphan = "--web-password-file"; }
+        }
+        if (orphan != nullptr) {
+            std::fprintf(stderr, "foxsdr-engine: %s needs --web-enable\n", orphan);
+            return 1;
+        }
+        if (prov.catBindAll && !prov.catEnable) {
+            std::fprintf(stderr, "foxsdr-engine: --cat-bind-all needs --cat-enable\n");
+            return 1;
+        }
+    }
+
     boot.frames = frames;
     boot.seconds = seconds;
+    boot.provision = prov;
     boot.engineConfigArg = configArg;
     boot.engineUseConfig = useConfig;
     boot.diagStallMs = diagStallMs;

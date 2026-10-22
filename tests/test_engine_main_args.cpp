@@ -61,6 +61,35 @@ int main() {
         {{"--config", "a.json", "--config", "b.json"}, "--config was given twice"},
         {{"--config", "a.json", "--use-config"}, "--config and --use-config both name the settings file; give one"},
         {{"--use-config", "--config", "a.json"}, "--config and --use-config both name the settings file; give one"},
+        // The provisioning flags (stage 7e): a value flag needs the switch it belongs to, wherever on the line it stands.
+        {{"--web-bind", "127.0.0.1"}, "--web-bind needs --web-enable"},
+        {{"--web-port", "9000"}, "--web-port needs --web-enable"},
+        {{"--web-user", "operator"}, "--web-user needs --web-enable"},
+        {{"--web-password-file", "pw.txt"}, "--web-password-file needs --web-enable"},
+        {{"--web-password-file", "-"}, "--web-password-file needs --web-enable"},
+        {{"--cat-bind-all"}, "--cat-bind-all needs --cat-enable"},
+        {{"--cat-bind-all", "--web-enable"}, "--cat-bind-all needs --cat-enable"},
+        // ...a value that is missing, or is another flag (a forgotten value is not a file called "--cat-enable"), or is wrong.
+        {{"--web-enable", "--web-bind"}, "--web-bind requires an address"},
+        {{"--web-enable", "--web-bind", "--web-port", "9000"}, "--web-bind requires an address"},
+        {{"--web-enable", "--web-bind", ""}, "--web-bind requires an address"},
+        {{"--web-enable", "--web-bind", "example.com"}, "invalid --web-bind value 'example.com'"},
+        {{"--web-enable", "--web-bind", "010.0.0.1"}, "invalid --web-bind value '010.0.0.1'"},
+        {{"--web-enable", "--web-port"}, "--web-port requires a port number"},
+        {{"--web-enable", "--web-port", "80"}, "invalid --web-port value '80' (a port from 1024 to 65535)"},
+        {{"--web-enable", "--web-port", "65536"}, "invalid --web-port value '65536'"},
+        {{"--web-enable", "--web-port", "abc"}, "invalid --web-port value 'abc'"},
+        {{"--web-enable", "--web-port", "8073x"}, "invalid --web-port value '8073x'"},
+        {{"--web-enable", "--web-port", "0"}, "invalid --web-port value '0'"},
+        {{"--web-enable", "--web-user"}, "--web-user requires a user name"},
+        {{"--web-enable", "--web-user", "--cat-enable"}, "--web-user requires a user name"},
+        {{"--web-enable", "--web-password-file"}, "--web-password-file requires the name of a file holding the password, or - for standard input"},
+        {{"--web-enable", "--web-password-file", "--cat-enable"}, "--web-password-file requires the name of a file"},
+        // ...and a value given twice.
+        {{"--web-enable", "--web-bind", "127.0.0.1", "--web-bind", "::1"}, "--web-bind was given twice"},
+        {{"--web-enable", "--web-port", "9000", "--web-port", "9001"}, "--web-port was given twice"},
+        {{"--web-enable", "--web-user", "a", "--web-user", "b"}, "--web-user was given twice"},
+        {{"--web-enable", "--web-password-file", "a.pw", "--web-password-file", "b.pw"}, "--web-password-file was given twice"},
     };
     for (const Refusal& r : refusals) {
         const emt::RunResult x = engine(r.args);
@@ -82,9 +111,13 @@ int main() {
         CHECK(host.exitCode == 1);
         CHECK(emt::contains(host.err, "cascade: unknown argument '--seconds'"));
         CHECK(!emt::contains(host.err, "foxsdr-engine"));
-        // ...and so are the engine's settings flags (stage 7c): the Host has no such flag, and says so as it always did.
+        // ...and so are the engine's settings flags (stage 7c) and its provisioning flags (stage 7e): the Host has no such flag, and
+        // says so as it always did.
         for (const std::vector<std::string>& args : {std::vector<std::string>{"--config", "x.json"},
-                                                     std::vector<std::string>{"--use-config"}}) {
+                                                     std::vector<std::string>{"--use-config"},
+                                                     std::vector<std::string>{"--web-enable"},
+                                                     std::vector<std::string>{"--cat-enable"},
+                                                     std::vector<std::string>{"--web-password-file", "-"}}) {
             const emt::RunResult h = emt::run(cascadeExe, args, home, root / "out", "host-" + args.front(), 120000);
             CHECK(h.exitCode == 1);
             CHECK(emt::contains(h.err, "cascade: unknown argument '" + args.front() + "'"));

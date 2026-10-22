@@ -12,7 +12,7 @@
 // between them") covers it and so does tests/test_engine_main_links_headless.cpp.
 //
 // WHAT IT DOES TODAY (7b made the skeleton; 7c gave it a life-cycle and a config, 7d the signals and
-// a bound on the stop, 7e the provisioning):
+// a bound on the stop, 7e the provisioning of the web and CAT servers):
 //   * `--version`, the tool modes (`--selftest` and the hidden bench checks) and
 //     the child-process helper modes the engine re-spawns itself for
 //     (`--enumerate-json`, `--sentinel`, `--sdrplay-probe`, `--sdrplay-service-state`)
@@ -36,6 +36,14 @@
 //     a closing console on Windows (the window application's own console handler). The handler only asks;
 //     the wait loop below reads the request and runs the orderly stop, exit 0, the clean-exit marker last.
 //     A kill is not a stop: the marker stays FALSE and the next start counts the crash;
+//   * PROVISIONED from the command line (7e, engine/provision.hpp): `--web-enable [--web-bind ADDR] [--web-port N]
+//     [--web-user NAME] [--web-password-file FILE|-]` and `--cat-enable [--cat-bind-all]` are submitted as one
+//     FOXAPI_OP_SERVER_CONFIG on a LOCAL ADMIN session after the restore and before the receiver starts, and settled
+//     (the password hashed on the host's worker, the listeners started or refused by the bind policy) before the run
+//     goes on. THE PASSWORD IS NEVER ON THE COMMAND LINE: the flag names a file, or `-` for standard input. A refusal
+//     (the policy's sentence for an off-machine bind with no password, a port that is taken) is on stderr, the run
+//     does not start, the exit code is 1 and a settings file is left as it was. With a settings file what was accepted
+//     is kept and restored by a later run with no flags; hermetic, it applies for this run and nothing is written;
 //   * EVERY STOP IS BOUNDED (7d, finding F5 of 7c, engine/shutdown_guard.hpp): armed around
 //     EngineService::stop() whatever ended the run - a signal, `--seconds`, a run that failed to start - with
 //     the window teardown's own budget (HangWatchdog::kShutdownThresholdMs, 53 s, a hang report when a report
@@ -46,8 +54,9 @@
 //   0   the run was asked to end and did: `--seconds` elapsed, or a stop signal / console event arrived,
 //       and the engine stopped in order; a tool mode that passed; `--version`
 //   1   a refused argument; a tool mode that failed; the settings file is in use by another
-//       program; the engine could not be started (it threw, or the receiver did not come up) -
-//       the reason is on stderr
+//       program; the provisioning was refused or could not be read (a password file that is missing or
+//       empty, a bind the policy will not allow, a port that is taken); the engine could not be started
+//       (it threw, or the receiver did not come up) - the reason is on stderr
 //   2   a helper mode refused its arguments (bootProcess)
 //   3   the stop did not finish within its budget (53 s, then a 5 s grace for the hang report) and the
 //       process was ended: the plugin unload, the pipeline join or a driver's close wedged. The clean-exit
@@ -72,6 +81,7 @@
 #include "engine/engine.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/process_boot.hpp"
+#include "engine/provision.hpp"
 #include "engine/shutdown_guard.hpp"
 
 namespace {
@@ -137,6 +147,19 @@ int runEngine(const cascade::engine::BootResult& boot) {
     if (boot.seconds >= 0.0) { options.unloadStallMs = envMillis("FOXSDR_ENGINE_UNLOAD_STALL_MS"); }
     const bool persistent = !options.configPath.empty();
 
+    // THE PASSWORD, read before anything is locked, read or started (stage 7e): a file that is missing or empty refuses the
+    // run while nothing has happened yet. It is in `password` - and in nothing that is logged - until the provisioning has
+    // handed it to the engine, and is overwritten there (Secret). It is never an argument of this process: the flag names the
+    // file (process_boot.cpp), so it is in no process list and no shell history.
+    cascade::engine::Secret password;
+    if (!boot.provision.passwordFile.empty()) {
+        std::string why;
+        if (!cascade::engine::readPassword(boot.provision.passwordFile, password, why)) {
+            std::fprintf(stderr, "foxsdr-engine: %s\n", why.c_str());
+            return kExitFailed;
+        }
+    }
+
     EngineService service(std::move(options));
     Engine& engine = service.engine();
 
@@ -157,6 +180,29 @@ int runEngine(const cascade::engine::BootResult& boot) {
             service.stop();
         }
         return kExitFailed;
+    }
+
+    // THE PROVISIONING (7e): the web and CAT flags, after the restore (what the command line says replaces what the file said)
+    // and before the receiver starts. A refusal ends the run here - nothing is receiving, and the service has told its writer
+    // to save nothing, so a settings file keeps what it held.
+    {
+        std::string refused;
+        std::string provisioned;
+        const bool ok = service.provision(boot.provision, password.empty() ? nullptr : &password, refused, provisioned);
+        cascade::engine::Secret::wipe(password.value);  // the engine has its own copy now, overwritten once hashed
+        if (!ok) {
+            std::fprintf(stderr, "%s\n", refused.c_str());
+            {
+                ShutdownGuard bound(guardOptions(service, boot));
+                bound.arm();
+                service.stop();
+            }
+            return kExitFailed;
+        }
+        if (!provisioned.empty()) {
+            std::fprintf(stderr, "foxsdr-engine: %s - %s\n", provisioned.c_str(),
+                         persistent ? "kept in the settings file" : "for this run only (no settings file: nothing is stored)");
+        }
     }
 
     std::string why;

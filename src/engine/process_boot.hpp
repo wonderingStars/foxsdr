@@ -42,10 +42,13 @@
 //     Engine: none unless it was ASKED - `--config PATH` or `--use-config`, stage
 //     7c; never the user's file by default, never CASCADE_CONFIG_TEST's);
 //   * which flags the parse accepts (Engine: `--seconds N`, `--config PATH` and
-//     `--use-config`, and none of the window's - --frames, --diag-stall,
-//     --diag-toggle, --link-tester are the Host's, refused by an Engine as
-//     unknown arguments; the Host refuses --seconds, --config and --use-config,
-//     exactly as it refused any flag it did not have before there was an Engine).
+//     `--use-config`, and - stage 7e - the provisioning flags `--web-enable`,
+//     `--web-bind`, `--web-port`, `--web-user`, `--web-password-file`,
+//     `--cat-enable` and `--cat-bind-all` (engine/provision.hpp), and none of the
+//     window's - --frames, --diag-stall, --diag-toggle, --link-tester are the
+//     Host's, refused by an Engine as unknown arguments; the Host refuses
+//     --seconds, --config, --use-config and every provisioning flag, exactly as
+//     it refused any flag it did not have before there was an Engine).
 // (The settings LOCK is not a boot step: the Engine takes it in its service, before
 // it reads the file, and the Host takes it in main(), best effort - src/main.cpp.)
 // Every other step is kind-blind. A Host behaves exactly as it did before 7a.
@@ -56,6 +59,7 @@
 
 #include <string>
 
+#include "engine/provision.hpp"
 #include "engine/tool_modes.hpp"
 
 namespace cascade::engine {
@@ -80,6 +84,7 @@ struct BootResult {
     double seconds = -1.0;         // negative: run until stopped; --seconds N (Engine only)
     std::string engineConfigArg;   // --config PATH (Engine only): the settings file this run owns
     bool engineUseConfig = false;  // --use-config (Engine only): the per-user settings file, the one the window uses
+    ProvisionRequest provision;    // --web-enable/--web-bind/--web-port/--web-user/--web-password-file/--cat-enable/--cat-bind-all (Engine only)
     int diagStallMs = 0;           // --diag-stall
     int diagToggle = 0;            // --diag-toggle on (1) / off (-1)
     bool linkTesterReveal = false; // --link-tester

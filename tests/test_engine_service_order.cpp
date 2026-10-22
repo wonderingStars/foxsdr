@@ -368,7 +368,8 @@ int checkProperties(const std::string& svcBlank, const std::string& mainBlank, b
         // The first call of each, in this order - except stop(), whose LAST call is the one that ends the run (it is also
         // called on the two early-return paths, where the run failed before it began).
         std::size_t last = 0;
-        for (const char* call : {"service.acquireConfig(", "service.restore()", "service.start(", "service.keep()"}) {
+        // (7e: the provisioning is between the restore and the start - after what the file said, before anything receives)
+        for (const char* call : {"service.acquireConfig(", "service.restore()", "service.provision(", "service.start(", "service.keep()"}) {
             const std::size_t at = run.find(call);
             need(at != std::string::npos && at >= last, call);
             if (at != std::string::npos) { last = at; }

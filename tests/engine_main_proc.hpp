@@ -11,7 +11,9 @@
 // directory that is not the test's, and a process the test can END on purpose
 // (a no-flag engine runs until it is ended from outside, and the test must not
 // leave one behind when it does not exit). Standard input is NUL, so a child
-// that read it would see the end at once.
+// that read it would see the end at once - unless the test names a FILE for it
+// (setStdinFile, stage 7e: the engine's `--web-password-file -` reads its
+// password from standard input).
 //
 // The environment is the test's own, inherited: tests/test_engine_main_*.cpp
 // point every per-user folder at a scratch directory first (isolate()), which is
@@ -149,6 +151,9 @@ public:
 #endif
     }
 
+    // The next child's standard input is this file (read from its start), not NUL. Stage 7e: `--web-password-file -`.
+    void setStdinFile(const fs::path& p) { stdinFile_ = p; }
+
     // Start `exe` with `args`, in `cwd`, its stdout and stderr in `outFile` and `errFile`.
     bool start(const fs::path& exe, const std::vector<std::string>& args, const fs::path& cwd, const fs::path& outFile,
                const fs::path& errFile) {
@@ -172,8 +177,9 @@ public:
         };
         HANDLE hOut = openOut(outFile);
         HANDLE hErr = openOut(errFile);
-        HANDLE hIn = ::CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
-                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE hIn = ::CreateFileW(stdinFile_.empty() ? L"NUL" : stdinFile_.wstring().c_str(), GENERIC_READ,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                   nullptr);
         if (hOut == INVALID_HANDLE_VALUE || hErr == INVALID_HANDLE_VALUE || hIn == INVALID_HANDLE_VALUE) {
             closeAll(hOut, hErr, hIn);
             return false;
@@ -212,7 +218,7 @@ public:
             if (::chdir(cwd.c_str()) != 0) { ::_exit(126); }
             const int o = ::open(outFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             const int e = ::open(errFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            const int i = ::open("/dev/null", O_RDONLY);
+            const int i = ::open(stdinFile_.empty() ? "/dev/null" : stdinFile_.c_str(), O_RDONLY);
             if (o < 0 || e < 0 || i < 0) { ::_exit(126); }
             ::dup2(i, 0);
             ::dup2(o, 1);
@@ -226,6 +232,36 @@ public:
     }
 
     unsigned long pid() const { return static_cast<unsigned long>(pid_); }
+
+    // The command line the running child was started with, as the operating system holds it - what any other process on
+    // the machine can read (stage 7e: the engine's password must never be in it). Windows: the process list's own
+    // CommandLine, asked of PowerShell (a second or two); Linux: /proc/<pid>/cmdline, arguments joined by a space. Empty
+    // when it cannot be read (the child is gone, or the facility is not there): the caller says so, it does not pass.
+    std::string commandLine() const {
+#if defined(_WIN32)
+        if (process_ == nullptr || done_) { return std::string(); }
+        const std::string cmd =
+            "powershell -NoProfile -NonInteractive -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId=" +
+            std::to_string(pid_) + "').CommandLine\" 2>NUL";
+        std::string out;
+        if (FILE* p = ::_popen(cmd.c_str(), "r")) {
+            char buf[512];
+            std::size_t n = 0;
+            while ((n = std::fread(buf, 1, sizeof(buf), p)) > 0) { out.append(buf, n); }
+            ::_pclose(p);
+        }
+        while (!out.empty() && (out.back() == '\r' || out.back() == '\n' || out.back() == ' ')) { out.pop_back(); }
+        return out;
+#else
+        std::ifstream in("/proc/" + std::to_string(pid_) + "/cmdline", std::ios::binary);
+        std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        for (char& c : raw) {
+            if (c == '\0') { c = ' '; }
+        }
+        while (!raw.empty() && raw.back() == ' ') { raw.pop_back(); }
+        return raw;
+#endif
+    }
 
     // Ask the child to stop, as an operator does. POSIX: kill(pid, `posixSignal`) (SIGTERM, SIGINT, SIGHUP). Windows:
     // Ctrl+Break to the child's process group (`posixSignal` is ignored; the child must have been started with
@@ -345,6 +381,7 @@ private:
 #else
     pid_t pid_ = -1;
 #endif
+    fs::path stdinFile_;
     bool done_ = false;
     bool killed_ = false;
     int code_ = -1;

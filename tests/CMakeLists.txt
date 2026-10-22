@@ -540,13 +540,14 @@ foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang te
     endif()
 endforeach()
 
-# THE foxsdr-engine TESTS (stages 7b and 7c) spawn the engine executable - and the window application where they compare
+# THE foxsdr-engine TESTS (stages 7b, 7c, 7d and 7e) spawn the engine executable - and the window application where they compare
 # against it (--version, --selftest, the refused --seconds) - so both are built first, or an end-to-end half would
 # drive whatever stale binary the build tree last held. They link the engine alone (no window include in them).
 foreach(_t IN ITEMS test_engine_main_version test_engine_main_args test_engine_main_helpers test_engine_main_smoke
                     test_engine_main_links_headless test_engine_main_config_roundtrip test_engine_main_clean_exit_marker
                     test_engine_main_damaged_config test_engine_main_second_instance_refused
-                    test_engine_main_sigterm test_engine_main_sigterm_wedged)
+                    test_engine_main_sigterm test_engine_main_sigterm_wedged test_engine_main_provision
+                    test_engine_main_password_not_in_argv)
     if(TARGET ${_t})
         add_dependencies(${_t} foxsdr-engine cascade)
     endif()

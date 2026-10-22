@@ -34,6 +34,9 @@ constexpr double kConfigRetryCapS = 300.0;
 // The keeper looks at the published snapshot this often, not on every wake of the thread that calls it
 // (the window looks once a frame, and compares fields; this compares text, which is dearer).
 constexpr double kLookEveryS = 0.25;
+// The longest the provisioning flags may take to settle: a password's hash is the long part, and a slow board's
+// is seconds, not a minute.
+constexpr std::chrono::milliseconds kProvisionBound{60000};
 
 }  // namespace
 
@@ -196,6 +199,29 @@ void EngineService::setAsideDamaged() {
         "settings: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
     std::fprintf(stderr,
                  "foxsdr-engine: the damaged settings file could not be kept aside, so nothing will be saved over it in this run\n");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 2b. THE PROVISION (stage 7e): the window has no counterpart - its settings panels submit the same
+// FOXAPI_OP_SERVER_CONFIG, one click at a time, while it runs. Here the command line says it all at once,
+// so it is submitted once, after the restore (what the flags say replaces what the file said) and before
+// the receiver starts (the configuration is settled - the password hashed, the listeners started or
+// refused - before anything is receiving, and a refusal costs nothing but the run).
+// ---------------------------------------------------------------------------------------------------
+bool EngineService::provision(const ProvisionRequest& request, const Secret* password, std::string& error,
+                              std::string& summary) {
+    if (!request.any()) { return true; }
+    const ProvisionOutcome outcome = provisionServers(engine_, request, password, kProvisionBound);
+    if (!outcome.ok) {
+        error = outcome.error;
+        // A REFUSED PROVISION SAVES NOTHING: the file keeps what it held (the clean-exit marker included - this run
+        // never started, so it did not end unclean either). The writer is told, as for a damaged file that could not
+        // be kept aside; its sentence is what the stop then says.
+        writer_.forbidWrites("the settings file was left as it was: the web/CAT provisioning was refused");
+        return false;
+    }
+    summary = outcome.summary;
+    return true;
 }
 
 // ---------------------------------------------------------------------------------------------------

@@ -37,7 +37,7 @@
 // install id would double-count one machine - the 0.65.0 note in app_window.cpp), the crash-report upload
 // sweep (survey O6: no UI has consented), the frame watchdog and the diagnostics switch's mid-session
 // toggle, the plugin windows, the front end's facts. Stage 7d adds the signals that end a run, 7e the
-// provisioning of the servers; both go through the phases above.
+// provisioning of the servers (provision(), between restore and start); both go through the phases above.
 //
 // Engine-clean: no gui/, imgui, GLFW or OpenGL.
 #pragma once
@@ -50,6 +50,7 @@
 #include "core/config_lock.hpp"
 #include "core/config_writer.hpp"
 #include "engine/engine.hpp"
+#include "engine/provision.hpp"
 
 namespace cascade::engine {
 
@@ -93,6 +94,17 @@ public:
         std::string error;      // the loader's sentence when damaged; a refused built-in source when hermetic
     };
     Restored restore();
+
+    // 2b. THE PROVISION (stage 7e): the web and CAT flags of the command line, submitted as FOXAPI_OP_SERVER_CONFIG on a
+    // LOCAL ADMIN session and settled (engine/provision.hpp) - after the restore, so what the flags say replaces what
+    // the file said, and BEFORE the receiver starts. Nothing to do when the request asks for nothing. False with the
+    // whole refusal in `error` (the engine's or the bind policy's sentence): the caller then stops. A refused provision
+    // FORBIDS THE SAVES of this run, so the settings file keeps exactly what it held (a refused flag is not a setting;
+    // the panels store what the operator chose, but nobody is choosing here, and a half-applied command line must not
+    // become the next start's configuration). With a settings file the flags that were accepted ride the forced first
+    // save of start() and the keeper; hermetic, they apply for this run and are written nowhere. `summary` is the
+    // journal line on success.
+    bool provision(const ProvisionRequest& request, const Secret* password, std::string& error, std::string& summary);
 
     // 3. THE START. False (with `why`) when the receiver could not be started; the caller then calls stop().
     bool start(std::string& why);

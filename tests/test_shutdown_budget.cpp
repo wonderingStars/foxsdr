@@ -1055,6 +1055,12 @@ const KnownWait kKnownWaits[] = {
      "main() sleeping between looks at the clock and the stop request while the engine runs on its own thread: a polling "
      "interval, not a bound. The stop is the engine's own teardown, which starts after this loop has ended; the slice is "
      "never slept inside it"},
+    // STAGE 7e (src/engine/engine_service.cpp): the provisioning flags' settle bound.
+    {"src/engine/engine_service.cpp", "kProvisionBound", 0,
+     "EngineService::provision() - the longest the web/CAT provisioning flags (--web-enable and the rest) are given to settle: the "
+     "engine's answer, the password's PBKDF2 hash on the server host's worker, the listeners started or refused. The main thread "
+     "spends it BEFORE the receiver starts, passes run by hand; a run that is refused stops AFTER provision() has returned. Never "
+     "spent on a shutdown path: no stop has begun while it is waited on, and the teardown never calls provision()"},
     {"src/engine/engine.hpp", "kPassWaitNet", 0,
      "Engine::waitForPassCounter() - the safety net on a front-end thread's wait for the pass (stepPass, runPassNow): the wait ends on the "
      "pass's own notification, and this is how often it looks again in case one was missed. NOT on the shutdown path: stopControlThread "
