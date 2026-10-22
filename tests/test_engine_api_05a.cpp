@@ -261,7 +261,7 @@ void testReadAudioIsTheTap() {
     Sess local(r.e, FOXAPI_SESSION_LOCAL, kAllGrants);
     Sess remote(r.e, FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_AUDIO, "s3cret");
     // Wait for audio to be produced at all (the generator on its own clock).
-    CHECK(waitUntil(5000, [&] { return Access::produced(r.e) > 20000; }));
+    CHECK(waitUntil(120000, [&] { return Access::produced(r.e) > 20000; }));
     std::uint64_t lc = 0, rc = 0;
     FoxStreamInfo li{}, ri{};
     li.structSize = ri.structSize = sizeof(li);
@@ -330,7 +330,12 @@ void testReadAudioOverrun() {
     }));
     const std::uint64_t joined = cursor;
     // (no reads: the pass keeps the ring fed, because a reader asked within audioDemandMs)
-    CHECK(waitUntil(6000, [&] { return Access::produced(r.e) > 5000 + 110000; }));
+    // (a read of no frames now and then keeps the demand alive however slowly the receiver runs - a sanitizer's DSP thread makes a
+    // fraction of 48 000 frames a second - and moves no cursor)
+    CHECK(waitUntil(120000, [&] {
+        (void)api()->read_audio(s.s, &cursor, scratch, 0, &info);
+        return Access::produced(r.e) > 5000 + 110000;
+    }));
     std::vector<float> buf(4096);
     const int32_t n = api()->read_audio(s.s, &cursor, buf.data(), 4096, &info);
     const std::uint64_t held = cascade::net::kWebAudioCapacity;

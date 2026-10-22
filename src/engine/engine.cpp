@@ -9671,8 +9671,10 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
         if (testHooks_.passStarting != nullptr) { testHooks_.passStarting(); }
         controlWatchdog_.heartbeat();
         while (controlParkForTest_.load() && controlRun_.load()) {
+            controlParkedForTest_.store(true);  // (the acknowledgement a test waits for: no pass is running, and none will begin)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        controlParkedForTest_.store(false);
         if (!controlRun_.load()) { break; }
         if (const int stallMs = controlStallForTestMs_.exchange(0); stallMs > 0) {
             controlInStallForTest_.store(true);

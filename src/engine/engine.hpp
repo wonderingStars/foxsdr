@@ -2203,6 +2203,9 @@ private:
     // TESTS ONLY: while true the control thread is parked at the top of its
     // loop - no pass, no tick, no heartbeat (tests/test_engine_control_thread).
     std::atomic<bool> controlParkForTest_{false};
+    // TESTS ONLY: true while the free-running loop sits in that park (set by the loop itself, so a test that parks the thread knows
+    // that no pass is in progress - a pass under a thread sanitizer can outlast any pause a test could judge it settled by).
+    std::atomic<bool> controlParkedForTest_{false};
     // TESTS ONLY: the next pass first sleeps this long, uninterruptibly (a
     // bounded wait the thread cannot leave early), with controlInStallForTest_
     // set meanwhile.

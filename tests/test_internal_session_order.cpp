@@ -113,6 +113,7 @@ struct AppWindowTestAccess {
     static bool remoteKeyed(Engine& e) { return e.transmitter_.remoteKeyed(); }
     static std::uint64_t passes(Engine& e) { return e.controlPasses_.load(); }
     static void park(Engine& e, bool on) { e.controlParkForTest_.store(on); }
+    static bool parked(Engine& e) { return e.controlParkedForTest_.load(); }
 };
 }  // namespace cascade::gui
 
@@ -138,6 +139,24 @@ bool waitUntil(int ms, const std::function<bool()>& pred) {
 bool waitPasses(Engine& e, std::uint64_t n, int ms = 2000) {
     const std::uint64_t target = Access::passes(e) + n;
     return waitUntil(ms, [&] { return Access::passes(e) >= target; });
+}
+
+// Parks the control thread between passes and waits until it SAYS it is parked: no pass is in progress and none will begin until it is
+// let go (a pass under a thread sanitizer can run far longer than any pause a test could take for "settled").
+bool parkAndSettle(Engine& e) {
+    Access::park(e, true);
+    return waitUntil(60000, [&] { return Access::parked(e); });
+}
+
+// The key owner as the published block says it (a seqlock): the rules themselves are the pumping thread's alone, and reading them from a
+// test thread while the control thread runs is the race the tripwire exists to forbid.
+std::uint64_t ownerNow(Engine& e) {
+    for (int i = 0; i < 1000; ++i) {
+        cascade::core::PublishedState p;
+        if (e.snapshot()->read(p)) { return p.app.txKeyOwner; }
+        std::this_thread::yield();
+    }
+    return ~std::uint64_t{0};
 }
 
 void startThread(Engine& e, int periodMs) {
@@ -371,6 +390,7 @@ int main() {
     // ================================================================================================================
     {
         Engine e;
+        e.configureApi("testHooks=1");  // (for the key state a failure prints)
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
         FrontEnd desk(e, "the desk");
@@ -380,15 +400,7 @@ int main() {
         desk.frame(true, false, false, true, 1);
         CHECK(waitPasses(e, 3));
         for (int round = 0; round < 3; ++round) {
-            Access::park(e, true);
-            std::uint64_t last = ~std::uint64_t{0};
-            CHECK(waitUntil(2000, [&] {
-                const std::uint64_t now = Access::passes(e);
-                const bool stable = now == last;
-                last = now;
-                std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                return stable;
-            }));
+            CHECK(parkAndSettle(e));
             web.beat();
             CHECK_EQ(web.submitStatus(cmdInt(FOXAPI_OP_TX_PTT, 1)), FOXAPI_OK);  // the browser FIRST in wall time...
             desk.frame(true, true, false);                                        // ...the desk second (and its heartbeat)
@@ -406,20 +418,20 @@ int main() {
             web.beat();
             CHECK_EQ(web.submitStatus(cmdInt(FOXAPI_OP_TX_PTT, 1)), FOXAPI_OK);
             CHECK(waitUntil(1000, [&] { return Access::remoteKeyed(e); }));
-            Access::park(e, true);
-            last = ~std::uint64_t{0};
-            CHECK(waitUntil(2000, [&] {
-                const std::uint64_t now = Access::passes(e);
-                const bool stable = now == last;
-                last = now;
-                std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                return stable;
-            }));
+            CHECK(parkAndSettle(e));
             CHECK_EQ(web.submitStatus(cmdInt(FOXAPI_OP_TX_PTT, 0)), FOXAPI_OK);
             const std::uint64_t p1 = Access::passes(e);
             Access::park(e, false);
             // (the pass counter moves when a pass ENDS; the Transmitter is down by the end of the pass that applied the release)
             CHECK(waitUntil(2000, [&] { return Access::passes(e) >= p1 + 1; }));
+            if (Access::remoteKeyed(e)) {
+                char ks[512] = {};
+                char td[32] = {};
+                (void)api()->get_setting(web.s, "test.keyState", ks, sizeof(ks));
+                (void)api()->get_setting(web.s, "test.tailDepth", td, sizeof(td));
+                std::printf("B round %d: STILL KEYED after the pass that should have released it: passes %llu (p1 %llu), tail depth %s, key state: %s\n",
+                            round, static_cast<unsigned long long>(Access::passes(e)), static_cast<unsigned long long>(p1), td, ks);
+            }
             CHECK(!Access::remoteKeyed(e));
             CHECK(waitUntil(1000, [&] { return !raw->running(); }));
             web.results();
@@ -645,7 +657,7 @@ int main() {
         CHECK(waitUntil(5000, [&] {
             deskA.frame(true, false, false);
             deskB.frame(true, false, false);
-            return !Access::remoteKeyed(e) && e.api().txFacts().owner == 0u && !raw->running();
+            return !Access::remoteKeyed(e) && ownerNow(e) == 0u && !raw->running();
         }));
         CHECK(e.api().offPassKeyTouches() == 0u);
         e.stopControlThread();
