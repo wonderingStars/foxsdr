@@ -27,6 +27,8 @@
 //   7  THE REMOTE KEY'S STANDING CONDITION is the local operator's consent:
 //      withdrawn, or its session closed, or its session silent past the
 //      keep-alive - each releases a remote key held.
+//      7e (stage 5d): AND A RE-ASSERTION IS NOT A HEARTBEAT - a browser that keeps saying PTT but has stopped polling its status
+//      loses the key at the remote keep-alive, because the web session's liveness is its heartbeat (the status poll) and nothing else.
 //   8  AND THE OTHER WAY: front end beating, control side passing - a latch
 //      stays keyed well past every 1 s bound (the heartbeat is what tells
 //      the TX thread the front end is alive; a latch is never re-asserted).
@@ -59,8 +61,10 @@
 #include "core/transmitter.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
+#include "net/web_control.hpp"
 #include "test_check.hpp"
 #include "tx_front_end.hpp"
+#include "web_seat.hpp"
 
 using cascade::core::Transmitter;
 using cascade::core::TxInput;
@@ -207,21 +211,47 @@ struct Rig {
         raw = Access::installSink(e);
         fe.frame(true, false, false);
         e.pump();
+        web.open(e);
     }
     Engine e;
     RecordingSink* raw = nullptr;
     FrontEnd fe{e};
+    // The browser: the web server's one engine session (stage 5d), opened as the server opens it. Declared after the front end, so it
+    // closes first.
+    web_test::WebSeat web;
 };
 
 bool ok(const FoxCommandResult& r) { return r.status == FOXAPI_OK && (r.flags & FOXAPI_RESULT_REFUSED) == 0u; }
 
-// The browser page's PTT, as the web server's control request reaches the
-// engine (Engine::applyCommand's FOXAPI_OP_TX_PTT).
-// The page polls its status (the web remote's keep-alive) before and while
-// it presses.
-FoxCommandResult webPtt(Engine& e, bool on) {
-    e.api().webRemoteBeat();
-    return e.applyCommand(cascade::core::cmd::makeInt(FOXAPI_OP_TX_PTT, on ? 1 : 0));
+// The browser page's PTT, as the web server's control request reaches the engine (stage 5d: the web server's session, a POST handed to it
+// by net::handOverControl, applied by the pass's remote-controls phase - so the answer is the RESULT of the pass that applied it, and this
+// runs that pass).
+// The page polls its status (the web remote's keep-alive: the session's heartbeat) before and while it presses.
+FoxCommandResult webPtt(Rig& r, bool on) {
+    r.web.beat();
+    cascade::net::ControlRequest q;
+    q.transmitPtt = on;
+    FoxCommandResult none{};
+    none.structSize = sizeof(none);
+    none.status = -9999;
+    none.flags = FOXAPI_RESULT_REFUSED;
+    if (!r.web.push(q)) { return none; }
+    r.e.pump();
+    FoxCommandResult got = none;
+    for (const FoxCommandResult& x : r.web.take()) {
+        if (x.op == FOXAPI_OP_TX_PTT) { got = x; }
+    }
+    return got;
+}
+
+// A PTT press that is only a re-assertion: handed to the session WITHOUT the status poll before it (the page's poll and its press are two
+// different requests).
+void webPttNoPoll(Rig& r, bool on) {
+    cascade::net::ControlRequest q;
+    q.transmitPtt = on;
+    (void)r.web.push(q);
+    r.e.pump();
+    (void)r.web.take();
 }
 
 }  // namespace
@@ -280,12 +310,12 @@ int main() {
         r.fe.frame(true, false, false, true, 1);  // "Allow remote transmit"
         r.e.pump();
         const auto t0 = Clock::now();  // before the apply: the hold counts from it
-        CHECK(ok(webPtt(r.e, true)));
+        CHECK(ok(webPtt(r, true)));
         r.e.pump();
         CHECK(Access::remoteKeyed(r.e));
         CHECK(r.raw->running());
         const bool released = untilQuiet(r.raw, 3000, [&] {
-            r.e.api().webRemoteBeat();
+            r.web.beat();
             r.fe.frame(true, false, false);
             r.e.pump();
         });
@@ -404,7 +434,7 @@ int main() {
     {
         // Without it, the browser's PTT is refused and nothing keys.
         Rig r;
-        const FoxCommandResult refused = webPtt(r.e, true);
+        const FoxCommandResult refused = webPtt(r, true);
         r.e.pump();
         std::printf("[7a] no consent: status %d, remote keyed=%d\n", refused.status, Access::remoteKeyed(r.e));
         CHECK(refused.status == FOXAPI_DENIED);
@@ -417,7 +447,7 @@ int main() {
         Rig r;
         r.fe.frame(true, false, false, true, 1);
         r.e.pump();
-        CHECK(ok(webPtt(r.e, true)));
+        CHECK(ok(webPtt(r, true)));
         r.e.pump();
         CHECK(Access::remoteKeyed(r.e));
         CHECK(r.raw->running());
@@ -438,8 +468,8 @@ int main() {
             t0 = Clock::now();
             r.fe.beat();
             released = untilQuiet(r.raw, 3000, [&] {
-                r.e.api().webRemoteBeat();
-                (void)webPtt(r.e, true);
+                r.web.beat();
+                (void)webPtt(r, true);
                 r.e.pump();
             });
         }
@@ -452,6 +482,45 @@ int main() {
             CHECK(ms >= static_cast<double>(FOXAPI_KEEPALIVE_MS) - 1.0);
             CHECK(ms <= static_cast<double>(FOXAPI_KEEPALIVE_MS) + 150.0);
         }
+    }
+
+    // 7e. A RE-ASSERTION IS NOT A HEARTBEAT (API 0.2: only the interface's own
+    //     heartbeat counts; stage 5d: the web session's heartbeat is the page's
+    //     STATUS POLL, and a POST /api/control is not one). The browser keeps
+    //     saying PTT every 300 ms - each one buys the key a fresh 2 s hold - but
+    //     has stopped polling its status; the local operator is present and
+    //     consenting the whole time. The key is released at the remote
+    //     keep-alive counted from the web session's LAST HEARTBEAT, although the
+    //     hold is renewed again and again. (Red if a control request counts as
+    //     a beat: the key would be held for as long as the browser keeps
+    //     talking, the very thing the keep-alive exists to end - a page whose
+    //     poll has died but whose press handler still fires.)
+    // =========================================================================
+    {
+        Rig r;
+        r.fe.frame(true, false, false, true, 1);  // the desk consents
+        r.e.pump();
+        const auto t0 = Clock::now();  // before the beat: its stamp is taken inside
+        r.web.beat();                  // the page's last poll
+        webPttNoPoll(r, true);
+        CHECK(Access::remoteKeyed(r.e));
+        CHECK(r.raw->running());
+        auto lastAssert = Clock::now();
+        const bool released = untilQuiet(r.raw, 4000, [&] {
+            r.fe.beat();  // the desk is present
+            if (Clock::now() - lastAssert >= std::chrono::milliseconds(300)) {
+                webPttNoPoll(r, true);  // ...the browser re-asserts, and does not poll
+                lastAssert = Clock::now();
+            }
+            r.e.pump();
+        });
+        const double ms = msSince(t0);
+        std::printf("[7e] browser re-asserting PTT every 300 ms, not polling: released %.0f ms after its last poll\n", ms);
+        CHECK(released);
+        CHECK(!Access::remoteKeyed(r.e));
+        CHECK(ms >= static_cast<double>(FOXAPI_REMOTE_KEEPALIVE_MS) - 1.0);
+        CHECK(ms <= static_cast<double>(FOXAPI_REMOTE_KEEPALIVE_MS) + 150.0);
+        CHECK(waitQuiet(r.raw, 150));
     }
 
     // =========================================================================

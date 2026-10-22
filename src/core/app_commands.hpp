@@ -70,12 +70,10 @@
 #define FOXAPP_OP_STORE_UPDATE           0x8705u /* text: catalogue id of an installed plugin to update */
 #define FOXAPP_OP_STORE_REMOVE_BLOCKED   0x8706u /* text: file name of a plugin the catalogue policy blocked */
 // The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
-// OPEN 1/10, SAFETY): ival[0] 0/1. Closing it (0) releases a remote transmit
-// key already held, in the SAME step - the engine's remote-controls phase
-// (Engine::pumpRemoteControls, once a pass) still does the same check as a second line of defence for
-// anything that still sets transmitOpen_ directly (a test's friend accessor,
-// today), but this is the immediate, zero-frame-latency release for the
-// normal UI path (the Transmit toolbar switch, the page's own close button).
+// OPEN 1/10, SAFETY): ival[0] 0/1. Since engine stage 4 the flag gates NO key:
+// the consent the window withdraws when its page closes (gui::txKeyCommands) is
+// what releases a remote key held. This op only moves the flag, at once, for
+// the normal UI path (the Transmit toolbar switch, the page's own close button).
 #define FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN 0x8408u /* ival[0]: 0/1 - closing releases a remote key held, at once */
 // A typed frequency the Source panel could not parse (engine/stage3b-pre 2c,
 // docs/engine-stage3.md OPEN 1): text, or empty to CLEAR the line - the
@@ -148,13 +146,10 @@
 // the config's own patch document, ids kept, plus next-id and centre-chosen
 // lines the document parser already skips. Always long text in practice.
 #define FOXAPP_OP_PATCH_SET_GRAPH        0x841Bu /* text (long text): the graph; ival[0]: FOXAPP_PATCH_GRAPH_* flags */
-// THE WEB CONTROL IS NOT RUNNING (engine/stage3b-pre, docs/engine-stage3.md
-// OPEN 7 (c)/10): the server that carries a browser's transmit key has been
-// stopped, disabled or never started, so no remote key can be held - the
-// Engine releases one in the same step. Sent by the window, which owns the
-// server until stage 5, where it stops it and once a frame while it is not
-// running (idempotent: a no-op with no remote key held).
-#define FOXAPP_OP_WEB_CONTROL_STOPPED    0x841Cu /* no args */
+// 0x841C was FOXAPP_OP_WEB_CONTROL_STOPPED (engine/stage3b-pre, docs/engine-stage3.md OPEN 7 (c)/10): "the server that carries a browser's
+// transmit key has been stopped, disabled or never started", sent by the window and, since the pump move, by the pass's standing condition.
+// RETIRED in stage 5d (docs/engine-stage4.md 6.12): the web server's engine session closes when the server stops, and a closed session's key
+// is opened by the key rules at the next pass. The number is not reused.
 // THE SOUND CARD LIST IS WANTED (engine/stage3b-pre, docs/engine-stage3.md
 // OPEN 2): the Source section's sound card row is showing. The Engine lists
 // the cards on its worker unless they are listed already, a list is already

@@ -525,11 +525,6 @@ public:
         tailQueue_.reserve(256);
         tailWork_.reserve(256);
         audioScratch_.resize(kAudioTapFrames);
-        // The web remote's key (engine-internal, REMOTE, never listed): the
-        // one session the app's browser page holds. Its heartbeat is the
-        // page's status poll (webRemoteBeat).
-        webSession_.id = kWebSessionId;
-        webSession_.principal = "web";
         if (opt_.testHooks) { engine_.txSinkForTest_ = &makeDummyLoad; }
     }
 
@@ -753,7 +748,7 @@ public:
     }
 
     // ---- THE KEY (core/tx_key_rules.hpp) ---------------------------------------
-    // Everything below runs on the pumping thread, except webRemoteBeat.
+    // Everything below runs on the pumping thread.
 
     // THE THREAD TRIPWIRE (pump move step P1, F3). The key rules are single-threaded by contract: only the thread that
     // pumps the engine may reach them. While the engine's own control thread runs, that is the control thread, so a call
@@ -774,30 +769,11 @@ public:
         rules_.endKey(why, steadyMs());
     }
 
-    // The web remote's PTT (Engine::applyCommand's TX_PTT: the browser's
-    // transmitPtt arrives there through applyControlRequest). A REMOTE key:
-    // a 2 s hold the page re-asserts, only with the local operator's consent.
-    cascade::core::TxKeyAnswer webRemotePtt(bool on) {
-        noteKeyTouch();
-        cascade::core::TxKeySender snd{kWebSessionId, true, webSession_.principal, true};
-        const cascade::core::TxKeyAnswer a = rules_.key(snd, false, on, engine_.transmitter_.haveSink(), steadyMs());
-        if (on && a.status == FOXAPI_OK) { engine_.transmitter_.keyRemote(); }
-        // PTT 0 RELEASES NOW (API 0.2): in this step, not at the next pass.
-        if (!on && rules_.keyOwner() != kWebSessionId) { engine_.transmitter_.releaseRemote("the remote let go"); }
-        return a;
-    }
-
-    // The web server is not running: no browser can ask again, so a key the
-    // web remote holds ends now rather than at its hold.
-    void webRemoteStopped(const char* why) {
-        noteKeyTouch();
-        if (rules_.keyOwner() == kWebSessionId) { rules_.endKey(why, steadyMs()); }
-        engine_.transmitter_.releaseRemote(why);
-    }
-
-    // Any thread: the browser page polled its status - the web remote's
-    // heartbeat (its PTT re-assertions are not one).
-    void webRemoteBeat() { webBeatMs_.store(steadyMs(), std::memory_order_relaxed); }
+    // (THE WEB REMOTE'S KEY IS NOT HERE ANY MORE - stage 5d. The browser's PTT used to be a private path of its own: webRemotePtt for a
+    // fake sender kWebSessionId, webRemoteStopped for "the server is not running", webRemoteBeat for the page's poll. The web server holds
+    // an engine-internal session like any other client's (openInternal, kind Web): its PTT is `apply`'s key branch below, in the internal
+    // tier, its liveness is that session's heartbeat, and the server stopping is that session closing - the next pass's sessionGone opens
+    // its key. PTT 0's release in the SAME pass is the key drive's second run, applyTail.)
 
     // The control loop's last act, before it stops the Transmitter.
     void engineStopping() {
@@ -1413,18 +1389,12 @@ private:
     }
 
     // The sessions as the key rules see them: open, local or remote, and
-    // when each last called heartbeat() (the web remote's internal one too).
+    // when each last called heartbeat() (the web server's internal session's too).
     class SessionsView final : public cascade::core::TxKeyRules::Sessions {
     public:
         explicit SessionsView(ApiHostImpl& h) : h_(h) {}
         cascade::core::TxKeyRules::Liveness find(std::uint64_t id) const override {
             cascade::core::TxKeyRules::Liveness l;
-            if (id == kWebSessionId) {
-                l.present = true;
-                l.remote = true;
-                l.lastBeatMs = h_.webBeatMs_.load(std::memory_order_relaxed);
-                return l;
-            }
             std::lock_guard<std::mutex> lk(h_.sessionsMutex_);
             auto it = h_.sessions_.find(id);
             if (it == h_.sessions_.end() || it->second->detached.load()) { return l; }
@@ -1442,16 +1412,10 @@ private:
     void publishNodeSpectra();
     std::string keyStateText() const;
 
-    // The web remote's session id: never handed out by open_session (those
-    // count up from 1), so it can never collide with one.
-    static constexpr std::uint64_t kWebSessionId = ~std::uint64_t{0} - 1;
-
     Engine& engine_;
     Options opt_;
     cascade::core::TxKeyRules rules_;        // the pumping thread
     SessionsView sessionsView_;
-    ApiSession webSession_;                  // its id and principal only
-    std::atomic<std::int64_t> webBeatMs_{0};
     std::atomic<std::uint64_t> keyOwner_{0};  // rules_.keyOwner(), for heartbeat()
     std::atomic<std::uint64_t> offPassKeyTouches_{0};  // noteKeyTouch: key-rule entries by a thread that is not the pump's
     bool lastPassFaulted_ = false;
@@ -1490,6 +1454,7 @@ private:
     // The internal tier (stage 5a): what the engine-internal sessions submitted, drained by applyTail. Under queueMutex_ too.
     std::vector<Pending> tailQueue_;
     std::vector<Pending> tailWork_;                      // the pumping thread's half of it
+    std::atomic<std::uint64_t> tailPhases_{0};           // how many times the pass ran the tier's phase (TESTS: ApiHost::tailPhasesForTest)
     std::vector<uint64_t> closedSessions_;
 
     std::mutex tokensMutex_;
@@ -2120,12 +2085,15 @@ void ApiHostImpl::beginPass() {
 // the same range checks, the same key rules, the same Engine::applyCommand as every session's, so what the internal tier adds is WHEN
 // (after the operator at the machine), nothing else.
 //
-// THE KEY DRIVE RUNS AGAIN. txPass sits at the end of beginPass, before this phase; the old pull released a PTT 0 itself (webRemotePtt
-// told the Transmitter at once), while the table's way is to decide in the rules and let txPass drive the Transmitter. Without this
-// second drive a browser's PTT 0 would keep the radio keyed until the NEXT pass. The drive is idempotent (the rules' clocks and the
-// Transmitter's tick are levels), so it runs only when the tier had something to apply.
+// THE KEY DRIVE RUNS AGAIN - THE SECOND KEY DRIVE. txPass sits at the end of beginPass, before this phase; the old pull released a PTT 0
+// itself (the retired webRemotePtt told the Transmitter at once), while the table's way is to decide in the rules and let txPass drive the
+// Transmitter. Without this second drive a browser's PTT 0 would keep the radio keyed until the NEXT pass - the browser's release is the
+// one that must not wait (API 0.2: PTT 0 releases now), and a pass is up to 16 ms of carrier nobody asked for. The drive is idempotent
+// (the rules' clocks and the Transmitter's tick are levels), so it runs only when the tier had something to apply.
+// (tests/test_remote_control_pull.cpp A5 holds it - the Transmitter let go after ONE pump - and is red with this call removed.)
 void ApiHostImpl::applyTail() {
     noteKeyTouch();
+    tailPhases_.fetch_add(1, std::memory_order_relaxed);
     tailWork_.clear();
     {
         std::lock_guard<std::mutex> lk(queueMutex_);
@@ -2950,6 +2918,7 @@ FoxEngine* ApiHost::handle() { return impl_.get(); }
 
 void ApiHost::beginPass() { impl_->beginPass(); }
 void ApiHost::applyTail() { impl_->applyTail(); }
+std::uint64_t ApiHost::tailPhasesForTest() const { return impl_->tailPhases_.load(std::memory_order_relaxed); }
 bool ApiHost::hostsServers() const { return impl_->hostsServers(); }
 std::int32_t ApiHost::validateForTest(FoxSession* s, const FoxCommand& c) {
     return s == nullptr ? FOXAPI_BAD_ARGUMENT : impl_->validateForTest(static_cast<ApiSession*>(s), c);
@@ -2964,24 +2933,11 @@ FoxSession* ApiHost::openInternalSession(InternalKind kind, const std::string& l
     }
 }
 void ApiHost::endKeyFromEngine(const char* why) { impl_->endKeyFromEngine(why); }
-FoxCommandResult ApiHost::webRemotePtt(bool on) {
-    FoxCommandResult r{};
-    r.structSize = sizeof(r);
-    r.op = FOXAPI_OP_TX_PTT;
-    const cascade::core::TxKeyAnswer a = impl_->webRemotePtt(on);
-    r.status = a.status;
-    r.applied[0] = a.applied0;
-    if (a.status != FOXAPI_OK) { r.flags |= FOXAPI_RESULT_REFUSED; }
-    copyText(r.message, a.message.c_str());
-    return r;
-}
-void ApiHost::webRemoteBeat() { impl_->webRemoteBeat(); }
 void ApiHost::takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log, std::uint64_t total) {
     impl_->takeDecoderLines(log, total);
 }
 void ApiHost::muteTuneAway(std::uint32_t names) { impl_->muteTuneAway(names); }
 void ApiHost::presetApplied(const std::string& moduleFile) { impl_->presetApplied(moduleFile); }
-void ApiHost::webRemoteStopped(const char* why) { impl_->webRemoteStopped(why); }
 void ApiHost::engineStopping() { impl_->engineStopping(); }
 std::uint64_t ApiHost::offPassKeyTouches() const { return impl_->offPassKeyTouches(); }
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }

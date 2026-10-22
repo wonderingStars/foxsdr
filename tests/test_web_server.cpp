@@ -18,8 +18,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -43,6 +46,7 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include "core/app_commands.hpp"
 #include "core/health_events.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_ui.hpp"
@@ -697,9 +701,93 @@ void testRestartRevokesSessions() {
     server.stop();
 }
 
-void testControlQueue() {
+// --- THE ENGINE SESSION (stage 5d) ------------------------------------------
+//
+// The server speaks to the engine through ONE session it opens when it has bound and closes when it stops (net/web_session.hpp). The engine's
+// side is stood in here by a stub that RECORDS what the server does with it, so these tests hold what is the SERVER'S: the route's order of
+// business (auth, content type, strict parse, the 409 gate, the hand-over), the heartbeat from the status route and from nothing else, the
+// session's open and close. What the engine does with the commands - the profile, the key rules, the pass - is held by
+// tests/test_engine_api_05a.cpp, test_remote_control_pull.cpp and test_remote_key_release.cpp against the real thing.
+
+struct SessionLog {
+    std::mutex m;
+    std::atomic<int> opened{0};
+    std::atomic<int> closed{0};
+    std::atomic<int> heartbeats{0};
+    std::atomic<int> polls{0};
+    std::atomic<int> contexts{0};
+    std::vector<std::string> labels;                                              // under m
+    std::vector<std::vector<cascade::core::cmd::QueuedCommand>> batches;          // under m: one entry per submit, in order
+    // What the stub gives back. Set before the server starts.
+    std::vector<std::uint64_t> ids{11, 22, 33};   // the ids behind the bookmark rows
+    double scanStartHz = 144.0e6, scanStopHz = 146.0e6, scanStepHz = 12.5e3;
+    bool contextWorks = true;
+    bool refuseOpen = false;                       // the engine has no session to give
+    int takes = -1;                                // how many commands submit reports taken; -1: all of them
+
+    std::size_t batchCount() {
+        std::lock_guard<std::mutex> lk(m);
+        return batches.size();
+    }
+    std::vector<cascade::core::cmd::QueuedCommand> batch(std::size_t i) {
+        std::lock_guard<std::mutex> lk(m);
+        return i < batches.size() ? batches[i] : std::vector<cascade::core::cmd::QueuedCommand>{};
+    }
+    std::vector<std::uint32_t> opsOf(std::size_t i) {
+        std::vector<std::uint32_t> ops;
+        for (const auto& q : batch(i)) { ops.push_back(q.c.op); }
+        return ops;
+    }
+};
+
+class StubSession final : public WebSession {
+public:
+    explicit StubSession(std::shared_ptr<SessionLog> log) : log_(std::move(log)) {}
+    ~StubSession() override { log_->closed.fetch_add(1); }
+    void heartbeat() override { log_->heartbeats.fetch_add(1); }
+    bool context(bool bookmarkIds, bool scanRange, WebControlContext& out) override {
+        log_->contexts.fetch_add(1);
+        if (!log_->contextWorks) { return false; }
+        if (bookmarkIds) { out.bookmarkIdByRow = log_->ids; }
+        if (scanRange) {
+            out.scanStartHz = log_->scanStartHz;
+            out.scanStopHz = log_->scanStopHz;
+            out.scanStepHz = log_->scanStepHz;
+        }
+        return true;
+    }
+    int submit(const std::vector<cascade::core::cmd::QueuedCommand>& commands) override {
+        std::lock_guard<std::mutex> lk(log_->m);
+        log_->batches.push_back(commands);
+        return log_->takes < 0 ? static_cast<int>(commands.size()) : log_->takes;
+    }
+    int pollResults(std::vector<FoxCommandResult>*) override {
+        log_->polls.fetch_add(1);
+        return 0;
+    }
+
+private:
+    std::shared_ptr<SessionLog> log_;
+};
+
+// The opener a server is given: counts the session it opens (and the label), refuses when told to.
+WebSessionOpener stubOpener(const std::shared_ptr<SessionLog>& log) {
+    return [log](const std::string& label) -> std::unique_ptr<WebSession> {
+        if (log->refuseOpen) { return nullptr; }
+        log->opened.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> lk(log->m);
+            log->labels.push_back(label);
+        }
+        return std::make_unique<StubSession>(log);
+    };
+}
+
+void testControlGoesToTheSession() {
     WebServer server;
     server.setStatusProvider([]() { return sampleStatus(); });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -709,41 +797,49 @@ void testControlQueue() {
     httplib::Client cli("127.0.0.1", port);
     cli.set_connection_timeout(5, 0);
 
-    // A valid request is ACCEPTED (202, not 200 — it has not been carried out
-    // yet) and lands in the queue for the application to drain.
-    auto ok = cli.Post("/api/control", "{\"centerHz\":144800000,\"mode\":\"NFM\"}",
-                       "application/json");
+    // A valid request is ACCEPTED (202, not 200 - it has not been carried out yet), translated here, on the HTTP thread, into the commands a
+    // desktop widget would send, and handed to the engine's session in ONE batch, in the order the fields have always been applied.
+    auto ok = cli.Post("/api/control", "{\"centerHz\":144800000,\"mode\":\"NFM\"}", "application/json");
     CHECK(static_cast<bool>(ok));
     if (ok) {
         CHECK(ok->status == 202);
+        CHECK(ok->body.find("\"accepted\":true") != std::string::npos);
     }
-    std::vector<ControlRequest> drained = server.takePendingControls();
-    CHECK(drained.size() == 1);
-    if (drained.size() == 1) {
-        CHECK(drained[0].centerHz.value_or(0.0) == 144800000.0);
-        CHECK(drained[0].mode.value_or(cascade::dsp::DemodMode::RAW) ==
-              cascade::dsp::DemodMode::NFM);
+    CHECK(log->batchCount() == 1);
+    const std::vector<std::uint32_t> ops = log->opsOf(0);
+    CHECK(ops.size() == 2);
+    if (ops.size() == 2) {
+        CHECK(ops[0] == FOXAPI_OP_SET_CENTRE);
+        CHECK(ops[1] == FOXAPI_OP_SET_MODE);
+        const auto b = log->batch(0);
+        CHECK(b[0].c.num[0] == 144800000.0);
+        CHECK(b[1].c.ival[0] == FOXAPI_DEMOD_NFM);
     }
-    // Draining empties it: a request must not be applied twice.
-    CHECK(server.takePendingControls().empty());
+    // The session is collected around the request (so a browser that only ever posts cannot fill it): once before, once after.
+    CHECK(log->polls.load() >= 2);
 
-    // A rejected request reaches the queue at all.
+    // A rejected request reaches the session at all: strict parse, unknown key = 400.
     auto bad = cli.Post("/api/control", "{\"gaain\":30}", "application/json");
     CHECK(static_cast<bool>(bad));
     if (bad) {
         CHECK(bad->status == 400);
     }
-    CHECK(server.takePendingControls().empty());
+    // ...and so does an empty object, which a client that meant to say something did not.
+    auto empty = cli.Post("/api/control", "{}", "application/json");
+    CHECK(static_cast<bool>(empty));
+    if (empty) {
+        CHECK(empty->status == 400);
+    }
+    CHECK(log->batchCount() == 1);
 
     // Form-encoded is refused before anything is parsed (CSRF), and this is
     // the endpoint that moves the radio, so it matters more here than at login.
-    auto wrongType = cli.Post("/api/control", "centerHz=144800000",
-                              "application/x-www-form-urlencoded");
+    auto wrongType = cli.Post("/api/control", "centerHz=144800000", "application/x-www-form-urlencoded");
     CHECK(static_cast<bool>(wrongType));
     if (wrongType) {
         CHECK(wrongType->status == 415);
     }
-    CHECK(server.takePendingControls().empty());
+    CHECK(log->batchCount() == 1);
 
     server.stop();
 }
@@ -753,6 +849,8 @@ void testControlRequiresAuth() {
     cfg.passwordRecord = realRecord();
 
     WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, cfg, error);
     CHECK(port > 0);
@@ -763,17 +861,16 @@ void testControlRequiresAuth() {
     cli.set_connection_timeout(5, 0);
 
     // THE ONE THAT MATTERS: an unauthenticated caller must not be able to move
-    // the receiver, and must not get a request into the queue by trying.
-    auto denied = cli.Post("/api/control", "{\"centerHz\":144800000}",
-                           "application/json");
+    // the receiver, and must not get a command to the engine by trying.
+    auto denied = cli.Post("/api/control", "{\"centerHz\":144800000}", "application/json");
     CHECK(static_cast<bool>(denied));
     if (denied) {
         CHECK(denied->status == 401);
     }
-    CHECK(server.takePendingControls().empty());
+    CHECK(log->batchCount() == 0);
+    CHECK(log->polls.load() == 0);
 
-    auto login = cli.Post("/api/login", loginBody("admin", kPassword),
-                          "application/json");
+    auto login = cli.Post("/api/login", loginBody("admin", kPassword), "application/json");
     CHECK(static_cast<bool>(login));
     std::string token;
     if (login) {
@@ -781,19 +878,57 @@ void testControlRequiresAuth() {
     }
     const httplib::Headers authed = {{"Cookie", "foxsdr_session=" + token}};
 
-    auto allowed = cli.Post("/api/control", authed, "{\"centerHz\":144800000}",
-                            "application/json");
+    auto allowed = cli.Post("/api/control", authed, "{\"centerHz\":144800000}", "application/json");
     CHECK(static_cast<bool>(allowed));
     if (allowed) {
         CHECK(allowed->status == 202);
     }
-    CHECK(server.takePendingControls().size() == 1);
+    CHECK(log->batchCount() == 1);
+
+    // BROWSER LOGINS ARE NOT ENGINE SESSIONS: the one session was opened by the server's start and nothing about a cookie touches it.
+    CHECK(log->opened.load() == 1);
+    httplib::Client second("127.0.0.1", port);
+    auto login2 = second.Post("/api/login", loginBody("admin", kPassword), "application/json");
+    CHECK(static_cast<bool>(login2));
+    CHECK(log->opened.load() == 1);
+    CHECK(log->closed.load() == 0);
 
     server.stop();
 }
 
-void testControlQueueIsBounded() {
+void testControlWithNoSessionIsRefused() {
+    // A server with no opener serves everything else and answers a control request 503, never a 202 for a request nobody holds.
     WebServer server;
+    server.setStatusProvider([]() { return sampleStatus(); });
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    auto r = cli.Post("/api/control", "{\"centerHz\":144800000}", "application/json");
+    CHECK(static_cast<bool>(r));
+    if (r) {
+        CHECK(r->status == 503);
+    }
+    auto st = cli.Get("/api/status");
+    CHECK(static_cast<bool>(st));
+    if (st) {
+        CHECK(st->status == 200);
+    }
+    server.stop();
+}
+
+void testEverySubmitIsOneBatchAndNothingIsDropped() {
+    // THE SERVER HOLDS NO QUEUE ANY MORE (it kept 64 and dropped the OLDEST past them; takePendingControls and kMaxQueuedControls are
+    // gone): every request is handed to the session, in order. The bound is the engine's - 256 outstanding, the NEWEST answered BUSY - and
+    // it is held at the table (tests/test_remote_control_pull.cpp C, test_internal_session_order.cpp C).
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    log->takes = 0;  // the session takes nothing at all (every command BUSY): the 202 is still the answer, a refusal is a result
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -803,25 +938,249 @@ void testControlQueueIsBounded() {
     httplib::Client cli("127.0.0.1", port);
     cli.set_connection_timeout(5, 0);
 
-    // An application that stopped draining must not let a client grow this
-    // without limit.
-    const std::size_t sent = WebServer::kMaxQueuedControls + 10;
-    for (std::size_t i = 0; i < sent; ++i) {
-        const std::string body =
-            "{\"centerHz\":" + std::to_string(100000000 + i) + "}";
+    constexpr std::size_t kSent = 200;
+    for (std::size_t i = 0; i < kSent; ++i) {
+        const std::string body = "{\"centerHz\":" + std::to_string(100000000 + i) + "}";
         auto r = cli.Post("/api/control", body, "application/json");
         CHECK(static_cast<bool>(r));
+        if (r) {
+            CHECK(r->status == 202);
+        }
     }
-    const std::vector<ControlRequest> drained = server.takePendingControls();
-    CHECK(drained.size() == WebServer::kMaxQueuedControls);
-    // The OLDEST were dropped: for a control surface the most recent
-    // instruction is the one that matters, so the newest must survive.
-    if (!drained.empty()) {
-        CHECK(drained.back().centerHz.value_or(0.0) ==
-              static_cast<double>(100000000 + sent - 1));
+    CHECK(log->batchCount() == kSent);
+    // In order, the first and the last both there (nothing was dropped to make room).
+    if (log->batchCount() == kSent) {
+        CHECK(log->batch(0)[0].c.num[0] == 100000000.0);
+        CHECK(log->batch(kSent - 1)[0].c.num[0] == static_cast<double>(100000000 + kSent - 1));
     }
 
     server.stop();
+}
+
+void testTheRowsAndTheRangeAreResolvedAtThePost() {
+    // THE CONTEXT IS TAKEN WHEN THE REQUEST IS POSTED (stage 5d): the ids behind the browser's bookmark rows come from the block the status
+    // is serving now, and a scan that is started carries the range the last publish stored - with the request's own range fields merged in.
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+
+    auto tune = cli.Post("/api/control", "{\"bookmarkTune\":1}", "application/json");
+    CHECK(static_cast<bool>(tune));
+    if (tune) {
+        CHECK(tune->status == 202);
+    }
+    auto remove = cli.Post("/api/control", "{\"bookmarkRemove\":2}", "application/json");
+    CHECK(static_cast<bool>(remove));
+    auto gone = cli.Post("/api/control", "{\"bookmarkTune\":9}", "application/json");  // a row that does not exist: id 0
+    CHECK(static_cast<bool>(gone));
+    CHECK(log->batchCount() == 3);
+    if (log->batchCount() == 3) {
+        CHECK(log->batch(0)[0].c.op == FOXAPI_OP_BOOKMARK_TUNE && log->batch(0)[0].c.ival[0] == 22);
+        CHECK(log->batch(1)[0].c.op == FOXAPI_OP_BOOKMARK_REMOVE && log->batch(1)[0].c.ival[0] == 33);
+        CHECK(log->batch(2)[0].c.op == FOXAPI_OP_BOOKMARK_TUNE && log->batch(2)[0].c.ival[0] == 0);
+    }
+
+    // A scan started with no range of its own carries the stored one; one that moves the start carries the new start and the stored rest.
+    auto scan = cli.Post("/api/control", "{\"scannerActive\":true}", "application/json");
+    CHECK(static_cast<bool>(scan));
+    auto scan2 = cli.Post("/api/control", "{\"scannerActive\":true,\"scanStartHz\":145000000}", "application/json");
+    CHECK(static_cast<bool>(scan2));
+    CHECK(log->batchCount() == 5);
+    if (log->batchCount() == 5) {
+        const auto b3 = log->batch(3);
+        CHECK(b3.size() == 1 && b3[0].c.op == FOXAPI_OP_SCANNER_RUN);
+        if (b3.size() == 1) {
+            CHECK(b3[0].c.num[0] == 144.0e6 && b3[0].c.num[1] == 146.0e6 && b3[0].c.num[2] == 12.5e3);
+        }
+        const auto b4 = log->batch(4);
+        CHECK(b4.size() == 2 && b4[0].c.op == FOXAPP_OP_SCANNER_RANGE && b4[1].c.op == FOXAPI_OP_SCANNER_RUN);
+        if (b4.size() == 2) {
+            CHECK(b4[1].c.num[0] == 145.0e6 && b4[1].c.num[1] == 146.0e6 && b4[1].c.num[2] == 12.5e3);
+        }
+    }
+
+    // A request that needs no context asks for none.
+    const int before = log->contexts.load();
+    auto vol = cli.Post("/api/control", "{\"volume\":0.5}", "application/json");
+    CHECK(static_cast<bool>(vol));
+    CHECK(log->contexts.load() == before);
+
+    // A context that cannot be read (the publish kept overlapping the read) is 503, and NOTHING is handed over: not a scan on a range of zeros.
+    log->contextWorks = false;
+    const std::size_t batches = log->batchCount();
+    auto scan3 = cli.Post("/api/control", "{\"scannerActive\":true}", "application/json");
+    CHECK(static_cast<bool>(scan3));
+    if (scan3) {
+        CHECK(scan3->status == 503);
+    }
+    CHECK(log->batchCount() == batches);
+
+    server.stop();
+}
+
+void testOnlyTheStatusPollIsTheHeartbeat() {
+    // THE PAGE'S KEEP-ALIVE is the web session's own heartbeat, called for every AUTHORISED GET /api/status and for NOTHING ELSE: a PTT
+    // re-assertion, a control request, a refused poll, any other route is not one (API 0.2: only the interface's own heartbeat counts -
+    // tests/test_transmit_dead_man.cpp 7e holds what the engine does with a page that presses without polling).
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+    WebServer server;
+    server.setStatusProvider([]() {
+        RadioStatus s = sampleStatus();
+        s.transmitAvailable = true;  // a transmitter is open and the desk allows a remote key: the 409 gate lets the press through
+        return s;
+    });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    cli.set_read_timeout(5, 0);
+
+    // Not signed in: refused, and not a beat.
+    auto no = cli.Get("/api/status");
+    CHECK(static_cast<bool>(no));
+    if (no) {
+        CHECK(no->status == 401);
+    }
+    CHECK(log->heartbeats.load() == 0);
+
+    auto login = cli.Post("/api/login", loginBody("admin", kPassword), "application/json");
+    CHECK(static_cast<bool>(login));
+    std::string token;
+    if (login) {
+        token = tokenFromSetCookie(login->get_header_value("Set-Cookie"));
+    }
+    const httplib::Headers authed = {{"Cookie", "foxsdr_session=" + token}};
+    CHECK(log->heartbeats.load() == 0);  // a login is not a beat
+
+    // The control requests - a PTT press and re-assertions among them - are not beats.
+    for (int i = 0; i < 5; ++i) {
+        auto r = cli.Post("/api/control", authed, "{\"transmitPtt\":true}", "application/json");
+        CHECK(static_cast<bool>(r));
+        if (r) {
+            CHECK(r->status == 202);
+        }
+    }
+    auto vol = cli.Post("/api/control", authed, "{\"volume\":0.4}", "application/json");
+    CHECK(static_cast<bool>(vol));
+    // ...nor are the other reads of the page.
+    auto sp = cli.Get("/api/spectrum?since=0", authed);
+    CHECK(static_cast<bool>(sp));
+    auto page = cli.Get("/", authed);
+    CHECK(static_cast<bool>(page));
+    CHECK(log->heartbeats.load() == 0);
+    CHECK(log->batchCount() == 6);
+
+    // An authorised status poll is one, each time.
+    for (int i = 1; i <= 3; ++i) {
+        auto st = cli.Get("/api/status", authed);
+        CHECK(static_cast<bool>(st));
+        if (st) {
+            CHECK(st->status == 200);
+        }
+        CHECK(log->heartbeats.load() == i);
+    }
+    // ...and the poll collects the session's results as well (the one request a page keeps making).
+    CHECK(log->polls.load() >= 3);
+
+    server.stop();
+}
+
+void testTheSessionLivesAndDiesWithTheServer() {
+    // ONE SESSION PER RUNNING SERVER, opened once the bind has succeeded and before a handler can run, closed when the server stops. A server
+    // that never ran holds none and closes none; a restart (start stops a running server first) closes the old and opens a new; a start the
+    // engine cannot give a session for is refused like a port that cannot be bound.
+    WebServer neverRan;
+    auto neverLog = std::make_shared<SessionLog>();
+    CHECK(neverRan.setSessionOpener(stubOpener(neverLog)));
+    neverRan.stop();  // (the stop() at the top of start() must not put a phantom close in front of a client's first request)
+    CHECK(neverLog->opened.load() == 0 && neverLog->closed.load() == 0);
+
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error);
+    CHECK(port > 0);
+    if (port <= 0) {
+        return;
+    }
+    CHECK(log->opened.load() == 1);
+    CHECK(log->closed.load() == 0);
+    {
+        std::lock_guard<std::mutex> lk(log->m);
+        CHECK(log->labels.size() == 1 && log->labels[0] == "web");
+    }
+    // A browser comes, presses, and goes: the session is the server's, not the browser's.
+    {
+        httplib::Client cli("127.0.0.1", port);
+        cli.set_connection_timeout(5, 0);
+        auto ok = cli.Post("/api/control", "{\"transmitPtt\":false}", "application/json");
+        CHECK(static_cast<bool>(ok));
+    }
+    CHECK(log->closed.load() == 0);
+
+    // THE IDLE TICK: with no browser asking for anything the session's results are still collected (every 200 ms while the server runs),
+    // so a session is never left holding results nobody reads; the tick ends with the server, before the session closes.
+    {
+        const int p0 = log->polls.load();
+        std::this_thread::sleep_for(std::chrono::milliseconds(750));
+        CHECK(log->polls.load() >= p0 + 2);
+    }
+
+    // THE SERVER STOPS: the session closes, and with it whatever key it held - the engine opens that key at its next pass.
+    server.stop();
+    CHECK(log->closed.load() == 1);
+    {
+        const int p1 = log->polls.load();
+        std::this_thread::sleep_for(std::chrono::milliseconds(450));
+        CHECK(log->polls.load() == p1);  // nothing polls a closed session
+    }
+    server.stop();  // (idempotent)
+    CHECK(log->closed.load() == 1);
+
+    // Started again: a new session. A restart in place (start while running) closes the old one first.
+    CHECK(server.start([&] {
+        WebServerConfig c = loopbackConfig();
+        c.port = port;
+        return c;
+    }(), error));
+    CHECK(log->opened.load() == 2);
+    CHECK(log->closed.load() == 1);
+    CHECK(server.start([&] {
+        WebServerConfig c = loopbackConfig();
+        c.port = port;
+        return c;
+    }(), error));
+    CHECK(log->opened.load() == 3);
+    CHECK(log->closed.load() == 2);
+    server.stop();
+    CHECK(log->closed.load() == 3);
+
+    // The engine has no session to give: the start is refused, with a sentence, and nothing listens.
+    WebServer refused;
+    auto refusing = std::make_shared<SessionLog>();
+    refusing->refuseOpen = true;
+    CHECK(refused.setSessionOpener(stubOpener(refusing)));
+    std::string why;
+    const int p2 = startOnFreePort(refused, loopbackConfig(), why);
+    CHECK(p2 < 0);
+    CHECK(!refused.running());
+    CHECK(why.find("session") != std::string::npos);
 }
 
 void testTileEndpoint() {
@@ -2012,6 +2371,8 @@ void testRemoteKeyRefusedWithNoTransmitter() {
     // The default: a receiver with no transmitter open, which is every
     // installation of this product that has never had a Pluto plugged in.
     server.setStatusProvider([]() { return sampleStatus(); });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -2027,7 +2388,8 @@ void testRemoteKeyRefusedWithNoTransmitter() {
     if (refused) {
         // 409, not 400: the request is well formed and would be honoured on a
         // receiver with a transmitter open. And a SENTENCE, not a bare status
-        // - the page shows this to a person.
+        // - the page shows this to a person. (The sentence is pinned BYTE FOR BYTE since 5d: the gate is the UX check, the engine's key rules
+        // the decision, and the words are what the page shows.)
         CHECK(refused->status == 409);
         const nlohmann::json j = nlohmann::json::parse(refused->body, nullptr, false);
         CHECK(!j.is_discarded());
@@ -2036,11 +2398,11 @@ void testRemoteKeyRefusedWithNoTransmitter() {
         std::printf("remote key with no transmitter: %d \"%s\"\n", refused->status,
                     msg.c_str());
         CHECK(msg.find("no transmitter") != std::string::npos);
+        CHECK(msg == "the key cannot be closed from here: there is no transmitter open, or remote transmit is not allowed at the desk");
     }
-    // AND NOTHING WAS QUEUED. A refusal that still left the request in the
-    // queue would be a key closed one frame later by the application, which is
+    // AND NOTHING WAS HANDED OVER. A refusal that still left the request with the engine would be a key closed one pass later, which is
     // the whole failure this endpoint exists to prevent.
-    CHECK(server.takePendingControls().empty());
+    CHECK(log->batchCount() == 0);
 
     // A RELEASE IS NEVER REFUSED, whatever the status says. The page sends
     // false on blur, on visibilitychange and on pointerup, and a release that
@@ -2051,19 +2413,21 @@ void testRemoteKeyRefusedWithNoTransmitter() {
     if (release) {
         CHECK(release->status == 202);
     }
-    const std::vector<ControlRequest> drained = server.takePendingControls();
-    CHECK(drained.size() == 1);
-    if (drained.size() == 1) {
-        CHECK(drained[0].transmitPtt.has_value());
-        CHECK(!drained[0].transmitPtt.value_or(true));
+    CHECK(log->batchCount() == 1);
+    if (log->batchCount() == 1) {
+        const std::vector<std::uint32_t> ops = log->opsOf(0);
+        CHECK(ops.size() == 1 && ops[0] == FOXAPI_OP_TX_PTT);
+        CHECK(log->batch(0)[0].c.ival[0] == 0);
     }
 
     server.stop();
 }
 
-void testRemoteKeyReachesTheQueueWhenATransmitterIsOpen() {
+void testRemoteKeyReachesTheSessionWhenATransmitterIsOpen() {
     WebServer server;
     server.setStatusProvider([]() { return statusWithTransmitter(); });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -2079,10 +2443,19 @@ void testRemoteKeyReachesTheQueueWhenATransmitterIsOpen() {
     if (ok) {
         CHECK(ok->status == 202);
     }
-    const std::vector<ControlRequest> drained = server.takePendingControls();
-    CHECK(drained.size() == 1);
-    if (drained.size() == 1) {
-        CHECK(drained[0].transmitPtt.value_or(false));
+    CHECK(log->batchCount() == 1);
+    if (log->batchCount() == 1) {
+        const std::vector<std::uint32_t> ops = log->opsOf(0);
+        CHECK(ops.size() == 1 && ops[0] == FOXAPI_OP_TX_PTT);
+        CHECK(log->batch(0)[0].c.ival[0] == 1);
+    }
+    // THE KEY IS THE LAST OF A REQUEST'S COMMANDS, however the fields were written.
+    auto both = cli.Post("/api/control", "{\"transmitPtt\":true,\"volume\":0.5,\"centerHz\":100000000}", "application/json");
+    CHECK(static_cast<bool>(both));
+    CHECK(log->batchCount() == 2);
+    if (log->batchCount() == 2) {
+        const std::vector<std::uint32_t> ops = log->opsOf(1);
+        CHECK(!ops.empty() && ops.back() == FOXAPI_OP_TX_PTT);
     }
 
     // The latch is refused at the parse, so it never reaches the gate above -
@@ -2097,14 +2470,19 @@ void testRemoteKeyReachesTheQueueWhenATransmitterIsOpen() {
         std::printf("remote latch: %d \"%s\"\n", latch->status, msg.c_str());
         CHECK(msg.find("latch") != std::string::npos);
     }
-    CHECK(server.takePendingControls().empty());
+    CHECK(log->batchCount() == 2);
 
     server.stop();
 }
 
-void testStoppingTheServerReleasesTheKey() {
+void testStoppingTheServerClosesTheSessionThatHoldsTheKey() {
+    // Was testStoppingTheServerReleasesTheKey: the stop QUEUED a transmitPtt=false for the application to find. It queues nothing now (there
+    // is no queue): the server's engine session closes when the server stops, and the engine's key rules open the key a closed session held
+    // at the start of the next pass (tests/test_remote_key_release.cpp B and E hold that against the real engine).
     WebServer server;
     server.setStatusProvider([]() { return statusWithTransmitter(); });
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
     std::string error;
     const int port = startOnFreePort(server, loopbackConfig(), error);
     CHECK(port > 0);
@@ -2118,34 +2496,17 @@ void testStoppingTheServerReleasesTheKey() {
         auto ok = cli.Post("/api/control", "{\"transmitPtt\":true}", "application/json");
         CHECK(static_cast<bool>(ok));
     }
-    // The application has taken the key request, so the queue is empty and the
-    // radio is (as far as this server knows) keyed.
-    const std::vector<ControlRequest> keyed = server.takePendingControls();
-    CHECK(keyed.size() == 1);
-    CHECK(!keyed.empty() && keyed.front().transmitPtt.value_or(false));
+    // The engine has the key request, and the browser is (as far as this server knows) holding the key.
+    CHECK(log->batchCount() == 1);
+    CHECK(log->closed.load() == 0);
 
-    // NOW THE SERVER STOPS - the settings panel turning it off, the password
-    // changing, the application shutting down. The browser is still holding
-    // the key and can no longer say so, so the server says it for them rather
-    // than leaving the hold to expire in its own time.
+    // NOW THE SERVER STOPS - the settings panel turning it off, the password changing, the application shutting down. The browser is
+    // still holding the key and can no longer say so, so the server lets the engine know the only way it can: its session closes. NOTHING
+    // is handed over by the stop itself - no synthetic release, no second batch - and the session is closed exactly once.
     server.stop();
-    const std::vector<ControlRequest> afterStop = server.takePendingControls();
-    CHECK(afterStop.size() == 1);
-    if (afterStop.size() == 1) {
-        CHECK(afterStop[0].transmitPtt.has_value());
-        CHECK(!afterStop[0].transmitPtt.value_or(true));
-    }
-    std::printf("web server stop queued %zu control(s), transmitPtt=%s\n", afterStop.size(),
-                (!afterStop.empty() && afterStop[0].transmitPtt.has_value())
-                    ? (afterStop[0].transmitPtt.value() ? "true" : "false")
-                    : "absent");
-
-    // And a server that was never running queues nothing: the stop() at the
-    // top of start() must not put a phantom release in front of a client's
-    // first request.
-    WebServer neverRan;
-    neverRan.stop();
-    CHECK(neverRan.takePendingControls().empty());
+    CHECK(log->closed.load() == 1);
+    CHECK(log->batchCount() == 1);
+    std::printf("web server stop closed %d session(s) and handed over %zu more batch(es)\n", log->closed.load(), log->batchCount() - 1);
 }
 
 void testTransmitStatusFieldsReachTheBrowser() {
@@ -2399,9 +2760,13 @@ int main() {
     testInvalidUtf8FromAPluginDoesNotKillTheApi();
     testStaleCursorFromAPreviousRunRecovers();
     testRestartRevokesSessions();
-    testControlQueue();
+    testControlGoesToTheSession();
     testControlRequiresAuth();
-    testControlQueueIsBounded();
+    testControlWithNoSessionIsRefused();
+    testEverySubmitIsOneBatchAndNothingIsDropped();
+    testTheRowsAndTheRangeAreResolvedAtThePost();
+    testOnlyTheStatusPollIsTheHeartbeat();
+    testTheSessionLivesAndDiesWithTheServer();
     testTileEndpoint();
     testTileRequiresAuth();
     testAudioStreamsRealSamples();
@@ -2416,8 +2781,8 @@ int main() {
     testServedWaterfallRampIsMonotone();
     testPluginAudioSourceReachesTheBrowser();
     testRemoteKeyRefusedWithNoTransmitter();
-    testRemoteKeyReachesTheQueueWhenATransmitterIsOpen();
-    testStoppingTheServerReleasesTheKey();
+    testRemoteKeyReachesTheSessionWhenATransmitterIsOpen();
+    testStoppingTheServerClosesTheSessionThatHoldsTheKey();
     testTransmitStatusFieldsReachTheBrowser();
     testThePageKeyIsHeldAndReleases();
     testLosingTheSessionMidHoldLetsGoOfTheKey();

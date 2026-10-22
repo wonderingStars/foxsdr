@@ -87,10 +87,10 @@ set(CASCADE_TSAN_TESTS
     test_apply_command
     # the transmit key across the front end, the control thread and the TX thread
     test_transmit_key_race test_transmit_liveness test_transmit_dead_man
-    # the pump move's step P1 (the review's F3): the engine PULLS the web remote's and CAT's requests in its own pass, and the key
-    # rules are touched by the control thread alone - producers, two local sessions and a flapping server flag against the threaded
+    # the pump move's step P1 (the review's F3), re-pointed in stage 5d from the engine's pull to the web server's engine session: the engine applies the web remote's and CAT's requests in its own pass, and the key
+    # rules are touched by the control thread alone - producers on the web session, two local sessions and a server whose session closes and opens again against the threaded
     # pass, the ordering, the 2 s hold, the latch's marking and the re-arm (test_transmit_key_race's case G is the same storm
-    # against the hammer); and the same standing conditions through the window's own source and a real web server
+    # against the hammer); and the same standing conditions through the window and a real web server with a real HTTP client (stage 5d: the PTT, the status poll, the stop)
     test_remote_control_pull test_remote_key_release
     # stage 5a: the same guarantee for the engine-internal sessions - the tier applied after the local and API queues whatever arrived
     # first, the same-pass release, the flood, the liveness and the storm with producers on the web and CAT sessions

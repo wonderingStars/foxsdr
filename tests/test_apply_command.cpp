@@ -66,6 +66,7 @@
 #include "source/device_source.hpp"
 #include "source/soundcard_source.hpp"
 #include "test_check.hpp"
+#include "web_request_seam.hpp"
 #include "tx_front_end.hpp"
 
 namespace {
@@ -551,7 +552,7 @@ struct AppWindowTestAccess {
     static bool mutePopupOpen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).mutePopup_.open; }); }
     static std::size_t mutePopupKeyCount(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).mutePopup_.keys.size(); }); }
     // The web remote's side: the snapshot a browser reads (and the row map it
-    // leaves), and a request applied as the engine's pumpRemoteControls applies it.
+    // leaves), and a request applied directly (web_request_seam.hpp: the product's translator, each command through applyCommand).
     static void publishWeb(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); }); }
     // The row a browser sees a bookmark on: read off the PUBLISHED snapshot
     // (what /api/status serves - the web provider's own call), never off the
@@ -564,7 +565,7 @@ struct AppWindowTestAccess {
         }
         return -1;
     }
-    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { wr(a, [&] { rawEngine(a.engine_).applyControlRequest(r); }); }
+    static void webRequest(AppWindow& a, const cascade::net::ControlRequest& r) { wr(a, [&] { web_test::applyRequestDirect(rawEngine(a.engine_), r); }); }
     static bool scanning(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanner_.active(); }); }
     static double scanStartMhz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStartMhz_; }); }
     static double scanStopMhz(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanStopMhz_; }); }
@@ -1801,8 +1802,8 @@ void bookmarkOps(AppWindow& a) {
 }
 
 // THE WEB REMOTE'S BOOKMARK ROWS, END TO END. A browser names a bookmark by
-// its ROW in the last snapshot; applyControlRequest turns the row into the id
-// that snapshot published. The case that matters: a desktop bookmark command
+// its ROW in the last snapshot; the translation (net::controlRequestToCommands, over the ids of the
+// Full block) turns the row into the id that snapshot published. The case that matters: a desktop bookmark command
 // drained at the top of the SAME frame as the web request (the drain runs
 // before applyWebControls) shifts every list index after it - the row must
 // still reach the bookmark the browser showed, never its new neighbour.
@@ -2528,35 +2529,31 @@ void transmitterOps(AppWindow& a) {
     CHECK(!A::txMonitor(a));
 
     covering(FOXAPI_OP_TX_PTT);
-    // The desk's consent to the web remote's key (API 0.2): a LOCAL session
-    // doing what the Transmit page's "Allow remote transmit" does.
+    // THE KEY IS A SESSION'S, NOT A COMMAND'S (stage 5d). applyCommand REFUSES a TX_PTT: the key rules judge a PTT for a SESSION - its
+    // consent, its hold, its place in the table's queues - and nothing that reaches applyCommand speaks for one. (The browser's PTT used to
+    // arrive here, for a fake session of the web remote's; it is the web server's engine session's now and keys through the table:
+    // tests/test_remote_control_pull.cpp, test_remote_key_release.cpp and test_transmit_dead_man.cpp hold every rule of that key.) The refusal
+    // does not depend on consent: with the desk's consent given - the state in which the browser's PTT IS granted through its session -
+    // and a transmitter open, the press and the release are both refused and nothing is keyed.
     tx_test::FrontEnd desk(A::engine(a), "the desk");
     auto consent = [&](int on) {
         desk.frame(true, false, false, true, on);
         A::pass(a);
     };
     {
-        // The REMOTE key: refused without the desk's consent - whether or
-        // not the page is open - a bounded hold with it, released by PTT 0.
         consent(0);
         A::setTransmitOpen(a, true);
         CHECK(refused(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1)), FOXAPI_DENIED));
         CHECK(A::remoteHoldMs(a) == 0);
         consent(1);
         A::setTransmitOpen(a, false);  // the page flag gates no key any more
-        // (One block: every pass releases a remote key while no web server runs - Engine::pumpRemoteControls' standing condition,
-        // test_remote_key_release's - so the hold the op gives, and the release PTT 0 gives, are read with no pass between.)
-        A::exclusive(a, [&] {
-            CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
-            CHECK(A::remoteHoldMs(a) > 0);
-            CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 0))));
-            CHECK(A::remoteHoldMs(a) == 0);
-        });
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1)), FOXAPI_DENIED));
+        CHECK(A::remoteHoldMs(a) == 0);
+        CHECK(A::txOwner(a) == 0u);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_TX_PTT, 0)), FOXAPI_DENIED));
+        CHECK(A::remoteHoldMs(a) == 0);
     }
 
-    // FOXAPP_OP_WEB_CONTROL_STOPPED (OPEN 7 (c)): no server, no remote key -
-    // a held key is released at once, and with none held it is a no-op, not
-    // a refusal (the window sends it once a frame while the server is off).
     // FOXAPP_OP_SOUND_CARDS_WANTED (OPEN 2): with the cards already listed it
     // takes no list (the listing itself, with a fake backend, is
     // test_soundcard_app_paths's testSoundCardsWantedIsACommand - this file
@@ -2567,18 +2564,6 @@ void transmitterOps(AppWindow& a) {
         CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_SOUND_CARDS_WANTED))));
         CHECK(!A::soundCardScanPending(a));
     });
-
-    covering(FOXAPP_OP_WEB_CONTROL_STOPPED);
-    {
-        A::exclusive(a, [&] {  // (the pass's standing condition does the same release: one block, as above)
-            CHECK(ok(A::apply(a, ints(FOXAPI_OP_TX_PTT, 1))));
-            CHECK(A::remoteHoldMs(a) > 0);
-            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
-            CHECK(A::remoteHoldMs(a) == 0);
-            CHECK(A::txOwner(a) == 0u);  // the rules let go, not only the radio
-            CHECK(ok(A::apply(a, cmd::make(FOXAPP_OP_WEB_CONTROL_STOPPED))));
-        });
-    }
 
     covering(FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN);
     {

@@ -49,6 +49,7 @@
 #include "net/web_control.hpp"
 #include "source/device_source.hpp"
 #include "test_check.hpp"
+#include "web_request_seam.hpp"
 #include "tx_front_end.hpp"
 
 namespace {
@@ -262,7 +263,7 @@ struct AppWindowTestAccess {
     }
     static int modeIndexHeld(AppWindow& a) { return rawEngine(a.engine_).modeIndex_; }
     static cascade::net::RadioStatus webStatus(AppWindow& a) { return rawEngine(a.engine_).webStatusNow(); }
-    static void webRequestHeld(AppWindow& a, const cascade::net::ControlRequest& r) { rawEngine(a.engine_).applyControlRequest(r); }
+    static void webRequestHeld(AppWindow& a, const cascade::net::ControlRequest& r) { web_test::applyRequestDirect(rawEngine(a.engine_), r); }
     static cascade::core::ReceiverSnapshot& snapshot(AppWindow& a) { return *rawEngine(a.engine_).receiverSnapshot_; }
     static void publish(AppWindow& a) { passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishReceiverState(); }); }
     static void publishHeld(AppWindow& a) { rawEngine(a.engine_).publishReceiverState(); }

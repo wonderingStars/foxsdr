@@ -730,23 +730,17 @@ void testKickGap() {
 }
 
 // K5: what a kick is not. Not a submit (no lag is stamped, so the submit-to-publish figure stays the submits'); a pass a kick starts is the
-// whole pass (the remote controls are drained in it); and an engine that is headless, stepped or without a thread is not touched.
-std::atomic<int> g_remotePulls{0};
+// whole pass (the remote controls' phase - the internal tier of the web and CAT sessions - runs in it); and an engine that is headless, stepped
+// or without a thread is not touched. (Until stage 5d the phase's mark was the remote-control SOURCE being pulled once a pass; the pull is
+// gone, and the phase's own count - ApiHost::tailPhasesForTest, once a pass whether or not the tier held anything - stands in for it.)
 void testKickIsOnlyAKick() {
-    std::printf("  K5: a kick is not a submit; a kicked pass drains the remote controls; headless, stepped and thread-less engines are untouched\n");
+    std::printf("  K5: a kick is not a submit; a kicked pass runs the remote controls' phase; headless, stepped and thread-less engines are untouched\n");
     {
         Engine e;
         e.initialise();
-        g_remotePulls = 0;
-        e.setRemoteControlSource([] {
-            g_remotePulls.fetch_add(1);
-            cascade::engine::RemoteControls r;
-            r.serverRunning = true;
-            return r;
-        });
         e.startControlThread(kickOpts(1500, 2, 24, 0));   // period 1500 ms: only a wake or a kick starts a pass
         CHECK(e.runPassNow());
-        const int pulls0 = g_remotePulls.load();
+        const std::uint64_t pulls0 = e.api().tailPhasesForTest();
         const Engine::PassStats before = e.passStats();
         std::size_t nKicks = 0;
         {
@@ -757,12 +751,12 @@ void testKickIsOnlyAKick() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(40));
         const Engine::PassStats d = statsDiff(e.passStats(), before);
-        const int pulls = g_remotePulls.load() - pulls0;
-        std::printf("      %zu kicks: %llu passes, the remote controls pulled %d times, submit-to-publish served %llu, passes started by a wake %llu\n", nKicks,
-                    static_cast<unsigned long long>(d.passes), pulls, static_cast<unsigned long long>(d.lagCount), static_cast<unsigned long long>(d.wakes));
+        const std::uint64_t pulls = e.api().tailPhasesForTest() - pulls0;
+        std::printf("      %zu kicks: %llu passes, the remote controls' phase run %llu times, submit-to-publish served %llu, passes started by a wake %llu\n", nKicks,
+                    static_cast<unsigned long long>(d.passes), static_cast<unsigned long long>(pulls), static_cast<unsigned long long>(d.lagCount), static_cast<unsigned long long>(d.wakes));
         CHECK(nKicks >= 20u);
-        CHECK(static_cast<std::size_t>(pulls) + 2u >= nKicks);   // the kicked pass is the whole pass: it pumps the remote controls (pumpRemoteControls)
-        CHECK(static_cast<std::uint64_t>(pulls) == d.passes);
+        CHECK(static_cast<std::size_t>(pulls) + 2u >= nKicks);   // the kicked pass is the whole pass: it runs the remote controls' phase (pumpRemoteControls)
+        CHECK(pulls == d.passes);
         CHECK(d.lagCount == 0u);                                  // a kick stamps no submit's wake: nothing is "served"
         CHECK(d.wakes == 0u);
         // ... and a real submit still is one.
@@ -770,7 +764,6 @@ void testKickIsOnlyAKick() {
         (void)spinFor([&] { return A::publishedVolume(e) == 0.31f; }, 3000);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         CHECK(e.passStats().lagCount - before.lagCount >= 1u);
-        e.setRemoteControlSource({});
         e.stopControlThread();
     }
     {

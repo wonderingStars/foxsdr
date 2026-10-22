@@ -4,7 +4,7 @@
 //
 // THE BUGS (0.99.35, found by review of app_window.cpp).
 //   * The desktop STOP dome and the Start/Stop key ended any IQ or audio take
-//     before stopping the pipeline, but applyControlRequest with
+//     before stopping the pipeline, but the old control-request path with
 //     running=false (the stop used by the WEB REMOTE and by PLUGINS through
 //     the host API; CAT has no command that sets the run state) and the radar
 //     scope's POWER button only called pipeline_.stop(). The take was left
@@ -707,7 +707,7 @@ void webStopEndsTakes() {
     nlohmann::json s;
     if (!ss.startTaping(s)) { return; }
 
-    // STOP, from the web remote: applyControlRequest with running=false.
+    // STOP, from the web remote: a control request with running=false, through the web server's session (RUN 0).
     CHECK(control(cli, R"({"running":false})"));
     CHECK(waitStatus(cli, s, 20000, [](const nlohmann::json& j) { return !jb(j, "running"); }));
     s = ss.settle();

@@ -22,8 +22,8 @@
 //   WEB / CAT  the browser's and the CAT client's servers are the ENGINE'S since stage 5b (engine/server_host.hpp); the window
 //              configures them (FOXAPI_OP_SERVER_CONFIG), reads them (the SERVERS list and the facts) and still FEEDS the web
 //              server the data only it produces - the audio tap, the receiver plugins' pictures, the basemap's tiles, the
-//              spectrum it drew. Their end: stages 5c-5e make the servers sessions of the table, which reads all of that
-//              itself, and this whole section is DELETED, not moved.
+//              spectrum it drew. Their end: the servers' CONTROL is sessions of the table since 5c and 5d; stage 5e serves the
+//              rest from the table too, and this whole section is DELETED (5f), not moved.
 //
 // THE SURFACE DOES NOT GROW SILENTLY. tests/test_engine_shell_guard.cpp counts the declarations of each section and holds the
 // budgets; a method added here takes a dated comment naming its class and its end, and the budget moves in the same change
@@ -55,7 +55,6 @@
 #include "core/receiver_snapshot.hpp"
 #include "engine/bias_tee.hpp"
 #include "engine/tune_control.hpp"
-#include "net/web_control.hpp"
 #include "net/web_server.hpp"
 #include "source/iq_source.hpp"
 
@@ -231,20 +230,9 @@ struct EngineStatusText {
     std::string deviceFault;
 };
 
-// THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md): what a source hands the engine's pass when it
-// asks (Engine::RemoteControls is this). The web remote hands the engine ControlRequests through a queue of its own
-// (WebServer::takePendingControls - mutex-protected, any thread, bounded, drop-oldest; CAT did too until stage 5c, and holds sessions
-// now); the ENGINE pulls them, in its own pass, after the local and API queues and the inputs, before the plugins' requests and the
-// scanner. Since stage 5b the servers and the source are the engine's (ServerHost::pull, armed by EngineShell::create); the vocabulary
-// stays here until 5d deletes the pull.
-struct RemoteControls {
-    std::vector<cascade::net::ControlRequest> requests;  // the browser's (CAT's commands are the internal tier's since 5c)
-    // Whether the server that carries the browser's key is running AT THE MOMENT OF THE PULL (the standing condition
-    // of the remote key, docs/engine-stage3.md OPEN 7 (c)): when it is not, a key the web remote holds ends in the same
-    // phase (FOXAPP_OP_WEB_CONTROL_STOPPED's rule), since no browser can ask again.
-    bool serverRunning = true;
-};
-using RemoteControlSource = std::function<RemoteControls()>;
+// (THE REMOTE CONTROLS' PULL - `RemoteControls` and `RemoteControlSource`, what a front-end-installed source handed the engine's pass - was
+// here until stage 5d: the web server and CAT hold sessions on the table now, and the pass drains what they submit in the internal tier.
+// docs/engine-stage4.md 6.12.)
 
 // ==================================================================================================================================
 // WHAT THE ENGINE ASKS OF ITS FRONT END (replaces the interface's use of EngineHost, which names the web server and the plugin UI)

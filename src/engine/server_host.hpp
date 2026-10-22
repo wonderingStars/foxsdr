@@ -9,7 +9,7 @@
 // setWeb()/setCat(). The window no longer owns either server; it configures them (SERVER_CONFIG), reads them (list 49, the facts) and feeds
 // them the data it still produces (audio, pictures, tiles, the spectrum - until 5e).
 //
-// THREADS. config()/listener()/version()/counters are any-thread; apply(), poll(), load(), pull() are the engine's pumping thread's. The
+// THREADS. config()/listener()/version()/counters are any-thread; apply(), poll(), load() are the engine's pumping thread's. The
 // password is hashed (PBKDF2-HMAC-SHA256, 600 000 iterations, net/web_auth.hpp) on a worker the pass polls, and the SERVERS are started
 // and stopped on a WORKER THREAD of their own - never in the pass: WebServer::stop() can block for as long as the read timeout (10 s), and
 // a pass stalled past a second unkeys the transmitter's thread. The pass only records a wish (one lock, one notify) and the worker makes it
@@ -19,6 +19,10 @@
 // TEARDOWN. shutdown() joins the worker, then stops both servers (each stop is a hard stop: no thread of the server runs after it
 // returns). Engine::shutdownQuiesce calls it FIRST, before the control thread stops; the destructor calls it again, and the host is the
 // last member the engine declares so it dies before the ApiHost the providers reach.
+//
+// STAGE 5d: BOTH SERVERS HOLD SESSIONS NOW. The pull this host used to carry (the browser's queued requests and whether its server runs) is
+// gone with the queue it drained: the web server holds one session while it runs (openWebSession) and every CAT connection holds one of its
+// own (openCatSession), and the engine's pass applies what they submit in the internal tier (ApiHost::applyTail).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_ENGINE_SERVER_HOST_HPP
@@ -48,6 +52,16 @@ struct AppConfig;
 namespace cascade::engine {
 
 class ApiHost;
+
+// THE WEB SERVER'S SESSION ON THE ENGINE (stage 5d): opens ApiHost::openInternalSession(InternalKind::Web, label) and wraps it in the
+// net::WebSession the web server speaks - heartbeat, context (the bookmark ids come from `bookmarkIds`, the scanner's range from the
+// session's own read_state), submit (one atomic batch; submit_text for a command whose text is longer than the slot), pollResults, and
+// close_session in the destructor - every call the C table's own, on the FoxSession* it returns. ONE per running server, shared by every
+// browser, so every call is any-thread and the wrapper keeps no state. Null when the engine will not give a session (FOXAPI_LIMIT). The
+// host must outlive the session (the engine's ServerHost is destroyed first, and stops the web server - which closes its session - before
+// that). `bookmarkIds` is called on the server's own threads: it must be safe from any thread (the engine hands the Full block's ids).
+std::unique_ptr<cascade::net::WebSession> openWebSession(ApiHost& api, std::function<std::vector<std::uint64_t>()> bookmarkIds,
+                                                         const std::string& label);
 
 // A CAT CONNECTION'S SESSION ON THE ENGINE (stage 5c): opens ApiHost::openInternalSession(InternalKind::Cat, label) and wraps it in the
 // net::CatSession the CAT server speaks - read_state for the six figures, submit for a request's commands, poll_results for their results,
@@ -137,26 +151,17 @@ public:
 
     // --- the providers (stage 5b) ------------------------------------------------------------------------------------------------
     // What the servers answer from, installed ONCE by the engine's constructor before any start (a server refuses to change them while it
-    // runs): the web page's status (the whole block of one publish), its keep-alive (any authorised GET /api/status - the browser's poll,
-    // never a PTT re-assertion) and the way a CAT connection gets its session (since 5c CAT answers from, and commands through, a session of
-    // its own per connection - see openCatSession). The spectrum the page long-polls is the host's own (publishSpectrum, below).
+    // runs): the web page's status (the whole block of one publish), the way the web server gets its session (since 5d the browser's control
+    // goes through ONE session of the web server's own, opened when the server has bound and closed when it stops - its heartbeat is the
+    // page's status poll, never a PTT re-assertion; see openWebSession) and the way a CAT connection gets its session (since 5c CAT
+    // answers from, and commands through, a session of its own per connection - see openCatSession). The spectrum the page long-polls is
+    // the host's own (publishSpectrum, below).
     struct Providers {
         cascade::net::WebServer::StatusProvider webStatus;
-        cascade::net::WebServer::PollHook webPoll;
+        cascade::net::WebSessionOpener webSession;
         cascade::net::CatSessionOpener catSession;
     };
     void attach(Providers p);
-
-    // --- the old private chain, owned here (stage 5b; 5c took CAT off it, 5d replaces the rest with a session) ---------------------
-    // What the engine's pass pulls (Engine::pumpRemoteControls): the browser's queued requests, and whether the web server is running AT
-    // THE MOMENT OF THE PULL, read after the queue - the standing condition on the remote key (docs/engine-stage3.md OPEN 7 (c)). CAT is
-    // not here any more: its connections hold sessions, whose commands the pass applies in the internal tier right after this pull's
-    // (ApiHost::applyTail), so the order the pull always gave - the web's requests, then CAT's - is the order of the phase itself.
-    struct Pulled {
-        std::vector<cascade::net::ControlRequest> requests;
-        bool serverRunning = false;
-    };
-    Pulled pull();
 
     // --- the data the window still feeds the web page (stage 5b; END: 5e, which reads them from the table) -----------------------------
     // The spectrum frame the browser long-polls, labelled with the centre and the span the look carries; copied only when the sequence

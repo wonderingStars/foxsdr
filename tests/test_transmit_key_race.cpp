@@ -57,6 +57,7 @@
 #include "net/web_control.hpp"
 #include "test_check.hpp"
 #include "tx_front_end.hpp"
+#include "web_seat.hpp"
 
 using cascade::core::Transmitter;
 using cascade::core::TxInput;
@@ -368,31 +369,19 @@ int main() {
         CHECK(waitQuiet(raw, 150));
     }
 
-    // G: THE HAMMER (C's), with the browser's and CAT's queues in the path - the pump move's step P1 (F3). The engine pulls
-    // the two servers' requests in its own pass, so the key rules are reached by the control thread alone; two producer
-    // threads flood the queue (PTT true and false, RUN 0, volume) and the server flag toggles, all the while the front end
-    // presses and lets go as in C. No local session has consented to a remote key, so every browser PTT is refused and the
-    // front end's key-up stays up - C's invariant, unchanged by the noise - and the rules were entered by no other thread
-    // (ApiHost::offPassKeyTouches). tests/test_remote_control_pull.cpp holds the cases where the browser DOES key.
+    // G: THE HAMMER (C's), with the browser's session in the path - the pump move's step P1 (F3), re-pointed in stage 5d from the engine's
+    // pull of the servers' queues to the web server's engine session. The engine applies the session's commands in its own pass, so the key
+    // rules are reached by the control thread alone; two producer threads flood the session (PTT true and false, RUN 0, volume) and the
+    // server's session closes and opens again (the server stopping and starting), all the while the front end presses and lets go as in C.
+    // No local session has consented to a remote key, so every browser PTT is refused and the front end's key-up stays up - C's invariant,
+    // unchanged by the noise - and the rules were entered by no other thread (ApiHost::offPassKeyTouches).
+    // tests/test_remote_control_pull.cpp holds the cases where the browser DOES key.
     {
         Engine e;
         e.initialise();
         RecordingSink* raw = Access::installSink(e);
-        std::mutex qm;
-        std::deque<cascade::net::ControlRequest> queue;
-        std::atomic<bool> serverUp{true};
-        std::atomic<std::uint64_t> pulls{0};
-        e.setRemoteControlSource([&] {
-            Engine::RemoteControls rc;
-            {
-                std::lock_guard<std::mutex> lk(qm);
-                rc.requests.assign(queue.begin(), queue.end());
-                queue.clear();
-            }
-            rc.serverRunning = serverUp.load();
-            pulls.fetch_add(1);
-            return rc;
-        });
+        web_test::WebSeat seat(e);
+        std::atomic<std::uint64_t> handed{0};
         cascade::engine::ControlThreadOptions opts;
         opts.period = std::chrono::milliseconds(1);
         opts.watchdogThresholdMs = 5000;
@@ -411,18 +400,19 @@ int main() {
                         case 2: r.running = false; break;
                         default: r.volume = static_cast<double>(rng() % 100) / 100.0; break;
                     }
-                    {
-                        std::lock_guard<std::mutex> lk(qm);
-                        if (queue.size() >= 64) { queue.pop_front(); }
-                        queue.push_back(std::move(r));
-                    }
+                    seat.beat();
+                    if (seat.push(r)) { handed.fetch_add(1); }
                     std::this_thread::sleep_for(std::chrono::microseconds(100 + rng() % 400));
                 }
             });
         }
         std::thread flip([&] {
             while (noise.load()) {
-                serverUp.store(!serverUp.load());
+                if (seat.isOpen()) {
+                    seat.close();
+                } else {
+                    (void)seat.open(e);
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(11));
             }
         });
@@ -442,13 +432,13 @@ int main() {
         flip.join();
         const std::uint64_t touches = e.api().offPassKeyTouches();
         e.stopControlThread();
-        std::printf("G: %d key-down/key-up cycles with %llu pulls of a flooded remote queue: still keyed two passes after "
+        std::printf("G: %d key-down/key-up cycles with %llu requests handed to a flooded web session: still keyed two passes after "
                     "the key-up %d times; key-rule entries from other threads: %llu\n",
-                    kHammerG, static_cast<unsigned long long>(pulls.load()), undone,
+                    kHammerG, static_cast<unsigned long long>(handed.load()), undone,
                     static_cast<unsigned long long>(touches));
         CHECK(undone == 0);
         CHECK(touches == 0u);
-        CHECK(pulls.load() > 50u);
+        CHECK(handed.load() > 50u);
         CHECK(waitQuiet(raw, 150));
     }
 

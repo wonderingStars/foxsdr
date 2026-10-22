@@ -32,6 +32,7 @@
 #include "net/web_control.hpp"
 #include "source/airspy_source.hpp"
 #include "test_check.hpp"
+#include "web_request_seam.hpp"
 
 namespace {
 
@@ -208,7 +209,7 @@ struct AppWindowTestAccess {
     }
     static bool agcMirror(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).deviceAgc_; }); }
     static void control(AppWindow& a, const cascade::net::ControlRequest& r) {
-        passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).applyControlRequest(r); });
+        passseam::on(rawEngine(a.engine_), [&] { web_test::applyRequestDirect(rawEngine(a.engine_), r); });
     }
     static cascade::core::AppConfig config(AppWindow& a) {
         passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).publishConfig(); });   // the engine's frame hands its half over (OPEN 2)

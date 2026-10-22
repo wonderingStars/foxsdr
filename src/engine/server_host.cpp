@@ -199,23 +199,8 @@ ServerHost::~ServerHost() {
 
 void ServerHost::attach(Providers p) {
     if (p.webStatus) { (void)webServer_.setStatusProvider(std::move(p.webStatus)); }
-    if (p.webPoll) { (void)webServer_.setStatusPollHook(std::move(p.webPoll)); }
+    if (p.webSession) { (void)webServer_.setSessionOpener(std::move(p.webSession)); }
     if (p.catSession) { catServer_.setSessionOpener(std::move(p.catSession)); }
-}
-
-// THE PULL IS THE BROWSER'S ALONE (stage 5c). CAT's requests used to be appended here and applied by the same code as the browser's - so
-// that a frequency set over CAT and one set from the browser did exactly the same thing, the RDS decoder told to drop the old station,
-// the offset clamped against the live rate, the bandwidth moved to the new mode's default. They still do the same thing: a CAT session's
-// commands are applied by Engine::applyCommand, the one function every command reaches; they just arrive through the session's tier
-// (ApiHost::applyTail) instead of through this pull, right after it in the same phase.
-ServerHost::Pulled ServerHost::pull() {
-    Pulled pulled;
-    pulled.requests = webServer_.takePendingControls();
-    // READ AFTER THE QUEUE (the order the frame's drain had): the engine ends a key the web remote holds, in the phase that applies these
-    // requests, when the server is not running - one that never started, or was disabled in the settings panel. WebServer::stop() also
-    // queues a release among the requests above; releasing twice costs nothing.
-    pulled.serverRunning = webServer_.running();
-    return pulled;
 }
 
 void ServerHost::publishSpectrum(std::uint64_t seq, const std::vector<float>& bins, double centreHz, double spanHz) {
@@ -541,6 +526,103 @@ void ServerHost::setCat(Listener l) {
         cat_ = std::move(l);
     }
     bump();
+}
+
+// ---- the web server's session (stage 5d) ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// net::WebSession over the C table: every call is the table's own, on the session openInternalSession returned. Shared by the web server's
+// worker threads (one session for every browser), which is what the table's any-thread calls are for; the wrapper keeps no state and takes
+// no lock.
+class TableWebSession final : public cascade::net::WebSession {
+public:
+    TableWebSession(const FoxEngineApi* table, FoxSession* session, std::function<std::vector<std::uint64_t>()> bookmarkIds)
+        : t_(table), s_(session), bookmarkIds_(std::move(bookmarkIds)) {}
+    ~TableWebSession() override { t_->close_session(s_); }
+
+    void heartbeat() override { (void)t_->heartbeat(s_); }
+
+    bool context(bool bookmarkIds, bool scanRange, cascade::net::WebControlContext& out) override {
+        if (bookmarkIds && bookmarkIds_) { out.bookmarkIdByRow = bookmarkIds_(); }
+        if (scanRange) {
+            // The stored range of the newest publish. BUSY is the table saying the seqlock read kept overlapping a publish: asked again, a
+            // few times, and then the request is not handed over (a 503 the page retries) rather than started on a range of zeros.
+            FoxReceiverState st{};
+            st.structSize = sizeof(st);
+            bool have = false;
+            for (int attempt = 0; attempt < 4 && !have; ++attempt) { have = t_->read_state(s_, &st) == FOXAPI_OK; }
+            if (!have) { return false; }
+            out.scanStartHz = st.scanStartHz;
+            out.scanStopHz = st.scanStopHz;
+            out.scanStepHz = st.scanStepHz;
+        }
+        return true;
+    }
+
+    int submit(const std::vector<cascade::core::cmd::QueuedCommand>& commands) override {
+        if (commands.empty()) { return 0; }
+        bool anyLong = false;
+        for (const cascade::core::cmd::QueuedCommand& q : commands) { anyLong = anyLong || !q.longText.empty(); }
+        std::int32_t taken = 0;
+        if (!anyLong) {
+            // ONE table submit: atomic, so another browser's batch can never come between this request's commands.
+            std::vector<FoxCommand> batch;
+            batch.reserve(commands.size());
+            for (const cascade::core::cmd::QueuedCommand& q : commands) {
+                batch.push_back(q.c);
+                batch.back().structSize = sizeof(FoxCommand);
+            }
+            std::vector<FoxSubmitResult> answers(batch.size());
+            for (FoxSubmitResult& a : answers) { a.structSize = sizeof(FoxSubmitResult); }
+            taken = t_->submit(s_, batch.data(), static_cast<std::uint32_t>(batch.size()), answers.data());
+        } else {
+            // A command whose text is longer than the slot (a 256-character name) goes by submit_text, one command a call, in order. The
+            // batch loses its atomicity against another thread's - which only matters for a request that is not meant to be split, and a
+            // 256-character field is not that.
+            for (const cascade::core::cmd::QueuedCommand& q : commands) {
+                FoxCommand c = q.c;
+                c.structSize = sizeof(FoxCommand);
+                FoxSubmitResult a{};
+                a.structSize = sizeof(FoxSubmitResult);
+                const std::int32_t n = q.longText.empty() ? t_->submit(s_, &c, 1, &a)
+                                                          : t_->submit_text(s_, &c, q.longText.data(), static_cast<std::uint32_t>(q.longText.size()), &a);
+                if (n > 0) { taken += n; }
+            }
+        }
+        return taken > 0 ? static_cast<int>(taken) : 0;  // (negative: the whole call was refused; no ticket was given)
+    }
+
+    int pollResults(std::vector<FoxCommandResult>* into) override {
+        int total = 0;
+        for (;;) {
+            FoxCommandResult r[16];
+            for (FoxCommandResult& x : r) { x.structSize = sizeof(x); }
+            const std::int32_t n = t_->poll_results(s_, r, 16);
+            if (n <= 0) { break; }
+            total += static_cast<int>(n);
+            if (into != nullptr) { into->insert(into->end(), r, r + n); }
+            if (n < 16) { break; }
+        }
+        return total;
+    }
+
+private:
+    const FoxEngineApi* t_;
+    FoxSession* s_;
+    std::function<std::vector<std::uint64_t>()> bookmarkIds_;
+};
+
+}  // namespace
+
+std::unique_ptr<cascade::net::WebSession> openWebSession(ApiHost& api, std::function<std::vector<std::uint64_t>()> bookmarkIds,
+                                                         const std::string& label) {
+    const FoxEngineApi* table = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    if (table == nullptr) { return nullptr; }
+    std::int32_t status = FOXAPI_OK;
+    FoxSession* s = api.openInternalSession(InternalKind::Web, label, &status);
+    if (s == nullptr) { return nullptr; }
+    return std::make_unique<TableWebSession>(table, s, std::move(bookmarkIds));
 }
 
 // ---- a CAT connection's session (stage 5c) --------------------------------------------------------------------------------------------

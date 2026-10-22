@@ -98,6 +98,9 @@ public:
     // that queue is in ARRIVAL order, and a browser that arrived first in wall time would then win the key against a local press that
     // landed in the same pass (rule 6, the operator at the machine comes first). Nothing is applied here by any other thread.
     void applyTail();
+    // TESTS ONLY - nothing in the product calls it: how many times the pass has run the tier's phase (applyTail), once a pass whether or
+    // not the tier held anything. What proves a kicked pass is the whole pass (tests/test_pass_control.cpp K5). Any thread.
+    std::uint64_t tailPhasesForTest() const;
     // Whether the engine this host serves runs the web server and the CAT listener it is configured for (stage 5b): yes, unless it was
     // created with testHooks=1 and without servers=1 (a hermetic engine of the tests binds no socket).
     bool hostsServers() const;
@@ -147,19 +150,12 @@ public:
     // An end the ENGINE makes, whoever asked for it (Engine::applyCommand's
     // RUN 0, TX_OPEN and TX_CLOSE): opens the key and marks a latch.
     void endKeyFromEngine(const char* why);
-    // The web remote's PTT (Engine::applyCommand's TX_PTT): a REMOTE key the
-    // engine holds for the browser page, under the same rules as any remote
-    // session - a 2 s hold, and only with a local session's consent.
-    FoxCommandResult webRemotePtt(bool on);
-    // ANY THREAD: the browser page polled its status - the web remote's
-    // keep-alive (its PTT re-assertions are not one).
-    void webRemoteBeat();
+    // (The web remote's PTT, keep-alive and "the server stopped" - webRemotePtt, webRemoteBeat, webRemoteStopped - were here until stage 5d:
+    // the web server's engine session keys through the table like any client's, its heartbeat is the page's status poll, and its close is
+    // the server stopping. docs/engine-stage4.md 6.12.)
     // The pumping thread hands over the decoder-output backlog (API 0.3's
     // FOXAPI_LIST_DECODER_LINES): the lines since the last pass.
     void takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log, std::uint64_t total);
-    // The web server is not running (FOXAPP_OP_WEB_CONTROL_STOPPED): a key the
-    // web remote holds ends in the same step.
-    void webRemoteStopped(const char* why);
     // The control loop's last act, before it stops the Transmitter.
     void engineStopping();
     // How many times a thread other than the control thread entered the key rules (every entry above, and the pass itself)

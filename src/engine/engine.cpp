@@ -100,23 +100,26 @@ Engine::Engine(EngineHost& host)
         passDoneCv_.notify_all();
     });
     // THE ENGINE OWNS THE WEB SERVER AND THE CAT LISTENER (stage 5b), and they answer from the engine's own publish. Installed once, before
-    // any start (a server refuses to change a provider while it runs): the browser's status is the whole block of one publish, the browser's
-    // own poll of its status is the web remote's keep-alive (API 0.2: only an interface's heartbeat counts) - never its PTT re-assertions -
-    // and (stage 5c) every CAT connection gets a SESSION of its own on the table: its figures are that session's read_state and its sets
-    // are that session's submits. They run on the servers' threads and read nothing but the snapshot and the API host, which outlive them
-    // (servers_ is the last member: ~Engine, and shutdownQuiesce before it, stop them first - which closes every CAT session). The host is
-    // reached through api_ at the call: configureApi replaces it, before any server starts.
+    // any start (a server refuses to change a provider while it runs): the browser's status is the whole block of one publish; (stage 5d) the
+    // web server holds ONE SESSION on the table while it runs - the browser's control is that session's submits, and the browser's own poll of
+    // its status is that session's heartbeat (API 0.2: only an interface's heartbeat counts), never its PTT re-assertions - and (stage 5c)
+    // every CAT connection gets a SESSION of its own: its figures are that session's read_state and its sets are that session's submits. They
+    // run on the servers' threads and read nothing but the snapshot and the API host, which outlive them (servers_ is the last member:
+    // ~Engine, and shutdownQuiesce before it, stop them first - which closes every session). The host is reached through api_ at the call:
+    // configureApi replaces it, before any server starts. The bookmark rows of a browser's request name the ids of the Full block its status
+    // is served from, read here at the post.
     ServerHost::Providers providers;
     providers.webStatus = [this] { return webStatusNow(); };
-    providers.webPoll = [this] { api_->webRemoteBeat(); };
+    providers.webSession = [this](const std::string& label) {
+        return openWebSession(*api_, [this] { return receiverSnapshot_->readFull()->bookmarkIds; }, label);
+    };
     providers.catSession = [this](const std::string& label) { return openCatSession(*api_, label); };
     servers_.attach(std::move(providers));
 }
 
 // What the web page's status reads: the whole block of one publish - figures and lists together - so a browser can never be shown two fields
 // from different publishes. The lock inside readFull() is held for a reference count (or the install of a handed-over block); the publish
-// only ever try-locks it - the one place the publishing thread takes it BLOCKING is applyControlRequest's own readFull()
-// (core/receiver_snapshot.hpp). (AppWindow::webStatusNow, moved here with the server.)
+// only ever try-locks it (core/receiver_snapshot.hpp). (AppWindow::webStatusNow, moved here with the server.)
 cascade::net::RadioStatus Engine::webStatusNow() const {
     const std::shared_ptr<const cascade::core::ReceiverSnapshot::Full> full = receiverSnapshot_->readFull();
     return cascade::net::composeRadioStatus(full->state, full->lists.get());
@@ -125,16 +128,6 @@ cascade::net::RadioStatus Engine::webStatusNow() const {
 // (CAT's figures - frequency, offset, rate, mode, bandwidth, run state - are not read here any more: each connection reads them through
 // the session it holds, the table's read_state; stage 5c deleted Engine::catStatusNow, and with it the Full-block fallback - the
 // connection retries a read that overlapped a publish once and keeps its last good figures.)
-
-void Engine::installServerPull() {
-    setRemoteControlSource([this] {
-        ServerHost::Pulled pulled = servers_.pull();
-        RemoteControls rc;
-        rc.requests = std::move(pulled.requests);
-        rc.serverRunning = pulled.serverRunning;
-        return rc;
-    });
-}
 
 void Engine::configureApi(const std::string& options) {
     api_ = std::make_unique<ApiHost>(*this, options);
@@ -5636,7 +5629,7 @@ void Engine::stopReceiver(const char* who) {
                             : audio         ? "ending the audio recording"
                                             : "no recording to end",
                             recordersMs);
-    // Unconditional, as applyControlRequest's own stop always was (the dome,
+    // Unconditional, as the stop of a control request always was (the dome,
     // the key and POWER only ever call this on a running receiver): on a
     // faulted pipeline, run flag already down, it still joins the threads
     // the fault left behind. Joins within ~10 ms, an acceptable one-off hitch
@@ -6469,9 +6462,10 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
     // indices, because a desktop add, remove or star applied before the next
     // web request (the command drain runs first in a frame) shifts every index
     // after it, and a stale index names a different bookmark. The ids travel
-    // IN THE PUBLISHED BLOCK with these rows (applyControlRequest reads them
-    // from readFull()), so the map and the rows /api/status serves are always
-    // from the same publish.
+    // IN THE PUBLISHED BLOCK with these rows (the web server's session reads
+    // them from readFull() when a request is POSTED, stage 5d - it was the
+    // pass at apply time before), so the map and the rows /api/status serves
+    // are always from the same publish.
     {
         const std::vector<cascade::core::Bookmark>& all = freqMgr_.list();
         bookmarkIds.clear();
@@ -7061,12 +7055,6 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // card is opening, and not at all once they are listed.
             if (!soundCardListed_ && !soundCardScanPending_ && !soundCardOpenPending_) { scanSoundCards(); }
             return res;
-        case FOXAPP_OP_WEB_CONTROL_STOPPED:
-            // No server, no browser, no remote key (OPEN 7 (c)): released
-            // here, in the same step the window stops the server, rather than
-            // by the window reaching into transmitter_ on its next frame.
-            api_->webRemoteStopped("the web server is not running");
-            return res;
         case FOXAPP_OP_PATCH_LOOK_FOR_RADIOS:
             // "Look for radios" pressed (0.99.40, engine/stage3b-pre
             // fields-to-commands round 2): unconditional, unlike the combo-open
@@ -7654,18 +7642,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 transmitArgs_ = transmitArgsSeed();
             }
             return res;
-        case FOXAPI_OP_TX_PTT: {
-            // THE WEB REMOTE'S KEY (0.95.1; the browser's transmitPtt reaches
-            // here through applyControlRequest): since stage 4 an
-            // engine-internal REMOTE session under API 0.2's rules - a 2 s
-            // hold the page re-asserts, and only while a LOCAL session has
-            // consented (TX_REMOTE_ARM). An interface with a session of its
-            // own keys through the table, never through here.
-            const FoxCommandResult r = api_->webRemotePtt(on);
-            if (r.status != FOXAPI_OK) { return refuse(r.status, r.message); }
-            res.applied[0] = r.applied[0];
-            return res;
-        }
+        case FOXAPI_OP_TX_PTT:
+            // REFUSED, NOT HANDLED (stage 5d). The key is decided by the key rules for a SESSION (core/tx_key_rules.hpp), in that session's
+            // place in the table's queues - ApiHostImpl::apply, which never calls this function for it. The browser's PTT used to arrive
+            // here (the web remote's private fake session, ApiHost::webRemotePtt); it is the web server's engine session's now, like any
+            // other client's, and nothing that reaches applyCommand can speak for a session: a TX_PTT here has no sender to judge, no
+            // consent to check and no hold to buy, so it is refused rather than guessed at. (Kept as a refusal and not deleted so that a
+            // caller that has not heard is told, not left to the "no such operation" of the default arm.)
+            return refuse(FOXAPI_DENIED, "the transmit key is pressed through a session, not applied directly");
         case FOXAPI_OP_TX_SET_MODE:
             if (c.ival[0] < 0 || c.ival[0] >= cascade::dsp::kTxModeCount) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "no such transmit mode");
@@ -7949,32 +7933,6 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             break;
     }
     return refuse(FOXAPI_UNSUPPORTED, "this build has no such operation");
-}
-
-// ONE REQUEST, TRANSLATED. The web remote, CAT and a plugin's queued controls
-// used to run a private copy of what each field does; they now turn into the
-// same commands a desktop widget sends, applied in the order the fields always
-// were (net/control_ops.cpp), by applyCommand. GUI thread only.
-void Engine::applyControlRequest(const cascade::net::ControlRequest& r) {
-    cascade::net::ControlOpsContext ctx;
-    // The browser's row numbers name the ids of the block /api/status is
-    // serving NOW - taken from that block itself, the block current when this
-    // request is APPLIED, so a row never lands on a bookmark /api/status is
-    // not showing there. An entry removed since answers NOT_FOUND, and one
-    // inserted since moves no other row. THIS READFULL() IS A SHORT BLOCKING
-    // LOCK taken by the publishing thread itself (the GUI thread in stage 3a;
-    // the engine's control thread from 3b), once per web bookmark request: a
-    // reader holds that lock only for a refcount copy or a slot install, so
-    // the wait is that long - but it is a wait, unlike publish().
-    if (r.bookmarkTune.has_value() || r.bookmarkRemove.has_value()) {
-        ctx.bookmarkIdByRow = receiverSnapshot_->readFull()->bookmarkIds;
-    }
-    ctx.scanStartHz = scanStartMhz_ * 1.0e6;
-    ctx.scanStopHz = scanStopMhz_ * 1.0e6;
-    ctx.scanStepHz = scanStepKhz_ * 1.0e3;
-    for (const cascade::core::cmd::QueuedCommand& q : cascade::net::controlRequestToCommands(r, ctx)) {
-        (void)applyCommand(q.c, q.longText);
-    }
 }
 
 void Engine::telemetryAccrueMode() {
@@ -9122,45 +9080,21 @@ void Engine::pumpInputs() {
     pumpDecoderOutput();
 }
 
-// THE REMOTE CONTROLS, in the place applyWebControls had in the frame (pump move step P1, F3): after the local queue and the
-// API's (pumpFrameBegin) and the inputs (pumpInputs), before the plugins' requests and the scanner (pumpPlugins), so the order
-// the operator could observe is the one the window's frame had - a local press landed in the same pass is applied first and a
-// remote one meets its key (rule 6). Every request is a TRANSLATION into commands (applyControlRequest) and applyCommand
-// reaches the key rules from RUN 0, TX_OPEN, TX_CLOSE and the web's TX_PTT, so this phase and no other thread is what keeps
-// ApiHostImpl::rules_ single-threaded. A source that is not installed makes the pull a no-op - the table's headless engine
-// pulls nothing and judges nothing (it has no server, so no standing condition either).
+// THE REMOTE CONTROLS' PHASE, in the place applyWebControls had in the frame (pump move step P1, F3): after the local queue and the
+// API's (pumpFrameBegin) and the inputs (pumpInputs), before the plugins' requests and the scanner (pumpPlugins), so the order the
+// operator could observe is the one the window's frame had - a local press landed in the same pass is applied first and a remote one
+// meets its key (rule 6).
 //
-// STAGE 5a: THE SAME PLACE IS THE INTERNAL TIER'S. The engine-internal sessions (ApiHost::openInternalSession - what the web server and
-// the CAT listener will hold in place of the pull) submit to a queue of their own, drained here, after the pull's requests (which only
-// the old path uses, and which shrinks as the servers move): the order the operator could observe is the same one, by construction
-// now - a session's command can never be applied before the local and API queues of the pass it lands in, whenever it arrived.
-// STAGE 5c: CAT IS ON THE TIER. Every CAT connection holds such a session (net/cat_server.hpp), so the pull carries the browser's requests
-// alone, and the phase's order - the browser's pulled requests, the web session's commands, then CAT's - is the one the pull gave (web
-// first, then CAT) with nothing left to keep it but the phase itself.
-void Engine::pumpRemoteControls() {
-    std::shared_ptr<const RemoteControlSource> source;
-    {
-        std::lock_guard<std::mutex> lk(remoteSourceMutex_);
-        source = remoteSource_;
-    }
-    if (source != nullptr) {
-        const RemoteControls pulled = (*source)();
-        for (const cascade::net::ControlRequest& r : pulled.requests) { applyControlRequest(r); }
-        // THE STANDING CONDITION ON THE REMOTE KEY, once a pass: the server that carries the browser's PTT is not running (never
-        // started, disabled in the settings panel). The consent half is the local operator's TX_REMOTE_ARM, which the key rules
-        // themselves withdraw with its session. WebServer::stop() also queues a release for the requests above; releasing twice
-        // costs nothing (a no-op with no remote key held).
-        if (!pulled.serverRunning) { api_->webRemoteStopped("the web server is not running"); }
-    }
-    api_->applyTail();
-}
-
-void Engine::setRemoteControlSource(RemoteControlSource source) {
-    std::shared_ptr<const RemoteControlSource> next =
-        source ? std::make_shared<const RemoteControlSource>(std::move(source)) : nullptr;
-    std::lock_guard<std::mutex> lk(remoteSourceMutex_);
-    remoteSource_ = std::move(next);
-}
+// STAGE 5d: THE PULL IS GONE, THE PHASE IS NOT. The web server and every CAT connection hold sessions on the table (net/web_session.hpp,
+// net/cat_server.hpp), and what they submit goes to the INTERNAL TIER, drained here by ApiHost::applyTail - the web session's commands
+// first, then CAT's, each session's in the order it submitted them - through the table's one `apply`, so the key rules (ApiHostImpl::rules_,
+// single-threaded by contract) and the whole of applyCommand are still touched by the pumping thread alone. Why a tier of its own and not
+// the queue beginPass drains: that queue is in ARRIVAL order, and a browser that arrived first in wall time would then win the key against
+// a local press that landed in the same pass; the tier is drained here, so "after the operator at the machine, whenever it arrived" is
+// structural (tests/test_remote_control_pull.cpp A4 holds it: the browser FIRST in wall time, the local press still wins). The server that
+// stops, the page that is closed, the consent withdrawn - each is a session closed or a heartbeat that stopped, judged by the key rules
+// (docs/engine-stage4.md 6.12), so there is no "is the server running" question left for this phase to ask.
+void Engine::pumpRemoteControls() { api_->applyTail(); }
 
 void Engine::pumpPlugins() {
     // An unload the interface could not take (it was not framing) is retried once it has framed (pump move step P3).

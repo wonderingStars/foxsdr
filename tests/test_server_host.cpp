@@ -1,7 +1,7 @@
 // test_server_host.cpp - THE ENGINE OWNS THE WEB AND CAT SERVERS (engine extraction stage 5b; docs/engine-stage4.md 6.10,
 // docs/api-0.3-additions.md 8.16.5). The real web server over a loopback socket and the real CAT listener over another, both started,
 // restarted and stopped by FOXAPI_OP_SERVER_CONFIG on a LOCAL ADMIN session, answering from the engine's own publish, and reaching the pass
-// through the pull the engine arms over them - the whole of the ownership move, with no window in the way.
+// through the sessions they hold on the table - the whole of the ownership move, with no window in the way.
 //
 // test_remote_key_release.cpp holds the same server through the window and the key's standing conditions; test_engine_api_05a.cpp holds the
 // table's side (the strict parse, the list, the facts) with the listeners switched off; this file holds the LISTENERS:
@@ -9,7 +9,8 @@
 //   H1  A hermetic engine (testHooks=1) hosts nothing: SERVER_CONFIG is recorded and published, no socket is opened.
 //   H2  THE WEB SERVER, started by SERVER_CONFIG on a worker: the SERVERS entry is ACTIVE on the port, the state carries WEB_LISTENING, the
 //       page answers, and /api/status is the engine's own publish byte for byte (statusJson over Engine::webStatusNow).
-//   H3  THE PULL IS ARMED: a POST /api/control reaches the pass and moves the radio; the spectrum the window feeds is what the page polls.
+//   H3  THE WEB SESSION: a POST /api/control reaches the pass through the web server's engine session and moves the radio; the session
+//       exists while the server runs and is gone when it stops; the spectrum the window feeds is what the page polls.
 //   H4  CAT, started by SERVER_CONFIG: f and F over a real socket, the F inside the band moving the offset only (through the connection's
 //       own engine session since stage 5c; tests/test_cat_engine.cpp holds the whole of that); the list counts the client and its
 //       commands, and counts them back down.
@@ -21,6 +22,8 @@
 //       right one a session.
 //   H8  THE CONFIG RESTORE starts what the file switched on (Engine::applyConfig), and the engine's half of the file reads back what runs.
 //   H9  THE TEARDOWN: shutdownQuiesce stops both servers, first; nothing is listening afterwards.
+//   H11 THE WEB SESSION, THROUGH THE WHOLE REAL CHAIN (stage 5d): fields, the page's application ops, bookmark rows, the PTT gate over a
+//       real HTTP client; one engine session for the running server, 17 cookies = 1, stop = 0, restart = 1.
 //   H10 NEVER IN THE PASS: with a browser holding a request open (so the web server's stop must wait for it), the SERVER_CONFIG that
 //       disables the server is applied by the free-running pass and the pass goes on at its rate while the WORKER is inside the stop. The
 //       gap between two passes stays a small fraction of the second a stalled pass unkeys the transmitter at.
@@ -29,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -246,7 +250,8 @@ bool refuses(int port) {
 
 // ---- the engine ------------------------------------------------------------------------------------------------------------------
 
-// A hermetic engine that HOSTS its servers (servers=1), the pull armed as the composition root arms it, passes by hand or on a thread.
+// A hermetic engine that HOSTS its servers (servers=1), passes by hand or on a thread. (Nothing is armed for the browser's control: since stage
+// 5d the web server holds its own engine session while it runs, and the pass drains it.)
 struct Rig {
     Engine e;
     bool threaded;
@@ -255,7 +260,6 @@ struct Rig {
         e.configureApi(options);
         e.initialise();
         (void)e.applyCommand(cmd::makeInt(FOXAPI_OP_RUN, 1));
-        e.installServerPull();
         e.controlPass();
         if (thread) { e.startControlThread(); }
         FoxSessionParams p{};
@@ -372,7 +376,8 @@ void testWebServerStartedBySessionConfig() {
     std::printf("H2: web server on :%d started by SERVER_CONFIG - SERVERS ACTIVE, WEB_LISTENING set, /api/status = the engine's publish (%zu bytes)\n",
                 port, st ? st->body.size() : std::size_t{0});
 
-    // H3: the pull is armed - a browser's request reaches the pass; the spectrum the window feeds is what the page polls.
+    // H3: a browser's request reaches the pass through the web server's engine session; the spectrum the window feeds is what the page polls.
+    CHECK_EQ(r.e.api().sessionCountForTest(cascade::engine::InternalKind::Web), std::size_t{1});   // one session for the running server
     const auto ctl = cli.Post("/api/control", "{\"vfoOffsetHz\":12345}", "application/json");
     CHECK(ctl && ctl->status == 202);
     r.pump(2);
@@ -385,7 +390,7 @@ void testWebServerStartedBySessionConfig() {
         const nlohmann::json j = nlohmann::json::parse(sp->body, nullptr, false);
         CHECK(!j.is_discarded() && j.value("fresh", false) && j.value("seq", 0) == 7);
     }
-    std::printf("H3: POST /api/control moved the radio through the pull (vfoOffsetHz 12345); /api/spectrum served the fed frame (seq 7)\n");
+    std::printf("H3: POST /api/control moved the radio through the web server's session (vfoOffsetHz 12345); /api/spectrum served the fed frame (seq 7)\n");
 }
 
 void testCatServer() {
@@ -664,6 +669,98 @@ void testStopIsNeverInThePass() {
 
 }  // namespace
 
+// H11: THE WEB SESSION, THROUGH THE WHOLE REAL CHAIN (stage 5d): a real httplib client, the real web server the engine hosts, the strict
+// parse, the hand-over on the HTTP thread, the engine's ONE web session, the pass - and the effect READ BACK through a table session. What the
+// route does is test_web_server.cpp's (against a stub session); what the engine's key rules do is test_remote_control_pull.cpp's; this holds
+// that the two are joined: a field of a ControlRequest, an application op the page's sliders send, a bookmark named by its ROW, and the
+// session's life.
+void testTheWebSessionThroughTheRealChain() {
+    Rig r("testHooks=1;servers=1");
+    const int port = freePort();
+    const auto webSessions = [&] { return r.e.api().sessionCountForTest(cascade::engine::InternalKind::Web); };
+    CHECK_EQ(webSessions(), std::size_t{0});  // no server, no session
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);
+    CHECK(r.e.servers().webServer().running());
+    CHECK_EQ(webSessions(), std::size_t{1});  // ONE session for the running server
+
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(2, 0);
+    cli.set_read_timeout(5, 0);
+    const auto post = [&](const char* body) {
+        const auto res = cli.Post("/api/control", body, "application/json");
+        r.pump(3);
+        return res ? res->status : 0;
+    };
+
+    // ---- the receiver's fields, through the session's profile -------------------------------------------------------------------
+    CHECK_EQ(post("{\"centerHz\":100000000,\"mode\":\"NFM\",\"bandwidthHz\":12500,\"squelchDb\":-60,\"volume\":0.4}"), 202);
+    FoxReceiverState st = r.state();
+    CHECK_EQ(st.centreHz, 100.0e6);
+    CHECK_EQ(st.demodMode, static_cast<std::uint32_t>(FOXAPI_DEMOD_NFM));
+    CHECK_EQ(st.bandwidthHz, 12500.0);
+    CHECK_EQ(st.squelchDb, -60.0);
+    CHECK(st.volume > 0.39 && st.volume < 0.41);
+    CHECK_EQ(post("{\"vfoOffsetHz\":25000}"), 202);
+    CHECK_EQ(r.state().vfoOffsetHz, 25000.0);
+
+    // ---- the application's own ops, which no other REMOTE session may send and the web profile holds (D2): the display's ends and the
+    //      noise-reduction strength. Refused to any session the table opens for a client; accepted here. ---------------------------------
+    CHECK_EQ(post("{\"dbMin\":-95}"), 202);
+    CHECK_EQ(r.state().dbMin, -95.0);
+    CHECK_EQ(post("{\"dbMax\":-5}"), 202);
+    CHECK_EQ(r.state().dbMax, -5.0);
+    CHECK_EQ(post("{\"nrStrength\":0.6}"), 202);
+    CHECK(r.state().nrStrength > 0.59 && r.state().nrStrength < 0.61);
+
+    // ---- a bookmark named by its ROW, resolved when the request is POSTED from the block /api/status serves --------------------------
+    CHECK_EQ(post("{\"centerHz\":101000000,\"bookmarkAdd\":\"H11 first\"}"), 202);
+    CHECK_EQ(post("{\"centerHz\":102000000,\"bookmarkAdd\":\"H11 second\"}"), 202);
+    r.pump(3);
+    const auto rowOf = [&](const char* name) {
+        const auto s = cli.Get("/api/status");
+        if (!s || s->status != 200) { return -1; }
+        const nlohmann::json j = nlohmann::json::parse(s->body, nullptr, false);
+        if (j.is_discarded() || !j.contains("bookmarks")) { return -1; }
+        int row = 0;
+        for (const auto& b : j["bookmarks"]) {
+            if (b.value("name", std::string()) == name) { return row; }
+            ++row;
+        }
+        return -1;
+    };
+    const int rowFirst = rowOf("H11 first");
+    const int rowSecond = rowOf("H11 second");
+    CHECK(rowFirst >= 0 && rowSecond >= 0 && rowFirst != rowSecond);
+    // tune to the first: the centre goes back to 101 MHz (the bookmark's frequency; the row named the ID, not a position)
+    CHECK_EQ(post(("{\"bookmarkTune\":" + std::to_string(rowFirst) + "}").c_str()), 202);
+    CHECK(std::fabs(r.state().centreHz + r.state().vfoOffsetHz - 101.0e6) < 1.0e5);
+    // remove the second by its row: it goes, and the first stays
+    CHECK_EQ(post(("{\"bookmarkRemove\":" + std::to_string(rowSecond) + "}").c_str()), 202);
+    r.pump(3);
+    CHECK_EQ(rowOf("H11 second"), -1);
+    CHECK(rowOf("H11 first") >= 0);
+
+    // ---- a PTT with no transmitter is the gate's 409 and nothing reaches the engine ---------------------------------------------------
+    CHECK_EQ(post("{\"transmitPtt\":true}"), 409);
+
+    // ---- the session's life: 17 browsers' cookies are not 17 engine sessions; the stop closes it; a restart opens a new one --------------
+    for (int i = 0; i < 17; ++i) {
+        httplib::Client other("127.0.0.1", port);
+        other.set_connection_timeout(2, 0);
+        const auto s = other.Get("/api/status");
+        CHECK(s && s->status == 200);
+    }
+    CHECK_EQ(webSessions(), std::size_t{1});
+    CHECK(r.config("{\"web\":{\"enabled\":false}}").status == FOXAPI_OK);
+    CHECK(!r.e.servers().webServer().running());
+    CHECK_EQ(webSessions(), std::size_t{0});
+    const int port2 = freePort();
+    CHECK(r.config(webConfig(port2)).status == FOXAPI_OK);
+    CHECK_EQ(webSessions(), std::size_t{1});
+    std::printf("H11: a browser's fields, the page's application ops (display ends, NR strength), bookmark rows, the PTT gate - through the real "
+                "server, the one web session and the pass; 17 cookies = 1 engine session; stop = 0; restart = 1\n");
+}
+
 int main(int argc, char** argv) {
     // (An argument of the form H<n> runs that case alone - the break-it checks use it; the CTest entry passes none.)
     std::string only;
@@ -680,5 +777,6 @@ int main(int argc, char** argv) {
     if (want("H8")) { testConfigRestoreStartsWhatTheFileSaid(); }
     if (want("H9")) { testTeardownStopsFirst(); }
     if (want("H10")) { testStopIsNeverInThePass(); }
+    if (want("H11")) { testTheWebSessionThroughTheRealChain(); }
     return testSummary("test_server_host");
 }

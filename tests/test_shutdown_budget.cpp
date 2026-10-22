@@ -1027,6 +1027,12 @@ const KnownWait kKnownWaits[] = {
      "this constant. Measured on the shipped binary (--frames 3 with the page enabled and a half-sent request held): teardown 9.8 s; with the "
      "page enabled and nobody connected 16 ms. Charged ONCE: the web server is stopped once, and the CAT listener beside it is bounded by "
      "its poll interval (fractions of a second). 13500 -> 23500, and kShutdownThresholdMs 33000 -> 53000 with it"},
+    {"src/net/web_server.cpp", "kSessionIdleTick", 0,
+     "WebServer::Impl::idleLoop() (stage 5d) - how often the idle thread collects the engine session's results while the server runs. A "
+     "polling interval, not a bound: the thread waits on a condition variable whose predicate is its stop flag, and WebServer::stop() sets "
+     "the flag and notifies it before joining, so the wait ends at once and the join costs what one in-flight poll_results does (a lock and "
+     "a copy of at most 16 results). Never spent on the shutdown path: stop() joins the listener (kClientIoTimeout, charged above), then "
+     "this thread, then closes the session"},
     {"src/engine/engine.hpp", "kSteppedIdleBeat", 0,
      "Engine::controlLoop() - how often a STEPPED control thread that is idle (its front end is drawing a frame) beats its own watchdog. "
      "A heartbeat interval, not a bound: the wait ends the moment a step is asked for or the thread is told to stop (stopControlThread "

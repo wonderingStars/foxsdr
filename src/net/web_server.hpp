@@ -41,6 +41,7 @@
 #include "net/web_auth.hpp"
 #include "net/web_control.hpp"
 #include "net/web_policy.hpp"
+#include "net/web_session.hpp"
 
 // Forward-declared rather than included: httplib.h is 747 KB and belongs in
 // exactly one translation unit.
@@ -470,13 +471,14 @@ public:
     // returns false, because a handler could be reading the old one.
     bool setStatusProvider(StatusProvider fn);
     bool setSpectrumProvider(SpectrumProvider fn);
-    // THE PAGE'S KEEP-ALIVE (engine stage 4): called for every authorised
-    // GET /api/status - the page's own poll, four times a second - and for
-    // nothing else, so a PTT re-assertion is never mistaken for one (API 0.2:
-    // only the interface's own heartbeat counts). The application hands it to
-    // the engine as the web remote's heartbeat.
-    using PollHook = std::function<void()>;
-    bool setStatusPollHook(PollHook fn);
+    // THE ENGINE SESSION (engine stage 5d; net/web_session.hpp). Must be set before start(). start() opens ONE session through it once the
+    // bind has succeeded - shared by every browser - and stop() closes it once the last thread of the server has ended, so a stopped server
+    // holds none (and a key the browser held is let go by the close, at the engine's next pass). The session is the browser's way to the
+    // radio: POST /api/control is handed to it, and every authorised GET /api/status is its heartbeat (the page's own poll, four times a
+    // second, and nothing else: a PTT re-assertion is never mistaken for one - API 0.2, only the interface's own heartbeat counts). With
+    // no opener the server still serves everything else and answers a control request 503. A start the engine could not give a session for
+    // (its session limits are reached) is refused, as a port that cannot be bound is.
+    bool setSessionOpener(WebSessionOpener fn);
 
     // Overrides the wall clock, for tests that need session expiry and login
     // throttling to be deterministic. Must be set before start().
@@ -520,21 +522,12 @@ public:
     void revokeAllSessions();
 
     // --- Control -------------------------------------------------------------
-    // POST /api/control validates a request (net/web_control.hpp) and queues
-    // it HERE; it never touches the radio, because several of the things a
-    // browser can ask for are GUI-thread-only. The application drains this
-    // once per frame and applies what it finds.
-    //
-    // Returns everything accepted since the last call, oldest first, and
-    // empties the queue. Safe to call from the application's own thread while
-    // requests keep arriving.
-    std::vector<ControlRequest> takePendingControls();
-
-    // Bound on the queue. An application that stops draining (a stalled GUI
-    // thread) must not let a client grow this without limit; past the cap the
-    // OLDEST request is dropped, because for a control surface the most recent
-    // instruction is the one that matters.
-    static constexpr std::size_t kMaxQueuedControls = 64;
+    // POST /api/control validates a request (net/web_control.hpp, strictly), refuses a key press the status says cannot be closed (409), and
+    // hands the rest to the engine session (net/web_session.hpp: translated on the HTTP thread, submitted in one batch). It never touches
+    // the radio, and holds no queue of its own: a request waits in the session, which holds at most 256 outstanding commands and answers
+    // the NEWEST BUSY past that (a result the server does not surface: the 202 means accepted, not carried out). The session's results
+    // are collected around every request that touches it and, while the server runs, on a 200 ms idle tick of its own. Since stage 5d there is no
+    // takePendingControls and no stop-time release: stopping the server closes its session.
 
     // --- Audio ---------------------------------------------------------------
     // Publishes newly produced receiver audio (mono, kWebAudioRateHz) for any

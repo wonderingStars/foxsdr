@@ -117,7 +117,7 @@ struct AppWindowTestAccess;
 namespace cascade::engine {
 
 // The vocabulary the engine shares with its front end (ControlThreadOptions, PassPart, WebTrackInfo, WebExtras, BasemapFacts, FrontEndFacts,
-// PluginUiReport, EngineStatusText, RemoteControls) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
+// PluginUiReport, EngineStatusText) moved to engine/engine_shell.hpp with the fence (engine extraction stage 4, step 5): a
 // name reachable only through this header is a name the interface cannot use. They are in namespace cascade::engine still.
 
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
@@ -401,19 +401,14 @@ private:
     void setPluginSettingsAllowed(const std::string& pluginKey, bool allowed);
     void applyPluginSettingsGrants();
     // ONCE A PASS, straight after pumpRemoteControls: applies what plugins
-    // asked of the receiver (through applyControlRequest, the code a click or
-    // a browser goes through), turns their log lines into decoder-output lines
+    // asked of the receiver (through pluginControlToCommand and applyCommand,
+    // the code a click goes through), turns their log lines into decoder-output lines
     // and plate notices, folds their settings into the config, and collects
     // their marks. GUI thread - the only thread that may touch the receiver,
     // which is the whole reason plugin requests are queued. What plugins READ
     // is the one receiver snapshot publishReceiverState publishes later in the
     // same frame, before anything is drawn.
     void applyPluginApi();
-    // ONE control request (the web remote, CAT, a plugin): a TRANSLATION, and
-    // nothing else - net::controlRequestToCommands turns its fields into
-    // commands in the order they were always applied, and each goes through
-    // applyCommand below.
-    void applyControlRequest(const cascade::net::ControlRequest& r);
 
 public:
     // --- ONE CONTROL PATH (engine extraction, stage 1) ----------------------
@@ -471,7 +466,7 @@ private:
     }
 
     // Helpers the commands call, each one the body a widget or a branch of
-    // applyControlRequest used to hold inline (so both paths now share it).
+    // the old control-request path used to hold inline (so both paths now share it).
     // GUI thread, like applyCommand.
     bool startIqRecording();
     void openIqFile(const std::string& path);
@@ -676,8 +671,8 @@ private:
     // routine below so no path can forget:
     //
     // stopReceiver - THE ONE WAY A USER STOPS THE RECEIVER. The STOP dome,
-    // the Start/Stop key, the radar scope's POWER button and
-    // applyControlRequest (the web remote and plugins through the host API;
+    // the Start/Stop key, the radar scope's POWER button and a RUN 0 from any
+    // session (the web page's, a plugin's through the host API;
     // CAT can read the run state but has no command that sets it) all call
     // it. Through 0.99.35 only the dome and the key ended the takes: a stop
     // from the remote or the POWER button left both recorders open with
@@ -2664,28 +2659,17 @@ public:
     // Just the web extras of the newest facts (a pointer copy under the same lock), for the publish.
     std::shared_ptr<const WebExtras> webExtras() const;
 
-    // THE REMOTE CONTROLS' PULL (pump move step P1; the review's F3, docs/engine-stage4.md). The web remote hands the
-    // engine ControlRequests through a queue of its own (WebServer::takePendingControls - mutex-protected, any
-    // thread, bounded, drop-oldest; CAT did too until stage 5c, and holds sessions now). The ENGINE pulls them, in its own pass, in a phase of its own (pumpRemoteControls)
-    // where the window's applyWebControls used to run in the frame: after the local and API queues and the inputs, before
-    // the plugins' requests and the scanner. Nothing else applies a remote request, so the key rules (ApiHostImpl::rules_,
-    // single-threaded by contract) and the whole of applyCommand are touched by the pumping thread alone. A front end that
-    // serves a browser or a CAT client installs the source once (before the pass runs on a thread of its own, or from it);
-    // an engine with none - the table's headless engine - pulls nothing and judges nothing. Since 5b the front end does not install a
-    // source of its own over servers of its own: the servers are the engine's (ServerHost) and installServerPull arms the pull over them.
+    // THE REMOTE CONTROLS' PHASE (pump move step P1; the review's F3, docs/engine-stage4.md). The web server and the CAT connections hold
+    // SESSIONS on the table (stage 5c, 5d; net/web_session.hpp, net/cat_server.hpp) and what they submit goes to the INTERNAL TIER, which the
+    // ENGINE drains in its own pass, in a phase of its own, where the window's applyWebControls used to run in the frame: after the local and
+    // API queues and the inputs, before the plugins' requests and the scanner - the web session's commands first, then CAT's. Nothing else
+    // applies a remote request, so the key rules (ApiHostImpl::rules_, single-threaded by contract) and the whole of applyCommand are touched
+    // by the pumping thread alone. (There was a PULL here until stage 5d: a source the front end installed, drained once a pass - the
+    // browser's queue and the "is the server running" flag. A server that stops now closes its session, which the key rules judge.)
     //
-    // STAGE 5a: the same phase is where the ENGINE-INTERNAL SESSIONS' commands are applied (ApiHost::applyTail, called by pumpRemoteControls). The
-    // web server and CAT hold sessions of their own (ApiHost::openInternalSession) instead of these queues; their submits go to a tier of
-    // their own, drained here after the pull's requests, so "after the local and API queues, whenever it arrived" stops being a property of
-    // a pull and is structural (docs/api-0.3-additions.md 8.16.4). CAT holds one per connection since 5c (net/cat_server.hpp); the browser's
-    // pull stays until 5d deletes it.
-    //
-    // WHY A PULL AND NOT A PUSH THROUGH submitCommand OR THE API QUEUE: both drain BEFORE this phase, so a remote request
-    // that arrived in the same pass as a local one would be applied FIRST and could win the key (rule 6, first come); the
-    // pull keeps today's order, the web after both.
-    using RemoteControls = cascade::engine::RemoteControls;
-    using RemoteControlSource = cascade::engine::RemoteControlSource;
-    void setRemoteControlSource(RemoteControlSource source);
+    // WHY A TIER AND NOT THE API QUEUE: the API queue drains BEFORE this phase, in arrival order, so a remote request that arrived in the same
+    // pass as a local one would be applied FIRST and could win the key (rule 6, the operator at the machine comes first, whenever the
+    // browser arrived); the tier keeps that order by construction (docs/api-0.3-additions.md 8.16.4).
     void pumpRemoteControls();
 
     // THE PLUGIN UI'S OWNER (pump move step P3). The front end that holds the plugin UI installs a function that applies one
@@ -2889,12 +2873,6 @@ public:
     // What the web page's status is read from: the newest publish (the whole block of one), on the server's own threads. The provider the
     // engine's constructor hands the host. (CAT's figures are each connection's own session's read_state since stage 5c.)
     cascade::net::RadioStatus webStatusNow() const;
-    // THE FRONT END'S WAY OF ARMING THE PULL OVER THE ENGINE'S OWN SERVERS (stage 5b): installs, as the remote controls' source, the host's
-    // pull (the browser's queued requests, then CAT's, and whether the web server runs), exactly the source the window used to install over
-    // the servers it owned. NOT done by the constructor: an engine with no source "pulls nothing and judges nothing" (below), which is what
-    // every engine that is not a product front end's (the table's headless engine, the unit tests that key the browser's remote with no
-    // server at all) relies on; the composition root arms it (EngineShell::create).
-    void installServerPull();
     // The C handle an in-process interface opens its sessions on.
     FoxEngine* apiHandle() { return api_->handle(); }
     // Rebuilds the API host with engine options (FoxEngineParams::options) -
@@ -2934,10 +2912,6 @@ private:
     // The origin of clockS(). Not const: tests/test_bookmark_save_async.cpp moves it (EngineTestAccess) to put the pass's clock where its debounce
     // cases need it, as the window's version of that test moved ImGui's.
     std::chrono::steady_clock::time_point clockOrigin_ = std::chrono::steady_clock::now();
-    // The remote controls' source (setRemoteControlSource): the pass copies the pointer under the lock and calls it
-    // outside it, so a front end may replace or clear it from any thread.
-    std::mutex remoteSourceMutex_;
-    std::shared_ptr<const RemoteControlSource> remoteSource_;
     // THE PASS'S PACING (everything below the mutex is guarded by it unless it says atomic). The wake a submit gives the control
     // loop (wakeControl); the wake runPassNow gives it, which is exempt from the floor; and, in a stepped run, the request a
     // stepPass makes and the count of steps the thread has finished.

@@ -115,10 +115,6 @@ EngineShell::~EngineShell() = default;
 std::unique_ptr<EngineShell> EngineShell::create(ShellHooks& hooks) {
     std::unique_ptr<EngineShell> shell(new EngineShell());
     shell->impl_ = std::make_unique<Impl>(hooks);
-    // THE COMPOSITION ROOT ARMS THE PULL OVER THE ENGINE'S OWN SERVERS (stage 5b): the browser's and CAT's queued requests reach the pass, and
-    // a key the browser holds ends when the web server is not running - what the window did over the servers it owned. Before anything can
-    // run a pass (the control thread starts in the window's run()).
-    shell->impl_->engine->installServerPull();
     return shell;
 }
 

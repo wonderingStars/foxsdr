@@ -33,13 +33,13 @@
 //     never waits. retryInstall(), on the writer's every pass, only moves a
 //     slot block into place early, so its memory is released on the writer.
 //
-//   A READFULL() FROM THE WRITER'S OWN THREAD IS A SHORT BLOCKING LOCK. The
-//   writer's publish() and retryInstall() never wait; but the thread that
-//   publishes also reads the whole block in one place - applyControlRequest,
-//   resolving the web remote's bookmark rows (Engine::applyControlRequest
-//   since engine stage 3; the GUI thread in 3a, the engine's control thread
-//   from 3b) - and that readFull() takes fullMutex_ like any reader, so it
-//   can wait for another reader's refcount copy or slot install.
+//   A READFULL() IS A SHORT BLOCKING LOCK for any reader. The writer's
+//   publish() and retryInstall() never wait; a reader's readFull() takes
+//   fullMutex_ and can wait for another reader's refcount copy or slot
+//   install. (Until engine stage 5d the writer's own thread read the whole
+//   block too, to resolve the web remote's bookmark rows when it applied a
+//   request; the web server's session reads them on the HTTP thread, when the
+//   request is POSTED, so no pass takes this lock any more.)
 //
 // THE COUNTERS ARE DERIVED, NOT SET. publish() compares the new facts with
 // the previous publish and advances FoxReceiverState's seq/tuneSeq/modeSeq/

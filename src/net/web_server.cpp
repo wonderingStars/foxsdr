@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <ctime>
 #include <deque>
 #include <set>
@@ -3103,11 +3104,11 @@ public:
         return true;
     }
 
-    bool setStatusPollHook(PollHook fn) {
+    bool setSessionOpener(WebSessionOpener fn) {
         if (running()) {
             return false;
         }
-        pollHook_ = std::move(fn);
+        sessionOpener_ = std::move(fn);
         return true;
     }
 
@@ -3220,13 +3221,6 @@ public:
         return static_cast<std::size_t>(listeners_.load(std::memory_order_relaxed));
     }
 
-    std::vector<ControlRequest> takePendingControls() {
-        std::lock_guard<std::mutex> lock(controlMutex_);
-        std::vector<ControlRequest> out(pending_.begin(), pending_.end());
-        pending_.clear();
-        return out;
-    }
-
 private:
     void installRoutes(httplib::Server& svr);
 
@@ -3242,7 +3236,11 @@ private:
     std::int64_t now() const { return clock_(); }
 
     StatusProvider status_;
-    PollHook pollHook_;
+    WebSessionOpener sessionOpener_;
+    // THE ENGINE SESSION, shared by every browser. Opened by start() once the bind has succeeded and BEFORE the listener thread exists, closed
+    // by stop() after that thread (and with it every handler) has ended: a handler therefore never sees it change, and needs no lock to use
+    // it. Null when no opener was set, or while the server is stopped.
+    std::unique_ptr<WebSession> session_;
     SpectrumProvider spectrum_;
     Clock clock_;
     std::function<void()> usageCallback_;
@@ -3256,10 +3254,6 @@ private:
 
     mutable SessionStore sessions_;
     mutable LoginThrottle throttle_;
-
-    // Accepted control requests awaiting the application's next frame.
-    mutable std::mutex controlMutex_;
-    std::deque<ControlRequest> pending_;
 
     // Decoded pictures, already BMP-encoded by the application.
     mutable std::mutex imageMutex_;
@@ -3321,7 +3315,29 @@ private:
     std::unique_ptr<httplib::Server> svr_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+
+    // THE IDLE TICK (stage 5d): while the server runs, the engine session's results are collected every kSessionIdleTick even if no browser
+    // asks for anything, so a session is never left holding results nobody reads (the table answers BUSY past 256 outstanding commands, and
+    // reads results to release a safer command's slot). Every request that touches the session collects as well - this is the floor under
+    // that. Started by start() with the session, joined by stop() BEFORE the session is closed.
+    static constexpr std::chrono::milliseconds kSessionIdleTick{200};
+    void idleLoop();
+    std::thread idleThread_;
+    std::mutex idleMutex_;
+    std::condition_variable idleCv_;
+    bool idleStop_ = false;  // under idleMutex_
 };
+
+void WebServer::Impl::idleLoop() {
+    std::unique_lock<std::mutex> lk(idleMutex_);
+    while (!idleStop_) {
+        idleCv_.wait_for(lk, kSessionIdleTick, [this] { return idleStop_; });
+        if (idleStop_) { break; }
+        lk.unlock();
+        session_->pollResults();  // (session_ is set before this thread exists and reset after it is joined)
+        lk.lock();
+    }
+}
 
 void WebServer::Impl::deny(httplib::Response& res, const std::string& message,
                            int status) {
@@ -3517,8 +3533,11 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, "sign in first");
             return;
         }
-        if (pollHook_) {
-            pollHook_();  // the page is alive: its keep-alive, and only this
+        if (session_) {
+            // The page is alive: its keep-alive, and only this - the session's own heartbeat. (The results of what the page posted are
+            // collected here too: the status poll is the one request a page keeps making.)
+            session_->heartbeat();
+            session_->pollResults();
         }
         RadioStatus s;
         if (status_) {
@@ -3699,15 +3718,19 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 return;
             }
         }
-        {
-            std::lock_guard<std::mutex> lock(controlMutex_);
-            while (pending_.size() >= WebServer::kMaxQueuedControls) {
-                pending_.pop_front();
-            }
-            pending_.push_back(cr);
+        // THE HAND-OVER: translated here, on this HTTP thread, into the commands a desktop widget would send, and submitted to the engine's
+        // session in one batch (net/web_session.hpp). A server with no session to give (no opener, or a stopped one) cannot carry a
+        // control, and says so: 503, never a 202 for a request nobody holds.
+        if (!session_) {
+            deny(res, "the receiver is not available to this server", 503);
+            return;
+        }
+        if (handOverControl(*session_, cr) != ControlHandOver::Handed) {
+            deny(res, "the receiver's state could not be read just now; try again", 503);
+            return;
         }
         // 202, not 200: this has been accepted, not carried out. The radio is
-        // moved by the application on its next frame, and the browser sees the
+        // moved by the engine in its next pass, and the browser sees the
         // result through /api/status like every other observer — which is also
         // what keeps the page honest if a clamp changes the value it asked for.
         res.status = 202;
@@ -3844,12 +3867,34 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         return false;
     }
 
+    // THE ENGINE SESSION, opened now that the bind has succeeded and before a single handler can run: opened by the thread that starts the
+    // server, closed by the one that stops it (stop() below, after the listener thread has joined). A server that cannot be given one is
+    // refused like a port it cannot bind - nothing has been listening yet, so nothing is torn down but the listener.
+    if (sessionOpener_) {
+        session_ = sessionOpener_("web");
+        if (!session_) {
+            error = "the engine has no session to give the web page (its session limits are reached)";
+            // The bound socket is released by stop() (a Server that was bound and never listened still owns its descriptor, and destroying
+            // it does not close it - a leaked bind would hold the port for the life of the process).
+            svr_->stop();
+            svr_.reset();
+            return false;
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         boundPort_ = port;
     }
     running_.store(true, std::memory_order_release);
     thread_ = std::thread([this]() { svr_->listen_after_bind(); });
+    if (session_) {
+        {
+            std::lock_guard<std::mutex> lk(idleMutex_);
+            idleStop_ = false;
+        }
+        idleThread_ = std::thread([this]() { idleLoop(); });
+    }
     svr_->wait_until_ready();
     return true;
 }
@@ -3867,30 +3912,22 @@ void WebServer::Impl::stop() {
     if (thread_.joinable()) {
         thread_.join();
     }
+    {
+        std::lock_guard<std::mutex> lk(idleMutex_);
+        idleStop_ = true;
+    }
+    idleCv_.notify_all();
+    if (idleThread_.joinable()) {
+        idleThread_.join();
+    }
     svr_.reset();
     sessions_.revokeAll();
-    // A SERVER THAT HAS STOPPED RELEASES THE TRANSMIT KEY, and it does it by
-    // queueing the release rather than by reaching for a transmitter it has
-    // never been given. The application drains this on its next frame and
-    // opens the key.
-    //
-    // WHY IT IS NEEDED AT ALL, given that the key expires by itself: the
-    // expiry is what covers a browser going away, and this covers the other
-    // direction - the server going away while a browser is still holding the
-    // key. Both end in the same place two seconds apart, and two seconds of
-    // unasked-for carrier is exactly the thing this whole design is arranged
-    // to avoid. It is queued only on a server that was actually running, so
-    // the stop() at the top of start() cannot put a phantom release in front
-    // of a client's first request.
-    {
-        std::lock_guard<std::mutex> lock(controlMutex_);
-        while (pending_.size() >= WebServer::kMaxQueuedControls) {
-            pending_.pop_front();
-        }
-        ControlRequest release;
-        release.transmitPtt = false;
-        pending_.push_back(release);
-    }
+    // THE ENGINE SESSION CLOSES HERE, with the last thread of the server gone (so no handler is using it) and the cookie sessions revoked.
+    // THIS IS WHAT RELEASES THE TRANSMIT KEY when the server goes away while a browser still holds it: the table opens the key a closed
+    // session held at the start of its next pass. It replaces the release this stop used
+    // to queue for the application to find, and the pull's "is the server running" check. It is closed only on a server that was running,
+    // so the stop() at the top of start() cannot put a phantom close in front of a client's first request - there is no session yet then.
+    session_.reset();
     std::lock_guard<std::mutex> lock(mutex_);
     boundPort_ = -1;
 }
@@ -3905,8 +3942,8 @@ WebServer::~WebServer() = default;
 bool WebServer::setStatusProvider(StatusProvider fn) {
     return impl_->setStatusProvider(std::move(fn));
 }
-bool WebServer::setStatusPollHook(PollHook fn) {
-    return impl_->setStatusPollHook(std::move(fn));
+bool WebServer::setSessionOpener(WebSessionOpener fn) {
+    return impl_->setSessionOpener(std::move(fn));
 }
 
 bool WebServer::setUsageCallback(std::function<void()> fn) {
@@ -3925,9 +3962,6 @@ int WebServer::boundPort() const { return impl_->boundPort(); }
 BindDecision WebServer::decision() const { return impl_->decision(); }
 std::size_t WebServer::sessionCount() const { return impl_->sessionCount(); }
 void WebServer::revokeAllSessions() { impl_->revokeAllSessions(); }
-std::vector<ControlRequest> WebServer::takePendingControls() {
-    return impl_->takePendingControls();
-}
 void WebServer::pushAudio(const float* samples, std::size_t n) {
     impl_->pushAudio(samples, n);
 }
