@@ -173,10 +173,28 @@ struct Outcome {
     std::string state;
     int merged = 0;      // submits answered NO_CHANGE (merged run only)
     bool clean = true;   // every expected result arrived
+    long long spanMs = 0;  // wall time of the whole run, from before its sessions opened to after the state was read
 };
+
+long long msSince(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// THE RULES THAT JUDGE WALL TIME. Two key rules compare the engine's clock with a fixed 1,000 ms: rule 4 (no latch
+// closes within FOXAPI_LATCH_REARM_MS of the last one ending) and rule 7 (a key holder that has not beaten for
+// FOXAPI_KEEPALIVE_MS has stopped answering). A case whose starting state ended a latch, followed by a LATCH 1,
+// is only deterministic if the run takes less than that window: inside it the LATCH 1 is refused, in the merged run
+// and the one-a-pass run alike; a run that stalls past it (24 workers and the control threads on a loaded host)
+// has the LATCH 1 granted, and the other run, which did not stall, does not. That is a difference of timing, not of
+// merging. A run's span contains the engine's whole interval from the latch's end to the last command's
+// application, so a span under the window proves the rules never saw it pass.
+constexpr long long kRuleWindowMs = (FOXAPI_LATCH_REARM_MS < FOXAPI_KEEPALIVE_MS ? FOXAPI_LATCH_REARM_MS
+                                                                                 : FOXAPI_KEEPALIVE_MS) - 100;
+constexpr int kMaxAttempts = 5;
 
 // All of `seq` in one control pass: repeats of a session's safer command merge.
 Outcome runMerged(Engine1& eng, Start start, const std::vector<Step>& seq) {
+    const auto t0 = std::chrono::steady_clock::now();
     Rig r(eng);
     Outcome o;
     o.clean = setUp(r, start);
@@ -223,12 +241,14 @@ Outcome runMerged(Engine1& eng, Start start, const std::vector<Step>& seq) {
     }
     o.clean = o.clean && allSeen();
     o.state = r.keyState();
+    o.spanMs = msSince(t0);
     return o;
 }
 
 // The same, one command per pass, each result read before the next is sent:
 // nothing merges.
 Outcome runSeparately(Engine1& eng, Start start, const std::vector<Step>& seq) {
+    const auto t0 = std::chrono::steady_clock::now();
     Rig r(eng);
     Outcome o;
     o.clean = setUp(r, start);
@@ -239,6 +259,7 @@ Outcome runSeparately(Engine1& eng, Start start, const std::vector<Step>& seq) {
         o.clean = o.clean && status == FOXAPI_OK && got;
     }
     o.state = r.keyState();
+    o.spanMs = msSince(t0);
     return o;
 }
 
@@ -322,7 +343,7 @@ int main() {
         cases.push_back({static_cast<Start>(rng() % kStartCount), seq});
     }
     std::atomic<std::size_t> next{0};
-    std::atomic<int> mergedCases{0}, unclean{0};
+    std::atomic<int> mergedCases{0}, unclean{0}, rerun{0};
     std::mutex failMutex;
     std::vector<std::string> failures;
     const unsigned workers = std::max(2u, std::min(24u, std::thread::hardware_concurrency()));
@@ -340,14 +361,29 @@ int main() {
             auto engine = std::make_unique<Engine1>();
             for (std::size_t i = next++; i < cases.size(); i = next++) {
                 const Case& k = cases[i];
-                const Outcome m = runMerged(*engine, k.start, k.seq);
-                const Outcome u = runSeparately(*engine, k.start, k.seq);
+                // A difference is excused only when one of the two runs outlasted the window the rules judge time
+                // by (kRuleWindowMs): the case is then run again, up to kMaxAttempts times. A difference between
+                // two runs that both finished inside the window is never excused, and neither is one that
+                // survives every attempt.
+                Outcome m, u;
+                for (int attempt = 1;; ++attempt) {
+                    m = runMerged(*engine, k.start, k.seq);
+                    u = runSeparately(*engine, k.start, k.seq);
+                    const bool differs = m.state != u.state || m.state.empty();
+                    const bool slow = std::max(m.spanMs, u.spanMs) >= kRuleWindowMs;
+                    if (!differs || !slow || attempt >= kMaxAttempts) break;
+                    ++rerun;
+                    std::lock_guard<std::mutex> lk(failMutex);
+                    std::printf("RERUN (a run outlasted the %lld ms the rules judge time by: merged %lld ms, one a pass %lld ms): %s | %s\n",
+                                kRuleWindowMs, m.spanMs, u.spanMs, kStartNames[k.start], describe(k.seq).c_str());
+                }
                 if (m.merged > 0) ++mergedCases;
                 if (!m.clean || !u.clean) ++unclean;
                 if (m.state != u.state || m.state.empty()) {
                     std::lock_guard<std::mutex> lk(failMutex);
                     failures.push_back(std::string(kStartNames[k.start]) + " | " + describe(k.seq) +
-                                       "\n    merged:     " + m.state + "\n    one a pass: " + u.state);
+                                       "\n    merged (" + std::to_string(m.spanMs) + " ms):     " + m.state + "\n    one a pass (" +
+                                       std::to_string(u.spanMs) + " ms): " + u.state);
                 }
             }
             engine.reset();  // the engine is gone before the thread function returns
@@ -357,9 +393,9 @@ int main() {
     const long long secs = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count();
     std::printf("%zu cases (%zu exhaustive: 3 starting states, 1-%d commands from A/B/C over LATCH0 LATCH1 RUN0 "
                 "TX_CLOSE PTT0, up to renaming; %zu random of 5-8 commands), %d with at least one merged send, on %u "
-                "threads in %lld s: %zu differ, %d with a missing result or refusal at setup\n",
+                "threads in %lld s: %zu differ, %d with a missing result or refusal at setup, %d rerun for a stall\n",
                 cases.size(), exhaustive, maxLen, cases.size() - exhaustive, mergedCases.load(), workers, secs,
-                failures.size(), unclean.load());
+                failures.size(), unclean.load(), rerun.load());
     for (std::size_t i = 0; i < failures.size() && i < 12; ++i) {
         std::printf("DIFFERS: %s\n", failures[i].c_str());
     }
