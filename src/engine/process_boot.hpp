@@ -38,11 +38,15 @@
 //     because a bare `foxsdr-engine` is not a "real session" in the sense that
 //     rule meant, and nothing else may write a log or a crash directory);
 //   * which config the run reads ahead of the parse and hands on (Host: as ever;
-//     Engine: none - not the user's file, not CASCADE_CONFIG_TEST's);
-//   * which flags the parse accepts (Engine: `--seconds N`, and none of the
-//     window's - --frames, --diag-stall, --diag-toggle, --link-tester are the
-//     Host's, refused by an Engine as unknown arguments; the Host refuses
-//     --seconds, exactly as it did before there was an Engine).
+//     Engine: none unless it was ASKED - `--config PATH` or `--use-config`, stage
+//     7c; never the user's file by default, never CASCADE_CONFIG_TEST's);
+//   * which flags the parse accepts (Engine: `--seconds N`, `--config PATH` and
+//     `--use-config`, and none of the window's - --frames, --diag-stall,
+//     --diag-toggle, --link-tester are the Host's, refused by an Engine as
+//     unknown arguments; the Host refuses --seconds, --config and --use-config,
+//     exactly as it refused any flag it did not have before there was an Engine).
+// (The settings LOCK is not a boot step: the Engine takes it in its service, before
+// it reads the file, and the Host takes it in main(), best effort - src/main.cpp.)
 // Every other step is kind-blind. A Host behaves exactly as it did before 7a.
 //
 // Engine-clean: no gui/, imgui, GLFW or OpenGL. main() constructs the window; it
@@ -73,6 +77,8 @@ struct BootResult {
     bool announceConfig = false;   // CASCADE_CONFIG_TEST named the path
     int frames = -1;               // negative: run until the window is closed (Host)
     double seconds = -1.0;         // negative: run until stopped; --seconds N (Engine only)
+    std::string engineConfigArg;   // --config PATH (Engine only): the settings file this run owns
+    bool engineUseConfig = false;  // --use-config (Engine only): the per-user settings file, the one the window uses
     int diagStallMs = 0;           // --diag-stall
     int diagToggle = 0;            // --diag-toggle on (1) / off (-1)
     bool linkTesterReveal = false; // --link-tester

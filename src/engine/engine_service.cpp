@@ -1,0 +1,439 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// The engine's life without a window (engine extraction stage 7c). See engine_service.hpp for what each
+// phase is. Each phase below is the window's own sequence with the window left out, written in the
+// window's ORDER and with its comments where the order has a reason; the line numbers in the margin of
+// each statement's comment are the places in src/gui/app_window.cpp it was read from (as of the stage
+// 7c tree). tests/test_engine_service_order.cpp holds this file's order, and the window's, in one table:
+// moving a statement here without moving it there - or the other way - is a red test, not a review
+// comment.
+#include "engine/engine_service.hpp"
+
+#include <chrono>
+#include <cstdio>
+#include <string>
+#include <thread>
+#include <utility>
+
+#include "core/app_commands.hpp"
+#include "core/damaged_file.hpp"
+#include "core/diag_log.hpp"
+#include "core/health_events.hpp"
+#include "source/soundcard_source.hpp"
+
+namespace cascade::engine {
+
+namespace {
+
+namespace cmd = cascade::core::cmd;
+
+// How long a change must sit still before it is saved, and how long a failed save is waited out at most:
+// the window's kConfigDebounceS and kConfigRetryCapS (app_window.cpp), seconds as doubles, as there.
+constexpr double kConfigDebounceS = 2.0;
+constexpr double kConfigRetryCapS = 300.0;
+// The keeper looks at the published snapshot this often, not on every wake of the thread that calls it
+// (the window looks once a frame, and compares fields; this compares text, which is dearer).
+constexpr double kLookEveryS = 0.25;
+
+}  // namespace
+
+EngineService::EngineService(ServiceOptions options) : options_(std::move(options)) {}
+
+EngineService::~EngineService() = default;
+
+double EngineService::nowS() const {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - born_).count();
+}
+
+// The text the keeper compares. The window's configsEqual leaves out the same three families and says why:
+// the pending usage report grows a second every second, the clean-exit flag is bookkeeping (false while
+// running, true only on the marker's own rewrite), and the session's start is constant for the session (it
+// rides the forced first save). Comparing the report would keep the debounce from ever settling (it moves every
+// second), so no change would ever be saved; comparing the marker would read as a change at the first look.
+//
+// This is a compare of the WHOLE serialised file, not of a hand-kept list of fields as configsEqual is:
+// a field a later build adds to AppConfig is compared by being written, so it cannot be one that "reaches
+// the file only when something else happens to change" - the failure configsEqual's own header warns of.
+// The cost is that a field that moves by itself and is not listed here would keep the debounce from settling, and
+// nothing would be saved; tests/test_engine_service_keep.cpp (an idle stretch, then a change that must land) says so.
+std::string EngineService::comparable(cascade::core::AppConfig cfg) {
+    cfg.telemetryPending.clear();
+    cfg.telemetryCleanExit = false;
+    cfg.telemetrySessionStarted = 0;
+    return cascade::core::ConfigStore::serialize(cfg);
+}
+
+std::string EngineService::refusal(const cascade::core::ConfigLock& lock, const std::string& configPath) {
+    using State = cascade::core::ConfigLock::State;
+    if (lock.state() == State::Unavailable) {
+        return "foxsdr-engine: not started - the lock that keeps two programs from saving one settings file at once "
+               "could not be taken beside \"" + configPath + "\" (" + lock.error() +
+               "), and without it nothing would stop a second program overwriting this one's settings";
+    }
+    std::string who = "another FoxSDR program";
+    if (lock.holder().role == "cascade") {
+        who = "the FoxSDR window application";
+    } else if (lock.holder().role == "foxsdr-engine") {
+        who = "another foxsdr-engine";
+    }
+    if (lock.holder().pid != 0) { who += " (process " + std::to_string(lock.holder().pid) + ")"; }
+    return "foxsdr-engine: not started - " + who + " is already using the settings file \"" + configPath +
+           "\". Two programs saving one settings file would overwrite each other's changes, so only one may use it "
+           "at a time: close that program, or run this one on a settings file of its own with --config PATH";
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 1. THE LOCK.
+//
+// POSITION: before anything reads the file. A program that is going to read a settings file and later
+// rewrite it from what it read must be the only one that may: a window that was open beside it would
+// have its own changes put back by this one's next save. Hermetic: nothing to lock.
+// ---------------------------------------------------------------------------------------------------
+bool EngineService::acquireConfig(std::string& sentence) {
+    if (!persistent()) { return true; }
+    if (lock_.acquire(options_.configPath, "foxsdr-engine") == cascade::core::ConfigLock::State::Held) { return true; }
+    sentence = refusal(lock_, options_.configPath);
+    return false;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 2. THE RESTORE: the window's constructor (app_window.cpp, AppWindow::AppWindow), minus the window.
+//
+// ORDER (each step's reason is the window's):
+//   initialise     the receiver's own start-up first (the recording folder, the demo signal, the band
+//                  plan, the plugin scan, the output device list), so a config restore has something to
+//                  restore onto                                                             [:808]
+//   writer bound   before anything can ask it to write                                       [:827]
+//   load           missing file: defaults and "loaded"; a damaged one: defaults and "not loaded", the
+//                  construction defaults KEPT and nothing applied                            [:837]
+//   start-up state the file records what was showing at the last exit; the application starts on the
+//                  bench whatever that was (core::startupState: every open flag cleared), and EVERYTHING
+//                  below reads that, never the file as saved                                [:21200]
+//   apply          the receiver's half, all of it (Engine::applyConfig)                      [:21210]
+//   usage journal  AFTER the apply, so the crash count and the pending report are read from the file
+//                  rather than from freshly defaulted members                                [:849]
+//   damaged        a file that failed to load is KEPT ASIDE before anything can save over it  [:856]
+//   first snapshot the engine hands its half over first - no pass has run yet - and that is the
+//                  baseline of the debounce: what the file holds (or would)                  [:873-875]
+//   bookmarks      under the same gate as the settings: a hermetic run never reads them      [:884]
+//   status lines   with or without a settings file, so the first read says what the restore said [:890]
+//
+// WHAT THE WINDOW ALSO DOES HERE AND THIS DOES NOT: the plugin feed, the engine API session, the
+// window's own half of the restore (view state, the diagnostics and update switches, the crash-upload
+// memory). None of it is the engine's; the fields it owns ride back into the file untouched, because the
+// engine publishes from the config as it LOADED it (Engine::publishConfig starts from loadedCfg_).
+// ---------------------------------------------------------------------------------------------------
+EngineService::Restored EngineService::restore() {
+    Restored out;
+    engine_.initialise();
+    writer_.bind(cascade::core::ConfigStore::writeFile);
+
+    if (persistent()) {
+        cascade::core::AppConfig cfg;
+        std::string err;
+        const bool loaded = cascade::core::ConfigStore::load(options_.configPath, cfg, err);
+        if (loaded) {
+            // THE START-UP STATE, then the receiver's half from it (the window's applyConfig, in its order).
+            const cascade::core::AppConfig startup = cascade::core::startupState(cfg);
+            engine_.applyConfig(startup);
+            diagnosticsEnabled_ = cfg.diagnosticsEnabled;
+            {
+                std::string configDir;
+                const std::size_t cut = options_.configPath.find_last_of("/\\");
+                if (cut != std::string::npos) { configDir = options_.configPath.substr(0, cut); }
+                engine_.telemetryStartup(cfg, configDir);
+            }
+            out.loaded = true;
+        } else {
+            std::fprintf(stderr, "foxsdr-engine: %s\n", err.c_str());
+            // KEPT ASIDE BEFORE ANYTHING CAN SAVE OVER IT (core/damaged_file.hpp).
+            setAsideDamaged();
+            out.damaged = true;
+            out.error = err;
+        }
+        // Baseline for the debounce: what the file holds (or would hold).
+        engine_.publishConfig();
+        const cascade::core::AppConfig first = engine_.configSnapshot();
+        savedKey_ = comparable(first);
+        pendingKey_ = savedKey_;
+        lastRequested_ = first;
+        engine_.loadBookmarks();
+    } else {
+        // HERMETIC (the 7b skeleton's defaults, which a restored config replaces): the built-in signal
+        // generator, chosen explicitly, MUTED - the receiver opens its audio sink on RUN whatever the
+        // level, and a service has no business playing the demo tones at a sound card.
+        (void)engine_.applyCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, 0.0));
+        const cmd::QueuedCommand generator = cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "siggen");
+        const FoxCommandResult selected = engine_.applyCommand(generator.c, generator.longText);
+        if (selected.status != FOXAPI_OK && selected.status != FOXAPI_NO_CHANGE) {
+            out.error = "the signal generator could not be selected (status " +
+                        std::to_string(static_cast<int>(selected.status)) + ")";
+        }
+    }
+    engine_.publishStatusText();
+    return out;
+}
+
+// A damaged settings file is kept, not overwritten (0.99.65): the window's setAsideDamagedFile, for the one
+// file this program has. If the rename is refused (held by another program, a read-only folder) the file stays
+// exactly as it is and this service's writer writes nothing for the rest of the run.
+void EngineService::setAsideDamaged() {
+    const cascade::core::SetAsideResult r = cascade::core::setDamagedFileAside(options_.configPath);
+    const unsigned long long bytes = static_cast<unsigned long long>(r.bytes);
+    switch (r.outcome) {
+        case cascade::core::SetAsideResult::Outcome::NothingToKeep:
+            return;  // a first run, an empty file, or a folder: nothing to lose, nothing said
+        case cascade::core::SetAsideResult::Outcome::KeptAside:
+            // WHICH FILE AND HOW BIG, and no path: a log line never names one.
+            cascade::core::diagLogf(
+                "settings: a damaged file (%llu bytes) was kept aside beside the live one; the next save writes a new file", bytes);
+            return;
+        case cascade::core::SetAsideResult::Outcome::CouldNotKeep:
+            break;
+    }
+    writer_.forbidWrites("config: not saved - the damaged settings file could not be kept aside");
+    cascade::core::diagWarnf(
+        "settings: a damaged file (%llu bytes) could not be kept aside, so nothing will be saved over it in this session", bytes);
+    std::fprintf(stderr,
+                 "foxsdr-engine: the damaged settings file could not be kept aside, so nothing will be saved over it in this run\n");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 3. THE START: the window's run() from the receiver's start to the control thread.
+//
+// ORDER:
+//   receiver       interactive runs start receiving at once (a radio that opens with dead panels reads as
+//                  broken); the window calls Engine::startReceiver, which is all the RUN command does
+//                  beyond clearing a test fault                                              [:1225]
+//   (heartbeat)    the window arms the update check and the usage heartbeat HERE, interactive runs
+//                  only. A headless service arms NEITHER for now: a service on the desktop's install id
+//                  would double-count one machine (the 0.65.0 note, app_window.cpp:1372-1378), and the
+//                  heartbeat needs a "kind" on the Worker that has not been decided (survey O8). The
+//                  start-up report of the PREVIOUS session is still sent, by the restore.   [:1371-1380]
+//   diagnostics    the hang watchdog's report directory follows the stored switch             [:1393-1402]
+//   first save     THE UNCLEAN-EXIT MARKER, FORCED TO DISK ONCE, HERE. telemetryCleanExit = false on
+//                  disk is what tells the NEXT start that this run never shut down; it reaches the file
+//                  only when the settings are saved, the save is debounced behind a CHANGE, and the
+//                  debounce baseline was taken after the launch counter moved - so without this a run
+//                  that died before anything changed would look, next start, like a clean exit [:1412-1427]
+//   control thread the pass on its own thread, AFTER everything this thread does to the engine before
+//                  the loop (the receiver, the first save), with the window's period and floor; the first
+//                  pass made here so the first read is a real state                            [:1439-1458]
+// ---------------------------------------------------------------------------------------------------
+bool EngineService::start(std::string& why) {
+    const FoxCommandResult started = engine_.applyCommand(cmd::makeInt(FOXAPI_OP_RUN, 1));
+    if (started.status != FOXAPI_OK || (started.flags & FOXAPI_RESULT_REFUSED) != 0u) {
+        why = "the receiver could not be started (status " + std::to_string(static_cast<int>(started.status)) + ")";
+        return false;
+    }
+
+    const std::string reportDir = diagnosticsEnabled_ ? options_.diagnosticsDir : std::string();
+
+    if (persistent()) { saveNow(); }
+
+    cascade::engine::ControlThreadOptions opt;
+    opt.period = std::chrono::milliseconds(16);
+    opt.floor = std::chrono::milliseconds(2);
+    opt.stepped = false;
+    opt.watchdogReportDir = reportDir;
+    engine_.controlPass();
+    engine_.startControlThread(opt);
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 4. THE KEEP: what the window's frame loop does about the settings, once a frame
+// (pollConfigWriter, then maybeSaveConfig, app_window.cpp:1828-1837).
+//
+// The write is on the writer's worker (core::ConfigWriter: the 0.96.3 field report that put the window's
+// config save off its thread is the same argument for a thread that must keep answering); this thread only
+// reads the engine's PUBLISHED snapshot (Engine::configSnapshot is a copy behind a mutex, the engine's pass
+// publishes it once a pass) and decides. It never calls Engine::publishConfig while the control thread
+// runs: that is the pass's own call.
+// ---------------------------------------------------------------------------------------------------
+void EngineService::keep() {
+    if (!persistent()) { return; }
+    pollWriter();
+    const double now = nowS();
+    if (lastLookS_ >= 0.0 && now - lastLookS_ < kLookEveryS) { return; }
+    lastLookS_ = now;
+    maybeSave(now);
+}
+
+void EngineService::pollWriter() {
+    if (!writer_.poll()) { return; }
+    if (writer_.lastOk()) {
+        // Only when fully drained: a write that just finished but has another coalesced behind it is not yet
+        // the LAST requested content.
+        if (!writer_.inFlight()) { savedKey_ = comparable(lastRequested_); }
+        noteWrite(true, std::string());
+    } else {
+        std::fprintf(stderr, "foxsdr-engine: %s\n", writer_.lastError().c_str());
+        noteWrite(false, writer_.lastError());
+        // THE SETTINGS FILE COULD NOT BE WRITTEN (a read-only profile, a full disk, a file another program holds)
+        // and the service carries on with what it has: counted, once a session.
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::CfgSave);
+    }
+}
+
+void EngineService::noteWrite(bool ok, const std::string& error) {
+    if (ok) {
+        failures_ = 0;
+        failureFresh_ = false;
+        retryAtS_ = 0.0;
+        failureLogged_ = false;  // the next failure starts a new run
+        return;
+    }
+    ++failures_;
+    failureFresh_ = true;  // the next look gives it the clock
+    if (!failureLogged_) {
+        failureLogged_ = true;
+        const char* cause = "the write failed";
+        if (error.find("cannot create temp file") != std::string::npos) {
+            cause = "the settings folder would not take a new file";
+        } else if (error.find("atomic replace") != std::string::npos) {
+            cause = "the settings file is held by another program or could not be replaced";
+        } else if (error.find("write to temp file") != std::string::npos) {
+            cause = "the write failed part way";
+        } else if (error.find("cannot create directory") != std::string::npos) {
+            cause = "the settings folder could not be made";
+        }
+        cascade::core::diagWarnf("config: the settings could not be saved (%s); trying again, with a longer wait each time", cause);
+    }
+}
+
+bool EngineService::retryHeld(double nowS) {
+    if (failureFresh_) {
+        failureFresh_ = false;
+        double wait = kConfigDebounceS;
+        for (int i = 0; i < failures_ && wait < kConfigRetryCapS; ++i) { wait *= 2.0; }
+        if (wait > kConfigRetryCapS) { wait = kConfigRetryCapS; }
+        retryAtS_ = nowS + wait;
+    }
+    return nowS < retryAtS_;
+}
+
+void EngineService::maybeSave(double nowS) {
+    // A DAMAGED SETTINGS FILE THAT COULD NOT BE KEPT ASIDE is never saved over: the writer was told so at
+    // start-up, and there is nothing to ask for.
+    if (writer_.writesForbidden()) { return; }
+    const bool held = retryHeld(nowS);
+    const cascade::core::AppConfig cur = engine_.configSnapshot();
+    const std::string curKey = comparable(cur);
+    if (curKey == savedKey_) {
+        lastChangeS_ = -1.0;  // clean again (e.g. change was undone)
+        return;
+    }
+    if (lastChangeS_ < 0.0 || curKey != pendingKey_) {
+        // First difference, or the state moved again: restart the debounce window so a burst of changes
+        // writes once, when it stops.
+        pendingKey_ = curKey;
+        lastChangeS_ = nowS;
+        return;
+    }
+    if (!held && nowS - lastChangeS_ >= kConfigDebounceS) {
+        // THE REQUEST NEVER BLOCKS (core/config_writer.hpp). lastChangeS_ resets optimistically: if the
+        // write goes on to fail, savedKey_ stays stale (pollWriter advances it on success only), so the very
+        // next look reads "different" again and starts a fresh debounce window.
+        requestSave(cur);
+        lastChangeS_ = -1.0;
+    }
+}
+
+void EngineService::saveNow() {
+    // A save that must be CURRENT (the first, the final): the engine hands over its half as it is now, not as
+    // the last pass left it. Only ever called with the control thread not running (before it starts, after
+    // the quiesce joined it).
+    engine_.publishConfig();
+    requestSave(engine_.configSnapshot());
+}
+
+void EngineService::requestSave(const cascade::core::AppConfig& cfg) {
+    lastRequested_ = cfg;
+    // A writer told not to write (a damaged file that could not be kept aside) drops the request: not counted
+    // as a save, so the run's last line never claims one that was refused.
+    if (!writer_.writesForbidden()) { ++saves_; }
+    writer_.requestAsync(options_.configPath, cascade::core::ConfigStore::serialize(cfg));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 5. THE STOP: the window's teardown (app_window.cpp, run() from "beginShutdown" to the drain,
+// :2149-2301), statement for statement. This order has been broken before - the 0.99.84 merge lost whole
+// statements from it and found them only by running tests - so each line says why it is where it is.
+//
+//   close wait off   NO SOUND CARD CLOSE IS WAITED FOR FROM HERE ON: each is handed to its own thread and
+//                    left there, so a card whose close hangs cannot spend the budget the radios' destroy
+//                    below is inside                                                          [:2161]
+//   quiesce          the servers first of all, the control thread joined, the TRANSMITTER (a keyed radio
+//                    cannot wait), the GPS reader and its last poll, both recordings finalised [:2170]
+//   (window only)    the plugin report, the crash-report sweep's stop, the feature-request senders:
+//                    the window's, none here                                                  [:2177-2202]
+//   final save       unconditional: guarantees the file matches the final state even when the debounce
+//                    never fired. BEFORE the pipeline stops, so the snapshot reads live state; and the
+//                    clean-exit flag is deliberately still FALSE - a death during the pipeline join is a
+//                    death                                                                    [:2203]
+//   stop             the bookmark flush, the pipeline stopped and joined - where the bounded driver waits
+//                    are spent and the 120 s CAT freeze happened                              [:2222]
+//   release          THE PLUGINS COME DOWN HERE, BEFORE THE CLEAN-EXIT MARKER (master 0.99.60; a merge
+//                    once put them after it and test_clean_exit_marker found out): a plugin's destroy()
+//                    is third-party code that can wedge, and a marker written before it already said
+//                    "clean". The patch's radios first, the plugins destroyed, the modules unmapped last
+//                                                                                             [:2234]
+//   marker           AFTER the last of the third-party code. It REWRITES THE SNAPSHOT THE FINAL SAVE JUST
+//                    ASKED FOR with one field changed, rather than publishing again: a second snapshot
+//                    would re-derive every value at a moment when the session is half torn down (the
+//                    usage report's clock, the source's live state)                           [:2260-2272]
+//   last save        THE LAST SAVE MUST BE GIVEN A REAL CHANCE TO LAND, OR BE SEEN NOT TO: the one place
+//                    that WAITS, bounded (ConfigWriter::kSaveBound, charged in the shutdown budget) and
+//                    abandoned, with a line in the log, past the bound; the deadline is taken BEFORE this
+//                    wait so what it leaves is what the drain gets                            [:2284-2297]
+//   drain            the two lists' last saves and the takes' files, against the SAME deadline [:2301]
+// ---------------------------------------------------------------------------------------------------
+void EngineService::stop() {
+    if (stopped_) { return; }
+    stopped_ = true;
+
+    cascade::source::SoundCardSource::setCloseWaitEnabled(false);
+
+    engine_.shutdownQuiesce();
+
+    if (persistent()) { saveNow(); }
+
+    engine_.shutdownStop();
+
+    engine_.shutdownRelease();
+
+    // The deliberate wedge in THIS stage - the one the plugins' own code runs in. A bounded run's test seam
+    // only (ServiceOptions::unloadStallMs); printed so a test can prove the process is inside it before it
+    // kills it.
+    if (options_.unloadStallMs > 0) {
+        std::fprintf(stderr, "foxsdr-engine: --diag-unload-stall wedging the plugin unload for %d ms\n", options_.unloadStallMs);
+        std::fflush(stderr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(options_.unloadStallMs));
+    }
+
+    engine_.markCleanExit();
+    if (persistent()) {
+        cascade::core::AppConfig marked = lastRequested_;
+        marked.telemetryCleanExit = true;
+        requestSave(marked);
+    }
+
+    const auto drainDeadline = std::chrono::steady_clock::now() + cascade::gui::ConfigWriter::kSaveBound;
+    if (persistent()) {
+        if (writer_.finishOrAbandon(cascade::gui::ConfigWriter::kSaveBound)) {
+            if (writer_.lastOk()) {
+                savedKey_ = comparable(lastRequested_);
+            } else {
+                std::fprintf(stderr, "foxsdr-engine: %s\n", writer_.lastError().c_str());
+            }
+        } else {
+            cascade::core::diagLogf("config: final save abandoned - the disk did not answer within %lld ms",
+                                    static_cast<long long>(cascade::gui::ConfigWriter::kSaveBound.count()));
+        }
+    }
+
+    engine_.shutdownDrain(drainDeadline);
+}
+
+}  // namespace cascade::engine

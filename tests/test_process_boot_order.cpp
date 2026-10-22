@@ -370,6 +370,27 @@ int main(int argc, char** argv) {
         CHECK(findIn(parseView, "!host && std::strcmp(argv[i], \"--seconds\")") != std::string::npos);
         CHECK(findIn(parseView, "foxsdr-engine: unknown argument") != std::string::npos);
         CHECK(findIn(parseView, "cascade: unknown argument") != std::string::npos);
+
+        // 7c: the Engine's settings file. The two flags are the Engine's (a Host refuses them as any flag it does not
+        // have), the path is handed on by the one function that knows the rule, and - the other half of the stored
+        // Diagnostics switch's "off means off" - read ahead of the parse from the command line alone, behind the same
+        // kind guard that returns before the Host's own rule.
+        CHECK(findIn(parseView, "!host && std::strcmp(argv[i], \"--config\")") != std::string::npos);
+        CHECK(findIn(parseView, "!host && std::strcmp(argv[i], \"--use-config\")") != std::string::npos);
+        CHECK(findIn(parseView, "--config and --use-config both name the settings file") != std::string::npos);
+        CHECK(findIn(slice(boot.blank, config), "engineSettingsPath(") != std::string::npos);
+        if (cfgPath.found()) {
+            const std::string code = slice(boot.blank, cfgPath);
+            const std::size_t guard = findIn(code, "kind != ProcessKind::Host");
+            const std::size_t engineRule = findIn(code, "engineConfigFromArgs(");
+            const std::size_t hostRule = findIn(code, "ConfigStore::defaultPath(");
+            CHECK(guard != std::string::npos && engineRule != std::string::npos && hostRule != std::string::npos &&
+                  guard < engineRule && engineRule < hostRule);
+        }
+        // The lock is NOT a boot step: boot decides and parses, the service (Engine) and main() (Host) take it, so no
+        // step of the sequence acquires anything on a settings file.
+        CHECK(findIn(boot.blank, "ConfigLock") == std::string::npos);
+        CHECK(findIn(boot.blank, "acquire(") == std::string::npos);
     }
     // The sequence passes the kind to exactly the seven steps that take it: the four gated ones and the three whose
     // inputs it decides.

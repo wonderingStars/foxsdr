@@ -1869,10 +1869,7 @@ private:
     // actually running rather than the last one selected.
     void telemetryAccrueMode();
     void telemetryNotePanel(const char* name);
-    // Reads the previous session out of the config, counts a crash if it
-    // never finished, and sends its report. Start-up only.
-    // `configDir`: where config.json lives (the usage record's ledgers and send marker sit beside it); empty = memory only.
-    void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir = std::string());
+    // (telemetryStartup, the usage journal's start-up, is public since stage 7c: it is declared with the engine's life, below.)
     // Builds this session's report into `cfg` for the next start-up to send.
     void telemetryJournal(cascade::core::AppConfig& cfg);
     // Rebuilds the report context out of state the application already has -
@@ -2623,6 +2620,12 @@ public:
     // ~Engine does both for a front end that did not. GUI thread in 3a.
     void initialise();
     void loadBookmarks();
+    // Reads the previous session out of the config, counts a crash if it
+    // never finished, and sends its report. Start-up only, after applyConfig (the crash count and the pending report are read
+    // from the file, not from freshly defaulted members). The window reaches it through EngineShell; the headless service
+    // (engine/engine_service.cpp, stage 7c) has no shell and calls it here.
+    // `configDir`: where config.json lives (the usage record's ledgers and send marker sit beside it); empty = memory only.
+    void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir = std::string());
     void stopTransfers();
     void teardown();
 
@@ -2720,6 +2723,12 @@ public:
     // takes' files still being closed on workers are waited for. A default-constructed one waits for nothing and collects what has finished.
     void shutdownDrain(std::chrono::steady_clock::time_point drainDeadline = std::chrono::steady_clock::time_point{});
     void shutdown();
+    // THE CLEAN-EXIT MARKER (stage 7c): what EngineShell::markCleanExit sets for the window, for the front end that has no shell - the
+    // headless service (engine/engine_service.cpp). From here every snapshot the engine publishes says telemetryCleanExit = true, so the
+    // call belongs AFTER shutdownRelease (the pipeline join and the plugins' destroy() are the two places a shutdown wedges: a marker
+    // written before them reads a session killed inside them as a clean one), and the service writes its marker by rewriting the LAST
+    // REQUESTED snapshot, not by publishing a fresh one (engine_service.cpp, stop()). tests/test_engine_service_order.cpp holds the order.
+    void markCleanExit() { telemetryCleanExit_ = true; }
     // THE TWO BOUNDED-RUN PLUGIN DIAGNOSTICS (window port group 14, part e; engine_diagnostics.cpp). Test machinery that
     // prints what the engine decided to stdout; they read nothing but the engine's own state and were the window's until
     // then. A front end calls reportPluginStatus once, right after shutdownQuiesce (the state a bounded run finished in,

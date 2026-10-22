@@ -64,14 +64,38 @@ namespace {
 // anywhere near the user's %LOCALAPPDATA%\FoxSDR.
 //
 // THE ENGINE (stage 7b) has no "real session" of this kind: a bare
-// `foxsdr-engine` is a headless run that stores nothing until stage 7c gives it
-// a config, so it is hermetic whatever its argument count is - the one door is
-// the same override, a directory somebody named on purpose.
+// `foxsdr-engine` is a headless run that stores nothing unless it is given a
+// settings file (stage 7c), so it is hermetic whatever its argument count is - the
+// one door is the same override, a directory somebody named on purpose.
 bool diagnosticsOnDisk(ProcessKind kind, int argc) {
     const char* over = std::getenv("FOXSDR_DIAG_DIR");
     if (over != nullptr && *over != '\0') { return true; }
     if (kind != ProcessKind::Host) { return false; }
     return argc == 1;
+}
+
+// THE ENGINE'S SETTINGS FILE, as the command line names it (stage 7c): `--config PATH` is that file,
+// `--use-config` the per-user file the window application uses (the survey's decision O3: one shared
+// file, guarded by a lock); neither: none - the hermetic default of 7b. Read from argv alone, so the
+// stored Diagnostics switch can be honoured before the parse (the Host's reason, startupConfigPath);
+// parseFlags is what REFUSES a malformed or contradictory line, so a refused line may be read here
+// and is never acted on.
+std::string engineConfigFromArgs(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc && argv[i + 1][0] != '\0' &&
+            std::strncmp(argv[i + 1], "--", 2) != 0) {
+            return std::string(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--use-config") == 0) { return cascade::core::ConfigStore::defaultPath(); }
+    }
+    return std::string();
+}
+
+// ...and the same answer once the parse has accepted the line: what wireConfig hands on to an Engine.
+std::string engineSettingsPath(const BootResult& boot) {
+    if (!boot.engineConfigArg.empty()) { return boot.engineConfigArg; }
+    if (boot.engineUseConfig) { return cascade::core::ConfigStore::defaultPath(); }
+    return std::string();
 }
 
 // The config THIS run will use, resolved before the argument parse so the
@@ -81,10 +105,10 @@ bool diagnosticsOnDisk(ProcessKind kind, int argc) {
 // CASCADE_CONFIG_TEST when it is set and no config at all otherwise. Empty
 // means "this run has no stored preference".
 std::string startupConfigPath(ProcessKind kind, int argc, char** argv) {
-    // An Engine reads no config at all (stage 7b; 7c wires one): "no stored
-    // preference", so the stored switch below answers its default and no file
-    // of the user's is opened.
-    if (kind != ProcessKind::Host) { return std::string(); }
+    // An Engine reads no config unless it was ASKED to (stage 7b: none at all; 7c:
+    // `--config PATH` or `--use-config`): "no stored preference", so the stored
+    // switch below answers its default and no file of the user's is opened.
+    if (kind != ProcessKind::Host) { return engineConfigFromArgs(argc, argv); }
     bool bounded = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) { bounded = true; }
@@ -488,6 +512,8 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     const bool argv1IsLinkActivation = boot.argv1IsLinkActivation;
     int frames = -1;  // negative: run until the window is closed
     double seconds = -1.0;  // negative: run until stopped (Engine)
+    std::string configArg;  // --config PATH (Engine)
+    bool useConfig = false;  // --use-config (Engine)
     int diagStallMs = 0;
     int diagToggle = 0;
     bool selftest = false;
@@ -678,10 +704,26 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
             }
             seconds = value;
             ++i;
+        } else if (!host && std::strcmp(argv[i], "--config") == 0) {
+            // THE ENGINE'S SETTINGS FILE (stage 7c): this run reads, owns and saves that file. A value that
+            // is another flag is a forgotten path, not a file called "--seconds".
+            if (i + 1 >= argc || argv[i + 1][0] == '\0' || std::strncmp(argv[i + 1], "--", 2) == 0) {
+                std::fprintf(stderr, "foxsdr-engine: --config requires the path of a settings file\n");
+                return 1;
+            }
+            if (!configArg.empty()) {
+                std::fprintf(stderr, "foxsdr-engine: --config was given twice\n");
+                return 1;
+            }
+            configArg = argv[i + 1];
+            ++i;
+        } else if (!host && std::strcmp(argv[i], "--use-config") == 0) {
+            // The per-user settings file the window application uses: the one shared file, behind a lock.
+            useConfig = true;
         } else if (!host) {
             std::fprintf(stderr,
                          "foxsdr-engine: unknown argument '%s' (usage: foxsdr-engine [--seconds N] "
-                         "[--selftest] [--version])\n",
+                         "[--config PATH | --use-config] [--selftest] [--version])\n",
                          argv[i]);
             return 1;
         } else {
@@ -693,8 +735,16 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         }
     }
 
+    // Two names for the settings file are one too many: which is meant?
+    if (!configArg.empty() && useConfig) {
+        std::fprintf(stderr, "foxsdr-engine: --config and --use-config both name the settings file; give one\n");
+        return 1;
+    }
+
     boot.frames = frames;
     boot.seconds = seconds;
+    boot.engineConfigArg = configArg;
+    boot.engineUseConfig = useConfig;
     boot.diagStallMs = diagStallMs;
     boot.diagToggle = diagToggle;
     boot.linkTesterReveal = linkTesterReveal;
@@ -716,11 +766,14 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
 // The Host's rule is below, unchanged. THE ENGINE'S (stage 7b) is the hermetic
 // one: no config path at all - not the user's file, and not CASCADE_CONFIG_TEST
 // either, which is the bounded window run's test hook - so a headless run reads
-// nothing and writes nothing of the user's until stage 7c wires a config in.
+// nothing and writes nothing of the user's. Stage 7c adds the one door: a path is
+// handed on only when the command line ASKED for one (--config PATH, or
+// --use-config for the per-user file); a bare run is as hermetic as it was.
 // ---------------------------------------------------------------------------
 void wireConfig(ProcessKind kind, BootResult& boot) {
     if (kind != ProcessKind::Host) {
-        boot.configPath.clear();
+        // The Engine's rule (7c): a settings file only when ASKED for one on the command line.
+        boot.configPath = engineSettingsPath(boot);
         boot.announceConfig = false;
         return;
     }

@@ -261,6 +261,10 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         // settings write that failed, the saved patch that lost connections) stay in app_window.cpp.
         {"Audio", "src/engine/engine.cpp", 1},      {"Reopen", "src/engine/engine.cpp", 1},
         {"CfgSave", "src/gui/app_window.cpp", 1},    {"PatchLoad", "src/gui/app_window.cpp", 1},
+        // Stage 7c: the headless service (engine/engine_service.cpp) keeps the settings saved and counts a failed write the way the window does.
+        // A word may have a site in each of two PROGRAMS that are never one process (the window application and foxsdr-engine); within one
+        // file it is still counted exactly once, and no third file counts it.
+        {"CfgSave", "src/engine/engine_service.cpp", 1},
         {"SdrEnum", "src/engine/engine.cpp", 1},     {"SdrLost", "src/engine/engine.cpp", 1},
         {"AudioLead", "src/engine/engine.cpp", 1},
         {"EnumChild", "src/source/soapy_enum_proc.cpp", 1},
@@ -269,6 +273,13 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
     // The four counters a poll reads: named in the poll, where the readings are made - the engine's pass since the extraction (the window
     // no longer holds a pipeline to read them from).
     const std::string window = readFile(root / "src" / "engine" / "engine.cpp");
+    // The words the table names, and how many files each has a site in (a word's files are exactly its rows').
+    std::set<std::string> words;
+    std::map<std::string, std::size_t> filesOf;
+    for (const Site& s : sites) {
+        words.insert(s.word);
+        ++filesOf[s.word];
+    }
     for (const char* reading : {"now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads())",
                                 "now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned()",
                                 "now.ringDroppedSamples = pipeline_.ringDroppedSamples()",
@@ -278,7 +289,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         CHECK(window.find(reading) != std::string::npos);
     }
     const std::set<std::string> watched = {"SrcThread", "VendorCall", "RingDrop", "DspExc"};
-    CHECK(sites.size() + watched.size() == health::kRecoveredCount);
+    CHECK(words.size() + watched.size() == health::kRecoveredCount);
     // scan the whole tree for uses outside the vocabulary's own files
     std::map<std::string, std::map<std::string, int>> found;   // word -> file -> count
     for (const auto& e : fs::recursive_directory_iterator(root / "src")) {
@@ -299,7 +310,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         const auto it = found.find(s.word);
         CHECK(it != found.end());
         if (it == found.end()) { std::printf("FAIL Recovered::%s is counted nowhere\n", s.word); continue; }
-        CHECK(it->second.size() == 1);
+        CHECK(it->second.size() == filesOf[s.word]);
         const auto f = it->second.find(s.file);
         CHECK(f != it->second.end() && f->second == s.count);
         if (f == it->second.end() || f->second != s.count) {
@@ -316,7 +327,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         CHECK(listed);
         known += listed ? 1 : 0;
     }
-    CHECK(known == sites.size());
+    CHECK(known == words.size());
 }
 
 // ---------------------------------------------------------------------------

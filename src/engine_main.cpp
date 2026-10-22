@@ -11,30 +11,34 @@
 // cascade_engine only; the configure-time walk (CMakeLists.txt, "the line
 // between them") covers it and so does tests/test_engine_main_links_headless.cpp.
 //
-// WHAT IT DOES TODAY, deliberately little (7b is the skeleton; 7c gives it a
-// life-cycle and a config, 7d the signals, 7e the provisioning):
+// WHAT IT DOES TODAY (7b made the skeleton; 7c gave it a life-cycle and a config, 7d the signals,
+// 7e the provisioning):
 //   * `--version`, the tool modes (`--selftest` and the hidden bench checks) and
 //     the child-process helper modes the engine re-spawns itself for
 //     (`--enumerate-json`, `--sentinel`, `--sdrplay-probe`, `--sdrplay-service-state`)
 //     all answer inside bootProcess, exactly as they do in `cascade`;
-//   * otherwise it constructs an Engine, selects the built-in signal generator,
-//     starts the receiver MUTED (a service has no business playing a demo tone
-//     at a sound card) and runs the engine's own pass on the engine's own
-//     thread, with the window's period and floor. It reads no config, writes no
-//     config and serves nothing; it writes no file at all (the diagnostics and
-//     config gates are in boot);
-//   * `--seconds N` ends the run after N seconds: the stop is the window's order
-//     (the sound-card close wait off, then the engine's four teardown phases) and
-//     the exit code is 0. Without it the run goes on until the process is ended
-//     from outside - which, until 7d's signal path, is a kill, and the engine
-//     says so on its stderr line.
+//   * otherwise it runs the engine through an EngineService (src/engine/engine_service.hpp),
+//     which is the window's life with the window left out: restore, start, keep, stop;
+//   * HERMETIC by default, as the skeleton was: no settings file read, written or locked,
+//     the built-in signal generator, MUTED (a service has no business playing a demo tone at a
+//     sound card), nothing written to the disk at all (the diagnostics and config gates are
+//     in boot);
+//   * PERSISTENT when asked: `--config PATH` (that file) or `--use-config` (the per-user file the
+//     window application uses). The run then takes the lock beside the file FIRST (a second
+//     foxsdr-engine, or the window application, on the same file is refused with a sentence),
+//     restores the settings the way the window does, keeps them saved while it runs and writes
+//     the clean-exit marker last of all, in the window's stop order;
+//   * `--seconds N` ends the run after N seconds: the stop is the window's order and the exit
+//     code is 0. Without it the run goes on until the process is ended from outside - which,
+//     until 7d's signal path, is a kill, and the engine says so on its stderr line.
 //
 // EXIT CODES (cascade's: 0 success, 1 a refused or failed run, 2 a refused
 // helper argument):
 //   0   the run was asked to end and did: `--seconds` elapsed and the engine stopped; a
 //       tool mode that passed; `--version`
-//   1   a refused argument; a tool mode that failed; the engine could not be started (it
-//       threw, or the receiver did not come up) - the reason is on stderr
+//   1   a refused argument; a tool mode that failed; the settings file is in use by another
+//       program; the engine could not be started (it threw, or the receiver did not come up) -
+//       the reason is on stderr
 //   2   a helper mode refused its arguments (bootProcess)
 //
 // stdout carries only what a mode prints (`--version`'s one line, a tool mode's
@@ -43,21 +47,23 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <string>
 #include <thread>
+#include <utility>
 
-#include "core/app_commands.hpp"
+#include "core/diag_log.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "core/version.hpp"
 #include "engine/engine.hpp"
+#include "engine/engine_service.hpp"
 #include "engine/process_boot.hpp"
-#include "source/soundcard_source.hpp"
 
 namespace {
 
-namespace cmd = cascade::core::cmd;
 using cascade::engine::Engine;
+using cascade::engine::EngineService;
 
 constexpr int kExitOk = 0;
 constexpr int kExitFailed = 1;
@@ -66,11 +72,12 @@ constexpr int kExitFailed = 1;
 // first pass has published well inside this on every machine measured; a slower
 // one is told, not waited on for ever.
 constexpr std::chrono::milliseconds kStartWait{5000};
-// The sleep between looks at the clock and the stop request. The engine runs on
-// its own thread; this thread only decides when to end it.
+// The sleep between looks at the clock, the stop request and the settings. The engine
+// runs on its own thread; this thread only decides when to end it and keeps the settings
+// saved (EngineService::keep, which looks at them a few times a second whatever this is).
 constexpr std::chrono::milliseconds kWaitSlice{20};
 
-// Set by whatever ends the run from outside. Nothing sets it in 7b (7d's
+// Set by whatever ends the run from outside. Nothing sets it in 7c (7d's
 // SIGTERM/SIGINT/SIGHUP path and the console-close handler will); the wait loop
 // reads it so that path needs no change here.
 std::atomic<bool> g_stopRequested{false};
@@ -81,45 +88,51 @@ bool receiverRunning(const Engine& engine) {
     return ps.app.published && (ps.rx.flags & FOXAPI_RX_RUNNING) != 0u;
 }
 
-// The whole run: construct, start, wait, stop. Returns the exit code.
+// A positive whole number of milliseconds from the environment, or 0: the bounded-run test seam below.
+int envMillis(const char* name) {
+    const char* v = std::getenv(name);
+    if (v == nullptr || *v == '\0') { return 0; }
+    char* end = nullptr;
+    const long n = std::strtol(v, &end, 10);
+    return (end != v && *end == '\0' && n > 0 && n <= 600000L) ? static_cast<int>(n) : 0;
+}
+
+// The whole run: lock, restore, start, wait (keeping the settings), stop. Returns the exit code.
 int runEngine(const cascade::engine::BootResult& boot) {
-    Engine engine;
-    engine.initialise();
+    cascade::engine::ServiceOptions options;
+    options.configPath = boot.configPath;
+    // The hang watchdog's report directory when this run may write diagnostics at all (boot decided) and the
+    // stored switch is on - the window's setDiagnosticsDir, handed over the same way (main.cpp).
+    options.diagnosticsDir = boot.mayWrite ? cascade::core::diagCrashDir() : std::string();
+    // THE TEST SEAM, a bounded run's only (`--seconds`; the window's CASCADE_DIAG_UNLOAD_STALL_MS is honoured
+    // with `--frames` only, for the same reason: no interactive run can be wedged by a stray variable).
+    if (boot.seconds >= 0.0) { options.unloadStallMs = envMillis("FOXSDR_ENGINE_UNLOAD_STALL_MS"); }
+    const bool persistent = !options.configPath.empty();
 
-    // THE SOURCE IS THE GENERATOR, chosen explicitly (it is the engine's default,
-    // and 7c's config restore will overrule it; naming it here keeps the
-    // skeleton's behaviour from depending on a default). MUTED: the receiver
-    // opens its audio sink on RUN whatever the level, and at level 0 there is
-    // nothing to hear.
-    (void)engine.applyCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, 0.0));
-    const cmd::QueuedCommand generator = cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "siggen");
-    const FoxCommandResult selected = engine.applyCommand(generator.c, generator.longText);
-    if (selected.status != FOXAPI_OK && selected.status != FOXAPI_NO_CHANGE) {
-        std::fprintf(stderr, "foxsdr-engine: the signal generator could not be selected (status %d)\n",
-                     static_cast<int>(selected.status));
-        engine.shutdown();
-        return kExitFailed;
-    }
-    const FoxCommandResult started = engine.applyCommand(cmd::makeInt(FOXAPI_OP_RUN, 1));
-    if (started.status != FOXAPI_OK || (started.flags & FOXAPI_RESULT_REFUSED) != 0u) {
-        std::fprintf(stderr, "foxsdr-engine: the receiver could not be started (status %d)\n",
-                     static_cast<int>(started.status));
-        engine.shutdown();
+    EngineService service(std::move(options));
+    Engine& engine = service.engine();
+
+    // THE LOCK FIRST, before the settings file is read: a program that is going to rewrite a file it read must
+    // be the only one that may (core/config_lock.hpp). Refused: say so, in a sentence, and do not start.
+    std::string sentence;
+    if (!service.acquireConfig(sentence)) {
+        std::fprintf(stderr, "%s\n", sentence.c_str());
         return kExitFailed;
     }
 
-    // THE PASS ON ITS OWN THREAD, as the window starts it (app_window.cpp: period
-    // 16 ms, floor 2 ms, free-running), and the first pass made here so the first
-    // read is a real state, as the table's own create() does it. The control
-    // thread's hang watchdog keeps its empty report directory: a run that may not
-    // write writes no report (the Diagnostics switch, 7c, moves it).
-    cascade::engine::ControlThreadOptions options;
-    options.period = std::chrono::milliseconds(16);
-    options.floor = std::chrono::milliseconds(2);
-    options.stepped = false;
-    options.watchdogReportDir.clear();
-    engine.controlPass();
-    engine.startControlThread(options);
+    const EngineService::Restored restored = service.restore();
+    if (!restored.error.empty() && !restored.damaged) {
+        std::fprintf(stderr, "foxsdr-engine: %s\n", restored.error.c_str());
+        service.stop();
+        return kExitFailed;
+    }
+
+    std::string why;
+    if (!service.start(why)) {
+        std::fprintf(stderr, "foxsdr-engine: %s\n", why.c_str());
+        service.stop();
+        return kExitFailed;
+    }
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto elapsedS = [&t0] {
@@ -130,7 +143,10 @@ int runEngine(const cascade::engine::BootResult& boot) {
     while (!up && !g_stopRequested.load() &&
            std::chrono::steady_clock::now() - t0 < kStartWait) {
         up = receiverRunning(engine);
-        if (!up) { std::this_thread::sleep_for(kWaitSlice); }
+        if (!up) {
+            service.keep();
+            std::this_thread::sleep_for(kWaitSlice);
+        }
     }
     int code = kExitOk;
     if (!up && !g_stopRequested.load()) {
@@ -138,26 +154,32 @@ int runEngine(const cascade::engine::BootResult& boot) {
                      static_cast<long long>(kStartWait.count()));
         code = kExitFailed;
     } else {
-        std::fprintf(stderr, "foxsdr-engine %s: running, signal generator, muted, no config%s\n",
-                     cascade::versionString(),
-                     boot.seconds >= 0.0 ? "" : " (until ended from outside)");
+        const char* tail = boot.seconds >= 0.0 ? "" : " (until ended from outside)";
+        if (persistent) {
+            std::fprintf(stderr, "foxsdr-engine %s: running, settings file in use (%s)%s\n", cascade::versionString(),
+                         restored.damaged ? "damaged, defaults in use" : "restored", tail);
+        } else {
+            std::fprintf(stderr, "foxsdr-engine %s: running, signal generator, muted, no config%s\n",
+                         cascade::versionString(), tail);
+        }
         std::fflush(stderr);
         while (!g_stopRequested.load() && (boot.seconds < 0.0 || elapsedS() < boot.seconds)) {
+            service.keep();
             std::this_thread::sleep_for(kWaitSlice);
         }
     }
 
-    // THE STOP, in the window's order (app_window.cpp, "SoundCardSource::
-    // setCloseWaitEnabled(false)" then the engine's phases): no sound-card close is
-    // waited for from here on, then quiesce (the transmitter first, the servers,
-    // the control thread joined), stop (the pipeline), release (the plugins and
-    // modules) and drain. There is no config to save between the phases until 7c
-    // gives the engine one.
-    cascade::source::SoundCardSource::setCloseWaitEnabled(false);
+    // THE STOP, in the window's order (EngineService::stop: no sound-card close waited for, quiesce, the
+    // final-state save, stop, release, the clean-exit marker, the last save waited for within its bound, the
+    // drain).
     const std::uint64_t passes = engine.passesEnded();
-    engine.shutdown();
+    service.stop();
     std::fprintf(stderr, "foxsdr-engine: stopped after %.1f s (%llu passes)\n", elapsedS(),
                  static_cast<unsigned long long>(passes));
+    if (persistent) {
+        std::fprintf(stderr, "foxsdr-engine: settings saved %llu time(s)\n",
+                     static_cast<unsigned long long>(service.savesRequested()));
+    }
     return code;
 }
 

@@ -54,6 +54,13 @@ int main() {
         {{"--seconds", "inf"}, "invalid --seconds value 'inf'"},
         {{"--seconds", "1e99"}, "invalid --seconds value '1e99'"},
         {{"--seconds", "2s"}, "invalid --seconds value '2s'"},
+        // The settings file (stage 7c): a path is required, a flag is not one, two names for it are one too many.
+        {{"--config"}, "--config requires the path of a settings file"},
+        {{"--config", "--seconds", "1"}, "--config requires the path of a settings file"},
+        {{"--config", ""}, "--config requires the path of a settings file"},
+        {{"--config", "a.json", "--config", "b.json"}, "--config was given twice"},
+        {{"--config", "a.json", "--use-config"}, "--config and --use-config both name the settings file; give one"},
+        {{"--use-config", "--config", "a.json"}, "--config and --use-config both name the settings file; give one"},
     };
     for (const Refusal& r : refusals) {
         const emt::RunResult x = engine(r.args);
@@ -67,7 +74,7 @@ int main() {
 
     // --- a usage line that names the engine and its one flag --------------------------------------------
     const emt::RunResult usage = engine({"--bogus"});
-    CHECK(emt::contains(usage.err, "usage: foxsdr-engine [--seconds N] [--selftest] [--version]"));
+    CHECK(emt::contains(usage.err, "usage: foxsdr-engine [--seconds N] [--config PATH | --use-config] [--selftest] [--version]"));
 
     // --- the Host is where it was: it refuses --seconds, as cascade, naming itself ------------------------
     if (fs::exists(cascadeExe)) {
@@ -75,6 +82,13 @@ int main() {
         CHECK(host.exitCode == 1);
         CHECK(emt::contains(host.err, "cascade: unknown argument '--seconds'"));
         CHECK(!emt::contains(host.err, "foxsdr-engine"));
+        // ...and so are the engine's settings flags (stage 7c): the Host has no such flag, and says so as it always did.
+        for (const std::vector<std::string>& args : {std::vector<std::string>{"--config", "x.json"},
+                                                     std::vector<std::string>{"--use-config"}}) {
+            const emt::RunResult h = emt::run(cascadeExe, args, home, root / "out", "host-" + args.front(), 120000);
+            CHECK(h.exitCode == 1);
+            CHECK(emt::contains(h.err, "cascade: unknown argument '" + args.front() + "'"));
+        }
     } else {
         CHECK(false);  // the application is built before this test (CMake dependency)
     }

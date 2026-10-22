@@ -23,7 +23,12 @@
 //     hands that one on), a bare Engine - argc 1, which is a "real session" for a
 //     Host - may write no diagnostics and leaves the profile exactly as it found it,
 //     and the flags differ by kind: --seconds is the Engine's, --frames the Host's,
-//     each refused by the other as an unknown argument.
+//     each refused by the other as an unknown argument;
+//   * (stage 7c) an Engine takes a settings file only when ASKED - `--config PATH` or
+//     `--use-config` - hands that one on (never CASCADE_CONFIG_TEST's), creates
+//     nothing by being asked (the lock is the service's), and refuses a missing
+//     path, a flag where the path goes, the flag twice and both names for the file;
+//     the Host refuses both flags as it refuses any flag it does not have.
 //
 // Isolation: APPDATA / XDG_CONFIG_HOME point at a scratch directory (the link
 // file lands there, never in the real profile), the instance names are private
@@ -209,6 +214,56 @@ int main() {
         CHECK(bare.seconds < 0.0);             // no bound: it would run until ended from outside
         CHECK(!bare.primaryInstance);
         CHECK(listing() == before);            // and nothing was created anywhere under the profile
+    }
+
+    // --- the Engine's settings file (stage 7c): handed on only when ASKED for, by the command line alone ------------
+    {
+        const std::string explicitPath = (scratch / "enginecfg" / "config.json").string();
+        const std::vector<std::string> before = [&] {
+            std::vector<std::string> names;
+            std::error_code lec;
+            for (const auto& entry : fs::recursive_directory_iterator(scratch, lec)) { names.push_back(entry.path().string()); }
+            return names;
+        }();
+        // --config PATH: that file, and the boot says so in the fields the service is built from.
+        const BootResult a = boot(ProcessKind::Engine, {"foxsdr-engine", "--config", explicitPath, "--seconds", "0"});
+        CHECK(!a.exit && a.configPath == explicitPath && !a.announceConfig && a.seconds == 0.0);
+        CHECK(a.engineConfigArg == explicitPath && !a.engineUseConfig);
+        // --use-config: the per-user file, the one the window application uses.
+        const BootResult u = boot(ProcessKind::Engine, {"foxsdr-engine", "--use-config", "--seconds", "0"});
+        CHECK(!u.exit && !u.configPath.empty() && u.configPath == cascade::core::ConfigStore::defaultPath() && u.engineUseConfig);
+        CHECK(u.configPath.rfind(scratch.string(), 0) == 0);  // the scratch profile's, never a real one
+        // CASCADE_CONFIG_TEST is the WINDOW's bounded-run hook: an engine asked for a file takes its own, and one not
+        // asked takes none, whatever the hook says.
+        setEnv("CASCADE_CONFIG_TEST", hook);
+        const BootResult withHook = boot(ProcessKind::Engine, {"foxsdr-engine", "--config", explicitPath, "--seconds", "0"});
+        CHECK(!withHook.exit && withHook.configPath == explicitPath);
+        const BootResult hookOnly = boot(ProcessKind::Engine, {"foxsdr-engine", "--seconds", "0"});
+        CHECK(!hookOnly.exit && hookOnly.configPath.empty());
+        unsetEnv("CASCADE_CONFIG_TEST");
+        // Naming a settings file creates nothing: no file, no folder, no lock - the service takes the lock, not boot.
+        CHECK(!fs::exists(explicitPath) && !fs::exists(fs::path(explicitPath).parent_path()));
+        {
+            std::vector<std::string> after;
+            std::error_code lec;
+            for (const auto& entry : fs::recursive_directory_iterator(scratch, lec)) { after.push_back(entry.path().string()); }
+            CHECK(after == before);
+        }
+        // Refused, with exit 1: no path, a flag where the path goes, the same flag twice, two names for the file.
+        for (const std::vector<std::string>& line : std::vector<std::vector<std::string>>{
+                 {"x", "--config"}, {"x", "--config", "--seconds", "1"}, {"x", "--config", ""},
+                 {"x", "--config", "a.json", "--config", "b.json"}, {"x", "--config", "a.json", "--use-config"},
+                 {"x", "--use-config", "--config", "a.json"}}) {
+            const BootResult r = boot(ProcessKind::Engine, line);
+            CHECK(r.exit && r.exitCode == 1);
+        }
+        // The Host has neither flag, and refuses each as it refuses any flag it does not have.
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-hcfg-" + std::to_string(std::rand()));
+        const BootResult hostConfig = boot(ProcessKind::Host, {"x", "--config", "a.json"});
+        CHECK(hostConfig.exit && hostConfig.exitCode == 1);
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-huse-" + std::to_string(std::rand()));
+        const BootResult hostUse = boot(ProcessKind::Host, {"x", "--use-config"});
+        CHECK(hostUse.exit && hostUse.exitCode == 1);
     }
 
     fs::remove_all(scratch, ec);

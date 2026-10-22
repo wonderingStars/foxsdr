@@ -26,6 +26,7 @@
 // order of the boot from the text of process_boot.cpp.
 #include <string>
 
+#include "core/config_lock.hpp"
 #include "core/diag_log.hpp"
 #include "engine/process_boot.hpp"
 #include "gui/app_window.hpp"
@@ -39,6 +40,25 @@ int main(int argc, char** argv) {
     const cascade::engine::BootResult boot =
         cascade::engine::bootProcess(cascade::engine::ProcessKind::Host, argc, argv);
     if (boot.exit) { return boot.exitCode; }
+
+    // THE SETTINGS FILE'S LOCK (stage 7c, core/config_lock.hpp), for a real session only: the headless
+    // engine shares this one file by design and refuses to run beside the window on it, so the window says it
+    // is here by taking the lock the engine looks for. BEST EFFORT, and never a refusal: a second window has
+    // always been allowed to start, and the window application behaves exactly as it did when it cannot get
+    // the lock (another window holds it, or an engine does - the one case the engine's own refusal cannot
+    // cover, recorded in docs/engine-stage4.md 6.17). A bounded --frames run is a test or a tool, stays as
+    // hermetic as it was, and takes none. Declared before the window so it is released after it: held through
+    // the window's last save.
+    cascade::core::ConfigLock configLock;
+    if (boot.frames < 0 && !boot.configPath.empty()) {
+        const cascade::core::ConfigLock::State lockState = configLock.acquire(boot.configPath, "cascade");
+        if (lockState != cascade::core::ConfigLock::State::Held) {
+            cascade::core::diagLogf("settings: the lock beside the settings file is %s; carrying on",
+                                    lockState == cascade::core::ConfigLock::State::Contended
+                                        ? "held by another FoxSDR program"
+                                        : "unavailable");
+        }
+    }
 
     cascade::gui::AppWindow app(boot.configPath, boot.announceConfig);
     // Empty unless this run is ALLOWED to write - which is not the same as
