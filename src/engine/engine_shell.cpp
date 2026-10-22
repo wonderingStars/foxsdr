@@ -156,6 +156,7 @@ void EngineShell::startReceiver() { SHELL_ENGINE.startReceiver(); }
 void EngineShell::controlPass() { SHELL_ENGINE.controlPass(); }
 void EngineShell::startControlThread(const ControlThreadOptions& options) { SHELL_ENGINE.startControlThread(options); }
 void EngineShell::stepPass(PassPart part) { SHELL_ENGINE.stepPass(part); }
+void EngineShell::frameKick() { SHELL_ENGINE.frameKick(); }
 
 void EngineShell::configureHeartbeat() {
     Engine& e = SHELL_ENGINE;

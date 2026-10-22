@@ -129,6 +129,29 @@ void Engine::kickControlWait() {
 #endif
 }
 
+// THE FRAME'S KICK (docs/engine-stage4.md 6.9). Called by the window, once a frame, on its own thread. Same protocol as a submit's wake - the
+// flag under the mutex, then the notify and the event - but a flag of its own: a kick stamps no controlWakeAtNs_, so the submit-to-publish
+// figure stays the submits'. Nothing happens unless the free-running loop is there to be woken.
+void Engine::frameKick() {
+    if (!controlRun_.load() || controlStepped_.load() || onControlThread()) { return; }
+    const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    lastKickNs_.store(nowNs, std::memory_order_relaxed);  // the frames are flowing, whether or not this one starts a pass
+    {
+        // The gap is tested and the flag set under the lock the loop clears the flags and stamps passStartNs_ under, so a kick can never be
+        // judged against the OLD pass's start and then set the flag after the new pass has taken its own (one spurious pass a flood).
+        std::lock_guard<std::mutex> lk(controlWakeMutex_);
+        if (const std::int64_t gapNs = kickGapNs_.load(std::memory_order_relaxed);
+            gapNs > 0 && nowNs - passStartNs_.load(std::memory_order_relaxed) < gapNs) {
+            passStats_.kicksDropped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        controlKick_ = true;
+    }
+    passStats_.kicks.fetch_add(1, std::memory_order_relaxed);
+    controlWakeCv_.notify_one();
+    kickControlWait();
+}
+
 // A front end that did not take the engine down itself (a headless one, a
 // test) gets the same teardown, in the same order, here.
 //
@@ -9137,6 +9160,10 @@ Engine::PassStats Engine::passStats() const {
     s.lagCount = passStats_.lagCount.load();
     s.lagSumUs = passStats_.lagSumUs.load();
     s.lagMaxUs = passStats_.lagMaxUs.load();
+    s.kicks = passStats_.kicks.load();
+    s.kicksDropped = passStats_.kicksDropped.load();
+    s.kickedPasses = passStats_.kickedPasses.load();
+    s.timedPasses = passStats_.timedPasses.load();
     passLagHist_.copyTo(h);
     s.lagP50Us = PassHist::percentile(h, 50.0);
     s.lagP99Us = PassHist::percentile(h, 99.0);
@@ -9153,6 +9180,10 @@ void Engine::markPassStats() {
     passMark_.wakes = passStats_.wakes.load();
     passMark_.lagCount = passStats_.lagCount.load();
     passMark_.lagSumUs = passStats_.lagSumUs.load();
+    passMark_.kicks = passStats_.kicks.load();
+    passMark_.kicksDropped = passStats_.kicksDropped.load();
+    passMark_.kickedPasses = passStats_.kickedPasses.load();
+    passMark_.timedPasses = passStats_.timedPasses.load();
     passDurHist_.copyTo(passMark_.dur);
     passLagHist_.copyTo(passMark_.lag);
 }
@@ -9182,10 +9213,11 @@ std::string Engine::passStatsJson() const {
     const std::uint64_t lagN = passStats_.lagCount.load() - m.lagCount;
     const std::uint64_t lagSum = passStats_.lagSumUs.load() - m.lagSumUs;
     const double seconds = m.have ? static_cast<double>(nowNs - m.atNs) / 1e9 : 0.0;
-    char buf[900];
+    char buf[1300];
     std::snprintf(buf, sizeof(buf),
                   "{\"marked\": %s, \"seconds\": %.3f, \"passes\": %llu, \"passesPerSecond\": %.2f, \"meanUs\": %.1f, \"p50UsAtMost\": %llu, "
                   "\"p99UsAtMost\": %llu, \"maxUsAtMost\": %llu, \"maxUsSinceStart\": %llu, \"overPeriod\": %llu, \"wakes\": %llu, "
+                  "\"kicks\": %llu, \"kicksDropped\": %llu, \"kickedPasses\": %llu, \"timedPasses\": %llu, "
                   "\"submitToPublish\": {\"served\": %llu, \"meanUs\": %.1f, \"p50UsAtMost\": %llu, \"p99UsAtMost\": %llu, \"maxUsAtMost\": %llu}}",
                   m.have ? "true" : "false", seconds, static_cast<unsigned long long>(passes),
                   seconds > 0.0 ? static_cast<double>(passes) / seconds : 0.0,
@@ -9193,7 +9225,10 @@ std::string Engine::passStatsJson() const {
                   static_cast<unsigned long long>(PassHist::percentile(dur, 50.0)), static_cast<unsigned long long>(PassHist::percentile(dur, 99.0)),
                   static_cast<unsigned long long>(durTop), static_cast<unsigned long long>(passStats_.maxUs.load()),
                   static_cast<unsigned long long>(passStats_.overPeriod.load() - m.overPeriod),
-                  static_cast<unsigned long long>(passStats_.wakes.load() - m.wakes), static_cast<unsigned long long>(lagN),
+                  static_cast<unsigned long long>(passStats_.wakes.load() - m.wakes),
+                  static_cast<unsigned long long>(passStats_.kicks.load() - m.kicks), static_cast<unsigned long long>(passStats_.kicksDropped.load() - m.kicksDropped),
+                  static_cast<unsigned long long>(passStats_.kickedPasses.load() - m.kickedPasses),
+                  static_cast<unsigned long long>(passStats_.timedPasses.load() - m.timedPasses), static_cast<unsigned long long>(lagN),
                   lagN > 0 ? static_cast<double>(lagSum) / static_cast<double>(lagN) : 0.0,
                   static_cast<unsigned long long>(PassHist::percentile(lag, 50.0)), static_cast<unsigned long long>(PassHist::percentile(lag, 99.0)),
                   static_cast<unsigned long long>(lagTop));
@@ -9467,6 +9502,11 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
         std::lock_guard<std::mutex> lk(controlWakeMutex_);
         controlWake_ = false;
         controlWakeNow_ = false;
+        controlKick_ = false;
+        lastKickNs_.store(0);
+        passStartNs_.store(0);
+        kickGapNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(options.kickGap).count());
+        kickGraceNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(options.kickGrace).count());
         stepPending_ = false;
         // A step the last thread never finished (a stop mid-stepPass) must not leave the counters one behind for ever: the next request's
         // ticket would then never be reached.
@@ -9649,10 +9689,24 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
         }
         {
             std::unique_lock<std::mutex> lk(controlWakeMutex_);
+            const bool firstPass = first;
             if (!first) {
                 // THE PASS PERIOD (engine-stage4.md decision 2): a pass every `period`, and at once when an interface submits or
                 // closes a session (wakeControl) - so a control lands within one pass's own time of its submit, not a period later.
-                waitUntil(lk, passStart + period, [this] { return controlWake_ || controlWakeNow_ || !controlRun_.load(); });
+                //
+                // THE FRAME'S KICK (6.9): while frames are kicking the pass, the timer is a fallback that must not fire before the next frame's
+                // kick - a 60 Hz frame is 16.7 ms and the period 16 - so with a kick in the last `kickGrace` the wait runs to the kick's grace
+                // (a kick resets it) rather than to the period; once the frames have stopped, the wait after the one grace that ran out is the
+                // period again. Every kick arrives as a flag and ends the wait like a wake.
+                SteadyClock::time_point deadline = passStart + period;
+                if (const std::int64_t graceNs = kickGraceNs_.load(std::memory_order_relaxed); graceNs > 0) {
+                    const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count();
+                    const std::int64_t kickNs = lastKickNs_.load(std::memory_order_relaxed);
+                    if (kickNs != 0 && nowNs - kickNs < graceNs) {
+                        deadline = std::max(deadline, SteadyClock::time_point(std::chrono::nanoseconds(kickNs + graceNs)));
+                    }
+                }
+                waitUntil(lk, deadline, [this] { return controlWake_ || controlWakeNow_ || controlKick_ || !controlRun_.load(); });
                 // THE FLOOR (adopted decision 6): a wake inside it waits the rest of it out; a runPassNow's does not.
                 if (floor.count() > 0 && controlRun_.load() && !controlWakeNow_) {
                     waitUntil(lk, passStart + floor, [this] { return controlWakeNow_ || !controlRun_.load(); });
@@ -9660,14 +9714,19 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
             }
             first = false;
             if (controlWake_ || controlWakeNow_) { passStats_.wakes.fetch_add(1); }
+            if (controlKick_) { passStats_.kickedPasses.fetch_add(1); }
+            if (!firstPass && !controlWake_ && !controlWakeNow_ && !controlKick_ && controlRun_.load()) { passStats_.timedPasses.fetch_add(1); }
+            // The pass's start is stamped here, with the flags cleared, under the lock frameKick judges its gap under.
+            passStart = SteadyClock::now();
+            passStartNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(passStart.time_since_epoch()).count(), std::memory_order_relaxed);
             controlWake_ = false;
             controlWakeNow_ = false;
+            controlKick_ = false;
             wakeAtNs = controlWakeAtNs_;
             controlWakeAtNs_ = 0;
             if (!controlRun_.load()) { break; }
             passesBegun_.fetch_add(1);
         }
-        passStart = SteadyClock::now();
         if (testHooks_.passStarting != nullptr) { testHooks_.passStarting(); }
         controlWatchdog_.heartbeat();
         while (controlParkForTest_.load() && controlRun_.load()) {

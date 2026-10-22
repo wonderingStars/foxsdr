@@ -22,6 +22,13 @@
 //   G  THE ENGINE'S CLOCK is its own: it runs with no front end at all
 //   H  THE CONTROL WATCHDOG follows the diagnostics switch (the dir moved at run time), and a stepped thread that idles while its front
 //      end draws is not a hung pass
+//   K  THE FRAME'S KICK (docs/engine-stage4.md 6.9, the capped-tail cure): a window's frame wakes the pass (Engine::frameKick), so while
+//      frames flow the pass runs once a frame and its timer never fires; the timer is the fallback when they stop. K1 frames pace the pass
+//      (a pass a kick, started within a millisecond of it, none by the timer - and the control: with the grace extension off the 16 ms timer
+//      fires first, every frame); K2 the frames stop and the timer takes over within the grace, then holds the period; K3 the 2 ms floor holds
+//      against kicks as fast as a thread can make them (and the control: floor off is a flood); K4 the kick gap drops what a pass cannot
+//      use; K5 a kick is not a submit (no lag stamped), a kicked pass drains the remote controls, and a headless / stepped / absent
+//      engine is untouched
 //   I  THE PASS'S OWN FIGURES (the measurement run's, P7): the log-linear histogram's arithmetic, pinned; and the engine's submit-to-publish
 //      lag and pass durations - every wake a submit made is served by a pass whose publish is timed from it, the window the harness marks
 //      is the window the JSON reports, and a build with no wake has no lag (the break-it: no stamp in wakeControl -> 0 served)
@@ -482,6 +489,321 @@ void testMinimizedImmunity() {
 #endif
 }
 
+// K: the frame's kick ------------------------------------------------------------------------------------------------------------
+// A stand-in for a window's frame loop: calls frameKick() every `intervalMs` (0: as fast as it can), timed by SPINNING (a sleep on Windows is a
+// 15.6 ms tick), and keeps each call's time so a pass's start can be paired with the kick that made it.
+struct Kicker {
+    Engine& e;
+    std::atomic<bool> go{true};
+    std::vector<Clock::time_point> times;   // the kicker's alone until stop() has joined it
+    std::thread t;
+    Kicker(Engine& eng, double intervalMs) : e(eng) {
+        times.reserve(200000);
+        t = std::thread([this, intervalMs] {
+            auto next = Clock::now();
+            while (go.load()) {
+                if (intervalMs > 0.0) {
+                    while (go.load() && Clock::now() < next) { std::this_thread::yield(); }
+                    next += std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(intervalMs));
+                    if (!go.load()) { break; }
+                }
+                if (times.size() < times.capacity()) { times.push_back(Clock::now()); }
+                e.frameKick();
+            }
+        });
+    }
+    void stop() {
+        go = false;
+        if (t.joinable()) { t.join(); }
+    }
+    ~Kicker() { stop(); }
+};
+
+ControlThreadOptions kickOpts(int periodMs, int floorMs, int graceMs, int gapMs) {
+    ControlThreadOptions o = opts(periodMs, floorMs);
+    o.kickGrace = std::chrono::milliseconds(graceMs);
+    o.kickGap = std::chrono::milliseconds(gapMs);
+    return o;
+}
+
+double msBetween(Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); }
+
+// For each kick, the time to the first pass start at or after it (a kick with another kick before that start was dropped, and is skipped).
+std::vector<double> kickToStart(const std::vector<Clock::time_point>& kicks, const std::vector<Clock::time_point>& starts) {
+    std::vector<double> lags;
+    std::size_t si = 0;
+    for (std::size_t ki = 0; ki < kicks.size(); ++ki) {
+        while (si < starts.size() && starts[si] < kicks[ki]) { ++si; }
+        if (si >= starts.size()) { break; }
+        if (ki + 1 < kicks.size() && starts[si] > kicks[ki + 1]) { continue; }
+        lags.push_back(msBetween(kicks[ki], starts[si]));
+    }
+    std::sort(lags.begin(), lags.end());
+    return lags;
+}
+
+Engine::PassStats statsDiff(const Engine::PassStats& a, const Engine::PassStats& b) {
+    Engine::PassStats d;
+    d.passes = a.passes - b.passes;
+    d.wakes = a.wakes - b.wakes;
+    d.lagCount = a.lagCount - b.lagCount;
+    d.kicks = a.kicks - b.kicks;
+    d.kicksDropped = a.kicksDropped - b.kicksDropped;
+    d.kickedPasses = a.kickedPasses - b.kickedPasses;
+    d.timedPasses = a.timedPasses - b.timedPasses;
+    return d;
+}
+
+// K1: 60 Hz frames pace the pass. period 16 ms, the grace 24: the frames come every 16.667 ms - LONGER than the period, so a pass paced by its
+// own 16 ms timer would start just before every kick; paced by the kicks it starts at them and the timer never fires.
+void testKickPaces() {
+    std::printf("  K1: a frame every 16.667 ms paces the pass: one pass a kick, started by the kick, none by the timer\n");
+    const int framesMs = 2000;
+    for (const bool graceOn : {true, false}) {
+        Engine e;
+        e.initialise();
+        A::passStarting(&recordPassStart);   // (set before the thread exists and cleared after it is joined: the hook is a plain pointer the loop reads)
+        e.startControlThread(kickOpts(16, 2, graceOn ? 24 : 0, 8));
+        CHECK(e.runPassNow());
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        const Engine::PassStats before = e.passStats();
+        std::size_t nKicks = 0;
+        std::vector<Clock::time_point> kickTimes;
+        {
+            Kicker k(e, 1000.0 / 60.0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(framesMs));
+            k.stop();
+            nKicks = k.times.size();
+            kickTimes = k.times;
+        }
+        const Engine::PassStats d = statsDiff(e.passStats(), before);
+        e.stopControlThread();
+        A::passStarting(nullptr);
+        const std::vector<Clock::time_point> starts = takeStarts();
+        const double perSecond = static_cast<double>(d.passes) / (framesMs / 1000.0);
+        std::printf("      grace %s: %zu kicks, %llu passes (%.1f a second), %llu started by a kick, %llu by the timer, %llu kicks dropped\n",
+                    graceOn ? "24 ms" : "OFF  ", nKicks, static_cast<unsigned long long>(d.passes), perSecond,
+                    static_cast<unsigned long long>(d.kickedPasses), static_cast<unsigned long long>(d.timedPasses),
+                    static_cast<unsigned long long>(d.kicksDropped));
+        if (graceOn) {
+            CHECK(nKicks >= 100u);
+            CHECK(d.kicks >= nKicks * 95u / 100u);                  // the gap drops nothing here: a pass starts at each kick, 16 ms before the next
+            CHECK(d.kickedPasses >= nKicks * 95u / 100u);           // a pass a kick
+            CHECK(d.timedPasses * 20u <= d.passes);                 // and the timer started at most one in twenty (a late kick thread on a busy desk)
+            CHECK(d.passes <= nKicks + 6u);                         // nothing else started a pass
+            CHECK(perSecond >= 55.0 && perSecond <= 65.0);          // ~60 passes a second
+            const std::vector<double> lags = kickToStart(kickTimes, starts);
+            CHECK(lags.size() >= nKicks * 9u / 10u);
+            if (!lags.empty()) {
+                std::printf("      kick to the start of its pass, %zu kicks: median %.3f ms, p90 %.3f ms, max %.3f ms\n", lags.size(), median(lags),
+                            lags[lags.size() * 9 / 10], lags.back());
+                CHECK(median(lags) < 1.0);
+            }
+        } else {
+            // The control, and what the grace is for: without it the 16 ms timer fires before every 16.667 ms kick, and the kick lands inside
+            // the gap of the pass the timer just started (dropped) - the pass is timer-paced, exactly the wake the cure removes.
+            CHECK(d.timedPasses * 10u >= d.passes * 8u);
+        }
+    }
+}
+
+// K2: the frames stop. The last kick starts a pass; the next is the timer's, at most the grace after the kick; then the period again.
+void testKickFallback() {
+    std::printf("  K2: the frames stop: the timer takes over within the grace, then holds the 16 ms period\n");
+    Engine e;
+    e.initialise();
+    A::passStarting(&recordPassStart);
+    e.startControlThread(kickOpts(16, 2, 24, 8));
+    CHECK(e.runPassNow());
+    Clock::time_point lastKick{};
+    {
+        Kicker k(e, 1000.0 / 60.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        k.stop();
+        CHECK(!k.times.empty());
+        if (!k.times.empty()) { lastKick = k.times.back(); }
+    }
+    const Engine::PassStats before = e.passStats();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    const Engine::PassStats d = statsDiff(e.passStats(), before);
+    e.stopControlThread();
+    A::passStarting(nullptr);
+    const std::vector<Clock::time_point> starts = takeStarts();
+    // The starts after the last kick: the pass that kick itself started (within 0.2 ms of it, left out), then the fallback's.
+    std::vector<double> after;
+    for (const Clock::time_point t : starts) {
+        if (msBetween(lastKick, t) > 5.0) { after.push_back(msBetween(lastKick, t)); }
+    }
+    CHECK(after.size() >= 2u);
+    if (after.size() >= 2u) {
+        std::vector<double> gaps;
+        for (std::size_t i = 1; i < after.size(); ++i) { gaps.push_back(after[i] - after[i - 1]); }
+        std::sort(gaps.begin(), gaps.end());
+        std::printf("      last kick -> the first pass the timer starts: %.2f ms (grace 24); then %zu passes in 1.5 s (%.1f a second), gap median %.2f ms\n",
+                    after[0], after.size(), static_cast<double>(after.size()) / 1.5, median(gaps));
+        CHECK(after[0] >= 16.0);             // not before the period, and ...
+        CHECK(after[0] <= 24.0 + 12.0);      // ... not later than the grace (a high-resolution timer's lateness and a busy desk's margin)
+        CHECK(after.size() >= 80u);          // ~62 a second in the 1.5 s, the same as a headless engine's (A2)
+        CHECK(median(gaps) >= 15.5 && median(gaps) <= 17.5);
+    }
+    std::printf("      in that 1.5 s: %llu passes, %llu started by the timer, %llu by a kick\n", static_cast<unsigned long long>(d.passes),
+                static_cast<unsigned long long>(d.timedPasses), static_cast<unsigned long long>(d.kickedPasses));
+    CHECK(d.timedPasses + 2u >= d.passes);
+    CHECK(d.kickedPasses == 0u);
+}
+
+// K3: the floor holds against kicks as fast as a thread can make them.
+std::uint64_t kickFloodPasses(int floorMs, int floodMs, std::vector<double>* gapsOut = nullptr) {
+    Engine e;
+    e.initialise();
+    A::passStarting(&recordPassStart);
+    e.startControlThread(kickOpts(1000, floorMs, 24, 0));   // gap off: only the floor bounds the kicks
+    (void)e.runPassNow();   // (exempt from the floor: its start is not one of the gaps)
+    (void)takeStarts();
+    const std::uint64_t before = e.passesEnded();
+    {
+        Kicker k(e, 0.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(floodMs));
+        k.stop();
+    }
+    const std::uint64_t passes = e.passesEnded() - before;
+    e.stopControlThread();
+    A::passStarting(nullptr);
+    const std::vector<Clock::time_point> starts = takeStarts();
+    if (gapsOut != nullptr) {
+        for (std::size_t i = 1; i < starts.size(); ++i) { gapsOut->push_back(msBetween(starts[i - 1], starts[i])); }
+        std::sort(gapsOut->begin(), gapsOut->end());
+    }
+    return passes;
+}
+
+void testKickFloor() {
+    std::printf("  K3: the 2 ms floor holds against kicks as fast as a thread can make them\n");
+    const int floodMs = 1000;
+    std::vector<double> gaps;
+    const std::uint64_t dflt = kickFloodPasses(2, floodMs, &gaps);
+    const std::uint64_t on = kickFloodPasses(40, floodMs);
+    const std::uint64_t off = kickFloodPasses(0, floodMs);
+    std::printf("      one second of kicks flat out: floor 2 ms -> %llu passes (bound %d), floor 40 ms -> %llu (bound %d), floor off -> %llu\n",
+                static_cast<unsigned long long>(dflt), floodMs / 2, static_cast<unsigned long long>(on), floodMs / 40, static_cast<unsigned long long>(off));
+    CHECK(dflt <= static_cast<std::uint64_t>(floodMs / 2) + 20u);
+    CHECK(dflt >= 100u);
+    CHECK(on <= static_cast<std::uint64_t>(floodMs / 40) + 4u);
+    CHECK(on >= 5u);
+    CHECK(off > on * 3u);
+    CHECK(gaps.size() >= 100u);
+    if (!gaps.empty()) {
+        std::printf("      start-to-start at the 2 ms floor: min %.3f ms, median %.3f ms\n", gaps.front(), median(gaps));
+        // (The hook runs a few microseconds after the loop stamps the start the floor is measured from, and that lag jitters: 1.95, not 2.)
+        CHECK(gaps.front() >= 1.95);
+        CHECK(median(gaps) >= 1.99 && median(gaps) < 4.0);
+    }
+}
+
+// K4: the gap drops a kick a pass cannot use: a window at 1 000 frames a second asks for ~125 passes, not 500.
+void testKickGap() {
+    std::printf("  K4: a kick within the gap of a pass's start is dropped (8 ms: ~125 passes a second at most)\n");
+    std::uint64_t passes[2] = {}, dropped[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        Engine e;
+        e.initialise();
+        e.startControlThread(kickOpts(1000, 2, 24, i == 0 ? 8 : 0));
+        (void)e.runPassNow();
+        const Engine::PassStats before = e.passStats();
+        {
+            Kicker k(e, 0.0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            k.stop();
+        }
+        const Engine::PassStats d = statsDiff(e.passStats(), before);
+        e.stopControlThread();
+        passes[i] = d.passes;
+        dropped[i] = d.kicksDropped;
+    }
+    std::printf("      one second flat out: gap 8 ms -> %llu passes (%llu kicks dropped); gap off -> %llu passes\n",
+                static_cast<unsigned long long>(passes[0]), static_cast<unsigned long long>(dropped[0]), static_cast<unsigned long long>(passes[1]));
+    CHECK(passes[0] <= 1000u / 8u + 6u);
+    CHECK(passes[0] >= 60u);
+    CHECK(dropped[0] > 1000u);
+    CHECK(passes[1] > passes[0] * 2u);
+    CHECK(dropped[1] == 0u);
+}
+
+// K5: what a kick is not. Not a submit (no lag is stamped, so the submit-to-publish figure stays the submits'); a pass a kick starts is the
+// whole pass (the remote controls are drained in it); and an engine that is headless, stepped or without a thread is not touched.
+std::atomic<int> g_remotePulls{0};
+void testKickIsOnlyAKick() {
+    std::printf("  K5: a kick is not a submit; a kicked pass drains the remote controls; headless, stepped and thread-less engines are untouched\n");
+    {
+        Engine e;
+        e.initialise();
+        g_remotePulls = 0;
+        e.setRemoteControlSource([] {
+            g_remotePulls.fetch_add(1);
+            cascade::engine::RemoteControls r;
+            r.serverRunning = true;
+            return r;
+        });
+        e.startControlThread(kickOpts(1500, 2, 24, 0));   // period 1500 ms: only a wake or a kick starts a pass
+        CHECK(e.runPassNow());
+        const int pulls0 = g_remotePulls.load();
+        const Engine::PassStats before = e.passStats();
+        std::size_t nKicks = 0;
+        {
+            Kicker k(e, 1000.0 / 60.0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            k.stop();
+            nKicks = k.times.size();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        const Engine::PassStats d = statsDiff(e.passStats(), before);
+        const int pulls = g_remotePulls.load() - pulls0;
+        std::printf("      %zu kicks: %llu passes, the remote controls pulled %d times, submit-to-publish served %llu, passes started by a wake %llu\n", nKicks,
+                    static_cast<unsigned long long>(d.passes), pulls, static_cast<unsigned long long>(d.lagCount), static_cast<unsigned long long>(d.wakes));
+        CHECK(nKicks >= 20u);
+        CHECK(static_cast<std::size_t>(pulls) + 2u >= nKicks);   // the kicked pass is the whole pass: it pumps the remote controls (pumpRemoteControls)
+        CHECK(static_cast<std::uint64_t>(pulls) == d.passes);
+        CHECK(d.lagCount == 0u);                                  // a kick stamps no submit's wake: nothing is "served"
+        CHECK(d.wakes == 0u);
+        // ... and a real submit still is one.
+        e.submitCommand(cmd::makeNum(FOXAPI_OP_SET_VOLUME, 0.31));
+        (void)spinFor([&] { return A::publishedVolume(e) == 0.31f; }, 3000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(e.passStats().lagCount - before.lagCount >= 1u);
+        e.setRemoteControlSource({});
+        e.stopControlThread();
+    }
+    {
+        // HEADLESS: nothing kicks. Paced by the timer exactly as A2 holds: ~62 a second, every pass the timer's.
+        Engine e;
+        e.initialise();
+        e.startControlThread(kickOpts(16, 2, 24, 8));
+        const Engine::PassStats before = e.passStats();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        const Engine::PassStats d = statsDiff(e.passStats(), before);
+        e.stopControlThread();
+        std::printf("      headless, 1.5 s: %llu passes (%.1f a second), %llu by the timer, %llu kicks\n", static_cast<unsigned long long>(d.passes),
+                    static_cast<double>(d.passes) / 1.5, static_cast<unsigned long long>(d.timedPasses), static_cast<unsigned long long>(d.kicks));
+        CHECK(d.passes >= 60u && d.passes <= 130u);
+        CHECK(d.timedPasses + 1u >= d.passes);
+        CHECK(d.kicks == 0u && d.kickedPasses == 0u);
+    }
+    {
+        // STEPPED: a kick is nothing (the window's stepPass calls are the passes). No thread: nothing either.
+        Engine e;
+        e.initialise();
+        e.frameKick();   // no control thread
+        CHECK(e.passStats().kicks == 0u);
+        e.startControlThread(opts(16, 2, true));
+        const std::uint64_t p0 = A::passes(e);
+        for (int i = 0; i < 50; ++i) { e.frameKick(); }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        CHECK(A::passes(e) == p0);
+        CHECK(e.passStats().kicks == 0u && e.passStats().kickedPasses == 0u);
+        e.stopControlThread();
+    }
+}
+
 // B: the floor ---------------------------------------------------------------------------------------------------------------
 std::uint64_t floodPasses(int floorMs, int floodMs) {
     Engine e;
@@ -908,6 +1230,11 @@ int main() {
     testFloorBetweenStarts();
     testWakeToStart();
     testMinimizedImmunity();
+    testKickPaces();
+    testKickFallback();
+    testKickFloor();
+    testKickGap();
+    testKickIsOnlyAKick();
     testFloor();
     testRunPassNow();
     testStepped();

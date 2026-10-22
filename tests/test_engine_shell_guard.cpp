@@ -58,11 +58,11 @@ namespace {
 // BUDGETS. Every number is the surface as the fence left it (2026-10-21); a change moves the number in the same commit, with the dated
 // comment in engine_shell.hpp that says why. They only go down on their own: stage 5 deletes the web/CAT section, stage 7 the shell's.
 // ----------------------------------------------------------------------------------------------------------------------------------
-constexpr int kShellMethodsBudget = 40;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart)
+constexpr int kShellMethodsBudget = 41;   // CLASS SHELL: EngineShell's own declarations before the HOST marker (distinct names; create and the special members apart): 40 before the frame's kick (frameKick, 6.9)
 constexpr int kHostMethodsBudget = 1;     // CLASS HOST: makePluginFeed
 constexpr int kWebMethodsBudget = 7;      // CLASS WEB / CAT: deleted by stage 5
 constexpr int kFeedMethodsBudget = 11;    // HostPluginFeed's virtuals (the eight host accessors and what drives them)
-constexpr int kCallSitesBudget = 72;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60) (the ratchet it replaces ended at 13 fields and 26 reads)
+constexpr int kCallSitesBudget = 73;      // `engine_.x` and `pluginFeed_->x` in src/gui, all classes: 71 when the fence landed, 72 after the 0.99.84 merge split shutdownRelease in two (the plugins come down BEFORE the clean-exit marker, the drain of the lists' saves after it: master 0.99.60), 73 with the frame's kick, one call at the top of run()'s frame loop (6.9) (the ratchet it replaces ended at 13 fields and 26 reads)
 
 // ----------------------------------------------------------------------------------------------------------------------------------
 // WHO MAY KNOCK: for each AppWindow member, the door methods it may call. EVERY ENTRY MUST BE MATCHED by a call (a stale entry fails),
@@ -88,7 +88,7 @@ const std::vector<Knock> kEngineKnocks = {
      {"startReceiver", "controlPass", "startControlThread", "configureHeartbeat", "markCleanExit", "shutdownQuiesce", "shutdownStop",
       "shutdownRelease", "shutdownDrain", "reportPluginStatus", "seamBiasStandIn", "seamFetchCatalogue", "seamSelectNativeDevice",
       "seamDeviceOpenPending", "seamPressPreset", "seamPatchStart", "seamPatchRunning", "seamSubmit", "seamMeasureTick",
-      "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource"}},
+      "seamMarkPassStats", "seamPassStatsJson", "seamInstallSource", "frameKick"}},
     // the frame is a look: the three parts of the pass, and the status lines the look copies
     {"AppWindow::drawUi", {"stepPass", "statusText"}},
     // CLASS WEB / CAT (stage 5 deletes these members' reads)
@@ -729,9 +729,10 @@ void checkMachineryHasNoInput(const fs::path& root) {
 // (The ratchet also held that no member names a pump phase or the command path: the door does not declare them, so naming one does not
 // compile.)
 void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) {
-    int stepCalls = 0, controlPassCalls = 0, startCalls = 0;
+    int stepCalls = 0, controlPassCalls = 0, startCalls = 0, kickCalls = 0;
     for (const Call& c : calls) {
         if (c.object != "engine_") { continue; }
+        if (c.method == "frameKick") { ++kickCalls; }
         if (c.method == "stepPass") { ++stepCalls; }
         if (c.method == "controlPass") { ++controlPassCalls; }
         if (c.method == "startControlThread") { ++startCalls; }
@@ -739,6 +740,7 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
     std::printf("  the frame is a look: stepPass %d (expect 3), controlPass %d (expect 1), startControlThread %d (expect 1)\n", stepCalls,
                 controlPassCalls, startCalls);
     CHECK(stepCalls == 3);
+    CHECK(kickCalls == 1);   // THE FRAME KICKS THE PASS, once (6.9): from run(), the first act of the frame loop - checked below
     CHECK(controlPassCalls == 1);
     CHECK(startCalls == 1);
     const std::string text = readFile(root / "src" / "gui" / "app_window.cpp");
@@ -789,6 +791,18 @@ void checkTheFrameIsALook(const fs::path& root, const std::vector<Call>& calls) 
                          firstPass < startThread && startThread < loop;
     if (!startOk) { std::printf("FAIL: run() does not start the engine's pass (first publish, then the thread) before the frame loop\n"); }
     CHECK(startOk);
+    // THE FRAME KICKS THE PASS as the first act of its loop (6.9): after the frame log's and the cap's start stamps, before the events are polled
+    // and the frame is drawn (the pass takes ~0.1 ms to publish, and the look is little later than the top of the frame: a later kick loses
+    // that race and the look reads a publish a whole frame old - measured in 6.9). Exactly once, and never from drawUi.
+    {
+        const std::size_t capStart = text.find("frameCap_->frameStart();", loop);
+        const std::size_t kick = text.find("engine_.frameKick();", loop);
+        const std::size_t poll = text.find("glfwPollEvents();", loop);
+        const bool kickOk = capStart != std::string::npos && kick != std::string::npos && poll != std::string::npos && loop < capStart &&
+                            capStart < kick && kick < poll && text.find("engine_.frameKick();", kick + 1) == std::string::npos;
+        if (!kickOk) { std::printf("FAIL: run() does not kick the pass exactly once, as the first act of the frame loop (after the start stamps, before glfwPollEvents)\n"); }
+        CHECK(kickOk);
+    }
 }
 
 // THE CONFIG SAVE IS THE SHELL'S, NOT THE FRAME'S (the pump move's step P4; the survey's 1.6 D). saveConfigNow asks the engine to hand over

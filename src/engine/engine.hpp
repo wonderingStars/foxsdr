@@ -2816,6 +2816,15 @@ public:
     // pass did not come back within `bound` (a pass held by a test hook, or one stalled past it) or the control thread stopped.
     // This is the test seam for "the look after the pass" and the front end's way to say "I need a pass now".
     bool runPassNow(std::chrono::milliseconds bound = std::chrono::milliseconds(30000));
+    // THE FRAME'S KICK (the capped-tail cure, docs/engine-stage4.md 6.9): the window calls it once a frame, from its own thread, and the
+    // pass is woken by it - "a pass per frame" - so while frames flow the pass's timer never has to fire (it was thought that a timed wake beating against the
+    // window's frame-cap wait was the capped-frame tail; 6.9 measured that it is not: the tail stayed with no timed wake at all). The timer stays as the FALLBACK: a pass is still started at the period when no kick came (a
+    // headless engine never calls this and is paced exactly as before; a minimized or stalled window stops calling it and the pass is back on
+    // its period within ControlThreadOptions::kickGrace). The kick is a wake that does not count as a submit's (it stamps no
+    // submit-to-publish lag), obeys the floor like any wake, and is dropped when a pass began less than ControlThreadOptions::kickGap ago, so
+    // a window drawing 1 000 frames a second asks for ~125 passes, not 500. A no-op with no free-running control thread (stepped: the
+    // window's stepPass calls are the passes; none: the front end is the pump).
+    void frameKick();
     bool controlStepped() const { return controlStepped_.load(); }
     // A function the front end's thread calls every kPassWaitNet while it waits inside stepPass or runPassNow (null: none). The window
     // installs its own watchdog's heartbeat: its frame is BLOCKED in the wait - not hung - and a pass part that really hangs is the control
@@ -2833,6 +2842,10 @@ public:
         std::uint64_t passes = 0, sumUs = 0, maxUs = 0, overPeriod = 0, wakes = 0;
         std::uint64_t durationP50Us = 0, durationP99Us = 0;
         std::uint64_t lagCount = 0, lagSumUs = 0, lagMaxUs = 0, lagP50Us = 0, lagP99Us = 0;
+        // The frame's kick (frameKick): kicks that woke the loop, kicks dropped for coming within kickGap of a pass's start, passes a kick
+        // started (a pass a submit and a kick both woke counts in both), and passes the TIMER started (neither a wake nor a kick: the
+        // period or the grace ran out) - the fallback's own count.
+        std::uint64_t kicks = 0, kicksDropped = 0, kickedPasses = 0, timedPasses = 0;
     };
     PassStats passStats() const;
     // THE MEASUREMENT WINDOW: markPassStats() starts it (the harness calls it where its own warm-up ends), passStatsJson() reports the figures
@@ -2924,6 +2937,16 @@ private:
     std::condition_variable passDoneCv_;      // a front-end thread waiting for a pass or a step waits here
     bool controlWake_ = false;
     bool controlWakeNow_ = false;
+    // The frame's kick (frameKick), set under the mutex like the wake flags and taken by the pass that starts. Apart from controlWake_ so
+    // that a kick is not a submit: it stamps no controlWakeAtNs_ and the submit-to-publish figure stays the submits'.
+    bool controlKick_ = false;
+    // Steady ns of the newest frameKick call (kept even when the kick was dropped: the frames are flowing) and of the newest pass start;
+    // the loop reads the first to decide whether the frames are flowing (the longer fallback), frameKick reads the second for kickGap.
+    // The two spans, from ControlThreadOptions, are set by startControlThread before the thread exists.
+    std::atomic<std::int64_t> lastKickNs_{0};
+    std::atomic<std::int64_t> passStartNs_{0};
+    std::atomic<std::int64_t> kickGapNs_{0};
+    std::atomic<std::int64_t> kickGraceNs_{0};
     bool stepPending_ = false;
     PassPart stepPart_ = PassPart::Front;
     std::uint64_t stepsAsked_ = 0;
@@ -2946,6 +2969,7 @@ private:
     struct PassStatsCounters {
         std::atomic<std::uint64_t> passes{0}, sumUs{0}, maxUs{0}, overPeriod{0}, wakes{0};
         std::atomic<std::uint64_t> lagCount{0}, lagSumUs{0}, lagMaxUs{0};
+        std::atomic<std::uint64_t> kicks{0}, kicksDropped{0}, kickedPasses{0}, timedPasses{0};
     };
     PassStatsCounters passStats_;
     PassHist passDurHist_;
@@ -2958,6 +2982,7 @@ private:
         bool have = false;
         std::int64_t atNs = 0;
         std::uint64_t passes = 0, sumUs = 0, overPeriod = 0, wakes = 0, lagCount = 0, lagSumUs = 0;
+        std::uint64_t kicks = 0, kicksDropped = 0, kickedPasses = 0, timedPasses = 0;
         std::uint64_t dur[PassHist::kBuckets] = {};
         std::uint64_t lag[PassHist::kBuckets] = {};
     };

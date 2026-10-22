@@ -1537,6 +1537,15 @@ int AppWindow::run(int frames) {
         if (frameLog_) { frameLog_->frameStart(); }
         if (frameCap_) { frameCap_->frameStart(); }
 
+        // THE FRAME KICKS THE PASS (docs/engine-stage4.md 6.9), as the first thing it does. Why here: the pass is a thread of its own and
+        // takes ~0.1 ms from the event to its publish, and the look is only a little later in the frame than the top of it, so the kick has to
+        // be as early as there is. Measured, the age of the newest publish at the look: a kick given just before the look (at the Front part
+        // in drawUi) loses the race every time - 16.9 ms, a whole frame old; the pass on its own timer 7.9 ms on average, anywhere in
+        // 0-16 ms; the kick here 4.5 ms on average, under 1 ms in three frames of four and the previous frame's publish in the fourth.
+        // It is also an event signal from the thread that has just come out of its own wait, a whole frame before the next timed wake the
+        // pass thread no longer makes. A no-op in a stepped run (the stepPass calls are the passes) and when a pass began a moment ago.
+        engine_.frameKick();
+
         // THE FRAME'S CLOCK STARTS HERE and stops at the bottom of the body; the guard is the scope the frame is in until it says otherwise
         // (to()), and everything not inside a scope is `other`.
         frameTimer.beginFrame(rendered);

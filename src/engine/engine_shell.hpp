@@ -110,6 +110,15 @@ struct ControlThreadOptions {
     // thread's start to its stop) is asked for ONLY when that timer cannot be made (Windows 10 before 1803), where the loop falls back to a
     // condition variable's millisecond waits.
     unsigned timerResolutionMs = 1;
+    // THE FRAME'S KICK (Engine::frameKick; docs/engine-stage4.md 6.9). A window kicks the free-running pass once a frame, so the period above
+    // is the FALLBACK cadence: the loop's timer is what starts a pass when no frame does (a headless engine, a minimized or stalled
+    // window). While kicks arrive the fallback waits `kickGrace` instead of `period` (a 60 Hz frame is 16.7 ms: a 16 ms timer would fire
+    // just before every kick, which is the timed wake this exists to avoid), and a kick that arrives less than `kickGap` after a pass began is
+    // dropped - the pass already running saw the frame's state, and a window that draws 1 000 frames a second must not ask for 500 passes.
+    // When the frames stop the next pass is at most `kickGrace` after the last kick, then the period again. kickGrace 0 turns the extension
+    // off (the fallback is always `period`); kickGap 0 turns the drop off (the floor alone bounds the kicks).
+    std::chrono::milliseconds kickGrace{24};
+    std::chrono::milliseconds kickGap{8};
 };
 
 // THE THREE PARTS OF A PASS (pump move P4/P5). A free-running pass runs them in this order as one; a stepped one runs each when
@@ -342,6 +351,8 @@ public:
     void controlPass();
     void startControlThread(const ControlThreadOptions& options);
     void stepPass(PassPart part);
+    // The frame's kick of the free-running pass (Engine::frameKick); a no-op for a stepped or absent control thread.
+    void frameKick();
     // The usage heartbeat, armed in an interactive run only (the endpoint, the install id and the version are the engine's to name).
     void configureHeartbeat();
     // The clean-exit marker, set after the pipeline join.

@@ -60,11 +60,13 @@ struct AppWindowTestAccess {
         cascade::engine::ControlThreadOptions o;
         o.period = std::chrono::milliseconds(periodMs);
         o.floor = std::chrono::milliseconds(floorMs);
+        o.kickGap = std::chrono::milliseconds(0);   // every frame's kick reaches the loop, beside its 1 ms passes (the race is the point)
         o.watchdogThresholdMs = 20000;
         rawEngine(a.engine_).startControlThread(o);
     }
     // THE FRAME'S ENGINE-FACING HALF, in drawUi's order (free-running: the two stepPass calls are no-ops).
     static void frame(AppWindow& a) {
+        rawEngine(a.engine_).frameKick();   // (run(): the frame's first act is to kick the pass, 6.9)
         a.applyPluginDirective();
         if (a.uiSession_ != nullptr) { a.engineApi_->heartbeat(a.uiSession_); }
         a.sendTrackInfoText();
@@ -273,6 +275,16 @@ int main() {
                     static_cast<unsigned long long>(backwards), readerBackwards.load());
         CHECK(frames > 1000);
         CHECK(A::passes(app) > 200u);
+        {
+            // The frame's kick (6.9): this loop is a window drawing thousands of frames a second beside a pass of its own, and every
+            // frame's kick reaches the loop (the gap is off here) without a lost or a doubled pass.
+            const Engine::PassStats ps = e.passStats();
+            std::printf("  A: the frame's kicks: %llu woke the pass, %llu passes started by a kick\n",
+                        static_cast<unsigned long long>(ps.kicks), static_cast<unsigned long long>(ps.kickedPasses));
+            CHECK(ps.kicks > 0u);
+            CHECK(ps.kickedPasses > 0u);
+            CHECK(ps.kickedPasses <= ps.kicks);
+        }
         CHECK(backwards == 0u);
         CHECK(readerBackwards.load() == 0);
         std::printf("  B: %llu list reads: the cache keyed on a listSeq other than the state's after its refresh %llu time(s)\n",
