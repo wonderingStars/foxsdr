@@ -539,7 +539,7 @@ function(_cascade_check_engine_links)
         return()
     endif()
     # The engine, and the headless programs built on it: none of them reaches the interface or the shell either.
-    set(_todo cascade_engine cascade_engine_link_check foxsdr-reports)
+    set(_todo cascade_engine cascade_engine_link_check foxsdr-reports foxsdr-engine)
     set(_seen "")
     set(_bad "")
     string(TOLOWER "${CMAKE_SOURCE_DIR}/" _root)
@@ -552,7 +552,7 @@ function(_cascade_check_engine_links)
         list(APPEND _seen "${_t}")
         # The target itself: its real name (an ALIAS has already been
         # resolved to it) and, when imported, the library it stands for.
-        if(NOT _t STREQUAL "cascade_engine" AND NOT _t STREQUAL "cascade_engine_link_check" AND NOT _t STREQUAL "foxsdr-reports")
+        if(NOT _t STREQUAL "cascade_engine" AND NOT _t STREQUAL "cascade_engine_link_check" AND NOT _t STREQUAL "foxsdr-reports" AND NOT _t STREQUAL "foxsdr-engine")
             _cascade_window_word("${_t}" _hit)
             if(_hit)
                 list(APPEND _bad "reaches ${_t}")
@@ -799,6 +799,49 @@ add_executable(foxsdr-reports tools/report-reader/main.cpp)
 # Engine only: the reader resolves reports against symbols/ and draws nothing.
 target_link_libraries(foxsdr-reports PRIVATE cascade_engine)
 
+# ---------------------------------------------------------------------------
+# foxsdr-engine - the receiver with no window (engine extraction stage 7b)
+# ---------------------------------------------------------------------------
+#
+# A second executable on the engine library, beside cascade: the same boot
+# (src/engine/process_boot.hpp, as an ENGINE process), then the engine alone. It
+# links cascade_engine and nothing else - no window, no GL, no ImGui - and is on
+# the configure-time walk's start list above, so a link to the window or the shell
+# fails the configure, not a test. src/engine_main.cpp says what it does and what
+# its exit codes are; tests/test_engine_main_*.cpp pin it.
+#
+# A CONSOLE program, not a windows-subsystem one: it is a service and a command-line
+# tool, and its stdout and stderr are the point. None of cascade's /ENTRY and
+# AttachConsole story (above) applies. Not packaged for Windows (the survey's P1:
+# the installer and the MSIX stay the window application's); symbol archiving, the
+# Linux tarballs and the release scripts are stage 7g's.
+add_executable(foxsdr-engine src/engine_main.cpp)
+target_link_libraries(foxsdr-engine PRIVATE cascade_engine)
+# The same delay-load as cascade (below, for why), so a missing hardware runtime is a
+# readable message from the source and not a loader modal before main() - the Windows
+# service this is for is the one place a modal nobody sees is worst.
+if(MSVC)
+    target_link_options(foxsdr-engine PRIVATE "/DELAYLOAD:SoapySDR.dll")
+    target_link_libraries(foxsdr-engine PRIVATE delayimp)
+endif()
+# WHAT CASCADE STAGES BESIDE ITSELF (below): SoapySDR.dll, resources/bandplans and
+# resources/firmware. Both executables land in ONE directory, so cascade's staging
+# already serves the engine and is not repeated here: two POST_BUILD copies of the
+# same directory tree into the same place, in a parallel build, are a race for a
+# file (and copy_directory_if_different, the safe form, needs CMake 3.26 where the
+# project's floor is 3.20). The DLL alone is staged for the engine too
+# (copy_if_different has no such floor and writes nothing when the file is there),
+# so a build of this target alone still runs. THE GAP, named for stage 7g: a build
+# with no window application (its CASCADE_BUILD_INTERFACE option) must stage the
+# band plans and firmware itself; until then the engine runs without them, as a
+# build tree without them does (BandPlan::defaultDir finds nothing and the overlay
+# is empty, which a window-less engine does not draw).
+if(WIN32 AND TARGET SoapySDR)
+    add_custom_command(TARGET foxsdr-engine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:foxsdr-engine>)
+endif()
+
 # Sanitizer build only (CASCADE_SANITIZE, cmake/sanitize.cmake): instrument the
 # vendored libraries that are linked into the executables, hand the flags to
 # everything that links cascade_engine (the window, the application, the tests -
@@ -811,6 +854,7 @@ if(CASCADE_SANITIZE_ENABLED)
     target_link_libraries(cascade_engine PUBLIC cascade_sanitize)
     cascade_sanitize_stage_runtime(cascade)
     cascade_sanitize_stage_runtime(foxsdr-reports)
+    cascade_sanitize_stage_runtime(foxsdr-engine)
     cascade_sanitize_stage_runtime(cascade_engine_link_check)
 endif()
 

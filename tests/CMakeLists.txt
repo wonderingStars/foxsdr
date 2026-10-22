@@ -540,6 +540,16 @@ foreach(_runs_app IN ITEMS test_bias_key_run test_crash_upload test_diag_hang te
     endif()
 endforeach()
 
+# THE foxsdr-engine TESTS (stage 7b) spawn the engine executable - and the window application where they compare
+# against it (--version, --selftest, the refused --seconds) - so both are built first, or an end-to-end half would
+# drive whatever stale binary the build tree last held. They link the engine alone (no window include in them).
+foreach(_t IN ITEMS test_engine_main_version test_engine_main_args test_engine_main_helpers test_engine_main_smoke
+                    test_engine_main_links_headless)
+    if(TARGET ${_t})
+        add_dependencies(${_t} foxsdr-engine cascade)
+    endif()
+endforeach()
+
 # THE STAGE-1 FIXTURE PLUGIN (engine extraction, docs/engine-stage1.md): a
 # real module - a decoder, two presets and a command key - so
 # test_apply_command applies the plugin ops to a loaded plugin. Built beside

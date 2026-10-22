@@ -1044,6 +1044,17 @@ const KnownWait kKnownWaits[] = {
      "Engine::controlLoop() - how often a STEPPED control thread that is idle (its front end is drawing a frame) beats its own watchdog. "
      "A heartbeat interval, not a bound: the wait ends the moment a step is asked for or the thread is told to stop (stopControlThread "
      "notifies it), so the shutdown path never spends it (the pump move's step P5)"},
+    // THE ENGINE EXECUTABLE'S TWO (stage 7b, src/engine_main.cpp). Both are the main thread's of a process with no window and
+    // no frame loop, neither is on any shutdown path: the main thread is the only caller, and it is not inside either when the
+    // stop starts.
+    {"src/engine_main.cpp", "kStartWait", 0,
+     "main() waiting for the receiver to report running after the control thread starts: how long a run that never comes up "
+     "is given before it is called failed (exit 1). Spent BEFORE the run, not during a stop - the stop has not begun - and the "
+     "poll that spends it is cut short by a stop request (the loop's own condition)"},
+    {"src/engine_main.cpp", "kWaitSlice", 0,
+     "main() sleeping between looks at the clock and the stop request while the engine runs on its own thread: a polling "
+     "interval, not a bound. The stop is the engine's own teardown, which starts after this loop has ended; the slice is "
+     "never slept inside it"},
     {"src/engine/engine.hpp", "kPassWaitNet", 0,
      "Engine::waitForPassCounter() - the safety net on a front-end thread's wait for the pass (stepPass, runPassNow): the wait ends on the "
      "pass's own notification, and this is how often it looks again in case one was missed. NOT on the shutdown path: stopControlThread "

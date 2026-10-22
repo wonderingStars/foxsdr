@@ -62,9 +62,15 @@ namespace {
 // caller-owned directory AND turns capture on, which is how
 // tests/test_diag_hang.cpp exercises the real application without going
 // anywhere near the user's %LOCALAPPDATA%\FoxSDR.
-bool diagnosticsOnDisk(int argc) {
+//
+// THE ENGINE (stage 7b) has no "real session" of this kind: a bare
+// `foxsdr-engine` is a headless run that stores nothing until stage 7c gives it
+// a config, so it is hermetic whatever its argument count is - the one door is
+// the same override, a directory somebody named on purpose.
+bool diagnosticsOnDisk(ProcessKind kind, int argc) {
     const char* over = std::getenv("FOXSDR_DIAG_DIR");
     if (over != nullptr && *over != '\0') { return true; }
+    if (kind != ProcessKind::Host) { return false; }
     return argc == 1;
 }
 
@@ -74,7 +80,11 @@ bool diagnosticsOnDisk(int argc) {
 // bare `cascade` uses the real per-user config; a bounded --frames run uses
 // CASCADE_CONFIG_TEST when it is set and no config at all otherwise. Empty
 // means "this run has no stored preference".
-std::string startupConfigPath(int argc, char** argv) {
+std::string startupConfigPath(ProcessKind kind, int argc, char** argv) {
+    // An Engine reads no config at all (stage 7b; 7c wires one): "no stored
+    // preference", so the stored switch below answers its default and no file
+    // of the user's is opened.
+    if (kind != ProcessKind::Host) { return std::string(); }
     bool bounded = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) { bounded = true; }
@@ -107,8 +117,8 @@ std::string startupConfigPath(int argc, char** argv) {
 // The cost is one small JSON read at the top of main() that AppWindow will do
 // again a moment later. That is the correct trade: the alternative is arming
 // the disk before consent is known.
-bool storedDiagnosticsEnabled(int argc, char** argv) {
-    const std::string path = startupConfigPath(argc, argv);
+bool storedDiagnosticsEnabled(ProcessKind kind, int argc, char** argv) {
+    const std::string path = startupConfigPath(kind, argc, argv);
     if (path.empty()) { return cascade::core::AppConfig{}.diagnosticsEnabled; }
     cascade::core::AppConfig cfg;
     std::string err;
@@ -289,9 +299,11 @@ Step runHelperModes(int argc, char** argv) {
 // flag parsed: the filters go on first because everything after this can fault,
 // the config read included. Inside the step the order is the order of consent:
 // REGISTER the filters with capture OFF, THEN read the stored switch under them,
-// THEN turn capture on if the user wants it. Kind-blind.
+// THEN turn capture on if the user wants it. The kind decides only two inputs
+// (7b): whether this run may write at all, and which config the stored switch is
+// read from - an Engine writes nothing and reads no config; the order is the same.
 // ---------------------------------------------------------------------------
-void armDiagnostics(int argc, char** argv, BootResult& boot) {
+void armDiagnostics(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     // FIRST, before anything that could fault has had the chance. The four
     // registrations are made unconditionally so the stderr attribution is
     // always available; only the on-disk half is conditional.
@@ -302,7 +314,7 @@ void armDiagnostics(int argc, char** argv, BootResult& boot) {
     // constructor and a window later. The directory is still handed over when
     // the run may write, so turning diagnostics on in Settings mid-session has
     // somewhere to go - but nothing is created until it is switched on.
-    const bool mayWrite = diagnosticsOnDisk(argc);
+    const bool mayWrite = diagnosticsOnDisk(kind, argc);
     cascade::core::CrashHandlerConfig crashCfg;
     if (mayWrite) { crashCfg.crashDir = cascade::core::diagCrashDir(); }
     // REGISTRATIONS FIRST, ON-DISK CAPTURE SECOND, and in that order for two
@@ -313,7 +325,7 @@ void armDiagnostics(int argc, char** argv, BootResult& boot) {
     crashCfg.enabled = false;
     cascade::core::installCrashHandlers(crashCfg);
 
-    const bool wanted = mayWrite && storedDiagnosticsEnabled(argc, argv);
+    const bool wanted = mayWrite && storedDiagnosticsEnabled(kind, argc, argv);
     // Creates the crashes directory if and only if `wanted`; see
     // crash_handler.cpp. The minidump switch stays off until AppWindow::run()
     // applies the user's - a dump is process memory and is never armed on a
@@ -465,11 +477,17 @@ Step activateLink(ProcessKind kind, int argc, char** argv, BootResult& boot) {
 // unknown or malformed argument anywhere on it refuses the run before the check
 // is started. The modes that need no further parsing (--version, --update-check)
 // answer inside the loop and end the process there, as they always did.
-// Kind-blind.
+// The tool modes and the two answering flags are the same for both kinds; the
+// KIND decides only the rest (stage 7b): the Host takes the window's flags
+// (--frames, --diag-stall, --diag-toggle, --link-tester) and refuses --seconds,
+// as it always refused it; the Engine takes --seconds and refuses the window's,
+// each as an unknown argument, with its own name in the message.
 // ---------------------------------------------------------------------------
-Step parseFlags(int argc, char** argv, BootResult& boot) {
+Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
+    const bool host = kind == ProcessKind::Host;
     const bool argv1IsLinkActivation = boot.argv1IsLinkActivation;
     int frames = -1;  // negative: run until the window is closed
+    double seconds = -1.0;  // negative: run until stopped (Engine)
     int diagStallMs = 0;
     int diagToggle = 0;
     bool selftest = false;
@@ -485,7 +503,7 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
     // which would otherwise print the whole "foxsdr://beta?t=<token>" URL to
     // stderr and exit 1 for a link clicked while no instance was running.
     for (int i = argv1IsLinkActivation ? 2 : 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--frames") == 0) {
+        if (host && std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "cascade: --frames requires an integer argument\n");
                 return 1;
@@ -589,7 +607,7 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
                 return 1;
             }
             ++i;
-        } else if (std::strcmp(argv[i], "--diag-stall") == 0) {
+        } else if (host && std::strcmp(argv[i], "--diag-stall") == 0) {
             // Hidden diagnostic: wedge the frame loop once, N ms into the run,
             // so the SHIPPED hang threshold can be proved against the REAL
             // frame loop rather than against a unit test of the watchdog
@@ -607,7 +625,7 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
             }
             diagStallMs = static_cast<int>(value);
             ++i;
-        } else if (std::strcmp(argv[i], "--diag-toggle") == 0) {
+        } else if (host && std::strcmp(argv[i], "--diag-toggle") == 0) {
             // Hidden diagnostic: flip Settings > Diagnostics mid-session, on
             // frame 30, through the same function the checkbox calls. The
             // switch's mid-session behaviour is a privacy promise made in
@@ -631,7 +649,7 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
             // Hidden bench diagnostic (see runToneCheck): plays audible sound,
             // so it is a human-in-the-loop tool, never a ctest entry.
             toneCheck = true;
-        } else if (std::strcmp(argv[i], "--link-tester") == 0) {
+        } else if (host && std::strcmp(argv[i], "--link-tester") == 0) {
             // Hidden, session-only reveal of SYSTEM > Beta tester's paste box
             // when no link has been confirmed yet (core/tester_link.hpp,
             // PORTAL-LINK-VERDICT.md §6/finding 8) - for a tester whose
@@ -641,6 +659,31 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
             // sit in shell history indefinitely, unlike a protocol
             // activation's argv[1], which is OS-delivered and transient.
             linkTesterReveal = true;
+        } else if (!host && std::strcmp(argv[i], "--seconds") == 0) {
+            // THE ENGINE'S BOUNDED RUN (stage 7b): run the engine this many
+            // seconds, stop it in the order a stop has, exit 0. A decimal is
+            // accepted (a test wants half a second); negatives, junk, NaN and
+            // more than a year are refused, so a typo cannot become "for ever".
+            // Without it an Engine runs until it is ended from outside (7d adds
+            // the signal that ends it in order).
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "foxsdr-engine: --seconds requires a number of seconds\n");
+                return 1;
+            }
+            char* end = nullptr;
+            const double value = std::strtod(argv[i + 1], &end);
+            if (end == argv[i + 1] || *end != '\0' || !(value >= 0.0) || value > 31536000.0) {
+                std::fprintf(stderr, "foxsdr-engine: invalid --seconds value '%s'\n", argv[i + 1]);
+                return 1;
+            }
+            seconds = value;
+            ++i;
+        } else if (!host) {
+            std::fprintf(stderr,
+                         "foxsdr-engine: unknown argument '%s' (usage: foxsdr-engine [--seconds N] "
+                         "[--selftest] [--version])\n",
+                         argv[i]);
+            return 1;
         } else {
             std::fprintf(stderr,
                          "cascade: unknown argument '%s' (usage: cascade [--frames N] "
@@ -651,6 +694,7 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
     }
 
     boot.frames = frames;
+    boot.seconds = seconds;
     boot.diagStallMs = diagStallMs;
     boot.diagToggle = diagToggle;
     boot.linkTesterReveal = linkTesterReveal;
@@ -669,9 +713,17 @@ Step parseFlags(int argc, char** argv, BootResult& boot) {
 // POSITION: after the tool modes (they use no config, and a refused run must not
 // have decided one) and BEFORE the stderr capture and the application object:
 // the path is an input of the window's constructor, which comes last.
-// Kind-blind. (The Engine's own hermetic rule arrives with its main in 7b.)
+// The Host's rule is below, unchanged. THE ENGINE'S (stage 7b) is the hermetic
+// one: no config path at all - not the user's file, and not CASCADE_CONFIG_TEST
+// either, which is the bounded window run's test hook - so a headless run reads
+// nothing and writes nothing of the user's until stage 7c wires a config in.
 // ---------------------------------------------------------------------------
-void wireConfig(BootResult& boot) {
+void wireConfig(ProcessKind kind, BootResult& boot) {
+    if (kind != ProcessKind::Host) {
+        boot.configPath.clear();
+        boot.announceConfig = false;
+        return;
+    }
     const int frames = boot.frames;
     // Config persistence wiring. Normal interactive runs load/save the
     // user's config at ConfigStore::defaultPath(). Bounded --frames runs
@@ -847,17 +899,17 @@ BootResult bootProcess(ProcessKind kind, int argc, char** argv) {
     // STEP 2: the helper modes return before anything is armed.
     if (const Step done = runHelperModes(argc, argv)) { return finish(*done); }
     // STEP 3: the crash handlers, then the config read under them, then capture.
-    armDiagnostics(argc, argv, boot);
+    armDiagnostics(kind, argc, argv, boot);
     // STEP 4: the instance name is claimed before the flags are parsed.
     claimInstance(kind, argc, argv, boot);
     // STEP 5: a foxsdr:// link in argv[1] is consumed before the parse sees it.
     if (const Step done = activateLink(kind, argc, argv, boot)) { return finish(*done); }
     // STEP 6: the argument parse.
-    if (const Step done = parseFlags(argc, argv, boot)) { return finish(*done); }
+    if (const Step done = parseFlags(kind, argc, argv, boot)) { return finish(*done); }
     // STEP 7: the tool modes (headless; a window would defeat them).
     if (const Step done = runToolMode(boot.tool, argc, argv)) { return finish(*done); }
     // STEP 8: the config path the window will load.
-    wireConfig(boot);
+    wireConfig(kind, boot);
     // STEP 9: the stderr capture (Host).
     captureStderr(kind, boot);
     // STEP 10: the sentinel test seam, read once.

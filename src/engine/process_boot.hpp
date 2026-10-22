@@ -19,8 +19,8 @@
 // process_boot.cpp says at each step why that step is where it is.
 //
 // THE KIND. A process is a Host (the window application, `cascade`) or an
-// Engine (the window-less service, stage 7b). The kind decides FIVE things and
-// nothing else:
+// Engine (the window-less service, `foxsdr-engine`, stage 7b). The kind decides
+// these things and nothing else:
 //   * whether the process claims the single-instance name (Host only);
 //   * whether it acts on a foxsdr:// link in argv[1] (Host only; an Engine
 //     neither writes a link-request file nor claims the instance - the link
@@ -29,9 +29,21 @@
 //     its journal; the capture exists for "a window nobody was reading");
 //   * whether it installs the console-close handler (Host only; the Engine's
 //     signal path arrives in stage 7d and is gated here, beside it);
-//   * the signal path itself (none yet).
-// Every other step is kind-blind. Today the only binary is a Host, so nothing
-// observable differs from before the move.
+//   * the signal path itself (none yet);
+// and, added by 7b with the Engine's main, three more - the ones the Engine's
+// hermetic rule is made of (an Engine stores nothing until stage 7c wires its
+// config, and a service is not a user session):
+//   * whether this run may put diagnostics on the disk (Host: a run with no
+//     arguments, as ever; Engine: only when FOXSDR_DIAG_DIR names a directory,
+//     because a bare `foxsdr-engine` is not a "real session" in the sense that
+//     rule meant, and nothing else may write a log or a crash directory);
+//   * which config the run reads ahead of the parse and hands on (Host: as ever;
+//     Engine: none - not the user's file, not CASCADE_CONFIG_TEST's);
+//   * which flags the parse accepts (Engine: `--seconds N`, and none of the
+//     window's - --frames, --diag-stall, --diag-toggle, --link-tester are the
+//     Host's, refused by an Engine as unknown arguments; the Host refuses
+//     --seconds, exactly as it did before there was an Engine).
+// Every other step is kind-blind. A Host behaves exactly as it did before 7a.
 //
 // Engine-clean: no gui/, imgui, GLFW or OpenGL. main() constructs the window; it
 // never happens here.
@@ -59,7 +71,8 @@ struct BootResult {
     // --- when the process goes on ---------------------------------------------
     std::string configPath;        // empty: no stored config (a hermetic bounded run)
     bool announceConfig = false;   // CASCADE_CONFIG_TEST named the path
-    int frames = -1;               // negative: run until the window is closed
+    int frames = -1;               // negative: run until the window is closed (Host)
+    double seconds = -1.0;         // negative: run until stopped; --seconds N (Engine only)
     int diagStallMs = 0;           // --diag-stall
     int diagToggle = 0;            // --diag-toggle on (1) / off (-1)
     bool linkTesterReveal = false; // --link-tester

@@ -17,7 +17,13 @@
 //   * both consume a foxsdr: argv[1] so the parse never sees it (no
 //     "unknown argument" exit, which would echo the token);
 //   * the kind-blind modes answer the same for both: --version exits 0, an
-//     unknown argument exits 1.
+//     unknown argument exits 1;
+//   * (stage 7b, the Engine's hermetic rule) an Engine has no config and no disk:
+//     it hands on NO config path even when CASCADE_CONFIG_TEST names one (the Host
+//     hands that one on), a bare Engine - argc 1, which is a "real session" for a
+//     Host - may write no diagnostics and leaves the profile exactly as it found it,
+//     and the flags differ by kind: --seconds is the Engine's, --frames the Host's,
+//     each refused by the other as an unknown argument.
 //
 // Isolation: APPDATA / XDG_CONFIG_HOME point at a scratch directory (the link
 // file lands there, never in the real profile), the instance names are private
@@ -103,12 +109,12 @@ int main() {
 
     // --- the Engine: no claim, no file, no echo ------------------------------------
     setEnv(cascade::core::kInstanceScopeEnv, scopeEngine);
-    const BootResult eng = boot(ProcessKind::Engine, {"foxsdr-engine", link, "--frames", "0"});
+    const BootResult eng = boot(ProcessKind::Engine, {"foxsdr-engine", link, "--seconds", "0"});
     CHECK(!eng.exit);                            // not refused: the link was not an unknown argument
     CHECK(eng.argv1IsLinkActivation);            // consumed, so the parse skipped it
     CHECK(!eng.primaryInstance);                 // it claimed nothing
     CHECK(!fs::exists(linkFile));                // and wrote no link-request file
-    CHECK(eng.frames == 0);                      // the rest of the line parsed
+    CHECK(eng.seconds == 0.0);                   // the rest of the line parsed
     // The name the Engine ran under is free: a claim from here succeeds.
     CHECK(cascade::core::claimPrimaryInstanceAt(identity(scopeEngine)));
 
@@ -127,7 +133,7 @@ int main() {
     for (const ProcessKind k : {ProcessKind::Engine, ProcessKind::Host}) {
         setEnv(cascade::core::kInstanceScopeEnv, std::string("bootkind-untrusted-") + (k == ProcessKind::Host ? "h" : "e") +
                                                      std::to_string(std::rand()));
-        const BootResult r = boot(k, {"x", untrusted, "--frames", "0"});
+        const BootResult r = boot(k, {"x", untrusted, k == ProcessKind::Host ? "--frames" : "--seconds", "0"});
         CHECK(!r.exit);
         CHECK(r.argv1IsLinkActivation);
         CHECK(!fs::exists(linkFile));
@@ -142,6 +148,67 @@ int main() {
         // A helper's refusal of an argument it does not know (exit 2) is the same for both.
         const BootResult helperBad = boot(k, {"x", "--enumerate-json", "--no-such-flag"});
         CHECK(helperBad.exit && helperBad.exitCode == 2);
+    }
+
+    // --- the flags differ by kind (stage 7b) ---------------------------------------------------------------
+    {
+        const BootResult s = boot(ProcessKind::Engine, {"foxsdr-engine", "--seconds", "2.5"});
+        CHECK(!s.exit && s.seconds == 2.5 && s.frames < 0);
+        const BootResult none = boot(ProcessKind::Engine, {"foxsdr-engine", "--selftest-not-a-flag"});
+        CHECK(none.exit && none.exitCode == 1);
+        // The window's flags are the Host's, and --seconds the Engine's: each refuses the other's, exit 1.
+        for (const std::vector<std::string>& line : std::vector<std::vector<std::string>>{
+                 {"x", "--frames", "0"}, {"x", "--diag-stall", "5"}, {"x", "--diag-toggle", "on"}, {"x", "--link-tester"}}) {
+            const BootResult r = boot(ProcessKind::Engine, line);
+            CHECK(r.exit && r.exitCode == 1);
+        }
+        for (const char* bad : {"abc", "-1", "nan", "1e99", "2s", ""}) {
+            const BootResult r = boot(ProcessKind::Engine, {"x", "--seconds", bad});
+            CHECK(r.exit && r.exitCode == 1);
+        }
+        const BootResult missing = boot(ProcessKind::Engine, {"x", "--seconds"});
+        CHECK(missing.exit && missing.exitCode == 1);
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-hs-" + std::to_string(std::rand()));  // a Host claims: a name of its own
+        const BootResult hostSeconds = boot(ProcessKind::Host, {"x", "--seconds", "1"});
+        CHECK(hostSeconds.exit && hostSeconds.exitCode == 1);
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-hf-" + std::to_string(std::rand()));
+        const BootResult hostFrames = boot(ProcessKind::Host, {"x", "--frames", "0"});
+        CHECK(!hostFrames.exit && hostFrames.frames == 0 && hostFrames.seconds < 0.0);
+    }
+
+    // --- the Engine is hermetic (stage 7b) -------------------------------------------------------------------
+    {
+        // CASCADE_CONFIG_TEST names a path (set above). The Host with --frames hands it on and says so; an Engine has no
+        // config at all - not that one, not the user's - whatever it is given.
+        setEnv(cascade::core::kInstanceScopeEnv, "bootkind-hc-" + std::to_string(std::rand()));
+        const BootResult hostCfg = boot(ProcessKind::Host, {"cascade", "--frames", "0"});
+        CHECK(!hostCfg.exit && hostCfg.configPath == hook && hostCfg.announceConfig);
+        const BootResult engCfg = boot(ProcessKind::Engine, {"foxsdr-engine", "--seconds", "0"});
+        CHECK(!engCfg.exit && engCfg.configPath.empty() && !engCfg.announceConfig);
+
+        // A BARE Engine - argc 1, which for a Host is "a real session" that logs, captures and reads the user's config
+        // ahead of the window. Every per-user folder is the scratch one first, so a gate that failed would write into
+        // the scratch tree where it can be seen, never into a real profile.
+        for (const char* v : {"LOCALAPPDATA", "USERPROFILE", "HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}) {
+            setEnv(v, scratch.string());
+        }
+        unsetEnv("CASCADE_CONFIG_TEST");
+        unsetEnv("FOXSDR_DIAG_DIR");
+        const auto listing = [&] {
+            std::vector<std::string> names;
+            std::error_code lec;
+            for (const auto& entry : fs::recursive_directory_iterator(scratch, lec)) { names.push_back(entry.path().string()); }
+            return names;
+        };
+        const std::vector<std::string> before = listing();
+        const BootResult bare = boot(ProcessKind::Engine, {"foxsdr-engine"});
+        CHECK(!bare.exit);
+        CHECK(!bare.mayWrite);                 // no diagnostics may reach the disk...
+        CHECK(!bare.wanted);                   // ...so none is wanted, and the config was not even asked
+        CHECK(bare.configPath.empty());
+        CHECK(bare.seconds < 0.0);             // no bound: it would run until ended from outside
+        CHECK(!bare.primaryInstance);
+        CHECK(listing() == before);            // and nothing was created anywhere under the profile
     }
 
     fs::remove_all(scratch, ec);

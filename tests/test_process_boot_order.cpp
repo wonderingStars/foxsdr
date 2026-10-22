@@ -17,12 +17,16 @@
 //     sentinel is wired - a refused or tool run must arm nothing;
 //   * the sentinel is the last thing armed before the window exists.
 //
-// And the KIND (Host | Engine) decides exactly five things - the instance claim,
+// And the KIND (Host | Engine) decides exactly these things - the instance claim,
 // link activation, the stderr capture, the console handler and (stage 7d) the
-// signal path - so an Engine never claims `Local\FoxSDR-instance` and never
-// writes a link-request file (docs/engine-merge-0.99.84.md, TESTER-LINK). This
-// test pins the gates from the text; tests/test_process_boot_kind.cpp runs the
-// boot as each kind and looks at the machine.
+// signal path, and, since stage 7b gave the Engine a main, three that make it
+// hermetic (whether diagnostics may reach the disk and which config the stored
+// switch is read from; the config path handed on; the flags the parse accepts) -
+// so an Engine never claims `Local\FoxSDR-instance` and never writes a
+// link-request file (docs/engine-merge-0.99.84.md, TESTER-LINK), and writes and
+// reads nothing of the user's. This test pins the gates from the text;
+// tests/test_process_boot_kind.cpp runs the boot as each kind and looks at the
+// machine.
 //
 // It is a SOURCE SCAN: comments are blanked, string literals kept where a flag
 // name is the thing being ordered. A function it cannot find FAILS (a scan that
@@ -295,7 +299,7 @@ int main(int argc, char** argv) {
     // unknown-argument echo).
     CHECK(findIn(slice(boot.blank, parse), "argv1IsLinkActivation ? 2 : 1") != std::string::npos);
 
-    // --- 5. The kind decides five things and nothing else -----------------------
+    // --- 5. The kind decides the things listed above and nothing else ------------
     // Each gate is a guard clause that RETURNS before the first effect.
     struct Gate { const char* name; const Body* body; const char* effect; };
     const Gate gates[] = {
@@ -303,6 +307,8 @@ int main(int argc, char** argv) {
         {"activateLink", &link, "writeLinkRequestFile("},
         {"captureStderr", &capture, "installStderrCapture("},
         {"installConsoleHandler", &handler, "installConsoleCloseHandler("},
+        // 7b: an Engine hands on no config path (the guard returns before the Host's rule is applied).
+        {"wireConfig", &config, "ConfigStore::defaultPath("},
     };
     for (const Gate& g : gates) {
         const std::string code = slice(boot.blank, *g.body);
@@ -317,19 +323,61 @@ int main(int argc, char** argv) {
     // the Engine branch (before the guard's return) writes no file, which the line
     // above shows; and no step outside the gates mentions the kind at all.
     struct Blind { const char* name; const Body* body; };
-    const Blind blind[] = {{"runHelperModes", &helpers}, {"armDiagnostics", &arming}, {"parseFlags", &parse},
-                           {"wireConfig", &config}, {"readSentinelSeam", &seam}, {"logConsoleOutcome", &outcome},
-                           {"armSentinel", &sentinel}};
+    const Blind blind[] = {{"runHelperModes", &helpers}, {"readSentinelSeam", &seam},
+                           {"logConsoleOutcome", &outcome}, {"armSentinel", &sentinel}};
     for (const Blind& b : blind) {
         const bool mentions = hasWord(slice(boot.blank, *b.body), "kind");
         if (mentions) { std::printf("  %s mentions 'kind': it must be kind-blind\n", b.name); }
         CHECK(!mentions);
     }
-    // The sequence passes the kind to exactly the four gated steps.
-    for (const char* gated : {"claimInstance(kind", "activateLink(kind", "captureStderr(kind", "installConsoleHandler(kind"}) {
+    // 7b: the three steps whose INPUTS the kind decides name it, each in the one way it is meant to.
+    {
+        // armDiagnostics hands the kind to the two questions it asks: may this run write, and which config is the stored
+        // switch read from. Neither answer is computed from anything else.
+        const std::string armKindCode = slice(boot.blank, arming);
+        CHECK(findIn(armKindCode, "diagnosticsOnDisk(kind") != std::string::npos);
+        CHECK(findIn(armKindCode, "storedDiagnosticsEnabled(kind") != std::string::npos);
+        // ...and those two answer for an Engine before the Host's own rule: a guard on the kind that returns "no"
+        // (no disk) / "no config" first.
+        const Body onDisk = bodyOf(boot, "bool diagnosticsOnDisk(");
+        const Body cfgPath = bodyOf(boot, "std::string startupConfigPath(");
+        CHECK(onDisk.found() && cfgPath.found());
+        if (onDisk.found()) {
+            const std::string code = slice(boot.blank, onDisk);
+            const std::size_t guard = findIn(code, "kind != ProcessKind::Host");
+            const std::size_t hostRule = findIn(code, "argc == 1");
+            CHECK(guard != std::string::npos && hostRule != std::string::npos && guard < hostRule);
+            CHECK(findIn(code.substr(guard, hostRule - guard), "return false") != std::string::npos);
+        }
+        if (cfgPath.found()) {
+            const std::string code = slice(boot.blank, cfgPath);
+            const std::size_t guard = findIn(code, "kind != ProcessKind::Host");
+            const std::size_t hostRule = findIn(code, "ConfigStore::defaultPath(");
+            CHECK(guard != std::string::npos && hostRule != std::string::npos && guard < hostRule);
+            CHECK(findIn(code.substr(guard, hostRule - guard), "return") != std::string::npos);
+        }
+        // parseFlags: the window's four flags are the Host's, --seconds the Engine's, and an unknown argument names
+        // the program that refused it.
+        const std::string parseView = slice(boot.view, parse);
+        const std::string parseCode = slice(boot.blank, parse);
+        CHECK(findIn(parseCode, "host = kind == ProcessKind::Host") != std::string::npos);
+        for (const char* hostOnly : {"host && std::strcmp(argv[i], \"--frames\")", "host && std::strcmp(argv[i], \"--diag-stall\")",
+                                     "host && std::strcmp(argv[i], \"--diag-toggle\")",
+                                     "host && std::strcmp(argv[i], \"--link-tester\")"}) {
+            if (findIn(parseView, hostOnly) == std::string::npos) { std::printf("  parseFlags: no '%s'\n", hostOnly); }
+            CHECK(findIn(parseView, hostOnly) != std::string::npos);
+        }
+        CHECK(findIn(parseView, "!host && std::strcmp(argv[i], \"--seconds\")") != std::string::npos);
+        CHECK(findIn(parseView, "foxsdr-engine: unknown argument") != std::string::npos);
+        CHECK(findIn(parseView, "cascade: unknown argument") != std::string::npos);
+    }
+    // The sequence passes the kind to exactly the seven steps that take it: the four gated ones and the three whose
+    // inputs it decides.
+    for (const char* gated : {"armDiagnostics(kind", "claimInstance(kind", "activateLink(kind", "parseFlags(kind",
+                              "wireConfig(kind", "captureStderr(kind", "installConsoleHandler(kind"}) {
         CHECK(findIn(seqCode, gated) != std::string::npos);
     }
-    CHECK(countOf(seqCode, "kind") == 4);  // those four calls and nothing else in the sequence body mentions it
+    CHECK(countOf(seqCode, "kind") == 7);  // those seven calls and nothing else in the sequence body mentions it
 
     // --- 6. main() is the thin entry point it claims to be ----------------------
     const Views mv = makeViews(mainText);

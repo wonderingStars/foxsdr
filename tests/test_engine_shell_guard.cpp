@@ -644,7 +644,7 @@ void checkTheFence(const fs::path& root, const std::set<std::string>& deny, cons
     const bool shellTarget = cmake.find("add_library(cascade_shell STATIC src/engine/engine_shell.cpp)") != std::string::npos;
     const bool excluded = cmake.find("EXCLUDE REGEX \"engine_shell") != std::string::npos;
     const bool refused = cmake.find("^cascade_interface$|^cascade_shell$") != std::string::npos;
-    const bool headless = cmake.find("set(_todo cascade_engine cascade_engine_link_check foxsdr-reports)") != std::string::npos;
+    const bool headless = cmake.find("set(_todo cascade_engine cascade_engine_link_check foxsdr-reports foxsdr-engine)") != std::string::npos;
     if (!target || !fenced) { std::printf("FAIL: CMakeLists.txt no longer builds the window as cascade_interface behind the fence\n"); }
     if (!shellTarget || !excluded) { std::printf("FAIL: engine_shell.cpp is not the cascade_shell target's alone (the headless engine must not carry it)\n"); }
     if (!refused || !headless) { std::printf("FAIL: the engine-side link check no longer refuses cascade_interface / cascade_shell for the headless programs\n"); }
