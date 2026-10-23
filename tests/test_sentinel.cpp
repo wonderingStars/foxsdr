@@ -771,6 +771,56 @@ int main() {
             CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kUserPaced)).words) == "held by the user");
         }
 
+        // --- CLOSED BY WINDOWS AS NOT RESPONDING (0xCFFFFFFF) is a freeze --------
+        //
+        // Field signature 35ED0AF291113FC8 (0.99.78 and 0.99.84): "sentinel: crash exit code, no
+        // report from the process - unknown exit code; phase held by the user; in user-wait;
+        // silent 83 s", code 0xCFFFFFFF. That code is what Windows' "<program> is not responding"
+        // dialog leaves when the person presses Close the program (measured, see
+        // kWindowsHungCloseCode). Windows offers that dialog only for a window that has stopped
+        // taking messages, and a person holding the window keeps it taking them - so the
+        // page's "held by the user" does not excuse it: it is a freeze, sent, named as what it
+        // is, and grouped as a freeze of that part of the frame.
+        {
+            CHECK(kWindowsHungCloseCode == 0xCFFFFFFFul);
+            // The two field reports, replayed: in the scope user-wait, and with the window
+            // procedure's bit.
+            const SentinelVerdict prompt =
+                decideSentinel(facts(inScope(crumb(Phase::Running, 500, 83000), FrameScope::UserWait), kWindowsHungCloseCode));
+            CHECK(prompt.cls == C::Frozen && prompt.upload() && !sentinelReasonIsLocalOnly(prompt.reason));
+            CHECK(contains(prompt.reason, std::string(kSentinelReasonFrozen) +
+                                              " - closed by Windows as not responding (0xCFFFFFFF, its Close the "
+                                              "program button); phase held by the user; in user-wait; silent 83 s"));
+            CHECK(prompt.reason.size() <= 200u);
+            CHECK(prompt.signatureTag == "sentinel:frozen:user-held:user-wait");
+            CHECK(prompt.codeKnown && prompt.code == kWindowsHungCloseCode);
+            const SentinelVerdict held =
+                decideSentinel(facts(crumb(Phase::Running, 500, 38000, breadcrumb::kUserPaced), kWindowsHungCloseCode));
+            CHECK(held.cls == C::Frozen && held.upload());
+            CHECK(held.signatureTag == "sentinel:frozen:user-held");
+            // Not the group it was filed in before: a crash of the same phase hashes elsewhere.
+            CHECK(sentinelSignature(prompt, nullptr) !=
+                  sentinelSignature(decideSentinel(facts(inScope(crumb(Phase::Running, 500, 83000), FrameScope::UserWait), kFastFail)), nullptr));
+            // Nobody holding it: frozen too, silence of any length (Windows has already
+            // measured the five seconds that make it hung).
+            const SentinelVerdict plain = decideSentinel(facts(crumb(Phase::Running, 500, 100), kWindowsHungCloseCode));
+            CHECK(plain.cls == C::Frozen && plain.signatureTag == "sentinel:frozen:running");
+            // Still a crash-like code where that matters elsewhere (the previous-session
+            // classification of a start-up ending, and Windows' own crash record), and the
+            // classes that outrank it are unchanged: before the first frame is start-up,
+            // a session ending is the session's.
+            CHECK(isCrashLikeExitCode(kWindowsHungCloseCode));
+            CHECK(decideSentinel(facts(crumb(Phase::AwaitingFirstFrame, 1, 100), kWindowsHungCloseCode)).cls == C::Startup);
+            CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagSessionEnding), kWindowsHungCloseCode)).cls == C::Session);
+            // A freeze the watchdog already filed covers the ending: one report per death.
+            SentinelFacts filed = facts(inScope(crumb(Phase::Running, 500, 83000), FrameScope::UserWait), kWindowsHungCloseCode);
+            filed.freezeReportExists = true;
+            CHECK(!decideSentinel(filed).upload());
+            // The words, on their own.
+            CHECK(sentinelExitWords(true, kWindowsHungCloseCode) ==
+                  "closed by Windows as not responding (0xCFFFFFFF, its Close the program button)");
+        }
+
         // --- what else was going on, in the phase the report names --------------
         CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kOpeningRadio)).words) == "opening a radio");
         CHECK(std::string(sentinelPhaseLabel(crumb(Phase::Running, 5, 0, breadcrumb::kReloadingPlugins)).words) == "reloading plugins");
@@ -914,7 +964,8 @@ int main() {
         std::set<std::string> ids;
         int written = 0;
         const unsigned long codes[] = {0ul,          1ul,          0xFFFFFFFFul, 0xC0000005ul, 0xC0000409ul,
-                                       0xC0000374ul, 0xC00000FDul, 0xC000013Aul, 0x40010004ul, 0xDEADBEEFul};
+                                       0xC0000374ul, 0xC00000FDul, 0xC000013Aul, 0x40010004ul, 0xDEADBEEFul,
+                                       kWindowsHungCloseCode};
         for (std::uint32_t p = 0; p <= 12; ++p) {
             for (const std::uint32_t activity : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}) {
                 for (const unsigned long code : codes) {

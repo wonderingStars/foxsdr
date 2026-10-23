@@ -125,6 +125,19 @@ bool sentinelUserPaced(const breadcrumb::Snapshot& b);
 // Anything else - 1 from taskkill, -1 from Stop-Process, 0 - is not.
 bool isCrashLikeExitCode(unsigned long code);
 
+// THE CODE WINDOWS ENDS A HUNG PROGRAM WITH (0.99.87). When a window has stopped taking
+// messages Windows calls it "Not Responding", and the dialog it offers - "<program> is not
+// responding" - ends the process with 0xCFFFFFFF when the person presses "Close the program".
+// MEASURED 2026-10-23 on Windows 11 22631 (a test window whose thread stopped pumping, the
+// dialog's own button pressed): exit code 0xCFFFFFFF. Task Manager's EndTask route on the same
+// window left 0, not this. Field signature 35ED0AF291113FC8 is two of these, filed as crashes.
+// It is not a fault of the program's own: it is a FREEZE that a person ended, and Windows only
+// offers that dialog for a window it has judged hung, which a person holding the window (a
+// drag, a menu, a dialog's own loop) never makes it: those loops take messages (measured the
+// same day: a thread inside GetMessage is never hung, one that stops taking messages is hung
+// after about 5 s). So the sentinel files it as frozen whatever the page says about a person.
+inline constexpr unsigned long kWindowsHungCloseCode = 0xCFFFFFFFul;
+
 // What an exit code means, in the fixed words the reason carries. "unknown exit
 // code" for any value not in the table; the table is checked against the Windows
 // SDK's ntstatus.h and, for the two codes a forced kill leaves, against a

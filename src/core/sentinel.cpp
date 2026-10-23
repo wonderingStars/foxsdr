@@ -306,6 +306,8 @@ std::string sentinelExitWords(bool exitKnown, unsigned long code, bool exitRecor
         case 0xFFFFFFFFul:
             return "ended by another process (exit code -1, as Stop-Process and Process.Kill do)";
         case 0x00000000ul: return "exit code 0 before the shutdown had finished";
+        case kWindowsHungCloseCode:
+            return "closed by Windows as not responding (0xCFFFFFFF, its Close the program button)";
         default: break;
     }
     return "unknown exit code";
@@ -353,6 +355,12 @@ SentinelVerdict decideSentinel(const SentinelFacts& f) {
         c = SentinelClass::Session;
     } else if (b.valid && b.phase < Phase::Running) {
         c = SentinelClass::Startup;
+    } else if (f.exitKnown && f.exitCode == kWindowsHungCloseCode) {
+        // WINDOWS SAID IT WAS NOT RESPONDING, and a person closed it from that dialog
+        // (kWindowsHungCloseCode): a freeze, not a crash, and a freeze even with the page
+        // saying a person was holding the window - a hold takes messages, and this window
+        // had stopped. Ahead of endIsFault, which a top nibble of C would otherwise claim.
+        c = SentinelClass::Frozen;
     } else if (f.exitKnown && endIsFault(f.exitCode)) {
         c = SentinelClass::Crash;
     } else if (b.valid && v.silentMs >= 0 &&

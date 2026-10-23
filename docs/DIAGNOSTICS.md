@@ -3305,10 +3305,32 @@ own reason. Two of the excuses — a pause the application takes, and a stall in
      application-paced pauses are held with it; when the last is released, an
      application-paced pause still held starts a fresh 30 s from that moment, so
      a rescan nested inside a long shell call is not reported the instant the
-     prompt closes. **What this leaves unreported, by design:** a `ShellExecute`
-     that never returns and shows no dialog is indistinguishable from a prompt
-     nobody has answered yet, and the only watch on it is the person who sees
-     the window not responding.
+     prompt closes. **Until 0.99.87 this left unreported** a `ShellExecute` (or
+     a file dialog) that never returns: it looked like a prompt nobody had
+     answered yet, and the only watch on it was the person who saw the window
+     not responding. Field signature `35ED0AF291113FC8` is exactly that, twice
+     (0.99.78, 0.99.84): a GUI thread silent for 83 s and 38 s with the frame
+     timer in `user-wait` or the modal-loop bit raised, closed by its user from
+     Windows' own *is not responding* dialog (exit code `0xCFFFFFFF`, below),
+     and no report but the sentinel's, which has no stack. **Since 0.99.87 the
+     excuse lasts only while Windows does not call the window hung**
+     (`HangWatchdog::guiWindowHung`: `IsHungAppWindow` on every top-level window
+     the GUI thread owns, the same verdict that greys a window and titles it
+     *(Not Responding)*). A person is always waited for in a loop that takes
+     messages - a file dialog's, a menu's, a drag's - and Windows never calls
+     such a thread hung; it calls a thread hung when it has taken no message for
+     about 5 s. Measured 2026-10-23 on Windows 11 22631: a window whose thread
+     sleeps reads hung after 5.0-5.3 s, shown or hidden; one whose thread waits
+     in `GetMessage` never does. Past the verdict the stall is measured from the
+     first poll that saw it, so the report, with every thread's stack, follows a
+     threshold later (about 10 s after the thread stopped). The same verdict ends
+     rule 2's modal-loop excuse: a thread inside a drag's loop whose handler
+     never returned is hung, and is reported. `tests/test_hung_window_excuse.cpp`
+     holds all four cases on real windows: a user-paced pause over a stopped
+     thread (reported) and over a pumping one (not), and a real
+     `WM_SYSCOMMAND`/`SC_MOVE` loop with a stopped handler (reported) and a
+     pumping one (not). What is still excused without limit is a prompt whose
+     loop keeps taking messages, which is what a person reading it looks like.
 
    `cascade --frames N` prints how many pauses the run took (both kinds count)
    and `tests/test_diag_hang.cpp` requires at least one, so a rescan that stops
@@ -3614,14 +3636,20 @@ row and boundary in `tests/test_sentinel.cpp`):
 4. The **session was closing** -> *session*, kept here.
 5. It ended **before the first frame** (phase before *running*) -> *startup*, sent,
    whatever the exit code.
-6. A **crash exit code** the handler never saw -> *crash*, sent.
-7. The heartbeat had been **silent for longer than the watchdog's own threshold**,
+6. **Closed by Windows as not responding** (exit code `0xCFFFFFFF`, since 0.99.87) ->
+   *frozen*, sent, whoever the page says was holding the window: Windows offers that
+   dialog only for a window that has stopped taking messages, and a person holding a
+   window keeps it taking them. Before 0.99.87 this was a *crash* with `unknown exit
+   code` (field signature `35ED0AF291113FC8`); the class is part of the signature, so
+   the same ending now groups apart, as `sentinel:frozen:<phase>[:<scope>]`.
+7. A **crash exit code** the handler never saw -> *crash*, sent.
+8. The heartbeat had been **silent for longer than the watchdog's own threshold**,
    and **nobody was holding the window** -> *frozen*, sent. A drag, a resize, an
    open menu or a prompt being read stops the frame loop for as long as the
    person likes; the watchdog excuses each (its rule 2 and its user-paced pause)
    and so does this. A plugin reload or a radio open that never came back is not
    excused: the application set that pace, and that silence is the freeze.
-8. Anything else -> *outside*, kept here.
+9. Anything else -> *outside*, kept here.
 
 The "freeze threshold" is read from `HangWatchdog`'s own constants, so the two
 cannot disagree: its start-up budget (`kStartupThresholdMs`, 30 s) for the first
@@ -3674,6 +3702,7 @@ the table):
 | `0xC000013A` | `Ctrl+C or a console close` | `ntstatus.h`: `STATUS_CONTROL_C_EXIT` ("The application terminated as a result of a CTRL+C."). Since 0.99.67 the program answers Ctrl+C, Ctrl+Break and a closing console with its own close (`core/console_close.hpp`), so this code now means the shutdown did not finish inside the 5000 ms the system allows a closing console (HandlerRoutine's Timeouts table) |
 | `1` | `exit code 1 (as taskkill /F leaves it, or the application ended itself)`; with the application's own record (below), `the application ended itself: the window could not be created - see the window: lines in the log` | **Measured**, 2026-10-05, Windows 11 22631: `taskkill /F` ends a process with 1. Microsoft's `TerminateProcess` page documents only that the *caller* chooses the code; that Task Manager's *End task* also leaves 1 is widely stated but **was not measured here**, which is why the words name `taskkill /F` and not Task Manager. **1 is not proof of a kill**: `AppWindow::run` returns 1 itself when `glfwInit` or `glfwCreateWindow` fails, so the exit code alone cannot tell the two apart and the words no longer say it can (0.99.73's two reports of signature `85FF854AA2C772F9` read "ended by another process" for a window that could not be created) |
 | `-1` (`0xFFFFFFFF`) | `ended by another process (exit code -1, as Stop-Process and Process.Kill do)` | **Measured** in the same session: PowerShell 5.1's `Stop-Process -Force` and .NET's `Process.Kill()` both leave -1 |
+| `0xCFFFFFFF` (since 0.99.87) | `closed by Windows as not responding (0xCFFFFFFF, its Close the program button)` | **Measured**, 2026-10-23, Windows 11 22631: a test window whose thread stopped taking messages, its grey "(Not Responding)" ghost sent `SC_CLOSE`, and the `WerFault` dialog's own *Close the program* button pressed - the process ended with `0xCFFFFFFF`. Task Manager's route (`EndTask(hwnd, FALSE, TRUE)`) on the same hung window left `0`, not this, so the words name the dialog and not Task Manager. Filed as *frozen*, not *crash* (class rule 6 above) |
 | `0` before the shutdown finished | `exit code 0 before the shutdown had finished` | by construction |
 | `0x5058....` (since 0.99.78, Linux) | `exit code N (the process ended itself)`, `killed by signal N (SIGSEGV)`, ... | not an operating-system value: the application's own record of how it ended, tagged so that no Windows code reads as one - see *Platforms* below |
 | anything else | `unknown exit code` | - |
