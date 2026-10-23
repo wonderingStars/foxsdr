@@ -215,6 +215,17 @@ bool keyBindingConflicts(const KeyBindings& kb, KeyAction self, const Chord& c, 
 // that state behaves the same way every launch.
 bool keyActionForChord(const KeyBindings& kb, const Chord& c, KeyAction& out);
 
+// IS A TEXT FIELD HOLDING THE KEYBOARD? Asked by AppWindow::dispatchKeyBindings
+// before any chord is matched, about the item that was active when the frame
+// began. Through 0.99.84 the question was io.WantTextInput alone, and that is
+// ImGui's answer to "should a software keyboard be shown", which is NO for a
+// READ-ONLY field - so Ctrl+A and Ctrl+C in the report page's read-only
+// diagnostics box selected and copied nothing and switched the mode to AM and
+// then CW (GitHub issue 6, 0.99.84). A read-only field owns the keys while it
+// is active exactly as an editable one does: Ctrl+A selects, Ctrl+C copies,
+// the arrows move. True while any text field, editable or not, is active.
+bool textFieldHoldsKeys();
+
 // --- config.json's side ------------------------------------------------------
 //
 // A list of "actionId=chord" lines rather than an object, because AppConfig

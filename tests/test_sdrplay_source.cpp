@@ -1757,20 +1757,38 @@ void testAWindowWithServiceGapsIsWrittenAsAWarning() {
         }
         return out;
     };
+    // THE SERVICE-GAP LINE IS THE LOG LINE AFTER THE HEALTH LINE (0.99.85),
+    // at the same level, and the health line itself stays the Soapy format
+    // with nothing after "in N s" - a tail took the first field report's line
+    // past the log's width and lost the count to the scrub (GitHub issue 6).
+    auto lineAfter = [&](const std::string& health) {
+        const std::vector<std::string> all = cascade::core::DiagLog::instance().ringSnapshot();
+        for (std::size_t i = 0; i + 1 < all.size(); ++i) {
+            if (all[i] == health) { return all[i + 1]; }
+        }
+        return std::string();
+    };
 
     r.block(0);
     closeWindow();  // the first window: written whatever it holds
     std::vector<std::string> lines = healthLines();
     CHECK(lines.size() == 1);
     CHECK(!lines.empty() && lines.back().find(" info source: stream health") != std::string::npos);
-    CHECK(!lines.empty() && serviceGapsOf(lines.back()) == "service gaps 0 (0 samples)");
+    CHECK(!lines.empty() && serviceGapsOf(lines.back()).empty());
+    CHECK(!lines.empty() && lines.back().find(" samples in ") != std::string::npos &&
+          lines.back().back() == 's');
+    std::string gap = lines.empty() ? std::string() : lineAfter(lines.back());
+    CHECK(gap.find(" info source: SDRplay service gaps") != std::string::npos);
+    CHECK(serviceGapsOf(gap) == "service gaps 0 (0 samples)");
 
     r.block(1000);  // expected 8: a gap of 992
     closeWindow();
     lines = healthLines();
     CHECK(lines.size() == 2);
     CHECK(!lines.empty() && lines.back().find(" warn source: stream health") != std::string::npos);
-    CHECK(!lines.empty() && serviceGapsOf(lines.back()) == "service gaps 1 (992 samples)");
+    gap = lines.empty() ? std::string() : lineAfter(lines.back());
+    CHECK(gap.find(" warn source: SDRplay service gaps") != std::string::npos);
+    CHECK(serviceGapsOf(gap) == "service gaps 1 (992 samples)");
 
     r.next();  // 1008: a clean window, nothing to say
     closeWindow();

@@ -32,7 +32,9 @@
 // the note at its top), so a test that names ImGuiKey_PageUp asks for the
 // definition itself.
 #include <imgui.h>
+#include <imgui_internal.h>
 
+#include "gui/fonts.hpp"
 #include "gui/key_bindings.hpp"
 #include "test_check.hpp"
 
@@ -65,6 +67,105 @@ Chord chordOf(const char* text) {
 }
 
 }  // namespace
+
+// --- a text field that holds the keys ------------------------------------------
+//
+// Headless ImGui, as test_plugin_settings_ui drives the settings form: a
+// context with no renderer, one window, a READ-ONLY multiline box (the report
+// page's diagnostics preview, drawn with the same flag) and an editable box
+// beside it. The question is asked where dispatchKeyBindings asks it - right
+// after NewFrame, before any widget of the frame is submitted - about the item
+// the previous frame left active.
+//
+// THE 0.99.84 FAULT, pinned: with the read-only box active, io.WantTextInput
+// is false (ImGui raises it only for a field that could take typing), and the
+// dispatcher that asked only that let Ctrl+A and Ctrl+C through to the AM and
+// CW chords. textFieldHoldsKeys must say true there.
+void textFieldHoldsKeysTest() {
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    cascade::gui::fonts::load();
+
+    char preview[128] = "FoxSDR diagnostics bundle\nversion: 0.99.84\nmode: AM\n";
+    char contact[64] = "M0XYZ";
+    bool focusPreview = false;
+    bool focusContact = false;
+    bool held = false;      // textFieldHoldsKeys() at the dispatcher's moment
+    bool wantText = false;  // io.WantTextInput at the same moment
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        held = cascade::gui::textFieldHoldsKeys();
+        wantText = io.WantTextInput;
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(600.0f, 400.0f), ImGuiCond_Always);
+        ImGui::Begin("report", nullptr, ImGuiWindowFlags_NoTitleBar);
+        if (focusPreview) {
+            ImGui::SetKeyboardFocusHere();
+            focusPreview = false;
+        }
+        ImGui::InputTextMultiline("##preview", preview, sizeof(preview), ImVec2(-1.0f, 140.0f),
+                                  ImGuiInputTextFlags_ReadOnly);
+        if (focusContact) {
+            ImGui::SetKeyboardFocusHere();
+            focusContact = false;
+        }
+        ImGui::InputText("##contact", contact, sizeof(contact));
+        ImGui::Button("Send");
+        ImGui::End();
+        ImGui::Render();
+    };
+    auto frames = [&](int n) {
+        for (int i = 0; i < n; ++i) { frame(); }
+    };
+
+    // Nothing active: the keys are free.
+    frames(2);
+    CHECK(ImGui::GetActiveID() == 0);
+    CHECK(!wantText);
+    CHECK(!held);
+
+    // The read-only preview takes the focus. It IS the active item (text can
+    // be selected and copied from it), ImGui does not ask for text input, and
+    // the keys are held all the same.
+    focusPreview = true;
+    frames(3);
+    CHECK(ImGui::GetActiveID() != 0);
+    CHECK(!wantText);
+    CHECK(held);
+
+    // Ctrl+A in that state - the keystroke of GitHub issue 6 - leaves the
+    // field active and the keys held.
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    io.AddKeyEvent(ImGuiKey_A, true);
+    frame();
+    io.AddKeyEvent(ImGuiKey_A, false);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    frame();
+    CHECK(ImGui::GetActiveID() != 0);
+    CHECK(held);
+
+    // The editable field: held, and this time ImGui asks for text input too.
+    focusContact = true;
+    frames(3);
+    CHECK(ImGui::GetActiveID() != 0);
+    CHECK(wantText);
+    CHECK(held);
+
+    // Nothing active again: free again. (Escape is what a user presses; the
+    // test clears the item directly so a change to Escape's meaning in a
+    // text field cannot mask a change here.)
+    ImGui::ClearActiveID();
+    frames(2);
+    CHECK(ImGui::GetActiveID() == 0);
+    CHECK(!wantText);
+    CHECK(!held);
+
+    ImGui::DestroyContext();
+}
 
 int main() {
     // --- the action table ---------------------------------------------------
@@ -360,6 +461,8 @@ int main() {
         CHECK(keyBindingsFromConfig(keyBindingsToConfig(loaded))[KeyAction::StartStop] ==
               loaded[KeyAction::StartStop]);
     }
+
+    textFieldHoldsKeysTest();
 
     return testSummary("test_key_bindings");
 }

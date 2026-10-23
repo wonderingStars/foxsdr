@@ -825,8 +825,57 @@ void pluginNamesSurviveTheScrub() {
 
 }  // namespace
 
+// THE STREAM-HEALTH LINES AT THEIR WIDEST ARE WHOLE. 0.99.84 put "service
+// gaps N (M samples)" at the end of the SDRplay health line, after every field
+// the Soapy line has, and a tester's 60 s window at 4 MS/s then wrote 194
+// characters into a ring whose lines hold 191 (GitHub issue 6): the line was
+// cut, a cut line is masked whole (the rule pinned in unitRules above), and
+// the one count the tail existed for came back to the author as "service
+// gaps #". Since 0.99.85 the gaps are a second line. The widest lines a real
+// window can produce - seven-digit reads, four-digit timeouts and gaps,
+// nine-digit samples and gap samples - must each fit the ring with room, come
+// back from it whole, and keep every count through the scrub: nothing on
+// either names a frequency.
+void streamHealthLinesAreWhole() {
+    DiagLog& log = DiagLog::instance();
+    log.resetForTest();
+    using cascade::core::diagWarnf;
+    // The format strings are sdrplay_source.cpp's healthLineLocked, word for
+    // word (the first is every driver's, SoapySource::streamHealthLine's).
+    diagWarnf("source: stream health - reads %llu, with samples %llu, timeouts %llu, "
+              "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
+              1693430ull, 1693430ull, 1300ull, 0ull, 0ull, 341ll, 599999999ull, 60ll);
+    diagWarnf("source: SDRplay service gaps %llu (%llu samples)", 1120ull, 592884999ull);
+    const std::vector<std::string> snap = log.ringSnapshot();
+    CHECK(snap.size() == 2);
+    if (snap.size() != 2) { return; }
+    const std::string& health = snap[0];
+    const std::string& gaps = snap[1];
+    std::printf("widest health line: %zu of %d, gap line %zu\n", health.size(),
+                DiagLog::kLineBytes - 1, gaps.size());
+    // Room to spare: a tenth digit anywhere must not cut either line.
+    CHECK(health.size() + 16u < static_cast<std::size_t>(DiagLog::kLineBytes) - 1u);
+    CHECK(gaps.size() + 16u < static_cast<std::size_t>(DiagLog::kLineBytes) - 1u);
+    const std::string healthTail = "599999999 samples in 60 s";
+    CHECK(health.size() >= healthTail.size() &&
+          health.compare(health.size() - healthTail.size(), healthTail.size(), healthTail) == 0);
+    const std::string gapTail = "service gaps 1120 (592884999 samples)";
+    CHECK(gaps.size() >= gapTail.size() &&
+          gaps.compare(gaps.size() - gapTail.size(), gapTail.size(), gapTail) == 0);
+    // Every count where it was, on every path a line leaves the machine by.
+    for (const std::string& line : snap) {
+        const std::string got = cascade::core::scrubUploadLine(line);
+        if (got != line) { std::printf("scrubbed to \"%s\"\n", got.c_str()); }
+        CHECK(got == line);
+    }
+    CHECK(cascade::core::scrubUploadLine(health).find(
+              "reads 1693430, with samples 1693430, timeouts 1300") != std::string::npos);
+    log.resetForTest();
+}
+
 int main() {
     unitRules();
+    streamHealthLinesAreWhole();
     networkAddresses();
     serialPortNames();
     bundleHeaderPaths();

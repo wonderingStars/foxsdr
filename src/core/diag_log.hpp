@@ -85,6 +85,16 @@ public:
     // last few minutes of a normal session's events (this log records state
     // changes, not frames). Both are compile-time constants so the ring is a
     // plain array with no allocation anywhere in its lifetime.
+    //
+    // THE WIDTH IS A BUDGET, NOT A CONVENIENCE: a full ring plus the two
+    // history sections must fit the problem report's 64 KiB diagnostics cap
+    // (problem_report.hpp, agreed with the site; tests/test_diag_history.cpp
+    // holds it to the byte). A line that needs more than 191 characters is
+    // written as two lines (airspy_source.cpp's stream line, the SDRplay
+    // stream-health line's service-gap tail since 0.99.85), never by widening
+    // this - a line at the width is CUT, and the upload scrub then masks every
+    // number on it, which is how 0.99.84's "service gaps N" reached its author
+    // as "service gaps #" (GitHub issue 6).
     static constexpr int kRingLines = 256;
     static constexpr int kLineBytes = 192;  // including the terminating NUL
 

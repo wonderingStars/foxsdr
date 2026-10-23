@@ -27812,13 +27812,14 @@ void AppWindow::dispatchKeyBindings() {
         return;
     }
     ImGuiIO& io = ImGui::GetIO();
-    // NOT WHILE SOMETHING IS BEING TYPED. A frequency in the counter's editor,
-    // a bookmark name, a web password: every one of them is a field where M
-    // means the letter M, and a shortcut that fired anyway would make the
-    // fields unusable. WantTextInput is ImGui's own answer to "is a text field
-    // taking keys right now", so this follows the widget rather than a list of
-    // widgets that could go stale.
-    if (io.WantTextInput) { return; }
+    // NOT WHILE SOMETHING IS BEING TYPED - OR SELECTED. A frequency in the
+    // counter's editor, a bookmark name, a web password: every one of them is
+    // a field where M means the letter M, and a shortcut that fired anyway
+    // would make the fields unusable. The question follows the widget rather
+    // than a list of widgets that could go stale, and it covers a READ-ONLY
+    // field too (the report page's diagnostics box, whose Ctrl+A and Ctrl+C
+    // switched the mode to AM and CW through 0.99.84): see textFieldHoldsKeys.
+    if (cascade::gui::textFieldHoldsKeys()) { return; }
     // NOT WHILE A MODAL IS UP. A dialog is a question, and the radio must not
     // change underneath one while it is being answered - the mute popup asks
     // about the very audio the Mute key would toggle.

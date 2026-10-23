@@ -840,7 +840,8 @@ public:
         std::uint64_t errors = 0;
     };
 
-    // The line for the window so far, and the window starts again. Empty when
+    // The lines for the window so far - the health line, a newline, the
+    // service-gap line (0.99.85) - and the window starts again. Empty when
     // nothing has been read since the last line.
     std::string streamHealthLine();
     void setStreamHealthWindowForTest(std::chrono::milliseconds w);
@@ -1237,7 +1238,14 @@ private:
     // link.healthMutex held. `rateWarning`, when given, receives the line
     // that says the window's samples arrived at a rate far from the one the
     // radio was set for (empty when they did not) - see Link::setRateHz.
-    static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr);
+    // `gapLine`, when given, receives the window's SECOND line - the gaps the
+    // service made in its own numbering (Link::cbSampleNumExpected) - empty
+    // exactly when the returned line is. Two lines rather than one tail
+    // (0.99.85): the tail took the line past the log's width in the first
+    // field report that carried it, and a cut line is masked whole by the
+    // upload scrub (DiagLog::kLineBytes). Written by writeHealthLines.
+    static std::string healthLineLocked(Link& link, std::string* rateWarning = nullptr,
+                                        std::string* gapLine = nullptr);
     // Service thread: atomics only. Never a lock, never the log.
     static void noteBlock(Link& link, std::size_t samples, bool dropped);
     // Service thread, same rule: checks one delivered block's firstSampleNum

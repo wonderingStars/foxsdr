@@ -1335,6 +1335,19 @@ std::int64_t steadyNowNs() {
                                          .count());
 }
 
+// A window's two lines into the log, the service-gap line straight after the
+// health line and at the same level, or nothing when the window had no line.
+void writeHealthLines(const std::string& line, const std::string& gapLine, bool warn) {
+    if (line.empty()) { return; }
+    if (warn) {
+        cascade::core::diagWarnf("%s", line.c_str());
+        if (!gapLine.empty()) { cascade::core::diagWarnf("%s", gapLine.c_str()); }
+    } else {
+        cascade::core::diagLogf("%s", line.c_str());
+        if (!gapLine.empty()) { cascade::core::diagLogf("%s", gapLine.c_str()); }
+    }
+}
+
 }  // namespace
 
 void SdrPlaySource::noteBlock(Link& link, std::size_t samples, bool dropped) {
@@ -1392,8 +1405,10 @@ void SdrPlaySource::noteSampleNumber(Link& link, std::uint32_t firstSampleNum,
         std::memory_order_relaxed, std::memory_order_relaxed);
 }
 
-std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning) {
+std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning,
+                                            std::string* gapLine) {
     if (rateWarning != nullptr) { rateWarning->clear(); }
+    if (gapLine != nullptr) { gapLine->clear(); }
     // CLOSED FIRST, then emptied: a block the callback lands in between opens
     // the next window and is counted in one of the two, never lost and never
     // counted twice.
@@ -1444,15 +1459,11 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
     char buf[256];
     // THE SAME FORMAT SoapySource::streamHealthLine WRITES, word for word, so
     // a reader of the diagnostic log does not have to know which driver was
-    // open to parse the line - then, AFTER every field that line has, the one
-    // only this driver can know (0.99.84): the gaps the SERVICE made in its
-    // own sample numbering, which no other radio here reports. `overflows`
-    // keeps its meaning (our ring was full), so a log from before this
-    // release reads the same as one after it.
+    // open to parse the line. `overflows` keeps its meaning (our ring was
+    // full), so a log from before 0.99.84 reads the same as one after it.
     std::snprintf(buf, sizeof(buf),
                   "source: stream health - reads %llu, with samples %llu, timeouts %llu, "
-                  "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s, "
-                  "service gaps %llu (%llu samples)",
+                  "overflows %llu, errors %llu, longest gap %lld ms, %llu samples in %lld s",
                   static_cast<unsigned long long>(reads),
                   static_cast<unsigned long long>(withSamples),
                   static_cast<unsigned long long>(mine.timeouts),
@@ -1460,9 +1471,23 @@ std::string SdrPlaySource::healthLineLocked(Link& link, std::string* rateWarning
                   static_cast<unsigned long long>(mine.errors),
                   static_cast<long long>(longestGapMs),
                   static_cast<unsigned long long>(samples),
-                  static_cast<long long>((windowMs + 500) / 1000),
-                  static_cast<unsigned long long>(apiGaps),
-                  static_cast<unsigned long long>(apiGapSamples));
+                  static_cast<long long>((windowMs + 500) / 1000));
+    // THEN, ON A LINE OF ITS OWN, the one thing only this driver can know
+    // (0.99.84): the gaps the SERVICE made in its own sample numbering, which
+    // no other radio here reports. 0.99.84 put it at the end of the line
+    // above, and the first field report that carried it (GitHub issue 6, an
+    // RSPduo at 4 MS/s) wrote 194 characters into a log whose lines hold 191:
+    // the line was cut, the upload scrub masks every number on a cut line,
+    // and the count this exists for reached its reader as "service gaps #".
+    // A second line is what airspy_source.cpp does for the same reason; the
+    // widest line above is about 165 characters, this one under 70.
+    if (gapLine != nullptr) {
+        char gbuf[96];
+        std::snprintf(gbuf, sizeof(gbuf), "source: SDRplay service gaps %llu (%llu samples)",
+                      static_cast<unsigned long long>(apiGaps),
+                      static_cast<unsigned long long>(apiGapSamples));
+        *gapLine = gbuf;
+    }
     return std::string(buf);
 }
 
@@ -1474,6 +1499,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
     const std::int64_t start = link.cbWindowStartNs.load(std::memory_order_acquire);
     if (start == 0) { return; }
     std::string line;
+    std::string gapLine;
     std::string rateWarning;
     bool warn = false;
     {
@@ -1491,7 +1517,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         warn = link.cbOverflows.load(std::memory_order_relaxed) > 0 ||
                link.cbApiGaps.load(std::memory_order_relaxed) > 0 || link.health.errors > 0;
         const bool first = !link.healthEverWritten;
-        line = healthLineLocked(link, &rateWarning);
+        line = healthLineLocked(link, &rateWarning, &gapLine);
         // A wrong rate is said whether or not the window is otherwise worth
         // a line: it is the one thing in it that invalidates everything the
         // chain built.
@@ -1503,11 +1529,7 @@ void SdrPlaySource::maybeWriteHealth(Link& link) {
         if (!(warn || first)) { return; }
         link.healthEverWritten = true;
     }
-    if (warn) {
-        core::diagWarnf("%s", line.c_str());
-    } else {
-        core::diagLogf("%s", line.c_str());
-    }
+    writeHealthLines(line, gapLine, warn);
 }
 
 void SdrPlaySource::drainEventLogs(Link& link) {
@@ -2214,12 +2236,13 @@ void SdrPlaySource::stopStreamingLocked() {
                            : "the SDRplay session was lost by another radio");
         strandLink(link_);
         std::string line;
+        std::string gapLine;
         std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            line = healthLineLocked(*link_, &rateWarning);
+            line = healthLineLocked(*link_, &rateWarning, &gapLine);
         }
-        if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+        writeHealthLines(line, gapLine, /*warn=*/false);
         if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
         link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
@@ -2259,12 +2282,13 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string abandonedLine;
+        std::string abandonedGapLine;
         std::string abandonedRateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning);
+            abandonedLine = healthLineLocked(*link_, &abandonedRateWarning, &abandonedGapLine);
         }
-        if (!abandonedLine.empty()) { core::diagLogf("%s", abandonedLine.c_str()); }
+        writeHealthLines(abandonedLine, abandonedGapLine, /*warn=*/false);
         if (!abandonedRateWarning.empty()) { core::diagWarnf("%s", abandonedRateWarning.c_str()); }
         link_->setRateHz.store(0.0, std::memory_order_relaxed);
         return;
@@ -2312,12 +2336,13 @@ void SdrPlaySource::stopStreamingLocked() {
         initialised_ = false;
         running_.store(false, std::memory_order_relaxed);
         std::string refusedLine;
+        std::string refusedGapLine;
         std::string rateWarning;
         {
             std::lock_guard<std::mutex> hl(link_->healthMutex);
-            refusedLine = healthLineLocked(*link_, &rateWarning);
+            refusedLine = healthLineLocked(*link_, &rateWarning, &refusedGapLine);
         }
-        if (!refusedLine.empty()) { core::diagLogf("%s", refusedLine.c_str()); }
+        writeHealthLines(refusedLine, refusedGapLine, /*warn=*/false);
         // The 0.99.43 report's own window would have said it here: 168956928
         // samples in the 28.2 s before the stall, against 2 MS/s set.
         if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
@@ -2351,12 +2376,13 @@ void SdrPlaySource::stopStreamingLocked() {
     // The stream-health line for whatever the window holds, so a session that
     // was too short to trip the window still leaves its numbers.
     std::string line;
+    std::string gapLine;
     std::string rateWarning;
     {
         std::lock_guard<std::mutex> hl(link_->healthMutex);
-        line = healthLineLocked(*link_, &rateWarning);
+        line = healthLineLocked(*link_, &rateWarning, &gapLine);
     }
-    if (!line.empty()) { core::diagLogf("%s", line.c_str()); }
+    writeHealthLines(line, gapLine, /*warn=*/false);
     if (!rateWarning.empty()) { core::diagWarnf("%s", rateWarning.c_str()); }
     link_->setRateHz.store(0.0, std::memory_order_relaxed);
 }
@@ -3641,8 +3667,17 @@ bool SdrPlaySource::setHdrMode(bool on) {
 // --- health ---------------------------------------------------------------
 
 std::string SdrPlaySource::streamHealthLine() {
+    // The test seam: both of the window's lines, the health line and then the
+    // service-gap line on a line of its own, exactly as the log receives them
+    // - or nothing, when the window has nothing.
     std::lock_guard<std::mutex> lk(link_->healthMutex);
-    return healthLineLocked(*link_);
+    std::string gapLine;
+    std::string line = healthLineLocked(*link_, nullptr, &gapLine);
+    if (!line.empty() && !gapLine.empty()) {
+        line += '\n';
+        line += gapLine;
+    }
+    return line;
 }
 
 void SdrPlaySource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {
