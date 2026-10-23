@@ -881,6 +881,17 @@ private:
     // reads at its next re-prime. A seam as well: it takes no clock, so a test
     // closes minutes at will.
     void closeAudioMinute(std::size_t ringFramesNow);
+    // THE PIPELINE'S RING, ONCE A MINUTE (0.99.86, GitHub issue 6): the frame
+    // loop's poll, beside pollAudioHealth and on a clock of its own - the audio
+    // watchdog returns early on a machine where no sound output has opened, and
+    // a ring overflows there just the same.
+    void pollDspMinute();
+    // A MINUTE OF THE PIPELINE'S RING HAS CLOSED: one log line if the source
+    // thread read samples the ring had no room for in the minute just ended -
+    // `dsp: 412000 samples dropped between the source and the DSP in the last
+    // minute (0.17%)`, the share being of the minute's input - and nothing for a
+    // minute that lost none. Takes no clock, so a test closes minutes at will.
+    void closeDspMinute();
     // The Sinks rail's AUDIO BUFFER: 0 is AUTOMATIC, 120, 240, 480 or 960 a
     // fixed value. Sets the live lead (a fixed value at once; AUTOMATIC puts it
     // back to 120 ms and forgets a raise this session made - and the depth
@@ -2588,6 +2599,11 @@ private:
     std::size_t audioRingLowWaterFrames_ = SIZE_MAX;
     std::uint64_t audioUnderrunsAtLogStart_ = 0;
     std::uint64_t audioPrimingAtLogStart_ = 0;
+    // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock,
+    // and the two monotonic pipeline counters as they stood when it last closed.
+    double lastDspLogSec_ = 0.0;
+    std::uint64_t dspDroppedAtMinute_ = 0;
+    std::uint64_t dspReadAtMinute_ = 0;
     // THE AUDIO BUFFER (0.99.73). The setting (0 automatic; see AppConfig::
     // audioBufferMs), and the one thing automatic mode last did, which is what
     // the Sinks rail and the AUDIO card say (audioLeadNotice): RAISED this

@@ -269,6 +269,14 @@ public:
     std::uint64_t ringDroppedSamples() const {
         return ringDropped_.load(std::memory_order_relaxed);
     }
+    // Diagnostics/tests (0.99.86): every sample the source thread has read and
+    // offered to the ring, kept or dropped - the denominator ringDroppedSamples()
+    // is a share of. Never reset, measured by difference like the drop count.
+    // GitHub issue 6: the once-a-minute log line says what share of the minute's
+    // input was lost (AppWindow::closeDspMinute).
+    std::uint64_t sourceSamplesRead() const {
+        return srcSamplesRead_.load(std::memory_order_relaxed);
+    }
     // Diagnostics/tests: the ring's current capacity in samples. Sized from
     // the SOURCE's rate each time a source thread is spawned, never below the
     // construction-time size (see ringCapacityForActiveSourceLocked).
@@ -1180,6 +1188,10 @@ private:
     std::atomic<int> dspExceptions_{0};
     // See ringDroppedSamples(). Written only by the source thread.
     std::atomic<std::uint64_t> ringDropped_{0};
+    // See sourceSamplesRead(). Written only by the source thread, BEFORE the
+    // write that may drop part of the same read, so a reader that loads the
+    // drop count first never sees a drop without its read.
+    std::atomic<std::uint64_t> srcSamplesRead_{0};
 
     std::shared_ptr<std::atomic<bool>> srcStopToken_;
     std::future<void> srcExitFuture_;

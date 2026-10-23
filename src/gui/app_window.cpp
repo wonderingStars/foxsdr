@@ -4489,6 +4489,9 @@ void AppWindow::drawUi() {
     // not judge a stream an open is still installing.
     pollAudioOpen();
     pollAudioHealth();
+    // ...and the samples the pipeline's own ring could not hold, once a minute
+    // (0.99.86) - after the sink, but not gated on it.
+    pollDspMinute();
     healthPoll();
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
@@ -4753,6 +4756,35 @@ void AppWindow::closeAudioMinute(std::size_t ringFramesNow) {
     for (auto it = patchQuietMinutes_.begin(); it != patchQuietMinutes_.end();) {
         it = speakers.count(it->first) != 0 ? std::next(it) : patchQuietMinutes_.erase(it);
     }
+}
+
+void AppWindow::pollDspMinute() {
+    const double now = ImGui::GetTime();
+    if (now - lastDspLogSec_ >= 60.0) {
+        lastDspLogSec_ = now;
+        closeDspMinute();
+    }
+}
+
+void AppWindow::closeDspMinute() {
+    // THE DROP COUNT FIRST. The source thread adds a read to its count before the
+    // write that may drop part of it, so reading in this order never finds a drop
+    // whose read is not yet counted. Both counters are monotonic and the pipeline
+    // lives as long as the window; the guards are for marks that ever got ahead.
+    const std::uint64_t droppedNow = pipeline_.ringDroppedSamples();
+    const std::uint64_t readNow = pipeline_.sourceSamplesRead();
+    const std::uint64_t dropped = droppedNow >= dspDroppedAtMinute_ ? droppedNow - dspDroppedAtMinute_ : 0;
+    const std::uint64_t read = readNow >= dspReadAtMinute_ ? readNow - dspReadAtMinute_ : 0;
+    dspDroppedAtMinute_ = droppedNow;
+    dspReadAtMinute_ = readNow;
+    // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
+    // characters at the widest a uint64 can make it - inside the log's line
+    // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
+    if (dropped == 0) { return; }
+    const std::string share = cascade::core::droppedShareText(dropped, read);
+    cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)",
+                            static_cast<unsigned long long>(dropped),
+                            share.empty() ? "share unknown" : share.c_str());
 }
 
 void AppWindow::setAudioBufferMs(int ms) {
@@ -31910,6 +31942,10 @@ std::string AppWindow::currentDiagnosticsBundle(bool freshHistory) {
     // and only when a bundle is made (0.99.55).
     in.sdrPlayService =
         cascade::source::sdrPlayServiceSummary(cascade::source::querySdrPlayService());
+    // The pipeline ring's whole session (0.99.86): two relaxed loads, drops first
+    // for the reason closeDspMinute gives.
+    in.ringDroppedSamples = pipeline_.ringDroppedSamples();
+    in.sourceSamplesRead = pipeline_.sourceSamplesRead();
     // The end of the previous session's log and the reports on this machine
     // (0.99.62). Not included, and not read, while diagnostics are off.
     in.history = diagHistoryForBundle(freshHistory);

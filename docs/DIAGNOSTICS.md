@@ -2168,6 +2168,39 @@ clock and the log write all happen on the side that is allowed to do them.
   `/api/status` (`audioPluginGaps`, `audioPluginGapFrames`), beside
   `audioSource` — the name of whatever is holding the speakers.
 
+### Samples lost between the source and the DSP (0.99.86)
+
+GitHub issue 6, an RSPduo at 4 MS/s with crackle: the 0.99.85 log showed the
+SDRplay service streaming cleanly through steady minutes - no service gaps, no
+link-ring overflows, no starved audio - which left one place samples could
+still be lost unseen. The pipeline's source thread writes every read into an
+SPSC ring the DSP thread drains, and a DSP side that falls behind finds the ring
+full: `SpscRing::write` keeps what fits and the rest is dropped, never blocking a
+live device. That loss was counted (`Pipeline::ringDroppedSamples`) but the count
+only reached the crash-report health events (`recovered.ringdrop`).
+
+Now `AppWindow::pollDspMinute`, called by the frame loop right after
+`pollAudioHealth` but on a clock of its own (the audio watchdog returns early on a
+machine where no sound output ever opened, and a ring overflows there just the
+same), closes a minute every sixty seconds. `closeDspMinute` writes one line for
+a minute in which samples were dropped and nothing for a clean one:
+
+    dsp: 412000 samples dropped between the source and the DSP in the last minute (0.17%)
+
+The share is of the minute's input, `Pipeline::sourceSamplesRead`, which the
+source thread counts before the write that may drop part of the same read (so
+the drop count, read first, never runs ahead of its read). A share too small for
+two decimals is `under 0.01%`, never `0.00%`. The bundle carries the session's
+total as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
+
+**Reading it beside the SDRplay lines:** service gaps or link-ring overflows mean
+samples were lost before FoxSDR had them; a `dsp:` drop line means FoxSDR had
+them and its own processing could not keep up - a slow machine, or something
+holding the DSP thread. Neither line in a minute with crackle points past the
+receive path, to the audio side (`audio: N starved callbacks`) or the signal.
+`tests/test_dsp_drop_minute_app.cpp` stalls the DSP thread through
+`Pipeline::holdLockForTest` and pins the line, its count and its share.
+
 ### What a "no audio" report carries (0.99.61)
 
 0.99.58, an NESDR SMArt v5, "no audio from my speakers": five minutes of log and

@@ -53,8 +53,9 @@ set(CASCADE_TSAN_TESTS
     test_config_save test_bookmark_save_async test_gui_disk_audit test_gui_file_jobs
     test_iq_open_async test_link_request_poll test_record_start test_audio_open
     test_tester_link_app test_patch_presets_app test_soundcard_app_paths
-    # the window's once-a-minute audio close, counting into the health ledger (0.99.73)
-    test_audio_lead_app
+    # the window's once-a-minute audio close, counting into the health ledger (0.99.73),
+    # and its pipeline-ring sibling read across the source thread (0.99.86)
+    test_audio_lead_app test_dsp_drop_minute_app
     # the health ledger's writer, the frame timer's cross-thread reads, the watchdog
     test_health_events test_health_paths test_frame_timing test_hang_signature
     test_excuse_cap test_watchdog_startup test_telemetry

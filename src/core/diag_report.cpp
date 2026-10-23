@@ -964,6 +964,16 @@ std::string freezeSignature(unsigned long kindTag, const std::uintptr_t* frames,
     return crashSignature(kindTag, "?", 0);
 }
 
+std::string droppedShareText(std::uint64_t dropped, std::uint64_t read) {
+    if (read == 0) { return std::string(); }
+    const double share =
+        std::min(100.0, 100.0 * static_cast<double>(dropped) / static_cast<double>(read));
+    if (dropped != 0 && share < 0.01) { return "under 0.01%"; }
+    char buf[16] = {};
+    std::snprintf(buf, sizeof(buf), "%.2f%%", share);
+    return buf;
+}
+
 const std::vector<std::string>& bundleFieldNames() {
     // THE INVENTORY. PRIVACY.md documents these field by field, and
     // tests/test_diagnostics.cpp compares this list with what the bundle
@@ -976,6 +986,8 @@ const std::vector<std::string>& bundleFieldNames() {
         "device-open", "sdr-model", "ppm",      "plugin",   "log-path",
         "crash-dir", "last-run-unclean", "launches", "crashes",
         "log-lines-total", "sdrplay-service",
+        // Samples the pipeline's ring had no room for, of those read (0.99.86).
+        "dsp-dropped",
         // The sound path (0.99.61): see DiagAudio.
         "audio-output", "volume", "audio-muted", "squelch",
         // The patch page's radios, by driver kind (0.99.62): see
@@ -1066,6 +1078,17 @@ std::string buildDiagnosticsBundle(const DiagBundleInput& in) {
     out += "log-lines-total: " + std::to_string(in.logLinesTotal) + "\n";
     // A service's name and state, nothing about the user (see PRIVACY.md).
     kv("sdrplay-service", in.sdrPlayService);
+    // THE SAMPLES LOST BETWEEN THE SOURCE AND THE DSP, all session (0.99.86, GitHub
+    // issue 6): two counts and a share, nothing about the signal. The log says the
+    // same minute by minute, but only for a minute that lost some, and the log is
+    // cut to its newest lines; this is the whole session in one line.
+    {
+        std::string v = std::to_string(in.ringDroppedSamples) + " of " +
+                        std::to_string(in.sourceSamplesRead) + " samples";
+        const std::string share = droppedShareText(in.ringDroppedSamples, in.sourceSamplesRead);
+        if (!share.empty()) { v += " (" + share + ")"; }
+        kv("dsp-dropped", v);
+    }
 
     out += "\n--- log ---\n";
     // Scrubbed exactly as an uploaded report's log is (core::scrubUploadLog):

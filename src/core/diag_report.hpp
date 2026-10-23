@@ -399,6 +399,12 @@ struct DiagBundleInput {
     // Bundle-only, not in the crash context: it is asked of the Service
     // Control Manager, which a fault path must not do. Empty prints "(none)".
     std::string sdrPlayService;
+    // THE PIPELINE'S RING (0.99.86, GitHub issue 6): the samples its source thread
+    // read this session and how many of them the ring had no room for
+    // (Pipeline::sourceSamplesRead / ringDroppedSamples). Bundle-only, like the
+    // service line: printed as `dsp-dropped: 324608 of 2400000000 samples (0.01%)`.
+    std::uint64_t ringDroppedSamples = 0;
+    std::uint64_t sourceSamplesRead = 0;
     // THE SESSIONS BEFORE THIS ONE (0.99.62): the end of the previous session's
     // log and one line per crash or freeze report on the machine, written after
     // the current log under headings of their own. `history.included` false -
@@ -416,6 +422,13 @@ inline constexpr const char* kPreviousSessionHeading =
 inline constexpr const char* kReportsHeading = "--- reports on this machine ---";
 
 std::string buildDiagnosticsBundle(const DiagBundleInput& in);
+
+// THE SHARE OF WHAT WAS READ THAT WAS LOST, as the log and the bundle print it
+// (0.99.86, GitHub issue 6): "0.17%", two decimals of a percent. A loss too small
+// for two decimals to show is "under 0.01%" - never "0.00%", which would read as
+// nothing lost - and a share over 100% (two counters read a moment apart) is
+// capped at "100.00%". Empty when nothing was read: there is no share to give.
+std::string droppedShareText(std::uint64_t dropped, std::uint64_t read);
 
 // THE FIELD INVENTORY, in the same spirit as TelemetryReport's: PRIVACY.md
 // documents what a bundle contains field by field, and a test asserts the

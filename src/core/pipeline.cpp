@@ -1662,7 +1662,9 @@ void Pipeline::sourceThreadBody(double chainRateHz,
                 // Same overflow policy as the free-running path: if the DSP
                 // side stalled and the ring is full, the excess is dropped
                 // (write() accepts what fits) — never block a live device.
-                // Counted, so the loss is never silent.
+                // Counted, so the loss is never silent, and so is what was
+                // read, so the loss has a denominator (sourceSamplesRead).
+                srcSamplesRead_.fetch_add(got, std::memory_order_relaxed);
                 const std::size_t put = ring_->write(buf.data(), got);
                 if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
             }
@@ -1723,7 +1725,8 @@ void Pipeline::sourceThreadBody(double chainRateHz,
         if (airView_.mirrors()) { cascade::core::conjugateInPlace(buf.data(), got); }
         // A real-time source must not block: if the DSP side stalled and the
         // ring is full, the overflow is dropped (write() accepts what fits),
-        // and counted.
+        // and counted - beside what was read, as in the self-paced loop.
+        srcSamplesRead_.fetch_add(got, std::memory_order_relaxed);
         const std::size_t put = ring_->write(buf.data(), got);
         if (put < got) { ringDropped_.fetch_add(got - put, std::memory_order_relaxed); }
         // The same fault poll as the self-paced branch, and it matters MORE
