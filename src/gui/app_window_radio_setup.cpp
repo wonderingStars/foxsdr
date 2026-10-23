@@ -96,6 +96,9 @@ rs::Inventory AppWindow::radioSetupInventory() const {
     // The SoapySDR families are judged only against a scan that actually ran
     // and covered every driver.
     inv.soapyChecked = soapyScanned_ && !soapyScanPartial_ && !soapyScanPending_;
+    // ...and what that scan itself said about UHD's firmware images
+    // (2026-10-21): assess() reads it only beside soapyChecked, the same gate.
+    inv.uhdImagesMissing = soapyUhdNoImages_;
     return inv;
 }
 

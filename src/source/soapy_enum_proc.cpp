@@ -10,6 +10,7 @@
 #include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 #include "core/version.hpp"
+#include "source/soapy_log_bridge.hpp"
 #include "source/vendor_guard.hpp"
 
 #include <nlohmann/json.hpp>
@@ -67,6 +68,9 @@ constexpr const char* kKeyDevices = "devices";
 constexpr const char* kKeyLabel = "label";
 constexpr const char* kKeyArgs = "args";
 constexpr const char* kKeyDrivers = "drivers";
+// Emitted only when true (so older answers parse unchanged), read defensively
+// like kKeyDrivers and kKeyCapture: see EnumResult::uhdImagesMissing.
+constexpr const char* kKeyUhdNoImages = "uhdNoImages";
 
 // THE DRIVERS NO WALK ASKS - see "audio" in the header, above
 // enumerateIsolated. Lower-case, as every comparison below is.
@@ -163,6 +167,8 @@ bool parseOneLine(const std::string& text, EnumResult& out) {
                            : 0ull;
     out.childCaptureArmed =
         j.contains(kKeyCapture) && j[kKeyCapture].is_boolean() && j[kKeyCapture].get<bool>();
+    out.uhdImagesMissing = j.contains(kKeyUhdNoImages) && j[kKeyUhdNoImages].is_boolean() &&
+                           j[kKeyUhdNoImages].get<bool>();
 
     if (j.contains(kKeyDrivers) && j[kKeyDrivers].is_array()) {
         for (const auto& d : j[kKeyDrivers]) {
@@ -212,6 +218,10 @@ bool parseChildOutput(const std::string& text, EnumResult& out) {
                 out.guardedCalls = candidate.guardedCalls;
                 out.childRuntimeAvailable = candidate.childRuntimeAvailable;
                 out.childCaptureArmed = candidate.childCaptureArmed;
+                // KEPT, never overwritten: the parent may already know from
+                // the child's stderr (runOneChild's tee), and the child's
+                // answer saying so too must not erase that.
+                out.uhdImagesMissing = out.uhdImagesMissing || candidate.uhdImagesMissing;
                 return true;
             }
         }
@@ -253,12 +263,24 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 
     HANDLE nul = openNul();
 
-    // THE PARENT'S stderr, deliberately: UHD prints its discovery errors there
-    // and always has, so a console run keeps showing exactly what it showed
-    // when the walk was in-process, and a windowed run discards them exactly
-    // as it did. Duplicated INHERITABLE because the handle list below refuses
-    // any handle that is not - a std handle usually is not, and the original
-    // must not have its flags changed under the rest of the process.
+    // THE CHILD'S stderr, DRAINED THROUGH A PIPE AND TEED (2026-10-21). It
+    // used to be the parent's stderr handle, passed straight through, so that
+    // UHD's discovery errors kept reaching the place they always had - and
+    // they still do: every byte read off this pipe is written on to the
+    // parent's own stderr below, so a console run shows the same text and a
+    // windowed run's capture (core::installStderrCapture) gets the same
+    // vendor lines. What the pipe adds is that the PARENT reads the text too,
+    // because one of those lines is an answer the scan needs: UHD's "Could
+    // not find path for image ... <no images directory located>" warning (a
+    // radioconda install ships no images, so a healthy USRP is silently not
+    // listed). It is printed by UHD's own stderr logger only - measured
+    // 2026-10-21 on radioconda's SoapyUHD, whose find does NOT forward UHD's
+    // log into SoapySDR's, so the child's log-bridge latch (soapy_log_bridge)
+    // stays false and this text is the one place the fact exists.
+    //
+    // The parent's own stderr is duplicated PRIVATE (not inheritable - only
+    // the tee thread writes to it) and kept as the fallback hStdError when
+    // the pipe cannot be made, which is the old behaviour exactly.
     HANDLE errDup = nullptr;
     const HANDLE errRaw = ::GetStdHandle(STD_ERROR_HANDLE);
     if (errRaw != nullptr && errRaw != INVALID_HANDLE_VALUE) {
@@ -267,7 +289,14 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
             errDup = nullptr;
         }
     }
-    HANDLE errH = (errDup != nullptr) ? errDup : nul;
+    HANDLE errRd = nullptr;
+    HANDLE errWr = nullptr;
+    if (::CreatePipe(&errRd, &errWr, &sa, 0) == 0) {
+        errRd = nullptr;
+        errWr = nullptr;
+    }
+    if (errRd != nullptr) { ::SetHandleInformation(errRd, HANDLE_FLAG_INHERIT, 0); }
+    HANDLE errH = (errWr != nullptr) ? errWr : (errDup != nullptr) ? errDup : nul;
 
     STARTUPINFOEXW six{};
     STARTUPINFOW& si = six.StartupInfo;
@@ -374,15 +403,22 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     const auto spawnedAt = std::chrono::system_clock::now();
     const BOOL ok = ::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags,
                                      nullptr, nullptr, &si, &pi);
-    // The parent's copy of the WRITE end must go now, whether or not the spawn
-    // worked: while it is open the pipe has a writer and the drain below would
-    // wait for end-of-file for ever.
+    // The parent's copies of BOTH write ends must go now, whether or not the
+    // spawn worked: while either is open its pipe has a writer and the drain
+    // below would wait for end-of-file for ever.
     ::CloseHandle(wr);
+    if (errWr != nullptr) { ::CloseHandle(errWr); }
     if (haveAttrs) { ::DeleteProcThreadAttributeList(attrs); }
-    if (errDup != nullptr) { ::CloseHandle(errDup); }
+    // errDup outlives the spawn only while the stderr tee below needs it.
+    if (errDup != nullptr && errRd == nullptr) {
+        ::CloseHandle(errDup);
+        errDup = nullptr;
+    }
     if (ok == 0) {
         out.outcome = EnumOutcome::SpawnFailed;
         ::CloseHandle(rd);
+        if (errRd != nullptr) { ::CloseHandle(errRd); }
+        if (errDup != nullptr) { ::CloseHandle(errDup); }
         if (job != nullptr) { ::CloseHandle(job); }
         if (nul != INVALID_HANDLE_VALUE) { ::CloseHandle(nul); }
         return;
@@ -408,6 +444,31 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
         }
     });
 
+    // THE STDERR DRAIN AND TEE - same deadlock argument as the stdout drain
+    // above, and the tee is what keeps the old pass-through behaviour: every
+    // byte goes on to the parent's own stderr (a console, or the stderr
+    // capture's pipe), unchanged and in order. A tee write that fails is
+    // dropped, exactly as the child's own write to that handle would have
+    // been.
+    std::string errText;
+    std::thread errDrain;
+    if (errRd != nullptr) {
+        errDrain = std::thread([errRd, errDup, &errText] {
+            char buf[4096];
+            for (;;) {
+                DWORD got = 0;
+                if (::ReadFile(errRd, buf, sizeof(buf), &got, nullptr) == 0 || got == 0) {
+                    break;
+                }
+                errText.append(buf, got);
+                if (errDup != nullptr) {
+                    DWORD wrote = 0;
+                    ::WriteFile(errDup, buf, got, &wrote, nullptr);
+                }
+            }
+        });
+    }
+
     const DWORD waited = ::WaitForSingleObject(pi.hProcess, timeoutMs);
     if (waited == WAIT_TIMEOUT) {
         // Kill it, then let the wait below collect it: terminating closes the
@@ -419,7 +480,17 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 
     drain.join();
     ::CloseHandle(rd);
+    if (errDrain.joinable()) { errDrain.join(); }
+    if (errRd != nullptr) { ::CloseHandle(errRd); }
+    if (errDup != nullptr) { ::CloseHandle(errDup); }
     if (nul != INVALID_HANDLE_VALUE) { ::CloseHandle(nul); }
+
+    // UHD SAYING IT HAS NO FIRMWARE IMAGES, read off the child's stderr - the
+    // one place the fact exists (see the pipe above). Whatever way the child
+    // ends: the warning is evidence even from a child that then died. The
+    // child's own answer can still say it too (a SoapyUHD that DOES forward
+    // UHD's log), which parseChildOutput keeps rather than overwrites.
+    out.uhdImagesMissing = uhdImagesMissingLine(errText.c_str());
 
     DWORD exitCode = 0;
     ::GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -529,9 +600,14 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
 #endif
         if (nullFd >= 0) { ::dup2(nullFd, STDIN_FILENO); }
         ::dup2(pipeFds[1], STDOUT_FILENO);
-        // stderr is left exactly as inherited - deliberately, matching the
-        // Windows side: UHD's discovery errors keep reaching the same place
-        // they always did (a console, or nowhere in a windowed run).
+        // stderr is left exactly as inherited - deliberately: UHD's discovery
+        // errors keep reaching the same place they always did (a console, or
+        // nowhere in a windowed run). The Windows side now pipes and tees it
+        // so the parent can read UHD's "no firmware images" warning; here the
+        // tee would need SIGPIPE care in the parent's drain thread for a
+        // condition that is, in the field, a Windows radioconda install - so
+        // this side keeps the pass-through, and uhdImagesMissing relies on
+        // the child's own answer (the log-bridge latch) alone.
         ::execv(argv[0], argv.data());
         ::_exit(127);  // exec failed; unreachable otherwise
     }
@@ -1122,6 +1198,9 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             rememberSlowDriver(driver);
         }
         if (one.outcome == EnumOutcome::Ok || one.answeredBeforeDeath) {
+            // Any child of the sweep can be the one whose walk ran UHD's find,
+            // so the fact is kept whichever one reported it.
+            if (one.uhdImagesMissing) { result.uhdImagesMissing = true; }
             for (SoapyDeviceInfo& d : one.devices) { found.push_back(std::move(d)); }
             if (one.answeredBeforeDeath) {
                 // DIED AFTER ANSWERING: its devices are listed, and the driver
@@ -1470,6 +1549,16 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         result.fellBackInProcess = true;
     }
 
+    // UHD WITH NO FIRMWARE IMAGES, said plainly (2026-10-21): the scan is
+    // otherwise a clean Ok with an empty list, which reads as "no radio" - and
+    // on a radioconda-only install that is exactly what the user saw.
+    if (result.uhdImagesMissing) {
+        core::diagWarnf(
+            "soapy: UHD reported it has no firmware images - a USB USRP cannot be identified "
+            "or listed until the UHD images package is installed (radioconda: "
+            "uhd_images_downloader) or UHD_IMAGES_DIR points at an images directory");
+    }
+
     // EACH OUTCOME LOGGED DIFFERENTLY, because to a user they mean opposite
     // things and used to be one silent "no devices".
     switch (result.outcome) {
@@ -1642,11 +1731,15 @@ std::string enumerationReportJson(bool runtimeAvailable,
                                   unsigned long long guardedCalls,
                                   bool captureArmed,
                                   const std::vector<SoapyDeviceInfo>& devices,
-                                  const std::vector<std::string>& drivers) {
+                                  const std::vector<std::string>& drivers,
+                                  bool uhdNoImages) {
     nlohmann::json j;
     j[kKeySchema] = kSchema;
     j[kKeyRuntime] = runtimeAvailable;
     j[kKeyGuarded] = guardedCalls;
+    // Only when true, like kKeyDrivers below: a parent from before the key
+    // never sees it, and a parent from after it reads its absence as false.
+    if (uhdNoImages) { j[kKeyUhdNoImages] = true; }
     // REPORTED, not assumed. "The parent passed a directory" and "the child is
     // actually able to write a report into it" are different claims - the
     // second one is what a test has to be able to check, and a directory that
@@ -1791,9 +1884,19 @@ int runEnumerateHelper(const char* crashDir, const char* driver, bool listDriver
         : oneDriver  ? SoapySource::enumerateInProcess(std::string(driver))
                      : SoapySource::enumerateInProcessEach(skipList, onProbe);
 
+    // DID UHD SAY IT HAS NO FIRMWARE IMAGES during the walk above? The warning
+    // reaches this process's log bridge (installed by runtimeAvailable());
+    // asked here, after the walk, because the find that warns is the walk. In
+    // this child's own log ring too, so a crash report of a later death still
+    // carries the fact.
+    const bool uhdNoImages = soapyUhdImagesMissingSeen();
+    if (uhdNoImages) {
+        core::diagLogf("enumeration helper: UHD reported no firmware images during the walk");
+    }
+
     const std::string line = enumerationReportJson(
         runtime, static_cast<unsigned long long>(vendorGuardCallCount() - before),
-        captureArmed, devices, names);
+        captureArmed, devices, names, uhdNoImages);
     // The answer is one line, written in one piece; a pipe with no reader is
     // learned of here or by a probe line above, and is its own exit code.
     const std::string answer = line + "\n";

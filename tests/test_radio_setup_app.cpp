@@ -268,6 +268,9 @@ void testEveryMachine() {
         {"rsp-noapi", "radio-setup:finding:vendor-missing", true},
         {"usrp-nouhd", "radio-setup:finding:vendor-missing", true},
         {"usrp-unlisted", "radio-setup:finding:not-visible", true},
+        // The radioconda machine: UHD installed, no firmware images, scan ran
+        // and listed nothing (2026-10-21).
+        {"usrp-noimages", "radio-setup:finding:vendor-missing", true},
         // A radio that is fine, listed by the application: no page.
         {"rtl-winusb-listed", "radio-setup:finding:usable", false},
         {"rsp-ok", "radio-setup:finding:usable", false},

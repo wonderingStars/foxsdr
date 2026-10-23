@@ -338,6 +338,32 @@ int fakeHelper(int argc, char** argv) {
                     gotCrashDir ? "true" : "false");
         return 0;
     }
+    if (mode == "noimages") {
+        // A SoapyUHD whose find forwards UHD's log into SoapySDR's: the
+        // child's log-bridge latch fired and its ANSWER carries the key (see
+        // tests/test_soapy_log_bridge.cpp for the latch itself, driven by the
+        // captured warning text).
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                    "\"uhdNoImages\":true,\"devices\":[]}\n",
+                    gotCrashDir ? "true" : "false");
+        return 0;
+    }
+    if (mode == "noimageserr") {
+        // THE RADIOCONDA MACHINE AS MEASURED (2026-10-21, this bench): UHD
+        // prints the warning with its own stderr logger ONLY - nothing
+        // forwards it into SoapySDR's log, so the child's latch stays false
+        // and its answer carries no key. The text on stderr, word for word as
+        // UHD 4.8 printed it, is all the parent has.
+        std::fprintf(stderr,
+                     "[WARNING] [B200] EnvironmentError: IOError: Could not find path for "
+                     "image: usrp_b200_fw.hex\n\n"
+                     "Using images directory: <no images directory located>\n");
+        std::fflush(stderr);
+        std::printf("{\"schema\":1,\"runtime\":true,\"guardedCalls\":1,\"capture\":%s,"
+                    "\"devices\":[]}\n",
+                    gotCrashDir ? "true" : "false");
+        return 0;
+    }
     if (mode == "handleprobe") {
         // DOES THIS CHILD HOLD A HANDLE IT WAS NEVER MEANT TO GET?
         //
@@ -1486,6 +1512,66 @@ int main(int argc, char** argv) {
         // Capture off in this process, so the parent passes no crash
         // directory and the child says so.
         CHECK(!r.childCaptureArmed);
+        // An answer without the uhdNoImages key - every helper before the key
+        // existed - reads as "nothing wrong with UHD's images".
+        CHECK(!r.uhdImagesMissing);
+    }
+
+    // --- UHD "NO FIRMWARE IMAGES" TRAVELS IN THE CHILD'S ANSWER (2026-10-21) --
+    //
+    // The radioconda machine: SoapyUHD and uhd.dll installed, no images
+    // directory, a healthy B200 on the bus - the walk answers Ok and EMPTY,
+    // which used to read as "no radio" with no sign of why. The child now says
+    // so, and the parent carries it for the Source list's hint
+    // (gui::uhdImagesMissingHint).
+    {
+        setMode("noimages");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(r.devices.empty());
+        CHECK(r.uhdImagesMissing);
+    }
+
+    // --- ...and off the child's STDERR, which is the measured field route ----
+    //
+    // radioconda's SoapyUHD does not forward UHD's log into SoapySDR's, so the
+    // warning exists only as UHD's own stderr print and the child's answer
+    // carries no key: on Windows the parent's stderr pipe-and-tee is what
+    // reads it. POSIX keeps the stderr pass-through (see runOneChild), so
+    // there the answer is honestly false.
+    {
+        setMode("noimageserr");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const EnumResult r = enumerateIsolated(o);
+        CHECK(r.outcome == EnumOutcome::Ok);
+        CHECK(r.devices.empty());
+#ifdef _WIN32
+        CHECK(r.uhdImagesMissing);
+#else
+        CHECK(!r.uhdImagesMissing);
+#endif
+    }
+
+    // --- ...and the key is emitted only when there is something to say -------
+    //
+    // Absence is the compatibility story: an answer from a helper that
+    // predates the key must parse exactly as it always did, so the healthy
+    // answer must not carry it at all.
+    {
+        const std::string without =
+            cascade::source::enumerationReportJson(true, 1, false, {});
+        CHECK(without.find("uhdNoImages") == std::string::npos);
+        const std::string with =
+            cascade::source::enumerationReportJson(true, 1, false, {}, {}, true);
+        const nlohmann::json j = nlohmann::json::parse(with, nullptr, false);
+        CHECK(!j.is_discarded());
+        CHECK(j.is_object() && j.contains("uhdNoImages") && j["uhdNoImages"].is_boolean() &&
+              j["uhdNoImages"].get<bool>());
     }
 
     // --- INVALID UTF-8 IN A VENDOR LABEL DOES NOT KILL THE CHILD ------------

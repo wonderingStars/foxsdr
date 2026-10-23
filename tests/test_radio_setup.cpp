@@ -280,6 +280,45 @@ void testUsrpTheScanNeverRanAndTheScanThatFoundNothing() {
     CHECK(f.showPage);
 }
 
+// THE RADIOCONDA MACHINE (2026-10-21): driver bound, uhd.dll found, the scan
+// ran and listed nothing - because UHD itself warned it has no firmware
+// images (Inventory::uhdImagesMissing, off EnumResult::uhdImagesMissing). The
+// generic "not listed" advice sends this user to install radioconda, which is
+// what they already did; the finding must name the images instead.
+void testUsrpWithUhdButNoFirmwareImages() {
+    Inventory inv = machine();
+    addUsrp(inv, "WinUSB");
+    inv.uhdRuntime = true;
+    inv.soapyChecked = true;
+    inv.uhdImagesMissing = true;
+    const Findings f = rs::assess(inv);
+    checkComplete(f);
+    CHECK(f.items.size() == 1);
+    CHECK(f.items[0].kind == Kind::VendorMissing);
+    CHECK(contains(f.items[0].explanation, "firmware images"));
+    CHECK(contains(f.items[0].install, "uhd_images_downloader"));
+    CHECK(contains(f.items[0].install, "UHD_IMAGES_DIR"));
+    CHECK(f.showPage);
+    // The log line carries the fact too.
+    bool said = false;
+    for (const std::string& l : rs::summaryLines(inv, f)) {
+        if (contains(l, "uhd found (no firmware images)")) { said = true; }
+    }
+    CHECK(said);
+    // A USRP the scan DID list is usable, images warning or not: a second
+    // radio's UHD grumble must not condemn one that works (and a stale warning
+    // must not outrank the list itself).
+    listedAs(inv, rs::kFamilyUsrp);
+    CHECK(rs::assess(inv).items[0].kind == Kind::Usable);
+    // Until the scan ran, the warning cannot have come from it: not judged.
+    Inventory unscanned = machine();
+    addUsrp(unscanned, "WinUSB");
+    unscanned.uhdRuntime = true;
+    unscanned.soapyChecked = false;
+    unscanned.uhdImagesMissing = true;
+    CHECK(rs::assess(unscanned).items[0].kind == Kind::Usable);
+}
+
 void testLimeNeedsOnlyAWorkingDriver() {
     Inventory inv = machine();
     inv.usb.push_back(node(0x1d50, 0x6108, "USB\\VID_1D50&PID_6108\\C", -1, "CyUsb3", "Cypress"));
@@ -530,6 +569,7 @@ void testTheFakeMachines() {
         {"usrp-nouhd", Kind::VendorMissing, true},
         {"usrp-ok", Kind::Usable, false},
         {"usrp-unlisted", Kind::NotVisible, true},
+        {"usrp-noimages", Kind::VendorMissing, true},
     };
     for (const Row& r : rows) {
         Inventory inv;
@@ -703,6 +743,7 @@ int main() {
     testUsrpWithoutUhd();
     testUsrpBoundToTheWrongDriverNamesUhd();
     testUsrpTheScanNeverRanAndTheScanThatFoundNothing();
+    testUsrpWithUhdButNoFirmwareImages();
     testLimeNeedsOnlyAWorkingDriver();
     testTheOtherNativeFamiliesNeedWinUsb();
     testTwoRadiosOneFine();

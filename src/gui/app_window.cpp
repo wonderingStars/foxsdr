@@ -9966,6 +9966,18 @@ void AppWindow::drawSourceSection() {
         ImGui::TextWrapped("%s", tr(hint));
         ImGui::PopStyleColor();
     }
+    // SAID WHEN UHD ITSELF REPORTED NO FIRMWARE IMAGES while a USRP sat on the
+    // USB bus (2026-10-21, gui::uhdImagesMissingHint): radioconda installs
+    // SoapyUHD and uhd.dll but no images, so the scan lists nothing and the
+    // empty list reads as "no radio". Amber, not dim: unlike the line above,
+    // this one names something broken with one fix.
+    if (const char* hint =
+            cascade::gui::uhdImagesMissingHint(soapyUhdNoImages_, soapyUsrpOnUsb_);
+        hint != nullptr) {
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        ImGui::TextWrapped("%s", tr(hint));
+        ImGui::PopStyleColor();
+    }
     // An rtl_tcp source beside the scan leaves no driver out of it (a TCP
     // connection protects no local dongle), so there is nothing to explain.
     const cascade::gui::SoapyScanPlan scanPlan = scanGated ? soapyScanPlan()
@@ -10761,23 +10773,34 @@ void AppWindow::scanSoapy() {
     }
     const bool lookForNetworkUsrps = lookForNetworkUsrps_;
     soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
+    soapyScanUhdNoImages_ = std::make_shared<bool>(false);
+    soapyScanUsrpOnUsb_ = std::make_shared<bool>(false);
     const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
-    // enumerate() never throws and is simply empty on a machine with no
-    // vendor modules; this is also the hot-plug refresh path.
-    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs,
-                                                       lookForNetworkUsrps, absentOut] {
+    const std::shared_ptr<bool> uhdNoImagesOut = soapyScanUhdNoImages_;
+    const std::shared_ptr<bool> usrpOnUsbOut = soapyScanUsrpOnUsb_;
+    // enumerateIsolated() never throws and is simply empty on a machine with no
+    // vendor modules; this is also the hot-plug refresh path. Called directly
+    // rather than through SoapySource::enumerate() because that signature
+    // promises a list and nothing more, and this caller also needs the scan's
+    // uhdImagesMissing answer for the hint under the Source list.
+    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
+                                                       absentOut, uhdNoImagesOut, usrpOnUsbOut] {
         std::vector<cascade::usb::UsbId> present;
         const bool listed = cascade::usb::presentUsbIds(present);
         std::vector<cascade::gui::UsbVidPid> ids;
         for (const cascade::usb::UsbId& id : present) { ids.push_back({id.vid, id.pid}); }
         const std::vector<std::string> absent = cascade::gui::soapyDriversWithNoHardware(
             ids, listed, namedSoapyArgs, lookForNetworkUsrps);
-        // Handed back for the hint under the Source list; the future being
-        // ready is what makes it safe to read there.
+        // Handed back for the hints under the Source list; the future being
+        // ready is what makes them safe to read there.
         *absentOut = absent;
-        return (skip.empty() && absent.empty())
-                   ? cascade::source::SoapySource::enumerate()
-                   : cascade::source::SoapySource::enumerate(skip, absent);
+        *usrpOnUsbOut = cascade::gui::anyUsrpUsbId(ids);
+        cascade::source::EnumOptions options;
+        options.skipDrivers = skip;
+        options.absentDrivers = absent;
+        cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
+        *uhdNoImagesOut = r.uhdImagesMissing;
+        return std::move(r.devices);
     });
 }
 
@@ -10816,6 +10839,13 @@ void AppWindow::pollSourceAsync() {
         soapyAbsentDrivers_ =
             soapyScanAbsent_ ? *soapyScanAbsent_ : std::vector<std::string>();
         soapyScanAbsent_.reset();
+        // ...and whether UHD said it has no firmware images while a USRP sat
+        // on the bus, for the hint under the Source list and the radio-setup
+        // page's images finding (2026-10-21).
+        soapyUhdNoImages_ = soapyScanUhdNoImages_ && *soapyScanUhdNoImages_;
+        soapyUsrpOnUsb_ = soapyScanUsrpOnUsb_ && *soapyScanUsrpOnUsb_;
+        soapyScanUhdNoImages_.reset();
+        soapyScanUsrpOnUsb_.reset();
         // A SCAN THAT FOUND NO RADIO AT ALL, counted anonymously (0.99.64,
         // core/health_events.hpp): the whole-bus scan, not one that left some
         // drivers out beside an open radio, and with the native list empty too.

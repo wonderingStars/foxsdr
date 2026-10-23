@@ -352,6 +352,27 @@ Finding judge(const KnownDevice& d, const std::vector<const UsbNode*>& nodes,
         if (!b.anyWorking) { return wrongDriver(d, b); }
     }
 
+    // A USRP THE SCAN RAN AGAINST AND UHD COULD NOT IDENTIFY (2026-10-21):
+    // radioconda installs uhd.dll and SoapyUHD but ships no firmware images,
+    // so UHD's find warns "Could not find path for image ... <no images
+    // directory located>" and lists nothing - while the driver and the runtime
+    // above both check out. Judged BEFORE the generic "not listed" below,
+    // whose advice (install PothosSDR or radioconda) is exactly what this user
+    // already followed.
+    if (family == kFamilyUsrp && inv.soapyChecked && inv.uhdImagesMissing &&
+        !listed(inv, family)) {
+        return makeFinding(Kind::VendorMissing, d, b.installed,
+                           formatText(tr("%s: vendor software missing"), d.name),
+                           formatText(tr("%s is plugged in and UHD is installed, but UHD has no "
+                                         "firmware images, so it cannot identify or open a "
+                                         "USRP."),
+                                      d.name),
+                           tr("Install the UHD firmware images (radioconda: run "
+                              "uhd_images_downloader) or set UHD_IMAGES_DIR to an images "
+                              "directory, then press CHECK AGAIN."),
+                           kUhdUrl);
+    }
+
     // Both families that FoxSDR reaches only through a SoapySDR vendor module:
     // judged only once the application has actually run that scan.
     if ((family == kFamilyUsrp || family == kFamilyLime) && inv.soapyChecked &&
@@ -464,7 +485,8 @@ std::vector<std::string> summaryLines(const Inventory& inv, const Findings& f) {
                     std::string(inv.sdrplay.dllFound ? "found" : "not found") + ", service " +
                     (inv.sdrplay.serviceState.empty() ? std::string("unknown")
                                                       : inv.sdrplay.serviceState) +
-                    "; uhd " + std::string(inv.uhdRuntime ? "found" : "not found"));
+                    "; uhd " + std::string(inv.uhdRuntime ? "found" : "not found") +
+                    std::string(inv.uhdImagesMissing ? " (no firmware images)" : ""));
     for (const Finding& x : f.items) {
         std::string s = "radio setup: ";
         if (!x.family.empty()) { s += x.family + " " + x.deviceName + " "; }
@@ -599,11 +621,15 @@ bool fakeInventory(const std::string& name, Inventory& out) {
         } else {
             inv.sdrplay.serviceState = "not installed";
         }
-    } else if (name == "usrp-nouhd" || name == "usrp-ok" || name == "usrp-unlisted") {
+    } else if (name == "usrp-nouhd" || name == "usrp-ok" || name == "usrp-unlisted" ||
+               name == "usrp-noimages") {
         inv.usb.push_back(node(0x2500, 0x0020, "USB\\VID_2500&PID_0020\\FAKE0003", -1, "WinUSB",
                                "Ettus Research", "USRPs", 0));
         inv.uhdRuntime = (name != "usrp-nouhd");
         inv.soapyChecked = (name != "usrp-nouhd");
+        // The radioconda machine: driver and runtime in place, images absent,
+        // so the scan ran and listed nothing (2026-10-21).
+        inv.uhdImagesMissing = (name == "usrp-noimages");
         if (name == "usrp-ok") {
             inv.visible.push_back(kFamilyUsrp);
             inv.visibleCount = 1;

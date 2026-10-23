@@ -169,9 +169,52 @@ int main() {
         CHECK(later.size() == 2 && later[0].text == "soapy: 2 more lines suppressed");
     }
 
+    // --- UHD's "no firmware images" warning is recognised and latched --------
+    //
+    // The radioconda machine (2026-10-21): SoapyUHD and uhd.dll installed, NO
+    // images directory, B200 healthy on the bus - UHD's find warns and lists
+    // nothing, and the Source list was empty with no sign of why.
+    {
+        using cascade::source::uhdImagesMissingLine;
+        // The warning as UHD 4.8 under radioconda printed it on this bench.
+        const char* fieldLine =
+            "[B200] EnvironmentError: IOError: Could not find path for image: "
+            "usrp_b200_fw.hex\n\nUsing images directory: <no images directory located>\n\n"
+            "Set the environment variable 'UHD_IMAGES_DIR' appropriately or follow the "
+            "below instructions to download the images package.";
+        CHECK(uhdImagesMissingLine(fieldLine));
+        // Either load-bearing phrase alone is enough, whatever the case, so a
+        // UHD that reworks the surrounding text is still caught.
+        CHECK(uhdImagesMissingLine("Could not find path for image: usrp_b200_fw.hex"));
+        CHECK(uhdImagesMissingLine("COULD NOT FIND PATH FOR IMAGE: x"));
+        CHECK(uhdImagesMissingLine("Using images directory: <no images directory located>"));
+        // Nearby but different text is not the condition.
+        CHECK(!uhdImagesMissingLine(nullptr));
+        CHECK(!uhdImagesMissingLine(""));
+        CHECK(!uhdImagesMissingLine("Could not find path for device"));
+        CHECK(!uhdImagesMissingLine(
+            "Using images directory: C:\\Program Files\\UHD\\share\\uhd\\images"));
+        CHECK(!uhdImagesMissingLine("rtlsdr_read_async: dev_lost"));
+
+        // The latch: set by feed() BEFORE the level map and the limiter, and
+        // never cleared - the walk that warned is the walk being reported on.
+        SoapyLogBridge b(false);
+        CHECK(!b.uhdImagesMissing());
+        (void)b.feed(kWarning, "unrelated warning", 0);
+        CHECK(!b.uhdImagesMissing());
+        // A line the level map would DROP still latches: the fact matters
+        // more than the log line.
+        (void)b.feed(kDebug, fieldLine, 1);
+        CHECK(b.uhdImagesMissing());
+        (void)b.feed(kInfo, "later, unrelated", 2);
+        CHECK(b.uhdImagesMissing());
+    }
+
     // Not called here, so the record says so: installSoapyLogBridge() is the
     // one function that touches SoapySDR, and it has not been.
     CHECK(!cascade::source::soapyLogBridgeInstalled());
+    // ...and with no bridge installed there is no latch to read.
+    CHECK(!cascade::source::soapyUhdImagesMissingSeen());
 
     return testSummary("test_soapy_log_bridge");
 }

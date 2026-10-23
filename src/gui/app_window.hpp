@@ -2698,6 +2698,17 @@ private:
     // gui::networkUsrpHint draws from under the Source list.
     std::shared_ptr<std::vector<std::string>> soapyScanAbsent_;
     std::vector<std::string> soapyAbsentDrivers_;
+    // WHAT THE SCAN SAID ABOUT UHD'S FIRMWARE IMAGES (2026-10-21), carried the
+    // same way as soapyScanAbsent_ above: the scan's own thread writes the
+    // shared values before its future is ready, pollSourceAsync copies them
+    // into the plain members once it is. uhdNoImages is EnumResult::
+    // uhdImagesMissing; usrpOnUsb is whether that scan's USB listing held a
+    // USRP (gui::anyUsrpUsbId). Together they drive gui::uhdImagesMissingHint
+    // under the Source list and the radio-setup page's images finding.
+    std::shared_ptr<bool> soapyScanUhdNoImages_;
+    std::shared_ptr<bool> soapyScanUsrpOnUsb_;
+    bool soapyUhdNoImages_ = false;
+    bool soapyUsrpOnUsb_ = false;
     // A deferral has been logged for the radio currently open. The combo's
     // lazy scan asks on every frame the dropdown is open, so without this the
     // one diag line would be written sixty times a second; cleared the moment

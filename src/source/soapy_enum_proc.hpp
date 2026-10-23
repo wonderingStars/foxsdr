@@ -366,6 +366,24 @@ struct EnumResult {
     // fault's code and module even when the child's report is lost.
     std::string childFaultLine;
 
+    // UHD SAID IT HAS NO FIRMWARE IMAGES during this scan's walk (2026-10-21,
+    // source/soapy_log_bridge.hpp's uhdImagesMissingLine). radioconda installs
+    // SoapyUHD and uhd.dll but no images directory, so UHD's find warns and
+    // lists nothing - while the USRP sits healthy on the bus with the right
+    // driver. Read, on Windows, off the child's STDERR (runOneChild pipes and
+    // tees it): measured on radioconda's SoapyUHD, UHD prints this warning
+    // with its own stderr logger only and nothing forwards it into SoapySDR's
+    // log, so the child's log-bridge latch stays false and the stderr text is
+    // the one place the fact exists. The child still reports its latch in its
+    // answer ("uhdNoImages", for a SoapyUHD that does forward), and either
+    // source sets this. The GUI's hint under the Source list
+    // (gui::uhdImagesMissingHint) is what turns it into words. Never set by
+    // the in-process fallback: this process's log bridge latch outlives the
+    // scan, and a stale "missing" after the user installed the images would
+    // be worse than silence on a path that is already a broken-install edge
+    // case.
+    bool uhdImagesMissing = false;
+
     // Drivers left out because no hardware of theirs can be present - see
     // EnumOptions::absentDrivers. Lower-cased; only the ones the listing (or,
     // for the whole bus, the options) actually named.
@@ -674,11 +692,15 @@ int runEnumerateHelper(const char* crashDir = nullptr, const char* driver = null
 // twenty with no named failure (the known UHD discovery fault, terminated by
 // the very filter the helper had just installed). This function is the
 // genuine production code the helper calls, not a copy of it.
+// `uhdNoImages` is EnumResult::uhdImagesMissing as the child reports it
+// (soapyUhdImagesMissingSeen() after the walk): emitted only when true, so an
+// answer from a helper that predates the key parses exactly as it always did.
 std::string enumerationReportJson(bool runtimeAvailable,
                                   unsigned long long guardedCalls,
                                   bool captureArmed,
                                   const std::vector<SoapyDeviceInfo>& devices,
-                                  const std::vector<std::string>& drivers = {});
+                                  const std::vector<std::string>& drivers = {},
+                                  bool uhdNoImages = false);
 
 }  // namespace cascade::source
 

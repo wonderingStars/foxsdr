@@ -238,6 +238,16 @@ inline bool isUsrpUsbId(const UsbVidPid& id) {
     return false;
 }
 
+// Any USRP among the listed USB devices - the same answer the rule below
+// builds on, named so the scan can keep it for the hint under the Source list
+// (uhdImagesMissingHint).
+inline bool anyUsrpUsbId(const std::vector<UsbVidPid>& presentUsb) {
+    for (const UsbVidPid& id : presentUsb) {
+        if (isUsrpUsbId(id)) { return true; }
+    }
+    return false;
+}
+
 // Which SoapySDR drivers this scan should not ask, because nothing of theirs
 // can be here. Today at most {"uhd"}, which is left out unless ANY of:
 //
@@ -255,9 +265,7 @@ inline std::vector<std::string> soapyDriversWithNoHardware(
     const std::vector<UsbVidPid>& presentUsb, bool usbListed,
     const std::vector<std::string>& namedSoapyArgs, bool lookForNetworkUsrps) {
     if (!usbListed || lookForNetworkUsrps) { return {}; }
-    for (const UsbVidPid& id : presentUsb) {
-        if (isUsrpUsbId(id)) { return {}; }
-    }
+    if (anyUsrpUsbId(presentUsb)) { return {}; }
     for (const std::string& args : namedSoapyArgs) {
         if (detail::driverOf(args) == "uhd") { return {}; }
     }
@@ -279,6 +287,25 @@ inline const char* networkUsrpHint(const std::vector<std::string>& absentDrivers
         }
     }
     return nullptr;
+}
+
+// THE ONE LINE UNDER THE SOURCE LIST when the scan ran UHD's probe and UHD
+// itself said it has no firmware images (2026-10-21). radioconda installs
+// SoapyUHD and uhd.dll but ships NO images directory, so UHD's find warns
+// "Could not find path for image: usrp_b200_fw.hex ... <no images directory
+// located>" and returns zero devices - while the B200 sits healthy on the bus
+// with the right driver, the radio-setup page calls it usable, and the Source
+// list is simply empty. Same contract as networkUsrpHint above: English,
+// marked for the catalogues, drawn with tr(); null means nothing is drawn.
+// `uhdReportedNoImages` is the scan's own answer (EnumResult::uhdImagesMissing,
+// latched off UHD's warning in the enumeration child); `usrpOnUsb` is whether
+// the scan's USB listing held a USRP (anyUsrpUsbId), so the line never claims
+// a radio that is not there.
+inline const char* uhdImagesMissingHint(bool uhdReportedNoImages, bool usrpOnUsb) {
+    if (!uhdReportedNoImages || !usrpOnUsb) { return nullptr; }
+    return FOX_TR_NOOP(
+        "A USRP is plugged in but UHD has no firmware images - install the UHD images "
+        "package (radioconda: run uhd_images_downloader) or set UHD_IMAGES_DIR");
 }
 
 }  // namespace cascade::gui

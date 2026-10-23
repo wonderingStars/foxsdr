@@ -148,6 +148,13 @@ struct Inventory {
     int visibleCount = 0;
     bool nativeChecked = false;
     bool soapyChecked = false;
+    // THE SCAN'S OWN REASON FOR AN EMPTY USRP ANSWER (2026-10-21): UHD warned
+    // "Could not find path for image ... <no images directory located>" during
+    // the application's Soapy scan (EnumResult::uhdImagesMissing - radioconda
+    // installs SoapyUHD and uhd.dll but no firmware images, so the scan lists
+    // nothing while the radio is healthy on the bus). Filled by the
+    // application beside soapyChecked; judged only when soapyChecked is true.
+    bool uhdImagesMissing = false;
 };
 
 // --- the findings -----------------------------------------------------------------
@@ -214,8 +221,8 @@ Inventory collectInventory();
 // can be made to appear with a chosen finding on a machine with no radio (and
 // not appear on one with several). Names, each a whole machine: "none",
 // "unreadable", "rtl-dvbt", "rtl-nodriver", "rtl-winusb", "rtl-winusb-listed",
-// "rsp-noapi", "rsp-ok", "usrp-nouhd", "usrp-ok", "usrp-unlisted". Returns false
-// for any other text and leaves `out` alone.
+// "rsp-noapi", "rsp-ok", "usrp-nouhd", "usrp-ok", "usrp-unlisted",
+// "usrp-noimages". Returns false for any other text and leaves `out` alone.
 bool fakeInventory(const std::string& name, Inventory& out);
 
 // How long the application waits for a probe before it stops waiting. A healthy

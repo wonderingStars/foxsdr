@@ -49,9 +49,31 @@ bool soapyDebugWanted(const char* envValue) {
     return v == "1" || v == "true" || v == "yes" || v == "on";
 }
 
+bool uhdImagesMissingLine(const char* message) {
+    if (message == nullptr || *message == '\0') { return false; }
+    // Lower-cased copy, then plain substring search: the phrases are UHD's own
+    // (host/lib/utils/paths.cpp, "Could not find path for image" out of
+    // find_image_path and "<no images directory located>" out of
+    // get_images_dir, checked 2026-10-21 against v4.8.0.0), and matching them
+    // anywhere keeps the detector honest against SoapyUHD's forwarder adding
+    // its own prefix or UHD moving them between log levels.
+    std::string text(message);
+    for (char& c : text) {
+        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return text.find("could not find path for image") != std::string::npos ||
+           text.find("no images directory located") != std::string::npos;
+}
+
 std::vector<SoapyLogEmit> SoapyLogBridge::feed(int level, const char* message,
                                                std::uint64_t nowMs) {
     std::vector<SoapyLogEmit> out;
+    // BEFORE the level map and the limiter, deliberately: what this latch
+    // answers ("why was no USRP listed") must not depend on whether the line
+    // itself got through either of them.
+    if (!uhdImagesMissing_.load(std::memory_order_relaxed) && uhdImagesMissingLine(message)) {
+        uhdImagesMissing_.store(true, std::memory_order_relaxed);
+    }
     const SoapyLogAction action = classifySoapyLogLevel(level, debugWanted_);
     if (action == SoapyLogAction::Drop) { return out; }
 
@@ -124,5 +146,10 @@ void installSoapyLogBridge() {
 }
 
 bool soapyLogBridgeInstalled() { return g_installed.load(); }
+
+bool soapyUhdImagesMissingSeen() {
+    std::lock_guard<std::mutex> lk(g_bridgeMutex);
+    return g_bridge != nullptr && g_bridge->uhdImagesMissing();
+}
 
 }  // namespace cascade::source
