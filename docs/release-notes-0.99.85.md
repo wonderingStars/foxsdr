@@ -7,19 +7,19 @@ Still not fixed: the RSPduo owner's crackle at 4 MS/s itself. The 0.99.84 counte
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.85.exe`:**
-`TBD`
+`1ee66fce4ec76af62d237eff313a42378852a07f7c72d4b77a79c017119800e0`
 
 **SHA-256 of `FoxSDR-0.99.85-x86_64.AppImage`:**
-`TBD`
+`6b73db1e1b752493e9efa41112b87747c4875597d91cc20ef6b9b634f2802498`
 
 **SHA-256 of `foxsdr-0.99.85-linux-x64.tar.gz`:**
-`TBD`
+`232ab01740e07c96c6b2cef9aae567e6dbc4e6f33f114620f64afb8262287416`
 
 **SHA-256 of `FoxSDR-0.99.85-aarch64.AppImage`:**
-`TBD`
+`13920019dbf0193d00803f4a714118b3511b81c3de5893dd653dfaf961238221`
 
 **SHA-256 of `foxsdr-0.99.85-linux-arm64.tar.gz`:**
-`TBD`
+`17d87380986fe57a02aa9e802991be08d04fef7607ae8afb3bea0c12739cc63b`
 
 ## Features and fixes, 2026-10-23
 
