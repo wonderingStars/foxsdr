@@ -7,19 +7,19 @@ This release does not fix the freeze those two users saw: the reports cannot say
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.87.exe`:**
-`TBD`
+`1ed49cb8cf82b0bf575bbe35df233a6ee1c209fb3c0be643d19053cced66eaeb`
 
 **SHA-256 of `FoxSDR-0.99.87-x86_64.AppImage`:**
-`TBD`
+`0df067b4dca6c0c2c446d2f3cbbef6ba8f43fb138bbb084aeb030408c8ba44f8`
 
 **SHA-256 of `foxsdr-0.99.87-linux-x64.tar.gz`:**
-`TBD`
+`1212c5876ede667627e20c946e3b57d89a9fa8f0167a0b951480bb209a2d7d69`
 
 **SHA-256 of `FoxSDR-0.99.87-aarch64.AppImage`:**
-`TBD`
+`44a4d6a35117d748941855e4a142d8292220faba1be383e7d540d53bd75ac51b`
 
 **SHA-256 of `foxsdr-0.99.87-linux-arm64.tar.gz`:**
-`TBD`
+`ee623d3575365578af1383e904166bc5e82da9f0477f8e13fbbae62c8b5dd865`
 
 ## Features and fixes, 2026-10-23
 
