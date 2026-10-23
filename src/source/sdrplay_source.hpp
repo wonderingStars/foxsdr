@@ -32,7 +32,9 @@
 // the cbContext. The API documents that Uninit returns with the callbacks
 // stopped; if a callback is nevertheless still inside us when we are done
 // with the device, the Link is deliberately STRANDED (kept alive in a
-// process-scope graveyard) rather than freed under a thread that is in it -
+// process-scope graveyard that not even exit destroys, since the service's
+// thread outlives our static destructors) rather than freed under a thread
+// that is in it -
 // the same judgement the USB drivers make when they abandon a wedged reader,
 // because a leak is survivable and a use-after-free on somebody else's thread
 // is not.
@@ -855,6 +857,13 @@ public:
     // a test asserts, because elapsed time alone still passes when the bound
     // is deleted.
     static unsigned long long linksStranded();
+
+    // TESTS ONLY: a weak reference to the Link most recently stranded, so a
+    // test can ask whether it is still alive at a moment of its choosing -
+    // in particular after the executable's own static destructors have run
+    // (tests/test_sdrplay_strand_exit.cpp). Empty until something has been
+    // stranded.
+    static std::weak_ptr<void> lastStrandedLinkForTest();
 
 private:
     // Everything the SERVICE's thread touches, behind a shared_ptr whose

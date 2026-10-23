@@ -5,6 +5,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/utf8_text.hpp"
 #include "source/rsp_rows.hpp"
 
@@ -43,13 +44,40 @@ std::atomic<unsigned long long> g_linksStranded{0};
 // freed under a service thread that is still inside it. Deliberately never
 // emptied: the whole point is that nothing here is safe to destroy, and a
 // handful of rings is a price worth paying once per wedged teardown.
-std::mutex g_graveyardMutex;
-std::vector<std::shared_ptr<void>> g_graveyard;
+//
+// ...AND NEVER DESTROYED EITHER (the 0.99.84 RSPduo report of 2026-10-23,
+// signature 929BF825C4993CB3). Through 0.99.84 this was a namespace-scope
+// std::vector, which the C runtime destroys when main returns - on the main
+// thread, while every other thread in the process is still running; the
+// operating system ends those threads only AFTER the executable's static
+// destructors have finished. That report is the moment in between: a stream
+// declared stalled 29 s earlier while the service in fact kept delivering
+// (115296 blocks in that last window, into a ring nobody read), so stop()
+// stranded the Link without Uninit, the device was closed without
+// ReleaseDevice, main returned, the graveyard's destructor freed the Link -
+// and the service's thread, which nothing had told to stop, took its next
+// block into it: an access violation on the vendor's thread, two frames of
+// ours above sdrplay_api.dll, 107 s into the session. So "for the life of
+// the process" has to mean past the static destructors as well: the
+// graveyard is a heap object that nothing, not even exit, ever deletes.
+// tests/test_sdrplay_strand_exit.cpp holds the line from a child process.
+struct Graveyard {
+    std::mutex mutex;
+    std::vector<std::shared_ptr<void>> links;
+    std::weak_ptr<void> last;  // the most recent, for lastStrandedLinkForTest
+};
+
+Graveyard& graveyard() {
+    static Graveyard* const g = core::leakOnPurpose(new Graveyard());
+    return *g;
+}
 
 void strandLink(std::shared_ptr<void> link) {
     {
-        std::lock_guard<std::mutex> lk(g_graveyardMutex);
-        g_graveyard.push_back(std::move(link));
+        Graveyard& g = graveyard();
+        std::lock_guard<std::mutex> lk(g.mutex);
+        g.last = link;
+        g.links.push_back(std::move(link));
     }
     g_linksStranded.fetch_add(1, std::memory_order_relaxed);
 }
@@ -1152,6 +1180,12 @@ const abi::Api& SdrPlaySource::api() const {
 
 unsigned long long SdrPlaySource::linksStranded() {
     return g_linksStranded.load(std::memory_order_relaxed);
+}
+
+std::weak_ptr<void> SdrPlaySource::lastStrandedLinkForTest() {
+    Graveyard& g = graveyard();
+    std::lock_guard<std::mutex> lk(g.mutex);
+    return g.last;
 }
 
 // --- errors ---------------------------------------------------------------
