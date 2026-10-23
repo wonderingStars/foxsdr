@@ -7,19 +7,19 @@ This release does not fix the crackle. It makes the next report able to say whet
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.86.exe`:**
-`TBD`
+`718c4cb79ed654d1de22ad4a6999de30443692e27a747c4560ee2d2a90fec7a9`
 
 **SHA-256 of `FoxSDR-0.99.86-x86_64.AppImage`:**
-`TBD`
+`c0a4ada2ee0afea36b427356dc77ca6c4d1842b3ced55ad240f8d35b34bb3a89`
 
 **SHA-256 of `foxsdr-0.99.86-linux-x64.tar.gz`:**
-`TBD`
+`19d6c8a9e224c2e63bf7790f75b0e9ab74078c33fa27c5b1055345400fb3237d`
 
 **SHA-256 of `FoxSDR-0.99.86-aarch64.AppImage`:**
-`TBD`
+`fb82ca82f6cb2e812fbcf0d972627fed32b26acc5103be048c56d574cd5f680e`
 
 **SHA-256 of `foxsdr-0.99.86-linux-arm64.tar.gz`:**
-`TBD`
+`a9f8cbf4d4fc1ba4a2947da3c0d25b0104916ff92300b6833e40bdce8c42bab4`
 
 ## Features and fixes, 2026-10-23
 
