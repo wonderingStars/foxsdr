@@ -3,14 +3,19 @@
 A free software-defined radio receiver for Windows and Linux. Spectrum and
 waterfall, NFM, WFM, AM, DSB, USB, LSB and CW, stereo FM with RDS, a scanner,
 an airband monitor that looks up any airport's control frequencies, audio and
-I/Q recording, a map and a radar scope for decoded aircraft and ships, and 28
-decoder plugins from an in-app catalogue. Most radios are driven by FoxSDR's
+I/Q recording, a map and a radar scope for decoded aircraft and ships, and 43
+plugins from an in-app catalogue. Most radios are driven by FoxSDR's
 own drivers, so nothing else has to be installed. The whole interface can be
 served to a browser on your own network.
 
 The current release is **0.99.87** (October 2026), in open beta. Free for
 noncommercial use; see [License](#license). Website:
 [foxsdr.com](https://foxsdr.com).
+
+Choosing SDR software? [SDR software compared](https://foxsdr.com/sdr-software.html)
+sets FoxSDR beside SDR#, SDR++, SDRangel, HDSDR, SDR Console, Gqrx and CubicSDR.
+Using an RTL-SDR dongle? The [RTL-SDR guide](https://foxsdr.com/rtl-sdr-software.html)
+covers the driver, Zadig, the Blog V4's HF input, the bias tee and rtl_tcp.
 
 Version **0.99.82** is a repair release from the month's field reports: the
 window no longer freezes on a retune, preset, or radio scan while the signal
