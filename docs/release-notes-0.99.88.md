@@ -7,19 +7,19 @@ The one-click install covers RTL-SDR dongles only; a HackRF, an Airspy, a Mirics
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.88.exe`:**
-`TBD`
+`675a6cb489c99fac10bcae0ba96ac95bc99987cf7213cc003b1aa0b5651e2cc8`
 
 **SHA-256 of `FoxSDR-0.99.88-x86_64.AppImage`:**
-`TBD`
+`e2960dd0bf45de362cf4828071968de0161c90dcda52efca2754d1ab53abbb16`
 
 **SHA-256 of `foxsdr-0.99.88-linux-x64.tar.gz`:**
-`TBD`
+`1c052c692a86bed3a0670d25d7a5afc18111ccee23d0f9ee82d20ab3a60d6205`
 
 **SHA-256 of `FoxSDR-0.99.88-aarch64.AppImage`:**
-`TBD`
+`886c71e8c0734fd6a32295dead1aa4158f83ed4ec8c77b01a89b34c9f670c42f`
 
 **SHA-256 of `foxsdr-0.99.88-linux-arm64.tar.gz`:**
-`TBD`
+`fd229a77d80e291694f230a6309b1ef695ccf4a613ff67b7177f6f37c411fff5`
 
 ## Features and fixes, 2026-10-24
 
