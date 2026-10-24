@@ -832,6 +832,9 @@ function standIn(rows) {
       } else if (/^SELECT blob1 AS version FROM foxsdr_usage WHERE .*GROUP BY blob1/.test(sql)) {
         // every version seen in the window, whether or not it reports a count
         data = [...rows.reporting.map((r) => ({ version: r.version })), ...rows.unmeasured];
+      } else if (/count\(DISTINCT index1\) AS (withRadio|listened|newInstalls|newWithRadio) /.test(sql)) {
+        const name = sql.match(/AS (withRadio|listened|newInstalls|newWithRadio) /)[1];
+        data = rows.funnel && rows.funnel[name] !== undefined ? [{ [name]: rows.funnel[name] }] : [];
       } else if (/^SELECT count\(DISTINCT index1\) AS installs FROM/.test(sql)) {
         data = [{ installs: '3' }];
       }
@@ -1308,4 +1311,63 @@ test('the README schema table lists blob14 and double13..double16, and says abse
     assert.match(readme, new RegExp(`\| \`${col}\` \|[^\n]*${word}`), col);
   }
   assert.match(readme.replace(/\s+/g, ' '), /An unwritten split is not zero/);
+});
+
+// ---- The SDR model never stores a serial or an address ---------------------
+// The usage reports of the 30 days to 2026-10-24 held eight such models, sent
+// by copies whose native-radio fallback used a row's args as its model. The
+// Worker scrubs them whatever the client sends, as the client does from 0.99.88.
+
+test('a model carrying a serial or an address is stored as "other", never as sent', async () => {
+  for (const leaked of ['serial=170204A600', 'serial=0000000001', 'rtltcp=garage.lan:1234',
+    'rtltcp=192.168.0.10:1234', 'uri=ip:192.168.1.9', 'index=0', '192.168.1.40']) {
+    const r = await post({ ...oldRecord(), sdr: leaked });
+    assert.equal(r.status, 204);
+    assert.equal(r.usage[0].blobs[3], 'other', `stored ${leaked} as ${r.usage[0].blobs[3]}`);
+  }
+  const mixed = await post({ ...oldRecord(), sdr: 'RTL2838 user@host' });
+  assert.equal(mixed.usage[0].blobs[3], 'RTL2838');
+});
+
+test('real models are stored unchanged, and no radio stays empty', async () => {
+  for (const ok of ['Blog V4', 'RTL2838UHIDIR', 'HackRF One', 'uhd b200', 'SDRplay RSPdx-R2',
+    'AIRSPY HF+', 'ADALM-Pluto (network)', 'rtl_tcp server (network)']) {
+    const r = await post({ ...oldRecord(), sdr: ok });
+    assert.equal(r.usage[0].blobs[3], ok);
+  }
+  assert.equal((await post({ ...oldRecord(), sdr: '' })).usage[0].blobs[3], '');
+  assert.equal((await post({ ...oldRecord(), sdr: 42 })).usage[0].blobs[3], '');
+});
+
+readerTest('the reader prints the first-run funnel from blob4, double4 and blob9', async () => {
+  const { server, queries, port } = await standIn({
+    reporting: [], stalled: [], unmeasured: [],
+    funnel: { withRadio: '2', listened: '2', newInstalls: '4', newWithRadio: '1' },
+  });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /First-run funnel/);
+    // the stand-in counts 5 installs in the window
+    assert.match(r.stdout, /ever had a radio open\s+: 2 of 5 \(40%\)/);
+    assert.match(r.stdout, /listened over a minute\s+: 2 of 5 \(40%\)/);
+    assert.match(r.stdout, /new installs found radio : 1 of 4 \(25%\)/);
+    assert.ok(queries.some((q) => /AS listened .*double4 > 60/.test(q)), 'listening is double4 over a minute');
+    assert.ok(queries.some((q) => /AS newWithRadio .*blob9 >= '\d{4}-\d\d-\d\d' AND blob4 != ''/.test(q)),
+      'new installs are those whose first run is in the window');
+  } finally {
+    server.close();
+  }
+});
+
+readerTest('a funnel the service cannot answer says unknown, never zero', async () => {
+  const { server, port } = await standIn({ reporting: [], stalled: [], unmeasured: [] });
+  try {
+    const r = await runAgainst(port);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /ever had a radio open\s+: unknown/);
+    assert.doesNotMatch(r.stdout, /ever had a radio open\s+: 0 of/);
+  } finally {
+    server.close();
+  }
 });

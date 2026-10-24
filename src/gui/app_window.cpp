@@ -3207,7 +3207,7 @@ cascade::core::DiagContext AppWindow::currentDiagContext(std::size_t* loadedOut)
     ctx.deviceOpen = (device_ != nullptr);
     // MODEL ONLY - sanitiseDevice strips the serial, exactly as the usage
     // report does. A report is a support artefact, not a hardware fingerprint.
-    ctx.sdrModel = deviceModel_;
+    ctx.sdrModel = cascade::core::scrubModel(deviceModel_);
     // The crystal correction and how it is applied - never a frequency.
     ctx.ppm = ppmDiagText();
     // THE PATCH PAGE'S RADIOS, by driver kind and nothing else: the part of the
@@ -12103,11 +12103,17 @@ void AppWindow::followSourceRowAfterRescan(const std::vector<cascade::gui::Sourc
     }
 }
 
+// The label of the scanned row this radio was opened from, or - when that row
+// is not in the current list (an rtl_tcp or Pluto address typed since the scan,
+// a radio restored before the scan ran) - the family's plain name. NEVER the
+// args: they are a serial or an address, and until 0.99.88 this fallback put
+// them into deviceModel_, and from there into the usage report, the log and
+// the crash context ("serial=170204A600", "rtltcp=garage.lan:1234").
 std::string AppWindow::nativeLabelFor(const std::string& kind, const std::string& args) const {
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         if (d.driver == kind && d.args == args) { return d.label; }
     }
-    return args;
+    return cascade::core::nativeFamilyModel(kind);
 }
 
 std::vector<cascade::gui::SourceRowKey> AppWindow::sourceRowKeys() const {

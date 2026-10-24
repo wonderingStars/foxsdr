@@ -46,7 +46,7 @@ corrupts every row written before.
 | `index1` | install id (random, made on the user's machine) |
 | `blob1` | application version, up to 48 characters |
 | `blob2`, `blob3` | operating system and build, architecture |
-| `blob4` | SDR model, serial already stripped |
+| `blob4` | SDR model: no serial number and no network address - the client strips them, and since 2026-10-24 the Worker drops any token that could still be one (`scrubModel`), storing `other` when nothing is left |
 | `blob5`, `blob6`, `blob7` | most-used demodulator, installed plugins, panels opened |
 | `blob8`, `blob9`, `blob10` | install channel, first-run day (UTC), version that created the id |
 | `blob11` | `'1'` when this client sent a display-stall count, else `''` |
