@@ -1863,6 +1863,27 @@ RTL-SDR dongle needs one further step on Windows**: it ships bound to the DVB-T
 television driver, under which it is invisible to every SDR application, and
 Zadig must be used to bind WinUSB to "Bulk-In, Interface (Interface 0)" instead.
 
+**Since 0.99.88 FoxSDR does that step itself.** When the **RADIO SETUP** page
+finds an RTL-SDR on the television driver, or on no driver at all, it shows an
+**INSTALL DRIVER** key under that radio. Press it and Windows asks once for
+permission; FoxSDR then gives the dongle's radio interface (interface 0 - never
+the whole dongle and never its remote-control interface) Windows' own WinUSB
+driver, the Microsoft-signed one Windows already carries, and checks the radios
+again. Nothing is downloaded, no certificate is added to the computer, and no
+other device is touched: the installer checks the device's own hardware ids
+before it changes anything. If Windows says a restart is needed, or the dongle
+is not listed straight away, unplug it, plug it back in and press **CHECK
+AGAIN**. Saying no to the permission prompt changes nothing. The Zadig
+instructions stay on the page beneath the key for anyone who prefers them.
+
+**To undo it** - to use the dongle as a television receiver again - open Device
+Manager, find the dongle's interface under *Universal Serial Bus devices*
+(*WinUsb Device*), choose **Uninstall device**, then unplug and replug it:
+Windows puts back the driver it would have chosen itself.
+
+This covers RTL-SDR dongles only so far, the radio most people start with; a
+HackRF, an Airspy, a Mirics or an RX888 is still bound with Zadig as below.
+
 An **RX888** is two devices. Plug it in and run Zadig once for
 **"WestBridge"** (USB ID `04B4:00F3` — the FX3 bootloader), then open it once
 in FoxSDR so the firmware loads: the radio disappears and comes back as

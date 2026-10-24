@@ -102,6 +102,10 @@ struct UsbNode {
     // devnode itself, or its parent for an interface child. What makes "one
     // radio" decidable out of several devnodes.
     std::string deviceId;
+    // THIS devnode's own instance id ("USB\VID_0BDA&PID_2838&MI_00\7&38A1...").
+    // Used only to aim the one-click driver install (core/winusb_install.hpp) at
+    // the right interface; never written to the log or any report.
+    std::string instanceId;
     bool isDeviceNode = false;
     // The composite interface number ("&MI_00" in the instance id), -1 for the
     // device node itself. (Not "interface": Windows' headers #define that.)
@@ -185,6 +189,11 @@ struct Finding {
     std::string explanation;
     std::string install;
     std::string url;
+    // THE ONE-CLICK INSTALL (0.99.88): the instance id of the interface FoxSDR
+    // can bind WinUSB to itself - set only for an RTL-SDR on the wrong driver
+    // or none, and only when its interface 0 was on the bus. Empty: the page
+    // offers the Zadig instructions alone. Never logged.
+    std::string installTarget;
 };
 
 struct Findings {

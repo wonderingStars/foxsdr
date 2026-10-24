@@ -4317,6 +4317,15 @@ private:
     void radioSetupFrame();
     void radioSetupCheckAgain();
     void drawRadioSetupPage();
+    // THE ONE-CLICK DRIVER INSTALL (0.99.88, core/winusb_install.hpp): the
+    // elevated helper started by INSTALL DRIVER, waited for off the GUI thread.
+    // Defined in app_window_radio_setup.cpp; null when none has been started.
+    struct DriverInstallJob;
+    std::shared_ptr<DriverInstallJob> driverInstall_;
+    // The last install's sentence for the page, already translated.
+    std::string driverInstallStatus_;
+    void radioSetupInstallDriver(const std::string& instanceId);
+    void radioSetupPollDriverInstall();
 
     // --- REPORT A BUG / DISLIKE (see core/problem_report.hpp) ----------------
     //

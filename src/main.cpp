@@ -46,6 +46,7 @@
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
 #include "core/sentinel.hpp"
+#include "core/winusb_install.hpp"
 #include "core/tester_link.hpp"
 
 // ---------------------------------------------------------------------------
@@ -991,6 +992,21 @@ int main(int argc, char** argv) {
     // watcher.
     if (argc >= 2 && std::strcmp(argv[1], "--sentinel") == 0) {
         return cascade::core::runSentinelMain(argc, argv);
+    }
+
+    // THE ONE-CLICK DRIVER INSTALL (0.99.88, core/winusb_install.hpp):
+    //
+    //     cascade --install-winusb <device instance id> --result <file>
+    //
+    // Started by the RADIO SETUP page through the shell's "runas" verb, so it
+    // runs elevated, behind one Windows permission prompt. It binds Windows'
+    // own WinUSB driver to interface 0 of an RTL-SDR - checked against the
+    // device itself, never taken on trust from this command line - writes the
+    // result file and returns. Like the helpers above: no configuration, no
+    // window, no radio, no crash handler, no telemetry, and argv[1] must be the
+    // flag itself with exactly the four arguments parseHelperArgs accepts.
+    if (argc >= 2 && std::strcmp(argv[1], cascade::core::winusb::kHelperFlag) == 0) {
+        return cascade::core::winusb::runHelperMain(argc, argv);
     }
 
     constexpr const char* kCrashDirFlag = "--crash-dir=";

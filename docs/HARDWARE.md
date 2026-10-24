@@ -106,9 +106,12 @@ common HF modification wires an antenna to.
 **Native on Windows (WinUSB) and Linux (usbfs) alike**, like the HackRF driver,
 through the same `src/usb/usb_device.hpp` transport contract — see "Linux
 status" at the top of this file for what is and is not yet confirmed against
-real Linux hardware. **On Windows a dongle must be bound to WinUSB** (with
-Zadig) to be opened natively; one still running the DVB-T driver is not
-listed, because it cannot be opened. **On Linux nothing needs unbinding** —
+real Linux hardware. **On Windows a dongle must be bound to WinUSB** to be
+opened natively; one still running the DVB-T driver is not listed, because it
+cannot be opened. Since 0.99.88 the RADIO SETUP page's **INSTALL DRIVER** key
+does that binding itself (`src/core/winusb_install.hpp`: Windows' in-box,
+Microsoft-signed winusb.inf on interface 0 only, behind one permission prompt);
+Zadig still works exactly as before. **On Linux nothing needs unbinding** —
 `installer/linux/README.md` explains why.
 
 **How it is verified.** Both ways, because neither alone is enough.

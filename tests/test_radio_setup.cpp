@@ -143,6 +143,62 @@ void testRtlOnTheTelevisionDriverNamesZadig() {
     CHECK(f.showPage);
 }
 
+// THE ONE-CLICK INSTALL'S TARGET (0.99.88): interface 0's own instance id, on
+// an RTL-SDR with the television driver or none - and never in the log, which
+// is read by people a dongle's serial (in the parent's id) is no business of.
+void testWrongDriverRtlOffersInterfaceZeroForTheOneClickInstall() {
+    for (const char* service : {"RTL2832UUSB", ""}) {
+        Inventory inv = machine();
+        const bool tv = service[0] != '\0';
+        addRtl(inv, "USB\\VID_0BDA&PID_2838\\00000001", service, tv ? "Realtek" : "", tv ? 0u : 28u);
+        inv.usb[0].instanceId = "USB\\VID_0BDA&PID_2838\\00000001";
+        inv.usb[1].instanceId = "USB\\VID_0BDA&PID_2838&MI_00\\7&38A180A5&0&0000";
+        inv.usb[2].instanceId = "USB\\VID_0BDA&PID_2838&MI_01\\7&38A180A5&0&0001";
+        const Findings f = rs::assess(inv);
+        CHECK(f.items.size() == 1);
+        CHECK(f.items[0].kind == Kind::WrongDriver);
+        CHECK(f.items[0].installTarget == "USB\\VID_0BDA&PID_2838&MI_00\\7&38A180A5&0&0000");
+        CHECK(contains(f.items[0].install, "Zadig"));  // the by-hand way stays on the page
+        for (const std::string& line : rs::summaryLines(inv, f)) {
+            CHECK(!contains(line, "38A180A5"));
+            CHECK(!contains(line, "00000001"));
+            CHECK(!contains(line, "MI_0"));
+        }
+    }
+    // A working RTL-SDR: nothing to install.
+    {
+        Inventory inv = machine();
+        addRtl(inv, "USB\\VID_0BDA&PID_2838\\1", "WinUSB", "libwdi");
+        inv.usb[1].instanceId = "USB\\VID_0BDA&PID_2838&MI_00\\7&1&0&0000";
+        const Findings f = rs::assess(inv);
+        CHECK(f.items.size() == 1);
+        CHECK(f.items[0].installTarget.empty());
+    }
+    // Interface 0 not seen (its instance id unknown): the Zadig text alone.
+    {
+        Inventory inv = machine();
+        addRtl(inv, "USB\\VID_0BDA&PID_2838\\1", "RTL2832UUSB", "Realtek");
+        const Findings f = rs::assess(inv);
+        CHECK(f.items[0].kind == Kind::WrongDriver);
+        CHECK(f.items[0].installTarget.empty());
+    }
+    // Not an RTL-SDR: a USRP with no driver gets no one-click install.
+    {
+        Inventory inv = machine();
+        UsbNode u = node(0x2500, 0x0020, "USB\\VID_2500&PID_0020\\B", -1, "", "", 28);
+        u.instanceId = "USB\\VID_2500&PID_0020\\B";
+        inv.usb.push_back(u);
+        const Findings f = rs::assess(inv);
+        CHECK(f.items[0].installTarget.empty());
+    }
+    // The synthetic machines a GUI test raises the page with carry a target,
+    // shaped like Windows' own, so the key can be seen and pressed there.
+    Inventory fake;
+    CHECK(rs::fakeInventory("rtl-dvbt", fake));
+    const Findings ff = rs::assess(fake);
+    CHECK(contains(ff.items[0].installTarget, "&MI_00\\"));
+}
+
 void testRtlWithNoDriverAtAll() {
     Inventory inv = machine();
     addRtl(inv, "USB\\VID_0BDA&PID_2838\\1", "", "", 28);
@@ -734,6 +790,7 @@ void testTheRealProbe() {
 int main() {
     testEmptyBus();
     testRtlOnTheTelevisionDriverNamesZadig();
+    testWrongDriverRtlOffersInterfaceZeroForTheOneClickInstall();
     testRtlWithNoDriverAtAll();
     testRtlOnWinUsbWithTheIrInterfaceInTrouble();
     testRtlBoundCorrectlyButNotListed();

@@ -430,7 +430,17 @@ Findings assess(const Inventory& inv) {
         }
         if (nodes.empty()) { continue; }
         const KnownDevice* d = findKnownDevice(nodes.front()->vid, nodes.front()->pid);
-        out.items.push_back(judge(*d, nodes, inv));
+        Finding f = judge(*d, nodes, inv);
+        // THE ONE-CLICK INSTALL'S TARGET: interface 0 of an RTL-SDR on the
+        // wrong driver. The elevated helper checks it again against the device.
+        if (f.kind == Kind::WrongDriver && f.family == kFamilyRtl) {
+            for (const UsbNode* n : nodes) {
+                if (n->interfaceNumber == 0 && !n->instanceId.empty()) {
+                    f.installTarget = n->instanceId;
+                }
+            }
+        }
+        out.items.push_back(std::move(f));
     }
 
     if (out.items.empty()) {
@@ -568,6 +578,19 @@ UsbNode node(std::uint16_t vid, std::uint16_t pid, const char* deviceId, int int
     n.pid = pid;
     n.deviceId = deviceId;
     n.interfaceNumber = interfaceNumber;
+    // The synthetic machines' instance ids follow Windows' shape: the parent's
+    // for the device node, an &MI_nn form for an interface.
+    if (interfaceNumber < 0) {
+        n.instanceId = deviceId;
+    } else {
+        // "USB\VID_0BDA&PID_2838\FAKE0001" -> "USB\VID_0BDA&PID_2838&MI_00\8&FAKE&0&0000"
+        const std::string d = deviceId;
+        const std::size_t cut = d.rfind('\\');
+        char mi[16];
+        std::snprintf(mi, sizeof(mi), "&MI_%02X", interfaceNumber);
+        n.instanceId = (cut == std::string::npos ? d + mi : d.substr(0, cut) + mi) +
+                       "\\8&FAKE&0&000" + std::to_string(interfaceNumber);
+    }
     n.isDeviceNode = interfaceNumber < 0;
     n.service = service;
     n.provider = provider;
@@ -784,6 +807,7 @@ Inventory collectInventory() {
             n.vid = id.vid;
             n.pid = id.pid;
             const std::wstring instance = instanceIdOf(info.DevInst);
+            n.instanceId = narrow(instance.c_str());
             const std::size_t mi = instance.find(L"&MI_");
             if (mi != std::wstring::npos && mi + 6 <= instance.size()) {
                 n.interfaceNumber = static_cast<int>(

@@ -380,7 +380,7 @@ if(WIN32)
     # device interface (never opening a device to list it), WinUSB for the
     # pipes. All three are inbox on Windows 10+, so the installer payload
     # contract (cascade.exe + SoapySDR.dll) does not change.
-    target_link_libraries(cascade_lib PUBLIC winusb setupapi cfgmgr32)
+    target_link_libraries(cascade_lib PUBLIC winusb setupapi cfgmgr32 newdev)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3
     # output (core/mp3_writer.cpp, 0.99.17).
     target_link_libraries(cascade_lib PUBLIC mf mfplat mfreadwrite mfuuid ole32)
