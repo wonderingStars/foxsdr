@@ -27,7 +27,9 @@
 //
 //   a whole report of this death by the in-process handler  -> nothing
 //   exit code 0 after the shutdown reached its last stage   -> nothing (clean)
-//   the session was closing                                 -> Session  (kept here)
+//   the session was closing - unless the start-up had
+//   already been silent past the watchdog's start-up
+//   budget, which is the next row (0.99.89)                 -> Session  (kept here)
 //   it ended before the first frame                         -> Startup  (sent)
 //   a crash exit code the handler never saw                 -> Crash    (sent)
 //   it had stopped drawing for longer than the watchdog's

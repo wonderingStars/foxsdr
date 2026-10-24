@@ -3633,7 +3633,16 @@ row and boundary in `tests/test_sentinel.cpp`):
    shutdown reached `closing the window`. (Exit code 0 *before* that stage is not
    clean: it is reported as a crash-class ending, `exit code 0 before the shutdown
    had finished`. A death after the marker with a crash code is still a crash.)
-4. The **session was closing** -> *session*, kept here.
+4. The **session was closing** -> *session*, kept here - **unless the start-up had
+   already hung** (since 0.99.89): before the first frame and silent for longer than
+   the watchdog's start-up budget (`kStartupThresholdMs`, 30 s), which goes on to 5.
+   A closing session explains an ending, not two minutes without a window before
+   it. The 0.99.88 RSP2 bundle of 2026-10-24 had four 0.99.81 processes, launched
+   within a minute of each other, all `building the application` and silent for 105 to 162 s,
+   ended together with exit code `0x40010004` while Windows was shutting down, and
+   all four filed as *session* and never sent. Within the budget, a start-up a
+   closing session cut short is still the session's (the same bundle's 0.99.88
+   process, 17 s in).
 5. It ended **before the first frame** (phase before *running*) -> *startup*, sent,
    whatever the exit code.
 6. **Closed by Windows as not responding** (exit code `0xCFFFFFFF`, since 0.99.87) ->
@@ -3781,7 +3790,12 @@ log off or shutdown in this application's situation (it is documented, not
 observed), that `SM_SHUTTINGDOWN` is already set when the sentinel wakes, that the
 sentinel itself outlives the application in a closing session at all, or what exit
 code the termination leaves. If the sentinel is ended first it writes nothing, which
-is the safe direction.
+is the safe direction. **Field evidence since (2026-10-24, inferred, not measured
+here):** the 0.99.88 RSP2 bundle holds five *session* reports of processes that
+never got past `building the application`, so had no window for `WM_ENDSESSION` to
+reach - the class can only have come from `SM_SHUTTINGDOWN`, which was therefore set
+when those sentinels woke, and the sentinels did outlive their applications. All
+five exit codes were `0x40010004`, still worded `unknown exit code`.
 
 ### One report per death
 

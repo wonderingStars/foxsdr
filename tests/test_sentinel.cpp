@@ -632,6 +632,71 @@ int main() {
         // ...but a normal exit during a session close is still just a clean exit.
         CHECK(decideSentinel(facts(crumb(Phase::ShutdownClosingWindow, 500, 100, 0, breadcrumb::kFlagSessionEnding), 0)).cls == C::None);
 
+        // --- a STARTUP that had already hung is not excused by the session closing ----
+        // The 0.99.88 RSP2 bundle (2026-10-24): four 0.99.81 processes, started within a
+        // minute of each other, all still "building the application" and silent their whole
+        // lives (105, 115, 149 and 162 s), ended together with 0x40010004 while Windows
+        // said it was shutting down - and every one was filed "ended as the session
+        // closed" and kept on the machine. A start-up past the watchdog's own start-up
+        // budget had hung before anybody closed anything; the session ending is only
+        // how it finally went.
+        {
+            const std::uint64_t budget = HangWatchdog::kStartupThresholdMs;
+            for (const std::uint64_t silent : {105000ull, 115000ull, 149000ull, 162000ull}) {
+                SentinelFacts f = facts(crumb(Phase::BuildingApp, 0, silent), 0x40010004ul);
+                f.osSessionEnding = true;
+                const SentinelVerdict v = decideSentinel(f);
+                CHECK(v.cls == C::Startup && v.upload() && !sentinelReasonIsLocalOnly(v.reason));
+                CHECK(contains(v.reason, kSentinelReasonStartup));
+                CHECK(contains(v.reason, "phase building the application"));
+                CHECK(contains(v.reason, "silent " + std::to_string(silent / 1000) + " s"));
+                CHECK(v.signatureTag == "sentinel:startup:building-app");
+            }
+            // Every phase before the first frame, and the page's own flag as well as the
+            // operating system's word.
+            for (const Phase p : {Phase::Starting, Phase::BuildingApp, Phase::CreatingWindow,
+                                  Phase::AwaitingFirstFrame}) {
+                const std::uint64_t frames = p == Phase::AwaitingFirstFrame ? 1 : 0;
+                CHECK(decideSentinel(facts(crumb(p, frames, budget + 1, 0, breadcrumb::kFlagSessionEnding), 1)).cls == C::Startup);
+                SentinelFacts f = facts(crumb(p, frames, budget + 1), 1);
+                f.osSessionEnding = true;
+                CHECK(decideSentinel(f).cls == C::Startup);
+            }
+            // THE BOUNDARY IS THE WATCHDOG'S: at the budget it is still a slow start that a
+            // closing session ended - kept here - and a millisecond past it, a hang.
+            {
+                SentinelFacts at = facts(crumb(Phase::BuildingApp, 0, budget), 0x40010004ul);
+                at.osSessionEnding = true;
+                CHECK(decideSentinel(at).cls == C::Session);
+                SentinelFacts past = facts(crumb(Phase::BuildingApp, 0, budget + 1), 0x40010004ul);
+                past.osSessionEnding = true;
+                CHECK(decideSentinel(past).cls == C::Startup);
+            }
+            // The same bundle's 0.99.88 process: 17 s into its start-up when the session
+            // closed. Within the budget, so the session's, as before.
+            {
+                SentinelFacts f = facts(crumb(Phase::BuildingApp, 0, 17000), 0x40010004ul);
+                f.osSessionEnding = true;
+                const SentinelVerdict v = decideSentinel(f);
+                CHECK(v.cls == C::Session && !v.upload() && sentinelReasonIsLocalOnly(v.reason));
+            }
+            // A freeze the watchdog already filed for that start-up covers it: one report
+            // per death, the one with every thread's stack.
+            {
+                SentinelFacts f = facts(crumb(Phase::AwaitingFirstFrame, 1, budget + 5000), 1);
+                f.osSessionEnding = true;
+                f.freezeReportExists = true;
+                CHECK(decideSentinel(f).cls == C::None);
+            }
+            // UNCHANGED: a RUNNING application silent past its threshold when the session
+            // closed is still the session's (the rule above, 90 s silent), and so is an
+            // unreadable page - with no phase there is no start-up to call hung.
+            CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 90000, 0, breadcrumb::kFlagSessionEnding), 1)).cls == C::Session);
+            SentinelFacts g = facts(breadcrumb::Snapshot{}, 0x40010004ul);
+            g.osSessionEnding = true;
+            CHECK(decideSentinel(g).cls == C::Session);
+        }
+
         // --- off means off; one report per death -----------------------------
         CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagReportsOff), kFastFail)).cls == C::None);
         CHECK(decideSentinel(facts(crumb(Phase::Running, 500, 100, 0, breadcrumb::kFlagReportsOff), 1)).cls == C::None);
