@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "core/i18n.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/telemetry.hpp"
 #include "core/utf8_text.hpp"
 #include "source/rtlsdr_source.hpp"
@@ -128,8 +129,15 @@ std::string familyForDriver(const std::string& driverKey) {
 //                                        04b4:8613 and 04b4:00f1 are the bare
 //                                        Cypress FX3 ids half the USB 3 world
 //                                        shares, so they are not claimed.
+//
+// NEVER DESTROYED (0.99.89, crash signature 74EEC22DE4163D64): collectInventory's
+// bus walk reads this on the probe's DETACHED worker (Probe::start), which can
+// still be running when main returns and the C runtime runs the static
+// destructors. A heap object nothing deletes outlives exit, like
+// source::rtlSdrUsbIds(); tests/test_radio_setup_exit.cpp holds both.
 const std::vector<KnownDevice>& knownDevices() {
-    static const std::vector<KnownDevice> table = []() {
+    static const std::vector<KnownDevice>* const table =
+        cascade::core::leakOnPurpose(new std::vector<KnownDevice>([]() {
         std::vector<KnownDevice> t = {
             {0x1d50, 0x60a1, kFamilyAirspy, "Airspy"},
             {0x03eb, 0x800c, kFamilyAirspyHf, "Airspy HF+"},
@@ -158,8 +166,8 @@ const std::vector<KnownDevice>& knownDevices() {
             t.push_back({id.vid, id.pid, kFamilyRtl, "RTL-SDR (RTL2832U)"});
         }
         return t;
-    }();
-    return table;
+    }()));
+    return *table;
 }
 
 const KnownDevice* findKnownDevice(std::uint16_t vid, std::uint16_t pid) {

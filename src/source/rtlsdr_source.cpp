@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/ppm_correction.hpp"
 
 namespace cascade::source {
@@ -309,8 +310,17 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
 // The dongles this driver opens. Every one is an RTL2832U; the list is the
 // set of USB ids those chips ship under, because Windows binds a driver per
 // id and an id that is not here can never have been bound to WinUSB.
+//
+// NEVER DESTROYED (0.99.89, crash signature 74EEC22DE4163D64): the radio-setup
+// probe reads this from a DETACHED worker (core/radio_setup.cpp, Probe::start)
+// that can still be scanning when main returns, and the C runtime runs the
+// static destructors while every other thread is still alive. As a plain
+// function-local static it was freed under that worker, whose next
+// ids[matched] read address zero. A heap object nothing deletes outlives
+// exit; tests/test_radio_setup_exit.cpp holds it.
 const std::vector<usb::UsbId>& rtlSdrUsbIds() {
-    static const std::vector<usb::UsbId> ids = {
+    static const std::vector<usb::UsbId>* const ids =
+        cascade::core::leakOnPurpose(new std::vector<usb::UsbId>{
         {0x0bda, 0x2832},  // Realtek RTL2832U, generic
         {0x0bda, 0x2838},  // Realtek RTL2832U OEM - the commonest by far
         {0x0413, 0x6680}, {0x0413, 0x6f0f}, {0x0458, 0x707f},
@@ -325,8 +335,8 @@ const std::vector<usb::UsbId>& rtlSdrUsbIds() {
         {0x1d19, 0x1101}, {0x1d19, 0x1102}, {0x1d19, 0x1103}, {0x1d19, 0x1104},
         {0x1f4d, 0xa803}, {0x1f4d, 0xb803}, {0x1f4d, 0xc803}, {0x1f4d, 0xd286},
         {0x1f4d, 0xd803},
-    };
-    return ids;
+    });
+    return *ids;
 }
 
 std::vector<NativeDeviceInfo> enumerateRtlSdr() {
