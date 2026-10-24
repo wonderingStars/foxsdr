@@ -143,6 +143,11 @@ bool parseUpdateManifest(const std::string& json, const std::string& currentVers
 bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersion,
                     const std::string& channel, UpdateInfo& out, std::string& error);
 
+// The channel parameter for the update-channel setting (AppConfig::updateChannel,
+// 0.99.88): "beta" for "beta", and "" - the stable answer every copy has always
+// asked for - for anything else. Pure.
+std::string updateChannelParam(const std::string& setting);
+
 // Where the check goes. Overridable with FOXSDR_UPDATE_URL so a test can point
 // at a local stub, and so the endpoint can move without orphaning binaries.
 std::string updateEndpoint();

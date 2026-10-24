@@ -845,6 +845,8 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
     getBool(j, "updateCheckEnabled", out.updateCheckEnabled);
+    getString(j, "updateChannel", out.updateChannel);
+    if (out.updateChannel != "beta") { out.updateChannel = "stable"; }
     getStringArray(j, "messagesSeen", out.messagesSeen);
     getBool(j, "telemetryEnabled", out.telemetryEnabled);
     getString(j, "telemetryInstallId", out.telemetryInstallId);
@@ -1477,6 +1479,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
     j["updateCheckEnabled"] = cfg.updateCheckEnabled;
+    j["updateChannel"] = cfg.updateChannel;
     j["messagesSeen"] = cfg.messagesSeen;
     j["telemetryEnabled"] = cfg.telemetryEnabled;
     j["telemetryInstallId"] = cfg.telemetryInstallId;

@@ -111,6 +111,18 @@ const char* const kHostileVersions[] = {
     "0.58.0-nightly\xC3\xA9",   // a letter outside the grammar (UTF-8 e-acute)
 };
 
+// THE CHANNEL PARAMETER (0.99.88): only the exact setting "beta" asks for every
+// release; everything else asks for stable, which is "" - the parameter every
+// copy before the setting sent, so foxsdr.com answers them alike.
+void testUpdateChannelParameter() {
+    CHECK(cascade::core::updateChannelParam("beta") == "beta");
+    CHECK(cascade::core::updateChannelParam("stable").empty());
+    CHECK(cascade::core::updateChannelParam("").empty());
+    CHECK(cascade::core::updateChannelParam("BETA").empty());
+    CHECK(cascade::core::updateChannelParam("nightly").empty());
+    CHECK(cascade::core::updateChannelParam("beta&x=1").empty());
+}
+
 void testVersionOrdering() {
     using cascade::core::compareVersions;
     CHECK(compareVersions("0.55.0", "0.54.0") == 1);
@@ -988,6 +1000,7 @@ void testEndpointIsHttpsAndOnTheProjectsDomain() {
 }  // namespace
 
 int main() {
+    testUpdateChannelParameter();
     testVersionOrdering();
     testAGoodManifestIsAccepted();
     testTheVersionDecisionIsMadeHereNotByTheServer();

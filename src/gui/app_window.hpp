@@ -5878,6 +5878,8 @@ private:
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;
+    // AppConfig::updateChannel (0.99.88): "stable" or "beta".
+    std::string updateChannel_ = "stable";
     // The ids of the team messages whose Seen key was pressed, oldest first
     // (AppConfig::messagesSeen, 0.99.79). Local only; pruned to the ids the last successful
     // check still carried (pollUpdateAsync). "Not now" on the update banner

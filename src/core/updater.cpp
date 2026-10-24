@@ -344,6 +344,10 @@ std::string updateEndpoint() {
     return "https://foxsdr.com/api/update";
 }
 
+std::string updateChannelParam(const std::string& setting) {
+    return setting == "beta" ? std::string("beta") : std::string();
+}
+
 bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersion,
                     const std::string& channel, UpdateInfo& out, std::string& error) {
     out = UpdateInfo{};

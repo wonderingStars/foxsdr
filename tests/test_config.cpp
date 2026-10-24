@@ -485,6 +485,26 @@ int main() {
         checkEqual(out, AppConfig{});
     }
 
+    // --- the update channel (0.99.88): beta, stable, and anything else ------
+    // Read as written for the two values the setting has; any other text, and
+    // a file that predates the setting, reads as stable - the channel every copy
+    // asked for before the setting existed.
+    {
+        const auto loadWith = [](const char* name, const char* body) {
+            std::ofstream(p(name), std::ios::binary) << body;
+            AppConfig out;
+            std::string err;
+            CHECK(ConfigStore::load(p(name), out, err));
+            return out.updateChannel;
+        };
+        CHECK(loadWith("ch_beta.json", "{\"updateChannel\": \"beta\"}") == "beta");
+        CHECK(loadWith("ch_stable.json", "{\"updateChannel\": \"stable\"}") == "stable");
+        CHECK(loadWith("ch_odd.json", "{\"updateChannel\": \"nightly\"}") == "stable");
+        CHECK(loadWith("ch_case.json", "{\"updateChannel\": \"BETA\"}") == "stable");
+        CHECK(loadWith("ch_none.json", "{\"updateCheckEnabled\": true}") == "stable");
+        CHECK(AppConfig{}.updateChannel == "stable");
+    }
+
     // --- startupState: WHETHER a window was open goes, WHERE it sat stays ----
     //
     // The application starts on the main screen alone whatever the file
@@ -2371,6 +2391,9 @@ int main() {
                 {"displayOpen", [](AppConfig& c) { c.displayOpen = true; }},
                 {"keyBindings", [](AppConfig& c) { c.keyBindings = {"mute=Ctrl+Shift+M"}; }},
                 {"updateCheckEnabled", [](AppConfig& c) { c.updateCheckEnabled = false; }},
+                // The update channel (0.99.88): two radio keys in the Updates
+                // section, which save nothing themselves.
+                {"updateChannel", [](AppConfig& c) { c.updateChannel = "beta"; }},
                 // A team message marked Seen (0.99.79): a press on the card's Seen key.
                 // The press asks for a save of its own, but the prune that follows a
                 // check does not, and the periodic writer is what catches that one.

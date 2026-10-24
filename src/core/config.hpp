@@ -1221,6 +1221,14 @@ struct AppConfig {
     // and the two share nothing.
     bool updateCheckEnabled = true;
 
+    // WHICH RELEASES THE CHECK OFFERS (0.99.88): "stable", the default - the
+    // release the project recommends to everyone, which foxsdr.com may hold back
+    // while a new one proves itself - or "beta", every release the day it is
+    // published. Anything else in the file reads as "stable". It travels as the
+    // check's channel parameter (core::updateChannelParam: "" or "beta"); the
+    // check still sends the running version and nothing else.
+    std::string updateChannel = "stable";
+
     // The ids of the team messages (core/updater.hpp, TeamMessage) whose "Seen" key was
     // pressed, oldest first (0.99.79). "They click Seen and it doesn't show up again" is
     // this list: a message whose id is in it is not drawn.

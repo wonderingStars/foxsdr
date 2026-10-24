@@ -923,7 +923,7 @@ bool configsEqual(const cascade::core::AppConfig& a, const cascade::core::AppCon
            a.transmitSplitHz == b.transmitSplitHz && a.transmitToneHz == b.transmitToneHz &&
            a.transmitMonitor == b.transmitMonitor && a.transmitArgs == b.transmitArgs &&
            a.railBank == b.railBank && a.keyBindings == b.keyBindings &&
-           a.updateCheckEnabled == b.updateCheckEnabled &&
+           a.updateCheckEnabled == b.updateCheckEnabled && a.updateChannel == b.updateChannel &&
            // The team messages marked Seen (0.99.79): the Seen key asks for a save of its
            // own, but the prune that follows an update check (pollUpdateAsync) does not -
            // and a press whose save is lost to a crash must still reach the file from here.
@@ -1270,6 +1270,7 @@ AppWindow::AppWindow(std::string configPath, bool announceConfig)
             telemetryStartup(cfg);
             testerUsageStartup(cfg);
             updateCheckEnabled_ = cfg.updateCheckEnabled;
+            updateChannel_ = cfg.updateChannel;
             messagesSeen_ = cfg.messagesSeen;
         } else {
             std::fprintf(stderr, "cascade: %s\n", err.c_str());
@@ -9267,12 +9268,14 @@ void AppWindow::startUpdateCheck() {
     updateError_.clear();
     const std::string endpoint = cascade::core::updateEndpoint();
     const std::string version = cascade::versionString();
+    // Stable ("") unless the person chose every release (0.99.88).
+    const std::string channel = cascade::core::updateChannelParam(updateChannel_);
     // NOTHING OF `this` IS CAPTURED: the outcome comes back by value, which is
     // what lets ~AppWindow abandon a check stalled inside WinHTTP instead of
     // waiting out its timeouts (see core::UpdateCheckTask).
-    updateCheck_.start([endpoint, version]() {
+    updateCheck_.start([endpoint, version, channel]() {
         cascade::core::UpdateCheckOutcome o;
-        o.ok = cascade::core::checkForUpdate(endpoint, version, "", o.info, o.error);
+        o.ok = cascade::core::checkForUpdate(endpoint, version, channel, o.info, o.error);
         return o;
     });
 }
@@ -30898,6 +30901,31 @@ void AppWindow::drawUpdatesSection() {
             startUpdateCheck();
         }
     }
+    // WHICH RELEASES (0.99.88). Not for a Store copy: its updates are the
+    // Store's, which certifies every one and is the slower channel already.
+    if (!packaged) {
+        const bool wasBeta = updateChannel_ == "beta";
+        bool beta = wasBeta;
+        if (ImGui::RadioButton(trId("Stable releases"), !beta)) { beta = false; }
+        ImGui::SameLine();
+        if (ImGui::RadioButton(trId("Every release (beta)"), beta)) { beta = true; }
+        cascade::gui::census::note("updates:channel-", beta ? "beta" : "stable");
+        if (beta != wasBeta) {
+            updateChannel_ = beta ? "beta" : "stable";
+            cascade::core::diagLogf("updates: channel set to %s", updateChannel_.c_str());
+            // A CHANGE ASKS AGAIN, as a re-tick does: the answer on screen was
+            // for the other channel.
+            if (updateCheckEnabled_ && !updatePending_) {
+                update_ = cascade::core::UpdateInfo{};
+                updateError_.clear();
+                updateStarted_ = false;
+                startUpdateCheck();
+            }
+        }
+        ImGui::TextDisabled("%s", tr("Stable is the release the FoxSDR team recommends to "
+                                        "everyone; beta is every release the day it is "
+                                        "published."));
+    }
     if (packaged) {
         // HONEST ABOUT WHO IS ASKED: Microsoft's Store service, through
         // Windows, identifying the app by the package identity Windows holds.
@@ -32960,6 +32988,7 @@ void AppWindow::telemetryJournal(cascade::core::AppConfig& cfg) {
     // GUI's copy of the config is written back before the file is saved. It
     // has nothing to do with telemetry and shares no state with it.
     cfg.updateCheckEnabled = updateCheckEnabled_;
+    cfg.updateChannel = updateChannel_;
     // ...and so does the list of team messages marked Seen (0.99.79), for the same reason.
     cfg.messagesSeen = messagesSeen_;
 
