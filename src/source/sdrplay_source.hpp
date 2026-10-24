@@ -918,6 +918,14 @@ private:
         bool faulted = false;
         bool deviceDead = false;
         std::string deadWhat;
+        // TRUE WHILE THE LATCH ABOVE IS ONE THE NEXT SUCCESSFUL Init SUPERSEDES
+        // (0.99.89): a fault the service raised about the STREAM - today only
+        // DeviceFailure - with the device still attached and selected. The
+        // 0.99.88 RSP2 bundle: the service raised it mid-overload and kept
+        // delivering, and every START after it found this latch still up and
+        // read nothing. Any other fault clears the flag, so a removal or a lost
+        // master that follows a failure is still judged as the worse one.
+        bool faultEndsWithStream = false;
 
         // THE CALLBACK'S HALF OF THE HEALTH WINDOW, LOCK-FREE (0.99.32).
         //
@@ -1172,7 +1180,10 @@ private:
     sdrplay_abi::RxChannelParamsT* chParamsLocked() const;
 
     static void setErrorOn(Link& link, std::string msg);
-    static void noteFaultOn(Link& link, const char* what, const std::string& detail);
+    // endsWithStream: see Link::faultEndsWithStream. False for every fault
+    // but the service's DeviceFailure event.
+    static void noteFaultOn(Link& link, const char* what, const std::string& detail,
+                            bool endsWithStream = false);
 
     // TRUE WHEN NO THREAD OF OURS MAY ENTER THE VENDOR DLL FOR THIS DEVICE
     // AGAIN - the whole of the rule the file header states, in one place so

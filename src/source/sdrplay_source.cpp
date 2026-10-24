@@ -1195,13 +1195,17 @@ void SdrPlaySource::setErrorOn(Link& link, std::string msg) {
     link.lastError = std::move(msg);
 }
 
-void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string& detail) {
+void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string& detail,
+                                bool endsWithStream) {
     {
         std::lock_guard<std::mutex> lk(link.errorMutex);
         link.lastError = std::string(what) + ": " + detail;
         link.faulted = true;
         link.deviceDead = true;
         link.deadWhat = what;
+        // Assigned, not or-ed: the LATEST fault decides whether a restart may
+        // lower the latch, so a removal after a failure stays a removal.
+        link.faultEndsWithStream = endsWithStream;
     }
     // Wake a read() that is parked: a dead device must not cost the pipeline
     // a whole kReadWait before it hears about it.
@@ -1282,6 +1286,7 @@ void SdrPlaySource::clearError() {
     link_->faulted = false;
     link_->deviceDead = false;
     link_->deadWhat.clear();
+    link_->faultEndsWithStream = false;
 }
 
 const char* SdrPlaySource::lastError() const {
@@ -1732,7 +1737,11 @@ void SdrPlaySource::eventCallback(abi::EventT eventId, abi::TunerSelectT tuner,
             break;
 
         case abi::DeviceFailure:
-            noteFaultOn(link, "device failure", "the SDRplay service reported a device failure");
+            // A fault of THIS STREAM (0.99.89): the next successful Init
+            // supersedes it - see startStreamingLocked. The 0.99.88 RSP2 bundle
+            // had the service go on delivering after raising it.
+            noteFaultOn(link, "device failure", "the SDRplay service reported a device failure",
+                        /*endsWithStream=*/true);
             link.pendingEventLogs.fetch_or(kEventLogFailure, std::memory_order_acq_rel);
             break;
 
@@ -2158,6 +2167,39 @@ bool SdrPlaySource::startStreamingLocked() {
     cbs.StreamBCbFn = &SdrPlaySource::streamCallbackB;
     cbs.EventCbFn = &SdrPlaySource::eventCallback;
 
+    // A FAULT THE LAST STREAM RAISED ABOUT ITSELF ENDS WITH IT (0.99.89).
+    //
+    // The 0.99.88 RSP2 bundle: the service raised DeviceFailure during an
+    // ADC-overload storm and went on delivering. Every START after it made a
+    // successful Init, but the latch from the old stream was still up, so the
+    // pipeline's source thread read one chunk, saw faulted() and left - and
+    // each following stop's health line said "with samples 20, timeouts 0",
+    // the rest overflows. Only open() lowered the latch.
+    //
+    // Lowered HERE, BEFORE Init, not after it: once Init returns, the new
+    // stream's own event callback may already have raised a fault of its own,
+    // and that one must never be erased. Nothing of the old stream can still
+    // write the slot: start() reaches this only with initialised_ false after
+    // an Uninit that answered (a refused or abandoned one strands the Link and
+    // makes the vendor unreachable, which start() refuses before this). Only
+    // a stream fault (Link::faultEndsWithStream) is lowered - a removal, a lost
+    // master, a stall or a dead service still needs the radio picked again or
+    // the service restarted.
+    bool supersededFault = false;
+    std::string supersededWhat;
+    {
+        std::lock_guard<std::mutex> ek(link_->errorMutex);
+        if (link_->faulted && link_->faultEndsWithStream) {
+            supersededFault = true;
+            supersededWhat = link_->deadWhat;
+            link_->lastError.clear();
+            link_->faulted = false;
+            link_->deviceDead = false;
+            link_->deadWhat.clear();
+            link_->faultEndsWithStream = false;
+        }
+    }
+
     // The one cbContext the API takes is the LINK - see the header. `cbs`
     // itself is a stack local because the API copies the table; the reference
     // does the same.
@@ -2165,6 +2207,17 @@ bool SdrPlaySource::startStreamingLocked() {
     if (err != abi::Success) {
         link_->accepting.store(false, std::memory_order_relaxed);
         link_->dev = nullptr;
+        // A REFUSED Init has not replaced the stream that failed, so its fault
+        // goes back up: the pipeline then shows FAIL rather than a receiver
+        // that calls itself running on nothing. The message below is the newer
+        // truth and is the one shown.
+        if (supersededFault) {
+            std::lock_guard<std::mutex> ek(link_->errorMutex);
+            link_->faulted = true;
+            link_->deviceDead = true;
+            link_->deadWhat = supersededWhat;
+            link_->faultEndsWithStream = true;
+        }
         setError("SDRplay Init failed: " + errText(a, err));
         core::diagWarnf("source: SDRplay start failed - %s", lastError());
         return false;
@@ -2177,6 +2230,11 @@ bool SdrPlaySource::startStreamingLocked() {
                            std::memory_order_relaxed);
     initialised_ = true;
     running_.store(true, std::memory_order_relaxed);
+    if (supersededFault) {
+        // Said, so a field log shows the radio coming back and why it may.
+        core::diagLogf("source: SDRplay started again after a %s - the new stream starts clean",
+                       supersededWhat.c_str());
+    }
     return true;
 }
 
@@ -2413,6 +2471,8 @@ bool SdrPlaySource::start() {
             link_->lastError = sdrPlaySessionLostSentence();
             link_->faulted = true;
             link_->deviceDead = true;
+            // A lost session is never lowered by a restart, whatever came first.
+            link_->faultEndsWithStream = false;
             if (link_->deadWhat.empty()) { link_->deadWhat = "start"; }
         }
         // Shorter than the sentence: a log line is cut at 191 bytes.

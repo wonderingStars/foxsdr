@@ -1866,6 +1866,130 @@ void testDeviceFailureAndMasterLossAlsoFault() {
     }
 }
 
+// A DEVICE FAILURE BELONGS TO THE STREAM THAT RAISED IT (the 0.99.88 RSP2
+// diagnostics bundle, 2026-10-24). The service raised DeviceFailure in the
+// middle of an ADC-overload storm and then went on delivering - tens of
+// thousands of blocks into a ring nobody drained. Every START after it entered
+// a fresh, successful Init, yet the Link's latch from the OLD stream was still
+// up: the pipeline's source thread read one chunk, saw faulted(), and left.
+// The field's health lines say exactly that, once per START:
+//   reads 11136, with samples 20, timeouts 0, overflows 11117
+// A new stream starts with a clean slate; if the radio really is broken, the
+// new stream says so itself.
+void testADeviceFailureIsClearedByTheNextStart() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1706012347", abi::kRsp2);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    abi::EventParamsT p{};
+    fake.fireEvent(abi::DeviceFailure, p);
+    CHECK(src.faulted());
+    CHECK(src.deviceDead());
+
+    src.stop();
+    CHECK(src.start());
+    CHECK(!src.faulted());
+    CHECK(!src.deviceDead());
+    CHECK(src.faultedWhile().empty());
+    CHECK(std::string(src.lastError()).empty());
+    CHECK(fake.countStarting("Init") == 2);
+
+    // And the new stream's samples reach read().
+    std::vector<short> xi(512, 1000);
+    std::vector<short> xq(512, -1000);
+    fake.pushSamples(xi.data(), xq.data(), 512);
+    std::vector<std::complex<float>> buf(512);
+    CHECK(src.read(buf.data(), buf.size()) == 512);
+
+    // A failure of the NEW stream is its own fault, raised as before.
+    fake.fireEvent(abi::DeviceFailure, p);
+    CHECK(src.faulted());
+    CHECK(src.faultedWhile() == "device failure");
+    src.stop();
+}
+
+// THE LATCH IS ONLY LOWERED BY A START THAT WORKED. An Init that is refused
+// after a device failure leaves the source faulted, so the pipeline still
+// shows FAIL instead of a receiver that calls itself running on nothing.
+void testADeviceFailureSurvivesAStartWhoseInitFails() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1706012347", abi::kRsp2);
+    SdrPlaySource src;
+    CHECK(openOn(src, fake));
+    CHECK(src.start());
+    abi::EventParamsT p{};
+    fake.fireEvent(abi::DeviceFailure, p);
+    src.stop();
+
+    fake.initResult = abi::Fail;
+    CHECK(!src.start());
+    CHECK(src.faulted());
+    CHECK(src.deviceDead());
+    CHECK(src.faultedWhile() == "device failure");
+    // The newer truth is what the panel shows.
+    CHECK(std::string(src.lastError()).find("Init failed") != std::string::npos);
+
+    // ...and a later start that does work clears it after all.
+    fake.initResult = abi::Success;
+    CHECK(src.start());
+    CHECK(!src.faulted());
+    src.stop();
+}
+
+// NOT EVERY FAULT IS A STREAM'S. An unplugged RSP, or an RSPduo slave whose
+// master has gone, is not brought back by Init on the same handle: the radio
+// has to be picked again (which reopens it, and open() clears the latch).
+// Those keep the source faulted across a restart, as they always did.
+void testRemovalAndMasterLossSurviveARestart() {
+    {
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        fake.fireDeviceRemoved();
+        src.stop();
+        (void) src.start();
+        CHECK(src.faulted());
+        CHECK(src.deviceDead());
+        CHECK(src.faultedWhile() == "device removed");
+        src.stop();
+    }
+    {
+        FakeSdrPlayApi fake;
+        fake.addRspDuo("1809001ABC");
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        abi::EventParamsT p{};
+        p.rspDuoModeParams.modeChangeType = abi::MasterDllDisappeared;
+        fake.fireEvent(abi::RspDuoModeChange, p);
+        src.stop();
+        (void) src.start();
+        CHECK(src.faulted());
+        CHECK(src.faultedWhile() == "master stream lost");
+        src.stop();
+    }
+    {
+        // A DEVICE FAILURE FOLLOWED BY A REMOVAL is a removal: the later, worse
+        // fault is the one the restart is judged by.
+        FakeSdrPlayApi fake;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource src;
+        CHECK(openOn(src, fake));
+        CHECK(src.start());
+        abi::EventParamsT p{};
+        fake.fireEvent(abi::DeviceFailure, p);
+        fake.fireDeviceRemoved();
+        src.stop();
+        (void) src.start();
+        CHECK(src.faulted());
+        CHECK(src.faultedWhile() == "device removed");
+        src.stop();
+    }
+}
+
 void testOverloadIsCountedAndAcknowledged() {
     FakeSdrPlayApi fake;
     fake.addDevice("1811003EFB", abi::kRsp1A);
@@ -4146,6 +4270,9 @@ int main() {
     testAWindowWithServiceGapsIsWrittenAsAWarning();
     testDeviceRemovedFaultsTheSource();
     testDeviceFailureAndMasterLossAlsoFault();
+    testADeviceFailureIsClearedByTheNextStart();
+    testADeviceFailureSurvivesAStartWhoseInitFails();
+    testRemovalAndMasterLossSurviveARestart();
     testOverloadIsCountedAndAcknowledged();
     testOverloadAckFollowsALiveTunerSwap();
     testOverloadDuringRetuneNeverOverlapsTheVendorCall();
