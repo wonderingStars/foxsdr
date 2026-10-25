@@ -143,8 +143,11 @@ namespace wu = cascade::core::winusb;
 // INSTALL DRIVER: start `cascade --install-winusb <id> --result <file>` through
 // the shell's "runas" verb - one Windows permission prompt - and wait for it on
 // a thread of its own. The prompt is a person reading a dialog, so the shell
-// call goes through runShellOpen and the watchdog's user-paced pause, exactly
-// as the in-app installer launch does (gui/shell_open.hpp).
+// call goes through runShellOpenResponsive and the watchdog's user-paced pause,
+// exactly as the in-app installer launch does (gui/shell_open.hpp): ShellExecuteEx
+// waits for the elevation prompt without taking messages, and made on the GUI
+// thread that greyed the window "(Not Responding)" behind the prompt
+// (gui/shell_open.cpp).
 void AppWindow::radioSetupInstallDriver(const std::string& instanceId) {
     if (driverInstall_ && !driverInstall_->done.load()) { return; }
     auto job = std::make_shared<DriverInstallJob>();
@@ -208,7 +211,7 @@ void AppWindow::radioSetupInstallDriver(const std::string& instanceId) {
     sei.lpParameters = paramsW.c_str();
     sei.nShow = SW_HIDE;
     DWORD launchError = 0;
-    const bool launched = cascade::gui::runShellOpen(watchdogShellHooks(), [&]() -> bool {
+    const bool launched = cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&]() -> bool {
         const bool ok = ::ShellExecuteExW(&sei) != FALSE;
         if (!ok) { launchError = ::GetLastError(); }
         return ok;

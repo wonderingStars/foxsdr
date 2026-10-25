@@ -22,8 +22,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -34,6 +36,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <objbase.h>
+#include <shellapi.h>
 #endif
 
 namespace {
@@ -167,6 +171,157 @@ void checkInstallerPathNonAscii() {
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// runShellOpenResponsive (0.99.91): the same contract, the call on a thread of its own.
+// Whether the window stays responsive meanwhile is measured with a real window and a real
+// watchdog in test_hung_window_excuse.cpp (cases 5 and 6); this holds everything else.
+// ---------------------------------------------------------------------------
+
+// The bracket is taken and released on the CALLING thread - the watchdog's GUI thread, whose
+// frame timer the hooks also tell - and the call runs between them on another thread.
+void checkResponsiveBracketAndThreads() {
+    std::mutex m;
+    std::vector<std::string> log;
+    std::thread::id pauseOn, callOn, resumeOn;
+    cascade::gui::ShellPauseHooks hooks;
+    hooks.pause = [&] {
+        std::lock_guard<std::mutex> lock(m);
+        log.push_back("pause");
+        pauseOn = std::this_thread::get_id();
+    };
+    hooks.resume = [&] {
+        std::lock_guard<std::mutex> lock(m);
+        log.push_back("resume");
+        resumeOn = std::this_thread::get_id();
+    };
+    const bool ok = cascade::gui::runShellOpenResponsive(hooks, [&] {
+        std::lock_guard<std::mutex> lock(m);
+        log.push_back("shell");
+        callOn = std::this_thread::get_id();
+        return true;
+    });
+    CHECK(ok);
+    CHECK((log == std::vector<std::string>{"pause", "shell", "resume"}));
+    CHECK(pauseOn == std::this_thread::get_id());
+    CHECK(resumeOn == std::this_thread::get_id());
+#if defined(_WIN32)
+    CHECK(callOn != std::this_thread::get_id());
+#else
+    CHECK(callOn == std::this_thread::get_id());  // off Windows it is runShellOpen
+#endif
+}
+
+void checkResponsiveResultAndThrow() {
+    cascade::gui::ShellPauseHooks none;
+    CHECK(cascade::gui::runShellOpenResponsive(none, [] { return true; }));
+    CHECK(!cascade::gui::runShellOpenResponsive(none, [] { return false; }));
+    CHECK(!cascade::gui::runShellOpenResponsive(none, nullptr));
+
+    // An exception thrown on the worker comes back as itself, and the pause is released.
+    int paused = 0;
+    int resumed = 0;
+    cascade::gui::ShellPauseHooks hooks;
+    hooks.pause = [&paused] { ++paused; };
+    hooks.resume = [&resumed] { ++resumed; };
+    std::string what;
+    try {
+        (void)cascade::gui::runShellOpenResponsive(hooks, []() -> bool {
+            throw std::runtime_error("the shell threw, off the GUI thread");
+        });
+    } catch (const std::runtime_error& e) {
+        what = e.what();
+    }
+    CHECK(what == "the shell threw, off the GUI thread");
+    CHECK(paused == 1 && resumed == 1);
+}
+
+#if defined(_WIN32)
+// Posted input and quit requests belong to the outer frame loop.
+void checkResponsivePostedMessages() {
+    MSG message{};
+    ::PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE); // create this thread's queue
+    const DWORD caller = ::GetCurrentThreadId();
+    cascade::gui::ShellPauseHooks none;
+    CHECK(cascade::gui::runShellOpenResponsive(none, [caller] {
+        const bool posted = ::PostThreadMessageW(caller, WM_APP + 42, 123, 456) != FALSE;
+        ::Sleep(300); // allow several iterations of the waiting pump
+        return posted;
+    }));
+    CHECK(::PeekMessageW(&message, nullptr, WM_APP + 42, WM_APP + 42, PM_REMOVE) != FALSE);
+    CHECK(message.message == WM_APP + 42 && message.wParam == 123 && message.lParam == 456);
+    ::PostQuitMessage(17);
+    CHECK(cascade::gui::runShellOpenResponsive(none, [] { ::Sleep(300); return true; }));
+    message = {};
+    CHECK(::PeekMessageW(&message, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) != FALSE);
+    CHECK(message.message == WM_QUIT && message.wParam == 17);
+}
+
+// THE WORKER IS AN STA, as ShellExecute's documentation asks ("CoInitializeEx(NULL,
+// COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)"): some shell extensions need one.
+void checkResponsiveApartment() {
+    APTTYPE type = APTTYPE_MTA;
+    APTTYPEQUALIFIER qualifier = APTTYPEQUALIFIER_NONE;
+    HRESULT hr = E_FAIL;
+    cascade::gui::ShellPauseHooks none;
+    (void)cascade::gui::runShellOpenResponsive(none, [&] {
+        hr = ::CoGetApartmentType(&type, &qualifier);
+        return true;
+    });
+    CHECK(SUCCEEDED(hr));
+    CHECK(type == APTTYPE_STA || type == APTTYPE_MAINSTA);
+}
+
+// REAL SHELL CALLS through it, shaped like the two in the product: a refusal whose reason is
+// read with GetLastError inside the call (the radio setup's INSTALL DRIVER reads it there), and
+// a launch that starts a process (the installer key). Neither shows anything: the refusal is a
+// file that does not exist with SEE_MASK_FLAG_NO_UI, the launch a hidden cmd.exe that exits 7.
+void checkResponsiveRealShellExecute() {
+    cascade::gui::ShellPauseHooks none;
+    DWORD error = 0;
+    const bool refused = !cascade::gui::runShellOpenResponsive(none, [&]() -> bool {
+        SHELLEXECUTEINFOW sei{};
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        sei.lpVerb = L"open";
+        sei.lpFile = L"C:\\foxsdr-no-such-folder\\no-such-installer.exe";
+        sei.nShow = SW_HIDE;
+        const bool ok = ::ShellExecuteExW(&sei) != FALSE;
+        if (!ok) { error = ::GetLastError(); }
+        return ok;
+    });
+    CHECK(refused);
+    CHECK(error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND);
+    if (!refused || (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)) {
+        std::printf("  refusal: Windows error %lu\n", static_cast<unsigned long>(error));
+    }
+
+    wchar_t cmd[MAX_PATH] = {0};
+    ::GetSystemDirectoryW(cmd, MAX_PATH);
+    const std::wstring cmdExe = std::wstring(cmd) + L"\\cmd.exe";
+    HANDLE process = nullptr;
+    const bool started = cascade::gui::runShellOpenResponsive(none, [&]() -> bool {
+        SHELLEXECUTEINFOW sei{};
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        sei.lpVerb = L"open";
+        sei.lpFile = cmdExe.c_str();
+        sei.lpParameters = L"/c exit 7";
+        sei.nShow = SW_HIDE;
+        const bool ok = ::ShellExecuteExW(&sei) != FALSE;
+        process = sei.hProcess;
+        return ok;
+    });
+    CHECK(started && process != nullptr);
+    if (process != nullptr) {
+        CHECK(::WaitForSingleObject(process, 10000) == WAIT_OBJECT_0);
+        DWORD code = 0;
+        ::GetExitCodeProcess(process, &code);
+        CHECK(code == 7u);
+        ::CloseHandle(process);
+    }
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -176,6 +331,13 @@ int main() {
     checkWatchdogPauseCounting();
 #if defined(_WIN32)
     checkInstallerPathNonAscii();
+#endif
+    checkResponsiveBracketAndThreads();
+    checkResponsiveResultAndThrow();
+#if defined(_WIN32)
+    checkResponsivePostedMessages();
+    checkResponsiveApartment();
+    checkResponsiveRealShellExecute();
 #endif
     return testSummary("test_shell_open");
 }

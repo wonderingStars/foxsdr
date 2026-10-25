@@ -24,6 +24,21 @@
 // FOXSDR_TEST_TAKES_POINTER=1 (see main) and are counted as skipped otherwise.
 // 1 and 3 fail without the change (the break-it check: both read 0 reports).
 //
+// THE SECOND FIELD CASE (0.99.89, 2026-10-25): "freeze: the frame was in user-wait", stalled in
+// AppWindow::launchInstaller -> ShellExecuteW -> windows.storage.dll -> a plain kernel wait. The
+// update banner's install key waits for SmartScreen, an antivirus check or an elevation prompt,
+// and ShellExecute does that wait WITHOUT taking messages - so Windows greyed a healthy window
+// "(Not Responding)" (which is very likely how 35ED0AF2's users came to close theirs) and, since
+// 0.99.87, the watchdog reported it. Since 0.99.91 the shell call runs on a thread of its own
+// (gui::runShellOpenResponsive) while the GUI thread waits taking sent messages:
+//   5. a shell call that blocks for longer than Windows' verdict, made through
+//      runShellOpenResponsive under the same user-paced pause: the window is NEVER called hung
+//      while it lasts, nothing is reported, and the call's answer comes back;
+//   6. a SendMessage from another thread to that window during the call is answered (a shell
+//      dialog owned by the window, or a broadcast, cannot deadlock against the wait).
+// 5 and 6 fail when the call is made inline on the GUI thread, as before 0.99.91 (the break-it
+// check: the window reads hung and one report is written; the SendMessage times out).
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
 #include <chrono>
@@ -35,6 +50,7 @@
 #include <thread>
 
 #include "core/hang_watchdog.hpp"
+#include "gui/shell_open.hpp"
 #include "test_check.hpp"
 
 #if defined(_WIN32)
@@ -173,6 +189,52 @@ int main() {
             return n;
         });
         CHECK(n == 0u);
+    }
+
+    // --- 5 and 6. a shell call that blocks past Windows' verdict, made off the GUI thread -----
+    // The call itself only sleeps: what ShellExecuteW does while SmartScreen, an antivirus check
+    // or an elevation prompt is answered, as far as the calling thread is concerned. Meanwhile
+    // another thread asks Windows about the window every 100 ms, and sends it a message halfway.
+    {
+        std::atomic<bool> everHung{false};
+        std::atomic<bool> sentAnswered{false};
+        std::atomic<bool> callOffGuiThread{false};
+        bool answer = false;
+        const unsigned n = runScenario("shell-responsive", [&](HangWatchdog& w, HWND h) {
+            cascade::gui::ShellPauseHooks hooks;
+            hooks.pause = [&w] { w.pauseUser(); };
+            hooks.resume = [&w] { w.resumeUser(); };
+            std::atomic<bool> calling{true};
+            std::thread watcher([&] {
+                const ULONGLONG half = ::GetTickCount64() + kStallMs / 2;
+                bool sent = false;
+                while (calling) {
+                    if (::IsHungAppWindow(h) != FALSE) { everHung = true; }
+                    if (!sent && ::GetTickCount64() >= half) {
+                        sent = true;
+                        DWORD_PTR result = 0;
+                        sentAnswered =
+                            ::SendMessageTimeoutW(h, WM_NULL, 0, 0, SMTO_BLOCK, 2000, &result) != 0;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            });
+            const DWORD guiThread = ::GetCurrentThreadId();
+            answer = cascade::gui::runShellOpenResponsive(hooks, [&]() -> bool {
+                callOffGuiThread = ::GetCurrentThreadId() != guiThread;
+                ::Sleep(kStallMs);
+                return true;
+            });
+            const unsigned n = w.reportsWritten();
+            calling = false;
+            watcher.join();
+            return n;
+        });
+        CHECK(answer);
+        CHECK(callOffGuiThread.load());
+        CHECK(!everHung.load());       // 5: never "(Not Responding)"
+        CHECK(n == 0u);                // 5: and so nothing reported
+        CHECK(sentAnswered.load());    // 6
     }
 
     // --- 3 and 4 TAKE THE MOUSE POINTER, so they run only when asked -------------------------

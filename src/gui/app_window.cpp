@@ -9549,11 +9549,15 @@ cascade::gui::ShellPauseHooks AppWindow::watchdogShellHooks() {
 }
 
 bool AppWindow::shellOpen(const std::string& target) {
-    return cascade::gui::runShellOpen(watchdogShellHooks(), [&target]() -> bool {
+    return cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&target]() -> bool {
 #if defined(_WIN32)
-        const HINSTANCE rc =
-            ::ShellExecuteA(nullptr, "open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        return reinterpret_cast<std::intptr_t>(rc) > 32;
+        SHELLEXECUTEINFOA sei{};
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOASYNC;
+        sei.lpVerb = "open";
+        sei.lpFile = target.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        return ::ShellExecuteExA(&sei) != FALSE;
 #else
         // See gui/shell_open.hpp for why this is a double-forked xdg-open
         // rather than system()/popen(), and why the logic lives in a free
@@ -9596,18 +9600,29 @@ bool AppWindow::launchInstaller(const std::string& path) {
     // cascade::gui::AppWindow::launchInstaller" is the watchdog reporting that
     // wait as a hang, five seconds into a consent prompt on a Windows 11
     // machine 28 s after launch. core/hang_watchdog.hpp's rule 2b names this
-    // exact case ("a native modal dialog ... MUST take one too"); see
-    // gui/shell_open.hpp for why a pause and not a helper thread.
-    const bool started = cascade::gui::runShellOpen(watchdogShellHooks(), [&path]() -> bool {
+    // exact case ("a native modal dialog ... MUST take one too").
+    //
+    // AND OFF THE GUI THREAD (0.99.91). That wait takes no messages, so five
+    // seconds in Windows greyed the window "(Not Responding)" behind the prompt,
+    // and since 0.99.87 the watchdog took Windows' verdict as the end of the
+    // pause: field report "freeze: the frame was in user-wait", 0.99.89, stalled
+    // in exactly this call. runShellOpenResponsive makes it on a thread of its
+    // own and keeps this one taking sent messages until it answers
+    // (gui/shell_open.cpp).
+    const bool started = cascade::gui::runShellOpenResponsive(watchdogShellHooks(), [&path]() -> bool {
         // ShellExecute rather than CreateProcess: the installer asks for
         // elevation through its manifest, and only the shell will show that
-        // prompt. The return is the documented "> 32 means it started"
-        // convention.
+        // prompt. ShellExecuteEx returns whether activation succeeded.
         const std::wstring wide = cascade::gui::installerPathWide(path);
         if (wide.empty()) { return false; }
-        const HINSTANCE rc = ::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr,
-                                             SW_SHOWNORMAL);
-        return reinterpret_cast<std::intptr_t>(rc) > 32;
+        SHELLEXECUTEINFOW sei{};
+        sei.cbSize = sizeof(sei);
+        // The worker exits after this call; finish any asynchronous shell activation first.
+        sei.fMask = SEE_MASK_NOASYNC;
+        sei.lpVerb = L"open";
+        sei.lpFile = wide.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        return ::ShellExecuteExW(&sei) != FALSE;
     });
     // An installer that could not be started is COUNTED, anonymously (0.99.64,
     // core/health_events.hpp) - the user pressed the button and nothing ran.

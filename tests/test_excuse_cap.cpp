@@ -556,7 +556,19 @@ int main() {
         // THREE call sites, each a native wait a person paces: shellOpen (the shell),
         // launchInstaller (the elevation prompt) and, since 0.99.74, pickFile (the
         // BROWSE key's modal file dialog). A fourth is a new reason to read this list.
-        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 3u);
+        // Since 0.99.91 the two that call ShellExecute go through runShellOpenResponsive:
+        // ShellExecute waits for SmartScreen or an elevation prompt WITHOUT taking
+        // messages, so made on this thread it greyed the window "(Not Responding)" and
+        // the watchdog filed a freeze (gui/shell_open.cpp). The file dialog runs its own
+        // message loop and stays on the GUI thread, which owns the dialog it parents.
+        CHECK(countOf(win, "runShellOpenResponsive(watchdogShellHooks(),") == 2u);
+        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 1u);
+        // ...and every ShellExecute in the GUI is made through the responsive kind: the
+        // radio setup's INSTALL DRIVER (0.99.88, "runas") is the third.
+        const std::string radio = liveCode(readFile(src / "gui" / "app_window_radio_setup.cpp"));
+        CHECK(countOf(radio, "runShellOpenResponsive(watchdogShellHooks(),") == 1u);
+        CHECK(countOf(radio, "runShellOpen(watchdogShellHooks(),") == 0u);
+        CHECK(countOf(win, "ShellExecute") + countOf(radio, "ShellExecute") == 3u);
         // The application-paced sites are still plain pauses: the audio and
         // microphone opens and the display grace.
         CHECK(countOf(win, "watchdog_.pause()") >= 3u);
