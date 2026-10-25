@@ -108,6 +108,7 @@
 #include "gui/volume_meter.hpp"
 #include "gui/waterfall_view.hpp"
 #include "gui/present_grace.hpp"
+#include "gui/software_gl.hpp"
 #include "gui/win_frame.hpp"
 #include "gui/window_platform.hpp"
 // Where a slow frame spent its time (0.99.64): the scope guards below.
@@ -586,7 +587,13 @@ bool parseFrequencyHz(const char* text, double& outHz) {
 // whichever thread called in.
 std::atomic<unsigned> g_glfwDisplayErrors{0};
 
+// The code of the last GLFW error, for the start-up: a refused window is moved to the software
+// renderer only when the reason was the driver's OpenGL (gui/window_platform.hpp,
+// glfwErrorMeansNoDriver), and glfwCreateWindow says no more than NULL.
+std::atomic<int> g_lastGlfwError{0};
+
 void glfwErrorCallback(int code, const char* description) {
+    g_lastGlfwError.store(code, std::memory_order_relaxed);
     std::fprintf(stderr, "cascade: GLFW error %d: %s\n", code,
                  description ? description : "(no description)");
     // THE SAME TEXT IN THE DIAGNOSTICS LOG (0.99.78), flushed by diagLogf before it returns.
@@ -1464,9 +1471,10 @@ namespace {
 // Windows in a real session, into a message box with no owner window - there is no window to own
 // it. A bounded --frames run only logs that the box was skipped, so a test never waits on a click.
 // The log lines are flushed one by one, so the one before the box is on disk while it is open.
-void tellUserWindowFailed(const char* what, int frames) {
+void tellUserWindowFailed(const char* what, int frames, bool softwareTried) {
     namespace wp = cascade::gui::windowplatform;
-    const std::string text = wp::failureMessage(cascade::core::DiagLog::instance().filePath());
+    const std::string text =
+        wp::failureMessage(cascade::core::DiagLog::instance().filePath(), softwareTried);
     std::fprintf(stderr, "cascade: %s\n%s\n", what, text.c_str());
     if (!wp::errorDialogAllowed(frames)) {
         cascade::core::diagLogf("window: error dialog suppressed for a flagged run");
@@ -1476,6 +1484,69 @@ void tellUserWindowFailed(const char* what, int frames) {
     cascade::core::diagLogf("window: error dialog shown");
     ::MessageBoxA(nullptr, text.c_str(), "FoxSDR", MB_OK | MB_ICONERROR);
 #endif
+}
+
+// LOADS THE SOFTWARE RENDERER (gui/software_gl.hpp) and says what became of it. True when this
+// process now draws with it.
+bool useSoftwareRenderer() {
+    namespace sg = cascade::gui::softgl;
+    const sg::LoadResult r = sg::load();
+    switch (r.status) {
+        case sg::LoadStatus::Loaded:
+            cascade::core::diagLogf("window: software renderer loaded from softgl (GALLIUM_DRIVER=%s)",
+                                    r.galliumDriver.empty() ? "(unset)" : r.galliumDriver.c_str());
+            return true;
+        case sg::LoadStatus::Missing:
+            cascade::core::diagWarnf(
+                "window: the software renderer is not installed (softgl\\opengl32.dll and libgallium_wgl.dll)");
+            return false;
+        case sg::LoadStatus::SystemStillLoaded:
+            cascade::core::diagWarnf(
+                "window: another opengl32.dll is already loaded, so the software renderer cannot take its "
+                "place in this run");
+            return false;
+        case sg::LoadStatus::Failed:
+            cascade::core::diagWarnf("window: the software renderer could not be loaded (Windows error %lu)",
+                                     r.error);
+            return false;
+    }
+    return false;
+}
+
+// THE SECOND ATTEMPT, after the graphics driver could not be used (`cause` says how): true when
+// this run may have one - a second process with the software renderer, which AppWindow::run hands
+// over to (relaunchWithSoftwareGl) - else false, with a line saying why not.
+bool softwareRelaunchWanted(cascade::gui::windowplatform::GlMode mode, const std::string& cause,
+                            bool softwareTried) {
+    namespace wp = cascade::gui::windowplatform;
+#if defined(_WIN32)
+    constexpr bool kWindows = true;
+#else
+    constexpr bool kWindows = false;
+#endif
+    const wp::SoftwareSkip skip =
+        wp::softwareSkip(mode, softwareTried || cascade::gui::softgl::loaded(), cascade::gui::softgl::present(),
+                         kWindows);
+    if (skip != wp::SoftwareSkip::None) {
+        const std::string line = wp::softwareSkipLine(skip);
+        if (!line.empty()) { cascade::core::diagLogf("%s", line.c_str()); }
+        return false;
+    }
+    cascade::core::diagLogf("%s", wp::softwareRetryLine(cause).c_str());
+    return true;
+}
+
+// glGetString, fetched through GLFW rather than called: cascade.exe delay-loads opengl32.dll, and
+// a direct call here would bind the delay-load to whichever opengl32.dll answers this context -
+// which, when the answer is "too old", is the one that must be let go of for the software renderer.
+#if defined(_WIN32)
+using GlGetStringFn = const unsigned char*(__stdcall*)(unsigned int);
+#else
+using GlGetStringFn = const unsigned char* (*)(unsigned int);
+#endif
+
+const char* glString(GlGetStringFn fn, unsigned int name) {
+    return fn != nullptr ? reinterpret_cast<const char*>(fn(name)) : nullptr;
 }
 }  // namespace
 
@@ -1511,6 +1582,35 @@ int AppWindow::run(int frames) {
             glfwInitHint(GLFW_PLATFORM, request.platform);
         }
     }
+    // FOXSDR_GL=auto|software|hardware (0.99.90, gui/window_platform.hpp): whether the software
+    // renderer in softgl\ may stand in for the graphics driver, and whether it does from the start.
+    // FOXSDR_TEST_WINDOW_FAIL (the same header): the seam that reaches every one of these paths for
+    // real in a bounded run, on a machine whose driver works.
+    namespace wp = cascade::gui::windowplatform;
+#if defined(_WIN32)
+    constexpr bool kWindowsGl = true;
+#else
+    constexpr bool kWindowsGl = false;
+#endif
+    const wp::GlRequest glRequest = wp::parseGlRequest(std::getenv("FOXSDR_GL"));
+    if (const std::string line = wp::glRequestLine(glRequest, kWindowsGl); !line.empty()) {
+        cascade::core::diagLogf("%s", line.c_str());
+    }
+    const wp::TestWindowFail testFail =
+        frames >= 0 ? wp::parseTestWindowFail(std::getenv("FOXSDR_TEST_WINDOW_FAIL")) : wp::TestWindowFail::None;
+    bool softwareTried = false;
+    if (kWindowsGl && glRequest.valid && glRequest.mode == wp::GlMode::Software) {
+        softwareTried = true;
+        useSoftwareRenderer();  // on failure the graphics driver is asked, as without the variable
+    }
+    // WHEN THE GRAPHICS DRIVER CANNOT BE USED, AND THIS RUN MAY HAVE THE SOFTWARE RENDERER: run()
+    // returns and main() starts FoxSDR again with FOXSDR_GL=software once this application object
+    // is gone (gui/software_gl.hpp says why it cannot be done in this process).
+    auto handOffToSoftwareRenderer = [this]() {
+        relaunchWithSoftwareGl_ = true;
+        cascade::core::diagLogf("window: handing over to a second FoxSDR process with the software renderer");
+        return 0;
+    };
     if (!glfwInit()) {
         cascade::core::diagWarnf(
             "window: glfwInit failed; the GLFW error line before this, if there is one, says why");
@@ -1518,7 +1618,7 @@ int AppWindow::run(int frames) {
         // exit code 1 on Windows is also what `taskkill /F` leaves, and the report must not call
         // this one a kill (field signature 85FF854AA2C772F9).
         cascade::core::breadcrumb::noteWindowFailed();
-        tellUserWindowFailed("glfwInit failed", frames);
+        tellUserWindowFailed("glfwInit failed", frames, softwareTried);
         return 1;
     }
     cascade::core::diagLogf("window: GLFW initialised; platform chosen: %s",
@@ -1539,27 +1639,60 @@ int AppWindow::run(int frames) {
     // until a resize made the layers agree again. Nothing sees this window
     // until the style it will keep is the style it has.
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    // FOXSDR_TEST_WINDOW_FAIL=1 (a test seam, honoured only in a bounded --frames run like every
-    // seam in this file): asks for an OpenGL version no driver has, so that glfwCreateWindow
-    // fails for real - the same call, the same GLFW error, the same return below - on a machine
-    // whose window can be made. The request is refused before a window exists, so nothing is ever
-    // shown, which is what lets a test run the whole failure path on a desktop.
-    if (frames >= 0) {
-        const char* forceFail = std::getenv("FOXSDR_TEST_WINDOW_FAIL");
-        if (forceFail != nullptr && forceFail[0] == '1') { glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99); }
+    // FOXSDR_TEST_WINDOW_FAIL=1 or =hardware: asks for an OpenGL version no driver has, so that
+    // glfwCreateWindow fails for real - the same call, the same GLFW error, the same code below -
+    // on a machine whose window can be made (=hardware: only while the graphics driver is in use,
+    // so the second process, on the software renderer, gets its window). The request is refused
+    // before a window exists, so nothing is ever shown, which is what lets a test run the whole
+    // failure path on a desktop.
+    if (testFail == wp::TestWindowFail::All ||
+        (testFail == wp::TestWindowFail::Hardware && !cascade::gui::softgl::loaded())) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99);
     }
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     mainWindow_ = window;
     if (window == nullptr) {
+        const int code = g_lastGlfwError.load(std::memory_order_relaxed);
         cascade::core::diagWarnf(
             "window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why");
-        cascade::core::breadcrumb::noteWindowFailed();  // see the glfwInit failure above
-        tellUserWindowFailed("glfwCreateWindow failed", frames);
         glfwTerminate();
+        if (wp::glfwErrorMeansNoDriver(code) &&
+            softwareRelaunchWanted(glRequest.mode, wp::noDriverCause(code), softwareTried)) {
+            return handOffToSoftwareRenderer();
+        }
+        cascade::core::breadcrumb::noteWindowFailed();  // see the glfwInit failure above
+        tellUserWindowFailed("glfwCreateWindow failed", frames, softwareTried);
         return 1;
     }
     cascade::core::diagLogf("window: window created (hidden until its frame is settled)");
+    // WHICH DRIVER ANSWERED, in the log (0.99.78): these strings are the ones every frame will be
+    // drawn with. A death after this line and before the first frame is the driver's or ImGui's,
+    // not the window system's. AND HOW OLD IT IS (0.99.90): the ImGui backend's "#version 130"
+    // needs OpenGL 3.0, and an older driver is let go of here, before anything is built on it.
+    glfwMakeContextCurrent(window);
+    const auto getString = reinterpret_cast<GlGetStringFn>(glfwGetProcAddress("glGetString"));
+    const char* glVersionText = glString(getString, 0x1F02 /* GL_VERSION */);
+    cascade::core::diagLogf(
+        "%s", wp::glLine(glString(getString, 0x1F00 /* GL_VENDOR */), glString(getString, 0x1F01 /* GL_RENDERER */),
+                         glVersionText)
+                  .c_str());
+    if (testFail == wp::TestWindowFail::OldDriver && !cascade::gui::softgl::loaded()) {
+        glVersionText = "2.1 (FOXSDR_TEST_WINDOW_FAIL=old-driver)";
+    }
+    if (const wp::GlVersion glVersion = wp::parseGlVersion(glVersionText); wp::glVersionTooOld(glVersion)) {
+        cascade::core::diagWarnf("%s", wp::oldDriverLine(glVersion).c_str());
+        glfwMakeContextCurrent(nullptr);
+        glfwDestroyWindow(window);
+        mainWindow_ = window = nullptr;
+        glfwTerminate();
+        if (softwareRelaunchWanted(glRequest.mode, wp::oldDriverCause(glVersion), softwareTried)) {
+            return handOffToSoftwareRenderer();
+        }
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("the OpenGL driver is older than 3.0", frames, softwareTried);
+        return 1;
+    }
     // THE INTERFACE SCALE'S "auto": the monitor this window is about to open
     // on, read BEFORE anything below is sized against it - GLFW already
     // knows a hidden window's target monitor content scale. FOXSDR_UI_SCALE
@@ -1668,21 +1801,12 @@ int AppWindow::run(int frames) {
             g_dropTarget->pendingDropPath_ = paths[0];
         }
     });
-    // Before the context is made current: purely a window-manager property,
-    // independent of GL, so even a run that fails at backend init has already
-    // shown the right icon.
+    // Purely a window-manager property, independent of GL, so even a run
+    // that fails at backend init has already shown the right icon.
     applyWindowIcon(window);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);  // vsync: the GUI thread paces itself off the display
-    // WHICH DRIVER ANSWERED, in the log (0.99.78): the context is current, so these strings are
-    // the ones every frame will be drawn with. A death after this line and before the first
-    // frame is the driver's or ImGui's, not the window system's.
-    cascade::core::diagLogf(
-        "%s", cascade::gui::windowplatform::glLine(
-                  reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
-                  reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
-                  reinterpret_cast<const char*>(glGetString(GL_VERSION)))
-                  .c_str());
+    // (WHICH DRIVER ANSWERED is logged where the window is made, above, with its version checked.)
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1797,15 +1921,26 @@ int AppWindow::run(int frames) {
     // ImGui corner disagree.
     cascade::gui::theme::applyTheme();
 
+    // A BACKEND THAT WILL NOT START ENDS THE RUN AS A REFUSED WINDOW DOES (0.99.90): in the log,
+    // to the sentinel and to the person. Until then these two returns wrote one line to stderr -
+    // which a windowed program on Windows has nowhere to put - and the process simply vanished.
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
         std::fprintf(stderr, "cascade: ImGui GLFW backend init failed\n");
+        cascade::core::diagWarnf("window: the Dear ImGui GLFW backend could not start");
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("ImGui GLFW backend init failed", frames, softwareTried);
         ImGui::DestroyContext();
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
     }
-    if (!ImGui_ImplOpenGL3_Init("#version 130")) {
+    // FOXSDR_TEST_WINDOW_FAIL=imgui takes the OpenGL 3 backend to have refused, without asking it.
+    if (testFail == wp::TestWindowFail::ImGui || !ImGui_ImplOpenGL3_Init("#version 130")) {
         std::fprintf(stderr, "cascade: ImGui OpenGL3 backend init failed\n");
+        cascade::core::diagWarnf(
+            "window: the Dear ImGui OpenGL 3 backend could not start (its shaders need OpenGL 3.0)");
+        cascade::core::breadcrumb::noteWindowFailed();
+        tellUserWindowFailed("ImGui OpenGL3 backend init failed", frames, softwareTried);
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
         glfwDestroyWindow(window);

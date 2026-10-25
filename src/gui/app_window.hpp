@@ -750,6 +750,12 @@ public:
     // ImGui backends fail to initialize (the reason is printed to stderr).
     int run(int frames = -1);
 
+    // True when run() returned because the graphics driver could not be used
+    // and this run is to be handed to a second process on the software
+    // renderer (gui/software_gl.hpp): main() does that once this object is
+    // gone, and ends with the second process's exit code.
+    bool relaunchWithSoftwareGl() const { return relaunchWithSoftwareGl_; }
+
     // Where hang reports go, and whether the frame loop should stage a
     // deliberate stall. Both are decided in main(), because only main() knows
     // whether this is a real session or a bounded CI run - and a bounded run
@@ -4498,6 +4504,8 @@ private:
     bool scopeLeftThisFrame_ = false;
 
     GLFWwindow* mainWindow_ = nullptr;
+    // run() handed this run to a second process on the software renderer.
+    bool relaunchWithSoftwareGl_ = false;
 
     // WHETHER A TORN-OFF PAGE GETS AN OPERATING SYSTEM WINDOW, and why not
     // when it does not. Decided once at startup from FOXSDR_SINGLE_VIEWPORT

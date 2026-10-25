@@ -32,6 +32,7 @@
 #include "dsp/vfo.hpp"
 #include "core/recorder.hpp"
 #include "gui/app_window.hpp"
+#include "gui/software_gl.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/sdrplay_probe.hpp"
 #include "source/sdrplay_service.hpp"
@@ -1116,9 +1117,21 @@ int main(int argc, char** argv) {
         }
     }
     const char* instanceScope = std::getenv(cascade::core::kInstanceScopeEnv);
-    const bool primaryInstance = cascade::core::claimPrimaryInstance(
-        std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
-        instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string());
+    // A SECOND PROCESS STARTED ON THE SOFTWARE RENDERER (0.99.90, gui/software_gl.hpp) is the
+    // primary instance whatever the claim says: the first one holds the claim while it waits for
+    // this one and does nothing else, and a link it was handed must be opened here, not passed
+    // back to it.
+    std::string softglParent;
+    const bool softglRelaunched = cascade::gui::softgl::takeRelaunchMarker(softglParent);
+    if (softglRelaunched) {
+        cascade::core::diagLogf("window: started again by process %s to use the software renderer",
+                                softglParent.empty() ? "?" : softglParent.c_str());
+    }
+    const bool primaryInstance =
+        cascade::core::claimPrimaryInstance(
+            std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
+            instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string()) ||
+        softglRelaunched;
     // Set below when argv[1] parsed as a real beta-link activation - the flag
     // loop starting a few lines down must then skip index 1 rather than hand
     // it to strcmp against every flag name, which is what used to happen: a
@@ -1450,16 +1463,39 @@ int main(int argc, char** argv) {
         }
     }
 
-    cascade::gui::AppWindow app(configPath, announceConfig);
-    // Empty unless this run is ALLOWED to write - which is not the same as
-    // whether the user wants it. run() gates the writing on the stored switch;
-    // handing over the directory regardless is what lets the Settings toggle
-    // work in a session that started with diagnostics off. The watchdog still
-    // runs and still logs a recovered stall to the ring either way, but it puts
-    // no file on a machine that only asked for a smoke test.
-    app.setDiagnosticsDir(mayWrite ? cascade::core::diagCrashDir() : std::string());
-    app.setDiagStallMs(diagStallMs);
-    app.setDiagToggle(diagToggle);
-    app.setLinkTesterReveal(linkTesterReveal);
-    return app.run(frames);
+    int exitCode = 0;
+    bool softglRelaunch = false;
+    {
+        cascade::gui::AppWindow app(configPath, announceConfig);
+        // Empty unless this run is ALLOWED to write - which is not the same as
+        // whether the user wants it. run() gates the writing on the stored switch;
+        // handing over the directory regardless is what lets the Settings toggle
+        // work in a session that started with diagnostics off. The watchdog still
+        // runs and still logs a recovered stall to the ring either way, but it puts
+        // no file on a machine that only asked for a smoke test.
+        app.setDiagnosticsDir(mayWrite ? cascade::core::diagCrashDir() : std::string());
+        app.setDiagStallMs(diagStallMs);
+        app.setDiagToggle(diagToggle);
+        app.setLinkTesterReveal(linkTesterReveal);
+        exitCode = app.run(frames);
+        softglRelaunch = app.relaunchWithSoftwareGl();
+    }
+    // THE GRAPHICS DRIVER COULD NOT BE USED, AND THE SOFTWARE RENDERER IS TO BE (0.99.90,
+    // gui/software_gl.hpp): a second process, started only now that this one's application object -
+    // its plugins, its sound device, its listening ports - is gone, so the two never hold anything
+    // at once. This one waits and ends with its exit code, which is what a script or a test that
+    // started FoxSDR sees.
+    if (softglRelaunch) {
+        // This process's watcher goes first: from here it only waits, and an ending it filed would
+        // be a second report of the second process's run, which that process's own watcher files.
+        cascade::core::sentinelSetEnabled(false);
+        const cascade::gui::softgl::RelaunchResult r = cascade::gui::softgl::relaunchAndWait();
+        if (!r.started) {
+            cascade::gui::softgl::tellUserRelaunchFailed(r.error, frames);
+            return 1;
+        }
+        cascade::core::diagLogf("window: the second FoxSDR process ended with exit code %lu", r.exitCode);
+        return static_cast<int>(r.exitCode);
+    }
+    return exitCode;
 }

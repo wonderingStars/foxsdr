@@ -4471,6 +4471,93 @@ lines in order before the first frame, `bad` ignored with the run still starting
 refused on Windows, a forced platform on Linux). **Not verified:** that forcing `x11` or
 `wayland` cures the field report - its cause is not known; nothing here ran on Linux.
 
+### When the graphics driver cannot be used: the software renderer (0.99.90, Windows)
+
+Field log (0.99.89, Windows): `window: GLFW error 65542: WGL: The driver does not appear to
+support OpenGL`, then `glfwCreateWindow failed` and the error dialog. In GLFW's WGL code that error
+means every pixel format the machine offers is Windows' own GDI renderer (OpenGL 1.1, unaccelerated)
+- no graphics driver, a virtual machine without 3D, a remote session (`third_party/glfw/src/
+wgl_context.c`, `choosePixelFormatWGL`). The Windows packages now carry Mesa's **llvmpipe**, a
+complete OpenGL 4.6 drawn by the processor, in `softgl\` beside `cascade.exe` (two files, 62 MB,
+pinned and fetched by CMake: `third_party/softgl/README.md`). The graphics driver is always asked
+first; the software renderer stands in only when
+
+- `glfwCreateWindow` fails with `GLFW_API_UNAVAILABLE` (65542, the field case),
+  `GLFW_VERSION_UNAVAILABLE` (65543) or `GLFW_FORMAT_UNAVAILABLE` (65545) - the driver's OpenGL,
+  not the window system; or
+- the context works but `GL_VERSION` is older than 3.0, which Dear ImGui's `#version 130` shaders
+  need. That machine used to get as far as the ImGui backend, which refused, and the process ended
+  with one line on stderr (see below). The version is read through `glfwGetProcAddress`, not a
+  direct call, so that nothing has bound to that driver's `opengl32.dll` yet.
+
+**Why a second process.** `cascade.exe` delay-loads `opengl32.dll` (`/DELAYLOAD`), and Windows
+answers a load by name from the modules already in the process, so Mesa's `opengl32.dll`, loaded
+from its full path before GLFW asks for anything, becomes the process's `opengl32.dll` - GDI's own
+`SwapBuffers` included. But once a context has been asked of the system's `opengl32.dll` it stays
+loaded: measured on this desktop (NVIDIA), it is still in the process after `glfwTerminate`. So
+after a refusal `run()` returns, `main()` lets the application object go (plugins, sound device,
+listening ports), switches its own sentinel off, starts `cascade.exe` again with `FOXSDR_GL=software`
+and the same command line and redirected standard handles (and only those:
+`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), and waits; it ends with the second process's exit code. The
+second process is the primary instance (`FOXSDR_SOFTGL_RELAUNCH`, cleared at once so nothing it
+starts inherits it), loads Mesa before GLFW, and has its own sentinel. `GALLIUM_DRIVER=llvmpipe` is
+set unless the environment names a driver (Mesa's default with a D3D12 driver is its D3D12 back
+end, which needs a `dxil.dll` that is not shipped). The log of a hand-over, both processes in the
+one file (a real run with the `hardware` seam below):
+
+```
+window: GLFW error 65543: WGL: Driver does not support OpenGL version 99.0
+window: glfwCreateWindow failed; the GLFW error line before this, if there is one, says why
+window: the graphics driver offers no usable OpenGL (GLFW error 65543); starting again with the software renderer in softgl
+window: handing over to a second FoxSDR process with the software renderer
+FoxSDR 0.99.89 (...) starting
+window: started again by process 8244 to use the software renderer
+window: FOXSDR_GL=software; the software renderer is used from the start
+window: software renderer loaded from softgl (GALLIUM_DRIVER=llvmpipe)
+window: GLFW initialised; platform chosen: win32
+window: window created (hidden until its frame is settled)
+window: GL vendor Mesa; renderer llvmpipe (LLVM 23.1.2, 256 bits); version 4.6 (Compatibility Profile) Mesa 26.2.4 (git-9a0169f2a7)
+window: window shown; the Dear ImGui backends are up
+window: the second FoxSDR process ended with exit code 0
+```
+
+and, when there is no second attempt, one of `window: no software fallback: FOXSDR_GL=hardware`,
+`... the software renderer was already tried` or `... softgl\opengl32.dll and libgallium_wgl.dll
+are not beside the application`, then the error dialog as before - which now says the software
+renderer was tried too when it was.
+
+**`FOXSDR_GL=auto|software|hardware`** (environment, like `FOXSDR_WINDOW_PLATFORM` and for the
+same reason): `auto` or unset is the above; `software` uses llvmpipe from the start in one process
+(a driver that crashes; a check on a machine whose driver works); `hardware` never falls back.
+Anything else is logged and ignored. Off Windows `software` is logged as ignored and points at
+Mesa's own `LIBGL_ALWAYS_SOFTWARE=1`.
+
+**The silent ImGui exit is gone.** `ImGui_ImplGlfw_InitForOpenGL` or `ImGui_ImplOpenGL3_Init`
+refusing used to `return 1` with a line on stderr only - no log line, no breadcrumb flag, no
+dialog, and the sentinel filed it as `ended by another process (exit code 1, as taskkill /F does)`
+(seen with the fix removed: that is what `test_window_failed_app` then reads). Both now log
+`window: the Dear ImGui ... backend could not start`, set `kFlagWindowFailed` and tell the person,
+like a refused window.
+
+**Seams** (bounded `--frames` runs only), `FOXSDR_TEST_WINDOW_FAIL=`: `1` refuses every window (both
+processes); `hardware` refuses it only while the graphics driver is in use, so the hand-over is the
+real one; `old-driver` takes the driver's context to say OpenGL 2.1; `imgui` takes the OpenGL 3
+backend to have refused. **Tested** by `tests/test_window_platform.cpp` (every new line, the
+parsers, the version boundary at exactly 3.0, the skip rules), `tests/test_window_failed_app.cpp`
+(headless: `1` through the hand-over to exit 1 and ONE sentinel report; `hardware` with
+`FOXSDR_GL=hardware`; `software` with every window refused; a copy of `cascade.exe` without
+`softgl\`; `imgui` and its report) and `tests/test_software_gl_app.cpp` (gui: the hand-over ending
+in a window on llvmpipe and exit 0 passed back, the second process's stdout arriving through the
+first's handle; `old-driver`; `FOXSDR_GL=software`; a plain run touching none of it). Break-it
+checks, each RED for its own reason: without the sentinel switch-off (two reports), without the
+ImGui fix (the report reads "taskkill"), and without `/DELAYLOAD:opengl32.dll` (the second process
+cannot load Mesa and is refused again). **Measured** on this desktop: about 85 frames a second on
+llvmpipe at 1280x720, 39 with `LP_NUM_THREADS=2` (`third_party/softgl/README.md`). **Not
+verified:** a machine that really has no OpenGL driver (the field case is reproduced with the
+seam, whose GLFW error is 65543 rather than 65542), a remote desktop session, the MSIX package
+running from its install (it was built and its contents checked, not installed), and llvmpipe's
+cost on a slow processor.
+
 ### Known limits
 
 - **It is visible.** A session with Diagnostics on has a second `cascade.exe` in Task

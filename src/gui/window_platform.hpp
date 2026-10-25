@@ -224,12 +224,16 @@ inline std::string glfwErrorLine(int code, const char* description) {
 inline bool errorDialogAllowed(int frames) { return frames < 0; }
 
 // The log path is DiagLog::filePath(), as Settings > Diagnostics shows it ("Log: <path>"); empty
-// when the file is off.
-inline std::string failureMessage(const std::string& logPath) {
+// when the file is off. `softwareTried`: the bundled software renderer was tried as well (below),
+// so the person is not left thinking it was never attempted.
+inline std::string failureMessage(const std::string& logPath, bool softwareTried = false) {
     std::string s =
         "FoxSDR could not create its window because no working OpenGL driver was found.\n\n"
         "Common causes: no graphics driver is installed on this computer, or this is a remote desktop "
         "session without GPU support. Installing or updating the graphics driver usually fixes it.\n\n";
+    if (softwareTried) {
+        s += "FoxSDR also tried its built-in software renderer, and that did not work either.\n\n";
+    }
     if (logPath.empty()) {
         s += "Diagnostics are switched off, so no log was written. Switch them on in Settings > Diagnostics "
              "and start FoxSDR again to record one.";
@@ -237,6 +241,200 @@ inline std::string failureMessage(const std::string& logPath) {
         s += "What happened was written to this log, which you can send to the developer:\n" + logPath;
     }
     return s;
+}
+
+// ---------------------------------------------------------------------------
+// THE SOFTWARE RENDERER, and FOXSDR_GL (0.99.90)
+// ---------------------------------------------------------------------------
+// The same field log (0.99.89, "WGL: The driver does not appear to support OpenGL"): a Windows
+// machine with no OpenGL driver at all - no graphics driver installed, a virtual machine without
+// 3D, a remote session. The Windows package carries Mesa's llvmpipe, a software OpenGL 4.6, in
+// softgl\ beside cascade.exe (gui/software_gl.hpp). It is NEVER the first choice: the graphics
+// driver is asked first, and only these answers move the start-up over to the software renderer,
+// once - by starting FoxSDR again with FOXSDR_GL=software, because the system's opengl32.dll, once
+// a context has been asked of it, stays loaded in the process that asked (measured: it is still
+// there after glfwTerminate) and the software renderer can only take its name in a process that
+// never loaded it:
+//
+//   - glfwCreateWindow refused with one of the three GLFW errors that mean "this driver offers no
+//     usable OpenGL": GLFW_API_UNAVAILABLE (the field case: only Windows' own GDI 1.1 renderer is
+//     there), GLFW_VERSION_UNAVAILABLE, GLFW_FORMAT_UNAVAILABLE. Anything else (a window-class or
+//     platform failure) is not the driver's, and a software renderer would not help;
+//   - a context that works but reports an OpenGL older than 3.0, which the Dear ImGui backend's
+//     "#version 130" shaders need. Before 0.99.90 that machine got as far as the backend, which
+//     refused, and the process ended with one line on stderr and no word to anyone.
+//
+// FOXSDR_GL=auto|software|hardware: `auto` (or unset) is the above; `software` uses the software
+// renderer from the start (a driver that crashes, a check on a machine whose driver works);
+// `hardware` never falls back, so a failure ends as it did before. Anything else is logged and
+// ignored. An environment variable and not a setting for the same reason as FOXSDR_WINDOW_PLATFORM:
+// it is needed before there is a window to set it in.
+inline constexpr int kApiUnavailable = 0x00010006;      // GLFW_API_UNAVAILABLE (65542)
+inline constexpr int kVersionUnavailable = 0x00010007;  // GLFW_VERSION_UNAVAILABLE (65543)
+inline constexpr int kFormatUnavailable = 0x00010009;   // GLFW_FORMAT_UNAVAILABLE (65545)
+
+// What "#version 130" needs.
+inline constexpr int kMinGlMajor = 3;
+inline constexpr int kMinGlMinor = 0;
+
+enum class GlMode { Auto, Software, Hardware };
+
+struct GlRequest {
+    GlMode mode = GlMode::Auto;
+    bool set = false;    // the variable was there and held more than blanks
+    bool valid = true;   // false: it named no mode (then `mode` is Auto)
+    std::string text;    // the value as logged: the word when valid, else plain ASCII, cut
+};
+
+inline GlRequest parseGlRequest(const char* value) {
+    GlRequest r;
+    const std::string v = detail::trimmed(value);
+    if (v.empty()) { return r; }
+    r.set = true;
+    std::string lower;
+    for (const char c : v) { lower.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c); }
+    if (lower == "auto") {
+        r.text = "auto";
+    } else if (lower == "software") {
+        r.mode = GlMode::Software;
+        r.text = "software";
+    } else if (lower == "hardware") {
+        r.mode = GlMode::Hardware;
+        r.text = "hardware";
+    } else {
+        r.valid = false;
+        r.text = detail::plain(v.c_str(), 24);
+    }
+    return r;
+}
+
+// BEFORE glfwInit, when FOXSDR_GL was set. `windows`: the software renderer exists only in the
+// Windows package; elsewhere Mesa's own LIBGL_ALWAYS_SOFTWARE=1 is the switch. Empty when unset.
+inline std::string glRequestLine(const GlRequest& r, bool windows) {
+    if (!r.set) { return std::string(); }
+    std::string s = "window: FOXSDR_GL=" + r.text;
+    if (!r.valid) {
+        s += " is not auto, software or hardware; ignored";
+    } else if (!windows && r.mode == GlMode::Software) {
+        s += " is for Windows; on this system Mesa's LIBGL_ALWAYS_SOFTWARE=1 does it; ignored";
+    } else if (r.mode == GlMode::Software) {
+        s += "; the software renderer is used from the start";
+    } else if (r.mode == GlMode::Hardware) {
+        s += "; the graphics driver only, with no software fallback";
+    } else {
+        s += "; the software renderer only if the graphics driver cannot be used";
+    }
+    return detail::cap(std::move(s));
+}
+
+// The GLFW errors after which a software renderer can help: the driver's OpenGL is missing or
+// not good enough, as opposed to the window system refusing a window.
+inline bool glfwErrorMeansNoDriver(int code) {
+    return code == kApiUnavailable || code == kVersionUnavailable || code == kFormatUnavailable;
+}
+
+// GL_VERSION's leading "<major>.<minor>" ("4.6.0 NVIDIA 610.88", "2.1 Mesa 26.2.4", "1.1.0").
+// `parsed` is false for anything that does not start that way - and an unreadable version is
+// never called old: the start-up then goes on as it always has.
+struct GlVersion {
+    int major = 0;
+    int minor = 0;
+    bool parsed = false;
+};
+
+inline GlVersion parseGlVersion(const char* s) {
+    GlVersion v;
+    if (s == nullptr) { return v; }
+    auto number = [&s](int& out) {
+        if (*s < '0' || *s > '9') { return false; }
+        long n = 0;
+        while (*s >= '0' && *s <= '9') {
+            if (n < 100000) { n = n * 10 + (*s - '0'); }
+            ++s;
+        }
+        out = static_cast<int>(n);
+        return true;
+    };
+    if (!number(v.major) || *s != '.') { return v; }
+    ++s;
+    if (!number(v.minor)) { return v; }
+    v.parsed = true;
+    return v;
+}
+
+inline bool glVersionTooOld(const GlVersion& v) {
+    return v.parsed && (v.major < kMinGlMajor || (v.major == kMinGlMajor && v.minor < kMinGlMinor));
+}
+
+// What a too-old driver did, in a few words (the cause softwareRetryLine names) ...
+inline std::string oldDriverCause(const GlVersion& v) {
+    return "the graphics driver offers OpenGL " + std::to_string(v.major) + "." + std::to_string(v.minor) +
+           "; FoxSDR needs " + std::to_string(kMinGlMajor) + "." + std::to_string(kMinGlMinor);
+}
+
+// ... and the line said right after the GL line when the version is too old.
+inline std::string oldDriverLine(const GlVersion& v) { return detail::cap("window: " + oldDriverCause(v)); }
+
+// Why there is no second attempt with the software renderer, when there is not.
+enum class SoftwareSkip {
+    None,            // there is one
+    Hardware,        // FOXSDR_GL=hardware
+    AlreadyTried,    // the software renderer was in use, or was tried, already
+    Missing,         // no softgl\opengl32.dll and libgallium_wgl.dll beside the application
+    NotThisPlatform  // the software renderer is part of the Windows package only
+};
+
+inline SoftwareSkip softwareSkip(GlMode mode, bool alreadyTried, bool present, bool windows) {
+    if (!windows) { return SoftwareSkip::NotThisPlatform; }
+    if (mode == GlMode::Hardware) { return SoftwareSkip::Hardware; }
+    if (alreadyTried) { return SoftwareSkip::AlreadyTried; }
+    if (!present) { return SoftwareSkip::Missing; }
+    return SoftwareSkip::None;
+}
+
+// The line for a skip; empty for None and for NotThisPlatform (nothing to say off Windows).
+inline std::string softwareSkipLine(SoftwareSkip why) {
+    switch (why) {
+        case SoftwareSkip::Hardware:
+            return "window: no software fallback: FOXSDR_GL=hardware";
+        case SoftwareSkip::AlreadyTried:
+            return "window: no software fallback: the software renderer was already tried";
+        case SoftwareSkip::Missing:
+            return "window: no software fallback: softgl\\opengl32.dll and libgallium_wgl.dll are not beside "
+                   "the application";
+        case SoftwareSkip::None:
+        case SoftwareSkip::NotThisPlatform:
+            break;
+    }
+    return std::string();
+}
+
+// The line that announces the second attempt. `cause` is what the driver did, in a few words.
+inline std::string softwareRetryLine(const std::string& cause) {
+    return detail::cap("window: " + cause + "; starting again with the software renderer in softgl");
+}
+
+// The cause for a refused window, from GLFW's error code.
+inline std::string noDriverCause(int code) {
+    return "the graphics driver offers no usable OpenGL (GLFW error " + std::to_string(code) + ")";
+}
+
+// FOXSDR_TEST_WINDOW_FAIL, the seam a bounded run uses to reach these paths for real on a machine
+// whose driver works (honoured only with --frames, like every seam in AppWindow::run):
+//   1           every window is refused (an OpenGL version no driver has is asked for);
+//   hardware    the window is refused while the graphics driver is in use, and not once the
+//               software renderer is - the field case, with the real fallback after it;
+//   old-driver  the graphics driver's context is taken to report OpenGL 2.1;
+//   imgui       the Dear ImGui OpenGL 3 backend is taken to have refused.
+enum class TestWindowFail { None, All, Hardware, OldDriver, ImGui };
+
+inline TestWindowFail parseTestWindowFail(const char* value) {
+    const std::string v = detail::trimmed(value);
+    if (v == "1") { return TestWindowFail::All; }
+    if (v == "hardware") { return TestWindowFail::Hardware; }
+    if (v == "old-driver") { return TestWindowFail::OldDriver; }
+    if (v == "imgui") { return TestWindowFail::ImGui; }
+    return TestWindowFail::None;
 }
 
 }  // namespace cascade::gui::windowplatform

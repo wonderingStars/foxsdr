@@ -21,7 +21,7 @@ C:\Users\steve\foxsdr-build\release-<version>\
     site-state.json   the same for site-release.ps1
     dist\             the five release files, sha256.txt, gh-notes-<version>.md
     msix\             FoxSDR-<version>-x64.msix (and the Store upload zip)
-    msix-in\          cascade.exe + SoapySDR.dll, the only payload the MSIX is built from
+    msix-in\          cascade.exe + SoapySDR.dll + softgl\ (the software renderer), the only payload the MSIX is built from
     ci\               one folder per GitHub Actions artifact
     verify\           install.log, uninstall.log, symbols.json, what the site served
     site\             the built foxsdr-site binary

@@ -486,8 +486,9 @@ function Step-Build {
     if ($script:Ctx.DryRun) {
         Write-Plan 'check' 'cascade.exe --version prints "FoxSDR <version>"'
         Write-Plan 'check' 'build\Release holds no runtime DLL but SoapySDR.dll'
+        Write-Plan 'check' 'build\Release\softgl holds exactly the two files third_party\softgl\PINNED.txt pins, with their sha256'
         Write-Plan 'archive symbols' ('tools\archive-symbols.ps1 -Binary ' + $exe + ' -EmitPaths')
-        Write-Plan 'copy' ('cascade.exe and SoapySDR.dll to ' + $RC.MsixIn)
+        Write-Plan 'copy' ('cascade.exe, SoapySDR.dll and softgl\ to ' + $RC.MsixIn)
         return 'done'
     }
     if ($hashes[0] -eq $hashes[1]) {
@@ -507,6 +508,18 @@ function Step-Build {
     $dlls = @(Get-ChildItem -LiteralPath $relDir -Filter *.dll -File | ForEach-Object { $_.Name })
     $extra = @($dlls | Where-Object { $_.ToLowerInvariant() -ne 'soapysdr.dll' })
     Assert-Check ($dlls.Count -ge 1 -and $extra.Count -eq 0) 'payload contract: only SoapySDR.dll' ($dlls -join ', ') 'installer\cascade.iss and build-msix.ps1 both refuse any other runtime DLL; add it to both on purpose or remove it'
+    # The software OpenGL renderer (0.99.90): the build checked both files against
+    # third_party\softgl\PINNED.txt before staging them; this checks what is actually
+    # there, because it is what both packages will carry.
+    $softPins = Get-SoftglPins (Join-Path $RC.Repo 'third_party\softgl\PINNED.txt')
+    $softDir = Join-Path $relDir 'softgl'
+    $softHave = @(Get-ChildItem -LiteralPath $softDir -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name.ToLowerInvariant() } | Sort-Object)
+    Assert-Check (($softHave -join '|') -eq (@($softPins.Keys | Sort-Object) -join '|')) 'payload contract: softgl\ holds the pinned renderer' ($softHave -join ', ') 'configure with CASCADE_SOFTGL=ON (the default) and build again; installer\cascade.iss and build-msix.ps1 refuse anything else'
+    $softSha = @{}
+    foreach ($n in $softPins.Keys) {
+        $softSha[$n] = Get-Sha256 (Join-Path $softDir $n)
+        Assert-Check ($softSha[$n] -eq $softPins[$n]) ('softgl\' + $n + ' is the pinned file') $softSha[$n] ('third_party\softgl\PINNED.txt says ' + $softPins[$n])
+    }
 
     # The symbols for exactly this binary. The CMake POST_BUILD step already did this;
     # running the archiver again is idempotent and returns the paths that belong to
@@ -534,12 +547,16 @@ function Step-Build {
 
     Copy-Item -LiteralPath $exe -Destination (Join-Path $RC.MsixIn 'cascade.exe') -Force
     Copy-Item -LiteralPath (Join-Path $relDir 'SoapySDR.dll') -Destination (Join-Path $RC.MsixIn 'SoapySDR.dll') -Force
+    $msixSoft = Join-Path $RC.MsixIn 'softgl'
+    if (-not (Test-Path -LiteralPath $msixSoft)) { New-Item -ItemType Directory -Path $msixSoft -Force | Out-Null }
+    foreach ($n in $softPins.Keys) { Copy-Item -LiteralPath (Join-Path $softDir $n) -Destination (Join-Path $msixSoft $n) -Force }
     $exeSha = Get-Sha256 (Join-Path $RC.MsixIn 'cascade.exe')
     $dllSha = Get-Sha256 (Join-Path $RC.MsixIn 'SoapySDR.dll')
     Assert-Check ($exeSha -eq $hashes[1]) 'payload copy matches the build' $exeSha 'the copy in msix-in differs from build\Release\cascade.exe'
     $size = (Get-Item -LiteralPath $exe).Length
     Write-Result 'PASS' 'cascade.exe' ('{0:N0} bytes, sha256 {1}' -f $size, $exeSha)
-    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim() }
+    Write-Result 'PASS' 'softgl' (($softPins.Keys | ForEach-Object { $_ + ' ' + $softSha[$_] }) -join '; ')
+    Set-StepDone 'build' @{ 'msix-in\cascade.exe' = $exeSha; 'msix-in\SoapySDR.dll' = $dllSha; 'msix-in\softgl\opengl32.dll' = $softSha['opengl32.dll']; 'msix-in\softgl\libgallium_wgl.dll' = $softSha['libgallium_wgl.dll'] } @{ exeSha256 = $exeSha; dllSha256 = $dllSha; softglOpengl32Sha256 = $softSha['opengl32.dll']; softglGalliumSha256 = $softSha['libgallium_wgl.dll']; size = $size; buildId = $buildId; subsystem = $sub; versionLine = $line.Trim() }
     return 'done'
 }
 
@@ -592,6 +609,17 @@ function Read-ZipEntryText($Zip, [string]$Name) {
     try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
 }
 
+# The software OpenGL renderer's files and their pinned sha256s: the `member` lines of
+# third_party\softgl\PINNED.txt, keyed by file name (opengl32.dll, libgallium_wgl.dll).
+function Get-SoftglPins([string]$Path) {
+    $pins = [ordered]@{}
+    foreach ($l in [System.IO.File]::ReadAllLines($Path)) {
+        $f = @($l.Trim() -split '\s+')
+        if ($f.Count -eq 3 -and $f[0] -eq 'member') { $pins[[System.IO.Path]::GetFileName($f[1]).ToLowerInvariant()] = $f[2].ToLowerInvariant() }
+    }
+    return $pins
+}
+
 function Get-ZipEntrySha256($Zip, [string]$Name) {
     $e = $Zip.GetEntry($Name)
     if ($null -eq $e) { return '' }
@@ -620,6 +648,14 @@ function Step-Msix {
         Assert-Check ($have -eq $buildInfo['exeSha256']) 'msix payload is the built exe' $have 'msix-in\cascade.exe differs from the one the build step recorded'
         $names = @(Get-ChildItem -LiteralPath $RC.MsixIn -File | ForEach-Object { $_.Name } | Sort-Object)
         Assert-Check (($names -join '|') -eq 'cascade.exe|SoapySDR.dll') 'msix-in holds only cascade.exe and SoapySDR.dll' ($names -join ', ') 'anything else in that folder would be packaged'
+        $dirs = @(Get-ChildItem -LiteralPath $RC.MsixIn -Directory | ForEach-Object { $_.Name })
+        Assert-Check (($dirs -join '|') -eq 'softgl') 'msix-in holds no folder but softgl' ($dirs -join ', ') 'anything else in that folder would be packaged'
+        $soft = @(Get-ChildItem -LiteralPath (Join-Path $RC.MsixIn 'softgl') -File | ForEach-Object { $_.Name.ToLowerInvariant() } | Sort-Object)
+        Assert-Check (($soft -join '|') -eq 'libgallium_wgl.dll|opengl32.dll') 'msix-in\softgl holds the two renderer files' ($soft -join ', ') 'the build step copies exactly these'
+        foreach ($pair in @(@('opengl32.dll', 'softglOpengl32Sha256'), @('libgallium_wgl.dll', 'softglGalliumSha256'))) {
+            $h = Get-Sha256 (Join-Path $RC.MsixIn ('softgl\' + $pair[0]))
+            Assert-Check ($h -eq $buildInfo[$pair[1]]) ('msix-in\softgl\' + $pair[0] + ' is the built one') $h 'it differs from the one the build step recorded'
+        }
     }
     $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $msixArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $RC.Repo 'installer\msix\build-msix.ps1'),
@@ -630,6 +666,7 @@ function Step-Msix {
     if ($null -eq $r) {
         Write-Plan 'check' ('package manifest: Identity Name ' + $script:StoreIdentityName + ', Publisher ' + $script:StoreIdentityPublisher + ', Version ' + (Get-MsixVersion $v))
         Write-Plan 'check' 'cascade.exe inside the package has the sha256 of the built exe'
+        Write-Plan 'check' 'softgl\opengl32.dll and softgl\libgallium_wgl.dll inside the package have the built sha256s'
         Write-Plan 'copy' ('installer\msix\Output\' + $RC.MsixName + ' to ' + $RC.Msix)
         return 'done'
     }
@@ -654,6 +691,11 @@ function Step-Msix {
         $inner = Get-ZipEntrySha256 $zip 'cascade.exe'
         $builtSha = (Get-StepInfo 'build')['exeSha256']
         Assert-Check ($inner -eq $builtSha) 'cascade.exe inside the package' $inner ('the built exe is ' + $builtSha)
+        foreach ($pair in @(@('opengl32.dll', 'softglOpengl32Sha256'), @('libgallium_wgl.dll', 'softglGalliumSha256'))) {
+            $want = (Get-StepInfo 'build')[$pair[1]]
+            $innerSoft = Get-ZipEntrySha256 $zip ('softgl/' + $pair[0])
+            Assert-Check ($innerSoft -eq $want) ('softgl\' + $pair[0] + ' inside the package') $innerSoft ('the built one is ' + $want)
+        }
     } finally { $zip.Dispose() }
     $sha = Get-Sha256 $msix
     Write-Result 'PASS' 'msix' ('{0:N0} bytes, sha256 {1} (unsigned: the Store signs it)' -f (Get-Item -LiteralPath $msix).Length, $sha)
@@ -704,7 +746,7 @@ function Get-InstallTestFiles([string]$LogPath, [string]$InstallDir) {
         $files += $path
     }
     # A success marker without a payload manifest must not pass vacuously.
-    foreach ($name in @('cascade.exe', 'SoapySDR.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe')) {
+    foreach ($name in @('cascade.exe', 'SoapySDR.dll', 'softgl\opengl32.dll', 'softgl\libgallium_wgl.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe')) {
         if ($files -notcontains (Join-Path $InstallDir $name)) { $valid = $false }
     }
     Assert-Check $valid 'install log valid' ($files.Count.ToString() + ' file records') 'expected timestamped absolute file paths, the core payload and Installation process succeeded; read verify\install.log'
@@ -822,6 +864,10 @@ function Step-InstallTest {
         Assert-Check ($instSha -eq $buildInfo['exeSha256']) 'installed cascade.exe = built cascade.exe' ('installed ' + $instSha + ' / built ' + $buildInfo['exeSha256']) 'the installer carries a different binary from the one that was built and hashed'
         $instDll = Get-Sha256 (Join-Path $installDir 'SoapySDR.dll')
         Assert-Check ($instDll -eq $buildInfo['dllSha256']) 'installed SoapySDR.dll = built SoapySDR.dll' $instDll 'the installer carries a different SoapySDR.dll'
+        foreach ($pair in @(@('opengl32.dll', 'softglOpengl32Sha256'), @('libgallium_wgl.dll', 'softglGalliumSha256'))) {
+            $instSoft = Get-Sha256 (Join-Path $installDir ('softgl\' + $pair[0]))
+            Assert-Check ($instSoft -eq $buildInfo[$pair[1]]) ('installed softgl\' + $pair[0] + ' = built') $instSoft 'the installer carries a different software renderer'
+        }
         $missing = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $installDir $_)) }
         Assert-Check (@($missing).Count -eq 0) 'installed payload files' 'CRT, licences, notes, uninstaller' ('missing: ' + (@($missing) -join ', '))
         $plansSrc = @(Get-ChildItem -LiteralPath (Join-Path $RC.Repo 'resources\bandplans') -Filter *.json -File).Count

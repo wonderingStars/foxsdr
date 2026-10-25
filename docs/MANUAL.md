@@ -1766,6 +1766,17 @@ holds the request, the code and that document to each other in both directions.
   side against stand-in declarations only: **none of it has run on Linux**, and whether
   forcing a window system cures that report is not known. Details in
   [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) ("If FoxSDR ends before its window appears").
+- **On a Windows computer with no working graphics driver** - none installed, a virtual
+  machine without 3D, some remote desktop sessions - FoxSDR (0.99.90 and later) starts
+  anyway: when the graphics driver offers no usable OpenGL, or one older than 3.0, it
+  starts itself again on the software renderer it carries in its `softgl` folder (Mesa,
+  drawn by the processor). The window looks the same and works the same; it costs more
+  processor time, so on a slow computer the picture may not be as smooth. Installing the
+  graphics card's own driver is still the better fix. To choose for yourself, set the
+  environment variable `FOXSDR_GL` before starting FoxSDR: `software` always uses the
+  software renderer (useful if a graphics driver crashes), `hardware` never does. The
+  log's `window:` lines say which one drew the window. Details in
+  [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) ("When the graphics driver cannot be used").
 - A rotating log lives in `%LOCALAPPDATA%\FoxSDR\logs\foxsdr.log`. Since
   0.89.0 it records what the **radio driver** says as well as what FoxSDR
   does: SoapySDR's own log is bridged in (lines beginning `soapy:`), and in a

@@ -25,7 +25,7 @@ function Write-Detail { param($Text) [void]$script:Messages.Add([string]$Text) }
 function Test-StepDone { return $false }
 function Assert-StepDone {}
 function Set-StepDone { $script:Done = $true }
-function Get-StepInfo { return @{exeSha256 = 'fake-hash'; dllSha256 = 'fake-hash'} }
+function Get-StepInfo { return @{exeSha256 = 'fake-hash'; dllSha256 = 'fake-hash'; softglOpengl32Sha256 = 'fake-hash'; softglGalliumSha256 = 'fake-hash'} }
 function Get-Sha256 { return 'fake-hash' }
 function Get-PeSubsystem { return 'Windows (fake)' }
 function Test-Path { param([string]$LiteralPath, [string]$Path, $PathType, $ErrorAction)
@@ -63,7 +63,7 @@ function Invoke-Planned { param($What, $File, $Arguments, $TimeoutSec)
     $prior = Join-Path $script:InstallDir 'prior.txt'
     if (Test-Path -LiteralPath $prior) { Remove-Item -LiteralPath $prior }
     $script:Payload = @()
-    foreach ($rel in @('cascade.exe', 'SoapySDR.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe', 'unins000.dat', 'resources\bandplans\fake.json', 'plugins\shipped\payload.dll')) {
+    foreach ($rel in @('cascade.exe', 'SoapySDR.dll', 'softgl\opengl32.dll', 'softgl\libgallium_wgl.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'POSTINSTALL.txt', 'unins000.exe', 'unins000.dat', 'resources\bandplans\fake.json', 'plugins\shipped\payload.dll')) {
         $script:Payload += Join-Path $script:InstallDir $rel
     }
     foreach ($rel in @('StartMenu\FoxSDR.lnk', 'StartMenu\Hardware setup notes.lnk', 'StartMenu\Uninstall FoxSDR.lnk', 'OneDrive Desktop\FoxSDR.lnk')) {
