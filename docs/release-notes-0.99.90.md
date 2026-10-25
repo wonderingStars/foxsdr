@@ -7,19 +7,19 @@ Nothing changes on a computer whose graphics driver works: the driver is always 
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.90.exe`:**
-`TBD`
+`bcf8d84bdfded60a5939967e2763d016824b291657bbd1143d87e344a45658a1`
 
 **SHA-256 of `FoxSDR-0.99.90-x86_64.AppImage`:**
-`TBD`
+`52a41fe3623f087cca42142d36952a84322103fc2f523322cd4a68ec8a639786`
 
 **SHA-256 of `foxsdr-0.99.90-linux-x64.tar.gz`:**
-`TBD`
+`16ac3ad321550641bc4f5d7e55b0ff53d8aca69109b44fc39cbe09cb57ffd652`
 
 **SHA-256 of `FoxSDR-0.99.90-aarch64.AppImage`:**
-`TBD`
+`df67749418bb139607b8b349e621123c505dc27e2568fab76453976c8e018df7`
 
 **SHA-256 of `foxsdr-0.99.90-linux-arm64.tar.gz`:**
-`TBD`
+`a27cc16334d4da64279b8e6c7dee07d185c9c0fda8063885bd082b3a28913e00`
 
 ## Features and fixes, 2026-10-25
 
