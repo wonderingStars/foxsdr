@@ -7,19 +7,19 @@ This is a repair only; nothing else changes. If you updated from 0.99.87, 0.99.8
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.91.exe`:**
-`TBD`
+`67b046abb974d3ffa315d5d640d87794ec298be5753515b27e3893811bb816d9`
 
 **SHA-256 of `FoxSDR-0.99.91-x86_64.AppImage`:**
-`TBD`
+`dd118097120faf0fb8ca2ee6de5d43aee640b0ac6190e5302b4f022ff60633f5`
 
 **SHA-256 of `foxsdr-0.99.91-linux-x64.tar.gz`:**
-`TBD`
+`564c4d400643be5164137190d7be88fd3362ec8b664d960c607f0f43709339a5`
 
 **SHA-256 of `FoxSDR-0.99.91-aarch64.AppImage`:**
-`TBD`
+`f052ec01442d43b87515bd84a837cccf3e731f78c713d8ba434481bbfccfa31e`
 
 **SHA-256 of `foxsdr-0.99.91-linux-arm64.tar.gz`:**
-`TBD`
+`37a61a298586768aa8a113b97bdd8e266b2f45eae76e60a8bfa6ede4f857a0e3`
 
 ## Features and fixes, 2026-10-26
 
