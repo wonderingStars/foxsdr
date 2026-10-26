@@ -5784,14 +5784,25 @@ void Engine::setModeIndex(int index) {
     cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], vfoBandwidthHz_);
 }
 
-void Engine::importBookmarkFile(const std::string& path) {
+bool Engine::importBookmarkFile(const std::string& path) {
     std::string p = path;
     // A path pasted from Explorer's "Copy as path" arrives quoted.
     if (p.size() >= 2 && p.front() == '"' && p.back() == '"') { p = p.substr(1, p.size() - 2); }
     const auto t0 = std::chrono::steady_clock::now();
     cascade::core::ImportResult r = cascade::core::importFrequencyFile(p);
     if (!r.error.empty() && r.items.empty()) {
-        bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), r.error.c_str());
+        // THE REASON IN THE USER'S LANGUAGE (0.99.80, stub campaign B8 - master's window said it so): the core's three reasons are English
+        // sentences, which put an English tail on "Could not import: ..."; the log below keeps the core's own words. Anything else passes
+        // through as it was.
+        std::string reason = r.error;
+        if (r.error.rfind("cannot open", 0) == 0) {
+            reason = cascade::core::formatText(tr("the file \"%s\" could not be opened"), p.c_str());
+        } else if (r.error.rfind("cannot read", 0) == 0) {
+            reason = cascade::core::formatText(tr("the file \"%s\" could not be read"), p.c_str());
+        } else if (r.error.rfind("no line had a usable frequency", 0) == 0) {
+            reason = tr("no line of the file had a usable frequency");
+        }
+        bookmarkImportNote_ = cascade::core::formatText(tr("Could not import: %s"), reason.c_str());
         // The file's KIND, never its name or path: "never the name or path of
         // a file you opened" (PRIVACY.md), and a frequency list's name is
         // usually what is on it.
@@ -5801,10 +5812,11 @@ void Engine::importBookmarkFile(const std::string& path) {
              at = why.find(p, at)) {
             why.replace(at, p.size(), "(the file)");
         }
-        cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s",
-                                 std::filesystem::path(p).extension().string().c_str(),
-                                 why.c_str());
-        return;
+        // (The extension through a UTF-8 path: .string() of a path with a letter outside the ANSI page throws on Windows.)
+        const auto extension = std::filesystem::path(std::u8string(p.begin(), p.end())).extension().u8string();
+        const std::string kind(extension.begin(), extension.end());
+        cascade::core::diagWarnf("bookmarks: an import (%s) failed: %s", kind.c_str(), why.c_str());
+        return false;
     }
     const std::size_t found = r.items.size();
     const std::size_t added = freqMgr_.addMany(std::move(r.items));
@@ -5820,6 +5832,7 @@ void Engine::importBookmarkFile(const std::string& path) {
     cascade::core::diagLogf("bookmarks: imported a %s file - %zu read, %zu added, %zu skipped, %zu shifted, %.0f ms",
                             r.format.c_str(), found, added, r.skipped, r.shifted, ms);
     if (added > 0) { saveBookmarks(); }
+    return true;
 }
 
 // FOXAPP_OP_BOOKMARK_EXPORT (API 0.3 8.6): the bookmarks whose ids `idsText` names - decimal
@@ -7280,7 +7293,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_BOOKMARK_IMPORT_FILE:
             if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no file named"); }
-            importBookmarkFile(text);
+            // AN IMPORT THAT READ NOTHING IS ANSWERED FAILED (stub campaign B8; it was answered OK with a note): the window opens its
+            // "Import a frequency list" window on that answer, with the sentence the note now holds (cut at the message's 127 bytes). The
+            // note and the log say it either way, and nothing but the note changed - the refusal's "changes nothing" rule holds for the list.
+            if (!importBookmarkFile(text)) { return refuse(FOXAPI_FAILED, bookmarkImportNote_.c_str()); }
             return res;
         case FOXAPP_OP_BOOKMARK_EXPORT: {
             // The ids of the bookmarks the section shows, by the long-text channel. The engine

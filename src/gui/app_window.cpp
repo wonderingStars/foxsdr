@@ -1498,6 +1498,20 @@ int AppWindow::run(int frames) {
         forceDisplayStall = forceStall != nullptr && forceStall[0] == '1';
         const char* hook = std::getenv("CASCADE_PLUGIN_TEST");
         if (hook != nullptr && *hook != '\0') { pluginTestHook_ = hook; }
+        // A SYNTHETIC MACHINE FOR THE RADIO SETUP PAGE (core/radio_setup.hpp, fakeInventory): replaces the probe and the application's own radio
+        // lists, so a test makes the page appear with a chosen finding on a desk that holds a real radio, or stay away on one that holds none.
+        // Bounded runs only, like every hook here: an interactive session can never be told it has no radio by a stray variable.
+        if (const char* fake = std::getenv("FOXSDR_FAKE_RADIO_SETUP"); fake != nullptr && *fake != '\0') { radioSetupFake_ = fake; }
+        radioSetupBounded_ = true;
+        // ...and what INSTALL DRIVER does on that machine (see driverInstallFake_): bounded runs with a synthetic machine only.
+        if (const char* fake = std::getenv("FOXSDR_FAKE_DRIVER_INSTALL"); fake != nullptr && *fake != '\0' && !radioSetupFake_.empty()) {
+            driverInstallFake_ = fake;
+        }
+        // THE BROWSE KEY'S ANSWER WITHOUT A DIALOG (core/file_pick.hpp, AppWindow::pickFile): FOXSDR_FILE_PICK=<path> is the file "chosen",
+        // FOXSDR_FILE_PICK= (set, empty) is the dialog cancelled. A native dialog cannot be pressed from a test, and the key's whole path - the
+        // press, the commit, the import, the plugin seeing settings_seq move - can. Bounded runs only: an interactive session can never have its
+        // file dialog replaced by a stray variable.
+        if (const char* pickSeam = std::getenv("FOXSDR_FILE_PICK"); pickSeam != nullptr) { filePickSeam_ = std::string(pickSeam); }
         // A DLL to map on frame 90, standing in for another program's injected hook (foreignModuleTestPath_ in the header). Bounded
         // runs only, like every hook here.
         if (const char* fm = std::getenv("CASCADE_FOREIGN_MODULE_TEST"); fm != nullptr && *fm != '\0') {
@@ -1561,6 +1575,9 @@ int AppWindow::run(int frames) {
         // tools/measure_engine.ps1). Bounded runs only, like the hooks above.
         measure_ = cascade::core::EngineMeasure::fromEnvironment();
     }
+    // A PATH settings field and the "Import a frequency list" window draw their BROWSE key only where there is a file dialog to open (the
+    // system's on Windows; zenity or kdialog on Linux) - or the test seam above to stand in for one.
+    if (filePickSeam_.has_value() || cascade::core::filePickAvailable()) { filePickOffered_ = true; }
     // The frame log (gui/frame_log.hpp): allocated here, before the first
     // frame, and written once after the loop.
     frameLog_ = cascade::gui::FrameLog::fromEnvironment();
@@ -1848,6 +1865,10 @@ int AppWindow::run(int frames) {
         featureRequestSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
         // ...and the same for the REPORT A BUG / DISLIKE page's sender.
         problemReportSender_.poll(static_cast<std::uint64_t>(std::time(nullptr)));
+        // The import's lookup, when a path with no root is being looked for on its worker: sent on to the engine the frame it is back.
+        importLookupPoll();
+        // The RADIO SETUP probe: started on the first frame, collected without ever waiting, and the once-a-launch decision to raise the page.
+        radioSetupFrame();
         frameScope.to(cascade::core::FrameScope::Other);
         // The hook's ONE fetch, started on the first frame so the rest of the
         // bounded run proves the window keeps rendering while it is in
@@ -3356,12 +3377,13 @@ void benchGroup(const char* caption) {
 }  // namespace
 
 // A FILE DROPPED ON THE WINDOW (the drop callback only records its path; this is the frame taking it): an import like the Import key's,
-// as the same command on this window's session (see drawUi).
+// as the same command on this window's session (see drawUi) - importBookmarkFile cleans the path and sends it. While the "Import a frequency
+// list" window is open a file dropped on the window goes where that window says (a preset's rows join the preset); otherwise as the file says.
 void AppWindow::submitPendingDrop() {
     if (pendingDropPath_.empty()) { return; }
     const std::string dropped = std::move(pendingDropPath_);
     pendingDropPath_.clear();
-    uiSubmit(cascade::core::cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, dropped));
+    importBookmarkFile(dropped, importDialogOpen_ ? importDialogInto_ : cascade::core::ImportInto{});
 }
 
 void AppWindow::drawUi() {
@@ -3763,6 +3785,8 @@ void AppWindow::drawUi() {
     // would nest it in that window's ID stack, where the dim overlay it draws
     // would sit under the panels it is meant to block.
     drawMutePopup();
+    // The "Import a frequency list" window (0.99.80), beside it for the same reason.
+    drawImportDialog();
     // The deck's bias tee question, at the top level for the same reason.
     drawBiasKeyConfirm();
 
@@ -7710,6 +7734,28 @@ bool AppWindow::shellOpen(const std::string& target) {
     });
 }
 
+// THE BROWSE KEY'S FILE DIALOG (core/file_pick.hpp; 0.99.74, restored by stub campaign B8): the answer is a path, or nothing when the person
+// cancelled. Used by the "Import a frequency list" window and, from B9, by a PATH settings field's BROWSE FILES.
+bool AppWindow::pickFile(const cascade::core::FilePickRequest& request, std::string& path) {
+    path.clear();
+    // THE TEST SEAM (bounded runs only, set in run()): no dialog, the answer is the variable's text, and an empty one is a cancel.
+    if (filePickSeam_.has_value()) {
+        path = *filePickSeam_;
+        return !path.empty();
+    }
+    // A MODAL DIALOG BLOCKS THIS THREAD for as long as the person takes to choose, which is the case gui/shell_open.hpp names for the watchdog's
+    // user-paced pause: the same bracket every shell call goes through, so a person reading a file dialog is not filed as a hang of a healthy
+    // application, and the wait is not counted as a slow frame. The dialog is modal to the main window.
+    cascade::core::FilePickRequest rq = request;
+    rq.owner = cascade::gui::frame::nativeHandle(mainWindow_);
+    bool chosen = false;
+    cascade::gui::runShellOpen(watchdogShellHooks(), [&]() -> bool {
+        chosen = cascade::core::pickFile(rq, path);
+        return chosen;
+    });
+    return chosen;
+}
+
 bool AppWindow::launchInstaller(const std::string& path) {
 #if defined(_WIN32)
     // UNDER A WATCHDOG PAUSE, and that is the whole of the 0.96.2 fix. The
@@ -8051,6 +8097,16 @@ void AppWindow::drawSourceSection() {
         ImGui::SetTooltip("%s", tr("Ask UHD for USRPs on the network (N200, X310, N310 and the "
                                    "like) as well as on USB. A USB USRP is always looked for "
                                    "when one is plugged in."));
+    }
+    // THE WAY BACK TO THE RADIO SETUP PAGE, here because this is where a person looks when their radio is not in the list above. The page opens
+    // by itself once a launch for someone with no usable radio and can be silenced for good; this key opens it whenever they want it, silenced
+    // or not.
+    if (ImGui::SmallButton(trId("RADIO SETUP"))) { radioSetupOpen_ = true; }
+    cascade::gui::census::note("source:radio-setup");
+    {
+        const ImVec2 k0 = ImGui::GetItemRectMin();
+        const ImVec2 k1 = ImGui::GetItemRectMax();
+        cascade::gui::census::rect("source:radio-setup", k0.x, k0.y, k1.x, k1.y);
     }
     // SAID WHEN THE LAST SCAN LEFT UHD OUT, so a network USRP that is not in
     // the list is not missing silently (gui::networkUsrpHint). Not while the
@@ -8721,6 +8777,16 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
         r.soapy = std::strncmp(it.detail, "soapy:", 6) == 0;
         r.pluto = std::strncmp(it.detail, "pluto:", 6) == 0;
         r.rtltcp = std::strncmp(it.detail, "rtltcp:", 7) == 0;
+        // THE DRIVER KEY (the RADIO SETUP page lists what is visible by family): a native row's id is "<driver>:<args>", a SoapySDR row's
+        // "soapy:<args>", whose driver is the args' own "driver=" (the id is cut at 159 bytes; the driver is in the first ones).
+        if (i < kNativeRowBase) {
+            r.driver.clear();
+        } else if (r.soapy) {
+            r.driver = cascade::gui::detail::driverOf(std::string(it.detail + 6));
+        } else {
+            const char* colon = std::strchr(it.detail, ':');
+            r.driver.assign(it.detail, colon != nullptr ? static_cast<std::size_t>(colon - it.detail) : std::strlen(it.detail));
+        }
         c.anySoapyRow = c.anySoapyRow || r.soapy;
         if (i == 0 && (it.flags & FOXAPI_ITEM_ACTIVE) != 0u) { c.generatorActive = true; }
         // THE CAPTION THE COMBO LETTERS: a native radio is "<name> (native)" - not decoration: with a Soapy row
@@ -14799,6 +14865,7 @@ void AppWindow::drawPluginWindows() {
     drawDemodScopePage();
     drawFeatureRequestPage();
     drawProblemReportPage();
+    drawRadioSetupPage();
 
     // Plugin-declared windows. Each gets its own, titled by the plugin, so two
     // plugins cannot collide in one panel.
@@ -17602,6 +17669,9 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
         // THE AIRBAND SECTION'S ANSWERS (stub campaign B7): the rows added for a lookup, a typed frequency or an import (the engine says how many, or
         // why a typed one was refused), a removed preset, a LISTEN that would not start.
         if (r.op == FOXAPP_OP_BOOKMARK_ADD_ROWS || r.op == FOXAPI_OP_BOOKMARK_REMOVE_GROUP || r.op == FOXAPP_OP_AIRBAND) { airbandOnAnswer(r); }
+        // THE IMPORT'S ANSWER (stub campaign B8): FAILED when the engine read nothing - the "Import a frequency list" window opens with its
+        // sentence - and OK when it read rows, which closes that window.
+        if (r.op == FOXAPP_OP_BOOKMARK_IMPORT_FILE) { importOnAnswer(r); }
         // THE WEB AND CAT PANELS' ANSWER (stage 5b): one is owed for every SERVER_CONFIG sent (the mirrors wait for them), and a refusal -
         // a password under eight characters, say - is lettered on the web panel in the engine's words, as the password field's own complaint was.
         if (r.op == FOXAPI_OP_SERVER_CONFIG) {
@@ -19645,11 +19715,22 @@ void AppWindow::drawBookmarksSection() {
     cascade::gui::inputTextWithFittedHint(
         "##bm_import", tr("SDR# frequencies.xml or .csv - or drop it on the window"),
         bookmarkImportPath_, sizeof(bookmarkImportPath_));
+    cascade::gui::census::rect("bookmarks:importpath", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     if (importBeside) { ImGui::SameLine(); }
-    ImGui::BeginDisabled(bookmarkImportPath_[0] == '\0');
+    // Disabled while a lookup is out (it is on a worker, 0.99.65: the path the user typed is being looked for, and a second press would only be
+    // remembered). NOT disabled by an empty box any more (0.99.80): pressed empty, it opens the "Import a frequency list" window, with its drop
+    // zone and Browse key.
+    ImGui::BeginDisabled(bookmarkImportPending());
     if (ImGui::Button(trId("Import"), ImVec2(importW, 0.0f))) {
-        uiSubmit(cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, bookmarkImportPath_));
+        if (bookmarkImportPath_[0] == '\0') {
+            openImportDialog(cascade::core::ImportInto{}, std::string());
+        } else {
+            importBookmarkFile(bookmarkImportPath_);
+        }
     }
+    cascade::gui::census::rect("bookmarks:import", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("%s", tr("Adds every entry of an SDR# frequencies.xml, or of a CSV with a\n"
@@ -19660,6 +19741,11 @@ void AppWindow::drawBookmarksSection() {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
         ImGui::TextWrapped("%s", statusLines_.bookmarkNote.c_str());
         ImGui::PopStyleColor();
+    }
+    // A lookup that is taking long says so, in the sentence the Record button and the I/Q file's Open already use; one answered at once never
+    // shows it.
+    if (bookmarkImportPending() && bookmarkImportElapsedS() >= 1.0) {
+        ImGui::TextDisabled(tr("Waiting for the disk to open the file: %.0f s"), bookmarkImportElapsedS());
     }
 
     // --- the view: search, group, favourites -------------------------------
@@ -21475,6 +21561,7 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     railCollapsed_ = cfg.railCollapsed;
     statusCollapsed_ = cfg.statusCollapsed;
     displayOpen_ = cfg.displayOpen;
+    radioSetupDontShow_ = cfg.radioSetupDontShow;   // the RADIO SETUP page's "Don't show this again" tick (stub campaign B8)
     // Told at once, so the engine's FIRST pass already knows (it starts "showing"): a window that opens on the receiver
     // must not run the patch step for a pass and stop it again.
     syncPatchPageOpen();
@@ -21666,6 +21753,7 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.railCollapsed = railCollapsed_;
     cfg.statusCollapsed = statusCollapsed_;
     cfg.displayOpen = displayOpen_;
+    cfg.radioSetupDontShow = radioSetupDontShow_;
     cfg.splitRatio = splitRatio_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
     cfg.language = languageSetting_;  // as chosen: never FOXSDR_LANGUAGE

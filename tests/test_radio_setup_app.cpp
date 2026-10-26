@@ -20,7 +20,16 @@
  *                  someone who ticked the box;
  *   check again    the page's CHECK AGAIN key runs a second probe;
  *   no seam        a run without the variable reads the real bus and prints
- *                  what it found (reported, not asserted - the desk decides).
+ *                  what it found (reported, not asserted - the desk decides);
+ *   install driver the one-click RTL-SDR driver install (0.99.88): the key is on the
+ *                  finding that can use it and on no other; pressed, it starts ONE
+ *                  install (the log says it once) and shows a sentence; a finished one
+ *                  says what it did and - when the driver went in - checks the radios
+ *                  again; pressed while one is out, it starts no second. (Written for
+ *                  stub campaign B8: this test had no scenario for the key, which is
+ *                  why the plan could not say it was covered. The synthetic machine
+ *                  starts nothing and shows no prompt: FOXSDR_FAKE_DRIVER_INSTALL=
+ *                  <outcome>[,<ms>] chooses what the key answers and how long it takes.)
  *
  * The presses are the application's own input script, aimed from the census.
  * The vendor links are NOT pressed: that would open a browser on the desktop.
@@ -133,6 +142,7 @@ struct Run {
     bool dontShow = false;      // radioSetupDontShow in the config
     std::string script;
     std::string reuseConfig;    // the tag of an earlier run whose config this one starts from
+    std::string fakeInstall;    // FOXSDR_FAKE_DRIVER_INSTALL: "<outcome>[,<ms>]", empty = the default (not found, at once)
 };
 
 Result once(const Run& r) {
@@ -157,6 +167,7 @@ Result once(const Run& r) {
     setEnv("FOXSDR_DIAG_DIR", diag.string());
     setEnv("FOXSDR_WINDOW_SIZE", "1920x1080");
     setEnv("FOXSDR_FAKE_RADIO_SETUP", r.fake);
+    setEnv("FOXSDR_FAKE_DRIVER_INSTALL", r.fakeInstall);
     if (r.script.empty()) {
         setEnv("FOXSDR_INPUT_SCRIPT", "");
     } else {
@@ -413,6 +424,81 @@ void testCheckAgainRunsASecondProbe() {
     CHECK(a.has("radio-setup:finding:wrong-driver"));
 }
 
+// THE ONE-CLICK DRIVER INSTALL KEY (0.99.88). The census names are the page's own: the key is `radio-setup:install-driver<finding>`, the
+// sentence under the findings `radio-setup:install-status`.
+void testInstallDriver() {
+    std::printf("  install driver\n");
+    const char* const kRequested = "radio setup: one-click driver install requested";
+    const char* const kProbe = "a synthetic machine, the bus is not read";
+
+    // WHERE IT IS OFFERED: on the RTL-SDR whose interface 0 is on the bus and has the wrong driver, on nothing else.
+    Run layoutRun;
+    layoutRun.tag = "install-layout";
+    layoutRun.fake = "rtl-dvbt";
+    const Result layout = once(layoutRun);
+    CHECK(layout.ok);
+    CHECK(layout.has("radio-setup:install-driver"));
+    CHECK(layout.rects.count("radio-setup:install-driver0") == 1);
+    CHECK(!layout.has("radio-setup:install-status"));  // nothing pressed, nothing said
+    CHECK(!layout.logs(kRequested));
+    for (const char* machine : {"rsp-noapi", "usrp-nouhd", "none"}) {
+        Run other;
+        other.tag = std::string("install-none-") + machine;
+        other.fake = machine;
+        const Result o = once(other);
+        CHECK(o.ok);
+        CHECK(o.has("radio-setup:page"));
+        CHECK(!o.has("radio-setup:install-driver"));
+    }
+    if (layout.rects.count("radio-setup:install-driver0") != 1) { return; }
+    const Rect key = layout.rects.at("radio-setup:install-driver0");
+    std::printf("    key at %.0f,%.0f .. %.0f,%.0f\n", key.x0, key.y0, key.x1, key.y1);
+
+    // PRESSED: one request, the answer in the log and on the page, and no second probe (nothing was installed).
+    {
+        Run press;
+        press.tag = "install-press";
+        press.fake = "rtl-dvbt";
+        press.script = pressAt(30, key);
+        const Result a = once(press);
+        CHECK(a.ok);
+        CHECK(a.count(kRequested) == 1);
+        CHECK(a.logs("radio setup: driver install not-found - a synthetic machine: nothing was started"));
+        CHECK(a.has("radio-setup:install-status"));
+        CHECK(a.count(kProbe) == 1);
+        CHECK(a.has("radio-setup:page"));
+    }
+    // A FINISHED INSTALL THAT PUT THE DRIVER IN checks the radios again, so the radio appears without another press.
+    {
+        Run press;
+        press.tag = "install-done";
+        press.fake = "rtl-dvbt";
+        press.fakeInstall = "installed";
+        press.script = pressAt(30, key);
+        const Result a = once(press);
+        CHECK(a.ok);
+        CHECK(a.count(kRequested) == 1);
+        CHECK(a.logs("radio setup: driver install installed - a synthetic machine: nothing was started"));
+        CHECK(a.has("radio-setup:install-status"));
+        CHECK(a.count(kProbe) == 2);
+    }
+    // ONE AT A TIME: three presses while the first install is still out (it takes ten minutes) start one install, say nothing finished, and
+    // check nothing again.
+    {
+        Run press;
+        press.tag = "install-busy";
+        press.fake = "rtl-dvbt";
+        press.fakeInstall = "installed,600000";
+        press.script = pressAt(30, key) + pressAt(46, key) + pressAt(62, key);
+        const Result a = once(press);
+        CHECK(a.ok);
+        CHECK(a.count(kRequested) == 1);
+        CHECK(!a.logs("radio setup: driver install installed"));
+        CHECK(a.has("radio-setup:install-status"));
+        CHECK(a.count(kProbe) == 1);
+    }
+}
+
 // A seam value that names no machine reads as an unreadable bus and raises
 // nothing: a typo in a test must not look like a radio that is missing.
 void testAnUnknownMachineRaisesNothing() {
@@ -485,6 +571,7 @@ int main() {
     testTheTickIsSavedAndSilencesTheNextLaunch();
     testTheSourceSectionKeyOpensThePage();
     testCheckAgainRunsASecondProbe();
+    testInstallDriver();
     testAnUnknownMachineRaisesNothing();
     testTheRealBusIsProbed();
 

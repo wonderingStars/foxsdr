@@ -41,7 +41,12 @@
  *            (three rows saved) and no window ever opens;
  *   airband  the AIRBAND section's Import with its box empty opens the window (nothing was imported),
  *            and Browse's file joins the section's preset: three rows, all in the group "Manual",
- *            all ticked.
+ *            all ticked;
+ *   shapes   (0.99.82, ledger S47; stub campaign B8 - tests/test_gui_file_jobs.cpp has the full table, and is
+ *            B19's) what a person pastes or drags in: a full path in single quotes with the space a paste
+ *            leaves, a file:// address, a name with a folder part (lists/nested.csv, in the recordings
+ *            folder) and a bare name in double quotes. Each is a file that exists: three rows come in and no
+ *            window opens. The window cleans the path BEFORE the op.
  *
  * NO NETWORK: every telemetry address is a discard port and the update check is off.
  *
@@ -587,6 +592,45 @@ int main() {
         const Result b = once("bare-control", before);
         CHECK(b.ok);
         if (b.ok) { CHECK(b.rows() == 0); }
+    }
+
+    // --- SHAPES: the paths people paste, each a file that exists ------------------------------------------------
+    {
+        const std::string recFile = (recordingsDir() / kInRecordings).generic_string();
+        writeFile(recordingsDir() / "lists" / "nested.csv", threeRows("Nested"));
+        struct Shape {
+            const char* tag;
+            std::string typed;
+            const char* firstRow;
+        };
+        const Shape shapes[] = {
+            {"shape-quoted", "'" + recFile + "' ", "Exported 0"},
+            // A full path with a root and the Enter that ended the pasted line: it goes to the engine as the window cleaned it, never as typed
+            // (a path with a root is not looked for, so nothing else would clean it; and not spaces - Windows drops those from a path itself,
+            // so a mutant that sent them on would pass).
+            {"shape-enter", recFile + "\r\n", "Exported 0"},
+            {"shape-uri", std::string("file://") + (recFile[0] == '/' ? "" : "/") + recFile, "Exported 0"},
+            {"shape-folder", "lists/nested.csv", "Nested 0"},
+            {"shape-dquoted-bare", "\"" + kInRecordings + "\"", "Exported 0"},
+        };
+        for (const Shape& sh : shapes) {
+            RunOptions o;
+            o.frames = 70;
+            o.script = pressImport;
+            o.importName = sh.typed;
+            o.pickEmpty = true;
+            o.shotAt = 60;
+            const Result r = once(sh.tag, o);
+            CHECK(r.ok);
+            if (r.ok) {
+                std::printf("    %s: %d rows saved; window parts noted: %d\n", sh.tag, r.rows(), r.rectsWithPrefix("import:"));
+                std::fflush(stdout);
+                CHECK(r.rows() == 3);
+                CHECK(r.bookmarks.find(sh.firstRow) != std::string::npos);
+                checkNoWindowParts(r, sh.tag);
+                CHECK(!r.windowUp);
+            }
+        }
     }
 
     // --- AIRBAND: the preset's Import with its box empty opens the window FOR THE PRESET -------------

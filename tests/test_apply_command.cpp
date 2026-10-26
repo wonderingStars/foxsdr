@@ -1785,6 +1785,18 @@ void bookmarkOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, csv.string()))));
         CHECK(A::bookmarks(a).size() == before + 2u);
         CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, "")), FOXAPI_BAD_ARGUMENT));
+        // AN IMPORT THAT READ NOTHING IS ANSWERED FAILED (stub campaign B8; it was answered OK with a note): the window opens its "Import a
+        // frequency list" window on that answer. The note says why, in the user's language and with the path it tried (the log never names a
+        // file: tests/test_import_dialog_app's `failure`); the list is as it was.
+        const std::filesystem::path missing = g_scratch / "no-such-list.csv";
+        const FoxCommandResult failed = A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, missing.string()));
+        CHECK(refused(failed, FOXAPI_FAILED));
+        CHECK(std::string(failed.message).rfind("Could not import: the file \"", 0) == 0);
+        CHECK(A::importNote(a) == "Could not import: the file \"" + missing.string() + "\" could not be opened");
+        CHECK(A::bookmarks(a).size() == before + 2u);
+        // ...and an import that read rows, even rows that were all here already, is answered OK.
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_BOOKMARK_IMPORT_FILE, csv.string()))));
+        CHECK(A::bookmarks(a).size() == before + 2u);
     }
 
     covering(FOXAPP_OP_BOOKMARK_EXPORT);

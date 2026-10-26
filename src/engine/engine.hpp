@@ -852,8 +852,10 @@ private:
     // every star clicked is exactly the slowdown an imported list must not add.
     void saveBookmarks();
     void flushBookmarkSave(bool force);
-    // Imports an SDR# frequencies.xml or a CSV into the bookmarks.
-    void importBookmarkFile(const std::string& path);
+    // Imports an SDR# frequencies.xml or a CSV into the bookmarks. True when it read something (rows, even rows already here); false when
+    // it read nothing - the note then says why, in the user's language, and FOXAPP_OP_BOOKMARK_IMPORT_FILE answers FAILED (stub campaign B8:
+    // the window opens its "Import a frequency list" window on that answer).
+    bool importBookmarkFile(const std::string& path);
     // Writes the bookmarks whose ids the text names, whole and in the store's order, as SDR#'s
     // frequencies.xml under the record folder (FOXAPP_OP_BOOKMARK_EXPORT); sets the note.
     // FOXAPI_OK, BAD_ARGUMENT (no id named), NOT_FOUND (none of them exists) or FAILED (the file).

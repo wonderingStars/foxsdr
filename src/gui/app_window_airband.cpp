@@ -35,7 +35,8 @@
 // sequence. The facts (the monitor's state and sentences) and the rows (BOOKMARKS) are cached the way every other panel's are.
 //
 // WHAT IS NOT HERE, and where it is:
-//   - the IMPORT dialog (the empty-box press, a failed read): batch B8 - openImportDialog() below is the hook, empty until then;
+//   - the IMPORT dialog (the empty-box press, a failed read) is app_window_import_dialog.cpp's (stub campaign B8): openImportDialog() opens it;
+//     a read that comes back with rows closes it (airbandPollJobs below);
 //   - the tester recorder's feature notes ("airband", "airband-listen" - master's testerUsage_.noteFeature): the window's recorder is batch B15's;
 //     the call sites are marked NOTEFEATURE;
 //   - the top bar's SQUELCH AUTO and the deck's squelch dial following the monitor: batch B12 (the slider and "Above the noise" below send the
@@ -402,13 +403,6 @@ void AppWindow::airbandImportPreset() {
     airbandImportFile(airband_.importPath);
 }
 
-// THE IMPORT DIALOG'S HOOK (batch B8 brings the window: a drop zone and a Browse key, whose chosen file joins `into`). Until it does there is no
-// dialog to open: a press with the box empty, and a read that found nothing, say what they always said in the section's note and nothing more.
-void AppWindow::openImportDialog(const cc::ImportInto& into, const std::string& reason) {
-    (void)into;
-    (void)reason;
-}
-
 // THE DISK IS NOT TOUCHED HERE (0.99.65): the file the user typed - a path that can be a network share or a sleeping drive - is read and parsed
 // on a worker (gui/disk_job.hpp), which owns everything it touches by value; airbandPollJobs() collects it. ONE READ AT A TIME: a press made
 // while one is out is remembered (the last one) and read when the first is back.
@@ -487,6 +481,11 @@ void AppWindow::airbandPollJobs() {
             // import that failed (batch B8).
             openImportDialog(cc::ImportInto{group, true}, airband_.presetNote);
         } else {
+            // An import the window was waiting for came back WITH rows: it has done its job, and the "Import a frequency list" window - open
+            // if the import began there (a Browse, a dropped file) - closes (batch B8).
+            importDialogOpen_ = false;
+            importDialogQueued_ = false;
+            importDialogReason_.clear();
             run.active = true;
             run.group = group;
             run.found = o.found;

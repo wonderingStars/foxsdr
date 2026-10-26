@@ -33,6 +33,8 @@ struct GLFWwindow;
 #include "core/config.hpp"
 #include "core/diag_history.hpp"
 #include "core/freq_import.hpp"
+#include "core/file_pick.hpp"
+#include "core/radio_setup.hpp"
 #include "core/freq_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_host.hpp"
@@ -174,6 +176,7 @@ struct PluginStoreModel;
 struct FittedModulesDeck;
 struct FittedListCache;
 struct StoreListCache;
+struct ImportJobs;   // the import lookup's worker (app_window_import_dialog.cpp)
 
 // --- THE FUNCTION SELECT RAIL'S ROW GEOMETRY ---------------------------------
 //
@@ -1357,10 +1360,79 @@ private:
                               std::size_t total, std::size_t ticked);
     void airbandOnAnswer(const FoxCommandResult& r);
     cascade::gui::AirbandJobs& airbandJobs();
-    // THE "Import a frequency list" WINDOW (0.99.80, batch B8): opened for a preset by an Import pressed with the box empty and by a read that
-    // found nothing. The hook only, until B8 brings the window.
-    void openImportDialog(const cascade::core::ImportInto& into, const std::string& reason);
     cascade::gui::AirbandWindowState airband_;
+
+    // --- THE "Import a frequency list" WINDOW and the import path (0.99.80 - 0.99.82; stub campaign B8; app_window_import_dialog.cpp) ----------
+    //
+    // A centred modal with a drop zone drawn in words, a BROWSE key (only where there is a file dialog) and Cancel. It opens when Import is
+    // pressed with its box empty (the Bookmarks section's, or the Airband preset's, whose rows then join the preset) and when an import comes
+    // back with nothing; it closes when one comes back with rows. THE IMPORT ITSELF is the engine's (FOXAPP_OP_BOOKMARK_IMPORT_FILE): the
+    // window cleans what was typed, pasted or dropped into a path (cleanImportPath: quotes, the Enter of a paste, a file:// address) BEFORE the
+    // op; a path with a root goes to the engine as it stands; any other - a bare name, lists/marine.csv - is looked for in the working directory
+    // and then in the recordings folder on a worker (the read stays off the pass), and the op names the place found (or the last place tried, so
+    // the failure says where it looked). The engine's answer (FAILED when it read nothing) is what opens the window.
+    void importBookmarkFile(const std::string& path, const cascade::core::ImportInto& into = cascade::core::ImportInto{});
+    void importSendOp(const std::string& path, const cascade::core::ImportInto& into);   // the op, its answer awaited
+    void importLookupPoll();                        // once a frame: a finished lookup is sent on to the engine
+    void importOnAnswer(const FoxCommandResult& r); // the engine's answer to an import this window sent
+    bool bookmarkImportPending() const;             // a lookup is out on its worker
+    double bookmarkImportElapsedS() const;
+    void drawImportDialog();
+    // Opens it (the state only: the keys that ask are drawn inside the rail, before the root level exists, and ImGui wants OpenPopup and
+    // BeginPopupModal in one ID stack - the deferral drawMutePopup() uses). `into` is where the rows go (a preset's name, or nothing: as the file
+    // says), `reason` the sentence of the failure that opened it.
+    void openImportDialog(const cascade::core::ImportInto& into, const std::string& reason);
+    bool importDialogOpen_ = false;
+    bool importDialogQueued_ = false;
+    cascade::core::ImportInto importDialogInto_;
+    std::string importDialogReason_;
+    struct ImportAsk {
+        std::uint64_t ticket = 0;
+        cascade::core::ImportInto into;
+    };
+    std::vector<ImportAsk> importAsks_;             // the imports sent whose answer has not come
+    std::shared_ptr<cascade::gui::ImportJobs> importJobs_;   // made on first use; defined in app_window_import_dialog.cpp
+    // THE BROWSE KEY'S FILE DIALOG (core/file_pick.hpp; 0.99.74): a blocking native dialog under the watchdog's user-paced pause
+    // (runShellOpen(watchdogShellHooks(), ...)), or - in a bounded run - the seam FOXSDR_FILE_PICK: the variable's text is the file "chosen",
+    // an empty one is the dialog cancelled. Defined in app_window.cpp, where the pause's call sites are counted (tests/test_excuse_cap.cpp).
+    bool pickFile(const cascade::core::FilePickRequest& request, std::string& path);
+    bool filePickOffered_ = false;                  // there is a dialog to open (the system's, or the seam)
+    std::optional<std::string> filePickSeam_;       // FOXSDR_FILE_PICK, read by run() in a bounded run only
+
+    // --- RADIO SETUP (core/radio_setup.hpp, app_window_radio_setup.cpp; 0.99.69, the INSTALL DRIVER key 0.99.88; stub campaign B8) ----------
+    //
+    // THE FIRST-RUN PAGE: what is plugged in, what is installed for it, and the one thing to install when the two do not add up. It opens BY
+    // ITSELF once a launch, when the start-up probe has finished, the application's own enumeration has listed no radio, nothing the probe found
+    // is usable and the person has not ticked "Don't show this again"; and by a key in the Source section whenever they want it. The open flag is
+    // in no config (the rule of every torn-off page); the one thing saved is the tick, as AppConfig::radioSetupDontShow. The probe is the
+    // window's own (host glue: the USB bus and the vendors' installs of THIS computer, on a worker of its own); what the application's lists hold
+    // comes from the table (gui/radio_setup_inventory.hpp) - the Source rows, the patch's radios, the state's flags, fact.source.uhdNoImages.
+    bool radioSetupOpen_ = false;
+    bool radioSetupDontShow_ = false;
+    cascade::core::radiosetup::Probe radioSetupProbe_;     // started on the first frame and again by CHECK AGAIN
+    bool radioSetupStarted_ = false;
+    bool radioSetupDecided_ = false;                       // the once-a-launch decision to raise the page has been made, whichever way
+    // FOXSDR_FAKE_RADIO_SETUP, read in bounded runs only: a synthetic machine that replaces the probe AND the application's lists, so a test can
+    // make the page appear with a chosen finding on any desk.
+    std::string radioSetupFake_;
+    // This is a bounded (--frames) run: it never has the page raise itself on the real bus (a CI runner has no radio and would get the page over
+    // every scripted click of every other test); it still probes and logs, and raises the page only for a synthetic machine.
+    bool radioSetupBounded_ = false;
+    cascade::core::radiosetup::Inventory radioSetupInventory();
+    void radioSetupStartProbe();
+    void radioSetupFrame();
+    void radioSetupCheckAgain();
+    void drawRadioSetupPage();
+    // THE ONE-CLICK DRIVER INSTALL (0.99.88, core/winusb_install.hpp): the elevated helper started by INSTALL DRIVER (`cascade --install-winusb`,
+    // a process_boot helper, kind-blind), waited for off the GUI thread. Null when none has been started; ONE at a time.
+    struct DriverInstallJob;
+    std::shared_ptr<DriverInstallJob> driverInstall_;
+    std::string driverInstallStatus_;                      // the last install's sentence for the page, already translated
+    // FOXSDR_FAKE_DRIVER_INSTALL=<outcome>[,<milliseconds>] (bounded runs with a synthetic machine only): the key answers with that outcome
+    // after that long, starting nothing and showing no prompt - so a test can hold an install "in flight" and see the key refuse a second one.
+    std::string driverInstallFake_;
+    void radioSetupInstallDriver(const std::string& instanceId);
+    void radioSetupPollDriverInstall();
 
     // --- Config persistence (P5) ---------------------------------------------
     // Pushes every AppConfig field into the pipeline/panel mirrors; source
@@ -1522,6 +1594,7 @@ private:
             bool soapy = false;              // the id begins "soapy:"
             bool pluto = false;              // the id begins "pluto:"
             bool rtltcp = false;             // the id begins "rtltcp:" (0.99.70: the Pluto's kind of row)
+            std::string driver;              // the radio's driver key, for the RADIO SETUP page: a native row's own ("rtlsdr"), a SoapySDR row's "driver=" ("uhd"); "" for the three fixed rows
         };
         std::vector<Row> rows;               // DEVICES, in the combo's order
         bool anySoapyRow = false;            // some entry is a SoapySDR row (its id begins "soapy:")

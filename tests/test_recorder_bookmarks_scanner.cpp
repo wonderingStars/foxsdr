@@ -1569,12 +1569,16 @@ void testTheCommandsReachTheEngine() {
             Access::submit(app, q);
             Access::look(app, true);
             const auto answers = Access::answers(app);
-            if (answers.size() != 1u || answers[0].second != FOXAPI_OK) {
+            // (Every command is accepted - but an import of a file that is not there, which the Import key's replay names, is answered FAILED
+            // since stub campaign B8: the engine says whether it read anything, and the window opens its "Import a frequency list" window on
+            // that answer. It was OK with only the note saying so; the note is checked below as it always was, and the answer is now held too.)
+            const int want = op == FOXAPP_OP_BOOKMARK_IMPORT_FILE ? FOXAPI_FAILED : FOXAPI_OK;
+            if (answers.size() != 1u || answers[0].second != want) {
                 std::printf("      %s: %zu answers, first %d\n", describe(q).c_str(), answers.size(),
                             answers.empty() ? 0 : answers[0].second);
             }
             CHECK_EQ(answers.size(), 1u);
-            if (answers.size() == 1u) { CHECK_EQ(answers[0].second, FOXAPI_OK); }
+            if (answers.size() == 1u) { CHECK_EQ(answers[0].second, want); }
             const FoxReceiverState& st = Access::state(app);
             const std::vector<cc::Bookmark> list = Access::storeList(app);
             switch (op) {

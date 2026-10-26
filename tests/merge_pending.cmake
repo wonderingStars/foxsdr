@@ -46,8 +46,8 @@ cascade_merge_pending(TX-PLUGIN        # 0.99.74 a plugin may key the transmitte
     test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app)
 cascade_merge_pending_part(TX-PLUGIN transmit_page_plugin_key
     "tests/test_transmit_page.cpp section 10: the wiring of a plugin's transmit key in the window (applyPluginTransmitKey, setPluginKey, pluginMayKey, txArming_.arm, armTransmitPlugins/disarmTransmitPlugins). Restore master's section (git show origin/master:tests/test_transmit_page.cpp) when the feature is re-expressed.")
-cascade_merge_pending_part(IMPORT-DIALOG excuse_cap_pickfile
-    "tests/test_excuse_cap.cpp: the third native-wait call site, pickFile (the BROWSE key's modal file dialog, 0.99.74, used by the plugin settings' BROWSE FILES and the bookmark Import dialog). The expected count of runShellOpen(watchdogShellHooks(), call sites is 2 today and goes back to master's 3 with the dialog.")
+# (IMPORT-DIALOG - the "Import a frequency list" window, 0.99.80, and pickFile, the BROWSE key's file dialog - is whole: back in stub batch B8,
+# test_import_dialog_app and the part excuse_cap_pickfile: tests/test_excuse_cap.cpp counts master's three native-wait call sites again.)
 cascade_merge_pending(TESTER-LINK      # 0.99.45 / 0.99.52 beta-tester portal link
     test_tester_link_app test_link_request_poll)
 cascade_merge_pending(PATCH-PRESETS    # 0.99.49 whole-patch presets
@@ -74,10 +74,8 @@ cascade_merge_pending(PLUGIN-ROW-KEYS
     test_row_keys_app)
 cascade_merge_pending(UPDATES          # 0.99.7x the Store's own update notice and the site banner
     test_store_update_app)
-cascade_merge_pending(IMPORT-DIALOG
-    test_import_dialog_app)
-cascade_merge_pending(RADIO-SETUP      # 0.99.7x the radio setup page
-    test_radio_setup_app)
+# (RADIO-SETUP - the page, its INSTALL DRIVER key and the UHD images finding, 0.99.69 - 0.99.89 - is whole: back in stub batch B8,
+# test_radio_setup_app.)
 cascade_merge_pending(TESTER-USAGE     # 0.99.44 - 0.99.52 the team's messages to a tester, the usage section
     test_team_message_app)
 cascade_merge_pending(TESTER-LINK

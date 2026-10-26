@@ -1830,6 +1830,20 @@ could not be written is `FAILED` (the note says "Could not write <path>"). Nothi
 in the first two. A REMOTE session is `DENIED`. The text is at most `FOXAPI_MAX_LONG_TEXT` (1
 MiB): about 130 000 ids of seven digits.
 
+`FOXAPP_OP_BOOKMARK_IMPORT_FILE` (0x8601, SETTINGS, **LOCAL sessions only** - it reads a file on this machine): `text` (or long
+text) is a PATH. The engine reads SDR#'s frequencies.xml or a CSV and adds every entry as the file wrote it (an identical row is
+skipped), then sets the `bookmarkNote` line ("<format>: <n> entries read, <m> added") and saves. The interface sends a path:
+what a person typed, pasted or dropped is cleaned first (`core::cleanImportPath`: the quotes of "Copy as path" or a terminal's
+drag-and-drop, the Enter or the space a paste leaves, a `file://` address with its `%XX` escapes), and a path with no root is
+looked for in the working directory and then the record folder by the window, on a worker, which sends the place it found (the
+engine reads the one path it is given, and never looks in two places). **The answer says whether it read anything** (stub
+campaign B8; it was `OK` either way, with the outcome only in the note): `OK` when it read entries, even entries that were all
+here already; `FAILED` - the list unchanged - when it read none, with the note's sentence as the message (cut at the message's
+127 bytes) and in the note whole: "Could not import: the file "<path>" could not be opened" (or "could not be read", or "no line of
+the file had a usable frequency"), in the user's language. The log names the failure's kind and never the file ("bookmarks: an
+import (.csv) failed: cannot open "(the file)""). The window opens its "Import a frequency list" window on `FAILED` and closes it
+on `OK`. An empty text is `BAD_ARGUMENT`; a REMOTE session is `DENIED`.
+
 `FOXAPP_OP_SET_PATCH_PAGE_OPEN` (0x8421, VIEW, **LOCAL sessions only**): `ival[0]` 0 or 1, whether the standard window's patch
 view is showing. The engine's pass runs the patch runtime while it is (the default) and its close rule when it goes (section 8.12).
 `FOXAPP_OP_PATCH_SET_GRAPH`'s `ival[1]` is the graph version the sender edited from; the engine merges a stale one, and the

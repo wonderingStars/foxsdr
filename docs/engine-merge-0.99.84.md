@@ -298,7 +298,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 0.99.69
   * no console window beside FoxSDR's own ................................................... carried (main.cpp, merged) (unverified)
-  * the RADIO SETUP page ..................................................................... stubbed RADIO-SETUP (src/gui_pending/app_window_radio_setup.cpp)
+  * the RADIO SETUP page ..................................................................... re-expressed, stub batch B8 (src/gui/app_window_radio_setup.cpp; the INSTALL DRIVER key of 0.99.88 and the
+    UHD images finding of 0.99.89 with it; test_radio_setup_app, test_radio_setup_inventory)
   * NFM de-emphasis in the Airband monitor ................................................... re-expressed, stub batch B6 (the engine builds an NFM channel with the 50 us network;
     test_engine_api_airband F1 reads it off the set as built); the section's note is B7's (the monitor's sentences are fact.airband.note, shown in the section)
   * an airport lookup while listening changes nothing played ................................ re-expressed in part, stub batch B6 (the engine's rule: the monitor's preset is the LISTEN's,
@@ -402,7 +403,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 0.99.80
   * bookmark Import: drop zone and Browse button; by-name import; translated errors;
-    Unicode filenames on Windows; Browse opens in the recordings folder ....................... stubbed IMPORT-DIALOG (src/gui_pending/app_window_import_dialog.cpp)
+    Unicode filenames on Windows; Browse opens in the recordings folder ....................... re-expressed, stub batch B8 (src/gui/app_window_import_dialog.cpp, AppWindow::pickFile;
+    test_import_dialog_app; the engine's answer to BOOKMARK_IMPORT_FILE opens and closes the window and the engine words the reason)
 
 0.99.81
   * IBOC dashboard programme rows respond to clicks ......................................... stubbed PLUGIN-ROW-KEYS
@@ -418,7 +420,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * LSB and USB reject the opposite sideband ................................................. carried (dsp/)
   * a machine with no working OpenGL driver is told so ....................................... re-expressed, C1 (window failure message)
   * a Linux audio device reporting zero periods no longer crashes ........................... carried (sink/) (unverified: Linux)
-  * Bookmark Import accepts the path shapes people use ....................................... stubbed IMPORT-DIALOG
+  * Bookmark Import accepts the path shapes people use ....................................... re-expressed, stub batch B8 (cleanImportPath in the window BEFORE the op; a path with no root is
+    looked for on a worker; test_gui_file_jobs' section stays B19's)
   * slide the tuned band with Shift + wheel .................................................. stubbed MARKERS-SPECTRUM (gui/passband_slide.hpp is in the tree)
 
 0.99.83
@@ -469,9 +472,9 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
   one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
                           SOURCE-ROWS test_source_row_app; UPDATES test_store_update_app;
-                          IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
+                          TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
-  parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
+  parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG; removed by B8), audio_lead_plugin_wake (PLUGIN-RUN)
                           [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
                           store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted; B1's display_fold_airband_section (AIRBAND) and the test test_airband_app were removed by B7: AIRBAND is whole]
 
@@ -525,6 +528,8 @@ part display_fold_airband_section is restored (test_display_fold_app's TOOLS-ban
 tests and 2 parts). Not engine work: no op, list or fact was added. The preset's IMPORT of a typed path and EXPORT CSV are window-side DiskJobs (the existing BOOKMARK_IMPORT_FILE carries no group
 and BOOKMARK_EXPORT writes SDR# XML), which B19 should fold into the disk-work file; the import-dialog hook (openImportDialog) is empty until B8; the tester recorder's feature notes
 (NOTEFEATURE call sites) are B15's and the squelch AUTO follow-up is B12's. test_i18n: 144 stale, 0 missing (unchanged: the parked file's keys were already counted).
+
+UPDATE 2026-10-26, stub batch B8 (docs/engine-stage4.md 6.22): the IMPORT-DIALOG and RADIO-SETUP pages are back in the window (src/gui/app_window_import_dialog.cpp, src/gui/app_window_radio_setup.cpp, git mv from src/gui_pending; AppWindow::pickFile in app_window.cpp, FOXSDR_FILE_PICK and FOXSDR_FAKE_RADIO_SETUP read again by run()). test_import_dialog_app and test_radio_setup_app are converted (the real binary: 114 and 156 checks) and the part excuse_cap_pickfile is gone (tests/test_excuse_cap.cpp counts master's 3 native-wait call sites): both placeholders and the part are gone, 32 remain (31 tests and 1 part). The ledger lines of 0.99.69 (the page), 0.99.80 (the dialog) and 0.99.82 (the path shapes) read re-expressed above; R1 (the INSTALL DRIVER key, 0.99.88) and R2 (the UHD images finding, 0.99.89) of docs/engine-merge-0.99.90.md section 3 are done with the page. test_radio_setup_app had NO scenario for the INSTALL DRIVER key (the plan could not tell): one was written RED first and now holds it, with a new bounded-run seam FOXSDR_FAKE_DRIVER_INSTALL; a new pure test, tests/test_radio_setup_inventory.cpp, holds the page's reading of the application's lists. ONE ENGINE CHANGE the plan did not list: FOXAPP_OP_BOOKMARK_IMPORT_FILE is answered FAILED (it was OK with only the note saying so) when it read nothing, and the note words the reason in the user's language - the window opens and closes its dialog on that answer (docs/api-0.3-additions.md section 9). Three existing tests were edited with their reasons beside the edit (test_recorder_bookmarks_scanner H, test_source_section_window's sweep helper with a new scenario A0 for the RADIO SETUP key, test_apply_command's added checks). The page raises itself again for a person with no radio: master counted the always-present rtl_tcp row as a radio found (decision 3 of the B8 note). Not engine work otherwise: no op, list or fact was added. test_gui_file_jobs' import sections stay B19's (it calls `consumePendingDrop`, which is AppWindow::submitPendingDrop here). test_i18n: 144 stale, 0 missing (unchanged).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

@@ -556,10 +556,10 @@ int main() {
         // THREE call sites, each a native wait a person paces: shellOpen (the shell),
         // launchInstaller (the elevation prompt) and, since 0.99.74, pickFile (the
         // BROWSE key's modal file dialog). A fourth is a new reason to read this list.
-        // (CARVED, 2026-10-21, the 0.99.84 merge - ledger IMPORT-DIALOG / PLUGIN-SETTINGS-UI, placeholder
-        // merge_pending_part_excuse_cap_pickfile: the third site is pickFile, the BROWSE key's modal file dialog (0.99.74), which the window
-        // does not have yet. Today's two are held exactly; master's text asked for 3u, and the number goes back to 3 with the dialog.)
-        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 2u);
+        // (Master's text again, stub campaign B8, 2026-10-26: the 0.99.84 merge carved this count to 2 - placeholder
+        // merge_pending_part_excuse_cap_pickfile - while the window had no pickFile, the BROWSE key's modal file dialog (0.99.74). The window
+        // has it again, in app_window.cpp where this scan reads, and the number is master's 3.)
+        CHECK(countOf(win, "runShellOpen(watchdogShellHooks(),") == 3u);
         // The application-paced sites are still plain pauses: the audio and microphone opens (the ENGINE's since the extraction -
         // WaitWatchdogPause, src/engine) and the display grace (the window's).
         std::size_t plainPauses = countOf(win, "watchdog_.pause()");

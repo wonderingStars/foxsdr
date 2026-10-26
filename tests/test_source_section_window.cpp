@@ -13,6 +13,7 @@
 // calls into the SoapySDR library that the window used to make every frame are never made - the engine's evidence
 // hook counts every call that would have crossed.
 //
+//   A0 the RADIO SETUP key (stub campaign B8): the section's fourth widget; a press opens the page and sends nothing
 //   A  the combo: its rows (the generator, the IQ file, the sound card, the radios with "(native)" composed), the
 //      scan its opening asks for (once, on the edge), a click opening the radio by the WHOLE id of its row (a Soapy id
 //      and a Pluto id longer than the table's 159-byte detail), the patch greying the radios
@@ -301,6 +302,7 @@ struct AppWindowTestAccess {
     static std::string receives(AppWindow& a) { return a.soundCardReceivesText(); }
     static char* plutoDraft(AppWindow& a) { return a.plutoUriDraft_; }
     static bool plutoPending(AppWindow& a) { return a.plutoUriPending_; }
+    static bool radioSetupOpen(AppWindow& a) { return a.radioSetupOpen_; }
     static double& centreMhz(AppWindow& a) { return a.soundCardCentreMhz_; }
     static bool centrePending(AppWindow& a) { return a.soundCardCentrePending_; }
     static bool comboWasOpen(AppWindow& a) { return a.sourceComboWasOpen_; }
@@ -607,8 +609,8 @@ std::vector<Hit> sweepRect(AppWindow& a, float x0, float y0, float x1, float y1,
     return out;
 }
 
-// The section's own widgets, top to bottom.
-std::vector<Hit> sweepSection(AppWindow& a, float stepX = 36.0f, float stepY = 8.0f) {
+// The section's own widgets, top to bottom: every one.
+std::vector<Hit> sweepSectionAll(AppWindow& a, float stepX = 36.0f, float stepY = 8.0f) {
     drawOnly(a);
     drawOnly(a);  // (a window's content size is known a frame after it was drawn)
     ImGuiWindow* w = ImGui::FindWindowByName(kWin);
@@ -618,6 +620,20 @@ std::vector<Hit> sweepSection(AppWindow& a, float stepX = 36.0f, float stepY = 8
     // (below the section's header row, whose key and arrow fold the section: a folded section is drawn as a drawer
     // child that only the rail's own flush ends)
     return sweepRect(a, w->Pos.x + 8.0f, w->Pos.y + 38.0f, w->Pos.x + w->Size.x - 8.0f, bottom, stepX, stepY);
+}
+
+// THE RADIO SETUP KEY (0.99.69; back in the window with stub campaign B8) is the FOURTH widget of the section - after the combo, Refresh and
+// the network box, before the rate combo - in every state the section draws, a radio open or not. The scenarios below index the section's OTHER
+// controls (the rate, the gains, the Pluto's box, the card's form ...) by their place in the sweep, as they did before the key was back, so the
+// sweep they use leaves the key out; testRadioSetupKey sweeps the whole section and proves that the fourth widget is the key (a press opens the
+// page and sends nothing), and tests/test_radio_setup_app.cpp presses it in the real application.
+constexpr std::size_t kRadioSetupHit = 3;
+
+// The section's own widgets but the RADIO SETUP key, top to bottom.
+std::vector<Hit> sweepSection(AppWindow& a, float stepX = 36.0f, float stepY = 8.0f) {
+    std::vector<Hit> hits = sweepSectionAll(a, stepX, stepY);
+    if (hits.size() > kRadioSetupHit) { hits.erase(hits.begin() + static_cast<std::ptrdiff_t>(kRadioSetupHit)); }
+    return hits;
 }
 // The open combo's rows, top to bottom.
 std::vector<Hit> sweepPopup(AppWindow& a) {
@@ -714,6 +730,29 @@ bool answered(AppWindow& a, std::uint32_t op, std::int32_t status) {
     bool found = false;
     for (const Access::Answer& x : Access::answers(a)) { found = found || (x.first == op && x.second == status); }
     return found;
+}
+
+// THE RADIO SETUP KEY, the section's fourth widget: pressed it opens the page and sends nothing (the page's own keys and findings are
+// tests/test_radio_setup_app.cpp's, in the real application). Every scenario below indexes the section's other controls past it (kRadioSetupHit).
+void testRadioSetupKey() {
+    std::printf("  A0: the RADIO SETUP key is the fourth widget of the section; a press opens the page and sends nothing\n");
+    Access::install();
+    Env env;
+    AppWindow& a = env.app;
+    scanAll(a);
+    const std::vector<Hit> all = sweepSectionAll(a);
+    CHECK(all.size() > kRadioSetupHit + 1u);
+    if (all.size() <= kRadioSetupHit + 1u) { return; }
+    const std::vector<Hit> others = sweepSection(a);
+    CHECK_EQ(others.size() + 1u, all.size());           // the sweep the scenarios use is the whole one less the key...
+    CHECK(has(shot(a), "RADIO SETUP"));                  // ...which the section does letter
+    CHECK(!Access::radioSetupOpen(a));
+    Access::holdPass(a);
+    const Access::Sent sent = clickSent(a, all[kRadioSetupHit].x, all[kRadioSetupHit].y);
+    CHECK(sentText(sent).empty());                       // a window, not a command
+    CHECK(Access::radioSetupOpen(a));
+    Access::dropQueued(a);
+    Access::releasePass(a);
 }
 
 void testCombo() {
@@ -2302,6 +2341,7 @@ int main() {
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
     CHECK(cascade::gui::fonts::load());
 
+    testRadioSetupKey();
     testCombo();
     testScanStates();
     testPartialAndNetworkBox();

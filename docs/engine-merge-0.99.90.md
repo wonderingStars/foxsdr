@@ -80,6 +80,8 @@ branch's did not (declare them when the page is re-expressed): `std::shared_ptr<
 are live and pass. Visible consequence today: a person on this branch has no INSTALL DRIVER key and no radio-setup images finding; they already had no
 RADIO SETUP page. The Source section's own images line (commit 5) IS live.
 
+UPDATE 2026-10-26, stub batch B8 (docs/engine-stage4.md 6.22): the worklist is done. The page is src/gui/app_window_radio_setup.cpp (git mv), with the INSTALL DRIVER key (`radioSetupInstallDriver`, `radioSetupPollDriverInstall`, `DriverInstallJob`, the two members `driverInstall_` and `driverInstallStatus_`) and the images finding (`fact.source.uhdNoImages` into the page's inventory, gui/radio_setup_inventory.hpp). test_radio_setup_app had no scenario for the key; one was written and holds it (FOXSDR_FAKE_DRIVER_INSTALL, a bounded-run seam), and `bootProcess` was not touched.
+
 ## 4. API, tests, and the traps
 
   * **Facts added** (public facts of the table, not in the 0.3 header): `fact.source.uhdNoImages`, `fact.source.usrpOnUsb` (hashed into the publish

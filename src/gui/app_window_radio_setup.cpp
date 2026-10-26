@@ -14,22 +14,33 @@
 // and draws what it found. Nothing in it blocks the frame loop and nothing in it
 // opens a radio.
 //
+// WHAT THE APPLICATION'S OWN LISTS HOLD comes from the table, not from members of
+// the window (stub campaign B8; master read nativeDevices_, soapyDevices_,
+// device_, patchHeldRadioNames and the scan's flags): the Source combo's rows
+// (DEVICES, through sourceLists()), the patch's radios, the state's flags and
+// fact.source.uhdNoImages - the arithmetic is gui/radio_setup_inventory.hpp's.
+// CHECK AGAIN asks the engine to scan (FOXAPI_OP_SCAN_DEVICES, the Refresh key's op).
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 
 #include <imgui.h>
 
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
+#include "core/patch_devices.hpp"
 #include "core/radio_setup.hpp"
 #include "core/winusb_install.hpp"
+#include "gui/radio_setup_inventory.hpp"
 #include "gui/shell_open.hpp"
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -42,7 +53,6 @@
 #include <shellapi.h>
 // clang-format on
 #endif
-#include "gui/device_scan_plan.hpp"
 #include "gui/page_geometry.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
@@ -76,47 +86,42 @@ void AppWindow::radioSetupStartProbe() {
 }
 
 // What the probe saw, plus what the application's own lists hold now. The
-// probe cannot know the second half: the Source list is filled by the GUI
-// thread (and the SoapySDR half only when someone scans, on purpose), and a
+// probe cannot know the second half: the Source list is filled by the engine's
+// scans (and the SoapySDR half only when someone scans, on purpose), and a
 // radio the receiver or a patch has OPEN is a radio whatever any list says.
-rs::Inventory AppWindow::radioSetupInventory() const {
+rs::Inventory AppWindow::radioSetupInventory() {
     rs::Inventory inv = radioSetupProbe_.inventory();
     // A synthetic machine is the whole truth: it replaces the lists too.
     if (!radioSetupFake_.empty() || !inv.probed || !inv.usbListed) { return inv; }
 
-    int listed = 0;
-    const auto note = [&inv](const std::string& family) {
-        if (family.empty()) { return; }
-        if (std::find(inv.visible.begin(), inv.visible.end(), family) == inv.visible.end()) {
-            inv.visible.push_back(family);
+    RadioSetupLists lists;
+    const SourceListCache& c = sourceLists();
+    for (std::size_t i = static_cast<std::size_t>(kNativeRowBase); i < c.rows.size(); ++i) {
+        const SourceListCache::Row& r = c.rows[i];
+        lists.rows.push_back({r.driver, r.pluto || r.rtltcp});
+    }
+    const std::uint32_t flags = uiState_.flags;
+    const std::uint32_t src = uiState_.sourceFlags;
+    lists.deviceOpen = (flags & FOXAPI_RX_DEVICE_OPEN) != 0u;
+    // What each radio the running patch holds was opened AS ("<device key>@<rate>", or the bare key of a recording) says whether it is
+    // hardware: the generator and an I/Q file are not.
+    if ((flags & FOXAPI_RX_PATCH_RUNNING) != 0u) {
+        for (const auto& node : patchLists().radios) {
+            if (!node.second.open) { continue; }
+            std::string key = node.second.device;
+            if (!cascade::core::patch::isIqFileKey(key)) {
+                if (const std::size_t at = key.rfind('@'); at != std::string::npos) { key.resize(at); }
+            }
+            if (!key.empty() && !cascade::core::patch::isGeneratorKey(key) && !cascade::core::patch::isIqFileKey(key)) {
+                ++lists.patchHeldRadios;
+            }
         }
-    };
-    for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
-        // The Pluto's row is always in the list (a network cannot be walked,
-        // so it asks for an address): it says nothing about what is plugged in.
-        if (d.driver == "pluto") { continue; }
-        ++listed;
-        note(rs::familyForDriver(d.driver));
     }
-    for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
-        ++listed;
-        note(rs::familyForDriver(cascade::gui::detail::driverOf(d.args)));
-    }
-    if (device_ != nullptr) {
-        ++listed;
-        const std::string key = device_->driverKey();
-        note(rs::familyForDriver(key == "soapy" ? cascade::gui::detail::driverOf(deviceArgs_)
-                                                : key));
-    }
-    listed += static_cast<int>(patchHeldRadioNames().size());
-    inv.visibleCount = std::max(inv.visibleCount, listed);
-    // The SoapySDR families are judged only against a scan that actually ran
-    // and covered every driver.
-    inv.soapyChecked = soapyScanned_ && !soapyScanPartial_ && !soapyScanPending_;
-    // ...and what that scan itself said about UHD's firmware images
-    // (2026-10-21): assess() reads it only beside soapyChecked, the same gate.
-    inv.uhdImagesMissing = soapyUhdNoImages_;
-    return inv;
+    lists.soapyScanned = (src & FOXAPI_SRC_SCANNED) != 0u;
+    lists.soapyScanPartial = (src & FOXAPI_SRC_SCAN_PARTIAL) != 0u;
+    lists.soapyScanPending = (src & FOXAPI_SRC_SCAN_PENDING) != 0u;
+    lists.uhdNoImages = c.uhdNoImages;
+    return radioSetupInventoryFrom(std::move(inv), lists);
 }
 
 // Once a frame, from the frame loop: starts the probe on the first frame,
@@ -130,6 +135,10 @@ struct AppWindow::DriverInstallJob {
     std::atomic<bool> done{false};
     bool consumed = false;
     std::string resultPath;
+    // A SYNTHETIC MACHINE'S INSTALL (FOXSDR_FAKE_DRIVER_INSTALL): finished, with the result below, when the clock reaches this. Set only on the
+    // window's thread, and read only there (radioSetupPollDriverInstall).
+    bool fake = false;
+    std::chrono::steady_clock::time_point fakeDoneAt{};
     // THE OUTCOME, written before `done` is set and read only after: by the
     // launch itself when it never got as far as a process (the prompt was
     // refused, or the shell call failed), otherwise by the waiting thread, which
@@ -156,10 +165,23 @@ void AppWindow::radioSetupInstallDriver(const std::string& instanceId) {
     // install onto, and a test run must never put a real permission prompt on
     // somebody's desktop: the key answers without starting anything.
     if (!radioSetupFake_.empty()) {
-        job->launchResult.outcome = wu::Outcome::NotFound;
+        // FOXSDR_FAKE_DRIVER_INSTALL=<outcome>[,<milliseconds>] (bounded runs): that outcome after that long. Without it: not found, at once.
+        wu::Outcome outcome = wu::Outcome::NotFound;
+        long long afterMs = 0;
+        if (!driverInstallFake_.empty()) {
+            const std::size_t comma = driverInstallFake_.find(',');
+            if (!wu::outcomeFromName(driverInstallFake_.substr(0, comma), outcome)) { outcome = wu::Outcome::NotFound; }
+            if (comma != std::string::npos) { afterMs = std::max(0ll, std::atoll(driverInstallFake_.c_str() + comma + 1)); }
+        }
+        job->launchResult.outcome = outcome;
         job->launchResult.detail = "a synthetic machine: nothing was started";
         job->haveLaunchResult = true;
-        job->done = true;
+        if (afterMs <= 0) {
+            job->done = true;
+        } else {
+            job->fake = true;
+            job->fakeDoneAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(afterMs);
+        }
         return;
     }
 #if defined(_WIN32)
@@ -255,6 +277,10 @@ void AppWindow::radioSetupInstallDriver(const std::string& instanceId) {
 // Once a frame while the page is up: a finished install is read once, said on
 // the page and in the log, and followed by CHECK AGAIN so the radio appears.
 void AppWindow::radioSetupPollDriverInstall() {
+    // (A synthetic machine's install finishes by the clock, here, once a frame.)
+    if (driverInstall_ && driverInstall_->fake && !driverInstall_->done.load() && std::chrono::steady_clock::now() >= driverInstall_->fakeDoneAt) {
+        driverInstall_->done = true;
+    }
     if (!driverInstall_ || !driverInstall_->done.load() || driverInstall_->consumed) { return; }
     driverInstall_->consumed = true;
     const wu::Result r = driverInstall_->launchResult;
@@ -293,7 +319,7 @@ void AppWindow::radioSetupFrame() {
     // The application's own lists are still moving: a saved radio is opening,
     // or a scan is out. Judging now would call a radio that is about to appear
     // missing.
-    if (deviceOpenPending_ || soapyScanPending_) { return; }
+    if ((uiState_.flags & FOXAPI_RX_DEVICE_OPENING) != 0u || (uiState_.sourceFlags & FOXAPI_SRC_SCAN_PENDING) != 0u) { return; }
     radioSetupDecided_ = true;
 
     const rs::Findings f = rs::assess(radioSetupInventory());
@@ -323,8 +349,8 @@ void AppWindow::radioSetupFrame() {
 // now; a synthetic machine reads nothing and scans nothing.
 void AppWindow::radioSetupCheckAgain() {
     if (radioSetupFake_.empty()) {
-        scanNative();
-        scanSoapy();  // defers itself, and says so once, while a radio is open
+        // The Refresh key's op: the native walk always, the SoapySDR half deferring itself, and saying so once, while a radio is open.
+        uiSubmit(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
     }
     radioSetupStartProbe();
 }
