@@ -48,6 +48,7 @@ struct GLFWwindow;
 #include "core/plugin_host.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/plugin_run.hpp"
+#include "core/patch_blueprints.hpp"
 #include "core/patch_graph.hpp"
 #include "core/patch_plan.hpp"
 #include "core/patch_presets.hpp"
@@ -1717,6 +1718,22 @@ private:
     std::string patchPresetPending_;
     // What the last action did, in a sentence under the list.
     std::string patchPresetNote_;
+    // THE BLUEPRINTS LIST (owner, 2026-10-26: "select in the list adsb and it
+    // places a full work flow for that app on the patch panel"). One pick
+    // places a whole wired workflow for one plugin, tuned by the plugin's own
+    // preset; core/patch_blueprints.hpp decides what is built, this draws the
+    // list on the parts band and says what happened.
+    // app_window_patch_blueprints.cpp.
+    void drawPatchBlueprints();
+    // Every blueprint the parts bin's catalogue makes, with each plugin's
+    // presets read out of it now - asked only while the list is open.
+    std::vector<cascade::core::patch::Blueprint> patchBlueprints() const;
+    // A pick is REMEMBERED HERE and placed once the canvas has a size, as a
+    // press of a part is, so the view can be moved to show what landed.
+    void placePendingPatchBlueprint(float canvasW, float canvasH);
+    std::optional<cascade::core::patch::Blueprint> patchBlueprintPending_;
+    // What the last pick did, in a sentence beside the list.
+    std::string patchBlueprintNote_;
     // The key that opens it, FIRST in the SIGNAL PATH bank. It goes there
     // rather than in TOOLS by the same test that put the recorder and the
     // transmitter in that bank: a patch is not a way of LOOKING at the signal

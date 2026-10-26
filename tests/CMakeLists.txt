@@ -370,6 +370,11 @@ foreach(src ${CASCADE_TESTS})
     elseif(name STREQUAL "test_programme_audio_app")
         add_dependencies(${name} programme_audio_fixture)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:programme_audio_fixture>")
+    elseif(name STREQUAL "test_patch_blueprints_app")
+        # Fits the preset probe (text and picture decoder, one preset) in a real AppWindow, stops
+        # it, places its blueprints and runs one on the signal generator - built first.
+        add_dependencies(${name} preset_probe_fixture)
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:preset_probe_fixture>")
     elseif(name STREQUAL "test_row_keys_app")
         # Runs the real cascade.exe (built first) with the row-keys fixture fitted and pinned to run,
         # opens its panel from the DECODE bank's row, presses its rows with the input script and reads

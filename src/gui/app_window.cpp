@@ -17483,10 +17483,15 @@ void AppWindow::rebuildPatchCatalogue() {
     patchApis_.clear();
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (!p.loaded) { continue; }
-        // A plugin the user has STOPPED stays out of the patch too: a stop is
-        // a decision about the plugin, not about one place it runs.
+        // A PLUGIN THE USER HAS STOPPED IS STILL A PART (owner, 2026-10-26:
+        // "make so the plugin doesn't have to be on to get the components").
+        // Until then a stop took the plugin out of the patch as well, so the
+        // parts bin and the blueprints list offered nothing for it until it
+        // was switched on in DECODE first. A patch decoder is built and fed
+        // by the patch's own runner (patch_runner.hpp), never by
+        // pluginRunner_, so a stop now governs only the receiver's copy of
+        // the plugin, and a patch node that names it runs either way.
         const std::string key = cascade::core::pluginKey(p);
-        if (pluginIsStopped(key)) { continue; }
         // One entry per decoder table, so a module with both an audio and an
         // I/Q decoder is two parts - with the same key and different inputs.
         if (p.decoder != nullptr) {
@@ -19064,6 +19069,9 @@ void AppWindow::drawPatchView() {
             }
         }
 
+        // The blueprints list: a whole workflow per plugin, on its own row.
+        drawPatchBlueprints();
+
         // THE BAND IS AS TALL AS ITS ROWS, and the pane beside them exactly
         // that tall - never under its floor, so a page with no decoder row
         // still has a pane that reads as one.
@@ -19126,6 +19134,8 @@ void AppWindow::drawPatchView() {
             ++nodesPlaced_;
             patchUi_.dirty = true;
         }
+        // A blueprint picked from the list, placed now for the same reason.
+        placePendingPatchBlueprint(canvasW, avail.y);
 
         // ONE COMPILE A FRAME, before anything is drawn, so the marks on
         // the canvas and the words in the inspector are the same answer.
