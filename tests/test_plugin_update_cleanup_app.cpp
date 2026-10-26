@@ -1,6 +1,12 @@
 // test_plugin_update_cleanup_app.cpp - an update that succeeds takes the copy it replaced with
 // it, by itself, and one that fails touches nothing (0.99.72, the plugin store redesign).
 //
+// CONVERTED (stub campaign B3, 0.99.84 house pattern): master ran this in the window (AppWindow::pollPluginAsync -> cleanUpAfterUpdate); it is
+// the ENGINE's now (src/engine/engine_store.cpp), so every touch of it goes through rawEngine and the pass seam (tests/pass_seam.hpp: the same
+// test runs inline and with the pass on its own thread). One thing differs in the way it is driven and nothing in what is asserted: the old
+// copy is deleted on a WORKER (the pass never waits on a disk), so the update's "landed" is the install collected AND the clean-up collected -
+// a poll until neither is pending - where master's was the install alone.
+//
 // THE BEHAVIOUR. A plugin's file name carries its version, so updating adsb-1.0.0 to 1.1.0
 // ADDS a file; the next scan loads both, keeps the newer and turns the older off as another
 // copy. Until 0.99.72's store the old file then sat in the folder until someone pressed the
@@ -56,7 +62,9 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
+#include "engine/engine.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -69,39 +77,54 @@ using cascade::core::PluginRepo;
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    static void rescan(AppWindow& a) { a.rescanPlugins(); }
+    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static const cascade::engine::Engine& eng(const AppWindow& a) { return rawEngine(const_cast<AppWindow&>(a).engine_); }
+    static void rescan(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).rescanPlugins(); }); }
     // Every instance destroyed and every module unmapped, so a folder can be emptied (a mapped
     // module cannot be deleted on Windows).
-    static void takeDown(AppWindow& a) { a.detachAndUnloadPlugins(); }
+    static void takeDown(AppWindow& a) { passseam::on(eng(a), [&] { (void)eng(a).detachAndUnloadPlugins(); }); }
     static void setCatalogue(AppWindow& a, std::vector<PluginCatalogEntry> c) {
-        a.catalog_ = std::move(c);
+        passseam::on(eng(a), [&] {
+            eng(a).catalog_ = std::move(c);
+            ++eng(a).catalogSeq_;
+        });
     }
-    // The store's UPDATE key, to the frame that collects it: plan, start, then poll as the
-    // frame loop does. True when the transfer finished within the wait.
+    // The store's UPDATE key, to the frame that collects it: plan, start, then poll as the pass does. True when the transfer AND the clean-up
+    // behind it were collected within the wait.
     static bool update(AppWindow& a, const std::string& id) {
-        const std::vector<cascade::core::PluginUpdate> plans = a.plannedPluginUpdates();
-        for (const cascade::core::PluginUpdate& u : plans) {
-            if (u.id != id) { continue; }
-            a.startUpdate(u);
-            for (int i = 0; i < 6000; ++i) {
-                a.pollPluginAsync();
-                if (!a.installPending_) { return true; }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        bool started = false;
+        passseam::on(eng(a), [&] {
+            const std::vector<cascade::core::PluginUpdate> plans = eng(a).plannedPluginUpdates();
+            for (const cascade::core::PluginUpdate& u : plans) {
+                if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) != id) { continue; }
+                eng(a).startUpdate(u);
+                started = true;
+                break;
             }
-            return false;
+        });
+        if (!started) { return false; }
+        for (int i = 0; i < 6000; ++i) {
+            bool busy = true;
+            passseam::on(eng(a), [&] {
+                eng(a).pollPluginAsync();
+                busy = eng(a).installPending_ || eng(a).cleanupPending_;
+            });
+            if (!busy) { return true; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return false;
     }
-    static std::size_t plannedCount(AppWindow& a) { return a.plannedPluginUpdates().size(); }
-    static const std::string& report(const AppWindow& a) { return a.installReport_; }
-    static const std::string& error(const AppWindow& a) { return a.installError_; }
-    static const std::vector<cascade::core::LoadedPlugin>& plugins(const AppWindow& a) {
-        return a.pluginHost_.plugins();
+    static std::size_t plannedCount(AppWindow& a) {
+        return passseam::read<std::size_t>(eng(a), [&] { return eng(a).plannedPluginUpdates().size(); });
     }
-    static const std::vector<cascade::core::InstalledPlugin>& records(const AppWindow& a) {
-        return a.pluginInventory_.plugins;
+    static std::string report(AppWindow& a) { return passseam::read<std::string>(eng(a), [&] { return eng(a).installReport_; }); }
+    static std::string error(AppWindow& a) { return passseam::read<std::string>(eng(a), [&] { return eng(a).installError_; }); }
+    // (read between passes - the pass is parked or the test is its own pump - and not kept past the next call)
+    static const std::vector<cascade::core::LoadedPlugin>& plugins(const AppWindow& a) { return eng(a).pluginHost_.plugins(); }
+    static const std::vector<cascade::core::InstalledPlugin>& records(const AppWindow& a) { return eng(a).pluginInventory_.plugins; }
+    static std::size_t oldCopies(AppWindow& a) {
+        return passseam::read<std::size_t>(eng(a), [&] { return eng(a).pluginOldCopies_.size(); });
     }
-    static std::size_t oldCopies(const AppWindow& a) { return a.pluginOldCopies_.size(); }
 };
 
 }  // namespace cascade::gui

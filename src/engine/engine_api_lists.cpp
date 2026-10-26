@@ -251,6 +251,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (const cascade::core::InstalledPlugin& r : pluginInventory_.plugins) {
         f.text(r.file);
         f.text(r.id);
+        f.text(r.source);  // (where the module came from: plugin.origin.<file>, stub campaign B3)
         f.value(r.digestMismatch);
     }
     // ...the tune grants held for any module - PLUGINS' TUNE_ALLOWED is a plugin's key in this list, and
@@ -300,6 +301,37 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(catalogSeq_);
     f.text(pluginCatalogueUrl_);
     f.text(installBusyName_);
+    // THE STORE'S OWN (stub campaign B3, engine_store.cpp): the kept copy and how fresh it is, the sites and what each said, the pictures (one
+    // counter: the map is walked by nobody here), the clean-up's state and its old copies, whose transfer a card is busy with and whose outcome
+    // the page shows. In place, from members: nothing allocates.
+    f.value(catalogueFromCache_);
+    f.value(catalogueRefreshFailed_);
+    f.value(catalogueReadTime_);
+    for (const std::string& url : pluginSites_) { f.text(url); }
+    for (const SiteStatus& st : siteStatus_) {
+        f.text(st.url);
+        f.value(st.state);
+        f.value(st.listed);
+        f.value(st.hiddenSameId);
+        f.value(st.hiddenOffHost);
+        f.text(st.error);
+    }
+    f.text(siteError_);
+    f.text(regionalState_);
+    f.value(regionalAdded_);
+    f.value(regionalDropped_);
+    f.value(picturesSeq_);
+    f.value(screenshotPending_);
+    f.value(cleanupPending_);
+    for (const cascade::core::SupersededPlugin& o : pluginOldCopies_) {
+        f.text(o.file);
+        f.text(o.keptFile);
+        f.text(o.version);
+        f.text(o.keptVersion);
+    }
+    f.text(pluginCleanupReport_);
+    f.text(installBusyId_);
+    f.text(installResultId_);
     f.value(addAllRun_.active);
     f.value(addAllRun_.next);
     f.value(addAllRun_.total);
@@ -722,8 +754,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
     for (const cascade::core::PluginCatalogEntry& e : catalog_) {
         const cascade::core::PluginPlatform* const here = e.thisPlatform();
+        // BY CATALOGUE KEY (0.99.74): the id for an official plugin - every name and key that existed before sites is unchanged - and
+        // "<id>@<site label>" for a plugin from a site the user added.
+        const std::string key = cascade::core::PluginRepo::catalogueKey(e.source, e.id);
         ApiListBlock::StoreEntry se;
-        se.id = e.id;
+        se.id = key;
         se.name = e.name;
         se.installed = catalogEntryInstalled(e);
         se.compatible = e.compatible;
@@ -733,7 +768,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         se.sizeBytes = here != nullptr ? here->sizeBytes : 0u;
         se.buildHere = here != nullptr;
         b.store.push_back(std::move(se));
-        const std::string k = "store." + e.id + ".";
+        const std::string k = "store." + key + ".";
         fact(k + "legal", e.legalNotice);
         fact(k + "summary", e.summary);
         fact(k + "description", e.description);
@@ -755,7 +790,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(k + "file", catalogueFileName(e));
         std::string reason;
         for (const cascade::core::PluginUpdate& u : updates) {
-            if (u.id == e.id) {
+            if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) == key) {
                 reason = u.reason;
                 break;
             }
@@ -766,7 +801,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // index.json is how it is exercised offline), so LOCAL. No id has a leaf-less key, so it cannot collide.
     fact("store.url", pluginCatalogueUrl_, true);
     for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-        fact("store." + catalog_[static_cast<std::size_t>(i)].id + ".blocked", pluginInstallBlockedReason(i, true));
+        const cascade::core::PluginCatalogEntry& ce = catalog_[static_cast<std::size_t>(i)];
+        fact("store." + cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) + ".blocked", pluginInstallBlockedReason(i, true));
     }
     for (const cascade::core::BlockedPlugin& x : pluginBlocked_) {
         b.storeBlocked.emplace_back(x.installed.file, x.message);
@@ -779,8 +815,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(kb + "message", cascade::core::PluginRepo::pluginBlockMessage(x.installed, x.policy));
     }
     for (const cascade::core::PluginUpdate& u : updates) {
-        b.storeUpdates.emplace_back(u.id, u.fromVersion + " -> " + u.toVersion);
+        b.storeUpdates.emplace_back(cascade::core::PluginRepo::catalogueKey(u.source, u.id), u.fromVersion + " -> " + u.toVersion);
     }
+    // The kept copy, the sites, the pictures, the old copies and each file's origin (engine_store.cpp).
+    buildApiListsStore(b);
     // API 0.3 8.9, STORE_ACTIVITY: the transfer in flight and the ADD ALL run. What is read live (the progress)
     // is not here: the block keeps the repo.
     {

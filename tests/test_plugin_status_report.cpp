@@ -259,9 +259,13 @@ int main() {
 
         // A failed fetch: FAILED with the reason, the frame it resolved on, and nothing after it.
         Access::setCatalogue(e, {}, "the store could not be reached");
+        // (Stub campaign B3 gave the report master's `plugin regional:` line back - the 0.99.84 merge had dropped it, with the member that
+        // held it - so a machine-readable run can tell "never asked" from "asked and swallowed". The public fetch failed, so the regional
+        // one was never asked: "not-asked".)
         std::vector<std::string> out = capture(scratch / "cat_failed.txt", [&] { e.reportPluginTestResult(7); });
-        CHECK(out.size() == 1u);
+        CHECK(out.size() == 2u);
         CHECK(!out.empty() && out[0] == "plugin catalogue: FAILED frame=7 the store could not be reached");
+        CHECK(out.size() == 2u && out[1] == "plugin regional: state=not-asked added=0 dropped=0");
 
         // A catalogue: the entry count, then one line per entry with the gate's two answers.
         cascade::core::PluginCatalogEntry good;
@@ -286,24 +290,25 @@ int main() {
         Access::setCatalogue(e, {good, old}, "");
         out = capture(scratch / "cat_ok.txt", [&] { e.reportPluginTestResult(3); });
         for (const std::string& l : out) { std::printf("  | %s\n", l.c_str()); }
-        CHECK(out.size() == 3u);
-        if (out.size() == 3u) {
+        CHECK(out.size() == 4u);
+        if (out.size() == 4u) {
             CHECK(out[0] == "plugin catalogue: frame=3 entries=2");
+            CHECK(out[1] == "plugin regional: state=not-asked added=0 dropped=0");
             // The gate WITH the acknowledgement unticked (what the user first sees) and ticked: a notice to read is the one
             // thing between a compatible entry and the download, so unticked it is blocked and ticked it is ok.
             const std::string noAck = Access::blocked(e, 0, false);
             const std::string ack = Access::blocked(e, 0, true);
             CHECK(!noAck.empty());
             CHECK(ack.empty());
-            CHECK(out[1] == "plugin entry: id=alpha abi=" + std::to_string(CASCADE_PLUGIN_ABI_VERSION) +
+            CHECK(out[2] == "plugin entry: id=alpha abi=" + std::to_string(CASCADE_PLUGIN_ABI_VERSION) +
                                 " compatible=1 installed=0 legal=1 licence=\"MIT\" install=blocked(" + noAck +
-                                ") installAcked=ok");
+                                ") installAcked=ok regional=0");
             // An entry built for another ABI is blocked either way.
             const std::string oldReason = Access::blocked(e, 1, true);
             CHECK(!oldReason.empty());
-            CHECK(out[2] == "plugin entry: id=beta abi=" + std::to_string(CASCADE_PLUGIN_ABI_VERSION + 1) +
+            CHECK(out[3] == "plugin entry: id=beta abi=" + std::to_string(CASCADE_PLUGIN_ABI_VERSION + 1) +
                                 " compatible=0 installed=0 legal=0 licence=\"MIT\" install=blocked(" +
-                                Access::blocked(e, 1, false) + ") installAcked=blocked(" + oldReason + ")");
+                                Access::blocked(e, 1, false) + ") installAcked=blocked(" + oldReason + ") regional=0");
         }
     }
 

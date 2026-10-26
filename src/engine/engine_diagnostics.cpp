@@ -38,10 +38,14 @@ void Engine::reportPluginTestResult(int frame) const {
     if (!statusText().catalogError.empty()) {
         std::printf("plugin catalogue: FAILED frame=%d %s\n", frame,
                     statusText().catalogError.c_str());
+        // REGIONAL CATALOGUE (plugin_repo.hpp): the regional fetch is never even attempted when the public one fails, so this is always
+        // "not-asked" here - printed anyway, for a machine-readable run that otherwise cannot tell "never asked" from "asked and swallowed".
+        std::printf("plugin regional: state=%s added=%d dropped=%d\n", regionalState_.c_str(), regionalAdded_, regionalDropped_);
         return;
     }
     std::printf("plugin catalogue: frame=%d entries=%d\n", frame,
                 static_cast<int>(catalog_.size()));
+    std::printf("plugin regional: state=%s added=%d dropped=%d\n", regionalState_.c_str(), regionalAdded_, regionalDropped_);
     for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
         const cascade::core::PluginCatalogEntry& e =
             catalog_[static_cast<std::size_t>(i)];
@@ -53,11 +57,11 @@ void Engine::reportPluginTestResult(int frame) const {
         const std::string noAckText = noAck.empty() ? "ok" : ("blocked(" + noAck + ")");
         const std::string ackText = ack.empty() ? "ok" : ("blocked(" + ack + ")");
         std::printf("plugin entry: id=%s abi=%u compatible=%d installed=%d legal=%d "
-                    "licence=\"%s\" install=%s installAcked=%s\n",
+                    "licence=\"%s\" install=%s installAcked=%s regional=%d\n",
                     e.id.c_str(), static_cast<unsigned>(e.abiVersion),
                     e.compatible ? 1 : 0, catalogEntryInstalled(e) ? 1 : 0,
                     e.legalNotice.empty() ? 0 : 1, e.licence.c_str(),
-                    noAckText.c_str(), ackText.c_str());
+                    noAckText.c_str(), ackText.c_str(), e.regional ? 1 : 0);
     }
 }
 

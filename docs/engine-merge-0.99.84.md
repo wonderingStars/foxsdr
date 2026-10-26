@@ -163,8 +163,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     unbound-id row; no window-specific part)
 
 0.99.50
-  * the plugin store cleans up after its own updates ......................................... stubbed STORE-VIEW (the engine keeps the scan's old copies, C4;
-    test_plugin_cleanup_app, test_plugin_update_cleanup_app)
+  * the plugin store cleans up after its own updates ......................................... re-expressed in part: the ENGINE's half since stub batch B3
+    (engine_store.cpp: an update removes the copy it replaced, on a worker, that plugin's only; CLEAN UP and REMOVE FILE are FOXAPP_OP_STORE_CLEAN_OLD;
+    a refused delete is queued for the next start; test_plugin_cleanup_app, test_plugin_update_cleanup_app, tests/test_engine_api_store.cpp S5). The
+    store's CLEAN UP OLD VERSIONS key and its confirmation are the window's: stub batch B4
   * FUNCTION SELECT folds to a strip ......................................................... re-expressed, stub batch B1 (test_rail_fold, test_rail_fold_app,
     test_app_rail, test_window_chrome_config)
   * the patch page's information pane at the top right ....................................... stubbed PATCH-VIEW (lostlines: drawPatchView, drawPatchFaces)
@@ -292,7 +294,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * an airport lookup while listening changes nothing played ................................ stubbed AIRBAND
   * a pasted report is recognised; `upload local-only` says what it means ..................... stubbed PROBLEM-REPORT (core/pasted_report is in; the page's
     attach-diagnostics rows, the preview and the recognised-report line are not - lostlines: drawProblemReportPage)
-  * Fitted modules names the files not installed from the store ............................ stubbed STORE-VIEW
+  * Fitted modules names the files not installed from the store ............................ stubbed STORE-VIEW (the engine's half - `fact.plugin.origin.<file>`:
+    orphan / site / removed-site - is back since stub batch B3; the window's words and REMOVE FILE key are batch B5)
   * the log and every report name the other programs' DLLs ................................... re-expressed, C1 (test_foreign_modules_app, test_diag_context_app)
   * the usage report says how an unclean session ended ....................................... re-expressed, C1 (exit causes)
   * the ADS-B scope's compass labels ......................................................... carried (gui/scope_view.cpp)
@@ -327,7 +330,14 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     of test_display_fold_app's list is carved out as the red part display_fold_airband_section: the TOOLS bank's Airband section is AIRBAND (B7)
   * each decoder's settings in a folded "Plugin settings" line ............................... stubbed PLUGIN-SETTINGS-UI
   * the ADS-B map lists only the aircraft you can see; no-altitude is grey ................... stubbed MAP-WINDOWS
-  * third-party plugin sites in the store ................................................... stubbed STORE-VIEW
+  * third-party plugin sites in the store ................................................... re-expressed in part: the ENGINE's half since stub batch B3
+    (engine_store.cpp: the sites list, each site read on the catalogue's worker, merged under the official list, kept as its own copy and loaded at start-up,
+    ADD with the consent and REMOVE as FOXAPP_OP_STORE_SITE, a site's plugin fitted only with the notice acknowledged and NEVER by a REMOTE session - the
+    web page's rows and the install op carry the refusal sentence; test_plugin_catalogue_app, tests/test_engine_api_store.cpp S1, S2, S6). The SITES panel,
+    the consent tick, the THIRD PARTY badge and the page's sentences are the window's: stub batch B4
+  * the plugin store keeps the catalogue it read, so a failed read empties nothing (0.99.72) ........ re-expressed, stub batch B3 (the kept copy, the regional
+    list's outcome, the pictures one transfer at a time; test_plugin_catalogue_app, tests/test_engine_api_store.cpp S3 and S4; the old contract that a failed
+    refetch EMPTIED the catalogue, pinned by tests/test_engine_api_03.cpp I1 and I5, is replaced by master's)
   * BROWSE FILES beside a plugin setting that names a file ................................... stubbed PLUGIN-SETTINGS-UI
   * switching auto gain off gives the radio its manual gains back ........................... re-expressed, C1 (Engine::changeAutoGain; test_autogain_app)
   * a plugin may send transmit audio through FoxSDR, granted and armed ...................... stubbed TX-PLUGIN, in the SAFE state: Transmitter's plugin key and
@@ -417,8 +427,9 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
 `ctest -L merge-pending`: 54 red placeholders (51 tests, 3 parts of converted tests). Each says its ledger id. In ids (tests):
 
   RAIL-CHROME (7)         test_app_rail test_rail_fold test_rail_fold_app test_status_fold test_status_fold_app test_deck_knobs_app test_theme_census
-  STORE-VIEW (9)          test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
-                          test_plugin_update_cleanup_app test_plugin_store_view test_fitted_modules_no_disk test_plugin_dup_app test_plugin_store_app
+  STORE-VIEW (6)          test_plugin_store_window test_fitted_modules_window test_plugin_store_view test_fitted_modules_no_disk
+                          test_plugin_dup_app test_plugin_store_app   [B3 removed test_plugin_catalogue_app, test_plugin_cleanup_app and
+                          test_plugin_update_cleanup_app]
   PLUGIN-SETTINGS-UI (3)  test_plugin_settings_ui test_decoder_settings_fold_app test_plugin_pathpick_app
   PLUGIN-ROW-KEYS (2)     test_programme_audio_app test_row_keys_app
   TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
@@ -442,6 +453,12 @@ that names a feature not yet on this window. test_i18n: 155 stale, 1 missing (th
 UPDATE 2026-10-26, stub batch B2 (docs/engine-stage4.md 6.22): test_plugin_rescan_skip is converted (it now also runs as _stepped) and the part
 audio_lead_plugin_wake is restored in test_audio_lead_app: both placeholders are gone, 47 remain (test_plugin_inuse_app, PLUGIN-RUN's window half, stays for B5).
 The engine decides which plugins have instances; a window-less host runs every plugin (owner decision). test_i18n: 153 stale, 1 missing.
+
+UPDATE 2026-10-26, stub batch B3 (docs/engine-stage4.md 6.22): test_plugin_catalogue_app, test_plugin_cleanup_app and test_plugin_update_cleanup_app are
+converted to Engine members (through rawEngine and the pass seam; each now also runs as _stepped) and green, and their placeholders are gone: 44 remain.
+The engine keeps the catalogue it read (and the sites' copies), lists the sites a user added, fetches a plugin's pictures one transfer at a time and removes
+the old copies an update leaves, none of it on the pass; a REMOTE session cannot fit a plugin from a site. test_i18n: 152 stale, 1 missing (the Catalogue-source
+tooltip, B4's); the one key that returned is the refusal sentence.
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

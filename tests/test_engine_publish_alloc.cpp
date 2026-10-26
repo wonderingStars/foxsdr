@@ -47,6 +47,10 @@
 //      moves nothing); each input the store adds moves the fingerprint ALONE (the catalogue's counter, the index,
 //      the busy name with the flag held, the run's five fields, a retired row's id and sentence, the two status
 //      lines) and the block's rebuild is counted, once for the change
+//   F13 the store's kept copy, sites, pictures and clean-up (API 0.3 8.9 / 9.4, stub campaign B3): with eight sites and what each said, twelve
+//      pictures (digests and cached paths of a real length), old copies, the clean-up's report and the busy and result keys, every pass's
+//      fingerprint, an unchanged pass and the publish allocate nothing, and each input B3 added moves the fingerprint ALONE, the block's rebuild
+//      counted once for the change (the picture state is one counter: the map is never walked by the fingerprint)
 //   F5 the Source section and the sound card (API 0.3 8.10): with six sound card inputs of eight rates, a form, three
 //      dongles that cannot be opened, two faulted drivers, the runtime's evidence, a 189-byte Pluto address and a
 //      134-byte fault sentence, every pass's fingerprint, an unchanged pass and the publish (with the section's flag
@@ -313,6 +317,26 @@ struct AppWindowTestAccess {
     static std::string& catalogStatus(cascade::engine::Engine& e) { return e.catalogStatus_; }
     // ... and the rows the policy retires.
     static std::vector<cascade::core::BlockedPlugin>& blocked(cascade::engine::Engine& e) { return e.pluginBlocked_; }
+    // The store's kept copy, sites, pictures and clean-up (stub campaign B3), each reachable alone.
+    using SiteStatus = cascade::engine::Engine::SiteStatus;
+    using PictureStatus = cascade::engine::Engine::PictureStatus;
+    using PictureState = cascade::engine::Engine::PictureState;
+    static std::vector<std::string>& sites(cascade::engine::Engine& e) { return e.pluginSites_; }
+    static std::vector<SiteStatus>& siteStatus(cascade::engine::Engine& e) { return e.siteStatus_; }
+    static std::string& siteError(cascade::engine::Engine& e) { return e.siteError_; }
+    static bool& fromCache(cascade::engine::Engine& e) { return e.catalogueFromCache_; }
+    static bool& refreshFailed(cascade::engine::Engine& e) { return e.catalogueRefreshFailed_; }
+    static std::int64_t& readTime(cascade::engine::Engine& e) { return e.catalogueReadTime_; }
+    static std::string& regionalState(cascade::engine::Engine& e) { return e.regionalState_; }
+    static int& regionalAdded(cascade::engine::Engine& e) { return e.regionalAdded_; }
+    static std::uint64_t& picturesSeq(cascade::engine::Engine& e) { return e.picturesSeq_; }
+    static auto& pictures(cascade::engine::Engine& e) { return e.pictures_; }
+    static bool& shotPending(cascade::engine::Engine& e) { return e.screenshotPending_; }
+    static bool& cleanupPending(cascade::engine::Engine& e) { return e.cleanupPending_; }
+    static std::vector<cascade::core::SupersededPlugin>& oldCopies(cascade::engine::Engine& e) { return e.pluginOldCopies_; }
+    static std::string& cleanupReport(cascade::engine::Engine& e) { return e.pluginCleanupReport_; }
+    static std::string& busyId(cascade::engine::Engine& e) { return e.installBusyId_; }
+    static std::string& resultId(cascade::engine::Engine& e) { return e.installResultId_; }
 // <<F5 ACCESS BEGIN
     // The Source section's inputs (API 0.3 8.10), each reachable alone.
     static std::vector<cascade::usb::UsbDeviceInfo>& unbound(cascade::engine::Engine& e) { return e.nativeUnbound_; }
@@ -1071,6 +1095,144 @@ int main() {
         }
         table->close_session(session);
     }
+
+    // F13: the store's kept copy, sites, pictures and clean-up (stub campaign B3). Eight sites and what each said, twelve pictures with
+    // digests and cached paths of a real length, two old copies, a clean-up report and the busy and result keys: every pass's fingerprint,
+    // an unchanged pass and the publish allocate nothing; each input B3 added moves the fingerprint ALONE, the rebuild is counted (bounded,
+    // once for the change), and a repeat of what is already so moves nothing. The pictures are ONE counter in the fingerprint (the map is
+    // not walked, and a picture's path and reason are read when the block is built).
+    {
+        cascade::engine::Engine e13;
+        e13.initialise();
+        std::vector<cascade::core::PluginCatalogEntry> cat;
+        for (int i = 0; i < 6; ++i) {
+            cascade::core::PluginCatalogEntry ce;
+            ce.id = "plugin-" + std::to_string(i);
+            ce.name = "Plugin number " + std::to_string(i);
+            ce.version = "1.0.0";
+            ce.licence = "MIT";
+            ce.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
+            ce.compatible = true;
+            for (int k = 0; k < 2; ++k) {
+                cascade::core::CatalogScreenshot sh;
+                sh.url = "https://pics.example.org/" + std::to_string(i) + "-" + std::to_string(k) + ".png";
+                sh.sha256 = std::string(63, 'a') + static_cast<char>('0' + i * 2 + k);
+                sh.caption = "picture " + std::to_string(k);
+                ce.screenshots.push_back(sh);
+            }
+            cat.push_back(std::move(ce));
+        }
+        Access::landCatalogue(e13, cat);
+        for (int i = 0; i < 8; ++i) {
+            Access::sites(e13).push_back("https://site-" + std::to_string(i) + ".example.org/plugins/index.json");
+            Access::SiteStatus st;
+            st.url = Access::sites(e13).back();
+            st.state = Access::SiteStatus::State::Read;
+            st.listed = i;
+            st.hiddenSameId = 1;
+            st.error = i % 2 == 0 ? std::string() : std::string("the server returned HTTP 503 for that address");
+            Access::siteStatus(e13).push_back(std::move(st));
+        }
+        for (int i = 0; i < 12; ++i) {
+            Access::PictureStatus ps;
+            ps.state = i % 3 == 0 ? Access::PictureState::Failed : Access::PictureState::Ready;
+            if (ps.state == Access::PictureState::Ready) { ps.path = std::string(150, 'p') + std::to_string(i); }
+            else { ps.reason = "the server returned HTTP 404"; }
+            Access::pictures(e13)[std::string(63, 'a') + static_cast<char>('0' + i % 10) + std::to_string(i / 10)] = std::move(ps);
+        }
+        ++Access::picturesSeq(e13);
+        Access::oldCopies(e13).push_back({"adsb-1.0.0.dll", "ADS-B", "1.0.0", "adsb-1.1.0.dll", "1.1.0"});
+        Access::oldCopies(e13).push_back({"apt-1.0.0.dll", "NOAA APT", "1.0.0", "apt-1.2.0.dll", "1.2.0"});
+        Access::cleanupReport(e13) = "Removed the old version adsb-1.0.0.dll.";
+        Access::busyId(e13) = "plugin-1";
+        Access::resultId(e13) = "plugin-1@site-3.example.org";
+        Access::fromCache(e13) = true;
+        Access::readTime(e13) = 1760001234;
+        Access::regionalState(e13) = "ok";
+
+        const std::uint64_t settled = Access::fingerprint(e13);  // (warm-up)
+        (void)Access::publishLists(e13);                         // the block is built here, once, and may allocate
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::fingerprint(e13); }
+        t_counting = false;
+        std::printf("F13: %d fingerprints with 8 sites, 12 pictures, 2 old copies and the clean-up's report: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e13); }
+        t_counting = false;
+        std::printf("F13: %d passes whose lists did not change: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+        CHECK(Access::fingerprint(e13) == settled);
+        cascade::core::PublishedState ps13;
+        Access::publish(e13, ps13);  // (warm-up)
+        t_news = 0;
+        t_counting = true;
+        for (int i = 0; i < kPublishes; ++i) { Access::publish(e13, ps13); }
+        t_counting = false;
+        std::printf("F13: %d publishes with the same: %ld heap allocations\n", kPublishes, t_news);
+        CHECK(t_news == 0);
+
+        const auto movedBy13 = [&](const char* what, auto change) {
+            const std::uint64_t before = Access::fingerprint(e13);
+            change();
+            const std::uint64_t after = Access::fingerprint(e13);
+            CHECK(after != before);
+            t_news = 0;
+            t_counting = true;
+            (void)Access::publishLists(e13);  // the rebuild
+            t_counting = false;
+            const long rebuild = t_news;
+            t_news = 0;
+            t_counting = true;
+            for (int i = 0; i < kPublishes; ++i) { (void)Access::publishLists(e13); }
+            t_counting = false;
+            std::printf("F13: %-52s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n", what, rebuild,
+                        kPublishes, t_news);
+            CHECK(rebuild > 0 && rebuild < 8000);
+            CHECK(t_news == 0);
+        };
+        movedBy13("a site's address", [&] { Access::sites(e13)[0] = "https://site-zero.example.org/plugins/index.json"; });
+        movedBy13("a site's state", [&] { Access::siteStatus(e13)[1].state = Access::SiteStatus::State::Failed; });
+        movedBy13("a site's listed count", [&] { ++Access::siteStatus(e13)[2].listed; });
+        movedBy13("a site's hidden count", [&] { ++Access::siteStatus(e13)[2].hiddenSameId; });
+        movedBy13("a site's off-host count", [&] { ++Access::siteStatus(e13)[2].hiddenOffHost; });
+        movedBy13("a site's error", [&] { Access::siteStatus(e13)[3].error = "another reason"; });
+        movedBy13("the last site refusal", [&] { Access::siteError(e13) = "that site is already in the list"; });
+        movedBy13("the kept copy flag", [&] { Access::fromCache(e13) = false; });
+        movedBy13("the refresh failed flag", [&] { Access::refreshFailed(e13) = true; });
+        movedBy13("the read time", [&] { Access::readTime(e13) = 1760009999; });
+        movedBy13("the regional outcome's state", [&] { Access::regionalState(e13) = "failed"; });
+        movedBy13("the regional outcome's count", [&] { Access::regionalAdded(e13) = 3; });
+        movedBy13("the pictures' counter (a state moved)", [&] { ++Access::picturesSeq(e13); });
+        movedBy13("a picture in flight", [&] { Access::shotPending(e13) = true; });
+        movedBy13("a clean-up in flight", [&] { Access::cleanupPending(e13) = true; });
+        movedBy13("an old copy", [&] { Access::oldCopies(e13)[0].keptVersion = "1.2.0"; });
+        movedBy13("a third old copy", [&] { Access::oldCopies(e13).push_back({"sat-1.0.0.dll", "Satellites", "1.0.0", "sat-1.1.0.dll", "1.1.0"}); });
+        movedBy13("the clean-up's report", [&] { Access::cleanupReport(e13) = "In use, so removed the next time FoxSDR starts: adsb-1.0.0.dll."; });
+        movedBy13("the busy key", [&] { Access::busyId(e13) = "plugin-2"; });
+        movedBy13("the result key", [&] { Access::resultId(e13) = "plugin-2"; });
+        // A repeat of what is already so moves nothing.
+        {
+            const std::uint64_t now = Access::fingerprint(e13);
+            Access::siteError(e13) = "that site is already in the list";
+            Access::cleanupReport(e13) = "In use, so removed the next time FoxSDR starts: adsb-1.0.0.dll.";
+            Access::busyId(e13) = "plugin-2";
+            Access::resultId(e13) = "plugin-2";
+            Access::regionalState(e13) = "failed";
+            CHECK(Access::fingerprint(e13) == now);
+            std::printf("F13: the same texts and keys said again: the fingerprint is equal\n");
+        }
+        // The pictures' own text (a path, a reason) is read when the block is built and is not in the fingerprint: a change to the map that
+        // does not bump the counter moves nothing (the counter is what every write of the map is paired with, engine_store.cpp).
+        {
+            const std::uint64_t now = Access::fingerprint(e13);
+            Access::pictures(e13).begin()->second.reason = "silently changed";
+            CHECK(Access::fingerprint(e13) == now);
+        }
+    }
+
 
 // <<F5 CASE BEGIN
 

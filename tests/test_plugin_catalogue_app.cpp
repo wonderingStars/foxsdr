@@ -1,8 +1,20 @@
-// test_plugin_catalogue_app.cpp - the REAL AppWindow keeping the catalogue it read and fetching a
-// plugin's pictures (0.99.72, the plugin store redesign). No window, no network: the catalogue is a
-// local file (the same seam CHECK NOW's local form uses) and the pictures come from the transport
-// stand-in (PluginRepo::setTransportForTest), so the worker, the poll, the cache files and the
-// rename all run for real.
+// test_plugin_catalogue_app.cpp - the ENGINE keeping the catalogue it read and fetching a plugin's pictures (0.99.72, the plugin store
+// redesign), and listing the plugin sites a user added (0.99.74). No window, no network: the catalogue is a local file (the same seam CHECK
+// NOW's local form uses) and the pictures come from the transport stand-in (PluginRepo::setTransportForTest), so the worker, the poll, the
+// cache files and the rename all run for real.
+//
+// CONVERTED (stub campaign B3, 0.99.84 house pattern): master ran all of this in the window (AppWindow::startCatalogFetch / pollPluginAsync /
+// loadCachedCatalogue / requestScreenshots / addPluginSite ...); it is the ENGINE's now (src/engine/engine_store.cpp). Every touch of it goes
+// through rawEngine and the pass seam (tests/pass_seam.hpp: the same test runs inline and with the pass on its own thread). What differs in the
+// way it is checked, and why - the assertions the engine still answers are untouched:
+//   - removing a site deletes its kept copy on a WORKER (the pass never waits on a disk): the helper waits for the pass to collect it before
+//     the disk is looked at;
+//   - the store window's MODEL (buildPluginStoreModel: a card's thirdParty/siteHost/legal-notice sentence/origin note, the sites panel's state
+//     and label) is the WINDOW's and comes back in the next batch, where tests/test_plugin_store_window.cpp holds it over the 0.99.72 model;
+//     the section that read it here reads what the window will read instead - the table: the entry's key, fact.store.<key>.site, the gate
+//     asked with and without the notice acknowledged, and fact.store.sites;
+//   - the web control (AppWindow::applyControlRequest) is the engine's STORE_INSTALL op from a REMOTE session now: the refusal is asserted on the
+//     op's own path with the session's origin set, and the same through a real web session in tests/test_engine_api_store.cpp.
 //
 // THE CATALOGUE KEPT (core/plugin_repo.hpp, saveCatalogueCache / loadCachedIndex; the core's own
 // rules are in tests/test_plugin_cache.cpp):
@@ -56,10 +68,12 @@
 #include "core/package_identity.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_host.hpp"
+#include "core/app_commands.hpp"
 #include "core/plugin_repo.hpp"
+#include "engine/engine.hpp"
+#include "engine/fox_engine_api.hpp"
 #include "gui/app_window.hpp"
-#include "gui/plugin_store_view.hpp"
-#include "net/web_control.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 
 namespace fs = std::filesystem;
@@ -72,63 +86,108 @@ using cascade::core::PluginRepo;
 namespace cascade::gui {
 
 struct AppWindowTestAccess {
-    using PictureState = AppWindow::PictureState;
+    using Engine = cascade::engine::Engine;
+    using PictureState = Engine::PictureState;
+    using PictureStatus = Engine::PictureStatus;
+    static Engine& eng(const AppWindow& a) { return rawEngine(const_cast<AppWindow&>(a).engine_); }
+    // Runs `f` on the pass's own thread (or here, inline) and returns what it returns.
+    template <class R, class F>
+    static R rd(const AppWindow& a, F f) {
+        return passseam::read<R>(eng(a), std::function<R()>(f));
+    }
+    template <class F>
+    static void wr(const AppWindow& a, F f) {
+        passseam::on(eng(a), std::function<void()>(f));
+    }
 
     static bool fetchCatalogue(AppWindow& a, const std::string& url) {
-        a.pluginCatalogueUrl_ = url;
-        a.startCatalogFetch();
-        if (!a.catalogPending_) { return false; }
+        bool started = false;
+        wr(a, [&] {
+            eng(a).pluginCatalogueUrl_ = url;
+            eng(a).startCatalogFetch();
+            started = eng(a).catalogPending_;
+        });
+        if (!started) { return false; }
         for (int i = 0; i < 6000; ++i) {
-            a.pollPluginAsync();
-            if (!a.catalogPending_) { return a.catalogError_.empty(); }
+            bool pending = true;
+            bool ok = false;
+            wr(a, [&] {
+                eng(a).pollPluginAsync();
+                pending = eng(a).catalogPending_;
+                ok = eng(a).catalogError_.empty();
+            });
+            if (!pending) { return ok; }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return false;
     }
-    // One frame's polling, until `done` or the wait runs out.
+    // One pass's polling, until `done` or the wait runs out.
     static bool pollUntil(AppWindow& a, const std::function<bool()>& done) {
         for (int i = 0; i < 6000; ++i) {
-            a.pollPluginAsync();
+            wr(a, [&] { eng(a).pollPluginAsync(); });
             if (done()) { return true; }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return false;
     }
-    static void poll(AppWindow& a) { a.pollPluginAsync(); }
-    static std::string pluginDir(const AppWindow& a) { return a.pluginDir_; }
-    static const std::vector<PluginCatalogEntry>& catalogue(const AppWindow& a) { return a.catalog_; }
+    static void poll(AppWindow& a) { wr(a, [&] { eng(a).pollPluginAsync(); }); }
+    static std::string pluginDir(const AppWindow& a) { return rd<std::string>(a, [&] { return eng(a).pluginDir_; }); }
+    static std::vector<PluginCatalogEntry> catalogue(const AppWindow& a) {
+        return rd<std::vector<PluginCatalogEntry>>(a, [&] { return eng(a).catalog_; });
+    }
     static void setCatalogue(AppWindow& a, std::vector<PluginCatalogEntry> c) {
-        a.catalog_ = std::move(c);
+        wr(a, [&] {
+            eng(a).catalog_ = std::move(c);
+            ++eng(a).catalogSeq_;
+        });
     }
-    static const std::string& error(const AppWindow& a) { return a.catalogError_; }
-    static bool fromCache(const AppWindow& a) { return a.catalogueFromCache_; }
-    static std::int64_t readTime(const AppWindow& a) { return a.catalogueReadTime_; }
-    static bool readThisSession(const AppWindow& a) { return a.catalogueReadThisSession(); }
-    static bool catalogPending(const AppWindow& a) { return a.catalogPending_; }
-    static bool installPending(const AppWindow& a) { return a.installPending_; }
-    static void setInstallPending(AppWindow& a, bool v) { a.installPending_ = v; }
+    static std::string error(const AppWindow& a) { return rd<std::string>(a, [&] { return eng(a).catalogError_; }); }
+    static bool fromCache(const AppWindow& a) { return rd<bool>(a, [&] { return eng(a).catalogueFromCache_; }); }
+    static std::int64_t readTime(const AppWindow& a) { return rd<std::int64_t>(a, [&] { return eng(a).catalogueReadTime_; }); }
+    static bool readThisSession(const AppWindow& a) { return rd<bool>(a, [&] { return eng(a).catalogueReadThisSession(); }); }
+    static bool catalogPending(const AppWindow& a) { return rd<bool>(a, [&] { return eng(a).catalogPending_; }); }
+    static bool installPending(const AppWindow& a) { return rd<bool>(a, [&] { return eng(a).installPending_; }); }
+    static void setInstallPending(AppWindow& a, bool v) { wr(a, [&] { eng(a).installPending_ = v; }); }
+    static void setAddAllActive(AppWindow& a, bool v) { wr(a, [&] { eng(a).addAllRun_.active = v; }); }
     static void request(AppWindow& a, const std::string& id, bool retry = false) {
-        a.requestScreenshots(id, retry);
+        wr(a, [&] { eng(a).requestScreenshots(id, retry); });
     }
-    static AppWindow::PictureStatus status(const AppWindow& a, const CatalogScreenshot& s) {
-        return a.pictureStatus(s);
+    static PictureStatus status(const AppWindow& a, const CatalogScreenshot& s) {
+        return rd<PictureStatus>(a, [&] { return eng(a).pictureStatus(s); });
     }
-    static bool shotPending(const AppWindow& a) { return a.screenshotPending_; }
-    static std::size_t queued(const AppWindow& a) { return a.screenshotQueue_.size(); }
-    static std::string blockedReason(const AppWindow& a, int idx) {
-        return a.pluginInstallBlockedReason(idx, true);
+    static bool shotPending(const AppWindow& a) { return rd<bool>(a, [&] { return eng(a).screenshotPending_; }); }
+    static std::size_t queued(const AppWindow& a) { return rd<std::size_t>(a, [&] { return eng(a).screenshotQueue_.size(); }); }
+    static std::string blockedReason(const AppWindow& a, int idx, bool acknowledged = true) {
+        return rd<std::string>(a, [&] { return eng(a).pluginInstallBlockedReason(idx, acknowledged); });
     }
-    static void startInstall(AppWindow& a, const PluginCatalogEntry& e) { a.startInstall(e); }
+    static void startInstall(AppWindow& a, const PluginCatalogEntry& e) { wr(a, [&] { eng(a).startInstall(e); }); }
 
     // --- plugin sites (0.99.74) ---
-    static void setSites(AppWindow& a, std::vector<std::string> s) { a.pluginSites_ = std::move(s); }
-    static const std::vector<std::string>& sites(const AppWindow& a) { return a.pluginSites_; }
-    static void loadCachedSites(AppWindow& a) { a.loadCachedSites(); }
+    static void setSites(AppWindow& a, std::vector<std::string> s) { wr(a, [&] { eng(a).pluginSites_ = std::move(s); }); }
+    static std::vector<std::string> sites(const AppWindow& a) { return rd<std::vector<std::string>>(a, [&] { return eng(a).pluginSites_; }); }
+    static void loadCachedSites(AppWindow& a) { wr(a, [&] { eng(a).loadCachedSites(); }); }
     static bool addSite(AppWindow& a, const std::string& url, std::string& why) {
-        return a.addPluginSite(url, why);
+        bool ok = false;
+        wr(a, [&] { ok = eng(a).addPluginSite(url, why); });
+        return ok;
     }
-    static void removeSite(AppWindow& a, const std::string& url) { a.removePluginSite(url); }
-    static int indexByKey(const AppWindow& a, const std::string& key) { return a.catalogIndexByKey(key); }
+    // REMOVE, and the wait for the worker that deletes the site's kept copy.
+    static void removeSite(AppWindow& a, const std::string& url) {
+        wr(a, [&] { eng(a).removePluginSite(url); });
+        for (int i = 0; i < 6000; ++i) {
+            bool pending = true;
+            wr(a, [&] {
+                eng(a).pollPluginAsync();
+                pending = eng(a).cleanupPending_;
+            });
+            if (!pending) { return; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(false);
+    }
+    static int indexByKey(const AppWindow& a, const std::string& key) {
+        return rd<int>(a, [&] { return eng(a).catalogIndexByKey(key); });
+    }
     struct SiteState {
         int state = 0;  // 0 not read, 1 kept, 2 read, 3 failed, -1 no such site
         int listed = 0;
@@ -137,27 +196,39 @@ struct AppWindowTestAccess {
         std::string error;
     };
     static SiteState siteState(const AppWindow& a, const std::string& url) {
-        for (const AppWindow::SiteStatus& s : a.siteStatus_) {
-            if (s.url != url) { continue; }
-            SiteState out;
-            out.state = static_cast<int>(s.state);
-            out.listed = s.listed;
-            out.hiddenSameId = s.hiddenSameId;
-            out.hiddenOffHost = s.hiddenOffHost;
-            out.error = s.error;
-            return out;
-        }
-        SiteState none;
-        none.state = -1;
-        return none;
+        return rd<SiteState>(a, [&] {
+            for (const Engine::SiteStatus& s : eng(a).siteStatus_) {
+                if (s.url != url) { continue; }
+                SiteState out;
+                out.state = static_cast<int>(s.state);
+                out.listed = s.listed;
+                out.hiddenSameId = s.hiddenSameId;
+                out.hiddenOffHost = s.hiddenOffHost;
+                out.error = s.error;
+                return out;
+            }
+            SiteState none;
+            none.state = -1;
+            return none;
+        });
     }
-    static std::size_t siteStatusCount(const AppWindow& a) { return a.siteStatus_.size(); }
-    static const std::string& installError(const AppWindow& a) { return a.installError_; }
-    static void control(AppWindow& a, const cascade::net::ControlRequest& r) { a.applyControlRequest(r); }
-    static cascade::gui::PluginStoreModel model(AppWindow& a) {
-        cascade::gui::PluginStoreModel m;
-        a.buildPluginStoreModel(m);
-        return m;
+    static std::size_t siteStatusCount(const AppWindow& a) { return rd<std::size_t>(a, [&] { return eng(a).siteStatus_.size(); }); }
+    static std::string installError(const AppWindow& a) { return rd<std::string>(a, [&] { return eng(a).installError_; }); }
+    // The install the web page asks for: STORE_INSTALL from a REMOTE session (the engine's origin flag is what ApiHostImpl::apply sets around
+    // the call), the notice acknowledged. Returns the op's status.
+    static int remoteInstall(AppWindow& a, const std::string& id) {
+        int status = 0;
+        wr(a, [&] {
+            eng(a).commandFromRemote_ = true;
+            const cascade::core::cmd::QueuedCommand q = cascade::core::cmd::makeText(FOXAPI_OP_STORE_INSTALL, id, 1);
+            status = eng(a).applyCommand(q.c, q.longText).status;
+            eng(a).commandFromRemote_ = false;
+        });
+        return status;
+    }
+    // The table, as a publish builds it (the lists and the facts of one block).
+    static std::shared_ptr<const cascade::engine::ApiListBlock> block(const AppWindow& a) {
+        return rd<std::shared_ptr<const cascade::engine::ApiListBlock>>(a, [&] { return eng(a).buildApiLists(0); });
     }
 };
 
@@ -566,6 +637,25 @@ void testPictures() {
         CHECK(Access::blockedReason(app, 0) != "a transfer is already in progress");
     }
 
+    // THE PICTURES WAIT FOR AN ADD ALL RUN TOO: between two of its downloads no install is in flight, and the queue still waits for the run
+    // (here only said to be active) and goes when it is over.
+    {
+        const std::string body6(1500, '6');
+        const CatalogScreenshot e1 = shot("https://pics.example.invalid/e1.png", body6);
+        gate->bodies[e1.url] = body6;
+        Access::setCatalogue(app, {entryWith("E", {e1})});
+        const int hitsBefore = gate->hits.load();
+        Access::setAddAllActive(app, true);
+        Access::request(app, "E");
+        for (int i = 0; i < 20; ++i) { Access::poll(app); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        CHECK(Access::status(app, e1).state == PictureState::Pending);
+        CHECK(!Access::shotPending(app));
+        CHECK(gate->hits == hitsBefore);
+        Access::setAddAllActive(app, false);
+        CHECK(Access::pollUntil(app, [&] { return Access::status(app, e1).state == PictureState::Ready; }));
+        CHECK(gate->hits == hitsBefore + 1);
+    }
+
     // A CATALOGUE THAT NO LONGER NAMES A PICTURE DROPS ITS STATUS AND ITS FILE, and only those.
     {
         // The catalogue as the store would read it now names only b1.
@@ -654,48 +744,46 @@ void testPluginSites() {
         CHECK(!kept.empty() && fs::is_regular_file(g_dir / kept));
         CHECK(fs::is_regular_file(g_dir / PluginRepo::siteCacheTimeFileName(urlA)));
         CHECK(readAll(g_dir / kept) == siteText({"hdradio", "p2"}));
-        // The store's model: the key, the badge fields, the notice that is always there.
-        const cascade::gui::PluginStoreModel model = Access::model(app);
-        CHECK(model.sites.size() == 1u);
-        if (model.sites.size() == 1u) {
-            CHECK(model.sites[0].state == cascade::gui::StoreSite::State::Read);
-            CHECK(model.sites[0].plugins == 1);
-            CHECK(model.sites[0].label == labelA);
-        }
-        int cards = 0;
-        for (const cascade::gui::StoreModule& sm : model.modules) {
-            if (sm.plate.name == "Site hdradio") {
-                ++cards;
-                CHECK(sm.thirdParty);
-                CHECK(sm.id == "hdradio@" + labelA);
-                CHECK(sm.siteHost == labelA);
-                CHECK(sm.plate.legalNotice.find("comes from " + labelA) != std::string::npos);
-                CHECK(!sm.plate.originNote.empty());
-                // The gate, with a site's plugin that publishes no legal notice of its own: the
-                // acknowledgement is still asked for, and given it, it passes.
-                const int idx = Access::indexByKey(app, sm.id);
-                CHECK(idx >= 0);
-                CHECK(Access::blockedReason(app, idx).empty());
-                CHECK(sm.blockedReasonIfAcknowledged.empty());
-                CHECK(sm.blockedReason == "the legal notice must be acknowledged first");
-            } else {
-                CHECK(!sm.thirdParty);
-                CHECK(sm.siteHost.empty());
-                CHECK(sm.id == (sm.plate.name == "Plugin p1" ? "p1" : "p2"));
+        // THE TABLE the store's page is drawn from: the key, the entry's site, the sites' lines, and the gate that is always there.
+        {
+            const auto block = Access::block(app);
+            // fact.store.sites: "address TAB state TAB listed TAB hidden-same-id TAB hidden-off-host TAB error" - state 2 is read.
+            CHECK(block->facts.at("store.sites").value == urlA + "\t2\t1\t1\t0\t");
+            CHECK(block->facts.at("store.sites").localOnly);  // a stranger's address the user typed
+            int cards = 0;
+            for (const cascade::engine::ApiListBlock::StoreEntry& se : block->store) {
+                const std::string key = se.id;
+                if (se.name == "Site hdradio") {
+                    ++cards;
+                    CHECK(key == "hdradio@" + labelA);  // the id for an official plugin, "<id>@<site label>" for a site's
+                    CHECK(block->facts.at("store." + key + ".site").value == urlA);
+                    CHECK(block->facts.at("store." + key + ".site").localOnly);
+                    // The gate, with a site's plugin that publishes no legal notice of its own: the acknowledgement is still asked for,
+                    // and given it, it passes.
+                    const int idx = Access::indexByKey(app, key);
+                    CHECK(idx >= 0);
+                    CHECK(Access::blockedReason(app, idx, true).empty());
+                    CHECK(Access::blockedReason(app, idx, false) == "the legal notice must be acknowledged first");
+                    CHECK(block->facts.at("store." + key + ".blocked").value.empty());  // asked WITH the notice acknowledged
+                } else {
+                    CHECK(key == (se.name == "Plugin p1" ? "p1" : "p2"));
+                    CHECK(block->facts.at("store." + key + ".site").value.empty());
+                    // An official plugin with no notice of its own: the tick changes nothing about its gate (a site's is the opposite, above).
+                    const int oi = Access::indexByKey(app, key);
+                    CHECK(Access::blockedReason(app, oi, false) == Access::blockedReason(app, oi, true));
+                }
             }
+            CHECK(cards == 1);
         }
-        CHECK(cards == 1);
         CHECK(Access::indexByKey(app, "hdradio@" + labelA) >= 0);
         CHECK(Access::indexByKey(app, "hdradio") == -1);  // the bare id names no entry of a site
 
-        // THE WEB CONTROL FITS OFFICIAL PLUGINS ONLY: a site's id is refused with a reason.
-        cascade::net::ControlRequest req;
-        req.pluginInstall = "hdradio";
-        req.acknowledgeNotice = true;
-        Access::control(app, req);
+        // THE WEB CONTROL FITS OFFICIAL PLUGINS ONLY: a site's id is refused with a reason - by the bare id the page lists, and by the key.
+        CHECK(Access::remoteInstall(app, "hdradio") == FOXAPI_DENIED);
         CHECK(!Access::installPending(app));
-        CHECK(Access::installError(app).find("can only be fitted from the plugin store on this computer") !=
-              std::string::npos);
+        CHECK(Access::installError(app).find("can only be fitted from the plugin store on this computer") != std::string::npos);
+        CHECK(Access::remoteInstall(app, "hdradio@" + labelA) == FOXAPI_DENIED);
+        CHECK(!Access::installPending(app));
 
         // A SITE THAT FAILS THE NEXT TIME never blanks the list: its earlier entries stay, with the reason.
         fs::remove(siteA);
@@ -808,8 +896,8 @@ void testPluginSites() {
         CHECK(fs::is_regular_file(g_dir / keptB));
         CHECK(readAll(g_dir / module) == "installed bytes");
         CHECK(readAll(g_dir / "installed.json") == manifestBefore);
-        // The store's model has one site, and it is the second.
-        CHECK(Access::model(app).sites.size() == 1u);
+        // The table has one site, and it is the second.
+        CHECK(Access::block(app)->facts.at("store.sites").value == urlB + "\t2\t1\t0\t0\t");
         // Removing one that is not there changes nothing.
         Access::removeSite(app, urlA);
         CHECK(Access::sites(app).size() == 1u);

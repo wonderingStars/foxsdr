@@ -620,7 +620,13 @@ struct AppWindowTestAccess {
     static std::string telemetryInstallId(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).telemetryInstallId_; }); }
     static std::vector<std::string> telemetryPanels(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).telemetryPanels_; }); }
     static cascade::source::SoundCardSettings soundCardForm(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).soundCard_; }); }
-    static bool storeBusyHere(AppWindow& a) { return rawEngine(a.engine_).catalogPending_ || rawEngine(a.engine_).installPending_; }
+    // (a picture on its way and a clean-up on a worker are transfers too: stub campaign B3)
+    static bool storeBusyHere(AppWindow& a) {
+        return rawEngine(a.engine_).catalogPending_ || rawEngine(a.engine_).installPending_ || rawEngine(a.engine_).screenshotPending_ ||
+               rawEngine(a.engine_).cleanupPending_;
+    }
+    static std::vector<std::string> storeSites(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).pluginSites_; }); }
+    static std::string siteError(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).siteError_; }); }
     static bool storeBusy(AppWindow& a) { return rd(a, [&] { return storeBusyHere(a); }); }
     static bool waitStore(AppWindow& a) {
         return waitPolled(a, [&] { rawEngine(a.engine_).pollPluginAsync(); }, [&] { return !storeBusyHere(a); });
@@ -2165,6 +2171,61 @@ void storeOps(AppWindow& a) {
 
     covering(FOXAPP_OP_STORE_UPDATE);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_UPDATE, "stage1-catalogue-only")), FOXAPI_NOT_FOUND));
+
+    // THE STORE'S SITES, PICTURES AND CLEAN-UP (0.99.49 - 0.99.74, stub campaign B3). The catalogue is pointed at a file that is not there and
+    // the sites are local paths (no scheme: the seam), so every read fails at once and nothing here touches a network.
+    covering(FOXAPP_OP_STORE_SITE);
+    {
+        const std::string savedUrl = A::catalogueUrl(a);
+        const std::string site = (g_plugins.parent_path() / "b3-site-index.json").string();
+        A::setCatalogueUrl(a, (g_plugins.parent_path() / "b3-no-such-catalogue.json").string());
+        CHECK(A::waitStore(a));
+        // ADD only with the consent the window collects: without it the address is not even looked at, and nothing is listed.
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_SITE, site, 0, 0)), FOXAPI_DENIED));
+        CHECK(A::storeSites(a).empty());
+        CHECK(A::siteError(a).find("not ticked") != std::string::npos);
+        // An address that fails the ONE validator is refused with its reason, and nothing is listed.
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_SITE, "http://plugins.example.test/index.json", 0, 1)), FOXAPI_BAD_ARGUMENT));
+        CHECK(A::storeSites(a).empty());
+        CHECK(!A::siteError(a).empty());
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_SITE, site, 2, 1)), FOXAPI_OUT_OF_RANGE));
+        // A good one is listed, and a read starts (it fails: there is no such file - the site is listed all the same, "failed").
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_SITE, "  " + site + "  ", 0, 1))));
+        CHECK(A::storeSites(a) == std::vector<std::string>{site});
+        CHECK(A::siteError(a).empty());
+        CHECK(A::waitStore(a));
+        // ...and once more is refused, whatever the consent.
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_SITE, site, 0, 1)), FOXAPI_BAD_ARGUMENT));
+        CHECK(A::siteError(a).find("already in the list") != std::string::npos);
+        // REMOVE: one that is not listed is NOT_FOUND; the listed one goes (its kept copy is deleted on a worker).
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_SITE, "https://nobody.example.test/index.json", 1)), FOXAPI_NOT_FOUND));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_SITE, site, 1))));
+        CHECK(A::storeSites(a).empty());
+        CHECK(A::waitStore(a));
+        A::setCatalogueUrl(a, savedUrl);
+    }
+
+    covering(FOXAPP_OP_STORE_PICTURES_WANT);
+    {
+        A::injectCatalogue(a);
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_PICTURES_WANT, "no-such-key", 0)), FOXAPI_NOT_FOUND));
+        // A key the catalogue holds (this entry lists no pictures: nothing is queued, and that is not a refusal).
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_PICTURES_WANT, "stage1-catalogue-only", 1))));
+        // The bare id of a plugin site's entry names nothing: the key is "<id>@<site>".
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_PICTURES_WANT, "stage1-catalogue-only@elsewhere.example", 0)), FOXAPI_NOT_FOUND));
+    }
+
+    covering(FOXAPP_OP_STORE_CLEAN_OLD);
+    {
+        // CLEAN UP with no old copy found is nothing to do; REMOVE FILE on a name this engine's scan holds no record of removes nothing and
+        // SAYS why (the last scan did not find it); any other mode is out of range.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_STORE_CLEAN_OLD, 0))));
+        CHECK(A::waitStore(a));
+        A::clearInstallError(a);
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_STORE_CLEAN_OLD, "no-such-module.dll", 1))));
+        CHECK(A::installError(a).find("last scan") != std::string::npos);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_STORE_CLEAN_OLD, 2)), FOXAPI_OUT_OF_RANGE));
+    }
 
     covering(FOXAPP_OP_STORE_REMOVE_BLOCKED);
     {

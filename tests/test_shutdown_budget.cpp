@@ -430,6 +430,10 @@ const KnownWait kKnownWaits[] = {
     {"src/engine/engine.cpp", "kNoWait", 0,
      "zero by construction - the same ready-polls (the device scan/open and the store's "
      "futures), moved verbatim from app_window.cpp in engine stage 3a"},
+    {"src/engine/engine_store.cpp", "kNoWait", 0,
+     "zero by construction - pollPluginAsync's ready-polls of the store's futures (the catalogue "
+     "read, a picture, an install, a clean-up), moved from engine.cpp by stub batch B3: a poll "
+     "once a pass, never a wait - and the pass has ended before beginShutdown() raises the threshold"},
     // THE AUDIO DEVICE OPEN (0.96.5), and why both of its waits are zero here.
     // The 0.96.4 field hang "ntdll.dll @ InitializeWaveHandles" was a
     // synchronous waveOutOpen on the FRAME LOOP - the Sinks combo and the audio

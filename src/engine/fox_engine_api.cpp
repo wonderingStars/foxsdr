@@ -1324,6 +1324,7 @@ private:
             case FOXAPI_OP_UPDATE_CHECK: case FOXAPI_OP_STORE_FETCH: case FOXAPI_OP_STORE_INSTALL:
             case FOXAPI_OP_STORE_REMOVE: case FOXAPI_OP_STORE_CANCEL: case FOXAPI_OP_STORE_UPDATE_ALL:
             case FOXAPP_OP_STORE_UPDATE: case FOXAPP_OP_STORE_REMOVE_BLOCKED: case FOXAPP_OP_STORE_ADD_ALL:
+            case FOXAPP_OP_STORE_SITE: case FOXAPP_OP_STORE_PICTURES_WANT: case FOXAPP_OP_STORE_CLEAN_OLD:
             case FOXAPP_OP_TELEMETRY_CONSENT: case FOXAPP_OP_SET_CATALOGUE_URL:
                 return FOXAPI_GRANT_ADMIN;
             case FOXAPI_OP_PROBLEM_REPORT: case FOXAPI_OP_FEATURE_REQUEST: case FOXAPP_OP_NOTE_PANEL:
@@ -1769,7 +1770,11 @@ void ApiHostImpl::apply(const Pending& p) {
         finish();
         return;
     }
+    // WHERE THE COMMAND CAME FROM, for the one op that must know (the store's install of a plugin from a site the user added: a REMOTE session
+    // - the web page's own is one - may not fit one). Set for the length of the call and cleared after it; the pass is the only thread here.
+    engine_.commandFromRemote_ = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
     const FoxCommandResult applied = engine_.applyCommand(c, p.longText);
+    engine_.commandFromRemote_ = false;
     r.status = applied.status;
     r.flags = applied.flags;
     r.applied[0] = applied.applied[0];
@@ -2890,6 +2895,23 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 }
                 if (sv.running) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                 if (sv.fault) { it.flags |= FOXAPI_ITEM_FAULT; }
+            }
+            break;
+        // ---- API 0.3 8.9 (stub campaign B3): the store's pictures ------------------------------------------------------------------
+        case FOXAPI_LIST_STORE_PICTURES:
+            if (want(b->storePictures.size())) {
+                const auto& pic = b->storePictures[index];
+                // The first 64 bits of the digest: stable for the picture's life, and what a reader can hold the row by.
+                it.id = std::strtoull(pic.sha256.substr(0, 16).c_str(), nullptr, 16);
+                copyText(it.name, pic.sha256.c_str());
+                // A cached file's path is this machine's (LOCAL sessions only); a failure's reason is a sentence.
+                if (pic.state == 2) {
+                    if (local) { copyText(it.detail, pic.path.c_str()); }
+                } else if (pic.state == 3) {
+                    copyText(it.detail, pic.reason.c_str());
+                }
+                it.value[0] = static_cast<double>(pic.state);
+                if (pic.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;
         case FOXAPI_LIST_PLUGIN_COMMANDS:

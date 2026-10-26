@@ -10,8 +10,9 @@ table has no read for, in a new vendored header version"). Every 0.3 change
 is APPENDED, per the header's own rule 4, and each is documented in
 `docs/api-0.3-additions.md` in API.md's style, to be merged upstream; until
 that commit exists, this file and that document are the 0.3 contract.
-SHA-256 of the 0.3 header: `91c101de96d3c8c30019e29e35fcae89546b75ef4dc6c5d0140f52f6d5a5230c`.
+SHA-256 of the 0.3 header: `fe98c0532c3b86ae2f50d9902d5f84fbe945348b0531e0b157ae2a02d6e96384`.
 (Refreshed at stage 5a, which added `FOXAPI_LIST_SERVERS` (49, docs/api-0.3-additions.md 8.16.5) - the only change; the hash is of the file with LF line ends, as git stores it. The value recorded before it, `f60701c2...`, had not been refreshed since the pump move's additions and matched no committed state of the header.)
+(Refreshed by stub campaign B3, which added `FOXAPI_LIST_STORE_PICTURES` (50, docs/api-0.3-additions.md 5.1 and 9.4). The value recorded before it, `91c101de...`, was stale: the header had changed since stage 5a (one line in the 0.99.84 merge's second pass, B2's) without the hash being refreshed. This hash is again that of the file as git stores it, LF line ends.)
 
 Licence: MIT, in the header's own licence block.
 

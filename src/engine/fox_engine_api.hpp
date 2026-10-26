@@ -298,6 +298,17 @@ struct ApiListBlock {
         std::string addAllName;
     };
     StoreActivity storeActivity;
+    // API 0.3 8.9 (stub campaign B3), STORE_PICTURES: every picture the store was asked for and still knows, by sha256 - Pending (1: queued
+    // or in flight), Ready (2: on disk at `path`, its bytes hashed to the catalogue's digest) or Failed (3: `reason`, English). `active`
+    // marks the one in flight. The status moves with a transfer, not per pass, so it is a block of its own like the rest (the fingerprint
+    // hashes Engine::picturesSeq_).
+    struct Picture {
+        std::string sha256;
+        int state = 0;
+        std::string path, reason;
+        bool active = false;
+    };
+    std::vector<Picture> storePictures;
     std::vector<std::pair<std::string, std::string>> storeBlocked;  // file, why
     std::vector<std::pair<std::string, std::string>> storeUpdates;  // id, "from -> to"
     std::string txArgs;              // the address TX_OPEN is given

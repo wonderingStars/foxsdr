@@ -761,7 +761,7 @@ void testEveryListIsServed() {
     engine_api_test::SerialEngine e(api(), kHooks);
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
     int served = 0;
-    for (uint32_t l = 1; l <= FOXAPI_LIST_SERVERS; ++l) {
+    for (uint32_t l = 1; l <= FOXAPI_LIST_STORE_PICTURES; ++l) {  // (the newest list: 50, stub campaign B3)
         if (l == 13u) { continue; }  // retired in 0.2
         if (l == FOXAPI_LIST_TRACKS) {
             // Map tracks come from track-source plugins through the map
@@ -1497,7 +1497,7 @@ void testStatusColumnRecordings() {
 void testListsBeforeFirstPublish() {
     const auto readEveryList = [](testing::Session& s, const char* when) {
         CHECK(s.ok());
-        for (uint32_t l = 1; l <= FOXAPI_LIST_SERVERS; ++l) {
+        for (uint32_t l = 1; l <= FOXAPI_LIST_STORE_PICTURES; ++l) {  // (the newest list: 50, stub campaign B3)
             if (l == 13u || l == FOXAPI_LIST_TRACKS) { continue; }  // retired / not served
             FoxListItem it{};
             it.structSize = sizeof(it);
@@ -4650,16 +4650,20 @@ void testStoreBeforeAndFetch() {
         CHECK(found);
     }
 
-    // A REFETCH that fails (a path that is not there) empties the catalogue and clears the status line.
+    // A REFETCH that fails (a path that is not there) KEEPS the catalogue on screen and clears the status line, with the reason beside it
+    // (0.99.72, restored by stub campaign B3). This section pinned the 0.99.42 rule - a failed refresh emptied the list - which master's
+    // 0.99.72 replaced on purpose: a user offline for a moment was shown an empty store. The list that stays is only ever one this client
+    // accepted once; install() re-checks every entry it is handed whatever list it came from. (tests/test_plugin_catalogue_app.cpp holds the
+    // rule on the kept copy, an earlier read and the sites; tests/test_engine_api_store.cpp on the table.)
     CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, (w.index.string() + ".missing"))).status(), FOXAPI_OK);
     CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
     CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; }));
     passes(d.eng, 2);
-    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 7);
     CHECK_EQ(levelOf(s, "catalogStatus"), -1.0);
     CHECK_EQ(levelOf(s, "catalogError"), 3.0);
-    storeFact(s, "alpha-good", "author", &st);
-    CHECK_EQ(st, FOXAPI_NOT_FOUND);  // the entry's facts went with it
+    CHECK_EQ(storeFact(s, "alpha-good", "author", &st), std::string("Alpha Labs Ltd"));
+    CHECK(st > 0);  // the entry's facts stayed with it (served: the text's length, not NOT_FOUND)
     std::printf("I1: CATALOGUE's value[0], value[1] and BUILD_HERE, the six per-entry facts, fact.store.url (LOCAL), the retired row's id and whole sentence, the two edges and a failed refetch\n");
 }
 
@@ -4853,19 +4857,18 @@ void testStoreCatalogueCounter() {
     const uint64_t c1 = Access::catalogSeq(d.eng);
     CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, w.index.string())).status(), FOXAPI_OK);
     CHECK_EQ(Access::catalogSeq(d.eng), c1);  // the index is not the catalogue
-    // A fetch: it empties the catalogue when it starts and replaces it when it lands (two writes, whichever pass
-    // each falls in).
+    // A fetch: the list on screen is NOT emptied when it starts (0.99.72, stub campaign B3) and is replaced when it lands - ONE write.
     CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
     CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_CATALOGUE) == 7; }));
-    CHECK_EQ(Access::catalogSeq(d.eng), c1 + 2u);
-    // ...and one that fails: emptied when it starts, emptied again when it fails.
+    CHECK_EQ(Access::catalogSeq(d.eng), c1 + 1u);
+    // ...and one that fails writes nothing: the list stays (a read that did not happen changes nothing a reader sees).
     CHECK_EQ(pumped(d.eng, s, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, (w.index.string() + ".missing"))).status(), FOXAPI_OK);
     CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
     CHECK(passUntil(d.eng, [&] { return count(s, FOXAPI_LIST_STORE_ACTIVITY) == 0; }));
     passes(d.eng, 2);
-    CHECK_EQ(Access::catalogSeq(d.eng), c1 + 4u);
-    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 0);
-    std::printf("I5: catalogSeq_ moves at the hook's entry, a fetch starting, landing and failing, and with the index alone it does not\n");
+    CHECK_EQ(Access::catalogSeq(d.eng), c1 + 1u);
+    CHECK_EQ(count(s, FOXAPI_LIST_CATALOGUE), 7);
+    std::printf("I5: catalogSeq_ moves at the hook's entry and at a fetch landing, and with the index alone, or a fetch that fails, it does not\n");
 }
 
 // I4: the two status lines through the hook (the writers are the engine's own: I1 and I3), and the language: a

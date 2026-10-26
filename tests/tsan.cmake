@@ -76,6 +76,8 @@ set(CASCADE_TSAN_TESTS
     test_engine_api_transmit test_engine_api_hermetic
     # stage 5a: read_audio's feed against its readers, the internal sessions' profiles and SERVER_CONFIG's worker against the pass
     test_engine_api_05a
+    # stub batch B3: the store's workers (a catalogue read, a picture, a clean-up) against the pass that collects them
+    test_engine_api_store
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

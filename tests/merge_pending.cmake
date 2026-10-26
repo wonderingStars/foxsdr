@@ -36,9 +36,10 @@ endmacro()
 
 cascade_merge_pending(RAIL-CHROME      # 0.99.74 dials (the interface size, the rail fold, the status fold and the TOOLS bank returned in stub batch B1)
     test_deck_knobs_app)
-cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table
-    test_plugin_store_window test_fitted_modules_window test_plugin_catalogue_app test_plugin_cleanup_app
-    test_plugin_update_cleanup_app test_plugin_store_view test_fitted_modules_no_disk)
+cascade_merge_pending(STORE-VIEW       # 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table (the engine's half - the kept
+                       # catalogue, the sites, the pictures, the clean-up of old copies - returned in stub batch B3: test_plugin_catalogue_app,
+                       # test_plugin_cleanup_app and test_plugin_update_cleanup_app are the engine's now)
+    test_plugin_store_window test_fitted_modules_window test_plugin_store_view test_fitted_modules_no_disk)
 cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: fields the host draws for a plugin
     test_plugin_settings_ui)
 cascade_merge_pending(PLUGIN-ROW-KEYS  # 0.99.77 a row in a plugin's panel as a key

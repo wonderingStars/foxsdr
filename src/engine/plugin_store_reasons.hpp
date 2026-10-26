@@ -14,6 +14,7 @@
 #include <string>
 
 #include "core/i18n.hpp"  // FOX_TR_NOOP
+#include "core/plugin_cleanup.hpp"
 
 namespace cascade::gui {
 
@@ -51,6 +52,9 @@ std::string trStoredReason(const std::string& english);
 // Marked FOX_TR_NOOP where it is defined and drawn through trStoredReason like every other reason, so its
 // translation is the catalogue entry the literal has always had.
 inline constexpr const char* kLegalNoticeFirstReason = FOX_TR_NOOP("the legal notice must be acknowledged first");
+
+// WHAT A CLEAN-UP DID, in one or more sentences for the store's line and for an update's report. Empty when it did nothing.
+std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r);
 
 }  // namespace cascade::gui
 

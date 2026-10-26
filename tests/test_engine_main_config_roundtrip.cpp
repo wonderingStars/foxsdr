@@ -82,7 +82,7 @@ const std::set<std::string>& engineWritten() {
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed",
-        "pluginSettings", "pluginsStopped", "pluginRun", "closedWindows", "pluginMuteOverride", "userPresets",
+        "pluginSettings", "pluginsStopped", "pluginRun", "pluginSites", "closedWindows", "pluginMuteOverride", "userPresets",
         // Engine::telemetryJournal and the clean-exit flag
         "telemetryEnabled", "telemetryInstallId", "telemetryFirstRun", "telemetryFirstVersion", "telemetryLaunches",
         "telemetryCrashes", "telemetryExitsDied", "telemetryExitsKilled", "telemetryExitsEnded",
@@ -389,6 +389,11 @@ int main() {
     // HOW EACH PLUGIN RUNS is the engine's since stub batch B2 (it is no longer a field nobody writes, so the saturation check above skips it
     // - this is what holds it instead): a pinned plugin that is not even fitted here keeps its pin, as seeded, run after run.
     CHECK(afterFirst["pluginRun"].is_object() && afterFirst["pluginRun"]["Radar Sweep"] == "always" && afterFirst["pluginRun"].size() == 1);
+    // THE PLUGIN SITES are the engine's since stub batch B3 (the store's list of other people's indexes; the engine restores it, reads each
+    // site's kept copy and writes the list back): the seeded address comes back as seeded, in order, run after run - and with no kept copy
+    // and no network the run reads nothing of it.
+    CHECK(afterFirst["pluginSites"].is_array() && afterFirst["pluginSites"].size() == 1 &&
+          afterFirst["pluginSites"][0] == "https://plugins.example.test/index.json");
 
     // 5. the engine's half was restored and written back through the engine, and the file was REWRITTEN.
     CHECK(afterFirst["mode"] == "USB");
@@ -414,6 +419,7 @@ int main() {
         const Check c2 = compareNonEngine(afterFirst, afterSecond, "second run");
         CHECK(c2.differing == 0);
         CHECK(afterSecond["pluginRun"] == afterFirst["pluginRun"]);
+        CHECK(afterSecond["pluginSites"] == afterFirst["pluginSites"]);
         CHECK(afterSecond["telemetryLaunches"] == 2);
         CHECK(afterSecond["telemetryCrashes"] == 0);       // the first run ended cleanly: nothing to count
         CHECK(afterSecond["telemetryCleanExit"] == true);

@@ -159,6 +159,7 @@ says when to read again.
 | `PATCH_LIVE` (47) | what the patch's running nodes are doing NOW (8.12, part 2): one entry per node that has something, copied once a pass into a block of its own. **It never moves `listSeq`: read it each time you draw.** `id`: node; `value[2]`: the kind - 1 a demodulator's squelch gate (`value[0]`: the level it judges, dB; `ACTIVE`: open), 2 a speaker's output (`name`: what it plays to; `value[0]`: peak 0..1; `value[1]`: samples written; `detail`: its error), 3 a channel's level (`value[0]`: dB), 4 a decoder's face (`value[0]`: lines said; `detail`: the newest), 5 a speaker whose output could not be made (`detail`: why), 6 a picture decoder's newest picture (`value[0]`: the image id `read_image` takes; `value[1]`: its bytes; `name`: the node's name; `ACTIVE`: finished) - 8.12.7 |
 | `GPS` (48) | ONE entry, the GPS reader as the position row draws it (8.13). **Read at the call and never part of the lists' block: it never moves `listSeq`, so read it each time you draw.** `name`: the port given to the last start, `""` when the reader is idle (**LOCAL sessions only**); `detail`: the status line the engine words (`""` when idle; **LOCAL sessions only** - the sentence names the port; cut at 159 bytes); `value[0]`: the state (0 idle, 1 listening, 2 fixed, 3 failed, 4 timed out); `value[1]`: seconds since the start (live while it listens, frozen when it ends); `value[2]`: satellites in view, -1 until a sentence says; `value[3]`: the baud; `ACTIVE`: listening; `FAULT`: failed or timed out. Never a coordinate |
 | `SERVERS` (49) | **LOCAL sessions only (`DENIED` to a REMOTE one).** The web server and the CAT listener the engine runs for `FOXAPI_OP_SERVER_CONFIG` (8.16.5): always two entries, web first. `id` 1 / 2; `name`: `web` / `cat`; `detail`: the sentence the last start was refused with, `""` when none; `value[0]`: the port (the one listened on, else the configured one); `value[1]`: browser sessions / CAT clients, `value[2]`: browsers listening to the audio, `value[3]`: commands received - all three **read at the call**; `ACTIVE`: listening; `FAULT`: enabled and refused to start. The configuration is `fact.web.*` and `fact.cat.*` |
+| `STORE_PICTURES` (50) | the plugin store's pictures, every one it was asked for (`FOXAPP_OP_STORE_PICTURES_WANT`) and still knows, in sha256 order (9.4). `id`: the first 64 bits of the sha256; `name`: the sha256 (64 hex digits - the cache key; the entry names its pictures in `fact.store.<key>.pictures`); `detail`: a Ready one's cached file path (**LOCAL sessions only**; whole in `fact.store.picture.<sha256>.path`), a Failed one's reason cut at 159 bytes (whole in `.reason`); `value[0]`: 1 pending (queued or in flight), 2 ready, 3 failed; `ACTIVE`: the one in flight. Moves `listSeq` with every change of a picture's state |
 
 ### 5.2 0.2 lists now served
 
@@ -974,9 +975,11 @@ download finished starts the next in the same call), so no publish shows a gap b
 present, its `name` changes, entry 2's `value[0]` advances. An interface that must notice "a catalogue was replaced" (the window clears the legal notice ticks it holds when one is: a
 tick is consent for a notice that was listed, not for another) finds entry 1 with `value[1]` 1 in some block, **or**, when it did not
 read the block in between (a fetch of a local file can start and land within two of its reads), finds the catalogue itself
-different from the one it holds; `CATALOGUE` is emptied when a fetch starts, so the old rows never stand under a new fetch.
-The index (`fact.store.url`) is one pass behind its command. A fetch that fails leaves `CATALOGUE` empty (a catalogue that
-could not be verified does not keep offering last time's installs) and writes `catalogError`.
+different from the one it holds. **`CATALOGUE` is NOT emptied when a fetch starts, and a fetch that fails does not empty it (0.99.72, restored by
+stub campaign B3; 9.4):** the list on screen stays until a fetch succeeds and replaces it, and a failure leaves it (or, with nothing on screen, brings back the
+kept copy) beside `catalogError`; `fact.store.refreshFailed` says which. What stays offered is only ever a list this client accepted once, and `install()`
+re-checks every entry it is handed whatever list it came from.
+The index (`fact.store.url`) is one pass behind its command.
 
 **What moves `listSeq`, beyond 8.1 to 8.8.** Everything new but the progress is in the list fingerprint: the catalogue
 (one counter, bumped wherever the engine replaces, clears or adds to it, so a refetch that returns the same ids, versions
@@ -1905,6 +1908,72 @@ takes the newest sets) and is dropped beside a waiting RELEASE, whose epoch the 
 
 **What the log says** (unchanged from master): `plugin: <name> woke - <signal>` and `plugin: <name> dormant after 30 s without a use`, one per transition of an AUTO
 plugin. `FOXSDR_DORMANT_AFTER_MS` (1 to 3 600 000) replaces the 30 seconds for the engine's first lifecycle step; the line still says "30 s".
+
+### 9.4 The plugin store's kept copy, sites, pictures and clean-up (stub campaign B3; docs/engine-stage4.md 6.22)
+
+Master's 0.99.49 - 0.99.74 ran all of this in the window. It is the ENGINE's now (`src/engine/engine_store.cpp`), so a headless engine keeps the store's catalogue
+offline, lists the sites a user added, fetches pictures and removes the old copies an update leaves. **No pass waits on the network or the disk**: a read, a
+picture and a clean-up run on a worker each and the pass collects what has finished; start-up (the kept copies, the queue the last session left) is the one place a
+disk is read synchronously, before the first pass. **One transfer at a time**: a catalogue read, a download, a picture and a clean-up never overlap (the gate says "a
+transfer is already in progress"); the picture queue waits behind a read, a download, an ADD ALL run and a clean-up.
+
+**The entry's key.** `CATALOGUE`'s `detail` and every `fact.store.<…>` use the entry's CATALOGUE KEY: the plain id for an official plugin (so every name that existed
+before sites is unchanged) and `<id>@<site label>` for a plugin from a site the user added (the label is the site's host, or a local file's name). `STORE_UPDATES`
+names the same key. `FOXAPI_OP_STORE_INSTALL` and `FOXAPP_OP_STORE_UPDATE` take it; a bare id of a site's plugin names nothing to a LOCAL session.
+
+**Ops** (all `APP` ops, **LOCAL sessions only**, grant ADMIN, none on the web profile's closure of 38, each in `kOps` and covered by test_apply_command):
+
+  * `FOXAPP_OP_STORE_SITE` (0x8709): `text`: the site's address as typed (it is normalised and re-checked here by the one validator,
+    `PluginRepo::normaliseSiteUrl`: an `https://` address with a lockable host and no credentials, or a path on this machine; at most 8 sites); `ival[0]`: 0 ADD,
+    1 REMOVE; `ival[1]` (ADD): 1 = the consent - the box that says what a site is was ticked. Without it ADD is `DENIED` and nothing is read or written; an address
+    the validator refuses, one already listed, the official one and a full list are `BAD_ARGUMENT`; any other `ival[0]` is `OUT_OF_RANGE`; while a transfer is in
+    flight it is `BUSY`. The refusal's English sentence is the result's message and `fact.store.siteError`. ADD lists the site and starts a catalogue read;
+    REMOVE of an address that is not listed is `NOT_FOUND`, and otherwise takes the site's entries out of `CATALOGUE`, deletes its kept copy (on a worker) and
+    **leaves what was installed from it installed** (its record keeps its source; nothing lists it any more, so it gets no updates).
+  * `FOXAPP_OP_STORE_PICTURES_WANT` (0x870A): `text`: a catalogue key; `ival[0]`: 1 = ask again for a picture that failed. Queues the entry's pictures that are not
+    already Ready, pending or in flight; `NOT_FOUND` for a key the catalogue does not hold. A site's picture whose address is not on the site's own host is never
+    queued (`mergeSite` held every address to it when the list was made; this is the second look, at the request, because the request is what contacts an address).
+  * `FOXAPP_OP_STORE_CLEAN_OLD` (0x870B): `ival[0]` 0: remove EVERY old copy the last scan found superseded (the store's CLEAN UP key, once the window has confirmed
+    it); `ival[0]` 1: REMOVE FILE on the orphaned module named in `text`, judged again against the engine's own scan (a row gone stale removes nothing and
+    `installError` says so; a name that tries to leave the folder removes nothing). The clean-up's one rule is `core::supersededPlugins`: only a copy the scan
+    turned off as another copy of a loaded, strictly newer, catalogue-recorded plugin, never one the manifest records; an update's own clean-up is restricted
+    again to the copies THAT file superseded. A delete the system refuses (a mapped module) is queued for the next start, which deletes it only if its own scan
+    still finds it superseded. `BUSY` under a transfer; `OUT_OF_RANGE` for any other `ival[0]`.
+
+**The list `STORE_PICTURES` (50)**: see 5.1. A picture is tracked by its sha256, so one two plugins share is one request; Ready means the bytes in
+`<plugins dir>/store-cache/<sha256>.png` were hashed to the catalogue's digest.
+
+**Facts** (get_setting, hashed into the publish fingerprint from raw members; the ones marked LOCAL are `DENIED` to a REMOTE session):
+
+| Fact | What it says | |
+|---|---|---|
+| `fact.store.fromCache` | `1` while `CATALOGUE` is a kept copy (`0` once a read succeeded this session, and while it is empty) | |
+| `fact.store.readThisSession` | `1` when `CATALOGUE` holds a list read this session: not empty and not from the cache (the rail's IDLE and the store's one automatic read ask this) | |
+| `fact.store.refreshFailed` | `1` when the last read failed: `catalogError` is then a refresh that did not happen and the rows are a kept copy or an earlier read | |
+| `fact.store.cacheTime` | seconds since the epoch of the read behind `CATALOGUE` (the read's own time, or the one the kept copy recorded); `0` = none or not recorded | |
+| `fact.store.busyKey`, `fact.store.resultKey` | the catalogue key of the transfer in flight (the store draws FITTING... on that key) and of the plugin the last install report or error is about | |
+| `fact.store.sites` | one line per site, in order: `<address>\t<state>\t<listed>\t<hidden-same-id>\t<hidden-off-host>\t<error>`, state 0 not read, 1 the kept copy, 2 read, 3 failed | LOCAL |
+| `fact.store.siteError` | why the last `FOXAPP_OP_STORE_SITE` was refused, English; `""` after one that was not | LOCAL |
+| `fact.store.<key>.site` | the entry's site address, `""` for an official entry | LOCAL |
+| `fact.store.<key>.regional` | `1` when the regional list offered it (shown by the store as "Offered by foxsdr.com in some countries only") | |
+| `fact.store.<key>.pictures` | the pictures the store may ask for, one per line `<sha256>\t<caption>` (a site's picture on another host is not listed) | |
+| `fact.store.picture.<sha256>.path`, `.reason` | a Ready picture's whole cached path (LOCAL), a Failed one's whole reason | `.path` LOCAL |
+| `fact.store.regional.state`, `.added`, `.dropped` | the regional list's outcome (`not-asked`, `ok`, `failed`), for the CASCADE_PLUGIN_TEST report and nothing else: the outcome itself would say which country answered, so it is never shown to a reader and never logged | LOCAL |
+| `fact.store.oldCopies` | one line per old copy the last scan found superseded: `<file>\t<name>\t<version>\t<kept file>\t<kept version>` - what CLEAN UP lists | LOCAL |
+| `fact.store.cleanupReport` | what the last clean-up did, in the language in force (a sentence; `""` when it did nothing) | |
+| `fact.plugin.origin.<file>` | for every module file the host holds a record of: `<word>\t<address>`; the word is `orphan` (the plugin index does not know it and nothing runs it: REMOVE FILE is offered), `site` (installed from a site that is still listed), `removed-site` (installed from one the user has since removed: it gets no updates) or `""`; the address is the install record's source | LOCAL |
+
+**A plugin from a site is fitted from the desktop store only.** Its page, its notice and the tick under it are what stand between a stranger's native code and this
+machine, and a request from a browser cannot have read any of them. A site's plugin ALWAYS carries a notice (the install gate asks for the acknowledgement of
+every such plugin: the same sentence, the same tick, the same ADD ALL path a legal notice always had). **A REMOTE session - the web page's own session included -
+is refused it** by `FOXAPI_OP_STORE_INSTALL`, whether it names the entry by key or by the bare id the page lists, and whatever acknowledgement it sends: `DENIED`
+with `installError` and the result's message `plugins from sites you added can only be fitted from the plugin store on this computer`, nothing started, nothing
+fetched. The web page's catalogue rows carry the same sentence as `blockedReason` for a site's entry. (The engine knows a command's origin from the session
+that sent it: `ApiHostImpl::apply` sets `Engine::commandFromRemote_` around its one call of `applyCommand`.)
+
+**What moves `listSeq`.** The kept copy's flags and time, the sites and what each said, `siteError`, the regional outcome, the pictures (one counter, bumped at every
+change of a picture's state or of the queue), whether a picture or a clean-up is in flight, the old copies and the clean-up's report, and the busy and result keys - all
+hashed in place from members; nothing allocates in a pass (tests/test_engine_publish_alloc).
 
 ## 10. What stays a GAP after 0.3
 

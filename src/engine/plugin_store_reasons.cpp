@@ -70,4 +70,32 @@ std::string trStoredReason(const std::string& english) {
     return english;
 }
 
+// WHAT A CLEAN-UP DID (stub campaign B3: moved here from gui/plugin_store_view.cpp when the clean-up became the engine's - the engine writes the
+// store's line, and it may not include a window header).
+std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r) {
+    std::string out;
+    const auto join = [](const std::vector<std::string>& v) {
+        std::string s;
+        for (const std::string& e : v) { s += (s.empty() ? "" : ", ") + e; }
+        return s;
+    };
+    if (!r.removed.empty()) {
+        out = r.removed.size() == 1
+                  ? cascade::core::formatText(tr("Removed the old version %s."), r.removed[0].c_str())
+                  : cascade::core::formatText(tr("Removed %zu old versions: %s."), r.removed.size(),
+                                              join(r.removed).c_str());
+    }
+    if (!r.queued.empty()) {
+        const std::string q = cascade::core::formatText(
+            tr("In use, so removed the next time FoxSDR starts: %s."), join(r.queued).c_str());
+        out += (out.empty() ? "" : " ") + q;
+    }
+    if (!r.failed.empty()) {
+        const std::string f =
+            cascade::core::formatText(tr("Could not remove: %s."), join(r.failed).c_str());
+        out += (out.empty() ? "" : " ") + f;
+    }
+    return out;
+}
+
 }  // namespace cascade::gui

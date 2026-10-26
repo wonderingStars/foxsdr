@@ -342,8 +342,9 @@ foreach(src ${CASCADE_TESTS})
         # A real AppWindow updating a real plugin module (probe a 1.0.0 -> 1.1.0) beside an
         # unrelated one (probe b); all three built first, in that order on the command line.
         add_dependencies(${name} rescan_probe_a rescan_probe_a_newer rescan_probe_b)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:rescan_probe_a>"
-                 "$<TARGET_FILE:rescan_probe_a_newer>" "$<TARGET_FILE:rescan_probe_b>")
+        # (the _stepped variant the pass seam adds - the test is the engine's since stub batch B3 - is handed the same three modules)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:rescan_probe_a>" "$<TARGET_FILE:rescan_probe_a_newer>" "$<TARGET_FILE:rescan_probe_b>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_plugin_host_origin")
         # A plugin site's module never takes a declared name from an official one (0.99.74): the
         # probe module built twice (1.0.0 and 1.1.0, one declared name), scanned by the real host and

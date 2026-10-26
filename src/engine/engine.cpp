@@ -350,43 +350,6 @@ bool isAudioDriver(const std::string& args) {
     return args.find("driver=audio") != std::string::npos;
 }
 
-// Reads a catalogue index from the LOCAL filesystem and parses it with the
-// same parseIndex() the network path uses. See AppConfig::pluginCatalogueUrl
-// for why this form exists: a catalogue on a corporate share, and the only
-// way the success path of this UI can be exercised without a live server.
-//
-// It grants nothing the network path does not already allow. parseIndex still
-// refuses every non-https download URL and every malformed sha256, and
-// install() re-checks both before it opens a socket — so the worst a hostile
-// local index can do is offer an entry that install() then refuses.
-// The same kMaxIndexBytes cap applies, because "it is on our own disk" is not
-// a reason to read a 4 GB document into memory.
-bool readLocalCatalogue(const std::string& path,
-                        std::vector<cascade::core::PluginCatalogEntry>& out,
-                        std::string& error) {
-    out.clear();
-    error.clear();
-    std::error_code ec;
-    const std::uintmax_t size = std::filesystem::file_size(std::filesystem::path(path), ec);
-    if (ec) {
-        error = "cannot read the catalogue file \"" + path + "\": " + ec.message();
-        return false;
-    }
-    if (size > cascade::core::PluginRepo::kMaxIndexBytes) {
-        error = "the catalogue file \"" + path + "\" is larger than the " +
-                std::to_string(cascade::core::PluginRepo::kMaxIndexBytes) + "-byte limit";
-        return false;
-    }
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        error = "cannot open the catalogue file \"" + path + "\"";
-        return false;
-    }
-    const std::string text((std::istreambuf_iterator<char>(f)),
-                           std::istreambuf_iterator<char>());
-    return cascade::core::PluginRepo::parseIndex(text, out, error);
-}
-
 // Index of the value in arr[0..n) closest to x (ties resolve low). Used to
 // point preset combos at whatever a config file or device readback holds.
 int nearestIndex(const double* arr, int n, double x) {
@@ -3474,7 +3437,8 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     // One transfer at a time. PluginRepo has a single progress/cancel pair,
     // so two concurrent operations would share one progress bar and one
     // Cancel button — and a cancel would hit whichever happened to look.
-    if (catalogPending_ || installPending_) {
+    // A picture on its way and a clean-up on a worker are transfers too (stub campaign B3): the same one slot.
+    if (catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_) {
         return FOX_TR_NOOP("a transfer is already in progress");
     }
 
@@ -3499,226 +3463,19 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     if (catalogEntryInstalled(e)) { return FOX_TR_NOOP("already installed"); }
     // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between
     // a compatible, licensed, not-yet-installed plugin and the download.
-    if (!e.legalNotice.empty() && !acknowledged) {
+    //
+    // A PLUGIN FROM A SITE THE USER ADDED ALWAYS CARRIES A NOTICE (0.99.74): the page says it comes from somewhere else and that FoxSDR has
+    // not reviewed it, whether or not its maker published a legal notice of their own, and the tick under that box is the consent. So the
+    // gate asks for the acknowledgement of every such plugin - the same sentence, the same tick, the same web and ADD ALL paths a legal
+    // notice always had.
+    if ((!e.legalNotice.empty() || !e.source.empty()) && !acknowledged) {
         return cascade::gui::kLegalNoticeFirstReason;
     }
     return {};
 }
 
-void Engine::startCatalogFetch() {
-    if (catalogPending_ || installPending_) { return; }
-    // A catalogue that could not be verified this time must not keep offering
-    // installs from last time — the same all-or-nothing stance fetchIndex
-    // takes with its own entries().
-    catalog_.clear();
-    ++catalogSeq_;
-    // AND THE SELECTION AND THE CONSENT GO WITH IT. The store window clamps
-    // its own selection every frame and clears its tick whenever the selection
-    // moves, but the tick is consent for ONE plugin and a fetch that replaces
-    // the whole catalogue can leave the same index pointing at a different
-    // module - so it is cleared here, at the moment the ground moves, rather
-    // than left to a rule that is about a different event. The ADD ALL tick
-    // goes too: it was given against the notices the old catalogue listed.
-    // (The standard window does not take this call any more: it sees the fetch
-    // in STORE_ACTIVITY - entry 1, value[1] 1 - or the catalogue it replaced,
-    // and clears its own ticks on its own thread. See AppWindow::storeLists.)
-    host_->onCatalogueFetchStarting();
-    catalogError_.clear();
-    catalogStatus_.clear();
-    installError_.clear();
-    installReport_.clear();
-    catalogPending_ = true;
-
-    const std::string url = pluginCatalogueUrl_;
-    const std::string dir = pluginDir_;
-    catalogFuture_ = std::async(std::launch::async, [this, url, dir] {
-        CatalogFetchResult r;
-        if (url.find("://") == std::string::npos) {
-            // No scheme at all: a local file (see readLocalCatalogue). A URL
-            // WITH a scheme — including http:// — goes to fetchIndex, which
-            // is the single place the https-only rule is enforced.
-            r.ok = readLocalCatalogue(url, r.entries, r.error);
-        } else {
-            r.ok = pluginRepo_.fetchIndex(url, r.error);
-            if (r.ok) { r.entries = pluginRepo_.entries(); }
-        }
-        if (r.ok) {
-            // THE ONLY MOMENT A RETIREMENT FLOOR IS WRITTEN TO THIS MACHINE.
-            // Enforcement reads the cache and never the network, so a floor
-            // that is not cached here protects nobody — not the user who goes
-            // offline for a year, and not the one who never opens this browser
-            // again. It runs on the worker because it re-hashes every
-            // installed plugin.
-            std::string policyError;
-            if (!cascade::core::PluginRepo::cacheCataloguePolicies(dir, r.entries,
-                                                                   policyError)) {
-                r.policyError = "the catalogue loaded, but its plugin version policy could "
-                                "not be saved, so it will not be remembered: " +
-                                policyError;
-            }
-        }
-        return r;
-    });
-}
-
-void Engine::startInstall(cascade::core::PluginCatalogEntry entry) {
-    if (catalogPending_ || installPending_) { return; }
-    installError_.clear();
-    installReport_.clear();
-    installBusyName_ = entry.name;
-    installPending_ = true;
-    const std::string dir = pluginDir_;
-    installFuture_ = std::async(
-        std::launch::async, [this, e = std::move(entry), dir]() {
-            PluginInstallResult r;
-            r.name = e.name;
-            // Every security rule lives inside install(): ABI match, platform
-            // match, file-name sanitisation, https, the byte cap, and the
-            // sha256 that decides whether the temp file ever becomes a plugin.
-            r.ok = pluginRepo_.install(e, dir, r.installedPath, r.error);
-            if (r.ok) {
-                // MANIFEST UPKEEP, without which the whole retirement feature
-                // silently no-ops: an unrecorded plugin has no id, no version
-                // and no cached policy, so pluginBlockReason() fails open for
-                // it forever. This is where a plain install becomes managed —
-                // applyUpdate() records itself, so this is the only install
-                // path that needs it.
-                (void)cascade::core::PluginRepo::recordInstall(dir, e, r.recordError);
-            }
-            return r;
-        });
-}
-
-void Engine::startUpdate(const cascade::core::PluginUpdate& u) {
-    if (catalogPending_ || installPending_ || u.entry == nullptr) { return; }
-    installError_.clear();
-    installReport_.clear();
-    installBusyName_ = u.entry->name;
-    installPending_ = true;
-    const std::string dir = pluginDir_;
-    // The plan's entry aliases catalog_, which the GUI may replace while this
-    // runs, so the worker owns a copy and the plan is re-pointed at it.
-    installFuture_ = std::async(
-        std::launch::async, [this, plan = u, entry = *u.entry, dir]() mutable {
-            PluginInstallResult r;
-            r.isUpdate = true;
-            r.name = entry.name;
-            plan.entry = &entry;
-            // applyUpdate is install() plus recordInstall(), in that order and
-            // with the same gauntlet — nothing here shortcuts it because "it
-            // is only an update".
-            r.ok = pluginRepo_.applyUpdate(plan, dir, r.installedPath, r.error);
-            return r;
-        });
-}
-
-void Engine::pollPluginAsync() {
-    constexpr auto kNoWait = std::chrono::seconds(0);
-
-    if (catalogPending_ && catalogFuture_.valid() &&
-        catalogFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        CatalogFetchResult r = catalogFuture_.get();
-        catalogPending_ = false;
-        if (r.ok) {
-            catalog_ = std::move(r.entries);
-            ++catalogSeq_;
-            std::string statusBuf;
-            cascade::core::formatUtf8(statusBuf,
-                          catalog_.size() == 1u ? tr("%zu plugin in the catalogue")
-                                                : tr("%zu plugins in the catalogue"),
-                          catalog_.size());
-            catalogStatus_ = statusBuf;
-            // "When the user last chose to look" — recorded here, never acted
-            // on: no code path reads this to decide whether to fetch (see
-            // AppConfig::pluginLastUpdateCheck).
-            pluginLastUpdateCheck_ = static_cast<std::int64_t>(std::time(nullptr));
-            // The floors the worker just cached only take effect on the next
-            // scan, and a user who has just been told a plugin is retired
-            // should not have to restart to stop running it. But a fetch that changed no floor and no file has nothing to take effect: the
-            // full rescan - every decoder destroyed, every module unmapped and mapped again, on this thread, unbounded - is made only when the
-            // plugins folder is not what the last scan left (rescanPluginsIfChanged). The worker leaves the manifest alone when the catalogue
-            // taught it nothing (PluginRepo::cacheCataloguePolicies), so "unchanged" is a state a fetch can leave the folder in.
-            rescanPluginsIfChanged();
-            // A cache-write failure is red text next to a catalogue that
-            // nevertheless loaded: the list is real, the policy behind it was
-            // not remembered, and both facts are shown.
-            if (!r.policyError.empty()) { catalogError_ = r.policyError; }
-        } else {
-            catalog_.clear();
-            ++catalogSeq_;
-            catalogError_ = r.error;
-        }
-        // PUBLISHED BEFORE THE HOST IS TOLD: the host reads the status lines
-        // through the copy (statusText, OPEN 3), and a host told first read
-        // the copy from before the fetch - a bounded run's report printed
-        // "entries=0" for a fetch that had failed
-        // (tests/test_catalogue_error_report.cpp).
-        publishStatusText();
-        host_->onCatalogueResult();
-        // A bounded run's diagnostic (CASCADE_PLUGIN_TEST): the engine prints the catalogue and every entry's install-gate
-        // decision from its own state, naming the frame the window had reached - both handed over in FrontEndFacts (pump move
-        // step P2: the window's onCatalogueResult hook used to read its own frame counter from this pass).
-        {
-            const FrontEndFacts facts = frontEndFacts();
-            if (facts.pluginTestReport) { reportPluginTestResult(facts.frame); }
-        }
-    }
-
-    if (installPending_ && installFuture_.valid() &&
-        installFuture_.wait_for(kNoWait) == std::future_status::ready) {
-        PluginInstallResult r = installFuture_.get();
-        installPending_ = false;
-        installBusyName_.clear();
-        // The point of the rescan: the file is on disk, but it is not a
-        // PLUGIN until the host has loaded and validated it — and if it fails
-        // validation the user needs to see that here, immediately, rather
-        // than after a restart. It also re-runs enforcement, which is what
-        // makes an update lift the retirement in the same frame it lands.
-        //
-        // Run on the ONE failure that still changed the disk too: applyUpdate
-        // reports false with installedPath set when the new file installed but
-        // the manifest could not be written.
-        if (r.ok || !r.installedPath.empty()) { rescanPlugins(); }
-        if (r.ok) {
-            std::string reportBuf;
-            cascade::core::formatUtf8(reportBuf,
-                          r.isUpdate ? tr("Updated %s to %s") : tr("Installed %s to %s"),
-                          r.name.c_str(), r.installedPath.c_str());
-            installReport_ = reportBuf;
-            if (!r.recordError.empty()) {
-                // Honest partial state: verified bytes are installed, but the
-                // plugin is unmanaged until a later install or catalogue fetch
-                // repairs the record — and an unmanaged plugin is never
-                // retired, which is the fail-open rule doing its job.
-                std::string recordBuf;
-                cascade::core::formatUtf8(recordBuf,
-                              tr("%s was installed, but its record could not be written: %s. "
-                                 "It will not be version-checked until that is repaired."),
-                              r.name.c_str(), r.recordError.c_str());
-                installError_ = recordBuf;
-            }
-        } else {
-            installError_ = r.error;
-        }
-        // THE RUN KEEPS ITS OWN TALLY, here, where the single authority on
-        // whether a transfer succeeded already is. Reading installReport_ back
-        // out of the panel afterwards would be a second opinion about the same
-        // event, and the two would eventually disagree.
-        if (addAllRun_.active) {
-            if (r.ok) {
-                ++addAllRun_.installed;
-            } else {
-                ++addAllRun_.failed;
-                addAllRun_.failures.emplace_back(r.name, r.error);
-                cascade::core::diagLogf("plugin store: add all - %s FAILED: %s",
-                                        r.name.c_str(), r.error.c_str());
-            }
-        }
-    }
-}
-
 void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledgedId) {
-    if (addAllRun_.active || catalogPending_ || installPending_) { return; }
+    if (addAllRun_.active || catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_) { return; }
     // RE-PLANNED FROM LIVE STATE, not from the plan the key was drawn against.
     // The key was drawn one frame ago from a model built one frame ago, and
     // the whole point of this queue is that it acts over many frames.
@@ -3735,11 +3492,13 @@ void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledg
         AddAllRow r;
         r.name = e.name;
         r.fitted = catalogEntryInstalled(e);
+        const std::string key = cascade::core::PluginRepo::catalogueKey(e.source, e.id);
         for (const cascade::core::PluginUpdate& u : updates) {
-            if (u.id == e.id && !u.toVersion.empty()) { r.hasUpdate = true; }
+            if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) == key && !u.toVersion.empty()) { r.hasUpdate = true; }
         }
-        r.hasNotice = !e.legalNotice.empty();
-        r.blockedReason = pluginInstallBlockedReason(i, !acknowledgedId.empty() && e.id == acknowledgedId);
+        // (A site's plugin always carries the notice the install gate asks about: see pluginInstallBlockedReason.)
+        r.hasNotice = !e.legalNotice.empty() || !e.source.empty();
+        r.blockedReason = pluginInstallBlockedReason(i, !acknowledgedId.empty() && key == acknowledgedId);
         r.blockedReasonIfAcknowledged = pluginInstallBlockedReason(i, true);
         rows.push_back(std::move(r));
     }
@@ -3747,7 +3506,7 @@ void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledg
     cat.haveCatalogue = !catalog_.empty();
     cat.listedNothing = !catalogStatus_.empty();
     cat.lastCheckFailed = !catalogError_.empty();
-    cat.busy = catalogPending_ || installPending_;
+    cat.busy = catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_;
     const AddAllRule plan = planAddAllRows(rows, cat, noticesAcknowledged);
     if (!plan.blockedReason.empty()) {
         installError_ = plan.blockedReason;
@@ -3755,12 +3514,15 @@ void Engine::startAddAll(bool noticesAcknowledged, const std::string& acknowledg
     }
 
     addAllRun_ = AddAllRun{};
+    // BY CATALOGUE KEY (0.99.74): the id for an official plugin, "<id>@<site>" for a site's.
     for (const int i : plan.install) {
-        addAllRun_.ids.push_back(catalog_[static_cast<std::size_t>(i)].id);
+        const cascade::core::PluginCatalogEntry& pe = catalog_[static_cast<std::size_t>(i)];
+        addAllRun_.ids.push_back(cascade::core::PluginRepo::catalogueKey(pe.source, pe.id));
         addAllRun_.isUpdate.push_back(false);
     }
     for (const int i : plan.update) {
-        addAllRun_.ids.push_back(catalog_[static_cast<std::size_t>(i)].id);
+        const cascade::core::PluginCatalogEntry& pe = catalog_[static_cast<std::size_t>(i)];
+        addAllRun_.ids.push_back(cascade::core::PluginRepo::catalogueKey(pe.source, pe.id));
         addAllRun_.isUpdate.push_back(true);
     }
     if (addAllRun_.ids.empty()) { return; }
@@ -3783,7 +3545,10 @@ void Engine::pumpAddAll() {
     // A transfer is in flight, or a catalogue fetch is: wait. Nothing here
     // cancels anything - CANCEL is the user's key and it stops the transfer,
     // which this queue then records as a failure and carries on past.
-    if (installPending_ || catalogPending_) { return; }
+    //
+    // (A clean-up on a worker - an update's own - and a picture are transfers too: a start would be refused, and a refused start is not a
+    // failure to be stepped past. A picture cannot be on its way during a run: the queue waits behind it.)
+    if (installPending_ || catalogPending_ || cleanupPending_ || screenshotPending_) { return; }
 
     while (addAllRun_.next < addAllRun_.ids.size()) {
         const std::string id = addAllRun_.ids[addAllRun_.next];
@@ -3793,13 +3558,7 @@ void Engine::pumpAddAll() {
         // THE ROW IS LOOKED UP AGAIN BY ID. catalog_ may have been replaced
         // since the queue was built, and an entry that is no longer there is a
         // failure with a reason rather than a silent skip.
-        int idx = -1;
-        for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-            if (catalog_[static_cast<std::size_t>(i)].id == id) {
-                idx = i;
-                break;
-            }
-        }
+        const int idx = catalogIndexByKey(id);
         if (idx < 0) {
             ++addAllRun_.failed;
             addAllRun_.failures.emplace_back(id, FOX_TR_NOOP("no longer in the catalogue"));
@@ -3814,7 +3573,7 @@ void Engine::pumpAddAll() {
             const std::vector<cascade::core::PluginUpdate> plans = plannedPluginUpdates();
             bool started = false;
             for (const cascade::core::PluginUpdate& u : plans) {
-                if (u.id != id) { continue; }
+                if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) != id) { continue; }
                 startUpdate(u);
                 started = installPending_;
                 break;
@@ -6605,6 +6364,9 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         // browser and the window can never disagree about what may be
         // installed, and the notice itself is still a separate, explicit act.
         c.blockedReason = pluginInstallBlockedReason(i, /*acknowledged=*/true);
+        // The browser is told what the install request would be told (0.99.74): a site's plugin is fitted from the desktop store only, so its
+        // key is greyed with the same reason (and the request is refused with it: applyCommand's STORE_INSTALL).
+        if (!e.source.empty()) { c.blockedReason = kSitePluginDesktopOnly; }
         s.catalogue.push_back(std::move(c));
     }
 
@@ -7607,14 +7369,29 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_STORE_INSTALL: {
             // The legal notice must be acknowledged explicitly, and the gate
             // is the ONE predicate the store window's FIT key uses too.
+            //
+            // THE ENTRY IS NAMED BY ITS CATALOGUE KEY (0.99.74, stub campaign B3): the id for an official plugin - so every caller that
+            // ever named one is unchanged - and "<id>@<site label>" for a plugin from a site the user added.
+            //
+            // A PLUGIN FROM A SITE IS FITTED FROM THE DESKTOP STORE ONLY: its page, its notice and the tick under it are what stand between
+            // a stranger's native code and this machine, and a request from a browser cannot have read any of them. So a REMOTE session -
+            // the web page's own is one - is refused it, however it names it (by key, or by the bare id the page lists: an id is unique in
+            // the merged list, so that names exactly one entry) and whatever acknowledgement it sends. The refusal is the same sentence
+            // the web page's catalogue rows carry (fillStatusLists).
             for (int i = 0; i < static_cast<int>(catalog_.size()); ++i) {
-                if (catalog_[static_cast<std::size_t>(i)].id != text) { continue; }
+                const cascade::core::PluginCatalogEntry& ce = catalog_[static_cast<std::size_t>(i)];
+                const bool byKey = cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) == text;
+                if (!byKey && !(commandFromRemote_ && ce.id == text)) { continue; }
+                if (commandFromRemote_ && !ce.source.empty()) {
+                    installError_ = kSitePluginDesktopOnly;
+                    return refuse(FOXAPI_DENIED, "plugins from sites you added can only be fitted from the plugin store on this computer");
+                }
                 const std::string blocked = pluginInstallBlockedReason(i, on);
                 if (!blocked.empty()) {
                     installError_ = blocked;
                     return refuse(FOXAPI_DENIED, "the install was refused");
                 }
-                startInstall(catalog_[static_cast<std::size_t>(i)]);
+                startInstall(ce);
                 return res;
             }
             // English, as every reason in installError_ is; the pages
@@ -7627,12 +7404,55 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // The plan is looked up again rather than captured with the key:
             // planUpdates' entries point INTO catalog_.
             for (const cascade::core::PluginUpdate& u : plannedPluginUpdates()) {
-                if (u.id != text) { continue; }
+                if (cascade::core::PluginRepo::catalogueKey(u.source, u.id) != text) { continue; }
                 startUpdate(u);
                 return res;
             }
             return refuse(FOXAPI_NOT_FOUND, "no update planned for that plugin");
         }
+        // --- the store's sites, pictures and clean-up (stub campaign B3, docs/api-0.3-additions.md 9.4) ------------------------------
+        case FOXAPP_OP_STORE_SITE: {
+            siteError_.clear();
+            if (catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_) {
+                return refuse(FOXAPI_BUSY, "a transfer is already in progress");
+            }
+            if (c.ival[0] == 1) {
+                // REMOVE. A site that is not listed changes nothing.
+                if (std::find(pluginSites_.begin(), pluginSites_.end(), text) == pluginSites_.end()) {
+                    return refuse(FOXAPI_NOT_FOUND, "no such site in the list");
+                }
+                removePluginSite(text);
+                return res;
+            }
+            if (c.ival[0] != 0) { return refuse(FOXAPI_OUT_OF_RANGE, "ival[0] is 0 (add) or 1 (remove)"); }
+            // ADD, only with the consent: the box that says what a site is (docs/THIRD-PARTY-SITES.md) was ticked. Nothing is read or written
+            // without it.
+            if (c.ival[1] == 0) {
+                siteError_ = "the box that says what a plugin site is was not ticked";
+                return refuse(FOXAPI_DENIED, siteError_.c_str());
+            }
+            std::string why;
+            if (!addPluginSite(text, why)) {
+                siteError_ = why;
+                return refuse(FOXAPI_BAD_ARGUMENT, why.c_str());
+            }
+            return res;
+        }
+        case FOXAPP_OP_STORE_PICTURES_WANT:
+            if (catalogIndexByKey(text) < 0) { return refuse(FOXAPI_NOT_FOUND, "no catalogue entry with that key"); }
+            requestScreenshots(text, on);
+            return res;
+        case FOXAPP_OP_STORE_CLEAN_OLD:
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "ival[0] is 0 (clean up) or 1 (remove one orphaned file)"); }
+            if (catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_) {
+                return refuse(FOXAPI_BUSY, "a transfer is already in progress");
+            }
+            if (c.ival[0] == 0) {
+                cleanUpOldVersionsConfirmed();
+            } else {
+                removeOrphanedPlugin(text);
+            }
+            return res;
         case FOXAPI_OP_STORE_REMOVE:
             removeInstalledPlugin(text);
             return res;
@@ -8419,6 +8239,11 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // from its rail key, never by itself - which is what keeps its
     // first-open read from ever being a startup fetch.
     pluginCatalogueUrl_ = cfg.pluginCatalogueUrl;
+    // THE PLUGIN SITES (0.99.74): the addresses of other people's indexes the store lists beside the official catalogue. The kept copy of
+    // each is merged under the official part of the list now (no network): the constructor loaded the kept official copy before it knew them.
+    pluginSites_ = cfg.pluginSites;
+    siteStatus_.clear();
+    loadCachedSites();
     // Restored purely so it can be saved back unchanged when the user never
     // browses this session. Nothing reads it to decide whether to fetch.
     pluginLastUpdateCheck_ = cfg.pluginLastUpdateCheck;
@@ -8889,6 +8714,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.rxLatDeg = rxLat_;
     cfg.rxLonDeg = rxLon_;
     cfg.pluginCatalogueUrl = pluginCatalogueUrl_;
+    cfg.pluginSites = pluginSites_;
     cfg.pluginLastUpdateCheck = pluginLastUpdateCheck_;
     cfg.pluginTuneAllowed = pluginTuneAllowed_;
     cfg.pluginSettingsAllowed = pluginSettingsAllowed_;
@@ -8950,6 +8776,11 @@ void Engine::initialise() {
     // a build tree — and every bounded --frames CI run takes this path.
     loadBandPlan();
     rescanPlugins();
+    // THE FIRST SCAN IS DONE: the copies a session before this one could not delete (a module was mapped) are deleted now if this scan still
+    // finds them superseded, and the store opens with the catalogue the last good read kept - no request is made (stub campaign B3; both run
+    // before the first pass, like the scan beside them).
+    processPendingPluginRemovals();
+    loadCachedCatalogue();
     // The catalogue URL starts at the published default and is overwritten by
     // a config restore if the user (or an enterprise deployment) changed it.
     // Setting it here is NOT a fetch: nothing contacts the origin until CHECK

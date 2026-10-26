@@ -1241,32 +1241,6 @@ std::string storeCleanupConfirmLabel(std::size_t count) {
                       : cascade::core::formatText(tr("Remove %zu files"), count);
 }
 
-std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r) {
-    std::string out;
-    const auto join = [](const std::vector<std::string>& v) {
-        std::string s;
-        for (const std::string& e : v) { s += (s.empty() ? "" : ", ") + e; }
-        return s;
-    };
-    if (!r.removed.empty()) {
-        out = r.removed.size() == 1
-                  ? cascade::core::formatText(tr("Removed the old version %s."), r.removed[0].c_str())
-                  : cascade::core::formatText(tr("Removed %zu old versions: %s."), r.removed.size(),
-                                              join(r.removed).c_str());
-    }
-    if (!r.queued.empty()) {
-        const std::string q = cascade::core::formatText(
-            tr("In use, so removed the next time FoxSDR starts: %s."), join(r.queued).c_str());
-        out += (out.empty() ? "" : " ") + q;
-    }
-    if (!r.failed.empty()) {
-        const std::string f =
-            cascade::core::formatText(tr("Could not remove: %s."), join(r.failed).c_str());
-        out += (out.empty() ? "" : " ") + f;
-    }
-    return out;
-}
-
 // ===========================================================================
 // WHAT THE WINDOW KEEPS OF THE ENGINE'S TABLE (window port, group 10)
 // ===========================================================================

@@ -234,6 +234,11 @@ private:
         // Called by the free-running control loop at the instant a pass starts, on the control thread (tests/test_pass_control.cpp: the
         // floor between two passes' starts, and the lag from a submit to the pass it wakes, are read from it). Never set in the product.
         void (*passStarting)();
+        // Replaces core::defaultPluginFileRemover() for every delete the store makes of a plugin file - the clean-up of old copies
+        // (an update's own and the CLEAN UP key's), the queue the next start works through, and REMOVE FILE on an orphan: a test plays
+        // Windows refusing a module another process has mapped (tests/test_plugin_cleanup_app.cpp). Stub campaign B3. Never set in the
+        // product.
+        bool (*pluginRemove)(const std::string& dir, const std::string& file, std::string& error);
     };
     // Set by the test before any AppWindow exists and never changed while one
     // does, so the worker threads that read makeDevice race with nothing.
@@ -769,6 +774,10 @@ private:
     // Where the command being applied came from: the WINDOW's queue (drainLocalCommands) or a control request (the engine API's sessions,
     // the web remote, a plugin - the default). The one place the difference is visible is the stop's log line.
     bool commandFromWindow_ = false;
+    // Set while a command of a REMOTE session is applied (the web page's own session is one - ApiHostImpl::apply, around its one call of
+    // applyCommand; the pass is the only thread that sets or reads it). The store's install reads it: a plugin from a site the user added
+    // is fitted from the desktop store only (stub campaign B3, engine_store.cpp).
+    bool commandFromRemote_ = false;
     void startReceiver();
     void endTakesOnFault();
     void installSource(std::unique_ptr<cascade::source::IqSource> src);
@@ -2506,6 +2515,45 @@ private:
         // catalogue still loaded, but the policy the user just saw was not
         // remembered.
         std::string policyError;
+
+        // The catalogue cache (0.99.72): the time of this read, whether the two cache files were written on the worker and why not when
+        // they were not - a failed cache write is reported next to a catalogue that nevertheless loaded, like policyError. `parseReport`
+        // is what parseIndex() dropped from the PUBLIC index and why (never the regional list's: that outcome is not disclosed). `pruned`
+        // is how many cached pictures the catalogue no longer names that the worker deleted.
+        std::int64_t readTime = 0;
+        std::string cacheError;
+        std::vector<std::string> parseReport;
+        std::size_t pruned = 0;
+        // A FAILED read brings the kept copy back (read on the worker, so the pass does no disk work): empty when there is none, or it was
+        // unusable.
+        std::vector<cascade::core::PluginCatalogEntry> keptEntries;
+        std::int64_t keptTime = 0;
+
+        // REGIONAL CATALOGUE outcome, for the CASCADE_PLUGIN_TEST hook only (reportPluginTestResult). "not-asked" - the default - covers
+        // both "the public fetch failed" and "regionalWanted() said no". NEVER surfaced to an ordinary reader (a regional failure is
+        // swallowed: the outcome itself would say which country answered) and NEVER logged - the facts are LOCAL.
+        std::string regionalState = "not-asked";
+        int regionalAdded = 0;
+        int regionalDropped = 0;
+
+        // THE PLUGIN SITES (0.99.74), read on this same worker after the official catalogue, one after another. `entries` is then the
+        // MERGED list (official, regional, then every site's, official winning an id - PluginRepo::mergeSite), whether or not the official
+        // read itself succeeded: when it did not, the official part is what was on screen (or the kept copy). `sitesDone` is false when no
+        // site is configured, and then none of this was touched.
+        struct SiteResult {
+            std::string url;
+            bool ok = false;          // read this time
+            std::string error;        // !ok: the reason, verbatim
+            std::vector<std::string> parseReport;
+            int listed = 0;           // how many of its plugins the merge kept
+            int hiddenSameId = 0;
+            int hiddenOffHost = 0;
+            std::int64_t readTime = 0;  // ok: now. !ok: the kept copy's time, 0 = none or unknown
+            bool keptShown = false;   // !ok, and an earlier read or the kept copy is what is listed
+            std::string cacheError;   // ok, but the kept copy could not be written
+        };
+        bool sitesDone = false;
+        std::vector<SiteResult> sites;
     };
     struct PluginInstallResult {
         bool ok = false;
@@ -2648,6 +2696,142 @@ private:
     // the deck: two copies of a consent flag is one copy too many.
     std::string installReport_;  // green: last successful install/remove
     std::string installError_;   // red: last failed install/remove, verbatim
+
+    // =========================================================================================================================
+    // THE STORE'S KEPT COPY, SITES, PICTURES AND CLEAN-UP (0.99.72 - 0.99.74; stub campaign B3, engine/engine_store.cpp)
+    //
+    // Master ran all of this in the window; it is the engine's now, because a headless engine serves a store too (its web page lists
+    // the catalogue, fits and removes) and because every one of these is the network or the disk. NOTHING HERE WAITS ON EITHER IN
+    // THE PASS: a read, a picture and a clean-up run on a worker each, and the pass only collects a finished one (pollPluginAsync).
+    // ONE OF THEM AT A TIME - a catalogue read, a module download, a picture, a clean-up: PluginRepo has one progress/cancel pair, and
+    // the clean-up edits the manifest a catalogue read edits (installed.json).
+    // =========================================================================================================================
+
+    // --- THE CATALOGUE CACHE AND ITS FRESHNESS (0.99.72) --------------------------------------------------------------------
+    //   catalogueFromCache_  true while catalog_ is a kept copy; false once a read succeeded this session (and while catalog_ is empty);
+    //   catalogueReadTime_   seconds since the epoch of the read behind catalog_ - the read's own time, or the time the cache file
+    //                        recorded; 0 = no catalogue, or a kept copy whose time was not recorded (drawn as unknown, never as 1970);
+    //   catalogueRefreshFailed_  the last read failed: catalogError_ is then a refresh that did not happen, and the rows are a kept copy
+    //                        or an earlier read (as against a catalogue that LOADED with a warning beside it).
+    // THE SESSION'S ONE AUTOMATIC READ and the rail chip's IDLE both mean "read THIS session": catalog_ non-empty AND NOT from the cache.
+    std::int64_t catalogueReadTime_ = 0;
+    bool catalogueFromCache_ = false;
+    bool catalogueRefreshFailed_ = false;
+    bool catalogueReadThisSession() const { return !catalog_.empty() && !catalogueFromCache_; }
+    // Start-up: loads the kept copy into catalog_ (no network). One that cannot be used is ignored and said so in the log; nothing is
+    // repaired or deleted.
+    void loadCachedCatalogue();
+    // REGIONAL CATALOGUE, for the CASCADE_PLUGIN_TEST report and the LOCAL facts only: never shown to an ordinary reader, never logged.
+    std::string regionalState_ = "not-asked";
+    int regionalAdded_ = 0;
+    int regionalDropped_ = 0;
+
+    // --- PLUGIN SITES (0.99.74) ----------------------------------------------------------------------------------------------
+    // AppConfig::pluginSites, committed: the addresses of other people's index.json the store lists beside the official catalogue
+    // (docs/THIRD-PARTY-SITES.md; the PLUGIN SITES block of core/plugin_repo.hpp holds the rules). Changed only by FOXAPP_OP_STORE_SITE,
+    // which re-checks every request (PluginRepo::normaliseSiteUrl: https only, no credentials, at most kMaxPluginSites), and by the
+    // configuration at start-up.
+    std::vector<std::string> pluginSites_;
+    // What the last read (or the kept copy) said of each site, in the same order.
+    struct SiteStatus {
+        std::string url;
+        enum class State { NotRead, Kept, Read, Failed } state = State::NotRead;
+        int listed = 0;
+        int hiddenSameId = 0;
+        int hiddenOffHost = 0;
+        std::string error;
+    };
+    std::vector<SiteStatus> siteStatus_;
+    // Start-up (and a configuration that names the sites): the kept copy of each site merged under the official part of catalog_, by the
+    // rules a fresh read is merged by.
+    void loadCachedSites();
+    // ADD, applied: re-validates, adds and starts a read. False with `why` (English) when it refused. NOT under a read or a download.
+    bool addPluginSite(const std::string& url, std::string& why);
+    // REMOVE, applied: forgets the site and drops its entries from the list; what was installed from it stays installed. Its kept copy
+    // is deleted on a worker.
+    void removePluginSite(const std::string& url);
+    // The index in catalog_ of the entry whose catalogue key (PluginRepo::catalogueKey) is `key`, or -1.
+    int catalogIndexByKey(const std::string& key) const;
+    // What a finished read said of each site; one anonymous line to the log.
+    void applySiteResults(const std::vector<CatalogFetchResult::SiteResult>& results);
+    // The sentence a site's plugin is refused with when it is asked for by a REMOTE session (the web page): English, like every reason in
+    // installError_. THE ONE LITERAL for the install op and the web page's catalogue rows.
+    static constexpr const char* kSitePluginDesktopOnly =
+        FOX_TR_NOOP("plugins from sites you added can only be fitted from the plugin store on this computer");
+    // WHICH PLUGIN THE TRANSFER IN FLIGHT / THE LAST INSTALL OUTCOME CONCERNS, by catalogue key (the id for an official plugin,
+    // "<id>@<site label>" for a site's): the store draws FITTING... on that plugin's key and the outcome under that plugin's header only.
+    std::string installBusyId_;
+    std::string installResultId_;
+    // Why the last STORE_SITE was refused (English; "" after one that was not): the SITES panel's red line. LOCAL (it can carry the address).
+    std::string siteError_;
+
+    // --- SCREENSHOTS (0.99.72) -----------------------------------------------------------------------------------------------
+    // A plugin's pictures are fetched ONLY when asked for (FOXAPP_OP_STORE_PICTURES_WANT: the page of one plugin being opened - never for
+    // the grid), one at a time, and NEVER while a catalogue read, a download or an ADD ALL run is in flight (those refuse to start while a
+    // picture is). Each picture is tracked by its sha256 - the cache key, so a picture two plugins share is one request:
+    //   Pending  queued or in flight;
+    //   Ready    on disk at `path` (<plugins dir>/store-cache/<sha256>.png), its bytes hashed to the catalogue's digest;
+    //   Failed   `reason`, verbatim and in English from PluginRepo.
+    // Nothing is decoded here and nothing is drawn.
+    enum class PictureState { None, Pending, Ready, Failed };
+    struct PictureStatus {
+        PictureState state = PictureState::None;
+        std::string path;    // Ready only
+        std::string reason;  // Failed only
+    };
+    struct ScreenshotFetchResult {
+        std::string sha256;
+        bool ok = false;
+        std::string path;
+        std::string error;
+    };
+    std::future<ScreenshotFetchResult> screenshotFuture_;
+    bool screenshotPending_ = false;
+    std::string screenshotInFlight_;  // the sha256 of the picture on the worker
+    std::deque<cascade::core::CatalogScreenshot> screenshotQueue_;
+    std::map<std::string, PictureStatus> pictures_;  // by sha256
+    // Moves whenever pictures_ or screenshotQueue_ changes (the list fingerprint hashes it - nothing is rebuilt per pass).
+    std::uint64_t picturesSeq_ = 0;
+    // Queues every picture of the entry whose catalogue KEY is `pluginKey` that is not already Ready, queued or in flight; a Failed one
+    // only when `retryFailed` (the page's first frame, not the sixty after it). A key the catalogue does not hold queues nothing, and a
+    // site's picture whose address is not on the site's own host queues nothing either.
+    void requestScreenshots(const std::string& pluginKey, bool retryFailed = false);
+    PictureStatus pictureStatus(const cascade::core::CatalogScreenshot& s) const;
+    // Starts the next queued picture when the slot is free. Called last in pollPluginAsync.
+    void pumpScreenshots();
+    // After a catalogue replaced catalog_: drops the status and the queue entry of every picture the new catalogue does not name.
+    void forgetStalePictures();
+
+    // --- CLEAN-UP OF OLD COPIES (0.99.49 - 0.99.72) --------------------------------------------------------------------------
+    // THE ONLY FILES THIS DELETES are the OLD copies a scan turned off as another copy of a loaded, strictly newer, catalogue-recorded
+    // plugin (core/plugin_cleanup.hpp: the rules are in supersededPlugins and nowhere else). The deletes run on a worker; a copy that
+    // cannot be deleted now (Windows will not delete a mapped module) is queued in pending-removal.json for the next start.
+    struct CleanupResult {
+        cascade::core::PluginCleanupResult res;
+        bool report = false;       // an old-copy clean-up: its sentence is the store's line (a site's kept copy removed says nothing)
+        bool afterUpdate = false;  // an update's own clean-up: its sentence is added to the install report
+    };
+    std::future<CleanupResult> cleanupFuture_;
+    bool cleanupPending_ = false;
+    // What the last clean-up did (core -> gui::pluginCleanupReport), the store's line under its key.
+    std::string pluginCleanupReport_;
+    // Starts one clean-up of `which` on a worker; empty `which` does nothing. `afterUpdate` joins its sentence to installReport_.
+    void startCleanUp(std::vector<cascade::core::SupersededPlugin> which, bool afterUpdate);
+    // FOXAPP_OP_STORE_CLEAN_OLD 0: every old copy the last scan found (the key, once confirmed). Not under a transfer: an update in
+    // flight is about to change which copy is the newest.
+    void cleanUpOldVersionsConfirmed();
+    // An update that succeeded takes the copies it superseded with it - for THAT plugin only: `installedPath` is the new file.
+    void cleanUpAfterUpdate(const std::string& installedPath);
+    // The queue the last session left (pending-removal.json), worked through once the first scan has run.
+    void processPendingPluginRemovals();
+    // FOXAPP_OP_STORE_CLEAN_OLD 1: REMOVE FILE on an orphaned module - the file is judged again against this engine's own scan (a row gone
+    // stale removes nothing and says why).
+    void removeOrphanedPlugin(const std::string& fileName);
+    // The remover every delete above goes through (TestHooks::pluginRemove, else PluginRepo's).
+    static cascade::core::PluginFileRemover pluginRemoverFor();
+
+    // The store's tables (engine_store.cpp): the facts and the pictures list, built with the lists block.
+    void buildApiListsStore(ApiListBlock& b);
 public:
     // THE ONE PUBLISH (engine stage 2, docs/engine-stage2.md): fills a
     // PublishedState - FoxReceiverState and the app's extension - and the

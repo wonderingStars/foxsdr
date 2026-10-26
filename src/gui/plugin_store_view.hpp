@@ -866,9 +866,7 @@ std::string storeCleanupKeyLabel(std::size_t count);
 std::string storeOldCopyLine(const StoreOldCopy& c);
 // The confirmation's own key: "Remove 1 file" / "Remove 3 files".
 std::string storeCleanupConfirmLabel(std::size_t count);
-// WHAT A CLEAN-UP DID, in one or more sentences for the panel. Empty when it did
-// nothing.
-std::string pluginCleanupReport(const cascade::core::PluginCleanupResult& r);
+// (pluginCleanupReport - what a clean-up did, in sentences - is in engine/plugin_store_reasons.hpp: the engine makes it, stub campaign B3.)
 
 // Draws the CLEAN UP OLD VERSIONS key, its one confirmation popup and the report
 // under it, at the ImGui cursor, `width` wide. Returns true on the frame the

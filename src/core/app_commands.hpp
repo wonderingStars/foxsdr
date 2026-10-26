@@ -83,6 +83,21 @@
 #define FOXAPP_PLUGIN_USE_RADAR_SCOPE    4u /* the radar scope is showing (every track source) */
 #define FOXAPP_PLUGIN_USE_DECODER_OUTPUT 8u /* the Decoder output window is open (a text decoder) */
 #define FOXAPP_PLUGIN_USE_ALL            15u
+// THE STORE'S SITES, PICTURES AND CLEAN-UP (stub campaign B3, 0.99.49 - 0.99.74; docs/api-0.3-additions.md 9.4), all LOCAL sessions only and
+// none of them on the web profile: a REMOTE session can neither add a source of code nor start a transfer to an address a stranger chose.
+//   STORE_SITE (ADMIN): text: the site's address as typed (it is normalised and re-checked here: PluginRepo::normaliseSiteUrl - https only, no
+//   credentials, a host - and refused when it is already listed, is the official address, or the list is full); ival[0]: 0 ADD, 1 REMOVE;
+//   ival[1] (ADD): 1 = the user ticked the box that says what a site is (the consent) - without it ADD is refused and nothing is written.
+//   ADD starts a catalogue read. Neither runs under a transfer in flight (BUSY). The refusal's sentence is the result's message and
+//   fact.store.siteError. REMOVE leaves what was installed from the site installed.
+//   STORE_PICTURES_WANT (ADMIN): text: a catalogue KEY (the id, or "<id>@<site label>"); ival[0]: 1 = ask again for a picture that failed.
+//   Queues the entry's pictures (one transfer at a time, after any read or download); NOT_FOUND for a key the catalogue does not hold.
+//   STORE_CLEAN_OLD (ADMIN): ival[0] 0: remove EVERY old copy the last scan found superseded (the store's CLEAN UP key, once confirmed - the
+//   window asks first; fact.store.oldCopies is what it lists); ival[0] 1: REMOVE FILE on the orphaned module named in text, which is judged
+//   again against the engine's own scan. Not under a transfer (BUSY).
+#define FOXAPP_OP_STORE_SITE             0x8709u /* text: the site's address; ival[0]: 0 add, 1 remove; ival[1] (add): 1 = consent given */
+#define FOXAPP_OP_STORE_PICTURES_WANT    0x870Au /* text: catalogue key; ival[0]: 1 = retry a failed picture */
+#define FOXAPP_OP_STORE_CLEAN_OLD        0x870Bu /* ival[0]: 0 remove every old copy, 1 remove the orphaned file named in text */
 // The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
 // OPEN 1/10, SAFETY): ival[0] 0/1. Since engine stage 4 the flag gates NO key:
 // the consent the window withdraws when its page closes (gui::txKeyCommands) is
