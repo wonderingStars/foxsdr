@@ -2,24 +2,24 @@
 
 **FoxSDR 0.99.95 makes the patch page's demodulator speak every mode on its list. A Demod part set to USB, LSB, CW or DSB now really demodulates that way - with the receiver's own sideband filter and its 700 Hz CW tone - so a blueprint for a single-sideband or CW plugin decodes in the patch, not only in the receiver.**
 
-This is a fix to yesterday's blueprints; nothing else changes. The Microsoft Store copy stays on its current version until the next submission is certified.
+This is a fix to 0.99.94's blueprints; nothing else changes. The Microsoft Store copy stays on its current version until the next submission is certified.
 
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.95.exe`:**
-`TBD`
+`5162d47427efaeeb9343081707166dc2bd617cdb0d5ad8fe361ceb0718254034`
 
 **SHA-256 of `FoxSDR-0.99.95-x86_64.AppImage`:**
-`TBD`
+`5519548a260def5c08536e78bf3b760bf490075438e451d38f349a53123e0c0d`
 
 **SHA-256 of `foxsdr-0.99.95-linux-x64.tar.gz`:**
-`TBD`
+`c9cd179944f2e10d9ad943861573957bd715e89d543f4d26d254a4ee6a32285c`
 
 **SHA-256 of `FoxSDR-0.99.95-aarch64.AppImage`:**
-`TBD`
+`a75da12dbcbcc231f0b4c755f5e828d963b7d1812a44d753348b1afe4fc76ecd`
 
 **SHA-256 of `foxsdr-0.99.95-linux-arm64.tar.gz`:**
-`TBD`
+`fbe29818626a863e6e5478bf919a62b9950a948f90e90e747d0c9bd001fd60ce`
 
 ## Features and fixes, 2026-10-26
 
