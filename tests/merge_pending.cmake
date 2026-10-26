@@ -38,10 +38,9 @@ cascade_merge_pending(RAIL-CHROME      # 0.99.74 dials (the interface size, the 
     test_deck_knobs_app)
 # (STORE-VIEW - 0.99.50 / 0.99.72 / 0.99.74 plugin store and Fitted modules window on the table - is whole: the engine's half returned in stub batch
 # B3, the store window in B4, the Fitted modules window in B5: test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app.)
-cascade_merge_pending(PLUGIN-SETTINGS-UI    # 0.99.43 CASCADE_CAP_SETTINGS_UI: fields the host draws for a plugin
-    test_plugin_settings_ui)
-cascade_merge_pending(PLUGIN-ROW-KEYS  # 0.99.77 a row in a plugin's panel as a key
-    test_programme_audio_app)
+# (PLUGIN-SETTINGS-UI - the settings form of a plugin (0.99.43), BROWSE FILES beside a path setting and the folded "Plugin settings" line (0.99.74) - and
+# PLUGIN-ROW-KEYS - a row in a plugin's panel as a key (0.99.77) - are whole: back in stub batch B9, test_plugin_settings_ui, test_decoder_settings_fold_app,
+# test_plugin_pathpick_app, test_programme_audio_app and test_row_keys_app.)
 cascade_merge_pending(TX-PLUGIN        # 0.99.74 a plugin may key the transmitter once granted and armed
     test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app)
 cascade_merge_pending_part(TX-PLUGIN transmit_page_plugin_key
@@ -66,12 +65,8 @@ cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 waterfall markers, pe
     test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app)
 cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip (the folded Display section returned in B1)
     test_display_menu_app)
-cascade_merge_pending(PLUGIN-SETTINGS-UI
-    test_decoder_settings_fold_app test_plugin_pathpick_app)
 # (PLUGIN-RUN - 0.99.73 a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes - is whole: the engine's half returned in stub batch B2,
 # test_plugin_inuse_app, which needs the Fitted modules window, in B5.)
-cascade_merge_pending(PLUGIN-ROW-KEYS
-    test_row_keys_app)
 cascade_merge_pending(UPDATES          # 0.99.7x the Store's own update notice and the site banner
     test_store_update_app)
 # (RADIO-SETUP - the page, its INSTALL DRIVER key and the UHD images finding, 0.99.69 - 0.99.89 - is whole: back in stub batch B8,

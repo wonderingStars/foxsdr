@@ -2981,6 +2981,10 @@ private:
     // FOXAPP_OP_AIRBAND. Returns the status; `why` is the sentence of a refusal (and `res.applied[0]` the state after: 0 idle, 1 listening, 2
     // waiting for the patch).
     std::int32_t applyAirbandOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    // FOXAPP_OP_PLUGIN_SETTING_EDIT (stub campaign B9, engine_plugin_settings.cpp): "<module file>\x1F<key>\x1F<value>" judged against the field the
+    // module's own table declares and written through PluginApiCore::settingsUiSet. Returns the status; `verdict` is the core::SettingEditResult
+    // (0 when accepted) and `why` its English.
+    std::int32_t applyPluginSettingEdit(const std::string& text, double& verdict, std::string& why);
     // Starts the monitor on the preset in airbandGroup_: 0 it did not start (airbandNote_ says why), 1 listening, 2 waiting for the patch.
     int airbandStart();
     void airbandStop(const std::string& why);

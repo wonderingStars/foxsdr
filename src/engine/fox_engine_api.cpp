@@ -2948,6 +2948,19 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 if (pic.active) { it.flags |= FOXAPI_ITEM_ACTIVE; }
             }
             break;
+        // ---- API 0.3 9.7 (stub campaign B9): the settings forms the modules declare -------------------------------------------------
+        case FOXAPI_LIST_PLUGIN_SETTINGS:
+            // What a person typed into a plugin's box - a callsign, a path on this machine - is the local operator's business.
+            if (!local) { return FOXAPI_DENIED; }
+            if (want(b->pluginSettings.size())) {
+                const auto& f = b->pluginSettings[index];
+                it.id = index + 1u;
+                copyText(it.name, f.label.c_str());
+                copyText(it.detail, f.file.c_str());
+                it.value[0] = static_cast<double>(f.kind);
+                it.value[1] = static_cast<double>(f.maxLength);
+            }
+            break;
         case FOXAPI_LIST_PLUGIN_COMMANDS:
             if (want(b->pluginCommands.size())) {
                 const auto& c = b->pluginCommands[index];

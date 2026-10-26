@@ -7589,6 +7589,16 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (catalogIndexByKey(text) < 0) { return refuse(FOXAPI_NOT_FOUND, "no catalogue entry with that key"); }
             requestScreenshots(text, on);
             return res;
+        case FOXAPP_OP_PLUGIN_SETTING_EDIT: {
+            // A PLUGIN'S SETTINGS FORM, edited (stub campaign B9; engine_plugin_settings.cpp): the verdict is the answer's applied[0], whether or not it
+            // was accepted - the window snaps a refused box back from it.
+            double verdict = 0.0;
+            std::string why;
+            const std::int32_t st = applyPluginSettingEdit(text, verdict, why);
+            res.applied[0] = verdict;
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
         case FOXAPP_OP_STORE_CLEAN_OLD:
             if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "ival[0] is 0 (clean up) or 1 (remove one orphaned file)"); }
             if (catalogPending_ || installPending_ || screenshotPending_ || cleanupPending_) {

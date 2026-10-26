@@ -266,6 +266,15 @@ struct ApiListBlock {
         std::string label, file;
     };
     std::vector<PluginCommand> pluginCommands;
+    // API 0.3 9.7 (stub campaign B9), PLUGIN_SETTINGS: the fields of the settings forms the loaded modules declare, a module's together and in its
+    // own order. `value` is what the field shows now (the stored text, else the plugin's default), whole - the list item carries none of it. Rebuilt
+    // with the block, which the fingerprint moves for a changed value (PluginApiCore::settingsGeneration()).
+    struct PluginSetting {
+        std::string file, key, label, placeholder, value;
+        std::uint32_t kind = 0;
+        std::uint32_t maxLength = 0;
+    };
+    std::vector<PluginSetting> pluginSettings;
 
     // ---- API 0.2's lists step 1 left out, and API 0.3's (docs/api-0.3-additions.md)
     struct Decoder {

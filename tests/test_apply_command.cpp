@@ -2172,6 +2172,19 @@ void pluginOps(AppWindow& a) {
         CHECK(ok(A::apply(a, text(FOXAPP_OP_PLUGIN_USE, std::string()))));
     }
 
+    covering(FOXAPP_OP_PLUGIN_SETTING_EDIT);
+    {
+        // A PLUGIN'S SETTINGS FORM, edited (stub campaign B9): "<module file> US <key> US <value>". The field is the one the module's own table declares,
+        // so a module that is not loaded - or one that declares no form, as this fixture - is NOT_FOUND, and text that names no module and field is
+        // BAD_ARGUMENT. (The accepted edit and every refusal's verdict against a real settings form, with settings_seq, are
+        // tests/test_engine_api_settings.cpp's.)
+        const std::string us(1, '\x1F');
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_SETTING_EDIT, "nobody.dll" + us + "callsign" + us + "x")), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_SETTING_EDIT, key + us + "callsign" + us + "x")), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_SETTING_EDIT, key + us + "callsign")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_SETTING_EDIT, std::string())), FOXAPI_BAD_ARGUMENT));
+    }
+
     covering(FOXAPI_OP_PLUGIN_PRESET);
     {
         // By file key (the preset bars) and by display name (the web remote).

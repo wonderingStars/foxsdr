@@ -57,6 +57,7 @@
 #include <vector>
 
 #include "core/plugin_abi.h"
+#include "core/plugin_ui_data.hpp"
 #include "core/receiver_snapshot.hpp"
 #include "core/seqlock_box.hpp"
 
@@ -196,23 +197,8 @@ struct HostMarker {
     CascadeMarker m{};
 };
 
-struct HostCommand {
-    std::uint32_t id = 0;
-    std::string label;
-};
-
-// A PRESSABLE PANEL ROW (0.99.77, CASCADE_ROW_FLAG_KEY): the command id the row is a key for,
-// or 0 when it is drawn as text. Two steps, kept apart so the drawing can tell "not a key" from
-// "a key bound to nothing":
-//   panelRowKeyId     what the row ASKS for - 0 unless it is a table row (CASCADE_ROW_CELLS)
-//                     carrying CASCADE_ROW_FLAG_KEY with a non-zero id in bits 8..15. A heading
-//                     or a separator is never a key, and id bits without the flag are not read.
-//   panelRowPressable what the host will DO - the id, only when the plugin registered it with
-//                     add_command (PluginApiCore::pressCommand refuses any other, so a key drawn
-//                     for an unregistered id would be a key that does nothing).
-std::uint32_t panelRowKeyId(const CascadePanelRow& row);
-std::uint32_t panelRowPressable(const CascadePanelRow& row,
-                                const std::vector<HostCommand>& registered);
+// (HostCommand, panelRowKeyId and panelRowPressable - the pressable panel row's rule - are in core/plugin_ui_data.hpp, which this header includes:
+// the window may not include this one. Stub campaign B9.)
 
 // The whole settings store: plugin NAME -> key -> value.
 using PluginSettingsMap = std::map<std::string, std::map<std::string, std::string>>;

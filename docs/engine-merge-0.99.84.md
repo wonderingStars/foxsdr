@@ -128,8 +128,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 ### 6.1 Release by release
 
 0.99.43  (the merge base's successor; plugin settings forms)
-  * a plugin's settings UI, CASCADE_CAP_SETTINGS_UI .......................................... stubbed PLUGIN-SETTINGS-UI (test_plugin_settings_ui; core and
-    gui/plugin_settings_form.* are in the tree and their pure tests run; the window's forms and the engine's grants are not wired)
+  * a plugin's settings UI, CASCADE_CAP_SETTINGS_UI .......................................... re-expressed, stub batch B9 (src/gui/plugin_settings_form.cpp over a
+    gui::SettingsEditSink - the fence denies plugin_api.hpp to src/gui; the window's sink reads PLUGIN_SETTINGS (list 52) and fact.plugin.setting.<id> and sends
+    FOXAPP_OP_PLUGIN_SETTING_EDIT, which the ENGINE judges and writes through settingsUiSet - src/engine/engine_plugin_settings.cpp; test_plugin_settings_ui
+    with an adapter over PluginApiCore and its [S] section, tests/test_engine_api_settings.cpp)
 
 0.99.44
   * interface size, for 4K screens ........................................................... re-expressed, stub batch B1 (docs/engine-stage4.md 6.22): the
@@ -352,7 +354,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the VIEW bank is TOOLS; Display moves to SYSTEM and starts folded ........................ re-expressed, stub batch B1 (the bank rename is in rail_banks.hpp, C0; the
     rail's heading and the Display section's place and remembered open state are the window's: test_display_fold_app, test_window_chrome_config). One name
     of test_display_fold_app's list is carved out as the red part display_fold_airband_section: the TOOLS bank's Airband section is AIRBAND (B7)
-  * each decoder's settings in a folded "Plugin settings" line ............................... stubbed PLUGIN-SETTINGS-UI
+  * each decoder's settings in a folded "Plugin settings" line ............................... re-expressed, stub batch B9 (AppWindow::drawPluginSettingsRailNode;
+    the same line folds the form on a plugin's own windows and the patch inspector; test_decoder_settings_fold_app)
   * the ADS-B map lists only the aircraft you can see; no-altitude is grey ................... stubbed MAP-WINDOWS
   * third-party plugin sites in the store ................................................... re-expressed in part: the ENGINE's half since stub batch B3
     (engine_store.cpp: the sites list, each site read on the catalogue's worker, merged under the official list, kept as its own copy and loaded at start-up,
@@ -363,7 +366,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the plugin store keeps the catalogue it read, so a failed read empties nothing (0.99.72) ........ re-expressed, stub batch B3 (the kept copy, the regional
     list's outcome, the pictures one transfer at a time; test_plugin_catalogue_app, tests/test_engine_api_store.cpp S3 and S4; the old contract that a failed
     refetch EMPTIED the catalogue, pinned by tests/test_engine_api_03.cpp I1 and I5, is replaced by master's)
-  * BROWSE FILES beside a plugin setting that names a file ................................... stubbed PLUGIN-SETTINGS-UI
+  * BROWSE FILES beside a plugin setting that names a file ................................... re-expressed, stub batch B9 (the form's key over AppWindow::pickFile, B8's;
+    the chosen path is an edit like a typed one; test_plugin_pathpick_app)
   * switching auto gain off gives the radio its manual gains back ........................... re-expressed, C1 (Engine::changeAutoGain; test_autogain_app)
   * a plugin may send transmit audio through FoxSDR, granted and armed ...................... stubbed TX-PLUGIN, in the SAFE state: Transmitter's plugin key and
     cap are merged and tested (test_tx_audio), and NOTHING in the engine calls Transmitter::setPluginKey, so no plugin can key a radio
@@ -386,7 +390,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * the Fitted modules / DECODE lists grouped under the store's headings ..................... re-expressed, stub batch B5 (the category is the install record's catalogue entry's:
     fact.plugin.<file>.record; the bank's rows are scoped by the plugin's run id, so two files of one plugin are one section; a double-click on a Fitted
     modules row opens that plugin's window: openPluginOwnWindow; test_plugin_inuse_app groups and dblclick, test_fitted_modules_window)
-  * a row in a plugin's panel is a key ....................................................... stubbed PLUGIN-ROW-KEYS (test_programme_audio_app)
+  * a row in a plugin's panel is a key ....................................................... re-expressed, stub batch B9 (panelRowKeyId / panelRowPressable hoisted into
+    core/plugin_ui_data.hpp; the registered set is PLUGIN_COMMANDS and a press is FOXAPI_OP_PLUGIN_COMMAND: AppWindow::drawPluginRows; test_row_keys_app, and
+    test_programme_audio_app, converted to the engine through rawEngine and the pass seam)
   * an old copy of a renamed plugin no longer loads beside the new one; ImGui's duplicate-ID box is off in the shipped build
     .......................................................................................... carried (core/plugin_host, gui/imgui_debug_policy.hpp) and held in part by
     test_plugin_host_origin (C4); the window's half - ConfigDebugHighlightIdConflicts set from the policy, its log line and the `imgui:idconflict` census
@@ -407,7 +413,7 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     test_import_dialog_app; the engine's answer to BOOKMARK_IMPORT_FILE opens and closes the window and the engine words the reason)
 
 0.99.81
-  * IBOC dashboard programme rows respond to clicks ......................................... stubbed PLUGIN-ROW-KEYS
+  * IBOC dashboard programme rows respond to clicks ......................................... re-expressed, stub batch B9 (the same rows: test_row_keys_app)
   * DAB decoder muting preserves decoded sound ............................................... carried in the core mute logic; the engine's updateAudioMute was not
     diffed against master's (unverified)
 
@@ -462,8 +468,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
                           test_plugin_update_cleanup_app; B4 removed test_plugin_store_window, test_plugin_store_view and test_plugin_store_app,
                           leaving test_fitted_modules_window, test_fitted_modules_no_disk and test_plugin_dup_app, and added the part store_app_fitted;
                           B5 removed the rest and the part: STORE-VIEW is whole]
-  PLUGIN-SETTINGS-UI (3)  test_plugin_settings_ui test_decoder_settings_fold_app test_plugin_pathpick_app
-  PLUGIN-ROW-KEYS (2)     test_programme_audio_app test_row_keys_app
+  (PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS - test_plugin_settings_ui, test_decoder_settings_fold_app, test_plugin_pathpick_app, test_programme_audio_app and
+  test_row_keys_app - were removed by B9: both ids are whole)
   TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
   TESTER-LINK (3)         test_tester_link_app test_link_request_poll test_tester_link
   MARKERS-SPECTRUM (4)    test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app
@@ -530,6 +536,8 @@ and BOOKMARK_EXPORT writes SDR# XML), which B19 should fold into the disk-work f
 (NOTEFEATURE call sites) are B15's and the squelch AUTO follow-up is B12's. test_i18n: 144 stale, 0 missing (unchanged: the parked file's keys were already counted).
 
 UPDATE 2026-10-26, stub batch B8 (docs/engine-stage4.md 6.22): the IMPORT-DIALOG and RADIO-SETUP pages are back in the window (src/gui/app_window_import_dialog.cpp, src/gui/app_window_radio_setup.cpp, git mv from src/gui_pending; AppWindow::pickFile in app_window.cpp, FOXSDR_FILE_PICK and FOXSDR_FAKE_RADIO_SETUP read again by run()). test_import_dialog_app and test_radio_setup_app are converted (the real binary: 114 and 156 checks) and the part excuse_cap_pickfile is gone (tests/test_excuse_cap.cpp counts master's 3 native-wait call sites): both placeholders and the part are gone, 32 remain (31 tests and 1 part). The ledger lines of 0.99.69 (the page), 0.99.80 (the dialog) and 0.99.82 (the path shapes) read re-expressed above; R1 (the INSTALL DRIVER key, 0.99.88) and R2 (the UHD images finding, 0.99.89) of docs/engine-merge-0.99.90.md section 3 are done with the page. test_radio_setup_app had NO scenario for the INSTALL DRIVER key (the plan could not tell): one was written RED first and now holds it, with a new bounded-run seam FOXSDR_FAKE_DRIVER_INSTALL; a new pure test, tests/test_radio_setup_inventory.cpp, holds the page's reading of the application's lists. ONE ENGINE CHANGE the plan did not list: FOXAPP_OP_BOOKMARK_IMPORT_FILE is answered FAILED (it was OK with only the note saying so) when it read nothing, and the note words the reason in the user's language - the window opens and closes its dialog on that answer (docs/api-0.3-additions.md section 9). Three existing tests were edited with their reasons beside the edit (test_recorder_bookmarks_scanner H, test_source_section_window's sweep helper with a new scenario A0 for the RADIO SETUP key, test_apply_command's added checks). The page raises itself again for a person with no radio: master counted the always-present rtl_tcp row as a radio found (decision 3 of the B8 note). Not engine work otherwise: no op, list or fact was added. test_gui_file_jobs' import sections stay B19's (it calls `consumePendingDrop`, which is AppWindow::submitPendingDrop here). test_i18n: 144 stale, 0 missing (unchanged).
+
+UPDATE 2026-10-26, stub batch B9 (docs/engine-stage4.md 6.22): the PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS items are back (src/gui/plugin_settings_form.cpp, git mv from src/gui_pending, over a gui::SettingsEditSink; src/gui/app_window_plugin_settings.cpp; src/engine/engine_plugin_settings.cpp; the pressable-row rule hoisted into core/plugin_ui_data.hpp). The table grew by the list PLUGIN_SETTINGS (52), two facts a field and FOXAPP_OP_PLUGIN_SETTING_EDIT 0x870C (API 0.3 9.7; LOCAL only; the door did not move). test_plugin_settings_ui (edited: the adapter over PluginApiCore, its reason beside it, and the three publish calls; a section [S] added), test_decoder_settings_fold_app, test_plugin_pathpick_app (four scenarios of mine added), test_programme_audio_app (converted to the engine through rawEngine and the pass seam; it now also runs as _stepped) and test_row_keys_app are green and their placeholders are gone; PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS are whole. New: tests/test_engine_api_settings.cpp and tests/test_plugin_settings_window.cpp (the real window against the real engine). The red placeholders are the 32 of B8 (31 tests and 1 part) less five tests: 27 (26 tests and 1 part). test_i18n: 143 stale, 0 missing (the one key that returned: "Plugin settings"). The preset lines B2 flagged are in the engine (verified line by line before test_programme_audio_app was converted).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

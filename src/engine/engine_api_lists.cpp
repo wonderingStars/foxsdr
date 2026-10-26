@@ -23,6 +23,7 @@
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
 #include "core/plugin_host.hpp"
+#include "core/plugin_settings_ui.hpp"
 #include "core/serial_port.hpp"
 #include "engine/device_scan_plan.hpp"
 #include "engine/engine.hpp"
@@ -246,6 +247,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     // moved: counters the plugin API and the runner keep, so none of the three builds a vector or copies a row.
     f.value(pluginApi_->settingsRequestersSeq());
     f.value(pluginApi_->commandsSeq());
+    // ...and the settings store's generation: PLUGIN_SETTINGS' values are what a settings form shows, and they move when anybody writes one (the form,
+    // the plugin's own settings_set, a config load) - stub campaign B9.
+    f.value(pluginApi_->settingsGeneration());
     f.value(pluginRunner_.statusGeneration());
     // The install records' verdict on each file (integrity: not the file that was installed).
     for (const cascade::core::InstalledPlugin& r : pluginInventory_.plugins) {
@@ -759,6 +763,31 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                 for (const cascade::core::HostCommand& hc : pluginApi_->commands(w.key)) {
                     b.pluginCommands.push_back({hc.id, hc.label, w.key});
                 }
+            }
+        }
+    }
+    // THE SETTINGS FORMS the loaded modules declare (API 0.3 9.7, stub campaign B9): PLUGIN_SETTINGS' fields, from each module's STATIC table (memory, not
+    // a call into its code - the rule the presets keep), and what each shows now - the stored text, else the plugin's default - whole, as facts: the item
+    // carries none of it. Index-aligned with `plugins` like the facts above. LOCAL only: a callsign, a path on this machine.
+    {
+        const auto& records = pluginHost_.plugins();
+        for (std::size_t i = 0; i < b.plugins.size() && i < records.size(); ++i) {
+            const ApiListBlock::Plugin& w = b.plugins[i];
+            const cascade::core::LoadedPlugin& p = records[i];
+            if (w.key.empty() || !w.loaded || p.settingsUi == nullptr) { continue; }
+            for (const cascade::core::SettingField& sf : cascade::core::settingFieldsFrom(p.settingsUi)) {
+                ApiListBlock::PluginSetting s;
+                s.file = w.key;
+                s.key = sf.key;
+                s.label = sf.label;
+                s.placeholder = sf.placeholder;
+                s.value = cascade::core::settingFieldValue(*pluginApi_, p.name, sf);
+                s.kind = sf.kind;
+                s.maxLength = static_cast<std::uint32_t>(sf.maxLength);
+                const std::string k = "plugin.setting." + std::to_string(b.pluginSettings.size() + 1u);
+                fact(k, s.value, true);
+                fact(k + ".spec", s.key + '\x1F' + s.placeholder, true);
+                b.pluginSettings.push_back(std::move(s));
             }
         }
     }

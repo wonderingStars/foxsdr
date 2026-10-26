@@ -277,6 +277,42 @@ struct MutePreset {
     std::string label;
 };
 
+// A command key a plugin registered with add_command: the id the plugin takes its press by (poll_command) and the label it gave the key. HOISTED
+// here from plugin_api.hpp with the two functions below (stub campaign B9): the window reads the registered set from the table's PLUGIN_COMMANDS
+// list and may not include plugin_api.hpp (cmake/interface_fence.cmake), and the row-key rule needs nothing else of it.
+struct HostCommand {
+    std::uint32_t id = 0;
+    std::string label;
+};
+
+// A PRESSABLE PANEL ROW (0.99.77, CASCADE_ROW_FLAG_KEY): the command id the row is a key for,
+// or 0 when it is drawn as text. Two steps, kept apart so the drawing can tell "not a key" from
+// "a key bound to nothing":
+//   panelRowKeyId     what the row ASKS for - 0 unless it is a table row (CASCADE_ROW_CELLS)
+//                     carrying CASCADE_ROW_FLAG_KEY with a non-zero id in bits 8..15. A heading
+//                     or a separator is never a key, and id bits without the flag are not read.
+//   panelRowPressable what the host will DO - the id, only when the plugin registered it with
+//                     add_command (the engine's pressCommand refuses any other, so a key drawn
+//                     for an unregistered id would be a key that does nothing).
+// Pure (stub campaign B9): the window draws the rule over the registered set the table lists and presses by FOXAPI_OP_PLUGIN_COMMAND.
+inline std::uint32_t panelRowKeyId(const CascadePanelRow& row) {
+    // ONLY A TABLE ROW, AND ONLY WITH THE FLAG: a heading and a separator are never keys, and id bits without CASCADE_ROW_FLAG_KEY are not read - a
+    // plugin that wrote junk into the bits above the three emphasis flags before 0.99.77 must not find its rows pressable now.
+    if (row.kind != CASCADE_ROW_CELLS || (row.flags & CASCADE_ROW_FLAG_KEY) == 0u) { return 0u; }
+    return CASCADE_ROW_KEY_ID(row.flags);
+}
+
+inline std::uint32_t panelRowPressable(const CascadePanelRow& row, const std::vector<HostCommand>& registered) {
+    const std::uint32_t id = panelRowKeyId(row);
+    if (id == 0u) { return 0u; }
+    // ONLY AN ID THE PLUGIN REGISTERED: a key drawn for any other would take the click and do nothing - a control that lies about having done
+    // something.
+    for (const HostCommand& c : registered) {
+        if (c.id == id) { return id; }
+    }
+    return 0u;
+}
+
 }  // namespace cascade::core
 
 #endif  // CASCADE_CORE_PLUGIN_UI_DATA_HPP

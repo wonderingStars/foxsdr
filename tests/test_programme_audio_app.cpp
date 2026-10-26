@@ -1,10 +1,25 @@
 // A real module in a real AppWindow, on its own preset with the default I/Q
 // mute. Measure the finished audio rather than just the plugin's claim.
+//
+// CONVERTED (stub campaign B9, PLUGIN-ROW-KEYS' pending list; master's test unedited except as the reasons below say). It was master's own test of
+// master's AppWindow: it reached the pipeline, the plugin host, the mute decision and the preset through `a.pipeline_`, `a.pluginHost_`,
+// `a.applyPluginPreset` and the rest - fields this branch's window does not have, because the engine owns them (the window's only door is the table).
+// The house pattern (tests/test_audio_lead_app.cpp): rawEngine(a.engine_) through AppWindowTestAccess, and tests/pass_seam.hpp for every call that must
+// run on the pass thread - so the test is registered again as _stepped, and the same assertions run against the pass on its own thread.
+//   * rescanPlugins, startReceiver, stopReceiver, updateAudioMute, setPluginMutes, applyPluginPreset and pluginMutes are Engine members now;
+//   * the saved overrides are read as the window reads them: the engine hands its half of the config over (publishConfig), the window's copy is
+//     currentConfig();
+//   * `currentDiagContext().audio.mutedByPlugin` - the window's builder of the diagnostics block - is Engine::refreshDiagContext, which renders the
+//     block a crash or a hang report prints (core::diagContextBlock): the same fact, asked for the way a report reads it ("muted: ... a decoder
+//     plugin"), after the engine has rendered it. Whether the preset lines (de-emphasis, an explicit rate request, keep-tuned-on-start) the test's
+//     fixture rides on are in the engine's applyPluginPreset is held by the line-for-line comparison in docs/engine-stage4.md 6.22 (B9).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "core/diag_report.hpp"
 #include "core/package_identity.hpp"
 #include "core/plugin_run.hpp"
 #include "gui/app_window.hpp"
+#include "pass_seam.hpp"
 #include "test_check.hpp"
 #include <chrono>
 #include <cmath>
@@ -24,22 +39,42 @@ namespace fs = std::filesystem;
 namespace cc = cascade::core;
 namespace cascade::gui {
 struct AppWindowTestAccess {
-    static void scan(AppWindow& a) { a.rescanPlugins(); }
-    static void start(AppWindow& a) { a.startReceiver(); }
-    static void stop(AppWindow& a) { a.stopReceiver("test"); }
-    static void frame(AppWindow& a) { a.updateAudioMute(); }
-    static void userMute(AppWindow& a, bool muted) { a.userMuted_ = muted; frame(a); }
-    static const std::vector<cc::LoadedPlugin>& plugins(AppWindow& a) { return a.pluginHost_.plugins(); }
-    static bool autoMute(AppWindow& a, const cc::LoadedPlugin& p) { return a.pluginMutes(p); }
-    static void preset(AppWindow& a, const cc::LoadedPlugin& p, const CascadePreset& ps) {
-        a.applyPluginPreset(p, ps);
+    static cascade::engine::Engine& eng(AppWindow& a) { return rawEngine(a.engine_); }
+    static void scan(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).rescanPlugins(); }); }
+    static void start(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).startReceiver(); }); }
+    static void stop(AppWindow& a) { passseam::on(eng(a), [&] { eng(a).stopReceiver("test"); }); }
+    // The audio mute, which a frame decides after its look and before it draws.
+    static void frame(AppWindow& a) { passseam::mute(eng(a), [&] { eng(a).updateAudioMute(); }); }
+    static void userMute(AppWindow& a, bool muted) {
+        passseam::on(eng(a), [&] { eng(a).userMuted_ = muted; });
+        frame(a);
     }
-    static cc::Pipeline& pipeline(AppWindow& a) { return a.pipeline_; }
-    static bool hasMuteDecision(AppWindow& a) { return !a.mutedBy_.empty(); }
-    static std::string muteSubject(AppWindow& a) { return a.muteSubjectText(); }
-    static bool diagMuted(AppWindow& a) { return a.currentDiagContext().audio.mutedByPlugin; }
-    static void overrideMute(AppWindow& a, const cc::LoadedPlugin& p, bool on) { a.setPluginMutes(p, on); }
-    static cc::AppConfig config(AppWindow& a) { return a.currentConfig(); }
+    static const std::vector<cc::LoadedPlugin>& plugins(AppWindow& a) { return eng(a).pluginHost_.plugins(); }
+    static bool autoMute(AppWindow& a, const cc::LoadedPlugin& p) {
+        return passseam::read<bool>(eng(a), [&] { return eng(a).pluginMutes(p); });
+    }
+    static void preset(AppWindow& a, const cc::LoadedPlugin& p, const CascadePreset& ps) {
+        passseam::on(eng(a), [&] { eng(a).applyPluginPreset(p, ps); });
+    }
+    static cc::Pipeline& pipeline(AppWindow& a) { return eng(a).pipeline_; }
+    static bool hasMuteDecision(AppWindow& a) {
+        return passseam::read<bool>(eng(a), [&] { return !eng(a).mutedBy_.empty(); });
+    }
+    static std::string muteSubject(AppWindow& a) {
+        return passseam::read<std::string>(eng(a), [&] { return eng(a).muteSubjectText(); });
+    }
+    // What a crash or a hang report would say the audio is muted by: the engine renders the diagnostics block, and the block says who.
+    static bool diagMuted(AppWindow& a) {
+        passseam::on(eng(a), [&] { eng(a).refreshDiagContext(); });
+        return cc::diagContextBlock().find("a decoder plugin") != std::string::npos;
+    }
+    static void overrideMute(AppWindow& a, const cc::LoadedPlugin& p, bool on) {
+        passseam::on(eng(a), [&] { eng(a).setPluginMutes(p, on); });
+    }
+    static cc::AppConfig config(AppWindow& a) {
+        passseam::on(eng(a), [&] { eng(a).publishConfig(); });
+        return a.currentConfig();
+    }
 };
 }
 using Access = cascade::gui::AppWindowTestAccess;
@@ -89,7 +124,7 @@ int main(int argc, char** argv) {
     const char* ext = ".so";
 #endif
 #endif
-    const fs::path scratch = fs::temp_directory_path() / ("foxsdr_programme_audio_" + std::to_string(pid));
+    const fs::path scratch = fs::temp_directory_path() / ("foxsdr_programme_audio_" + std::to_string(pid) + "_" + passseam::name());
     fs::create_directories(scratch);
     for (const char* name : {"APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME", "XDG_CONFIG_HOME",
                              "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}) {

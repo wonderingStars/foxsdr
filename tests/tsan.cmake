@@ -80,6 +80,8 @@ set(CASCADE_TSAN_TESTS
     test_engine_api_store
     # stub batch B6: the Airband monitor's pass against the DSP thread whose squelch reports and block count it reads, and the live list's block
     test_engine_api_airband
+    # stub batch B9: the settings edit (a command on the pass) against the plugin API's store a plugin's own thread writes
+    test_engine_api_settings
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

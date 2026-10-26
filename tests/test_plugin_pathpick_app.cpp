@@ -30,7 +30,14 @@
  *   cancel   the same press with FOXSDR_FILE_PICK set EMPTY (the dialog cancelled) stores
  *            nothing;
  *   again    a second launch from the config the "chosen" run left shows the path and the key
- *            still drawn (the value survives a restart, and the box is not what stored it).
+ *            still drawn (the value survives a restart, and the box is not what stored it);
+ *   typed    (stub campaign B9, which this scenario is MINE for: the form's edit is a command now, answered by the engine a frame or more later)
+ *            a text box is committed when it is LEFT, once and whole, and never per keystroke: "G4" then "A" typed into the callsign box
+ *            and Enter pressed makes the plugin's settings ONE saved edit (the engine's log line, which names the field and the length and
+ *            never the text, is there once, and says 3 bytes) and the config holds "G4A"; the same run stopped BEFORE Enter - typed, not left -
+ *            saved nothing; a number that is not one is refused and saves nothing, and the engine's verdict reaches the box (the census
+ *            says settings:message:power:2 - NotANumber - which only the ANSWER of the command can have caused); and a box typed in whose
+ *            surface stops drawing before it is left (the "Plugin settings" line folded under it) is committed all the same, once.
  *
  * Where the host has a file dialog the key is drawn WITHOUT the seam too (Windows always); the
  * seam is set in every run here so the Linux runners, which may have neither zenity nor kdialog,
@@ -152,7 +159,14 @@ struct Result {
     std::map<std::string, Rect> rects;
     std::string out;     // what the process printed
     std::string config;  // the settings file as the run left it
+    std::string log;     // the diagnostic log (a run with diagnostics on)
     bool has(const std::string& item) const { return items.count(item) != 0; }
+    // How many lines of the log say `what`.
+    int logLines(const std::string& what) const {
+        int n = 0;
+        for (std::size_t at = log.find(what); at != std::string::npos; at = log.find(what, at + what.size())) { ++n; }
+        return n;
+    }
     const Rect* rect(const std::string& name) const {
         const auto it = rects.find(name);
         return it == rects.end() ? nullptr : &it->second;
@@ -200,6 +214,7 @@ struct RunOptions {
     std::string pick;         // FOXSDR_FILE_PICK: the path "chosen"
     bool pickEmpty = false;   // FOXSDR_FILE_PICK present and empty: the dialog cancelled
     bool keepConfig = false;  // keep the config the previous run with this tag wrote
+    bool diagnostics = false; // the run keeps its diagnostic log (read back into Result::log)
 };
 
 Result once(const std::string& tag, const RunOptions& o) {
@@ -216,7 +231,8 @@ Result once(const std::string& tag, const RunOptions& o) {
         writeFile(cfg,
                   "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"sourceKind\": "
                   "\"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", \"mainView\": "
-                  "\"receiver\", \"railBank\": 1, \"bandPlanOverlay\": false }\n");
+                  "\"receiver\", \"railBank\": 1, \"bandPlanOverlay\": false" +
+                      std::string(o.diagnostics ? ", \"diagnosticsEnabled\": true" : "") + " }\n");
     }
     const std::string scriptPath = (g_dir / (tag + ".script")).string();
     writeFile(scriptPath, o.script);
@@ -232,6 +248,7 @@ Result once(const std::string& tag, const RunOptions& o) {
     }
     r.out = run("\"" + exePath() + "\" --frames " + std::to_string(o.frames) + " 2>&1");
     r.config = readFile(cfg);
+    r.log = readFile(diag / "logs" / "foxsdr.log");
     const bool rendered = r.out.find("rendered " + std::to_string(o.frames) + " frames") != std::string::npos;
     const bool written = r.out.find("ui census written") != std::string::npos;
     if (!rendered || !written) {
@@ -355,6 +372,8 @@ int main(int argc, char** argv) {
 
     // --- LAYOUT: one key, for the PATH field and no other -------------------------------------------
     Rect browse;
+    Rect callsignBox;
+    Rect powerBox;
     {
         installPlugin();
         RunOptions o;
@@ -369,6 +388,11 @@ int main(int argc, char** argv) {
             CHECK(r.rect("settings:browse:callsign") == nullptr);
             CHECK(r.rect("settings:browse:power") == nullptr);
             CHECK(r.rect("settings:browse:report") == nullptr);
+            const Rect* cb = r.rect("settings:box:callsign");
+            const Rect* pb = r.rect("settings:box:power");
+            CHECK(cb != nullptr && pb != nullptr);
+            if (cb != nullptr) { callsignBox = *cb; }
+            if (pb != nullptr) { powerBox = *pb; }
             const Rect* p = r.rect("settings:browse:tool_path");
             CHECK(p != nullptr);
             if (p != nullptr) {
@@ -439,6 +463,69 @@ int main(int argc, char** argv) {
         if (n.ok) {
             CHECK(n.has("settings:browse:tool_path"));
             CHECK(n.config.find("\"tool_path\": \"" + kStoredPath + "\"") != std::string::npos);
+        }
+    }
+
+    // --- TYPED: a text box is committed when it is LEFT, once and whole (stub campaign B9) --------------------------------------
+    //
+    // The pointer arrives at the callsign box at frame 30 and presses it (down 32, up 34); "G4" is typed at 40 and "A" at 44 - two separate
+    // keystrokes, in two frames, with the box still being typed in - and Enter at 50 leaves it. A form that committed per keystroke would save
+    // "G4" and then "G4A": two lines in the log, two moves of the plugin's settings_seq, and the plugin reading a callsign that was never one.
+    if (callsignBox.x1 > callsignBox.x0 && powerBox.x1 > powerBox.x0) {
+        const std::string saved = "plugin settings: Settings Form Fixture - callsign saved";
+        installPlugin();
+        RunOptions o;
+        o.frames = 70;
+        o.diagnostics = true;
+        o.pickEmpty = true;
+        o.script = g_unfoldScript + click(30, callsignBox) + "40 text G4\n44 text A\n50 key enter\n";
+        const Result r = once("typed", o);
+        CHECK(r.ok);
+        if (r.ok) {
+            const int lines = r.logLines(saved);
+            std::printf("    typed: the log says the callsign was saved %d time(s); config %s \"G4A\"\n", lines,
+                        r.config.find("\"callsign\": \"G4A\"") != std::string::npos ? "holds" : "does NOT hold");
+            CHECK(lines == 1);                                                      // ONE edit, not one a keystroke
+            CHECK(r.logLines(saved + " (3 bytes)") == 1);                           // the whole of it
+            CHECK(r.logLines(saved + " (2 bytes)") == 0);                           // never "G4"
+            CHECK(r.config.find("\"callsign\": \"G4A\"") != std::string::npos);    // and it is what the plugin's store holds
+        }
+
+        // CONTROL: the same run stopped before Enter - typed, not left - saves nothing at all.
+        RunOptions before = o;
+        before.frames = 47;
+        const Result b = once("typed-control", before);
+        CHECK(b.ok);
+        if (b.ok) {
+            CHECK(b.logLines("plugin settings:") == 0);
+            CHECK(b.config.find("\"callsign\"") == std::string::npos);
+        }
+
+        // REFUSED: "12x" into the number is not one - answered, nothing saved, the config does not hold it.
+        RunOptions bad = o;
+        bad.script = g_unfoldScript + click(30, powerBox) + "40 text 12x\n50 key enter\n";
+        const Result x = once("typed-refused", bad);
+        CHECK(x.ok);
+        if (x.ok) {
+            CHECK(x.logLines("plugin settings:") == 0);
+            CHECK(x.config.find("12x") == std::string::npos);
+            CHECK(x.has("settings:message:power:2"));  // the verdict - NotANumber - came back and the box says so
+        }
+        // ...and an accepted edit says nothing of the kind.
+        CHECK(!r.has("settings:message:callsign:0") && r.itemsWithPrefix("settings:message:") == 0);
+
+        // FLUSHED: "G4A" typed, and then the "Plugin settings" line itself pressed (frame 50): the node sits ABOVE the box, so the same press folds it
+        // and the box is never drawn again - ImGui's own deactivation cannot fire for it. The frame's flush commits it: one saved edit, 3 bytes.
+        RunOptions flushed = o;
+        flushed.script = g_unfoldScript + click(30, callsignBox) + "40 text G4A\n" + click(50, node);
+        const Result f = once("typed-flushed", flushed);
+        CHECK(f.ok);
+        if (f.ok) {
+            std::printf("    flushed: the log says the callsign was saved %d time(s) when its fold shut\n", f.logLines(saved));
+            CHECK(f.logLines(saved) == 1);
+            CHECK(f.logLines(saved + " (3 bytes)") == 1);
+            CHECK(f.config.find("\"callsign\": \"G4A\"") != std::string::npos);
+            CHECK(f.has("decoders:settings:folded"));
         }
     }
 

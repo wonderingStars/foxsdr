@@ -63,10 +63,12 @@
 #include "core/plugin_settings_ui.hpp"
 #include "core/plugin_ui.hpp"
 #include "gui/fonts.hpp"
+#include "foxsdr_api.h"
 #include "gui/plugin_settings_form.hpp"
 #include "gui/ui_census.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "receiver_facts_helper.hpp"
 #include "test_check.hpp"
 
 using cascade::core::LoadedPlugin;
@@ -74,7 +76,10 @@ using cascade::core::PluginApiCore;
 using cascade::core::PluginHost;
 using cascade::core::PluginRejection;
 using cascade::core::PluginUi;
-using cascade::core::ReceiverFacts;
+// (The plugin API reads the ONE receiver snapshot the application publishes since engine stage 2: a core test publishes a state through
+// tests/receiver_facts_helper.hpp, the way test_plugin_api does - still written against the same plain facts, which is what the three
+// `publish` calls below say. Stub campaign B9; no assertion is changed by it.)
+using testfacts::ReceiverFacts;
 using cascade::core::SettingEditResult;
 using cascade::core::SettingField;
 
@@ -466,6 +471,25 @@ const SettingField* fieldByKey(const std::vector<SettingField>& f, const char* k
 // [W] headless ImGui
 // ---------------------------------------------------------------------------
 
+// THE ADAPTER OVER THE STORE (stub campaign B9; the one change this file takes). The form no longer takes a core::PluginApiCore: it draws against a
+// gui::SettingsEditSink, because the interface fence denies core/plugin_api.hpp to everything under src/gui (cmake/interface_fence.cmake) - the engine owns
+// the store, and the window reads fact.plugin.setting.<id> and sends FOXAPP_OP_PLUGIN_SETTING_EDIT. This test is not fenced and wants the real store and
+// the plugin's real settings_seq, so it gives the form the sink master's window was: reads through settingFieldValue, commits through commitSettingEdit
+// (prepareSettingEdit, then settingsUiSet - the one path that advances settings_seq), and answers AT ONCE. Every assertion below is master's, unedited.
+// What the window's sink adds - an answer that comes later - is [S] further down, against a sink of its own.
+struct StoreSink final : cascade::gui::SettingsEditSink {
+    PluginApiCore& api;
+    explicit StoreSink(PluginApiCore& a) : api(a) {}
+    std::string value(const std::string& owner, const SettingField& f) override {
+        return cascade::core::settingFieldValue(api, owner, f);
+    }
+    cascade::gui::SettingsCommit commit(const std::string& owner, const SettingField& f, const std::string& typed) override {
+        cascade::gui::SettingsCommit c;
+        c.verdict = cascade::core::commitSettingEdit(api, owner, f, typed);
+        return c;
+    }
+};
+
 struct Form {
     PluginApiCore& api;
     std::string plugin;
@@ -474,8 +498,12 @@ struct Form {
     int focus = -1;        // SetKeyboardFocusHere(focus) on the next frame
     ImVec2 lastMin{}, lastMax{};
     int stored = 0;
+    // [S]: a sink of the test's own instead of the adapter over `api`, and what it does before each frame.
+    cascade::gui::SettingsEditSink* sinkOverride = nullptr;
+    std::function<void()> beforeFrame;
 
     void frame() {
+        if (beforeFrame) { beforeFrame(); }
         // The production per-frame reconciliation (app_window.cpp's drawUi):
         // clear touched marks before drawing, exactly as every real frame
         // does - so a test that never calls flushUntouchedSettingsEdits sees
@@ -489,7 +517,8 @@ struct Form {
             ImGui::SetKeyboardFocusHere(focus);
             focus = -1;
         }
-        stored += cascade::gui::drawPluginSettingsForm(api, plugin, fields, state, "test");
+        StoreSink own(api);
+        stored += cascade::gui::drawPluginSettingsForm(sinkOverride != nullptr ? *sinkOverride : own, plugin, fields, state, "test");
         lastMin = ImGui::GetItemRectMin();
         lastMax = ImGui::GetItemRectMax();
         ImGui::End();
@@ -644,7 +673,8 @@ void testFlushOnDisappear(PluginApiCore& api, const std::string& plugin,
     // it does every frame in the real application (drawUi's own begin/end
     // calls), and it is what must catch this.
     cascade::gui::beginSettingsFormFrame(f.state);
-    const int flushed = cascade::gui::flushUntouchedSettingsEdits(api, f.state);
+    StoreSink sink(api);
+    const int flushed = cascade::gui::flushUntouchedSettingsEdits(sink, f.state);
     CHECK(flushed == 1);
     std::string v;
     CHECK(api.settingsUiGet(plugin, "callsign", v) == CASCADE_API_OK && v == "G7XYZ");
@@ -652,7 +682,7 @@ void testFlushOnDisappear(PluginApiCore& api, const std::string& plugin,
 
     // A second flush of the same, now-clean state does nothing more - the
     // field is no longer `editing`, so there is nothing left to lose.
-    CHECK(cascade::gui::flushUntouchedSettingsEdits(api, f.state) == 0);
+    CHECK(cascade::gui::flushUntouchedSettingsEdits(sink, f.state) == 0);
     CHECK(api.settingsUiSeq(plugin) == seq0 + 1u);
 
     // A REFUSED flush still clears `editing` without storing anything - it
@@ -670,7 +700,7 @@ void testFlushOnDisappear(PluginApiCore& api, const std::string& plugin,
     f.selectAll();
     f.type("abc");
     cascade::gui::beginSettingsFormFrame(f.state);
-    CHECK(cascade::gui::flushUntouchedSettingsEdits(api, f.state) == 0);  // refused, not accepted
+    CHECK(cascade::gui::flushUntouchedSettingsEdits(sink, f.state) == 0);  // refused, not accepted
     std::string pv;
     api.settingsUiGet(plugin, "power", pv);
     CHECK(pv == before);  // unchanged either way
@@ -869,6 +899,212 @@ void testBrowseKey(PluginApiCore& api, const std::string& plugin,
     ImGui::DestroyContext();
 }
 
+// ---------------------------------------------------------------------------
+// [S] an edit that is ANSWERED LATER (stub campaign B9): the window's sink
+// ---------------------------------------------------------------------------
+
+// The window's sink in miniature: an edit is SENT (a command on a session) and the engine's verdict comes back a frame or more later; the store the box
+// reads is the engine's, and reaches it after the answer. Nothing here is the application's code - it is the form's contract with ANY sink whose commit
+// crosses a round trip, held with expected answers: the commit-on-leave rule, a refused edit snapping back after the answer and not before, an
+// accepted one never flashing the old text, a surface that stops drawing a mid-edit box flushing it through the same road.
+struct AsyncSink final : cascade::gui::SettingsEditSink {
+    struct Waiting {
+        std::uint64_t ticket;
+        SettingField f;
+        std::string typed;
+    };
+    struct Late {
+        int frames;
+        std::string key, value;
+    };
+    std::map<std::string, std::string> store;  // the engine's store, by field key
+    std::vector<std::string> sent;             // every edit handed over, "<key>=<typed>", in order: what the plugin could be told of
+    std::vector<Waiting> waiting;              // sent, not yet judged
+    std::uint64_t next = 1;
+    int lag = 0;                               // frames between an accepted answer and the store showing it
+    std::vector<Late> late;
+
+    std::string value(const std::string&, const SettingField& f) override {
+        const auto it = store.find(f.key);
+        return it == store.end() ? f.defaultValue : it->second;
+    }
+    cascade::gui::SettingsCommit commit(const std::string&, const SettingField& f, const std::string& typed) override {
+        sent.push_back(f.key + "=" + typed);
+        waiting.push_back({next, f, typed});
+        cascade::gui::SettingsCommit c;
+        c.ticket = next++;
+        return c;
+    }
+    // The engine judging what waits, in order (prepareSettingEdit is the same judge); an accepted edit reaches the store `lag` frames later.
+    std::vector<std::pair<std::uint64_t, SettingEditResult>> answerAll() {
+        std::vector<std::pair<std::uint64_t, SettingEditResult>> out;
+        for (const Waiting& w : waiting) {
+            std::string kept;
+            const SettingEditResult r = cascade::core::prepareSettingEdit(w.f, w.typed, kept);
+            if (r == SettingEditResult::Accepted) { late.push_back({lag, w.f.key, kept}); }
+            out.emplace_back(w.ticket, r);
+        }
+        waiting.clear();
+        tick(true);  // an answer with no lag lands now
+        return out;
+    }
+    void tick(bool immediate = false) {
+        for (std::size_t i = 0; i < late.size();) {
+            if (late[i].frames <= 0) {
+                store[late[i].key] = late[i].value;
+                late.erase(late.begin() + static_cast<std::ptrdiff_t>(i));
+            } else {
+                if (!immediate) { --late[i].frames; }
+                ++i;
+            }
+        }
+    }
+};
+
+// A sink whose every edit is refused on the spot (the command could not be handed over: no session, a full queue, a refusal at the door).
+struct RefusingSink final : cascade::gui::SettingsEditSink {
+    std::string value(const std::string&, const SettingField& fld) override { return fld.defaultValue; }
+    cascade::gui::SettingsCommit commit(const std::string&, const SettingField&, const std::string&) override {
+        cascade::gui::SettingsCommit c;
+        c.verdict = SettingEditResult::StoreError;
+        return c;
+    }
+};
+
+void testAsyncSink(PluginApiCore& api, const std::string& plugin, const std::vector<SettingField>& fields) {
+    std::printf("[S] an edit answered later: commit-on-leave across a round trip\n");
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 700.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    cascade::gui::fonts::load();
+
+    // The verdict an answer carries, as the window reads it (settingVerdictFromAnswer): OK is accepted; a refusal carries the SettingEditResult in
+    // applied[0]; a refusal that carries none (the grant, the door) is the store refusing; NOT_FOUND alone is a field the host cannot store.
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_OK, 0.0) == SettingEditResult::Accepted);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_NO_CHANGE, 0.0) == SettingEditResult::Accepted);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_BAD_ARGUMENT, 2.0) == SettingEditResult::NotANumber);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_OUT_OF_RANGE, 1.0) == SettingEditResult::TooLong);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_BAD_ARGUMENT, 3.0) == SettingEditResult::BadText);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_LIMIT, 4.0) == SettingEditResult::StoreFull);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_FAILED, 5.0) == SettingEditResult::StoreError);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_NOT_FOUND, 6.0) == SettingEditResult::Refused);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_DENIED, 0.0) == SettingEditResult::StoreError);
+    CHECK(cascade::gui::settingVerdictFromAnswer(FOXAPI_NOT_FOUND, 0.0) == SettingEditResult::Refused);
+
+    AsyncSink eng;
+    Form f{api, plugin, fields};
+    f.sinkOverride = &eng;
+    f.beforeFrame = [&] { eng.tick(); };
+    f.frames(3);
+    CHECK(f.box("power") == "5");  // the default, from the sink
+
+    // TYPING IS NEVER SENT. "G4", then "A": the plugin must never be told "G4".
+    f.focus = 0;
+    f.frames(2);
+    f.selectAll();
+    f.type("G4");
+    f.type("A");
+    CHECK(eng.sent.empty());
+    CHECK(f.box("callsign") == "G4A");
+    // LEAVING THE BOX sends it, once and whole.
+    f.enter();
+    CHECK(eng.sent.size() == 1u);
+    CHECK(!eng.sent.empty() && eng.sent[0] == "callsign=G4A");
+    // THE ANSWER IS ON ITS WAY: the engine's store still holds the old (empty) value, and the box keeps what was typed instead of snapping back to it -
+    // and says nothing is wrong, for nothing is yet.
+    f.frames(6);
+    CHECK(eng.value("", fields[0]).empty());
+    CHECK(f.box("callsign") == "G4A");
+    CHECK(f.last("callsign") == SettingEditResult::Accepted);
+    CHECK(eng.sent.size() == 1u);  // ...and not sent again while it waits
+
+    // ACCEPTED, with the store a few frames behind the answer: the box never shows the old text in between.
+    eng.lag = 4;
+    {
+        const auto answers = eng.answerAll();
+        CHECK(answers.size() == 1u);
+        for (const auto& a : answers) { CHECK(f.state.deliver(a.first, a.second)); }
+    }
+    for (int i = 0; i < 4; ++i) {
+        f.frame();
+        CHECK(f.box("callsign") == "G4A");
+    }
+    f.frames(2);
+    CHECK(eng.value("", fields[0]) == "G4A");
+    CHECK(f.box("callsign") == "G4A");
+    CHECK(f.last("callsign") == SettingEditResult::Accepted);
+    CHECK(!f.state.fields[cascade::gui::settingFieldStateKey("test", plugin, "callsign")].pending);
+    CHECK(f.state.fields[cascade::gui::settingFieldStateKey("test", plugin, "callsign")].hold == 0);
+    // A late answer that matches nothing (an edit since replaced, a form since gone) is nothing to do.
+    CHECK(!f.state.deliver(9999u, SettingEditResult::Accepted));
+    CHECK(!f.state.deliver(0u, SettingEditResult::Accepted));
+
+    // A REFUSED EDIT SNAPS BACK AFTER THE ANSWER AND NOT BEFORE. "12x" into the number (stored: the default "5"): while it waits the box shows "12x".
+    eng.lag = 0;
+    f.focus = 1;
+    f.frames(2);
+    f.selectAll();
+    f.type("12x");
+    f.enter();
+    CHECK(eng.sent.size() == 2u);
+    CHECK(eng.sent.size() == 2u && eng.sent[1] == "power=12x");
+    f.frames(4);
+    CHECK(f.box("power") == "12x");
+    CHECK(f.last("power") == SettingEditResult::Accepted);  // no verdict yet, no sentence yet
+    {
+        const auto answers = eng.answerAll();
+        CHECK(answers.size() == 1u);
+        CHECK(!answers.empty() && answers[0].second == SettingEditResult::NotANumber);
+        for (const auto& a : answers) { CHECK(f.state.deliver(a.first, a.second)); }
+    }
+    f.frames(1);
+    CHECK(f.last("power") == SettingEditResult::NotANumber);
+    CHECK(f.box("power") == "5");  // back on what the store holds
+    CHECK(eng.value("", fields[1]) == "5");
+
+    // A SURFACE THAT STOPS DRAWING A MID-EDIT BOX FLUSHES IT THROUGH THE SAME ROAD: sent once, answered later, and a second flush has nothing to send.
+    f.focus = 0;
+    f.frames(2);
+    f.selectAll();
+    f.type("G7XYZ");
+    CHECK(eng.sent.size() == 2u);  // nothing yet
+    cascade::gui::beginSettingsFormFrame(f.state);
+    CHECK(cascade::gui::flushUntouchedSettingsEdits(eng, f.state) == 1);  // sent: not known accepted, but not lost
+    CHECK(eng.sent.size() == 3u);
+    CHECK(eng.sent.size() == 3u && eng.sent[2] == "callsign=G7XYZ");
+    CHECK(cascade::gui::flushUntouchedSettingsEdits(eng, f.state) == 0);
+    CHECK(eng.sent.size() == 3u);
+    {
+        const auto answers = eng.answerAll();
+        CHECK(answers.size() == 1u);
+        CHECK(!answers.empty() && answers[0].second == SettingEditResult::Accepted);
+        for (const auto& a : answers) { CHECK(f.state.deliver(a.first, a.second)); }
+    }
+    CHECK(eng.value("", fields[0]) == "G7XYZ");
+
+    // A VERDICT WITH NO TICKET (the command could not be handed over) is final at once: the sentence shows, nothing waits, the box goes back.
+    {
+        RefusingSink refusing;
+        Form g{api, plugin, fields};
+        g.sinkOverride = &refusing;
+        g.frames(3);
+        g.focus = 0;
+        g.frames(2);
+        g.selectAll();
+        g.type("M0AAA");
+        g.enter();
+        CHECK(g.last("callsign") == SettingEditResult::StoreError);
+        CHECK(!g.state.fields[cascade::gui::settingFieldStateKey("test", plugin, "callsign")].pending);
+        g.frames(2);
+        CHECK(g.box("callsign").empty());  // back on what the sink holds: its default
+    }
+
+    ImGui::DestroyContext();
+}
+
 void testRealModule(const char* dir) {
     std::printf("[R] the fixture module, through the real loader\n");
     PluginHost host;
@@ -965,7 +1201,7 @@ void testRealModule(const char* dir) {
         rf.rxPositionSet = true;
         rf.rxLatDeg = 51.5074;
         rf.rxLonDeg = -0.1278;
-        api.publish(rf);
+        testfacts::publish(api, rf);
         CascadeReceiverState rs{};
         rs.structSize = static_cast<std::uint32_t>(sizeof(rs));
         CHECK(api.getState(c, &rs) == CASCADE_API_OK);
@@ -991,6 +1227,7 @@ void testRealModule(const char* dir) {
         testWidget(api, name, fields);
         testFlushOnDisappear(api, name, fields);
         testBrowseKey(api, name, fields);
+        testAsyncSink(api, name, fields);
 
         // [Minor] StoreFull is told apart from a generic StoreError: fill
         // this plugin's store to its key limit (CASCADE_MAX_SETTINGS_PER_
@@ -1114,7 +1351,7 @@ void testOldPlugin() {
     f.rxPositionSet = true;
     f.rxLatDeg = 51.5074;
     f.rxLonDeg = -0.1278;
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
 
     // The old struct inside a larger buffer painted with a sentinel: a host
     // that wrote its own sizeof would overwrite the bytes after it.
@@ -1214,7 +1451,7 @@ void testOldPlugin() {
     const std::uint64_t seqBefore = ls.seq;
     f.rxLatDeg = 53.4808;
     f.rxLonDeg = -2.2426;
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     CascadeReceiverState moved{};
     moved.structSize = static_cast<std::uint32_t>(sizeof(moved));
     CHECK(g_locatorHost->get_state(g_locatorHost->ctx, &moved) == CASCADE_API_OK);
@@ -1227,7 +1464,7 @@ void testOldPlugin() {
     // for the same M2 reason: a position being CLEARED is a change too.
     const std::uint64_t seqBeforeClear = moved.seq;
     f.rxPositionSet = false;
-    ui.api().publish(f);
+    testfacts::publish(ui.api(), f);
     CascadeReceiverState u{};
     u.structSize = static_cast<std::uint32_t>(sizeof(u));
     CHECK(g_locatorHost->get_state(g_locatorHost->ctx, &u) == CASCADE_API_OK);

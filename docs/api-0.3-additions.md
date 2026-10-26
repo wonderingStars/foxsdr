@@ -161,6 +161,7 @@ says when to read again.
 | `SERVERS` (49) | **LOCAL sessions only (`DENIED` to a REMOTE one).** The web server and the CAT listener the engine runs for `FOXAPI_OP_SERVER_CONFIG` (8.16.5): always two entries, web first. `id` 1 / 2; `name`: `web` / `cat`; `detail`: the sentence the last start was refused with, `""` when none; `value[0]`: the port (the one listened on, else the configured one); `value[1]`: browser sessions / CAT clients, `value[2]`: browsers listening to the audio, `value[3]`: commands received - all three **read at the call**; `ACTIVE`: listening; `FAULT`: enabled and refused to start. The configuration is `fact.web.*` and `fact.cat.*` |
 | `STORE_PICTURES` (50) | the plugin store's pictures, every one it was asked for (`FOXAPP_OP_STORE_PICTURES_WANT`) and still knows, in sha256 order (9.4). `id`: the first 64 bits of the sha256; `name`: the sha256 (64 hex digits - the cache key; the entry names its pictures in `fact.store.<key>.pictures`); `detail`: a Ready one's cached file path (**LOCAL sessions only**; whole in `fact.store.picture.<sha256>.path`), a Failed one's reason cut at 159 bytes (whole in `.reason`); `value[0]`: 1 pending (queued or in flight), 2 ready, 3 failed; `ACTIVE`: the one in flight. Moves `listSeq` with every change of a picture's state |
 | `AIRBAND_CHANNELS` (51) | the channels the Airband monitor plays (9.6): one entry per channel of the plan - not only the block on the air - in frequency order, and none while it is not listening. **Read at the call and never part of the lists' block: it never moves `listSeq`, so read it each time you draw** (`PATCH_LIVE`'s rule: a channel's level and heard time change every pass). `id`: the channel's number in the plan, from 1; `name`: the row that names it (the first ticked row on that frequency); `value[0]`: the frequency, Hz; `value[1]`: the channel width, Hz; `value[2]`: the level its squelch judges, dB (-200 until it has reported one); `value[3]`: the seconds heard since the monitor last wrote them to the list (add them to `BOOKMARKS`' `value[3]` for the figure to show); `ACTIVE`: its squelch is open now; `ON_AIR`: it is in the block on the air (none is, before the first block has been tuned - with several blocks that waits for the scan's first tick) |
+| `PLUGIN_SETTINGS` (52) | **LOCAL sessions only (`DENIED` to a REMOTE one).** The fields of the settings forms the loaded modules declare (`CASCADE_CAP_SETTINGS_UI`, 9.7), one entry per field the host can store, a module's fields together and in its own order. `id`: the entry's number in this list, from 1 (what `fact.plugin.setting.<id>` is read by; it moves when the modules do); `name`: the field's label (the plugin's own text); `detail`: the module file name (`PLUGINS`' detail); `value[0]`: the kind (0 TEXT, 1 NUMBER, 2 BOOL, 3 PATH), `value[1]`: the longest value in UTF-8 bytes. The field's key and placeholder are the fact `fact.plugin.setting.<id>.spec`, its value the fact `fact.plugin.setting.<id>`. The list moves `listSeq` when a field's value changes, whoever changed it |
 
 ### 5.2 0.2 lists now served
 
@@ -2084,6 +2085,35 @@ block and no more. The ticks are `BOOKMARKS`' `TICKED`, hashed with the list's v
 
 Held by tests/test_engine_api_airband.cpp (each group written red first, against an engine whose ops answered `UNSUPPORTED`, then against mutants), test_apply_command (the four ops'
 cases) and the engine's own `fox_engine_api.hpp` block `ApiAirbandBlock`.
+
+### 9.7 A plugin's settings form (stub campaign B9; docs/engine-stage4.md 6.22)
+
+A plugin that declares `CASCADE_CAP_SETTINGS_UI` (0.99.43) gets a form drawn for it by the host: a text box, a number, a checkbox, and (0.99.74) a path with a BROWSE key. The rules - what a
+field shows, what an edit may store - are `core/plugin_settings_ui.hpp`'s and pure; the store is the plugin API's, whose `settingsUiSet` is the ONE path that advances the plugin's
+`settings_seq`. In master the window held the form AND called that path. The window may not include `plugin_api.hpp` (the interface fence), and a headless engine has no window, so the
+form is the table's: one list, two facts per field and one op. The engine judges and stores an edit with the two core calls master's window made (`commitSettingEdit`: `prepareSettingEdit`,
+then `settingsUiSet`) - `src/engine/engine_plugin_settings.cpp`.
+
+* **`PLUGIN_SETTINGS` (list 52, 5.1)**, LOCAL sessions only: what each loaded module declares, from its static table (memory, never a call into its code). Built with the lists' block, whose
+  fingerprint hashes the settings store's generation, so a value changed by the form, by the plugin's own `settings_set` or by a config load moves `listSeq`.
+* **`fact.plugin.setting.<id>`** (LOCAL): the whole value the field shows - the stored text, else the plugin's default (the rule the plugin's own `settings_get` has) - and
+  **`fact.plugin.setting.<id>.spec`** (LOCAL): `<key>`, the unit separator (byte 0x1F), `<placeholder>`. `<id>` is the list entry's `id`.
+* **`FOXAPP_OP_PLUGIN_SETTING_EDIT` (0x870C, grant SETTINGS, LOCAL sessions only, not on the web profile)**: `text` (or long text): `<module file>` 0x1F `<key>` 0x1F `<value>` - the file name
+  `PLUGINS` lists, the key from the spec fact, and what the person typed or chose, exactly as typed (a value may be empty: a cleared box is a value, not a deletion; everything after the
+  second separator is the value). The command is the answer to *leaving* a box (TEXT, NUMBER, PATH) or clicking a checkbox - never to a keystroke. The result: `OK` for an accepted edit
+  (`NO_CHANGE` is not used: an edit that leaves the stored value as it was is accepted, and moves nothing); otherwise a refusal whose `applied[0]` is the verdict
+  (`core::SettingEditResult`: 1 TooLong, 2 NotANumber, 3 BadText, 4 StoreFull, 5 StoreError, 6 Refused) and whose status is `OUT_OF_RANGE`, `BAD_ARGUMENT`, `BAD_ARGUMENT`, `LIMIT`, `FAILED`,
+  `NOT_FOUND` in that order, with the English sentence as the message. `applied[0]` is 0 for an accepted edit. `NOT_FOUND` also answers a module that is not loaded or declares no such
+  key, and `BAD_ARGUMENT` an edit that names no module and field. **The plugin sees `settings_seq` move once for each accepted edit that changes the value, and never for a refused one.** Each such
+  edit also writes one line to the diagnostic log - `plugin settings: <plugin name> - <key> saved (<n> bytes)` - naming the field and the length and never the text (a callsign, a path on this machine).
+* **The window's half** (`app_window_plugin_settings.cpp`): the form's state - the text being typed, the edits sent and not yet answered - is the window's (no feed method: the door did not
+  move). A box that is left sends its edit and keeps the typed text until the ticketed answer comes back; a refusal's verdict makes it snap back to the stored value from the next frame, an
+  acceptance keeps the box on the text it was accepted as until the table reads it back (a bounded number of frames). A surface that stops drawing a box that was being typed in flushes
+  it through the same road, once.
+
+Held by tests/test_engine_api_settings.cpp (the list and the facts, LOCAL-only, accepted and refused edits, `settings_seq`, against the real fixture module), test_engine_api_03 (its "every
+list is served" loops run to list 52), test_apply_command (the op's cases), tests/test_plugin_settings_ui.cpp (the form's contract with a sink whose answer comes later),
+tests/test_plugin_settings_window.cpp (the real window against the real engine, frame by frame), and the real-binary tests test_decoder_settings_fold_app and test_plugin_pathpick_app.
 
 ## 10. What stays a GAP after 0.3
 

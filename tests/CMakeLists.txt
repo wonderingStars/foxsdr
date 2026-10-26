@@ -390,9 +390,17 @@ foreach(src ${CASCADE_TESTS})
         # heard without a position are listed after the placed ones and never drawn (0.99.75).
         add_dependencies(${name} track_probe_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:track_probe_fixture>")
+    elseif(name STREQUAL "test_plugin_settings_window")
+        # The REAL window and the REAL engine with the settings fixture fitted (stub campaign B9): the form's wiring frame by frame in drawUi's order.
+        # (the _stepped variant the pass seam adds is handed the same fixture module)
+        add_dependencies(${name} settings_ui_fixture)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:settings_ui_fixture>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_programme_audio_app")
         add_dependencies(${name} programme_audio_fixture)
-        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:programme_audio_fixture>")
+        # (the _stepped variant the pass seam adds - the test is the engine's since stub batch B9 - is handed the same fixture module)
+        set(CASCADE_TEST_ARGS_${name} "$<TARGET_FILE:programme_audio_fixture>")
+        add_test(NAME ${name} COMMAND ${name} ${CASCADE_TEST_ARGS_${name}})
     elseif(name STREQUAL "test_row_keys_app")
         # Runs the real cascade.exe (built first) with the row-keys fixture fitted and pinned to run,
         # opens its panel from the DECODE bank's row, presses its rows with the input script and reads
@@ -634,6 +642,13 @@ foreach(_t IN ITEMS test_engine_api_03 test_engine_publish_alloc test_decoders_m
             FIXTURE_GROUP8_PLUGIN="$<TARGET_FILE:fixture_group8_plugin>")
     endif()
 endforeach()
+# THE SETTINGS FIXTURE THROUGH THE TABLE (stub campaign B9, API 0.3 9.7): test_engine_api_settings fits tests/fixtures/settings_ui_plugin.cpp into a plugin
+# directory of its own (Engine::testHooks_.pluginDir) and holds PLUGIN_SETTINGS, its facts and FOXAPP_OP_PLUGIN_SETTING_EDIT against the real engine.
+if(TARGET test_engine_api_settings)
+    add_dependencies(test_engine_api_settings settings_ui_fixture)
+    target_compile_definitions(test_engine_api_settings PRIVATE
+        FIXTURE_SETTINGS_UI_PLUGIN="$<TARGET_FILE:settings_ui_fixture>")
+endif()
 # THE GROUP-9 FIXTURE (window port group 9, API 0.3 section 8.8): a third real module that is NOT a
 # decoder - an in-chain audio processor with two command keys and a descriptor of its own (a version,
 # an author, a licence) - for the tests of the fitted-modules window's reads (test_engine_api_03 group

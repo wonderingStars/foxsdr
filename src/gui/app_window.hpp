@@ -69,6 +69,7 @@ struct GLFWwindow;
 #include "gui/section_reads.hpp"
 #include "gui/tuning_reads.hpp"
 #include "gui/decoder_reads.hpp"
+#include "gui/plugin_settings_form.hpp"
 #include "gui/scope_gain.hpp"
 #include "gui/tune_local.hpp"
 #include "engine/running_view.hpp"
@@ -3419,6 +3420,32 @@ private:
     // lives behind imgui.h.
     std::unique_ptr<FittedListCache> fittedCache_;
     FittedListCache& fittedLists();
+    // A PLUGIN'S SETTINGS FORM (CASCADE_CAP_SETTINGS_UI, 0.99.43; stub campaign B9, app_window_plugin_settings.cpp). The form is the WINDOW's (its boxes, the
+    // text being typed, the edits sent and not yet answered); what each module declares is the table's list PLUGIN_SETTINGS, read when listSeq moves
+    // and only by a surface that draws one (settingsLists); what each field shows is fact.plugin.setting.<id>; an edit is FOXAPP_OP_PLUGIN_SETTING_EDIT
+    // and its answer (settingsOnAnswer, from the once-a-frame drain) is what a refused box snaps back on. The window adds no door: a list, a fact and an op.
+    cascade::gui::PluginSettingsFormState pluginSettingsForms_;
+    cascade::gui::PluginSettingsLists pluginSettingsLists_;
+    const cascade::gui::PluginSettingsLists& settingsLists();
+    bool pluginHasSettings(const std::string& file);
+    void drawPluginSettingsFields(const std::string& file, const char* scope);   // one module's fields, where the caller stands
+    void drawPluginSettingsSection(const std::string& displayName);              // a plugin's own window: a folded "Plugin settings" line
+    void drawPluginSettingsRailNode(const std::string& file);                    // the DECODE bank's folded line
+    void drawPluginSettingsPatchNode(const std::string& nodePlugin);             // the patch inspector's form
+    void settingsFormsBeginFrame();                                              // the frame's first word...
+    void settingsFormsFlush();                                                   // ...and its last: a box whose surface vanished is committed
+    void settingsOnAnswer(const FoxCommandResult& r);
+    friend class PluginSettingsSink;
+    // THE ROWS OF A PLUGIN'S PANEL THAT ARE KEYS (0.99.77): the commands the modules registered (PLUGIN_COMMANDS), by module file, read when listSeq
+    // moves and only when a table has a row that asks to be a key; the rows drawn, a press sent as FOXAPI_OP_PLUGIN_COMMAND.
+    struct PluginCommandRegistry {
+        std::uint64_t listSeq = ~std::uint64_t{0};
+        std::map<std::string, std::vector<cascade::core::HostCommand>> byFile;
+    };
+    PluginCommandRegistry pluginCommandRegistry_;
+    const std::vector<cascade::core::HostCommand>& registeredCommandsOf(const std::string& file);
+    void drawPluginRows(const std::string& plugin, const char* censusSuffix, const std::vector<std::string>& headings,
+                        const std::vector<CascadePanelRow>& rows);
     // The listSeq at which the open module page's pictures were last asked for (the store window's storePicturesWantSeq_ for this window): a page
     // asks on the edge of opening, and later at most once for a move of listSeq and only for a picture the table lists nobody asked for.
     std::uint64_t fittedPicturesWantSeq_ = 0;

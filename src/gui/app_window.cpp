@@ -1577,7 +1577,10 @@ int AppWindow::run(int frames) {
     }
     // A PATH settings field and the "Import a frequency list" window draw their BROWSE key only where there is a file dialog to open (the
     // system's on Windows; zenity or kdialog on Linux) - or the test seam above to stand in for one.
-    if (filePickSeam_.has_value() || cascade::core::filePickAvailable()) { filePickOffered_ = true; }
+    if (filePickSeam_.has_value() || cascade::core::filePickAvailable()) {
+        filePickOffered_ = true;
+        pluginSettingsForms_.pick = [this](const cascade::core::FilePickRequest& rq, std::string& path) { return pickFile(rq, path); };
+    }
     // The frame log (gui/frame_log.hpp): allocated here, before the first
     // frame, and written once after the loop.
     frameLog_ = cascade::gui::FrameLog::fromEnvironment();
@@ -3390,6 +3393,9 @@ void AppWindow::drawUi() {
     // WHICH PART OF THE FRAME THIS IS (0.99.64, core/frame_timing.hpp): one guard walks the function through its phases with to(), and
     // gives the caller's scope back on every way out.
     cascade::core::FrameScopeGuard frameScope(cascade::core::FrameScope::PreDraw);
+    // Clears last frame's touched marks on every settings-form field, so the flush at the end of this frame can tell a field some surface reaches this
+    // frame from one nobody reaches any more (stub campaign B9). Before anything is drawn.
+    settingsFormsBeginFrame();
     // "Enlarge every reading", handed to the drawing sites for this frame.
     cascade::gui::theme::setReadingsScale(readingsScale_);
     // (THE SNAPSHOT'S RETRY and THE COMMANDS THE WIDGETS SUBMITTED LAST FRAME are the pass's: its front part, run below, does both before
@@ -3794,6 +3800,10 @@ void AppWindow::drawUi() {
     // top-level thing belongs at the top level, not nested in the borderless
     // root window's ID stack.
     drawDiagnosticsOffer();
+
+    // THE SAFE POINT for a settings-form edit whose surface disappeared mid-edit (a window closing, a fold shutting, the patch page selecting another
+    // node): every place a form could have been drawn this frame has now had its turn. The edit goes as a command, like a box left the ordinary way.
+    settingsFormsFlush();
 
     // ONE basemap eviction pass, AFTER every surface that wanted tiles has
     // asked for them. Two things ask now - the map pages, which draw inside
@@ -9892,6 +9902,9 @@ void AppWindow::drawDecodersSection() {
                                   "silences nothing. The volume setting is not touched."));
             }
         }
+        // THE PLUGIN'S OWN FORM (CASCADE_CAP_SETTINGS_UI), under its keys, FOLDED BY DEFAULT (0.99.74; stub campaign B9): one "Plugin settings" line, drawn
+        // only for a plugin the table lists fields for. Safe inside this loop: an edit sends a command and changes nothing here.
+        drawPluginSettingsRailNode(p.file);
         ImGui::PopID();
     }
     // COMMANDS, applied at the top of the next frame: each of these rebuilds
@@ -13148,6 +13161,8 @@ void AppWindow::drawPatchView() {
                                 "in the Decoder output window."));
                             ImGui::PopStyleColor();
                         }
+                        // THE PLUGIN'S SETTINGS FORM, on the node that runs it (0.99.43; stub campaign B9).
+                        drawPluginSettingsPatchNode(sel->plugin);
                         break;
                     }
                     default:
@@ -14089,72 +14104,8 @@ void AppWindow::placeSavedFeatureWindow(int slot, int& x, int& y, int& w, int& h
 
 namespace {
 
-// The rows a plugin publishes, as a table: a PANEL's whole window and an
-// INSTRUMENT's memory beneath its face are the same feed drawn the same way,
-// so one drawing serves both and the two cannot drift apart.
-void drawRowTable(const std::vector<std::string>& headings,
-                  const std::vector<CascadePanelRow>& rows) {
-    const int cols = static_cast<int>(headings.size());
-    if (cols > 0 &&
-        ImGui::BeginTable("##rows", cols,
-                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
-        for (const std::string& h : headings) {
-            ImGui::TableSetupColumn(h.c_str());
-        }
-        ImGui::TableHeadersRow();
-        for (const CascadePanelRow& r : rows) {
-            if (r.kind == CASCADE_ROW_SEPARATOR) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Separator();
-                continue;
-            }
-            ImGui::TableNextRow();
-            if (r.kind == CASCADE_ROW_HEADING) {
-                ImGui::TableNextColumn();
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                ImGui::TextUnformatted(r.cells[0],
-                                       r.cells[0] + ::strnlen(r.cells[0], CASCADE_PANEL_CELL_CHARS));
-                ImGui::PopStyleColor();
-                continue;
-            }
-            for (int c = 0; c < cols; ++c) {
-                ImGui::TableNextColumn();
-                // BOUNDED, AND UNFORMATTED. The ABI says the cells are
-                // NUL-terminated, but a plugin that fills every byte must
-                // not walk the host off the end of the array, so the end is
-                // measured with strnlen. Measured rather than printed through
-                // "%.*s": under Georgia every cell grew a tail of question
-                // marks the moment the bench went over to it (0.84.0), where
-                // Saira had drawn the same rows clean - the format path
-                // handed the renderer bytes past the terminator, and Georgia
-                // has no silent glyph for them. TextUnformatted with an
-                // explicit end hands it exactly the word and nothing after.
-                const char* cell = r.cells[c];
-                const char* cellEnd = cell + ::strnlen(cell, CASCADE_PANEL_CELL_CHARS);
-                if ((r.flags & CASCADE_ROW_FLAG_WARN) != 0u) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-                    ImGui::TextUnformatted(cell, cellEnd);
-                    ImGui::PopStyleColor();
-                } else if ((r.flags & CASCADE_ROW_FLAG_GOOD) != 0u) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::good());
-                    ImGui::TextUnformatted(cell, cellEnd);
-                    ImGui::PopStyleColor();
-                } else if ((r.flags & CASCADE_ROW_FLAG_MUTED) != 0u) {
-                    ImGui::PushStyleColor(ImGuiCol_Text,
-                                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                    ImGui::TextUnformatted(cell, cellEnd);
-                    ImGui::PopStyleColor();
-                } else {
-                    ImGui::TextUnformatted(cell, cellEnd);
-                }
-            }
-        }
-        ImGui::EndTable();
-    }
-    if (rows.empty()) { ImGui::TextDisabled("%s", tr("Nothing to show yet.")); }
-}
+// (The rows a plugin publishes, as a table - and the rows of it that are keys, 0.99.77 - are drawn by AppWindow::drawPluginRows, in
+// app_window_plugin_settings.cpp: stub campaign B9.)
 
 // A plugin's page named on its rail in the bench's capitals: "%s MAP" with the
 // plugin's own name, translated WHOLE so a language can put its word first
@@ -14459,6 +14410,7 @@ void AppWindow::drawPluginWindows() {
             // watching satellites" is the same gesture this whole feature
             // exists for. Draws nothing when the plugin has none.
             drawPluginPresetBar(page.plugin);
+            drawPluginSettingsSection(page.plugin);
             // TWO KINDS OF MAP PAGE, AND THE SATELLITE ONE IS A WHOLE
             // INSTRUMENT. Every control below - fit, the receiver position,
             // the coverage and trail switches, the target list - exists on the
@@ -14757,6 +14709,7 @@ void AppWindow::drawPluginWindows() {
         }
         if (imageDrawn) {
             drawPluginPresetBar(im.plugin);
+            drawPluginSettingsSection(im.plugin);
             if (im.width == 0 || im.height == 0) {
                 ImGui::TextDisabled("%s", tr("Waiting for the first image..."));
             } else {
@@ -14894,7 +14847,9 @@ void AppWindow::drawPluginWindows() {
         }
         if (panelDrawn) {
             drawPluginPresetBar(p.plugin);
-            drawRowTable(p.headings, p.rows);
+            drawPluginSettingsSection(p.plugin);
+            // A row may be a key bound to one of the plugin's commands (0.99.77): a press is FOXAPI_OP_PLUGIN_COMMAND (stub campaign B9).
+            drawPluginRows(p.plugin, "", p.headings, p.rows);
         }
         endPage();
         if (!panelOpen) { pluginWindows_.hide(id); }
@@ -14926,6 +14881,7 @@ void AppWindow::drawPluginWindows() {
         if (cascade::gui::census::enabled()) { noteWindowRectInCensus("instrument:window:" + in.plugin, id.c_str()); }
         if (instrumentDrawn) {
             drawPluginPresetBar(in.plugin);
+            drawPluginSettingsSection(in.plugin);
             const double now = ImGui::GetTime();
             InstrumentSeen& seen = instrumentSeen_[id];
             if (in.have && in.state.seq != seen.seq) {
@@ -14949,7 +14905,7 @@ void AppWindow::drawPluginWindows() {
             ImGui::Dummy(ImVec2(avail.x, std::max(used, 1.0f)));
             if (hasMemory) {
                 ImGui::Spacing();
-                drawRowTable(in.headings, in.rows);
+                drawPluginRows(in.plugin, ":memory", in.headings, in.rows);
             }
         }
         endPage();
@@ -17672,6 +17628,9 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
         // THE IMPORT'S ANSWER (stub campaign B8): FAILED when the engine read nothing - the "Import a frequency list" window opens with its
         // sentence - and OK when it read rows, which closes that window.
         if (r.op == FOXAPP_OP_BOOKMARK_IMPORT_FILE) { importOnAnswer(r); }
+        // A PLUGIN SETTINGS EDIT'S ANSWER (stub campaign B9): the verdict of the engine's judging - a refused box snaps back from it, once a frame, after
+        // the answer and not before.
+        if (r.op == FOXAPP_OP_PLUGIN_SETTING_EDIT) { settingsOnAnswer(r); }
         // THE WEB AND CAT PANELS' ANSWER (stage 5b): one is owed for every SERVER_CONFIG sent (the mirrors wait for them), and a refusal -
         // a password under eight characters, say - is lettered on the web panel in the engine's words, as the password field's own complaint was.
         if (r.op == FOXAPI_OP_SERVER_CONFIG) {

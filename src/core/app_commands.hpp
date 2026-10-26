@@ -115,6 +115,15 @@
 #define FOXAPP_OP_STORE_SITE             0x8709u /* text: the site's address; ival[0]: 0 add, 1 remove; ival[1] (add): 1 = consent given */
 #define FOXAPP_OP_STORE_PICTURES_WANT    0x870Au /* text: catalogue key; ival[0]: 1 = retry a failed picture */
 #define FOXAPP_OP_STORE_CLEAN_OLD        0x870Bu /* ival[0]: 0 remove every old copy, 1 remove the orphaned file named in text */
+// A PLUGIN'S SETTINGS FORM, edited (stub campaign B9, 0.99.43; docs/api-0.3-additions.md 9.7), LOCAL sessions only and not on the web profile:
+//   PLUGIN_SETTING_EDIT (SETTINGS): text (or long text): "<module file>\x1F<key>\x1F<value>" - the module's file name (PLUGINS' detail), the field's key
+//   (PLUGIN_SETTINGS' spec fact) and the text the person typed or chose, exactly as typed (the value may be empty: a cleared box is a value, not a
+//   deletion). The ENGINE judges it (core::commitSettingEdit: the field's own length and kind, UTF-8, no control character, a number that is one) and
+//   writes it through PluginApiCore::settingsUiSet - the one path that advances the plugin's settings_seq, once for an accepted edit that changes the
+//   value and never for a refused one. The ANSWER carries the verdict: OK for an accepted edit, otherwise a refusal whose applied[0] is the
+//   core::SettingEditResult (1 TooLong, 2 NotANumber, 3 BadText, 4 StoreFull, 5 StoreError, 6 Refused) and whose message says it in English; NOT_FOUND
+//   for a module that is not loaded or declares no such field. applied[0] is 0 for an accepted edit.
+#define FOXAPP_OP_PLUGIN_SETTING_EDIT    0x870Cu /* text: "<module file>\x1F<key>\x1F<value>"; answered with the verdict in applied[0] */
 // The Transmit page's open flag (engine/stage3b-pre 2b, docs/engine-stage3.md
 // OPEN 1/10, SAFETY): ival[0] 0/1. Since engine stage 4 the flag gates NO key:
 // the consent the window withdraws when its page closes (gui::txKeyCommands) is
