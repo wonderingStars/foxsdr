@@ -1256,6 +1256,7 @@ set(CASCADE_GUI_TESTS
     test_diagnostics
     test_display_fold_app
     test_display_menu_app
+    test_display_restart_app
     test_exit_cause_app
     test_foreign_modules_app
     test_freq_markers_app
@@ -1293,6 +1294,7 @@ set(CASCADE_GUI_TESTS
     test_theme_census
     test_tx_audio_page_app
     test_tx_audio_plate_app
+    test_typed_band_mode_app
     test_ui_scale_app
     test_unplaced_list_app
     test_viewports

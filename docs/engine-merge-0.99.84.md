@@ -207,7 +207,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     the engine's since C5; now it is worked through FOXAPP_OP_MARKER_DROP/_REMOVE/_CLEAR/_NOTE 0x8606-0x8609 and read as FREQ_MARKERS (53), engine_markers.cpp;
     the window's half is app_window_markers.cpp: the lines, the tabs, the right-click menu on the receiver's waterfall and on a patch Display part, the Markers
     window; test_freq_markers_app, test_markers_window_app, test_engine_api_markers)
-  * peak hold and average on the spectrum ................................................... stubbed MARKERS-SPECTRUM
+  * peak hold and average on the spectrum ................................................... re-expressed, stub batch B11 (app_window_display.cpp: the trace-mode menu, the
+    held trace over the receiver's spectrum and a patch Spectrum part's, the label, the config; window state, no table surface; test_spectrum_trace_app)
   * the receiver's waterfall fits its window ................................................ stubbed MARKERS-SPECTRUM (spectrum/waterfall views are in the tree)
   * holding the left button on the waterfall no longer tunes ................................. re-expressed, stub batch B10 (drawCenterPanels' release branch asks
     gui::pressIsClick again, wfPressT_; held by test_freq_markers_app's long press)
@@ -384,8 +385,9 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * B200 antenna/gain advice ................................................................. n/a
 
 0.99.76
-  * the spectrum's and waterfall's range set by hand ......................................... stubbed DISPLAY-RANGE (core RangeMode is in; the menu and the
-    dB window are not)
+  * the spectrum's and waterfall's range set by hand ......................................... re-expressed, stub batch B11 (app_window_display.cpp: the Display block that ends
+    the spectrum's menu and the waterfall's, the 4-second tip, displayRange_ - the person's choice - over the engine's window in force, sent as SET_DISPLAY_RANGE;
+    the Display section's two sliders choose Manual; test_display_menu_app)
   * no more death when a window is dropped into / pulled out of a dock node .................. re-expressed, C1 (page_resize_id.hpp; test_page_resize_id)
   * a Linux scan helper with no reader is not a crash ........................................ carried (source/)
 
@@ -431,11 +433,13 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * a Linux audio device reporting zero periods no longer crashes ........................... carried (sink/) (unverified: Linux)
   * Bookmark Import accepts the path shapes people use ....................................... re-expressed, stub batch B8 (cleanImportPath in the window BEFORE the op; a path with no root is
     looked for on a worker; test_gui_file_jobs' section stays B19's)
-  * slide the tuned band with Shift + wheel .................................................. stubbed MARKERS-SPECTRUM (gui/passband_slide.hpp is in the tree)
+  * slide the tuned band with Shift + wheel .................................................. re-expressed, stub batch B11 (slidePassband over the state, SET_VFO_OFFSET and,
+    past the end of the span, SET_FREQUENCY; the picture follows for 1.5 s; the second press of a double-click on the waterfall is not a click; test_passband_slide_app)
 
 0.99.83
   * the audio buffer comes back down by itself and says where it stands ...................... re-expressed, C1 (test_audio_lead_app)
-  * the mode follows a typed band change ..................................................... stubbed MARKERS-SPECTRUM (lostlines: drawFrequencyReadout)
+  * the mode follows a typed band change ..................................................... re-expressed, stub batch B11 (commitTypedFrequency asks core::modeFollowsTypedBandChange
+    over the rail's BAND_PLAN rows and sends SET_MODE after the tune; NEW test_typed_band_mode_app, which master never had)
   * the Radiofax recorder prints the chart on its paper .................................... carried (gui/instrument_fax.cpp)
 
 0.99.84
@@ -475,8 +479,8 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   test_row_keys_app - were removed by B9: both ids are whole)
   TX-PLUGIN (3)           test_tx_audio_app test_tx_audio_page_app test_tx_audio_plate_app
   TESTER-LINK (3)         test_tester_link_app test_link_request_poll test_tester_link
-  MARKERS-SPECTRUM (2)    test_spectrum_trace_app test_passband_slide_app   [B10 removed test_bookmark_stacking_app and test_freq_markers_app]
-  DISPLAY-RANGE (2)       test_display_menu_app test_display_fold_app
+  (MARKERS-SPECTRUM and DISPLAY-RANGE - test_bookmark_stacking_app and test_freq_markers_app removed by B10; test_spectrum_trace_app, test_passband_slide_app and
+  test_display_menu_app removed by B11; test_display_fold_app by B1 - are whole)
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
   one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
@@ -543,6 +547,8 @@ UPDATE 2026-10-26, stub batch B8 (docs/engine-stage4.md 6.22): the IMPORT-DIALOG
 UPDATE 2026-10-26, stub batch B9 (docs/engine-stage4.md 6.22): the PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS items are back (src/gui/plugin_settings_form.cpp, git mv from src/gui_pending, over a gui::SettingsEditSink; src/gui/app_window_plugin_settings.cpp; src/engine/engine_plugin_settings.cpp; the pressable-row rule hoisted into core/plugin_ui_data.hpp). The table grew by the list PLUGIN_SETTINGS (52), two facts a field and FOXAPP_OP_PLUGIN_SETTING_EDIT 0x870C (API 0.3 9.7; LOCAL only; the door did not move). test_plugin_settings_ui (edited: the adapter over PluginApiCore, its reason beside it, and the three publish calls; a section [S] added), test_decoder_settings_fold_app, test_plugin_pathpick_app (four scenarios of mine added), test_programme_audio_app (converted to the engine through rawEngine and the pass seam; it now also runs as _stepped) and test_row_keys_app are green and their placeholders are gone; PLUGIN-SETTINGS-UI and PLUGIN-ROW-KEYS are whole. New: tests/test_engine_api_settings.cpp and tests/test_plugin_settings_window.cpp (the real window against the real engine). The red placeholders are the 32 of B8 (31 tests and 1 part) less five tests: 27 (26 tests and 1 part). test_i18n: 143 stale, 0 missing (the one key that returned: "Plugin settings"). The preset lines B2 flagged are in the engine (verified line by line before test_programme_audio_app was converted).
 
 UPDATE 2026-10-26, stub batch B10 (docs/engine-stage4.md 6.22): the waterfall's markers (0.99.57), the close bookmark names that stack (0.99.54) and the press that is held (0.99.57) are back (src/gui/app_window_markers.cpp, src/engine/engine_markers.cpp; drawBookmarkMarkers and the Bookmarks section's "Stack close names" key in app_window.cpp; the window half of the config, which had dropped bookmarkMarkers_ and bookmarkStackNames_). The table grew by the ops FOXAPP_OP_MARKER_DROP / _REMOVE / _CLEAR / _NOTE 0x8606 - 0x8609 (LOCAL only, not on the web profile), the list FREQ_MARKERS (53, LOCAL only) and the facts fact.markers.version / .note.<id> / .error (API 0.3 9.8; the door did not move). test_freq_markers_app and test_bookmark_stacking_app are green, master's, unedited, and their placeholders are gone. New: tests/test_engine_api_markers.cpp (349 checks) and tests/test_markers_window_app.cpp (37 checks; the Markers window's note, Tune, Bookmark, x and Clear against the real binary); test_apply_command gained the four ops (133 implemented, 133 tested). The red placeholders are the 27 of B9 (26 tests and 1 part) less two tests: 25 (24 tests and 1 part). test_i18n: 122 stale, 0 missing (the 21 keys that returned are itemised in 6.22). Not here: the Display block of master's 0.99.76 that ends the marker menu, and the display tip - B11's.
+
+UPDATE 2026-10-26, stub batch B11 (docs/engine-stage4.md 6.22): the spectrum's peak hold and average (0.99.57), the display range menu and its 4-second tip (0.99.76), Shift + wheel to slide the tuned band (0.99.82) and the mode that follows a typed band change (0.99.83) are back (src/gui/app_window_display.cpp, new; call sites in app_window.cpp and the Display block in app_window_markers.cpp). WINDOW STATE OVER EXISTING WORDS: no op, list or fact was added, the door did not move; the dB window in force goes to the engine as FOXAPI_OP_SET_DISPLAY_RANGE and the person's choice of Automatic or Manual and the pair Manual returns to are the window's, saved by currentConfig as waterfallRangeMode, dbMin and dbMax (the engine's own dbMin/dbMax are the window in force, which Automatic makes the standard one). test_spectrum_trace_app, test_passband_slide_app and test_display_menu_app are green, master's, unedited, and their placeholders are gone. New: tests/test_typed_band_mode_app.cpp (master never had one: "none own - NEW assertion", plan section 2 S49). The red placeholders are the 25 of B10 (24 tests and 1 part) less three tests: 22 (21 tests and 1 part). test_i18n: 106 stale, 0 missing (the 16 keys that returned are itemised in 6.22).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

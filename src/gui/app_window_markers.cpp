@@ -311,7 +311,8 @@ void AppWindow::drawMarkerMenu() {
         if (ImGui::MenuItem(yes.c_str())) { uiSubmit(cmd::make(FOXAPP_OP_MARKER_CLEAR)); }
         ImGui::EndMenu();
     }
-    // (The display range block of master's 0.99.76 ends this menu, as it ends the spectrum's: batch B11's drawDisplayMenuBlock.)
+    // The display range (0.99.76): the waterfall's right-click is the markers', and the same block as the spectrum's menu ends it (app_window_display.cpp, stub campaign B11).
+    drawDisplayMenuBlock();
     ImGui::EndPopup();
 }
 

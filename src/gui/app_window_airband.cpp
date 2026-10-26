@@ -820,7 +820,7 @@ void AppWindow::drawAirbandMarkers(float x0, float y0, float width, float height
 // THE CAPTION ON THE SPECTRUM (0.99.71). A tester listening to O'Hare, whose twenty-nine rows make the section taller than the rail, had to hold
 // the rail scrolled to its foot to read which frequency was talking: the status lines were the last thing the section drew, under the keys. They
 // now sit above the row list in the rail, and are lettered here as well, at the left under the spectrum's header - the row the trace-mode label
-// uses (batch B11; one row lower while PEAK HOLD or AVERAGE is showing, so the two never cross), over the channel marks drawAirbandMarkers has
+// uses (one row lower while PEAK HOLD or AVERAGE is showing, so the two never cross: stub campaign B11), over the channel marks drawAirbandMarkers has
 // just drawn - so the message is on the picture the listener is watching, whatever the rail shows. The block's line in the rail's green, then the
 // names in its amber, on ONE line: a long list of names is cut at the panel's edge rather than wrapped down over the trace. Drawn after the
 // gridlines as the panel's topmost lettering.
@@ -833,6 +833,7 @@ void AppWindow::drawAirbandCaption(float x0, float y0, float width, float yBotto
     ImFont* font = cascade::gui::fonts::ui();
     const float px = ImGui::GetFontSize() * 0.8f;
     float y = y0 + 2.0f;
+    if (spectrumTraceMode_ != cc::TraceMode::Normal) { y += px + 2.0f; }
     if (y + px > yBottom) { return; }
     const float x = x0 + 6.0f;
     ImDrawList* dl = ImGui::GetWindowDrawList();

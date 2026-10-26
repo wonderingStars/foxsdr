@@ -63,10 +63,9 @@ cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, on
 # the feature they read the census of is not in the window yet). The ledger id says which feature.
 # (The waterfall's markers - 0.99.57, with the press-hold rule that a long press tunes nothing - and the close bookmark names that stack - 0.99.54 - are back:
 # stub batch B10, test_freq_markers_app and test_bookmark_stacking_app.)
-cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 peak hold / average / trace modes, Shift+wheel slide
-    test_spectrum_trace_app test_passband_slide_app)
-cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip (the folded Display section returned in B1)
-    test_display_menu_app)
+# (MARKERS-SPECTRUM - the spectrum's peak hold and average (0.99.57) and Shift + wheel to slide the tuned band (0.99.82) - and DISPLAY-RANGE - the range set by hand,
+# the display menu and its tip (0.99.76; the folded Display section returned in B1) - are whole: back in stub batch B11, test_spectrum_trace_app,
+# test_passband_slide_app and test_display_menu_app.)
 # (PLUGIN-RUN - 0.99.73 a plugin that is not used is dormant (FOXSDR_DORMANT_AFTER_MS), run modes - is whole: the engine's half returned in stub batch B2,
 # test_plugin_inuse_app, which needs the Fitted modules window, in B5.)
 cascade_merge_pending(UPDATES          # 0.99.7x the Store's own update notice and the site banner

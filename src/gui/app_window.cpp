@@ -3809,6 +3809,7 @@ void AppWindow::drawUi() {
     // (stub campaign B10).
     drawMarkerMenu();
     drawMarkerWindow();
+    drawTraceModeMenu();
 
     // THE SAFE POINT for a settings-form edit whose surface disappeared mid-edit (a window closing, a fold shutting, the patch page selecting another
     // node): every place a form could have been drawn this frame has now had its turn. The edit goes as a command, like a box left the ordinary way.
@@ -6313,6 +6314,8 @@ void AppWindow::drawFrequencyReadout(float plateX, float plateY, float scale) {
         ImGui::SetCursorScreenPos(ImVec2(tube.x0, tube.y0));
         ImGui::InvisibleButton(("##fd" + std::to_string(i)).c_str(),
                                ImVec2(tube.x1 - tube.x0, tube.y1 - tube.y0));
+        // THE CENSUS (stub campaign B11: the test seam of tests/test_typed_band_mode_app, which clicks a figure to open the typed editor).
+        cascade::gui::census::rect("cnt:tube:", i, tube.x0, tube.y0, tube.x1, tube.y1);
         if (cellPaint.glassFurniture) {
             drawNixieTube(fdl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), digits[i],
                           significant, cellS, cellPaint);
@@ -7104,9 +7107,8 @@ void AppWindow::drawDisplaySection() {
     // The lamp is the overlay ACTUALLY DRAWING - asked for, no load error, and
     // a plan with bands in it - so "PLAN" with the lamp out is the honest
     // reading of "you switched it on and there is nothing installed".
-    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the display
-    // range is the state's, the plans and the loaded plan's rows are the rail's cache.
-    const FoxReceiverState& st = uiState_;
+    // FROM THE WINDOW'S SESSION (window port, group 5, API 0.3 section 8.4): the plans and the loaded plan's rows are the rail's cache (the display
+    // range is the window's own choice, displayRange_, since stub campaign B11).
     const RailListCache& rail = railLists();
     const bool planDrawing = bandPlanOverlay_ && rail.bandPlanError.empty() && !rail.bands.empty();
     // FOLDED UNTIL THE USER OPENS IT, AND IT REMEMBERS (0.99.74, a tester):
@@ -7217,20 +7219,19 @@ void AppWindow::drawDisplaySection() {
         }
         // One shared dB range drives both the spectrum axis and the waterfall
         // colormap so the two panels always agree on what "hot" means.
-        // COPIES are edited; each end is its own command, which keeps at
-        // least kMinDbSpan between the endpoints by pushing back the end the
-        // user is actually dragging - correcting the *other* value would make
-        // an untouched slider jump under the user's eyes.
-        float dbMin = static_cast<float>(st.dbMin);
-        float dbMax = static_cast<float>(st.dbMax);
-        if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Min dB")), &dbMin, -160.0f,
-                               -20.0f, "%.0f")) {
-            uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MIN, dbMin));
-        }
-        if (ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Max dB")), &dbMax, -100.0f,
-                               20.0f, "%.0f")) {
-            uiSubmit(cascade::core::cmd::makeNum(FOXAPP_OP_SET_DISPLAY_MAX, dbMax));
-        }
+        //
+        // THE SAME TWO NUMBERS THE RIGHT-CLICK MENU SETS (0.99.76; stub campaign B11): right-click the spectrum or the waterfall for Range: Automatic / Manual, Floor and
+        // Ceiling. These two sliders show the window in force, and dragging either is choosing a range - it is Manual from then on (setManualRange).
+        //
+        // COPIES are edited. The ceiling stays at least kMinRangeSpanDb above the floor by pushing back the end the user is actually dragging - correcting the *other*
+        // value would make an untouched slider jump under the user's eyes (core::clampManualRange).
+        float floorEdit = displayRange_.inForce().floorDb;
+        float ceilingEdit = displayRange_.inForce().ceilingDb;
+        const bool minChanged = ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Min dB")), &floorEdit, cascade::core::kFloorMinDb,
+                                                   cascade::core::kFloorMaxDb, "%.0f");
+        const bool maxChanged = ImGui::SliderFloat(cascade::gui::labelAboveIfNeeded(trId("Max dB")), &ceilingEdit, cascade::core::kCeilingMinDb,
+                                                   cascade::core::kCeilingMaxDb, "%.0f");
+        if (minChanged || maxChanged) { setManualRange(floorEdit, ceilingEdit, minChanged); }
 
         // THE FREQUENCY DISPLAY (GitHub issue #1: "Would be nice to be able
         // to swap the frequency display for easier to read display? Maybe a
@@ -9004,6 +9005,7 @@ void AppWindow::drawCenterPanels() {
     // published between that read and a Stop click is the next frame's. Cheap enough
     // to run unconditionally: a NO_CHANGE copies nothing.
     const double nowS = ImGui::GetTime();
+    displayTipShown_ = false;   // set again below by whichever panel shows the 4-second tip (stub campaign B11)
 
     // THE WATERFALL'S SCROLL RATE, MEASURED RATHER THAN ASSUMED, AND MEASURED
     // ON THE RIGHT QUANTITY. It counts the lines actually pushed into the ring
@@ -9051,6 +9053,13 @@ void AppWindow::drawCenterPanels() {
     const TuningListCache& tune = tuningLists();
     const double centreHz = uiState_.centreHz;
     scale_.setSpan(centreHz, tune.inputRateHz);
+    // WHILE A SLID PASSBAND IS BEING FOLLOWED (kPassbandFollowS), and only while the hand is not on the band or the waterfall, the view is panned no further than it must
+    // to keep the passband in it - after setSpan, so that it is the span the source now delivers that it is kept inside. The follow is an event the slide armed, never a
+    // standing rule: a view left alone is left alone (stub campaign B11, 0.99.82).
+    if (ImGui::GetTime() < passbandFollowUntilS_ && !airbandFacts().listening && vfoDrag_ == VfoDrag::None && !wfPanning_) {
+        const double tunedNow = centreHz + tunedVfoOffsetHz();
+        scale_.keepInView(tunedNow - 0.5 * tunedBandwidthHz(), tunedNow + 0.5 * tunedBandwidthHz(), kPassbandFollowMargin);
+    }
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float splitterThickness = 6.0f;
@@ -9065,7 +9074,10 @@ void AppWindow::drawCenterPanels() {
     const float usable = avail.y - splitterThickness - 2.0f * ImGui::GetStyle().ItemSpacing.y;
     // A squeezed window can drive the region to zero; drawing into negative
     // sizes asserts inside ImGui, so just skip the panels that frame.
-    if (usable < 40.0f || avail.x < 40.0f) { return; }
+    if (usable < 40.0f || avail.x < 40.0f) {
+        displayTip_.reset();
+        return;
+    }
 
     const float width = avail.x;
     const float spectrumHeight = splitRatio_ * usable;
@@ -9076,6 +9088,11 @@ void AppWindow::drawCenterPanels() {
     double firstBin = 0.0;
     double lastBin = 0.0;
     scale_.visibleBinRange(static_cast<int>(kFftSize), firstBin, lastBin);
+
+    // THE PICTURE AS IT IS DRAWN THIS FRAME, in kHz from the source's centre: the view's two edges, where the VFO is, and how wide its band is. The census keeps the last,
+    // so a test reads whether a zoom survived a retune and whether the passband is still in the picture (tests/test_passband_slide_app; stub campaign B11).
+    cascade::gui::census::rect("rx:view:khz", static_cast<float>((scale_.viewLowHz() - centreHz) / 1000.0), static_cast<float>((scale_.viewHighHz() - centreHz) / 1000.0),
+                               static_cast<float>(tunedVfoOffsetHz() / 1000.0), static_cast<float>(tunedBandwidthHz() / 1000.0));
 
     ImGuiIO& io = ImGui::GetIO();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -9253,6 +9270,12 @@ void AppWindow::drawCenterPanels() {
     drawPluginMarkers(specPos.x, specPos.y, width, spectrumHeight, false);
     // The user's waterfall markers, as faint lines through the trace too (stub campaign B10).
     drawFreqMarkerLines(scale_.viewLowHz(), scale_.viewHighHz(), specPos.x, specPos.y, width, spectrumHeight, 1.0f);
+    // The held trace - peak or average - in bold over the live one, on the live trace's own axes (SpectrumView::drawOverlayTrace; stub campaign B11).
+    if (spectrumTraceMode_ != cascade::core::TraceMode::Normal && !spectrumHold_.trace().empty()) {
+        spectrum_->drawOverlayTrace(spectrumHold_.trace().data(), static_cast<int>(spectrumHold_.trace().size()), firstBin, lastBin, width, spectrumHeight, traceColour(), 2.5f);
+        cascade::gui::census::note("trc:overlay:receiver");
+    }
+    drawTraceModeLabel(specPos.x, spectrum_->headerBottom(), 1.0f);
 
     for (int i = 0; i < tickCount; ++i) {
         // ticks() only returns in-view frequencies, so x stays in-panel.
@@ -9293,17 +9316,23 @@ void AppWindow::drawCenterPanels() {
             ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
             !ImGui::IsMouseDown(0)) {
             if (hit == SpectrumView::VfoHit::Center) {
-                ImGui::SetTooltip(tr("Drag to move the tuned band | drag an edge to widen it\n"
-                                  "Shift-drag: free, unsnapped | wheel: zoom | double-click: unzoom"));
+                ImGui::SetTooltip("%s\n%s",
+                                  tr("Drag to move the tuned band | drag an edge to widen it\n"
+                                     "Shift-drag: free, unsnapped | wheel: zoom | double-click: unzoom"),
+                                  tr("Shift + wheel: slide the tuned band"));
             } else if (hit == SpectrumView::VfoHit::EdgeLow ||
                        hit == SpectrumView::VfoHit::EdgeHigh) {
                 ImGui::SetTooltip(tr("Drag to widen or narrow the tuned band"));
             } else {
-                ImGui::SetTooltip(tr("Click to tune here | wheel: zoom about the pointer\n"
-                                  "double-click: unzoom | drag the shaded band to move it"));
+                ImGui::SetTooltip("%s\n%s\n%s",
+                                  tr("Click to tune here | wheel: zoom about the pointer\n"
+                                     "double-click: unzoom | drag the shaded band to move it"),
+                                  tr("Shift + wheel: slide the tuned band"),
+                                  tr("Right-click: normal, peak hold or average trace"));
             }
         }
         if (ImGui::IsMouseClicked(0) && hit != SpectrumView::VfoHit::None) {
+            passbandFollowUntilS_ = 0.0;  // the hand has the band: nothing else moves the picture
             vfoDrag_ = (hit == SpectrumView::VfoHit::Center)  ? VfoDrag::Center
                        : (hit == SpectrumView::VfoHit::EdgeLow) ? VfoDrag::EdgeLow
                                                                 : VfoDrag::EdgeHigh;
@@ -9319,6 +9348,12 @@ void AppWindow::drawCenterPanels() {
             scale_.resetView();  // double-click on empty spectrum: unzoom
         }
     }
+    // RIGHT-CLICK: the trace-mode menu, which also carries the display range (drawDisplayMenuBlock). The right button does nothing else on this panel; every tuning
+    // gesture above is the left one.
+    if (specHovered && vfoDrag_ == VfoDrag::None && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { traceMenuPending_ = true; }
+    // AFTER FOUR SECONDS OF REST the tip that says there is a menu (owner, 2026-10-13). Below the gesture tip above on purpose: it replaces that one for as long as the
+    // hand stays still.
+    showDisplayTip(kTipRegionSpectrum, specHovered, "spectrum");
     if (vfoHidden) {
         cascade::gui::census::note("airband:vfo-hidden");
         cascade::gui::census::rect("rx:vfo", 0.0f, 0.0f, 0.0f, 0.0f);
@@ -9405,6 +9440,8 @@ void AppWindow::drawCenterPanels() {
         }
     }
     wfChrome.decoding = !decodeLine.empty() ? decodeLine.c_str() : nullptr;
+    // The strength key says MANUAL when the floor and ceiling it names are the user's (stub campaign B11).
+    wfChrome.manualRange = displayRange_.manual();
     waterfall_->draw(width, waterfallHeight, u0, u1, wfChrome);
     const bool wfHovered = ImGui::IsItemHovered();
     // Plugin marks down the waterfall too, unless a mark asked to stay on the
@@ -9451,6 +9488,7 @@ void AppWindow::drawCenterPanels() {
         } else {
             if (!wfMoved_ && std::fabs(io.MousePos.x - wfPressX_) > kDragSlopPx) {
                 wfMoved_ = true;
+                passbandFollowUntilS_ = 0.0;  // a pan is the hand arranging the picture
             }
             if (wfMoved_ && io.MouseDelta.x != 0.0f) {
                 scale_.pan(-static_cast<double>(io.MouseDelta.x) / width);
@@ -9462,7 +9500,13 @@ void AppWindow::drawCenterPanels() {
         wfPressT_ = ImGui::GetTime();
         wfMoved_ = false;
     }
-    if (wfHovered && ImGui::IsMouseDoubleClicked(0)) { scale_.resetView(); }
+    if (wfHovered && ImGui::IsMouseDoubleClicked(0)) {
+        scale_.resetView();
+        // THE SECOND PRESS OF A DOUBLE-CLICK IS NOT A CLICK (0.99.82). Its first press has already tuned to the signal that was clicked; the unzoom above changes what
+        // every pixel means, so letting the release tune again put the VFO on whatever the same pixel showed in the picture just put back - another signal, hundreds of kHz
+        // away on a deep zoom. Marked as moved, the press is neither a click nor, without the pointer travelling, a pan (stub campaign B11).
+        wfMoved_ = true;
+    }
     // The waterfall's gestures, said once the hand has rested - the spectrum
     // above has had its own tooltip from the start, and the marker menu is
     // found by nothing else. Not over a marker: its own tooltip wins there.
@@ -9470,9 +9514,14 @@ void AppWindow::drawCenterPanels() {
         !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
         ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
         markerNearHz(scale_.xToHz(mouseFrac), 4.0 * (scale_.viewHighHz() - scale_.viewLowHz()) / width) == 0) {
-        // (the Shift + wheel line of the slide, 0.99.82, is batch B11's)
-        ImGui::SetTooltip("%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
-                                   "Right-click: drop a marker here, list, copy or clear markers"));
+        if (vfoHidden) {
+            ImGui::SetTooltip("%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
+                                       "Right-click: drop a marker here, list, copy or clear markers"));
+        } else {
+            ImGui::SetTooltip("%s\n%s", tr("Click to tune here | drag to pan | wheel: zoom\n"
+                                            "Right-click: drop a marker here, list, copy or clear markers"),
+                              tr("Shift + wheel: slide the tuned band"));
+        }
     }
     // RIGHT-CLICK: the marker menu for the frequency under the pointer. The
     // right button does nothing else on this panel, so it cannot collide with
@@ -9480,13 +9529,28 @@ void AppWindow::drawCenterPanels() {
     if (wfHovered && !wfPanning_ && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         requestMarkerMenu(scale_.xToHz(mouseFrac), (scale_.viewHighHz() - scale_.viewLowHz()) / static_cast<double>(width));
     }
+    // AFTER FOUR SECONDS OF REST the tip that says the menu has a display range in it - the marker tip above is the only thing the waterfall has ever said about its
+    // right button.
+    showDisplayTip(kTipRegionWaterfall, wfHovered && !wfPanning_, "waterfall");
+    // Whether the tip was up on this frame, and how long the pointer has rested: the census keeps the last, so a test reads the end of a run (tests/test_display_menu_app).
+    cascade::gui::census::rect("wfm:tip:state", displayTipShown_ ? 1.0f : 0.0f, static_cast<float>(displayTip_.restS(ImGui::GetTime())), 0.0f, 0.0f);
 
     // Wheel over EITHER panel zooms about the cursor (1.3x per notch; the
     // zoom floor and full-span clamp live in FreqScale). Both panels share
     // the same x extent, so the spectrum-relative fraction serves both.
+    //
+    // SHIFT + WHEEL SLIDES THE PASSBAND instead (0.99.82): the tuned band moves along the band by the mode's raster per notch (slidePassband), and the picture follows it.
+    // Shift is the one modifier the wheel did not use - Ctrl + wheel is the touchpad's pinch, and zooms - and on a click it already means "off the raster", so the wheel's
+    // modifier is not a new idea. With the Airband monitor listening there is no passband to slide (vfoHidden above), so the wheel stays the zoom. While the hand holds the
+    // band or pans the waterfall the wheel does nothing at all: a gesture is in progress and has one writer.
     if ((specHovered || wfHovered) && io.MouseWheel != 0.0f) {
-        scale_.zoomAt(mouseFrac,
-                      std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
+        if (io.KeyShift && !io.KeyCtrl && !vfoHidden) {
+            if (vfoDrag_ == VfoDrag::None && !wfPanning_) { slidePassband(static_cast<double>(io.MouseWheel)); }
+        } else {
+            passbandFollowUntilS_ = 0.0;  // a zoom is the hand arranging the picture
+            scale_.zoomAt(mouseFrac,
+                          std::pow(kZoomPerNotch, static_cast<double>(io.MouseWheel)));
+        }
     }
 }
 
@@ -11526,6 +11590,9 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
     for (auto it = patchScopeSeq_.begin(); it != patchScopeSeq_.end();) {
         it = gone(it->first) ? patchScopeSeq_.erase(it) : std::next(it);
     }
+    for (auto it = patchHolds_.begin(); it != patchHolds_.end();) {
+        it = gone(it->first) ? patchHolds_.erase(it) : std::next(it);
+    }
     for (auto it = patchTextOutLines_.begin(); it != patchTextOutLines_.end();) {
         it = gone(it->first) ? patchTextOutLines_.erase(it) : std::next(it);
     }
@@ -11881,11 +11948,29 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
 
                 std::vector<float> colsDb;
                 pg::binsToColumns(specDb, rate, lo, hi, cols, -200.0f, colsDb);
-                const pg::DbRange range = pg::autoRange(colsDb);
+                // THE WINDOW THIS PART IS DRAWN THROUGH (0.99.76; stub campaign B11). Automatic is what it has always been, fitted to the line in hand; Manual is the
+                // user's floor and ceiling - the same two numbers the receiver's spectrum, waterfall and strength key use - so a part that was milky can be stretched from
+                // its own right-click menu. See core/display_range.hpp.
+                const bool rangeManual = displayRange_.manual();
+                const pg::DbRange range = rangeManual ? pg::DbRange{displayRange_.inForce().floorDb, displayRange_.inForce().ceilingDb} : pg::autoRange(colsDb);
+                cascade::gui::census::rect("wfm:patch:range", range.lo, range.hi, rangeManual ? 1.0f : 0.0f, 0.0f);
                 pg::ScopeHistory& hist = patchScopes_[n.id];
                 hist.reshape(cols, rows, lo, hi);
                 std::uint64_t& seq = patchScopeSeq_[n.id];
+                // This part's held trace, over its columns, following the one trace-mode setting. Its axis is the columns, the slice of the band and the radio's centre:
+                // any of them changing starts it again.
+                cascade::core::TraceHold& hold = patchHolds_[n.id];
+                hold.setMode(spectrumTraceMode_);
+                if (hold.averageMs() != spectrumAverageMs_) { hold.setAverageMs(spectrumAverageMs_); }
+                const double holdCentre = rrun != lists.radios.end() && rrun->second.open ? rrun->second.centreHz : 0.0;
+                const auto bitsOf = [](double v) {
+                    std::uint64_t b = 0;
+                    std::memcpy(&b, &v, sizeof b);
+                    return b;
+                };
                 if (seq != specSeq) {
+                    hold.push(colsDb.data(), static_cast<int>(colsDb.size()), ImGui::GetTime(),
+                              cascade::gui::scopeMemoryKey(static_cast<std::uint64_t>(cols), bitsOf(lo), bitsOf(hi), bitsOf(holdCentre)));
                     seq = specSeq;
                     std::vector<float> norm(colsDb.size());
                     for (std::size_t i = 0; i < colsDb.size(); ++i) {
@@ -11905,6 +11990,25 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 }
                 dl->AddPolyline(pts.data(), static_cast<int>(pts.size()),
                                 cascade::gui::theme::kPhosphor, 0, 1.2f * drawZoom);
+                // The held trace, bold, on the same columns and the same range.
+                if (spectrumTraceMode_ != cascade::core::TraceMode::Normal && hold.trace().size() == colsDb.size()) {
+                    std::vector<ImVec2> held;
+                    held.reserve(colsDb.size());
+                    for (int c = 0; c < cols; ++c) {
+                        const float t = pg::normalise(hold.trace()[static_cast<std::size_t>(c)], range);
+                        held.emplace_back(x0 + (static_cast<float>(c) + 0.5f) * colW, y0 + traceH - t * (traceH - 2.0f * drawZoom));
+                    }
+                    dl->AddPolyline(held.data(), static_cast<int>(held.size()), traceColour(), 0, 2.5f * drawZoom);
+                    cascade::gui::census::note("trc:overlay:patch");
+                }
+                drawTraceModeLabel(x0, y0, drawZoom);
+                cascade::gui::census::rect("trc:patch:trace", x0, y0, x1, y0 + traceH);
+                // Right-click on the trace: the trace-mode menu (the picture below it has the marker menu). Hovered through the canvas's own active button, as the marker
+                // menu is - see there.
+                const bool traceHot = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseHoveringRect(ImVec2(x0, y0), ImVec2(x1, y0 + traceH));
+                if (traceHot && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { traceMenuPending_ = true; }
+                // The 4-second tip, per part: a region of its own for the trace and one for the picture, from the node's id (kTipRegionSpectrum's note).
+                showDisplayTip((static_cast<std::uint64_t>(n.id) << 2) | 1u, traceHot, "spectrum");
 
                 // The waterfall, newest at the top, in the main waterfall's
                 // own colour map.
@@ -11969,6 +12073,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                         const double frac = static_cast<double>(ImGui::GetIO().MousePos.x - x0) / static_cast<double>(x1 - x0);
                         requestMarkerMenu(centre + lo + frac * (hi - lo), (hi - lo) / static_cast<double>(x1 - x0));
                     }
+                    showDisplayTip((static_cast<std::uint64_t>(n.id) << 2) | 2u, pictureHot, "waterfall");
                 }
                 break;
             }
@@ -17054,6 +17159,8 @@ void AppWindow::refreshUiState() {
         const double nowS = uiClockS_();
         (void)cascade::gui::tuneLocalRelease(tuneLocal_.offset, uiState_.vfoOffsetHz, nowS);
         (void)cascade::gui::tuneLocalRelease(tuneLocal_.bandwidth, uiState_.bandwidthHz, nowS);
+        // The dB window the state carries against the one the person chose (stub campaign B11): a range somebody else set is taken as the person's choice of Manual.
+        followDisplayRange();
     }
     // ...and the spectrum, after the state: the waterfall is fed from it with the
     // display range this very read carried.
@@ -17103,6 +17210,9 @@ void AppWindow::readSpectrum() {
                             static_cast<float>(uiState_.dbMax));
         ++waterfallLines_;
     }
+    // THE RECEIVER'S HELD TRACE (peak or average), from the same new frame, whichever view is up: the scope and the patch page consume the stream too, and the hold
+    // would otherwise have a hole in its history on the way back (stub campaign B11).
+    feedSpectrumHold();
     spectrumArrived_ = true;
 }
 
@@ -17223,7 +17333,12 @@ void AppWindow::commitTypedFrequency(const char* text) {
     // must not take: the old code applied the clear at once and queued the tune, so it came
     // first.
     uiSubmit(cascade::core::cmd::make(FOXAPP_OP_SET_SOURCE_ERROR));
+    // THE MODE FOLLOWS A TYPED BAND CHANGE (field report a09fe097, 0.99.78; stub campaign B11): typing a frequency in another band adopts that band's conventional mode -
+    // 3.620 MHz lands in LSB - while a typed frequency in the SAME band leaves the mode alone, so a digital setup (FT8 on 7.074 USB) survives nearby retypes. Both bands are
+    // read BEFORE the tune is sent, so `from` is the band the user is leaving.
+    const int followMode = modeForTypedFrequency(typed);
     uiSubmit(cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, typed));
+    if (followMode != 0) { uiSubmit(cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, followMode)); }
 }
 
 // THE STATUS COLUMN'S LIST READS, only when listSeq has moved (the members are
@@ -19570,9 +19685,11 @@ void AppWindow::applyKeyAction(cascade::gui::KeyAction action) {
         case KeyAction::ZoomIn:
             // About the CENTRE of the view, not about the pointer: the wheel
             // zooms where the hand is, and a key has no hand.
+            passbandFollowUntilS_ = 0.0;
             scale_.zoomAt(0.5, kZoomPerNotch);
             break;
         case KeyAction::ZoomOut:
+            passbandFollowUntilS_ = 0.0;
             scale_.zoomAt(0.5, 1.0 / kZoomPerNotch);
             break;
         case KeyAction::ZoomReset:
@@ -21614,6 +21731,11 @@ void AppWindow::applyConfig(const cascade::core::AppConfig& saved) {
     railCollapsed_ = cfg.railCollapsed;
     statusCollapsed_ = cfg.statusCollapsed;
     displayOpen_ = cfg.displayOpen;
+    // THE SPECTRUM'S TRACE MODE AND THE DISPLAY RANGE (stub campaign B11): the window's half of the config, kept by currentConfig below; the range's pair went to the
+    // engine with the rest of its half (Engine::applyConfig), and which window is in force is put over it here.
+    setSpectrumTraceMode(cascade::core::traceModeFromName(cfg.spectrumTraceMode));
+    setSpectrumAverageMs(static_cast<double>(cfg.spectrumAverageMs));
+    restoreDisplayRange(cfg);
     radioSetupDontShow_ = cfg.radioSetupDontShow;   // the RADIO SETUP page's "Don't show this again" tick (stub campaign B8)
     // Told at once, so the engine's FIRST pass already knows (it starts "showing"): a window that opens on the receiver
     // must not run the patch step for a pass and stop it again.
@@ -21813,6 +21935,13 @@ cascade::core::AppConfig AppWindow::currentConfig() {
     cfg.statusCollapsed = statusCollapsed_;
     cfg.displayOpen = displayOpen_;
     cfg.radioSetupDontShow = radioSetupDontShow_;
+    // The spectrum's trace and the display range (0.99.57, 0.99.76; stub campaign B11). The pair is the user's floor and ceiling, kept whichever mode is in force (what
+    // the engine holds is the window IN FORCE, which Automatic makes the standard one); the mode says which. A field not written here would be silently kept by loadedCfg_.
+    cfg.spectrumTraceMode = cascade::core::traceModeName(spectrumTraceMode_);
+    cfg.spectrumAverageMs = static_cast<int>(std::lround(spectrumAverageMs_));
+    cfg.dbMin = displayRange_.manualPair().floorDb;
+    cfg.dbMax = displayRange_.manualPair().ceilingDb;
+    cfg.waterfallRangeMode = cascade::core::rangeModeName(displayRange_.mode());
     cfg.splitRatio = splitRatio_;
     cfg.bandPlanOverlay = bandPlanOverlay_;
     cfg.language = languageSetting_;  // as chosen: never FOXSDR_LANGUAGE

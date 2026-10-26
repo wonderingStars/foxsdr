@@ -126,6 +126,11 @@ struct GLFWwindow;
 #include "core/problem_report.hpp"
 #include "core/hang_watchdog.hpp"
 #include "gui/freq_scale.hpp"
+// THE SPECTRUM'S TRACE MODES, THE DISPLAY RANGE AND THE TIP THAT SAYS THEY ARE THERE (stub campaign B11): all three header-only and free of ImGui, so held
+// by value below like the scale is.
+#include "core/display_range.hpp"
+#include "core/trace_hold.hpp"
+#include "gui/hover_dwell.hpp"
 // The settings panels' port range, default ports and the two address classifiers - as data (stage 5b): the interface includes nothing of
 // net/ for them any more (the servers are the engine's).
 #include "core/server_ports.hpp"
@@ -1370,6 +1375,80 @@ private:
         int frames = 0;
     };
     MarkerNoteHold markerNoteHold_;
+
+    // --- THE SPECTRUM'S TRACE, THE DISPLAY RANGE AND THE PASSBAND'S SLIDE (stub campaign B11, 0.99.57 - 0.99.83; app_window_display.cpp has the why) ------
+    // All window state, over the table's existing words: nothing here is a new op, list or fact (the engine holds the dB window IN FORCE as dbMin/dbMax and
+    // takes it by FOXAPI_OP_SET_DISPLAY_RANGE; which of Automatic and Manual that is, and the pair Manual returns to, is the person's choice about what they
+    // see and is kept - and saved - here, as the trace mode is).
+    //
+    // THE TRACE MODE (a right-click on the spectrum, or on a patch Spectrum part's trace): Normal, Peak hold or Average over a length. One setting for every
+    // spectrum; the held trace is drawn in bold over the live one. spectrumHold_ is the receiver's, patchHolds_ one per Spectrum part (its axis is its own columns).
+    cascade::core::TraceMode spectrumTraceMode_ = cascade::core::TraceMode::Normal;
+    double spectrumAverageMs_ = cascade::core::kTraceAverageDefaultMs;
+    cascade::core::TraceHold spectrumHold_;                       // the receiver's
+    std::map<cascade::core::patch::NodeId, cascade::core::TraceHold> patchHolds_;
+    std::uint64_t spectrumHoldSeq_ = ~std::uint64_t{0};            // the frame the receiver's hold last took
+    bool traceMenuPending_ = false;                                // open the menu at the top level this frame
+    void setSpectrumTraceMode(cascade::core::TraceMode m);
+    void setSpectrumAverageMs(double ms);
+    void resetSpectrumTraces();
+    void feedSpectrumHold();                                       // once a frame, from readSpectrum: a NEW frame moves the receiver's hold
+    unsigned int traceColour() const;
+    void drawTraceModeLabel(float x0, float y0, float scale);
+    void drawTraceModeMenu();
+    // THE DISPLAY RANGE (a right-click on the spectrum or the waterfall): Range: Automatic or Manual, Floor and Ceiling, and Reset. displayRange_ is the
+    // person's choice; the window in force goes to the engine by SET_DISPLAY_RANGE, and the picture is drawn from the state's dbMin/dbMax as ever.
+    cascade::core::DisplayRange displayRange_;
+    // What the window asked the engine for and is waiting to see in the state (a command lands at the engine's next pass), so that a state that has not caught
+    // up is not mistaken for somebody else's change; and the last pair the state showed, so a CHANGE of it that nobody here asked for (the web remote's
+    // range) is taken as the person's choice of Manual, as master's onDisplayRange did.
+    struct DisplaySent {
+        bool pending = false;
+        cascade::core::DbPair pair;
+        double atS = 0.0;
+    };
+    DisplaySent displaySent_;
+    bool displaySeenValid_ = false;
+    cascade::core::DbPair displaySeen_;
+    void sendDisplayRange();                                       // the window in force, to the engine
+    void followDisplayRange();                                     // once a frame after refreshUiState
+    void restoreDisplayRange(const cascade::core::AppConfig& cfg); // applyConfig's half
+    void setRangeMode(cascade::core::RangeMode m);
+    void setManualRange(float floorDb, float ceilingDb, bool floorMoved);
+    void resetDisplay();
+    void drawDisplayMenuBlock();                                   // the block that ends the spectrum's menu and the waterfall's
+    // THE TIP: "Right-click to change the range and display", after four seconds of rest on the spectrum, the waterfall or a patch Spectrum part
+    // (gui/hover_dwell.hpp). displayTipShown_ is whether it was up this frame (the census reads it).
+    cascade::gui::HoverDwell displayTip_;
+    bool displayTipShown_ = false;
+    void showDisplayTip(std::uint64_t region, bool over, const char* name);
+    // THE PASSBAND'S SLIDE (Shift + wheel over the spectrum or the waterfall, 0.99.82): the tuned frequency moves by the mode's raster a notch; the picture
+    // follows it for kPassbandFollowS (passbandFollowUntilS_, ImGui's clock), and ends at once under the hand. slideNotches_/slideAtS_ gather a touchpad's
+    // fractions into whole notches; slideAsk_ is what the last slide asked the engine for while the state has not shown it yet (the retune is paced by the
+    // engine), so a run of notches in a few frames counts from where the last one is going and not from where the receiver still is.
+    // THE PICTURE FOLLOWS A SLID PASSBAND (0.99.82): for this long after the last Shift + wheel the view is panned to keep the passband in it, with this share of the
+    // view's width to spare at the edge it was leaving, so the band is not left against the frame. A second and a half outlasts the retune pacing (50 ms) and the source's
+    // readback, and is short enough that a view the user arranges afterwards is never fought; the user's own pan, drag or zoom ends it at once.
+    static constexpr double kPassbandFollowS = 1.5;
+    static constexpr double kPassbandFollowMargin = 0.08;
+    // The regions the 4-second tip is asked about (gui/hover_dwell.hpp). A patch part's regions are (node id << 2) | 1 for its trace and | 2 for its waterfall, which for any
+    // node (ids start at 1) is 5 or more, so these two cannot meet one.
+    static constexpr std::uint64_t kTipRegionSpectrum = 1;
+    static constexpr std::uint64_t kTipRegionWaterfall = 2;
+    void slidePassband(double notches);
+    double slideNotches_ = 0.0;
+    double slideAtS_ = -1.0e9;
+    struct SlideAsk {
+        bool pending = false;
+        double centreHz = 0.0;     // the source's centre the last slide asked for
+        double offsetHz = 0.0;     // the passband's offset from it
+        double atS = 0.0;
+    };
+    SlideAsk slideAsk_;
+    double passbandFollowUntilS_ = 0.0;
+    // THE TYPED FREQUENCY'S MODE (0.99.83): typing a frequency in another band adopts that band's conventional mode (core/band_mode.hpp has the rule).
+    // Returns the 1-based FOXAPI_DEMOD_* the mode should become, or 0 for "leave it".
+    int modeForTypedFrequency(double typedHz);
 
     // --- THE AIRBAND SECTION (stub campaign B7, 0.99.60 - 0.99.71; app_window_airband.cpp has the why) -----------------------------------
     // The monitor is the engine's (src/engine/engine_airband.cpp): the window sends FOXAPP_OP_AIRBAND, FOXAPP_OP_BOOKMARK_TICK, _ADD_ROWS and
