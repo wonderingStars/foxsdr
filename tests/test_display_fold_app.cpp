@@ -264,13 +264,10 @@ int main() {
     CHECK(tools.items.count("bank:2") == 1);
     CHECK(tools.items.count("section:Display") == 0);
     CHECK(!shown(tools));
-    // (Master's list also names "section:Airband###airband". The Airband section is the
-    // 0.99.60-0.99.71 monitor and is not re-expressed on the engine yet - stub campaign
-    // batch B7 - so that one name is carved out behind the red placeholder
-    // merge_pending_part_display_fold_airband_section (tests/merge_pending.cmake), which
-    // says to restore it. Nothing else in this list or this test was changed for the carve.)
+    // (The Airband section is the last of the bank: master's list names it, "section:Airband###airband". Stub batch B1 carved that one name out
+    // behind a red part while the section was not on the window; batch B7 brought the section back and this list is master's again, name for name.)
     for (const char* kept : {"switch:Demod scope###demodscope", "section:Radar",
-                             "section:Bookmarks", "section:Scanner"}) {
+                             "section:Bookmarks", "section:Scanner", "section:Airband###airband"}) {
         if (tools.items.count(kept) != 1) { std::printf("    TOOLS lost %s\n", kept); }
         CHECK(tools.items.count(kept) == 1);
     }

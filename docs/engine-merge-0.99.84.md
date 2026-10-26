@@ -219,12 +219,12 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * privacy: reports carry no addresses, computer names, ports or sound-card names ........... carried (core/) and re-expressed (C1: no log line names a card)
 
 0.99.60
-  * Airband: type an airport, hear its control frequencies ................................... stubbed AIRBAND, window half B7 (src/gui_pending/app_window_airband.cpp, 1,329 lines;
-    core/ and the views are in the tree; the engine's half - the rows an airport's lookup adds, FOXAPP_OP_BOOKMARK_ADD_ROWS - is re-expressed, stub batch B6)
+  * Airband: type an airport, hear its control frequencies ................................... re-expressed, stub batch B7 (src/gui/app_window_airband.cpp: the lookup sends the
+    airport's rows as FOXAPP_OP_BOOKMARK_ADD_ROWS, a list; the engine's half is batch B6's; test_airband_app, lookup)
   * LISTEN, ticked frequencies ............................................................... re-expressed in part, stub batch B6: the ENGINE runs the monitor
     (src/engine/engine_airband.cpp: the blocks, the squelch, the scan between them, the hand-back from the patch view, the heard time) and the scanner's list mode
     (FOXAPP_OP_AIRBAND, _BOOKMARK_TICK, _SCANNER_LIST, AIRBAND_CHANNELS; tests/test_engine_api_airband.cpp), and the window draws the Bookmarks tick column and the
-    Scanner's "Ticked frequencies" key; the Airband SECTION (its LISTEN key, rows, lamps) is stubbed AIRBAND, B7
+    Scanner's "Ticked frequencies" key; the Airband SECTION (its LISTEN key, rows, lamps) is re-expressed, stub batch B7 (test_airband_app, listen / stop / hand-back)
 
 0.99.61
   * the Bandwidth control narrows what you hear .............................................. re-expressed, C3 (the filter is core/dsp; test_bandwidth_app)
@@ -278,10 +278,12 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 
 0.99.66
   * the Airband monitor takes a typed list and plays NFM ..................................... re-expressed in part, stub batch B6 (the engine: a typed row, an NFM channel and one
-    channel per frequency, test_engine_api_airband A2 / B3 / F1); the add row's keys are stubbed AIRBAND, B7
-  * presets: a named list filled by hand, from a file, exported ............................. stubbed AIRBAND (the engine's half of REMOVE PRESET - the monitor stops when its
-    preset goes - is B6's; the import into a preset and the export are B7 / B8 / B19)
-  * the spectrum shows what the monitor is hearing ........................................... stubbed AIRBAND, B7 (the engine serves it: AIRBAND_CHANNELS, B6)
+    channel per frequency, test_engine_api_airband A2 / B3 / F1) and B7 (the add row, the mode list: test_airband_app, add row / nfm / one channel per frequency)
+  * presets: a named list filled by hand, from a file, exported ............................. re-expressed, stub batch B7 (the preset field, Add, Remove preset - the engine stops
+    a monitor that plays the group, B6; IMPORT of a typed path and EXPORT CSV are window-side disk jobs in app_window_airband.cpp, see docs/engine-stage4.md 6.22 B7:
+    the existing BOOKMARK_IMPORT_FILE / BOOKMARK_EXPORT carry neither a group nor a CSV; the empty-box Import DIALOG is B8's - openImportDialog is the empty hook)
+  * the spectrum shows what the monitor is hearing ........................................... re-expressed, stub batch B7 (marks fed from AIRBAND_CHANNELS read every frame;
+    the VFO band, its waterfall line and its peak figure are not drawn while it listens; test_airband_app, spectrum)
   * a native HydraSDR RFOne driver ........................................................... re-expressed, C0/C4 (engine enumeration and kind; the remembered
     gain mode under its own key, found by test_hydrasdr_app)
   * a sentinel report says where a fast-fail was ............................................. carried (core/)
@@ -298,9 +300,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * no console window beside FoxSDR's own ................................................... carried (main.cpp, merged) (unverified)
   * the RADIO SETUP page ..................................................................... stubbed RADIO-SETUP (src/gui_pending/app_window_radio_setup.cpp)
   * NFM de-emphasis in the Airband monitor ................................................... re-expressed, stub batch B6 (the engine builds an NFM channel with the 50 us network;
-    test_engine_api_airband F1 reads it off the set as built); the section's note is B7
+    test_engine_api_airband F1 reads it off the set as built); the section's note is B7's (the monitor's sentences are fact.airband.note, shown in the section)
   * an airport lookup while listening changes nothing played ................................ re-expressed in part, stub batch B6 (the engine's rule: the monitor's preset is the LISTEN's,
-    a row added to another preset restarts nothing; test_engine_api_airband C2); the window's lookup is stubbed AIRBAND, B7
+    a row added to another preset restarts nothing; test_engine_api_airband C2); the window's lookup leaves the group on show - and so the monitor - alone while it listens, B7
+    (test_airband_app, lookup while listening; the in-process mate checkAnAirportLookupKeepsAListeningMonitorsChoice of test_gui_file_jobs is B19's)
   * a pasted report is recognised; `upload local-only` says what it means ..................... stubbed PROBLEM-REPORT (core/pasted_report is in; the page's
     attach-diagnostics rows, the preview and the recognised-report line are not - lostlines: drawProblemReportPage)
   * Fitted modules names the files not installed from the store ............................ re-expressed, stub batches B3 and B5 (the engine's half - `fact.plugin.origin.<file>`:
@@ -318,8 +321,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     the remote API refuses an address-bearing open from a remote session)
 
 0.99.71
-  * the Airband monitor says what it is hearing where you look ............................... stubbed AIRBAND, B7 (the engine serves the block's line, fact.airband.block, and the names
-    that are talking, AIRBAND_CHANNELS, B6)
+  * the Airband monitor says what it is hearing where you look ............................... re-expressed, stub batch B7 (fact.airband.block and the open channels' names, in the rail
+    above the row list and as a caption on the spectrum; test_airband_app, caption)
 
 0.99.72
   * the plugin store laid out like a store; Fitted modules like an operating panel ........... re-expressed in part: THE STORE since stub batch B4 (the window
@@ -465,12 +468,12 @@ the plugin settings forms, plugin run modes, window placement) were left stubbed
   PATCH-VIEW (2)          test_patch_canvas_nav test_patch_info_pane
   DISK-WORK (4)           test_gui_file_jobs test_failure_files test_iq_open_async test_gui_disk_audit
   one each                PATCH-PRESETS test_patch_presets_app; HEALTH-DIAG test_slow_frames_app;
-                          SOURCE-ROWS test_source_row_app; AIRBAND test_airband_app; UPDATES test_store_update_app;
+                          SOURCE-ROWS test_source_row_app; UPDATES test_store_update_app;
                           IMPORT-DIALOG test_import_dialog_app; RADIO-SETUP test_radio_setup_app; TESTER-USAGE test_team_message_app;
                           MAP-WINDOWS test_unplaced_list_app; WINDOW-PLACEMENT test_decoder_window_app
   parts (3)               transmit_page_plugin_key (TX-PLUGIN), excuse_cap_pickfile (IMPORT-DIALOG), audio_lead_plugin_wake (PLUGIN-RUN)
                           [B2 removed audio_lead_plugin_wake and added nothing; B1 had added display_fold_airband_section (AIRBAND); B4 added
-                          store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted]
+                          store_app_fitted (STORE-VIEW: the FITTED MODULES scenarios of test_plugin_store_app); B5 removed store_app_fitted; B1's display_fold_airband_section (AIRBAND) and the test test_airband_app were removed by B7: AIRBAND is whole]
 
 UPDATE 2026-10-26, stub batch B1 (docs/engine-stage4.md 6.22): test_app_rail, test_rail_fold, test_rail_fold_app, test_status_fold, test_status_fold_app
 and test_display_fold_app are converted and green, and the placeholders of those six are gone (RAIL-CHROME is now test_deck_knobs_app and test_theme_census,
@@ -515,6 +518,13 @@ then against 14 mutants) and by four new cases of test_apply_command. The window
 test_recorder_bookmarks_scanner, had their expectations edited for the two new widgets). test_i18n:
 144 stale, 0 missing (the three keys that returned: "Ticked: scanned by the Scanner's \"Ticked frequencies\"..." (the tick's tooltip), "Ticked frequencies (%zu)" and its
 tooltip).
+
+UPDATE 2026-10-26, stub batch B7 (docs/engine-stage4.md 6.22): the AIRBAND section is back in the window (src/gui/app_window_airband.cpp, src/gui/airband_window_state.hpp; the parked
+file is gone). test_airband_app is converted (the real binary, 330 checks: the 316 of the parked test and a new scenario, an airport looked up while the monitor plays a preset) and the
+part display_fold_airband_section is restored (test_display_fold_app's TOOLS-bank list is master's again, "section:Airband###airband" included): both placeholders are gone, 35 remain (33
+tests and 2 parts). Not engine work: no op, list or fact was added. The preset's IMPORT of a typed path and EXPORT CSV are window-side DiskJobs (the existing BOOKMARK_IMPORT_FILE carries no group
+and BOOKMARK_EXPORT writes SDR# XML), which B19 should fold into the disk-work file; the import-dialog hook (openImportDialog) is empty until B8; the tester recorder's feature notes
+(NOTEFEATURE call sites) are B15's and the squelch AUTO follow-up is B12's. test_i18n: 144 stale, 0 missing (unchanged: the parked file's keys were already counted).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

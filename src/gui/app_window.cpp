@@ -3801,6 +3801,9 @@ void AppWindow::drawUi() {
     // stands between the workers and the sink.)
     frameScope.to(cascade::core::FrameScope::Polls);
     pollUpdateAsync();
+    // The Airband section's once-a-frame half (stub campaign B7): its disk jobs, the view switch the engine asks for, the monitor's sentences. In
+    // master the monitor's driver ran here as well; that part is the engine's pass now.
+    airbandFrame();
     // And the sink: everything above this line can be working perfectly while
     // the user hears nothing. The collect comes first - the health check must
     // not judge a stream an open is still installing.
@@ -6518,6 +6521,8 @@ void AppWindow::drawMenuColumn() {
             drawRadarSection();
             drawBookmarksSection();
             drawScannerSection();
+            // The Airband monitor's section (0.99.60, stub campaign B7): the last of the bank, as in master.
+            drawAirbandSection();
             break;
         case cascade::gui::RailBank::Extend:
             benchGroup(tr("EXTEND"));
@@ -9026,6 +9031,15 @@ void AppWindow::drawCenterPanels() {
     // (From the window's session, window port group 6: the state's offset and
     // bandwidth - or, after a drag step below, the numbers that step sent; see
     // tuneLocal_.)
+    //
+    // WHILE THE AIRBAND MONITOR LISTENS (0.99.66) THE VFO IS NOT WHAT IS HEARD:
+    // its audio is faded out for the monitor's mix of channels, so its shaded
+    // band, its passband peak, its line down the waterfall and its grab handles
+    // all describe a demodulator that is not playing. None of them is drawn or
+    // acts until the monitor stops; drawAirbandMarkers shows the channels that
+    // ARE heard. Everything below that depends on the band reads this one flag
+    // (fact.airband.listening, as read at the frame's start - one answer all frame).
+    const bool vfoHidden = airbandFacts().listening;
     double bandCenterAbs = centreHz + tunedVfoOffsetHz();
     SpectrumView::VfoBand band;
     band.x0Frac = scale_.hzToX(bandCenterAbs - 0.5 * tunedBandwidthHz());
@@ -9035,7 +9049,8 @@ void AppWindow::drawCenterPanels() {
     const double mouseFrac =
         static_cast<double>(io.MousePos.x - specPos.x) / static_cast<double>(width);
     if (vfoDrag_ != VfoDrag::None) {
-        if (!ImGui::IsMouseDown(0)) {
+        // (A drag the monitor's start found already in progress ends here, on the same path as a button let go: nothing visible is being dragged.)
+        if (!ImGui::IsMouseDown(0) || vfoHidden) {
             vfoDrag_ = VfoDrag::None;
             band.dragging = false;
             // The drag has SETTLED: the engine writes one line for the width it ended on (if the drag moved it).
@@ -9104,7 +9119,7 @@ void AppWindow::drawCenterPanels() {
     // SPECTRUM and appends the bin count it was actually handed.
     SpectrumView::Chrome chrome;
     chrome.emaAlpha = kAveragingAlpha;
-    chrome.passband = &band;
+    chrome.passband = vfoHidden ? nullptr : &band;   // no band drawn, no peak "in" it
     chrome.dataAgeSec = (lastFrameSeenS_ >= 0.0) ? (nowS - lastFrameSeenS_) : -1.0;
     chrome.freqTicks = (tickCount > 0) ? axisTicks : nullptr;
     chrome.freqTickCount = tickCount;
@@ -9142,6 +9157,11 @@ void AppWindow::drawCenterPanels() {
     if (bookmarkMarkers_ && !tune.markers.empty()) {
         drawBookmarkMarkers(specPos.x, specPos.y, width, spectrumHeight);
     }
+    // The channels the AIRBAND monitor is playing (0.99.66), in place of the VFO band that is not drawn meanwhile. Not under bookmarkMarkers_: the
+    // marks are the monitor's, and switching the bookmark names off must not blind the one picture of what is being heard. FED FROM THE LIVE LIST
+    // (airbandReadLive, this frame's read - never a copy kept until listSeq moves, which a channel's open lamp does not move): the marks draw
+    // only the channels in the block on the air.
+    if (vfoHidden) { drawAirbandMarkers(specPos.x, specPos.y, width, spectrumHeight); }
     // The plugins' own marks (host API level 1), over the bookmarks and under
     // the gridlines and the VFO overlay, which stay the topmost furniture: a
     // plugin can annotate the spectrum, never cover the user's tuning.
@@ -9153,12 +9173,23 @@ void AppWindow::drawCenterPanels() {
         drawList->AddLine(ImVec2(x, specPos.y), ImVec2(x, specPos.y + spectrumHeight),
                           kTickGridColor);
     }
+    // What the AIRBAND monitor is hearing (0.99.71), lettered under the header: the rail's two status lines, on the picture the listener
+    // watches (the why is at drawAirbandCaption). After the gridlines, as the panel's topmost lettering.
+    if (vfoHidden) { drawAirbandCaption(specPos.x, spectrum_->headerBottom(), width, specPos.y + spectrumHeight); }
 
     // STARTING a drag, which is the half that needs the hover state and so
     // could not move above the panel with the continuation.
+    //
+    // WITH THE VFO HIDDEN (the monitor is listening, 0.99.66) there is no band
+    // to hit: a press on the middle of the spectrum is "off the band", so it
+    // never starts an invisible drag or shows a move/resize cursor, and the
+    // tooltip - which tells of a "shaded band" that is not there - stays off.
+    // A plain click still tunes the VFO and a double-click still unzooms, as
+    // they do for any press off the band; neither involves the band.
     if (vfoDrag_ == VfoDrag::None && specHovered) {
-        const auto hit = SpectrumView::hitTest(
-            mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
+        const auto hit = vfoHidden ? SpectrumView::VfoHit::None
+                                   : SpectrumView::hitTest(
+                                         mouseFrac, band, static_cast<double>(kVfoEdgeTolPx) / width);
         if (hit == SpectrumView::VfoHit::EdgeLow ||
             hit == SpectrumView::VfoHit::EdgeHigh) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -9171,7 +9202,8 @@ void AppWindow::drawCenterPanels() {
         // the window has had a tooltip from the start. Shown after ImGui's
         // normal hover delay and only while nothing is being dragged, so it
         // never sits under a hand that is already working.
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
+        if (!vfoHidden &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_NoSharedDelay) &&
             !ImGui::IsMouseDown(0)) {
             if (hit == SpectrumView::VfoHit::Center) {
                 ImGui::SetTooltip(tr("Drag to move the tuned band | drag an edge to widen it\n"
@@ -9200,10 +9232,15 @@ void AppWindow::drawCenterPanels() {
             scale_.resetView();  // double-click on empty spectrum: unzoom
         }
     }
-    spectrum_->drawVfoOverlay(band, width, spectrumHeight);
-    // Where the band is on screen, so a test can tell "drawn again" from "never hidden" by the LAST frame.
-    cascade::gui::census::rect("rx:vfo", specPos.x + static_cast<float>(band.x0Frac) * width, specPos.y,
-                               specPos.x + static_cast<float>(band.x1Frac) * width, specPos.y + spectrumHeight);
+    if (vfoHidden) {
+        cascade::gui::census::note("airband:vfo-hidden");
+        cascade::gui::census::rect("rx:vfo", 0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        spectrum_->drawVfoOverlay(band, width, spectrumHeight);
+        // Where the band is on screen, so a test can tell "drawn again" from "never hidden" by the LAST frame; an empty rectangle above is "hidden".
+        cascade::gui::census::rect("rx:vfo", specPos.x + static_cast<float>(band.x0Frac) * width, specPos.y,
+                                   specPos.x + static_cast<float>(band.x1Frac) * width, specPos.y + spectrumHeight);
+    }
 
     // Splitter: an invisible button whose vertical drag re-balances the
     // spectrum/waterfall split. Ratio (not pixels) so a window resize keeps
@@ -9293,9 +9330,10 @@ void AppWindow::drawCenterPanels() {
     cascade::gui::census::rect("fmk:wf:receiver", wfPos.x, wfPos.y, wfPos.x + width, wfPos.y + waterfallHeight);
 
     // Thin VFO marker on the waterfall (the parity spec's "where am I tuned"
-    // line), culled when the tuned frequency is scrolled out of view.
+    // line), culled when the tuned frequency is scrolled out of view. Not while the monitor listens (0.99.66): it marks the VFO, which is not what is
+    // heard then (see vfoHidden above).
     const double markFrac = scale_.hzToX(bandCenterAbs);
-    if (markFrac >= 0.0 && markFrac <= 1.0) {
+    if (!vfoHidden && markFrac >= 0.0 && markFrac <= 1.0) {
         const float x = wfPos.x + static_cast<float>(markFrac) * width;
         drawList->AddLine(ImVec2(x, wfPos.y), ImVec2(x, wfPos.y + waterfallHeight),
                           kWfMarkerColor);
@@ -17035,6 +17073,7 @@ const AppWindow::TuningListCache& AppWindow::tuningLists() {
             m.mode = static_cast<std::uint32_t>(it.value[1]);
             m.bandwidthHz = it.value[2];
             m.ticked = (it.flags & FOXAPI_ITEM_TICKED) != 0u;   // (stub campaign B6)
+            m.heardS = it.value[3];                             // (B7: the Airband section's "heard" column; a flush moves the store's version)
         }
         c.markersVersion = c.factText;
         ++c.markerCopies;
@@ -17560,6 +17599,9 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
         // version the draft is rebased onto, and the native scan a new Radio part waits for.
         if (r.op == FOXAPP_OP_PATCH_SET_GRAPH) { onPatchGraphResult(r); }
         if (r.op == FOXAPP_OP_SCAN_NATIVE_ONLY) { patchScanDone_ = std::max<std::uint64_t>(patchScanDone_, r.ticket); }
+        // THE AIRBAND SECTION'S ANSWERS (stub campaign B7): the rows added for a lookup, a typed frequency or an import (the engine says how many, or
+        // why a typed one was refused), a removed preset, a LISTEN that would not start.
+        if (r.op == FOXAPP_OP_BOOKMARK_ADD_ROWS || r.op == FOXAPI_OP_BOOKMARK_REMOVE_GROUP || r.op == FOXAPP_OP_AIRBAND) { airbandOnAnswer(r); }
         // THE WEB AND CAT PANELS' ANSWER (stage 5b): one is owed for every SERVER_CONFIG sent (the mirrors wait for them), and a refusal -
         // a password under eight characters, say - is lettered on the web panel in the engine's words, as the password field's own complaint was.
         if (r.op == FOXAPI_OP_SERVER_CONFIG) {

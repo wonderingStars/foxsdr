@@ -59,13 +59,9 @@ cascade_merge_pending(HEALTH-DIAG      # 0.99.61 - 0.99.69 diagnostics context, 
     test_slow_frames_app)
 cascade_merge_pending(SOURCE-ROWS      # 0.99.50 / 0.99.75 source row naming, one chip one route, per-radio manual gain
     test_source_row_app)
-cascade_merge_pending_part(AIRBAND display_fold_airband_section
-    "tests/test_display_fold_app.cpp, scenario 'tools': the TOOLS bank must keep the Airband section ('section:Airband###airband' in the list of names the TOOLS bank keeps - master's list is in git show origin/master:tests/test_display_fold_app.cpp). The Airband section (0.99.60-0.99.71, src/gui_pending/app_window_airband.cpp) is not on this window yet, so the one name was carved out when the rest of the test returned in stub batch B1. Restore the name when drawAirbandSection returns (B7).")
 
 # --- ADDED 2026-10-21, after the first run of the gui-labelled tests (real-binary tests; they build and run as they are, and fail only because
 # the feature they read the census of is not in the window yet). The ledger id says which feature.
-cascade_merge_pending(AIRBAND          # 0.99.7x the airband monitor
-    test_airband_app)
 cascade_merge_pending(MARKERS-SPECTRUM # 0.99.5x - 0.99.82 waterfall markers, peak hold / average / trace modes, close names stack, Shift+wheel slide
     test_bookmark_stacking_app test_freq_markers_app test_spectrum_trace_app test_passband_slide_app)
 cascade_merge_pending(DISPLAY-RANGE    # 0.99.7x the spectrum's and waterfall's range set by hand, the display menu and its tip (the folded Display section returned in B1)

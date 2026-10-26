@@ -53,6 +53,9 @@
  *             the lines are on screen in a 1000-pixel window without the
  *             rail being scrolled further, and the caption is on the
  *             spectrum; idle, neither is drawn.
+ *   lookup while listening   (0.99.69; added by stub batch B7, which brought the section back) O'Hare is looked up while the monitor
+ *             plays the preset Marine: the rows are added all the same, and what is played, shown and marked does not change - the
+ *             same three channels in one block, the group on show still Marine, no mark for an O'Hare frequency.
  *
  * Every click is aimed at the rectangle a first, unscripted run of the same
  * layout reported for that key, so nothing here depends on where the rail
@@ -1030,6 +1033,48 @@ int main() {
                 CHECK(m.load(bookmarksPath().string(), err));
                 CHECK(m.list().size() == 1);
                 if (m.list().size() == 1) { CHECK(m.list()[0].name == "Tower" && m.list()[0].group == "Tower"); }
+            }
+
+            // --- an airport's lookup while the monitor plays a preset (0.99.69; batch B7) ---------------------------------
+            // The same preset - Marine, its two rows and the one the script adds - is LISTENed to, and O'Hare is looked up while it
+            // plays. The lookup adds the airport's rows to the frequency list as it always does, and changes NOTHING that is
+            // played: still the three channels of Marine in one block, no mark for an O'Hare frequency, the group on show still
+            // Marine (the section lists its three rows, never O'Hare's twenty-nine), and the VFO's band still hidden on the last
+            // frame because the monitor is still listening. A lookup that put the airport on show, or restarted the monitor on it,
+            // would change every one of those. (The same rule for Add and Import is held in test_gui_file_jobs, batch B19.)
+            if (layout.rects.count("airband:code") == 1) {
+                writeBookmarks(rows);
+                const Result lk = once("lklisten", 420, "receiver",
+                                       prepare(first.rects) + click(110, layout.rects.at("airband:listen")) + hold(120) +
+                                           click(200, layout.rects.at("airband:code")) + "206 text ORD\n208 key enter\n" + hold(212));
+                std::printf("  an airport looked up while the monitor plays Marine\n");
+                CHECK(lk.ok);
+                CHECK(lk.items.count("airband:listening") == 1);
+                std::size_t channelFigures = 0, blockFigures = 0;
+                for (const std::string& it : lk.items) {
+                    channelFigures += it.rfind("airband:channels:", 0) == 0 ? 1u : 0u;
+                    blockFigures += it.rfind("airband:blocks:", 0) == 0 ? 1u : 0u;
+                }
+                CHECK(lk.items.count("airband:channels:3") == 1);
+                CHECK(channelFigures == 1);   // never another plan
+                CHECK(lk.items.count("airband:blocks:1") == 1);
+                CHECK(blockFigures == 1);
+                CHECK(lk.rects.count("airband:mk:121900") == 0);   // O'Hare's ground: not played
+                CHECK(lk.items.count("airband:rows:3") == 1);
+                CHECK(lk.items.count("airband:rows:29") == 0);     // the airport was not put on show
+                CHECK(lk.items.count("airband:vfo-hidden") == 1);
+                CHECK(vfoRectWidth(lk) == 0.0f);                   // still listening on the last frame
+                cascade::core::FreqManager m;
+                std::string err;
+                CHECK(m.load(bookmarksPath().string(), err));
+                std::size_t marine = 0, ohare = 0;
+                for (const cascade::core::Bookmark& b : m.list()) {
+                    marine += (b.group == "Marine") ? 1u : 0u;
+                    ohare += (b.group == "KORD Chicago O'Hare International Airport") ? 1u : 0u;
+                }
+                std::printf("    saved: %zu in Marine, %zu in O'Hare's group\n", marine, ohare);
+                CHECK(marine == 3);
+                CHECK(ohare == 29);   // the rows were added all the same
             }
         }
     }

@@ -32,6 +32,7 @@ struct GLFWwindow;
 #include "core/band_plan.hpp"
 #include "core/config.hpp"
 #include "core/diag_history.hpp"
+#include "core/freq_import.hpp"
 #include "core/freq_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_host.hpp"
@@ -54,6 +55,7 @@ struct GLFWwindow;
 #include "core/utf8_text.hpp"
 #include "core/engine_measure.hpp"
 #include "gui/frame_log.hpp"
+#include "gui/airband_window_state.hpp"
 #include "gui/basemap_cache.hpp"
 // The floor a torn-off page cannot be dragged under, and the reset generation
 // that puts an already-wrong one back. ImGui-free for the same reason as the
@@ -1321,6 +1323,44 @@ private:
     void rebuildBookmarkView();
     // Bookmarks inside the visible span, as marks on the spectrum.
     void drawBookmarkMarkers(float x0, float y0, float width, float height);
+
+    // --- THE AIRBAND SECTION (stub campaign B7, 0.99.60 - 0.99.71; app_window_airband.cpp has the why) -----------------------------------
+    // The monitor is the engine's (src/engine/engine_airband.cpp): the window sends FOXAPP_OP_AIRBAND, FOXAPP_OP_BOOKMARK_TICK, _ADD_ROWS and
+    // FOXAPI_OP_BOOKMARK_REMOVE_GROUP, reads fact.airband.* when listSeq moves, and reads the live list AIRBAND_CHANNELS once a frame - never
+    // on listSeq. What the window keeps is airband_ (gui/airband_window_state.hpp).
+    void drawAirbandSection();
+    void airbandFrame();   // once a frame, with the polls: disk jobs, the view switch, the monitor's sentences, the census
+    // On the spectrum: one mark per channel of the block on the air, from the live list (called from drawCenterPanels), and the caption.
+    void drawAirbandMarkers(float x0, float y0, float width, float height);
+    void drawAirbandCaption(float x0, float y0, float width, float yBottom);
+    // The monitor's facts (read when listSeq moves) and its channels (read at most once an ImGui frame, never on listSeq).
+    const cascade::gui::AirbandFacts& airbandFacts();
+    void airbandReadLive();
+    void airbandRebuildView();
+    bool airbandStatusText(std::string& block, std::string& hearing);
+    std::string airbandPresetName() const;
+    void airbandLookup(const std::string& code);
+    void airbandAddAirport(const cascade::core::Airport& a);
+    void airbandAddManual();
+    void airbandShowGroup(const std::string& group);
+    void airbandImportPreset();                       // the Import key: the typed path's rows into the preset (the empty box: openImportDialog)
+    void airbandImportFile(const std::string& path);
+    void airbandPollJobs();
+    void airbandSendChunks();
+    void airbandFinishImport();
+    void airbandRemovePreset();
+    void airbandExportPreset();
+    void airbandListen();
+    // A command whose answer the section waits for (its ticket is kept: airbandOnAnswer), and the answers; actOnUiAnswers calls the second
+    // for every result.
+    std::uint64_t airbandSend(const cascade::core::cmd::QueuedCommand& q, cascade::gui::AirbandAsk::Kind kind, const std::string& group,
+                              std::size_t total, std::size_t ticked);
+    void airbandOnAnswer(const FoxCommandResult& r);
+    cascade::gui::AirbandJobs& airbandJobs();
+    // THE "Import a frequency list" WINDOW (0.99.80, batch B8): opened for a preset by an Import pressed with the box empty and by a read that
+    // found nothing. The hook only, until B8 brings the window.
+    void openImportDialog(const cascade::core::ImportInto& into, const std::string& reason);
+    cascade::gui::AirbandWindowState airband_;
 
     // --- Config persistence (P5) ---------------------------------------------
     // Pushes every AppConfig field into the pipeline/panel mirrors; source
