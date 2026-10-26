@@ -7,19 +7,19 @@ This is a feature release; nothing else changes. The Microsoft Store copy stays 
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.94.exe`:**
-`TBD`
+`b2360725f901d0aae26577735bc123b2e9fb9d582d190001dc02171f620d453b`
 
 **SHA-256 of `FoxSDR-0.99.94-x86_64.AppImage`:**
-`TBD`
+`b9b2a681484b23474768dfbede144c1ec30975d3bca21af147c5f71cf6f4055f`
 
 **SHA-256 of `foxsdr-0.99.94-linux-x64.tar.gz`:**
-`TBD`
+`b9bb9b6534bffb06704df378e9b6460e21098a90ce8e6f22eefca71937dbe81e`
 
 **SHA-256 of `FoxSDR-0.99.94-aarch64.AppImage`:**
-`TBD`
+`dcd6afb1ea76dd67c5ac5f57bac454d4f091caa0a452d382fb4496d3847e985e`
 
 **SHA-256 of `foxsdr-0.99.94-linux-arm64.tar.gz`:**
-`TBD`
+`1f4d4c56851d6540ebd56a684b31bf056379357f1c7718b45cc1745b17328191`
 
 ## Features and fixes, 2026-10-26
 
