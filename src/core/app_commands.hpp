@@ -62,6 +62,23 @@
 #define FOXAPP_OP_BOOKMARK_IMPORT_FILE   0x8601u /* text (or long text): a PATH on this machine; LOCAL only */
 #define FOXAPP_OP_SCANNER_RANGE          0x8602u /* ival[0]: mask 1 start 2 stop 4 step 8 reconfigure-if-running; num[0..2]: Hz */
 #define FOXAPP_OP_BOOKMARK_EXPORT        0x8603u /* long text: bookmark ids, decimal, space-separated; writes them as SDR# XML under the record folder; LOCAL only */
+// THE FREQUENCY LIST'S TICK, ROWS TYPED IN, AND THE SCANNER'S LIST MODE (stub campaign B6, 0.99.60 - 0.99.66; docs/api-0.3-additions.md 9.6), all LOCAL
+// sessions only and none of them on the web profile. A bookmark's tick is what the scanner's list mode and the Airband monitor play.
+//   BOOKMARK_TICK (SETTINGS): ival[0]: the bookmark's id; ival[1]: 0 untick, 1 tick. NOT_FOUND for an id the list does not hold. A row already
+//   as asked changes nothing (and writes nothing).
+//   BOOKMARK_ADD_ROWS (SETTINGS): long text (or text), one row a line: "<Hz>\t<mode>\t<bandwidth Hz>\t<tick 0/1>\t<group>\t<name>" (the group and the
+//   name are the last two fields and may be empty; a name with a tab in it is the sender's to clean). ival[0]: 0 a row TYPED IN - added as the list's
+//   own add does (a name already in use gets " (2)"), and judged by the rule a tune the radio refuses is: a frequency outside what the open radio
+//   covers (a converter's LO taken out) is OUT_OF_RANGE with the sentence that says what it does cover - 1 a LIST (an airport's rows) - added as an
+//   import does, a row identical in name, frequency and group to one already there skipped, no range judged. applied[0]: the rows added. BAD_ARGUMENT
+//   for text with no row in it.
+//   SCANNER_LIST (TUNE): ival[0]: 0 range mode (the scanner scans the range again), 1 list mode (it scans the ticked rows, in frequency order, each
+//   tuned with its own mode and bandwidth) - either stops a running scan, as the checkbox did - 2 START a list scan (list mode, whatever it was).
+//   A start with nothing ticked is NO_CHANGE. List mode is session-only. While a list scan runs it follows the ticks: a row ticked or unticked
+//   restarts it from the first row, nothing ticked stops it. SCANNER_RUN (a range scan, from the desk or a browser) leaves list mode.
+#define FOXAPP_OP_BOOKMARK_TICK          0x8604u /* ival[0]: the bookmark's id; ival[1]: 0 untick / 1 tick */
+#define FOXAPP_OP_BOOKMARK_ADD_ROWS      0x8605u /* long text: "<Hz>\t<mode>\t<bw Hz>\t<tick>\t<group>\t<name>" lines; ival[0]: 0 typed rows / 1 a list */
+#define FOXAPP_OP_SCANNER_LIST           0x860Au /* ival[0]: 0 range mode / 1 list mode / 2 start a list scan */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
@@ -231,6 +248,21 @@
 #define FOXAPP_OP_TEST_HOLD_AUDIO_LOCK   0x8427u /* ival[0]: ms (0.99.68, bounded runs only: FOXSDR_HOLD_AUDIO_LOCK) - the first stop a control request makes of a running receiver first has a thread take the audio mutex for that long; 0 = no seam */
 #define FOXAPP_OP_SET_PPM                0x8426u /* ival[0]: the crystal correction's switch (0/1); num[0]: the open radio's value, ppm (core::sanitisePpm; 0 = none) */
 #define FOXAPP_OP_SET_AUDIO_BUFFER       0x8425u /* ival[0]: the Sinks rail's AUDIO BUFFER, 0 AUTOMATIC | 120 | 240 | 480 | 960 ms (sink::validAudioBufferSetting) */
+// THE AIRBAND MONITOR (stub campaign B6, 0.99.60 - 0.99.71; docs/api-0.3-additions.md 9.6), LOCAL sessions only, grant TUNE (it tunes the receiver):
+// several ticked AM and NFM channels off the receiver's one radio, mixed to the speakers, each behind its own squelch. ival[0] is the action:
+//   0 STOP: the monitor stops (NO_CHANGE when it was neither listening nor waiting).
+//   1 LISTEN: text: the preset to play - a bookmark group - or "" for every ticked AM or NFM row. Nothing ticked there is NO_CHANGE with the note
+//   "Tick at least one AM or NFM frequency to listen to."; a radio that cannot be divided to an audio rate, or a block the radio will not tune to, is
+//   FAILED with the note. A patch view that is showing is handed back FIRST: the engine closes it (the receiver view) and the monitor starts on the
+//   pass after the patch has let go of the radio - applied[0] is then 2. A monitor already listening takes the new preset and starts again.
+//   2 NEXT BLOCK: moves on to the next block now (NO_CHANGE with one block, or not listening).
+//   3 ABOVE THE NOISE: the squelch to 8 dB over the median channel level the strips have reported (NO_CHANGE with no level yet); applied[1]: the dB.
+//   4 SQUELCH: num[0] dB, clamped to -110..0 (applied[1]); a listening monitor rebuilds its block with it. 5 HOLD: num[0] seconds, clamped to 0..60: how
+//   long a block stays after its last word; a listening multi-block monitor starts again.
+//   6 TUNE ONE: ival[1]: a bookmark's id. The monitor stops ("Tuned to <name> alone.") and the receiver tunes to that row, as a click on it would.
+// applied[0] is the state after: 0 not listening, 1 listening, 2 waiting for the patch to hand the radio back. What it is doing is the facts
+// fact.airband.* and the live list AIRBAND_CHANNELS.
+#define FOXAPP_OP_AIRBAND                0x8429u /* ival[0]: 0 stop / 1 listen (text: preset) / 2 next block / 3 above the noise / 4 squelch / 5 hold / 6 tune one */
 // FOXAPP_OP_SOUND_CARD_FORM's ival[1], the FIELD MASK (API 0.3 8.10): which fields the command carries. 0 (and
 // ALL) is the whole form. With a mask, the fields not named keep the engine's own values.
 #define FOXAPP_SOUND_CARD_FIELD_DEVICE   1  /* text: device and host API */

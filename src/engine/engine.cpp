@@ -5657,6 +5657,8 @@ cascade::core::Scanner::Params Engine::scannerParams() const {
     p.holdMs = scanHoldMs_;
     p.resumeMs = scanResumeMs_;
     p.listenMs = scanListenMs_;
+    // LIST MODE (stub campaign B6): the ticked rows of the frequency list stand in for the range.
+    if (scanTicked_) { p.list = tickedScanList(); }
     return p;
 }
 
@@ -6195,10 +6197,41 @@ void Engine::scannerFrame() {
     // the scan decision only "is a signal present now" matters, and the
     // S-meter is the one channel-power readout that is lock-free from the
     // GUI thread.
+    // LIST MODE FOLLOWS THE TICKS (stub campaign B6): a row ticked or unticked while the scan runs re-reads the list (the reconfigure restarts at
+    // the first entry, which is the Scanner's rule for new parameters). Any other edit - a star, a bookmark added elsewhere, a heard time written
+    // - leaves the scan where it is, or it would be pulled off the signal it is holding. Nothing ticked: stop.
+    if (scanTicked_ && freqMgr_.version() != scanListVersion_) {
+        scanListVersion_ = freqMgr_.version();
+        const std::vector<double> now = tickedScanList();
+        if (now.empty()) {
+            scanner_.stop();
+            return;
+        }
+        if (now != scanList_) { configureScanner(); }
+    }
+
     const bool squelchOpen = pipeline_.signalPowerDb() > squelchDb_;
     const std::optional<double> retune =
         scanner_.tick(clockS() * 1000.0, squelchOpen);
-    if (retune.has_value()) {
+    if (retune.has_value() && scanTicked_) {
+        // THE ROW ITSELF, so its mode and bandwidth come with it - an airband row is AM at 10 kHz, a broadcast row WFM.
+        cascade::core::Bookmark row;
+        bool found = false;
+        for (const cascade::core::Bookmark& b : freqMgr_.list()) {
+            if (b.scan && b.freqHz == *retune) {
+                row = b;
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            tuneToBookmark(row);
+        } else {
+            tuneAbsoluteHz(*retune);
+        }
+        scannerExpectedAbsHz_ = currentAbsoluteHz();
+        scannerHasExpected_ = true;
+    } else if (retune.has_value()) {
         tuneAbsoluteHz(*retune);
         // Baseline from READBACK, not the request: a device that coerces
         // the tune must not read as a user action next frame.
@@ -7232,6 +7265,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             bool any = false;
             for (const cascade::core::Bookmark& b : freqMgr_.list()) { any = any || b.group == text; }
             if (!any) { return refuse(FOXAPI_NOT_FOUND, "no bookmark is in that group"); }
+            // THE MONITOR IS PLAYING THIS PRESET (0.99.66 review, stub campaign B6): with its group gone the next pass would cut the blocks
+            // again from "every ticked row" of the WHOLE list - a different set of channels from the one the user chose - or, with none
+            // ticked, stop it with no reason. It stops here instead, saying why, BEFORE the rows go (the heard time goes into them first).
+            if ((airbandListening_ || airbandStartPending_) && airbandGroup_ == text) {
+                airbandStop(tr("Stopped: the preset was removed."));
+            }
+            if (airbandGroup_ == text) { airbandGroup_.clear(); }
             const std::size_t n = freqMgr_.removeGroup(text);
             bookmarkImportNote_ = cascade::core::formatText(tr("Removed %zu from \"%s\""), n, text.c_str());
             saveBookmarks();
@@ -7261,9 +7301,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 scanStartMhz_ = c.num[0] / 1.0e6;
                 scanStopMhz_ = c.num[1] / 1.0e6;
                 scanStepKhz_ = c.num[2] / 1.0e3;
-                scanner_.configure(scannerParams());
+                // A RANGE SCAN leaves list mode (the range travelled with the command: it is what was asked), and one radio takes one plan -
+                // the Airband monitor stands down (stub campaign B6).
+                scanTicked_ = false;
+                if (airbandListening_ || airbandStartPending_) { airbandStop(std::string()); }
+                configureScanner();
                 scanner_.start(clockS() * 1000.0);
-                scannerHasExpected_ = false;
             } else {
                 scanner_.stop();
             }
@@ -7280,10 +7323,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             scanListenMs_ = c.num[3];
             // A running scan takes the new timings at once (the panel's own
             // commit-on-deactivate rule).
-            if (scanner_.active()) {
-                scanner_.configure(scannerParams());
-                scannerHasExpected_ = false;
-            }
+            if (scanner_.active()) { configureScanner(); }
             return res;
         case FOXAPP_OP_SCANNER_RANGE:
             if ((c.ival[0] & 1) != 0) { scanStartMhz_ = c.num[0] / 1.0e6; }
@@ -7291,11 +7331,33 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if ((c.ival[0] & 4) != 0) { scanStepKhz_ = c.num[2] / 1.0e3; }
             // Only the panel reconfigures a running scan; a browser's range
             // is stored for the next start, as it always was.
-            if ((c.ival[0] & 8) != 0 && scanner_.active()) {
-                scanner_.configure(scannerParams());
-                scannerHasExpected_ = false;
-            }
+            if ((c.ival[0] & 8) != 0 && scanner_.active()) { configureScanner(); }
             return res;
+        case FOXAPP_OP_SCANNER_LIST: {
+            std::string why;
+            const std::int32_t st = applyScannerListOp(c, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
+        // --- the Airband monitor and the frequency list's ticks (stub campaign B6, docs/api-0.3-additions.md 9.6) ----------------------
+        case FOXAPP_OP_AIRBAND: {
+            std::string why;
+            const std::int32_t st = applyAirbandOp(c, text, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
+        case FOXAPP_OP_BOOKMARK_TICK: {
+            std::string why;
+            const std::int32_t st = applyBookmarkTick(c, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
+        case FOXAPP_OP_BOOKMARK_ADD_ROWS: {
+            std::string why;
+            const std::int32_t st = applyBookmarkAddRows(c, text, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
 
         // --- decoders and plugins ------------------------------------------------------------
         case FOXAPI_OP_DECODER_START:
@@ -9070,6 +9132,9 @@ void Engine::pumpPlugins() {
     // commands (a window's report, a START, a preset) have landed, before the publish, so what the publish says is the plugins that exist.
     updatePluginLifecycle();
     scannerFrame();
+    // THE AIRBAND MONITOR'S STEP, for the scanner's reason and in its place: a retune made this pass is already applied when it looks (stub
+    // campaign B6). Inert while nothing listens.
+    airbandFrame();
 }
 
 double Engine::pumpPublish() {
@@ -9202,6 +9267,10 @@ void Engine::shutdownQuiesce() {
     // step below runs on the engine's state with nothing beside it. A no-op
     // with no control thread (the window, today).
     stopControlThread();
+
+    // THE LAST HEARD SECONDS of the Airband monitor go into the frequency list now, with the pass stopped, for the forced save that follows
+    // (shutdownStop) to carry them (stub campaign B6).
+    airbandShutdown();
 
     // THE TRANSMITTER BEFORE ANYTHING ELSE, AND IT IS NOT A STYLE CHOICE.
     // Everything else in this teardown can take its time; a radio that is

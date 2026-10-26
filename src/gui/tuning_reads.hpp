@@ -87,6 +87,7 @@ struct BookmarkRow {
     std::string group;
     std::uint32_t mode = 0;  // FOXAPI_DEMOD_*; 0 for a mode no code names
     double bandwidthHz = 0.0;
+    bool ticked = false;     // FOXAPI_ITEM_TICKED (stub campaign B6): the scanner's list mode scans it, the Airband monitor plays it (AM or NFM)
 };
 using MarkerRow = BookmarkRow;  // (the markers' name for it, group 6)
 

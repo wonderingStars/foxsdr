@@ -219,10 +219,12 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * privacy: reports carry no addresses, computer names, ports or sound-card names ........... carried (core/) and re-expressed (C1: no log line names a card)
 
 0.99.60
-  * Airband: type an airport, hear its control frequencies ................................... stubbed AIRBAND (src/gui_pending/app_window_airband.cpp, 1,329 lines;
-    core/ and the views are in the tree)
-  * LISTEN, ticked frequencies ............................................................... stubbed AIRBAND / MARKERS-SPECTRUM (the scanner's list mode is
-    in core/scanner_params.hpp; the window's tick column and the engine's list scan are not)
+  * Airband: type an airport, hear its control frequencies ................................... stubbed AIRBAND, window half B7 (src/gui_pending/app_window_airband.cpp, 1,329 lines;
+    core/ and the views are in the tree; the engine's half - the rows an airport's lookup adds, FOXAPP_OP_BOOKMARK_ADD_ROWS - is re-expressed, stub batch B6)
+  * LISTEN, ticked frequencies ............................................................... re-expressed in part, stub batch B6: the ENGINE runs the monitor
+    (src/engine/engine_airband.cpp: the blocks, the squelch, the scan between them, the hand-back from the patch view, the heard time) and the scanner's list mode
+    (FOXAPP_OP_AIRBAND, _BOOKMARK_TICK, _SCANNER_LIST, AIRBAND_CHANNELS; tests/test_engine_api_airband.cpp), and the window draws the Bookmarks tick column and the
+    Scanner's "Ticked frequencies" key; the Airband SECTION (its LISTEN key, rows, lamps) is stubbed AIRBAND, B7
 
 0.99.61
   * the Bandwidth control narrows what you hear .............................................. re-expressed, C3 (the filter is core/dsp; test_bandwidth_app)
@@ -275,9 +277,11 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
   * an unwritable settings folder is not retried every two seconds .......................... re-expressed, C5 (noteConfigWrite / configRetryHeld)
 
 0.99.66
-  * the Airband monitor takes a typed list and plays NFM ..................................... stubbed AIRBAND
-  * presets: a named list filled by hand, from a file, exported ............................. stubbed AIRBAND
-  * the spectrum shows what the monitor is hearing ........................................... stubbed AIRBAND
+  * the Airband monitor takes a typed list and plays NFM ..................................... re-expressed in part, stub batch B6 (the engine: a typed row, an NFM channel and one
+    channel per frequency, test_engine_api_airband A2 / B3 / F1); the add row's keys are stubbed AIRBAND, B7
+  * presets: a named list filled by hand, from a file, exported ............................. stubbed AIRBAND (the engine's half of REMOVE PRESET - the monitor stops when its
+    preset goes - is B6's; the import into a preset and the export are B7 / B8 / B19)
+  * the spectrum shows what the monitor is hearing ........................................... stubbed AIRBAND, B7 (the engine serves it: AIRBAND_CHANNELS, B6)
   * a native HydraSDR RFOne driver ........................................................... re-expressed, C0/C4 (engine enumeration and kind; the remembered
     gain mode under its own key, found by test_hydrasdr_app)
   * a sentinel report says where a fast-fail was ............................................. carried (core/)
@@ -293,8 +297,10 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
 0.99.69
   * no console window beside FoxSDR's own ................................................... carried (main.cpp, merged) (unverified)
   * the RADIO SETUP page ..................................................................... stubbed RADIO-SETUP (src/gui_pending/app_window_radio_setup.cpp)
-  * NFM de-emphasis in the Airband monitor ................................................... stubbed AIRBAND
-  * an airport lookup while listening changes nothing played ................................ stubbed AIRBAND
+  * NFM de-emphasis in the Airband monitor ................................................... re-expressed, stub batch B6 (the engine builds an NFM channel with the 50 us network;
+    test_engine_api_airband F1 reads it off the set as built); the section's note is B7
+  * an airport lookup while listening changes nothing played ................................ re-expressed in part, stub batch B6 (the engine's rule: the monitor's preset is the LISTEN's,
+    a row added to another preset restarts nothing; test_engine_api_airband C2); the window's lookup is stubbed AIRBAND, B7
   * a pasted report is recognised; `upload local-only` says what it means ..................... stubbed PROBLEM-REPORT (core/pasted_report is in; the page's
     attach-diagnostics rows, the preview and the recognised-report line are not - lostlines: drawProblemReportPage)
   * Fitted modules names the files not installed from the store ............................ re-expressed, stub batches B3 and B5 (the engine's half - `fact.plugin.origin.<file>`:
@@ -312,7 +318,8 @@ Every bold item of master's release notes 0.99.43 to 0.99.84 (docs/release-notes
     the remote API refuses an address-bearing open from a remote session)
 
 0.99.71
-  * the Airband monitor says what it is hearing where you look ............................... stubbed AIRBAND
+  * the Airband monitor says what it is hearing where you look ............................... stubbed AIRBAND, B7 (the engine serves the block's line, fact.airband.block, and the names
+    that are talking, AIRBAND_CHANNELS, B6)
 
 0.99.72
   * the plugin store laid out like a store; Fitted modules like an operating panel ........... re-expressed in part: THE STORE since stub batch B4 (the window
@@ -498,6 +505,16 @@ event's value[0] (the preset's flags), and three lines of applyPluginPreset / ma
 the explicit rate request, CASCADE_PRESET_KEEP_TUNED_ON_START). The window got back what the merge had lost around it: the `switchrow:` census rect, the
 `image:window:` / `panel:window:` / `instrument:window:` / `decoder:window:` census rects, the ImGui ID-conflict setup. test_i18n: 147 stale, 0 missing (the two keys
 that returned: "Installed from %s, a site you removed. It gets no updates." and "Installed from %s, not from the FoxSDR catalogue.").
+
+UPDATE 2026-10-26, stub batch B6 (docs/engine-stage4.md 6.22): no placeholder is removed - test_airband_app is B7's - so the red set is the 37 of B5 (34 tests and 3
+parts) and its names do not change. The monitor, the scanner's list mode and the frequency list's tick are the ENGINE's (src/engine/engine_airband.cpp; API 0.3 9.6:
+FOXAPP_OP_AIRBAND 0x8429, _BOOKMARK_TICK 0x8604, _BOOKMARK_ADD_ROWS 0x8605, _SCANNER_LIST 0x860A, the live list AIRBAND_CHANNELS 51, fact.airband.* and
+fact.scanner.listMode / .ticked), held by the new tests/test_engine_api_airband.cpp (386 checks, each group shown red against an engine whose ops answered UNSUPPORTED,
+then against 14 mutants) and by four new cases of test_apply_command. The window drew back two keys: the Bookmarks tick column and the Scanner's "Ticked frequencies"
+(held by the new real-binary tests/test_bookmark_tick_app.cpp, gui label, 37 checks, against 3 mutants; two of this branch's own port tests, test_scanner_draft_input and
+test_recorder_bookmarks_scanner, had their expectations edited for the two new widgets). test_i18n:
+144 stale, 0 missing (the three keys that returned: "Ticked: scanned by the Scanner's \"Ticked frequencies\"..." (the tick's tooltip), "Ticked frequencies (%zu)" and its
+tooltip).
 
 One more red test is a consequence and is not in the list: **test_i18n** (2 keys missing, 162 stale in every catalogue). The stale keys are the
 strings of stubbed features (they return with them); the two missing are the Catalogue-source tooltip's last two lines (they send the reader to

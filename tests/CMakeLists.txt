@@ -1230,6 +1230,7 @@ set(CASCADE_GUI_TESTS
     test_airband_app
     test_bias_key_run
     test_bookmark_stacking_app
+    test_bookmark_tick_app
     test_clean_exit_marker
     test_console_owner_app
     test_crash_upload

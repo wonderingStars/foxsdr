@@ -232,6 +232,8 @@ struct AppWindowTestAccess {
         return passseam::read<std::vector<cascade::core::Bookmark>>(
             rawEngine(a.engine_), [&]() -> std::vector<cascade::core::Bookmark> { return rawEngine(a.engine_).freqMgr_.list(); });
     }
+    // The scanner's list mode (stub campaign B6): the engine's own switch.
+    static bool scanTicked(AppWindow& a) { return passseam::read<bool>(rawEngine(a.engine_), [&] { return rawEngine(a.engine_).scanTicked_; }); }
     static std::size_t storeSizeHeld(AppWindow& a) { return rawEngine(a.engine_).freqMgr_.list().size(); }
     static void writeAudio(AppWindow& a, const float* s, std::size_t n) {
         passseam::on(rawEngine(a.engine_), [&] { rawEngine(a.engine_).audioRecorder_.writeAudio(s, n); });
@@ -1453,7 +1455,8 @@ void testDrawnAndClicked() {
         std::printf("    scanner, idle:\n");
         std::optional<Access::PassHold> hold(std::in_place, app);
         auto got = clickEverything(app, body, &g_cap.scanner);
-        checkSet(got, {expect("SCANNER_RUN", 1, 0, 88.0e6, 108.0e6, 100.0e3, 0, "")}, "idle");
+        // (the "Ticked frequencies" checkbox, back with stub campaign B6, sends FOXAPP_OP_SCANNER_LIST 1 - list mode on - from either state)
+        checkSet(got, {expect("SCANNER_RUN", 1, 0, 88.0e6, 108.0e6, 100.0e3, 0, ""), expect("APP_SCANNER_LIST", 1, 0, 0, 0, 0, 0, "")}, "idle");
         Access::dropQueued(app);
         hold.reset();
         Access::submit(app, cascade::gui::scannerStartCommand(Access::state(app)));
@@ -1461,7 +1464,9 @@ void testDrawnAndClicked() {
         std::printf("    scanner, running:\n");
         hold.emplace(app);
         got = clickEverything(app, body, &g_cap.scanner);
-        checkSet(got, {expect("SCANNER_RUN", 0, 0, 0, 0, 0, 0, ""), expect("SCANNER_SKIP", 0, 0, 0, 0, 0, 0, "")}, "running");
+        checkSet(got, {expect("SCANNER_RUN", 0, 0, 0, 0, 0, 0, ""), expect("SCANNER_SKIP", 0, 0, 0, 0, 0, 0, ""),
+                       expect("APP_SCANNER_LIST", 1, 0, 0, 0, 0, 0, "")},
+                 "running");
         Access::dropQueued(app);
         hold.reset();
     }
@@ -1484,6 +1489,8 @@ void testDrawnAndClicked() {
             const long long ident = static_cast<long long>(id[static_cast<std::size_t>(i)]);
             const bool fav = list[static_cast<std::size_t>(i)].favourite;
             want.push_back(expect("BOOKMARK_FAVOURITE", ident, fav ? 0 : 1, 0, 0, 0, 0, ""));
+            // (the tick column, back with stub campaign B6: a row's box sends FOXAPP_OP_BOOKMARK_TICK by its id, to the state the click asks for)
+            want.push_back(expect("APP_BOOKMARK_TICK", ident, list[static_cast<std::size_t>(i)].scan ? 0 : 1, 0, 0, 0, 0, ""));
             want.push_back(expect("BOOKMARK_TUNE", ident, 0, 0, 0, 0, 0, ""));
             want.push_back(expect("BOOKMARK_REMOVE", ident, 0, 0, 0, 0, 0, ""));
         }
@@ -1515,6 +1522,7 @@ void testDrawnAndClicked() {
         for (int i = 1; i < 3; ++i) {
             const long long ident = static_cast<long long>(id[static_cast<std::size_t>(i)]);
             want.push_back(expect("BOOKMARK_FAVOURITE", ident, 1, 0, 0, 0, 0, ""));
+            want.push_back(expect("APP_BOOKMARK_TICK", ident, list[static_cast<std::size_t>(i)].scan ? 0 : 1, 0, 0, 0, 0, ""));
             want.push_back(expect("BOOKMARK_TUNE", ident, 0, 0, 0, 0, 0, ""));
             want.push_back(expect("BOOKMARK_REMOVE", ident, 0, 0, 0, 0, 0, ""));
         }
@@ -1591,6 +1599,12 @@ void testTheCommandsReachTheEngine() {
                         if (b.id == static_cast<std::uint64_t>(q.c.ival[0])) { CHECK_EQ(b.favourite, q.c.ival[1] != 0); }
                     }
                     break;
+                case FOXAPP_OP_BOOKMARK_TICK:
+                    for (const cc::Bookmark& b : list) {
+                        if (b.id == static_cast<std::uint64_t>(q.c.ival[0])) { CHECK_EQ(b.scan, q.c.ival[1] != 0); }
+                    }
+                    break;
+                case FOXAPP_OP_SCANNER_LIST: CHECK_EQ(Access::scanTicked(app), q.c.ival[0] == 1); break;
                 case FOXAPI_OP_BOOKMARK_TUNE:
                     for (const cc::Bookmark& b : list) {
                         if (b.id == static_cast<std::uint64_t>(q.c.ival[0])) {
@@ -1622,7 +1636,7 @@ void testTheCommandsReachTheEngine() {
     replay(g_cap.scanner);
     replay(g_cap.bookmarks);
     std::printf("      %d distinct commands replayed\n", distinct);
-    CHECK_EQ(distinct, 21);  // 4 recorder, 3 scanner, 14 bookmark: add, import, 2 exports, remove group, 3 x (star, tune, remove)
+    CHECK_EQ(distinct, 25);  // 4 recorder, 4 scanner (the list key since B6), 17 bookmark: add, import, 2 exports, remove group, 3 x (star, tick, tune, remove)
 }
 
 }  // namespace

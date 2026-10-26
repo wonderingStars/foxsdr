@@ -17034,6 +17034,7 @@ const AppWindow::TuningListCache& AppWindow::tuningLists() {
             m.group = it.detail;
             m.mode = static_cast<std::uint32_t>(it.value[1]);
             m.bandwidthHz = it.value[2];
+            m.ticked = (it.flags & FOXAPI_ITEM_TICKED) != 0u;   // (stub campaign B6)
         }
         c.markersVersion = c.factText;
         ++c.markerCopies;
@@ -19696,6 +19697,7 @@ void AppWindow::drawBookmarksSection() {
     // buttons send can move an index the same frame still iterates.
     int deleteIdx = -1;
     int starIdx = -1;
+    int tickIdx = -1;
     const float delW = ImGui::GetFrameHeight();
     const float rows = std::min(12.0f, static_cast<float>(bookmarkView_.size()));
     if (!bookmarkView_.empty() &&
@@ -19709,6 +19711,18 @@ void AppWindow::drawBookmarksSection() {
                 if (i >= static_cast<int>(list.size())) { continue; }
                 const cascade::gui::BookmarkRow& b = list[static_cast<std::size_t>(i)];
                 ImGui::PushID(i);
+                // THE TICK (stub campaign B6, 0.99.60): what the scanner's list mode scans and the Airband monitor plays. It is the engine's
+                // row flag, changed by BOOKMARK_TICK by id - never a write into this copy.
+                bool ticked = b.ticked;
+                if (ImGui::Checkbox("##scan", &ticked)) { tickIdx = i; }
+                cascade::gui::census::rect("bookmarks:tick:", i, ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                           ImGui::GetItemRectMax().y);
+                if (b.ticked) { cascade::gui::census::note("bookmarks:ticked:", i); }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tr("Ticked: scanned by the Scanner's \"Ticked frequencies\"\n"
+                                               "and, for AM or NFM, played by the Airband monitor."));
+                }
+                ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       b.favourite ? cascade::gui::theme::vec(cascade::gui::theme::kAmber)
                                                   : cascade::gui::theme::vec(cascade::gui::theme::kInkMuted));
@@ -19741,6 +19755,10 @@ void AppWindow::drawBookmarksSection() {
         const cascade::gui::BookmarkRow& b = list[static_cast<std::size_t>(starIdx)];
         uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_FAVOURITE, static_cast<std::int64_t>(b.id),
                               b.favourite ? 0 : 1));
+    }
+    if (tickIdx >= 0 && tickIdx < static_cast<int>(list.size())) {
+        const cascade::gui::BookmarkRow& b = list[static_cast<std::size_t>(tickIdx)];
+        uiSubmit(cmd::makeInt(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(b.id), b.ticked ? 0 : 1));
     }
     if (deleteIdx >= 0 && deleteIdx < static_cast<int>(list.size())) {
         uiSubmit(cmd::makeInt(FOXAPI_OP_BOOKMARK_REMOVE,
@@ -19849,6 +19867,31 @@ void AppWindow::drawScannerSection() {
     if (!scannerOpen) { return; }
     uiNotePanel("scanner");
 
+    // THE TICKED ROWS INSTEAD OF A RANGE (stub campaign B6, the airband request, 2026-10): each stop tunes that row's frequency, mode and bandwidth, as
+    // clicking it would. List mode and the number of ticked rows are the engine's (fact.scanner.listMode / .ticked); the key sends
+    // FOXAPP_OP_SCANNER_LIST. The range fields stand aside while it is on.
+    const bool listMode = uiFact("fact.scanner.listMode") == "1";
+    const std::size_t tickedCount = static_cast<std::size_t>(std::strtoull(uiFact("fact.scanner.ticked").c_str(), nullptr, 10));
+    {
+        bool want = listMode;
+        std::string tickId;
+        cascade::core::formatUtf8(tickId, tr("Ticked frequencies (%zu)"), tickedCount);
+        tickId += "###scan_ticked";
+        if (ImGui::Checkbox(tickId.c_str(), &want)) { uiSubmit(cascade::core::cmd::makeInt(FOXAPP_OP_SCANNER_LIST, want ? 1 : 0)); }
+        cascade::gui::census::rect("scanner:listkey", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                   ImGui::GetItemRectMax().y);
+        cascade::gui::census::note("scanner:ticked:", static_cast<int>(tickedCount));
+        if (listMode) { cascade::gui::census::note("scanner:listmode"); }
+        if (running) {
+            cascade::gui::census::note("scanner:running");
+            if (listMode) { cascade::gui::census::note("scanner:listscan"); }   // a scan of the ticked rows is running
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", tr("Scans the rows ticked in the Bookmarks list, in frequency order,\n"
+                                       "tuning each one's mode and bandwidth with it."));
+        }
+    }
+
     // THE FIELDS ARE A FORM (docs/engine-stage1.md, the view-state line): the
     // stored parameters change nothing the receiver does until a command
     // applies them - Start (SCANNER_RUN, which also carries the range) or the
@@ -19899,6 +19942,8 @@ void AppWindow::drawScannerSection() {
     unsigned typed = 0;      // changed this frame, scanner idle: store now
     unsigned finished = 0;   // deactivated after an edit this frame
     for (int i = 0; i < 7; ++i) {
+        if (i == 0) { ImGui::BeginDisabled(listMode); }   // the range's three fields: start, stop, step
+        if (i == 3) { ImGui::EndDisabled(); }
         const unsigned bit = 1u << i;
         if (engineKnown && (scanDraftPending_ & bit) == 0 &&
             (scanDraftIds_[i] == 0 || ImGui::GetActiveID() != scanDraftIds_[i])) {
@@ -19934,10 +19979,19 @@ void AppWindow::drawScannerSection() {
 
     namespace cmd = cascade::core::cmd;
     if (!running) {
+        ImGui::BeginDisabled(listMode && tickedCount == 0);
         if (ImGui::Button(trId("Start scan"), ImVec2(-FLT_MIN, 0.0f))) {
-            // The range the engine stores (the state's), as SCANNER_RUN carries it.
-            uiSubmit(cascade::gui::scannerStartCommand(uiState_));
+            if (listMode) {
+                // THE TICKED ROWS (the engine also stands the Airband monitor down: one radio, one plan).
+                uiSubmit(cmd::makeInt(FOXAPP_OP_SCANNER_LIST, 2));
+            } else {
+                // The range the engine stores (the state's), as SCANNER_RUN carries it.
+                uiSubmit(cascade::gui::scannerStartCommand(uiState_));
+            }
         }
+        cascade::gui::census::rect("scanner:start", ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().x,
+                                   ImGui::GetItemRectMax().y);
+        ImGui::EndDisabled();
     } else {
         // STOP AND SKIP SIDE BY SIDE: skip is the operator's "next", for the
         // signal that is heard and not wanted - the retune comes on the next

@@ -51,6 +51,7 @@ class Engine;
 class ApiHostImpl;
 struct ApiListBlock;
 struct ApiLiveBlock;
+struct ApiAirbandBlock;
 struct ApiImageSet;
 
 // ENGINE-INTERNAL SESSIONS (stage 5a; docs/api-0.3-additions.md 8.16). The web server and the CAT listener are part of the engine
@@ -120,6 +121,9 @@ public:
     // API 0.3 8.12: the pass's copy of what the patch's running nodes are doing (PATCH_LIVE), handed over once a pass
     // when its own fingerprint moved. It moves no listSeq.
     void setPatchLive(std::shared_ptr<const ApiLiveBlock> live);
+    // API 0.3 9.6 (stub campaign B6): the pass's copy of the Airband monitor's channels (AIRBAND_CHANNELS), handed over once a pass when its own
+    // fingerprint moved. It moves no listSeq, for the reason PATCH_LIVE moves none.
+    void setAirbandLive(std::shared_ptr<const ApiAirbandBlock> live);
     // API 0.3 8.12 (part 3): the patch decoders' newest pictures, as ONE immutable set the pumping thread builds when a
     // picture arrived or a node's went (Engine::syncPatchImages) and hands over BEFORE the event that names the picture
     // is queued. read_image serves from it, and nothing else.
@@ -517,6 +521,26 @@ struct ApiLiveBlock {
         double v0 = 0.0, v1 = 0.0;
         bool open = false;           // kind 1: the gate is open
         std::string name, detail;
+    };
+    std::vector<Entry> entries;
+};
+
+// AIRBAND_CHANNELS (API 0.3 9.6, stub campaign B6): the channels the Airband monitor plays, copied once a pass by the pumping thread
+// (Engine::refreshAirbandLive) into ONE immutable block of its own, for PATCH_LIVE's reason: a channel's level and heard time change every pass the
+// monitor listens, and a rebuild of the whole list block, and a re-read of every list by every interface, every pass, is the cost live figures must
+// not have. It has a fingerprint of its own (levels to half a decibel, heard time to a tenth of a second): a pass that finds the same readings builds
+// nothing and hands the host nothing. A reader never touches the monitor's channel table - it belongs to the pass.
+struct ApiAirbandBlock {
+    std::uint64_t fingerprint = 0;
+    struct Entry {
+        std::uint64_t id = 0;        // the channel's number in the plan, from 1
+        std::string name;
+        double freqHz = 0.0;
+        double bandwidthHz = 0.0;
+        double levelDb = -200.0;
+        double heardS = 0.0;         // heard since the monitor last wrote it to the list
+        bool open = false;           // its squelch is open now
+        bool onAir = false;          // it is in the block on the air
     };
     std::vector<Entry> entries;
 };

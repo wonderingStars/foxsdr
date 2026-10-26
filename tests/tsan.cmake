@@ -78,6 +78,8 @@ set(CASCADE_TSAN_TESTS
     test_engine_api_05a
     # stub batch B3: the store's workers (a catalogue read, a picture, a clean-up) against the pass that collects them
     test_engine_api_store
+    # stub batch B6: the Airband monitor's pass against the DSP thread whose squelch reports and block count it reads, and the live list's block
+    test_engine_api_airband
     # the control thread against the front end's thread: the command queue (submit from
     # any thread, drain on one), the pumping engine, what the host answers from a thread
     # that is not the window's, the shutdown order

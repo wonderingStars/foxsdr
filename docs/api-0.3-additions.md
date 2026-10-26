@@ -160,6 +160,7 @@ says when to read again.
 | `GPS` (48) | ONE entry, the GPS reader as the position row draws it (8.13). **Read at the call and never part of the lists' block: it never moves `listSeq`, so read it each time you draw.** `name`: the port given to the last start, `""` when the reader is idle (**LOCAL sessions only**); `detail`: the status line the engine words (`""` when idle; **LOCAL sessions only** - the sentence names the port; cut at 159 bytes); `value[0]`: the state (0 idle, 1 listening, 2 fixed, 3 failed, 4 timed out); `value[1]`: seconds since the start (live while it listens, frozen when it ends); `value[2]`: satellites in view, -1 until a sentence says; `value[3]`: the baud; `ACTIVE`: listening; `FAULT`: failed or timed out. Never a coordinate |
 | `SERVERS` (49) | **LOCAL sessions only (`DENIED` to a REMOTE one).** The web server and the CAT listener the engine runs for `FOXAPI_OP_SERVER_CONFIG` (8.16.5): always two entries, web first. `id` 1 / 2; `name`: `web` / `cat`; `detail`: the sentence the last start was refused with, `""` when none; `value[0]`: the port (the one listened on, else the configured one); `value[1]`: browser sessions / CAT clients, `value[2]`: browsers listening to the audio, `value[3]`: commands received - all three **read at the call**; `ACTIVE`: listening; `FAULT`: enabled and refused to start. The configuration is `fact.web.*` and `fact.cat.*` |
 | `STORE_PICTURES` (50) | the plugin store's pictures, every one it was asked for (`FOXAPP_OP_STORE_PICTURES_WANT`) and still knows, in sha256 order (9.4). `id`: the first 64 bits of the sha256; `name`: the sha256 (64 hex digits - the cache key; the entry names its pictures in `fact.store.<key>.pictures`); `detail`: a Ready one's cached file path (**LOCAL sessions only**; whole in `fact.store.picture.<sha256>.path`), a Failed one's reason cut at 159 bytes (whole in `.reason`); `value[0]`: 1 pending (queued or in flight), 2 ready, 3 failed; `ACTIVE`: the one in flight. Moves `listSeq` with every change of a picture's state |
+| `AIRBAND_CHANNELS` (51) | the channels the Airband monitor plays (9.6): one entry per channel of the plan - not only the block on the air - in frequency order, and none while it is not listening. **Read at the call and never part of the lists' block: it never moves `listSeq`, so read it each time you draw** (`PATCH_LIVE`'s rule: a channel's level and heard time change every pass). `id`: the channel's number in the plan, from 1; `name`: the row that names it (the first ticked row on that frequency); `value[0]`: the frequency, Hz; `value[1]`: the channel width, Hz; `value[2]`: the level its squelch judges, dB (-200 until it has reported one); `value[3]`: the seconds heard since the monitor last wrote them to the list (add them to `BOOKMARKS`' `value[3]` for the figure to show); `ACTIVE`: its squelch is open now; `ON_AIR`: it is in the block on the air (none is, before the first block has been tuned - with several blocks that waits for the scan's first tick) |
 
 ### 5.2 0.2 lists now served
 
@@ -175,6 +176,9 @@ service; `value[0..2]`: start, stop, colour), `PRESETS` and `USER_PRESETS`
 ones the open radio has), `SERIAL_PORTS` (`name`; filled by
 `SCAN_SERIAL_PORTS`). `TRACKS` stays **GAP** (`UNSUPPORTED`): map tracks come
 through the map page's plugin APIs, which are not served yet.
+
+`BOOKMARKS` (0.2: `id`, `name`, `detail` the group, `value[0..2]` Hz, mode, bandwidth, `FAVOURITE`) gains in 0.3 (9.6) `value[3]`, the seconds the Airband monitor has
+heard the row talking (kept with the list, "which ones are busy"), and `FOXAPI_ITEM_TICKED`, the row's tick.
 
 `DEVICES` (0.2: the generator and the scanned radios; `name`: label, `detail`: the id `SELECT_SOURCE` takes, `ACTIVE`: the source in use) is **completed** in 0.3 (8.10): the IQ file and the sound card are entries 2 and 3, so an entry's index is its row in the Source combo and every radio's entry moved down two places; the whole id is `fact.source.id.<n>` where `detail` has cut it. `SAMPLE_RATES` (0.2: `value[0]`, Hz) carries the rate's caption in `detail` (8.10).
 
@@ -227,6 +231,9 @@ this machine's os and architecture). This is the next free bit of the **item** f
 `FOXAPI_RX_WEB_LISTENING` is a bit of the state's flag word, a different namespace.
 
 Section 8.10 adds four: `FOXAPI_ITEM_EXCLUSIVE` 0x400000 (`SOUND_CARD_RATES`: a rate only WASAPI exclusive mode reaches), and on `SOUND_CARD_FORM` `FOXAPI_ITEM_IQ_STEREO` 0x800000, `SWAP_IQ` 0x1000000 and `PICKED` 0x2000000.
+
+Section 9.6 adds two: `FOXAPI_ITEM_TICKED` 0x4000000 (`BOOKMARKS`: the row is ticked - the scanner's list mode scans it and, when its mode is exactly AM or NFM, the
+Airband monitor plays it) and `FOXAPI_ITEM_ON_AIR` 0x8000000 (`AIRBAND_CHANNELS`: the channel is in the block on the air). Four item-flag bits are left (0x10000000 to 0x80000000).
 
 ## 6. Scope taps — `read_scope` (closes 0.2 gap 5)
 
@@ -2012,6 +2019,57 @@ is named by its display name), a picture decoder neither; a panel and an instrum
 **`FOXAPI_EVENT_PRESET_APPLIED` carries the preset's flags** in `value[0]` (8.14.1). `FOXAPP_OP_PLUGIN_RUN_MODE` is sent by the Fitted modules page's KEEP RUNNING
 tick (`ival[0]` 1 / 0), `FOXAPI_OP_DECODER_START` / `_STOP` by the row's key, `FOXAPP_OP_STORE_CLEAN_OLD` (`ival[0]` 1) by an orphan's REMOVE FILE, and
 `FOXAPP_OP_PLUGIN_USE` by the window for every window shown - no new op.
+
+### 9.6 The Airband monitor, the frequency list's ticks and the scanner's list mode (stub campaign B6; docs/engine-stage4.md 6.22)
+
+Master's 0.99.60 - 0.99.71 let a tester tick frequencies in the frequency list and LISTEN: several AM and NFM channels off the receiver's one radio, mixed, each behind its
+own squelch, and the scanner could scan the ticked rows. The DSP, the radio and the list were the engine's even in master; the window only drove them, from its frame. They
+are the ENGINE's now (`src/engine/engine_airband.cpp`), so a headless engine listens too. Four APP ops (`core/app_commands.hpp`), **LOCAL sessions only** (`DENIED` to a
+REMOTE one and not in the web profile's closure of 38), each in `kOps` and covered by test_apply_command; one list (`AIRBAND_CHANNELS`, 5.1); two item flags and one value
+word on `BOOKMARKS` (5.2, 5.3); the facts below. The patch runner and the pass's bookmark save are the ones the engine already had: no thread was added.
+
+| Op | Grant | What it does |
+|---|---|---|
+| `FOXAPP_OP_BOOKMARK_TICK` (0x8604) | SETTINGS | `ival[0]`: the bookmark's id; `ival[1]`: 0 untick / 1 tick. `NOT_FOUND` for an id the list does not hold. A row already as asked changes nothing and writes nothing (the list's version does not move). The row stays where it is among its peers on one frequency (the monitor plays the first). |
+| `FOXAPP_OP_BOOKMARK_ADD_ROWS` (0x8605) | SETTINGS | `long text` (or `text`), one row a line: `<Hz> TAB <mode> TAB <bandwidth Hz> TAB <tick 0/1> TAB <group> TAB <name>` (the last two may be empty; a width that is no number takes the mode's default). `ival[0]` 0: rows TYPED IN - added as the list's own add does (a name in use gets " (2)"; a nameless row is named by its frequency, "121.5000 MHz") and judged by the rule a tune the radio refuses is: a frequency outside what the open radio covers (a converter's LO taken out) is `OUT_OF_RANGE` with the sentence that says what it does cover, and nothing is added; a radio that publishes no range (the generator, an I/Q file) refuses nothing. `ival[0]` 1: a LIST (an airport's rows) - added as an import adds (a row identical in name, frequency and group to one already there is skipped) and not judged. `applied[0]`: the rows added. `BAD_ARGUMENT` for text with no row in it, `OUT_OF_RANGE` for any other `ival[0]`. Why an op of its own: `FOXAPI_OP_BOOKMARK_IMPORT` is not served and `BOOKMARK_ADD` adds the tuned station only. |
+| `FOXAPP_OP_SCANNER_LIST` (0x860A) | TUNE | `ival[0]` 0: range mode (the scanner scans the range again); 1: list mode (it scans the ticked rows, in frequency order, each tuned with its own mode and bandwidth) - either stops a running scan, as the checkbox did; 2: START a list scan (list mode, whatever it was; the Airband monitor stands down). A start with nothing ticked is `NO_CHANGE` ("no frequency is ticked"). List mode is session-only (never in the config). While a list scan runs it follows the ticks: a row ticked or unticked restarts it from the first row, nothing ticked stops it; a heard time written or a bookmark added elsewhere leaves it where it is. `FOXAPI_OP_SCANNER_RUN` (a range scan, from the desk or a browser) leaves list mode - the range is what the command carried. |
+| `FOXAPP_OP_AIRBAND` (0x8429) | TUNE | `ival[0]` the action. **0 STOP** (`NO_CHANGE` when nothing listens or waits). **1 LISTEN**, `text`: the preset (a bookmark group) to play, "" for every ticked AM or NFM row: nothing ticked there is `NO_CHANGE` with the note "Tick at least one AM or NFM frequency to listen to."; a radio that cannot be divided to an audio rate, or a block the radio will not tune to, is `FAILED` with the note; the same preset while listening is already so, another is a restart on it. **2 NEXT BLOCK** (`NO_CHANGE` with one block). **3 ABOVE THE NOISE**: the squelch to 8 dB over the median channel level the strips have reported (`NO_CHANGE` with no level yet; `applied[1]`: the dB) - the one place the rule is written; the top bar's AUTO squelch (batch B12) calls it. **4 SQUELCH** `num[0]` dB, clamped to -110..0 (`CLAMPED`; `applied[1]`); a listening monitor rebuilds its block with it. **5 HOLD** `num[0]` seconds, clamped to 0..60: how long a block stays after its last word; a listening multi-block monitor starts again. **6 TUNE ONE** `ival[1]`: a bookmark's id - the monitor stops ("Tuned to <name> alone.") and the receiver tunes to the row, as a click on it would. `applied[0]` is the state after: 0 idle, 1 listening, 2 waiting for the patch to hand the radio back. |
+
+**One radio, one runner - the hand-back.** The monitor plays on the pipeline's patch runner, which the patch view otherwise has. They are never on it at once. LISTEN with the patch
+view showing (`FOXAPP_OP_SET_PATCH_PAGE_OPEN`'s flag, true until a window says otherwise) switches to the receiver view: the engine closes the patch view itself (so a headless engine,
+whose flag nobody reports, listens too), says it is waiting (`applied[0]` 2, `fact.airband.pending` "1") and starts on the first pass after the patch has let go of the radio - the close
+rule has run (a running patch stopped, its radios closed) and no radio is being opened. A window that follows `fact.airband.pending` switches its own view and reports it. The patch view
+being shown again - the window's report - stops a listening monitor ("Stopped: the patch view took the radio.") and cancels a waiting LISTEN: the user's hand wins over the wish.
+The other rules that stop it, each with its note in `fact.airband.note`: the receiver stopped, the receiver retuned by hand (a centre the monitor did not tune to), a scan started (and
+LISTEN stops a scan), the preset removed (`FOXAPI_OP_BOOKMARK_REMOVE_GROUP` of the group it plays: "Stopped: the preset was removed."), the radio unable to tune where the ticked
+frequencies are. A different radio or sample rate, or a change of the rows it plays, cuts the blocks again without a note; a row added to ANOTHER preset changes nothing.
+
+**One channel per frequency.** Two ticked rows on one frequency (an AM and an NFM row, CTAF and UNICOM) are one channel: the FIRST ticked row names it, gives it its mode and width,
+and is the row its heard time is credited to. A row whose mode is not exactly AM or NFM (WFM, SSB, CW...) is never played; ticked, it is a row of the scanner's list mode and nothing else.
+An NFM channel runs the 50 us de-emphasis the receiver's own NFM runs and is mixed at the level that matches an AM one.
+
+**The heard time has one writer.** Every second a channel's squelch is open while the monitor plays it is added to its row's `heardSeconds`: by the engine's pass, flushed to the list
+every 20 s, at STOP and at exit (the engine's shutdown flushes before its final save), and saved by the bookmark worker from a snapshot taken on the pass. Nothing else writes it. A flush
+moves the list's version (and `listSeq`); `AIRBAND_CHANNELS`' `value[3]` carries what has not been flushed yet.
+
+| Fact | What it says |
+|---|---|
+| `fact.airband.listening` | "1" while the monitor listens, else "0" |
+| `fact.airband.pending` | "1" while a LISTEN waits for the patch to hand the radio back |
+| `fact.airband.preset` | the preset on the air ("" = every ticked AM or NFM row) |
+| `fact.airband.note` | what the monitor last said: the reason it stopped, or why a LISTEN was refused (a sentence, in the language in force when it was said) |
+| `fact.airband.block` | "Block 2 of 6: 10 channels, 118.100-119.950 MHz", or "All 7 channels at once, ..." when one block holds every channel; "" when not listening |
+| `fact.airband.blocks` | how many blocks the plan has while listening, else "0" |
+| `fact.airband.squelchDb`, `fact.airband.holdS` | the monitor's squelch (dB) and hold (s), to one decimal |
+| `fact.scanner.listMode` | "1" while the scanner is in list mode |
+| `fact.scanner.ticked` | how many rows are ticked |
+
+All are hashed into the publish fingerprint in place, from the members they are built from (the monitor's state is a few scalars and two strings): nothing allocates in a settled
+pass. `AIRBAND_CHANNELS` is built once a pass when its own fingerprint moved - a level to half a decibel, the heard time to a tenth of a second - and an idle engine builds one empty
+block and no more. The ticks are `BOOKMARKS`' `TICKED`, hashed with the list's version.
+
+Held by tests/test_engine_api_airband.cpp (each group written red first, against an engine whose ops answered `UNSUPPORTED`, then against mutants), test_apply_command (the four ops'
+cases) and the engine's own `fox_engine_api.hpp` block `ApiAirbandBlock`.
 
 ## 10. What stays a GAP after 0.3
 

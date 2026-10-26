@@ -153,6 +153,10 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_SET_PPM, "APP_SET_PPM", true},
     {FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, "APP_TEST_HOLD_AUDIO_LOCK", true},
     {FOXAPP_OP_BANDWIDTH_DRAG_END, "APP_BANDWIDTH_DRAG_END", true},
+    {FOXAPP_OP_AIRBAND, "APP_AIRBAND", true},
+    {FOXAPP_OP_BOOKMARK_TICK, "APP_BOOKMARK_TICK", true},
+    {FOXAPP_OP_BOOKMARK_ADD_ROWS, "APP_BOOKMARK_ADD_ROWS", true},
+    {FOXAPP_OP_SCANNER_LIST, "APP_SCANNER_LIST", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

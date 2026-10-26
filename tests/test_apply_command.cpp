@@ -573,6 +573,13 @@ struct AppWindowTestAccess {
     static double scanDwell(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanDwellMs_; }); }
     static double scanListen(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanListenMs_; }); }
     static double scanHold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanHoldMs_; }); }
+    // The Airband monitor and the scanner's list mode (stub campaign B6).
+    static bool scanTicked(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanTicked_; }); }
+    static bool airbandListening(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandListening_; }); }
+    static bool airbandPending(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandStartPending_; }); }
+    static std::string airbandNote(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandNote_; }); }
+    static float airbandSquelch(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandSquelchDb_; }); }
+    static double airbandHold(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).airbandHoldS_; }); }
     static double scanResume(AppWindow& a) { return rd(a, [&] { return rawEngine(a.engine_).scanResumeMs_; }); }
 
     // Plugins and the store.
@@ -1942,6 +1949,149 @@ void scannerOps(AppWindow& a) {
     }
 }
 
+// --- the Airband monitor and the frequency list's ticks (stub campaign B6, docs/api-0.3-additions.md 9.5) ------------------
+
+// The row named `name` (a zeroed one with id 0 when there is none).
+cascade::core::Bookmark rowNamed(AppWindow& a, const std::string& name) {
+    for (const cascade::core::Bookmark& b : A::bookmarks(a)) {
+        if (b.name == name) { return b; }
+    }
+    return cascade::core::Bookmark{};
+}
+
+void airbandOps(AppWindow& a) {
+    const bool pageWas = A::patchPageOpen(a);
+
+    covering(FOXAPP_OP_BOOKMARK_TICK);
+    {
+        const std::uint64_t id = A::addBookmark(a, "Tick me", 119.7e6, "AM", 10000.0);
+        CHECK(!rowNamed(a, "Tick me").scan);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(id), 1))));
+        CHECK(rowNamed(a, "Tick me").scan);
+        CHECK(rowNamed(a, "Tick me").id == id);   // an edited row keeps its identity
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(id), 1))));   // already so: nothing changes
+        CHECK(rowNamed(a, "Tick me").scan);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(id), 0))));
+        CHECK(!rowNamed(a, "Tick me").scan);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, 0, 1)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, 999999, 1)), FOXAPI_NOT_FOUND));
+    }
+
+    covering(FOXAPP_OP_BOOKMARK_ADD_ROWS);
+    {
+        // A row TYPED IN (ival[0] 0): ticked, in its group, named by its frequency when nameless.
+        const std::size_t before = A::bookmarks(a).size();
+        FoxCommandResult r = A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS, "121500000\tNFM\t12500\t1\tManual\t", 0));
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0);
+        CHECK(A::bookmarks(a).size() == before + 1u);
+        const cascade::core::Bookmark typed = rowNamed(a, "121.5000 MHz");
+        CHECK(typed.id != 0u);
+        CHECK(typed.scan);
+        CHECK(typed.group == "Manual");
+        CHECK(typed.mode == "NFM");
+        CHECK(typed.bandwidthHz == 12500.0);
+        // A LIST (ival[0] 1): added as an import adds - one of the two lines is the row above, again.
+        r = A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS,
+                             "121500000\tNFM\t12500\t1\tManual\t121.5000 MHz\n118100000\tAM\t10000\t0\tKABC\tKABC TWR", 1));
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0);
+        CHECK(!rowNamed(a, "KABC TWR").scan);   // the tick the line gave it
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS, "no row here", 0)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS, "", 1)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BOOKMARK_ADD_ROWS, "121500000\tNFM\t12500\t1\tManual\t", 5)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::bookmarks(a).size() == before + 2u);
+    }
+
+    covering(FOXAPP_OP_SCANNER_LIST);
+    {
+        const std::uint64_t one = A::addBookmark(a, "List one", 99.5e6, "WFM", 150000.0);
+        const std::uint64_t two = A::addBookmark(a, "List two", 156.8e6, "NFM", 12500.0);
+        for (const std::uint64_t id : {one, two}) { CHECK(ok(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(id), 1)))); }
+        CHECK(!A::scanTicked(a));
+        // LIST MODE on or off stops nothing that is not running; a start scans the ticked rows.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 1))));
+        CHECK(A::scanTicked(a));
+        CHECK(!A::scanning(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 2))));
+        CHECK(A::scanning(a));
+        // ...and either switch stops a scan that runs.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 0))));
+        CHECK(!A::scanTicked(a));
+        CHECK(!A::scanning(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 2))));   // a start is list mode whatever it was
+        CHECK(A::scanTicked(a));
+        CHECK(A::scanning(a));
+        // A range scan leaves list mode.
+        FoxCommand c = ints(FOXAPI_OP_SCANNER_RUN, 1);
+        c.num[0] = 144.0e6;
+        c.num[1] = 146.0e6;
+        c.num[2] = 12.5e3;
+        CHECK(ok(A::apply(a, c)));
+        CHECK(!A::scanTicked(a));
+        A::exclusive(a, [&] { CHECK(ok(A::apply(a, ints(FOXAPI_OP_SCANNER_RUN, 0)))); });
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 7)), FOXAPI_OUT_OF_RANGE));
+        // A start with nothing ticked.
+        for (const cascade::core::Bookmark& b : A::bookmarks(a)) {
+            if (b.scan) { CHECK(ok(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(b.id), 0)))); }
+        }
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 2)), FOXAPI_NO_CHANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCANNER_LIST, 0))));
+    }
+
+    covering(FOXAPP_OP_AIRBAND);
+    {
+        // Nothing ticked: LISTEN is refused with the note, and nothing else has anything to do.
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_AIRBAND, "No such preset", 1)), FOXAPI_NO_CHANGE));
+        CHECK(A::airbandNote(a) == "Tick at least one AM or NFM frequency to listen to.");
+        CHECK(!A::airbandListening(a));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND, 2)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND, 3)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND, 9)), FOXAPI_OUT_OF_RANGE));
+        // SQUELCH and HOLD are the monitor's settings, kept and clamped, listening or not.
+        FoxCommandResult r = A::apply(a, numInt(FOXAPP_OP_AIRBAND, -70.0, 4));
+        CHECK(ok(r));
+        CHECK(r.applied[1] == -70.0);
+        CHECK(A::airbandSquelch(a) == -70.0f);
+        r = A::apply(a, numInt(FOXAPP_OP_AIRBAND, -300.0, 4));
+        CHECK(ok(r));
+        CHECK((r.flags & FOXAPI_RESULT_CLAMPED) != 0u);
+        CHECK(A::airbandSquelch(a) == -110.0f);
+        r = A::apply(a, numInt(FOXAPP_OP_AIRBAND, 90.0, 5));
+        CHECK(ok(r));
+        CHECK((r.flags & FOXAPI_RESULT_CLAMPED) != 0u);
+        CHECK(A::airbandHold(a) == 60.0);
+        CHECK(ok(A::apply(a, numInt(FOXAPP_OP_AIRBAND, -55.0, 4))));
+        CHECK(ok(A::apply(a, numInt(FOXAPP_OP_AIRBAND, 2.0, 5))));
+        // TUNE ONE: a row that is not there is refused; one that is is tuned to.
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND, 6, 0)), FOXAPI_NOT_FOUND));
+        const std::uint64_t air = A::addBookmark(a, "Airband one", 124.2e6, "AM", 10000.0);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_BOOKMARK_TICK, static_cast<std::int64_t>(air), 1))));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_AIRBAND, 6, static_cast<std::int64_t>(air)))));
+        CHECK(A::tuned(a) == 124.2e6);
+        // LISTEN with the patch view showing waits for it to let go (the engine closes the view); with it closed, it starts at once.
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 1))));
+        r = A::apply(a, text(FOXAPP_OP_AIRBAND, "", 1));
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 2.0);
+        CHECK(A::airbandPending(a));
+        CHECK(!A::patchPageOpen(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_AIRBAND, 0))));   // STOP cancels the wait
+        CHECK(!A::airbandPending(a));
+        CHECK(!A::airbandListening(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, 0))));
+        // (the pass's own step would hand the radio back; the engine's hand-back is held in tests/test_engine_api_airband.cpp)
+        r = A::apply(a, text(FOXAPP_OP_AIRBAND, "", 1));
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 1.0 || r.applied[0] == 2.0);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_AIRBAND, 0))));
+        CHECK(!A::airbandListening(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_RUN, 0))));
+    }
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PATCH_PAGE_OPEN, pageWas ? 1 : 0))));
+}
+
 // --- plugins and the store -------------------------------------------------------------------
 
 void pluginOps(AppWindow& a) {
@@ -2947,6 +3097,7 @@ int main() {
         pluginOps(app);
         storeOps(app);
         patchOps(app);
+        airbandOps(app);
         transmitterOps(app);
         otherOps(app);
         statusLineOps(app);

@@ -408,6 +408,19 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.text(cascade::i18n::current());
     // The serial ports the last scan found.
     f.value(serialPortsScans_);
+    // THE AIRBAND MONITOR AND THE SCANNER'S LIST MODE (stub campaign B6): whether it listens or waits, the preset, the block on the air, the
+    // squelch and the hold, what it last said, and the list mode's switch. In place, from members: nothing allocates. (The channels' own
+    // figures are AIRBAND_CHANNELS, a block of its own; the ticks are BOOKMARKS, hashed with the list's version above.)
+    f.value(airbandListening_);
+    f.value(airbandStartPending_);
+    f.text(airbandGroup_);
+    f.text(airbandNote_);
+    f.value(airbandSquelchDb_);
+    f.value(airbandHoldS_);
+    f.value(airbandBlock_);
+    f.value(airbandBlocks_.size());
+    f.value(airbandChans_.size());
+    f.value(scanTicked_);
     // The status lines.
     for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
@@ -821,6 +834,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     }
     // The kept copy, the sites, the pictures, the old copies and each file's origin (engine_store.cpp).
     buildApiListsStore(b);
+    // The Airband monitor's facts and the scanner's list mode (engine_airband.cpp).
+    buildApiListsAirband(b);
     // API 0.3 8.9, STORE_ACTIVITY: the transfer in flight and the ADD ALL run. What is read live (the progress)
     // is not here: the block keeps the repo.
     {
@@ -1485,6 +1500,50 @@ void Engine::refreshPatchLive() {
     api_->setPatchLive(apiLive_);
 }
 
+// AIRBAND_CHANNELS (API 0.3 9.6, stub campaign B6): the channels the Airband monitor plays, taken once a pass. The readings are fingerprinted as
+// numbers - a level to half a decibel, the heard time to a tenth of a second, so the block is not rebuilt for a wobble nobody can see - and only
+// when the fingerprint has moved is a block built, with the names. A pass that finds the same readings builds nothing, allocates nothing and hands
+// the host nothing. Empty while the monitor is not listening.
+void Engine::refreshAirbandLive() {
+    const cascade::core::AirbandBlock* onAir =
+        (airbandListening_ && airbandTuned_ && airbandBlock_ < airbandBlocks_.size()) ? &airbandBlocks_[airbandBlock_] : nullptr;
+    const auto inBlock = [onAir](std::size_t i) {
+        return onAir != nullptr && std::find(onAir->members.begin(), onAir->members.end(), i) != onAir->members.end();
+    };
+    const std::size_t n = airbandListening_ ? airbandChans_.size() : 0u;
+    Fingerprint f;
+    f.value(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const AirbandChan& c = airbandChans_[i];
+        f.value(c.freqHz);
+        f.value(c.bandwidthHz);
+        f.value(c.open);
+        f.value(inBlock(i));
+        f.value(static_cast<long long>(std::lround(static_cast<double>(c.levelDb) * 2.0)));
+        f.value(static_cast<long long>(std::llround(c.pendingHeardS * 10.0)));
+        f.value(c.rowId);
+    }
+    if (apiAirband_ != nullptr && apiAirband_->fingerprint == f.h) { return; }
+    auto b = std::make_shared<ApiAirbandBlock>();
+    b->fingerprint = f.h;
+    b->entries.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const AirbandChan& c = airbandChans_[i];
+        ApiAirbandBlock::Entry e;
+        e.id = static_cast<std::uint64_t>(i) + 1u;
+        e.name = c.name;
+        e.freqHz = c.freqHz;
+        e.bandwidthHz = c.bandwidthHz;
+        e.levelDb = static_cast<double>(c.levelDb);
+        e.heardS = c.pendingHeardS;
+        e.open = c.open;
+        e.onAir = inBlock(i);
+        b->entries.push_back(std::move(e));
+    }
+    apiAirband_ = std::move(b);
+    api_->setAirbandLive(apiAirband_);
+}
+
 // Once a pass, on the pumping thread, before the state is published: a new
 // block for the table when anything in it changed. Returns the fingerprint
 // the publish carries into listSeq.
@@ -1494,6 +1553,7 @@ std::uint64_t Engine::publishApiLists() {
     syncPatchGraphVersion();
     syncPatchImages();
     refreshPatchLive();
+    refreshAirbandLive();
     const std::uint64_t fp = apiListsFingerprint();
     if (apiLists_ == nullptr || apiLists_->fingerprint != fp) {
         apiLists_ = buildApiLists(fp);

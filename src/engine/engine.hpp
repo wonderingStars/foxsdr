@@ -44,6 +44,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/airband_monitor.hpp"
 #include "core/airspy_settings.hpp"
 #include "core/app_commands.hpp"
 #include "core/band_plan.hpp"
@@ -484,7 +485,7 @@ private:
     void openRtlTcpFromBox();
     void tuneToBookmark(const cascade::core::Bookmark& b);
     std::uint64_t addBookmarkHere(const std::string& name);  // the new bookmark's id
-    cascade::core::Scanner::Params scannerParams() const;
+    cascade::core::Scanner::Params scannerParams() const;   // (the list mode's list too: scanTicked_)
     bool selectSourceById(const std::string& id);
     // HOW MANY LOADED MODULES ARE DECODERS AT ALL - the denominator under the
     // word DECODERS, and under the rail's fed-of-fitted chip.
@@ -2884,6 +2885,120 @@ private:
     // scanner did not make — a manual tune, and the user wins (scan stops).
     double scannerExpectedAbsHz_ = 0.0;
     bool scannerHasExpected_ = false;  // false until the scan's first retune
+
+    // --- THE SCANNER'S LIST MODE (stub campaign B6, 0.99.60; engine_airband.cpp) ---------------------------------------
+    // The scanner scans the TICKED ROWS of the frequency list, in frequency order, instead of its range, each tuned with its own mode and
+    // bandwidth (core::Scanner's list mode, ScannerParams::list). SESSION-ONLY, as it always was: never in the config. While a list scan runs
+    // it follows the ticks (scannerFrame): a row ticked or unticked restarts it from the first row, nothing ticked stops it.
+    bool scanTicked_ = false;
+    unsigned scanListVersion_ = 0;        // the list's version the running scan's list was read at
+    std::vector<double> scanList_;        // ...and what it was (a version that moved with the same list restarts nothing)
+    mutable unsigned tickedCountVersion_ = ~0u;   // the version tickedScanCount() last counted at
+    mutable std::size_t tickedCount_ = 0;
+    // The ticked rows' frequencies, ascending (the list is kept sorted), one per row.
+    std::vector<double> tickedScanList() const;
+    // How many rows are ticked: counted once a version of the list, not once a call.
+    std::size_t tickedScanCount() const;
+    // scanner_.configure(scannerParams()) with the list mode's bookkeeping kept in step, and the user-tune baseline re-armed.
+    void configureScanner();
+    // FOXAPP_OP_SCANNER_LIST. Returns the status; `why` is the sentence of a refusal.
+    std::int32_t applyScannerListOp(const FoxCommand& c, std::string& why);
+    // FOXAPP_OP_BOOKMARK_TICK and FOXAPP_OP_BOOKMARK_ADD_ROWS (engine_airband.cpp).
+    std::int32_t applyBookmarkTick(const FoxCommand& c, std::string& why);
+    std::int32_t applyBookmarkAddRows(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+
+    // --- THE AIRBAND MONITOR (stub campaign B6, 0.99.60 - 0.99.71; engine_airband.cpp) ----------------------------------
+    // Several ticked AM and NFM channels off the RECEIVER'S ONE RADIO, mixed to the speakers, each behind its own squelch: core/airband_monitor.hpp
+    // cuts them into blocks the radio's band can hold (planAirbandBlocks) and builds the set that plays a block (buildMonitorSet), and this runs
+    // it on the pipeline's patch runner - the same runner, on the same radio, the patch page's receiver radio uses; the two are never on it at
+    // once (the patch view that is showing stops the monitor, LISTEN closes the patch view first and waits for it to let go). With more than one
+    // block a second core::Scanner, in list mode, walks the block centres: it stops where anybody is talking and moves on when the block has been
+    // quiet for the hold time.
+    //
+    // ONE THREAD. Every member below belongs to the pass: the monitor is started, stopped and stepped by it and its figures are read by it. What
+    // an interface sees is copied out once a pass (fact.airband.* in the list block, AIRBAND_CHANNELS in a block of its own).
+    //
+    // THE HEARD TIME HAS ONE WRITER. "Which ones are busy" - every second a channel's squelch is open while the monitor plays it - is added to
+    // that row's heardSeconds in the frequency list, which the engine saves on a worker from a snapshot taken on this thread
+    // (flushBookmarkSave). Nothing else ever writes the figure, and the channel names the row BY ID - the first ticked row on the frequency.
+    struct AirbandChan {
+        double freqHz = 0.0;
+        double bandwidthHz = 0.0;
+        std::string name;                 // the row that names it
+        std::uint64_t rowId = 0;          // ...and that row's id: where its heard time is credited, and nowhere else
+        bool open = false;                // its squelch is open now
+        float levelDb = -200.0f;          // the level its squelch judges (-200: none reported)
+        double pendingHeardS = 0.0;       // heard, not yet written to the list
+    };
+    // What a wanted row is: its name and its id.
+    struct AirbandRow {
+        std::string name;
+        std::uint64_t id = 0;
+    };
+    // What the last published set was built as, per channel, read off the set as built - the monitor's own record of what it put on the air
+    // (the test seam of the NFM de-emphasis and the mix levels; nothing in the product reads it).
+    struct AirbandBuilt {
+        double freqHz = 0.0;
+        bool nfm = false;
+        double deemphasisUs = 0.0;
+        double mixLevel = 1.0;
+        float squelchDb = 0.0f;
+        cascade::core::patch::NodeId node = 0;
+    };
+    bool airbandListening_ = false;
+    bool airbandStartPending_ = false;      // LISTEN was pressed with the patch view showing: waiting for the patch to hand the radio back
+    std::string airbandGroup_;              // the preset played ("" = every ticked AM or NFM row)
+    std::string airbandNote_;               // what the monitor last said (a stop's reason, a refusal)
+    float airbandSquelchDb_ = -55.0f;
+    double airbandHoldS_ = 2.0;
+    std::vector<AirbandChan> airbandChans_;                    // index for index with airbandPlanned_
+    std::vector<cascade::core::MonitorChannel> airbandPlanned_;   // what the blocks were cut from
+    std::vector<cascade::core::AirbandBlock> airbandBlocks_;
+    std::size_t airbandBlock_ = 0;                          // the block on the air
+    cascade::core::Scanner airbandScanner_;                 // walks the block centres when there is more than one
+    cascade::core::patch::NodeId airbandFirstId_ = 0;       // the channel identities of the set on the air: firstId + member
+    cascade::core::patch::NodeId airbandNextId_ = 0x40000000u;
+    double airbandRateHz_ = 0.0;
+    double airbandCentreHz_ = 0.0;                          // the readback after the last block tune
+    bool airbandTuned_ = false;                             // a block has been tuned this session
+    const void* airbandSourceDevice_ = nullptr;             // the radio the blocks were cut for...
+    std::string airbandSourceKind_;                         // ...and its kind: a different one means cut them again
+    std::uint64_t airbandBlocksSeen_ = 0;
+    double airbandProgressS_ = 0.0;
+    double airbandPublishedS_ = 0.0;
+    double airbandLastFrameS_ = 0.0;
+    double airbandFlushDueS_ = 0.0;
+    unsigned airbandListVersion_ = 0;                       // the list's version the rows were last read at: the pass looks again only when it moves
+    std::vector<AirbandBuilt> airbandBuilt_;
+    // The live list's own copy (see ApiAirbandBlock).
+    std::shared_ptr<const ApiAirbandBlock> apiAirband_;
+
+    // The rows the monitor plays: ticked AM or NFM rows of the preset, one channel to a frequency - the FIRST ticked row on it names it and
+    // gives it its mode and width. `rows`, when given, is filled index for index with the channels.
+    std::vector<cascade::core::MonitorChannel> airbandWanted(std::vector<AirbandRow>* rows = nullptr) const;
+    // FOXAPP_OP_AIRBAND. Returns the status; `why` is the sentence of a refusal (and `res.applied[0]` the state after: 0 idle, 1 listening, 2
+    // waiting for the patch).
+    std::int32_t applyAirbandOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    // Starts the monitor on the preset in airbandGroup_: 0 it did not start (airbandNote_ says why), 1 listening, 2 waiting for the patch.
+    int airbandStart();
+    void airbandStop(const std::string& why);
+    void airbandTuneBlock(std::size_t index);
+    // Once a pass, after the scanner's: the monitor's whole life (the hand-back, the rules that stop it, the squelch reports, the heard time,
+    // the scan between blocks).
+    void airbandFrame();
+    // The heard time not yet in the list goes into it, each channel's to its own row.
+    void airbandFlushHeard();
+    // The monitor's "above the noise" rule, the one place it is written: 8 dB over the MEDIAN channel level. False, and nothing done, when no
+    // channel has reported a level or the result is within `minMoveDb` of where the threshold is.
+    bool airbandAboveTheNoise(float minMoveDb);
+    // The block's line ("Block 2 of 6: 10 channels, 118.100-119.950 MHz" / "All 7 channels at once, ..."); empty when not listening.
+    std::string airbandBlockText() const;
+    // At exit, with the pass stopped: the last heard seconds into the list, before the final save.
+    void airbandShutdown();
+    // The block AIRBAND_CHANNELS serves, built once a pass when its own fingerprint moved (publishApiLists).
+    void refreshAirbandLive();
+    // The monitor's facts and the scanner's list-mode facts (fact.airband.*, fact.scanner.listMode / .ticked).
+    void buildApiListsAirband(ApiListBlock& b);
 
 public:
     // --- THE ENGINE'S LIFE (engine stage 3a) ---------------------------------

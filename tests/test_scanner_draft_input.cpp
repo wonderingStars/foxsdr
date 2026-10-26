@@ -130,8 +130,8 @@ void frames(AppWindow& a, int n) {
 }
 
 // The distinct hovered ids down the window's left edge, top to bottom, with
-// the y each was first found at: the section header, then the seven
-// InputDoubles, then the Start (or Stop) scan key.
+// the y each was first found at: the section header, the Ticked
+// frequencies checkbox, then the seven InputDoubles, then the Start (or Stop) scan key.
 std::vector<std::pair<ImGuiID, float>> locate(AppWindow& a) {
     std::vector<std::pair<ImGuiID, float>> out;
     ImGuiIO& io = ImGui::GetIO();
@@ -191,10 +191,12 @@ void startScan(AppWindow& a, double startHz, double stopHz, double stepHz) {
     (void)A::apply(a, run);
 }
 
-// Header, start, stop, step, dwell, hold, resume, listen, then the key.
-constexpr std::size_t kStart = 1;
-constexpr std::size_t kDwell = 4;
-constexpr std::size_t kKey = 8;
+// Header, the "Ticked frequencies" key, start, stop, step, dwell, hold, resume, listen, then the key. (The "Ticked frequencies" checkbox is master's 0.99.60 key,
+// drawn back by stub campaign B6: it is the new SECOND item, and every index below it moved by one. What these scenarios hold - the form's draft and when
+// an edit reaches the engine - is unchanged.)
+constexpr std::size_t kStart = 2;
+constexpr std::size_t kDwell = 5;
+constexpr std::size_t kKey = 9;
 
 }  // namespace
 
@@ -226,8 +228,8 @@ int main() {
         std::printf("A: web remote sets 144-146 MHz, then the desk edits Dwell only\n");
         AppWindow* a = makeApp(true);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             FoxCommand c = cascade::core::cmd::make(FOXAPP_OP_SCANNER_RANGE);
             c.ival[0] = 1 | 2 | 4;  // exactly net::controlRequestToCommands' shape
             c.num[0] = 144.0e6;
@@ -259,8 +261,8 @@ int main() {
         std::printf("B: no config applied, desk edits Dwell only\n");
         AppWindow* a = makeApp(false);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             CHECK(A::draft(*a, 0) == 88.0);  // shows real values, never 0.0000
             click(*a, 60.0f, ids[kDwell].second);
             typeOver(*a, "75");
@@ -281,8 +283,8 @@ int main() {
         std::printf("C: type Start MHz 95, click Start scan with the field still active\n");
         AppWindow* a = makeApp(true);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             click(*a, 60.0f, ids[kStart].second);
             typeOver(*a, "95");
             click(*a, 60.0f, ids[kKey].second);  // Start scan
@@ -300,8 +302,8 @@ int main() {
         std::printf("D: type Start MHz 95, then the section stops being drawn\n");
         AppWindow* a = makeApp(true);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             click(*a, 60.0f, ids[kStart].second);
             typeOver(*a, "95");
             g_open = false;
@@ -325,8 +327,8 @@ int main() {
         std::printf("F: running scan, type Start MHz 95, then deactivate\n");
         AppWindow* a = makeApp(true);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             startScan(*a, 88.0e6, 108.0e6, 100.0e3);
             frames(*a, 2);
             CHECK(A::active(*a));
@@ -352,8 +354,8 @@ int main() {
         std::printf("G: running scan, type Start MHz 95, then the section stops being drawn\n");
         AppWindow* a = makeApp(true);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             startScan(*a, 88.0e6, 108.0e6, 100.0e3);
             frames(*a, 2);
             click(*a, 60.0f, ids[kStart].second);
@@ -375,8 +377,8 @@ int main() {
         std::printf("H: running scan, edit Dwell\n");
         AppWindow* a = makeApp(true);
         const auto ids = locate(*a);
-        CHECK(ids.size() >= 9);
-        if (ids.size() >= 9) {
+        CHECK(ids.size() >= 10);
+        if (ids.size() >= 10) {
             startScan(*a, 144.0e6, 146.0e6, 12.5e3);
             frames(*a, 2);
             click(*a, 60.0f, ids[kDwell].second);

@@ -1317,6 +1317,7 @@ private:
             case FOXAPI_OP_STEP_TUNE: case FOXAPI_OP_BOOKMARK_TUNE: case FOXAPI_OP_SCANNER_RUN:
             case FOXAPI_OP_SCANNER_SKIP: case FOXAPI_OP_SCANNER_CONFIG:
             case FOXAPP_OP_VFO_TO_ABSOLUTE: case FOXAPP_OP_SET_VFO_OFFSET_FREE: case FOXAPP_OP_SCANNER_RANGE:
+            case FOXAPP_OP_AIRBAND: case FOXAPP_OP_SCANNER_LIST:   // (stub campaign B6: both tune the receiver)
                 return FOXAPI_GRANT_TUNE;
             case FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN: case FOXAPP_OP_SET_TRANSMIT_ARGS:
                 return FOXAPI_GRANT_TRANSMIT;
@@ -1476,6 +1477,8 @@ private:
     std::shared_ptr<const ApiListBlock> lists_;  // under listsMutex_
     // API 0.3 8.12, PATCH_LIVE: the pass's copy of the running patch nodes' readings (a block apart, no listSeq).
     std::shared_ptr<const ApiLiveBlock> patchLive_;   // under listsMutex_
+    // API 0.3 9.6, AIRBAND_CHANNELS: the pass's copy of the Airband monitor's channels (a block apart, no listSeq).
+    std::shared_ptr<const ApiAirbandBlock> airbandLive_;   // under listsMutex_
     // API 0.3 8.12 (part 3): the patch decoders' newest pictures, one immutable set (read_image's only source).
     std::shared_ptr<const ApiImageSet> patchImages_;  // under listsMutex_
     // ...and the events for the pictures that arrived since the last endPass (the pumping thread's; room kept).
@@ -1532,6 +1535,10 @@ public:
     void setPatchLive(std::shared_ptr<const ApiLiveBlock> l) {
         std::lock_guard<std::mutex> lk(listsMutex_);
         patchLive_ = std::move(l);
+    }
+    void setAirbandLive(std::shared_ptr<const ApiAirbandBlock> l) {
+        std::lock_guard<std::mutex> lk(listsMutex_);
+        airbandLive_ = std::move(l);
     }
     void setPatchImages(std::shared_ptr<const ApiImageSet> s) {
         std::lock_guard<std::mutex> lk(listsMutex_);
@@ -2409,7 +2416,9 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[0] = bm.freqHz;
                 it.value[1] = static_cast<double>(cascade::core::cmd::foxDemodFromName(bm.mode.c_str()));
                 it.value[2] = bm.bandwidthHz;
+                it.value[3] = bm.heardSeconds;  // 0.3 (9.6): the Airband monitor's "which ones are busy" figure
                 if (bm.favourite) { it.flags |= FOXAPI_ITEM_FAVOURITE; }
+                if (bm.scan) { it.flags |= FOXAPI_ITEM_TICKED; }
             }
             break;
         }
@@ -2670,6 +2679,27 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.value[1] = e.v1;
                 it.value[2] = static_cast<double>(e.kind);
                 if (e.open) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+            }
+            break;
+        }
+        case FOXAPI_LIST_AIRBAND_CHANNELS: {
+            // The pass's copy, from a block of its own (see ApiAirbandBlock): read the pointer, never the monitor's table.
+            std::shared_ptr<const ApiAirbandBlock> ab;
+            {
+                std::lock_guard<std::mutex> lk(listsMutex_);
+                ab = airbandLive_;
+            }
+            const std::size_t n = ab != nullptr ? ab->entries.size() : 0u;
+            if (want(n)) {
+                const auto& e = ab->entries[index];
+                it.id = e.id;
+                copyText(it.name, e.name.c_str());
+                it.value[0] = e.freqHz;
+                it.value[1] = e.bandwidthHz;
+                it.value[2] = e.levelDb;
+                it.value[3] = e.heardS;
+                if (e.open) { it.flags |= FOXAPI_ITEM_ACTIVE; }
+                if (e.onAir) { it.flags |= FOXAPI_ITEM_ON_AIR; }
             }
             break;
         }
@@ -2971,6 +3001,7 @@ std::uint64_t ApiHost::offPassKeyTouches() const { return impl_->offPassKeyTouch
 ApiHost::TxFacts ApiHost::txFacts() const { return impl_->txFacts(); }
 void ApiHost::setLists(std::shared_ptr<const ApiListBlock> lists) { impl_->setLists(std::move(lists)); }
 void ApiHost::setPatchLive(std::shared_ptr<const ApiLiveBlock> live) { impl_->setPatchLive(std::move(live)); }
+void ApiHost::setAirbandLive(std::shared_ptr<const ApiAirbandBlock> live) { impl_->setAirbandLive(std::move(live)); }
 void ApiHost::setPatchImages(std::shared_ptr<const ApiImageSet> images) { impl_->setPatchImages(std::move(images)); }
 void ApiHost::patchImageArrived(std::uint64_t node, std::uint64_t imageId, const std::string& caption) {
     impl_->patchImageArrived(node, imageId, caption);
